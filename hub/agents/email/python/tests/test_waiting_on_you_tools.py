@@ -267,6 +267,81 @@ class TestDirectAskDetection:
         assert out["waiting_on_you"] == []
 
 
+class TestGenuineExchangeCountsUserMessagesOnly:
+    """Third checkpoint fix: the ">=2 prior messages" corroboration
+    threshold must count the USER's own prior messages, not the thread's
+    total message count. Counting every message regardless of direction let
+    a vendor's cold intro plus a one-word "thanks" from the user (2 total
+    messages, only 1 the user's own) hit the threshold and skip the
+    substance check on that single, non-substantive outbound message."""
+
+    def test_vendor_intro_plus_one_word_reply_does_not_qualify(self):
+        # Exact shape the verifier reported: vendor cold intro -> one-word
+        # "Thanks!" from the user -> a later signal-bearing follow-up. Two
+        # total prior messages, but only ONE of them is the user's own, and
+        # it is not substantive — must NOT qualify.
+        gmail = _backend(
+            _inbound(
+                "r0",
+                thread_id="t1",
+                sender="Vendor <vendor@example.com>",
+                subject="Introducing our platform",
+                body="Hi, we'd love to show you our enterprise platform.",
+                age_days=20,
+            ),
+            _outbound(
+                "s1",
+                thread_id="t1",
+                to="vendor@example.com",
+                body="Thanks!",
+                age_days=15,
+            ),
+            _inbound(
+                "r1",
+                thread_id="t1",
+                sender="Vendor <vendor@example.com>",
+                subject="Following up",
+                body="Could you please confirm if you'd like to proceed?",
+                age_days=1,
+            ),
+        )
+        out = _run(gmail)
+        assert out["waiting_on_you"] == []
+
+    def test_two_genuine_user_replies_still_qualifies(self):
+        # Contrast case: TWO substantive-or-not messages from the user
+        # (real participation, not just message volume) still qualifies —
+        # proves the fix didn't overcorrect into requiring substance on
+        # every prior user message.
+        gmail = _backend(
+            _outbound(
+                "s1",
+                thread_id="t1",
+                to="alice@example.com",
+                body="Thanks!",
+                age_days=20,
+            ),
+            _outbound(
+                "s2",
+                thread_id="t1",
+                to="alice@example.com",
+                body="Got it.",
+                age_days=15,
+            ),
+            _inbound(
+                "r1",
+                thread_id="t1",
+                sender="Alice <alice@example.com>",
+                subject="Following up",
+                body="Could you please confirm if you'd like to proceed?",
+                age_days=1,
+            ),
+        )
+        out = _run(gmail)
+        assert len(out["waiting_on_you"]) == 1
+        assert out["waiting_on_you"][0]["message_id"] == "r1"
+
+
 class TestMeetingTimeDetection:
     def test_incident_wording_qualifies_with_corroboration(self):
         # #2580 incident wording: the existing calendar heuristic does NOT

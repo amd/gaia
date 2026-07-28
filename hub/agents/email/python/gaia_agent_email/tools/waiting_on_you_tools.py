@@ -50,17 +50,38 @@ Qualification therefore requires BOTH of:
 
    The first checkpoint fix's within-thread bar still applies: "a prior
    message exists in this thread" is not itself sufficient either — real
-   correspondence requires either (a) more than one prior exchange in the
-   thread, or (b) a single prior message with real substance
-   (``text_signals.is_substantive_text`` — a floor against one-line
-   dismissals/inquiries like "Please remove me from this list." or
-   "what's the pricing?"). A prior message where the user told the sender
-   to stop contacting them (``text_signals.is_opt_out_reply``) never
-   counts as corroboration and instead suppresses that sender from ever
-   qualifying — it is evidence of wanting LESS contact, not more — and
-   this suppression is address-normalized (casefolded, plus-tag stripped)
-   so ``vendor+updates@example.com`` cannot dodge a suppression recorded
-   against ``vendor@example.com``.
+   correspondence requires either (a) more than one prior message FROM THE
+   USER in the thread, or (b) a single prior message of theirs with real
+   substance (``text_signals.is_substantive_text`` — a floor against
+   one-line dismissals/inquiries like "Please remove me from this list."
+   or "what's the pricing?"). THIRD CHECKPOINT FIX: that ">=2" count must
+   be over the user's own prior messages specifically, never the thread's
+   total message count — counting every message regardless of direction
+   let a vendor's cold intro plus a one-word "thanks" from the user (2
+   total messages, only 1 of them the user's own) hit the threshold and
+   skip the substance check entirely. A prior message where the user told
+   the sender to stop contacting them (``text_signals.is_opt_out_reply``)
+   never counts as corroboration and instead suppresses that sender from
+   ever qualifying — it is evidence of wanting LESS contact, not more —
+   and this suppression is address-normalized (casefolded, plus-tag
+   stripped) so ``vendor+updates@example.com`` cannot dodge a suppression
+   recorded against ``vendor@example.com``.
+
+   Known, accepted residual gap (not fixed at this layer): once a thread
+   has genuinely earned corroboration, a later PROMOTIONAL message sent
+   INTO that same thread can still qualify — the only thing that could
+   reject it is a message-level promotional judgement, and the existing
+   category heuristic is label-driven and largely inert on unlabelled
+   mail. Tightening corroboration further would only cost recall on
+   genuine conversations; this is a product-level trade-off, not an
+   oversight.
+
+   Also known, not fixed here: prior in-thread/SENT messages are trusted
+   by their backend-supplied ``From`` header with no authentication check
+   (e.g. no SPF/DKIM/DMARC verification), so a forged prior-outbound could
+   in principle manufacture corroboration. Real spoofing defenses belong
+   upstream of this module (at the mail backend / provider level), not
+   here — flagged for the record, low severity in practice.
 
    "Addressed to the user specifically, not a bulk recipient list" is
    deliberately NOT used as a corroboration path either: the adversarial
@@ -380,8 +401,15 @@ def detect_waiting_on_you_impl(
             # checkpoint fix removed the cross-thread known-correspondent
             # path entirely — see module docstring). A prior message
             # existing is still not enough on its own (first checkpoint
-            # fix) — either the thread shows real depth (>=2 prior
-            # messages) or a single prior outbound is itself substantive.
+            # fix) — either the USER has sent >=2 prior messages in this
+            # thread, or a single prior outbound of theirs is itself
+            # substantive. THIRD CHECKPOINT FIX: this threshold must count
+            # only the user's own prior messages, never the thread's total
+            # — counting every message regardless of direction let a
+            # vendor's cold intro plus a one-word "thanks" from the user
+            # (2 total messages, only 1 of them the user's) hit the ">=2"
+            # bar and skip the substance check entirely. Both sides of the
+            # decision below are now about the user's own participation.
             prior_messages = ordered[:-1]
             prior_outbound_bodies: List[str] = []
             thread_has_opt_out = False
@@ -400,9 +428,7 @@ def detect_waiting_on_you_impl(
                 # suppress regardless of everything else.
                 continue
 
-            has_earlier_outbound = bool(prior_outbound_bodies) and (
-                len(prior_messages) >= 2 or _is_genuine_exchange(prior_outbound_bodies)
-            )
+            has_earlier_outbound = _is_genuine_exchange(prior_outbound_bodies)
             if not has_earlier_outbound:
                 # No in-thread corroboration that this is an ongoing
                 # conversation where it's the user's turn — sender shape,

@@ -26,8 +26,12 @@ contract version is tracked separately as
   genuine prior message to a vendor in a different thread corroborate every
   later marketing email from that address — sender identity was the wrong
   axis). Within a thread, a prior message merely existing is still not
-  enough on its own: real correspondence needs more than one exchange, or
-  one message with genuine substance (`text_signals.is_substantive_text`).
+  enough on its own: real correspondence needs more than one prior message
+  FROM THE USER specifically (not the thread's total message count — an
+  earlier version counted every message regardless of direction, so a
+  vendor's cold intro plus a one-word "thanks" from the user hit the
+  threshold and skipped the substance check), or one of the user's own
+  messages with genuine substance (`text_signals.is_substantive_text`).
   A message the existing category heuristic confidently calls PROMOTIONAL
   never qualifies regardless of corroboration; and a sender the user has
   told to stop contacting them (`text_signals.is_opt_out_reply`,
@@ -38,6 +42,15 @@ contract version is tracked separately as
   threads are excluded; a meeting-signal check gates on
   `is_meeting_request and confidence == "high"`, never confidence alone.
   Read-only — no archive, label, star, draft, or send.
+  Two known, accepted limitations: a PROMOTIONAL message sent into a
+  thread that has already earned genuine corroboration can still qualify
+  (closing this needs a message-level promotional judgement stronger than
+  the existing label-driven heuristic — tightening corroboration further
+  would only cost recall on real conversations); and prior messages are
+  trusted by their backend-supplied `From` header with no authentication
+  check, so a forged prior message could in principle contribute to
+  corroboration (real spoofing defenses belong upstream, at the mail
+  provider/backend level).
 
 - **The autonomy trust model can now be exercised end to end — broader candidates, an undo
   surface, and per-message decisions (#2529).** The proactive `earn_trust`/`full` loop's
