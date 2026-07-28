@@ -336,14 +336,20 @@ land in a future schema bump:
 - **Waiting-on-you detection (#2581):** `list_waiting_on_you` is the inbound
   counterpart to `check_followups` — it scans every connected mailbox's inbox
   for messages that ask directly for a reply, decision, or meeting time AND
-  show corroboration that they are genuine correspondence (multiple prior
+  sit in a thread with genuine back-and-forth already in it (multiple prior
   exchanges, or one genuinely substantive prior message — a single one-line
-  prior contact is not enough on its own). Precision-first by design: a bare
-  `?` or a human-looking sender name is never enough — both are common in
-  adversarial marketing mail — and a message the category heuristic
-  confidently calls promotional never qualifies regardless of corroboration.
-  A sender the user has told to stop contacting them is suppressed
-  unconditionally. **Detection only**, read-only against the mailbox.
+  prior contact is not enough on its own). Corroboration is deliberately
+  scoped to THIS thread's own history only — having emailed the same address
+  before, in some other thread, does not corroborate anything; "waiting on
+  your reply" means you're in a conversation and it's your turn, which a
+  one-off prior contact elsewhere doesn't establish. Precision-first by
+  design: a bare `?` or a human-looking sender name is never enough — both
+  are common in adversarial marketing mail — and a message the category
+  heuristic confidently calls promotional never qualifies regardless of
+  corroboration. A sender the user has told to stop contacting them
+  (address-normalized, so a plus-tagged variant can't dodge it) is
+  suppressed unconditionally. **Detection only**, read-only against the
+  mailbox.
 
 None of these are on the REST/MCP contract, so none of them moves `SCHEMA_VERSION`.
 

@@ -17,6 +17,12 @@ Acceptance criteria covered:
 - Bulk/automated senders are excluded (reusing the existing signal list).
 - Any meeting-signal check gates on ``is_meeting_request and confidence ==
   "high"``, never confidence alone.
+- Corroboration is ONLY within-thread history (second checkpoint fix): a
+  prior message to the same address in a DIFFERENT thread never qualifies
+  anything, no matter how substantive.
+- A sender the user has opted out of (in this thread OR any other) is
+  suppressed unconditionally, with the address normalized (casefolded,
+  plus-tag stripped) so a tagged variant can't dodge it.
 - The tool performs no mailbox mutation.
 
 All tests are hermetic: FakeGmailBackend only, no Lemonade, no network.
@@ -47,12 +53,12 @@ from gaia_agent_email.tools.calendar_tools import (  # noqa: E402
     detect_meeting_request_heuristic,
 )
 from gaia_agent_email.tools.waiting_on_you_tools import (  # noqa: E402
-    CORROBORATION_KNOWN_CORRESPONDENT,
     CORROBORATION_THREAD_REPLY,
     SIGNAL_DIRECT_ASK,
     SIGNAL_MEETING_TIME,
     WaitingOnYouToolsMixin,
     _has_gated_meeting_signal,
+    _normalize_address_for_suppression,
     detect_waiting_on_you_impl,
 )
 
@@ -196,11 +202,25 @@ class TestDirectAskDetection:
         assert item["signal"] == SIGNAL_DIRECT_ASK
         assert item["corroboration"] == CORROBORATION_THREAD_REPLY
 
-    def test_direct_ask_from_known_correspondent_qualifies(self):
-        # New thread, but the user has emailed this address before (a
-        # different thread) — corroborated by Sent-folder history.
+    def test_cross_thread_correspondence_alone_does_not_qualify(self):
+        # Second checkpoint fix: a prior message to this address in a
+        # DIFFERENT thread must NOT corroborate anything, no matter how
+        # substantive — "waiting on your reply" means real back-and-forth
+        # in THIS thread, not "I've emailed this person before". This is
+        # exactly the verifier's 6c construction: a genuine, substantive
+        # prior message to a vendor in another thread must not silently
+        # corroborate a later marketing email from the same address.
         gmail = _backend(
-            _outbound("s0", thread_id="t-old", to="bob@example.com", age_days=30),
+            _outbound(
+                "s0",
+                thread_id="t-old",
+                to="bob@example.com",
+                body=(
+                    "Thanks for reaching out. Could you send over pricing "
+                    "for the enterprise tier and whether it includes SSO?"
+                ),
+                age_days=30,
+            ),
             _inbound(
                 "r1",
                 thread_id="t-new",
@@ -211,10 +231,7 @@ class TestDirectAskDetection:
             ),
         )
         out = _run(gmail)
-        assert len(out["waiting_on_you"]) == 1
-        item = out["waiting_on_you"][0]
-        assert item["message_id"] == "r1"
-        assert item["corroboration"] == CORROBORATION_KNOWN_CORRESPONDENT
+        assert out["waiting_on_you"] == []
 
     def test_bare_question_mark_with_no_corroboration_does_not_qualify(self):
         # First-contact message, no prior correspondence at all. A bare "?"
@@ -471,6 +488,115 @@ class TestAutomatedSenderExclusion:
         )
 
         assert waiting_on_you_tools._AUTOMATED_SENDER_KEYWORDS is canonical
+
+
+# ---------------------------------------------------------------------------
+# Opt-out suppression (never corroboration; unconditional; address-normalized)
+# ---------------------------------------------------------------------------
+
+
+class TestOptOutSuppression:
+    def test_in_thread_opt_out_suppresses_even_with_real_history(self):
+        # The user told THIS sender, in THIS thread, to stop — must be
+        # suppressed even though the thread otherwise has real depth
+        # (>=2 prior messages), which would normally corroborate.
+        gmail = _backend(
+            _inbound(
+                "r0",
+                thread_id="t1",
+                sender="Vendor <vendor@example.com>",
+                subject="Newsletter signup",
+                body="Thanks for subscribing to our updates!",
+                age_days=40,
+            ),
+            _outbound(
+                "s1",
+                thread_id="t1",
+                to="vendor@example.com",
+                body="Please remove me from this list.",
+                age_days=35,
+            ),
+            _inbound(
+                "r1",
+                thread_id="t1",
+                sender="Vendor <vendor@example.com>",
+                subject="Could you confirm?",
+                body="Could you please confirm your subscription preferences?",
+                age_days=1,
+            ),
+        )
+        out = _run(gmail)
+        assert out["waiting_on_you"] == []
+
+    def test_cross_thread_opt_out_suppresses_a_later_thread(self):
+        # The user opted out of this sender in an OLD thread; a NEW thread
+        # from the same address, even with its own in-thread corroboration,
+        # must still be suppressed.
+        gmail = _backend(
+            _outbound(
+                "s0",
+                thread_id="t-old",
+                to="vendor@example.com",
+                body="Please remove me from this list.",
+                age_days=60,
+            ),
+            _outbound(
+                "s1",
+                thread_id="t-new",
+                to="vendor@example.com",
+                age_days=10,
+            ),
+            _inbound(
+                "r1",
+                thread_id="t-new",
+                sender="Vendor <vendor@example.com>",
+                subject="Could you confirm?",
+                body="Could you please confirm the details on the new order?",
+                age_days=1,
+            ),
+        )
+        out = _run(gmail)
+        assert out["waiting_on_you"] == []
+
+    def test_plus_tag_variant_cannot_dodge_opt_out_suppression(self):
+        # Opt-out recorded against vendor@example.com; the candidate arrives
+        # from a plus-tagged variant of the same mailbox. Address
+        # normalization (casefold + strip plus-tag) must still suppress it.
+        gmail = _backend(
+            _outbound(
+                "s0",
+                thread_id="t-old",
+                to="vendor@example.com",
+                body="Please remove me from this list.",
+                age_days=60,
+            ),
+            _outbound(
+                "s1",
+                thread_id="t-new",
+                to="vendor+updates@example.com",
+                age_days=10,
+            ),
+            _inbound(
+                "r1",
+                thread_id="t-new",
+                sender="Vendor <VENDOR+Updates@Example.com>",
+                subject="Could you confirm?",
+                body="Could you please confirm the details on the new order?",
+                age_days=1,
+            ),
+        )
+        out = _run(gmail)
+        assert out["waiting_on_you"] == []
+
+    def test_normalize_address_strips_plus_tag_and_casefolds(self):
+        assert (
+            _normalize_address_for_suppression("VENDOR+Updates@Example.com")
+            == "vendor@example.com"
+        )
+        assert (
+            _normalize_address_for_suppression("vendor@example.com")
+            == "vendor@example.com"
+        )
 
 
 # ---------------------------------------------------------------------------

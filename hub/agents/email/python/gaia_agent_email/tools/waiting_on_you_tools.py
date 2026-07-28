@@ -29,43 +29,59 @@ Qualification therefore requires BOTH of:
    heuristic gated on ``is_meeting_request and confidence == "high"`` —
    never confidence alone, since the heuristic returns
    ``confidence="high"`` on its no-signal branch too).
-2. Corroboration that this is genuine, ongoing correspondence:
-   - the thread already contains earlier outbound message(s) from the
-     user (a real back-and-forth), or
-   - the sender is a known correspondent — someone the user has
-     genuinely corresponded with before, in any thread.
+2. Corroboration that THIS thread is a genuine, ongoing conversation and
+   it is the user's turn to answer: the thread already contains earlier
+   message(s) showing real back-and-forth, not merely "a prior message
+   exists between me and this address, somewhere".
+
+   SECOND CHECKPOINT FIX — the ``known_correspondent`` cross-thread path
+   (any address the user has ever emailed, from a Sent-folder scan) was
+   removed entirely, not tightened further. An adversarial verifier's
+   final probe (6c) showed why tightening isn't enough: one genuine,
+   substantive prior message to a vendor in a DIFFERENT thread — an
+   ordinary "could you send pricing for the enterprise tier?" — silently
+   corroborated every later marketing email from that same address (24 of
+   25 signal-firing rows). "Has this person ever sent me a real message"
+   is not evidence that THIS message needs a reply; sender identity was
+   the wrong axis to corroborate on. "Waiting on your reply" means you are
+   IN a conversation and it is your turn — that only exists within a
+   single thread's own history, so cross-thread correspondence can no
+   longer qualify anything.
+
+   The first checkpoint fix's within-thread bar still applies: "a prior
+   message exists in this thread" is not itself sufficient either — real
+   correspondence requires either (a) more than one prior exchange in the
+   thread, or (b) a single prior message with real substance
+   (``text_signals.is_substantive_text`` — a floor against one-line
+   dismissals/inquiries like "Please remove me from this list." or
+   "what's the pricing?"). A prior message where the user told the sender
+   to stop contacting them (``text_signals.is_opt_out_reply``) never
+   counts as corroboration and instead suppresses that sender from ever
+   qualifying — it is evidence of wanting LESS contact, not more — and
+   this suppression is address-normalized (casefolded, plus-tag stripped)
+   so ``vendor+updates@example.com`` cannot dodge a suppression recorded
+   against ``vendor@example.com``.
 
    "Addressed to the user specifically, not a bulk recipient list" is
-   deliberately NOT used as a corroboration path: the adversarial corpus
-   entries are crafted as one-to-one, human-named, single-recipient cold
-   outreach specifically to look targeted (e.g. corpus ids ``4fae4338``,
-   ``567fa520``, ``1677f2af``, ``5f720d3d`` all address exactly one
-   recipient by name and contain genuine-looking ask phrasing). Treating
-   single-recipient targeting as corroboration would let precisely the
-   messages this detector exists to reject qualify.
-
-   IMPORTANT (checkpoint fix): "a prior message exists" is NOT itself
-   sufficient corroboration — an adversarial verifier proved that a single
-   one-line prior contact (an unsubscribe reply, or one unrelated cold
-   outreach to the same address) manufactures corroboration for every
-   subsequent marketing message from that sender. Real correspondence
-   requires either (a) more than one prior exchange, or (b) a single prior
-   message with real substance (``text_signals.is_substantive_text`` — a
-   floor against one-line dismissals/inquiries like "Please remove me from
-   this list." or "what's the pricing?"). A prior message where the user
-   told the sender to stop contacting them (``text_signals.
-   is_opt_out_reply``) never counts as corroboration and instead suppresses
-   that sender from ever qualifying — it is evidence of wanting LESS
-   contact, not more.
+   deliberately NOT used as a corroboration path either: the adversarial
+   corpus entries are crafted as one-to-one, human-named, single-recipient
+   cold outreach specifically to look targeted (e.g. corpus ids
+   ``4fae4338``, ``567fa520``, ``1677f2af``, ``5f720d3d`` all address
+   exactly one recipient by name and contain genuine-looking ask
+   phrasing). Treating single-recipient targeting as corroboration would
+   let precisely the messages this detector exists to reject qualify.
 
 3. An independent veto: if the existing category heuristic
    (``triage_heuristics.classify_category_heuristic``, unmodified — see
    that module's own docstring) confidently classifies the candidate
    message as PROMOTIONAL, it never qualifies regardless of signal or
-   corroboration. Corroboration proves "we've had contact before"; it must
-   not be read as "therefore this specific message is personal", which is
-   an independent question the category heuristic already answers when it
-   is confident.
+   corroboration. Corroboration proves "this thread is a real
+   conversation"; it must not be read as "therefore this specific message
+   is personal", which is an independent question the category heuristic
+   already answers when it is confident. In practice this fires rarely on
+   this corpus (it is label-driven and the fixture data carries no Gmail
+   category labels) — the within-thread corroboration requirement above
+   is what carries the actual precision load.
 
 Threads whose latest message is the user's own (i.e. already replied) are
 excluded, as are bulk/automated senders (reusing
@@ -113,8 +129,9 @@ log = get_logger(__name__)
 DEFAULT_MAX_INBOX_SCAN = 50
 MAX_INBOX_SCAN_CAP = 200
 
-# How many SENT messages are scanned to build the "known correspondent" set
-# used as one of the two corroboration signals.
+# How many SENT messages are scanned to build the opt-out suppression set
+# (the ONLY thing the SENT folder is scanned for now — see module docstring
+# on why cross-thread "known correspondent" was removed, not tightened).
 DEFAULT_MAX_SENT_LOOKBACK = 50
 MAX_SENT_LOOKBACK_CAP = 200
 
@@ -124,7 +141,6 @@ SIGNAL_DIRECT_ASK = "direct_ask"
 SIGNAL_MEETING_TIME = "meeting_time"
 
 CORROBORATION_THREAD_REPLY = "thread_reply_history"
-CORROBORATION_KNOWN_CORRESPONDENT = "known_correspondent"
 
 
 def _is_automated_sender(sender: str) -> bool:
@@ -169,24 +185,33 @@ def _is_genuine_exchange(bodies: List[str]) -> bool:
     return False
 
 
-def _known_correspondents(
-    gmail, *, user_email: str, max_sent: int
-) -> tuple:
-    """Addresses the user has genuinely corresponded with before.
+def _normalize_address_for_suppression(addr: str) -> str:
+    """Casefold and strip a plus-tag so ``vendor+updates@x`` and
+    ``vendor@x`` collide for opt-out suppression purposes.
 
-    Returns ``(bodies_by_address, opted_out)``:
+    Only used as the suppression-set key — the address returned to the
+    caller in a qualifying item stays the literal sender address; this
+    normalization exists solely so a sender can't dodge a recorded opt-out
+    by varying the tag on an otherwise-identical mailbox.
+    """
+    addr = (addr or "").strip().lower()
+    local, sep, domain = addr.partition("@")
+    if "+" in local:
+        local = local.split("+", 1)[0]
+    return f"{local}{sep}{domain}"
 
-    - ``bodies_by_address``: address -> list of non-opt-out message bodies
-      the user sent to it (any thread). Callers apply
-      ``_is_genuine_exchange`` — a single one-line prior contact is not
-      itself sufficient corroboration (checkpoint fix).
-    - ``opted_out``: addresses the user has told, in any scanned message,
-      to stop contacting them. These must never qualify regardless of any
-      other signal, in this call or a later one against the same address.
+
+def _scan_opted_out_senders(gmail, *, user_email: str, max_sent: int) -> Set[str]:
+    """Normalized addresses the user has told, anywhere, to stop contacting
+    them. These must never qualify regardless of any other signal.
+
+    This is now the ONLY thing the SENT folder is scanned for — the
+    cross-thread "known correspondent" signal that used to live here was
+    removed, not tightened (see module docstring): sender identity is the
+    wrong axis to corroborate "is this message waiting on my reply" on.
 
     One bounded SENT-folder scan (mirrors ``check_followups_impl``'s scan
-    shape) so this stays a cheap, single-purpose corroboration signal —
-    not a per-candidate lookup.
+    shape) so this stays cheap — not a per-candidate lookup.
     """
     listing = gmail.list_messages(label_ids=["SENT"], max_results=max_sent)
     stubs = listing.get("messages", [])
@@ -196,7 +221,6 @@ def _known_correspondents(
         if tid and tid not in thread_ids:
             thread_ids.append(tid)
 
-    bodies_by_address: Dict[str, List[str]] = {}
     opted_out: Set[str] = set()
     for tid in thread_ids:
         thread = gmail.get_thread(tid)
@@ -206,16 +230,13 @@ def _known_correspondents(
             if frm != user_email:
                 continue
             body, _attachments = decode_message_body(msg.get("payload") or {})
-            body_lower = body.lower()
+            if not is_opt_out_reply(body.lower()):
+                continue
             recipients = [
                 a for a in _recipient_addresses(headers.get("to", "")) if a != user_email
             ]
-            if is_opt_out_reply(body_lower):
-                opted_out.update(recipients)
-                continue
-            for addr in recipients:
-                bodies_by_address.setdefault(addr, []).append(body)
-    return bodies_by_address, opted_out
+            opted_out.update(_normalize_address_for_suppression(a) for a in recipients)
+    return opted_out
 
 
 def detect_waiting_on_you_impl(
@@ -237,7 +258,7 @@ def detect_waiting_on_you_impl(
         max_inbox: INBOX-folder enumeration budget (each distinct thread
             costs one ``get_thread`` round-trip).
         max_sent_lookback: SENT-folder scan budget used only to build the
-            known-correspondent corroboration set.
+            opt-out suppression set.
         min_age_hours: Skip messages younger than this (0 = no minimum).
         now_ms: Injectable "now" in epoch milliseconds (tests); defaults to
             the current time.
@@ -277,7 +298,7 @@ def detect_waiting_on_you_impl(
                 "distinguish inbound mail from the user's own replies"
             )
 
-        known_correspondent_bodies, opted_out_senders = _known_correspondents(
+        opted_out_senders = _scan_opted_out_senders(
             gmail, user_email=user_email, max_sent=max_sent_lookback
         )
 
@@ -319,10 +340,12 @@ def detect_waiting_on_you_impl(
                 continue
 
             sender_email = extract_sender_email(sender_raw)
-            if sender_email in opted_out_senders:
+            if _normalize_address_for_suppression(sender_email) in opted_out_senders:
                 # The user has already told this address to stop contacting
                 # them — evidence of wanting LESS contact, never
                 # corroboration for MORE. Suppressed unconditionally.
+                # Address-normalized so a plus-tag variant of a suppressed
+                # mailbox can't dodge it.
                 continue
 
             subject = latest_headers.get("subject", "")
@@ -353,10 +376,12 @@ def detect_waiting_on_you_impl(
             else:
                 continue
 
-            # Corroboration: a prior message existing is not enough on its
-            # own (checkpoint fix) — either the thread shows real depth
-            # (>=2 prior messages) or a single prior outbound is itself
-            # substantive; same bar applies to cross-thread correspondence.
+            # Corroboration: ONLY within-thread history counts (second
+            # checkpoint fix removed the cross-thread known-correspondent
+            # path entirely — see module docstring). A prior message
+            # existing is still not enough on its own (first checkpoint
+            # fix) — either the thread shows real depth (>=2 prior
+            # messages) or a single prior outbound is itself substantive.
             prior_messages = ordered[:-1]
             prior_outbound_bodies: List[str] = []
             thread_has_opt_out = False
@@ -378,15 +403,14 @@ def detect_waiting_on_you_impl(
             has_earlier_outbound = bool(prior_outbound_bodies) and (
                 len(prior_messages) >= 2 or _is_genuine_exchange(prior_outbound_bodies)
             )
-            if has_earlier_outbound:
-                corroboration = CORROBORATION_THREAD_REPLY
-            elif _is_genuine_exchange(known_correspondent_bodies.get(sender_email, [])):
-                corroboration = CORROBORATION_KNOWN_CORRESPONDENT
-            else:
-                # No corroboration that this is genuine correspondence —
-                # sender shape / phrasing alone is not enough (see module
-                # docstring). Skip rather than qualify a cold-outreach guess.
+            if not has_earlier_outbound:
+                # No in-thread corroboration that this is an ongoing
+                # conversation where it's the user's turn — sender shape,
+                # phrasing, or having emailed this address in some OTHER
+                # thread are all not enough (see module docstring). Skip
+                # rather than qualify a cold-outreach guess.
                 continue
+            corroboration = CORROBORATION_THREAD_REPLY
 
             sent_ms = _timestamp_ms(latest)
             age_ms = now_ms - sent_ms
@@ -448,22 +472,25 @@ class WaitingOnYouToolsMixin:
             """Flag inbound mail that is waiting on the user's reply.
 
             Scans the inbox of every connected mailbox for messages that
-            ask directly for a reply, decision, or meeting time, AND show
-            corroboration that they are genuine correspondence (an
-            existing back-and-forth in the thread, or a sender the user
-            has emailed before). Use this when the user asks what they
-            haven't gotten to, who's waiting on them, or what needs a
-            reply.
+            ask directly for a reply, decision, or meeting time, AND sit in
+            a thread with genuine back-and-forth already in it — i.e. the
+            user is in a real conversation and it's their turn to answer.
+            Use this when the user asks what they haven't gotten to, who's
+            waiting on them, or what needs a reply.
 
             A bare question mark or a human-looking sender name is NOT
             enough to qualify a message here — marketing and cold-outreach
-            mail routinely use both. Nor is a single one-line prior
-            contact (an old unsubscribe reply, a one-off cold outreach) —
+            mail routinely use both. Nor is a single one-line prior message
+            in the thread (an old unsubscribe reply, a one-off "thanks") —
             real corroboration needs more than one exchange, or one
-            genuinely substantive message. A message an existing category
-            heuristic confidently calls promotional never qualifies
-            regardless of any of the above, and a sender the user has
-            told to stop contacting them is suppressed unconditionally.
+            genuinely substantive message. Having emailed this address
+            before, in some OTHER thread, does NOT corroborate anything —
+            only history within THIS thread counts. A message an existing
+            category heuristic confidently calls promotional never
+            qualifies regardless of any of the above, and a sender the
+            user has told to stop contacting them is suppressed
+            unconditionally (address-normalized, so a plus-tag variant
+            can't dodge it).
 
             READ-ONLY: this tool only detects and reports. It never
             drafts, sends, labels, or archives anything.
@@ -478,8 +505,8 @@ class WaitingOnYouToolsMixin:
                 JSON envelope with ``{"waiting_on_you": [...]}`` — per
                 item: message_id, thread_id, sender, subject, received_at,
                 age_days, signal (``"direct_ask"`` or ``"meeting_time"``),
-                corroboration (``"thread_reply_history"`` or
-                ``"known_correspondent"``), and mailbox — sorted most
+                corroboration (currently always ``"thread_reply_history"``
+                — the only corroboration path), and mailbox — sorted most
                 overdue first, plus ``inbox_scanned`` and
                 ``scan_truncated``. ``scan_truncated`` is true when the
                 INBOX scan hit its ceiling in any connected mailbox — older

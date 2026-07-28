@@ -318,3 +318,147 @@ class TestCorroborationExercisedGate:
             f"6b construction qualified {len(false_positives)} of "
             f"{len(rows)} rows: {false_positives}"
         )
+
+    def test_6c_genuine_substantive_message_in_different_thread_does_not_qualify(
+        self, capsys
+    ):
+        """Verifier construction 6c (the one that broke the first fix): one
+        GENUINE, substantive prior message to a vendor in a DIFFERENT
+        thread — "Thanks for reaching out. Could you send over pricing for
+        the enterprise tier and whether it includes SSO?" (25 words, not a
+        dismissal, not opt-out-shaped) — used to corroborate 24/25
+        signal-firing rows via known_correspondent, because "has this
+        person ever sent me a real message" is not evidence THIS message
+        needs a reply. The known_correspondent path was removed entirely
+        (not tightened further) specifically because tightening the
+        word/count floor cannot fix this: the prior message here is
+        genuinely substantive by any reasonable floor."""
+        rows = _signal_firing_rows()
+        false_positives = []
+        for rec in rows:
+            gmail = FakeGmailBackend(user_email=USER_EMAIL)
+            sender_addr = _sender_address(rec) or "sender@example.com"
+            gmail.add_message(
+                _outbound_message(
+                    f"{rec['id']}-different-thread",
+                    thread_id=f"{rec['id']}-different-thread-id",
+                    to=sender_addr,
+                    body=(
+                        "Thanks for reaching out. Could you send over "
+                        "pricing for the enterprise tier and whether it "
+                        "includes SSO?"
+                    ),
+                    age_days=45,
+                )
+            )
+            gmail.add_message(_candidate_message(rec))
+            out = detect_waiting_on_you_impl(gmail, now_ms=NOW_MS)
+            if out["waiting_on_you"]:
+                false_positives.append(rec["id"])
+        print(
+            f"\n6c (genuine substantive prior message, different thread) "
+            f"false positives over {len(rows)} signal-firing rows: "
+            f"{len(false_positives)} {false_positives}"
+        )
+        assert false_positives == [], (
+            f"6c construction qualified {len(false_positives)} of "
+            f"{len(rows)} rows: {false_positives}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Recall sanity check: the surviving corroboration path (genuine in-thread
+# history) must still catch the real positive cases this feature exists for.
+# Not corpus-derived (the corpus has no genuine positives — it is a
+# PROMOTIONAL-only precision fixture) — these mirror the hand-authored
+# positive scenarios in test_waiting_on_you_tools.py, re-asserted here
+# alongside the precision numbers so all the evidence lives in one place.
+# ---------------------------------------------------------------------------
+
+
+class TestRecallHoldsAfterHardening:
+    def test_genuine_in_thread_history_still_qualifies(self, capsys):
+        gmail = FakeGmailBackend(user_email=USER_EMAIL)
+        gmail.add_message(
+            _outbound_message(
+                "s1",
+                thread_id="t1",
+                to="alice@example.com",
+                body=(
+                    "Sure, I will take a look at the numbers and get back "
+                    "to you with any questions before the review."
+                ),
+                age_days=10,
+            )
+        )
+        candidate = {
+            "id": "r1",
+            "threadId": "t1",
+            "labelIds": ["INBOX"],
+            "snippet": "",
+            "internalDate": str(NOW_MS - 3 * DAY_MS),
+            "payload": {
+                "mimeType": "text/plain",
+                "filename": "",
+                "headers": [
+                    {"name": "Subject", "value": "Re: budget"},
+                    {"name": "From", "value": "Alice <alice@example.com>"},
+                    {"name": "To", "value": USER_EMAIL},
+                    {"name": "Date", "value": "3 days ago"},
+                ],
+                "body": {
+                    "size": 0,
+                    "data": _b64(
+                        "Thanks! Could you please confirm the numbers by Friday?"
+                    ),
+                },
+            },
+            "sizeEstimate": 0,
+        }
+        gmail.add_message(candidate)
+        out = detect_waiting_on_you_impl(gmail, now_ms=NOW_MS)
+        print(f"\ngenuine in-thread history recall check: {out['waiting_on_you']}")
+        assert len(out["waiting_on_you"]) == 1
+        assert out["waiting_on_you"][0]["message_id"] == "r1"
+
+    def test_incident_wording_in_genuine_thread_still_qualifies(self, capsys):
+        gmail = FakeGmailBackend(user_email=USER_EMAIL)
+        gmail.add_message(
+            _outbound_message(
+                "s1",
+                thread_id="t1",
+                to="alice@example.com",
+                body=(
+                    "Sure, I will take a look at the numbers and get back "
+                    "to you with any questions before the review."
+                ),
+                age_days=10,
+            )
+        )
+        candidate = {
+            "id": "r1",
+            "threadId": "t1",
+            "labelIds": ["INBOX"],
+            "snippet": "",
+            "internalDate": str(NOW_MS - 2 * DAY_MS),
+            "payload": {
+                "mimeType": "text/plain",
+                "filename": "",
+                "headers": [
+                    {"name": "Subject", "value": "Catching up"},
+                    {"name": "From", "value": "Alice <alice@example.com>"},
+                    {"name": "To", "value": USER_EMAIL},
+                    {"name": "Date", "value": "2 days ago"},
+                ],
+                "body": {
+                    "size": 0,
+                    "data": _b64("Any chance to meet this Thursday at 9am?"),
+                },
+            },
+            "sizeEstimate": 0,
+        }
+        gmail.add_message(candidate)
+        out = detect_waiting_on_you_impl(gmail, now_ms=NOW_MS)
+        print(f"\nincident-wording recall check: {out['waiting_on_you']}")
+        assert len(out["waiting_on_you"]) == 1
+        assert out["waiting_on_you"][0]["message_id"] == "r1"
