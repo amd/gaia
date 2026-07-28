@@ -9,6 +9,23 @@ contract version is tracked separately as
 
 ### Added
 
+- **New read-only tool `list_waiting_on_you` (#2581): flags inbound mail awaiting
+  the user's reply.** The inverse of `check_followups` (#1606) — that tool flags
+  outbound mail nobody answered; this one flags inbound mail the user hasn't
+  answered, e.g. a colleague's "did you get a chance to look at this? can we
+  meet Thursday?". Qualification requires BOTH a genuine ask/meeting-time
+  signal (`text_signals.has_direct_ask_signal` / `has_meeting_time_signal`,
+  new dependency-free leaf module `tools/text_signals.py`) AND corroboration
+  that the message is real correspondence (an earlier outbound message in the
+  thread, or a sender the user has emailed before) — sender shape and a bare
+  `?` alone are not enough (measured against the adversarial PROMOTIONAL
+  corpus: 47 of 104 rows carry a `?` from a non-automated-looking sender).
+  Bulk/automated senders are excluded via the existing
+  `triage_heuristics._AUTOMATED_SENDER_KEYWORDS` list; already-replied threads
+  are excluded; a meeting-signal check gates on
+  `is_meeting_request and confidence == "high"`, never confidence alone.
+  Read-only — no archive, label, star, draft, or send.
+
 - **The autonomy trust model can now be exercised end to end — broader candidates, an undo
   surface, and per-message decisions (#2529).** The proactive `earn_trust`/`full` loop's
   candidate generator (`_autonomy_candidate`) only ever proposed `archive`, so the rest of

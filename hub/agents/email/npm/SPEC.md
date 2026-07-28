@@ -333,6 +333,15 @@ land in a future schema bump:
   user's own outbound mail past a configurable window (default 3 days), most
   overdue first. **Detection only** — it never sends a nudge (any send stays
   confirmation-gated).
+- **Waiting-on-you detection (#2581):** `list_waiting_on_you` is the inbound
+  counterpart to `check_followups` — it scans every connected mailbox's inbox
+  for messages that ask directly for a reply, decision, or meeting time AND
+  show corroboration that they are genuine correspondence (an existing
+  back-and-forth in the thread, or a sender the user has emailed before).
+  Precision-first by design: a bare `?` or a human-looking sender name is
+  never enough on its own — both are common in adversarial marketing mail —
+  so a message without corroboration never qualifies, even if it reads like a
+  direct ask. **Detection only**, read-only against the mailbox.
 
 None of these are on the REST/MCP contract, so none of them moves `SCHEMA_VERSION`.
 
