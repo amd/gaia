@@ -99,7 +99,17 @@ CATEGORY_PERSONAL = "PERSONAL"
 #   - POST /v1/email/query/{run_id}/respond — deliver the answer; the ORIGINAL
 #     stream resumes. 404 unknown run, 409 stale/unknown request_id.
 # No existing shape changed, so 2.5 consumers keep working (additive MINOR).
-SCHEMA_VERSION = "2.7"
+# 2.8 is additive over 2.7 (#2582): a new read-only attention-view surface
+#   - GET /v1/email/attention — the merged "what needs you" read-model: inbound
+#     waiting-on-you items (#2581), meeting proposals found during the scan
+#     (#2583, including messages that would otherwise collapse into the
+#     pre-scan envelope's bare informational_count), unreviewed messages
+#     (#2584), and open action items from prior triage. Computed on open and
+#     cached — never scheduler-driven — so the response carries its own
+#     ``cache_age_seconds`` / ``stale`` so a renderer never presents a cached
+#     result as current. No existing shape changed, so 2.7 consumers keep
+#     working (additive MINOR).
+SCHEMA_VERSION = "2.8"
 
 # Maximum number of items in a single batch request. Protects the single-tenant
 # local model slot from runaway batches. Enforced via Pydantic max_length.
@@ -1445,6 +1455,158 @@ class EmailPreScanResponse(_Strict):
 
 
 # ---------------------------------------------------------------------------
+# ATTENTION VIEW (schema 2.8, #2582) — the read-only, no-prompt "what needs
+# you" surface rendered when the TUI/Agent UI opens the email agent. Merges
+# four signals that each already exist as their own tool: waiting-on-you
+# (#2581), meeting proposals (#2583), unreviewed messages (#2584), and open
+# action items from prior triage (#2110/#2525). Computed directly from the
+# underlying tools rather than derived from the pre-scan envelope above —
+# ``EmailPreScanResult.informational_count`` is a bare count with no rows, so
+# a meeting proposal in a confidently-classified informational message would
+# be silently invisible if this view depended on that envelope instead.
+# ---------------------------------------------------------------------------
+
+
+class AttentionItemKind(str, Enum):
+    """Why one attention-view item is here — the source signal it came from."""
+
+    MEETING_REQUEST = "meeting_request"
+    WAITING_ON_YOU = "waiting_on_you"
+    NEEDS_REVIEW = "needs_review"
+    ACTION_ITEM = "action_item"
+
+
+class AttentionItem(_Strict):
+    """One item the attention view surfaces, tagged with why it's here.
+
+    Passive data only — the view never acts on a message, so this carries no
+    action affordance, just enough to identify the message and explain the
+    reason a person should look at it.
+    """
+
+    kind: AttentionItemKind = Field(
+        ..., description="Which signal surfaced this item."
+    )
+    message_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Provider message id (opaque). Null for an action_item with no "
+            "recoverable source message (e.g. a pre-#1605 task row)."
+        ),
+    )
+    thread_id: Optional[str] = Field(
+        default=None, description="Provider thread id, when known."
+    )
+    sender: str = Field(
+        default="", description="Raw 'From' header of the source message."
+    )
+    subject: str = Field(
+        default="",
+        description=(
+            "Subject line of the source message. For an action_item this is "
+            "the extracted action description, not an email subject."
+        ),
+    )
+    why: str = Field(
+        ..., description="Plain-language reason this item needs attention."
+    )
+    due_hint: Optional[str] = Field(
+        default=None,
+        description="Free-text due hint (action items only); null otherwise.",
+    )
+    mailbox: Optional[str] = Field(
+        default=None,
+        description=(
+            "Provider name ('google' / 'microsoft') this item came from. Set "
+            "only when more than one mailbox is connected — with a single "
+            "mailbox, tagging every row is noise, not information."
+        ),
+    )
+
+
+class AttentionCoverage(_Strict):
+    """How much of the mailbox this attention view actually covered.
+
+    Carries the same honesty fields #2584 established for the pre-scan
+    envelope, so the renderer can state what was scanned rather than let
+    'nothing needs you' read as an unqualified whole-mailbox claim.
+    """
+
+    scanned: int = Field(
+        default=0, description="Messages actually scanned across every mailbox."
+    )
+    total_unread: Optional[int] = Field(
+        default=None,
+        description=(
+            "Exact total unread count when the backend can report it "
+            "honestly (Gmail); null when it can't (Outlook) — never a "
+            "fabricated number."
+        ),
+    )
+    scan_truncated: bool = Field(
+        default=False,
+        description=(
+            "True when the scan hit its message ceiling in any connected "
+            "mailbox — older mail may exist beyond what was looked at."
+        ),
+    )
+    degraded: bool = Field(
+        default=False,
+        description="True when at least one connected mailbox could not be scanned.",
+    )
+    mailbox_errors: Optional[List[MailboxError]] = Field(
+        default=None,
+        description="Connected mailboxes that failed during this scan, if any.",
+    )
+
+
+class EmailAttentionResult(_Strict):
+    """The merged attention-view envelope — computed on open, then cached."""
+
+    kind: Literal["email_attention"] = Field(
+        default="email_attention",
+        description="Discriminator identifying this envelope shape.",
+    )
+    items: List[AttentionItem] = Field(
+        default_factory=list,
+        description="Every surfaced item, unordered across signal types.",
+    )
+    coverage: AttentionCoverage = Field(
+        ..., description="What this view actually scanned."
+    )
+    generated_at: str = Field(
+        ...,
+        description="UTC ISO-8601 timestamp of the underlying scan this result reflects.",
+    )
+    cache_age_seconds: float = Field(
+        default=0.0,
+        ge=0,
+        description=(
+            "Seconds since ``generated_at``. 0 on a freshly-computed result; "
+            "positive when served from cache — a renderer must label a "
+            "nonzero age rather than present a cached result as current."
+        ),
+    )
+    stale: bool = Field(
+        default=False,
+        description=(
+            "True when the cache exceeded its freshness threshold and a live "
+            "refresh was attempted but failed (e.g. a transient mailbox "
+            "error) — the result is last-known-good, not current."
+        ),
+    )
+
+
+class EmailAttentionResponse(_Strict):
+    """Top-level attention-view response envelope (#2582)."""
+
+    schema_version: str = Field(
+        default=SCHEMA_VERSION, description="Echoes the contract version."
+    )
+    result: EmailAttentionResult = Field(..., description="The attention-view envelope.")
+
+
+# ---------------------------------------------------------------------------
 # OAuth forward-OUT intake (schema 2.5, #2154) — the daemon (custody home)
 # forwards a short-lived access token for a granted connector to the sidecar.
 # The sidecar NEVER receives the refresh token or the OAuth client secret; it
@@ -1596,6 +1758,12 @@ __all__ = [
     "EmailQuarantineResponse",
     "EmailUnquarantineRequest",
     "EmailUnquarantineResponse",
+    # Attention view (schema 2.8, #2582).
+    "AttentionItemKind",
+    "AttentionItem",
+    "AttentionCoverage",
+    "EmailAttentionResult",
+    "EmailAttentionResponse",
     # Calendar surface (schema 2.1, #1780).
     "CalendarEventDateTime",
     "CalendarEvent",
