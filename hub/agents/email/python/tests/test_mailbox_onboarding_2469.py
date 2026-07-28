@@ -421,6 +421,39 @@ def test_a_fix_that_did_not_fix_it_is_reported_as_failure(connectors):
     assert "still isn't usable" in out["error"]
 
 
+def test_connected_but_grant_failed_is_reported_honestly_not_as_nothing_changed(
+    connectors,
+):
+    """#2590: save_connection runs before the grant commits. If the grant
+    write fails the connection IS persisted — the generic catch-all used to
+    say "Nothing was changed", which is false. It must say what actually
+    happened: connected, not yet permitted."""
+    from gaia.connectors.errors import GrantAfterConnectError
+
+    connectors["connection"] = None
+
+    async def failing_complete_authorization(flow_id):
+        raise GrantAfterConnectError(
+            "google", ms.AGENT_ID, reason="disk full"
+        )
+
+    import gaia.connectors.flow as flow_mod
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(flow_mod, "complete_authorization", failing_complete_authorization)
+    try:
+        agent = _FakeAgent(answers=["google", "yes"])
+        out = _run(agent)
+    finally:
+        monkeypatch.undo()
+
+    assert out["ok"] is True
+    assert out["data"]["changed"] is True
+    assert "connected" in out["data"]["message"].lower()
+    assert "nothing was changed" not in out["data"]["message"].lower()
+    assert "disk full" in out["data"]["message"]
+
+
 # ---------------------------------------------------------------------------
 # Surfaces that cannot ask
 # ---------------------------------------------------------------------------

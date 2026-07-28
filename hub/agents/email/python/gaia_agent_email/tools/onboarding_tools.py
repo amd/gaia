@@ -45,6 +45,7 @@ from gaia_agent_email.question import (
 from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 
 from gaia.agents.base.tools import tool
+from gaia.connectors.errors import GrantAfterConnectError
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
@@ -516,6 +517,27 @@ def _setup_mailbox_access(agent: Any, wanted: str) -> str:
         return _setup_flow(agent, wanted)
     except _Declined as exc:
         return _envelope_ok({"changed": False, "declined": True, "message": str(exc)})
+    except GrantAfterConnectError as exc:
+        # save_connection commits BEFORE the grant does (flow.py), so this is
+        # NOT "nothing was changed" — the mailbox connected; only the local
+        # permission write failed. .reason is authored/constructed by GAIA
+        # (agent id, provider, a local OSError-style message) and never
+        # carries a credential, so — unlike the generic catch-all in
+        # setup_mailbox_access — showing it is safe.
+        label = ms.provider_label(exc.provider)
+        return _envelope_ok(
+            {
+                "changed": True,
+                "provider": exc.provider,
+                "account_email": None,
+                "state": ms.STATE_NOT_GRANTED,
+                "message": (
+                    f"{label} is connected now, but I couldn't allow myself "
+                    f"to use it: {exc.reason} Try again, or grant it manually "
+                    "from Settings → Connections in the Agent UI."
+                ),
+            }
+        )
 
 
 def _setup_flow(agent: Any, wanted: str) -> str:
