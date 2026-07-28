@@ -5377,11 +5377,18 @@ def _email_interactive(*, model, verbose: bool) -> int:
 
 
 def _print_autonomy_status(body: dict) -> None:
-    print(f"level: {body.get('level')}  enabled: {body.get('enabled')}")
+    # Whitelisted fields only, coerced to known-safe scalars — never format a
+    # relay response verbatim, so it can't echo back anything unexpected.
+    level = str(body.get("level"))
+    enabled = bool(body.get("enabled"))
+    min_samples = int(body.get("trust_min_samples") or 0)
+    threshold = float(body.get("trust_threshold") or 0.0)
+    trusted_scopes = int(body.get("trusted_scope_count") or 0)
+    print(f"level: {level}  enabled: {enabled}")
     print(
-        f"trust: min_samples={body.get('trust_min_samples')} "
-        f"threshold={body.get('trust_threshold')} "
-        f"trusted_scopes={body.get('trusted_scope_count')}"
+        f"trust: min_samples={min_samples} "
+        f"threshold={threshold} "
+        f"trusted_scopes={trusted_scopes}"
     )
 
 
@@ -5390,20 +5397,25 @@ def _print_autonomy_trust(body: dict) -> None:
     if not scopes:
         print("No trust ledger entries yet.")
         return
+    # Same whitelist contract as _print_autonomy_status.
     for s in scopes:
+        action_type = str(s.get("action_type"))
+        scope = str(s.get("scope"))
+        positive = int(s.get("positive") or 0)
+        total = int(s.get("total") or 0)
         mark = "trusted" if s.get("trusted") else "not trusted"
-        print(
-            f"{s.get('action_type')} / {s.get('scope')}: "
-            f"{s.get('positive')}/{s.get('total')} ({mark})"
-        )
+        print(f"{action_type} / {scope}: {positive}/{total} ({mark})")
 
 
 def _print_autonomy_run(body: dict) -> None:
+    # Same whitelist contract as _print_autonomy_status.
+    executed = len(body.get("executed") or [])
+    proposals = len(body.get("proposals") or [])
+    skipped = int(body.get("skipped") or 0)
+    already_proposed = int(body.get("already_proposed") or 0)
     print(
-        f"executed={len(body.get('executed') or [])} "
-        f"proposals={len(body.get('proposals') or [])} "
-        f"skipped={body.get('skipped')} "
-        f"already_proposed={body.get('already_proposed')}"
+        f"executed={executed} proposals={proposals} "
+        f"skipped={skipped} already_proposed={already_proposed}"
     )
 
 
