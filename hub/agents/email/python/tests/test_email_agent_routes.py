@@ -432,8 +432,12 @@ class TestAutonomyRoutes:
         )
         assert r.status_code == 400
 
-    def test_run_cycle_returns_report(self, client):
+    def test_run_cycle_returns_report_when_enabled(self, client):
         self._mk(client)
+        client.post(
+            "/v1/email/agent/autonomy",
+            json={"session_id": "s1", "level": "earn_trust"},
+        )
         r = client.post("/v1/email/agent/autonomy/run", json={"session_id": "s1"})
         assert r.status_code == 200
         body = r.json()
@@ -442,6 +446,31 @@ class TestAutonomyRoutes:
     def test_run_cycle_404_without_session(self, client):
         r = client.post("/v1/email/agent/autonomy/run", json={"session_id": "nope"})
         assert r.status_code == 404
+
+    def test_run_cycle_refused_while_off(self, client):
+        """#2528: a session's default level is 'off' — /run must refuse with an
+        actionable error naming the current level, not silently return the
+        same 200 shape a real (found-nothing) run would."""
+        self._mk(client)
+        r = client.post("/v1/email/agent/autonomy/run", json={"session_id": "s1"})
+        assert r.status_code == 409
+        detail = r.json()["detail"]
+        assert "off" in detail
+        assert "/v1/email/agent/autonomy" in detail
+
+    def test_run_cycle_refused_while_off_after_explicit_kill(self, client):
+        """Same refusal after the level was explicitly killed mid-session, not
+        just at the untouched default."""
+        self._mk(client)
+        client.post(
+            "/v1/email/agent/autonomy",
+            json={"session_id": "s1", "level": "earn_trust"},
+        )
+        client.post(
+            "/v1/email/agent/autonomy", json={"session_id": "s1", "level": "off"}
+        )
+        r = client.post("/v1/email/agent/autonomy/run", json={"session_id": "s1"})
+        assert r.status_code == 409
 
 
 class TestWorkerDiesWithoutTerminalEvent:
