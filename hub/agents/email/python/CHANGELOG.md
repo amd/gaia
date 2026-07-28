@@ -53,6 +53,16 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **A batch-tool retry no longer gets killed mid-recovery by the streaming
+  layer (#2515).** When the model called a batch tool with a spurious extra
+  argument (e.g. `archive_message_batch` with a stray `mailbox` kwarg), the
+  agent loop correctly rejected it and started retrying — but the SSE layer
+  couldn't tell that per-tool error apart from a genuinely fatal failure, so
+  it ended the response and cancelled the still-retrying agent, dead-ending
+  the turn with no answer and no stats line. `print_error` now carries a
+  `recoverable` flag through to the wire; a recoverable error folds to a
+  non-terminal status line instead of a terminal `error`, so the retry can
+  reach completion and the user still sees the failure as it happens.
 - **A trashed message is recoverable any time it's still in Trash, not just
   for a few seconds (#2523).** The only restore path (`restore_message`) was
   gated by a short undo window and a live `action_id`; once either was gone,
