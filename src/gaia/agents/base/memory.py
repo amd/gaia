@@ -53,7 +53,10 @@ from gaia.agents.base.memory_store import (
     VALID_CATEGORIES,
 )
 from gaia.agents.base.procedural_memory import ProceduralMemoryMixin
-from gaia.llm.lemonade_client import DEFAULT_EMBEDDING_MODEL
+from gaia.llm.lemonade_client import (
+    DEFAULT_EMBEDDING_CHECKPOINT,
+    DEFAULT_EMBEDDING_MODEL,
+)
 
 if TYPE_CHECKING:
     from gaia.agents.base.bootstrap import BootstrapResult
@@ -338,6 +341,36 @@ def _blob_to_embedding(blob: bytes) -> np.ndarray:
     return np.frombuffer(blob, dtype=np.float32).copy()
 
 
+#: Reason codes for why memory is unavailable this session (#2519). Distinct
+#: codes because the remedies differ: an unset env var, a model that was
+#: never pulled into a *running* Lemonade, and Lemonade not running at all
+#: are three different problems with three different fixes.
+MEMORY_UNAVAILABLE_DISABLED_BY_ENV = "disabled_by_env"
+MEMORY_UNAVAILABLE_MODEL_NOT_PULLED = "model_not_pulled"
+MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE = "service_unreachable"
+
+#: Substrings that identify a Lemonade "model not found" response (the
+#: service answered, it just doesn't have this model pulled) rather than a
+#: connection failure. Matches Lemonade's own error body, e.g. status 404
+#: with ``{"error":{"code":"model_not_found", ...}}``.
+_MODEL_NOT_FOUND_MARKERS = ("model_not_found", "was not found", "404")
+
+
+def _classify_embedding_failure(exc: Exception) -> str:
+    """Classify why the embedding connectivity probe failed at startup.
+
+    Returns ``MEMORY_UNAVAILABLE_MODEL_NOT_PULLED`` when Lemonade answered
+    but rejected the embedding model as unknown (never pulled), or
+    ``MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE`` for everything else (Lemonade
+    down, wrong port, connection refused/timeout, etc.) — the safer default
+    when the failure can't be positively identified as "model not pulled".
+    """
+    text = str(exc).lower()
+    if any(marker in text for marker in _MODEL_NOT_FOUND_MARKERS):
+        return MEMORY_UNAVAILABLE_MODEL_NOT_PULLED
+    return MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE
+
+
 class MemoryMixin(ProceduralMemoryMixin):
     """
     Mixin that gives any Agent persistent memory across sessions (v2).
@@ -389,6 +422,12 @@ class MemoryMixin(ProceduralMemoryMixin):
         self._embedding_model = embedding_model or EMBEDDING_MODEL
         # Pre-probe default; refined from the live embedder below.
         self._embedding_dim = EMBEDDING_DIM
+        # Why memory is unavailable this session, or None while it's live.
+        # Set on every path below (#2519) so callers can report the REAL
+        # cause instead of guessing between "env var" / "not pulled" /
+        # "unreachable" after the fact.
+        self._memory_unavailable_reason: Optional[str] = None
+        self._memory_unavailable_detail: Optional[str] = None
 
         if os.environ.get("GAIA_MEMORY_DISABLED") == "1":
             logger.info(
@@ -396,6 +435,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                 "skipping init"
             )
             self._memory_store = None
+            self._memory_unavailable_reason = MEMORY_UNAVAILABLE_DISABLED_BY_ENV
             self._memory_context = context
             self._auto_extract_enabled = False
             self._incognito = True
@@ -498,12 +538,24 @@ class MemoryMixin(ProceduralMemoryMixin):
                 )
             self._memory_store.set_embedder_id(self._embedding_model)
         except Exception as e:
-            logger.warning(
-                "[MemoryMixin] Lemonade embedding service unreachable — "
-                "memory v2 disabled for this session (start lemonade-server "
-                "and reload to enable). Reason: %s",
-                e,
-            )
+            reason = _classify_embedding_failure(e)
+            self._memory_unavailable_reason = reason
+            self._memory_unavailable_detail = str(e)
+            if reason == MEMORY_UNAVAILABLE_MODEL_NOT_PULLED:
+                logger.warning(
+                    "[MemoryMixin] embedding model '%s' is not pulled in "
+                    "Lemonade — memory v2 disabled for this session (pull "
+                    "the model and restart the agent to enable). Reason: %s",
+                    self._embedding_model,
+                    e,
+                )
+            else:
+                logger.warning(
+                    "[MemoryMixin] Lemonade embedding service unreachable — "
+                    "memory v2 disabled for this session (start lemonade-server "
+                    "and reload to enable). Reason: %s",
+                    e,
+                )
             # Tear down the partially-built state so no later code path tries
             # to use memory.
             self._memory_store = None
@@ -701,13 +753,13 @@ class MemoryMixin(ProceduralMemoryMixin):
 
         store = self.memory_store  # raises if init_memory() was never called
         if store is None:
+            reason = self.memory_unavailable_message() or (
+                "memory is disabled for this session"
+            )
             raise RuntimeError(
-                "Cannot run onboarding: memory is disabled for this session "
-                "(the embedding service was unreachable at agent start, or "
-                "GAIA_MEMORY_DISABLED=1 is set). Start lemonade-server and "
-                "re-create the agent, or run `gaia memory bootstrap "
-                "--chat-only`, which onboards without an embedder. See "
-                "docs/guides/memory.mdx."
+                f"Cannot run onboarding: {reason} Alternatively, run `gaia "
+                "memory bootstrap --chat-only`, which onboards without an "
+                "embedder. See docs/guides/memory.mdx."
             )
 
         return _run_bootstrap_conversation(
@@ -726,6 +778,62 @@ class MemoryMixin(ProceduralMemoryMixin):
         vec = self._embed_text(content)
         self.memory_store.store_embedding(knowledge_id, _embedding_to_blob(vec))
         self._faiss_add(knowledge_id, vec)
+
+    # ------------------------------------------------------------------
+    # Degraded-state reporting (#2519)
+    # ------------------------------------------------------------------
+
+    def memory_unavailable_message(self) -> Optional[str]:
+        """Human-readable reason + remedy for why memory is off this session.
+
+        Returns ``None`` when a memory store is live. Otherwise returns one of
+        three DISTINCT messages, keyed off the real cause recorded by
+        ``init_memory()`` — never conflates "the model was never pulled" (the
+        service is reachable and running fine) with "the service itself is
+        down" (start it), since a user who acts on the wrong one is sent down
+        the wrong remedy. Every branch also says a running session cannot
+        recover on its own — memory availability is decided once at startup.
+        """
+        if getattr(self, "_memory_store", None) is not None:
+            return None
+        reason = getattr(self, "_memory_unavailable_reason", None)
+        model = getattr(self, "_embedding_model", EMBEDDING_MODEL)
+        restart_note = (
+            "Restart the agent to pick this up — a running session cannot "
+            "recover memory on its own."
+        )
+        if reason == MEMORY_UNAVAILABLE_DISABLED_BY_ENV:
+            return (
+                "Memory is unavailable this session: disabled via "
+                "GAIA_MEMORY_DISABLED=1. Unset it and restart the agent to "
+                "enable memory."
+            )
+        if reason == MEMORY_UNAVAILABLE_MODEL_NOT_PULLED:
+            if model == EMBEDDING_MODEL:
+                remedy = (
+                    f"Pull it — POST /api/v1/pull "
+                    f'{{"model_name": "{model}", "checkpoint": '
+                    f'"{DEFAULT_EMBEDDING_CHECKPOINT}", "recipe": "llamacpp", '
+                    '"embedding": true}'
+                )
+            else:
+                remedy = f"Pull '{model}' in Lemonade"
+            return (
+                f"Memory is unavailable this session: the embedding model '{model}' "
+                "has not been pulled into Lemonade — Lemonade itself is "
+                f"running and reachable. {remedy}, then restart the agent. "
+                f"{restart_note}"
+            )
+        # MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE, or an unclassified failure —
+        # treat as unreachable, the safer default (matches the pre-#2519
+        # behavior for anything we can't positively identify).
+        detail = getattr(self, "_memory_unavailable_detail", None)
+        detail_suffix = f" ({detail})" if detail else ""
+        return (
+            "Memory is unavailable this session: the Lemonade embedding service was "
+            f"unreachable at startup{detail_suffix}. Start Lemonade Server, "
+            f"then restart the agent. {restart_note}"
+        )
 
     # ------------------------------------------------------------------
     # Properties

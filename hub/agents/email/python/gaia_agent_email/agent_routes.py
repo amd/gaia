@@ -52,6 +52,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from gaia.logger import get_logger
+from gaia_agent_email import trust
 
 logger = get_logger(__name__)
 
@@ -402,11 +403,25 @@ async def set_autonomy(request: AutonomyLevelRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.post("/autonomy/run")
+@router.post(
+    "/autonomy/run",
+    responses={
+        409: {
+            "description": (
+                "Autonomy is off for this session — the kill switch refuses "
+                "the run instead of silently doing nothing (#2528)."
+            )
+        }
+    },
+)
 async def run_autonomy(request: AutonomyRunRequest) -> Dict[str, Any]:
     """Trigger one observe->decide->act cycle now (the daemon/CLI driver seam).
 
     Runs on a worker thread — the cycle does mailbox I/O and local inference.
+    Refuses with HTTP 409 while the session's autonomy level is ``off`` (#2528)
+    — without this, "autonomy is disabled" and "autonomy ran and found
+    nothing to do" return the identical 200 shape, and a caller can't tell
+    them apart.
     """
     session = registry.get(request.session_id)
     if session is None:
@@ -415,6 +430,18 @@ async def run_autonomy(request: AutonomyRunRequest) -> Dict[str, Any]:
     if not callable(runner):
         raise HTTPException(
             status_code=501, detail="This agent build does not expose autonomy."
+        )
+    status_fn = getattr(session.agent, "autonomy_status", None)
+    level = status_fn().get("level") if callable(status_fn) else None
+    if level == trust.LEVEL_OFF:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Autonomy is off for session '{request.session_id}' — the run "
+                "was refused, not silently skipped. POST /v1/email/agent/autonomy "
+                f'{{"session_id": "{request.session_id}", '
+                '"level": "suggest|earn_trust|full"} to enable it first.'
+            ),
         )
     return await asyncio.to_thread(runner, {"max_messages": request.max_messages})
 

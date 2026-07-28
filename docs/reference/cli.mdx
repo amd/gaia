@@ -1072,6 +1072,28 @@ gaia email -v -q "Triage my inbox"  # verbose logs for benchmarking
 
 [→ Full Email Triage Agent Documentation](/guides/email)
 
+#### `gaia email autonomy` — autonomy control
+
+A thin client over the sidecar's `/v1/email/agent/autonomy*` REST routes, relayed
+through the daemon like every other `gaia email` command (same auth path — no
+sidecar bearer ever reaches the CLI).
+
+```bash
+gaia email autonomy status                    # current level + trust summary
+gaia email autonomy trust                     # earned-trust ledger
+gaia email autonomy set-level earn_trust       # set the level explicitly
+gaia email autonomy pause                      # stop autonomous activity
+gaia email autonomy resume --level earn_trust  # resume (default: earn_trust)
+gaia email autonomy kill                       # kill switch — level -> off
+gaia email autonomy run --max-messages 25      # trigger one cycle now
+```
+
+All subcommands share one persistent `--session-id` (default `cli`) — autonomy
+state lives on that session's in-memory agent, not on disk, so a level you set
+stays set across invocations that use the same session. `run` refuses with an
+actionable error while the level is `off` (#2528) instead of silently reporting
+that nothing happened.
+
 ---
 
 ### SD Command

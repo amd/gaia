@@ -99,7 +99,7 @@ class TrustDecision:
     """The policy's verdict for one candidate action.
 
     ``action`` is the disposition; ``reason`` is a human-readable rationale
-    surfaced in the activity feed and the planned ``gaia email autonomy`` output;
+    surfaced in the activity feed and the ``gaia email autonomy`` CLI output;
     ``confidence`` is the ledger trust score in ``[0, 1]`` (1.0 for the
     hard-coded floor and for explicit preferences).
     """
