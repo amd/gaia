@@ -554,21 +554,24 @@ def _list_agents_dict(inst) -> dict:
     return {e["agent_id"]: e for e in r.json()["agents"]}
 
 
-def test_headline_pre_fix_baseline_wrong_checkout_silently_served_checkout_a(
+def test_regression_wrong_checkout_can_no_longer_be_silently_served(
     toy_dev_env, tmp_path
 ):
-    """PRE-FIX BASELINE (#2588), captured on UNMODIFIED code.
+    """Regression pin (#2588) on the OLD, now-impossible behavior.
 
-    The daemon's toy-dev spec is anchored at this repo's own fixture tree
-    ("checkout A"). A caller invoking `gaia daemon start-agent toy-dev
-    --mode dev` from a COMPLETELY DIFFERENT git work tree ("checkout B")
-    gets no error and no mention of either checkout -- today's
-    ``_handle_daemon_start_agent`` never resolves the caller's own checkout
-    at all, and the daemon spawns from whatever ITS OWN spec says. This test
-    exists to prove that is real, observed behavior (not a hypothetical) so
-    the paired post-fix test below has something concrete to invert. It is
-    expected to start FAILING once #2588 lands, at which point delete it (or
-    repurpose it as a regression pin on the OLD, now-impossible behavior).
+    Before the fix, this exact scenario — the daemon's toy-dev spec anchored
+    at this repo's own fixture tree ("checkout A"), a caller invoking `gaia
+    daemon start-agent toy-dev --mode dev` from a COMPLETELY DIFFERENT git
+    work tree ("checkout B") — exited 0 and silently served checkout A's
+    sidecar with no mention of either checkout anywhere in the response
+    (captured verbatim on unmodified `main`: exit 0, stdout "agent 'toy-dev'
+    sidecar running (mode: dev, ...)", GET /daemon/v1/agents reporting
+    dev_src_dir == checkout A's fixture path, and a live /health + /version
+    answering from checkout A — see the PR description for the full capture).
+
+    Now inverted: the same setup must refuse, and — the assertion this test
+    adds beyond ``test_start_agent_from_wrong_checkout_is_refused_naming_both_checkouts``
+    — nothing ever answers on any port at all, because nothing was spawned.
     """
     checkout_b = tmp_path / "checkout-b"
     checkout_b.mkdir()
@@ -584,25 +587,19 @@ def test_headline_pre_fix_baseline_wrong_checkout_silently_served_checkout_a(
             "dev",
             cwd=str(checkout_b),
         )
-        assert r.returncode == 0, f"stdout={r.stdout!r} stderr={r.stderr!r}"
-        assert "toy-dev" in r.stdout
-        assert "dev" in r.stdout
+        assert r.returncode != 0, f"stdout={r.stdout!r} stderr={r.stderr!r}"
 
         inst = client.attach()
         assert inst is not None
 
         entry = _list_agents_dict(inst)["toy-dev"]
-        assert entry["state"] == "running"
-        assert entry["mode"] == "dev"
-        # Silently serving THE DAEMON'S OWN checkout ("A") -- checkout B (the
-        # caller's actual checkout) is never consulted, let alone named.
-        assert entry["dev_src_dir"] == str(_TOY_DEV_FIXTURE_DIR)
+        # The old assertion was entry["state"] == "running" with
+        # dev_src_dir == checkout A. Now: nothing runs, nothing is served.
+        assert entry["state"] == "stopped"
+        assert entry["mode"] is None
+        assert entry["dev_src_dir"] is None
+        assert entry["base_url"] is None
         assert str(checkout_b) not in json.dumps(entry)
-
-        health = requests.get(f"{entry['base_url']}/health", timeout=5).json()
-        assert health["service"] == "gaia-agent-toy-dev"
-        version = requests.get(f"{entry['base_url']}/version", timeout=5).json()
-        assert version["apiVersion"] == "1.0"
     finally:
         _stop(inst)
 
