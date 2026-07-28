@@ -267,7 +267,18 @@ def get_message_impl(
 
 
 def get_thread_impl(gmail, *, thread_id: str, debug: bool = False) -> Dict[str, Any]:
-    """Fetch every message in a thread, backend order preserved (no sort).
+    """Fetch every message in a thread, sorted chronologically (oldest first).
+
+    #2531: Gmail's thread API does not guarantee message order (it is
+    "usually" oldest-first, not always) — the same risk
+    ``_thread_message_sort_key`` already defends against for
+    ``summarize_thread``. This path used to trust raw backend order instead,
+    and a live run showed the consequence: the calling LLM, handed an
+    unlabeled JSON array it had to sort and enumerate itself, returned the
+    right message COUNT but dropped/duplicated entries and inverted the
+    trailing pair. Sorting here, and numbering each message with its
+    position, gives the model an authoritative order instead of one it has
+    to compute.
 
     The combined body budget mirrors ``_format_thread_for_summary``'s
     soft-target semantics (#2073): under ``DEFAULT_THREAD_TRANSCRIPT_CHARS``
@@ -278,7 +289,7 @@ def get_thread_impl(gmail, *, thread_id: str, debug: bool = False) -> Dict[str, 
     """
     with log_tool_call("get_thread", {"thread_id": thread_id}, debug=debug) as st:
         thread = gmail.get_thread(thread_id)
-        messages = thread.get("messages", [])
+        messages = sorted(thread.get("messages", []), key=_thread_message_sort_key)
         out = [_format_message_for_llm(m) for m in messages]
         total = sum(len(f["body"]) for f in out)
         if messages and total > DEFAULT_THREAD_TRANSCRIPT_CHARS:
@@ -293,6 +304,9 @@ def get_thread_impl(gmail, *, thread_id: str, debug: bool = False) -> Dict[str, 
                 out = [
                     _format_message_for_llm(m, body_limit=fair_share) for m in messages
                 ]
+        for position, formatted in enumerate(out, start=1):
+            formatted["index"] = position
+            formatted["of_total"] = len(out)
         bodies_clipped = sum(1 for f in out if f["body_truncated"])
         st["result_summary"] = {
             "thread_id": thread_id,
@@ -1425,10 +1439,14 @@ class ReadToolsMixin:
         def get_thread(thread_id: str, mailbox: str = "") -> str:
             """Fetch every message in a thread (conversation view).
 
-            Long threads share a combined body budget: over-budget message
-            bodies are clipped with a ``...[truncated]`` marker; messages are
-            never dropped. ``mailbox`` (optional) routes when multiple
-            mailboxes are connected.
+            Messages are returned sorted chronologically (oldest first) and
+            each carries ``index``/``of_total`` (its 1-based position in the
+            thread) — use these, not the raw list order, when listing or
+            counting messages. Long threads share a combined body budget:
+            over-budget message bodies are clipped with a
+            ``...[truncated]`` marker; messages are never dropped.
+            ``mailbox`` (optional) routes when multiple mailboxes are
+            connected.
             """
             try:
                 backend = agent._backend_for_message(thread_id, mailbox or None)
