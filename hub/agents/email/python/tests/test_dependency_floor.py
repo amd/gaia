@@ -9,6 +9,14 @@ core and the agent dies at startup with ImportError (#2112). These tests
 pin the floor to the symbol so the two can't silently drift apart again:
 if the floor is lowered, or the agent grows an import the declared floor
 doesn't cover, one of these fails.
+
+The guided Outlook walkthrough (#2590) adds a second such import:
+``gaia_agent_email.tools.setup_walkthrough`` imports ``gaia.connectors.
+setup_routes``, a brand-new core module. Core is 0.22.0 today, so a floor
+left at 0.22.0 would let a fresh resolver pick a core that predates
+``setup_routes`` and ImportError on every call to ``setup_mailbox_access``
+for Microsoft — exactly how #2112 burned. The floor here is bumped to the
+release that will actually contain it.
 """
 
 from __future__ import annotations
@@ -21,6 +29,12 @@ EMAIL_ROOT = Path(__file__).resolve().parents[1]
 # First core release shipping gaia.agents.registry.get_embedding_model_for_device
 # (introduced by commit 89db99d6, first tagged in v0.22.0).
 REQUIRED_FLOOR = (0, 22, 0)
+
+# First core release that will ship gaia.connectors.setup_routes (#2590).
+# Core is 0.22.0 as of this change; this names the NEXT release, matching
+# the pattern flow.py already uses elsewhere for the 'common' tenant default
+# ("since v0.23.0").
+REQUIRED_FLOOR_SETUP_ROUTES = (0, 23, 0)
 
 
 def _floor_tuple(version: str) -> tuple[int, ...]:
@@ -45,6 +59,26 @@ def test_pyproject_floor_covers_registry_symbol():
         "gaia.agents.registry.get_embedding_model_for_device (first shipped in "
         "0.22.0); a fresh resolver may select a core that ImportErrors at "
         "agent start (#2112)"
+    )
+
+
+def test_setup_walkthrough_module_imports_and_setup_routes_symbol_exists():
+    """The import chain that will burn exactly like #2112 if the floor lags."""
+    import gaia_agent_email.tools.setup_walkthrough  # noqa: F401
+    from gaia.connectors.setup_routes import ROUTES
+
+    assert "microsoft" in ROUTES
+
+
+def test_pyproject_floor_covers_setup_routes():
+    pyproject = (EMAIL_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    match = re.search(r'"amd-gaia\[api\]>=([0-9.]+)"', pyproject)
+    assert match, "pyproject.toml must declare an amd-gaia[api]>=X.Y.Z floor"
+    assert _floor_tuple(match.group(1)) >= REQUIRED_FLOOR_SETUP_ROUTES, (
+        f"amd-gaia floor {match.group(1)} predates gaia.connectors.setup_routes "
+        "(first shipped in 0.23.0); a fresh resolver may select a core that "
+        "ImportErrors on every guided-Outlook-setup call (#2590, same failure "
+        "mode as #2112)"
     )
 
 

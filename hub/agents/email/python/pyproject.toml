@@ -14,10 +14,13 @@ requires-python = ">=3.10"
 # AND keyring automatically — the email REST router's import chain needs keyring
 # at module load and at request time (connected_mailbox_providers). Closes the
 # "consumer forgot [api]" half of #1617.
-# Floor: 0.22.0 is the first core release shipping
-# gaia.agents.registry.get_embedding_model_for_device, imported at agent
-# start (#2112). tests/test_dependency_floor.py guards this floor.
-dependencies = ["amd-gaia[api]>=0.22.0"]
+# Floor: 0.23.0 is the first core release shipping
+# gaia.connectors.setup_routes, imported by tools/setup_walkthrough.py for
+# the guided Outlook setup (#2590) — same failure mode as #2112
+# (get_embedding_model_for_device, which needed 0.22.0). Raising the floor
+# again here rather than adding a second min-version check keeps this file
+# the single source of truth. tests/test_dependency_floor.py guards it.
+dependencies = ["amd-gaia[api]>=0.23.0"]
 
 # Console script for the REST sidecar — the fast dev-iteration entry point.
 # `gaia-agent-email serve --reload` runs the same app the frozen binary serves,
