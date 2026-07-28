@@ -444,6 +444,18 @@ async def system_status(request: Request, db: ChatDatabase = Depends(get_db)):
     """Check system readiness (Lemonade, models, disk space)."""
     status = SystemStatus()
 
+    # Resolve how to start Lemonade on THIS host once, here, so every surface
+    # renders the same answer. Never fatal: a banner losing its hint is far
+    # better than the status endpoint failing.
+    try:
+        from gaia.llm.lemonade_launcher import describe_start_hint
+
+        hint = describe_start_hint()
+        status.start_instruction = hint.instruction
+        status.start_command = hint.command
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("system status: could not resolve the start hint: %s", exc)
+
     # Check Lemonade Server
     # Use a generous timeout (10s) because when the LLM is handling many
     # parallel requests it may take a while to respond to the health check.

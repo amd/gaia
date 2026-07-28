@@ -403,6 +403,36 @@ describe("POST /publish — catalog enrichment (website contract)", () => {
     expect(index.agents[0].requirements.npu).toBe("required");
   });
 
+  // type was validated on ingest but dropped before storage, so a published
+  // component was indistinguishable from an agent in the served catalog.
+  it("carries type through to manifest.json and index.json", async () => {
+    const env = makeEnv();
+    await publish(env, {
+      token: "tok_amd",
+      manifestYaml: `${sampleManifest({ id: "terminal-hub", language: "go" })}type: component\n`,
+      artifact: "binary",
+      filename: "gaia-linux-x64",
+    });
+    const stored = (await (
+      await env.bucket.get("agents/terminal-hub/manifest.json")
+    )!.json()) as { type: string };
+    expect(stored.type).toBe("component");
+    const index = (await (await env.bucket.get("index.json"))!.json()) as CatalogIndex;
+    expect(index.agents.find((a) => a.id === "terminal-hub")!.type).toBe("component");
+  });
+
+  it("defaults type to agent in index.json when the manifest omits it", async () => {
+    const env = makeEnv();
+    await publish(env, {
+      token: "tok_amd",
+      manifestYaml: sampleManifest(),
+      artifact: "wheel",
+      filename: "gaia_agent_chat-0.1.0-py3-none-any.whl",
+    });
+    const index = (await (await env.bucket.get("index.json"))!.json()) as CatalogIndex;
+    expect(index.agents[0].type).toBe("agent");
+  });
+
   it("surfaces deprecation_message in manifest.json and index.json", async () => {
     const env = makeEnv();
     const yaml =

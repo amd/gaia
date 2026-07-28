@@ -319,6 +319,10 @@ func realCommands() []string {
 		"gaia connectors connect ",
 		"gaia connectors grants grant ",
 		"gaia connectors list",
+		// Reached only when the machine cannot name Lemonade's launcher
+		// (lemonadeRestartRemedy, !l.Found) — so it fires on a runner with no
+		// Lemonade installed and never on a developer box that has one.
+		"gaia kill",
 	}
 	l := resolveLemonade()
 	for _, cmd := range []string{l.Start, l.Restart} {
@@ -327,6 +331,25 @@ func realCommands() []string {
 		}
 	}
 	return fixed
+}
+
+// The remedy for a host that cannot name Lemonade's launcher only fires where
+// nothing is installed — a CI runner, never a developer box with Lemonade on
+// it. So the rows that reach it pass locally and fail only in CI, which is how
+// "gaia kill" stayed missing from realCommands(). Resolving against a simulated
+// bare Linux host puts that answer in reach of a local `go test`.
+func TestTheBareHostRemedyIsARealCommand(t *testing.T) {
+	orig := realHostProbe
+	realHostProbe = func() hostProbe { return fakeHostFor("linux", nil, nil, map[string]string{}) }
+	defer func() { realHostProbe = orig }()
+
+	if l := resolveLemonade(); l.Found {
+		t.Fatalf("a host with nothing installed resolved a launcher: %+v", l)
+	}
+	assertRealCommand(t, Row{
+		Key:    KeyLemonade,
+		Remedy: lemonadeRestartRemedy(),
+	})
 }
 
 func assertRealCommand(t *testing.T, row Row) {
