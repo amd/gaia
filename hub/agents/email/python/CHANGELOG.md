@@ -88,6 +88,20 @@ contract version is tracked separately as
   the target — and only uses the user's own wording verbatim when they hand
   it over explicitly. `send_draft` / `send_now` / `forward_message` remain
   confirmation-gated; drafting still never sends.
+- **"Show me my inbox" now works on a real mailbox with the default NPU
+  profile (#2514).** `list_inbox` and `search_messages` capped each
+  message's body independently but never checked the COMBINED size of the
+  result — a realistic 25-message inbox built a >100KB tool response that
+  overflowed the NPU profile's 32768-token context window on the very
+  first tool call of a brand-new conversation, and `/clear` didn't help
+  since nothing had accumulated yet. Worse, the overflow sometimes surfaced
+  as a silently truncated message count (10 requested, 8 returned) rather
+  than a clear error. Both tools now shrink every message's body together
+  to fit the active device's context budget (GPU or NPU, whichever is
+  running) — messages are never dropped to make the count fit, and a
+  request too large even at the smallest usable body size fails with an
+  actionable error naming the limit instead of silently returning less
+  than was asked for.
 - **Calendar listing and conflict checks no longer 400 on a date-only range,
   and never end a turn narrating a retry that didn't happen (#2517).**
   `list_calendar_events` and `detect_calendar_conflicts` forwarded a
