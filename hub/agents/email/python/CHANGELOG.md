@@ -53,6 +53,17 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **`get_thread` returns every message in the right order — no more dropped
+  or duplicated entries on a multi-participant thread (#2531).** Asked to
+  list a full conversation chronologically, the agent could return the
+  right message count but the wrong contents — one side of a two-party
+  thread under-represented, entries duplicated, the last two messages
+  swapped. Gmail's thread API does not guarantee message order, and
+  `get_thread` — unlike its `summarize_thread` sibling, which already
+  sorted defensively — trusted raw backend order and handed the model an
+  unlabeled list to sort itself. `get_thread` now sorts by timestamp and
+  numbers each message with its position (`index`/`of_total`), giving the
+  model an authoritative order instead of one it has to compute.
 - **A trashed message is recoverable any time it's still in Trash, not just
   for a few seconds (#2523).** The only restore path (`restore_message`) was
   gated by a short undo window and a live `action_id`; once either was gone,
