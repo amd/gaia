@@ -179,6 +179,11 @@ async def upload_by_path(
     Small files (<5 MB) are indexed synchronously. Larger files are
     indexed in the background so the UI stays responsive.
     """
+    # An empty path resolves to the CWD, so it would be judged by whatever
+    # directory the server happens to run from. Refuse it outright.
+    if not request.filepath:
+        raise HTTPException(status_code=400, detail="File path is required")
+
     # Security: reject null bytes before resolve() — it raises an unhandled
     # ValueError on an embedded NUL, bypassing every check below.
     if "\x00" in request.filepath:

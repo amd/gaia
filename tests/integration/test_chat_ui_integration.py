@@ -1318,10 +1318,15 @@ class TestRequestValidation:
         assert resp.json()["title"] == "Test Session"
 
     def test_document_upload_empty_filepath(self, client):
-        """Empty filepath string is rejected."""
+        """Empty filepath string is rejected, whatever the server's CWD.
+
+        An empty path used to fall through to ``resolve()``, which turns it
+        into the CWD -- so the status depended on where the suite ran (404
+        from inside home, 403 from outside). It is now a flat 400.
+        """
         resp = client.post("/api/documents/upload-path", json={"filepath": ""})
-        # Empty path should fail (no extension or file not found)
-        assert resp.status_code in (400, 404)
+        assert resp.status_code == 400, resp.text
+        assert "required" in resp.json()["detail"]
 
     def test_attach_document_missing_document_id(self, client, session_id):
         """Missing document_id in attach request returns 422."""
