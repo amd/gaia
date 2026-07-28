@@ -50,6 +50,7 @@ behind any entry — API shapes, endpoints, and version semantics — see
   resumes. An unanswered question ends the run with an error rather than hanging.
   Approvals (`needs_confirmation`) are unchanged: still terminal, still
   deny-by-default (#2469).
+
 - **Work/school Outlook (Microsoft 365 / Entra ID) mailboxes now work, not just
   personal Outlook.com.** The Microsoft connector previously signed in only
   against the `consumers` tenant, so a corporate Microsoft 365 account was

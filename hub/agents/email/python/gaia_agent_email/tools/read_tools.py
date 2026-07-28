@@ -793,6 +793,12 @@ def triage_inbox_impl(
     movement. It must never break the scan — callers get their exceptions
     swallowed and logged, because narration is not worth losing a triage over.
 
+    ``progress(done, total, subject)`` is called after each message when
+    supplied. A single LLM follow-up costs 9-31s locally, so a 25-message scan
+    can sit silent for a minute; the callback is what turns that into visible
+    movement. It must never break the scan — callers get their exceptions
+    swallowed and logged, because narration is not worth losing a triage over.
+
     For each message: fetch metadata, run the heuristic. If the heuristic
     is confident, record its category as the triage decision. Otherwise
     (and always for ``urgent`` vs ``actionable``, which depend on body

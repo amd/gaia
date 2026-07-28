@@ -264,3 +264,5 @@ tests/unit/eval/test_mcp_tool_reliability_scenarios.py
 /.codex/
 /.cursor/
 /.claude/skills/m365-email/
+# Claudia agent worktrees (local orchestration scratch)
+.claudia-worktrees/
