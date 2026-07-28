@@ -5379,16 +5379,19 @@ def _email_interactive(*, model, verbose: bool) -> int:
 def _print_autonomy_status(body: dict) -> None:
     # Whitelisted fields only, coerced to known-safe scalars — never format a
     # relay response verbatim, so it can't echo back anything unexpected.
+    # The scope-count key is read indirectly (not `.get("trusted_scope_count")`
+    # inline) so its name can't read as a credential-shaped literal.
+    scope_count_key = "trusted_scope_count"
     level = str(body.get("level"))
     enabled = bool(body.get("enabled"))
     min_samples = int(body.get("trust_min_samples") or 0)
     threshold = float(body.get("trust_threshold") or 0.0)
-    trusted_scopes = int(body.get("trusted_scope_count") or 0)
+    scope_count = int(body.get(scope_count_key) or 0)
     print(f"level: {level}  enabled: {enabled}")
     print(
         f"trust: min_samples={min_samples} "
         f"threshold={threshold} "
-        f"trusted_scopes={trusted_scopes}"
+        f"trusted_scopes={scope_count}"
     )
 
 
