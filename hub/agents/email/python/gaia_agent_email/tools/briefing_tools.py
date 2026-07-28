@@ -58,14 +58,26 @@ class BriefingToolsMixin:
             "morning brief", or "what's my inbox summary for today". Returns
             the most recent scheduled briefing if one has been generated;
             otherwise generates a fresh briefing now over every connected
-            mailbox and persists it. The payload is the same
-            ``email_pre_scan`` envelope the triage card renders — write a short
-            framing sentence, do not recite the JSON.
+            mailbox and persists it.
+
+            Unlike ``pre_scan_inbox``, no card renders for this tool's result
+            — your reply IS the briefing, so do not pad it into one sentence.
+            ``data.summary`` is already computed for you (never compute or
+            guess your own urgency judgement): state ``data.summary.headline``
+            in your own words, then list each entry in
+            ``data.summary.highlights`` individually (subject + sender), not
+            just the count. If ``data.summary.needs_attention`` is false, say
+            plainly that nothing needs attention. Name every entry in
+            ``data.summary.preferences_applied`` (e.g. "using your low
+            priority: ..."), matching the pre-scan card's behavior. Never
+            assert an urgency conclusion that ``data.summary`` /
+            ``data.briefing`` did not itself compute.
             """
             try:
                 from gaia_agent_email.briefing import (
                     load_latest_briefing,
                     persist_briefing,
+                    summarize_briefing,
                 )
 
                 record = load_latest_briefing()
@@ -78,6 +90,11 @@ class BriefingToolsMixin:
                         "briefing": envelope,
                     }
                     persist_briefing(record)
+                # Computed fresh on every call (never trust a persisted
+                # "summary" as current) so a briefing generated before #2525
+                # still gets the structured breakdown on read.
+                record = dict(record)
+                record["summary"] = summarize_briefing(record.get("briefing") or {})
                 return _envelope_ok(record)
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))

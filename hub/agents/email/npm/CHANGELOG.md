@@ -12,6 +12,17 @@ behind any entry — API shapes, endpoints, and version semantics — see
   response whether autonomy was disabled or had genuinely run and found
   nothing — there was no way to tell which. It now returns an error naming
   the current level and how to turn autonomy back on.
+- **Asking the agent to draft a reply or forward now actually drafts one,
+  instead of asking you to write it.** The agent would correctly find the
+  right email, then ask you to supply the reply or forward text — the exact
+  thing you'd asked it to write. Nothing told it that composing the message
+  was its own job (that instruction only existed once it had learned your
+  writing style from enough sent mail, so it never applied to a fresh
+  mailbox). It now writes the reply or forward itself from the original
+  message plus whatever you specified (length, tone, points to hit), and
+  still uses your exact wording when you hand it over yourself. Sending is
+  unchanged — every draft still needs your confirmation before it goes out
+  (#2524).
 - **A trashed email is recoverable any time it's still in Trash — not just for
   a few seconds after you delete it.** The only way back used to be a short
   undo window right after trashing; miss it, and the agent told you the
