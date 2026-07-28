@@ -40,7 +40,7 @@ const { nodes, depth = 0 } = Astro.props;
             </span>
             <span class="flex-none text-[11px] text-g-muted">{n.count} {n.count === 1 ? 'file' : 'files'} · {formatBytes(n.size)}</span>
           </summary>
-          <div class="ml-2 border-l border-g-border/40 pl-3">
+          <div class="ml-2 border-l border-g-border pl-3">
             <Self nodes={n.children} depth={depth + 1} />
           </div>
         </details>

@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: MIT
 
 import '../design/tokens.css';
+import '../design/global.css';
+import StarField from '../components/StarField.astro';
 
 interface Props {
   title: string;
@@ -20,8 +22,8 @@ const canonicalURL = new URL(Astro.url.pathname, Astro.site);
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="description" content={description} />
     <meta name="generator" content={Astro.generator} />
-    <meta name="theme-color" content="#0a0a0b" media="(prefers-color-scheme: dark)" />
-    <meta name="theme-color" content="#fcfcfa" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#08080a" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#fbfaf7" media="(prefers-color-scheme: light)" />
     <!-- Pre-paint theme: avoids flash of wrong theme. localStorage empty -> OS preference. -->
     <script is:inline>
       (() => {
@@ -40,34 +42,45 @@ const canonicalURL = new URL(Astro.url.pathname, Astro.site);
     <meta property="og:type" content="website" />
     <meta property="og:url" content={canonicalURL} />
     <!-- TODO: Add og-image.png (1200x630) to public/ -->
-    <!-- <meta property="og:image" content={new URL('/og-image.png', Astro.site)} /> -->
-    <!-- <meta property="og:image:width" content="1200" /> -->
-    <!-- <meta property="og:image:height" content="630" /> -->
     <meta property="og:site_name" content="gaia" />
 
     <!-- Twitter -->
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content={title} />
     <meta name="twitter:description" content={description} />
-    <!-- <meta name="twitter:image" content={new URL('/og-image.png', Astro.site)} /> -->
 
     <!-- Favicon -->
     <link rel="icon" type="image/x-icon" href="/favicon.ico" />
     <link rel="apple-touch-icon" href="/favicon.ico" />
 
-    <!-- Fonts -->
+    <!-- Fonts. Space Grotesk carries the identity, so a FOUT on h1 is very
+         visible — fetch the stylesheet at highest priority, not lazily. -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <link
+      rel="preload"
+      as="style"
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
+    />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
+    />
 
     <title>{title}</title>
   </head>
-  <body class="bg-g-bg text-g-text font-sans antialiased min-h-screen transition-colors duration-200">
+  <body class="min-h-screen bg-g-bg font-sans text-g-text antialiased">
     <!-- Skip to main content link for accessibility -->
-    <a href="#main-content" class="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-g-gold focus:text-black focus:rounded-md focus:outline-none">
+    <a href="#main-content" class="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-[100] focus:rounded-g-btn focus:bg-g-gold focus:px-4 focus:py-2 focus:text-g-on-gold focus:outline-none">
       Skip to main content
     </a>
-    <slot />
+
+    <StarField />
+
+    <!-- Content sits above the canvas (z-0) and the readability gradient (z-1). -->
+    <div class="relative z-[2]">
+      <slot />
+    </div>
   </body>
 </html>
 
@@ -85,6 +98,27 @@ const canonicalURL = new URL(Astro.url.pathname, Astro.site);
     border-width: 0;
   }
 
+  /* Headings carry the display face. Set here so every h1–h4 gets it without
+     each page having to remember `font-display`. */
+  h1, h2, h3, h4 {
+    font-family: 'Space Grotesk', Inter, system-ui, sans-serif;
+  }
+
+  /* Link colors, defined globally — the previous site left these to browser
+     defaults in some places. Nav and card links opt out with their own classes. */
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+  .prose-link,
+  .doc a {
+    color: rgb(var(--g-gold-text));
+  }
+  .prose-link:hover,
+  .doc a:hover {
+    color: rgb(var(--g-gold2));
+  }
+
   /* Custom scrollbar, theme-aware via tokens */
   ::-webkit-scrollbar {
     width: 8px;
@@ -94,7 +128,7 @@ const canonicalURL = new URL(Astro.url.pathname, Astro.site);
     background: rgb(var(--g-bg));
   }
   ::-webkit-scrollbar-thumb {
-    background: rgb(var(--g-border));
+    background: var(--g-border2);
     border-radius: 4px;
   }
   ::-webkit-scrollbar-thumb:hover {
@@ -104,22 +138,22 @@ const canonicalURL = new URL(Astro.url.pathname, Astro.site);
   /* Firefox scrollbar */
   * {
     scrollbar-width: thin;
-    scrollbar-color: rgb(var(--g-border)) rgb(var(--g-bg));
+    scrollbar-color: rgb(var(--g-muted) / 0.35) transparent;
   }
 
-  /* Code block styling */
   pre {
     font-family: 'JetBrains Mono', monospace;
   }
 
-  /* Selection color */
   ::selection {
     background: rgb(var(--g-gold) / 0.3);
   }
 
-  /* Smooth focus outline */
+  /* Visible focus ring everywhere. The prototypes style hover but not focus;
+     pills, tabs, search and the copy button all need this. */
   :focus-visible {
     outline: 2px solid rgb(var(--g-gold));
     outline-offset: 2px;
+    border-radius: 2px;
   }
 </style>

@@ -180,6 +180,9 @@ export async function getAgent(id: string): Promise<Agent | undefined> {
 
 // ---- Display helpers ----
 
+// Every category any hub/agents manifest declares. A missing entry falls through
+// to the raw slug, which renders as a lowercase odd-one-out next to the labelled
+// pills — so add the label here when a manifest introduces a new category.
 const CATEGORY_LABELS: Record<string, string> = {
   conversation: 'Conversation',
   development: 'Development',
@@ -187,6 +190,10 @@ const CATEGORY_LABELS: Record<string, string> = {
   integrations: 'Integrations',
   creative: 'Creative',
   vision: 'Vision',
+  research: 'Research',
+  infrastructure: 'Infrastructure',
+  healthcare: 'Healthcare',
+  examples: 'Examples',
 };
 
 export function categoryLabel(category: string): string {
