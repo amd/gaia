@@ -43,6 +43,14 @@ from gaia_agent_email.tools.triage_heuristics import (
     classify_category_heuristic,
     group_by_category,
 )
+
+# Read-only reuse of the existing automated-sender signal for needs_review's
+# display ordering (#2584) — NOT a new heuristic phrase list (that's #2581's
+# job; triage_heuristics.py itself is untouched). Single source of truth
+# stays in triage_heuristics; this module never redefines it.
+from gaia_agent_email.tools.triage_heuristics import (
+    _AUTOMATED_SENDER_KEYWORDS as _NEEDS_REVIEW_AUTOMATED_SENDER_KEYWORDS,
+)
 from gaia_agent_email.tools.usage import aggregate_usage_stats
 from gaia_agent_email.verbose import (
     log_tool_call,
@@ -988,6 +996,10 @@ def triage_inbox_impl(
                     else heuristic.reason
                 ),
                 "source": "heuristic",
+                # Epoch-millis string (Gmail-native; #2584 — used by pre-scan
+                # to order the needs_review bucket newest-first). Not part of
+                # any public envelope; internal-only.
+                "internal_date": msg.get("internalDate"),
             }
 
             # LLM follow-up (#1107; is_spam added #1906): re-classify when the
@@ -1074,6 +1086,39 @@ PRE_SCAN_NEEDS_REVIEW_CAP = 5
 _PRE_SCAN_LABEL_IDS = ["INBOX", "UNREAD"]
 
 
+def _parse_epoch_millis(raw: Any) -> int:
+    """Parse a Gmail-style epoch-millis string; 0 (oldest) when absent/bad.
+
+    Mirrors ``_thread_message_sort_key``'s defensive parsing so a missing or
+    malformed timestamp sorts last rather than raising.
+    """
+    try:
+        return int(raw or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _looks_automated(sender: str) -> bool:
+    """Cheap human-vs-automated signal for needs_review ordering only.
+
+    Does not affect classification or bucketing — display ordering only.
+    """
+    sender_lower = (sender or "").lower()
+    return any(kw in sender_lower for kw in _NEEDS_REVIEW_AUTOMATED_SENDER_KEYWORDS)
+
+
+def _needs_review_sort_key(decision: Mapping[str, Any]) -> tuple:
+    """Deterministic needs_review order: newest first, human senders before
+    automated ones on a same-timestamp tie (#2584).
+
+    An arbitrary slice of a 295-candidate bucket down to 5 rendered rows is
+    close to useless to a reader — this makes which 5 surface a defensible,
+    stated policy instead of an accident of backend scan order.
+    """
+    internal_date = _parse_epoch_millis(decision.get("internal_date"))
+    return (-internal_date, _looks_automated(decision.get("from", "")))
+
+
 def pre_scan_inbox_impl(
     gmail,
     *,
@@ -1103,10 +1148,20 @@ def pre_scan_inbox_impl(
     ``suggested_archives`` when the user has previously asked for that.
 
     A ``confident=False`` heuristic result is a placeholder guess, not a
-    real classification — it goes to ``needs_review`` regardless of what
-    category it guessed (an unconfident PROMOTIONAL guess, for instance,
-    must not be recommended for archival). This check runs AFTER the
-    spam/phishing safety override, which still always wins.
+    real classification. It overrides routing into the two LOW-SIGNAL
+    buckets only — ``informational`` and ``suggested_archives`` — sending
+    the message to ``needs_review`` instead (an unconfident PROMOTIONAL
+    guess, for instance, must not be recommended for archival). It does
+    NOT pull a message out of ``urgent``/``actionable``: an unconfident
+    guess toward a HIGH-signal category (e.g. an IMPORTANT/STARRED-flagged
+    message the heuristic can't yet tell is urgent vs. merely actionable)
+    already errs toward surfacing, which is the direction to err in — an
+    unconfident guess must never make a message LESS visible than a
+    confident one would. This check runs AFTER the spam/phishing safety
+    override, which still always wins. ``needs_review`` is ordered
+    newest-first (human senders before automated ones on a timestamp tie)
+    before the cap is applied, so which N of a large uncapped bucket
+    surface is a stated policy, not scan-order luck.
 
     Drafts are intentionally left as an empty list in this version — the
     ``suggested_drafts`` field is reserved for future LLM-driven draft
@@ -1134,7 +1189,7 @@ def pre_scan_inbox_impl(
         actionable: List[Dict[str, Any]] = []
         informational: List[Dict[str, Any]] = []
         suggested_archives: List[Dict[str, Any]] = []
-        needs_review: List[Dict[str, Any]] = []
+        needs_review_ranked: List[tuple] = []
 
         for r in triage["results"]:
             base = {
@@ -1145,6 +1200,7 @@ def pre_scan_inbox_impl(
             }
             why = r.get("rationale", "")
             category = r.get("category", CATEGORY_FYI)
+            confident = r.get("confident", True)
 
             if r.get("is_spam") or r.get("is_phishing"):
                 # Phishing/spam should never be silently archived from a
@@ -1168,22 +1224,38 @@ def pre_scan_inbox_impl(
                 )
                 continue
 
-            if not r.get("confident", True):
-                # The category is a placeholder the heuristic could not
-                # commit to — surface the doubt instead of trusting it for
-                # bucketing (#2584). Wins over every category branch below.
-                needs_review.append({**base, "why": why})
-                continue
-
+            # confident=False only overrides routing into the two LOW-SIGNAL
+            # buckets (#2584) — an unconfident guess must never make a
+            # message LESS visible than a confident one would, so URGENT and
+            # NEEDS_RESPONSE keep their category-based routing regardless of
+            # confidence (e.g. an IMPORTANT/STARRED message the heuristic
+            # can't yet tell is urgent vs. merely actionable already errs
+            # toward surfacing — that is the correct direction to err).
             if category == CATEGORY_URGENT:
                 urgent.append({**base, "why": why})
             elif category == CATEGORY_NEEDS_RESPONSE:
                 actionable.append({**base, "why": why})
             elif category == CATEGORY_PROMOTIONAL:
-                suggested_archives.append({**base, "reason": why})
+                if confident:
+                    suggested_archives.append({**base, "reason": why})
+                else:
+                    needs_review_ranked.append(
+                        (_needs_review_sort_key(r), {**base, "why": why})
+                    )
             else:
-                # FYI and PERSONAL share the keep / no-action bucket.
-                informational.append({**base, "why": why})
+                # FYI and PERSONAL share the keep / no-action bucket when
+                # confident; unconfident goes to needs_review instead (the
+                # #2584 incident: a bare question falling through every rule
+                # to the terminal FYI-placeholder fallback).
+                if confident:
+                    informational.append({**base, "why": why})
+                else:
+                    needs_review_ranked.append(
+                        (_needs_review_sort_key(r), {**base, "why": why})
+                    )
+
+        needs_review_ranked.sort(key=lambda pair: pair[0])
+        needs_review = [item for _, item in needs_review_ranked]
 
         # Apply the FYI category default: when the user has previously asked
         # us to archive FYI mail, lift those items into suggested_archives.

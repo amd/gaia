@@ -95,27 +95,30 @@ def _msg(
 # So a heuristic-only pre-scan buckets these messages as:
 #   low priority   : promo-labelled + promo-keyword + social      -> 3
 #   informational  : updates-labelled + automated-sender           -> 2
-#   needs_review   : no-match + IMPORTANT-labelled (both confident=False) -> 2
-#   actionable     : (none — the IMPORTANT-labelled message moved to
-#                     needs_review, #2584: confident=False wins over
-#                     whatever category the heuristic guessed)      -> 0
+#   actionable     : IMPORTANT-labelled (confident=False, category
+#                     NEEDS_RESPONSE)                                -> 1
+#   needs_review   : no-match (confident=False, category FYI)        -> 1
 #   urgent         : (none — heuristic never emits urgent)          -> 0
 #
 # #2584 correction: this fixture's ``m_no_match`` ("Lunch next week?" from an
 # unlabeled colleague) is structurally the same case as the reported incident
-# — rule 9's terminal fallback, confident=False. Filing it under
-# informational is exactly the bug this issue fixes, so the expected counts
-# below reflect the NEW bucketing, not the pre-fix one. Same for
-# ``m_important`` (IMPORTANT label, confident=False): today it lands in
-# actionable, but confident=False must win over category regardless of which
-# category the heuristic guessed.
+# — rule 9's terminal fallback, confident=False, category=FYI (a genuine
+# placeholder guess). Filing it under informational is exactly the bug this
+# issue fixes, so it now surfaces in needs_review instead.
+#
+# ``m_important`` (IMPORTANT label, confident=False, category=NEEDS_RESPONSE)
+# stays in ``actionable``: confident=False only overrides routing into the
+# two LOW-SIGNAL buckets (informational / suggested_archives) — it must
+# never pull a message OUT of a high-signal bucket, since an unconfident
+# guess toward urgent/actionable already errs toward surfacing, which is the
+# correct direction to err.
 _EXPECTED = {
     CATEGORY_URGENT: 0,
-    CATEGORY_NEEDS_RESPONSE: 0,
+    CATEGORY_NEEDS_RESPONSE: 1,
     CATEGORY_FYI: 2,
     CATEGORY_PROMOTIONAL: 3,
 }
-_EXPECTED_NEEDS_REVIEW = 2
+_EXPECTED_NEEDS_REVIEW = 1
 
 
 @pytest.fixture

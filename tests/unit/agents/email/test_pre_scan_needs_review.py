@@ -6,17 +6,25 @@ Failing acceptance tests for the pre-scan "needs_review" honesty fix (#2584).
 Bug: when the heuristic classifier is NOT confident about a message's
 category (``confident=False`` in the per-message triage result), today's
 ``pre_scan_inbox_impl`` still files the message under whatever bucket its
-placeholder guess maps to (``informational_count``, ``actionable``, or even
-``suggested_archives`` for an unconfident PROMOTIONAL guess) instead of
-surfacing the doubt. This is silent for ~97% of a typical unlabeled corpus.
+placeholder guess maps to (``informational_count``, or ``suggested_archives``
+for an unconfident PROMOTIONAL guess) instead of surfacing the doubt. This is
+silent for ~97% of a typical unlabeled corpus.
 
-The planned fix adds a ``needs_review`` bucket: the spam/phishing safety
-check still runs FIRST and unconditionally routes to ``actionable``
-(unchanged), but after that, ``confident is False`` ALWAYS routes to
-``needs_review`` -- overriding any category-based routing that would
-otherwise apply. ``needs_review`` is capped like the other three buckets via
-a new ``PRE_SCAN_NEEDS_REVIEW_CAP`` constant, while ``totals.needs_review``
-reports the full, uncapped count.
+The fix adds a ``needs_review`` bucket: the spam/phishing safety check still
+runs FIRST and unconditionally routes to ``actionable`` (unchanged). After
+that, ``confident is False`` overrides routing into the two LOW-SIGNAL
+buckets ONLY -- ``informational`` and ``suggested_archives`` -- sending the
+message to ``needs_review`` instead. It does NOT override ``urgent`` or
+``actionable``: an unconfident guess toward a HIGH-signal category (e.g. an
+IMPORTANT/STARRED-flagged message the heuristic can only tell is
+NEEDS_RESPONSE, not yet urgent vs. merely actionable) already errs toward
+surfacing, which is the correct direction to err -- pulling it into
+needs_review would instead bury a message that needed attention behind a
+5-of-295 arbitrary slice, a worse version of the bug this issue fixes.
+``needs_review`` is capped like the other three buckets via a new
+``PRE_SCAN_NEEDS_REVIEW_CAP`` constant and ordered newest-first (human
+senders before automated ones on a timestamp tie), while
+``totals.needs_review`` reports the full, uncapped count.
 
 Every test in this module is expected to FAIL against the current
 (unfixed) code -- most immediately at import time, because
@@ -64,6 +72,7 @@ def _msg(
     sender: str,
     label_ids: List[str],
     body: str = "Body text for the fixture message.",
+    internal_date: str = "1700000000000",
 ) -> Dict[str, Any]:
     """Build a minimal Gmail API v1 message dict (single text/plain part).
 
@@ -75,7 +84,7 @@ def _msg(
         "threadId": msg_id,
         "labelIds": list(label_ids),
         "snippet": body[:120],
-        "internalDate": "1700000000000",
+        "internalDate": internal_date,
         "payload": {
             "mimeType": "text/plain",
             "filename": "",
@@ -125,11 +134,17 @@ class TestNeedsReviewRoutingOverridesCategoryGuess:
             f"informational; informational_count={out['informational_count']!r}"
         )
 
-    def test_unconfident_important_label_routes_to_needs_review_not_actionable(self):
+    def test_unconfident_important_label_stays_in_actionable_not_needs_review(self):
         """An IMPORTANT-labeled message is confident=False,
-        category=NEEDS_RESPONSE under the current heuristic. Today that lands
-        in ``actionable``; the fix routes ANY confident=False result to
-        ``needs_review`` regardless of the guessed category.
+        category=NEEDS_RESPONSE under the current heuristic — the heuristic
+        can't yet tell urgent from merely actionable, but it already knows
+        this needs a reply. confident=False only overrides routing into the
+        two LOW-SIGNAL buckets (informational / suggested_archives); it must
+        NOT pull a message out of a high-signal bucket like actionable — an
+        unconfident guess toward high signal already errs toward surfacing,
+        which is the direction to err in. Burying a starred/important
+        message in a 5-of-295 needs_review slice would be a worse version of
+        the bug this issue exists to fix.
         """
         gmail = FakeGmailBackend()
         gmail.add_message(
@@ -145,8 +160,8 @@ class TestNeedsReviewRoutingOverridesCategoryGuess:
 
         needs_review_ids = {item["message_id"] for item in out["needs_review"]}
         actionable_ids = {item["message_id"] for item in out["actionable"]}
-        assert "m_important" in needs_review_ids
-        assert "m_important" not in actionable_ids
+        assert "m_important" in actionable_ids
+        assert "m_important" not in needs_review_ids
 
     def test_unconfident_promotional_guess_routes_to_needs_review_not_archive(self):
         """A CATEGORY_PROMOTIONS-labeled message with a commitment/deadline
@@ -282,3 +297,91 @@ class TestPreScanNewTopLevelFields:
 
         assert out["degraded"] is False
         assert out.get("mailbox_errors") is None
+
+
+# ---------------------------------------------------------------------------
+# Deterministic needs_review ordering (#2584 redirect): a 5-of-295 slice is
+# useless to a reader unless which 5 surface is a stated, defensible policy
+# rather than an accident of backend scan order. newest-first, with a
+# human-sender-before-automated-sender tiebreak on same-timestamp messages.
+# ---------------------------------------------------------------------------
+
+
+class TestNeedsReviewDeterministicOrdering:
+    def test_needs_review_is_ordered_newest_first(self):
+        gmail = FakeGmailBackend()
+        # All three fall through to the terminal fallback (confident=False,
+        # no label, no automated-sender/promo keyword match).
+        gmail.add_message(
+            _msg(
+                "m_oldest",
+                subject="Quick question A",
+                sender="alice@example.com",
+                label_ids=["INBOX"],
+                internal_date="1600000000000",
+            )
+        )
+        gmail.add_message(
+            _msg(
+                "m_newest",
+                subject="Quick question B",
+                sender="bob@example.com",
+                label_ids=["INBOX"],
+                internal_date="1800000000000",
+            )
+        )
+        gmail.add_message(
+            _msg(
+                "m_middle",
+                subject="Quick question C",
+                sender="carol@example.com",
+                label_ids=["INBOX"],
+                internal_date="1700000000000",
+            )
+        )
+
+        out = pre_scan_inbox_impl(gmail, max_messages=25)
+
+        ordered_ids = [item["message_id"] for item in out["needs_review"]]
+        assert ordered_ids == ["m_newest", "m_middle", "m_oldest"], (
+            "needs_review must be ordered newest-first; got " f"{ordered_ids!r}"
+        )
+
+    def test_needs_review_prefers_human_sender_over_automated_on_a_timestamp_tie(
+        self,
+    ):
+        gmail = FakeGmailBackend()
+        same_timestamp = "1700000000000"
+        # "noreply" is an existing automated-sender signal
+        # (triage_heuristics._AUTOMATED_SENDER_KEYWORDS) -- reused read-only
+        # for ordering, not a new phrase list. "[SEV1]" trips the automated-
+        # sender rule's own urgent-subject exception (rule 7), which is what
+        # makes THIS automated message confident=False -- an automated
+        # sender's message is normally confident=True (-> informational) and
+        # would never reach needs_review at all.
+        gmail.add_message(
+            _msg(
+                "m_automated",
+                subject="[SEV1] Quick question A",
+                sender="noreply@service.example.com",
+                label_ids=["INBOX"],
+                internal_date=same_timestamp,
+            )
+        )
+        gmail.add_message(
+            _msg(
+                "m_human",
+                subject="Quick question B",
+                sender="dave@example.com",
+                label_ids=["INBOX"],
+                internal_date=same_timestamp,
+            )
+        )
+
+        out = pre_scan_inbox_impl(gmail, max_messages=25)
+
+        ordered_ids = [item["message_id"] for item in out["needs_review"]]
+        assert ordered_ids == ["m_human", "m_automated"], (
+            "on a timestamp tie, a human sender must sort before an "
+            f"automated one; got {ordered_ids!r}"
+        )
