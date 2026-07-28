@@ -21,6 +21,48 @@ contract version is tracked separately as
   co-occurrence anywhere in the email — so marketing copy mentioning a "quick call" near an
   unrelated offer-deadline clock ("valid only through 4PM PT today") false-positived. Both
   are fixed; the noun and the time now have to appear within one clause of each other.
+- **New read-only tool `list_waiting_on_you` (#2581): flags inbound mail awaiting
+  the user's reply.** The inverse of `check_followups` (#1606) — that tool flags
+  outbound mail nobody answered; this one flags inbound mail the user hasn't
+  answered, e.g. a colleague's "did you get a chance to look at this? can we
+  meet Thursday?". Qualification requires BOTH a genuine ask/meeting-time
+  signal (`text_signals.has_direct_ask_signal` / `has_meeting_time_signal`,
+  new dependency-free leaf module `tools/text_signals.py`) AND corroboration
+  that the message sits in a thread with real back-and-forth already in it
+  — sender shape and a bare `?` alone are not enough (measured against the
+  adversarial PROMOTIONAL corpus: 47 of 104 rows carry a `?` from a
+  non-automated-looking sender). Corroboration is scoped to the THIS
+  thread's own history only: having emailed the same address before, in
+  some other thread, does not corroborate anything (an earlier design that
+  treated "ever corresponded with this address" as sufficient let a single
+  genuine prior message to a vendor in a different thread corroborate every
+  later marketing email from that address — sender identity was the wrong
+  axis). Within a thread, a prior message merely existing is still not
+  enough on its own: real correspondence needs more than one prior message
+  FROM THE USER specifically (not the thread's total message count — an
+  earlier version counted every message regardless of direction, so a
+  vendor's cold intro plus a one-word "thanks" from the user hit the
+  threshold and skipped the substance check), or one of the user's own
+  messages with genuine substance (`text_signals.is_substantive_text`).
+  A message the existing category heuristic confidently calls PROMOTIONAL
+  never qualifies regardless of corroboration; and a sender the user has
+  told to stop contacting them (`text_signals.is_opt_out_reply`,
+  address-normalized so a plus-tagged variant can't dodge it) is suppressed
+  unconditionally, since that is evidence of wanting less contact, not
+  more. Bulk/automated senders are excluded via the existing
+  `triage_heuristics._AUTOMATED_SENDER_KEYWORDS` list; already-replied
+  threads are excluded; a meeting-signal check gates on
+  `is_meeting_request and confidence == "high"`, never confidence alone.
+  Read-only — no archive, label, star, draft, or send.
+  Two known, accepted limitations: a PROMOTIONAL message sent into a
+  thread that has already earned genuine corroboration can still qualify
+  (closing this needs a message-level promotional judgement stronger than
+  the existing label-driven heuristic — tightening corroboration further
+  would only cost recall on real conversations); and prior messages are
+  trusted by their backend-supplied `From` header with no authentication
+  check, so a forged prior message could in principle contribute to
+  corroboration (real spoofing defenses belong upstream, at the mail
+  provider/backend level).
 
 - **The autonomy trust model can now be exercised end to end — broader candidates, an undo
   surface, and per-message decisions (#2529).** The proactive `earn_trust`/`full` loop's

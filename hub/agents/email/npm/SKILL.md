@@ -411,11 +411,15 @@ Until then the binary boots, but the first `triage` returns **HTTP 502**.
 - **Some capabilities are agent-loop-only — no REST endpoint, no client method.**
   Scheduled send / snooze (#1609), **voice / style-matched drafting** (#1607 —
   `build_voice_profile` learns a local style profile from Sent mail so drafts
-  come out in the user's own voice), and **follow-up tracking** (#1606 —
-  `check_followups` flags sent mail still awaiting a reply, detection only) all
-  run in the agent tool loop. The REST contract has no routes for them yet, so
-  don't look for `client.scheduleSend()` / `client.snooze()` / a voice or
-  follow-up method — they don't exist (and none of these moves `SCHEMA_VERSION`).
+  come out in the user's own voice), **follow-up tracking** (#1606 —
+  `check_followups` flags sent mail still awaiting a reply, detection only),
+  and **waiting-on-you detection** (#2581 — `list_waiting_on_you` flags
+  INBOUND mail awaiting the user's reply; it only qualifies a message that has
+  both a genuine ask/meeting-time signal and corroboration that it's real
+  correspondence) all run in the agent tool loop. The REST contract has no
+  routes for them yet, so don't look for `client.scheduleSend()` /
+  `client.snooze()` / a voice, follow-up, or waiting-on-you method — they
+  don't exist (and none of these moves `SCHEMA_VERSION`).
 - **ESM-only.** `require("@amd-gaia/agent-email")` fails; use `import` / dynamic
   `import()`.
 

@@ -47,7 +47,7 @@ python hub/agents/email/python/packaging/capability_matrix.py
 
 ## Surface totals
 
-- Internal `@tool` agent-loop functions: **59**
+- Internal `@tool` agent-loop functions: **60**
   - `briefing_tools`: 3
   - `calendar_tools`: 6
   - `connection_tools`: 1
@@ -63,6 +63,7 @@ python hub/agents/email/python/packaging/capability_matrix.py
   - `schedule_tools`: 4
   - `summarize_tools`: 1
   - `voice_tools`: 2
+  - `waiting_on_you_tools`: 1
 - REST functional verbs: **22** (25 total operations in the frozen contract, including health/version/init probes)
 - MCP tools: **4**
   - `draft_reply`
