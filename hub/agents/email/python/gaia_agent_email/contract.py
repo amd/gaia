@@ -1561,7 +1561,16 @@ class AttentionCoverage(_Strict):
 
 
 class EmailAttentionResult(_Strict):
-    """The merged attention-view envelope — computed on open, then cached."""
+    """The merged attention-view envelope — computed on open, then cached.
+
+    ``items == []`` is NOT itself a "nothing needs you" claim — it only means
+    nothing surfaced from what was actually scanned. A consumer MUST read
+    ``coverage`` before asserting the mailbox is clear, and must qualify the
+    claim when ``coverage.scan_truncated`` or ``coverage.degraded`` is set
+    (e.g. "of the 200 most recent" / "one mailbox couldn't be scanned") —
+    rendering an empty ``items`` list as an unqualified whole-mailbox claim is
+    the exact defect #2584 fixed one layer down for the pre-scan envelope.
+    """
 
     kind: Literal["email_attention"] = Field(
         default="email_attention",

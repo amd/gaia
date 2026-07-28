@@ -1174,6 +1174,25 @@ def _fetch_total_unread(gmail) -> Optional[int]:
     return int(value) if isinstance(value, (int, float)) else None
 
 
+def needs_review_decision(r: Mapping[str, Any]) -> bool:
+    """True when a triage result belongs in the needs_review bucket (#2584).
+
+    Single source of truth for "unconfident low-signal" routing: spam/phishing
+    always wins (never needs_review — they're actionable), URGENT and
+    NEEDS_RESPONSE never demote out of their buckets regardless of
+    confidence, and everything else needs_review only when the heuristic was
+    NOT confident. ``pre_scan_inbox_impl`` and the attention-view aggregator
+    (#2582) both call this instead of each keeping their own copy of the
+    routing rule, so a future change to it (like #2584 narrowing which
+    categories it applies to) cannot silently diverge between the two.
+    """
+    if r.get("is_spam") or r.get("is_phishing"):
+        return False
+    if r.get("category") in (CATEGORY_URGENT, CATEGORY_NEEDS_RESPONSE):
+        return False
+    return not r.get("confident", True)
+
+
 def pre_scan_inbox_impl(
     gmail,
     *,
@@ -1292,23 +1311,25 @@ def pre_scan_inbox_impl(
             elif category == CATEGORY_NEEDS_RESPONSE:
                 actionable.append({**base, "why": why})
             elif category == CATEGORY_PROMOTIONAL:
-                if confident:
-                    suggested_archives.append({**base, "reason": why})
-                else:
+                if needs_review_decision(r):
                     needs_review_ranked.append(
                         (_needs_review_sort_key(r), {**base, "why": why})
                     )
+                else:
+                    suggested_archives.append({**base, "reason": why})
             else:
                 # FYI and PERSONAL share the keep / no-action bucket when
                 # confident; unconfident goes to needs_review instead (the
                 # #2584 incident: a bare question falling through every rule
-                # to the terminal FYI-placeholder fallback).
-                if confident:
-                    informational.append({**base, "why": why})
-                else:
+                # to the terminal FYI-placeholder fallback). Routed through
+                # needs_review_decision (shared with the attention-view
+                # aggregator, #2582) rather than a local confidence check.
+                if needs_review_decision(r):
                     needs_review_ranked.append(
                         (_needs_review_sort_key(r), {**base, "why": why})
                     )
+                else:
+                    informational.append({**base, "why": why})
 
         needs_review_ranked.sort(key=lambda pair: pair[0])
         needs_review = [item for _, item in needs_review_ranked]
