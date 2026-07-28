@@ -33,7 +33,7 @@ flow entirely; nothing else here changes.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from gaia_agent_email import mailbox_state as ms
 from gaia_agent_email.question import (
@@ -466,6 +466,37 @@ def _choose_provider(agent: Any, states: List[Dict[str, Any]]) -> str:
     return answer
 
 
+def _normalize_provider_arg(provider: str) -> Tuple[str, Optional[str]]:
+    """Resolve the ``setup_mailbox_access`` tool's ``provider`` argument.
+
+    A live model hears "Outlook" — ``provider_label`` uses that word
+    everywhere in this agent's own copy — and has every reason to pass it
+    straight back as the argument, not the internal id ``"microsoft"``.
+    Validating the raw string against ``ms.PROVIDERS`` rejected exactly that
+    word with a message that ALSO named it as supported ("I don't support
+    'outlook'. I can connect Gmail or Outlook.") — a rejection that
+    contradicts itself in one sentence. Resolve aliases via
+    ``ms.resolve_provider`` FIRST, so the canonical/friendly split is
+    invisible to the caller.
+
+    Returns ``(wanted, error)``: ``wanted`` is ``""`` when *provider* was
+    empty (let the flow pick), else the resolved canonical id. ``error`` is
+    ``None`` on success, else a message safe to return directly — one that
+    never names, as an accepted option, a word that would itself be
+    rejected if passed back in.
+    """
+    raw = (provider or "").strip()
+    if not raw:
+        return "", None
+    resolved = ms.resolve_provider(raw)
+    if resolved is None:
+        return "", (
+            f"I can set up {' or '.join(ms.provider_label(p) for p in ms.PROVIDERS)} "
+            f"— I didn't recognise {raw!r}."
+        )
+    return resolved, None
+
+
 class OnboardingToolsMixin:
     """Registers the mailbox self-service tools.
 
@@ -527,9 +558,12 @@ class OnboardingToolsMixin:
             immediately without asking anything.
 
             Args:
-                provider: Optional — 'google' or 'microsoft' to target one
-                    mailbox. Omit to let the flow pick the one that needs the
-                    least work, or ask the user when nothing is connected.
+                provider: Optional — which mailbox to target. Accepts the
+                    friendly names users actually say ('Gmail', 'Outlook',
+                    'Office 365', 'Hotmail', 'Exchange', ...) as well as the
+                    internal ids ('google', 'microsoft') — case-insensitive.
+                    Omit to let the flow pick the one that needs the least
+                    work, or ask the user when nothing is connected.
 
             Returns:
                 JSON envelope. On success ``{"ok": true, "data": {"changed":
@@ -537,12 +571,9 @@ class OnboardingToolsMixin:
                 ``message`` back to the user. On refusal or failure ``{"ok":
                 false, "error": "<what to tell the user>"}``.
             """
-            wanted = (provider or "").strip().lower()
-            if wanted and wanted not in ms.PROVIDERS:
-                return _envelope_err(
-                    f"I don't support {provider!r}. I can connect "
-                    f"{' or '.join(ms.provider_label(p) for p in ms.PROVIDERS)}."
-                )
+            wanted, provider_error = _normalize_provider_arg(provider)
+            if provider_error is not None:
+                return _envelope_err(provider_error)
             try:
                 return _setup_mailbox_access(agent, wanted)
             except InputUnsupportedError as exc:
