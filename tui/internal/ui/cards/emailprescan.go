@@ -251,11 +251,20 @@ func renderEmailPreScan(data json.RawMessage, width int) string {
 // renderMailboxErrors draws the per-account warning banner. A broken grant on
 // one account is free information that today surfaces nowhere — and the results
 // that did arrive are still valid, so this warns and never fails the card.
+func (p emailPreScan) renderMailboxErrors(b *box) {
+	renderMailboxErrorBanner(b, p.MailboxErrors)
+}
+
+// renderMailboxErrorBanner draws the per-account warning banner shared by every
+// card that carries a “mailbox_errors“ list (the pre-scan card and the
+// attention view, #2582). A broken grant on one account is free information
+// that today surfaces nowhere — and the results that did arrive are still
+// valid, so this warns and never fails the card.
 //
 // The banner is capped: one long enough to bury the results it annotates defeats
 // its own purpose.
-func (p emailPreScan) renderMailboxErrors(b *box) {
-	if len(p.MailboxErrors) == 0 {
+func renderMailboxErrorBanner(b *box, errs []mailboxError) {
+	if len(errs) == 0 {
 		return
 	}
 
@@ -264,12 +273,12 @@ func (p emailPreScan) renderMailboxErrors(b *box) {
 	// strings would take a third of the card to annotate results the user can
 	// still act on.
 	tail := "Results below are unaffected."
-	if len(p.MailboxErrors) == 1 {
-		me := p.MailboxErrors[0]
+	if len(errs) == 1 {
+		me := errs[0]
 		b.addWrapped("  ", "[!] "+mailboxLabel(me.Mailbox)+" wasn't scanned: "+strings.TrimSpace(me.Error))
 	} else {
-		names := make([]string, len(p.MailboxErrors))
-		for i, me := range p.MailboxErrors {
+		names := make([]string, len(errs))
+		for i, me := range errs {
 			names[i] = mailboxLabel(me.Mailbox)
 		}
 		b.addWrapped("  ", "[!] "+itoa(len(names))+" accounts weren't scanned: "+strings.Join(names, ", "))
