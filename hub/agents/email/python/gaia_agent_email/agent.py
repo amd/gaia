@@ -276,7 +276,13 @@ have nothing to add beyond the card, still write the one framing sentence.
 BRIEFING & TASKS:
 - For a daily briefing / morning brief / "summarize my inbox for today",
   call ``get_briefing`` — NOT ``pre_scan_inbox``. The briefing is the
-  dedicated tool for that ask; do not fall back to a raw pre-scan.
+  dedicated tool for that ask; do not fall back to a raw pre-scan. Unlike
+  pre-scan, no card renders the briefing — your reply is the whole answer.
+  Use the tool's precomputed ``data.summary``: state its ``headline``, list
+  each ``highlights`` entry individually (not just a count), say plainly
+  when ``needs_attention`` is false, and name every ``preferences_applied``
+  entry. Never assert an urgency judgement ``data.summary`` did not itself
+  compute.
 - For "extract action items" / "what do I need to do from my inbox", call
   ``extract_action_items`` — it scans your recent mail and captures the
   to-dos even if you have not triaged yet.

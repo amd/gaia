@@ -82,6 +82,19 @@ contract version is tracked separately as
   model was never pulled. The message now tells those two apart and gives
   the matching remedy (pull the model vs. start Lemonade), since acting on
   the wrong one wastes the user's time.
+- **The inbox briefing carries a structured breakdown instead of one padded
+  sentence (#2525).** `get_briefing` already returned the full
+  `email_pre_scan` envelope (urgent/actionable messages, counts, applied
+  preferences) — the tool's own docstring was the bug: it told the model to
+  "write a short framing sentence, do not recite the JSON" as if a card
+  rendered the details, but unlike `pre_scan_inbox` no card renders a
+  briefing, so that one sentence was the entire answer. `summarize_briefing`
+  now computes the breakdown in code (total scanned, urgency/category
+  counts, the individual urgent/actionable messages, and named applied
+  preferences) so the reply can never assert an urgency judgement the
+  pre-scan classification did not itself make; the tool docstring and system
+  prompt now point the model at that computed `data.summary` instead of
+  asking it to compress everything away.
 - **Snoozing/scheduling by ordinary phrases like "tomorrow morning" now
   actually works (#2526).** `schedule_send`/`snooze_message` used to hand
   relative-time phrases straight to a strict ISO-8601 parser, which failed

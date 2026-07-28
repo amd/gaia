@@ -113,6 +113,42 @@ def test_get_briefing_cold_generates(host, monkeypatch, tmp_path):
     assert (tmp_path / "brief.json").exists()  # persisted
 
 
+def test_get_briefing_includes_structured_summary(host, monkeypatch, tmp_path):
+    # #2525 — the tool result must carry a computed breakdown (counts,
+    # individual highlighted messages, applied preferences), not leave the
+    # model to collapse everything into one sentence.
+    import gaia_agent_email.briefing as briefing
+
+    monkeypatch.setattr(briefing, "briefing_path", lambda: tmp_path / "brief.json")
+    host._pre_scan_all_backends = lambda *, max_messages: {
+        "kind": "email_pre_scan",
+        "urgent": [
+            {
+                "message_id": "u1",
+                "sender": "boss@corp.example",
+                "subject": "Server down",
+            }
+        ],
+        "actionable": [],
+        "informational_count": 24,
+        "suggested_archives": [],
+        "preferences_applied": {
+            "priority_senders": ["boss@corp.example"],
+            "low_priority_senders": [],
+            "category_defaults": {},
+        },
+        "totals": {"urgent": 1, "actionable": 0, "informational": 24},
+    }
+    fn = _tool(host, "get_briefing")
+    out = json.loads(fn(max_messages=10))
+
+    summary = out["data"]["summary"]
+    assert summary["breakdown"]["urgent"] == 1
+    assert summary["needs_attention"] is True
+    assert summary["highlights"][0]["message_id"] == "u1"
+    assert "priority sender: boss@corp.example" in summary["preferences_applied"]
+
+
 def test_get_briefing_returns_persisted_when_present(host, monkeypatch, tmp_path):
     import gaia_agent_email.briefing as briefing
 
