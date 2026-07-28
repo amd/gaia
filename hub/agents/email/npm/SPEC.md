@@ -246,23 +246,27 @@ emits the canonical event vocabulary.
 | `GET /v1/email/agent/memory/{id}` | Memory status without changing it. |
 | `GET /v1/email/agent/autonomy/{id}` | Inspectable autonomy status: `{ level, enabled, trust_min_samples, trust_threshold, trusted_scope_count, scopes[] }` — the earned-trust ledger, never a black box. |
 | `POST /v1/email/agent/autonomy` | Set the autonomy level, `{ session_id, level }` where level ∈ `off` \| `suggest` \| `earn_trust` \| `full` (`off` = kill switch). Bad level → **400**. |
-| `POST /v1/email/agent/autonomy/run` | Trigger one observe→decide→act cycle, `{ session_id, max_messages? }` → `{ level, executed[], proposals[], skipped }`. The daemon clock / scheduler drives this in production. Refused with **409** while the session's level is `off` — the kill switch is never mistakable for "ran and found nothing to do" (#2528). |
+| `POST /v1/email/agent/autonomy/run` | Trigger one observe→decide→act cycle, `{ session_id, max_messages? }` → `{ level, executed[], proposals[], decisions[], skipped }`. `decisions[]` (#2529) is a per-message log — `{ message_id, tool, action, outcome, reason, sender }` for every candidate considered, whatever the outcome — so a held-back decision (importance guard, confirm floor) is explained, not silent. The daemon clock / scheduler drives this in production. Refused with **409** while the session's level is `off` — the kill switch is never mistakable for "ran and found nothing to do" (#2528). |
+| `POST /v1/email/agent/autonomy/undo` | Reverse one auto-executed action and record the correction against its trust scope, `{ session_id, action_id }` → `{ action_id, action_type, message_id, undone, correction_captured }` (#2529). `action_id` comes from a prior `executed[]` entry. Unknown/expired/already-undone id → **409**; an action_type with no reversal implemented → **400**. `correction_captured` is `false` (mutation still reversed) when `action_id` wasn't an autonomy-executed action. |
 
 Sessions are in-process and single-tenant (the sidecar hosts one user's agent); one turn
 runs at a time per session. Memory uses FAISS locally; embeddings still go over Lemonade
 HTTP, so the frozen binary stays free of torch/transformers.
 
 **Full autonomy (earn-trust).** At `earn_trust` the agent auto-executes only *reversible*
-actions (archive/label/mark-read), and only where your explicit preferences sanction it
+actions — today `archive` (promotional/spam mail) and `mark_read` (FYI mail: useful context
+stays visible, but doesn't sit unread) — and only where your explicit preferences sanction it
 (a low-priority sender, or a category defaulted to archive) or a sender/category has crossed
 the trust bar (`autonomy_trust_min_samples` decisions at ≥ `autonomy_trust_threshold`
 accuracy); everything else is proposed. The destructive floor — send, forward,
 RSVP, quarantine — **always requires confirmation, at every level**. There is no
 permanent-delete tool: Gmail gates real permanent delete behind a full-mailbox
 scope GAIA never requests, so the agent only ever offers reversible Trash.
-Undoing an auto-action feeds the trust ledger as a correction (a negative outcome), so
-trust ratchets *down* on a mistake; positive-outcome accrual that would let a scope cross
-the bar through earned trust is not yet wired. See `docs/plans/email-full-autonomy.mdx`.
+Undoing an auto-action — via `POST .../autonomy/undo`, or the conversational
+`undo_archive_batch` tool for a batch archive — feeds the trust ledger as a correction (a
+negative outcome), so trust ratchets *down* on a mistake; positive-outcome accrual that would
+let a scope cross the bar through earned trust is not yet wired. See
+`docs/plans/email-full-autonomy.mdx`.
 
 ### Mailbox actions (archive / quarantine, schema 2.1)
 

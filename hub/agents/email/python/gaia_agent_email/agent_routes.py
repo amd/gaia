@@ -45,7 +45,6 @@ import asyncio
 import json
 import queue
 import threading
-import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException
@@ -249,6 +248,13 @@ class AutonomyRunRequest(_Strict):
     )
 
 
+class AutonomyUndoRequest(_Strict):
+    session_id: str = Field(..., description="Session whose autonomy action to undo.")
+    action_id: str = Field(
+        ..., description="The action_id from a prior autonomy/run 'executed' entry."
+    )
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -438,6 +444,32 @@ async def run_autonomy(request: AutonomyRunRequest) -> Dict[str, Any]:
             ),
         )
     return await asyncio.to_thread(runner, {"max_messages": request.max_messages})
+
+
+@router.post("/autonomy/undo")
+async def undo_autonomy(request: AutonomyUndoRequest) -> Dict[str, Any]:
+    """Undo one autonomy-executed action, feeding a correction to the trust
+    ledger (#2529).
+
+    Without this the ledger can only ever ratchet trust up — no undo could
+    reach it except through the archive-only, conversational
+    ``undo_archive_batch`` tool. Runs on a worker thread (mailbox I/O).
+    """
+    session = registry.get(request.session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="No such session.")
+    undo_fn = getattr(session.agent, "undo_autonomy_action", None)
+    if not callable(undo_fn):
+        raise HTTPException(
+            status_code=501,
+            detail="This agent build does not expose autonomy undo.",
+        )
+    try:
+        return await asyncio.to_thread(undo_fn, request.action_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/confirm-tool")

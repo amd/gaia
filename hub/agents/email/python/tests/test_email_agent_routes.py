@@ -116,6 +116,23 @@ class _FakeAgent:
             "skipped": 0,
         }
 
+    def undo_autonomy_action(self, action_id: str) -> dict:
+        """Routing-only fake — no real ledger logic, matching the style of
+        run_autonomy_cycle/autonomy_status above. Two sentinel ids let route
+        tests drive the RuntimeError -> 409 / ValueError -> 400 mapping
+        without a real trust ledger."""
+        if action_id == "raise-runtime":
+            raise RuntimeError("undo window has expired")
+        if action_id == "raise-value":
+            raise ValueError("bad action_id")
+        return {
+            "action_id": action_id,
+            "action_type": "archive",
+            "message_id": "m1",
+            "undone": True,
+            "correction_captured": True,
+        }
+
     def close_db(self) -> None:
         self.closed = True
 
@@ -471,6 +488,45 @@ class TestAutonomyRoutes:
         )
         r = client.post("/v1/email/agent/autonomy/run", json={"session_id": "s1"})
         assert r.status_code == 409
+
+    def test_undo_returns_report(self, client):
+        self._mk(client)
+        r = client.post(
+            "/v1/email/agent/autonomy/undo",
+            json={"session_id": "s1", "action_id": "a1"},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert "undone" in body
+        assert "correction_captured" in body
+
+    def test_undo_404_without_session(self, client):
+        r = client.post(
+            "/v1/email/agent/autonomy/undo",
+            json={"session_id": "nope", "action_id": "a1"},
+        )
+        # An unmatched path 404s too — pin the actual detail text so this
+        # only goes green once the route exists AND does its own session
+        # lookup (matching the "No such session." convention used by every
+        # other route in this file), not by accident of the path missing.
+        assert r.status_code == 404
+        assert r.json()["detail"] == "No such session."
+
+    def test_undo_409_on_runtime_error(self, client):
+        self._mk(client)
+        r = client.post(
+            "/v1/email/agent/autonomy/undo",
+            json={"session_id": "s1", "action_id": "raise-runtime"},
+        )
+        assert r.status_code == 409
+
+    def test_undo_400_on_value_error(self, client):
+        self._mk(client)
+        r = client.post(
+            "/v1/email/agent/autonomy/undo",
+            json={"session_id": "s1", "action_id": "raise-value"},
+        )
+        assert r.status_code == 400
 
 
 class TestWorkerDiesWithoutTerminalEvent:
