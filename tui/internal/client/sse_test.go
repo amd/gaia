@@ -52,8 +52,15 @@ type fakeRelay struct {
 	queries     []queryRequest
 	rawBodies   []string
 	cancelled   []string
+	confirmed   []confirmCall
 	auths       []string
 	versionHits int
+}
+
+// confirmCall is one recorded POST .../query/{run_id}/confirm.
+type confirmCall struct {
+	runID    string
+	approved bool
 }
 
 func newFakeRelay(t *testing.T) *fakeRelay {
@@ -148,6 +155,22 @@ func (f *fakeRelay) handle(w http.ResponseWriter, r *http.Request) {
 		parts := strings.Split(r.URL.Path, "/")
 		f.mu.Lock()
 		f.cancelled = append(f.cancelled, parts[len(parts)-2])
+		f.mu.Unlock()
+		w.WriteHeader(http.StatusOK)
+
+	case strings.HasSuffix(r.URL.Path, "/confirm"):
+		// No shipped sidecar has this route (the resume model is unimplemented
+		// anywhere — spec §5, D1 unsigned); this fake exists purely so the
+		// CLIENT's request construction and response handling are tested, the
+		// same way TestSSEClientCancelPostsToCancelEndpoint tests /cancel.
+		parts := strings.Split(r.URL.Path, "/")
+		var body confirmRequest
+		raw, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(raw, &body); err != nil {
+			f.t.Errorf("confirm body is not valid JSON: %v (%s)", err, raw)
+		}
+		f.mu.Lock()
+		f.confirmed = append(f.confirmed, confirmCall{runID: parts[len(parts)-2], approved: body.Approved})
 		f.mu.Unlock()
 		w.WriteHeader(http.StatusOK)
 
@@ -773,6 +796,106 @@ func TestSSEClientCancelPostsToCancelEndpoint(t *testing.T) {
 
 	if tr := c.Transcript(); len(tr) != 0 {
 		t.Errorf("a cancelled turn must not be appended to the transcript: %+v", tr)
+	}
+}
+
+// Confirm posts to the deterministic .../query/{run_id}/confirm path (spec §5)
+// with {"approved": bool} — built from the client's own knowledge, never a
+// server-supplied confirm_url string, exactly like Respond and cancelRun build
+// their own paths. No shipped sidecar has this route; this test is about the
+// CLIENT half of the resume model being correct and ready, not about it being
+// exercised against a real peer today.
+func TestSSEClientConfirmPostsApprovedFlag(t *testing.T) {
+	f := newFakeRelay(t)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	f.stream = func(w http.ResponseWriter, flush func(), _ queryRequest) {
+		frame(w, `{"type":"status","message":"thinking"}`)
+		flush()
+		close(started)
+		<-release
+	}
+
+	c := f.client(t)
+	defer c.Close()
+
+	ctx := context.Background()
+	ch, err := c.Send(ctx, "send it")
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if _, ok := <-ch; !ok {
+		t.Fatal("expected the status event before confirming")
+	}
+	<-started
+
+	runID := f.lastQuery().RunID
+	if err := c.Confirm(context.Background(), runID, true); err != nil {
+		t.Fatalf("Confirm: %v", err)
+	}
+
+	f.mu.Lock()
+	got := append([]confirmCall(nil), f.confirmed...)
+	f.mu.Unlock()
+	if len(got) != 1 || got[0].runID != runID || !got[0].approved {
+		t.Errorf("confirmed = %+v, want one call for run %q approved=true", got, runID)
+	}
+
+	close(release)
+	for range ch {
+	}
+}
+
+// A decision for a run that is no longer the active one (a new turn started,
+// or this one already ended) must be refused locally — never sent as if it
+// still meant something.
+func TestSSEClientConfirmRefusesAStaleRun(t *testing.T) {
+	f := newFakeRelay(t)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	f.stream = func(w http.ResponseWriter, flush func(), _ queryRequest) {
+		frame(w, `{"type":"status","message":"thinking"}`)
+		flush()
+		close(started)
+		<-release
+	}
+
+	c := f.client(t)
+	defer c.Close()
+
+	ch, err := c.Send(context.Background(), "send it")
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if _, ok := <-ch; !ok {
+		t.Fatal("expected the status event")
+	}
+	<-started
+
+	if err := c.Confirm(context.Background(), "some-other-run-id", true); err == nil {
+		t.Error("a confirmation for a non-active run was silently accepted")
+	}
+	f.mu.Lock()
+	n := len(f.confirmed)
+	f.mu.Unlock()
+	if n != 0 {
+		t.Error("a stale confirmation must never reach the wire")
+	}
+
+	close(release)
+	for range ch {
+	}
+}
+
+// Confirm before any run has ever been sent must refuse locally too — the
+// zero-value client has nothing to confirm.
+func TestSSEClientConfirmWithNoActiveRunIsRefused(t *testing.T) {
+	f := newFakeRelay(t)
+	c := f.client(t)
+	defer c.Close()
+
+	if err := c.Confirm(context.Background(), "run-1", true); err == nil {
+		t.Error("Confirm with no active run was silently accepted")
 	}
 }
 

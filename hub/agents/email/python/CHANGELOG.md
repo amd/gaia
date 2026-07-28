@@ -70,6 +70,22 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **A trashed message is recoverable any time it's still in Trash, not just
+  for a few seconds (#2523).** The only restore path (`restore_message`) was
+  gated by a short undo window and a live `action_id`; once either was gone,
+  the agent told the user the message was stuck, even though Gmail keeps
+  Trash for 30 days. `restore_trashed_message` reconciles with the live
+  mailbox state instead — no window, no id — and `search_trash` finds the
+  message first when the id was never held onto. The `trash_message`
+  confirmation now also says "moved to Trash", never "archived" — the two
+  have very different recoverability and conflating them was its own hazard.
+- **`permanent_delete` is no longer offered as a capability the agent doesn't
+  actually have (#2533).** Real Gmail permanent delete requires a
+  full-mailbox OAuth scope GAIA deliberately never requests (granting it
+  would let every GAIA agent delete a user's entire mailbox for the sake of
+  this one operation), so every call 403'd — yet asked directly, the agent
+  claimed it could do it. The tool is no longer registered; the agent now
+  says plainly it can move mail to Trash but not permanently delete it.
 - **Two-turn "archive several… then undo" is now actually reachable (#2456).**
   "Undo that" with no id no longer demands the internal batch uuid:
   `undo_archive_batch` recalls the most recently archived, still-undoable

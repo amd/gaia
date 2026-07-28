@@ -61,7 +61,7 @@ _spec.loader.exec_module(capability_matrix)
 # and #2520 for the preference_tools bump 4 -> 8).
 # ---------------------------------------------------------------------------
 
-# 15 mixins in gaia_agent_email/tools/, keyed by module stem, 62 tools total.
+# 15 mixins in gaia_agent_email/tools/, keyed by module stem, 63 tools total.
 _EXPECTED_TOOLS_BY_MIXIN = {
     "read_tools": 8,
     "organize_tools": 15,
@@ -73,7 +73,10 @@ _EXPECTED_TOOLS_BY_MIXIN = {
     # existing set_*/clear_session_preferences tools.
     "preference_tools": 8,
     "briefing_tools": 3,
-    "delete_tools": 3,
+    # #2523/#2533: permanent_delete removed (never advertised — the scope it
+    # needs is never granted); restore_trashed_message + search_trash added
+    # (state-reconciling restore, independent of the undo window/action_id).
+    "delete_tools": 4,
     "phishing_tools": 2,
     "voice_tools": 2,
     "followup_tools": 1,
@@ -83,7 +86,7 @@ _EXPECTED_TOOLS_BY_MIXIN = {
     # #2469 agent-led onboarding: check_mailbox_access + setup_mailbox_access.
     "onboarding_tools": 2,
 }
-_EXPECTED_TOOLS_TOTAL = 62
+_EXPECTED_TOOLS_TOTAL = 63
 assert sum(_EXPECTED_TOOLS_BY_MIXIN.values()) == _EXPECTED_TOOLS_TOTAL
 
 _EXPECTED_MCP_COUNT = 4

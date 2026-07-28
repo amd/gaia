@@ -458,10 +458,13 @@ func finishOneShot(res OneShotResult, tools *toolLedger, query string, errW io.W
 }
 
 // writeWithheld says what was not done, and does not invent a way to approve
-// it. The interactive chat cannot answer a gate either (ui/chat: "the approval
-// UI is a later phase"), and the agent's own final answer already explains the
-// route for that agent — naming a command that does not exist is how four wrong
-// remedies got shipped today.
+// it. A --query run has no session for anyone to answer a gate on, full stop.
+// The interactive chat does now have a real y/n/Esc modal (ui/chat/canonical.go,
+// components.ConfirmationModel), but it cannot DELIVER an approval either
+// against the current sidecar contract — needs_confirmation is immediately
+// terminal with no confirm_url (spec §5, D1 unsigned) — so naming a command
+// that does not exist would be the same mistake either surface can make; the
+// agent's own final answer already explains the route for that agent.
 func writeWithheld(w io.Writer, actions []string, exitCode int, confirmURL func(string) string) {
 	fmt.Fprintf(w,
 		"⛔ %s needed approval and a --query run has no way to give it, so it was NOT "+

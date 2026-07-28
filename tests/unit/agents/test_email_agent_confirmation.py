@@ -57,7 +57,6 @@ class TestConfirmationGatingAtBaseLevel:
             "send_now",
             "schedule_send",
             "forward_message",
-            "permanent_delete",
             "accept_invite",
             "decline_invite",
             "create_event_from_email",
@@ -65,6 +64,10 @@ class TestConfirmationGatingAtBaseLevel:
     )
     def test_destructive_tool_is_gated(self, tool_name):
         assert tool_name in EmailTriageAgent.confirmation_required_tools()
+
+    def test_permanent_delete_is_not_registered_or_gated(self):
+        """#2533: permanent_delete is gone outright, not merely ungated."""
+        assert "permanent_delete" not in EmailTriageAgent.confirmation_required_tools()
 
     @pytest.mark.parametrize(
         "tool_name",
@@ -89,8 +92,14 @@ class TestConfirmationGatingAtBaseLevel:
             # Drafting is harmless; only sending requires confirmation.
             "draft_reply",
             "draft_forward",
-            # restore_message is the undo path — never gated.
+            # restore_message is the undo-window path — never gated.
             "restore_message",
+            # restore_trashed_message / search_trash (#2523) — the
+            # state-reconciling restore path and its lookup tool. Both
+            # reversible/read-only, same as restore_message and
+            # search_messages above — never gated.
+            "restore_trashed_message",
+            "search_trash",
         ],
     )
     def test_safe_tool_is_NOT_gated(self, tool_name):

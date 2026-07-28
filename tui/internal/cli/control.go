@@ -46,3 +46,31 @@ func controlOptions(enabled bool, port int, explicitPort bool) (*control.Options
 		Version: version,
 	}, nil
 }
+
+// agentControlOptions is controlOptions plus the one restriction specific to an
+// agent launch (`chat --agent`, `run <id>`): a --query run answers and exits
+// before any session exists for an assistant to attach to. Accepting --control
+// there would just move the silent no-op #2512 fixes one call deeper instead of
+// closing it, so the combination is refused rather than quietly starting no
+// server.
+func agentControlOptions(enabled bool, port int, explicitPort, oneShot bool) (*control.Options, error) {
+	opts, err := controlOptions(enabled, port, explicitPort)
+	if err != nil {
+		return nil, err
+	}
+	if opts != nil && oneShot {
+		return nil, fmt.Errorf(
+			"--control / --control-port is not supported with --query: a one-shot run answers " +
+				"and exits before any session exists for an assistant to attach to. Drop --query " +
+				"to open the interactive chat, or drop --control")
+	}
+	return opts, nil
+}
+
+// controlOptionsForAgentRun reads this command's flags for an agent launch
+// (`chat --agent`, `run <id>`) — the interactive case binds the control API
+// exactly like the bare root command and `chat --subprocess` (control.go was
+// only ever wired for those two paths); the one-shot case refuses it loudly.
+func controlOptionsForAgentRun(cmd *cobra.Command, oneShot bool) (*control.Options, error) {
+	return agentControlOptions(controlEnabled, controlPort, cmd.Flags().Changed("control-port"), oneShot)
+}
