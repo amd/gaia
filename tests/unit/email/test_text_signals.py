@@ -11,9 +11,14 @@ Covers:
   ``?`` alone does not qualify, and genuine ask phrasing qualifies even with
   no ``?`` at all.
 - ``has_meeting_time_signal`` catches the #2580 incident wording ("any
-  chance to meet this Thursday at 9am") that the existing calendar
-  heuristic (``detect_meeting_request_heuristic``) does not catch, and
-  requires a concrete time token (not a bare "chance to meet").
+  chance to meet this Thursday at 9am") — added because the existing
+  calendar heuristic (``detect_meeting_request_heuristic``) did not catch
+  that phrasing at the time this predicate was written. #2583 has since
+  taught the calendar heuristic a separate invite phrase that also catches
+  it; this suite asserts only what ``has_meeting_time_signal`` itself does,
+  not whether the calendar heuristic can or can't see the same text (both
+  detecting it is fine — see ``test_incident_wording_qualifies`` below).
+  It still requires a concrete time token (not a bare "chance to meet").
 """
 
 from __future__ import annotations
@@ -32,9 +37,6 @@ if str(_REPO_ROOT) not in sys.path:
 pytest.importorskip("gaia_agent_email")
 
 import gaia_agent_email.tools.text_signals as text_signals  # noqa: E402
-from gaia_agent_email.tools.calendar_tools import (  # noqa: E402
-    detect_meeting_request_heuristic,
-)
 from gaia_agent_email.tools.text_signals import (  # noqa: E402
     has_direct_ask_signal,
     has_meeting_time_signal,
@@ -110,13 +112,6 @@ class TestMeetingTimeSignal:
             has_meeting_time_signal("", "any chance to meet this thursday at 9am?")
             is True
         )
-
-    def test_existing_heuristic_does_not_catch_incident_wording(self):
-        """Locks in the #2584-panel fact this predicate exists to cover."""
-        detection = detect_meeting_request_heuristic(
-            "", "Any chance to meet this Thursday at 9am?"
-        )
-        assert detection.is_meeting_request is False
 
     def test_bare_meeting_verb_without_time_does_not_qualify(self):
         assert has_meeting_time_signal("", "let's meet up sometime soon") is False
