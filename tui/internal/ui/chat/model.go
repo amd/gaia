@@ -120,6 +120,12 @@ type ChatModel struct {
 	// not to the composer.
 	question *components.QuestionModel
 
+	// confirmation is the pending needs_confirmation modal, if any. Non-nil
+	// means a destructive/external tool call is asking for approval — every
+	// key except Ctrl+C goes to it (including Esc, which means "deny" here,
+	// not "cancel the turn" — see handleKey).
+	confirmation *components.ConfirmationModel
+
 	connected    bool
 	totalSteps   int
 	initialQuery string
@@ -212,6 +218,7 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.events = nil
 		m.cancelFn = nil
 		m.question = nil
+		m.confirmation = nil
 		m.flushBuffer()
 		m.activity = nil
 		m.updateViewport()
@@ -222,6 +229,7 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.events = nil
 		m.cancelFn = nil
 		m.question = nil
+		m.confirmation = nil
 		m.err = msg.err
 		m.messages = append(m.messages, Message{
 			Role:    RoleError,
@@ -254,6 +262,45 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewport()
 		return m, nil
 
+	case components.ConfirmationTimeoutMsg:
+		if m.confirmation == nil {
+			// Already resolved (the run's own final/error got there first, the
+			// overwhelmingly common case against the current stateless email
+			// sidecar) or the turn moved on. Dropping is correct — nothing to warn.
+			return m, nil
+		}
+		c, cmd := m.confirmation.ResolveTimeout(msg)
+		m.confirmation = &c
+		return m, cmd
+
+	case components.ConfirmationDecidedMsg:
+		if m.confirmation == nil || m.confirmation.RunID() != msg.RunID {
+			// Stale — a decision for a confirmation that is no longer up (already
+			// resolved by the run ending first, or superseded). Drop it, same as a
+			// stale question answer.
+			return m, nil
+		}
+		return m.resolveConfirmationDecision(msg)
+
+	case confirmActionResultMsg:
+		word := "denied"
+		if msg.Approved {
+			word = "approved"
+		}
+		if msg.err != nil {
+			m.messages = append(m.messages, Message{
+				Role:    RoleError,
+				Content: fmt.Sprintf("could not deliver the %s decision for '%s': %v", word, msg.Action, msg.err),
+			})
+		} else {
+			m.messages = append(m.messages, Message{
+				Role:    RoleStatus,
+				Content: fmt.Sprintf("[!] %s decision for '%s' delivered", word, msg.Action),
+			})
+		}
+		m.updateViewport()
+		return m, nil
+
 	case spinner.TickMsg:
 		if m.streaming {
 			var cmd tea.Cmd
@@ -275,6 +322,16 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// A pending confirmation owns the keyboard too, but UNLIKE a question, Esc
+	// belongs to it: the issue's contract is "Esc denies", not "Esc cancels the
+	// turn". Ctrl+C is still the universal way out.
+	if m.confirmation != nil && msg.Type != tea.KeyCtrlC {
+		c, cmd := m.confirmation.Update(msg)
+		m.confirmation = &c
+		m.updateViewport()
+		return m, cmd
+	}
+
 	// A pending question owns the keyboard: the run is blocked on it, so a
 	// keystroke that fell through to the composer would go nowhere. Ctrl+C and
 	// Esc still cancel the turn — abandoning a question must stay possible.
@@ -294,6 +351,7 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cancelFn = nil
 			m.activity = nil
 			m.question = nil
+			m.confirmation = nil
 			m.messages = append(m.messages, Message{
 				Role:    RoleStatus,
 				Content: "cancelled",
@@ -311,6 +369,7 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cancelFn = nil
 			m.activity = nil
 			m.question = nil
+			m.confirmation = nil
 			m.messages = append(m.messages, Message{
 				Role:    RoleStatus,
 				Content: "cancelled",
@@ -445,6 +504,7 @@ func (m *ChatModel) CancelActiveTurn() {
 	m.streaming = false
 	m.events = nil
 	m.question = nil
+	m.confirmation = nil
 }
 
 func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
@@ -631,6 +691,9 @@ func (m *ChatModel) resize() {
 	if m.question != nil {
 		m.question.SetWidth(m.cardWidth())
 	}
+	if m.confirmation != nil {
+		m.confirmation.SetWidth(m.cardWidth())
+	}
 	m.updateViewport()
 }
 
@@ -654,6 +717,11 @@ func (m *ChatModel) updateViewport() {
 	// blank screen reads as a hang.
 	if m.streaming {
 		sb.WriteString(m.renderLiveRegion())
+		sb.WriteString("\n")
+	}
+
+	if m.confirmation != nil {
+		sb.WriteString(m.confirmation.View())
 		sb.WriteString("\n")
 	}
 
@@ -889,6 +957,15 @@ func (m ChatModel) renderActivityItem(item ActivityItem) string {
 			return "  " + successStyle.Render("[ok] ") + toolNameStyle.Render(content)
 		}
 		return "  " + activityStyle.Render("[..] ") + toolNameStyle.Render(content)
+
+	case "confirm":
+		// Always added already-resolved (see resolveConfirmationDecision) — a
+		// confirmation has no separate "in progress" activity line, since the
+		// modal itself is the in-progress view.
+		if item.Success != nil && !*item.Success {
+			return "  " + failStyle.Render("[x] ") + toolNameStyle.Render(content)
+		}
+		return "  " + successStyle.Render("[ok] ") + toolNameStyle.Render(content)
 
 	case "status":
 		return "       " + lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render(content)

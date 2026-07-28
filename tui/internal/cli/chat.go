@@ -46,7 +46,11 @@ var chatCmd = &cobra.Command{
 			}
 		}
 		if agentID != "" {
-			code, err := ui.RunAgent(agentID, query, chatModel, debug, chatTimeout)
+			ctrl, err := controlOptionsForAgentRun(cmd, query != "")
+			if err != nil {
+				return err
+			}
+			code, err := ui.RunAgent(agentID, query, chatModel, debug, chatTimeout, ctrl)
 			if err != nil {
 				return err
 			}

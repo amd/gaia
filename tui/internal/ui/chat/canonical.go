@@ -21,6 +21,16 @@ const answerTimeout = 15 * time.Second
 // questionFailedMsg reports that an answer never reached the agent.
 type questionFailedMsg struct{ err error }
 
+// confirmActionResultMsg reports the outcome of delivering an approve/deny
+// decision over the resume-model confirm seam (client.AgentConfirmer). Only
+// produced when the triggering event carried a confirm_url — see
+// (ChatModel).confirmAction.
+type confirmActionResultMsg struct {
+	Action   string
+	Approved bool
+	err      error
+}
+
 // handleCanonicalEvent renders the canonical `/query` SSE vocabulary — what the
 // daemon transport streams. handled is false for anything else, so the legacy
 // in-process types (used by the subprocess transport) fall through untouched.
@@ -72,14 +82,23 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		})
 
 	case event.CanonicalNeedsConfirmationEvent:
-		// The approval UI is a later phase. Until then the pause is surfaced as a
-		// message the user can actually read — never swallowed — and the run
-		// continues to its own terminal event.
+		// The pause goes to the permanent transcript — never swallowed — AND to
+		// the interactive modal, which owns the keyboard until the user answers
+		// or the 30s client-side timeout auto-denies. The status line stays
+		// durable in scrollback even after the modal resolves and clears (see
+		// CanonicalFinalEvent below): the modal is the CURRENT decision surface,
+		// this line is the permanent record of it.
 		line := "confirmation needed: " + e.Action
 		if summary := strings.TrimSpace(e.Summary); summary != "" {
 			line += " — " + summary
 		}
 		m.messages = append(m.messages, Message{Role: RoleStatus, Content: "[!] " + line})
+
+		cm := components.NewConfirmationModel(e.RunID, e.Action, e.Summary, e.ConfirmURL)
+		cm.SetWidth(m.cardWidth())
+		m.confirmation = &cm
+		m.updateViewport()
+		return m, tea.Batch(waitForEvent(m.events), components.StartConfirmationTimeout(e.RunID)), true
 
 	case event.CanonicalFinalEvent:
 		usage := event.CanonicalUsageOf(e)
@@ -108,6 +127,11 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		// the panel up would swallow every keystroke into a question nobody is
 		// listening to — the composer becomes unreachable and Esc quits the app.
 		m.question = nil
+		// Same reasoning for a still-pending confirmation — and on the current
+		// email sidecar this is the ORDINARY case, not an edge one: the stateless
+		// D1 stub sends this final refusal in the same stream read the
+		// needs_confirmation event arrived on, before a human can plausibly react.
+		m.resolveConfirmationOnTurnEnd()
 		if usage.Steps > 0 {
 			m.totalSteps = usage.Steps
 		}
@@ -116,6 +140,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 
 	case event.CanonicalErrorEvent:
 		m.flushBuffer()
+		m.resolveConfirmationOnTurnEnd()
 		m.messages = append(m.messages, Message{Role: RoleError, Content: e.Detail})
 		m.streaming = false
 		m.activity = nil
@@ -190,6 +215,100 @@ func (m ChatModel) answerQuestion(requestID, value string) tea.Cmd {
 			return questionFailedMsg{err: err}
 		}
 		return nil
+	}
+}
+
+// resolveConfirmationOnTurnEnd clears a still-pending confirmation when the
+// run's own terminal event gets there first — which, against the current
+// email sidecar's stateless D1 stub, is the NORMAL case: `needs_confirmation`
+// is immediately followed, in the same stream read, by a synthesized `final`
+// refusal (docs/spec/agent-ui-query-sse-contract.md §5). Leaving the modal up
+// would trap every keystroke in a decision that can no longer change anything
+// — the composer becomes unreachable, exactly the bug m.question=nil already
+// fixes for a mid-run question. The permanent transcript line added when the
+// event first arrived (not the modal) is the durable record of what happened.
+func (m *ChatModel) resolveConfirmationOnTurnEnd() {
+	if m.confirmation == nil {
+		return
+	}
+	if m.confirmation.Pending() {
+		m.messages = append(m.messages, Message{
+			Role: RoleStatus,
+			Content: "[!] confirmation for '" + m.confirmation.Action() +
+				"' resolved: denied — the run ended before it could be answered. Nothing was sent.",
+		})
+	}
+	m.confirmation = nil
+}
+
+// resolveConfirmationDecision records a confirmation's outcome — from a
+// keypress or the 30s timeout — in the activity log and the permanent
+// transcript, then attempts live delivery when (and only when) the triggering
+// event carried a confirm_url.
+func (m ChatModel) resolveConfirmationDecision(msg components.ConfirmationDecidedMsg) (tea.Model, tea.Cmd) {
+	outcome, success := confirmationOutcomeText(msg)
+	m.activity = append(m.activity, ActivityItem{
+		Kind:    "confirm",
+		Content: "confirm " + msg.Action + ": " + outcome,
+		Done:    true,
+		Success: &success,
+	})
+	m.messages = append(m.messages, Message{
+		Role:    RoleStatus,
+		Content: "[!] confirmation for '" + msg.Action + "' resolved: " + outcome,
+	})
+	m.confirmation = nil
+	m.updateViewport()
+
+	if msg.ConfirmURL == "" {
+		// The stateless model (what every shipped sidecar speaks today): there is
+		// no channel to deliver a decision to, so there is nothing further to do
+		// — recording the outcome above is the whole job.
+		return m, nil
+	}
+	return m, m.confirmAction(msg.RunID, msg.Action, msg.Approved)
+}
+
+// confirmationOutcomeText is the one-line outcome recorded for a resolved
+// confirmation. Never claims delivery that cannot happen: an approval with no
+// confirm_url is recorded as exactly that, not as "approved" — see
+// ConfirmationModel's doc comment for why (ui/oneshot.go's writeWithheld
+// already draws this line for the one-shot surface; this is the same rule
+// applied here).
+func confirmationOutcomeText(msg components.ConfirmationDecidedMsg) (text string, success bool) {
+	switch {
+	case msg.TimedOut:
+		return "denied (30s timeout — no response)", false
+	case msg.Approved && msg.ConfirmURL != "":
+		return "approved — delivering", true
+	case msg.Approved:
+		return "approved, but this transport has no live approval channel yet " +
+			"(no confirm_url on the event) — nothing was actually sent", false
+	default:
+		return "denied — nothing sent", false
+	}
+}
+
+// confirmAction delivers the user's decision on the transport's out-of-band
+// confirm seam. Only reachable when the triggering event carried a
+// confirm_url — the resume model (spec §5). No shipped sidecar sets that
+// field today, so this path exists for forward compatibility and is not
+// exercised against the current email agent; see ConfirmationModel's doc
+// comment for the full picture.
+func (m ChatModel) confirmAction(runID, action string, approved bool) tea.Cmd {
+	confirmer, ok := m.client.(client.AgentConfirmer)
+	if !ok {
+		return func() tea.Msg {
+			return confirmActionResultMsg{Action: action, Approved: approved, err: fmt.Errorf(
+				"this agent connection cannot deliver a confirmation decision; " +
+					"relaunch the agent through the GAIA daemon transport")}
+		}
+	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), answerTimeout)
+		defer cancel()
+		err := confirmer.Confirm(ctx, runID, approved)
+		return confirmActionResultMsg{Action: action, Approved: approved, err: err}
 	}
 }
 
