@@ -23,8 +23,8 @@ import json
 import time
 
 import pytest
-from conftest import FakeAgent as _FakeAgent
-from conftest import ScriptedConsole as _ScriptedConsole
+from onboarding_fakes import FakeAgent as _FakeAgent
+from onboarding_fakes import ScriptedConsole as _ScriptedConsole
 from gaia_agent_email import mailbox_state as ms
 from gaia_agent_email import question as q
 from gaia_agent_email.tools import onboarding_tools as ob

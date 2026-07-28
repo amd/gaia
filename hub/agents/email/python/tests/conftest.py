@@ -9,38 +9,10 @@ can never silently short-circuit another test's fake ``requests.get``
 """
 
 import pytest
-from gaia_agent_email import question as q
 
-
-class ScriptedConsole:
-    """Records every question asked and replies from a fixed script.
-
-    Shared by every mailbox-onboarding test module (#2469, #2590) so the real
-    ``question.ask()`` — its casefold option-matching, its strict-rejection
-    ``ValueError``, its sensitive-echo suppression — always runs unmodified.
-    A second, drifted copy of this fake is how a test module stops exercising
-    that behaviour without anyone noticing.
-    """
-
-    def __init__(self, answers):
-        self.answers = list(answers)
-        self.asked = []
-        self.info = []
-
-    def request_user_input_blocking(self, **kwargs):
-        self.asked.append(kwargs)
-        if not self.answers:
-            return q.NO_RESPONSE
-        return self.answers.pop(0)
-
-    def print_info(self, message):
-        self.info.append(message)
-
-
-class FakeAgent:
-    def __init__(self, answers=(), can_answer_questions=True):
-        self.console = ScriptedConsole(answers)
-        self.can_answer_questions = can_answer_questions
+# ScriptedConsole / FakeAgent live in onboarding_fakes.py, NOT here — see that
+# module's docstring for why a bare `from conftest import ...` is unsafe
+# under CI's multi-root pytest invocation (test_email_agent.yml).
 
 
 @pytest.fixture(autouse=True)

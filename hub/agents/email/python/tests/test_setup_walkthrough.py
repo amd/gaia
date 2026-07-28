@@ -13,7 +13,7 @@ and the single-use code is burnt for a user who did everything right.
 from __future__ import annotations
 
 import pytest
-from conftest import FakeAgent as _FakeAgent
+from onboarding_fakes import FakeAgent as _FakeAgent
 from gaia.connectors import setup_routes as sr
 from gaia_agent_email.tools import setup_walkthrough as sw
 

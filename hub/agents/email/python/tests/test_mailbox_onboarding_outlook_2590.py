@@ -24,8 +24,8 @@ from __future__ import annotations
 import json
 
 import pytest
-from conftest import FakeAgent as _FakeAgent
-from conftest import ScriptedConsole as _ScriptedConsole
+from onboarding_fakes import FakeAgent as _FakeAgent
+from onboarding_fakes import ScriptedConsole as _ScriptedConsole
 from gaia_agent_email.tools import onboarding_tools as ob
 
 OUTLOOK_SCOPES = [
