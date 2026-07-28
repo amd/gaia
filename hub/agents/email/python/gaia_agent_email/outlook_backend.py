@@ -439,7 +439,11 @@ class LiveOutlookBackend:
             # Carry the @odata.nextLink so paginated callers keep working;
             # Gmail callers treat any truthy token as "more pages".
             "nextPageToken": data.get("@odata.nextLink"),
-            "resultSizeEstimate": len(messages),
+            # Graph's list response carries no honest mailbox-total field the
+            # way Gmail's resultSizeEstimate does — len(messages) is just the
+            # page size just fetched, and reporting it as a total silently
+            # lies about coverage (#2584). None: unavailable, never fabricated.
+            "resultSizeEstimate": None,
         }
 
     def get_message(self, message_id: str) -> Dict[str, Any]:
