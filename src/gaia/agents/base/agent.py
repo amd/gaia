@@ -228,6 +228,42 @@ def _repair_invalid_json_escapes(s: str) -> str:
     return re.sub(r"\\(.)", _fix, s)
 
 
+def _find_matching_close_paren(text: str, open_pos: int) -> Optional[int]:
+    """Return the index of the ``)`` that closes ``text[open_pos]`` (a ``(``).
+
+    Depth- and quote-aware (mirrors the brace matcher used for embedded JSON
+    tool calls) so a ``)`` inside a quoted argument value doesn't close the
+    call early. Returns ``None`` if the call is never terminated.
+    """
+    depth = 0
+    in_str = False
+    quote_char = ""
+    escape = False
+    for j in range(open_pos, len(text)):
+        ch = text[j]
+        if escape:
+            escape = False
+            continue
+        if ch == "\\":
+            escape = True
+            continue
+        if in_str:
+            if ch == quote_char:
+                in_str = False
+            continue
+        if ch in ("'", '"'):
+            in_str = True
+            quote_char = ch
+            continue
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return j
+    return None
+
+
 # Suffix appended to the last tool-result message when ``single_tool_per_turn``
 # agents have completed their one tool call. The model sees this and emits a
 # short final reply instead of calling another tool. Greppable for fixtures
@@ -920,16 +956,25 @@ Do NOT wrap conversational replies in JSON.
           1. ≥1 unfenced candidate → return the first (unchanged — zero regression).
           2. else exactly one fenced candidate → return it (the fix for #1428).
           3. else >1 fenced, 0 unfenced → ambiguous (looks like docs) → None + warning.
-          4. else → None.
+          4. else → fall back to Python-call syntax detection (#2521), e.g.
+             ``remember(fact="...", category="preference")``.
 
         This method finds the JSON block using brace-depth matching and returns
         the parsed tool call if it contains a "tool" key.  Returns None if no
         embedded tool call is found, allowing the caller to treat the response
         as plain text.
+
+        Raises:
+            ValueError: propagated from the Python-call-syntax fallback (#2521)
+                when a *registered* tool's name is followed by an argument list
+                that can't be parsed — a loud failure rather than echoing the
+                raw syntax to the user as an answer.
         """
-        # Quick check: must contain "tool" to be worth scanning
+        # Quick check: must contain "tool" to be worth scanning for the JSON
+        # shape. Responses without it may still carry the #2521 Python-call
+        # shape below (e.g. no literal "tool" substring at all).
         if '"tool"' not in response:
-            return None
+            return self._extract_function_call_tool_syntax(response)
 
         # Build a set of character ranges inside code fences (```...```)
         _code_ranges: list[tuple[int, int]] = []
@@ -1042,6 +1087,79 @@ Do NOT wrap conversational replies in JSON.
                 len(fenced),
             )
             return None
+
+        # Rule 4: the "tool" marker was present but matched no JSON-shaped
+        # candidate (e.g. it appeared in unrelated text) — fall back to the
+        # Python-call syntax detector (#2521) before giving up.
+        return self._extract_function_call_tool_syntax(response)
+
+    _FUNC_CALL_NAME_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\(")
+
+    def _extract_function_call_tool_syntax(
+        self, response: str
+    ) -> Optional[Dict[str, Any]]:
+        """Detect a Python-call-style tool invocation embedded in text (#2521).
+
+        On the non-tool-calling (embedded-JSON) path the prompt only ever
+        teaches the JSON shape ``{"tool": "name", "tool_args": {...}}``, but
+        some models — observed on the FastFlowLM/NPU backend — instead emit
+        a bare Python-style call, e.g.::
+
+            remember(fact="TechCrunch emails are low priority", category="preference")
+
+        Without this, that text falls through to the plain-text answer path:
+        the raw call syntax is shown to the user and the tool never runs.
+
+        Only names that match a tool actually **registered** on this agent
+        are treated as calls, so ordinary prose that happens to contain
+        "word(...)" (code snippets, examples) is left as plain text. A name
+        match with an argument list that can't be parsed is a loud failure
+        (raises ``ValueError``) rather than being echoed to the user.
+
+        Returns:
+            ``{"tool": name, "tool_args": {...}}`` on a successful match, or
+            ``None`` if no registered-tool call syntax is present.
+
+        Raises:
+            ValueError: a registered tool's name is followed by an argument
+                list that could not be parsed as Python literals.
+        """
+        registry = self._tools_registry
+        if not registry:
+            return None
+
+        for match in self._FUNC_CALL_NAME_RE.finditer(response):
+            name = match.group(1)
+            if name not in registry:
+                continue
+
+            open_paren = match.end() - 1
+            close_paren = _find_matching_close_paren(response, open_paren)
+            if close_paren is None:
+                raise ValueError(
+                    f"Detected an unterminated call to tool '{name}' — cannot "
+                    "execute it. Raw text: "
+                    f"{response[match.start():match.start() + 200]!r}"
+                )
+
+            call_src = response[match.start() : close_paren + 1]
+            try:
+                node = ast.parse(call_src, mode="eval").body
+                if not isinstance(node, ast.Call) or node.args:
+                    raise ValueError("expected a call with only keyword arguments")
+                tool_args: Dict[str, Any] = {}
+                for kw in node.keywords:
+                    if kw.arg is None:
+                        raise ValueError("**kwargs expansion is not supported")
+                    tool_args[kw.arg] = ast.literal_eval(kw.value)
+            except (SyntaxError, ValueError) as exc:
+                raise ValueError(
+                    f"Detected a call to tool '{name}' but could not parse "
+                    f"its arguments: {exc}. Raw call: {call_src[:200]!r}"
+                ) from exc
+
+            logger.debug("[PARSE] Extracted function-call-syntax tool call: %s", name)
+            return {"tool": name, "tool_args": tool_args}
 
         return None
 
