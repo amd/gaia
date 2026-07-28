@@ -285,8 +285,10 @@ The agent can run **proactively** at the `earn_trust` level: it archives low-sig
 (promotional/spam) mail and marks FYI mail read on its own **where your explicit
 preferences already sanction it** (a low-priority sender, or a category you default to
 archive) or a sender/category has earned enough trust, and **always asks before anything
-destructive** (send / forward / permanent-delete / RSVP) — reply drafting is not yet wired
-into this proactive loop (the policy layer supports it, but no candidate reaches it today).
+destructive** (send / forward / RSVP / quarantine). There is no permanent-delete — the
+agent only ever moves mail to Trash, which is always reversible. Reply drafting is not yet
+wired into this proactive loop (the policy layer supports it, but no candidate reaches it
+today).
 Turn it on and inspect the earned trust:
 
 ```js

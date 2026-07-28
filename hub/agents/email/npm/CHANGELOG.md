@@ -6,6 +6,19 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## Unreleased
 
+- **A trashed email is recoverable any time it's still in Trash — not just for
+  a few seconds after you delete it.** The only way back used to be a short
+  undo window right after trashing; miss it, and the agent told you the
+  message was stuck, even though Gmail actually keeps Trash for 30 days. It
+  can now find the message and restore it any time it's still there. The
+  agent also stopped calling a trashed message "archived" in its confirmation
+  — trash and archive recover differently, so it now says exactly what it did.
+- **The agent no longer claims it can permanently delete email — because it
+  can't.** Permanently deleting a Gmail message needs a scope GAIA
+  deliberately never asks for (it would hand over delete access to your whole
+  mailbox for one rare action), so every attempt failed. Asked directly, the
+  agent used to say it could do it anyway. Now it says plainly it can only
+  move mail to Trash.
 - **Full autonomy now does more than archive, explains its decisions, and can be undone.**
   Previously the proactive `earn_trust`/`full` loop only ever archived low-signal mail —
   every other reversible action the trust model already declared (marking mail read,
@@ -19,7 +32,6 @@ behind any entry — API shapes, endpoints, and version semantics — see
   correction against its trust scope, the same negative-feedback loop `undo_archive_batch`
   already gave archives. The destructive floor (send/forward/permanent-delete/RSVP/quarantine)
   is unaffected — it was already inviolable and stays that way at every level (#2529).
-
 - **The agent sets up your mailbox itself, in the conversation.** Before, hitting
   the email agent without a working mailbox produced an error and a shell command
   to go run somewhere else — a dead end for anyone in a terminal or chat window.

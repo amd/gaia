@@ -77,8 +77,10 @@ jobs:
           # exists. It ships in the [ui]/[rag] extras, which this job does not install.
           # cvss is required by tests/unit/test_cvss4.py and test_findings_to_sarif.py
           # (the security-audit scorer); it lives in the [dev] extra, not [api].
+          # responses is required by tests/unit/test_lemonade_error_classification.py
+          # — same story as cvss: declared in [dev], and this job installs [api].
           uv pip install --system pytest pytest-cov pytest-asyncio pytest-mock pytest-timeout \
-                                  pyfakefs keyring httpx respx matplotlib pymupdf cvss
+                                  pyfakefs keyring httpx respx matplotlib pymupdf cvss responses
           uv pip install --system -e ".[api]"
 
       - name: Validate packaging integrity
@@ -194,7 +196,7 @@ jobs:
       - name: Install dependencies
         run: |
           uv pip install --system pytest pytest-asyncio pytest-mock pytest-timeout \
-                                  pyfakefs keyring httpx respx matplotlib pymupdf cvss
+                                  pyfakefs keyring httpx respx matplotlib pymupdf cvss responses
           uv pip install --system -e ".[api]"
 
       - name: Validate packaging integrity

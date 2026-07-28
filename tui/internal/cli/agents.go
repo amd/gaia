@@ -303,7 +303,11 @@ var runCmd = &cobra.Command{
 		if err := checkModelSupported(args[0], runModel); err != nil {
 			return err
 		}
-		code, err := ui.RunAgent(args[0], runQuery, runModel, debug, runTimeout)
+		ctrl, err := controlOptionsForAgentRun(cmd, runQuery != "")
+		if err != nil {
+			return err
+		}
+		code, err := ui.RunAgent(args[0], runQuery, runModel, debug, runTimeout, ctrl)
 		if err != nil {
 			return err
 		}

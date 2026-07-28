@@ -531,6 +531,71 @@ class InsufficientDiskSpaceError(LemonadeClientError):
     """Raised when there's not enough disk space for model download."""
 
 
+# Phrases indicating a backend rejected a request because the prompt plus
+# conversation history exceeded the loaded model's context window.
+# Case-insensitive; matched against the backend's own error message once
+# extracted from a Lemonade error envelope (see ``is_context_overflow_error``
+# below). A new backend's overflow wording only needs a new entry here, not
+# a new classification branch (#2513: FastFlowLM's "Max length reached!"
+# matched none of the original llama.cpp-only phrasings, so the agent's
+# trim-and-retry recovery never engaged on NPU).
+CONTEXT_OVERFLOW_PHRASES = (
+    "exceed_context_size",
+    "exceeds the available context size",
+    "got too long",
+    "max length reached",
+)
+
+
+def _extract_backend_error_message(error_text: str) -> Optional[str]:
+    """Pull the backend's own ``message`` out of a Lemonade JSON error
+    envelope embedded in *error_text*, preferring the nested
+    ``details.response.error`` shape used for backend-wrapped failures
+    (e.g. FastFlowLM) over the outer envelope. Returns ``None`` when no
+    envelope can be located/parsed so the caller falls back to scanning
+    the raw text.
+    """
+    start = error_text.find("{")
+    if start == -1:
+        return None
+    try:
+        payload = json.loads(error_text[start:])
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    err = payload.get("error")
+    if not isinstance(err, dict):
+        return None
+    nested = None
+    details = err.get("details")
+    if isinstance(details, dict):
+        response = details.get("response")
+        if isinstance(response, dict):
+            nested = response.get("error")
+    source = nested if isinstance(nested, dict) else err
+    message = source.get("message")
+    return str(message) if message else None
+
+
+def is_context_overflow_error(error_text: str) -> bool:
+    """Classify a stringified backend error as context overflow.
+
+    Structure first, text second: when *error_text* embeds a Lemonade JSON
+    error envelope, phrase-matching runs against just that envelope's own
+    message — so unrelated text elsewhere (e.g. an echoed request body)
+    can't produce a false positive. Falls back to scanning the raw text
+    when no envelope can be parsed, which keeps non-JSON backend phrasings
+    working. Shared by the agent loop's streaming and non-streaming retry
+    paths so every backend benefits from one classifier (#2513).
+    """
+    if not error_text:
+        return False
+    message = _extract_backend_error_message(error_text)
+    haystack = (message or error_text).lower()
+    return any(phrase in haystack for phrase in CONTEXT_OVERFLOW_PHRASES)
+
+
 @dataclass
 class DownloadTask:
     """Represents an ongoing model download."""
@@ -1530,15 +1595,32 @@ class LemonadeClient:
             raise last_error
 
     def _execute_with_auto_download(
-        self, api_call: Callable, model: str, auto_download: bool = True
+        self,
+        api_call: Callable,
+        model: str,
+        auto_download: bool = True,
+        *,
+        error: Exception,
     ):
         """
-        Execute an API call with auto-download retry logic.
+        Recover from a failed API call by auto-downloading/loading the
+        model — but ONLY when *error* is actually the missing-model
+        condition this exists for.
+
+        Every caller invokes this from an ``except`` block after
+        ``api_call()`` already failed once; *error* is that failure.
+        This used to retry ``api_call()`` unconditionally before even
+        looking at *error*, so any failure — context overflow included —
+        silently repeated the identical request. #2513 measured that as
+        two identical 400s per turn on the NPU/FastFlowLM backend.
+        Anything that isn't a missing-model error is re-raised immediately
+        instead of retried.
 
         Args:
             api_call: Function to call (should raise exception if model not loaded)
             model: Model name
             auto_download: Whether to auto-download on model error
+            error: The exception the caller's own first attempt raised
 
         Returns:
             Result of api_call()
@@ -1546,29 +1628,27 @@ class LemonadeClient:
         Raises:
             ModelDownloadCancelledError: If user cancels download
             InsufficientDiskSpaceError: If not enough disk space
-            LemonadeClientError: If download/load fails
+            LemonadeClientError: If download/load fails, or if *error* is
+                not a missing-model error (re-raised unchanged)
         """
-        try:
-            return api_call()
-        except Exception as e:
-            # Check if this is a model loading error and auto_download is enabled
-            if auto_download and self._is_model_error(e):
-                self.log.info(
-                    f"{_emoji('📥', '[AUTO-DOWNLOAD]')} Model '{model}' not loaded, "
-                    f"attempting auto-download and load..."
-                )
+        if not (auto_download and self._is_model_error(error)):
+            # Not the missing-model condition this recovery is for --
+            # retrying would just repeat the same failing request.
+            raise error
 
-                # Load model with auto-download (includes prompt, validation, etc.)
-                self.load_model(model, timeout=60, auto_download=True)
+        self.log.info(
+            f"{_emoji('📥', '[AUTO-DOWNLOAD]')} Model '{model}' not loaded, "
+            f"attempting auto-download and load..."
+        )
 
-                # Retry the API call
-                self.log.info(
-                    f"{_emoji('🔄', '[RETRY]')} Retrying API call with model: {model}"
-                )
-                return api_call()
+        # Load model with auto-download (includes prompt, validation, etc.)
+        self.load_model(model, timeout=60, auto_download=True)
 
-            # Re-raise original error
-            raise
+        # Retry the API call
+        self.log.info(
+            f"{_emoji('🔄', '[RETRY]')} Retrying API call with model: {model}"
+        )
+        return api_call()
 
     def chat_completions(
         self,
@@ -1725,10 +1805,13 @@ class LemonadeClient:
             # Execute with auto-download retry logic
             try:
                 return _make_request()
-            except (requests.exceptions.RequestException, LemonadeClientError):
-                # Use helper to handle auto-download and retry
+            except (requests.exceptions.RequestException, LemonadeClientError) as e:
+                # Use helper to handle auto-download and retry. Passing the
+                # already-caught error lets it skip the retry entirely for
+                # non-missing-model failures (#2513) instead of repeating
+                # the identical request first.
                 return self._execute_with_auto_download(
-                    _make_request, model, auto_download
+                    _make_request, model, auto_download, error=e
                 )
 
     def _stream_chat_completions_with_openai(
@@ -2035,9 +2118,12 @@ class LemonadeClient:
         # Execute with auto-download retry logic
         try:
             return _make_request()
-        except (requests.exceptions.RequestException, LemonadeClientError):
-            # Use helper to handle auto-download and retry
-            return self._execute_with_auto_download(_make_request, model, auto_download)
+        except (requests.exceptions.RequestException, LemonadeClientError) as e:
+            # Use helper to handle auto-download and retry (#2513: only
+            # when *e* is actually the missing-model condition).
+            return self._execute_with_auto_download(
+                _make_request, model, auto_download, error=e
+            )
 
     def _stream_completions_with_openai(
         self,

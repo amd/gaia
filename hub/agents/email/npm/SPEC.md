@@ -259,7 +259,9 @@ stays visible, but doesn't sit unread) — and only where your explicit preferen
 (a low-priority sender, or a category defaulted to archive) or a sender/category has crossed
 the trust bar (`autonomy_trust_min_samples` decisions at ≥ `autonomy_trust_threshold`
 accuracy); everything else is proposed. The destructive floor — send, forward,
-permanent-delete, RSVP, quarantine — **always requires confirmation, at every level**.
+RSVP, quarantine — **always requires confirmation, at every level**. There is no
+permanent-delete tool: Gmail gates real permanent delete behind a full-mailbox
+scope GAIA never requests, so the agent only ever offers reversible Trash.
 Undoing an auto-action — via `POST .../autonomy/undo`, or the conversational
 `undo_archive_batch` tool for a batch archive — feeds the trust ledger as a correction (a
 negative outcome), so trust ratchets *down* on a mistake; positive-outcome accrual that would

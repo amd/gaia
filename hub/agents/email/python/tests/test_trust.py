@@ -46,13 +46,13 @@ def db():
 # The email agent's real floor. Kept as a literal here so a change to the
 # agent's CONFIRMATION_REQUIRED_TOOLS that accidentally *shrinks* the floor is
 # caught by the parity test below rather than silently loosening these cases.
+# permanent_delete removed (#2533) — no longer a registered tool.
 FLOOR = frozenset(
     {
         "send_draft",
         "send_now",
         "schedule_send",
         "forward_message",
-        "permanent_delete",
         "accept_invite",
         "decline_invite",
         "create_event_from_email",
