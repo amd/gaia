@@ -1,0 +1,102 @@
+{
+  "agents": [
+    {
+      "id": "analyst",
+      "name": "Analyst Agent",
+      "description": "GAIA analyst agent — structured data analysis (CSV/Excel, scratchpad SQL)",
+      "category": "productivity",
+      "icon": "table"
+    },
+    {
+      "id": "blender",
+      "name": "Blender",
+      "description": "3D scene automation for Blender via MCP",
+      "category": "creative",
+      "icon": "box"
+    },
+    {
+      "id": "browser",
+      "name": "Browser Agent",
+      "description": "GAIA browser agent — web research (search, fetch, download)",
+      "category": "research",
+      "icon": "globe"
+    },
+    {
+      "id": "chat",
+      "name": "Chat",
+      "description": "GAIA chat agent — conversation, document Q&A (RAG), and file-system profiles",
+      "category": "conversation",
+      "icon": "message-circle"
+    },
+    {
+      "id": "code",
+      "name": "Code",
+      "description": "Autonomous code generation — plan, write, lint, fix, and test",
+      "category": "development",
+      "icon": "code"
+    },
+    {
+      "id": "docker",
+      "name": "Docker",
+      "description": "Container management — build, run, and inspect Docker containers",
+      "category": "infrastructure",
+      "icon": "container"
+    },
+    {
+      "id": "docqa",
+      "name": "Document Q&A",
+      "description": "GAIA Document Q&A agent — RAG document Q&A and indexing",
+      "category": "productivity",
+      "icon": "file-search"
+    },
+    {
+      "id": "email",
+      "name": "Email Triage",
+      "description": "GAIA email triage agent — read, triage, organize, and reply to Gmail/Outlook locally",
+      "category": "productivity",
+      "icon": "mail"
+    },
+    {
+      "id": "fileio",
+      "name": "File I/O",
+      "description": "Read, write, and edit files on the local filesystem",
+      "category": "productivity",
+      "icon": "file"
+    },
+    {
+      "id": "jira",
+      "name": "Jira",
+      "description": "Jira issue management — search, create, and update issues",
+      "category": "productivity",
+      "icon": "kanban"
+    },
+    {
+      "id": "emr",
+      "name": "Medical Intake",
+      "description": "Medical intake — VLM extraction of patient forms into a records database",
+      "category": "healthcare",
+      "icon": "stethoscope"
+    },
+    {
+      "id": "routing",
+      "name": "Routing Agent",
+      "description": "GAIA routing agent — meta-agent that routes requests to the right concrete agent",
+      "category": "infrastructure",
+      "icon": "route"
+    },
+    {
+      "id": "sd",
+      "name": "Stable Diffusion",
+      "description": "Image generation — LLM-enhanced prompts for Stable Diffusion",
+      "category": "creative",
+      "icon": "image"
+    },
+    {
+      "id": "summarize",
+      "name": "Summarizer",
+      "description": "Document and text summarization — PDFs, transcripts, and email",
+      "category": "productivity",
+      "icon": "file-text"
+    }
+  ]
+}

@@ -5,10 +5,10 @@
 import Layout from '../../layouts/Layout.astro';
 import Header from '../../components/Header.astro';
 import Footer from '../../components/Footer.astro';
-import Eyebrow from '../../components/Eyebrow.astro';
 import AgentIcon from '../../components/AgentIcon.astro';
-import InstallMethods from '../../components/InstallMethods.astro';
-import TerminalBlock from '../../components/TerminalBlock.astro';
+import InstallCard from '../../components/InstallCard.astro';
+import DocTabs from '../../components/DocTabs.astro';
+import SidebarCard from '../../components/SidebarCard.astro';
 import FileTree from '../../components/FileTree.astro';
 import {
   getCatalog,
@@ -32,12 +32,7 @@ export async function getStaticPaths() {
 const { id } = Astro.params;
 const agent = (await getAgent(id!))!;
 
-// npm-distributed agents (the email sidecar) install via npm, not the GAIA app /
-// pip. Surface only the path that actually works — see installMethods().
 const isNpm = !!agent.npm_package;
-const npmUrl = agent.npm_package ? `https://www.npmjs.com/package/${agent.npm_package}` : '';
-const installCmd = isNpm ? `npm i ${agent.npm_package}` : `gaia agent install ${agent.id}`;
-const deepLink = `gaia://hub/install/${agent.id}`;
 const readmeHtml = renderMarkdown(agent.readme);
 // Optional docs — older index.json (served before the hub Worker adds a field) may
 // lack these; render a tab only when there's content.
@@ -48,7 +43,7 @@ const evaluationHtml = agent.evaluation ? renderMarkdown(agent.evaluation) : '';
 const capabilityMatrixHtml = agent.capability_matrix ? renderMarkdown(agent.capability_matrix) : '';
 // Eval scorecard: the Worker embeds the SCORECARD.md body (front matter already
 // stripped) as `scorecard`, and the aggregate as `eval_score`. Render the body as
-// a tab; the sidebar badge links out to the canonical source (eval_scorecard_url).
+// a tab; the score card links out to the canonical source (eval_scorecard_url).
 const scorecardHtml = agent.scorecard ? renderMarkdown(agent.scorecard) : '';
 const hasScore = typeof agent.eval_score === 'number';
 // Clamp display precision to 2 dp so an unrounded upstream aggregate (e.g.
@@ -57,6 +52,9 @@ const hasScore = typeof agent.eval_score === 'number';
 const scoreDisplay = typeof agent.eval_score === 'number'
   ? Math.round(agent.eval_score * 100) / 100
   : undefined;
+const scorePct = typeof agent.eval_score === 'number'
+  ? Math.max(0, Math.min(100, agent.eval_score))
+  : 0;
 const req = agent.requirements;
 
 const packageFiles = agent.package?.files ?? [];
@@ -84,329 +82,270 @@ const fileTree = buildFileTree(packageFiles, previewBase);
 // Doc tabs that actually have content (README is always present). The Files tab is
 // the package's directory listing; it only appears once a whole-package zip ships.
 const docTabs = [
-  { key: 'readme', label: 'README' },
+  { key: 'readme', label: 'Readme' },
   ...(specHtml ? [{ key: 'spec', label: 'Spec' }] : []),
   ...(skillHtml ? [{ key: 'skill', label: 'Skill' }] : []),
-  ...(scorecardHtml ? [{ key: 'scorecard', label: 'Scorecard' }] : []),
   ...(evaluationHtml ? [{ key: 'evaluation', label: 'Evaluation' }] : []),
   ...(capabilityMatrixHtml ? [{ key: 'capability_matrix', label: 'Capabilities' }] : []),
   ...(changelogHtml ? [{ key: 'changelog', label: 'Changelog' }] : []),
+  ...(scorecardHtml ? [{ key: 'scorecard', label: 'Scorecard' }] : []),
   ...(packageFiles.length ? [{ key: 'files', label: 'Files' }] : []),
 ];
-const terminalLines = [
-  { prompt: true, text: installCmd },
-  { muted: true, text: `✓ ${agent.name} ${agent.latest_version} installed` },
-  // Non-npm agents launch via the CLI; the npm client is embedded by the host app.
-  ...(isNpm ? [] : [{ prompt: true, text: `gaia ${agent.id}` }]),
+
+// A lone Readme needs no tablist — and with no tabs rendered, the panel must not
+// claim a tabpanel role pointing at a `doctab-readme` that doesn't exist.
+const hasTabs = docTabs.length > 1;
+
+const detailRows = [
+  { label: 'Version', value: agent.latest_version },
+  ...(sizeMax > 0
+    ? [{ label: 'Size', value: sizeMin === sizeMax ? formatBytes(sizeMax) : `${formatBytes(sizeMin)} – ${formatBytes(sizeMax)}` }]
+    : []),
+  { label: 'Author', value: agent.author },
+  { label: 'Category', value: categoryLabel(agent.category) },
+  {
+    label: 'Language',
+    value: languageLabel(agent.language),
+    // npm/binary agents ship a self-contained compiled binary — no Python
+    // runtime on the host, so "Python" alone is misleading.
+    note: isNpm ? 'Ships as a native binary — no Python needed' : undefined,
+  },
+  ...(agent.tools_count > 0 ? [{ label: 'Tools', value: String(agent.tools_count) }] : []),
+  ...(agent.npm_package ? [{ label: 'Package', value: agent.npm_package }] : []),
+];
+
+const requirementRows = [
+  ...(req.min_memory_gb > 0 ? [{ label: 'Memory', value: `${req.min_memory_gb} GB` }] : []),
+  ...(req.min_disk_gb > 0 ? [{ label: 'Disk', value: `${req.min_disk_gb} GB` }] : []),
+  ...(req.min_context_size > 0 ? [{ label: 'Context', value: req.min_context_size.toLocaleString() }] : []),
+  ...(req.gpu_vram_gb > 0 ? [{ label: 'GPU VRAM', value: `${req.gpu_vram_gb} GB` }] : []),
+  { label: 'NPU', value: npuLabel(req.npu) },
+  ...(agent.min_gaia_version ? [{ label: 'Min GAIA', value: agent.min_gaia_version }] : []),
+  ...(req.platforms.length ? [{ label: 'Platforms', value: req.platforms.map(platformLabel).join(' · ') }] : []),
 ];
 ---
 
 <Layout title={`${agent.name} — Agent Hub — gaia`} description={agent.description}>
   <Header />
-  <main id="main-content" class="max-w-5xl mx-auto px-6 pt-32 pb-28">
+  <main id="main-content" class="g-shell pb-24 pt-[110px]">
 
-    <a href="/hub" class="text-sm text-g-muted hover:text-g-text transition-colors">← Agent Hub</a>
+    <nav class="mono mb-[30px] flex items-center gap-2.5 text-[12px] text-g-faint" aria-label="Breadcrumb">
+      <a href="/hub" class="text-g-muted transition-colors hover:text-g-gold-text">Agent Hub</a>
+      <span aria-hidden="true">/</span>
+      <span class="text-g-text">{agent.id}</span>
+    </nav>
 
-    <!-- Header -->
-    <header class="mt-8 flex flex-col sm:flex-row sm:items-start gap-6">
-      <span class="flex-none w-16 h-16 rounded-xl border border-g-border bg-g-surface flex items-center justify-center text-g-gold-text">
-        <AgentIcon name={agent.icon} class="w-8 h-8" />
-      </span>
-      <div class="min-w-0 flex-1">
-        <div class="flex flex-wrap items-center gap-3">
-          <h1 class="text-3xl font-bold tracking-tight">{agent.name}</h1>
-          <span class="text-[10px] font-bold tracking-wide uppercase text-g-gold-text border border-g-gold/40 rounded px-2 py-0.5">
+    <!-- Title block + eval score -->
+    <div class="animate-g-rise flex flex-wrap items-start justify-between gap-8">
+      <div class="min-w-0 flex-1 basis-[460px]">
+        <div class="flex flex-wrap items-center gap-x-4 gap-y-3">
+          <span class="g-chip h-[52px] w-[52px] rounded-g-chip-lg border-g-border2">
+            <AgentIcon name={agent.icon} class="h-[25px] w-[25px]" />
+          </span>
+          <h1 class="g-h-agent">{agent.name}</h1>
+          <span class="mono text-[13px] text-g-faint">v{agent.latest_version}</span>
+          <span class="g-badge inline-flex items-center gap-1.5 px-2 py-[3px]">
+            {agent.security_tier === 'verified' && (
+              <svg width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.4" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg>
+            )}
             {securityTierLabel(agent.security_tier)}
           </span>
         </div>
-        <p class="mt-2 text-g-muted max-w-2xl">{agent.description}</p>
+
+        <p class="mt-[18px] max-w-[600px] text-[17px] leading-[1.65] text-g-muted">{agent.description}</p>
+
         {agent.deprecated && (
-          <p class="mt-3 text-sm text-g-muted border border-g-border rounded-md px-3 py-2">
+          <p class="mt-4 max-w-[600px] rounded-g-panel border border-g-border2 px-3.5 py-2.5 text-[13px] text-g-muted">
             Deprecated{agent.deprecation_message ? ` — ${agent.deprecation_message}` : ''}
           </p>
         )}
-        {!isNpm && (
-          <div class="mt-6 flex flex-wrap items-center gap-3">
-            <a href={deepLink} class="rounded-md bg-g-gold px-6 py-3 text-sm font-semibold text-black hover:brightness-110 transition">
-              Open in GAIA
-            </a>
-          </div>
-        )}
-        <p class="mt-4 text-xs text-g-muted">
-          {isNpm ? (
-            // The playground needs install + a running sidecar, so its launcher lives
-            // in the README's Playground section, not as a hero button.
-            <span>Install with npm below, then drive it from your app. <a href={npmUrl} class="text-g-gold-text hover:underline">View on npm →</a></span>
-          ) : (
-            <span>Don't have GAIA yet? <a href="https://amd-gaia.ai/docs" class="text-g-gold-text hover:underline">Get started →</a></span>
-          )}
-        </p>
-      </div>
-    </header>
 
-    <!-- Install chrome: switcher + platform badges, both manifest-driven -->
-    <section class="mt-12" aria-label="Install">
-      <Eyebrow class="mb-3">Install</Eyebrow>
-      <div class="max-w-xl">
-        <InstallMethods agent={agent} />
+        {agent.tags.length > 0 && (
+          <ul class="mt-5 flex flex-wrap gap-2.5">
+            {agent.tags.map((t) => <li class="g-pill-static">{t}</li>)}
+          </ul>
+        )}
       </div>
-      <div class="mt-4 flex flex-wrap items-center gap-1.5">
-        <span class="text-[11px] text-g-muted mr-1">Runs on:</span>
-        {req.platforms.map((p) => (
-          <span class="text-[11px] text-g-muted border border-g-border rounded px-2 py-0.5">{platformLabel(p)}</span>
-        ))}
-      </div>
-    </section>
 
-    <!-- Body: tabbed docs (README / Spec / Skill / Scorecard / Evaluation / Capabilities / Changelog / Files) + cards -->
-    <div class="mt-12 grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_280px] gap-12">
-      <div class="min-w-0" data-doc-tabs>
-        {docTabs.length > 1 && (
-          <div role="tablist" aria-label={`${agent.name} documentation`} class="flex gap-1 border-b border-g-border mb-7 overflow-x-auto">
-            {docTabs.map((t, i) => (
-              <button
-                type="button"
-                role="tab"
-                id={`doctab-${t.key}`}
-                aria-controls={`docpanel-${t.key}`}
-                data-doc-tab={t.key}
-                aria-selected={i === 0 ? 'true' : 'false'}
-                tabindex={i === 0 ? 0 : -1}
-                class="doc-tab"
-              >{t.label}</button>
-            ))}
+      {hasScore && (
+        <!-- Eval score: the aggregate parsed from the published scorecard, with a
+             jump to the full scorecard tab and the canonical source. -->
+        <div class="g-card w-full border-g-border2 p-[22px] sm:w-auto sm:min-w-[280px]">
+          <h2 class="g-label">Eval score</h2>
+          <div class="mt-2.5 flex items-baseline gap-[7px]">
+            <span class="mono text-[44px] font-medium leading-none tracking-[-0.03em] text-g-gold-text">{scoreDisplay}</span>
+            <span class="mono text-[14px] text-g-faint">/ 100</span>
           </div>
-        )}
-        <article role="tabpanel" id="docpanel-readme" aria-labelledby="doctab-readme" data-doc-panel="readme" class="doc max-w-[70ch]">
-          <h2 class="sr-only">About {agent.name}</h2>
-          <div set:html={readmeHtml} />
-          <div class="mt-10">
-            <TerminalBlock lines={terminalLines} typing />
+          <div class="mt-3.5 h-[5px] overflow-hidden rounded-[3px] bg-g-surface2">
+            <div class="h-full rounded-[3px] bg-gradient-to-r from-g-gold to-g-gold2" style={`width:${scorePct}%`}></div>
           </div>
-        </article>
-        {specHtml && (
-          <article role="tabpanel" id="docpanel-spec" aria-labelledby="doctab-spec" data-doc-panel="spec" class="doc max-w-[70ch]" hidden>
-            <div set:html={specHtml} />
-          </article>
-        )}
-        {skillHtml && (
-          <article role="tabpanel" id="docpanel-skill" aria-labelledby="doctab-skill" data-doc-panel="skill" class="doc max-w-[70ch]" hidden>
-            <div set:html={skillHtml} />
-          </article>
-        )}
-        {scorecardHtml && (
-          <article role="tabpanel" id="docpanel-scorecard" aria-labelledby="doctab-scorecard" data-doc-panel="scorecard" class="doc max-w-[70ch]" hidden>
+          <p class="mt-3.5 max-w-[280px] text-[12.5px] leading-[1.55] text-g-faint">
+            Aggregate benchmark score for the latest published version — the methodology and every sub-metric are in the scorecard.
+          </p>
+          <div class="mt-3.5 flex flex-wrap items-center gap-x-5 gap-y-2">
+            {scorecardHtml && (
+              <button type="button" data-doc-goto="scorecard" class="g-cta-link">Read the scorecard →</button>
+            )}
             {agent.eval_scorecard_url && (
-              <p class="text-[13px] text-g-muted">
-                {hasScore && <span>Aggregate score <strong class="text-g-text">{scoreDisplay} / 100</strong>. </span>}
-                <a href={agent.eval_scorecard_url} target="_blank" rel="noopener" class="text-g-gold-text hover:underline">View the canonical scorecard ↗</a>
-              </p>
+              <a href={agent.eval_scorecard_url} target="_blank" rel="noopener" class="g-cta-link">Source ↗</a>
             )}
-            <div set:html={scorecardHtml} />
-          </article>
-        )}
-        {evaluationHtml && (
-          <article role="tabpanel" id="docpanel-evaluation" aria-labelledby="doctab-evaluation" data-doc-panel="evaluation" class="doc max-w-[70ch]" hidden>
-            <div set:html={evaluationHtml} />
-          </article>
-        )}
-        {capabilityMatrixHtml && (
-          <article role="tabpanel" id="docpanel-capability_matrix" aria-labelledby="doctab-capability_matrix" data-doc-panel="capability_matrix" class="doc max-w-[70ch]" hidden>
-            <div set:html={capabilityMatrixHtml} />
-          </article>
-        )}
-        {changelogHtml && (
-          <article role="tabpanel" id="docpanel-changelog" aria-labelledby="doctab-changelog" data-doc-panel="changelog" class="doc max-w-[70ch]" hidden>
-            <div set:html={changelogHtml} />
-          </article>
-        )}
-        {packageFiles.length > 0 && (
-          <section role="tabpanel" id="docpanel-files" aria-labelledby="doctab-files" data-doc-panel="files" hidden>
-            <h2 class="text-xl font-semibold tracking-tight">Package contents</h2>
-            <div class="mt-2 mb-4 flex flex-wrap items-center justify-between gap-3">
-              <p class="text-[13px] text-g-muted">
-                {packageFiles.length} files across {topLevelFolders} {topLevelFolders === 1 ? 'folder' : 'folders'}{previewBase ? ' — click a text file to preview it.' : '.'}
-              </p>
-              <div class="flex flex-none gap-1.5 text-[11px]" data-file-tree-controls>
-                <button type="button" data-files-expand class="rounded border border-g-border px-2 py-1 text-g-muted transition-colors hover:border-g-gold/50 hover:text-g-text">Expand all</button>
-                <button type="button" data-files-collapse class="rounded border border-g-border px-2 py-1 text-g-muted transition-colors hover:border-g-gold/50 hover:text-g-text">Collapse all</button>
-              </div>
-            </div>
-            <div class="file-tree rounded-xl border border-g-border p-3 font-mono text-[12.5px]" data-file-tree>
-              <FileTree nodes={fileTree.children} />
-            </div>
-          </section>
-        )}
+          </div>
+        </div>
+      )}
+    </div>
+
+    <!-- Install + tabbed docs, with the metadata sidebar -->
+    <div class="mt-11 grid grid-cols-1 items-start gap-7 lg:grid-cols-[minmax(0,1fr)_320px]">
+      <div class="min-w-0" data-doc-tabs>
+        <InstallCard agent={agent} />
+
+        <!-- scroll-mt clears the fixed 66px header when a [data-doc-goto] link jumps here. -->
+        <div id="docs" class="g-card mt-6 scroll-mt-[86px] overflow-hidden">
+          {hasTabs && <DocTabs tabs={docTabs} label={`${agent.name} documentation`} />}
+
+          <div class="px-6 py-7">
+            <article
+              role={hasTabs ? 'tabpanel' : undefined}
+              aria-labelledby={hasTabs ? 'doctab-readme' : undefined}
+              id="docpanel-readme"
+              data-doc-panel="readme"
+              class="doc max-w-[70ch]"
+            >
+              <h2 class="sr-only">About {agent.name}</h2>
+              <div set:html={readmeHtml} />
+            </article>
+            {specHtml && (
+              <article role="tabpanel" id="docpanel-spec" aria-labelledby="doctab-spec" data-doc-panel="spec" class="doc max-w-[70ch]" hidden>
+                <div set:html={specHtml} />
+              </article>
+            )}
+            {skillHtml && (
+              <article role="tabpanel" id="docpanel-skill" aria-labelledby="doctab-skill" data-doc-panel="skill" class="doc max-w-[70ch]" hidden>
+                <div set:html={skillHtml} />
+              </article>
+            )}
+            {evaluationHtml && (
+              <article role="tabpanel" id="docpanel-evaluation" aria-labelledby="doctab-evaluation" data-doc-panel="evaluation" class="doc max-w-[70ch]" hidden>
+                <div set:html={evaluationHtml} />
+              </article>
+            )}
+            {capabilityMatrixHtml && (
+              <article role="tabpanel" id="docpanel-capability_matrix" aria-labelledby="doctab-capability_matrix" data-doc-panel="capability_matrix" class="doc max-w-[70ch]" hidden>
+                <div set:html={capabilityMatrixHtml} />
+              </article>
+            )}
+            {changelogHtml && (
+              <article role="tabpanel" id="docpanel-changelog" aria-labelledby="doctab-changelog" data-doc-panel="changelog" class="doc max-w-[70ch]" hidden>
+                <div set:html={changelogHtml} />
+              </article>
+            )}
+            {scorecardHtml && (
+              <article role="tabpanel" id="docpanel-scorecard" aria-labelledby="doctab-scorecard" data-doc-panel="scorecard" class="doc max-w-[70ch]" hidden>
+                {agent.eval_scorecard_url && (
+                  <p class="text-[13px] text-g-faint">
+                    {hasScore && <span>Aggregate score <strong class="text-g-text">{scoreDisplay} / 100</strong>. </span>}
+                    <a href={agent.eval_scorecard_url} target="_blank" rel="noopener">View the canonical scorecard ↗</a>
+                  </p>
+                )}
+                <div set:html={scorecardHtml} />
+              </article>
+            )}
+            {packageFiles.length > 0 && (
+              <section role="tabpanel" id="docpanel-files" aria-labelledby="doctab-files" data-doc-panel="files" hidden>
+                <h2 class="g-h-card">Package contents</h2>
+                <div class="mb-4 mt-2 flex flex-wrap items-center justify-between gap-3">
+                  <p class="text-[13px] text-g-faint">
+                    {packageFiles.length} files across {topLevelFolders} {topLevelFolders === 1 ? 'folder' : 'folders'}{previewBase ? ' — click a text file to preview it.' : '.'}
+                  </p>
+                  <div class="flex flex-none gap-1.5 text-[11px]" data-file-tree-controls>
+                    <button type="button" data-files-expand class="rounded-g-badge border border-g-border px-2 py-1 text-g-muted transition-colors hover:border-g-gold-dim hover:text-g-text">Expand all</button>
+                    <button type="button" data-files-collapse class="rounded-g-badge border border-g-border px-2 py-1 text-g-muted transition-colors hover:border-g-gold-dim hover:text-g-text">Collapse all</button>
+                  </div>
+                </div>
+                <div class="file-tree rounded-g-panel border border-g-border p-3 font-mono text-[12.5px]" data-file-tree>
+                  <FileTree nodes={fileTree.children} />
+                </div>
+              </section>
+            )}
+          </div>
+        </div>
       </div>
 
-      <aside class="space-y-5">
-        <!-- Security tier card -->
-        <section class="rounded-xl border border-g-border bg-g-surface p-5">
-          <div class="flex items-center justify-between gap-2">
-            <Eyebrow>Security tier</Eyebrow>
-            <span class="text-[10px] font-bold tracking-wide uppercase text-g-gold-text border border-g-gold/40 rounded px-2 py-0.5">
-              {securityTierLabel(agent.security_tier)}
-            </span>
-          </div>
-          <p class="mt-2 text-[12.5px] leading-relaxed text-g-muted">{securityTierDescription(agent.security_tier)}</p>
-        </section>
+      <aside class="flex flex-col gap-[18px]">
+        <SidebarCard title="Details" rows={detailRows} />
+        <SidebarCard title="Requirements" rows={requirementRows} />
 
-        {hasScore && (
-          <!-- Eval scorecard badge: headline aggregate score + jump to the full
-               scorecard tab, plus the canonical source link. Mirrors the Agent UI
-               (AgentDetailModal). Only shows once a scorecard was published. -->
-          <section class="rounded-xl border border-g-border bg-g-surface p-5">
-            <Eyebrow class="mb-2">Eval scorecard</Eyebrow>
-            <div class="flex items-baseline gap-1.5">
-              <span class="text-3xl font-bold tracking-tight text-g-text">{scoreDisplay}</span>
-              <span class="text-sm text-g-muted">/ 100</span>
-            </div>
-            <p class="mt-1 text-[12px] leading-relaxed text-g-muted">Aggregate benchmark score for the latest version.</p>
-            <div class="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1.5 text-[12px] font-medium">
-              {scorecardHtml && (
-                <button type="button" data-doc-goto="scorecard" class="text-g-gold-text hover:underline">View scorecard →</button>
-              )}
-              {agent.eval_scorecard_url && (
-                <a href={agent.eval_scorecard_url} target="_blank" rel="noopener" class="text-g-gold-text hover:underline">Source ↗</a>
-              )}
-            </div>
-          </section>
+        {agent.permissions.length > 0 && (
+          <SidebarCard title="Permissions">
+            <ul class="flex flex-col gap-2.5">
+              {agent.permissions.map((p) => (
+                <li class="grid grid-cols-[auto_1fr] items-baseline gap-2.5">
+                  <span class="text-[11px] text-g-gold-text" aria-hidden="true">◆</span>
+                  <span class="mono text-[12px] leading-[1.5] text-g-muted">{p}</span>
+                </li>
+              ))}
+            </ul>
+            <p class="mt-4 text-[12px] leading-[1.55] text-g-faint">
+              Declared in the agent's manifest for v{agent.latest_version} — the full set it can request.
+            </p>
+          </SidebarCard>
         )}
 
-        <!-- Details card -->
-        <section class="rounded-xl border border-g-border bg-g-surface p-5">
-          <Eyebrow class="mb-2">Details</Eyebrow>
-          <dl class="text-[13px]">
-            <div class="flex justify-between py-2 border-b border-g-border">
-              <dt class="text-g-muted">Version</dt><dd class="font-mono">{agent.latest_version}</dd>
-            </div>
-            {sizeMax > 0 && (
-              <div class="flex justify-between py-2 border-b border-g-border">
-                <dt class="text-g-muted">Size</dt>
-                <dd class="font-mono">{sizeMin === sizeMax ? formatBytes(sizeMax) : `${formatBytes(sizeMin)} – ${formatBytes(sizeMax)}`}</dd>
-              </div>
-            )}
-            <div class="flex justify-between py-2 border-b border-g-border">
-              <dt class="text-g-muted">Author</dt><dd>{agent.author}</dd>
-            </div>
-            <div class="flex justify-between py-2 border-b border-g-border">
-              <dt class="text-g-muted">Language</dt>
-              <dd class="text-right">
-                {languageLabel(agent.language)}
-                {/* npm/binary agents ship as a self-contained compiled binary — no
-                    Python runtime on the host. Surface that here; "Python" alone is misleading. */}
-                {isNpm && <span class="block text-[11px] text-g-muted">Ships as native binary — no Python needed</span>}
-              </dd>
-            </div>
-            <div class="flex justify-between py-2 border-b border-g-border">
-              <dt class="text-g-muted">Category</dt><dd>{categoryLabel(agent.category)}</dd>
-            </div>
-            <div class="flex justify-between py-2 last:border-0 border-b border-g-border">
-              <dt class="text-g-muted">Min GAIA SDK</dt><dd class="font-mono">{agent.min_gaia_version || '—'}</dd>
-            </div>
-          </dl>
-        </section>
+        <SidebarCard title="Security tier">
+          <span class="g-badge">{securityTierLabel(agent.security_tier)}</span>
+          <p class="mt-3 text-[12.5px] leading-[1.55] text-g-faint">{securityTierDescription(agent.security_tier)}</p>
+        </SidebarCard>
+
+        {agent.models.length > 0 && (
+          <SidebarCard title="Models">
+            <ul class="mono flex flex-col gap-1.5 text-[12px] text-g-muted">
+              {agent.models.map((m) => <li>{m}</li>)}
+            </ul>
+          </SidebarCard>
+        )}
 
         {agent.package && packageFiles.length > 0 && (
-          <!-- Package contents: the client, docs, and every platform binary. Gated on
-               files.length too so the "Browse the contents →" jump always has a Files tab. -->
-          <section class="rounded-xl border border-g-border bg-g-surface p-5">
-            <Eyebrow class="mb-2">Package</Eyebrow>
-            <p class="text-[12px] leading-relaxed text-g-muted">
+          <!-- Gated on files.length too so the "Browse the contents" jump always
+               has a Files tab to land on. -->
+          <SidebarCard title="Package">
+            <p class="text-[12.5px] leading-[1.55] text-g-faint">
               The client, docs, and every platform binary — {packageFiles.length} files in all.
             </p>
-            <button
-              type="button"
-              data-doc-goto="files"
-              class="mt-3 text-[12px] font-medium text-g-gold-text hover:underline"
-            >Browse the contents →</button>
-          </section>
+            <button type="button" data-doc-goto="files" class="g-cta-link mt-3">Browse the contents →</button>
+          </SidebarCard>
         )}
 
         {agent.playground_url && isNpm && (
           <!-- Playground launcher: one command to fetch+run the sidecar, then a
                button that goes live once the local sidecar is reachable. -->
-          <section
-            class="rounded-xl border border-g-border bg-g-surface p-5"
-            data-playground
-            data-playground-url={agent.playground_url}
-          >
-            <Eyebrow class="mb-2">Playground</Eyebrow>
-            <p class="text-[12px] leading-relaxed text-g-muted">
-              Run the sidecar and open the interactive playground in one command:
-            </p>
-            <button
-              type="button"
-              data-pg-copy={`npx ${agent.npm_package} playground`}
-              aria-label="Copy command"
-              class="pg-copy group mt-2 flex w-full items-center gap-2 rounded-md border border-g-border bg-g-bg/50 px-3 py-2 text-left font-mono text-[12px] text-g-text transition-colors hover:border-g-gold/50"
-            >
-              <span class="select-none text-g-gold" aria-hidden="true">$</span>
-              <span class="min-w-0 flex-1 truncate">npx {agent.npm_package} playground</span>
-              <span class="pg-copy-label flex-none select-none text-[11px] text-g-muted group-hover:text-g-gold-text">copy</span>
-            </button>
-            <a
-              href={agent.playground_url}
-              target="_blank"
-              rel="noopener"
-              data-pg-open
-              aria-disabled="true"
-              class="mt-2 flex items-center justify-center rounded-md border border-g-border px-4 py-2 text-[13px] font-medium text-g-muted transition-colors"
-            >
-              Open playground
-            </a>
-            <p data-pg-status class="mt-2 text-[11px] text-g-muted">Checking if it's running…</p>
-          </section>
-        )}
-
-        <!-- Requirements card -->
-        <section class="rounded-xl border border-g-border bg-g-surface p-5">
-          <Eyebrow class="mb-2">Requirements</Eyebrow>
-          <dl class="text-[13px]">
-            {req.min_memory_gb > 0 && (
-              <div class="flex justify-between py-2 border-b border-g-border">
-                <dt class="text-g-muted">Memory</dt><dd class="font-mono">{req.min_memory_gb} GB</dd>
-              </div>
-            )}
-            {req.min_disk_gb > 0 && (
-              <div class="flex justify-between py-2 border-b border-g-border">
-                <dt class="text-g-muted">Disk</dt><dd class="font-mono">{req.min_disk_gb} GB</dd>
-              </div>
-            )}
-            {req.min_context_size > 0 && (
-              <div class="flex justify-between py-2 border-b border-g-border">
-                <dt class="text-g-muted">Context</dt><dd class="font-mono">{req.min_context_size.toLocaleString()}</dd>
-              </div>
-            )}
-            <div class="flex justify-between py-2 border-b border-g-border">
-              <dt class="text-g-muted">NPU</dt><dd>{npuLabel(req.npu)}</dd>
-            </div>
-            {req.gpu_vram_gb > 0 && (
-              <div class="flex justify-between py-2 border-b border-g-border">
-                <dt class="text-g-muted">GPU VRAM</dt><dd class="font-mono">{req.gpu_vram_gb} GB</dd>
-              </div>
-            )}
-          </dl>
-        </section>
-
-        {agent.models.length > 0 && (
-          <section class="rounded-xl border border-g-border bg-g-surface p-5">
-            <Eyebrow class="mb-2">Models</Eyebrow>
-            <ul class="text-[12px] font-mono text-g-muted space-y-1.5">
-              {agent.models.map((m) => <li>{m}</li>)}
-            </ul>
-          </section>
-        )}
-
-        {agent.permissions.length > 0 && (
-          <section class="rounded-xl border border-g-border bg-g-surface p-5">
-            <Eyebrow class="mb-2">Permissions</Eyebrow>
-            <ul class="flex flex-wrap gap-1.5">
-              {agent.permissions.map((p) => (
-                <li class="text-[11px] font-mono text-g-muted border border-g-border rounded px-2 py-0.5">{p}</li>
-              ))}
-            </ul>
-          </section>
+          <div data-playground data-playground-url={agent.playground_url}>
+            <SidebarCard title="Playground">
+              <p class="text-[12.5px] leading-[1.55] text-g-faint">
+                Run the sidecar and open the interactive playground in one command:
+              </p>
+              <button
+                type="button"
+                data-pg-copy={`npx ${agent.npm_package} playground`}
+                aria-label={`Copy command: npx ${agent.npm_package} playground`}
+                class="g-cmd pg-copy group mt-2.5 w-full border-g-border text-left transition-colors hover:border-g-gold-dim"
+              >
+                <span class="select-none text-g-gold" aria-hidden="true">$</span>
+                <span class="min-w-0 flex-1 truncate">npx {agent.npm_package} playground</span>
+                <span class="pg-copy-label flex-none select-none text-[11px] text-g-code-text/70 group-hover:text-g-gold">copy</span>
+              </button>
+              <a
+                href={agent.playground_url}
+                target="_blank"
+                rel="noopener"
+                data-pg-open
+                aria-disabled="true"
+                class="mt-2.5 flex items-center justify-center rounded-g-btn border border-g-border px-4 py-2 text-[13px] font-medium text-g-faint transition-colors"
+              >
+                Open playground
+              </a>
+              <p data-pg-status class="mt-2.5 text-[11px] text-g-faint">Checking if it's running…</p>
+            </SidebarCard>
+          </div>
         )}
       </aside>
     </div>
@@ -414,7 +353,7 @@ const terminalLines = [
   </main>
   <Footer />
 
-  <!-- Fullscreen image lightbox for rendered README/CHANGELOG diagrams. -->
+  <!-- Fullscreen image lightbox for rendered doc diagrams. -->
   <div
     id="doc-lightbox"
     class="fixed inset-0 z-[100] hidden cursor-zoom-out items-center justify-center bg-black/90 p-6 backdrop-blur-sm focus:outline-none"
@@ -424,7 +363,7 @@ const terminalLines = [
     aria-label="Image preview (press Escape to close)"
     tabindex="-1"
   >
-    <img id="doc-lightbox-img" src="" alt="" class="max-h-full max-w-full rounded-lg shadow-2xl" />
+    <img id="doc-lightbox-img" src="" alt="" class="max-h-full max-w-full rounded-g-panel shadow-2xl" />
   </div>
 
   <!-- File preview modal: shows the text content of a clicked package file. -->
@@ -436,7 +375,7 @@ const terminalLines = [
     aria-modal="true"
     aria-label="File preview (press Escape to close)"
   >
-    <div class="flex max-h-full w-full max-w-3xl flex-col overflow-hidden rounded-xl border border-g-border bg-g-bg shadow-2xl">
+    <div class="flex max-h-full w-full max-w-3xl flex-col overflow-hidden rounded-g-card border border-g-border bg-g-bg shadow-g-terminal">
       <div class="flex flex-none items-center justify-between gap-3 border-b border-g-border bg-g-surface px-4 py-2.5">
         <span id="file-preview-name" class="truncate font-mono text-[13px] text-g-text"></span>
         <div class="flex flex-none items-center gap-3">
@@ -445,7 +384,7 @@ const terminalLines = [
         </div>
       </div>
       <div class="min-h-0 flex-1 overflow-auto">
-        <pre class="!my-0 !rounded-none !border-0 bg-[#0c0c0e] p-4 text-[12.5px] leading-relaxed"><code id="file-preview-code" class="!bg-transparent"></code></pre>
+        <pre class="!my-0 !rounded-none !border-0 bg-g-code-bg p-4 text-[12.5px] leading-relaxed"><code id="file-preview-code" class="!bg-transparent"></code></pre>
       </div>
     </div>
   </div>
@@ -462,7 +401,7 @@ const terminalLines = [
 
   // Syntax-highlight rendered code blocks. The renderer emits
   // <code class="language-*">; Prism reads textContent (already HTML-escaped) and
-  // restyles, so no new injection surface. Runs once for both doc tab panels.
+  // restyles, so no new injection surface. Runs once for every doc tab panel.
   Prism.highlightAll();
 
   // Click any rendered doc image to view it fullscreen; click anywhere or press
@@ -509,8 +448,8 @@ const terminalLines = [
     });
   }
 
-  // Doc tabs: switch between the README and Changelog panels. Mirrors the
-  // InstallMethods tab pattern — roving tabindex + ArrowLeft/Right, ARIA-correct.
+  // Doc tabs: switch between the rendered doc panels. Mirrors the InstallMethods
+  // tab pattern — roving tabindex + ArrowLeft/Right, ARIA-correct.
   const tabRoot = document.querySelector('[data-doc-tabs]');
   if (tabRoot) {
     const tabs = Array.from(tabRoot.querySelectorAll<HTMLButtonElement>('[data-doc-tab]'));
@@ -534,13 +473,15 @@ const terminalLines = [
       });
     });
 
-    // Cross-links elsewhere on the page (e.g. the Package card's "View all files")
-    // that jump to a specific doc tab and scroll it into view.
+    // Cross-links elsewhere on the page (the score card, the Package card) that
+    // jump to a specific doc tab and scroll it into view.
+    const docsCard = document.getElementById('docs') ?? tabRoot;
     document.querySelectorAll<HTMLElement>('[data-doc-goto]').forEach((btn) => {
       btn.addEventListener('click', () => {
         const key = btn.getAttribute('data-doc-goto');
         select(key);
-        tabRoot.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+        docsCard.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' });
         tabs.find((t) => t.getAttribute('data-doc-tab') === key)?.focus();
       });
     });
@@ -554,12 +495,26 @@ const terminalLines = [
   const pg = document.querySelector('[data-playground]');
   if (pg) {
     const copyBtn = pg.querySelector<HTMLButtonElement>('[data-pg-copy]');
+    let revert: number | undefined;
     copyBtn?.addEventListener('click', async () => {
       try {
         await navigator.clipboard.writeText(copyBtn.dataset.pgCopy || '');
         const label = copyBtn.querySelector('.pg-copy-label');
-        if (label) { label.textContent = 'copied'; setTimeout(() => (label.textContent = 'copy'), 1500); }
-      } catch { /* clipboard unavailable */ }
+        if (label) {
+          label.textContent = 'copied';
+          clearTimeout(revert);
+          revert = window.setTimeout(() => (label.textContent = 'copy'), 1600);
+        }
+      } catch {
+        // Same non-secure-origin / permission case as InstallMethods: tell the
+        // user instead of leaving them to paste stale clipboard contents.
+        const label = copyBtn.querySelector('.pg-copy-label');
+        if (label) {
+          label.textContent = 'select & copy';
+          clearTimeout(revert);
+          revert = window.setTimeout(() => (label.textContent = 'copy'), 2600);
+        }
+      }
     });
 
     const open = pg.querySelector<HTMLAnchorElement>('[data-pg-open]');
@@ -571,9 +526,9 @@ const terminalLines = [
     const setRunning = (up: boolean) => {
       if (open) {
         open.setAttribute('aria-disabled', up ? 'false' : 'true');
-        open.classList.toggle('border-g-gold/50', up);
+        open.classList.toggle('border-g-gold-dim', up);
         open.classList.toggle('text-g-gold-text', up);
-        open.classList.toggle('text-g-muted', !up);
+        open.classList.toggle('text-g-faint', !up);
         open.classList.toggle('border-g-border', !up);
       }
       if (status) status.textContent = up
@@ -677,48 +632,50 @@ const terminalLines = [
 </script>
 
 <style is:global>
-  /* Documentation prose theme for rendered README + CHANGELOG markdown.
-     Mirrors the amd-gaia.ai (Mintlify) docs: clear heading hierarchy with a
-     ruled h2, comfortable line-height, readable body contrast, chip-style inline
-     code, a dark code card, and bordered tables. The markdown renderer emits
-     classless semantic tags (website/src/data/markdown.ts) so this stylesheet is
-     the single source of truth for how hub markdown looks. */
+  /* Documentation prose theme for the rendered hub markdown (README, SPEC,
+     SKILL, EVALUATION, CAPABILITY_MATRIX, CHANGELOG, SCORECARD). The markdown
+     renderer emits classless semantic tags (website/src/data/markdown.ts) so
+     this stylesheet is the single source of truth for how hub markdown looks.
+     Every color is a token — code cards stay dark in both themes because
+     g-code-bg / g-code-text are theme-invariant. */
   .doc { @apply text-[15px] leading-[1.75] text-g-text/90; }
   .doc > :first-child { @apply mt-0; }
 
-  .doc h1 { @apply mt-0 mb-4 text-3xl font-bold tracking-tight text-g-text; }
-  .doc h2 { @apply mt-10 mb-4 border-b border-g-border pb-2 text-xl font-semibold tracking-tight text-g-text; }
-  .doc h3 { @apply mt-8 mb-3 text-base font-semibold text-g-text; }
-  .doc h4 { @apply mt-6 mb-2 text-[15px] font-semibold text-g-text; }
+  /* Shifted one level to match renderMarkdown's demotion (doc `#` emits <h2>), so
+     the visual hierarchy is unchanged while the outline stays valid. */
+  .doc h2 { @apply mt-0 mb-4 font-display text-[28px] font-semibold tracking-[-0.025em] text-g-text; }
+  .doc h3 { @apply mt-10 mb-4 border-b border-g-border pb-2 font-display text-[20px] font-semibold tracking-[-0.015em] text-g-text; }
+  .doc h4 { @apply mt-8 mb-3 font-display text-[16px] font-semibold text-g-text; }
+  .doc h5 { @apply mt-6 mb-2 font-display text-[15px] font-semibold text-g-text; }
 
   .doc p { @apply my-4 leading-[1.75] text-g-text/90; }
   .doc strong { @apply font-semibold text-g-text; }
   .doc em { @apply italic; }
   .doc a { @apply font-medium text-g-gold-text underline decoration-g-gold/40 underline-offset-2 transition-colors hover:decoration-g-gold; }
 
-  .doc ul { @apply my-4 list-disc space-y-2 pl-6 marker:text-g-muted; }
-  .doc ol { @apply my-4 list-decimal space-y-2 pl-6 marker:text-g-muted; }
+  .doc ul { @apply my-4 list-disc space-y-2 pl-6 marker:text-g-faint; }
+  .doc ol { @apply my-4 list-decimal space-y-2 pl-6 marker:text-g-faint; }
   .doc li { @apply leading-[1.7] text-g-text/90; }
   .doc li > ul, .doc li > ol { @apply my-2; }
 
-  .doc code { @apply rounded-md border border-g-border bg-g-surface px-1.5 py-0.5 font-mono text-[0.85em] text-g-text; }
-  .doc pre { @apply my-5 overflow-x-auto rounded-xl border border-g-border bg-[#0c0c0e] p-4; }
-  .doc pre code { @apply border-0 bg-transparent p-0 font-mono text-[13px] leading-relaxed text-[#e8e8e6]; }
+  .doc code { @apply rounded-g-badge border border-g-border bg-g-surface2 px-1.5 py-0.5 font-mono text-[0.85em] text-g-text; }
+  .doc pre { @apply my-5 overflow-x-auto rounded-g-panel border border-g-border bg-g-code-bg p-4; }
+  .doc pre code { @apply border-0 bg-transparent p-0 font-mono text-[12.5px] leading-[1.8] text-g-code-text; }
 
   .doc table { @apply my-6 block w-full overflow-x-auto border-collapse text-left text-[14px]; }
-  .doc th { @apply border-b border-g-border bg-g-surface px-3 py-2 text-left font-semibold text-g-text; }
+  .doc th { @apply border-b border-g-border bg-g-surface2 px-3 py-2 text-left font-semibold text-g-text; }
   .doc td { @apply border-b border-g-border px-3 py-2 align-top text-g-text/85; }
   .doc tbody tr:last-child td { @apply border-0; }
 
-  .doc blockquote { @apply my-5 border-l-2 border-g-gold/50 bg-g-surface/40 px-4 py-2 italic text-g-muted; }
+  .doc blockquote { @apply my-5 border-l-2 border-g-gold-dim bg-g-surface2 px-4 py-2 italic text-g-muted; }
   /* Default image: natural size, capped to the column. Keeps inline badges
      (e.g. a shields.io version pill, which sits in a paragraph with other text)
      from being blown up to full width. */
-  .doc img { @apply my-5 max-w-full rounded-lg border border-g-border; }
+  .doc img { @apply my-5 max-w-full rounded-g-panel border border-g-border; }
   /* A standalone image — the only child of its paragraph — is a diagram or
      screenshot: fill the column (they read small at natural size) and zoom to
-     fullscreen on click (see the lightbox script below). */
-  .doc p > img:only-child { @apply w-full cursor-zoom-in transition-colors hover:border-g-gold/50; }
+     fullscreen on click (see the lightbox script above). */
+  .doc p > img:only-child { @apply w-full cursor-zoom-in transition-colors hover:border-g-gold-dim; }
   .doc hr { @apply my-8 border-0 border-t border-g-border; }
 
   /* File tree (Files tab): native <details> collapse, custom chevron, no marker. */
@@ -727,14 +684,6 @@ const terminalLines = [
   .file-tree summary:hover .file-tree-chevron { @apply text-g-text; }
   .file-tree-chevron { transition: transform 0.15s ease; }
   .file-tree details[open] > summary .file-tree-chevron { transform: rotate(90deg); }
-
-  /* Doc tabs (README / Spec / Skill / Scorecard / Evaluation / Capabilities / Changelog / Files) */
-  .doc-tab {
-    @apply -mb-px border-b-2 border-transparent px-4 py-2 text-sm font-medium text-g-muted transition-colors hover:text-g-text;
-  }
-  .doc-tab[aria-selected="true"] {
-    @apply border-g-gold text-g-text;
-  }
 
   /* Prism syntax-highlight tokens, tuned for the dark code card (.doc pre). */
   .doc pre .token.comment,
