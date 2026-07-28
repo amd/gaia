@@ -250,6 +250,51 @@ def test_not_granted_is_fixed_locally_with_no_browser(connectors):
     assert connectors["grants"], "the grant was never written"
 
 
+def test_success_message_quotes_the_terminal_probe_not_a_mid_flow_value(
+    connectors, monkeypatch
+):
+    """#2590 AC5: success is reported only after the TERMINAL
+    inspect_provider(probe=True) call. Plant a differing mid-flow value (the
+    account email the INITIAL survey() saw) and assert the final message
+    quotes the LAST call's value, not a cached earlier one."""
+    connectors["connection"] = _connection(email="stale@example.com")
+    connectors["granted"] = False
+    agent = _FakeAgent(answers=["yes"])
+
+    calls = {"n": 0}
+    real_get_connection = connectors["connection"]
+
+    def get_connection(provider):
+        if provider != "google":
+            return None
+        calls["n"] += 1
+        # First call: the INITIAL ms.survey(probe=True) inside _setup_flow.
+        # Every call after: the grant has landed and the account is now the
+        # REAL one — the terminal inspect_provider() call must see this.
+        if calls["n"] == 1:
+            return real_get_connection
+        return _connection(email="current@example.com")
+
+    monkeypatch.setattr("gaia.connectors.api.get_connection", get_connection)
+
+    def after_grant(provider, agent_id, scopes):
+        connectors["granted"] = True
+
+    import gaia.connectors.grants as grants
+
+    original = grants.grant_agent
+    grants.grant_agent = lambda p, a, s: (original(p, a, s), after_grant(p, a, s))[0]
+    try:
+        out = _run(agent)
+    finally:
+        grants.grant_agent = original
+
+    assert out["ok"] is True
+    assert out["data"]["account_email"] == "current@example.com"
+    assert "current@example.com" in out["data"]["message"]
+    assert "stale@example.com" not in out["data"]["message"]
+
+
 def test_reauth_required_says_the_sign_in_stopped_working(connectors):
     from gaia.connectors.errors import ConnectionRevokedError
 
