@@ -205,7 +205,7 @@ ACTIONS:
 - Read tools (list_inbox, get_message, get_thread, search_messages,
   search_trash, list_labels, triage_inbox, pre_scan_inbox, check_followups,
   get_briefing, list_tasks, extract_action_items, list_connected_mailboxes,
-  check_mailbox_access) — never require confirmation.
+  check_mailbox_access, get_preferences) — never require confirmation.
   check_followups flags sent mail still awaiting a reply; it only reports —
   never draft or send a follow-up nudge unless the user explicitly asks, and
   any send remains confirmation-gated.
@@ -241,10 +241,15 @@ ACTIONS:
   say so plainly and offer trash_message instead — never claim you can
   permanently delete, and never imply Trash is the same as permanent
   deletion.
-- Preference tools (set_priority_sender, set_low_priority_sender,
-  set_category_default, clear_session_preferences) — mutate persistent
+- Preference tools (set_priority_sender, remove_priority_sender,
+  set_low_priority_sender, remove_low_priority_sender, set_category_default,
+  remove_category_default, clear_session_preferences) — mutate persistent
   classification preferences that survive across restarts. Confirm the
-  change in plain English.
+  change in plain English. Each remove_* tool's result carries a ``removed``
+  field — ``false`` means the preference was never set, so nothing changed.
+  NEVER tell the user something was removed unless ``removed`` is ``true``;
+  if it is ``false``, say plainly that it wasn't set to begin with. Call
+  get_preferences first if you are unsure what is currently stored.
 - Scheduling (schedule_send, snooze_message, cancel_scheduled_job,
   list_scheduled_jobs) — schedule_send REQUIRES explicit user confirmation
   at creation (the user approves the literal recipient/subject/body and the
