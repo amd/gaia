@@ -9,6 +9,24 @@ contract version is tracked separately as
 
 ### Added
 
+- **The autonomy trust model can now be exercised end to end — broader candidates, an undo
+  surface, and per-message decisions (#2529).** The proactive `earn_trust`/`full` loop's
+  candidate generator (`_autonomy_candidate`) only ever proposed `archive`, so the rest of
+  the declared reversible-action set, the nine-tool confirm floor, and the importance guard
+  were unreachable and unverifiable from outside. Now: FYI mail maps to `mark_read` instead
+  of `archive` (useful context stays visible, but no longer sits unread — PROMOTIONAL/spam
+  mail is unaffected, it still archives); `_run_email_autonomy_cycle`'s report gains a
+  `decisions` list — one entry per candidate considered (`message_id`, `tool`, `action`,
+  `outcome`, `reason`, `sender`) — so a held-back decision explains itself instead of only
+  being counted; and a new `EmailTriageAgent.undo_autonomy_action(action_id)` (exposed as
+  `POST /v1/email/agent/autonomy/undo`) reverses any auto-executed action and records a
+  negative outcome against its trust scope, generalizing the archive-only
+  `undo_archive_batch` correction path via a new `organize_tools.undo_reversible_action_impl`
+  and two pure `trust.py` functions (`record_autonomy_outcome`, `note_autonomy_undo`) that
+  `EmailTriageAgent`'s existing methods now delegate to. The confirm floor is unchanged and
+  still inviolable at every level — broadening the candidate map cannot make a floor tool
+  auto-executable.
+
 - **Agent-led mailbox onboarding — the agent sets up its own access, in the
   conversation (#2469).** Hitting the agent without a usable mailbox used to
   end the run with an error and a shell command
