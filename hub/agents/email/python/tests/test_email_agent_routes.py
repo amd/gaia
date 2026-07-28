@@ -442,3 +442,58 @@ class TestAutonomyRoutes:
     def test_run_cycle_404_without_session(self, client):
         r = client.post("/v1/email/agent/autonomy/run", json={"session_id": "nope"})
         assert r.status_code == 404
+
+
+class TestWorkerDiesWithoutTerminalEvent:
+    """The stream must report a dead worker, not close on a blank answer.
+
+    ``_run_agent`` catches ``Exception`` and always emits a terminal event, so
+    the only way to reach the drain loop's fallback is a ``BaseException``
+    escaping the worker (the thread dies, ``finally`` still frees the lock, no
+    event is ever queued). That path used to synthesize
+    ``{"type": "run_complete", "answer": ""}`` — a well-formed *successful*
+    completion carrying an empty reply, indistinguishable to any client from
+    the agent genuinely having nothing to say.
+    """
+
+    def test_dead_worker_streams_an_error_before_completing(self, client):
+        class _Killed:
+            console = None
+
+            def process_query(self, *a, **k):
+                raise KeyboardInterrupt("worker killed outside the error path")
+
+        client.built["next"] = _Killed()
+        with client.stream(
+            "POST", "/v1/email/agent/query", json={"session_id": "s1", "message": "hi"}
+        ) as resp:
+            assert resp.status_code == 200
+            events = _sse_events(resp)
+
+        types = [e["type"] for e in events]
+        assert "error" in types, (
+            "the stream closed without an error event — a client cannot tell a "
+            f"dead worker from an empty reply. Got: {types}"
+        )
+        assert types.index("error") < types.index("run_complete")
+
+        message = next(e["message"] for e in events if e["type"] == "error")
+        # Actionable: names what happened and where to look next.
+        assert "without producing an answer" in message
+        assert "gaia-agent-email serve" in message
+
+    def test_dead_worker_still_frees_the_session_lock(self, client):
+        class _Killed:
+            console = None
+
+            def process_query(self, *a, **k):
+                raise KeyboardInterrupt("boom")
+
+        client.built["next"] = _Killed()
+        with client.stream(
+            "POST", "/v1/email/agent/query", json={"session_id": "s1", "message": "hi"}
+        ) as resp:
+            _sse_events(resp)
+
+        session = agent_routes.registry.get("s1")
+        assert session is not None and not session.is_running()

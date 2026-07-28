@@ -238,7 +238,12 @@ def test_policy_alert_maps_to_error_with_tail():
     assert "send_now" in out[0]["detail"] and "r1" in out[0]["detail"]
 
 
-def test_user_input_request_maps_to_needs_confirmation_input():
+def test_user_input_request_maps_to_needs_input_not_confirmation():
+    """Spec §9 Q3 (#2469): a question is its own type, not a flavour of approval.
+
+    Folding it into ``needs_confirmation`` would make the run-terminating,
+    deny-by-default approval behaviour depend on an optional field.
+    """
     out = _tr().translate(
         {
             "type": "user_input_request",
@@ -247,9 +252,58 @@ def test_user_input_request_maps_to_needs_confirmation_input():
             "choices": ["a", "b"],
         }
     )
-    assert out[0]["type"] == "needs_confirmation"
-    assert out[0]["action"] == "input"
-    assert "a, b" in out[0]["summary"]
+    assert out[0]["type"] == "needs_input"
+    assert out[0]["request_id"] == "r"
+    assert out[0]["question"] == "Which?"
+    # Bare `choices` still become pickable options rather than prose.
+    assert out[0]["options"] == [
+        {"value": "a", "label": "a", "description": ""},
+        {"value": "b", "label": "b", "description": ""},
+    ]
+    assert out[0]["respond_url"].endswith("/respond")
+
+
+def test_user_input_request_carries_rich_options():
+    out = _tr().translate(
+        {
+            "type": "user_input_request",
+            "request_id": "r",
+            "message": "Which mailbox?",
+            "choices": ["google"],
+            "options": [
+                {
+                    "value": "google",
+                    "label": "Gmail",
+                    "description": "A gmail.com account.",
+                }
+            ],
+            "allow_free_text": False,
+            "sensitive": False,
+            "timeout_seconds": 240,
+        }
+    )
+    assert out[0]["options"] == [
+        {"value": "google", "label": "Gmail", "description": "A gmail.com account."}
+    ]
+    assert out[0]["allow_free_text"] is False
+    assert out[0]["timeout_seconds"] == 240
+
+
+def test_needs_input_is_not_terminal():
+    """The run resumes after a question, so it must not end the stream."""
+    assert "needs_input" not in TERMINAL_TYPES
+
+
+def test_sensitive_question_is_flagged_for_masking():
+    out = _tr().translate(
+        {
+            "type": "user_input_request",
+            "request_id": "r",
+            "message": "Paste the client secret",
+            "sensitive": True,
+        }
+    )
+    assert out[0]["sensitive"] is True
 
 
 def test_tool_confirm_denied_folds_to_status():
@@ -314,6 +368,7 @@ def test_every_documented_source_type_is_mapped(source_type):
         "tool_call",
         "tool_result",
         "needs_confirmation",
+        "needs_input",
         "final",
         "error",
     }

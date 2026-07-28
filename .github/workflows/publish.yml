@@ -50,7 +50,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.x'
 
@@ -182,7 +182,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.x'
       - name: Download pre-built frontend
@@ -218,7 +218,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 
@@ -439,7 +439,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
 
@@ -493,9 +493,60 @@ jobs:
 
   # ── Stage 5: GitHub Release ─────────────────────────────────────────
 
+  build-tui:
+    name: Build TUI binary (${{ matrix.goos }}/${{ matrix.goarch }})
+    needs: [validate]
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - { goos: linux,   goarch: amd64 }
+          - { goos: linux,   goarch: arm64 }
+          - { goos: darwin,  goarch: amd64 }
+          - { goos: darwin,  goarch: arm64 }
+          - { goos: windows, goarch: amd64 }
+          - { goos: windows, goarch: arm64 }
+    defaults:
+      run:
+        working-directory: tui
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: tui/go.mod
+          cache-dependency-path: tui/go.sum
+
+      # Stamped with the RELEASE TAG, not the branch name: `gaia version` is the
+      # first thing asked for in a bug report, and "main" tells nobody which
+      # build they are on.
+      - name: Build
+        env:
+          CGO_ENABLED: '0'
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          EXT=""
+          if [ "${{ matrix.goos }}" = "windows" ]; then EXT=".exe"; fi
+          PKG=github.com/amd/gaia/tui/internal/cli
+          mkdir -p ../release-assets
+          go build -ldflags="-s -w \
+            -X ${PKG}.version=${{ needs.validate.outputs.tag_name }} \
+            -X ${PKG}.commit=${{ github.sha }} \
+            -X ${PKG}.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -o ../release-assets/gaia-${{ matrix.goos }}-${{ matrix.goarch }}${EXT} \
+            ./cmd/gaia
+
+      - name: Upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: tui-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: release-assets/gaia-*
+          if-no-files-found: error
+
   github-release:
     name: GitHub Release
-    needs: [validate, post-publish-smoke, publish-npm, build-desktop-installers]
+    needs: [validate, post-publish-smoke, publish-npm, build-desktop-installers, build-tui]
     if: >-
       !cancelled() &&
       needs.post-publish-smoke.result == 'success' &&
@@ -570,6 +621,25 @@ jobs:
       # artifacts to "<platform>-installer" workflow-run artifacts. Pull
       # them here and add to release-assets/ so the softprops step
       # below includes them in the published release.
+      # The terminal hub. Until these are release assets the binary exists
+      # only as a CI artifact that expires in 14 days, so nothing can install it
+      # — install.sh has no URL to fetch and the docs describe a command users
+      # cannot obtain.
+      - name: Download TUI binaries
+        uses: actions/download-artifact@v8
+        with:
+          pattern: tui-*
+          merge-multiple: true
+          path: release-assets
+
+      # A checksum file is what lets install.sh verify what it downloaded. A
+      # binary published without one can only be trusted blindly.
+      - name: Checksum TUI binaries
+        run: |
+          cd release-assets
+          sha256sum gaia-* > gaia-tui-SHA256SUMS.txt
+          cat gaia-tui-SHA256SUMS.txt
+
       - name: Download Desktop Installer (Windows NSIS)
         uses: actions/download-artifact@v8
         with:

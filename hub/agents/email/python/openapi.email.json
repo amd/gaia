@@ -187,7 +187,7 @@
             "type": "array"
           },
           "schema_version": {
-            "default": "2.5",
+            "default": "2.6",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -212,7 +212,7 @@
             "type": "array"
           },
           "schema_version": {
-            "default": "2.5",
+            "default": "2.6",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -289,7 +289,7 @@
             "title": "Provider"
           },
           "schema_version": {
-            "default": "2.5",
+            "default": "2.6",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -476,7 +476,7 @@
             "title": "Location"
           },
           "schema_version": {
-            "default": "2.5",
+            "default": "2.6",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -516,7 +516,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.5",
+            "default": "2.6",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -547,7 +547,7 @@
             "type": "array"
           },
           "schema_version": {
-            "default": "2.5",
+            "default": "2.6",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -583,7 +583,7 @@
             "title": "Provider"
           },
           "schema_version": {
-            "default": "2.5",
+            "default": "2.6",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -623,7 +623,7 @@
             "type": "boolean"
           },
           "schema_version": {
-            "default": "2.5",
+            "default": "2.6",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -774,7 +774,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.5",
+            "default": "2.6",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -887,7 +887,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.5",
+            "default": "2.6",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -922,7 +922,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.5",
+            "default": "2.6",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1122,7 +1122,7 @@
             "type": "integer"
           },
           "schema_version": {
-            "default": "2.5",
+            "default": "2.6",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -1140,7 +1140,7 @@
             "description": "The pre-scan envelope."
           },
           "schema_version": {
-            "default": "2.5",
+            "default": "2.6",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1305,7 +1305,7 @@
             "type": "boolean"
           },
           "schema_version": {
-            "default": "2.5",
+            "default": "2.6",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1377,7 +1377,7 @@
             "title": "Query"
           },
           "schema_version": {
-            "default": "2.5",
+            "default": "2.6",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -1428,7 +1428,7 @@
             "title": "Query"
           },
           "schema_version": {
-            "default": "2.5",
+            "default": "2.6",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1649,7 +1649,7 @@
             "title": "Payload"
           },
           "schema_version": {
-            "default": "2.5",
+            "default": "2.6",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -1679,7 +1679,7 @@
             "description": "The structured analysis."
           },
           "schema_version": {
-            "default": "2.5",
+            "default": "2.6",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1845,7 +1845,7 @@
             "type": "integer"
           },
           "schema_version": {
-            "default": "2.5",
+            "default": "2.6",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1913,7 +1913,7 @@
             "type": "boolean"
           },
           "schema_version": {
-            "default": "2.5",
+            "default": "2.6",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -2053,7 +2053,7 @@
             "type": "array"
           },
           "schema_version": {
-            "default": "2.5",
+            "default": "2.6",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -2443,6 +2443,12 @@
         "additionalProperties": false,
         "description": "``POST /v1/email/query`` request body (frozen #2015 contract, spec §2.2).",
         "properties": {
+          "can_answer_questions": {
+            "default": false,
+            "description": "Whether THIS caller can render a 'needs_input' event and POST the answer back to /query/{run_id}/respond. Defaults to false, which is the safe answer: a caller that cannot answer would otherwise park the run until the question times out, which reads as a hang. When false, a step that would ask instead fails immediately with what the user should do on this surface.",
+            "title": "Can Answer Questions",
+            "type": "boolean"
+          },
           "context": {
             "description": "The relevant transcript slice, pushed in the body. May be an empty array for a fresh conversation, but the field must be present.",
             "items": {
@@ -2506,6 +2512,64 @@
           "context"
         ],
         "title": "QueryRequest",
+        "type": "object"
+      },
+      "QueryRespondRequest": {
+        "additionalProperties": false,
+        "description": "Body of ``POST /v1/email/query/{run_id}/respond`` (spec §5.1).",
+        "properties": {
+          "request_id": {
+            "description": "The 'request_id' from the needs_input event being answered. An answer for a question that is no longer pending is rejected (409) rather than applied to whatever the run is waiting on now.",
+            "minLength": 1,
+            "title": "Request Id",
+            "type": "string"
+          },
+          "value": {
+            "description": "The answer: an option's 'value' (or its 'label'), or free text when the question set allow_free_text.",
+            "minLength": 1,
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "value"
+        ],
+        "title": "QueryRespondRequest",
+        "type": "object"
+      },
+      "QueryRespondResponse": {
+        "additionalProperties": false,
+        "description": "Result of ``POST /v1/email/query/{run_id}/respond``.",
+        "properties": {
+          "accepted": {
+            "default": true,
+            "description": "True once the answer unblocked the run.",
+            "title": "Accepted",
+            "type": "boolean"
+          },
+          "request_id": {
+            "description": "The question that was answered.",
+            "title": "Request Id",
+            "type": "string"
+          },
+          "run_id": {
+            "description": "The run the answer was delivered to.",
+            "title": "Run Id",
+            "type": "string"
+          },
+          "status": {
+            "default": "ok",
+            "description": "Always 'ok' on success.",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "request_id"
+        ],
+        "title": "QueryRespondResponse",
         "type": "object"
       },
       "SingleEmailInput": {
@@ -2762,7 +2826,7 @@
   "info": {
     "description": "REST surface for the GAIA Email Triage agent (/v1/email/*). Cross-implementation contract for the npm client and native builds.",
     "title": "GAIA Email Agent API",
-    "version": "2.5"
+    "version": "2.6"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -3454,7 +3518,7 @@
     },
     "/v1/email/query": {
       "post": {
-        "description": "Run the email agent loop for one request and stream canonical SSE events.\n\nBuilds an agent, injects the pushed ``context`` as conversation history, runs\n``process_query(query)`` on a worker thread with an ``SSEOutputHandler``, and\nrelays the loop as the seven canonical event types (spec §4). The stream ends\nwith exactly one ``final`` or ``error``. A confirmation-requiring step ends the\nstream with a ``needs_confirmation`` followed by a ``final`` refusal (the\nstateless D1 stub — see module docstring).",
+        "description": "Run the email agent loop for one request and stream canonical SSE events.\n\nBuilds an agent, injects the pushed ``context`` as conversation history, runs\n``process_query(query)`` on a worker thread with an ``SSEOutputHandler``, and\nrelays the loop as the seven canonical event types (spec §4). The stream ends\nwith exactly one ``final`` or ``error``. A confirmation-requiring step ends the\nstream with a ``needs_confirmation`` followed by a ``final`` refusal (the\nstateless D1 stub — see module docstring). A step that asks the user a\nquestion emits ``needs_input`` and the stream STAYS OPEN, resuming once\n``POST /v1/email/query/{run_id}/respond`` delivers the answer.",
         "operationId": "query_v1_email_query_post",
         "requestBody": {
           "content": {
@@ -3479,7 +3543,7 @@
                 }
               }
             },
-            "description": "Server-Sent Events stream (text/event-stream). Each `data:` line is one canonical event discriminated on `type`, one of: status {message} | token {delta} | tool_call {tool, args} | tool_result {tool, render?, data} | needs_confirmation {run_id, action, summary} | final {answer, usage?} | error {detail, status}. The stream is terminated by exactly one `final` or one `error`."
+            "description": "Server-Sent Events stream (text/event-stream). Each `data:` line is one canonical event discriminated on `type`, one of: status {message} | token {delta} | tool_call {tool, args} | tool_result {tool, render?, data} | needs_confirmation {run_id, action, summary} | needs_input {run_id, request_id, question, options, allow_free_text, respond_url, timeout_seconds?} | final {answer, usage?} | error {detail, status}. The stream is terminated by exactly one `final` or one `error`; `needs_input` pauses the run until POST /v1/email/query/{run_id}/respond delivers the answer, then the SAME stream continues. `:`-prefixed heartbeat comments may appear at any time and carry no payload."
           },
           "422": {
             "content": {
@@ -3537,6 +3601,60 @@
           }
         },
         "summary": "Cancel Query",
+        "tags": [
+          "email",
+          "email-query"
+        ]
+      }
+    },
+    "/v1/email/query/{run_id}/respond": {
+      "post": {
+        "description": "Answer a ``needs_input`` question and let the paused run continue.\n\nThe run's worker thread is blocked inside ``request_user_input_blocking``;\nthis hands it the answer through the same out-of-band resolve the stateful\nAgent UI path uses, and the run resumes emitting on its ORIGINAL ``/query``\nstream — no second request, no replayed context.\n\nFailure modes are distinct on purpose, because \"the agent never saw my\nanswer\" is otherwise indistinguishable from \"the agent is thinking\":\n\n- **404** — no run with that ``run_id`` is in flight (it finished, was\n  cancelled, or the id is wrong).\n- **409** — the run is live but ``request_id`` is not what it is waiting on:\n  a stale answer to a question that already timed out or was answered.\n  Rejected rather than applied to whatever question is pending now.",
+        "operationId": "respond_query_v1_email_query__run_id__respond_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QueryRespondRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QueryRespondResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Respond Query",
         "tags": [
           "email",
           "email-query"

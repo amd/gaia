@@ -127,6 +127,7 @@
                     "group": "MCP Integration",
                     "pages": [
                       "guides/mcp/agent-ui",
+                      "guides/mcp/tui",
                       "guides/mcp/client",
                       "guides/mcp/windows-system-health"
                     ]

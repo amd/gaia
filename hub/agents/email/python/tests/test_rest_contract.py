@@ -71,6 +71,9 @@ _EXPECTED_RESPONSE_MODELS = {
     # route returns a JSON model; /query streams text/event-stream (no JSON
     # response model) and is asserted separately in _EXPECTED_STREAMING_ROUTES.
     ("post", "/v1/email/query/{run_id}/cancel"): "QueryCancelResponse",
+    # Mid-run question resume (schema 2.6, #2469) — answers the needs_input
+    # event the run is paused on; the ORIGINAL /query stream then continues.
+    ("post", "/v1/email/query/{run_id}/respond"): "QueryRespondResponse",
     # OAuth forward-out intake (schema 2.5, #2154) — the daemon forwards
     # short-lived access tokens to these; part of the frozen sidecar contract.
     ("post", "/v1/connections/{provider}"): "ForwardedConnectionSummary",

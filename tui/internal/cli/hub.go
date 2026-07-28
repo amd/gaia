@@ -9,11 +9,16 @@ import (
 var mockAgent string
 
 var hubCmd = &cobra.Command{
-	Use:   "hub",
-	Short: "Browse and launch GAIA agents",
-	Long:  "Open the Agent Hub to discover, search, and launch GAIA agents.",
+	Use:          "hub",
+	Short:        "Browse and launch GAIA agents",
+	Long:         "Open the Agent Hub to discover, search, and launch GAIA agents.",
+	SilenceUsage: true,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return ui.RunHub(debug, mockAgent)
+		ctrl, err := controlOptionsFor(cmd)
+		if err != nil {
+			return err
+		}
+		return ui.RunHub(debug, mockAgent, ctrl)
 	},
 }
 

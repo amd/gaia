@@ -33,6 +33,7 @@ from openai import OpenAI
 
 from gaia.llm.lemonade_launcher import (
     build_start_command,
+    describe_start_hint,
     get_installed_version,
     resolve_lemonade,
 )
@@ -3803,8 +3804,8 @@ class LemonadeClient:
             else:
                 error_msg = (
                     f"Insufficient context size: server has {reported_ctx} tokens, "
-                    f"but {required_tokens} tokens are required. "
-                    f"Restart with: {self._start_command_hint(required_tokens)}"
+                    f"but {required_tokens} tokens are required. Restart Lemonade "
+                    f"Server. {self._start_command_hint(required_tokens)}"
                 )
                 if not quiet:
                     print(f"❌ {error_msg}")
@@ -4098,18 +4099,15 @@ class LemonadeClient:
         """
         return get_installed_version(resolve_lemonade())
 
-    def _start_command_hint(self, ctx_size: Optional[int]) -> str:
-        """Render the exact start command for the installed tooling.
+    @staticmethod
+    def _start_command_hint(ctx_size: Optional[int]) -> str:
+        """Platform-accurate "here's how to start it" text for the user.
 
-        Used in user-facing guidance so modern installs aren't told to run
-        the removed ``lemonade-server`` CLI.
+        Delegates to the shared resolver so modern installs aren't told to
+        run the removed ``lemonade-server`` CLI, and so platforms started
+        from a GUI get prose instead of an invented shell command.
         """
-        tooling = resolve_lemonade()
-        if tooling.found:
-            spec = build_start_command(tooling, ctx_size)
-            env_prefix = " ".join(f"{k}={v}" for k, v in spec.env.items())
-            return f"{env_prefix} {' '.join(spec.argv)}".strip()
-        return f"lemonade-server serve --ctx-size {ctx_size}"
+        return describe_start_hint(ctx_size).instruction
 
     def _check_version_compatibility(
         self,
@@ -4288,7 +4286,7 @@ class LemonadeClient:
                         f"is less than recommended ({required_ctx})"
                     )
                     print(
-                        f"   For better performance, restart with: "
+                        f"   For better performance, restart Lemonade Server. "
                         f"{self._start_command_hint(required_ctx)}"
                     )
                     print("")
@@ -4299,7 +4297,7 @@ class LemonadeClient:
         if not auto_start:
             if not quiet:
                 print(f"{_emoji('❌', '[ERROR]')} Lemonade Server is not running")
-                print(f"   Start with: {self._start_command_hint(required_ctx)}")
+                print(f"   {self._start_command_hint(required_ctx)}")
             status.error = "Server not running"
             return status
 

@@ -24,7 +24,7 @@ The Email Triage Agent connects to your Gmail account through GAIA's connectors 
 - **Find past mail** — search your mailbox with keyword or Gmail-syntax queries (`from:alice is:unread newer_than:7d`). Ask in chat (the `search_messages` tool) or call it from a consuming app via `POST /v1/email/search` on the REST contract; results carry metadata only (id, sender, subject, date, snippet) — never message bodies.
 - **Organize** — archive, label, mark read/unread, star/unstar. Reversible via the per-action undo log.
 - **Soft-delete with undo** — `trash_message` records the action; `restore_message` reverses it within a 30-second window.
-- **Draft + confirmed send** — generate replies (`draft_reply`) and forwards (`draft_forward`); `send_draft` and `send_now` require explicit user confirmation in the UI.
+- **Draft + confirmed send** — generate replies (`draft_reply`) and forwards (`draft_forward`); `send_draft` and `send_now` require explicit user confirmation — the UI's permission dialog or a terminal prompt on the CLI — and are refused outright when there is nobody to ask.
 - **Attachments** — reading a message exposes each attachment's name, type, and size, and `draft_reply` / `send_now` accept local file paths to attach (contract schema 2.2, #1542).
 - **Voice-matched drafting** — learn your writing style from your Sent mail (`build_voice_profile`) so drafts sound like you; the style profile is derived and stored locally, nothing leaves the device.
 - **Calendar** — list events, accept/decline invites, create events from email content (all calendar mutations gated by user confirmation).
@@ -270,7 +270,7 @@ This is detection only, distinct from autonomous follow-ups ([#555](https://gith
 
 ### Reply / send (require confirmation)
 
-`draft_reply`, `draft_forward` — drafts are harmless. `send_draft`, `send_now`, `forward_message` — gated by user confirmation; the UI shows the literal recipient/subject/body before you approve.
+`draft_reply`, `draft_forward` — drafts are harmless. `send_draft`, `send_now`, `forward_message` — gated by user confirmation; you always see the literal recipient/subject/body before you approve, in the UI's permission dialog or as a terminal prompt on the CLI. With no way to ask you — output piped or redirected, CI, an unattended host — these tools are **denied**, never sent silently (see [troubleshooting](/reference/troubleshooting)).
 
 ### Scheduled send & snooze
 
@@ -381,21 +381,21 @@ sidecar is running, then talks to the sidecar port directly. No Node.js is
 involved. Two modes, selected by `GAIA_EMAIL_AGENT_MODE`:
 
 - `user` (default) — runs the published frozen binary. The binary comes from an
-  **Agent Hub install** (its SHA-256 was verified against the hub manifest at
-  install time and is re-checked before every spawn). In the Agent UI, click
-  **Install** on the email agent; on a **headless** machine, install it from the
-  hub directly:
+  **Agent Hub install**: its SHA-256 is verified against the hub manifest at install
+  time and re-checked before every spawn. In the Agent UI, click **Install** on the
+  email agent; on a **headless** machine, install it from the hub directly:
 
   ```bash
-  gaia agent install email
+  gaia hub install email       # via the daemon; also `gaia agent install email`
   gaia daemon start-agent email
   ```
 
-  Only a GAIA **source checkout** additionally carries a `binaries.lock.json`
-  from which the binary can be lazily fetched on first use; an installed GAIA
-  does not ship that file, so without a Hub install (or dev mode) user mode fails
-  loudly naming those two remedies — it never silently falls back. Either way
-  SHA-256 is the integrity gate: a tampered or unpublished binary fails loudly.
+  Only a GAIA **source checkout** additionally carries a `binaries.lock.json` from
+  which the binary can be lazily fetched on first use; an installed GAIA does not
+  ship that file, so an agent that was never installed reports "run `gaia hub
+  install email`" rather than a lock error. Either way SHA-256 is the integrity
+  gate: a tampered or unpublished binary fails loudly, and there is no silent
+  fallback to dev mode.
 - `dev` — runs the agent from your local source with hot reload, so prompt/tool
   edits show up live without a freeze → publish cycle:
 

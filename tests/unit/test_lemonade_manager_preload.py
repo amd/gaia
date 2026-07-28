@@ -165,18 +165,37 @@ def test_small_ctx_with_loaded_model_uses_existing_reload(mock_cls):
 def test_preload_failure_raises_actionable_and_does_not_poison_singleton(mock_cls):
     """If load_model raises, the helper re-raises a LemonadeClientError carrying
     the three actionable substrings AND `_initialized` stays False so a retry
-    will reattempt initialisation (per adversarial reflection C1)."""
+    will reattempt initialisation (per adversarial reflection C1).
+
+    The recovery command must be the one that exists on THIS machine — a
+    modern install told to run the removed ``lemonade-server`` CLI has no way
+    forward (issue #1867)."""
+    from gaia.llm.lemonade_launcher import LemonadeTooling
+
     client = _make_client_mock(_status(running=True, context_size=0, loaded_models=[]))
     client.load_model.side_effect = LemonadeClientError("server returned 500")
     mock_cls.return_value = client
 
-    with pytest.raises(LemonadeClientError) as exc_info:
+    with (
+        patch("platform.system", return_value="Linux"),
+        patch(
+            "gaia.llm.lemonade_launcher.resolve_lemonade",
+            return_value=LemonadeTooling(
+                found=True,
+                kind="modern",
+                client_path="/usr/bin/lemonade",
+                server_launcher="/usr/bin/lemond",
+            ),
+        ),
+        pytest.raises(LemonadeClientError) as exc_info,
+    ):
         LemonadeManager.ensure_ready(min_context_size=32768, quiet=True)
 
     msg = str(exc_info.value)
     assert "Lemonade" in msg
     assert "ctx_size=32768" in msg or "32768" in msg
-    assert "lemonade-server serve" in msg
+    assert "systemctl --user start lemond" in msg
+    assert "lemonade-server" not in msg
 
     # Singleton must NOT be in the broken (initialized=True, ctx=0) state.
     assert (

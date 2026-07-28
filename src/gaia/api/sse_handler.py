@@ -24,6 +24,13 @@ class SSEOutputHandler(OutputHandler):
     Each output is converted to a dictionary and added to a queue
     that can be consumed by the API server.
 
+    This stream is one-way: there is no channel for the client to answer a
+    permission request, so confirmation-gated tools (shell, file mutation, email
+    send/delete) are DENIED here via the inherited ``OutputHandler`` default
+    (#2210) rather than silently approved. An operator running an intentionally
+    unattended agent opts in with ``GAIA_AUTO_APPROVE_TOOLS=1``; the proper fix
+    is a permission event plus a resolve endpoint, as the Agent UI has.
+
     Args:
         debug_mode: If True, include verbose event details. If False, only stream
                    clean, user-friendly status updates.

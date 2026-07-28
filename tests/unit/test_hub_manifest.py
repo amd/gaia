@@ -301,6 +301,15 @@ def test_invalid_language_raises():
         AgentManifest.from_dict(data)
 
 
+# cpp is covered by test_valid_cpp_manifest_parses — it needs its own `cpp:`
+# section, so it cannot ride the Python fixture here.
+@pytest.mark.parametrize("language", ["python", "go", "typescript"])
+def test_supported_languages_parse(language):
+    """go/typescript admit the terminal hub and the Agent UI as hub packages."""
+    data = dict(VALID_PYTHON_MANIFEST, language=language)
+    assert AgentManifest.from_dict(data).language == language
+
+
 def test_type_defaults_to_agent():
     data = dict(VALID_PYTHON_MANIFEST)
     assert "type" not in data
@@ -401,6 +410,80 @@ def test_negative_memory_raises():
     data = dict(VALID_PYTHON_MANIFEST)
     data["requirements"] = dict(data["requirements"], min_memory_gb=-1)
     with pytest.raises(ManifestError, match="min_memory_gb"):
+        AgentManifest.from_dict(data)
+
+
+# ---------------------------------------------------------------------------
+# requirements.min_lemonade_version
+#
+# This block exists because the field was declared in a shipped manifest and
+# silently dropped by the parser for months. A test that only compares the YAML
+# text to a constant cannot catch that — it proves two files agree while the
+# value reaches nobody. These assert the parsed object actually carries it.
+# ---------------------------------------------------------------------------
+
+
+def test_min_lemonade_version_survives_parsing():
+    data = dict(VALID_PYTHON_MANIFEST)
+    data["requirements"] = dict(data["requirements"], min_lemonade_version="10.2.0")
+
+    parsed = AgentManifest.from_dict(data)
+
+    assert parsed.requirements.min_lemonade_version == "10.2.0"
+
+
+def test_min_lemonade_version_survives_a_round_trip_through_yaml(tmp_path):
+    """The path a real agent takes: YAML on disk → parse → consumer."""
+    data = dict(VALID_PYTHON_MANIFEST)
+    data["requirements"] = dict(data["requirements"], min_lemonade_version="11.5.0")
+    path = tmp_path / "gaia-agent.yaml"
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+
+    assert parse(path).requirements.min_lemonade_version == "11.5.0"
+
+
+def test_min_lemonade_version_is_optional():
+    """Most agents declare no backend floor; that is not an error."""
+    data = dict(VALID_PYTHON_MANIFEST)
+    data["requirements"] = {
+        k: v for k, v in data["requirements"].items() if k != "min_lemonade_version"
+    }
+
+    assert AgentManifest.from_dict(data).requirements.min_lemonade_version is None
+
+
+def test_absent_requirements_block_leaves_min_lemonade_version_none():
+    data = dict(VALID_PYTHON_MANIFEST)
+    data.pop("requirements")
+
+    assert AgentManifest.from_dict(data).requirements.min_lemonade_version is None
+
+
+def test_dict_to_requirements_coercion_keeps_min_lemonade_version():
+    """The second dict → Requirements path must not drop it either.
+
+    ``check_compatibility`` accepts a raw mapping and coerces it. That converter
+    is a separate parse path from the manifest one, and a field added to only
+    half of them is the same silent drop with a different entry point.
+    """
+    from gaia.hub.compatibility import _coerce_requirements
+
+    coerced = _coerce_requirements({"min_lemonade_version": "10.2.0"})
+
+    assert coerced.min_lemonade_version == "10.2.0"
+
+
+def test_malformed_min_lemonade_version_raises():
+    """A floor nothing can compare against is worse than none — fail loudly.
+
+    A readiness check that cannot parse the declared minimum reports the
+    version gate as indeterminate, so a typo here would silently disable the
+    very check the field exists to drive.
+    """
+    data = dict(VALID_PYTHON_MANIFEST)
+    data["requirements"] = dict(data["requirements"], min_lemonade_version="10.2")
+
+    with pytest.raises(ManifestError, match="min_lemonade_version"):
         AgentManifest.from_dict(data)
 
 

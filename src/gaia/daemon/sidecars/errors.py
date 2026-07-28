@@ -82,3 +82,39 @@ class CapacityError(SidecarError):
 
 class StopFailedError(SidecarError):
     """The sidecar process survived a tree-kill — it is still alive."""
+
+
+class UnsupervisedAgentError(SidecarError):
+    """The agent cannot be installed/managed by the daemon.
+
+    Either a reserved framework built-in (never installable) or an agent the
+    daemon has no sidecar spec for, so installing it would leave something the
+    daemon then refuses to start.
+    """
+
+
+class InstallBusyError(SidecarError):
+    """An install for this agent id is already running (one install per id)."""
+
+
+class AgentTrustRequiredError(SidecarError):
+    """A non-verified agent needs an explicit trust opt-in to install.
+
+    The daemon-side mirror of :class:`gaia.hub.installer.TrustRequiredError`,
+    so the route layer maps it to 403 without importing ``gaia.hub``. 403 is a
+    distinct, actionable status: a client renders a "Trust & Install" prompt
+    and retries with ``trusted: true``. There is no bypass — the gate exists
+    because installing runs third-party code on the user's machine.
+    """
+
+
+class AgentNotInstalledError(SidecarError):
+    """The agent has no ``.installed`` sentinel — there is nothing to remove."""
+
+
+class InstallFailedError(SidecarError):
+    """An install/uninstall could not complete (disk, permissions, bad manifest)."""
+
+
+class HubUnavailableError(SidecarError):
+    """The Agent Hub could not be reached and no usable offline cache exists."""

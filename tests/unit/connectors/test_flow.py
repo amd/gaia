@@ -21,11 +21,14 @@ Coverage:
 from __future__ import annotations
 
 import asyncio
+import logging
 from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
 import respx
+
+pytestmark = pytest.mark.allow_network
 
 from gaia.connectors.errors import (
     ConsentDeniedError,
@@ -397,3 +400,50 @@ class TestDecodeEmailFromIdToken:
 
     def test_empty_string_returns_none(self):
         assert _decode_email_from_id_token("") is None
+
+
+class TestBrowserLaunchReporting:
+    """A launch that never happened must not look like one that did.
+
+    ``webbrowser.open`` returns False when no browser is registered — the normal
+    case on headless Ubuntu, WSL and SSH — rather than raising. Only the raising
+    case was handled, so the caller went on telling the user to check a browser
+    that was never opened, and nothing recorded that the copy-paste URL had
+    become the only way through.
+    """
+
+    @respx.mock
+    async def test_a_browser_that_never_opened_is_reported(
+        self, google_provider, monkeypatch, caplog
+    ):
+        monkeypatch.setattr("webbrowser.open", lambda *_, **__: False)
+        _mock_token_endpoint()
+
+        with caplog.at_level(logging.WARNING, logger="gaia.connectors.flow"):
+            info = await start_authorization("google", scopes=["openid"])
+            # The launch is fire-and-forget and runs in an executor thread, so
+            # yield long enough for it to finish rather than a bare sleep(0).
+            for _ in range(50):
+                if any("no browser" in r.message for r in caplog.records):
+                    break
+                await asyncio.sleep(0.01)
+
+        assert "authorization_url" in info, "the fallback URL must still be returned"
+        assert any(
+            "no browser could be launched" in r.message for r in caplog.records
+        ), f"a failed launch went unreported: {[r.message for r in caplog.records]}"
+
+    @respx.mock
+    async def test_a_successful_launch_stays_quiet(
+        self, google_provider, monkeypatch, caplog
+    ):
+        monkeypatch.setattr("webbrowser.open", lambda *_, **__: True)
+        _mock_token_endpoint()
+
+        with caplog.at_level(logging.WARNING, logger="gaia.connectors.flow"):
+            await start_authorization("google", scopes=["openid"])
+            await asyncio.sleep(0.1)
+
+        assert not any(
+            "no browser could be launched" in r.message for r in caplog.records
+        ), "a browser that opened fine was reported as failed"

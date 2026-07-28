@@ -10,7 +10,11 @@ Two verified sources, checked in order; there is NO 'use it anyway' path:
 2. **Lock fetch** — resolve the host platform -> look up the artifact in
    binaries.lock.json -> download -> **verify its SHA-256 against the lock and
    raise loudly on any mismatch** -> write atomically into the cache -> chmod +x
-   on POSIX.
+   on POSIX. Source 2 is a repo-checkout/npm-package convenience: the lock is
+   NOT wheel package data, so on a pip install the Hub install (source 1, which
+   verifies against the hub manifest) is the only path — an absent lock reports
+   "not installed" with the `gaia hub install <id>` remedy, never a
+   broken-install error.
 
 A tampered/truncated binary is rejected before it can ever be spawned.
 
@@ -30,7 +34,11 @@ from pathlib import Path
 from typing import Optional
 
 from gaia.daemon.sidecars import platform as plat
-from gaia.daemon.sidecars.errors import IntegrityError, PlatformError
+from gaia.daemon.sidecars.errors import (
+    BinaryNotFoundError,
+    IntegrityError,
+    PlatformError,
+)
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -79,6 +87,40 @@ class FetchResult:
 
 def _join_url(base: str, name: str) -> str:
     return f"{base.rstrip('/')}/{name.lstrip('/')}"
+
+
+def _install_remedy(agent_dir_name: str) -> str:
+    return (
+        f"Install it with `gaia hub install {agent_dir_name}` (or `gaia agent "
+        f"install {agent_dir_name}`, or the Agent UI's hub panel), which downloads "
+        "the binary from the Agent Hub and verifies its SHA-256 against the hub "
+        "manifest — independent of this lock. To run from source instead, use dev mode."
+    )
+
+
+def _load_lock_or_install_hint(
+    lock_path: Optional[Path], agent_dir_name: str
+) -> "plat.BinaryLock":
+    """Load the binary lock, mapping "no lock at all" to an install remedy.
+
+    binaries.lock.json is a repo-checkout/npm-package asset, not wheel package
+    data — a pip-installed ``amd-gaia`` has no such file, and the hub manifest
+    (which the Agent Hub installer verifies against) is the real source of
+    truth for published artifacts. So an absent default lock means "this agent
+    is not installed yet", not "your install is broken": say so.
+    """
+    try:
+        return plat.load_lock(lock_path)
+    except PlatformError as e:
+        if lock_path is not None:
+            # An explicitly-supplied lock that cannot be read is a caller
+            # contract violation, not a missing install — surface it as-is.
+            raise
+        raise BinaryNotFoundError(
+            f"no verified '{agent_dir_name}' agent binary is installed and no "
+            f"local binaries.lock.json is available ({e}) "
+            f"{_install_remedy(agent_dir_name)}"
+        ) from e
 
 
 def _hub_installed_binary(cache: Path, platform_key: str) -> Optional[FetchResult]:
@@ -158,7 +200,7 @@ def fetch_binary(
         if installed is not None:
             return installed
 
-    lock = plat.load_lock(lock_path)
+    lock = _load_lock_or_install_hint(lock_path, agent_dir_name)
     entry = plat.resolve_entry(lock, key)
     resolved_base = base_url or os.environ.get("ASSETS_BASE_URL") or lock.base_url
     if not resolved_base:
@@ -171,8 +213,7 @@ def fetch_binary(
             f"the binary lock has a placeholder sha256 for '{key}' "
             f"({entry.sha256}); this lock publishes no verifiable binary for it. "
             "Fetch is blocked so an unverifiable binary can never be trusted. "
-            "Install the agent from the Agent Hub, which downloads and verifies "
-            "the real binary from the hub manifest (independent of this lock)."
+            f"{_install_remedy(agent_dir_name)}"
         )
 
     cache.mkdir(parents=True, exist_ok=True)

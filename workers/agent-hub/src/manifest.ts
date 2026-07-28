@@ -20,7 +20,9 @@ const ID_RE = /^[a-z0-9]([a-z0-9-]{0,50}[a-z0-9])?$/;
 const SEMVER_RE =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/;
 
-const VALID_LANGUAGES = new Set(["python", "cpp"]);
+// go/typescript admit the two shipped non-agent packages: the Go terminal hub
+// and the Electron Agent UI. Keep in lock-step with manifest.py.
+const VALID_LANGUAGES = new Set(["python", "cpp", "go", "typescript"]);
 const VALID_SECURITY_TIERS = new Set(["verified", "community", "experimental"]);
 const DEFAULT_SECURITY_TIER = "experimental";
 // Multi-component discriminator (#1716). Defaults to "agent" so existing

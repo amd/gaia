@@ -31,6 +31,8 @@ from typing import List, Optional, Tuple
 
 import pytest
 
+pytestmark = pytest.mark.allow_network
+
 from gaia.daemon import broker_client
 from gaia.daemon.broker import ModelSlotBroker
 from gaia.daemon.constants import (
