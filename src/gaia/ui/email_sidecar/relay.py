@@ -115,7 +115,7 @@ def _augment_error_detail(detail: str) -> str:
 
 #: Mutating email tools that execute WITHOUT confirmation under ``/query``
 #: (``CONFIRMATION_REQUIRED_TOOLS`` gates only send/RSVP/forward/
-#: permanent-delete/quarantine/calendar-create — see
+#: quarantine/calendar-create — see
 #: ``gaia_agent_email.agent.EmailTriageAgent.CONFIRMATION_REQUIRED_TOOLS``).
 #: Their effects are persistent mailbox/preference changes, so the relay also
 #: emits a visible status line for them — never buried in the collapsed
@@ -139,6 +139,7 @@ _MUTATING_TOOLS = frozenset(
         "move_to_label_batch",
         "trash_message",
         "restore_message",
+        "restore_trashed_message",
         "snooze_message",
         "cancel_scheduled_job",
         "unquarantine_message",
@@ -160,6 +161,7 @@ _TOOL_LABELS: Dict[str, str] = {
     "pre_scan_inbox": "Scanning inbox",
     "triage_inbox": "Triaging inbox",
     "search_messages": "Searching mail",
+    "search_trash": "Searching Trash",
     "list_inbox": "Listing inbox",
     "get_message": "Reading message",
     "get_thread": "Reading thread",
@@ -191,7 +193,7 @@ _TOOL_LABELS: Dict[str, str] = {
     "move_to_label_batch": "Moving messages",
     "trash_message": "Trashing message",
     "restore_message": "Restoring message",
-    "permanent_delete": "Permanently deleting message",
+    "restore_trashed_message": "Restoring message from Trash",
     "snooze_message": "Snoozing message",
     "cancel_scheduled_job": "Cancelling scheduled job",
     "list_scheduled_jobs": "Listing scheduled jobs",

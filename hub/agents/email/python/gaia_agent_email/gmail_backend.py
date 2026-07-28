@@ -51,6 +51,7 @@ import httpx
 from gaia_agent_email.scopes import (
     AGENT_NAMESPACED_ID,
     GMAIL_SCOPES,
+    SCOPE_GMAIL_FULL_MAILBOX,
 )
 
 from gaia_agent_email.google_errors import (
@@ -59,7 +60,7 @@ from gaia_agent_email.google_errors import (
 )
 
 from gaia.connectors.api import get_access_token_sync
-from gaia.connectors.errors import ConnectorsError
+from gaia.connectors.errors import ConnectorsError, ScopeMismatchError
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
@@ -164,7 +165,14 @@ class GmailBackend(Protocol):
         ...
 
     def permanent_delete(self, message_id: str) -> None:
-        """Permanently delete (DELETE not recoverable). Use sparingly."""
+        """Permanently delete (DELETE not recoverable). Use sparingly.
+
+        ``LiveGmailBackend`` never actually issues this call (#2533) — Gmail
+        gates it behind a full-mailbox scope GAIA does not request, so it
+        fails loud with an actionable error instead. Kept on the Protocol
+        for backend parity (Outlook's scope already covers it) and so a
+        fake/test backend can still implement it directly.
+        """
         ...
 
     def create_draft(
@@ -593,7 +601,30 @@ class LiveGmailBackend:
         return self._modify_labels(message_id, add=[GMAIL_LABEL_INBOX])
 
     def permanent_delete(self, message_id: str) -> None:
-        self._delete(f"/messages/{message_id}")
+        # #2533: DELETE /messages/{id} requires the https://mail.google.com/
+        # full-mailbox scope, which GAIA deliberately never requests (see
+        # scopes.SCOPE_GMAIL_FULL_MAILBOX) — every call would 403
+        # ACCESS_TOKEN_SCOPE_INSUFFICIENT. Fail loud here, before any HTTP
+        # call, with an actionable message naming the missing scope — never
+        # let the user hit a raw 403 after already confirming an
+        # "irreversible" action. No agent tool calls this today (the
+        # ``permanent_delete`` tool was removed from the agent's registered
+        # capabilities for the same reason), but the Protocol method must
+        # still fail safely for any direct caller.
+        raise ScopeMismatchError(
+            required=[SCOPE_GMAIL_FULL_MAILBOX],
+            granted=list(GMAIL_SCOPES),
+            provider="google",
+            message=(
+                "Permanently deleting a Gmail message requires the "
+                f"{SCOPE_GMAIL_FULL_MAILBOX!r} scope, which GAIA does not "
+                "request — it would grant full-mailbox delete access for "
+                "every GAIA agent. Move the message to Trash instead "
+                "(trash_message); Gmail keeps it recoverable there for 30 "
+                "days and it can be restored any time with "
+                "restore_trashed_message."
+            ),
+        )
 
     # -- Send APIs ----------------------------------------------------------
 
