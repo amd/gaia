@@ -465,3 +465,59 @@ def test_cli_stop_agent_unknown_id_surfaces_registered_ids(toy_env):
         assert "toy" in combined  # 404 detail lists registered ids
     finally:
         _stop(inst)
+
+
+# ---------------------------------------------------------------------------
+# The real daemon clock actually fires (#2379: DaemonClock is never started)
+# ---------------------------------------------------------------------------
+
+
+def test_real_daemon_clock_fires_a_due_pending_job(toy_env):
+    """A real daemon process starts DaemonClock (#2379): a past-due pending
+    job registered directly in the scheduler db (before the daemon is even
+    started) is picked up by the polling thread the moment the daemon starts,
+    and marked failed. No executor is wired for KIND_ONE_SHOT in this issue —
+    the clock firing the job for real is proven by the pending -> failed
+    transition, not by success."""
+    from gaia.daemon import paths as daemon_paths
+    from gaia.daemon.scheduler import store
+    from gaia.daemon.scheduler.clock import _ClockDB
+    from gaia.daemon.scheduler.models import KIND_ONE_SHOT, STATUS_FAILED
+
+    db_path = str(daemon_paths.scheduler_db_path())
+    db = _ClockDB()
+    db.init_db(db_path)
+    store.init_schema(db)
+    job_id = store.register_job(
+        db, source="test", kind=KIND_ONE_SHOT, fire_at=time.time() - 3600
+    )
+    db.close_db()
+
+    def _job_status():
+        reader = _ClockDB()
+        reader.init_db(db_path)
+        try:
+            row = store.get_job(reader, job_id=job_id)
+            return row["status"] if row else None
+        finally:
+            reader.close_db()
+
+    inst = None
+    try:
+        inst = client.start_or_attach()
+
+        assert _wait_for(
+            lambda: _job_status() == STATUS_FAILED, timeout=10.0
+        ), f"job never transitioned to failed; last status={_job_status()!r}"
+
+        r = requests.get(
+            f"{inst.base_url}{API_PREFIX}/status",
+            headers={"Authorization": f"Bearer {inst.token}"},
+            timeout=5,
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["clock"]["running"] is True
+        assert body["clock"]["failed_jobs"] >= 1
+    finally:
+        _stop(inst)

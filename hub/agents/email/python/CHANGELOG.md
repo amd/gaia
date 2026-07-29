@@ -22,6 +22,35 @@ contract version is tracked separately as
   unrelated offer-deadline clock ("valid only through 4PM PT today") false-positived. Both
   are fixed; the noun and the time now have to appear within one clause of each other.
 
+- **Preference removal and read-back tools — the agent can no longer claim
+  it removed a preference it has no way to remove (#2520).** Asking the
+  agent to remove a low-priority sender used to either do nothing while it
+  reported success, or trigger the *set* tool instead and report success at
+  adding when the user asked to remove — verified by diffing the agent's
+  own `state.db` before and after. Three new tools (`remove_priority_sender`,
+  `remove_low_priority_sender`, `remove_category_default`) pair with each
+  existing `set_*` tool, and a new `get_preferences` tool reads back
+  everything currently stored so a change is verifiable from the
+  conversation. Every removal reports an explicit `removed` field — `false`
+  means the preference was never set, and in that case the result carries no
+  persistence claim at all, so the model has an unambiguous signal instead of
+  inferring success from `ok: true` alone. Removing a low-priority sender
+  never promotes it to priority (or vice versa) the way *setting* one
+  deliberately clears the opposite flag — removal only ever touches its own
+  target.
+- **`gaia email autonomy` CLI (#2516).** A thin client over the session-scoped
+  `/v1/email/agent/autonomy*` REST surface, relayed through the daemon like
+  every other `gaia email` command (no second auth scheme): `status`,
+  `set-level`, `pause`, `resume`, `run`, `trust`, `kill`. Closes the gap where
+  the code and the plan doc both described this command before it existed.
+
+### Fixed
+
+- **`POST /autonomy/run` refuses instead of silently no-oping while autonomy
+  is `off` (#2528).** Previously the route returned HTTP 200 with the same
+  empty-report shape whether autonomy was disabled or had genuinely run and
+  found nothing to do — a caller could not tell the two apart. It now returns
+  **409**, naming the current level and how to change it.
 - **The autonomy trust model can now be exercised end to end — broader candidates, an undo
   surface, and per-message decisions (#2529).** The proactive `earn_trust`/`full` loop's
   candidate generator (`_autonomy_candidate`) only ever proposed `archive`, so the rest of
@@ -84,6 +113,44 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **A batch-tool retry no longer gets killed mid-recovery by the streaming
+  layer (#2515).** When the model called a batch tool with a spurious extra
+  argument (e.g. `archive_message_batch` with a stray `mailbox` kwarg), the
+  agent loop correctly rejected it and started retrying — but the SSE layer
+  couldn't tell that per-tool error apart from a genuinely fatal failure, so
+  it ended the response and cancelled the still-retrying agent, dead-ending
+  the turn with no answer and no stats line. `print_error` now carries a
+  `recoverable` flag through to the wire; a recoverable error folds to a
+  non-terminal status line instead of a terminal `error`, so the retry can
+  reach completion and the user still sees the failure as it happens.
+- **A failed memory startup is now visible in chat, and blames the right
+  cause (#2519).** When the embedding model wasn't reachable, memory quietly
+  disabled itself: a log line and a REST field said so, but the agent's
+  answers made it look like a missing feature ("I don't have a tool to view
+  saved preferences") rather than a broken one. The agent now prints a
+  startup warning naming the real problem and the fix. It also used to blame
+  every failure on `GAIA_MEMORY_DISABLED=1` or a stopped Lemonade — the
+  common real case is neither: Lemonade is running fine but the embedding
+  model was never pulled. The message now tells those two apart and gives
+  the matching remedy (pull the model vs. start Lemonade), since acting on
+  the wrong one wastes the user's time.
+- **`draft_reply` / `draft_forward` actually draft instead of asking for the
+  text to draft (#2524).** Asked to draft a reply or forward, the agent
+  correctly located the source message and then asked the user to supply the
+  finished reply/forward text — the thing it was asked to write. Neither
+  tool's docstring nor the base system prompt ever told the model that
+  composing `body` is its own job; the only place that said so was the
+  voice-profile style guidance, which only appears once enough Sent-mail
+  history has been learned, so a fresh mailbox never saw it.
+  `draft_forward`'s `body` was already optional, ruling out a simple
+  required-parameter theory — this was a missing authorship contract, not a
+  schema-required-ness problem. Both tools' docstrings and the always-present
+  REPLYING/DRAFTING system-prompt section now say explicitly: the model
+  writes the body itself, from the source message plus any stated
+  constraints (length, tone, points to hit), in the same turn it resolves
+  the target — and only uses the user's own wording verbatim when they hand
+  it over explicitly. `send_draft` / `send_now` / `forward_message` remain
+  confirmation-gated; drafting still never sends.
 - **The inbox briefing carries a structured breakdown instead of one padded
   sentence (#2525).** `get_briefing` already returned the full
   `email_pre_scan` envelope (urgent/actionable messages, counts, applied
