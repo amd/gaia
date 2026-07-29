@@ -30,6 +30,7 @@ pytest.importorskip("fastapi")
 
 from fastapi import FastAPI  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
+from gaia.connectors.errors import ConnectorsError  # noqa: E402
 from gaia_agent_email import agent_routes  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -125,6 +126,16 @@ class _FakeAgent:
             raise RuntimeError("undo window has expired")
         if action_id == "raise-value":
             raise ValueError("bad action_id")
+        if action_id == "raise-connectors":
+            raise ConnectorsError(
+                "no forwarded 'microsoft' credential is available to the "
+                "email sidecar. The connection may not be granted to this "
+                "agent, or it was revoked/withdrawn. Connect and grant it "
+                "in one command — no Agent UI required: `gaia connectors "
+                "connect microsoft --scopes <scopes> --grant-agent "
+                "installed:email`, or use Settings -> Connections in the "
+                "Agent UI."
+            )
         return {
             "action_id": action_id,
             "action_type": "archive",
@@ -527,6 +538,58 @@ class TestAutonomyRoutes:
             json={"session_id": "s1", "action_id": "raise-value"},
         )
         assert r.status_code == 400
+
+    def test_run_cycle_500_with_connectors_error_detail(self, client):
+        """#2617: a bare ``ConnectorsError`` escaping ``run_autonomy_cycle``
+        must not become a textless HTTP 500 — the route must catch it and
+        re-raise as an ``HTTPException`` carrying the actionable connectors
+        message (the base ``ConnectorsError`` maps to 500 per the table in
+        ``src/gaia/ui/routers/connectors.py``, but with a real body).
+
+        Uses a second TestClient with ``raise_server_exceptions=False``:
+        with the default client, an exception unhandled by the route
+        propagates as a raw Python exception through TestClient rather than
+        becoming an HTTP response at all, which would defeat a status-code
+        assertion entirely.
+        """
+
+        class _ConnectorsErrorAgent(_FakeAgent):
+            def run_autonomy_cycle(self, context=None):
+                raise ConnectorsError(
+                    "no forwarded 'microsoft' credential is available to "
+                    "the email sidecar. The connection may not be granted "
+                    "to this agent, or it was revoked/withdrawn. Connect "
+                    "and grant it in one command — no Agent UI required: "
+                    "`gaia connectors connect microsoft --scopes <scopes> "
+                    "--grant-agent installed:email`, or use Settings -> "
+                    "Connections in the Agent UI."
+                )
+
+        client.built["next"] = _ConnectorsErrorAgent()
+        self._mk(client)
+        client.post(
+            "/v1/email/agent/autonomy",
+            json={"session_id": "s1", "level": "earn_trust"},
+        )
+        insecure = TestClient(client.app_ref, raise_server_exceptions=False)
+        r = insecure.post("/v1/email/agent/autonomy/run", json={"session_id": "s1"})
+        assert r.status_code == 500
+        detail = r.json()["detail"]
+        assert "gaia connectors connect" in detail
+        assert "microsoft" in detail
+
+    def test_undo_500_with_connectors_error_detail(self, client):
+        """Same #2617 contract as the /run test above, for /undo."""
+        self._mk(client)
+        insecure = TestClient(client.app_ref, raise_server_exceptions=False)
+        r = insecure.post(
+            "/v1/email/agent/autonomy/undo",
+            json={"session_id": "s1", "action_id": "raise-connectors"},
+        )
+        assert r.status_code == 500
+        detail = r.json()["detail"]
+        assert "gaia connectors connect" in detail
+        assert "microsoft" in detail
 
 
 class TestWorkerDiesWithoutTerminalEvent:
