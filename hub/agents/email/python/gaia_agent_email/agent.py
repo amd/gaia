@@ -84,7 +84,11 @@ if TYPE_CHECKING:  # import-cheap: only for annotations, never at runtime
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
-from gaia.agents.base.memory import MemoryMixin
+from gaia.agents.base.memory import (
+    MEMORY_UNAVAILABLE_MODEL_NOT_PULLED,
+    MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE,
+    MemoryMixin,
+)
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.registry import get_embedding_model_for_device
 from gaia.connectors.errors import AuthRequiredError, ConnectorsError
@@ -202,8 +206,8 @@ ACTIONS:
 - Read tools (list_inbox, get_message, get_thread, search_messages,
   search_trash, list_labels, triage_inbox, pre_scan_inbox, check_followups,
   list_waiting_on_you, get_briefing, list_tasks, extract_action_items,
-  list_connected_mailboxes, check_mailbox_access) — never require
-  confirmation.
+  list_connected_mailboxes, check_mailbox_access, get_preferences) — never
+  require confirmation.
   check_followups flags sent mail still awaiting a reply; it only reports —
   never draft or send a follow-up nudge unless the user explicitly asks, and
   any send remains confirmation-gated.
@@ -243,10 +247,15 @@ ACTIONS:
   say so plainly and offer trash_message instead — never claim you can
   permanently delete, and never imply Trash is the same as permanent
   deletion.
-- Preference tools (set_priority_sender, set_low_priority_sender,
-  set_category_default, clear_session_preferences) — mutate persistent
+- Preference tools (set_priority_sender, remove_priority_sender,
+  set_low_priority_sender, remove_low_priority_sender, set_category_default,
+  remove_category_default, clear_session_preferences) — mutate persistent
   classification preferences that survive across restarts. Confirm the
-  change in plain English.
+  change in plain English. Each remove_* tool's result carries a ``removed``
+  field — ``false`` means the preference was never set, so nothing changed.
+  NEVER tell the user something was removed unless ``removed`` is ``true``;
+  if it is ``false``, say plainly that it wasn't set to begin with. Call
+  get_preferences first if you are unsure what is currently stored.
 - Scheduling (schedule_send, snooze_message, cancel_scheduled_job,
   list_scheduled_jobs) — schedule_send REQUIRES explicit user confirmation
   at creation (the user approves the literal recipient/subject/body and the
@@ -352,6 +361,15 @@ searching. NEVER dead-end on "give me a message ID / the exact subject line":
 if the reference is ambiguous the tool returns the candidate list for the user
 to pick from; if nothing matches it says so. Only when the tool reports multiple
 matches do you ask the user which one.
+
+You write the reply/forward body yourself. ``draft_reply``'s ``body`` and
+``draft_forward``'s optional ``body`` are the finished text for the draft, not
+a placeholder for the user to fill in — compose it from the source message
+plus any constraints the user gave (length, tone, points to hit) and call the
+tool with it in the SAME turn you resolve the target. Never ask the user to
+supply or dictate the wording first; that defeats the point of asking you to
+draft. Use the user's own words verbatim only when they explicitly hand you
+exact text to send.
 
 OUTPUT:
 Tool results come back as JSON envelopes ``{"ok": true, "data": ...}``
@@ -693,6 +711,19 @@ class EmailTriageAgent(
             ),
         )
 
+        # Surface the degraded-memory state where the user actually is
+        # (#2519): before this, a failed embedding connectivity probe only
+        # logged a WARNING and set a REST field nobody was looking at, so a
+        # user in chat saw the agent quietly claim it never had memory tools
+        # rather than being told memory failed to come up and how to fix it.
+        # Skip the deliberate GAIA_MEMORY_DISABLED=1 opt-out here — that's an
+        # explicit choice (used by tests/CI), not a silent degradation.
+        if getattr(self, "_memory_unavailable_reason", None) in (
+            MEMORY_UNAVAILABLE_MODEL_NOT_PULLED,
+            MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE,
+        ):
+            self.console.print_warning(self.memory_unavailable_message())
+
         # Exact ctx pin (#1892): set the instance-scoped override on the
         # concrete LemonadeClient this agent chats through. Post-super(),
         # the client lives at self.chat.llm_client._backend (AgentSDK →
@@ -769,19 +800,19 @@ class EmailTriageAgent(
         """Report the current memory state without changing it.
 
         Returns ``{"enabled", "available", "message"}`` where ``available`` is
-        whether a memory store exists this session (False when disabled at startup
-        via ``GAIA_MEMORY_DISABLED`` or when Lemonade was unreachable) and
-        ``enabled`` is the effective on/off state (``available`` and not incognito).
+        whether a memory store exists this session and ``enabled`` is the
+        effective on/off state (``available`` and not incognito). When
+        unavailable, ``message`` names the REAL cause — env opt-out, the
+        embedding model never having been pulled into a running Lemonade, or
+        Lemonade itself being unreachable — via
+        ``MemoryMixin.memory_unavailable_message()`` (#2519). These are
+        distinct failures with distinct remedies; conflating them (as this
+        method used to) sends the user down the wrong fix.
         """
         available = getattr(self, "_memory_store", None) is not None
         enabled = self.is_memory_enabled()
         if not available:
-            message = (
-                "Memory is unavailable this session: it was disabled at startup "
-                "(GAIA_MEMORY_DISABLED=1) or the Lemonade embedding service was "
-                "unreachable when the agent started. Start lemonade-server and "
-                "restart the agent to enable it."
-            )
+            message = self.memory_unavailable_message()
         elif enabled:
             message = "Memory is enabled: personalization and persistence are active."
         else:
@@ -1316,9 +1347,8 @@ class EmailTriageAgent(
         """Build the earn-trust policy from current config + the confirm-floor.
 
         Rebuilt per cycle so a runtime ``autonomy_level`` change (e.g. via the
-        the forthcoming ``gaia email autonomy`` CLI) takes effect on the next
-        heartbeat without
-        reconstructing the agent.
+        ``gaia email autonomy set-level`` CLI) takes effect on the next
+        heartbeat without reconstructing the agent.
         """
         ledger = trust.TrustLedger(
             min_samples=self.config.autonomy_trust_min_samples,
@@ -1650,9 +1680,10 @@ class EmailTriageAgent(
         Returns the current level, the trust thresholds, and the earned-trust
         ledger — every ``(action, scope)`` with its positive/negative tally and
         whether it has crossed the bar. This is the single read-model the
-        planned ``gaia email autonomy status`` / ``trust`` CLI, the REST surface, and
-        the Agent-UI panel all render, so autonomy behavior is always
-        explainable ("archives news@x because 12/12 correct").
+        ``gaia email autonomy status`` / ``trust`` CLI and the REST surface
+        both render (a future Agent-UI panel is not yet built), so autonomy
+        behavior is always explainable ("archives news@x because 12/12
+        correct").
         """
         ledger = trust.TrustLedger(
             min_samples=self.config.autonomy_trust_min_samples,
@@ -1688,8 +1719,8 @@ class EmailTriageAgent(
     ) -> Dict[str, Any]:
         """Driver-facing entry: run a cycle and persist proposals to GoalStore.
 
-        This is the seam a ``DaemonClock`` job / the planned ``gaia email autonomy`` CLI
-        invokes (mirroring ``run_briefing_job`` for the briefing feature).
+        This is the seam a ``DaemonClock`` job / the ``gaia email autonomy run``
+        CLI invokes (mirroring ``run_briefing_job`` for the briefing feature).
         Returns a JSON-serializable report — the ``Proposal`` objects are
         replaced by their persisted dict form.
         """

@@ -261,8 +261,18 @@ class OutputHandler(ABC):
     # === Status Messages (Required) ===
 
     @abstractmethod
-    def print_error(self, error_message: str):
-        """Print error message."""
+    def print_error(self, error_message: str, recoverable: bool = False):
+        """Print error message.
+
+        Args:
+            error_message: The error to display.
+            recoverable: True when the agent loop is retrying past this error
+                (e.g. a per-tool argument-validation failure that enters
+                ``STATE_ERROR_RECOVERY``), False for a genuinely fatal
+                top-level failure that ends the run. Handlers that translate
+                this into a downstream wire event (SSE, etc.) use the flag to
+                decide terminal vs. non-terminal — see #2515.
+        """
         ...
 
     @abstractmethod
@@ -1221,12 +1231,14 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
         else:
             print("✅ Tool execution complete")
 
-    def print_error(self, error_message: str) -> None:
+    def print_error(self, error_message: str, recoverable: bool = False) -> None:
         """
         Print an error message with appropriate styling.
 
         Args:
             error_message: The error message to display
+            recoverable: Unused by the CLI console (styling is the same
+                either way); accepted for interface parity with SSE handlers.
         """
         # Handle None error messages
         if error_message is None:
@@ -2594,7 +2606,7 @@ class SilentConsole(TerminalConfirmationMixin, OutputHandler):
     def pretty_print_json(self, data: Dict[str, Any], title: str = None):
         """No-op implementation."""
 
-    def print_error(self, error_message: str):
+    def print_error(self, error_message: str, recoverable: bool = False):
         """No-op implementation."""
 
     def print_warning(self, warning_message: str):

@@ -222,6 +222,29 @@ def test_agent_error_maps_to_terminal_error():
     assert out == [{"type": "error", "detail": "boom", "status": 500}]
 
 
+def test_recoverable_agent_error_maps_to_non_terminal_status():
+    """#2515: a per-tool error the agent loop is retrying (agent.py's
+    STATE_ERROR_RECOVERY path) is NOT terminal — the two layers must agree
+    that "recoverable" means the run continues, not that the wire-level
+    terminal contract gets loosened for every agent_error."""
+    out = _tr().translate(
+        {"type": "agent_error", "content": "boom", "recoverable": True}
+    )
+    assert out[0]["type"] not in TERMINAL_TYPES
+    assert out[0]["type"] == "status"
+    # The user must still SEE the failure — never silently swallowed.
+    assert "boom" in out[0]["message"]
+
+
+def test_recoverable_false_agent_error_is_still_terminal():
+    # An explicit False (as well as the field's absence, covered above) keeps
+    # the existing terminal contract — this is not a blanket downgrade.
+    out = _tr().translate(
+        {"type": "agent_error", "content": "boom", "recoverable": False}
+    )
+    assert out == [{"type": "error", "detail": "boom", "status": 500}]
+
+
 def test_policy_alert_maps_to_error_with_tail():
     out = _tr().translate(
         {

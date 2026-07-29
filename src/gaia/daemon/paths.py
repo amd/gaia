@@ -57,10 +57,43 @@ def custody_db_path() -> Path:
 
 
 def ensure_host_dir() -> Path:
-    """Create ``host_dir()`` if missing and return it."""
+    """Create ``host_dir()`` if missing (``0700`` on POSIX, first-touch only)
+    and return it.
+
+    The directory holds instance.json's client token, the sidecar ledger, and
+    (via ``scheduler_db_path()``) will eventually hold job recipients/subjects —
+    hardened at the point of creation for every caller, not re-chmod'd on
+    every call, so a directory a user deliberately loosened afterward isn't
+    silently re-tightened underneath them the next time any daemon path helper
+    runs.
+    """
     d = host_dir()
+    existed = d.exists()
     d.mkdir(parents=True, exist_ok=True)
+    if not existed and os.name != "nt":
+        os.chmod(d, 0o700)
     return d
+
+
+def scheduler_db_path() -> Path:
+    """The daemon-owned scheduler SQLite file (single clock's job store, #2379).
+
+    Hardened beyond its sibling ``custody_db_path()``: this store will
+    eventually hold recipients and subjects (email job payloads), so the file
+    is created ``0600`` on first touch — mirroring the
+    ``atomic_write_json(mode=0o600)`` precedent above. Mode bits are
+    meaningless on Windows and skipped there.
+    """
+    d = ensure_host_dir()
+    path = d / "scheduler.db"
+    if not path.exists():
+        try:
+            fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            pass
+        else:
+            os.close(fd)
+    return path
 
 
 def atomic_write_json(path: Path, payload, mode: int = 0o600) -> None:

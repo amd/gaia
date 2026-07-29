@@ -56,18 +56,22 @@ _spec.loader.exec_module(capability_matrix)
 
 
 # ---------------------------------------------------------------------------
-# Ground truth (hard-coded, verified against the code as of 2026-07-13 —
-# see the plan for issue #2013 §1 for the derivation of every number below).
+# Ground truth (hard-coded, verified against the code as of 2026-07-27 —
+# see the plan for issue #2013 §1 for the derivation of the original numbers,
+# and #2520 for the preference_tools bump 4 -> 8).
 # ---------------------------------------------------------------------------
 
-# 16 mixins in gaia_agent_email/tools/, keyed by module stem, 60 tools total.
+# 16 mixins in gaia_agent_email/tools/, keyed by module stem, 64 tools total.
 _EXPECTED_TOOLS_BY_MIXIN = {
     "read_tools": 8,
     "organize_tools": 15,
     "reply_tools": 5,
     "calendar_tools": 6,
     "schedule_tools": 4,
-    "preference_tools": 4,
+    # #2520: remove_priority_sender, remove_low_priority_sender,
+    # remove_category_default, get_preferences added alongside the
+    # existing set_*/clear_session_preferences tools.
+    "preference_tools": 8,
     "briefing_tools": 3,
     # #2523/#2533: permanent_delete removed (never advertised — the scope it
     # needs is never granted); restore_trashed_message + search_trash added
@@ -84,7 +88,7 @@ _EXPECTED_TOOLS_BY_MIXIN = {
     # #2581: list_waiting_on_you (inbound mail awaiting the user's reply).
     "waiting_on_you_tools": 1,
 }
-_EXPECTED_TOOLS_TOTAL = 60
+_EXPECTED_TOOLS_TOTAL = 64
 assert sum(_EXPECTED_TOOLS_BY_MIXIN.values()) == _EXPECTED_TOOLS_TOTAL
 
 _EXPECTED_MCP_COUNT = 4
