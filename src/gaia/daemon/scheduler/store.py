@@ -150,6 +150,18 @@ def list_jobs(db, *, status: Optional[str] = None) -> List[Dict[str, Any]]:
     return [_row_to_job(r) for r in rows or ()]
 
 
+def count_jobs(db, *, status: str) -> int:
+    """``SELECT COUNT(*)`` for one status — used by the status route, which any
+    client can poll, so it must never materialise every matching row just to
+    take a length."""
+    row = db.query(
+        "SELECT COUNT(*) AS n FROM daemon_jobs WHERE status = :st",
+        {"st": status},
+        one=True,
+    )
+    return int(row["n"]) if row else 0
+
+
 def fetch_due(db, *, now: Optional[float] = None) -> List[Dict[str, Any]]:
     """Return every pending job whose ``fire_at`` is at or before ``now``.
 
@@ -277,6 +289,7 @@ def list_ledger(db, *, source: Optional[str] = None) -> List[Dict[str, Any]]:
 __all__ = [
     "DAEMON_JOBS_DDL",
     "claim_job",
+    "count_jobs",
     "fetch_due",
     "get_job",
     "init_schema",

@@ -416,6 +416,42 @@ td:nth-child(3) {
     <code>{ enabled, available, message }</code>.</p>
 </div>
 
+<div class="endpoint-block">
+  <span class="method-badge">GET</span>
+  <span class="path">/v1/email/agent/autonomy/{session_id}</span>
+  <p class="desc">Inspectable snapshot of the autonomy engine — level, trust
+    thresholds, and the earned-trust ledger:
+    <code>{ level, enabled, trust_min_samples, trust_threshold,
+    trusted_scope_count, scopes:[{ action_type, scope, positive, negative,
+    total, score, trusted }] }</code>. This is the read-model
+    <code>gaia email autonomy status</code> / <code>trust</code> render, so
+    autonomy behavior is always explainable. 404 if the session is unknown.</p>
+</div>
+
+<div class="endpoint-block">
+  <span class="method-badge">POST</span>
+  <span class="path">/v1/email/agent/autonomy</span>
+  <p class="desc">Set the autonomy level at runtime — pause/resume/kill.
+    Body: <code>{ "session_id": str, "level": "off"|"suggest"|"earn_trust"|"full" }</code>.
+    <code>off</code> is the kill switch. Returns
+    <code>{ level, enabled }</code>. <b>400</b> on an unknown level; 404 if
+    the session is unknown.</p>
+</div>
+
+<div class="endpoint-block">
+  <span class="method-badge">POST</span>
+  <span class="path">/v1/email/agent/autonomy/run</span>
+  <p class="desc">Trigger one observe-&gt;decide-&gt;act autonomy cycle now —
+    the <code>gaia email autonomy run</code> / daemon-scheduler driver seam.
+    Body: <code>{ "session_id": str, "max_messages"?: int (1-200, default 25) }</code>.
+    Returns <code>{ level, executed:[...], proposals:[...], skipped,
+    already_proposed }</code>. <b>409</b> while the session's level is
+    <code>off</code> — the kill switch refuses the run instead of returning
+    the same 200 shape a real, found-nothing cycle would (#2528), so a caller
+    can always tell "disabled" apart from "ran and found nothing to do". 404
+    if the session is unknown.</p>
+</div>
+
 
 <h2>Context-window envelope</h2>
 <p class="body-t">The agent is designed, measured, and released against a pinned

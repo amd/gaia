@@ -12,19 +12,24 @@ import os
 import threading
 import time
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Callable, Optional
 
 import psutil
 
 from gaia.daemon.sidecars.errors import (
     CapacityError,
+    DevSrcDirResolutionError,
     ModeConflictError,
     SidecarNotRunningError,
     StopFailedError,
     UnknownAgentError,
 )
 from gaia.daemon.sidecars.manager import AgentSidecarManager
-from gaia.daemon.sidecars.spec import AgentSidecarSpec
+from gaia.daemon.sidecars.spec import (
+    AgentSidecarSpec,
+    repo_root_from_agent_dev_src_dir,
+)
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -129,8 +134,21 @@ class SidecarRegistry:
         if self._custody_auth is not None:
             self._custody_auth.revoke(agent_id)
 
-    def ensure(self, agent_id: str, mode: Optional[str] = None) -> dict:
-        """Spawn-or-attach *agent_id*'s sidecar; return its fields + token."""
+    def ensure(
+        self,
+        agent_id: str,
+        mode: Optional[str] = None,
+        dev_src_dir: Optional[str] = None,
+    ) -> dict:
+        """Spawn-or-attach *agent_id*'s sidecar; return its fields + token.
+
+        *dev_src_dir* is the caller's own belief about which checkout it is
+        asking for (issue #2588) — it is COMPARED against ``spec.dev_src_dir``,
+        never executed. The daemon always spawns from its own configured
+        source; a caller in a different checkout gets a loud refusal instead
+        of silently being served the daemon's checkout (or, in the attach
+        case, whatever checkout is already running).
+        """
         spec = self._spec(agent_id)
         with self._lock:
             holder = self._managers.get(agent_id)
@@ -142,6 +160,7 @@ class SidecarRegistry:
                 self._managers[agent_id] = holder
         manager, agent_lock = holder
         with agent_lock:
+            self._check_dev_src_dir(agent_id, spec, mode, dev_src_dir)
             if manager.is_running:
                 # Attaching without an explicit mode is not a mode request —
                 # only an explicit, differing mode conflicts (compared against
@@ -206,6 +225,52 @@ class SidecarRegistry:
     @staticmethod
     def _manager_mode(manager) -> str:
         return manager.mode
+
+    def _check_dev_src_dir(
+        self,
+        agent_id: str,
+        spec: AgentSidecarSpec,
+        mode: Optional[str],
+        dev_src_dir: Optional[str],
+    ) -> None:
+        """Refuse BEFORE the attach/spawn branch if *dev_src_dir* names a
+        different checkout than the daemon can actually serve (issue #2588).
+
+        Runs ahead of every path into ``ensure()`` — attach, fresh spawn, and
+        stopped-manager reuse alike — because all three previously let a
+        caller's mismatched checkout through silently. The daemon NEVER
+        executes *dev_src_dir*; this is a comparison, nothing else.
+
+        No "stop the sidecar first" alternative is offered here (unlike the
+        mode-conflict message below): stopping a sidecar does not change
+        ``spec.dev_src_dir`` — a checkout mismatch is neither fixed nor
+        helped by it, only by restarting the daemon itself (which stops the
+        sidecar anyway).
+        """
+        if dev_src_dir is None or spec.dev_src_dir is None:
+            return
+        if self._resolve_mode(spec, mode) != "dev":
+            return
+        caller_path = Path(dev_src_dir)
+        if not caller_path.is_absolute():
+            raise DevSrcDirResolutionError(
+                f"dev_src_dir must be an absolute path; got '{dev_src_dir}'."
+            )
+        caller_resolved = caller_path.expanduser().resolve()
+        daemon_resolved = Path(spec.dev_src_dir).expanduser().resolve()
+        if caller_resolved == daemon_resolved:
+            return
+        # The remedy names a REPO ROOT (what a Python environment is rooted
+        # at, and what the daemon's own parents[4] anchor depends on) — never
+        # the agent source dir above, restarting from which changes nothing.
+        caller_repo_root = repo_root_from_agent_dev_src_dir(caller_resolved, agent_id)
+        raise ModeConflictError(
+            f"agent '{agent_id}' dev mode would be served from {daemon_resolved} "
+            f"(the daemon's own checkout), not the caller's checkout at "
+            f"{caller_resolved}. The daemon never runs code from a path a "
+            "caller sends it — restart the daemon from a Python "
+            f"environment/editable install rooted at {caller_repo_root}."
+        )
 
     def connection(self, agent_id: str) -> "tuple[str, str]":
         """``(base_url, bearer token)`` for *agent_id*'s RUNNING sidecar.
@@ -286,7 +351,11 @@ class SidecarRegistry:
                         "api_version": None,
                         "agent_version": None,
                         "started_at": None,
-                        "dev_src_dir": self._dev_src_dir(agent_id),
+                        # No manager is running, so nothing IS being served in
+                        # dev mode -- unconditionally None (see _entry() for
+                        # the running case), never the spec's default (issue
+                        # #2588 AC-3: one field must not carry two meanings).
+                        "dev_src_dir": None,
                     }
                 )
         return entries
@@ -387,7 +456,12 @@ class SidecarRegistry:
             "api_version": manager.api_version,
             "agent_version": manager.agent_version,
             "started_at": manager.started_at,
-            "dev_src_dir": self._dev_src_dir(agent_id),
+            # Only a dev-mode manager is actually serving from this path
+            # (issue #2588 AC-3) -- a user-mode entry reporting it would
+            # advertise a source it isn't running.
+            "dev_src_dir": (
+                self._dev_src_dir(agent_id) if manager.resolved_mode == "dev" else None
+            ),
         }
         if include_token:
             entry["token"] = manager.auth_token

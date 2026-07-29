@@ -2200,7 +2200,9 @@ Do NOT wrap conversational replies in JSON.
             )
             logger.error(error_msg)
             self.error_history.append(error_msg)
-            self.console.print_error(error_msg)
+            # The main loop's is_error/STATE_ERROR_RECOVERY handling retries
+            # this — not a fatal top-level failure (#2515).
+            self.console.print_error(error_msg, recoverable=True)
             return {
                 "status": "error",
                 "error": error_msg,
@@ -2226,8 +2228,10 @@ Do NOT wrap conversational replies in JSON.
             logger.error(f"Error executing tool {tool_name}: {e}")
             self.error_history.append(str(e))  # Store brief error, not formatted
 
-            # Print to console immediately so user sees it
-            self.console.print_error(formatted_error)
+            # Print to console immediately so user sees it. The caller's
+            # is_error/STATE_ERROR_RECOVERY handling retries this — not a
+            # fatal top-level failure (#2515).
+            self.console.print_error(formatted_error, recoverable=True)
 
             return {
                 "status": "error",
@@ -3116,7 +3120,9 @@ Do NOT wrap conversational replies in JSON.
                         )
                         # Only print if error wasn't already displayed by _execute_tool
                         if not tool_result.get("error_displayed"):
-                            self.console.print_error(last_error)
+                            # STATE_ERROR_RECOVERY below retries this — not a
+                            # fatal top-level failure (#2515).
+                            self.console.print_error(last_error, recoverable=True)
 
                         # Switch to error recovery state
                         self.execution_state = self.STATE_ERROR_RECOVERY
@@ -3887,9 +3893,12 @@ Do NOT wrap conversational replies in JSON.
                         f"Invalid plan format: expected list, got {type(parsed['plan']).__name__}. "
                         f"Plan content: {parsed['plan']}"
                     )
+                    # The "continue" below asks the LLM to correct itself —
+                    # not a fatal top-level failure (#2515).
                     self.console.print_error(
                         f"LLM returned invalid plan format (expected array, got {type(parsed['plan']).__name__}). "
-                        "Asking for correction..."
+                        "Asking for correction...",
+                        recoverable=True,
                     )
 
                     # Create error recovery prompt
@@ -3923,8 +3932,11 @@ Do NOT wrap conversational replies in JSON.
 
                 if invalid_steps:
                     logger.error(f"Invalid plan steps found: {invalid_steps}")
+                    # The "continue" below asks the LLM to correct itself —
+                    # not a fatal top-level failure (#2515).
                     self.console.print_error(
-                        f"Plan contains {len(invalid_steps)} invalid step(s). Asking for correction..."
+                        f"Plan contains {len(invalid_steps)} invalid step(s). Asking for correction...",
+                        recoverable=True,
                     )
 
                     # Create detailed error message
@@ -4141,7 +4153,10 @@ Do NOT wrap conversational replies in JSON.
                             last_error,
                         )
                         if not tool_result.get("error_displayed"):
-                            self.console.print_error(last_error)
+                            # any_error below switches to STATE_ERROR_RECOVERY
+                            # and retries — not a fatal top-level failure
+                            # (#2515, the archive_message_batch repro).
+                            self.console.print_error(last_error, recoverable=True)
                         any_error = True
 
                 if fanout_repeat_break:
@@ -4365,7 +4380,9 @@ Do NOT wrap conversational replies in JSON.
                     )
                     # Only print if error wasn't already displayed by _execute_tool
                     if not tool_result.get("error_displayed"):
-                        self.console.print_error(last_error)
+                        # STATE_ERROR_RECOVERY below retries this — not a
+                        # fatal top-level failure (#2515).
+                        self.console.print_error(last_error, recoverable=True)
 
                     # Switch to error recovery state
                     self.execution_state = self.STATE_ERROR_RECOVERY

@@ -29,10 +29,13 @@ Design commitments
 - **Buffer ``tool_start`` + ``tool_args`` into one ``tool_call``** (spec §6.3): the
   handler emits the name first and the arguments separately; the canonical
   ``tool_call`` carries ``{tool, args}`` together.
-- **Fail loudly, never silently.** ``agent_error`` and a governance
-  ``policy_alert`` map to a terminal ``error`` with an actionable ``detail`` — never
-  a placeholder. The ``None`` queue sentinel is *stream close*, handled by the
-  drain loop, not a wire event.
+- **Fail loudly, never silently.** A fatal top-level ``agent_error`` and a
+  governance ``policy_alert`` map to a terminal ``error`` with an actionable
+  ``detail`` — never a placeholder. A **recoverable** ``agent_error`` (the
+  source event's ``recoverable`` flag, set by ``agent.py``'s
+  ``STATE_ERROR_RECOVERY`` retry path) is explicitly NOT terminal — it folds
+  to a ``status`` line so the run continues (#2515). The ``None`` queue
+  sentinel is *stream close*, handled by the drain loop, not a wire event.
 
 Spec open questions surfaced in this file (do not block #2016):
 - **Q2** — ``policy_alert`` maps to ``error`` (status 403). A governance block is
@@ -240,6 +243,14 @@ class CanonicalTranslator:
 
     def _on_agent_error(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
         detail = str(event.get("content") or "Unknown agent error")
+        if event.get("recoverable"):
+            # A per-tool error the agent loop is retrying (agent.py's
+            # STATE_ERROR_RECOVERY path, e.g. a bad tool argument) is not
+            # terminal — the run continues on this same stream. Fold it to a
+            # status line, same pattern as ``_on_tool_confirm_denied``, so
+            # the user still SEES the failure without the stream (and the
+            # still-retrying agent) being cut out from under it (#2515).
+            return [{"type": "status", "message": f"Tool call failed, retrying: {detail}"}]
         return [{"type": "error", "detail": detail, "status": _ERROR_STATUS_AGENT}]
 
     def _on_policy_alert(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:

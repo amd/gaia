@@ -12,6 +12,11 @@ does (least exposure). Manager-level spawn failures surface as 502 with the
 manager's actionable message verbatim (which embeds the sidecar log tail —
 pre-first-health-success only, so it cannot contain mailbox data).
 
+``ensure``'s optional ``dev_src_dir`` body field (issue #2588) is the
+caller's own belief about which checkout it is asking for dev mode from —
+it is COMPARED against the daemon's own configured source, never executed. A
+mismatch is a 409 naming both checkouts; a non-absolute value is a 400.
+
 The daemon serves no OpenAPI schema, so this table IS the contract:
 
 ===============================================  ======================================
@@ -41,6 +46,7 @@ from gaia.daemon.sidecars.errors import (
     AgentNotInstalledError,
     AgentTrustRequiredError,
     CapacityError,
+    DevSrcDirResolutionError,
     HealthTimeoutError,
     HubUnavailableError,
     InstallBusyError,
@@ -71,6 +77,18 @@ def build_agents_router(token: str, registry):
             return None
         return body.get("mode")
 
+    async def _body_dev_src_dir(request: Request) -> Optional[str]:
+        """``dev_src_dir`` from an optional JSON body (issue #2588): the
+        caller's own belief about which checkout it is asking for, compared
+        (never executed) against the daemon's own configured source."""
+        try:
+            body = await request.json()
+        except ValueError:
+            return None
+        if not isinstance(body, dict):
+            return None
+        return body.get("dev_src_dir")
+
     async def _install_body(request: Request) -> "tuple[Optional[str], bool]":
         """``(version, trusted)`` from an optional JSON install body.
 
@@ -97,14 +115,19 @@ def build_agents_router(token: str, registry):
     @router.post(f"{API_PREFIX}/agents/{{agent_id}}/ensure")
     async def ensure(agent_id: str, request: Request) -> dict:
         mode = await _body_mode(request)
+        dev_src_dir = await _body_dev_src_dir(request)
         try:
             # manager.start() is sync-blocking (health poll, lazy fetch) —
             # keep it off the event loop.
-            return await run_in_threadpool(registry.ensure, agent_id, mode=mode)
+            return await run_in_threadpool(
+                registry.ensure, agent_id, mode=mode, dev_src_dir=dev_src_dir
+            )
         except UnknownAgentError as e:
             raise HTTPException(status_code=404, detail=str(e)) from e
         except (ModeConflictError, CapacityError) as e:
             raise HTTPException(status_code=409, detail=str(e)) from e
+        except DevSrcDirResolutionError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
         except (SidecarSpawnError, HealthTimeoutError, VersionMismatchError) as e:
             raise HTTPException(status_code=502, detail=str(e)) from e
 
