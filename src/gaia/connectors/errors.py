@@ -87,6 +87,59 @@ class OAuthClientNotConfiguredError(ConfigurationError):
         )
 
 
+class MicrosoftTenantConflictError(ConfigurationError):
+    """``GAIA_MICROSOFT_TENANT`` disagrees with the tenant a Microsoft
+    connector resolves to on its own (plan amendment A2/A3, #2628).
+
+    Subclasses ``ConfigurationError`` (not bare ``ConnectorsError``) —
+    ``ConfigurationError`` is what ``api.list_connections``, ``tripwire_check``,
+    and the UI router's ``_connector_summary`` already catch per-provider, so
+    one misconfigured connector degrades to a warning row instead of taking
+    down the whole connections list or sweep.
+
+    Only raised on a genuine CONFLICT: the env var is no longer read for
+    tenant resolution at all, so merely setting it (to a value that happens
+    to agree with what the connector already resolves to) is a silent no-op
+    with a one-time deprecation log, not an error. This fires when the value
+    would have changed behaviour, or is a bare tenant GUID that is inherently
+    ambiguous between the personal and work/school connectors.
+    """
+
+    _OTHER_CONNECTOR = {"microsoft": "microsoft_work", "microsoft_work": "microsoft"}
+
+    def __init__(
+        self,
+        connector_id: str,
+        *,
+        env_value: str,
+        resolved_tenant: str,
+        ambiguous_guid: bool = False,
+    ):
+        self.connector_id = connector_id
+        self.env_value = env_value
+        self.resolved_tenant = resolved_tenant
+        other = self._OTHER_CONNECTOR.get(connector_id, "the other Microsoft connector")
+        if ambiguous_guid:
+            what = (
+                f"is a single tenant id, which is ambiguous between "
+                f"{connector_id!r} and {other!r}"
+            )
+        else:
+            what = (
+                f"disagrees with {connector_id!r}, which resolves to "
+                f"{resolved_tenant!r} from its own connector definition"
+            )
+        super().__init__(
+            f"GAIA_MICROSOFT_TENANT={env_value!r} {what}. This environment "
+            "variable is no longer read for tenant resolution — GAIA now "
+            f"resolves the tenant per connector. If you meant {connector_id!r}, "
+            f"remove the conflicting value; if you meant {other!r}, use that "
+            "connector instead (or set its Directory (tenant) ID setup field "
+            "for a single-tenant registration). Then `unset "
+            "GAIA_MICROSOFT_TENANT`. See docs/connectors/microsoft.mdx."
+        )
+
+
 class AuthRequiredError(ConnectorsError):
     """
     A caller cannot use a connection right now and must take a specific action.
@@ -101,6 +154,12 @@ class AuthRequiredError(ConnectorsError):
         AGENT_NOT_GRANTED = "agent_not_granted"
         CONNECTION_MISSING_SCOPES = "connection_missing_scopes"
         REAUTH_REQUIRED = "reauth_required"
+        # A6: distinct from REAUTH_REQUIRED — the stored connection was
+        # minted against a different OAuth tenant than the connector
+        # currently resolves to. The remedy differs (use the other
+        # Microsoft connector, not "just reconnect this one"), so callers
+        # must be able to branch on it separately.
+        TENANT_MISMATCH = "tenant_mismatch"
 
     def __init__(
         self,
@@ -151,6 +210,14 @@ class AuthRequiredError(ConnectorsError):
                 f"Connections, or run `gaia connectors connect "
                 f"{self.provider or '<provider>'}`. "
                 "See docs/runbooks/google-oauth-client.md."
+            )
+        if self.reason is AuthRequiredError.Reason.TENANT_MISMATCH:
+            return (
+                f"The stored {prov} connection was authenticated against a "
+                "different Microsoft tenant than the connector currently "
+                "resolves to. Reconnect from Settings → Connections, or run "
+                f"`gaia connectors connect {self.provider or '<provider>'}`. "
+                "See docs/connectors/microsoft.mdx."
             )
         # Fallback — should be unreachable since Reason is a closed enum.
         return f"Authentication required for {prov} (reason={self.reason.value})."
