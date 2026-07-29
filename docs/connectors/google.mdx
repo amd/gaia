@@ -118,7 +118,74 @@ yourself — there's no need to verify the app for personal use.
   consent, so GAIA will eventually prompt you to reconnect. This is a
   Google policy for unverified test apps, not a GAIA bug — just reconnect
   when it happens (see [Common issues](#error-400-invalid_grant-after-a-long-while)).
+  Google waives this limit only when the connection's *only* scopes are a
+  subset of `openid` / `email` / `profile` — any Gmail or Calendar scope
+  (which GAIA's agents always request) means the 7-day limit applies to
+  you.
 </Warning>
+
+### Declare scopes under Data access
+
+Every scope GAIA can request must also be **declared** on the consent
+screen — a separate step from anything you type into a `gaia` command,
+and easy to miss because nothing in the flow above mentions it.
+
+<Warning>
+  **Exact click path not verified for this guide** — flagged for a human
+  pass, tracked in [#2602](https://github.com/amd/gaia/issues/2602). Open
+  [**Google Auth Platform → Data
+  access**](https://console.cloud.google.com/auth/scopes) and use its
+  scope picker to add each entry from the table below. If the tab's exact
+  label or control has moved since this was written, look for wherever
+  the console lets you register OAuth scopes for the consent screen — the
+  goal is that every scope your agents will request ends up listed there.
+</Warning>
+
+You only need to declare the scopes the agents you actually use will
+request — the [Email Triage agent](/guides/email) needs `gmail.modify`,
+`gmail.send`, `calendar.events`, and `calendar.readonly`; `openid` /
+`email` / `profile` are requested on every connection regardless of
+agent.
+
+<!-- google-scopes:start -->
+| Scope | Tier | What it buys |
+|---|---|---|
+| `openid` | Non-sensitive | Verify your identity |
+| `email` | Non-sensitive | See your email address |
+| `profile` | Non-sensitive | See your basic profile |
+| `https://www.googleapis.com/auth/gmail.readonly` | Restricted | Read your email |
+| `https://www.googleapis.com/auth/gmail.send` | Sensitive | Send email on your behalf |
+| `https://www.googleapis.com/auth/gmail.modify` | Restricted | Read, modify, and send email on your behalf |
+| `https://www.googleapis.com/auth/calendar.readonly` | Sensitive | Read your calendar events |
+| `https://www.googleapis.com/auth/calendar.events` | Sensitive | Manage your calendar events |
+| `https://www.googleapis.com/auth/drive.readonly` | Restricted | Read your Google Drive files |
+| `https://www.googleapis.com/auth/drive.file` | Non-sensitive | Manage Drive files this app creates — no built-in GAIA agent requests this today |
+<!-- google-scopes:end -->
+
+**Tiers, sourced from Google's own tables:** [Gmail
+scopes](https://developers.google.com/workspace/gmail/api/auth/scopes)
+and [Drive
+scopes](https://developers.google.com/workspace/drive/api/guides/api-specific-auth).
+Two corrections worth flagging if you've seen older guidance:
+`gmail.readonly` and `drive.readonly` are **Restricted** — the same
+strictest tier as `gmail.modify` — not "Sensitive"; read-only buys no
+verification relief. `drive.file` is **Non-sensitive**, which is why
+Google recommends it as the default per-file Drive scope. Google
+publishes no tier table for Calendar; `calendar.events` /
+`calendar.readonly` are listed as Sensitive based on the Console UI's own
+grouping, not an authoritative Google document.
+
+A Testing-status app shows the "Google hasn't verified this app" warning
+for *any* Sensitive or Restricted scope regardless of whether it's
+declared here — so seeing that warning doesn't by itself tell you a
+scope is missing from Data access.
+
+**Unverified:** whether Google actually refuses OAuth consent in Testing
+mode for a scope that's requested in the authorization URL but not
+declared under Data access has not been checked end-to-end for this
+guide — tracked in [#2602](https://github.com/amd/gaia/issues/2602).
+Declaring every scope you'll use removes the question either way, so do
+that regardless of the answer.
 
 ## Step 4 — Create the OAuth client
 
@@ -195,38 +262,57 @@ you connect"** with a default-on checkbox per installed agent that
 declares Google access, and checked agents receive their declared scopes
 the moment the OAuth flow completes. Uncheck an agent to withhold its
 grant, and adjust or revoke any grant later under the tile's
-**Per-agent grants** section. On the CLI you grant explicitly:
+**Per-agent grants** section.
 
-**Chat agent — read-only Gmail:**
+On the CLI, lead with `--grant-agent` — GAIA reads the scopes the agent
+already declares in its own code, so there's no list to type out or keep
+in sync:
+
+**Email Triage agent — the full mailbox + calendar scope set** it needs
+to read, organize, draft/send, and manage events:
+
+```bash
+gaia connectors connect google --grant-agent installed:email
+```
+
+One command both authorizes those scopes with Google **and** grants them
+to the agent — the same thing the Agent UI's **Connect** button does.
+Naming the agent is enough; GAIA rejects `--grant-agent` outright for an
+agent that declares no Google scopes, rather than silently granting
+nothing.
+
+**Chat agent — a narrower, read-only Gmail grant:** the chat agent
+declares no fixed Google requirement, so grant it explicit scopes
+instead:
 
 ```bash
 gaia connectors grants grant google builtin:chat \
   --scopes https://www.googleapis.com/auth/gmail.readonly
 ```
 
-**Email Triage agent — the full mailbox + calendar scope set** it needs
-to read, organize, draft/send, and manage events:
-
-```bash
-gaia connectors grants grant google installed:email \
-  --scopes https://www.googleapis.com/auth/gmail.modify \
-           https://www.googleapis.com/auth/gmail.send \
-           https://www.googleapis.com/auth/calendar.events \
-           https://www.googleapis.com/auth/calendar.readonly
-```
+<Note>
+  `gmail.readonly` is a **Restricted** scope — the same tier as
+  `gmail.modify` (see [Scopes to declare in your
+  Console](#declare-scopes-under-data-access)). Read-only narrows what the
+  agent can *do*, not which verification tier Google applies.
+</Note>
 
 <Note>
-  The Agent UI's **Connect** / **Reconnect** flow for the Email Triage
-  agent both authorizes these scopes with Google **and** grants them to the
-  agent for you. On the CLI you do both steps yourself — authorize the
-  scopes with `gaia connectors connect google --scopes …`, then run the
-  `grants grant` above. The [Email Triage guide's CLI tab](/guides/email#setup)
-  has the full sequence; the grant is also the fix when you hit
+  **`--scopes` is a two-command path, and it does not union with the
+  connection's default scopes.** Authorize with `gaia connectors connect
+  google --scopes …` first, then grant the same list with `gaia connectors
+  grants grant google <agent> --scopes …` (the `grants grant` example
+  above assumes the scope was already authorized on a prior connect). A
+  hand-typed list that omits `openid` can still connect but resolve to
+  `Connected as default` instead of your real address — one reason
+  `--grant-agent` is the recommended path for any agent that supports it.
+  The [Email Triage guide's CLI tab](/guides/email#setup) has the full
+  two-command sequence; a missing grant either way surfaces as
   `AGENT_NOT_GRANTED`.
 </Note>
 
-The default scopes a connection is established with are listed in the
-spec at
+The default scopes a connection is established with, and every scope an
+agent may request, are listed in the spec at
 [`src/gaia/connectors/catalog/google.py`](https://github.com/amd/gaia/blob/main/src/gaia/connectors/catalog/google.py).
 
 ## Common issues
@@ -265,6 +351,41 @@ which GAIA can't provide because it picks an ephemeral port.
 
 Add yourself as a test user (Step 3, "Add yourself as a test user").
 Apps in Testing mode only allow listed test users.
+
+### `Something went wrong` / `accounts.google.com/info/unknownerror` after you click Allow
+
+Google's own opaque failure page, shown **after** you complete the
+consent screen — not the "Google hasn't verified this app" interstitial
+from Step 5. GAIA never sees why: the browser lands on Google's error
+page instead of coming back to GAIA's loopback callback, so the callback
+handler never runs and the CLI/UI just times out after two minutes
+(`OAuth flow ... timed out after 120s. Restart the flow.`) — that
+message will not name the real cause.
+
+Nothing found while researching this guide ties this error page
+authoritatively to one cause for a loopback (Desktop-app) OAuth flow.
+Check these, roughly in order of how often they're reported for this
+exact error text:
+
+1. **Third-party cookies blocked in the browser.** The most concrete
+   reported match for this literal error page — though most reports are
+   for Google Identity Services JS sign-in widgets embedded in a web
+   page, not a Desktop-app loopback redirect, so treat this as a lead
+   rather than a confirmed cause here. Allow third-party cookies for
+   `accounts.google.com` and retry.
+2. **A stale or mismatched OAuth parameter** — `redirect_uri`, `state`,
+   or PKCE `code_challenge` that no longer matches what GAIA sent.
+   Restart the flow from GAIA rather than re-using an old consent tab.
+3. **Double-clicking Allow, or finishing consent in a second tab/window**
+   after the original flow's state already expired. Restart the flow and
+   complete it in a single tab.
+4. **A transient Google-side incident.** Wait a few minutes and retry.
+
+**Unverified:** whether an undeclared Restricted or Sensitive scope
+(missing from [Data access](#declare-scopes-under-data-access)) can
+itself trigger this page has not been confirmed end-to-end — see the
+note in that section. Don't assume adding a Data access declaration
+fixes this without testing it.
 
 ### `Error 400: invalid_grant` after a long while
 
