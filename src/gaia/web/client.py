@@ -896,11 +896,11 @@ class WebClient:
         # Determine endpoint and headers based on API key availability
         if api_key:
             # Authenticated endpoint with higher rate limits.
-            url = "https://api.you.com/v1/search"
+            url = "https://ydc-index.io/v1/search"
             headers = {"X-API-Key": api_key}
         else:
             # Keyless endpoint (100 searches/day per IP)
-            url = "https://api.you.com/v1/agents/search"
+            url = "https://ydc-index.io/v1/agents/search"
             headers = {}
 
         # Add integration User-Agent for tracking
