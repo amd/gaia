@@ -54,7 +54,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from gaia.connectors.errors import (
     AuthRequiredError,
     ConfigurationError,
+    ConnectionRevokedError,
     ConnectorsError,
+    ScopeMismatchError,
 )
 from gaia.logger import get_logger
 from gaia_agent_email import trust
@@ -282,6 +284,15 @@ def _connectors_error_to_http(exc: ConnectorsError) -> HTTPException:
             AuthRequiredError.Reason.REAUTH_REQUIRED,
         ):
             return HTTPException(status_code=401, detail=str(exc))
+        return HTTPException(status_code=403, detail=str(exc))
+    # ConnectionRevokedError / ScopeMismatchError are ConnectorsError SIBLINGS
+    # of AuthRequiredError (errors.py:159,175), not subclasses of it — a
+    # revoked grant is the headline scenario for this route, so missing these
+    # would silently fall through to 500 for exactly the case a client most
+    # needs to tell apart from a server-side failure.
+    if isinstance(exc, ConnectionRevokedError):
+        return HTTPException(status_code=401, detail=str(exc))
+    if isinstance(exc, ScopeMismatchError):
         return HTTPException(status_code=403, detail=str(exc))
     return HTTPException(status_code=500, detail=str(exc))
 

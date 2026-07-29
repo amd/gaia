@@ -30,7 +30,11 @@ pytest.importorskip("fastapi")
 
 from fastapi import FastAPI  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
-from gaia.connectors.errors import ConnectorsError  # noqa: E402
+from gaia.connectors.errors import (  # noqa: E402
+    ConnectionRevokedError,
+    ConnectorsError,
+    ScopeMismatchError,
+)
 from gaia_agent_email import agent_routes  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -135,6 +139,12 @@ class _FakeAgent:
                 "connect microsoft --scopes <scopes> --grant-agent "
                 "installed:email`, or use Settings -> Connections in the "
                 "Agent UI."
+            )
+        if action_id == "raise-revoked":
+            raise ConnectionRevokedError("microsoft")
+        if action_id == "raise-scope-mismatch":
+            raise ScopeMismatchError(
+                required=["mail.read"], granted=[], provider="microsoft"
             )
         return {
             "action_id": action_id,
@@ -590,6 +600,70 @@ class TestAutonomyRoutes:
         detail = r.json()["detail"]
         assert "gaia connectors connect" in detail
         assert "microsoft" in detail
+
+    def test_run_cycle_401_on_connection_revoked_error(self, client):
+        """#2617: ``ConnectionRevokedError`` is a ``ConnectorsError`` SIBLING
+        of ``AuthRequiredError`` (errors.py:159), not a subclass — it must
+        still map to 401 per the canonical table, not fall through to 500.
+        A revoked mailbox grant is the headline scenario for this issue."""
+
+        class _RevokedAgent(_FakeAgent):
+            def run_autonomy_cycle(self, context=None):
+                raise ConnectionRevokedError("microsoft")
+
+        client.built["next"] = _RevokedAgent()
+        self._mk(client)
+        client.post(
+            "/v1/email/agent/autonomy",
+            json={"session_id": "s1", "level": "earn_trust"},
+        )
+        insecure = TestClient(client.app_ref, raise_server_exceptions=False)
+        r = insecure.post("/v1/email/agent/autonomy/run", json={"session_id": "s1"})
+        assert r.status_code == 401
+        assert "gaia connectors connect" in r.json()["detail"]
+
+    def test_run_cycle_403_on_scope_mismatch_error(self, client):
+        """Same sibling-not-subclass gap as above, for ``ScopeMismatchError``
+        (errors.py:175) — must map to 403, not fall through to 500."""
+
+        class _ScopeMismatchAgent(_FakeAgent):
+            def run_autonomy_cycle(self, context=None):
+                raise ScopeMismatchError(
+                    required=["mail.read"],
+                    granted=[],
+                    provider="microsoft",
+                )
+
+        client.built["next"] = _ScopeMismatchAgent()
+        self._mk(client)
+        client.post(
+            "/v1/email/agent/autonomy",
+            json={"session_id": "s1", "level": "earn_trust"},
+        )
+        insecure = TestClient(client.app_ref, raise_server_exceptions=False)
+        r = insecure.post("/v1/email/agent/autonomy/run", json={"session_id": "s1"})
+        assert r.status_code == 403
+        assert "mail.read" in r.json()["detail"]
+
+    def test_undo_401_on_connection_revoked_error(self, client):
+        """Same #2617 sibling-mapping contract as the /run test, for /undo."""
+        self._mk(client)
+        insecure = TestClient(client.app_ref, raise_server_exceptions=False)
+        r = insecure.post(
+            "/v1/email/agent/autonomy/undo",
+            json={"session_id": "s1", "action_id": "raise-revoked"},
+        )
+        assert r.status_code == 401
+
+    def test_undo_403_on_scope_mismatch_error(self, client):
+        """Same #2617 sibling-mapping contract as the /run test, for /undo."""
+        self._mk(client)
+        insecure = TestClient(client.app_ref, raise_server_exceptions=False)
+        r = insecure.post(
+            "/v1/email/agent/autonomy/undo",
+            json={"session_id": "s1", "action_id": "raise-scope-mismatch"},
+        )
+        assert r.status_code == 403
 
 
 class TestWorkerDiesWithoutTerminalEvent:
