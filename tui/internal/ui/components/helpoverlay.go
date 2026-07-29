@@ -1,6 +1,10 @@
 package components
 
-import "github.com/charmbracelet/lipgloss"
+import (
+	"github.com/charmbracelet/lipgloss"
+
+	"github.com/amd/gaia/tui/internal/ui/theme"
+)
 
 type HelpContext int
 
@@ -11,7 +15,7 @@ const (
 
 var helpBoxStyle = lipgloss.NewStyle().
 	Border(lipgloss.RoundedBorder()).
-	BorderForeground(lipgloss.Color("114")).
+	BorderForeground(theme.Accent).
 	Padding(1, 2)
 
 // RenderHelpOverlay renders a help panel centered over a background view.

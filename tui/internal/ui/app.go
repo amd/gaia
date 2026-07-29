@@ -20,11 +20,16 @@ import (
 	"github.com/amd/gaia/tui/internal/ui/components"
 	"github.com/amd/gaia/tui/internal/ui/preflight"
 	"github.com/amd/gaia/tui/internal/ui/root"
+	"github.com/amd/gaia/tui/internal/ui/theme"
 )
 
 // prepareTerminal does everything that has to TALK to the terminal before
 // Bubble Tea takes over stdin. Every full-screen launch path calls it.
 func prepareTerminal() {
+	// First: it caches the light/dark answer that PrimeRenderer then reads, so
+	// the markdown style and the palette can never disagree, and a
+	// GAIA_TUI_THEME override reaches both.
+	theme.Init()
 	if err := components.PrimeRenderer(); err != nil {
 		fmt.Fprintf(os.Stderr,
 			"%v — replies will be shown as plain text. Report this with `gaia diagnostics`.\n", err)

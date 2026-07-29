@@ -16,6 +16,8 @@ import (
 	"github.com/amd/gaia/tui/internal/client"
 	"github.com/amd/gaia/tui/internal/event"
 	"github.com/amd/gaia/tui/internal/ui/components"
+
+	"github.com/amd/gaia/tui/internal/ui/theme"
 )
 
 // eventMsg and doneMsg carry the channel they came from. Bubble Tea cannot
@@ -40,54 +42,54 @@ type ToggleHelpMsg struct{}
 var (
 	headerStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("150")).
+			Foreground(theme.AccentBright).
 			Padding(0, 1)
 
 	userStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("39"))
+			Foreground(theme.Info)
 
 	assistantStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("252"))
+			Foreground(theme.Text)
 
 	errorStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("196"))
+			Foreground(theme.Danger)
 
 	activityStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("243"))
+			Foreground(theme.Dim)
 
 	toolNameStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("75"))
+			Foreground(theme.Info)
 
 	successStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("42"))
+			Foreground(theme.Success)
 
 	failStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("196"))
+			Foreground(theme.Danger)
 
 	dividerStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("238"))
+			Foreground(theme.Divider)
 
 	thinkingStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("42"))
+			Foreground(theme.Success)
 
 	stepStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("39"))
+			Foreground(theme.Info)
 
 	statusMsgStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("243")).
+			Foreground(theme.Dim).
 			Italic(true)
 
 	answerPanelStyle = lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).
-				BorderForeground(lipgloss.Color("42")).
+				BorderForeground(theme.Success).
 				Padding(0, 1)
 
 	errorPanelStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("196")).
+			BorderForeground(theme.Danger).
 			Padding(0, 1)
 )
 
@@ -145,7 +147,7 @@ func NewChatModel(c client.AgentClient, agentName string, initialQuery string, d
 
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
-	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+	sp.Style = lipgloss.NewStyle().Foreground(theme.Highlight)
 
 	vp := viewport.New(80, 20)
 	vp.SetContent("")
@@ -743,11 +745,11 @@ func (m *ChatModel) updateViewport() {
 func (m ChatModel) renderWelcome() string {
 	title := lipgloss.NewStyle().
 		Bold(true).
-		Foreground(lipgloss.Color("150")).
+		Foreground(theme.AccentBright).
 		Render("Welcome to GAIA")
 
 	agent := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("252")).
+		Foreground(theme.Text).
 		Render("Connected to: " + m.agentName)
 
 	hint := activityStyle.Render("Type a message and press Enter to start chatting.\nType /help for available commands.")
@@ -968,7 +970,7 @@ func (m ChatModel) renderActivityItem(item ActivityItem) string {
 		return "  " + successStyle.Render("[ok] ") + toolNameStyle.Render(content)
 
 	case "status":
-		return "       " + lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render(content)
+		return "       " + lipgloss.NewStyle().Foreground(theme.Warning).Render(content)
 
 	default:
 		return "       " + activityStyle.Render(content)
@@ -1065,6 +1067,6 @@ func extractCommandFromArgs(raw json.RawMessage) string {
 
 func (m ChatModel) renderHeader() string {
 	title := headerStyle.Render("GAIA")
-	name := lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Render(" │ " + m.agentName)
+	name := lipgloss.NewStyle().Foreground(theme.Text).Render(" │ " + m.agentName)
 	return title + name
 }

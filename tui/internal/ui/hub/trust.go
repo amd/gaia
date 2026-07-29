@@ -8,6 +8,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/amd/gaia/tui/internal/catalog"
+
+	"github.com/amd/gaia/tui/internal/ui/theme"
 )
 
 // trustDecisionMsg is the user's answer to the trust gate. Approved is true
@@ -86,28 +88,28 @@ func (m trustModel) Update(msg tea.Msg) (trustModel, tea.Cmd) {
 var (
 	trustBorder = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("214")).
+			BorderForeground(theme.Warning).
 			Padding(1, 2)
 
-	trustTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
-	trustKeyStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
-	trustValStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-	trustWarnStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
-	trustHintStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
+	trustTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(theme.Warning)
+	trustKeyStyle   = lipgloss.NewStyle().Foreground(theme.Dim)
+	trustValStyle   = lipgloss.NewStyle().Foreground(theme.Text)
+	trustWarnStyle  = lipgloss.NewStyle().Foreground(theme.Warning)
+	trustHintStyle  = lipgloss.NewStyle().Foreground(theme.Dim)
 
 	dangerBtnFocused = lipgloss.NewStyle().
 				Bold(true).
-				Foreground(lipgloss.Color("232")).
-				Background(lipgloss.Color("214")).
+				Foreground(theme.OnFill).
+				Background(theme.WarnFillBG).
 				Padding(0, 2)
 
 	safeBtnFocused = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("230")).
-			Background(lipgloss.Color("114")).
+			Foreground(theme.OnFill).
+			Background(theme.AccentFillBG).
 			Padding(0, 2)
 
-	btnDim = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Padding(0, 2)
+	btnDim = lipgloss.NewStyle().Foreground(theme.Dim).Padding(0, 2)
 )
 
 // fixedTrustRows is everything in the box except the daemon's reason: borders,

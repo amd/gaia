@@ -2520,6 +2520,22 @@ ctrl+c.
   with `d` and `delete`, which made "go back" a destructive action.
 </Note>
 
+#### Theme (light vs dark terminals)
+
+The hub asks the terminal for its background colour on startup and picks a
+light or dark palette to match, so text stays readable either way. Over SSH,
+inside tmux, or in a CI log where the terminal never answers that query, force
+a mode instead of guessing:
+
+```bash
+GAIA_TUI_THEME=light gaia tui    # or: dark
+```
+
+<Note>
+  `GAIA_TUI_THEME` also accepts `auto` (the default) to re-enable
+  detection.
+</Note>
+
 ---
 
 ### TUI Control API
