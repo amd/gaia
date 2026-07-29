@@ -99,7 +99,7 @@ CATEGORY_PERSONAL = "PERSONAL"
 #   - POST /v1/email/query/{run_id}/respond — deliver the answer; the ORIGINAL
 #     stream resumes. 404 unknown run, 409 stale/unknown request_id.
 # No existing shape changed, so 2.5 consumers keep working (additive MINOR).
-SCHEMA_VERSION = "2.6"
+SCHEMA_VERSION = "2.7"
 
 # Maximum number of items in a single batch request. Protects the single-tenant
 # local model slot from runaway batches. Enforced via Pydantic max_length.
@@ -1268,6 +1268,14 @@ class PreScanItem(_Strict):
     reason: Optional[str] = Field(
         default=None,
         description="Rationale for a suggested-archive row (the heuristic reason).",
+    )
+    is_meeting_request: bool = Field(
+        default=False,
+        description=(
+            "True when the heuristic confidently detected a meeting/"
+            "scheduling request in this message's subject/snippet (#2583). "
+            "Read-only signal — detection makes no calendar changes."
+        ),
     )
 
 

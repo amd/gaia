@@ -950,6 +950,11 @@ def triage_inbox_impl(
     existing behavior); a caller wanting a narrower query (e.g. unread-only
     for coverage honesty) can override it.
     """
+    # Local import breaks a real import cycle: calendar_tools imports
+    # DEFAULT_BODY_LIMIT_CHARS from this module at module scope, so importing
+    # calendar_tools back at module scope here would close the loop.
+    from gaia_agent_email.tools.calendar_tools import detect_meeting_request_heuristic
+
     prefs = session_preferences or {}
     with log_tool_call(
         "triage_inbox", {"max_messages": max_messages}, debug=debug
@@ -970,6 +975,18 @@ def triage_inbox_impl(
                 sender=payload_headers.get("from", ""),
                 label_ids=msg.get("labelIds", []),
                 body=msg.get("snippet", ""),
+            )
+            # Meeting-request detection (#2583) — reads the same already-
+            # fetched snippet as the category heuristic above, never the
+            # decoded full body, so the scan stays cheap (#1265). Gated on
+            # BOTH is_meeting_request and confidence=="high": the heuristic's
+            # no-signal branch also returns confidence="high" (a confident
+            # NEGATIVE), so confidence alone is not a safe gate.
+            meeting = detect_meeting_request_heuristic(
+                payload_headers.get("subject", ""), msg.get("snippet", "")
+            )
+            is_meeting_request = (
+                meeting.is_meeting_request and meeting.confidence == "high"
             )
             log_triage_dispatch(
                 message_id=msg["id"],
@@ -1000,6 +1017,10 @@ def triage_inbox_impl(
                 # to order the needs_review bucket newest-first). Not part of
                 # any public envelope; internal-only.
                 "internal_date": msg.get("internalDate"),
+                # Meeting-request signal (#2583) — orthogonal to category;
+                # carried through to the pre-scan envelope for downstream
+                # rendering (#2582).
+                "is_meeting_request": is_meeting_request,
             }
 
             # LLM follow-up (#1107; is_spam added #1906): re-classify when the
@@ -1231,6 +1252,7 @@ def pre_scan_inbox_impl(
                 "thread_id": r.get("thread_id"),
                 "sender": r.get("from", ""),
                 "subject": r.get("subject", ""),
+                "is_meeting_request": bool(r.get("is_meeting_request", False)),
             }
             why = r.get("rationale", "")
             category = r.get("category", CATEGORY_FYI)
@@ -1305,6 +1327,7 @@ def pre_scan_inbox_impl(
                         "thread_id": item.get("thread_id"),
                         "sender": item["sender"],
                         "subject": item["subject"],
+                        "is_meeting_request": item.get("is_meeting_request", False),
                         "reason": (
                             "informational + session default 'archive'"
                             f" — {item.get('why', '')}"

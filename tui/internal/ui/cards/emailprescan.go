@@ -13,13 +13,14 @@ import (
 // both are decoded here even though the REST models do not carry them.
 
 type preScanItem struct {
-	MessageID string `json:"message_id"`
-	ThreadID  string `json:"thread_id"`
-	Sender    string `json:"sender"`
-	Subject   string `json:"subject"`
-	Why       string `json:"why"`
-	Reason    string `json:"reason"`
-	Mailbox   string `json:"mailbox"`
+	MessageID        string `json:"message_id"`
+	ThreadID         string `json:"thread_id"`
+	Sender           string `json:"sender"`
+	Subject          string `json:"subject"`
+	Why              string `json:"why"`
+	Reason           string `json:"reason"`
+	Mailbox          string `json:"mailbox"`
+	IsMeetingRequest bool   `json:"is_meeting_request"`
 }
 
 // rationale is the row's justification. Archive rows carry `reason`, urgent and
