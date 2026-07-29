@@ -574,20 +574,21 @@ async def start_device_flow(provider_id: str, scopes: Iterable[str]) -> Dict[str
     async with httpx.AsyncClient(timeout=15.0) as client:
         resp = await client.post(device_code_url, data=body)
     if resp.status_code != 200:
-        # AADSTS9002346: the app registration is scoped to personal Microsoft
-        # accounts only, so the ``common`` endpoint (the default since v0.23.0)
-        # rejects it. Name the exact migration step instead of making the user
-        # decode the raw AADSTS error — a personal-account-only app must use the
-        # ``consumers`` tenant.
+        # AADSTS9002346 (D11, #2628): the app registration is scoped to
+        # personal Microsoft accounts only, so a non-consumers authority
+        # rejects it — under the split, that means it was registered for
+        # "microsoft" (consumers) but connected via "microsoft_work"
+        # (organizations, or a pinned Directory tenant id). Name the
+        # connector to use instead, never an env var (GAIA_MICROSOFT_TENANT
+        # is gone — it is not part of tenant resolution at all).
         if "AADSTS9002346" in resp.text:
+            other = "microsoft" if provider_id != "microsoft" else "microsoft_work"
             raise ConnectorsError(
                 f"Device-code request for {provider_id} was rejected: this app "
                 "registration is configured for personal Microsoft accounts only "
-                "(Outlook.com / Hotmail / Live), but GAIA now defaults to the "
-                "'common' tenant. Set GAIA_MICROSOFT_TENANT=consumers and connect "
-                "again, e.g.:\n"
-                "  GAIA_MICROSOFT_TENANT=consumers gaia connectors connect "
-                f"{provider_id} --device\n"
+                "(Outlook.com / Hotmail / Live). Reconnect using the "
+                f"{other!r} connector instead, e.g.:\n"
+                f"  gaia connectors connect {other} --device\n"
                 "See docs/connectors/microsoft."
             )
         raise ConnectorsError(

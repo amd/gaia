@@ -142,10 +142,15 @@ class TestStartDeviceFlow:
             asyncio.run(flow_mod.start_device_flow("microsoft", [MAIL_READ]))
         assert "Device-code request" in str(exc.value)
 
-    def test_personal_account_only_app_names_consumers_tenant(self, monkeypatch):
-        # AADSTS9002346: personal-account-only app rejected on the 'common'
-        # endpoint (the v0.23.0 default). The error must name the exact
-        # migration step, not dump the raw AADSTS code.
+    def test_personal_account_only_app_points_at_personal_connector(self, monkeypatch):
+        # D11 (#2628): AADSTS9002346 fires when a personal-account-only app
+        # registration is used against a non-consumers authority — under
+        # the split, that is exactly "microsoft_work" (organizations). The
+        # error must point at the "microsoft" connector, never an env var
+        # (GAIA_MICROSOFT_TENANT is gone). Same mocked AADSTS9002346 response
+        # shape as before (A8) — this still proves the real Microsoft error
+        # routes correctly, only the remediation text changed.
+        monkeypatch.setenv("GAIA_MICROSOFT_WORK_CLIENT_ID", "work-client-id")
         aad_error = (
             "AADSTS9002346: Application 'x' is configured for use by Microsoft "
             "Account users only. Please use the /consumers endpoint to serve "
@@ -156,10 +161,11 @@ class TestStartDeviceFlow:
             [_FakeResp(400, {"error": "invalid_request"}, aad_error)],
         )
         with pytest.raises(ConnectorsError) as exc:
-            asyncio.run(flow_mod.start_device_flow("microsoft", [MAIL_READ]))
+            asyncio.run(flow_mod.start_device_flow("microsoft_work", [MAIL_READ]))
         msg = str(exc.value)
-        assert "GAIA_MICROSOFT_TENANT=consumers" in msg
+        assert "GAIA_MICROSOFT_TENANT" not in msg
         assert "personal Microsoft accounts only" in msg
+        assert "gaia connectors connect microsoft --device" in msg
 
     def test_provider_without_device_support_raises(self, monkeypatch):
         # Google has no device_code_url -> loud, actionable error.

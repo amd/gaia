@@ -166,10 +166,16 @@ async def get_or_refresh(
 
         # Refresh-token rotation: if the provider returned a new refresh
         # token, persist it before exposing the access token to callers.
-        # A4: forward the RECORDED tenant (not the live provider's) — it is
-        # a historical fact about which authority minted this refresh
-        # token, and Microsoft rotates the token on every refresh, so
-        # dropping it here loses the diagnostic within one daemon tick.
+        # A4: prefer the RECORDED tenant — it is a historical fact about
+        # which authority minted THIS refresh token, and Microsoft rotates
+        # the token on every refresh, so dropping it here loses the
+        # diagnostic within one daemon tick. A legacy blob (no recorded
+        # tenant) has no such fact to preserve, and a successful refresh IS
+        # proof the live provider's tenant just minted the token we are
+        # about to persist — record it then, upgrading the blob out of
+        # "legacy" exactly once, on proof, rather than leaving it legacy
+        # forever (which would keep re-triggering the A5 split-language
+        # guess on every future unrelated failure).
         if new_refresh and new_refresh != stored["refresh_token"]:
             save_connection(
                 provider=provider_id,
@@ -178,7 +184,7 @@ async def get_or_refresh(
                 scopes=stored.get("scopes", []),
                 client_id_hash=provider.client_id_hash,
                 connected_at=stored.get("connected_at"),
-                tenant=stored.get("tenant"),
+                tenant=stored.get("tenant") or getattr(provider, "tenant", None),
             )
 
         entry.access_token = new_access

@@ -19,9 +19,11 @@ Acceptance:
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 
 import httpx
+import keyring
 import pytest
 import respx
 
@@ -31,6 +33,8 @@ from gaia.connectors.errors import (
 )
 from gaia.connectors.providers import _registry
 from gaia.connectors.store import (
+    SERVICE_NAME,
+    _connection_username,
     load_connection,
     save_connection,
 )
@@ -408,13 +412,23 @@ class TestSplitLanguageFailureTaxonomy:
 
     @pytest.fixture
     def legacy_microsoft_connection(self, microsoft_provider):
-        # No tenant= kwarg at all — a pre-#2628 blob.
-        save_connection(
-            provider="microsoft",
-            account_email="alice@example.com",
-            refresh_token="seed-legacy",
-            scopes=["s"],
-            client_id_hash=microsoft_provider.client_id_hash,
+        # Raw JSON with NO "tenant" key at all, written directly via
+        # keyring.set_password (not save_connection(tenant=None)) — this is
+        # the exact shape 100% of existing users' blobs have on their first
+        # post-upgrade refresh, and it must stay independent of whatever
+        # save_connection's own omission logic does, so a future refactor
+        # of one can't silently break this test's premise.
+        blob = {
+            "account_email": "alice@example.com",
+            "refresh_token": "seed-legacy",
+            "scopes": ["s"],
+            "connected_at": time.time(),
+            "client_id_hash": microsoft_provider.client_id_hash,
+        }
+        keyring.set_password(
+            SERVICE_NAME,
+            _connection_username("microsoft", "default"),
+            json.dumps(blob, sort_keys=True),
         )
         return microsoft_provider
 
@@ -490,3 +504,35 @@ class TestSplitLanguageFailureTaxonomy:
             )
             is None
         )
+
+    @respx.mock
+    async def test_legacy_blob_upgraded_on_successful_refresh(
+        self, legacy_microsoft_connection
+    ):
+        # A successful refresh is the strongest evidence available that the
+        # NEW refresh token was minted by the live provider's tenant — a
+        # rotation always accompanies a successful refresh (Microsoft
+        # rotates on every refresh), so record it then, upgrading the blob
+        # out of "legacy" exactly once, on proof rather than a guess.
+        respx.post(MS_TOKEN_URL).mock(
+            return_value=_ok_token_response(
+                access="a1", expires_in=3600, refresh="ROTATED-1"
+            )
+        )
+        await get_or_refresh("microsoft")
+        loaded = load_connection(
+            "microsoft",
+            current_client_id_hash=legacy_microsoft_connection.client_id_hash,
+        )
+        assert loaded["tenant"] == "consumers"
+
+        # Second refresh: the blob is no longer legacy, so a subsequent
+        # invalid_grant must NOT take the split-language enrichment path.
+        _cache[("microsoft", "default")].expires_at = 0.0
+        respx.post(MS_TOKEN_URL).mock(
+            return_value=httpx.Response(400, json={"error": "invalid_grant"})
+        )
+        with pytest.raises(ConnectionRevokedError) as exc:
+            await get_or_refresh("microsoft")
+        assert "microsoft_work" not in str(exc.value)
+        assert "split" not in str(exc.value).lower()
