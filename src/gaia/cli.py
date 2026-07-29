@@ -5519,7 +5519,9 @@ def handle_email_autonomy_command(args) -> None:
     except DaemonError as e:
         # Sidecar unreachable, autonomy off and refusing /run (#2528), or any
         # other relay failure — surfaced loudly, never a silent empty result.
-        log.error("email autonomy %s failed: %s", action, e)
+        # debug (not error): the stderr print below is the one guaranteed
+        # user-facing line; an ERROR-level record here duplicated it (#2617).
+        log.debug("email autonomy %s failed: %s", action, e)
         print(f"❌ {e}", file=sys.stderr)
         sys.exit(1)
 
