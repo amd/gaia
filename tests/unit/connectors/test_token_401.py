@@ -171,9 +171,7 @@ class TestToken401ActionableError:
         (AuthRequiredError/REAUTH_REQUIRED), never the Google-specific
         "go configure a client_secret" ConfigurationError — that message
         tells a Microsoft user to enter a secret they must not have."""
-        respx.post(
-            "https://login.microsoftonline.com/common/oauth2/v2.0/token"
-        ).mock(
+        respx.post("https://login.microsoftonline.com/common/oauth2/v2.0/token").mock(
             return_value=httpx.Response(
                 401,
                 json={

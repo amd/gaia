@@ -538,12 +538,8 @@ class TestConfigureSecretlessPublicClient:
         monkeypatch.setattr(
             oauth_pkce, "PROVIDERS_REQUIRING_CLIENT_SECRET", frozenset({"microsoft"})
         )
-        assert (
-            _run("connectors", "configure", "microsoft", "--client-id", "x")[0] == 2
-        )
-        assert (
-            _run("connectors", "configure", "google", "--client-id", "y")[0] == 0
-        )
+        assert _run("connectors", "configure", "microsoft", "--client-id", "x")[0] == 2
+        assert _run("connectors", "configure", "google", "--client-id", "y")[0] == 0
 
     def test_help_no_longer_implies_a_universal_secret_requirement(self):
         rc, out, _err = _run("connectors", "configure", "--help")
