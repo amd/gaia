@@ -98,30 +98,42 @@ def google_only_agent(tmp_path, monkeypatch):
         agent.close_db()
 
 
-def test_outlook_target_with_only_google_errors_before_any_tool(
+def test_unconnected_target_is_not_rejected_and_reaches_the_loop(
     google_only_agent, monkeypatch
 ):
-    """#2164: 'check my Outlook inbox' with only Google connected must return
-    the connectors NOT_CONNECTED error — and never touch the Gmail backend or
-    enter the agent loop."""
+    """#2590 regression: 'check my Outlook inbox' with only Google connected
+    used to be rejected here with a canned "go to Settings" message BEFORE
+    the agent loop ran — which meant setup_mailbox_access (the guided
+    walkthrough) could never be reached no matter how the request was
+    phrased. A provider that is simply not connected yet must fall through
+    to the loop instead, so the agent can offer to connect it."""
     from gaia.agents.base.agent import Agent
 
     agent, backend = google_only_agent
+    sentinel = {"status": "success", "result": "loop ran"}
+    monkeypatch.setattr(Agent, "process_query", lambda self, *a, **k: sentinel)
 
-    def _loop_must_not_run(self, *args, **kwargs):
-        raise AssertionError(
-            "agent loop ran for an unconnected-provider request — the "
-            "pre-flight guard did not fire"
-        )
+    assert agent.process_query("check my Outlook inbox") is sentinel
+    # Still never silently substituted Gmail for the named-but-unconnected
+    # provider — the loop decides what to do (e.g. offer setup), not the
+    # guard picking a different mailbox.
+    assert backend.calls == []
 
-    monkeypatch.setattr(Agent, "process_query", _loop_must_not_run)
 
-    result = agent.process_query("check my Outlook inbox")
+def test_provider_named_while_another_is_connected_still_reaches_the_loop(
+    google_only_agent, monkeypatch
+):
+    """#2590: naming an unconnected provider while a DIFFERENT provider is
+    already connected-and-usable must still reach the loop for the named
+    provider — not be swallowed by the guard, and not silently answered
+    from the already-usable mailbox instead."""
+    from gaia.agents.base.agent import Agent
 
-    assert result["status"] == "failed"
-    assert "NOT_CONNECTED" in result["result"]
-    assert "microsoft" in result["result"]
-    # The misleading substitution: no Gmail call may have happened.
+    agent, backend = google_only_agent  # only google connected/usable
+    sentinel = {"status": "success", "result": "loop ran"}
+    monkeypatch.setattr(Agent, "process_query", lambda self, *a, **k: sentinel)
+
+    assert agent.process_query("please set up my outlook mailbox") is sentinel
     assert backend.calls == []
 
 
@@ -148,20 +160,53 @@ def test_connected_provider_target_passes_through(google_only_agent, monkeypatch
     assert agent.process_query("check my gmail inbox") is sentinel
 
 
-def test_guard_error_is_surfaced_on_the_console(google_only_agent, monkeypatch):
-    """The message must reach the console (the SSE stream renders console
-    events, not the return value)."""
-    agent, _ = google_only_agent
-    printed = []
-    monkeypatch.setattr(
-        agent.console, "print_error", lambda msg: printed.append(msg), raising=False
+def _build_pinned_agent(tmp_path, monkeypatch):
+    """Both providers connected, session pinned to google — the ONE case the
+    guard still rejects pre-flight (#2164's actual intent-conflict purpose,
+    unaffected by #2590)."""
+    from gaia_agent_email.agent import EmailTriageAgent
+    from gaia_agent_email.config import EmailAgentConfig
+
+    gmail = _RecordingMailBackend()
+    outlook = _RecordingMailBackend()
+    cfg = EmailAgentConfig(
+        gmail_backend=gmail,
+        outlook_backend=outlook,
+        mail_provider="google",
+        calendar_backend=_MinimalCalendarBackend(),
+        db_path=str(tmp_path / "state.db"),
+        memory_db_path=str(tmp_path / "memory.db"),
+        silent_mode=True,
+        start_scheduler=False,
     )
+    monkeypatch.setenv("GAIA_MEMORY_DISABLED", "1")
+    with patch("gaia.agents.base.agent.AgentSDK") as mock_sdk:
+        mock_sdk.return_value = MagicMock()
+        agent = EmailTriageAgent(config=cfg)
+    return agent, gmail, outlook
 
-    agent.process_query("check my Outlook inbox")
 
-    assert len(printed) == 1
-    assert "NOT_CONNECTED" in printed[0]
-    assert "microsoft" in printed[0]
+def test_guard_error_is_surfaced_on_the_console(tmp_path, monkeypatch):
+    """The message must reach the console (the SSE stream renders console
+    events, not the return value). Uses the pinned-mailbox conflict — the
+    only case the guard still rejects pre-flight; an unconnected target no
+    longer does (#2590)."""
+    agent, gmail, outlook = _build_pinned_agent(tmp_path, monkeypatch)
+    try:
+        printed = []
+        monkeypatch.setattr(
+            agent.console, "print_error", lambda msg: printed.append(msg), raising=False
+        )
+
+        agent.process_query("check my Outlook inbox")
+
+        assert len(printed) == 1
+        assert "pinned" in printed[0]
+        assert "microsoft" in printed[0]
+        assert gmail.calls == []
+        assert outlook.calls == []
+    finally:
+        agent.close_db()
 
 
 def test_session_pinned_to_other_mailbox_errors(tmp_path, monkeypatch):

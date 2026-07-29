@@ -10,6 +10,10 @@ can never silently short-circuit another test's fake ``requests.get``
 
 import pytest
 
+# ScriptedConsole / FakeAgent live in onboarding_fakes.py, NOT here — see that
+# module's docstring for why a bare `from conftest import ...` is unsafe
+# under CI's multi-root pytest invocation (test_email_agent.yml).
+
 
 @pytest.fixture(autouse=True)
 def _reset_model_select_cache_between_tests():

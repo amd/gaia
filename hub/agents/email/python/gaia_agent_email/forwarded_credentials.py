@@ -181,12 +181,18 @@ def get_forwarded_token(provider: str, scopes: List[str]) -> str:
         )
     missing = [s for s in scopes if s not in cred.scopes]
     if missing:
+        # Union of currently-held and newly-required scopes, not just the
+        # missing ones — `--grant-agent` REPLACES the grant (grants.grant_agent
+        # overwrites rather than unions), so a "missing-only" suggestion would
+        # silently drop the scopes already held on reconnect (#2603).
+        suggested = sorted(set(cred.scopes) | set(scopes))
         raise ConnectorsError(
             f"the forwarded '{provider}' token does not cover the required "
             f"scopes {missing}. Reconnect with those scopes in one command: "
-            f"`gaia connectors connect {provider} --scopes {' '.join(missing)} "
-            f"--grant-agent installed:email` (or Settings -> Connections in the "
-            "Agent UI) so the daemon can forward a token that covers them."
+            f"`gaia connectors connect {provider} --scopes "
+            f"{' '.join(suggested)} --grant-agent installed:email` (or "
+            "Settings -> Connections in the Agent UI) so the daemon can "
+            "forward a token that covers them."
         )
     return cred.access_token
 

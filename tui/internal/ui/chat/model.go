@@ -16,6 +16,8 @@ import (
 	"github.com/amd/gaia/tui/internal/client"
 	"github.com/amd/gaia/tui/internal/event"
 	"github.com/amd/gaia/tui/internal/ui/components"
+
+	"github.com/amd/gaia/tui/internal/ui/theme"
 )
 
 // eventMsg and doneMsg carry the channel they came from. Bubble Tea cannot
@@ -31,6 +33,13 @@ type doneMsg struct{ ch <-chan interface{} }
 type sendQueryMsg struct{ query string }
 type channelReadyMsg struct{ ch <-chan interface{} }
 
+// attentionFetchedMsg / attentionFetchFailedMsg deliver the result of the
+// on-open "what needs you" fetch (#2582) — a side-channel read, never a
+// chat turn, so it carries no query/answer pair and never touches the
+// host-owned transcript Send() pushes as `context`.
+type attentionFetchedMsg struct{ data json.RawMessage }
+type attentionFetchFailedMsg struct{ err error }
+
 // ReturnToHubMsg signals the root model to switch back to the hub view.
 type ReturnToHubMsg struct{ AgentID string }
 
@@ -40,54 +49,54 @@ type ToggleHelpMsg struct{}
 var (
 	headerStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("150")).
+			Foreground(theme.AccentBright).
 			Padding(0, 1)
 
 	userStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("39"))
+			Foreground(theme.Info)
 
 	assistantStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("252"))
+			Foreground(theme.Text)
 
 	errorStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("196"))
+			Foreground(theme.Danger)
 
 	activityStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("243"))
+			Foreground(theme.Dim)
 
 	toolNameStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("75"))
+			Foreground(theme.Info)
 
 	successStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("42"))
+			Foreground(theme.Success)
 
 	failStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("196"))
+			Foreground(theme.Danger)
 
 	dividerStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("238"))
+			Foreground(theme.Divider)
 
 	thinkingStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("42"))
+			Foreground(theme.Success)
 
 	stepStyle = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("39"))
+			Foreground(theme.Info)
 
 	statusMsgStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("243")).
+			Foreground(theme.Dim).
 			Italic(true)
 
 	answerPanelStyle = lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).
-				BorderForeground(lipgloss.Color("42")).
+				BorderForeground(theme.Success).
 				Padding(0, 1)
 
 	errorPanelStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("196")).
+			BorderForeground(theme.Danger).
 			Padding(0, 1)
 )
 
@@ -145,7 +154,7 @@ func NewChatModel(c client.AgentClient, agentName string, initialQuery string, d
 
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
-	sp.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
+	sp.Style = lipgloss.NewStyle().Foreground(theme.Highlight)
 
 	vp := viewport.New(80, 20)
 	vp.SetContent("")
@@ -171,6 +180,12 @@ func NewChatModelFromHub(c client.AgentClient, agentID, agentName string, debug 
 	return m
 }
 
+// attentionAgentID is the one agent this on-open fetch applies to today.
+// Scoped by id rather than by capability alone so a future agent that
+// happens to reuse the AttentionFetcher interface for something unrelated
+// doesn't unexpectedly get this fetch too.
+const attentionAgentID = "email"
+
 func (m ChatModel) Init() tea.Cmd {
 	cmds := []tea.Cmd{
 		m.spinner.Tick,
@@ -180,8 +195,34 @@ func (m ChatModel) Init() tea.Cmd {
 		cmds = append(cmds, func() tea.Msg {
 			return sendQueryMsg{query: m.initialQuery}
 		})
+	} else if m.agentID == attentionAgentID {
+		// Rendered with no user prompt, on open, per #2582 — but only when
+		// there's no initial query already about to run a turn, so the
+		// attention view never races the answer to what the user just asked.
+		cmds = append(cmds, m.fetchAttention())
 	}
 	return tea.Batch(cmds...)
+}
+
+// fetchAttention builds the Cmd that fetches the email agent's read-only
+// attention view (#2582). A transport that doesn't implement
+// client.AttentionFetcher (subprocess mode has no HTTP relay to ask) is
+// skipped silently — this is a best-effort side-channel read, never a
+// requirement for the chat surface to function.
+func (m ChatModel) fetchAttention() tea.Cmd {
+	fetcher, ok := m.client.(client.AttentionFetcher)
+	if !ok {
+		return nil
+	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		data, err := fetcher.FetchAttention(ctx)
+		if err != nil {
+			return attentionFetchFailedMsg{err: err}
+		}
+		return attentionFetchedMsg{data: data}
+	}
 }
 
 func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -203,6 +244,27 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case channelReadyMsg:
 		m.events = msg.ch
 		return m, waitForEvent(m.events)
+
+	case attentionFetchedMsg:
+		m.messages = append(m.messages, Message{
+			Role:   RoleCard,
+			Render: "email_attention",
+			Data:   msg.data,
+		})
+		m.updateViewport()
+		return m, nil
+
+	case attentionFetchFailedMsg:
+		// Best-effort side-channel read (#2582) — a failure (no mailbox
+		// connected, daemon unreachable, a transient connector error) is
+		// worth telling the user about, but it must never block or clutter
+		// the surface like a turn-ending error would.
+		m.messages = append(m.messages, Message{
+			Role:    RoleStatus,
+			Content: fmt.Sprintf("[!] attention view unavailable: %v", msg.err),
+		})
+		m.updateViewport()
+		return m, nil
 
 	case eventMsg:
 		if m.supersededTurn(msg.ch) {
@@ -743,11 +805,11 @@ func (m *ChatModel) updateViewport() {
 func (m ChatModel) renderWelcome() string {
 	title := lipgloss.NewStyle().
 		Bold(true).
-		Foreground(lipgloss.Color("150")).
+		Foreground(theme.AccentBright).
 		Render("Welcome to GAIA")
 
 	agent := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("252")).
+		Foreground(theme.Text).
 		Render("Connected to: " + m.agentName)
 
 	hint := activityStyle.Render("Type a message and press Enter to start chatting.\nType /help for available commands.")
@@ -968,7 +1030,7 @@ func (m ChatModel) renderActivityItem(item ActivityItem) string {
 		return "  " + successStyle.Render("[ok] ") + toolNameStyle.Render(content)
 
 	case "status":
-		return "       " + lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Render(content)
+		return "       " + lipgloss.NewStyle().Foreground(theme.Warning).Render(content)
 
 	default:
 		return "       " + activityStyle.Render(content)
@@ -1065,6 +1127,6 @@ func extractCommandFromArgs(raw json.RawMessage) string {
 
 func (m ChatModel) renderHeader() string {
 	title := headerStyle.Render("GAIA")
-	name := lipgloss.NewStyle().Foreground(lipgloss.Color("252")).Render(" │ " + m.agentName)
+	name := lipgloss.NewStyle().Foreground(theme.Text).Render(" │ " + m.agentName)
 	return title + name
 }

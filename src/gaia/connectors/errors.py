@@ -49,6 +49,7 @@ class OAuthClientNotConfiguredError(ConfigurationError):
     ):
         self.provider_id = provider_id
         self.provider_label = provider_label
+        self.console_steps = console_steps
         super().__init__(
             self._build_message(
                 provider_id, provider_label, console_steps, docs, example
@@ -213,3 +214,108 @@ class FlowTimeoutError(ConnectorsError):
 
 class FlowInProgressError(ConnectorsError):
     """Another OAuth flow is already pending; only one at a time is supported."""
+
+
+class OAuthProviderError(ConnectorsError):
+    """A provider's OAuth endpoint rejected a request, with a structured reason.
+
+    Replaces raising ``ConnectorsError`` with the entire unbounded
+    ``response.text`` interpolated into the message (the literal #2590 bug):
+    ``error`` / ``error_description`` are the RFC 6749 / AADSTS fields the
+    provider actually returned, each truncated so a malformed or oversized
+    body can never reach model context unbounded — see
+    ``flow.classify_oauth_exception``, which is the only code meant to
+    inspect these fields programmatically.
+    """
+
+    _MAX_FIELD_LEN = 300
+
+    def __init__(
+        self,
+        provider: str,
+        *,
+        error: str = "",
+        error_description: str = "",
+        status_code: int | None = None,
+    ):
+        self.provider = provider
+        self.error = (error or "")[: self._MAX_FIELD_LEN]
+        self.error_description = (error_description or "")[: self._MAX_FIELD_LEN]
+        self.status_code = status_code
+        detail = self.error_description or self.error or "no error detail returned"
+        status = f" ({status_code})" if status_code else ""
+        super().__init__(f"{provider} OAuth request was rejected{status}: {detail}")
+
+
+class UnknownAgentError(ConnectorsError):
+    """One or more requested agent ids are not registered in the agent registry.
+
+    Distinct from ``gaia.daemon.sidecars.errors.UnknownAgentError`` (a
+    ``SidecarError``, unrelated hierarchy) — this one IS a ``ConnectorsError``
+    so the CLI's blanket ``except ConnectorsError`` and the router's
+    ``ConnectorsError -> HTTPException`` mapping both catch it uniformly.
+    """
+
+    def __init__(self, agent_ids: list[str]):
+        self.agent_ids = list(agent_ids)
+        super().__init__(
+            f"Unknown agent id(s): {', '.join(self.agent_ids)}. Check the "
+            "namespaced agent id (e.g. 'installed:email') via `gaia connectors "
+            "grants list` or the Agent UI's agent picker."
+        )
+
+
+class NoDeclaredScopesError(ConnectorsError):
+    """An agent declares no ``REQUIRED_CONNECTORS`` scopes for a connector."""
+
+    def __init__(self, agent_id: str, connector_id: str):
+        self.agent_id = agent_id
+        self.connector_id = connector_id
+        super().__init__(
+            f"Agent {agent_id!r} declares no REQUIRED_CONNECTORS scopes for "
+            f"connector {connector_id!r}, so there is nothing to authorize or "
+            "grant. Pass --scopes explicitly, or check the agent's "
+            "REQUIRED_CONNECTORS declaration."
+        )
+
+
+class ScopeNotAllowedError(ConnectorsError):
+    """A declared scope is outside the connector's ``available_scopes`` ceiling.
+
+    Raised by ``resolve_declared_scopes`` so an agent's own declaration can
+    never put a scope in front of the user's consent screen that the catalog
+    entry does not explicitly allow (#2603) — a half-fix would validate agent
+    identity but not scope values.
+    """
+
+    def __init__(self, agent_id: str, connector_id: str, scopes: list[str]):
+        self.agent_id = agent_id
+        self.connector_id = connector_id
+        self.scopes = list(scopes)
+        super().__init__(
+            f"Agent {agent_id!r} declares scope(s) {', '.join(self.scopes)} for "
+            f"connector {connector_id!r} that are outside its available_scopes "
+            "catalog entry. This is a catalog/agent mismatch — file a bug "
+            "rather than widening the request."
+        )
+
+
+class GrantAfterConnectError(ConnectorsError):
+    """A connection was persisted but the agent grant that should follow it failed.
+
+    Deliberately its own type — never merged into a generic ``ConnectorsError``
+    — so a caller that must not echo an arbitrary exception's text (it might
+    carry a credential) can still tell apart "the connection itself is fine,
+    only the grant write failed" from every other failure, and report that
+    honestly instead of a blanket "nothing was changed." See
+    ``onboarding_tools._setup_mailbox_access``.
+    """
+
+    def __init__(self, provider: str, agent_id: str, *, reason: str):
+        self.provider = provider
+        self.agent_id = agent_id
+        self.reason = reason
+        super().__init__(
+            f"Connected {provider!r} but failed to grant it to agent "
+            f"{agent_id!r}: {reason}."
+        )

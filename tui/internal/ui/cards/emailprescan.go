@@ -13,13 +13,14 @@ import (
 // both are decoded here even though the REST models do not carry them.
 
 type preScanItem struct {
-	MessageID string `json:"message_id"`
-	ThreadID  string `json:"thread_id"`
-	Sender    string `json:"sender"`
-	Subject   string `json:"subject"`
-	Why       string `json:"why"`
-	Reason    string `json:"reason"`
-	Mailbox   string `json:"mailbox"`
+	MessageID        string `json:"message_id"`
+	ThreadID         string `json:"thread_id"`
+	Sender           string `json:"sender"`
+	Subject          string `json:"subject"`
+	Why              string `json:"why"`
+	Reason           string `json:"reason"`
+	Mailbox          string `json:"mailbox"`
+	IsMeetingRequest bool   `json:"is_meeting_request"`
 }
 
 // rationale is the row's justification. Archive rows carry `reason`, urgent and
@@ -35,6 +36,7 @@ type preScanTotals struct {
 	Actionable        int `json:"actionable"`
 	Informational     int `json:"informational"`
 	SuggestedArchives int `json:"suggested_archives"`
+	NeedsReview       int `json:"needs_review"`
 }
 
 type preScanPreferences struct {
@@ -55,9 +57,13 @@ type emailPreScan struct {
 	InformationalCount int                 `json:"informational_count"`
 	SuggestedArchives  []preScanItem       `json:"suggested_archives"`
 	SuggestedDrafts    []json.RawMessage   `json:"suggested_drafts"`
+	NeedsReview        []preScanItem       `json:"needs_review"`
 	PreferencesApplied *preScanPreferences `json:"preferences_applied"`
 	Totals             *preScanTotals      `json:"totals"`
 	MailboxErrors      []mailboxError      `json:"mailbox_errors"`
+	Scanned            int                 `json:"scanned"`
+	TotalUnread        *int                `json:"total_unread"`
+	Degraded           bool                `json:"degraded"`
 }
 
 // maxCardRows bounds the card's interior. 22 interior rows plus two borders is
@@ -152,7 +158,7 @@ func isPreScanEnvelope(data json.RawMessage) bool {
 	}
 	for _, field := range []string{
 		"kind", "urgent", "actionable", "informational_count",
-		"suggested_archives", "suggested_drafts", "totals",
+		"suggested_archives", "suggested_drafts", "totals", "needs_review",
 	} {
 		if _, ok := probe[field]; ok {
 			return true
@@ -190,9 +196,12 @@ func renderEmailPreScan(data json.RawMessage, width int) string {
 	itemRows := [][]int{
 		p.itemRows(b, p.Urgent, showMailbox, true),
 		p.itemRows(b, p.Actionable, showMailbox, true),
+		p.itemRows(b, p.NeedsReview, showMailbox, true),
 		p.itemRows(b, p.SuggestedArchives, showMailbox, false),
 	}
-	sectionTotals := []int{totals.Urgent, totals.Actionable, totals.SuggestedArchives}
+	sectionTotals := []int{
+		totals.Urgent, totals.Actionable, totals.NeedsReview, totals.SuggestedArchives,
+	}
 	budget := maxCardRows - len(b.lines)
 
 	// Once every bucket is down to its last row there is nothing left to trim in
@@ -221,12 +230,14 @@ func renderEmailPreScan(data json.RawMessage, width int) string {
 	}
 
 	n := 0
-	// Urgent and actionable rows always carry their rationale — that is what
-	// turns a row from a claim into an argument. Archive rows do not: their
-	// reason is nearly always the category the section header already names.
+	// Urgent, actionable, and needs-review rows always carry their rationale
+	// — that is what turns a row from a claim into an argument. Archive rows
+	// do not: their reason is nearly always the category the section header
+	// already names.
 	n = p.section(b, "URGENT", p.Urgent, shown[0], totals.Urgent, n, showMailbox, true)
 	n = p.section(b, "NEEDS A REPLY", p.Actionable, shown[1], totals.Actionable, n, showMailbox, true)
-	_ = p.section(b, "SUGGESTED ARCHIVE", p.SuggestedArchives, shown[2], totals.SuggestedArchives, n, showMailbox, false)
+	n = p.section(b, "NEEDS REVIEW", p.NeedsReview, shown[2], totals.NeedsReview, n, showMailbox, true)
+	_ = p.section(b, "SUGGESTED ARCHIVE", p.SuggestedArchives, shown[3], totals.SuggestedArchives, n, showMailbox, false)
 
 	if len(footer) > 0 {
 		b.blank()
@@ -240,11 +251,20 @@ func renderEmailPreScan(data json.RawMessage, width int) string {
 // renderMailboxErrors draws the per-account warning banner. A broken grant on
 // one account is free information that today surfaces nowhere — and the results
 // that did arrive are still valid, so this warns and never fails the card.
+func (p emailPreScan) renderMailboxErrors(b *box) {
+	renderMailboxErrorBanner(b, p.MailboxErrors)
+}
+
+// renderMailboxErrorBanner draws the per-account warning banner shared by every
+// card that carries a “mailbox_errors“ list (the pre-scan card and the
+// attention view, #2582). A broken grant on one account is free information
+// that today surfaces nowhere — and the results that did arrive are still
+// valid, so this warns and never fails the card.
 //
 // The banner is capped: one long enough to bury the results it annotates defeats
 // its own purpose.
-func (p emailPreScan) renderMailboxErrors(b *box) {
-	if len(p.MailboxErrors) == 0 {
+func renderMailboxErrorBanner(b *box, errs []mailboxError) {
+	if len(errs) == 0 {
 		return
 	}
 
@@ -253,12 +273,12 @@ func (p emailPreScan) renderMailboxErrors(b *box) {
 	// strings would take a third of the card to annotate results the user can
 	// still act on.
 	tail := "Results below are unaffected."
-	if len(p.MailboxErrors) == 1 {
-		me := p.MailboxErrors[0]
+	if len(errs) == 1 {
+		me := errs[0]
 		b.addWrapped("  ", "[!] "+mailboxLabel(me.Mailbox)+" wasn't scanned: "+strings.TrimSpace(me.Error))
 	} else {
-		names := make([]string, len(p.MailboxErrors))
-		for i, me := range p.MailboxErrors {
+		names := make([]string, len(errs))
+		for i, me := range errs {
 			names[i] = mailboxLabel(me.Mailbox)
 		}
 		b.addWrapped("  ", "[!] "+itoa(len(names))+" accounts weren't scanned: "+strings.Join(names, ", "))
@@ -368,7 +388,8 @@ func (p emailPreScan) renderEmpty(b *box, t preScanTotals) {
 }
 
 func (p emailPreScan) isEmpty() bool {
-	return len(p.Urgent) == 0 && len(p.Actionable) == 0 && len(p.SuggestedArchives) == 0
+	return len(p.Urgent) == 0 && len(p.Actionable) == 0 &&
+		len(p.SuggestedArchives) == 0 && len(p.NeedsReview) == 0
 }
 
 // totalsOrDerived falls back to the visible list lengths when the agent omitted
@@ -383,11 +404,15 @@ func (p emailPreScan) totalsOrDerived() preScanTotals {
 		Actionable:        len(p.Actionable),
 		Informational:     p.InformationalCount,
 		SuggestedArchives: len(p.SuggestedArchives),
+		NeedsReview:       len(p.NeedsReview),
 	}
 }
 
+// scanned is the coverage numerator this card can derive from the totals it
+// was actually given — every bucket, including needs_review (#2584: a
+// needs-review-heavy pre-scan must not undercount how much was looked at).
 func (p emailPreScan) scanned(t preScanTotals) int {
-	return t.Urgent + t.Actionable + t.Informational + t.SuggestedArchives
+	return t.Urgent + t.Actionable + t.Informational + t.SuggestedArchives + t.NeedsReview
 }
 
 func (p emailPreScan) title(t preScanTotals) string {
@@ -399,7 +424,7 @@ func (p emailPreScan) title(t preScanTotals) string {
 // than noise.
 func (p emailPreScan) multiMailbox() bool {
 	seen := map[string]bool{}
-	for _, group := range [][]preScanItem{p.Urgent, p.Actionable, p.SuggestedArchives} {
+	for _, group := range [][]preScanItem{p.Urgent, p.Actionable, p.SuggestedArchives, p.NeedsReview} {
 		for _, it := range group {
 			if it.Mailbox != "" {
 				seen[it.Mailbox] = true

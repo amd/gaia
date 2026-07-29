@@ -131,6 +131,11 @@ def test_briefing_job_produces_email_pre_scan_envelope():
         "suggested_drafts",
         "preferences_applied",
         "totals",
+        # Pre-scan coverage-honesty fields (#2584).
+        "needs_review",
+        "scanned",
+        "total_unread",
+        "degraded",
     }
     assert any(i["message_id"] == "m1" for i in briefing["suggested_archives"])
     assert record["generated_at"]  # stamped for the pull surface

@@ -19,13 +19,13 @@ Asserts:
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import List
 from unittest.mock import MagicMock
 
 import httpx
 import pytest
 import respx
+
+from tests.unit.connectors.conftest import make_fake_agent_registry
 
 UI_HEADER = {"x-gaia-ui": "1"}
 
@@ -95,8 +95,8 @@ class TestForwardPost:
         # so inject the email agent's registry entry directly — this keeps the
         # router's scope-resolution check deterministic and independent of which
         # agent wheels happen to be installed in the test env.
-        ui_api_client.app.state.agent_registry = _make_fake_registry(
-            provider="google", scopes=FULL_SCOPES, nsid="installed:email"
+        ui_api_client.app.state.agent_registry = make_fake_agent_registry(
+            connector_id="google", scopes=FULL_SCOPES, nsid="installed:email"
         )
         resp = ui_api_client.post(
             "/v1/connections/google",
@@ -182,8 +182,8 @@ class TestAgentActsAfterForward:
             )
 
         respx.post("https://oauth2.googleapis.com/token").mock(side_effect=_cap)
-        ui_api_client.app.state.agent_registry = _make_fake_registry(
-            provider="google", scopes=FULL_SCOPES, nsid="installed:email"
+        ui_api_client.app.state.agent_registry = make_fake_agent_registry(
+            connector_id="google", scopes=FULL_SCOPES, nsid="installed:email"
         )
 
         resp = ui_api_client.post(
@@ -248,29 +248,6 @@ def _ms_forward_body(**overrides):
     return body
 
 
-def _make_fake_registry(provider: str, scopes: list[str], nsid: str = "builtin:test"):
-    """Return an object that mimics AgentRegistry.list() for the router's
-    scope-resolution code (``request.app.state.agent_registry``)."""
-    from gaia.connectors.providers.base import ConnectorRequirement
-
-    @dataclass
-    class FakeReg:
-        namespaced_agent_id: str
-        required_connections: List[ConnectorRequirement] = field(default_factory=list)
-
-    @dataclass
-    class FakeRegistry:
-        _regs: List[FakeReg]
-
-        def list(self):
-            return self._regs
-
-    cr = ConnectorRequirement(connector_id=provider, scopes=scopes)
-    return FakeRegistry(
-        _regs=[FakeReg(namespaced_agent_id=nsid, required_connections=[cr])]
-    )
-
-
 # ─── New test classes ─────────────────────────────────────────────────────────
 
 
@@ -324,8 +301,8 @@ class TestRouterDrivenScopeResolution:
         """Inject a registry whose builtin:test agent requires
         gmail.modify for Google.  Forward Google scopes that exclude
         gmail.modify → should raise scope_mismatch via the router resolution."""
-        fake_registry = _make_fake_registry(
-            provider="google",
+        fake_registry = make_fake_agent_registry(
+            connector_id="google",
             scopes=["https://www.googleapis.com/auth/gmail.modify"],
             nsid="builtin:test",
         )
@@ -347,8 +324,8 @@ class TestRouterDrivenScopeResolution:
     def test_scope_satisfied_via_registry_returns_201(self, ui_api_client):
         """When the forwarded scopes cover the agent's declared requirements,
         the forward succeeds even though the default map would demand more."""
-        fake_registry = _make_fake_registry(
-            provider="google",
+        fake_registry = make_fake_agent_registry(
+            connector_id="google",
             scopes=["https://www.googleapis.com/auth/gmail.modify"],
             nsid="builtin:test",
         )
@@ -395,8 +372,8 @@ class TestRouterDrivenScopeResolution:
         grants, which also collapsed required_scopes to [] when no valid grant
         ids were present.
         """
-        ui_api_client.app.state.agent_registry = _make_fake_registry(
-            provider="google",
+        ui_api_client.app.state.agent_registry = make_fake_agent_registry(
+            connector_id="google",
             scopes=["https://www.googleapis.com/auth/gmail.modify"],
             nsid="builtin:test",
         )
@@ -422,8 +399,8 @@ class TestRouterDrivenScopeResolution:
 
     def test_mixed_known_and_unknown_grant_agents_are_rejected(self, ui_api_client):
         """Every requested grant id must be valid before import."""
-        ui_api_client.app.state.agent_registry = _make_fake_registry(
-            provider="google",
+        ui_api_client.app.state.agent_registry = make_fake_agent_registry(
+            connector_id="google",
             scopes=["https://www.googleapis.com/auth/gmail.modify"],
             nsid="builtin:test",
         )

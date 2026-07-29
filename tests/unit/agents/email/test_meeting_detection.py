@@ -20,6 +20,9 @@ Labelled fixtures cover the three acceptance-criteria cases:
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 # EmailTriageAgent ships as the standalone gaia-agent-email wheel (#1102);
 # skip when a framework-only env lacks it.
 import pytest  # noqa: E402
@@ -36,6 +39,52 @@ from gaia_agent_email.tools.read_tools import (
     UNTRUSTED_BODY_CLOSE,
     UNTRUSTED_BODY_OPEN,
 )
+
+# ---------------------------------------------------------------------------
+# #2583 — wiring the detector into the inbox scan requires two more things
+# from the heuristic: it must catch the informal incident phrasing, and it
+# must NOT fire on marketing copy that happens to mention "call" near a
+# time-looking token (a real false positive found in the vendor corpus).
+# ---------------------------------------------------------------------------
+
+_CORPUS_PATH = (
+    Path(__file__).resolve().parents[4]
+    / "tests"
+    / "fixtures"
+    / "email"
+    / "vendor_corpus_seed.jsonl"
+)
+
+# The two adversarial PROMOTIONAL rows named in the #2583 plan: "happy to
+# jump on a quick call" / "let's schedule a 15-min call" each co-occur with an
+# unrelated discount-deadline time ("4PM PT today"). Wiring the heuristic into
+# the scan must not start calling these marketing emails meeting requests.
+_REQUIRED_NEGATIVE_IDS = {
+    "1677f2af-ab08-4d57-8d58-967228dc89a0",
+    "5f720d3d-a91f-47b5-a5c7-4edbef57cc9c",
+}
+
+
+def _load_corpus_rows():
+    rows = []
+    with open(_CORPUS_PATH, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                rows.append(json.loads(line))
+    return rows
+
+
+def _load_required_negative_rows():
+    rows = {
+        r["id"]: r for r in _load_corpus_rows() if r["id"] in _REQUIRED_NEGATIVE_IDS
+    }
+    assert rows.keys() == _REQUIRED_NEGATIVE_IDS, (
+        "expected corpus fixture rows missing — did vendor_corpus_seed.jsonl move? "
+        f"found: {sorted(rows)}"
+    )
+    return rows
+
 
 # ---------------------------------------------------------------------------
 # Labelled fixtures
@@ -408,6 +457,100 @@ class TestDetectMeetingRequestImpl:
         )
         for key in ("is_meeting_request", "confident", "source", "signals"):
             assert key in out
+
+
+# ---------------------------------------------------------------------------
+# #2583 — informal slot-proposal wording (the #2580 incident)
+#
+# "Any chance to meet this Thursday at 9am?" previously scored a confident
+# NEGATIVE: _MEETING_NOUNS held the noun "meeting" but not the verb "meet",
+# and no _INVITE_PHRASES entry matched. This is the acceptance-criterion case
+# from the plan — it must now be a confident positive.
+# ---------------------------------------------------------------------------
+
+
+class TestHeuristicInformalSlotProposal:
+    def test_incident_wording_is_detected(self):
+        result = detect_meeting_request_heuristic(
+            "", "Any chance to meet this Thursday at 9am?"
+        )
+        assert result.is_meeting_request is True
+        assert result.confidence == "high"
+
+    @pytest.mark.parametrize(
+        "subject,body",
+        [
+            ("", "Any chance to meet this Thursday at 9am?"),
+            ("Quick one", "Any chance we could meet tomorrow at 10am?"),
+            ("", "Any chance to meet up Friday afternoon?"),
+        ],
+    )
+    def test_any_chance_to_meet_variants_detected(self, subject, body):
+        result = detect_meeting_request_heuristic(subject, body)
+        assert result.is_meeting_request is True, (
+            f"expected a meeting request for {body!r}, "
+            f"got confidence={result.confidence!r} reason={result.reason!r}"
+        )
+        assert result.confidence == "high"
+
+
+# ---------------------------------------------------------------------------
+# #2583 — precision regression: the meeting noun/verb + time rule must not
+# fire on marketing copy where the "time" is an unrelated offer deadline.
+# ---------------------------------------------------------------------------
+
+
+class TestHeuristicMarketingDeadlineIsNotAMeeting:
+    def test_required_negative_corpus_rows_stay_negative(self):
+        rows = _load_required_negative_rows()
+        for row_id, row in rows.items():
+            result = detect_meeting_request_heuristic(row["subject"], row["body"])
+            assert not (result.is_meeting_request and result.confidence == "high"), (
+                f"corpus row {row_id} must stay a non-meeting-request after "
+                f"#2583 wiring, got is_meeting_request={result.is_meeting_request} "
+                f"confidence={result.confidence!r} reason={result.reason!r}"
+            )
+
+    def test_call_near_an_unrelated_deadline_is_not_a_meeting(self):
+        # Mirrors the corpus shape: a scheduling-flavoured noun ("call") far
+        # away from an unrelated discount-deadline clock ("4PM").
+        body = (
+            "This 60% discount is valid only through 4PM PT today. "
+            "Lock in your savings now.\n\n"
+            "Offer expires in a few hours. Happy to jump on a quick call "
+            "if you have questions."
+        )
+        result = detect_meeting_request_heuristic("Limited-time offer", body)
+        assert not (result.is_meeting_request and result.confidence == "high")
+
+    def test_corpus_promotional_false_positive_rate_stays_low(self):
+        # A general regression guard, not just the two named ids: the whole
+        # 104-row PROMOTIONAL slice of the vendor corpus should almost never
+        # be flagged as a meeting request. A handful of rows that genuinely
+        # embed a real scheduling ask inside marketing copy (e.g. "let me
+        # know the best time for a quick call — I have 2:30pm and 3:15pm
+        # open") are tolerated; a regression that reintroduces the bulk
+        # "noun + unrelated deadline time" false positive is not.
+        rows = [r for r in _load_corpus_rows() if r.get("category") == "PROMOTIONAL"]
+        assert len(rows) == 104, (
+            "expected 104 PROMOTIONAL rows in the vendor corpus fixture — "
+            f"found {len(rows)}; corpus may have changed"
+        )
+        flagged = [
+            r["id"]
+            for r in rows
+            if (lambda d: d.is_meeting_request and d.confidence == "high")(
+                detect_meeting_request_heuristic(r["subject"], r["body"])
+            )
+        ]
+        assert not (_REQUIRED_NEGATIVE_IDS & set(flagged)), (
+            f"required-negative corpus ids were flagged as meeting requests: "
+            f"{_REQUIRED_NEGATIVE_IDS & set(flagged)}"
+        )
+        assert len(flagged) <= 3, (
+            f"expected at most 3/104 PROMOTIONAL rows flagged as meeting "
+            f"requests, got {len(flagged)}: {flagged}"
+        )
 
 
 if __name__ == "__main__":

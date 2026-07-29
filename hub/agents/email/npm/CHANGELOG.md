@@ -6,6 +6,17 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## Unreleased
 
+- **The agent can now tell you which inbound mail is waiting on your reply —
+  not just which of your own messages went unanswered.** Previously the agent
+  could only flag sent mail nobody replied to; a colleague's "did you get a
+  chance to look at this? can we meet Thursday?" was invisible to it. It now
+  also flags inbound messages that ask directly for a reply, a decision, or a
+  meeting time — but only when there's real corroboration that it's genuine
+  correspondence (an existing back-and-forth in the thread, or a sender
+  you've emailed before). A question mark or a convincing-looking sender name
+  is deliberately not enough on its own — both show up constantly in
+  marketing and cold-outreach mail, and a false "someone is waiting on you"
+  costs more trust than a missed one.
 - **Triggering an autonomy cycle while autonomy is switched off now tells you
   so, instead of quietly reporting nothing happened.** `POST
   /v1/email/agent/autonomy/run` used to return the same "nothing to do"

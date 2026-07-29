@@ -38,7 +38,10 @@ from gaia.connectors.errors import (
     AuthRequiredError,
     ConfigurationError,
     ConnectorsError,
+    NoDeclaredScopesError,
     ScopeMismatchError,
+    ScopeNotAllowedError,
+    UnknownAgentError,
 )
 from gaia.connectors.events import emit_change
 from gaia.connectors.flow import (
@@ -85,6 +88,73 @@ _DEFAULT_REQUIRED_SCOPES_BY_PROVIDER: dict[str, tuple[str, ...]] = {
         "https://www.googleapis.com/auth/calendar.events",
     ),
 }
+
+
+def resolve_declared_scopes(
+    registry: Any, connector_id: str, agent_ids: List[str]
+) -> Dict[str, List[str]]:
+    """Resolve ``[namespaced_agent_id]`` -> ``{agent_id: declared_scopes}`` (#2603).
+
+    Each agent's scopes come from its ``REQUIRED_CONNECTORS`` declaration for
+    ``connector_id`` — the single source of truth both the CLI
+    (``gaia connectors connect --grant-agent``) and the Agent UI router's
+    ``/authorize``, ``/authorize-device``, and ``/configure`` endpoints read,
+    so the two surfaces cannot drift (#2117's original resolver, hoisted here
+    out of ``gaia.ui.routers.connectors`` so it is FastAPI-free).
+
+    ``registry`` is duck-typed — any object exposing ``.list()`` that returns
+    entries with ``.namespaced_agent_id`` and ``.required_connections``
+    (``AgentRegistry`` shaped). This module never imports ``gaia.agents``.
+
+    Fails loudly (no silent skips or truncation):
+      - an unknown agent id -> ``UnknownAgentError``;
+      - an agent that declares no scopes for ``connector_id`` -> raises
+        ``NoDeclaredScopesError`` rather than ever falling back to the
+        provider's ``default_scopes``;
+      - a declared scope outside ``REGISTRY.get(connector_id).available_scopes``
+        -> ``ScopeNotAllowedError`` naming the offending scope(s). Without
+        this ceiling, an agent's own declaration would flow straight into the
+        OAuth consent screen with no check against the catalog (#2603 C4) —
+        the registry already namespaces against a malicious custom agent
+        claiming a built-in's identity, but not against bad scope values.
+        Skipped (no ceiling enforced) only when ``connector_id`` itself is
+        not in the connector catalog — an unrelated failure surfaces later
+        at the connector lookup that every caller already performs.
+
+    Returns ``{}`` when ``agent_ids`` is empty — no resolution needed.
+    """
+    if not agent_ids:
+        return {}
+
+    by_nsid = {reg.namespaced_agent_id: reg for reg in registry.list()}
+    unknown = [nsid for nsid in agent_ids if nsid not in by_nsid]
+    if unknown:
+        raise UnknownAgentError(unknown)
+
+    from gaia.connectors.registry import REGISTRY as _CONNECTOR_REGISTRY
+
+    try:
+        available: Optional[set] = set(
+            _CONNECTOR_REGISTRY.get(connector_id).available_scopes
+        )
+    except KeyError:
+        available = None
+
+    resolved: Dict[str, List[str]] = {}
+    for nsid in agent_ids:
+        reg = by_nsid[nsid]
+        scopes: set = set()
+        for cr in reg.required_connections:
+            if cr.connector_id == connector_id:
+                scopes.update(cr.scopes)
+        if not scopes:
+            raise NoDeclaredScopesError(nsid, connector_id)
+        if available is not None:
+            disallowed = sorted(scopes - available)
+            if disallowed:
+                raise ScopeNotAllowedError(nsid, connector_id, disallowed)
+        resolved[nsid] = sorted(scopes)
+    return resolved
 
 
 def _authorize_access(
@@ -690,6 +760,7 @@ __all__ = [
     "load_activations",
     "load_grants",
     "poll_device_flow",
+    "resolve_declared_scopes",
     "revoke_agent_grant",
     "revoke_connection",
     "start_authorization",

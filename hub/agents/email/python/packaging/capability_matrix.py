@@ -124,6 +124,10 @@ OP_EVAL_COVERAGE: Dict[str, str] = {
     "search": _NO_EVAL_SENTINEL,
     "prescan": _NO_EVAL_SENTINEL,
     "briefing": "briefing",
+    # #2582 attention view: merges four already-tested read-only signals into
+    # one read-model -- contract/shape-tested (and the aggregator's own
+    # unit suite), no separate judged quality bar of its own.
+    "attention": _NO_EVAL_SENTINEL,
     "draft": "drafting",
     "send": _NO_EVAL_SENTINEL,
     "confirm": _NO_EVAL_SENTINEL,

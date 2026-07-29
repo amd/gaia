@@ -32,6 +32,8 @@ func Render(renderKey string, data json.RawMessage, width int) string {
 	switch key {
 	case "email_pre_scan":
 		return renderEmailPreScan(data, width)
+	case "email_attention":
+		return RenderEmailAttention(data, width)
 	case "table":
 		return renderTable(data, width)
 	case "key_value":

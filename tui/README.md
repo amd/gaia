@@ -53,6 +53,27 @@ per-agent checks. Each row shows what failed and the command that fixes it.
 A check that cannot be determined renders `[?]` rather than a checkmark, and
 never counts as ready.
 
+## Theming
+
+The hub adapts to your terminal automatically — it asks the terminal for its
+background colour at startup and picks a light or dark palette to match.
+
+Some terminals never answer that query (SSH, tmux, a CI log). Force a mode
+with `GAIA_TUI_THEME`:
+
+```bash
+GAIA_TUI_THEME=light gaia    # or dark; unset or "auto" = detect
+```
+
 ## Documentation
 
 Full command reference: <https://amd-gaia.ai/docs/reference/cli>
+
+## Contributing
+
+New colours are added to `internal/ui/theme` and addressed by role
+(`theme.Text`, `theme.Danger`, `theme.Accent`…) — never a raw
+`lipgloss.Color("NNN")` in a screen file. Keep package-level colour vars as
+`lipgloss.Style` values and call `.Render()` where the string is actually
+used; a `.Render()` called at package-init time bakes in a string before
+`theme.Init()` has picked light or dark, so it never changes again.

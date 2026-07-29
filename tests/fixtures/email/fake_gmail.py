@@ -365,6 +365,26 @@ class FakeGmailBackend:
         self._transport.record("list_labels")
         return list(self._labels)
 
+    def get_label(self, label_id: str) -> Dict[str, Any]:
+        """Exact per-label counts, mirroring Gmail's ``labels().get`` shape
+        (#2584) — unlike ``list_messages``'s ``resultSizeEstimate``, this is
+        an exact count over every message actually held, not an estimate.
+        """
+        self._transport.record("get_label", label_id=label_id)
+        with_label = [
+            m for m in self._messages.values() if label_id in set(m.get("labelIds", ()))
+        ]
+        unread = [m for m in with_label if "UNREAD" in set(m.get("labelIds", ()))]
+        return {
+            "id": label_id,
+            "name": label_id,
+            "type": "system",
+            "messagesTotal": len(with_label),
+            "messagesUnread": len(unread),
+            "threadsTotal": len(with_label),
+            "threadsUnread": len(unread),
+        }
+
     # -- Mutate -------------------------------------------------------------
 
     def _modify(

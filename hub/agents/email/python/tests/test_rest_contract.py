@@ -51,6 +51,8 @@ _EXPECTED_RESPONSE_MODELS = {
     # Scheduled daily briefing (#1608 additive) — the pull surface for the
     # sidecar's scheduled pre-scan runs.
     ("get", "/v1/email/briefing"): "EmailBriefingResponse",
+    # Attention view (schema 2.8, #2582) — the "what needs you" read-model.
+    ("get", "/v1/email/attention"): "EmailAttentionResponse",
     ("post", "/v1/email/draft"): "EmailDraftResponse",
     ("post", "/v1/email/send"): "EmailSendResponse",
     # Mailbox actions (schema 2.1, #1779).
@@ -1117,6 +1119,12 @@ def test_prescan_returns_card_envelope_shape(prescan_client):
         "suggested_drafts",
         "preferences_applied",
         "totals",
+        # Pre-scan coverage-honesty fields (#2584).
+        "needs_review",
+        "scanned",
+        "total_unread",
+        "degraded",
+        "mailbox_errors",
     }
     for section in ("urgent", "actionable", "suggested_archives"):
         assert isinstance(result[section], list)

@@ -160,6 +160,10 @@ class TestToolRegistry:
         "setup_mailbox_access",
         # Follow-up tracking (#1606) — read-only detection
         "check_followups",
+        # Waiting-on-you detection (#2581) — inbound mail awaiting the
+        # user's reply (the opposite direction from check_followups);
+        # pre-existing gap, this file never got it when it landed.
+        "list_waiting_on_you",
         # Organize
         "archive_message",
         "mark_read",

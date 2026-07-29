@@ -80,21 +80,13 @@ There are two ways to connect Google depending on how you use GAIA.
 
     Both flags are required together — Google rejects token requests that omit the secret even for Desktop-app PKCE clients.
 
-    **Step 2 — Sign in and grant the email agent in one command.** Pass the
-    email agent's scopes explicitly with `--scopes` (a bare
-    `gaia connectors connect google` requests only the default
-    `openid`/`email`/`profile` and mailbox calls would later fail with a scope
-    error), and add `--grant-agent installed:email` so the same scopes are
-    granted to the agent in the same flow — no separate `grants grant` step, and
-    the connect/grant scopes can never drift:
+    **Step 2 — Sign in and grant the email agent in one command.**
+    `--grant-agent installed:email` alone is enough — GAIA reads the scopes
+    the email agent already declares and authorizes + grants them in the
+    same flow, so there's no `--scopes` list to type out or keep in sync:
 
     ```bash
-    gaia connectors connect google \
-      --grant-agent installed:email \
-      --scopes https://www.googleapis.com/auth/gmail.modify \
-               https://www.googleapis.com/auth/gmail.send \
-               https://www.googleapis.com/auth/calendar.events \
-               https://www.googleapis.com/auth/calendar.readonly
+    gaia connectors connect google --grant-agent installed:email
     ```
 
     The command prints an authorization URL. Open it in a browser **on the
@@ -104,10 +96,17 @@ There are two ways to connect Google depending on how you use GAIA.
     scope, and the flow finishes.
 
     <Note>
-    Prefer to do it in two explicit steps? Run `gaia connectors connect google
-    --scopes …` first, then `gaia connectors grants grant google installed:email
-    --scopes …` with the **same** scopes. `--grant-agent` just folds those into
-    one flow (which is what the Agent UI does).
+    Want a narrower grant instead? Pass `--scopes` explicitly — but note it
+    does **not** union with the provider's default scopes, so a hand-typed
+    list that omits `openid` can still connect while resolving to `Connected
+    as default` instead of your real address. Prefer two explicit steps
+    instead of the combined flow? Run `gaia connectors connect google
+    --scopes …` first (authorize), then `gaia connectors grants grant google
+    installed:email --scopes …` (grant) with a matching list — `--grant-agent`
+    just runs both steps together and derives the scopes for you. See the
+    [Google connector guide's scope
+    table](/connectors/google#declare-scopes-under-data-access) for what each
+    scope buys.
     </Note>
 
     Skip this and the first email tool call fails with
@@ -412,6 +411,22 @@ The sidecar binds an ephemeral local port (never 4001). Dev mode loads
 package's `packaging/` directory does not collide with the PyPI `packaging`
 library. If the source package is missing, dev mode fails loudly with the
 `uv pip install -e` remedy — it never silently falls back to the binary.
+
+Dev mode always runs from **the daemon's own checkout** — the daemon (a
+per-user singleton) is never told to spawn from an arbitrary path a caller
+sends it. `gaia daemon start-agent email --mode dev` and `gaia chat --ui`
+resolve *your own* checkout (via `git rev-parse --show-toplevel` against your
+shell's cwd, or an explicit `--dev-src-dir <path>`) and send it to the daemon
+purely for comparison. If it matches the checkout the daemon is already
+running from, nothing changes; if it doesn't, the daemon refuses loudly,
+naming both checkouts and the fix — restart the daemon from a Python
+environment/editable install rooted at your checkout (a bare `cd` there does
+not help if one virtualenv is shared across checkouts, since the daemon's
+default source dir follows the Python environment that launched it, not its
+cwd). This exists because a per-user daemon started from checkout A silently
+served checkout A's source to a `--mode dev` request made from checkout B —
+a testing-integrity bug, not a runtime one, but one that makes a passing test
+meaningless without saying so.
 
 **Operational behavior:**
 - The **daemon owns the sidecar lifecycle**. Closing the Agent UI no longer

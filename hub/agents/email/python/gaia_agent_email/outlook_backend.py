@@ -439,7 +439,11 @@ class LiveOutlookBackend:
             # Carry the @odata.nextLink so paginated callers keep working;
             # Gmail callers treat any truthy token as "more pages".
             "nextPageToken": data.get("@odata.nextLink"),
-            "resultSizeEstimate": len(messages),
+            # Graph's list response carries no honest mailbox-total field the
+            # way Gmail's resultSizeEstimate does — len(messages) is just the
+            # page size just fetched, and reporting it as a total silently
+            # lies about coverage (#2584). None: unavailable, never fabricated.
+            "resultSizeEstimate": None,
         }
 
     def get_message(self, message_id: str) -> Dict[str, Any]:
@@ -474,6 +478,22 @@ class LiveOutlookBackend:
             if name:
                 out.append({"id": name, "name": name, "type": "user"})
         return out
+
+    def get_label(self, label_id: str) -> Dict[str, Any]:
+        # Graph has no label/folder resource with an exact unread count the
+        # way Gmail's labels().get does — report unavailable (None) rather
+        # than fabricate one (#2584, same principle as list_messages's
+        # resultSizeEstimate). No HTTP call: this is a structural stand-in
+        # so Outlook still satisfies the GmailBackend Protocol.
+        return {
+            "id": label_id,
+            "name": label_id,
+            "type": "system",
+            "messagesTotal": None,
+            "messagesUnread": None,
+            "threadsTotal": None,
+            "threadsUnread": None,
+        }
 
     # -- Mutate APIs --------------------------------------------------------
 

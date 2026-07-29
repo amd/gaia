@@ -61,7 +61,7 @@ _spec.loader.exec_module(capability_matrix)
 # and #2520 for the preference_tools bump 4 -> 8).
 # ---------------------------------------------------------------------------
 
-# 15 mixins in gaia_agent_email/tools/, keyed by module stem, 63 tools total.
+# 16 mixins in gaia_agent_email/tools/, keyed by module stem, 64 tools total.
 _EXPECTED_TOOLS_BY_MIXIN = {
     "read_tools": 8,
     "organize_tools": 15,
@@ -85,14 +85,16 @@ _EXPECTED_TOOLS_BY_MIXIN = {
     "connection_tools": 1,
     # #2469 agent-led onboarding: check_mailbox_access + setup_mailbox_access.
     "onboarding_tools": 2,
+    # #2581: list_waiting_on_you (inbound mail awaiting the user's reply).
+    "waiting_on_you_tools": 1,
 }
-_EXPECTED_TOOLS_TOTAL = 63
+_EXPECTED_TOOLS_TOTAL = 64
 assert sum(_EXPECTED_TOOLS_BY_MIXIN.values()) == _EXPECTED_TOOLS_TOTAL
 
 _EXPECTED_MCP_COUNT = 4
 _EXPECTED_EVAL_SUITE_COUNT = 6
-_EXPECTED_REST_FUNCTIONAL_COUNT = 22
-_EXPECTED_REST_IN_CONTRACT_COUNT = 25
+_EXPECTED_REST_FUNCTIONAL_COUNT = 23
+_EXPECTED_REST_IN_CONTRACT_COUNT = 26
 
 # The 6 eval suites are the *_gate_thresholds.json fixture stems at the repo
 # root (NOT under hub/agents/email/python/tests/ — this package ships no such
@@ -124,6 +126,7 @@ _EXPECTED_REST_OP_NAMES = {
     "search",
     "prescan",
     "briefing",
+    "attention",
     "draft",
     "send",
     "confirm",

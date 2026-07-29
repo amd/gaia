@@ -117,6 +117,19 @@ class GmailBackend(Protocol):
         """List all labels in the user's mailbox."""
         ...
 
+    def get_label(self, label_id: str) -> Dict[str, Any]:
+        """Fetch one label with its exact message/thread counts (#2584).
+
+        ``list_labels()`` returns Gmail's MINIMAL label form (id/name/type
+        only, no counts) — this is the only call that returns the label
+        resource's ``messagesTotal`` / ``messagesUnread`` fields, which are
+        exact integers (unlike ``list_messages``'s ``resultSizeEstimate``,
+        which Google documents as approximate and can be off by 2x+ on a
+        real mailbox). Used to report accurate scan-coverage denominators,
+        not per-message — one call per scan, not per message.
+        """
+        ...
+
     def archive_message(self, message_id: str) -> Dict[str, Any]:
         """Remove the INBOX label."""
         ...
@@ -542,6 +555,12 @@ class LiveGmailBackend:
     def list_labels(self) -> List[Dict[str, Any]]:
         data = self._get("/labels")
         return data.get("labels", [])
+
+    def get_label(self, label_id: str) -> Dict[str, Any]:
+        # labels().get (NOT list — list returns the minimal form with no
+        # counts) — the label resource's messagesTotal/messagesUnread are
+        # exact integers, unlike list_messages's resultSizeEstimate (#2584).
+        return self._get(f"/labels/{label_id}")
 
     # -- Mutate APIs --------------------------------------------------------
 
