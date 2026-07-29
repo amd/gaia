@@ -437,6 +437,89 @@ export interface EmailBriefingResponse {
 }
 
 // ---------------------------------------------------------------------------
+// Attention view (contract.py — schema 2.8, #2582). The read-only "what
+// needs you" surface, rendered without a user prompt when the email agent
+// opens. Built by calling triage_inbox_impl / detect_waiting_on_you_impl
+// directly rather than the pre-scan envelope above — informational_count is
+// a bare count with no rows, so a meeting proposal in a confidently-
+// classified informational message would otherwise be invisible.
+// ---------------------------------------------------------------------------
+
+/** Which signal surfaced an AttentionItem (contract.py: AttentionItemKind). */
+export type AttentionItemKind =
+  | "meeting_request"
+  | "waiting_on_you"
+  | "needs_review"
+  | "action_item";
+
+/** One item the attention view surfaces (contract.py: AttentionItem). Passive
+ * data only — never an action affordance; the view never acts on a message. */
+export interface AttentionItem {
+  /** Which signal surfaced this item. */
+  kind: AttentionItemKind;
+  /** Provider message id (opaque); null for an action_item with no recoverable source message. */
+  message_id?: string | null;
+  /** Provider thread id, when known. */
+  thread_id?: string | null;
+  /** Raw "From" header of the source message. */
+  sender: string;
+  /** Subject line — for an action_item this is the extracted action description, not an email subject. */
+  subject: string;
+  /** Plain-language reason this item needs attention. */
+  why: string;
+  /** Free-text due hint (action items only); null otherwise. */
+  due_hint?: string | null;
+  /** Provider name ('google' / 'microsoft'); set only when more than one mailbox is connected. */
+  mailbox?: string | null;
+}
+
+/** How much of the mailbox the attention view actually covered (contract.py: AttentionCoverage). */
+export interface AttentionCoverage {
+  /** Messages actually scanned across every mailbox. */
+  scanned: number;
+  /** Exact total unread count when the backend can report it honestly; null otherwise (never fabricated). */
+  total_unread?: number | null;
+  /** True when the scan hit its message ceiling in any connected mailbox. */
+  scan_truncated: boolean;
+  /** True when at least one connected mailbox could not be scanned. */
+  degraded: boolean;
+  /** Connected mailboxes that failed during this scan, if any. */
+  mailbox_errors?: MailboxError[] | null;
+}
+
+/**
+ * The merged attention-view envelope (contract.py: EmailAttentionResult).
+ *
+ * `items == []` is NOT itself a "nothing needs you" claim — it only means
+ * nothing surfaced from what `coverage` says was actually scanned. Always
+ * read `coverage` (and qualify the claim when `scan_truncated` or
+ * `degraded` is set) before asserting the mailbox is clear — the exact
+ * defect #2584 fixed one layer down for the pre-scan envelope.
+ */
+export interface EmailAttentionResult {
+  /** Discriminator identifying this envelope shape. */
+  kind: "email_attention";
+  /** Every surfaced item, unordered across signal types. */
+  items: AttentionItem[];
+  /** What this view actually scanned. */
+  coverage: AttentionCoverage;
+  /** UTC ISO-8601 timestamp of the underlying scan this result reflects. */
+  generated_at: string;
+  /** Seconds since generated_at — 0 when freshly computed, positive when served from cache. */
+  cache_age_seconds: number;
+  /** True when a live refresh past the cache's freshness window failed and this is last-known-good, not current. */
+  stale: boolean;
+}
+
+/** Top-level attention-view response envelope (contract.py: EmailAttentionResponse). */
+export interface EmailAttentionResponse {
+  /** Echoes the contract version. */
+  schema_version: string;
+  /** The attention-view envelope. */
+  result: EmailAttentionResult;
+}
+
+// ---------------------------------------------------------------------------
 // Batch triage (#1887) — ADDITIVE beside the single-email triage above.
 // POST /v1/email/triage/batch: an items array in, a results array out. The
 // single triage() / EmailTriageRequest / EmailTriageResponse are unchanged.

@@ -51,6 +51,8 @@ _EXPECTED_RESPONSE_MODELS = {
     # Scheduled daily briefing (#1608 additive) — the pull surface for the
     # sidecar's scheduled pre-scan runs.
     ("get", "/v1/email/briefing"): "EmailBriefingResponse",
+    # Attention view (schema 2.8, #2582) — the "what needs you" read-model.
+    ("get", "/v1/email/attention"): "EmailAttentionResponse",
     ("post", "/v1/email/draft"): "EmailDraftResponse",
     ("post", "/v1/email/send"): "EmailSendResponse",
     # Mailbox actions (schema 2.1, #1779).

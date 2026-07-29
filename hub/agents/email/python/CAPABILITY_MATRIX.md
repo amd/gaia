@@ -9,12 +9,12 @@ python hub/agents/email/python/packaging/capability_matrix.py
 
 ## Definitions
 
-- **tools_count**: the number of internal @tool-decorated agent-loop functions across gaia_agent_email/tools/*.py mixins (one per capability the agent's own LLM tool-calling loop can invoke). This is distinct from, and larger than, the REST API's 22 functional verbs and the MCP interface's 4 task-level tools -- both smaller, purpose-built surfaces for external callers, not agent-loop tools.
+- **tools_count**: the number of internal @tool-decorated agent-loop functions across gaia_agent_email/tools/*.py mixins (one per capability the agent's own LLM tool-calling loop can invoke). This is distinct from, and larger than, the REST API's 23 functional verbs and the MCP interface's 4 task-level tools -- both smaller, purpose-built surfaces for external callers, not agent-loop tools.
 - **no quality eval sentinel**: `no quality eval (contract-tested only)` -- the op is contract/shape-tested only; no judged quality bar exists for it.
 
 ## Capability matrix
 
-26 exposed ops (22 REST functional + 4 MCP) and their eval coverage:
+27 exposed ops (23 REST functional + 4 MCP) and their eval coverage:
 
 | Op | Surface | Eval coverage |
 |---|---|---|
@@ -22,6 +22,7 @@ python hub/agents/email/python/packaging/capability_matrix.py
 | `/v1/connections/{provider} (DELETE)` | REST | no quality eval (contract-tested only) |
 | `/v1/connections/{provider} (POST)` | REST | no quality eval (contract-tested only) |
 | `archive` | REST | no quality eval (contract-tested only) |
+| `attention` | REST | no quality eval (contract-tested only) |
 | `briefing` | REST | briefing |
 | `calendar/events (GET)` | REST | no quality eval (contract-tested only) |
 | `calendar/events (POST)` | REST | no quality eval (contract-tested only) |
@@ -64,7 +65,7 @@ python hub/agents/email/python/packaging/capability_matrix.py
   - `summarize_tools`: 1
   - `voice_tools`: 2
   - `waiting_on_you_tools`: 1
-- REST functional verbs: **22** (25 total operations in the frozen contract, including health/version/init probes)
+- REST functional verbs: **23** (26 total operations in the frozen contract, including health/version/init probes)
 - MCP tools: **4**
   - `draft_reply`
   - `send_email`
