@@ -142,6 +142,35 @@ class TestStartDeviceFlow:
             asyncio.run(flow_mod.start_device_flow("microsoft", [MAIL_READ]))
         assert "Device-code request" in str(exc.value)
 
+    def test_non_200_remedy_names_the_connector_specific_env_var_not_tenant(
+        self, monkeypatch
+    ):
+        # The generic (non-AADSTS9002346) failure branch must not point at
+        # GAIA_MICROSOFT_TENANT — that var is not part of tenant resolution
+        # at all (D6) and naming it here would send the user to set exactly
+        # the value the conflict-checker would then reject. It also must
+        # name the CONNECTOR-SPECIFIC client-id var (D9), not always the
+        # personal one.
+        _install_responses(
+            monkeypatch, [_FakeResp(400, {"error": "invalid_client"}, "bad")]
+        )
+        with pytest.raises(ConnectorsError) as exc:
+            asyncio.run(flow_mod.start_device_flow("microsoft", [MAIL_READ]))
+        msg = str(exc.value)
+        assert "GAIA_MICROSOFT_TENANT" not in msg
+        assert "GAIA_MICROSOFT_CLIENT_ID" in msg
+
+    def test_non_200_remedy_for_work_connector_names_its_own_env_var(self, monkeypatch):
+        monkeypatch.setenv("GAIA_MICROSOFT_WORK_CLIENT_ID", "work-client-id")
+        _install_responses(
+            monkeypatch, [_FakeResp(400, {"error": "invalid_client"}, "bad")]
+        )
+        with pytest.raises(ConnectorsError) as exc:
+            asyncio.run(flow_mod.start_device_flow("microsoft_work", [MAIL_READ]))
+        msg = str(exc.value)
+        assert "GAIA_MICROSOFT_TENANT" not in msg
+        assert "GAIA_MICROSOFT_WORK_CLIENT_ID" in msg
+
     def test_personal_account_only_app_points_at_personal_connector(self, monkeypatch):
         # D11 (#2628): AADSTS9002346 fires when a personal-account-only app
         # registration is used against a non-consumers authority — under

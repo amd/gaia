@@ -591,11 +591,18 @@ async def start_device_flow(provider_id: str, scopes: Iterable[str]) -> Dict[str
                 f"  gaia connectors connect {other} --device\n"
                 "See docs/connectors/microsoft."
             )
+        # D9: the client-id env var name is CONNECTOR-SPECIFIC
+        # (GAIA_MICROSOFT_CLIENT_ID for "microsoft",
+        # GAIA_MICROSOFT_WORK_CLIENT_ID for "microsoft_work") — never
+        # hard-coded to the personal one. Tenant is no longer an env var at
+        # all (D6); the only tenant knob left is microsoft_work's optional
+        # Directory (tenant) ID setup field.
+        client_id_env = f"GAIA_{provider_id.upper()}_CLIENT_ID"
         raise ConnectorsError(
             f"Device-code request for {provider_id} failed with status "
-            f"{resp.status_code}: {resp.text[:300]}. Check the client id / "
-            "tenant (GAIA_MICROSOFT_CLIENT_ID / GAIA_MICROSOFT_TENANT). See "
-            "docs/security/connections.mdx."
+            f"{resp.status_code}: {resp.text[:300]}. Check the client id "
+            f"({client_id_env}), or the Directory (tenant) ID setup field if "
+            f"you set one. See docs/connectors/microsoft.mdx."
         )
     d = resp.json()
     logger.info(
