@@ -1117,6 +1117,12 @@ def test_prescan_returns_card_envelope_shape(prescan_client):
         "suggested_drafts",
         "preferences_applied",
         "totals",
+        # Pre-scan coverage-honesty fields (#2584).
+        "needs_review",
+        "scanned",
+        "total_unread",
+        "degraded",
+        "mailbox_errors",
     }
     for section in ("urgent", "actionable", "suggested_archives"):
         assert isinstance(result[section], list)

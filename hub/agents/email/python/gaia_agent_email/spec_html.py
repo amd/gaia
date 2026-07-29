@@ -454,13 +454,17 @@ def render_endpoint_spec_html() -> str:
     prescan_block = _endpoint_block(
         path="/v1/email/prescan",
         description=(
-            "Inbox pre-scan (#1778). Lists the most-recent inbox messages from "
-            "the connected mailbox and returns the aggregate triage-card "
-            "envelope the Agent UI renders — top urgent / actionable rows, an "
-            "informational count, and suggested archives, each with a heuristic "
-            "reason. Read-only: nothing is archived, marked, or sent. "
-            "Classification reuses the agent's pre_scan_inbox path. Fails loudly "
-            "when no mailbox is connected (503) or 2+ are (400)."
+            "Inbox pre-scan (#1778). Lists the most-recent unread inbox messages "
+            "from the connected mailbox and returns the aggregate triage-card "
+            "envelope the Agent UI renders — top urgent / actionable / "
+            "needs-review rows, an informational count, and suggested archives, "
+            "each with a heuristic reason. ``needs_review`` (#2584) holds "
+            "messages the heuristic was not confident about; ``scanned`` / "
+            "``total_unread`` / ``degraded`` / ``mailbox_errors`` report how much "
+            "of the mailbox this pre-scan actually covered. Read-only: nothing "
+            "is archived, marked, or sent. Classification reuses the agent's "
+            "pre_scan_inbox path. Fails loudly when no mailbox is connected "
+            "(503) or 2+ are (400)."
         ),
         request_sections=[("EmailPreScanRequest", EmailPreScanRequest)],
         response_sections=[

@@ -1703,13 +1703,13 @@ def _run_prescan(backend, *, max_messages: int) -> dict:
         return pre_scan_inbox_impl(backend, max_messages=max_messages)
 
     merged = merge_pre_scan_backends(backend.backends, max_messages=max_messages)
-    # The frozen pre-scan contract (PreScanItem / EmailPreScanResult, both
-    # extra="forbid") has no per-item ``mailbox`` tag or ``mailbox_errors`` field
-    # — those belong to the agent-loop card's richer shape. Drop them at this
-    # boundary so the consolidated envelope validates; the surfaced items (from
-    # every connected mailbox) are unchanged.
-    merged.pop("mailbox_errors", None)
-    for section in ("urgent", "actionable", "suggested_archives"):
+    # The frozen pre-scan contract's PreScanItem (extra="forbid") has no
+    # per-item ``mailbox`` tag — that belongs to the agent-loop card's richer
+    # shape. Drop it at this boundary so the consolidated envelope validates;
+    # the surfaced items (from every connected mailbox) are unchanged.
+    # ``mailbox_errors`` (and the coverage fields alongside it, #2584) ARE
+    # part of the contract now and must reach the caller, not be stripped.
+    for section in ("urgent", "actionable", "suggested_archives", "needs_review"):
         for item in merged.get(section, []):
             item.pop("mailbox", None)
     return merged

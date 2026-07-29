@@ -508,12 +508,38 @@ or `date` (`YYYY-MM-DD` all-day). The Outlook backend defaults a missing
 
 ### Inbox pre-scan — `POST /v1/email/prescan` (#1778)
 
-A read-only, lightweight triage over recent inbox messages, reshaped into the
-scannable card the Agent UI renders. `EmailPreScanRequest` carries `max_messages`
-(1–100, default 25). `EmailPreScanResponse.result` is an `EmailPreScanResult`
-(`kind == "email_pre_scan"`) with capped `urgent` / `actionable` /
-`suggested_archives` lists of `PreScanItem`, an `informational_count`,
-`preferences_applied`, and pre-cap `totals`.
+A read-only, lightweight triage over recent unread inbox messages, reshaped into
+the scannable card the Agent UI renders. `EmailPreScanRequest` carries
+`max_messages` (1–100, default 25). `EmailPreScanResponse.result` is an
+`EmailPreScanResult` (`kind == "email_pre_scan"`) with capped `urgent` /
+`actionable` / `suggested_archives` / `needs_review` lists of `PreScanItem`, an
+`informational_count`, `preferences_applied`, and pre-cap `totals`.
+
+`needs_review` (#2584) holds messages the heuristic classifier was NOT
+confident about — a placeholder category guess, not a real classification.
+It only overrides routing into the two LOW-SIGNAL buckets: `informational`
+and `suggested_archives`, which assert "you can ignore this" from what is
+often a placeholder guess. It never pulls a message out of `urgent` or
+`actionable` — an unconfident guess toward a high-signal category already
+errs toward surfacing, which is the direction to err in. Capped like the
+other three buckets and ordered newest-first (human senders before
+automated ones on a timestamp tie); `totals.needs_review` reports the full
+uncapped count.
+
+Coverage-honesty fields (#2584), all on `EmailPreScanResult` directly:
+`scanned` (how many messages this call actually classified, across every
+bucket), `total_unread` (the mailbox's EXACT unread-message count — sourced
+from Gmail's `labels().get(id="INBOX").messagesUnread`, not
+`list_messages`'s `resultSizeEstimate`, which Google documents as
+approximate and measured 2.6x off on a real mailbox; `null` for Outlook,
+which has no equivalent honest source — `null` propagates through a
+multi-mailbox merge if ANY connected mailbox's count is unknown), `degraded`
+(true when at least one connected mailbox could not be scanned), and
+`mailbox_errors` (the list of `{mailbox, error}` failures behind `degraded`,
+surfaced to the caller rather than only logged). A failed mailbox's share
+of `max_messages` is reclaimed by the mailboxes
+still to be tried, so a single dead connection never halves a healthy
+mailbox's scan budget.
 
 ---
 

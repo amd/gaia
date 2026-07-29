@@ -214,6 +214,80 @@ func TestPreScanDegradesAtNarrowWidth(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// needs_review (#2584) -- the pre-scan coverage-honesty bucket. These fixtures
+// are defined inline (not in testdata_test.go) so the Go-side changes for
+// this issue stay confined to this one file until emailprescan.go grows a
+// NeedsReview field and its own `scanned()`/`isEmpty()` handling.
+// ---------------------------------------------------------------------------
+
+const needsReviewPopulatedPreScan = `{
+  "kind": "email_pre_scan",
+  "urgent": [],
+  "actionable": [
+    {"message_id":"a1","thread_id":"ta1","sender":"boss@example.com",
+     "subject":"Q3 numbers","why":"direct question"}
+  ],
+  "informational_count": 2,
+  "suggested_archives": [],
+  "suggested_drafts": [],
+  "needs_review": [
+    {"message_id":"nr1","thread_id":"tnr1","sender":"colleague@example.com",
+     "subject":"Any chance to meet this Thursday at 9am?","why":"heuristic unconfident (no match)"}
+  ],
+  "preferences_applied": null,
+  "totals": {"urgent": 0, "actionable": 1, "informational": 2, "suggested_archives": 0, "needs_review": 1}
+}`
+
+// needsReviewOnlyPreScan: every OTHER bucket is empty -- only needs_review
+// has an item. isEmpty() today only looks at Urgent/Actionable/
+// SuggestedArchives, so this fixture must NOT render as "Nothing needs you"
+// once needs_review is a real section.
+const needsReviewOnlyPreScan = `{
+  "kind": "email_pre_scan",
+  "urgent": [],
+  "actionable": [],
+  "informational_count": 0,
+  "suggested_archives": [],
+  "suggested_drafts": [],
+  "needs_review": [
+    {"message_id":"nr1","thread_id":"tnr1","sender":"colleague@example.com",
+     "subject":"Any chance to meet this Thursday at 9am?","why":"heuristic unconfident"}
+  ],
+  "preferences_applied": null,
+  "totals": {"urgent": 0, "actionable": 0, "informational": 0, "suggested_archives": 0, "needs_review": 1}
+}`
+
+func TestPreScanNeedsReviewRendersAndCountsTowardScanned(t *testing.T) {
+	out := Render("email_pre_scan", raw(t, needsReviewPopulatedPreScan), width80)
+	t.Logf("\n%s", plain(out))
+
+	assertWidth(t, out, width80)
+	// Today's scanned() sums Urgent+Actionable+Informational+SuggestedArchives
+	// = 0+1+2+0 = 3, so the title reads "3 scanned". Once needs_review (1)
+	// counts toward scanned(), it must read "4 scanned".
+	assertContains(t, out, "Inbox · 4 scanned")
+	// A needs-review row's sender/subject/why must appear somewhere in the
+	// rendered card -- today the field is unknown to the Go struct and is
+	// silently dropped, so none of this text renders.
+	assertContains(t, out,
+		"colleague@example.com",
+		"Any chance to meet this Thursday at 9am?",
+		"heuristic unconfident (no match)",
+	)
+}
+
+func TestPreScanNeedsReviewOnlyIsNotEmptyState(t *testing.T) {
+	out := Render("email_pre_scan", raw(t, needsReviewOnlyPreScan), width80)
+	t.Logf("\n%s", plain(out))
+
+	assertWidth(t, out, width80)
+	// A needs_review-only pre-scan still needs the user's attention -- it
+	// must never render as "Nothing needs you", which is exactly what
+	// isEmpty() (Urgent/Actionable/SuggestedArchives only) produces today.
+	assertNotContains(t, out, "Nothing needs you.")
+}
+
 func TestDisplaySender(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
 		{`"Sarah Chen" <sarah@example.com>`, "Sarah Chen"},

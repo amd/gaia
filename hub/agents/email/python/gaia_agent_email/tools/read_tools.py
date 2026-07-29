@@ -43,6 +43,14 @@ from gaia_agent_email.tools.triage_heuristics import (
     classify_category_heuristic,
     group_by_category,
 )
+
+# Read-only reuse of the existing automated-sender signal for needs_review's
+# display ordering (#2584) — NOT a new heuristic phrase list (that's #2581's
+# job; triage_heuristics.py itself is untouched). Single source of truth
+# stays in triage_heuristics; this module never redefines it.
+from gaia_agent_email.tools.triage_heuristics import (
+    _AUTOMATED_SENDER_KEYWORDS as _NEEDS_REVIEW_AUTOMATED_SENDER_KEYWORDS,
+)
 from gaia_agent_email.tools.usage import aggregate_usage_stats
 from gaia_agent_email.verbose import (
     log_tool_call,
@@ -886,6 +894,7 @@ def triage_inbox_impl(
     gmail,
     *,
     max_messages: int = 25,
+    label_ids: Optional[List[str]] = None,
     session_preferences: Optional[Mapping[str, Any]] = None,
     force_llm: bool = False,
     classifier: Optional[Callable[..., Mapping[str, Any]]] = None,
@@ -933,13 +942,22 @@ def triage_inbox_impl(
     ``preference_applied`` field for downstream inspection.
 
     Returns a summary listing per-message classifications + a bucketed
-    view via ``group_by_category``.
+    view via ``group_by_category``. Also passes through the listing call's
+    raw ``resultSizeEstimate`` (whatever the backend reports — a real
+    mailbox estimate for Gmail, ``None`` for Outlook, #2584) so a caller
+    like ``pre_scan_inbox_impl`` can report scan coverage without a second
+    round-trip. ``label_ids`` defaults to ``["INBOX"]`` (this tool's
+    existing behavior); a caller wanting a narrower query (e.g. unread-only
+    for coverage honesty) can override it.
     """
     prefs = session_preferences or {}
     with log_tool_call(
         "triage_inbox", {"max_messages": max_messages}, debug=debug
     ) as st:
-        listing = gmail.list_messages(label_ids=["INBOX"], max_results=max_messages)
+        listing = gmail.list_messages(
+            label_ids=list(label_ids) if label_ids else ["INBOX"],
+            max_results=max_messages,
+        )
         results: List[Dict[str, Any]] = []
         for stub in listing.get("messages", []):
             msg = gmail.get_message(stub["id"])
@@ -978,6 +996,10 @@ def triage_inbox_impl(
                     else heuristic.reason
                 ),
                 "source": "heuristic",
+                # Epoch-millis string (Gmail-native; #2584 — used by pre-scan
+                # to order the needs_review bucket newest-first). Not part of
+                # any public envelope; internal-only.
+                "internal_date": msg.get("internalDate"),
             }
 
             # LLM follow-up (#1107; is_spam added #1906): re-classify when the
@@ -1035,7 +1057,11 @@ def triage_inbox_impl(
             "spam_count": len(grouped["spam"]),
             "phishing_count": len(grouped["phishing"]),
         }
-        return {"results": results, "grouped": grouped}
+        return {
+            "results": results,
+            "grouped": grouped,
+            "resultSizeEstimate": listing.get("resultSizeEstimate"),
+        }
 
 
 # Default per-section caps for the pre-scan envelope. Small enough to be
@@ -1045,6 +1071,86 @@ def triage_inbox_impl(
 PRE_SCAN_URGENT_CAP = 5
 PRE_SCAN_ACTIONABLE_CAP = 5
 PRE_SCAN_ARCHIVE_CAP = 10
+# A real corpus with no label signal is majority-unconfident (#2584 —
+# 296/305 messages in the vendor seed corpus) — uncapped, this bucket would
+# read as "0 actionable, 290 need review" and be a worse UX than the bug it
+# fixes. Capped like its three siblings above; the uncapped count still
+# reaches the caller via ``totals["needs_review"]``.
+PRE_SCAN_NEEDS_REVIEW_CAP = 5
+
+# Adding UNREAD narrows the pre-scan listing query to unread mail only, so the
+# backend's resultSizeEstimate means "how many unread" (the honest coverage
+# denominator, #2584) instead of "how big is the inbox". triage_inbox (the
+# expensive full-triage tool) keeps its default ["INBOX"] query — this is
+# pre-scan-only.
+_PRE_SCAN_LABEL_IDS = ["INBOX", "UNREAD"]
+
+
+def _parse_epoch_millis(raw: Any) -> int:
+    """Parse a Gmail-style epoch-millis string; 0 (oldest) when absent/bad.
+
+    Mirrors ``_thread_message_sort_key``'s defensive parsing so a missing or
+    malformed timestamp sorts last rather than raising.
+    """
+    try:
+        return int(raw or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _looks_automated(sender: str) -> bool:
+    """Cheap human-vs-automated signal for needs_review ordering only.
+
+    Does not affect classification or bucketing — display ordering only.
+    """
+    sender_lower = (sender or "").lower()
+    return any(kw in sender_lower for kw in _NEEDS_REVIEW_AUTOMATED_SENDER_KEYWORDS)
+
+
+def _needs_review_sort_key(decision: Mapping[str, Any]) -> tuple:
+    """Deterministic needs_review order: newest first, human senders before
+    automated ones on a same-timestamp tie (#2584).
+
+    An arbitrary slice of a 295-candidate bucket down to 5 rendered rows is
+    close to useless to a reader — this makes which 5 surface a defensible,
+    stated policy instead of an accident of backend scan order.
+    """
+    internal_date = _parse_epoch_millis(decision.get("internal_date"))
+    return (-internal_date, _looks_automated(decision.get("from", "")))
+
+
+def _fetch_total_unread(gmail) -> Optional[int]:
+    """Exact unread-inbox count via ``labels().get`` — NOT ``list_messages``'s
+    ``resultSizeEstimate`` (#2584).
+
+    Measured against a real mailbox: ``resultSizeEstimate`` for
+    ``label_ids=[INBOX, UNREAD]`` reported 201 while full pagination of the
+    identical query found 523 real message ids — Google documents that field
+    as approximate, and 2.6x off is not a fabricated-placeholder-grade lie
+    (the Outlook page-size case) but it is still not honest enough to state
+    as the scan-coverage denominator. The label resource's ``messagesUnread``
+    is an exact integer. One call per SCAN, not per message — ``list_labels``
+    returns the minimal label form with no counts, so this must be
+    ``get_label``, not that.
+
+    Backends that can't provide an honest count (Outlook — Graph has no
+    equivalent resource) return ``messagesUnread: None`` from their own
+    ``get_label``, which flows straight through here with no per-provider
+    branching. A backend that doesn't implement ``get_label`` at all (a
+    minimal test double, or a future provider) degrades the same way: this
+    field is supplementary coverage metadata, never allowed to abort the
+    scan itself if it can't be produced.
+    """
+    get_label = getattr(gmail, "get_label", None)
+    if not callable(get_label):
+        return None
+    try:
+        label = get_label("INBOX")
+    except ConnectorsError as exc:
+        log.warning("pre-scan: get_label(INBOX) failed, total_unread unknown: %s", exc)
+        return None
+    value = (label or {}).get("messagesUnread")
+    return int(value) if isinstance(value, (int, float)) else None
 
 
 def pre_scan_inbox_impl(
@@ -1054,6 +1160,7 @@ def pre_scan_inbox_impl(
     urgent_cap: int = PRE_SCAN_URGENT_CAP,
     actionable_cap: int = PRE_SCAN_ACTIONABLE_CAP,
     archive_cap: int = PRE_SCAN_ARCHIVE_CAP,
+    needs_review_cap: int = PRE_SCAN_NEEDS_REVIEW_CAP,
     session_preferences: Optional[Mapping[str, Any]] = None,
     force_llm: bool = False,
     debug: bool = False,
@@ -1063,15 +1170,32 @@ def pre_scan_inbox_impl(
     Reshapes ``triage_inbox_impl`` output into a typed envelope optimized
     for a daily-driver triage card: top-N urgent, top-N actionable,
     informational count, suggested archives derived from the low-priority
-    bucket and (when configured) from category defaults. The caller is
-    expected to set ``kind`` in the rendered output to ``email_pre_scan``
-    so the chat surface can detect and render the structured card
-    component.
+    bucket and (when configured) from category defaults, and a needs-review
+    bucket for messages the heuristic was not confident about (#2584). The
+    caller is expected to set ``kind`` in the rendered output to
+    ``email_pre_scan`` so the chat surface can detect and render the
+    structured card component.
 
     ``session_preferences`` flow through to ``triage_inbox_impl`` so
     sender overrides shape the underlying classification, and category
     defaults applied here move informational items into
     ``suggested_archives`` when the user has previously asked for that.
+
+    A ``confident=False`` heuristic result is a placeholder guess, not a
+    real classification. It overrides routing into the two LOW-SIGNAL
+    buckets only — ``informational`` and ``suggested_archives`` — sending
+    the message to ``needs_review`` instead (an unconfident PROMOTIONAL
+    guess, for instance, must not be recommended for archival). It does
+    NOT pull a message out of ``urgent``/``actionable``: an unconfident
+    guess toward a HIGH-signal category (e.g. an IMPORTANT/STARRED-flagged
+    message the heuristic can't yet tell is urgent vs. merely actionable)
+    already errs toward surfacing, which is the direction to err in — an
+    unconfident guess must never make a message LESS visible than a
+    confident one would. This check runs AFTER the spam/phishing safety
+    override, which still always wins. ``needs_review`` is ordered
+    newest-first (human senders before automated ones on a timestamp tie)
+    before the cap is applied, so which N of a large uncapped bucket
+    surface is a stated policy, not scan-order luck.
 
     Drafts are intentionally left as an empty list in this version — the
     ``suggested_drafts`` field is reserved for future LLM-driven draft
@@ -1090,6 +1214,7 @@ def pre_scan_inbox_impl(
         triage = triage_inbox_impl(
             gmail,
             max_messages=max_messages,
+            label_ids=_PRE_SCAN_LABEL_IDS,
             session_preferences=prefs,
             force_llm=force_llm,
             debug=debug,
@@ -1098,6 +1223,7 @@ def pre_scan_inbox_impl(
         actionable: List[Dict[str, Any]] = []
         informational: List[Dict[str, Any]] = []
         suggested_archives: List[Dict[str, Any]] = []
+        needs_review_ranked: List[tuple] = []
 
         for r in triage["results"]:
             base = {
@@ -1108,6 +1234,7 @@ def pre_scan_inbox_impl(
             }
             why = r.get("rationale", "")
             category = r.get("category", CATEGORY_FYI)
+            confident = r.get("confident", True)
 
             if r.get("is_spam") or r.get("is_phishing"):
                 # Phishing/spam should never be silently archived from a
@@ -1131,20 +1258,45 @@ def pre_scan_inbox_impl(
                 )
                 continue
 
+            # confident=False only overrides routing into the two LOW-SIGNAL
+            # buckets (#2584) — an unconfident guess must never make a
+            # message LESS visible than a confident one would, so URGENT and
+            # NEEDS_RESPONSE keep their category-based routing regardless of
+            # confidence (e.g. an IMPORTANT/STARRED message the heuristic
+            # can't yet tell is urgent vs. merely actionable already errs
+            # toward surfacing — that is the correct direction to err).
             if category == CATEGORY_URGENT:
                 urgent.append({**base, "why": why})
             elif category == CATEGORY_NEEDS_RESPONSE:
                 actionable.append({**base, "why": why})
             elif category == CATEGORY_PROMOTIONAL:
-                suggested_archives.append({**base, "reason": why})
+                if confident:
+                    suggested_archives.append({**base, "reason": why})
+                else:
+                    needs_review_ranked.append(
+                        (_needs_review_sort_key(r), {**base, "why": why})
+                    )
             else:
-                # FYI and PERSONAL share the keep / no-action bucket.
-                informational.append({**base, "why": why})
+                # FYI and PERSONAL share the keep / no-action bucket when
+                # confident; unconfident goes to needs_review instead (the
+                # #2584 incident: a bare question falling through every rule
+                # to the terminal FYI-placeholder fallback).
+                if confident:
+                    informational.append({**base, "why": why})
+                else:
+                    needs_review_ranked.append(
+                        (_needs_review_sort_key(r), {**base, "why": why})
+                    )
+
+        needs_review_ranked.sort(key=lambda pair: pair[0])
+        needs_review = [item for _, item in needs_review_ranked]
 
         # Apply the FYI category default: when the user has previously asked
         # us to archive FYI mail, lift those items into suggested_archives.
         # (The ``informational`` list holds both FYI and PERSONAL — the keep
-        # bucket — but only the FYI default promotes to archive.)
+        # bucket — but only the FYI default promotes to archive.) Never
+        # applies to ``needs_review`` — an unconfident guess must not be
+        # silently archived by a stale category preference.
         if category_defaults.get(CATEGORY_FYI) == "archive":
             for item in informational:
                 suggested_archives.append(
@@ -1161,6 +1313,7 @@ def pre_scan_inbox_impl(
                 )
             informational = []
 
+        scanned = len(triage["results"])
         out = {
             "kind": "email_pre_scan",
             "urgent": urgent[: max(0, urgent_cap)],
@@ -1168,6 +1321,7 @@ def pre_scan_inbox_impl(
             "informational_count": len(informational),
             "suggested_archives": suggested_archives[: max(0, archive_cap)],
             "suggested_drafts": [],
+            "needs_review": needs_review[: max(0, needs_review_cap)],
             "preferences_applied": {
                 "priority_senders": sorted(prefs.get("priority_senders") or []),
                 "low_priority_senders": sorted(prefs.get("low_priority_senders") or []),
@@ -1178,13 +1332,22 @@ def pre_scan_inbox_impl(
                 "actionable": len(actionable),
                 "informational": len(informational),
                 "suggested_archives": len(suggested_archives),
+                "needs_review": len(needs_review),
             },
+            "scanned": scanned,
+            "total_unread": _fetch_total_unread(gmail),
+            # Single-backend call: a backend failure always raises (never a
+            # silent partial result), so this layer never degrades on its
+            # own — only merge_pre_scan_backends' multi-mailbox fan-out can.
+            "degraded": False,
         }
         st["result_summary"] = {
             "urgent": out["totals"]["urgent"],
             "actionable": out["totals"]["actionable"],
             "informational": out["totals"]["informational"],
             "suggested_archives": out["totals"]["suggested_archives"],
+            "needs_review": out["totals"]["needs_review"],
+            "scanned": scanned,
         }
         return out
 
@@ -1210,22 +1373,36 @@ def merge_pre_scan_backends(
     A single backend's ``ConnectorsError`` (e.g. a revoked agent grant) is
     recorded in ``mailbox_errors`` and the loop continues with the rest; when
     EVERY backend fails the error is raised rather than returning a misleading
-    empty pre-scan. ``remember_mailbox`` is the agent's optional
-    message-id -> mailbox recorder for action routing; the stateless REST path
-    omits it.
+    empty pre-scan. A failed backend's share of ``max_messages`` is reclaimed
+    by whichever backends are tried after it (#2584) — the split is
+    recomputed each iteration from what's actually left, not fixed up front,
+    so the surviving mailbox(es) get the full allowance instead of losing
+    half the budget to a dead one. ``remember_mailbox`` is the agent's
+    optional message-id -> mailbox recorder for action routing; the stateless
+    REST path omits it.
     """
     prefs = session_preferences
-    per_backend = max(1, max_messages // len(backends))
+    provider_backends = list(backends.items())
+    remaining_budget = max_messages
     urgent: List[Dict[str, Any]] = []
     actionable: List[Dict[str, Any]] = []
     suggested_archives: List[Dict[str, Any]] = []
+    needs_review: List[Dict[str, Any]] = []
     informational_count = 0
     scanned = 0
+    total_unread = 0
+    total_unread_unknown = False
     merged_prefs_applied: Dict[str, Any] = {}
     mailbox_errors: List[Dict[str, Any]] = []
-    for provider, backend in backends.items():
+    for index, (provider, backend) in enumerate(provider_backends):
         if scanned >= max_messages:
             break
+        # Recomputed each iteration (never precomputed for every backend up
+        # front): a backend that already failed does not consume a slot
+        # below, so its share rolls forward to whatever is tried next
+        # instead of being silently lost.
+        backends_left = len(provider_backends) - index
+        per_backend = max(1, remaining_budget // backends_left)
         try:
             out = pre_scan_inbox_impl(
                 backend,
@@ -1239,6 +1416,7 @@ def merge_pre_scan_backends(
             mailbox_errors.append({"mailbox": provider, "error": msg})
             log.warning("email pre-scan: skipping %s mailbox — %s", provider, msg)
             continue
+        remaining_budget = max(0, remaining_budget - per_backend)
         # Count messages actually returned, not the cap — an under-filled
         # backend would otherwise trip the budget guard and skip a later one.
         backend_totals = out.get("totals", {})
@@ -1246,6 +1424,7 @@ def merge_pre_scan_backends(
             int(backend_totals.get("urgent", 0))
             + int(backend_totals.get("actionable", 0))
             + int(backend_totals.get("suggested_archives", 0))
+            + int(backend_totals.get("needs_review", 0))
             + int(out.get("informational_count", 0))
         )
         merged_prefs_applied = out.get("preferences_applied", merged_prefs_applied)
@@ -1253,6 +1432,7 @@ def merge_pre_scan_backends(
             ("urgent", urgent),
             ("actionable", actionable),
             ("suggested_archives", suggested_archives),
+            ("needs_review", needs_review),
         ):
             for item in out.get(section, []):
                 item["mailbox"] = provider
@@ -1261,6 +1441,15 @@ def merge_pre_scan_backends(
                     remember_mailbox(item.get("thread_id"), provider)
                 dest.append(item)
         informational_count += int(out.get("informational_count", 0))
+        backend_total_unread = out.get("total_unread")
+        if backend_total_unread is None:
+            # This backend can't honestly report an unread count (Outlook,
+            # #2584) — the merged total can't claim to be a whole-mailbox
+            # number either, so it stays unknown rather than silently
+            # summing only the known part.
+            total_unread_unknown = True
+        else:
+            total_unread += int(backend_total_unread)
     result = {
         "kind": "email_pre_scan",
         "urgent": urgent[: max(0, PRE_SCAN_URGENT_CAP)],
@@ -1268,13 +1457,18 @@ def merge_pre_scan_backends(
         "informational_count": informational_count,
         "suggested_archives": suggested_archives[: max(0, PRE_SCAN_ARCHIVE_CAP)],
         "suggested_drafts": [],
+        "needs_review": needs_review[: max(0, PRE_SCAN_NEEDS_REVIEW_CAP)],
         "preferences_applied": merged_prefs_applied,
         "totals": {
             "urgent": len(urgent),
             "actionable": len(actionable),
             "informational": informational_count,
             "suggested_archives": len(suggested_archives),
+            "needs_review": len(needs_review),
         },
+        "scanned": scanned,
+        "total_unread": None if total_unread_unknown else total_unread,
+        "degraded": bool(mailbox_errors),
     }
     if mailbox_errors and len(mailbox_errors) == len(backends):
         # Every connected mailbox failed — surface it loudly rather than
@@ -1690,11 +1884,27 @@ class ReadToolsMixin:
             """Pre-scan the inbox into a typed envelope for the chat
             triage card.
 
-            Reshapes the per-message triage decisions into three sections
-            (urgent, actionable, suggested archives), an informational
-            count, and an empty drafts placeholder. The result has
-            ``kind: "email_pre_scan"`` so the chat surface renders the
-            structured card component instead of plain text.
+            Reshapes the per-message triage decisions into four sections
+            (urgent, actionable, needs review, suggested archives), an
+            informational count, and an empty drafts placeholder. The
+            result has ``kind: "email_pre_scan"`` so the chat surface
+            renders the structured card component instead of plain text.
+            ``needs_review`` holds messages the heuristic was NOT
+            confident about — a placeholder guess, not a real
+            classification — so they are surfaced for you to look at
+            rather than silently filed as informational or archived.
+
+            The result is a PARTIAL view of the mailbox, not the whole
+            inbox: ``scanned`` reports how many messages were actually
+            looked at this call, and ``total_unread`` reports the
+            mailbox's unread count when known (Gmail; Outlook cannot
+            report this honestly and returns null). ALWAYS mention scan
+            coverage in your framing sentence when scanned is less than
+            total_unread — e.g. "12 of 508 unread scanned — 3
+            actionable, 2 need review." — never phrase a partial scan as
+            if it covered the whole inbox. When ``degraded`` is true or
+            ``mailbox_errors`` is non-empty, say which mailbox couldn't
+            be scanned.
 
             The chat surface injects the triage card automatically from
             the tool result — do NOT copy, re-serialize, or paraphrase
@@ -1702,11 +1912,12 @@ class ReadToolsMixin:
             envelope wastes the output budget on long message/thread IDs
             and truncates the prose summary before the user can read it.
             After this tool returns, write ONE short framing sentence
-            (e.g. "Here's your inbox pre-scan — 3 actionable, 1 urgent.")
-            and stop. The card is already visible to the user.
+            (e.g. "Here's your inbox pre-scan — 3 actionable, 1 urgent,
+            12 of 508 unread scanned.") and stop. The card is already
+            visible to the user.
 
             Args:
-                max_messages: How many INBOX messages to scan
+                max_messages: How many unread INBOX messages to scan
                     (default 25, max 100).
             """
             try:

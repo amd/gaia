@@ -1304,6 +1304,28 @@ class PreScanTotals(_Strict):
     suggested_archives: int = Field(
         default=0, description="Total suggested-archive messages found."
     )
+    needs_review: int = Field(
+        default=0,
+        description=(
+            "Total messages the heuristic was NOT confident about (#2584) — "
+            "surfaced for human review rather than filed under a placeholder "
+            "category guess."
+        ),
+    )
+
+
+class MailboxError(_Strict):
+    """One connected mailbox that failed during a pre-scan (#2584).
+
+    A partial failure never silently shrinks the result — every skipped
+    mailbox is named here so the caller can tell "empty inbox" apart from
+    "half the inbox couldn't be scanned".
+    """
+
+    mailbox: str = Field(
+        ..., description="Provider name of the failed mailbox ('google' / 'microsoft')."
+    )
+    error: str = Field(..., description="Actionable error message for the failure.")
 
 
 class EmailPreScanRequest(_Strict):
@@ -1359,6 +1381,49 @@ class EmailPreScanResult(_Strict):
     )
     totals: Optional[PreScanTotals] = Field(
         default=None, description="Pre-cap totals per bucket."
+    )
+    needs_review: List[PreScanItem] = Field(
+        default_factory=list,
+        description=(
+            "Messages the heuristic was NOT confident about (capped, #2584) — "
+            "surfaced for human review rather than silently filed under a "
+            "placeholder category guess (e.g. an unconfident FYI or PROMOTIONAL "
+            "guess). ``why`` carries the heuristic's escalation reason."
+        ),
+    )
+    scanned: int = Field(
+        default=0,
+        description=(
+            "How many messages this pre-scan actually classified (sum across "
+            "every bucket, including needs_review) — the honest numerator for "
+            "'how much of the inbox did we look at' (#2584)."
+        ),
+    )
+    total_unread: Optional[int] = Field(
+        default=None,
+        description=(
+            "Exact total UNREAD message count in the scanned mailbox(es), "
+            "the denominator for scan coverage (#2584). Gmail reports this "
+            "via labels().get's messagesUnread — an exact integer, not "
+            "list_messages's resultSizeEstimate (measured 2.6x off on a "
+            "real mailbox). Outlook has no equivalent honest source and "
+            "reports null — never a fabricated page-size number."
+        ),
+    )
+    degraded: bool = Field(
+        default=False,
+        description=(
+            "True when at least one connected mailbox could not be scanned "
+            "(see mailbox_errors) — the surviving mailboxes' results are still "
+            "shown, but coverage is partial (#2584)."
+        ),
+    )
+    mailbox_errors: Optional[List[MailboxError]] = Field(
+        default=None,
+        description=(
+            "Connected mailboxes that failed during this pre-scan, if any "
+            "(#2584) — surfaced to the caller, not only logged."
+        ),
     )
 
 
