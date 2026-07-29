@@ -81,9 +81,15 @@ def get(provider_id: str) -> OAuthProvider:
         register(provider)
         return provider
 
+    # Derived from the catalog (every oauth_pkce spec id) rather than a
+    # hand-maintained set — a hardcoded list would silently drift the
+    # moment a fourth Microsoft-audience connector lands, undercutting the
+    # "no providers/__init__.py edit" property the oauth_impl dispatch
+    # above exists to guarantee.
+    known_oauth_pkce_ids = {s.id for s in REGISTRY.all() if s.type == "oauth_pkce"}
     raise KeyError(
         f"Unknown OAuth provider '{provider_id}'. Known: "
-        f"{sorted(set(_registry) | {'google', 'microsoft', 'microsoft_work'})}"
+        f"{sorted(set(_registry) | known_oauth_pkce_ids)}"
     )
 
 

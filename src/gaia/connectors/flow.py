@@ -492,6 +492,10 @@ async def _exchange_code_for_tokens(flow: _PendingFlow, code: str) -> Dict[str, 
         refresh_token=refresh_token,
         scopes=flow.scopes,
         client_id_hash=provider.client_id_hash,
+        # D8: record the minting authority — None for providers with no
+        # concept of a tenant (e.g. Google), which save_connection omits
+        # from the blob entirely (A7-style contract).
+        tenant=getattr(provider, "tenant", None),
     )
 
     # No separate state-cache write needed — the keyring blob written
@@ -699,6 +703,7 @@ async def poll_device_flow(
         refresh_token=refresh_token,
         scopes=scopes_list,
         client_id_hash=provider.client_id_hash,
+        tenant=getattr(provider, "tenant", None),
     )
 
     if grant_agents:

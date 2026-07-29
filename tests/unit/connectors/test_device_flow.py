@@ -202,6 +202,9 @@ class TestPollDeviceFlow:
         blob = peek_connection("microsoft")
         assert blob is not None
         assert blob["refresh_token"] == "RT-value"
+        # D8: the device-code exchange records the minting tenant too — not
+        # just the loopback path.
+        assert blob["tenant"] == "consumers"
 
     def test_grant_agents_committed_on_success(self, monkeypatch):
         _install_responses(monkeypatch, [_FakeResp(200, self._success_payload())])

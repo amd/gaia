@@ -77,6 +77,19 @@ class TestRegistry:
         with pytest.raises(KeyError):
             providers.get("definitely-not-a-provider")
 
+    def test_unknown_provider_message_lists_microsoft_work_too(self):
+        # The known-ids list must be DERIVED from the catalog (every
+        # oauth_pkce spec id), not a hand-maintained set that drifts the
+        # moment a third Microsoft-audience connector lands — that would
+        # silently undercut the "no providers/__init__.py edit" property
+        # A1's dispatch mechanism is supposed to guarantee.
+        with pytest.raises(KeyError) as exc:
+            providers.get("definitely-not-a-provider")
+        msg = str(exc.value)
+        assert "google" in msg
+        assert "microsoft" in msg
+        assert "microsoft_work" in msg
+
     def test_register_then_get_round_trip(self):
         class FakeProvider:
             provider_id = "fake"
