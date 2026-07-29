@@ -51,7 +51,11 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from gaia.connectors.errors import AuthRequiredError, ConfigurationError, ConnectorsError
+from gaia.connectors.errors import (
+    AuthRequiredError,
+    ConfigurationError,
+    ConnectorsError,
+)
 from gaia.logger import get_logger
 from gaia_agent_email import trust
 
