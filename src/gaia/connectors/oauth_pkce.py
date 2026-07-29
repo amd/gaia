@@ -141,15 +141,47 @@ class OAuthPkceHandler:
         # picks up the new id/secret instead of a stale instance.
         client_id = config.get("client_id")
         client_secret = config.get("client_secret", "")
+        # A14: the ONLY code that persists oauth_setup_fields values. The
+        # UI renders a declared field (e.g. microsoft_work's "tenant_id")
+        # blind — it must actually reach save_provider_credentials, or the
+        # field accepts input and silently drops it. Name bridge: the
+        # ConfigField.key is "tenant_id" (user-facing); the storage kwarg is
+        # "tenant" (store.py's connection-blob-compatible name).
+        tenant_id = config.get("tenant_id", "")
         if client_id:
             from gaia.connectors.providers import _registry as _provider_registry
             from gaia.connectors.store import save_provider_credentials
 
-            save_provider_credentials(
-                provider_id,
-                client_id=client_id,
-                client_secret=client_secret,
-            )
+            if tenant_id:
+                # Misuse guard: reject a tenant override on a spec that
+                # doesn't declare the field — e.g. `configure microsoft
+                # --set tenant_id=<org-guid>` would otherwise silently pin
+                # the PERSONAL connector to an org tenant, rejecting every
+                # personal sign-in at Microsoft.
+                declares_tenant_id = any(
+                    f.key == "tenant_id" for f in spec.oauth_setup_fields
+                )
+                if not declares_tenant_id:
+                    raise ConfigurationError(
+                        f"configure({spec.id!r}): this connector does not "
+                        "accept a tenant_id setup field. tenant_id is only "
+                        "valid for connectors that declare it (e.g. "
+                        "microsoft_work's optional Directory (tenant) ID) — "
+                        f"setting one on {spec.id!r} would silently narrow "
+                        "which accounts can sign in."
+                    )
+                save_provider_credentials(
+                    provider_id,
+                    client_id=client_id,
+                    client_secret=client_secret,
+                    tenant=tenant_id,
+                )
+            else:
+                save_provider_credentials(
+                    provider_id,
+                    client_id=client_id,
+                    client_secret=client_secret,
+                )
             _provider_registry.pop(provider_id, None)
 
         if config.get("save_only"):

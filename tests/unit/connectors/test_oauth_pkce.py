@@ -227,6 +227,123 @@ class TestConfigure:
         # Cache evicted so the next get_provider() picks up new creds.
         assert "google" not in _provider_registry
 
+    @pytest.mark.asyncio
+    async def test_tenant_id_forwards_to_save_provider_credentials(self, monkeypatch):
+        # A14 (CRITICAL): configure() is the ONLY code that persists
+        # oauth_setup_fields values. A spec that declares a "tenant_id"
+        # field must actually have it reach save_provider_credentials'
+        # tenant= kwarg — the field rendering blind in the UI and then
+        # discarding the value on save is exactly what A14 forbids.
+        from gaia.connectors.spec import ConfigField
+
+        spec = _make_spec(id="microsoft_work", oauth_provider_ref="microsoft_work")
+        spec = ConnectorSpec(
+            **{
+                **spec.__dict__,
+                "oauth_setup_fields": (
+                    ConfigField(
+                        key="tenant_id",
+                        label="Directory (tenant) ID",
+                        kind="text",
+                        required=False,
+                    ),
+                ),
+            }
+        )
+        handler = OAuthPkceHandler()
+
+        saved: dict = {}
+
+        def fake_save(provider, *, client_id, client_secret="", tenant=None):
+            saved["provider"] = provider
+            saved["client_id"] = client_id
+            saved["client_secret"] = client_secret
+            saved["tenant"] = tenant
+
+        monkeypatch.setattr(
+            "gaia.connectors.store.save_provider_credentials", fake_save
+        )
+        with patch(
+            "gaia.connectors.oauth_pkce.start_authorization",
+            new=AsyncMock(return_value={"flow_id": "f", "authorization_url": "u"}),
+        ):
+            await handler.configure(
+                spec,
+                {
+                    "client_id": "work-client-id",
+                    "tenant_id": "deadbeef-0000-1111-2222-333344445555",
+                },
+            )
+        assert saved["tenant"] == "deadbeef-0000-1111-2222-333344445555"
+
+    @pytest.mark.asyncio
+    async def test_empty_tenant_id_is_omitted_not_forwarded_as_empty_string(
+        self, monkeypatch
+    ):
+        # A7's blob contract (omit unless a real value was passed) must hold
+        # even when the config dict technically carries an empty tenant_id
+        # (the UI form's default unfilled state) — never forward "".
+        from gaia.connectors.spec import ConfigField
+
+        spec = _make_spec(id="microsoft_work", oauth_provider_ref="microsoft_work")
+        spec = ConnectorSpec(
+            **{
+                **spec.__dict__,
+                "oauth_setup_fields": (
+                    ConfigField(
+                        key="tenant_id",
+                        label="Directory (tenant) ID",
+                        kind="text",
+                        required=False,
+                    ),
+                ),
+            }
+        )
+        handler = OAuthPkceHandler()
+
+        saved: dict = {}
+
+        def fake_save(provider, *, client_id, client_secret="", **kwargs):
+            saved["provider"] = provider
+            saved["client_id"] = client_id
+            saved["kwargs"] = kwargs
+
+        monkeypatch.setattr(
+            "gaia.connectors.store.save_provider_credentials", fake_save
+        )
+        with patch(
+            "gaia.connectors.oauth_pkce.start_authorization",
+            new=AsyncMock(return_value={"flow_id": "f", "authorization_url": "u"}),
+        ):
+            await handler.configure(
+                spec, {"client_id": "work-client-id", "tenant_id": ""}
+            )
+        assert "tenant" not in saved["kwargs"]
+
+    @pytest.mark.asyncio
+    async def test_tenant_id_rejected_when_spec_does_not_declare_the_field(self):
+        # Misuse guard (A14): nothing stops
+        # `gaia connectors configure microsoft --set tenant_id=<org-guid>`
+        # from putting an organization tenant on the PERSONAL connector,
+        # which would silently reject every personal sign-in at Microsoft.
+        from gaia.connectors.errors import ConfigurationError
+
+        # no tenant_id in oauth_setup_fields (the default _make_spec shape)
+        spec = _make_spec(id="microsoft", oauth_provider_ref="microsoft")
+        handler = OAuthPkceHandler()
+        with patch(
+            "gaia.connectors.oauth_pkce.start_authorization",
+            new=AsyncMock(return_value={"flow_id": "f", "authorization_url": "u"}),
+        ):
+            with pytest.raises(ConfigurationError):
+                await handler.configure(
+                    spec,
+                    {
+                        "client_id": "personal-client-id",
+                        "tenant_id": "deadbeef-0000-1111-2222-333344445555",
+                    },
+                )
+
 
 # ---------------------------------------------------------------------------
 # disconnect

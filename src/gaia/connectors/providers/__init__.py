@@ -31,6 +31,14 @@ def get(provider_id: str) -> OAuthProvider:
     """
     Return the registered provider, instantiating known built-ins lazily.
 
+    ``google`` stays a literal check (one provider, one connector id).
+    Every other id is resolved through the connector catalog's
+    ``ConnectorSpec.oauth_impl`` (plan amendment A1, #2628): dispatch is on
+    WHICH PROVIDER CLASS implements a spec, never on the connector id
+    itself, so a fourth Microsoft-audience connector (or any future spec
+    sharing an existing provider class) needs no edit here — only a new
+    catalog entry with the same ``oauth_impl``.
+
     Raises ``KeyError`` for unknown provider ids.
     """
     if provider_id in _registry:
@@ -45,16 +53,37 @@ def get(provider_id: str) -> OAuthProvider:
         register(provider)
         return provider
 
-    if provider_id == "microsoft":
+    # A15: defensive catalog import — this module has no module-level
+    # dependency on the catalog/registry, so a caller that reaches ``get()``
+    # without having imported ``gaia.connectors.catalog`` first (e.g. a unit
+    # test constructing a provider directly) would otherwise see REGISTRY
+    # empty and get a bare KeyError instead of the real error. Mirrors the
+    # idiom at store.py's list_connections / api.py.
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+    from gaia.connectors.registry import REGISTRY
+
+    try:
+        spec = REGISTRY.get(provider_id)
+    except KeyError:
+        spec = None
+
+    if spec is not None and spec.oauth_impl == "microsoft":
         from gaia.connectors.providers.microsoft import MicrosoftOAuthProvider
 
-        provider = MicrosoftOAuthProvider()
+        # A16: pass default_tenant under its OWN name, never a resolved
+        # "tenant=" — MicrosoftOAuthProvider.__init__ owns the full
+        # explicit -> stored -> default three-tier chain. Pre-resolving
+        # here would make the stored-override tier permanently
+        # unreachable (D5's entire reason for existing).
+        provider = MicrosoftOAuthProvider(
+            provider_id=provider_id, default_tenant=spec.oauth_tenant
+        )
         register(provider)
         return provider
 
     raise KeyError(
         f"Unknown OAuth provider '{provider_id}'. Known: "
-        f"{sorted(set(_registry) | {'google', 'microsoft'})}"
+        f"{sorted(set(_registry) | {'google', 'microsoft', 'microsoft_work'})}"
     )
 
 

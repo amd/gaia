@@ -128,8 +128,11 @@ class TestStartDeviceFlow:
         assert info["user_code"] == "ABCD-EFGH"
         assert info["device_code"] == "DEV"
         assert info["verification_uri"].endswith("devicelogin")
-        # Hit the tenant-scoped devicecode endpoint.
-        assert _FakeAsyncClient.calls[0][0].endswith("/common/oauth2/v2.0/devicecode")
+        # Hit the tenant-scoped devicecode endpoint — "microsoft" resolves
+        # to "consumers" from its own spec data (D1/#2628), not "common".
+        assert _FakeAsyncClient.calls[0][0].endswith(
+            "/consumers/oauth2/v2.0/devicecode"
+        )
 
     def test_non_200_raises(self, monkeypatch):
         _install_responses(
