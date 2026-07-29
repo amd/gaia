@@ -45,6 +45,8 @@ SCOPE_DESCRIPTIONS: dict[str, str] = {
     "https://www.googleapis.com/auth/userinfo.email": "See your email address",
     "https://www.googleapis.com/auth/userinfo.profile": "See your basic profile",
     "openid": "Verify your identity",
+    "email": "See your email address",
+    "profile": "See your basic profile",
 }
 
 
@@ -93,6 +95,7 @@ class GoogleOAuthProvider:
             raise OAuthClientNotConfiguredError(
                 "google",
                 provider_label="Google",
+                # Missing the Data access step; see docs/connectors/google.mdx until #2594 restructures this.
                 console_steps=(
                     "  1. Create or pick a project at "
                     "https://console.cloud.google.com\n"
