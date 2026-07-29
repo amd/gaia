@@ -13,6 +13,38 @@ from __future__ import annotations
 import pytest
 
 
+def make_fake_agent_registry(nsid: str, connector_id: str, scopes: list[str]):
+    """Minimal ``AgentRegistry`` stand-in exposing only what the shared scope
+    resolver (``gaia.connectors.api.resolve_declared_scopes``) and the
+    router's ``_resolve_grant_scopes`` read: ``.list()`` returning objects
+    with ``.namespaced_agent_id`` and ``.required_connections``.
+
+    Shared by the router tests, the CLI-facing derivation tests, and the
+    forwarded-connection tests so all three exercise one fake shape (#2603).
+    """
+    from dataclasses import dataclass, field
+    from typing import List
+
+    from gaia.connectors.providers.base import ConnectorRequirement
+
+    @dataclass
+    class FakeReg:
+        namespaced_agent_id: str
+        required_connections: List[ConnectorRequirement] = field(default_factory=list)
+
+    @dataclass
+    class FakeRegistry:
+        _regs: List[FakeReg]
+
+        def list(self):
+            return self._regs
+
+    cr = ConnectorRequirement(connector_id=connector_id, scopes=scopes)
+    return FakeRegistry(
+        _regs=[FakeReg(namespaced_agent_id=nsid, required_connections=[cr])]
+    )
+
+
 @pytest.fixture(autouse=True)
 def _autouse_in_memory_keyring(in_memory_keyring):  # noqa: F811
     """
