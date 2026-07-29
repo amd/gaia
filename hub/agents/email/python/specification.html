@@ -449,7 +449,11 @@ td:nth-child(3) {
     <code>off</code> — the kill switch refuses the run instead of returning
     the same 200 shape a real, found-nothing cycle would (#2528), so a caller
     can always tell "disabled" apart from "ran and found nothing to do". 404
-    if the session is unknown.</p>
+    if the session is unknown. <b>501</b> if this agent build does not expose
+    autonomy. <b>500</b> if a connected mailbox raises a connector error
+    (missing/expired/under-scoped credential) — the response <code>detail</code>
+    carries the actionable message and the exact <code>gaia connectors
+    connect ...</code> command to fix it (#2617), never a bare status code.</p>
 </div>
 
 

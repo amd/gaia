@@ -154,6 +154,21 @@ contract version is tracked separately as
   reconnect made without restarting GAIA is reflected on the next question.
   The reactive fail-loud errors on mailbox *operations* are unchanged.
 
+- **`POST /autonomy/run` and `/autonomy/undo` no longer collapse an actionable
+  connector error into a bare, textless HTTP 500 (#2617).** Both routes let a
+  `ConnectorsError` from mailbox I/O (e.g. no forwarded credential) escape
+  unhandled, so FastAPI turned the agent's own detailed message — what's
+  missing and the exact `gaia connectors connect ...` command to fix it —
+  into a plain "Internal Server Error" with no body, which the CLI then
+  reduced further to the string `HTTP 500`. Both routes now catch
+  `ConnectorsError` and re-raise as an `HTTPException` carrying the real
+  message, mapped to status per the same table used by the Agent UI's
+  connectors router (`ConfigurationError` → 503, `AuthRequiredError` →
+  401/403, any other `ConnectorsError`, the observed case, stays 500 — now
+  with a body). `gaia email autonomy run` no longer prints the same error
+  twice (`log.error` + `print`) either — one line on stderr, with the log
+  record still available under `--logging-level debug`.
+
 ### Fixed
 
 - **A batch-tool retry no longer gets killed mid-recovery by the streaming
