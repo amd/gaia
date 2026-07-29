@@ -237,6 +237,20 @@ class TestPrecisionGate:
 # signal (including both named regression ids). This section re-runs that
 # exact construction against the fixed detector and reports the count under
 # each — this, not the isolated-corpus number, is the real gate.
+#
+# The denominator below has since dropped 25 -> 19 (#2589, the noun+time
+# proximity fix stacked on #2583): 6 PROMOTIONAL rows (all of the
+# "ACTION REQUIRED ... expires 4PM" marketing template, plus two spam rows)
+# previously fired ``detect_meeting_request_heuristic`` only because a
+# meeting noun ("call") and an unrelated deadline-clock time token
+# co-occurred *anywhere* in the message; requiring them within 60 chars of
+# each other correctly stopped all 6 from firing. Verified by diffing
+# ``_fires_signal`` against the pre-#2589 heuristic: all 6 dropped rows'
+# only firing reason was the noun+time rule (never
+# ``has_direct_ask_signal``/``has_meeting_time_signal``), and zero rows
+# newly fired — a pure precision improvement, not a lost signal. The 25/15
+# figures above are the verifier's original historical finding and are left
+# unchanged as a record of that investigation.
 # ---------------------------------------------------------------------------
 
 
@@ -245,9 +259,10 @@ def _signal_firing_rows() -> List[Dict[str, Any]]:
 
 
 class TestCorroborationExercisedGate:
-    def test_signal_firing_subset_is_25_rows(self):
-        """Locks in the verifier's stated denominator."""
-        assert len(_signal_firing_rows()) == 25
+    def test_signal_firing_subset_is_19_rows(self):
+        """Locks in the current signal-firing denominator (was 25 before
+        #2589's noun+time proximity fix — see the module comment above)."""
+        assert len(_signal_firing_rows()) == 19
 
     def test_6a_prior_outbound_in_thread_does_not_manufacture_corroboration(
         self, capsys
