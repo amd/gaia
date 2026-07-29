@@ -77,15 +77,17 @@ def test_missing_credential_error_names_the_cli_not_just_the_ui():
 
 
 def test_scope_short_error_names_the_missing_scopes_in_the_cli_command():
-    # The reconnect command must carry the ACTUAL missing scopes, not a
-    # placeholder, and must not print an unexpanded '{provider}' literal.
+    # The reconnect command must suggest the UNION of currently-held and
+    # newly-required scopes, not just the missing ones — since --grant-agent
+    # REPLACES the grant, a "missing-only" suggestion would silently drop
+    # s1 on reconnect (#2603). Must not print an unexpanded '{provider}' literal.
     forwarded_credentials.set_forwarded(
         "google", access_token="tok", scopes=["s1"], expires_at=_FUTURE
     )
     with pytest.raises(ConnectorsError) as exc:
         forwarded_credentials.get_forwarded_token("google", ["s1", "s2"])
     msg = str(exc.value)
-    assert "gaia connectors connect google --scopes s2 --grant-agent" in msg
+    assert "gaia connectors connect google --scopes s1 s2 --grant-agent" in msg
     assert "{provider}" not in msg  # f-string bug regression guard
 
 
