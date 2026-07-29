@@ -367,6 +367,26 @@ class TestCatalog:
         assert MICROSOFT_SPEC.type == "oauth_pkce"
         assert MICROSOFT_SPEC.oauth_provider_ref == "microsoft"
 
+    def test_catalog_personal_spec_declares_consumers_tenant_and_impl(self):
+        # D1/D2: the personal connector always resolves to the "consumers"
+        # authority via spec data — no env var involved.
+        from gaia.connectors.catalog.microsoft import MICROSOFT_SPEC
+
+        assert MICROSOFT_SPEC.oauth_tenant == "consumers"
+        assert MICROSOFT_SPEC.oauth_impl == "microsoft"
+
+    def test_catalog_personal_audience_text_points_at_work_connector_only(self):
+        # A9: the personal connector's user-facing text must not claim it
+        # ALSO covers work/school accounts (that dual-audience claim is
+        # exactly the docs-vs-code contradiction A9 flags) — any mention of
+        # "work" must be the pointer to the other connector, not a claim
+        # that this one handles it.
+        from gaia.connectors.catalog.microsoft import MICROSOFT_SPEC
+
+        blob = MICROSOFT_SPEC.description + " " + MICROSOFT_SPEC.instructions_md
+        assert "personal" in blob.lower()
+        assert "Microsoft Work or School" in blob
+
     def test_catalog_setup_form_requires_client_id_only(self):
         # Public PKCE client: the user pastes only a Client ID. A client
         # secret must NOT be a required setup field (MS forbids secrets for
@@ -385,7 +405,105 @@ class TestCatalog:
 
         assert "microsoft" in REGISTRY
         spec = REGISTRY.get("microsoft")
-        assert spec.display_name == "Microsoft"
+        # A8: was "Microsoft" pre-#2628; now disambiguated from the new
+        # microsoft_work connector.
+        assert spec.display_name == "Microsoft Personal"
+
+
+class TestMicrosoftWorkCatalog:
+    """microsoft_work — the new Microsoft 365 / Entra ID connector (#2628)."""
+
+    def test_id_and_type(self):
+        from gaia.connectors.catalog.microsoft import MICROSOFT_WORK_SPEC
+
+        assert MICROSOFT_WORK_SPEC.id == "microsoft_work"
+        assert MICROSOFT_WORK_SPEC.type == "oauth_pkce"
+        assert MICROSOFT_WORK_SPEC.display_name == "Microsoft Work or School"
+
+    def test_distinct_storage_key_from_personal_connector(self):
+        # A1/A17 (CRITICAL): the two connectors must resolve to DIFFERENT
+        # provider ids, or they silently share one keyring slot / token
+        # cache entry.
+        from gaia.connectors.catalog.microsoft import (
+            MICROSOFT_SPEC,
+            MICROSOFT_WORK_SPEC,
+        )
+
+        assert MICROSOFT_WORK_SPEC.oauth_provider_ref == "microsoft_work"
+        assert (
+            MICROSOFT_WORK_SPEC.oauth_provider_ref != MICROSOFT_SPEC.oauth_provider_ref
+        )
+
+    def test_declares_organizations_tenant_and_shared_impl(self):
+        from gaia.connectors.catalog.microsoft import (
+            MICROSOFT_SPEC,
+            MICROSOFT_WORK_SPEC,
+        )
+
+        assert MICROSOFT_WORK_SPEC.oauth_tenant == "organizations"
+        # Both specs share the implementation class, dispatched via
+        # oauth_impl — NOT inferred from oauth_tenant being non-None (A1).
+        assert MICROSOFT_WORK_SPEC.oauth_impl == "microsoft"
+        assert MICROSOFT_WORK_SPEC.oauth_impl == MICROSOFT_SPEC.oauth_impl
+
+    def test_declares_optional_tenant_id_setup_field(self):
+        # D5/AC4: optional single-tenant override, not required.
+        from gaia.connectors.catalog.microsoft import MICROSOFT_WORK_SPEC
+
+        fields = {f.key: f for f in MICROSOFT_WORK_SPEC.oauth_setup_fields}
+        assert "tenant_id" in fields
+        assert fields["tenant_id"].required is False
+        assert "client_id" in fields
+        assert fields["client_id"].required is True
+
+    def test_personal_connector_has_no_tenant_id_field(self):
+        # The misuse guard (A14) rejects a tenant override on a spec that
+        # doesn't declare this field — pin the precondition here.
+        from gaia.connectors.catalog.microsoft import MICROSOFT_SPEC
+
+        keys = {f.key for f in MICROSOFT_SPEC.oauth_setup_fields}
+        assert "tenant_id" not in keys
+
+    def test_supports_device_code(self):
+        from gaia.connectors.catalog.microsoft import MICROSOFT_WORK_SPEC
+
+        assert MICROSOFT_WORK_SPEC.supports_device_code is True
+
+    def test_scopes_shared_with_personal_connector(self):
+        # The two connectors' Graph scope sets must never drift apart —
+        # both specs reference the SAME shared tuples.
+        from gaia.connectors.catalog.microsoft import (
+            MICROSOFT_SPEC,
+            MICROSOFT_WORK_SPEC,
+        )
+
+        assert MICROSOFT_WORK_SPEC.default_scopes == MICROSOFT_SPEC.default_scopes
+        assert MICROSOFT_WORK_SPEC.available_scopes == MICROSOFT_SPEC.available_scopes
+
+    def test_audience_text_points_at_personal_connector_only(self):
+        from gaia.connectors.catalog.microsoft import MICROSOFT_WORK_SPEC
+
+        blob = (
+            MICROSOFT_WORK_SPEC.description + " " + MICROSOFT_WORK_SPEC.instructions_md
+        )
+        assert "work" in blob.lower() or "school" in blob.lower()
+        assert "Microsoft Personal" in blob
+
+    def test_registered_in_global_registry(self):
+        import gaia.connectors.catalog  # noqa: F401  populate REGISTRY
+        from gaia.connectors.registry import REGISTRY
+
+        assert "microsoft_work" in REGISTRY
+        assert REGISTRY.get("microsoft_work").display_name == (
+            "Microsoft Work or School"
+        )
+
+    def test_ids_are_permanent_microsoft_unchanged(self):
+        # D1: "microsoft" keeps its pre-#2628 id — renaming would orphan
+        # every existing grant/keyring key. This is the negative control.
+        from gaia.connectors.catalog.microsoft import MICROSOFT_SPEC
+
+        assert MICROSOFT_SPEC.id == "microsoft"
 
 
 class TestNoImportSideEffects:
