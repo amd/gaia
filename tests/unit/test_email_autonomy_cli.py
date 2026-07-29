@@ -206,8 +206,7 @@ class TestAutonomyRunErrorNotDoublePrinted:
             autonomy_action="run", session_id="cli", max_messages=25
         )
         distinctive = (
-            "no forwarded 'microsoft' credential is available to the email "
-            "sidecar"
+            "no forwarded 'microsoft' credential is available to the email " "sidecar"
         )
 
         def fake_relay(agent_id, method, path, *, json_body=None):
