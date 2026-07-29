@@ -108,15 +108,21 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
         "--client-id",
         dest="client_id",
         help=(
-            "OAuth client id for an oauth_pkce connector (e.g. the Google "
-            "Desktop-app client). Persists to the keyring; requires --client-secret. "
-            "Run 'gaia connectors connect <id>' afterward to complete login."
+            "OAuth client id for an oauth_pkce connector (e.g. the Google or "
+            "Microsoft Desktop-app client). Persists to the keyring. Google "
+            "additionally needs --client-secret; other providers (e.g. "
+            "Microsoft, a public PKCE client) do not send one. Run 'gaia "
+            "connectors connect <id>' afterward to complete login."
         ),
     )
     p_cfg.add_argument(
         "--client-secret",
         dest="client_secret",
-        help="OAuth client secret (paired with --client-id; stored encrypted in the keyring)",
+        help=(
+            "OAuth client secret (paired with --client-id; stored encrypted "
+            "in the keyring). Required for Google; omit for providers that "
+            "use a secretless public PKCE client (e.g. Microsoft)."
+        ),
     )
     p_cfg.add_argument(
         "--set",

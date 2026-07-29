@@ -545,6 +545,12 @@ class TestConfigureSecretlessPublicClient:
             _run("connectors", "configure", "google", "--client-id", "y")[0] == 0
         )
 
+    def test_help_no_longer_implies_a_universal_secret_requirement(self):
+        rc, out, _err = _run("connectors", "configure", "--help")
+        assert rc == 0
+        assert "requires --client-secret" not in out
+        assert "google" in out.lower()
+
 
 class TestDisconnect:
     def test_disconnect_idempotent(self):
