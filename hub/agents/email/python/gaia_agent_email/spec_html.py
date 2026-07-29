@@ -35,6 +35,8 @@ from gaia_agent_email.contract import (
     SCHEMA_VERSION,
     ActionItem,
     AttachmentMeta,
+    AttentionCoverage,
+    AttentionItem,
     BatchItemError,
     BatchItemResult,
     BatchTriageRequest,
@@ -54,6 +56,8 @@ from gaia_agent_email.contract import (
     EmailAddress,
     EmailArchiveRequest,
     EmailArchiveResponse,
+    EmailAttentionResponse,
+    EmailAttentionResult,
     EmailCategory,
     EmailMessage,
     EmailPreScanRequest,
@@ -512,6 +516,35 @@ def render_endpoint_spec_html() -> str:
         ],
     )
 
+    attention_block = _endpoint_block(
+        path="/v1/email/attention",
+        method="GET",
+        description=(
+            "The read-only 'what needs you' attention view (#2582), rendered "
+            "without a user prompt when the email agent opens. Merges four "
+            "signals by calling the underlying tools directly rather than the "
+            "pre-scan envelope: inbound waiting-on-you items (#2581), meeting "
+            "proposals found during the scan (#2583) -- including messages "
+            "that would otherwise collapse into the pre-scan envelope's bare "
+            "informational_count -- unreviewed messages (#2584), and open "
+            "action items from prior triage (#2110/#2525). Computed on open "
+            "and cached (no scheduler dependency): a call within the "
+            "freshness window returns the cached result with its real "
+            "cache_age_seconds; a failed refresh past that window falls back "
+            "to the last known-good result marked stale=true rather than "
+            "presenting it as current. items == [] is NOT itself a 'nothing "
+            "needs you' claim -- always read coverage first. Read-only "
+            "throughout: never archives, marks, replies, or sends."
+        ),
+        request_sections=[],
+        response_sections=[
+            ("EmailAttentionResponse", EmailAttentionResponse),
+            ("EmailAttentionResult", EmailAttentionResult),
+            ("AttentionItem", AttentionItem),
+            ("AttentionCoverage", AttentionCoverage),
+        ],
+    )
+
     search_block = _endpoint_block(
         path="/v1/email/search",
         description=(
@@ -966,6 +999,8 @@ def render_endpoint_spec_html() -> str:
 {prescan_block}
 
 {briefing_block}
+
+{attention_block}
 
 {search_block}
 

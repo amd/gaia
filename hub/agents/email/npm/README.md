@@ -27,6 +27,11 @@ a cloud service, and that's enforced when the agent starts up.
   from an email.
 - **Track follow-ups** — flag replies you're still waiting on past a window you
   choose (it points them out; it never nudges anyone for you).
+- **Spot what's waiting on you** — flag inbound mail that asks you directly for
+  a reply, decision, or meeting time, with a sender, subject, and how long it's
+  been sitting there. Requires a real back-and-forth already in that thread —
+  a bare question mark, a convincing cold-outreach email, or having emailed
+  the sender before in some unrelated thread never qualifies on its own.
 - **Daily briefing** — generate a morning inbox summary on a schedule, no prompt
   needed.
 - **Plain-language requests** — describe what you want done ("find today's
