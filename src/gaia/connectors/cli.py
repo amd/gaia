@@ -80,10 +80,12 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
         "--grant-agent",
         dest="grant_agent",
         help=(
-            "Also grant the requested --scopes to this namespaced agent id "
-            "(e.g. 'installed:email') in the same flow — one command instead of a "
-            "separate `grants grant`, and the scopes always match. Requires "
-            "--scopes."
+            "Also grant this connector to the named namespaced agent id (e.g. "
+            "'installed:email') in the same flow — one command instead of a "
+            "separate `grants grant`, and the scopes always match. Without "
+            "--scopes, the scopes are derived from the agent's own declared "
+            "REQUIRED_CONNECTORS; pass --scopes explicitly to grant a narrower "
+            "set instead."
         ),
     )
     p_conn.add_argument(
@@ -328,19 +330,55 @@ def _handle_connect(args: argparse.Namespace) -> int:
     if getattr(args, "device", False):
         return _handle_connect_device(args)
 
-    from gaia.connectors.api import complete_authorization, start_authorization
+    from gaia.connectors.api import (
+        complete_authorization,
+        resolve_declared_scopes,
+        start_authorization,
+    )
 
     grant_agent = getattr(args, "grant_agent", None)
-    scopes = args.scopes or []
-    if grant_agent and not scopes:
-        sys.stderr.write(
-            "gaia connectors connect: --grant-agent requires --scopes (there is "
-            "nothing to grant without them).\n"
-        )
-        return 2
-    # One-flow connect + grant: authorize the scopes AND grant them to the agent
-    # so the two can never drift (the Agent UI does this via the same path).
-    grant_agents = {grant_agent: list(scopes)} if grant_agent else None
+    explicit_scopes = args.scopes or []
+
+    if grant_agent and not explicit_scopes:
+        # Derive scopes from the agent's own REQUIRED_CONNECTORS declaration
+        # (#2603) instead of demanding the user type them out. Authorize the
+        # UNION with the provider's default_scopes (Google issues no id_token,
+        # and this provider has no userinfo fallback, without `openid` — see
+        # GoogleOAuthProvider.default_scopes) but grant exactly the declared
+        # set so the agent's own credential ceiling is never widened.
+        from gaia.agents.registry import AgentRegistry
+        from gaia.connectors.providers import get as get_provider
+        from gaia.hub.installer import register_installed_sidecars
+
+        # Three-call sequence, not two (#2408): a binary-only sidecar agent
+        # (e.g. installed:email) has no importable Python package, so
+        # discover()'s entry-point scan never sees it — only
+        # register_installed_sidecars bridges the daemon's sidecar specs into
+        # this registry.
+        registry = AgentRegistry()
+        registry.discover()
+        register_installed_sidecars(registry)
+
+        resolved = resolve_declared_scopes(registry, args.connector_id, [grant_agent])
+        declared_scopes = resolved[grant_agent]
+        provider = get_provider(args.connector_id)
+        scopes = sorted(set(declared_scopes) | set(provider.default_scopes))
+        grant_agents = {grant_agent: declared_scopes}
+    else:
+        scopes = explicit_scopes
+        # One-flow connect + grant: authorize the scopes AND grant them to the
+        # agent so the two can never drift (the Agent UI does this via the
+        # same path).
+        grant_agents = {grant_agent: list(scopes)} if grant_agent else None
+
+    if scopes:
+        # Human-readable preview before the browser opens (#2603) — the same
+        # descriptions the Agent UI's consent dialog renders for a scope.
+        from gaia.connectors.providers.google import SCOPE_DESCRIPTIONS
+
+        sys.stdout.write(f"Requesting access to {args.connector_id}:\n")
+        for scope in scopes:
+            sys.stdout.write(f"  - {SCOPE_DESCRIPTIONS.get(scope, scope)}\n")
 
     async def _run() -> str:
         info = await start_authorization(
@@ -361,7 +399,11 @@ def _handle_connect(args: argparse.Namespace) -> int:
     email = asyncio.run(_run())
     msg = f"Connected as {email}"
     if grant_agent:
-        msg += f"; granted {args.connector_id} → {grant_agent}: {', '.join(scopes)}"
+        granted_scopes = grant_agents[grant_agent]
+        msg += (
+            f"; granted {args.connector_id} → {grant_agent}: "
+            f"{', '.join(granted_scopes)}"
+        )
     sys.stdout.write(msg + "\n")
     return 0
 

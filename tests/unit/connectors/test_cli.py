@@ -112,9 +112,7 @@ class TestConnectGrantAgent:
 
         class FakeAgentRegistry:
             def __init__(self, *_a, **_k):
-                cr = ConnectorRequirement(
-                    connector_id="google", scopes=declared_scopes
-                )
+                cr = ConnectorRequirement(connector_id="google", scopes=declared_scopes)
                 self._regs = [
                     FakeReg(
                         namespaced_agent_id="installed:email",
@@ -128,9 +126,7 @@ class TestConnectGrantAgent:
             def list(self):
                 return self._regs
 
-        monkeypatch.setattr(
-            "gaia.agents.registry.AgentRegistry", FakeAgentRegistry
-        )
+        monkeypatch.setattr("gaia.agents.registry.AgentRegistry", FakeAgentRegistry)
         monkeypatch.setattr(
             "gaia.hub.installer.register_installed_sidecars",
             lambda registry: None,
@@ -194,6 +190,7 @@ class TestConnectGrantAgent:
         monkeypatch.setattr(
             "gaia.connectors.api.complete_authorization", _fake_complete
         )
+
         # --scopes is explicit here, so resolve_declared_scopes must never run.
         def _must_not_run(*_a, **_k):
             raise AssertionError(

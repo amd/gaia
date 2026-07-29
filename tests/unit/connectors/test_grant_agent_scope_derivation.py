@@ -173,9 +173,7 @@ class TestResolveDeclaredScopes:
         from gaia.connectors.errors import ScopeNotAllowedError
 
         bogus_scope = "https://www.googleapis.com/auth/fake.nonexistent.scope"
-        registry = make_fake_agent_registry(
-            "installed:email", "google", [bogus_scope]
-        )
+        registry = make_fake_agent_registry("installed:email", "google", [bogus_scope])
 
         with pytest.raises(ScopeNotAllowedError) as exc:
             resolve_declared_scopes(registry, "google", ["installed:email"])
@@ -244,7 +242,9 @@ class TestAuthorizeAndGrantScopeUnion:
 
 class TestExceptionHierarchy:
     def test_unknown_agent_error_is_a_connectors_error_not_a_sidecar_error(self):
-        from gaia.connectors.errors import ConnectorsError
+        from gaia.connectors.errors import (
+            ConnectorsError,
+        )
         from gaia.connectors.errors import (
             UnknownAgentError as ConnectorsUnknownAgentError,
         )
@@ -362,9 +362,9 @@ class TestSharedResolverCallSites:
         call = spy.call_args
         all_values = list(call.args) + list(call.kwargs.values())
         assert "google" in all_values or call.kwargs.get("connector_id") == "google"
-        assert ["installed:email"] in all_values or call.kwargs.get(
-            "agent_ids"
-        ) == ["installed:email"]
+        assert ["installed:email"] in all_values or call.kwargs.get("agent_ids") == [
+            "installed:email"
+        ]
 
 
 # ---------------------------------------------------------------------------

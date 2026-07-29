@@ -108,12 +108,17 @@ class GoogleOAuthProvider:
                     "client above:\n"
                     "    gaia connectors configure google --client-id <ID> "
                     "--client-secret <SECRET>\n"
+                    "    gaia connectors connect google --grant-agent "
+                    "installed:email\n"
+                    "  (Naming the agent is enough — GAIA reads the scopes it "
+                    "already declares, no need to type them out. To grant a "
+                    "narrower set instead, pass --scopes explicitly:\n"
                     '    SCOPES="https://www.googleapis.com/auth/gmail.modify '
                     "https://www.googleapis.com/auth/gmail.send "
                     "https://www.googleapis.com/auth/calendar.events "
                     'https://www.googleapis.com/auth/calendar.readonly"\n'
                     "    gaia connectors connect google --scopes $SCOPES "
-                    "--grant-agent installed:email"
+                    "--grant-agent installed:email)"
                 ),
                 docs="https://amd-gaia.ai/docs/connectors/google",
             )
@@ -139,6 +144,14 @@ class GoogleOAuthProvider:
         - ``prompt=consent`` — force the consent screen on every connect, so
           we always receive a refresh token (Google issues a refresh token
           ONLY on the first consent unless ``prompt=consent`` is set).
+
+        Deliberately NOT setting ``include_granted_scopes=true`` (#2603): it
+        would make ``flow.py``'s persisted ``scopes`` (what was requested)
+        diverge from what Google actually granted, which ``flow.py`` never
+        reconciles (it persists ``flow.scopes`` and never reads back
+        ``payload.get("scope")``) — GAIA's recorded scope metadata would
+        under-report real token access. See the follow-up issue for adding
+        the reconciliation this needs before turning the flag on.
         """
         return {"access_type": "offline", "prompt": "consent"}
 

@@ -53,11 +53,18 @@ def isolated_registry(monkeypatch, tmp_path):
             description="Google OAuth",
             default_scopes=("openid",),
             # Ceiling for resolve_declared_scopes' ScopeNotAllowedError check
-            # (#2603) — TestAuthorizeGrantAgents declares gmail.modify via
-            # make_fake_agent_registry, so it must be inside this fixture's
+            # (#2603). TestAuthorizeGrantAgents declares gmail.modify via
+            # make_fake_agent_registry; TestSidecarRegistrationEndToEnd and
+            # TestSidecarInstallNoRestart run the REAL server lifespan against
+            # the real email daemon-sidecar spec (all 4 scopes, see
+            # gaia.daemon.sidecars.spec.builtin_specs()["email"]) — every
+            # scope either exercises must be inside this fixture's
             # available_scopes or the ceiling would reject it.
             available_scopes=(
                 "https://www.googleapis.com/auth/gmail.modify",
+                "https://www.googleapis.com/auth/gmail.send",
+                "https://www.googleapis.com/auth/calendar.events",
+                "https://www.googleapis.com/auth/calendar.readonly",
                 "openid",
             ),
             oauth_provider_ref="google",
