@@ -3,6 +3,8 @@ package components
 import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/amd/gaia/tui/internal/ui/theme"
 )
 
 type ConfirmResult int
@@ -43,19 +45,19 @@ func NewConfirmModel(id, title, message string) ConfirmModel {
 var (
 	confirmBorder = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("114")).
+			BorderForeground(theme.Accent).
 			Padding(1, 2)
 
 	confirmTitle = lipgloss.NewStyle().Bold(true)
 
 	btnFocused = lipgloss.NewStyle().
 			Bold(true).
-			Foreground(lipgloss.Color("230")).
-			Background(lipgloss.Color("114")).
+			Foreground(theme.OnFill).
+			Background(theme.AccentFillBG).
 			Padding(0, 2)
 
 	btnUnfocused = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("245")).
+			Foreground(theme.Dim).
 			Padding(0, 2)
 )
 

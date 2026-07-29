@@ -6,6 +6,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/amd/gaia/tui/internal/ui/theme"
 )
 
 // RiskTier classifies a confirmation-gated action for the badge on the modal.
@@ -29,13 +31,13 @@ const (
 
 var (
 	badgeReadStyle = lipgloss.NewStyle().Bold(true).
-			Foreground(lipgloss.Color("230")).Background(lipgloss.Color("114")).Padding(0, 1)
+			Foreground(theme.OnFill).Background(theme.AccentFillBG).Padding(0, 1)
 	badgeWriteStyle = lipgloss.NewStyle().Bold(true).
-			Foreground(lipgloss.Color("230")).Background(lipgloss.Color("33")).Padding(0, 1)
+			Foreground(theme.OnFill).Background(theme.InfoFillBG).Padding(0, 1)
 	badgeDestructiveStyle = lipgloss.NewStyle().Bold(true).
-				Foreground(lipgloss.Color("230")).Background(lipgloss.Color("196")).Padding(0, 1)
+				Foreground(theme.OnFill).Background(theme.DangerFillBG).Padding(0, 1)
 	badgeDeniedStyle = lipgloss.NewStyle().Bold(true).
-				Foreground(lipgloss.Color("252")).Background(lipgloss.Color("238")).Padding(0, 1)
+				Foreground(theme.OnSurface).Background(theme.SurfaceBG).Padding(0, 1)
 )
 
 // Badge is the short label shown on the modal. Colour is decoration only —
@@ -246,15 +248,15 @@ func (m ConfirmationModel) decide(state ConfirmState, timedOut bool) (Confirmati
 var (
 	confirmationPanelStyle = lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).
-				BorderForeground(lipgloss.Color("196")).
+				BorderForeground(theme.Danger).
 				Padding(0, 1)
 
-	confirmationTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("196"))
-	confirmationBodyStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-	confirmationWarnStyle  = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
-	confirmationHintStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Italic(true)
-	confirmationOkStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
-	confirmationNoStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
+	confirmationTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(theme.Danger)
+	confirmationBodyStyle  = lipgloss.NewStyle().Foreground(theme.Text)
+	confirmationWarnStyle  = lipgloss.NewStyle().Bold(true).Foreground(theme.Warning)
+	confirmationHintStyle  = lipgloss.NewStyle().Foreground(theme.Dim).Italic(true)
+	confirmationOkStyle    = lipgloss.NewStyle().Foreground(theme.Success)
+	confirmationNoStyle    = lipgloss.NewStyle().Foreground(theme.Danger)
 )
 
 // View renders the panel. Wrapping happens here and only here, exactly like
