@@ -10,10 +10,11 @@ module-level ``pytest.importorskip("gaia_agent_email")`` that would silently
 disable this guard in any CI job that doesn't install the email wheel.
 
 The Console list lives in a fenced block bounded by
-``<!-- google-scopes:start -->`` / ``<!-- google-scopes:end -->`` so this test
-never scrapes freeform prose for scope strings — three of the ten scopes are
-the bare words ``openid``, ``email``, and ``profile``, and "email" alone
-appears repeatedly as ordinary prose elsewhere on the page.
+``{/* google-scopes:start */}`` / ``{/* google-scopes:end */}`` (MDX comment
+syntax — HTML comments aren't valid MDX) so this test never scrapes freeform
+prose for scope strings — three of the ten scopes are the bare words
+``openid``, ``email``, and ``profile``, and "email" alone appears repeatedly
+as ordinary prose elsewhere on the page.
 """
 
 from __future__ import annotations
@@ -25,8 +26,8 @@ from gaia.connectors.catalog.google import GOOGLE_SPEC
 
 _GOOGLE_MDX = Path(__file__).resolve().parents[3] / "docs" / "connectors" / "google.mdx"
 
-_START_MARKER = "<!-- google-scopes:start -->"
-_END_MARKER = "<!-- google-scopes:end -->"
+_START_MARKER = "{/* google-scopes:start */}"
+_END_MARKER = "{/* google-scopes:end */}"
 
 _VALID_TIERS = {"Restricted", "Sensitive", "Non-sensitive"}
 
