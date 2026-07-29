@@ -23,6 +23,8 @@ icon: mail
 tools_count: 63
 
 language: python
+# NOTE (#2590): stays at 0.22.0, not the setup_routes floor — see the
+# comment on the dependencies floor in pyproject.toml.
 min_gaia_version: "0.22.0"
 models: [Gemma-4-E4B-it-GGUF]
 

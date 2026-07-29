@@ -92,6 +92,43 @@ class TestRegistry:
         assert "Settings" in msg
         assert "Connections" in msg
 
+    def test_console_steps_do_not_diverge_from_the_guided_walkthrough(
+        self, monkeypatch
+    ):
+        """#2116 canonical failure: a hand-copied console-steps walkthrough
+        drifted from reality and produced a 403 on first use. console_steps
+        must be DERIVED from setup_routes.MS_PERSONAL, not a second copy of
+        it — assert the exception's steps and the route's steps agree."""
+        from gaia.connectors.errors import OAuthClientNotConfiguredError
+        from gaia.connectors.setup_routes import MS_PERSONAL, render_console_steps
+
+        monkeypatch.delenv("GAIA_MICROSOFT_CLIENT_ID", raising=False)
+        monkeypatch.delenv("GAIA_MICROSOFT_CLIENT_SECRET", raising=False)
+        with pytest.raises(OAuthClientNotConfiguredError) as exc:
+            providers.get("microsoft")
+
+        assert exc.value.console_steps == render_console_steps(MS_PERSONAL)
+        # The CLI-facing text is explicitly the LOOPBACK rendering (covers
+        # whichever route the user ends up taking) — pin that explicitly, not
+        # just the default, so a default-flip can't silently change which
+        # steps a CLI user sees.
+        assert exc.value.console_steps == render_console_steps(
+            MS_PERSONAL, sign_in="loopback"
+        )
+        # Every LOOPBACK step's instruction text is present verbatim — not
+        # just an independently-worded summary that happens to match.
+        for step in MS_PERSONAL.steps:
+            assert step.instruction in exc.value.console_steps
+        # And the device-code rendering must genuinely differ: it drops the
+        # loopback-only redirect-URI step device code never uses (#2590) —
+        # the console text and the guided walkthrough are two DIFFERENT
+        # (but both route-derived) renderings, not one flat unfiltered dump.
+        device_rendering = render_console_steps(MS_PERSONAL, sign_in="device_code")
+        assert device_rendering != exc.value.console_steps
+        redirect_step = next(s for s in MS_PERSONAL.steps if s.loopback_only)
+        assert redirect_step.instruction not in device_rendering
+        assert redirect_step.instruction in exc.value.console_steps
+
     def test_microsoft_loads_from_keyring_without_env(self, monkeypatch):
         from gaia.connectors.store import save_provider_credentials
 

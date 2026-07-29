@@ -49,6 +49,7 @@ class OAuthClientNotConfiguredError(ConfigurationError):
     ):
         self.provider_id = provider_id
         self.provider_label = provider_label
+        self.console_steps = console_steps
         super().__init__(
             self._build_message(
                 provider_id, provider_label, console_steps, docs, example
@@ -213,3 +214,55 @@ class FlowTimeoutError(ConnectorsError):
 
 class FlowInProgressError(ConnectorsError):
     """Another OAuth flow is already pending; only one at a time is supported."""
+
+
+class OAuthProviderError(ConnectorsError):
+    """A provider's OAuth endpoint rejected a request, with a structured reason.
+
+    Replaces raising ``ConnectorsError`` with the entire unbounded
+    ``response.text`` interpolated into the message (the literal #2590 bug):
+    ``error`` / ``error_description`` are the RFC 6749 / AADSTS fields the
+    provider actually returned, each truncated so a malformed or oversized
+    body can never reach model context unbounded — see
+    ``flow.classify_oauth_exception``, which is the only code meant to
+    inspect these fields programmatically.
+    """
+
+    _MAX_FIELD_LEN = 300
+
+    def __init__(
+        self,
+        provider: str,
+        *,
+        error: str = "",
+        error_description: str = "",
+        status_code: int | None = None,
+    ):
+        self.provider = provider
+        self.error = (error or "")[: self._MAX_FIELD_LEN]
+        self.error_description = (error_description or "")[: self._MAX_FIELD_LEN]
+        self.status_code = status_code
+        detail = self.error_description or self.error or "no error detail returned"
+        status = f" ({status_code})" if status_code else ""
+        super().__init__(f"{provider} OAuth request was rejected{status}: {detail}")
+
+
+class GrantAfterConnectError(ConnectorsError):
+    """A connection was persisted but the agent grant that should follow it failed.
+
+    Deliberately its own type — never merged into a generic ``ConnectorsError``
+    — so a caller that must not echo an arbitrary exception's text (it might
+    carry a credential) can still tell apart "the connection itself is fine,
+    only the grant write failed" from every other failure, and report that
+    honestly instead of a blanket "nothing was changed." See
+    ``onboarding_tools._setup_mailbox_access``.
+    """
+
+    def __init__(self, provider: str, agent_id: str, *, reason: str):
+        self.provider = provider
+        self.agent_id = agent_id
+        self.reason = reason
+        super().__init__(
+            f"Connected {provider!r} but failed to grant it to agent "
+            f"{agent_id!r}: {reason}."
+        )
