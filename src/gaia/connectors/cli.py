@@ -502,20 +502,16 @@ def _handle_configure_client_credentials(
     provider so the next construction re-reads them. Does NOT start the PKCE
     flow — the browser login stays a separate ``gaia connectors connect``.
 
-    Both flags are required together: Google rejects token requests that omit
-    the secret even for Desktop PKCE clients, so a half-configured client would
-    fail loudly later instead of here. Mixing with ``--set`` / ``--json`` is a
-    usage error to avoid an ambiguous double-write.
+    ``--client-secret`` is only required together with ``--client-id`` for
+    providers in ``oauth_pkce.PROVIDERS_REQUIRING_CLIENT_SECRET`` (currently
+    just Google, which rejects token requests that omit the secret even for
+    Desktop PKCE clients). Public PKCE clients like Microsoft/Entra must NOT
+    send one, so a missing secret there is not an error (#1638). Mixing with
+    ``--set`` / ``--json`` is a usage error to avoid an ambiguous double-write.
     """
     if not client_id:
         sys.stderr.write(
             "gaia connectors configure: --client-secret requires --client-id.\n"
-        )
-        return 2
-    if not client_secret:
-        sys.stderr.write(
-            "gaia connectors configure: --client-id requires --client-secret "
-            "(Google requires the secret even for Desktop-app PKCE clients).\n"
         )
         return 2
     if getattr(args, "config_pairs", None) or getattr(args, "config_json", None):
@@ -526,6 +522,7 @@ def _handle_configure_client_credentials(
         return 2
 
     import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+    from gaia.connectors.oauth_pkce import PROVIDERS_REQUIRING_CLIENT_SECRET
     from gaia.connectors.providers import _registry as _provider_registry
     from gaia.connectors.registry import REGISTRY
     from gaia.connectors.store import save_provider_credentials
@@ -546,10 +543,20 @@ def _handle_configure_client_credentials(
         return 2
 
     provider_id = spec.oauth_provider_ref or spec.id
+    if not client_secret and provider_id in PROVIDERS_REQUIRING_CLIENT_SECRET:
+        sys.stderr.write(
+            "gaia connectors configure: --client-id requires --client-secret "
+            "(Google requires the secret even for Desktop-app PKCE clients).\n"
+        )
+        return 2
+
     save_provider_credentials(
         provider_id,
         client_id=client_id,
-        client_secret=client_secret,
+        # Coerce None -> "" so a secretless provider (e.g. Microsoft) never
+        # persists a null client_secret (--client-secret has no argparse
+        # default, so an omitted flag arrives as None).
+        client_secret=client_secret or "",
     )
     # Evict any cached provider instance so the next get_provider() re-reads the
     # freshly persisted creds instead of a stale id/secret.
