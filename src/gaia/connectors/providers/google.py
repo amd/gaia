@@ -150,8 +150,8 @@ class GoogleOAuthProvider:
         diverge from what Google actually granted, which ``flow.py`` never
         reconciles (it persists ``flow.scopes`` and never reads back
         ``payload.get("scope")``) — GAIA's recorded scope metadata would
-        under-report real token access. See the follow-up issue for adding
-        the reconciliation this needs before turning the flag on.
+        under-report real token access. See #2605 for the reconciliation
+        this needs before turning the flag on.
         """
         return {"access_type": "offline", "prompt": "consent"}
 
