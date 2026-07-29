@@ -51,6 +51,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from gaia.connectors.errors import AuthRequiredError, ConfigurationError, ConnectorsError
 from gaia.logger import get_logger
 from gaia_agent_email import trust
 
@@ -260,6 +261,27 @@ class AutonomyUndoRequest(_Strict):
 # ---------------------------------------------------------------------------
 
 
+def _connectors_error_to_http(exc: ConnectorsError) -> HTTPException:
+    """Map a ``ConnectorsError`` escaping mailbox I/O to its HTTP status.
+
+    Mirrors the canonical table at ``src/gaia/ui/routers/connectors.py:13-24``
+    (#2617) so an autonomy-route failure and a UI-router failure never
+    disagree on status code for the same exception type. The bug this fixes
+    was never the status code — it was letting the exception (and its
+    already-actionable message) escape uncaught as a textless 500.
+    """
+    if isinstance(exc, ConfigurationError):
+        return HTTPException(status_code=503, detail=str(exc))
+    if isinstance(exc, AuthRequiredError):
+        if exc.reason in (
+            AuthRequiredError.Reason.NOT_CONNECTED,
+            AuthRequiredError.Reason.REAUTH_REQUIRED,
+        ):
+            return HTTPException(status_code=401, detail=str(exc))
+        return HTTPException(status_code=403, detail=str(exc))
+    return HTTPException(status_code=500, detail=str(exc))
+
+
 def _memory_status(agent: Any) -> MemoryStatusResponse:
     """Read the agent's memory status, tolerating agents without the toggle."""
     status_fn = getattr(agent, "memory_status", None)
@@ -443,7 +465,10 @@ async def run_autonomy(request: AutonomyRunRequest) -> Dict[str, Any]:
                 '"level": "suggest|earn_trust|full"} to enable it first.'
             ),
         )
-    return await asyncio.to_thread(runner, {"max_messages": request.max_messages})
+    try:
+        return await asyncio.to_thread(runner, {"max_messages": request.max_messages})
+    except ConnectorsError as exc:
+        raise _connectors_error_to_http(exc) from exc
 
 
 @router.post("/autonomy/undo")
@@ -466,6 +491,8 @@ async def undo_autonomy(request: AutonomyUndoRequest) -> Dict[str, Any]:
         )
     try:
         return await asyncio.to_thread(undo_fn, request.action_id)
+    except ConnectorsError as exc:
+        raise _connectors_error_to_http(exc) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
