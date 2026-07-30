@@ -15,6 +15,7 @@ import (
 
 	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/daemon"
+	"github.com/amd/gaia/tui/internal/ui/chat"
 	"github.com/amd/gaia/tui/internal/ui/hub"
 	"github.com/amd/gaia/tui/internal/ui/preflight"
 	"github.com/amd/gaia/tui/internal/ui/root"
@@ -458,7 +459,7 @@ func TestAMailboxWhoseCredentialsAreRejectedNeverGreenLightsALaunch(t *testing.T
 	// Never automatic — but the user may choose it. The agent repairs this state
 	// inside the conversation, so refusing the choice would hide the fix behind
 	// the gate that found the problem.
-	if !strings.Contains(screen, "start anyway") {
+	if !strings.Contains(screen, "continue") {
 		t.Errorf("the gate hid the launch that reaches the in-conversation fix:\n%s", d.screen())
 	}
 	d.send(keyEnter())
@@ -923,18 +924,21 @@ func TestEveryGateStateFitsEightyByTwentyFour(t *testing.T) {
 	}
 }
 
-// --- the halt notice ---------------------------------------------------------
+// --- the halt flag ------------------------------------------------------------
 //
-// A DispositionHalt row now holds the screen for a person instead of naming
-// itself and passing by. TestACtxShortfallHaltsTheRealGate drives the real
-// Check() pipeline for the row this issue exists to fix; the rest inject a
-// synthetic status.Outcome directly, since no current check can produce two
-// simultaneous halting rows — that scenario is about the notice mechanism,
-// not about any one row.
+// A DispositionHalt row makes the readiness screen hold itself and explain
+// why — that is entirely increment 3's doing, already covered in
+// internal/ui/preflight. What lives here is the flag RootModel derives from
+// it: a state signal for automation (ControlSnapshot's Overlay), nothing
+// drawn, nothing intercepted. TestACtxShortfallHaltsTheRealGate drives the
+// real Check() pipeline for the row this issue exists to fix; the rest
+// inject a synthetic status.Outcome directly.
 
 // The reported bug, through the real gate end to end: a ctx-shortfall report
-// halts instead of auto-proceeding, the control-API state says so without
-// blinding the view, and the notice names the window that will fail.
+// halts (Overlay reports it without blinding the view, and the screen names
+// the window that will fail), and the SAME single enter that the screen has
+// always offered is what both proceeds and clears the flag — there is no
+// separate dismiss to press first.
 func TestACtxShortfallHaltsTheRealGate(t *testing.T) {
 	d := newRootDriver(t, readyGateTransport().ctxShortfall(), 100, 30)
 	d.launchEmail()
@@ -950,26 +954,27 @@ func TestACtxShortfallHaltsTheRealGate(t *testing.T) {
 		t.Errorf("View = %q, want %q — a halt must not blind the automation's view", snap.View, "preflight")
 	}
 	if !strings.Contains(d.flat(), "25037") {
-		t.Errorf("the notice does not show the window that will fail:\n%s", d.screen())
+		t.Errorf("the screen does not show the window that will fail:\n%s", d.screen())
 	}
 
+	// One enter — the screen's own "continue" choice — both proceeds AND
+	// clears the flag. There is no separate prompt in front of it.
 	d.send(keyEnter())
+	if got := d.view(); got != "chat" {
+		t.Fatalf("enter on the holding gate = %q, want chat", got)
+	}
 	if d.m.Halted() {
-		t.Error("enter did not dismiss the halt")
+		t.Error("Halted() stayed true after the screen proceeded")
 	}
 	if d.m.ControlSnapshot().Overlay == "halt" {
-		t.Error("Overlay still reports halt after dismiss")
-	}
-	// The dismiss must not ALSO reach the gate behind it: still on the
-	// preflight screen, not launched into chat by the same keypress.
-	if got := d.view(); got != "preflight" {
-		t.Fatalf("view after dismissing the halt = %q, want preflight — the dismiss reached the screen behind it", got)
+		t.Error("Overlay still reports halt after proceeding")
 	}
 }
 
-// ctrl+c quits on the FIRST press while halted, never swallowed by the
-// notice — the halt is raised at the moment something is already wrong, the
-// worst time to make the escape hatch need two presses.
+// ctrl+c quits on the FIRST press while halted — RootModel does not
+// intercept it, so this is really proving the preflight screen's own
+// ctrl+c handling (unrelated to this issue) still works while HasHalt()
+// holds it open.
 func TestCtrlCQuitsOnFirstPressWhileHalted(t *testing.T) {
 	d := newRootDriver(t, readyGateTransport().ctxShortfall(), 100, 30)
 	d.launchEmail()
@@ -986,38 +991,68 @@ func TestCtrlCQuitsOnFirstPressWhileHalted(t *testing.T) {
 	}
 }
 
-// Dismissing a halt suppresses that StepID for the session: pressing r
-// re-runs the checks, the row is still bad, and it must not halt a second
-// time — without this, a permanently-unknown row (this is exactly one) would
-// re-halt on every single re-check, reintroducing the confirm-fatigue the
-// whole Notify/Halt split exists to avoid for rows that cannot be halts.
-func TestReCheckDoesNotReHaltTheSameStepID(t *testing.T) {
+// Re-checking a still-holding gate (r) never needed a fix here: the screen
+// was never blocked from receiving r in the first place, so hitting it
+// leaves the flag exactly as it was — still Halted(), still the same row.
+func TestReCheckOnAHoldingGateStaysHalted(t *testing.T) {
 	d := newRootDriver(t, readyGateTransport().ctxShortfall(), 100, 30)
 	d.launchEmail()
 	if !d.m.Halted() {
 		t.Fatal("test setup: want the gate halted")
 	}
 
-	d.send(keyEnter()) // dismiss
-	if d.m.Halted() {
-		t.Fatal("test setup: dismiss did not clear the halt")
-	}
-
-	// r now reaches the gate — the notice is gone — and re-runs the same
-	// checks against the same still-bad transport.
 	d.send(key("r"))
-	if d.m.Halted() {
-		t.Error("re-checking re-halted on the same row this session already dismissed")
+	if !d.m.Halted() {
+		t.Error("re-checking a row that is still genuinely bad cleared the halt")
 	}
 	if got := d.view(); got != "preflight" {
 		t.Fatalf("view after re-check = %q, want preflight", got)
 	}
 }
 
-// A resize (not a key) must still reach the gate behind the notice — the
-// notice owns the KEYBOARD, not every message. Proven by the rendered width
-// actually narrowing, which only happens if the message reached the
-// preflight model's own Update, not just RootModel's.
+// Proceeding past a halt suppresses that StepID for the rest of the
+// session: the screen still pauses on every launch (that pause is the
+// feature, not something suppression touches), but automation's "a NEW,
+// unhandled halt" signal does not fire twice for a row the user already
+// chose to proceed past once — without this, a permanently-unknown row
+// (this is exactly one) would report a fresh halt on every single relaunch,
+// reintroducing the confirm-fatigue the whole Notify/Halt split exists to
+// avoid.
+func TestProceedingPastAHaltSuppressesTheFlagForTheRestOfTheSession(t *testing.T) {
+	d := newRootDriver(t, readyGateTransport().ctxShortfall(), 100, 30)
+	d.launchEmail()
+	if !d.m.Halted() {
+		t.Fatal("test setup: want the gate halted")
+	}
+
+	d.send(keyEnter())
+	if got := d.view(); got != "chat" {
+		t.Fatalf("enter on the holding gate = %q, want chat", got)
+	}
+	if d.m.Halted() {
+		t.Error("Halted() stayed true after the screen proceeded")
+	}
+
+	d.send(chat.ReturnToHubMsg{AgentID: "email"})
+	d.launchEmail()
+
+	// The screen itself still pauses every launch on the same row —
+	// unrelated to suppression, and not something this issue changes.
+	if got := d.view(); got != "preflight" {
+		t.Fatalf("relaunch view = %q, want preflight — the screen still pauses on the same row", got)
+	}
+	// But the flag does not fire again for a row already accepted this
+	// session.
+	if d.m.Halted() {
+		t.Error("the same row set Halted() again after the user already proceeded past it this session")
+	}
+}
+
+// A resize (or any non-key message) must still reach the gate while
+// Halted() — RootModel never gates message routing on the flag, only
+// ControlSnapshot reads it. Proven by the rendered width actually
+// narrowing, which only happens if the message reached the preflight
+// model's own Update.
 func TestNonKeyMessagesPassThroughWhileHalted(t *testing.T) {
 	d := newRootDriver(t, readyGateTransport().ctxShortfall(), 100, 30)
 	d.launchEmail()
@@ -1029,7 +1064,7 @@ func TestNonKeyMessagesPassThroughWhileHalted(t *testing.T) {
 	for i, line := range strings.Split(d.screen(), "\n") {
 		if w := ansi.StringWidth(line); w > 40 {
 			t.Fatalf("line %d is %d columns wide after a 40-column resize while halted — "+
-				"the resize did not reach the screen behind the notice:\n%s", i, w, d.screen())
+				"the resize did not reach the screen:\n%s", i, w, d.screen())
 		}
 	}
 }
@@ -1063,38 +1098,8 @@ func TestASpinnerTickReachesABusyGateWhileHalted(t *testing.T) {
 	}
 }
 
-// Two rows can be halting at once (an unadvertised Lemonade version does not
-// halt, but a future Halt row alongside the ctx shortfall could), and one
-// dismiss must clear both. Ordered so a known failure is listed before an
-// unproven row — the same precedence unverifiedSummary already uses.
-func TestTwoSimultaneousHaltingRowsProduceOneNoticeAndOneDismissClearsBoth(t *testing.T) {
-	d := newRootDriver(t, readyGateTransport(), 100, 30)
-	d.send(status.Outcome{StepID: "a", Label: "Row A", Level: status.LevelUnknown,
-		Disposition: status.DispositionHalt, Summary: "row a is unproven"})
-	d.send(status.Outcome{StepID: "b", Label: "Row B", Level: status.LevelFailed,
-		Disposition: status.DispositionHalt, Summary: "row b is broken"})
-
-	if !d.m.Halted() {
-		t.Fatal("test setup: want halted")
-	}
-	flat := d.flat()
-	for _, want := range []string{"Row A", "Row B"} {
-		if !strings.Contains(flat, want) {
-			t.Errorf("the notice does not list %q:\n%s", want, d.screen())
-		}
-	}
-	if strings.Index(flat, "Row B") > strings.Index(flat, "Row A") {
-		t.Errorf("a known failure must be listed before an unproven row:\n%s", d.screen())
-	}
-
-	d.send(keyEnter())
-	if d.m.Halted() {
-		t.Error("one dismiss did not clear both rows")
-	}
-}
-
-// A halt reaches the app the same way from either screen it can be raised
-// from — the notice is not wired to one view.
+// The flag sets the same way from either screen it can be raised from — it
+// is not wired to one view.
 func TestCrossScreenHaltingWorksFromHubAndFromPreflight(t *testing.T) {
 	t.Run("hub", func(t *testing.T) {
 		d := newRootDriver(t, readyGateTransport(), 100, 30)

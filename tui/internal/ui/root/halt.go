@@ -1,14 +1,9 @@
 package root
 
 import (
-	"sort"
-	"strings"
-
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
 
 	"github.com/amd/gaia/tui/internal/ui/status"
-	"github.com/amd/gaia/tui/internal/ui/theme"
 )
 
 // Listener decides whether an Outcome should hold the screen for a person.
@@ -25,13 +20,18 @@ func haltOnDisposition(o status.Outcome) bool {
 	return o.Level != status.LevelOK && o.Disposition != status.DispositionNotify
 }
 
-// Halted reports whether a halting Outcome currently owns the screen.
-// Mirrors preflight.Model.Ready()/Busy() — an exported query over otherwise
-// unexported state.
+// Halted reports whether the active screen is holding on a consequential
+// Outcome. RootModel does not act on this itself — it neither renders
+// anything nor intercepts a key for it. The screen that raised it
+// (preflight.Model) already pauses itself and explains why; this is purely
+// a signal ControlSnapshot's Overlay exposes to automation, so it can wait
+// on "this TUI is waiting" without scraping the screen.
 func (m RootModel) Halted() bool { return len(m.halted) > 0 }
 
-// applyOutcome runs o past every listener. A dismissed StepID never halts
-// again this session; an already-tracked StepID is not added twice.
+// applyOutcome runs o past every listener. A StepID already suppressed this
+// session (the user has already proceeded past it once, see
+// suppressHalted) never halts again; an already-tracked StepID is not added
+// twice.
 func (m RootModel) applyOutcome(o status.Outcome) (tea.Model, tea.Cmd) {
 	if m.suppressed[o.StepID] {
 		return m, nil
@@ -55,89 +55,23 @@ func (m RootModel) applyOutcome(o status.Outcome) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// handleHaltKey owns every key while the notice is up, extending the
-// hand-ordered overlay chain showHelp and connectHandoff already use.
-// ctrl+c quits like everywhere else — the halt is raised at the moment
-// something is already wrong, the worst time to make the escape hatch need
-// two presses. enter dismisses and suppresses every currently-halted StepID
-// for the rest of the session, and does not reach the screen behind it.
-// Every other key is swallowed.
-func (m RootModel) handleHaltKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch key.String() {
-	case "ctrl+c":
-		return m, tea.Quit
-	case "enter":
-		suppressed := make(map[string]bool, len(m.suppressed)+len(m.halted))
-		for k := range m.suppressed {
-			suppressed[k] = true
-		}
-		for _, o := range m.halted {
-			suppressed[o.StepID] = true
-		}
-		m.suppressed = suppressed
-		m.halted = nil
-		return m, nil
+// suppressHalted marks every currently-halted StepID as accepted for the
+// rest of the session and clears halted. Called when the gate the Outcomes
+// belonged to proceeds (see proceedFromGate) — proceeding past a
+// consequential row IS the deliberate choice the Halt disposition exists to
+// gate, so the same row halting again on a later launch this session would
+// be the exact confirm-fatigue the Notify/Halt split exists to avoid. It
+// does not change what the screen itself asks for on the next launch — only
+// what automation is told about it.
+func (m *RootModel) suppressHalted() {
+	if len(m.halted) == 0 {
+		return
 	}
-	return m, nil
-}
-
-// orderedHaltRows returns a COPY of outcomes with a known failure ordered
-// before an unproven row — the same precedence
-// preflight.Model.unverifiedSummary already encodes, reused rather than
-// reinvented.
-func orderedHaltRows(outcomes []status.Outcome) []status.Outcome {
-	out := append([]status.Outcome{}, outcomes...)
-	sort.SliceStable(out, func(i, j int) bool {
-		return haltPrecedence(out[i].Level) < haltPrecedence(out[j].Level)
-	})
-	return out
-}
-
-func haltPrecedence(l status.Level) int {
-	switch l {
-	case status.LevelFailed:
-		return 0
-	case status.LevelUnknown:
-		return 1
-	default:
-		return 2
+	if m.suppressed == nil {
+		m.suppressed = map[string]bool{}
 	}
-}
-
-var (
-	haltBoxStyle   = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(theme.Warning).Padding(1, 2)
-	haltTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(theme.Warning)
-	haltLabelStyle = lipgloss.NewStyle().Bold(true).Foreground(theme.Text)
-	haltDimStyle   = lipgloss.NewStyle().Foreground(theme.Dim)
-	haltKeyStyle   = lipgloss.NewStyle().Bold(true).Foreground(theme.Info)
-)
-
-// renderHaltNotice centers the halt notice over background, the same
-// pattern components.RenderHelpOverlay uses for the help panel.
-func renderHaltNotice(outcomes []status.Outcome, background string, width, height int) string {
-	ordered := orderedHaltRows(outcomes)
-
-	var b strings.Builder
-	b.WriteString(haltTitleStyle.Render("Waiting for you"))
-	b.WriteString("\n\n")
-	for _, o := range ordered {
-		b.WriteString(haltLabelStyle.Render(o.Label))
-		if o.Summary != "" {
-			b.WriteString(": " + haltDimStyle.Render(o.Summary))
-		}
-		b.WriteString("\n")
+	for _, o := range m.halted {
+		m.suppressed[o.StepID] = true
 	}
-	b.WriteString("\n")
-	b.WriteString(haltKeyStyle.Render("enter") + " " + haltDimStyle.Render("continue anyway") +
-		haltDimStyle.Render("  ·  ") + haltKeyStyle.Render("ctrl+c") + " " + haltDimStyle.Render("quit"))
-
-	boxWidth := width - 4
-	if boxWidth > 70 {
-		boxWidth = 70
-	}
-	if boxWidth < 20 {
-		boxWidth = 20
-	}
-	box := haltBoxStyle.Width(boxWidth).Render(strings.TrimRight(b.String(), "\n"))
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
+	m.halted = nil
 }

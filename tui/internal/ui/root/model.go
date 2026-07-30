@@ -47,13 +47,17 @@ type RootModel struct {
 	pfTransport preflight.Transport
 	pfOpts      preflight.Options
 
-	// halted is every Outcome currently holding the screen, in arrival order
-	// (rendered in precedence order — see orderedHaltRows). Empty means
-	// nothing is halting.
+	// halted is every Outcome the active screen is currently holding on.
+	// RootModel does not render it or intercept keys for it — the screen
+	// that raised it (preflight.Model) already pauses itself and shows its
+	// own explanation; this is purely a state flag automation reads via
+	// ControlSnapshot's Overlay. Cleared when the gate closes, whether by
+	// proceeding or backing out.
 	halted []status.Outcome
-	// suppressed is every StepID a person has already dismissed this
-	// session — per-process, never persisted, so a permanently-unknown row
-	// does not re-halt on every re-check.
+	// suppressed is every StepID the user has already proceeded past this
+	// session — per-process, never persisted, so relaunching the same agent
+	// does not report a fresh halt for a row already accepted once. It does
+	// NOT change what the screen itself asks for on each launch.
 	suppressed map[string]bool
 	// listeners decide whether an Outcome halts. The subscribe seam the
 	// issue asks for; defaults to one entry with no registration API beyond
@@ -164,12 +168,6 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		// The halt notice owns every key while it is up, above showHelp and
-		// connectHandoff both — it is raised at the moment something is
-		// already wrong, so it gets first claim on the keyboard.
-		if m.Halted() {
-			return m.handleHaltKey(msg)
-		}
 		if m.showHelp {
 			// Any key dismisses help overlay
 			m.showHelp = false
@@ -229,12 +227,6 @@ func (m RootModel) View() string {
 		if m.chat != nil {
 			base = m.chat.View()
 		}
-	}
-
-	// The halt notice renders above showHelp too — same precedence as the
-	// keyboard ownership in Update.
-	if m.Halted() {
-		return renderHaltNotice(m.halted, base, m.width, m.height)
 	}
 
 	if m.showHelp {
