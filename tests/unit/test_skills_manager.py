@@ -537,6 +537,7 @@ class _StubAgent:
     skill_manager = Agent.skill_manager
     loaded_skills = Agent.loaded_skills
     _tools_registry = Agent._tools_registry
+    _format_tools_for_prompt = Agent._format_tools_for_prompt
     load_skill = Agent.load_skill
     unload_skill = Agent.unload_skill
     get_skills_system_prompt = Agent.get_skills_system_prompt
@@ -635,14 +636,43 @@ def test_agent_load_skill_leaves_nothing_behind_on_tool_mismatch(roots):
 
 
 def test_agent_unload_skill_removes_tools_and_body(roots):
+    """Unloading must leave no orphaned tool schema on any surface the model
+    sees — the global registry, the agent's snapshot, or the rendered prompt."""
     copy_fixture("web-search", roots["user"])
     agent = _StubAgent()
+    agent._instance_tools = {}
     agent.load_skill("web-search", manager=make_manager(roots))
 
+    # Precondition: the tool really is visible everywhere before the unload.
+    assert "web-search/search_web" in _TOOL_REGISTRY
+    assert "web-search/search_web" in agent._instance_tools
+    assert "web-search/search_web" in agent._format_tools_for_prompt()
+
     assert agent.unload_skill("web-search") is True
+
     assert "web-search/search_web" not in _TOOL_REGISTRY
+    assert "web-search/search_web" not in agent._instance_tools
+    # The rendered tool block is what reaches the model — nothing may linger.
+    assert "web-search" not in agent._format_tools_for_prompt()
     assert agent.get_skills_system_prompt() == ""
+    assert agent.loaded_skills == {}
     assert agent.unload_skill("web-search") is False
+
+
+def test_agent_can_reload_a_skill_after_unloading_it(roots):
+    """Unload must not poison the module cache — a re-load re-registers cleanly."""
+    copy_fixture("web-search", roots["user"])
+    agent = _StubAgent()
+    manager = make_manager(roots)
+
+    agent.load_skill("web-search", manager=manager)
+    agent.unload_skill("web-search")
+    agent.load_skill("web-search", manager=manager)
+
+    assert "web-search/search_web" in _TOOL_REGISTRY
+    assert (
+        _TOOL_REGISTRY["web-search/search_web"]["function"](query="x")["query"] == "x"
+    )
 
 
 def test_agent_load_skill_updates_an_instance_tool_snapshot(roots):
@@ -653,13 +683,18 @@ def test_agent_load_skill_updates_an_instance_tool_snapshot(roots):
     assert "web-search/search_web" in agent._instance_tools
 
 
-def test_agent_skill_manager_uses_bundled_dirs(tmp_path):
+def test_agent_skill_manager_uses_bundled_dirs(tmp_path, monkeypatch):
+    # Point the default user root at tmp_path: the lazily-built manager would
+    # otherwise resolve the developer's real ~/.gaia/skills.
+    monkeypatch.setenv("GAIA_CONFIG_DIR", str(tmp_path / "gaia-home"))
+
     class Bundled(_StubAgent):
         SKILL_DIRS = [str(tmp_path / "bundled")]
 
     manager = Bundled().skill_manager
     assert manager.roots[0].label == ROOT_AGENT_BUNDLED
     assert manager.roots[0].path == tmp_path / "bundled"
+    assert manager.user_root == tmp_path / "gaia-home" / "skills"
 
 
 def test_agent_without_skills_adds_nothing_to_the_prompt():
