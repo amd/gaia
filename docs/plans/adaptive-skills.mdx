@@ -669,6 +669,16 @@ corpora: when N deltas on the same base and anchor say near-identical things, or
 N procedures cluster tightly, propose one consolidated replacement through the
 same staged-diff gate. Consolidation is a *proposal*, not an automatic rewrite.
 
+**One more finding the budget has to cover.** The in-flight loader renders every
+loaded skill's **full** body into the system prompt with no cap (PR #2669,
+`Agent.get_skills_system_prompt`) — correct for atomicity (#888's "no partial
+load"), but it means authored skills have *no runtime ceiling at all*, bounded
+only by what an agent author chooses to load. That is the mirror image of the
+truncated recall path ([#2676](https://github.com/amd/gaia/issues/2676)): one
+half cuts mid-step, the other half is unbounded. The budget below must cover the
+authored + learned total, not the learned part alone, or a well-behaved overlay
+can still be the thing that overflows a 32K window.
+
 **Learning budget, enforced.** Tier-2 and tier-3 deltas get a hard resident-token
 ceiling per agent, sized against the 32K NPU window and the existing
 `MAX_RECALL_BODY_CHARS = 1500` recall cap
