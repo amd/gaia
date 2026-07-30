@@ -459,19 +459,26 @@ class TestSplitLanguageFailureTaxonomy:
         assert "microsoft_work" not in msg
 
     @respx.mock
-    async def test_configuration_error_401_never_gets_split_language(
+    async def test_secretless_401_never_gets_split_language(
         self, legacy_microsoft_connection
     ):
-        # Negative case (I5-required): a 401 with no client_secret configured
-        # is a ConfigurationError, not an OAuth-protocol rejection — must
-        # propagate as itself, no split language.
+        # Negative case (I5-required): a 401 on a secretless public client is
+        # a rejected-credential problem, not an OAuth-protocol rejection of a
+        # legacy blob, so it must propagate as itself with no split language.
+        #
+        # This asserted ConfigurationError until #1638 landed: that fix gated
+        # the "go configure a client_secret" branch on the providers that
+        # actually require one, so a secretless Microsoft 401 now correctly
+        # raises AuthRequiredError(REAUTH_REQUIRED) instead. A5 excludes
+        # AuthRequiredError from enrichment, so the exclusion still has to
+        # hold — on the path that now really occurs rather than one that
+        # cannot.
         respx.post(MS_TOKEN_URL).mock(
             return_value=httpx.Response(401, json={"error": "invalid_client"})
         )
-        from gaia.connectors.errors import ConfigurationError
-
-        with pytest.raises(ConfigurationError) as exc:
+        with pytest.raises(AuthRequiredError) as exc:
             await get_or_refresh("microsoft")
+        assert exc.value.reason is AuthRequiredError.Reason.REAUTH_REQUIRED
         assert "split" not in str(exc.value).lower()
         assert "microsoft_work" not in str(exc.value).lower()
 
