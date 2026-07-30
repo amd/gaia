@@ -45,8 +45,32 @@ from gaia.skills.audit.findings import (
     python_sources,
     worst_severity,
 )
+from gaia.skills.audit.verdict import (
+    TIER_BLOCK_THRESHOLD,
+    TIER_REVIEW_THRESHOLD,
+    TIER_TRUST_ORDER,
+    TIERS_REQUIRING_AUDIT,
+    TIERS_REQUIRING_HUMAN_AUDIT,
+    cleared_tiers,
+    clears_tier,
+    highest_cleared_tier,
+    report_is_stale,
+    severity_verdict,
+    verdict_for_tier,
+)
 
 __all__ = [
+    "verdict_for_tier",
+    "severity_verdict",
+    "clears_tier",
+    "cleared_tiers",
+    "highest_cleared_tier",
+    "report_is_stale",
+    "TIER_BLOCK_THRESHOLD",
+    "TIER_REVIEW_THRESHOLD",
+    "TIER_TRUST_ORDER",
+    "TIERS_REQUIRING_AUDIT",
+    "TIERS_REQUIRING_HUMAN_AUDIT",
     "AuditReport",
     "Finding",
     "Severity",
