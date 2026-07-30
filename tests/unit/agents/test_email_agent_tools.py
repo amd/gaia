@@ -267,10 +267,12 @@ class TestPreScanInbox:
         # The override-skipped marker should be set so logs show why.
         assert phishing_decision.get("preference_applied") == "skipped_phishing_or_spam"
 
-    def test_priority_sender_promotes_to_urgent(self, fake_gmail):
-        """A sender flagged via session preference bypasses the heuristic."""
-        # Pick a sender from the fixture that the heuristic would NOT
-        # classify as urgent — any non-spam non-promo non-phishing one.
+    def test_priority_sender_does_not_change_category(self, fake_gmail):
+        """A sender flagged via session preference is tagged for salience
+        but never has its category overridden (#2632) — content alone
+        decides urgency, so the same message classifies identically with
+        and without the preference.
+        """
         first_msg = fake_gmail.get_message(list(fake_gmail._messages.keys())[0])
         first_sender = next(
             h["value"]
@@ -283,16 +285,23 @@ class TestPreScanInbox:
             "low_priority_senders": set(),
             "category_defaults": {},
         }
-        out = pre_scan_inbox_impl(
+        baseline = triage_inbox_impl(fake_gmail, max_messages=50)
+        with_pref = triage_inbox_impl(
             fake_gmail, max_messages=50, session_preferences=prefs
         )
-        urgent_senders = [
-            extract_sender_email(item["sender"]) for item in out["urgent"]
-        ]
-        assert addr in urgent_senders, (
-            f"priority sender {addr} should land in urgent; "
-            f"saw urgent={urgent_senders}"
+        baseline_decision = next(
+            r for r in baseline["results"] if r["id"] == first_msg["id"]
         )
+        with_pref_decision = next(
+            r for r in with_pref["results"] if r["id"] == first_msg["id"]
+        )
+
+        assert with_pref_decision["category"] == baseline_decision["category"], (
+            "priority-sender preference must not change category; baseline="
+            f"{baseline_decision['category']!r} with_pref="
+            f"{with_pref_decision['category']!r}"
+        )
+        assert with_pref_decision.get("preference_applied") == "priority_sender"
 
     def test_low_priority_sender_lands_in_archives(self, fake_gmail):
         first_msg = fake_gmail.get_message(list(fake_gmail._messages.keys())[0])

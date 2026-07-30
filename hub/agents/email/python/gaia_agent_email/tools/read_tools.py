@@ -895,10 +895,17 @@ def _apply_session_preferences(
 ) -> Dict[str, Any]:
     """Layer session-scoped sender overrides onto a heuristic decision.
 
-    Mutates a copy of ``decision`` and returns it. Sender overrides take
-    precedence over the heuristic; the original heuristic rationale is
-    preserved alongside the override reason so the UI / logs still see
-    why the heuristic would have classified the message differently.
+    Mutates a copy of ``decision`` and returns it.
+
+    Resolution rule (#2632): a priority-sender match never overrides
+    ``category`` — content (the heuristic or the LLM) decides severity,
+    a sender preference only raises salience. "I care about this sender"
+    is not "this message is urgent": a newsletter from a priority sender
+    stays exactly as low-signal as its content says, tagged with
+    ``preference_applied`` so a caller can still surface/order it earlier.
+    The low-priority-sender branch is unchanged — it still commits
+    PROMOTIONAL, since that is an explicit user request to downrank a
+    sender rather than an inferred one.
 
     Safety override: a phishing-flagged message bypasses BOTH priority
     and low-priority sender preferences. A user can't safely promote a
@@ -922,12 +929,12 @@ def _apply_session_preferences(
             out["preference_applied"] = "skipped_phishing_or_spam"
         return out
     if sender_addr and sender_addr in priority_senders:
-        out["category"] = CATEGORY_URGENT
-        out["confident"] = True
         out["preference_applied"] = "priority_sender"
         out["rationale"] = (
-            f"priority sender (session preference): {sender_addr} "
-            f"[heuristic said: {decision.get('rationale', '')}]"
+            f"priority sender (session preference): {sender_addr} -- "
+            "raises salience only, category unchanged (content "
+            f"classified it {decision.get('category')}: "
+            f"{decision.get('rationale', '')})"
         )
     elif sender_addr and sender_addr in low_priority_senders:
         out["category"] = CATEGORY_PROMOTIONAL
@@ -1334,6 +1341,7 @@ def pre_scan_inbox_impl(
     needs_review_cap: int = PRE_SCAN_NEEDS_REVIEW_CAP,
     session_preferences: Optional[Mapping[str, Any]] = None,
     force_llm: bool = False,
+    include_informational: bool = False,
     debug: bool = False,
 ) -> Dict[str, Any]:
     """Pre-scan the inbox for the chat surface.
@@ -1351,6 +1359,15 @@ def pre_scan_inbox_impl(
     sender overrides shape the underlying classification, and category
     defaults applied here move informational items into
     ``suggested_archives`` when the user has previously asked for that.
+
+    ``include_informational`` (#2633): the default envelope carries only
+    ``informational_count`` — a bare number, on purpose, so the default
+    card stays scannable. But a bare count is unauditable: a caller has no
+    way to tell a correctly-filtered newsletter from a miscategorized
+    message that needed a reply. When True, the ``informational`` field
+    carries the full list (id/sender/subject/why) of every message this
+    call classified informational, bounded only by ``max_messages`` — the
+    same list this function already builds internally, just not discarded.
 
     A ``confident=False`` heuristic result is a placeholder guess, not a
     real classification. It overrides routing into the two LOW-SIGNAL
@@ -1493,6 +1510,10 @@ def pre_scan_inbox_impl(
             "urgent": urgent[: max(0, urgent_cap)],
             "actionable": actionable[: max(0, actionable_cap)],
             "informational_count": len(informational),
+            # #2633: empty unless the caller opted in — the full list was
+            # already computed above, so honoring the flag costs nothing
+            # beyond what this call already did.
+            "informational": informational if include_informational else [],
             "suggested_archives": suggested_archives[: max(0, archive_cap)],
             "suggested_drafts": [],
             "needs_review": needs_review[: max(0, needs_review_cap)],
@@ -1532,6 +1553,7 @@ def merge_pre_scan_backends(
     max_messages: int = 25,
     session_preferences: Optional[Mapping[str, Any]] = None,
     force_llm: bool = False,
+    include_informational: bool = False,
     debug: bool = False,
     remember_mailbox: Optional[Callable[[Optional[str], str], None]] = None,
 ) -> Dict[str, Any]:
@@ -1554,6 +1576,10 @@ def merge_pre_scan_backends(
     half the budget to a dead one. ``remember_mailbox`` is the agent's
     optional message-id -> mailbox recorder for action routing; the stateless
     REST path omits it.
+
+    ``include_informational`` (#2633) is forwarded verbatim to every
+    per-backend ``pre_scan_inbox_impl`` call; the merged ``informational``
+    list is tagged with ``mailbox`` the same way the other four sections are.
     """
     prefs = session_preferences
     provider_backends = list(backends.items())
@@ -1562,6 +1588,7 @@ def merge_pre_scan_backends(
     actionable: List[Dict[str, Any]] = []
     suggested_archives: List[Dict[str, Any]] = []
     needs_review: List[Dict[str, Any]] = []
+    informational: List[Dict[str, Any]] = []
     informational_count = 0
     scanned = 0
     total_unread = 0
@@ -1583,6 +1610,7 @@ def merge_pre_scan_backends(
                 max_messages=per_backend,
                 session_preferences=prefs,
                 force_llm=force_llm,
+                include_informational=include_informational,
                 debug=debug,
             )
         except ConnectorsError as exc:
@@ -1607,6 +1635,7 @@ def merge_pre_scan_backends(
             ("actionable", actionable),
             ("suggested_archives", suggested_archives),
             ("needs_review", needs_review),
+            ("informational", informational),
         ):
             for item in out.get(section, []):
                 item["mailbox"] = provider
@@ -1629,6 +1658,7 @@ def merge_pre_scan_backends(
         "urgent": urgent[: max(0, PRE_SCAN_URGENT_CAP)],
         "actionable": actionable[: max(0, PRE_SCAN_ACTIONABLE_CAP)],
         "informational_count": informational_count,
+        "informational": informational,
         "suggested_archives": suggested_archives[: max(0, PRE_SCAN_ARCHIVE_CAP)],
         "suggested_drafts": [],
         "needs_review": needs_review[: max(0, PRE_SCAN_NEEDS_REVIEW_CAP)],
@@ -2055,7 +2085,9 @@ class ReadToolsMixin:
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
-        def pre_scan_inbox(max_messages: int = 25) -> str:
+        def pre_scan_inbox(
+            max_messages: int = 25, include_informational: bool = False
+        ) -> str:
             """Pre-scan the inbox into a typed envelope for the chat
             triage card.
 
@@ -2068,6 +2100,17 @@ class ReadToolsMixin:
             confident about — a placeholder guess, not a real
             classification — so they are surfaced for you to look at
             rather than silently filed as informational or archived.
+
+            ``informational_count`` alone is a bare number — it is NOT
+            proof every one of those messages is truly low-priority
+            (#2633). When the user asks what got filtered, what's in the
+            informational count, or to double-check nothing important was
+            skipped, call this tool AGAIN with ``include_informational=True``
+            — the ``informational`` field then carries the full id/sender/
+            subject list for that count instead of an empty list, at no
+            extra scan cost (same underlying data, already computed).
+            Leave it False for a normal triage request — the point of the
+            count is to keep the default card short.
 
             The result is a PARTIAL view of the mailbox, not the whole
             inbox: ``scanned`` reports how many messages were actually
@@ -2094,13 +2137,19 @@ class ReadToolsMixin:
             Args:
                 max_messages: How many unread INBOX messages to scan
                     (default 25, max 100).
+                include_informational: When True, return the full
+                    informational message list instead of just its count
+                    (default False — see above).
             """
             try:
                 max_messages = max(1, min(int(max_messages or 25), scan_ceiling))
                 # Phase 2 (#1603): pre-scan every connected mailbox, tag each
                 # section item with its source mailbox, split the budget, merge.
                 return _envelope_ok(
-                    agent._pre_scan_all_backends(max_messages=max_messages)
+                    agent._pre_scan_all_backends(
+                        max_messages=max_messages,
+                        include_informational=bool(include_informational),
+                    )
                 )
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))
