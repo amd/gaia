@@ -55,13 +55,8 @@ never counts as ready. Most of those are named on screen and the launch
 continues — the sidecar itself does not treat them as fatal. A handful are
 consequential enough to hold instead: right now, a model loaded into a
 smaller context window than this machine's profile expects, since a
-document-sized request against it fails. If that classification is ever
-wrong for your setup, `GAIA_TUI_NO_GATE=1` restores the old behaviour (name
-it, don't hold) until a release changes the classification itself:
-
-```bash
-GAIA_TUI_NO_GATE=1 gaia
-```
+document-sized request against it fails. When that happens the screen waits
+for `enter` instead of proceeding on its own.
 
 ## Theming
 

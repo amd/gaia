@@ -3,7 +3,6 @@ package preflight
 import (
 	"context"
 	"errors"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -412,57 +411,6 @@ func TestADispositionHaltRowNoLongerAutoProceeds(t *testing.T) {
 	}
 	if _, ok := cmd().(ProceedMsg); !ok {
 		t.Fatalf("enter on a Halt report produced %T, want ProceedMsg", cmd())
-	}
-}
-
-// GAIA_TUI_NO_GATE is the escape hatch: a TUI binary cannot be hot-patched,
-// so if a Halt classification is wrong in the field, this restores today's
-// auto-proceed rather than making affected users press a key on every launch
-// until a release reaches them.
-func TestGAIATUINoGateRestoresAutoProceedOverAHaltRow(t *testing.T) {
-	t.Setenv(EnvNoGate, "1")
-
-	f := newFake().with("GET /v1/email/init", 200, initCtxShortfall)
-	rep := Check(t.Context(), f, EmailConfig())
-	if !rep.HasHalt() {
-		t.Fatal("test setup: want a Halt row present")
-	}
-
-	m := New(f, EmailConfig(), Options{ReadyHold: time.Millisecond})
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-	updated, cmd := updated.(Model).Update(reportMsg{rep: rep})
-	m = updated.(Model)
-
-	if cmd == nil {
-		t.Fatal("GAIA_TUI_NO_GATE=1 did not schedule the hand-off")
-	}
-	if _, ok := cmd().(proceedTickMsg); !ok {
-		t.Fatalf("GAIA_TUI_NO_GATE=1 scheduled %T, want proceedTickMsg", cmd())
-	}
-	screen := strings.Join(strings.Fields(ansi.Strip(m.View())), " ")
-	if !strings.Contains(screen, "Starting anyway") {
-		t.Errorf("GAIA_TUI_NO_GATE=1 did not restore the auto-proceed copy:\n%s", screen)
-	}
-}
-
-// The default (unset) behaviour must still halt — a test that only checks
-// the override is set could pass even if the env var leaked into every run.
-func TestGAIATUINoGateUnsetStillHalts(t *testing.T) {
-	if got := os.Getenv(EnvNoGate); got != "" {
-		t.Fatalf("test setup: %s is %q in the environment, want unset", EnvNoGate, got)
-	}
-
-	f := newFake().with("GET /v1/email/init", 200, initCtxShortfall)
-	rep := Check(t.Context(), f, EmailConfig())
-
-	m := New(f, EmailConfig(), Options{ReadyHold: time.Millisecond})
-	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-	_, cmd := updated.(Model).Update(reportMsg{rep: rep})
-
-	if cmd != nil {
-		if _, ok := cmd().(proceedTickMsg); ok {
-			t.Fatal("a Halt row auto-proceeded with GAIA_TUI_NO_GATE unset")
-		}
 	}
 }
 
