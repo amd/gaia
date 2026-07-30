@@ -2290,6 +2290,9 @@ def get_attention_backends() -> Dict[str, Any]:
 # the live scan, and every call within the freshness window reuses it.
 # ---------------------------------------------------------------------------
 
+from gaia_agent_email import attention_cache as _attention_cache_store  # noqa: E402
+from gaia_agent_email.attention_cache import ATTENTION_CACHE_TTL_SECONDS  # noqa: E402
+
 # Seconds a computed result is served verbatim (stale=False) before the next
 # call attempts a live refresh. Deliberately not parameterized by
 # max_messages — the TUI always calls this with its default, and keying the
@@ -2300,8 +2303,6 @@ def get_attention_backends() -> Dict[str, Any]:
 # not here, so ``answer_grounding.py``'s prose-vs-card contradiction guard
 # (#2636) can read the same cache without importing this FastAPI-heavy
 # module — re-exported here so existing call sites/tests are unaffected.
-from gaia_agent_email.attention_cache import ATTENTION_CACHE_TTL_SECONDS  # noqa: E402
-from gaia_agent_email import attention_cache as _attention_cache_store  # noqa: E402
 
 
 def reset_attention_cache() -> None:
@@ -2348,9 +2349,7 @@ def _get_or_refresh_attention_view(
             return _attention_view_with_age(cached, now=now, stale=True)
         raise
     _attention_cache_store.store(fresh, computed_at=now)
-    return _attention_view_with_age(
-        _attention_cache_store.peek(), now=now, stale=False
-    )
+    return _attention_view_with_age(_attention_cache_store.peek(), now=now, stale=False)
 
 
 @router.get(
