@@ -209,9 +209,7 @@ class TestDedupAcrossPages:
             def __init__(self) -> None:
                 self.calls = 0
 
-            def list_messages(
-                self, *, label_ids=None, max_results=25, page_token=None
-            ):
+            def list_messages(self, *, label_ids=None, max_results=25, page_token=None):
                 self.calls += 1
                 if self.calls == 1:
                     return {
@@ -246,9 +244,7 @@ class TestClientSideClamp:
             def __init__(self) -> None:
                 self.calls: List[int] = []
 
-            def list_messages(
-                self, *, label_ids=None, max_results=25, page_token=None
-            ):
+            def list_messages(self, *, label_ids=None, max_results=25, page_token=None):
                 self.calls.append(max_results)
                 # Always returns 30, regardless of what max_results asked
                 # for -- mirrors Outlook's $top-baked-into-page-1 behavior
@@ -277,7 +273,7 @@ class TestClientSideClamp:
 
 class TestOutlookVerbatimContinuation:
     def test_second_call_hits_the_literal_nextlink_from_page_one(self):
-        """"Params are not re-derived" is intent, not a test on its own --
+        """ "Params are not re-derived" is intent, not a test on its own --
         a test could pass on "a second page was fetched" while still
         reconstructing (and corrupting) the query. Assert the literal URL.
         """
