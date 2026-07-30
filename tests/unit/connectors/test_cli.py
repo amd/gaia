@@ -502,6 +502,96 @@ class TestConfigure:
         assert work.tenant == "organizations"
 
 
+class TestConfigureSecretlessPublicClient:
+    """#1638: ``configure`` must not demand --client-secret for providers
+    whose token endpoint rejects one (Microsoft/Entra public PKCE clients).
+    Google's requirement is unchanged.
+    """
+
+    def test_configure_microsoft_without_secret_succeeds(self, monkeypatch):
+        monkeypatch.delenv("GAIA_MICROSOFT_CLIENT_ID", raising=False)
+        monkeypatch.delenv("GAIA_MICROSOFT_CLIENT_SECRET", raising=False)
+
+        rc, out, _err = _run(
+            "connectors",
+            "configure",
+            "microsoft",
+            "--client-id",
+            "cli-test-guid",
+        )
+        assert rc == 0
+        assert "Configured microsoft" in out
+
+        from gaia.connectors.store import peek_provider_credentials
+
+        creds = peek_provider_credentials("microsoft")
+        # Exact equality, not truthiness: a loose `not creds["client_secret"]`
+        # check would pass for both "" and the None this fix must prevent.
+        assert creds == {"client_id": "cli-test-guid", "client_secret": ""}
+
+    def test_configure_google_without_secret_still_exits_2(self):
+        rc, _out, err = _run(
+            "connectors",
+            "configure",
+            "google",
+            "--client-id",
+            "id.apps.googleusercontent.com",
+        )
+        assert rc == 2
+        assert "client-secret" in err
+        assert "Google" in err or "google" in err
+
+    def test_client_secret_without_id_still_exits_2(self):
+        # Unchanged regardless of provider: --client-secret alone is a
+        # usage error.
+        rc, _out, err = _run(
+            "connectors",
+            "configure",
+            "microsoft",
+            "--client-secret",
+            "should-not-be-sent",
+        )
+        assert rc == 2
+        assert "client-id" in err
+
+    def test_configure_then_provider_resolves_without_env(self, monkeypatch):
+        """The actual payoff (#1638): after `configure microsoft
+        --client-id`, the provider resolves the id with no env var set —
+        proven at the provider-construction seam, not through `connect`
+        (which mocks start_authorization and would pass either way)."""
+        monkeypatch.delenv("GAIA_MICROSOFT_CLIENT_ID", raising=False)
+        monkeypatch.delenv("GAIA_MICROSOFT_CLIENT_SECRET", raising=False)
+
+        rc, _out, _err = _run(
+            "connectors", "configure", "microsoft", "--client-id", "cli-test-guid"
+        )
+        assert rc == 0
+
+        _registry.clear()
+        from gaia.connectors.providers import get as get_provider
+
+        assert get_provider("microsoft").client_id == "cli-test-guid"
+
+    def test_cli_reads_the_shared_constant_not_a_copy(self, monkeypatch):
+        """Structural guard: the CLI must consult
+        oauth_pkce.PROVIDERS_REQUIRING_CLIENT_SECRET directly, not a copy
+        of the rule, so flipping the shared constant moves both providers'
+        behavior together."""
+        from gaia.connectors import oauth_pkce
+
+        monkeypatch.setattr(
+            oauth_pkce, "PROVIDERS_REQUIRING_CLIENT_SECRET", frozenset({"microsoft"})
+        )
+        assert _run("connectors", "configure", "microsoft", "--client-id", "x")[0] == 2
+        assert _run("connectors", "configure", "google", "--client-id", "y")[0] == 0
+
+    def test_help_no_longer_implies_a_universal_secret_requirement(self):
+        rc, out, _err = _run("connectors", "configure", "--help")
+        assert rc == 0
+        assert "requires --client-secret" not in out
+        assert "google" in out.lower()
+
+
 class TestDisconnect:
     def test_disconnect_idempotent(self):
         rc, _out, _err = _run("connectors", "disconnect", "google")

@@ -13,15 +13,20 @@
 
 name: Website CI
 
+# The agent manifests are in the filter because the snapshot gate below is the
+# only thing that catches them drifting — and the change it exists to catch
+# (adding an agent under hub/agents/) touches nothing in website/.
 on:
   pull_request:
     paths:
       - 'website/**'
+      - 'hub/agents/**/gaia-agent.yaml'
       - '.github/workflows/website-ci.yml'
   push:
     branches: [main]
     paths:
       - 'website/**'
+      - 'hub/agents/**/gaia-agent.yaml'
       - '.github/workflows/website-ci.yml'
 
 permissions:

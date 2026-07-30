@@ -2,6 +2,7 @@
   "agents": [
     {
       "id": "analyst",
+      "manifestId": "data",
       "name": "Analyst Agent",
       "description": "GAIA analyst agent — structured data analysis (CSV/Excel, scratchpad SQL)",
       "category": "productivity",
@@ -9,6 +10,7 @@
     },
     {
       "id": "blender",
+      "manifestId": "blender",
       "name": "Blender",
       "description": "3D scene automation for Blender via MCP",
       "category": "creative",
@@ -16,6 +18,7 @@
     },
     {
       "id": "browser",
+      "manifestId": "web",
       "name": "Browser Agent",
       "description": "GAIA browser agent — web research (search, fetch, download)",
       "category": "research",
@@ -23,6 +26,7 @@
     },
     {
       "id": "chat",
+      "manifestId": "chat",
       "name": "Chat",
       "description": "GAIA chat agent — conversation, document Q&A (RAG), and file-system profiles",
       "category": "conversation",
@@ -30,6 +34,7 @@
     },
     {
       "id": "code",
+      "manifestId": "code",
       "name": "Code",
       "description": "Autonomous code generation — plan, write, lint, fix, and test",
       "category": "development",
@@ -37,6 +42,7 @@
     },
     {
       "id": "docker",
+      "manifestId": "docker",
       "name": "Docker",
       "description": "Container management — build, run, and inspect Docker containers",
       "category": "infrastructure",
@@ -44,6 +50,7 @@
     },
     {
       "id": "docqa",
+      "manifestId": "docqa",
       "name": "Document Q&A",
       "description": "GAIA Document Q&A agent — RAG document Q&A and indexing",
       "category": "productivity",
@@ -51,6 +58,7 @@
     },
     {
       "id": "email",
+      "manifestId": "email",
       "name": "Email Triage",
       "description": "GAIA email triage agent — read, triage, organize, and reply to Gmail/Outlook locally",
       "category": "productivity",
@@ -58,6 +66,7 @@
     },
     {
       "id": "fileio",
+      "manifestId": "fileio",
       "name": "File I/O",
       "description": "Read, write, and edit files on the local filesystem",
       "category": "productivity",
@@ -65,6 +74,7 @@
     },
     {
       "id": "jira",
+      "manifestId": "jira",
       "name": "Jira",
       "description": "Jira issue management — search, create, and update issues",
       "category": "productivity",
@@ -72,6 +82,7 @@
     },
     {
       "id": "emr",
+      "manifestId": "emr",
       "name": "Medical Intake",
       "description": "Medical intake — VLM extraction of patient forms into a records database",
       "category": "healthcare",
@@ -79,6 +90,7 @@
     },
     {
       "id": "routing",
+      "manifestId": "routing",
       "name": "Routing Agent",
       "description": "GAIA routing agent — meta-agent that routes requests to the right concrete agent",
       "category": "infrastructure",
@@ -86,6 +98,7 @@
     },
     {
       "id": "sd",
+      "manifestId": "sd",
       "name": "Stable Diffusion",
       "description": "Image generation — LLM-enhanced prompts for Stable Diffusion",
       "category": "creative",
@@ -93,6 +106,7 @@
     },
     {
       "id": "summarize",
+      "manifestId": "summarize",
       "name": "Summarizer",
       "description": "Document and text summarization — PDFs, transcripts, and email",
       "category": "productivity",

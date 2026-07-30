@@ -36,6 +36,12 @@ from gaia.connectors.tokens import get_or_refresh
 
 logger = logging.getLogger(__name__)
 
+#: Providers whose token endpoint rejects a request with no client_secret.
+#: Public PKCE clients (Microsoft/Entra) must NOT send one; default is "not
+#: required" so any provider added later defaults to the safe, public-client
+#: behavior without needing to be listed here.
+PROVIDERS_REQUIRING_CLIENT_SECRET: frozenset[str] = frozenset({"google"})
+
 
 def _validate_provider_secret(provider_id: str) -> None:
     """Raise ``ConfigurationError`` if the provider requires a client_secret
@@ -47,7 +53,7 @@ def _validate_provider_secret(provider_id: str) -> None:
     unknown providers are passed through without checking.
     """
     # Only Google Desktop PKCE clients are known to require the secret.
-    if provider_id != "google":
+    if provider_id not in PROVIDERS_REQUIRING_CLIENT_SECRET:
         return
     from gaia.connectors.providers import get as _get_provider
 

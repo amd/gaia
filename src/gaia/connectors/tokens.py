@@ -257,12 +257,21 @@ async def _refresh_token(
         #     credentials in Settings → Connections).
         #   - Secret is present but token rejected → AuthRequiredError (fix:
         #     reconnect from Settings → Connections).
+        # Public PKCE clients (Microsoft/Entra) never have a secret — that's
+        # the correct, expected state, not a misconfiguration — so only
+        # providers in PROVIDERS_REQUIRING_CLIENT_SECRET take the
+        # config-missing branch (#1638).
         try:
             err_payload = response.json()
         except Exception:
             err_payload = {}
+        from gaia.connectors.oauth_pkce import PROVIDERS_REQUIRING_CLIENT_SECRET
+
         client_secret = getattr(provider, "client_secret", None)
-        if not client_secret:
+        if (
+            not client_secret
+            and provider.provider_id in PROVIDERS_REQUIRING_CLIENT_SECRET
+        ):
             raise ConfigurationError(
                 f"Token endpoint returned 401 for {provider.provider_id}: "
                 "client_secret is not configured. Open Settings → Connections "

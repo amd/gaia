@@ -40,10 +40,28 @@ describe('getInDevelopmentAgents', () => {
     expect(ids).not.toContain('connectors-demo');
   });
 
+  it('drops an agent the catalog publishes under its manifest id', () => {
+    // The catalog keys on the manifest `id`; the snapshot keys on the directory.
+    // hub/agents/analyst declares `id: data`, so the day it publishes the
+    // catalog says "data" while this row still says "analyst" — without the
+    // manifestId match it renders in the published grid AND here.
+    const analyst = getInDevelopmentAgents([]).find((a) => a.id === 'analyst');
+    expect(analyst?.manifestId).toBe('data');
+    expect(getInDevelopmentAgents(['data']).map((a) => a.id)).not.toContain('analyst');
+    expect(getInDevelopmentAgents(['web']).map((a) => a.id)).not.toContain('browser');
+  });
+
   it('emits no version or size, and sorts by name', () => {
     const agents = getInDevelopmentAgents(['email']);
     const keys = new Set(agents.flatMap((a) => Object.keys(a)));
-    expect([...keys].sort()).toEqual(['category', 'description', 'icon', 'id', 'name']);
+    expect([...keys].sort()).toEqual([
+      'category',
+      'description',
+      'icon',
+      'id',
+      'manifestId',
+      'name',
+    ]);
     expect(agents.map((a) => a.name)).toEqual([...agents.map((a) => a.name)].sort());
   });
 });
