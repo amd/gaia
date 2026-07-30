@@ -69,6 +69,22 @@ logger = logging.getLogger(__name__)
 # builds valid URLs instead of a bare "None" segment.
 _FALLBACK_TENANT = "common"
 
+# The well-known "consumers" tenant. Every personal Microsoft account (Outlook.com
+# / Hotmail / Live) carries this exact GUID in its id_token ``tid`` claim; a
+# work/school account carries its organization's Entra tenant id instead. This is
+# the canonical, exact discriminator between the two kinds of account — unlike the
+# ``mail`` vs ``userPrincipalName`` shape, which only *usually* differs and would
+# misclassify silently. It is a property of the signed-in ACCOUNT, independent of
+# which tenant the app signed in against.
+# https://learn.microsoft.com/en-us/entra/identity-platform/id-token-claims-reference
+_MSA_TENANT_ID = "9188040d-6c67-4c5b-b112-36a304b66dad"
+
+# Account kinds derived from ``tid``. Consumed by agents that behave differently
+# for a personal vs a work mailbox (e.g. the email agent's skill sets, #2466).
+ACCOUNT_TYPE_PERSONAL = "personal"
+ACCOUNT_TYPE_WORK = "work"
+ACCOUNT_TYPES = (ACCOUNT_TYPE_PERSONAL, ACCOUNT_TYPE_WORK)
+
 # Display labels for known connector ids — used only in the not-configured
 # error's copy. Falls back to a title-cased id for anything unlisted (e.g. a
 # future fourth Microsoft audience, or a test's throwaway spec) so adding a
@@ -77,6 +93,25 @@ _PROVIDER_LABELS: dict[str, str] = {
     "microsoft": "Microsoft Personal",
     "microsoft_work": "Microsoft Work or School",
 }
+
+def account_type_for_tenant(tenant_id: str | None) -> str | None:
+    """Classify a Microsoft account from its id_token ``tid`` claim.
+
+    Args:
+        tenant_id: The ``tid`` claim value, or ``None`` when the token carried
+            none (e.g. a device-code response with no decodable id_token).
+
+    Returns:
+        ``"personal"`` for the well-known consumers tenant, ``"work"`` for any
+        other tenant GUID, or ``None`` when *tenant_id* is absent/blank. ``None``
+        means "unknown" — callers must handle it explicitly rather than assuming
+        a kind.
+    """
+    tid = (tenant_id or "").strip().lower()
+    if not tid:
+        return None
+    return ACCOUNT_TYPE_PERSONAL if tid == _MSA_TENANT_ID else ACCOUNT_TYPE_WORK
+
 
 # Plain-language descriptions for the AgentUI consent dialog, mirroring the
 # Google provider's SCOPE_DESCRIPTIONS. The router/CLI render these strings;
@@ -125,6 +160,18 @@ class MicrosoftOAuthProvider:
     userinfo_url: str = (
         "https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName"
     )
+
+    @staticmethod
+    def classify_account_type(claims: dict) -> str | None:
+        """Derive ``personal`` / ``work`` from an id_token's claims (#2466).
+
+        Duck-typed hook: ``flow.py`` calls this when the provider defines it, so
+        the account kind is recorded on the connection at connect time and no
+        agent has to re-derive it (or make a Graph call) later. Reads only the
+        ``tid`` claim; returns ``None`` when it is absent, which callers must
+        treat as unknown.
+        """
+        return account_type_for_tenant(claims.get("tid"))
 
     @staticmethod
     def parse_account_email(userinfo: dict) -> str | None:

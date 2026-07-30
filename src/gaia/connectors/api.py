@@ -375,9 +375,14 @@ def list_connections() -> List[Dict[str, Any]]:
     """
     Return all stored connections as a list of summary dicts.
 
-    Each entry: ``{provider, account_email, scopes, connected_at}``.
-    Refresh tokens are NEVER included in the return value — only the
-    metadata callers need to display "Connected as <email>".
+    Each entry: ``{provider, account_email, scopes, connected_at,
+    account_type}``. Refresh tokens are NEVER included in the return value —
+    only the metadata callers need to display "Connected as <email>".
+
+    ``account_type`` is ``"personal"`` / ``"work"`` when the provider could
+    derive it at connect time (Microsoft, from the id_token ``tid`` claim,
+    #2466), and ``None`` otherwise — including for every Google connection,
+    which has no equivalent notion.
     """
     out: List[Dict[str, Any]] = []
     for provider in _store_list():
@@ -414,6 +419,7 @@ def list_connections() -> List[Dict[str, Any]]:
                 "account_email": blob.get("account_email"),
                 "scopes": blob.get("scopes", []),
                 "connected_at": blob.get("connected_at"),
+                "account_type": blob.get("account_type"),
             }
         )
     return out
