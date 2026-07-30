@@ -38,10 +38,12 @@ def has_prior_state(provider_id: str) -> bool:
     return bool(load_grants().get(provider_id))
 
 
-def _current_scope_count(provider_id: str) -> int:
-    """Best-effort size of the scope set *provider_id* currently carries,
-    across its stored connection and every agent's grant — used only to make
-    the D0 rejection message concrete, never to decide anything."""
+def _current_scopes_and_agents(provider_id: str) -> "tuple[set, List[str]]":
+    """The scope set *provider_id* currently carries — across its stored
+    connection and every agent's grant — plus the agent ids already granted
+    it. Used to build a copy-pasteable rejection command, never a placeholder
+    (a printed remedy with an unfilled ``<scope>`` slot is the exact defect
+    this issue exists to remove — see ``errors.py`` / ``forward.py``)."""
     from gaia.connectors.grants import load_grants
     from gaia.connectors.store import peek_connection
 
@@ -49,9 +51,10 @@ def _current_scope_count(provider_id: str) -> int:
     conn = peek_connection(provider_id)
     if conn:
         current.update(conn.get("scopes", []))
-    for scopes in load_grants().get(provider_id, {}).values():
+    grants_for_provider = load_grants().get(provider_id, {})
+    for scopes in grants_for_provider.values():
         current.update(scopes)
-    return len(current)
+    return current, sorted(grants_for_provider.keys())
 
 
 def resolve_or_reject_empty_scopes(
@@ -76,13 +79,30 @@ def resolve_or_reject_empty_scopes(
         return scopes_list
 
     if has_prior_state(provider_id):
+        current_scopes, agent_ids = _current_scopes_and_agents(provider_id)
+        if current_scopes:
+            command = (
+                f"gaia connectors connect {provider_id} --scopes "
+                f"{' '.join(sorted(current_scopes))}"
+            )
+            if agent_ids:
+                command += f" --grant-agent {agent_ids[0]}"
+            how = f"Run the scope-complete command that restores it:\n  {command}\n"
+        else:
+            # A connection or grant exists but carries no readable scopes — a
+            # degenerate state no scope-complete command can be reconstructed
+            # from. Point at the connector's catalog rather than print a
+            # placeholder that could not actually be run as-is.
+            how = (
+                f"No prior scopes could be read back for {provider_id!r} to "
+                "reconstruct a command from — reconnect with the exact scopes "
+                "this account needs; see the connector's available_scopes "
+                "via `gaia connectors status --json`.\n"
+            )
         raise ConnectorsError(
             f"Reconnecting {provider_id!r} with no scopes would drop the "
-            f"{_current_scope_count(provider_id)} scope(s) this connection "
-            "currently carries. Specify the full scope list explicitly, "
-            "e.g.:\n"
-            f"  gaia connectors connect {provider_id} --scopes <scope> ... "
-            "--grant-agent <agent-id>\n"
+            f"{len(current_scopes)} scope(s) this connection currently "
+            f"carries. {how}"
             "See docs/sdk/infrastructure/connections.mdx."
         )
 

@@ -86,8 +86,14 @@ class TestStartAuthorizationEmptyScopes:
         )
         with pytest.raises(ConnectorsError) as exc:
             await start_authorization("google", scopes=[])
-        assert "no scopes" in str(exc.value).lower()
-        assert "gaia connectors connect google --scopes" in str(exc.value)
+        message = str(exc.value)
+        assert "no scopes" in message.lower()
+        assert "gaia connectors connect google --scopes" in message
+        # The remedy must be copy-pasteable — the real scopes, never a
+        # placeholder (that is the exact defect this issue removes).
+        assert "<scope" not in message
+        assert "https://www.googleapis.com/auth/gmail.modify" in message
+        assert "openid" in message
         assert calls == []
 
     @pytest.mark.asyncio
@@ -101,8 +107,12 @@ class TestStartAuthorizationEmptyScopes:
             "save_connection",
             lambda **kw: pytest.fail("save_connection must not run"),
         )
-        with pytest.raises(ConnectorsError):
+        with pytest.raises(ConnectorsError) as exc:
             await start_authorization("google", scopes=[])
+        message = str(exc.value)
+        assert "<scope" not in message
+        assert "https://www.googleapis.com/auth/gmail.modify" in message
+        assert "--grant-agent installed:email" in message
 
     @pytest.mark.asyncio
     async def test_empty_scopes_with_no_prior_state_falls_back_to_defaults(
@@ -160,7 +170,10 @@ class TestStartDeviceFlowEmptyScopes:
 
         with pytest.raises(ConnectorsError) as exc:
             await start_device_flow("microsoft", scopes=[])
-        assert "no scopes" in str(exc.value).lower()
+        message = str(exc.value)
+        assert "no scopes" in message.lower()
+        assert "<scope" not in message
+        assert "https://graph.microsoft.com/Mail.ReadWrite" in message
 
 
 class TestPollDeviceFlowEmptyScopes:
@@ -177,4 +190,7 @@ class TestPollDeviceFlowEmptyScopes:
 
         with pytest.raises(ConnectorsError) as exc:
             await poll_device_flow("microsoft", "dc-1", scopes=[])
-        assert "no scopes" in str(exc.value).lower()
+        message = str(exc.value)
+        assert "no scopes" in message.lower()
+        assert "<scope" not in message
+        assert "https://graph.microsoft.com/Mail.ReadWrite" in message
