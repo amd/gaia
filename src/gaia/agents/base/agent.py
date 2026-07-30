@@ -1087,15 +1087,15 @@ Do NOT wrap conversational replies in JSON.
             SkillValidationError: a required skill is installed at a version the
                 pin excludes, or the manifest's ``skills:`` block is malformed.
         """
-        from gaia.skills.consume import (
-            find_agent_manifest,
-            load_manifest_requirements,
-            resolve_requirements,
-        )
-
-        path = self._resolve_skill_manifest(manifest_path, find_agent_manifest)
+        # Locate the manifest with plain path checks first. This runs in every
+        # Agent.__init__, and importing gaia.skills would pull in the connector
+        # base module for the overwhelming majority of agents that declare no
+        # skills at all — so the import waits until there is a manifest to read.
+        path = self._resolve_skill_manifest(manifest_path)
         if path is None:
             return {}
+
+        from gaia.skills.consume import load_manifest_requirements, resolve_requirements
 
         requirements = load_manifest_requirements(path)
         if not requirements:
@@ -1124,10 +1124,23 @@ Do NOT wrap conversational replies in JSON.
             )
         return loaded
 
+    #: Manifest filename searched for beside an agent's module. Duplicated from
+    #: ``gaia.skills.consume.AGENT_MANIFEST_FILENAME`` so the hot path in
+    #: ``__init__`` can look for it without importing the skills package; the two
+    #: are asserted equal by ``tests/unit/test_skills_consume.py``.
+    _SKILL_MANIFEST_FILENAME: ClassVar[str] = "gaia-agent.yaml"
+
     def _resolve_skill_manifest(
-        self, explicit: Optional[Union[str, Path]], finder
+        self, explicit: Optional[Union[str, Path]] = None
     ) -> Optional[Path]:
-        """Locate the manifest whose ``skills:`` block applies to this agent."""
+        """Locate the manifest whose ``skills:`` block applies to this agent.
+
+        Searches the agent module's own directory then its parent — the two
+        layouts GAIA ships (a hub package keeps the manifest one level above the
+        Python package; a custom agent keeps it beside ``agent.py``). It stops
+        there deliberately: walking further up would eventually claim an unrelated
+        manifest from a site-packages sibling or the repo root.
+        """
         if explicit is not None:
             path = Path(explicit)
             if not path.is_file():
@@ -1157,7 +1170,12 @@ Do NOT wrap conversational replies in JSON.
         except TypeError:
             # A class defined in a REPL/exec has no source file to search from.
             return None
-        return finder(Path(module_file))
+        module_dir = Path(module_file).resolve().parent
+        for candidate in (module_dir, module_dir.parent):
+            manifest = candidate / self._SKILL_MANIFEST_FILENAME
+            if manifest.is_file():
+                return manifest
+        return None
 
     def unload_skill(self, name: str) -> bool:
         """Remove a loaded skill's tools and body. Returns True if it was loaded."""

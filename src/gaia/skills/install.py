@@ -48,7 +48,6 @@ from gaia.logger import get_logger
 from gaia.skills.errors import SkillError, SkillNotFoundError, SkillValidationError
 from gaia.skills.format import SKILL_FILENAME, Skill, parse_skill, validate_skill
 from gaia.skills.hub import (
-    RemoteSkill,
     download_artifact,
     fetch_skill_doc,
     fetch_skill_manifest,
@@ -267,12 +266,27 @@ def install_skill(
         destination_root.mkdir(parents=True, exist_ok=True)
         shutil.copytree(source_dir, target)
 
-        # Re-stamp the tier the signature actually earned, so `gaia skill info`
-        # and the loader read the enforced tier rather than the publisher's claim.
-        installed = skill
-        installed.gaia.security_tier = tier
-        installed.path = target / SKILL_FILENAME
-        installed.write(target / SKILL_FILENAME)
+        # Re-stamp only when the signature did not support the claim, so
+        # `gaia skill info` and the loader read the enforced tier rather than the
+        # publisher's. Rewriting SKILL.md invalidates the bundled
+        # SIGNATURE.json's digest for that file, which is why an install that
+        # honored the claim is left byte-identical and still verifiable; a
+        # downgraded one records its verified provenance in the lock instead.
+        if tier != claimed:
+            skill.gaia.security_tier = tier
+            skill.path = target / SKILL_FILENAME
+            skill.write(target / SKILL_FILENAME)
+            log.info(
+                "Re-stamped '%s' %s from claimed tier '%s' to enforced '%s'; the "
+                "bundled %s no longer matches the rewritten %s (its verified "
+                "provenance is recorded in the skill lock)",
+                name,
+                version,
+                claimed,
+                tier,
+                SIGNATURE_FILENAME,
+                SKILL_FILENAME,
+            )
 
     lock.record(
         LockEntry(
@@ -512,10 +526,8 @@ __all__ = [
     "InstallResult",
     "RemoveResult",
     "SkillInstallError",
-    "SIGNATURE_FILENAME",
     "install_skill",
     "installed_provenance",
     "parse_skill_ref",
     "remove_skill",
-    "RemoteSkill",
 ]

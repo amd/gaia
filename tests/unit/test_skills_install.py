@@ -362,6 +362,47 @@ def test_install_lands_the_skill_and_records_the_lock(marketplace, tmp_path):
     assert "search_web" in loaded.body
 
 
+def test_an_install_that_honored_the_claim_stays_verifiable_on_disk(
+    marketplace, tmp_path
+):
+    """No re-stamp when the signature backed the claim, so the bundle still verifies.
+
+    The installer rewrites SKILL.md only to *lower* a tier the signature did not
+    support. Rewriting invalidates the bundled SIGNATURE.json's digest for that
+    file, so skipping it when nothing changed keeps the installed copy auditable.
+    """
+    from gaia.skills.signing import SIGNATURE_FILENAME, verify_bundle
+
+    key = marketplace.keygen()
+    marketplace.trust(key)
+    result = marketplace.publish(_write_source(tmp_path), publisher="acme")
+    installed = marketplace.install("web-research")
+
+    assert installed.downgraded is False
+    assert (installed.path / SIGNATURE_FILENAME).is_file()
+    revalidated = verify_bundle(
+        installed.path,
+        name="web-research",
+        version="1.0.0",
+        trust_store=TrustStore.load(marketplace.skills_root),
+    )
+    assert revalidated.trusted is True
+    assert revalidated.key_id == result.key_id
+
+
+def test_a_downgraded_install_rewrites_the_manifest_and_says_so(marketplace, tmp_path):
+    """The converse: a lowered tier does rewrite, and the lock keeps the evidence."""
+    source = _write_source(tmp_path, tier="community", permissions=("network:read",))
+    _seed_hub_directly(marketplace, source, version="1.0.0")
+
+    result = marketplace.install("web-research", allow_experimental=True)
+
+    assert result.downgraded is True
+    assert marketplace.manager.reload()["web-research"].security_tier == "experimental"
+    entry = SkillLock.load(marketplace.skills_root).get("web-research")
+    assert (entry.claimed_tier, entry.installed_tier) == ("community", "experimental")
+
+
 def test_install_resolves_the_highest_version_satisfying_the_pin(marketplace, tmp_path):
     key = marketplace.keygen()
     marketplace.trust(key)

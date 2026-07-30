@@ -100,6 +100,18 @@ def test_duplicate_name_with_the_same_range_is_collapsed():
 # ---------------------------------------------------------------------------
 
 
+def test_the_agent_hot_path_constant_matches_the_canonical_one():
+    """``Agent`` duplicates the filename to keep ``gaia.skills`` off ``__init__``.
+
+    That import runs for every agent, so the cheap path check has to happen before
+    it — at the cost of one duplicated literal, which this pins.
+    """
+    from gaia.agents.base.agent import Agent
+    from gaia.skills.consume import AGENT_MANIFEST_FILENAME
+
+    assert Agent._SKILL_MANIFEST_FILENAME == AGENT_MANIFEST_FILENAME
+
+
 def test_finds_the_manifest_beside_the_module_and_one_level_up(tmp_path):
     package = tmp_path / "pkg" / "gaia_agent_demo"
     package.mkdir(parents=True)
@@ -505,6 +517,29 @@ def test_an_agent_with_no_manifest_loads_no_skills(
 
     agent = custom_agent_harness(None)(silent_mode=True)
     assert agent.loaded_skills == {}
+
+
+def test_manifest_lookup_does_not_reach_the_skills_parser_without_a_manifest(
+    tmp_path, monkeypatch, custom_agent_harness
+):
+    """The autoload hook runs in every Agent.__init__, so it must stay cheap.
+
+    Importing ``gaia.skills.consume`` drags in the connector base module. An agent
+    with no manifest — which is every agent today — must not pay for it, so the
+    path check happens before the import.
+    """
+    import gaia.skills.consume as consume_module
+
+    _stub_llm(monkeypatch)
+    monkeypatch.setenv("GAIA_CONFIG_DIR", str(tmp_path / "home"))
+
+    def explode(*_args, **_kwargs):
+        raise AssertionError(
+            "load_manifest_requirements was reached for an agent with no manifest"
+        )
+
+    monkeypatch.setattr(consume_module, "load_manifest_requirements", explode)
+    assert custom_agent_harness(None)(silent_mode=True).loaded_skills == {}
 
 
 def test_an_agent_whose_manifest_declares_no_skills_loads_none(

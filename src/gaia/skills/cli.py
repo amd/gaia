@@ -523,7 +523,7 @@ def _handle_search(args: argparse.Namespace) -> int:
             f"{entry.get('id', '?'):<28} {entry.get('latest_version', '-'):<10} "
             f"{entry.get('security_tier', '-'):<13} {tools:<6} {description}"
         )
-    print(f"\nInstall one with: gaia skill install <name>")
+    print("\nInstall one with: gaia skill install <name>")
     return EXIT_OK
 
 
@@ -610,10 +610,8 @@ def _handle_publish(args: argparse.Namespace) -> int:
     print(f"✅ {verb} skill '{result.name}' {result.version}")
     print(f"   artifact    : {result.artifact_filename}")
     print(f"   tier        : {result.security_tier}")
-    print(
-        f"   signature   : "
-        + (f"signed with key {result.key_id}" if result.signed else "unsigned")
-    )
+    provenance = f"signed with key {result.key_id}" if result.signed else "unsigned"
+    print(f"   signature   : {provenance}")
     if result.audit is not None:
         print(
             f"   audit       : {result.audit.verdict} "
@@ -641,7 +639,7 @@ def _handle_keygen(args: argparse.Namespace) -> int:
     print(
         "\n   Share the PUBLIC key with anyone who should trust your skills; they "
         "run:\n"
-        f"     gaia skill trust add <public-key> --publisher <you>"
+        "     gaia skill trust add <public-key> --publisher <you>"
     )
     return EXIT_OK
 
