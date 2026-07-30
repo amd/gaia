@@ -429,6 +429,36 @@ def _normalize_plain_text_answer(text: str) -> str:
     return _LATEX_CMD_RE.sub(_sub, text)
 
 
+# Redact common credential/token shapes out of a per-row autonomy failure's
+# exception text before it leaves the process (#2625 — adversarial C5).
+# Provider/HTTP client exceptions routinely embed request/response text —
+# auth headers, cookies, tokens — in ``str(exc)``.
+_AUTONOMY_ERROR_SENSITIVE_RE = re.compile(
+    r"(authorization|bearer|cookie|set-cookie|x-api-key|api[-_]?key|"
+    r"access[-_]?token|refresh[-_]?token)\s*[:=]\s*\S+",
+    re.IGNORECASE,
+)
+#: Hard cap on a sanitized autonomy error's message length (#2625 — C5) — the
+#: length cap alone bounds how much of a raw provider payload can leak even
+#: past the pattern redaction above.
+_AUTONOMY_ERROR_MESSAGE_MAX_LEN = 200
+
+
+def _sanitize_autonomy_error(message_id: Optional[str], exc: Exception) -> Dict[str, Any]:
+    """Redact + length-cap a per-row autonomy failure (#2625 — adversarial C5).
+
+    ``report["errors"]`` is returned verbatim as an HTTP 200 body
+    (``agent_routes.py``'s ``/autonomy/run``) and can be shipped off-box in a
+    ``gaia diagnostics`` bundle. This keeps the exception *type* (always
+    safe) and a redacted, length-capped rendering of its message — never the
+    raw provider payload.
+    """
+    text = _AUTONOMY_ERROR_SENSITIVE_RE.sub(r"\1: [redacted]", str(exc))
+    if len(text) > _AUTONOMY_ERROR_MESSAGE_MAX_LEN:
+        text = text[:_AUTONOMY_ERROR_MESSAGE_MAX_LEN].rstrip() + "…[truncated]"
+    return {"message_id": message_id, "error_type": type(exc).__name__, "error": text}
+
+
 # ---------------------------------------------------------------------------
 # Agent
 # ---------------------------------------------------------------------------
@@ -550,6 +580,14 @@ class EmailTriageAgent(
     # single turn, the agent surfaces a single batch confirm.
     ORGANIZE_BATCH_OP_THRESHOLD = 5
     ORGANIZE_BATCH_SENDER_THRESHOLD = 3
+
+    # #2625 — an unattended cycle must not grind through a systemic outage
+    # logging one identical error per message. This many CONSECUTIVE
+    # per-message `_autonomy_execute` failures (resets on any execute
+    # success; a suggest/draft/confirm/skipped row neither resets nor counts
+    # — it carries no signal about whether the mailbox backend is failing)
+    # stops the cycle early.
+    AUTONOMY_MAX_CONSECUTIVE_FAILURES = 3
 
     def __init__(self, config: Optional[EmailAgentConfig] = None):
         config = config or EmailAgentConfig()
@@ -1413,6 +1451,22 @@ class EmailTriageAgent(
         as the ones that do. A row the candidate map never considered at all
         (no signal, e.g. urgent/needs-response/personal mail) has no
         ``decisions`` entry; it only bumps ``skipped``, same as before.
+
+        Kill pre-emption (#2624): ``self.config.autonomy_level`` is re-read
+        live immediately before each row's execute call, so a kill issued
+        while this cycle is running (same session, single-worker sidecar —
+        ``agent_routes.py``'s REST/CLI surface) stops the batch instead of
+        only affecting the next one. ``report["stopped"]`` names why the
+        loop ended early (``"autonomy_off"`` or ``"consecutive_failures"``),
+        ``None`` when it ran to completion.
+
+        Partial-failure tolerance (#2625): a per-row execute failure is
+        caught, recorded in ``report["errors"]`` (sanitized —
+        :func:`_sanitize_autonomy_error`), and the cycle continues — up to
+        :data:`AUTONOMY_MAX_CONSECUTIVE_FAILURES` CONSECUTIVE failures, past
+        which a systemic outage would otherwise log one identical error per
+        remaining message. A triage-level failure (raised before this loop
+        starts) is NOT a per-message error and still propagates.
         """
         from gaia_agent_email.tools.read_tools import extract_sender_email
         from gaia_agent_email.tools.triage_heuristics import LABEL_IMPORTANT
@@ -1427,6 +1481,8 @@ class EmailTriageAgent(
             "decisions": [],
             "skipped": 0,
             "already_proposed": 0,
+            "errors": [],
+            "stopped": None,
         }
         policy = self._autonomy_policy()
         if not policy.enabled:
@@ -1435,6 +1491,7 @@ class EmailTriageAgent(
         max_messages = int(context.get("max_messages", 25))
         triage = self._triage_all_backends(max_messages=max_messages)
 
+        consecutive_failures = 0
         for row in triage.get("results", []):
             candidate = self._autonomy_candidate(row)
             if candidate is None:
@@ -1469,24 +1526,40 @@ class EmailTriageAgent(
                 }
             )
             if decision.action == "auto":
-                executed = self._autonomy_execute(action_type, row)
-                # Index the action so a later undo is attributed to this scope
-                # and lands a negative signal on the right ledger rows.
-                action_id = executed.get("action_id")
-                if action_id:
-                    trust.record_autonomy_action(
-                        self,
-                        action_id=action_id,
-                        action_type=action_type,
-                        sender=sender,
-                        category=row.get("category", ""),
+                # #2624: re-check the LIVE level, never the frozen `policy`
+                # (its `.level`/`.enabled` are copied once at construction,
+                # before this loop starts, so they can never observe a kill
+                # fired mid-cycle). A plain str attribute is read/write-
+                # atomic under the GIL, so the worst case is staleness of
+                # exactly one row.
+                if self.config.autonomy_level == trust.LEVEL_OFF:
+                    report["stopped"] = "autonomy_off"
+                    break
+                try:
+                    executed = self._autonomy_execute(action_type, row)
+                except Exception as exc:
+                    consecutive_failures += 1
+                    report["errors"].append(
+                        _sanitize_autonomy_error(message_id, exc)
                     )
-                # A message we once proposed and now act on is resolved — clear
-                # its re-proposal guard so the row can't linger open.
-                if message_id:
-                    trust.resolve_proposal(
-                        self, message_id=message_id, action_type=action_type
+                    logger.warning(
+                        "autonomy cycle: row %s (%s) failed: %s: %s",
+                        message_id,
+                        action_type,
+                        type(exc).__name__,
+                        exc,
                     )
+                    if (
+                        consecutive_failures
+                        >= self.AUTONOMY_MAX_CONSECUTIVE_FAILURES
+                    ):
+                        report["stopped"] = "consecutive_failures"
+                        break
+                    continue
+                # #2625: record the row as executed the INSTANT the mutation
+                # succeeds, before the bookkeeping calls below — a
+                # bookkeeping failure must never reclassify an already-
+                # mutated row as an error (adversarial C2/C3).
                 report["executed"].append(
                     {
                         "message_id": message_id,
@@ -1497,6 +1570,45 @@ class EmailTriageAgent(
                         **executed,
                     }
                 )
+                consecutive_failures = 0
+                # Index the action so a later undo is attributed to this scope
+                # and lands a negative signal on the right ledger rows.
+                action_id = executed.get("action_id")
+                if action_id:
+                    try:
+                        trust.record_autonomy_action(
+                            self,
+                            action_id=action_id,
+                            action_type=action_type,
+                            sender=sender,
+                            category=row.get("category", ""),
+                        )
+                    except Exception as exc:
+                        # Logged only — the row already succeeded and stays
+                        # in `executed`; an audit-trail write failing must
+                        # not un-succeed it.
+                        logger.warning(
+                            "autonomy cycle: record_autonomy_action failed "
+                            "for already-executed row %s: %s: %s",
+                            message_id,
+                            type(exc).__name__,
+                            exc,
+                        )
+                # A message we once proposed and now act on is resolved — clear
+                # its re-proposal guard so the row can't linger open.
+                if message_id:
+                    try:
+                        trust.resolve_proposal(
+                            self, message_id=message_id, action_type=action_type
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "autonomy cycle: resolve_proposal failed for "
+                            "already-executed row %s: %s: %s",
+                            message_id,
+                            type(exc).__name__,
+                            exc,
+                        )
             elif decision.action in ("suggest", "draft"):
                 # Re-proposal guard: a message already proposed and not yet acted
                 # on must not spawn a duplicate goal every cycle. Without this,
@@ -1666,8 +1778,16 @@ class EmailTriageAgent(
     def set_autonomy_level(self, level: str) -> Dict[str, Any]:
         """Change the autonomy level at runtime (pause / resume / kill switch).
 
-        ``off`` is the kill switch — the next heartbeat is a no-op. Returns the
-        applied status. Raises ``ValueError`` (translated to HTTP 400 at the
+        ``off`` is the kill switch. For a cycle already running against THIS
+        agent object — the REST/CLI session surface on a single-worker
+        sidecar (``agent_routes.py``) — the effect is pre-emptive, not just
+        "the next heartbeat is a no-op" (#2624): ``_run_email_autonomy_cycle``
+        re-reads this live field before executing each row and stops
+        mid-batch. The scheduler is the documented exception — each fire
+        builds its own agent from ``GAIA_EMAIL_AUTONOMY_LEVEL`` and never
+        touches this instance, so a kill issued here does not reach an
+        already-scheduled run (tracked separately). Returns the applied
+        status. Raises ``ValueError`` (translated to HTTP 400 at the
         boundary) on an unknown level rather than silently ignoring it.
         """
         if level not in trust.AUTONOMY_LEVELS:
