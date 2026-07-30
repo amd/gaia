@@ -27,6 +27,9 @@ on:
     branches: [main]
     paths:
       - 'website/**'
+      # The hub page renders these; kept in sync with website-ci.yml's filter so
+      # an agent change can never land without the site rebuilding.
+      - 'hub/agents/**/gaia-agent.yaml'
       - '.github/workflows/deploy_website.yml'
   workflow_dispatch:
 
