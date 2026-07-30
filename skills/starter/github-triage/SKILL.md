@@ -37,6 +37,16 @@ Once configured, the GitHub MCP server's tools (issue search, issue read,
 comment, label) are registered into the agent's tool registry. Use the names the
 agent actually lists; they are defined by the MCP server, not by this skill.
 
+In the Agent UI, MCP tools are additionally gated per agent by the activations
+ledger, so grant this connector to the agent you are using:
+
+```bash
+gaia connectors activations activate mcp-github installed:chat
+```
+
+`gaia chat` does not apply that filter — a configured server's tools are visible
+there as soon as the connector is set up.
+
 ## Procedure
 
 1. **Pull the backlog.** Fetch open issues for the repository the user named,

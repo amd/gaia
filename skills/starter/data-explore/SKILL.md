@@ -32,12 +32,20 @@ against those numbers does not. Always move the data into a table first.
 3. **Insert with `insert_data(table_name, data)`.** Load everything, not a
    sample — the outliers are usually the point.
 4. **Verify the load.** `list_tables()` to confirm the schema landed as you
-   intended, then `query_data("SELECT COUNT(*) FROM <table>")` and compare to
-   the source row count. If they differ, find out why before answering anything.
+   intended, then `query_data("SELECT COUNT(*) FROM scratch_<table>")` and
+   compare to the source row count. If they differ, find out why before
+   answering anything.
 5. **Answer with `query_data(sql)`.** One query per question. Show the SQL you
    ran alongside the result so the user can check your reasoning.
 6. **Say what the data cannot tell you.** Missing rows, nulls, and a single
    month of history are all limits worth naming.
+
+## The prefix rule
+
+**Every table name in a query carries the `scratch_` prefix.** A table created
+as `create_table("sales", ...)` is queried as `SELECT ... FROM scratch_sales`.
+Getting this wrong is the single most common failure here — the query errors
+instead of returning data, and no amount of rephrasing the question fixes it.
 
 ## Cleaning rules
 

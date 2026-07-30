@@ -12,7 +12,7 @@ metadata:
       python: ">=3.10"
     tools:
       - name: fetch_rss
-        description: Fetch an RSS or Atom feed and return its newest entries as structured data.
+        description: Fetch an RSS or Atom feed and return its entries as structured data.
         parameters:
           url:
             type: string
@@ -41,9 +41,11 @@ signature exactly, plus the `network:read` permission the tool actually uses.
 
 1. **Fetch the feed** with `rss-digest/fetch_rss(url, max_entries=10)`. It
    returns `{"feed_title": ..., "entries": [{"title", "link", "published",
-   "summary"}], "count": N}`.
+   "summary"}], "count": N}` in feed order — conventionally newest first, but
+   the feed decides, so read the `published` values rather than assuming.
 2. **If the call returns an `error` key, report it verbatim.** A malformed feed,
-   a 404, or a blocked host are all real answers; an invented digest is not.
+   a 404, a blocked host, a feed with no recognizable entries, and a feed
+   carrying a DTD are all real answers; an invented digest is not.
 3. **Digest the entries.** One line per entry: what it is and why it might
    matter, with its link. Group by theme when more than five entries share one.
 4. **Lead with the exception.** If one entry is materially different from the
@@ -56,6 +58,10 @@ signature exactly, plus the `network:read` permission the tool actually uses.
 
 - The tool follows GAIA's `WebClient`, so private and loopback addresses are
   refused. Point it at a public feed.
+- Feeds declaring a DTD are refused rather than parsed: entity expansion is a
+  denial-of-service vector, and no real feed needs one.
+- RSS 1.0 / RDF feeds are not supported and report an error rather than an empty
+  digest — "nothing published" and "I could not read this" must never look alike.
 - Entry summaries in feeds are frequently truncated or HTML-laden. Treat them as
   a headline, not the article; say so rather than over-reading a stub.
 

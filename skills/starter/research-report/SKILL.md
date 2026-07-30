@@ -11,6 +11,7 @@ metadata:
     tools_required:
       - search_web
       - fetch_page
+      - write_file
       - index_document
       - query_documents
     provenance:
@@ -42,9 +43,10 @@ decomposition — a single search rarely answers a real research question.
 
 ## When the answer must outlive the session
 
-If the user wants to keep querying the material later, save the fetched pages to
-files and `index_document(file_path)` each one. After that `query_documents`
-answers follow-ups from the indexed corpus instead of re-fetching the web.
+If the user wants to keep querying the material later, save each fetched page
+with `write_file(file_path, content)` and `index_document(file_path)` it. After
+that `query_documents` answers follow-ups from the indexed corpus instead of
+re-fetching the web.
 
 ## Notes
 

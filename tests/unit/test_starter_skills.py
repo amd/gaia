@@ -20,6 +20,7 @@ developer's real ``~/.gaia/skills`` or ``~/.claude/skills``.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -224,6 +225,63 @@ def test_starter_skill_body_mentions_the_tools_it_declares(skill_dir: Path):
 
 
 # ----------------------------------------------------------------------
+# Semantic guards on the procedure text
+#
+# Naming a real tool is not enough — a body can call a real tool with an
+# argument the tool rejects, which fails only at runtime in front of a user.
+# ----------------------------------------------------------------------
+
+_CATEGORY_ARG = re.compile(r"""category\s*=\s*["']([a-z_]+)["']""")
+_SQL_FROM = re.compile(r"\bFROM\s+([A-Za-z_<][\w<>_]*)", re.IGNORECASE)
+
+
+@pytest.mark.parametrize("skill_dir", STARTER_DIRS, ids=_ids(STARTER_DIRS))
+def test_starter_skill_uses_only_real_memory_categories(skill_dir: Path):
+    """``remember``/``recall`` reject an unknown category.
+
+    ``remember`` returns a validation error and ``recall`` silently matches
+    nothing, so an invented category breaks a memory skill in the one place a
+    user would never think to look.
+    """
+    from gaia.agents.base.memory_store import VALID_CATEGORIES
+
+    skill = parse_skill_file(skill_dir)
+    used = set(_CATEGORY_ARG.findall(skill.body))
+    unknown = sorted(used - set(VALID_CATEGORIES))
+
+    assert not unknown, (
+        f"{skill.name} passes category={unknown} to a memory tool, but the "
+        f"store only accepts {sorted(VALID_CATEGORIES)}"
+    )
+
+
+@pytest.mark.parametrize("skill_dir", STARTER_DIRS, ids=_ids(STARTER_DIRS))
+def test_starter_skill_scratchpad_sql_uses_the_table_prefix(skill_dir: Path):
+    """Scratchpad tables are only reachable through their ``scratch_`` prefix.
+
+    A query without it errors, so example SQL that omits the prefix teaches the
+    model the one thing guaranteed to fail.
+    """
+    from gaia.scratchpad.service import ScratchpadService
+
+    skill = parse_skill_file(skill_dir)
+    if "query_data" not in skill.gaia.tools_required:
+        pytest.skip("not a scratchpad skill")
+
+    prefix = ScratchpadService.TABLE_PREFIX
+    unprefixed = [
+        table
+        for table in _SQL_FROM.findall(skill.body)
+        if not table.lower().startswith(prefix)
+    ]
+
+    assert not unprefixed, (
+        f"{skill.name} shows SQL selecting FROM {unprefixed} without the "
+        f"{prefix!r} prefix; those queries cannot resolve"
+    )
+
+
+# ----------------------------------------------------------------------
 # Discovery + loading through the shipped runtime
 # ----------------------------------------------------------------------
 
@@ -327,6 +385,111 @@ def test_rss_digest_registers_its_declared_tool(pack_manager: SkillManager):
         unregister_skill_tools("rss-digest")
         _TOOL_REGISTRY.clear()
         _TOOL_REGISTRY.update(before)
+
+
+def _load_rss_tools():
+    """Import the skill's ``tools.py`` as a module, without registering it."""
+    import importlib.util
+
+    path = STARTER_ROOT / "rss-digest" / "tools.py"
+    spec = importlib.util.spec_from_file_location("starter_rss_digest_tools", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_RSS_2_0 = b"""<?xml version="1.0"?>
+<rss version="2.0"><channel><title>Example Feed</title>
+<item><title>First</title><link>https://example.com/1</link>
+<pubDate>Mon, 01 Jan 2029 00:00:00 GMT</pubDate>
+<description>One</description></item>
+<item><title>Second</title><link>https://example.com/2</link></item>
+</channel></rss>"""
+
+_ATOM = b"""<?xml version="1.0"?>
+<feed xmlns="http://www.w3.org/2005/Atom"><title>Atom Feed</title>
+<entry><title>Alpha</title><link href="https://example.com/a"/>
+<updated>2029-01-01T00:00:00Z</updated><summary>A</summary></entry>
+</feed>"""
+
+
+def test_fetch_rss_parses_rss_2_0():
+    """The RSS branch, exercised without network."""
+    result = _load_rss_tools().parse_feed(_RSS_2_0, source="x", max_entries=10)
+
+    assert result["feed_title"] == "Example Feed"
+    assert result["count"] == 2
+    assert result["entries"][0]["title"] == "First"
+    assert result["entries"][0]["link"] == "https://example.com/1"
+
+
+def test_fetch_rss_parses_atom_and_reads_link_from_href():
+    """Atom puts the URL in an attribute, not the element text."""
+    result = _load_rss_tools().parse_feed(_ATOM, source="x", max_entries=10)
+
+    assert result["feed_title"] == "Atom Feed"
+    assert result["entries"][0]["link"] == "https://example.com/a"
+
+
+def test_fetch_rss_honors_max_entries():
+    result = _load_rss_tools().parse_feed(_RSS_2_0, source="x", max_entries=1)
+
+    assert result["count"] == 1
+
+
+@pytest.mark.parametrize(
+    "payload, expected",
+    [
+        (b"<html><body>not a feed</body></html>", "no RSS <item>"),
+        (b"<rss><channel><title>t</title></channel></rss>", "no RSS <item>"),
+        (b"not xml at all <<<", "did not parse"),
+        (
+            b'<?xml version="1.0"?><!DOCTYPE l [<!ENTITY a "b">]><rss><item/></rss>',
+            "DTD",
+        ),
+    ],
+    ids=["html", "empty-feed", "malformed", "doctype"],
+)
+def test_fetch_rss_fails_loudly_instead_of_returning_an_empty_digest(
+    payload: bytes, expected: str
+):
+    """ "Nothing published" and "I could not read this" must never look alike.
+
+    The DTD case also covers the entity-expansion vector: stdlib ElementTree
+    expands entities, so a feed carrying a DTD is refused rather than parsed.
+    """
+    result = _load_rss_tools().parse_feed(payload, source="x", max_entries=10)
+
+    assert "error" in result, f"expected an error, got {result}"
+    assert expected in result["error"]
+    assert "entries" not in result
+
+
+def test_the_guide_consumes_lists_match_the_manifests():
+    """The guide names each skill's tools; drift makes it quietly wrong."""
+    guide = (REPO_ROOT / "docs" / "guides" / "starter-skills.mdx").read_text(
+        encoding="utf-8"
+    )
+    sections = re.split(r"^### ", guide, flags=re.MULTILINE)[1:]
+
+    documented = {}
+    for section in sections:
+        name = section.splitlines()[0].strip()
+        match = re.search(r"- \*\*Consumes\*\* —(.+?)(?=\n- \*\*|\n\n)", section, re.S)
+        if match:
+            documented[name] = set(re.findall(r"`([a-z_]+)`", match.group(1)))
+
+    assert documented, "no '**Consumes**' bullets found — did the guide change shape?"
+
+    for skill_dir in STARTER_DIRS:
+        skill = parse_skill_file(skill_dir)
+        if skill.name not in documented:
+            continue
+        assert documented[skill.name] == set(skill.gaia.tools_required), (
+            f"the guide's Consumes list for {skill.name} disagrees with its "
+            f"tools_required: guide={sorted(documented[skill.name])} "
+            f"manifest={sorted(skill.gaia.tools_required)}"
+        )
 
 
 def test_the_guides_run_a_skill_snippet_still_type_checks():

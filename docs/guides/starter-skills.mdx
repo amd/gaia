@@ -81,7 +81,8 @@ not confirm" section.
 
 - **Demonstrates** — multi-step planning, web search + fetch, optional RAG over
   what it fetched.
-- **Consumes** — `search_web`, `fetch_page`, `index_document`, `query_documents`.
+- **Consumes** — `search_web`, `fetch_page`, `write_file`, `index_document`,
+  `query_documents`.
 - **Configure** — nothing. Ask it for a report on anything.
 - **Note** — `search_web` is DuckDuckGo-backed; coverage is uneven and it is
   rate-limited.
@@ -175,6 +176,8 @@ duplicates, ranks by severity × reach, and drafts the reply without sending it.
   ```bash
   gaia connectors configure mcp-github --set GITHUB_TOKEN=<your-token>
   gaia connectors list
+  # Agent UI only — MCP tools are gated per agent by the activations ledger:
+  gaia connectors activations activate mcp-github installed:chat
   ```
 
   The token goes to the OS keyring, never into the skill file. Its tools come

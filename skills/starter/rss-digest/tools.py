@@ -9,6 +9,7 @@ refused, response size capped) instead of re-implementing them.
 
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List
 from xml.etree import ElementTree
 
@@ -16,6 +17,10 @@ from gaia.agents.base.tools import tool
 
 # Atom uses a namespace; RSS 2.0 does not. Strip it so one parser handles both.
 _ATOM_NS = "{http://www.w3.org/2005/Atom}"
+
+_DOCTYPE_RE = re.compile(rb"<!DOCTYPE", re.IGNORECASE)
+# A DTD may only appear in the prolog, so scanning the head is sufficient.
+_DOCTYPE_SCAN_BYTES = 4096
 
 
 def _text(element: Any, *names: str) -> str:
@@ -34,7 +39,7 @@ def _text(element: Any, *names: str) -> str:
 
 
 def _parse_entries(root: Any, max_entries: int) -> List[Dict[str, str]]:
-    """Extract RSS ``<item>`` or Atom ``<entry>`` elements, newest first."""
+    """Extract RSS ``<item>`` or Atom ``<entry>`` elements, in feed order."""
     items = root.iter("item")
     entries = [
         {
@@ -60,11 +65,11 @@ def _parse_entries(root: Any, max_entries: int) -> List[Dict[str, str]]:
 
 @tool
 def fetch_rss(url: str, max_entries: int = 10) -> dict:
-    """Fetch an RSS or Atom feed and return its newest entries as structured data.
+    """Fetch an RSS or Atom feed and return its entries as structured data.
 
     Args:
         url: The feed URL. Must be a public http(s) address.
-        max_entries: Maximum entries to return, newest first.
+        max_entries: Maximum entries to return, in feed order.
 
     Returns:
         ``{"feed_title", "entries", "count"}`` on success, or ``{"error"}``
@@ -75,29 +80,56 @@ def fetch_rss(url: str, max_entries: int = 10) -> dict:
 
     from gaia.web.client import WebClient
 
+    client = WebClient()
     try:
-        response = WebClient().get(url)
+        response = client.get(url)
         response.raise_for_status()
+        payload = response.content
     except Exception as exc:  # noqa: BLE001 - reported to the model, not swallowed
         return {
             "error": f"Could not fetch {url}: {type(exc).__name__}: {exc}. "
             "Check the URL is a reachable public feed."
         }
+    finally:
+        client.close()
+
+    return parse_feed(payload, source=url, max_entries=max_entries)
+
+
+def parse_feed(payload: bytes, *, source: str, max_entries: int) -> dict:
+    """Parse feed bytes into the ``fetch_rss`` result shape.
+
+    Split out from the tool so the parsing rules are testable without network.
+    """
+    # Entity expansion is a DoS vector and stdlib ElementTree performs it. A
+    # real RSS/Atom feed never needs a DTD, so refuse one outright.
+    if _DOCTYPE_RE.search(payload[:_DOCTYPE_SCAN_BYTES]):
+        return {
+            "error": f"{source} declares a DTD (<!DOCTYPE>). Feeds do not need one "
+            "and entity expansion is a denial-of-service vector, so it was refused."
+        }
 
     try:
-        root = ElementTree.fromstring(response.content)
+        root = ElementTree.fromstring(payload)
     except ElementTree.ParseError as exc:
         return {
-            "error": f"{url} did not parse as RSS/Atom XML: {exc}. "
+            "error": f"{source} did not parse as RSS/Atom XML: {exc}. "
             "The URL may point at an HTML page rather than a feed."
+        }
+
+    entries = _parse_entries(root, max_entries)
+    if not entries:
+        return {
+            "error": f"{source} parsed as XML but contains no RSS <item> or Atom "
+            "<entry> elements. It may be an unsupported dialect (RSS 1.0/RDF) or "
+            "an empty feed — reported rather than returned as an empty digest."
         }
 
     channel = root.find("channel")
     title_source = channel if channel is not None else root
-    entries = _parse_entries(root, max_entries)
 
     return {
-        "feed_title": _text(title_source, "title") or url,
+        "feed_title": _text(title_source, "title") or source,
         "entries": entries,
         "count": len(entries),
     }

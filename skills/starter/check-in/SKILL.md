@@ -24,8 +24,9 @@ commitments, ask about them, write back what you learn.
 ## Procedure
 
 1. **Recall open commitments.**
-   `recall(query="commitment", category="task", limit=20)` — the things the user
-   said they would do and has not closed out.
+   `recall(category="reminder", limit=20)` — the things the user said they would
+   do and has not closed out. `reminder` is the category for todos; there is no
+   `task` category, and passing one silently matches nothing.
 2. **Recall recent context.** `search_past_conversations(days=7, limit=10)` for
    what has actually been going on. Use it to make the greeting specific.
 3. **Open with one concrete follow-up**, not a generic greeting:
@@ -37,7 +38,7 @@ commitments, ask about them, write back what you learn.
 5. **Write back what changed.**
    - Done → `update_memory(knowledge_id=..., content="... — completed <date>")`
    - Still open → leave it, but note the new expected date
-   - New → `remember(fact="<commitment> by <date>", category="task", due_at="<ISO date>")`
+   - New → `remember(fact="<commitment> by <date>", category="reminder", due_at="<ISO date>")`
 6. **Close with one line** on what you will ask about next time.
 
 ## Tone
