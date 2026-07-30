@@ -73,6 +73,30 @@ def seeded_connection_no_secret(google_provider_no_secret):
     yield google_provider_no_secret
 
 
+@pytest.fixture
+def microsoft_provider_no_secret(monkeypatch):
+    """A Microsoft provider with no client_secret — the correct, expected
+    state for a public PKCE client (#1638)."""
+    monkeypatch.setenv("GAIA_MICROSOFT_CLIENT_ID", "test-app-guid")
+    monkeypatch.delenv("GAIA_MICROSOFT_CLIENT_SECRET", raising=False)
+    _registry.clear()
+    from gaia.connectors.providers import get as get_provider
+
+    return get_provider("microsoft")
+
+
+@pytest.fixture
+def seeded_microsoft_connection_no_secret(microsoft_provider_no_secret):
+    save_connection(
+        provider="microsoft",
+        account_email="alice@outlook.com",
+        refresh_token="seed-refresh-token",
+        scopes=["https://graph.microsoft.com/Mail.Read"],
+        client_id_hash=microsoft_provider_no_secret.client_id_hash,
+    )
+    yield microsoft_provider_no_secret
+
+
 class TestToken401ActionableError:
     @respx.mock
     async def test_401_with_secret_present_raises_actionable_reauth(
@@ -137,3 +161,25 @@ class TestToken401ActionableError:
         )
         with pytest.raises(ConnectorsError):
             await get_or_refresh("google")
+
+    @respx.mock
+    async def test_401_for_secretless_microsoft_raises_reauth_not_config_error(
+        self, seeded_microsoft_connection_no_secret
+    ):
+        """#1638: a secretless provider (Microsoft) is the correct, expected
+        state. Its 401 must fall through to the normal reconnect advice
+        (AuthRequiredError/REAUTH_REQUIRED), never the Google-specific
+        "go configure a client_secret" ConfigurationError — that message
+        tells a Microsoft user to enter a secret they must not have."""
+        respx.post("https://login.microsoftonline.com/common/oauth2/v2.0/token").mock(
+            return_value=httpx.Response(
+                401,
+                json={
+                    "error": "invalid_grant",
+                    "error_description": "AADSTS700082: expired refresh token.",
+                },
+            )
+        )
+        with pytest.raises(AuthRequiredError) as exc_info:
+            await get_or_refresh("microsoft")
+        assert exc_info.value.reason == AuthRequiredError.Reason.REAUTH_REQUIRED
