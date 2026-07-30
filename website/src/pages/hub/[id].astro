@@ -330,20 +330,25 @@ const requirementRows = [
                 class="g-cmd pg-copy group mt-2.5 w-full border-g-border text-left transition-colors hover:border-g-gold-dim"
               >
                 <span class="select-none text-g-gold" aria-hidden="true">$</span>
-                <span class="min-w-0 flex-1 truncate">npx {agent.npm_package} playground</span>
+                <span data-pg-cmd class="min-w-0 flex-1 truncate">npx {agent.npm_package} playground</span>
                 <span class="pg-copy-label flex-none select-none text-[11px] text-g-code-text/70 group-hover:text-g-gold">copy</span>
               </button>
+              <p data-pg-copy-status class="sr-only" role="status"></p>
               <a
                 href={agent.playground_url}
                 target="_blank"
                 rel="noopener"
                 data-pg-open
                 aria-disabled="true"
+                aria-describedby="pg-status"
                 class="mt-2.5 flex items-center justify-center rounded-g-btn border border-g-border px-4 py-2 text-[13px] font-medium text-g-faint transition-colors"
               >
                 Open playground
               </a>
-              <p data-pg-status class="mt-2.5 text-[11px] text-g-faint">Checking if it's running…</p>
+              {/* role="status": the sidecar coming up, and a blocked click, are
+                  both silent otherwise. aria-describedby ties the reason the
+                  link is disabled to the link itself. */}
+              <p id="pg-status" data-pg-status role="status" class="mt-2.5 text-[11px] text-g-faint">Checking if it's running…</p>
             </SidebarCard>
           </div>
         )}
@@ -495,25 +500,36 @@ const requirementRows = [
   const pg = document.querySelector('[data-playground]');
   if (pg) {
     const copyBtn = pg.querySelector<HTMLButtonElement>('[data-pg-copy]');
+    const copyStatus = pg.querySelector<HTMLElement>('[data-pg-copy-status]');
     let revert: number | undefined;
     copyBtn?.addEventListener('click', async () => {
+      const label = copyBtn.querySelector('.pg-copy-label');
+      const reset = (ms: number) => {
+        clearTimeout(revert);
+        revert = window.setTimeout(() => {
+          if (label) label.textContent = 'copy';
+          if (copyStatus) copyStatus.textContent = '';
+        }, ms);
+      };
       try {
         await navigator.clipboard.writeText(copyBtn.dataset.pgCopy || '');
-        const label = copyBtn.querySelector('.pg-copy-label');
-        if (label) {
-          label.textContent = 'copied';
-          clearTimeout(revert);
-          revert = window.setTimeout(() => (label.textContent = 'copy'), 1600);
-        }
+        if (label) label.textContent = 'copied';
+        if (copyStatus) copyStatus.textContent = 'Command copied to the clipboard.';
+        reset(1600);
       } catch {
-        // Same non-secure-origin / permission case as InstallMethods: tell the
-        // user instead of leaving them to paste stale clipboard contents.
-        const label = copyBtn.querySelector('.pg-copy-label');
-        if (label) {
-          label.textContent = 'select & copy';
-          clearTimeout(revert);
-          revert = window.setTimeout(() => (label.textContent = 'copy'), 2600);
+        // Same non-secure-origin / permission case as InstallMethods: select the
+        // command so "select & copy" is an instruction the page has honoured.
+        if (label) label.textContent = 'select & copy';
+        const cmd = copyBtn.querySelector('[data-pg-cmd]');
+        if (cmd) {
+          const range = document.createRange();
+          range.selectNodeContents(cmd);
+          const sel = getSelection();
+          sel?.removeAllRanges();
+          sel?.addRange(range);
         }
+        if (copyStatus) copyStatus.textContent = 'Copying was blocked. The command is selected — press Control or Command + C to copy it.';
+        reset(2600);
       }
     });
 
@@ -523,7 +539,19 @@ const requirementRows = [
     let healthUrl = '';
     try { healthUrl = new URL(pgUrl).origin + '/health'; } catch { /* invalid */ }
 
-    const setRunning = (up: boolean) => {
+    // A blocked-click message survives a few idle polls, but never a real state
+    // change — the status is the link's aria-describedby, so it must not claim
+    // "can't open it yet" once the link has actually gone live.
+    let holdUntil = 0;
+    let lastUp: boolean | null = null;
+
+    // Only write when the text actually changes: role="status" is polite-live,
+    // and re-asserting the same string every 3s is what makes a region chatty.
+    const say = (msg: string) => {
+      if (status && status.textContent !== msg) status.textContent = msg;
+    };
+
+    const setRunning = (up: boolean, quiet = false) => {
       if (open) {
         open.setAttribute('aria-disabled', up ? 'false' : 'true');
         open.classList.toggle('border-g-gold-dim', up);
@@ -531,11 +559,18 @@ const requirementRows = [
         open.classList.toggle('text-g-faint', !up);
         open.classList.toggle('border-g-border', !up);
       }
-      if (status) status.textContent = up
-        ? 'Running — opens in a new tab.'
-        : 'Not running yet — run the command above, then this lights up.';
+      const changed = up !== lastUp;
+      lastUp = up;
+      if (quiet) return;
+      if (changed || Date.now() >= holdUntil) {
+        say(up
+          ? 'Running — opens in a new tab.'
+          : 'Not running yet — run the command above, then this lights up.');
+      }
     };
-    setRunning(false);
+    // Style the link now, but leave "Checking if it's running…" up until the
+    // first probe resolves rather than announcing a verdict we don't have yet.
+    setRunning(false, true);
 
     // Block the click until the sidecar is up (avoids a confusing connection error).
     open?.addEventListener('click', (e) => {
@@ -543,6 +578,10 @@ const requirementRows = [
         e.preventDefault();
         copyBtn?.classList.add('animate-g-pulse');
         setTimeout(() => copyBtn?.classList.remove('animate-g-pulse'), 600);
+        // The pulse is the only feedback a sighted user gets, and reduced motion
+        // crushes it to nothing — so say it in text as well.
+        holdUntil = Date.now() + 5000;
+        say("Can't open it yet — copy the command above and run it first, then this link lights up.");
       }
     });
 
