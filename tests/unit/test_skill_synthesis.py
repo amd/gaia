@@ -3,8 +3,9 @@
 """Unit tests for the skill-synthesis pipeline (procedural memory, #887).
 
 Covers the pure pipeline in ``gaia.agents.base.skill_synthesis``:
-``DistilledProcedure.parse`` / ``DistilledProcedure.to_skill_md`` round-trip and the #691 emit/inject
-split, ``load_synthesis_config`` overrides, ``cluster_by_goal`` grouping at the
+``DistilledProcedure.parse`` / ``DistilledProcedure.to_skill_md`` round-trip and
+the #691 emit/inject split, ``load_synthesis_config`` overrides,
+``cluster_by_goal`` grouping at the
 cosine threshold, ``distill_cluster`` contract-shape + fail-loud split, and
 ``reconcile_and_store`` ADD / UPDATE / NOOP (never DELETE).
 
@@ -36,6 +37,11 @@ from gaia.agents.base.skill_synthesis import (
     load_synthesis_config,
     reconcile_and_store,
 )
+
+try:  # The on-disk SKILL.md format (#888) — absent until that lands.
+    from gaia.skills import format as _SKILLS_FORMAT
+except ImportError:
+    _SKILLS_FORMAT = None
 
 
 @pytest.fixture
@@ -222,6 +228,30 @@ class TestSkillToSkillMd:
         # The on-disk schema uses `description`, never the intermediate label.
         assert "when_to_use" not in front
         assert "description" in front
+
+    @pytest.mark.skipif(
+        _SKILLS_FORMAT is None,
+        reason="gaia.skills (the #888 on-disk format) is not available",
+    )
+    def test_renders_a_document_the_format_validator_accepts(self):
+        """The rendered document survives the real ``gaia.skills`` validator.
+
+        ``to_skill_md`` claims its output "validates under the Agent Skills
+        format"; this asserts it against the actual parser rather than a
+        hand-rolled YAML check, so the two halves cannot drift apart silently.
+        """
+        parse_skill = _SKILLS_FORMAT.parse_skill
+        validate_skill = _SKILLS_FORMAT.validate_skill
+
+        skill = DistilledProcedure.parse(_INTERMEDIATE_MD)
+        parsed = parse_skill(skill.to_skill_md(), source="<synthesized>")
+        validate_skill(parsed, source="<synthesized>")
+
+        assert parsed.name == skill.name
+        assert parsed.description == skill.when_to_use
+        assert parsed.version == "1.0.0"
+        assert parsed.license == "MIT"
+        assert parsed.gaia.tools_required == skill.tools_required
 
 
 # ===========================================================================
