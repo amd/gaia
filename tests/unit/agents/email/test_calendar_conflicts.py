@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -105,6 +106,19 @@ class TestIntervalsOverlap:
         # candidate 2:30-3:30 overlaps busy 2:00-3:00 on the [2:30,3:00) slice.
         assert intervals_overlap(150, 210, 120, 180) is True
 
+    def test_thirty_minute_overlap_matches_issue_2571_repro(self):
+        # #2571: the agent narrated "back-to-back, do not conflict" for
+        # 7:00-8:00 vs 7:30-8:30 — they actually overlap by 30 minutes.
+        assert (
+            intervals_overlap(
+                datetime(2026, 7, 30, 7, 0),
+                datetime(2026, 7, 30, 8, 0),
+                datetime(2026, 7, 30, 7, 30),
+                datetime(2026, 7, 30, 8, 30),
+            )
+            is True
+        )
+
 
 # ---------------------------------------------------------------------------
 # detect_calendar_conflicts_impl — against the fixture calendar
@@ -125,6 +139,33 @@ class TestDetectCalendarConflictsImpl:
         assert out["has_conflict"] is True
         ids = [c["id"] for c in out["conflicts"]]
         assert "busy-1" in ids
+
+    def test_thirty_minute_overlap_matches_issue_2571_repro(self, fake_calendar):
+        # Exact repro from #2571: two events overlapping by 30 minutes
+        # (7:00-8:00 and 7:30-8:30 local, -04:00). The agent reported these
+        # as "back-to-back and do not conflict" without calling this tool;
+        # the tool itself has always gotten this right — pin it so it can't
+        # regress.
+        fake_calendar.events["budget-sync"] = _event(
+            "budget-sync",
+            "2026-07-30T07:00:00-04:00",
+            "2026-07-30T08:00:00-04:00",
+            "GAIA-M59-FIXTURE Budget sync",
+        )
+        fake_calendar.events["design-review"] = _event(
+            "design-review",
+            "2026-07-30T07:30:00-04:00",
+            "2026-07-30T08:30:00-04:00",
+            "GAIA-M59-FIXTURE Overlapping design review",
+        )
+        out = detect_calendar_conflicts_impl(
+            fake_calendar,
+            start_iso="2026-07-30T11:00:00Z",
+            end_iso="2026-07-30T12:00:00Z",
+        )
+        assert out["has_conflict"] is True
+        ids = sorted(c["id"] for c in out["conflicts"])
+        assert ids == ["budget-sync", "design-review"]
 
     def test_abut_boundary_is_not_flagged(self, fake_calendar):
         # Existing 2:00-3:00; candidate 3:00-4:00 abuts but must NOT conflict.

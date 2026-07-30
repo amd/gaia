@@ -89,6 +89,20 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **The agent no longer narrates its own calendar-conflict verdict — and
+  gets it backwards (#2571).** Asked to list calendar events and flag
+  conflicts, the agent listed events correctly, then stated a conflict
+  conclusion it never computed: two events overlapping by 30 minutes were
+  reported as "back-to-back and do not conflict." `detect_calendar_conflicts`
+  was never called — only `list_calendar_events` ran, and the model judged
+  overlap from the listed times itself. The tool was always correct; it
+  simply never ran. `_SYSTEM_PROMPT` now has a CALENDAR CONFLICTS section
+  mandating the tool for any conflict/overlap/double-booking question, both
+  calendar tool docstrings state the same rule (the schema actually sent to
+  the model), and a new deterministic guard in `calendar_tools.py`
+  (`response_has_ungrounded_conflict_claim`) flags a conflict-judgement
+  reply that never called `detect_calendar_conflicts` and appends a
+  correction rather than letting the ungrounded verdict stand unqualified.
 - **Thread summaries now keep the newest message's open asks (#2641).** A
   thread summary could reflect the opening question and an early reply while
   dropping the newest message entirely — even when that message carried the
