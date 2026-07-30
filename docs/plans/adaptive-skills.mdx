@@ -527,6 +527,50 @@ risk in this milestone after rebase.
 
 ---
 
+## The learning trigger
+
+[#2679](https://github.com/amd/gaia/issues/2679) owns *how* a delta is written and
+approved. Nothing owned *when* one is proposed — a real gap, because "explicit
+user correction only" is a policy, and a policy with no detector is a policy that
+never fires.
+
+The answer is not a correction *detector*. It is three signals the codebase
+already produces, in descending order of confidence, none of which requires the
+model to judge anything:
+
+| Signal | What it is | Confidence | State |
+|---|---|---|---|
+| **A preference-setting tool call** | The user asked for a rule and the model called the tool that stores it — `set_priority_sender`, `set_category_default`, … ([`preference_tools.py:355`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/tools/preference_tools.py)). The call *is* the correction; nothing needs detecting. | **Highest** | **Shipped** — needs only a delta write alongside the store write |
+| **A recorded negative outcome** | The user undid, rejected, or edited an agent action, and `TrustLedger.record_outcome(..., positive=False)` logged it ([`trust.py:358`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/trust.py)). Machine-observable, no interpretation. | **High** | **Shipped** — needs a link from the scope to a candidate delta |
+| **An explicit "remember this" affordance** | A `remember_correction`-style tool the model may call only when the user used corrective language, or a `/teach` command the user invokes. Model-*proposed*, human-*confirmed*, so a misread costs a declined prompt, not a bad delta. | Medium | **New** — the only new machinery |
+
+**Explicitly out of scope for v2.0:** inferring a preference from repeated
+behavior without the user saying anything. That is where both the injection risk
+and the compounding-error risk live.
+
+### GAIA does not need Hermes' trigger heuristic
+
+Hermes creates a skill autonomously after a complex task — 5+ tool calls. It is
+cheap and concrete, and GAIA's equivalent already exists and is **stricter**:
+synthesis requires a goal to recur across `MIN_OCCURRENCES = 3` sessions at
+`MIN_SUCCESS_RATE = 0.80` ([`skill_synthesis.py:51-55`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py)) —
+repetition *and* measured success, not merely complexity. A 5-tool-call heuristic
+fires on one hard task that may have gone badly.
+
+So the trigger gap is narrower than it looks: it exists only for **deltas on
+authored skills**, not for the synthesized corpus, which has had a trigger since
+#887. But note the qualifier from
+[Correction 4](#correction-4-the-empirical-promotion-gate-has-no-counter): that
+0.80 is measured on tool calls that did not raise, not on outcomes the user
+endorsed. The trigger is stricter than Hermes'; the *quality* of the signal it
+gates on is weaker than the number suggests.
+
+**This needs its own issue** — it is a peer of #2679, not a sub-clause of it.
+Sequencing matters: signals 1 and 2 exist today and can land with the store,
+while signal 3 is the only piece with design risk.
+
+---
+
 ## The delta grammar
 
 A bounded vocabulary, not free prose. The agent may add a preference or an
@@ -536,8 +580,8 @@ exception; it may not rewrite the procedure.
 |---|:--:|---|---|
 | `fact` | 0 | *(routed away — see below)* | Never a delta; a write to the agent's tier-0 store |
 | `tool-hint` | 1 | `{prefer: [name, …], drop: [name, …]}` — names must already be in the live registry | Contributed to (or withheld from) the loader's `skill_tools` list |
-| `parameter` | 2 | `{key, value, scope?}` — `key` allowlisted per base section | A typed knob read by the tool, or one rendered line |
-| `exception` | 2 | `{condition, action}` — `action` from a restrictive-only set | One rendered line under the anchored section |
+| `parameter` | 2 | `{key, value, scope?}` — `key` allowlisted per base section | **Deferred past v1** — see [the tier-2 collapse hypothesis](#why-v1-ships-three-tiers-not-four) |
+| `exception` | 2 | `{condition, action}` — `action` from a restrictive-only set | **Deferred past v1**; expressible as a bounded tier-3 `preference` meanwhile |
 | `preference` | 3 | `{body}` ≤ 400 chars | Retrieval-gated prose under the anchored section |
 | `example` | 3 | `{input, output}` ≤ 400 chars total | Retrieval-gated worked example |
 
@@ -570,6 +614,18 @@ Two honest caveats:
    only at the whole-body level, and whole-body-anchored deltas are the ones most
    likely to orphan on any edit — surface that at write time so the user knows
    the learning is fragile before it is stored.
+
+<Note>
+**v1 records anchors; it does not act on them.** Writing an anchor is one small
+function (slug + digest at write time). *Matching* an anchor across a base update
+is the research problem, and v1 declines it — see
+[Rebase](#rebase-on-base-update-v1-is-deliberately-crude). Every v1 delta still
+carries a full anchor so it stays rebaseable later, and rendering prefers the
+anchored section when it resolves cleanly, falling back to a single appended
+**Learned adjustments** block. That fallback is also the *only* rendering path
+needed for a base with no headings, which removes anchoring from v1's critical
+path without losing forward compatibility.
+</Note>
 
 ### Provenance and trust class
 
@@ -769,46 +825,68 @@ converts a one-shot attack into permanent compromise.
 
 ---
 
-## Rebase on base update (highest risk)
+## Rebase on base update: v1 is deliberately crude
 
 The base goes `v1.0 → v1.1` with deltas attached. **There is no prior art
 anywhere.** Hermes never faces this — it has no authored base to update against;
-`git rebase` gives only the failure vocabulary, because a delta is typed
-structured data, not a text hunk. This is the genuinely-new problem in the
-milestone and the item most likely to be wrong on the first attempt.
+`git`'s three-way merge gives only the failure vocabulary, because a delta is
+typed structured data, not a text hunk.
 
-### The pass
+The original plan (and [#2680](https://github.com/amd/gaia/issues/2680)) was to
+build selective re-anchoring in v1. **That is now judged premature, and the
+challenge that raised it is accepted plainly** — this is the single largest
+de-risking available in the milestone.
 
-On detecting a changed base (content digest differs, whether or not `version`
-moved), for each attached delta:
+The reasoning is a timing argument, not a difficulty argument. At launch the hub
+carries approximately zero authored skills with real version history, so a
+re-anchoring path would be **built, shipped, and never exercised** — untested code
+guarding a rare event, which is how a subtle silent-reapplication bug reaches
+production a year later when skill updates finally become common. The scenario is
+rare early and common late; the code should arrive on the same schedule.
 
-| Case | Detection | Action |
-|---|---|---|
-| **Clean re-anchor** | `anchor.section` slug still present, section digest unchanged | Re-attach silently; refresh `base_version`. |
-| **Stale** | Slug present, digest changed | Re-attach, mark `stale`, surface in inspection. The section was reworded — the delta probably still applies, but say so. |
-| **Orphan** | Slug absent | Set `status = 'orphaned'`. **Never applied. Never re-anchored by similarity.** Surfaced for review with the old anchor text so the user can re-point or discard it. |
-| **Conflict** | The new base text already states something the delta contradicts (e.g. base now says 48h; delta says 48h, or says 72h) | Report as a conflict; do not resolve automatically. Redundant deltas are offered for deletion; contradictory ones require a decision. |
-| **Permission/tier regression** | The new base *narrows* a permission the delta depended on | Delta refused, `status = 'orphaned'`, reason recorded. The base always wins in the restrictive direction. |
+### v1 behavior: orphan everything, retain everything, surface everything
 
-### What is honestly unsolved
+On any change to a base skill's content digest:
 
-- **Semantic re-anchoring is out of scope, on purpose.** Matching an orphan to a
-  renamed section by embedding similarity is exactly the "silently re-applied to
-  different text" failure the umbrella issue forbids. Orphans surface; they do
-  not get guessed homes. If that proves too noisy in practice, the fix is a
-  *user-confirmed* suggestion, never an automatic one.
-- **Conflict detection needs a text-level judgment** ("does the new base already
-  say this?"), and the only available judge is a ~4B local model — the exact tool
-  this design refuses to trust for promotion. Provisional answer: detect
-  conflicts only for tier-1/2 deltas, where the comparison is structural (same
-  key, different value), and for tier 3 report *possible* conflict without
-  claiming a verdict. **This is the weakest part of the spec and should be
-  prototyped before it is committed to.**
-- **Bases with no headings** anchor whole-body, so any edit orphans every delta
-  on them. Mitigation is a write-time warning, not a fix.
-- **No corpus to test against.** There is no population of authored skills with
-  real version history yet, so the rebase pass will first be exercised on
-  synthetic updates. Treat its first field release as provisional.
+1. **Every** delta attached to that skill moves to `status = 'orphaned'`.
+2. No delta is deleted, ever — same archive-never-delete property as
+   `supersede_skill` ([`memory_store.py:2735`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py)).
+3. The user is told, once, with a list and a **bulk re-approve** action alongside
+   per-delta approve/discard.
+4. Nothing re-applies until the user says so.
+
+| Property | v1 crude | v2 selective |
+|---|:--:|:--:|
+| A delta is never silently dropped | ✅ | ✅ |
+| A delta is never silently re-applied to changed text | ✅ | ✅ |
+| A permission narrowing in the new base always wins | ✅ | ✅ |
+| Surviving deltas re-attach with no user action | ❌ | ✅ |
+| Requires a working anchor *matcher* | ❌ | ✅ |
+| Requires "materially changed" to be defined | ❌ | ✅ |
+
+**Both safety properties are preserved. What v1 gives up is convenience.** The
+honest cost: a skill that updates frequently produces review fatigue, and a fatigued
+user bulk-approves without reading — which is the same failure the consent gate
+exists to prevent. That is the argument for building v2's selective path
+*eventually*, and it is an argument from observed update frequency, which is data
+v1 will produce.
+
+### What v2 still has to solve (research, not review)
+
+- **"Materially changed."** Heading identity, content hash, or embedding distance —
+  each with a different false-positive/false-negative profile. Hash is the
+  conservative default (any edit orphans); embeddings introduce a judgment call the
+  local model is poorly suited to make.
+- **Re-anchoring to a *renamed* section.** Almost certainly unsafe by similarity
+  alone — that is precisely the silent-reapplication failure. If it ships at all it
+  ships as a *user-confirmed suggestion*.
+- **Do orphans expire?** They accumulate. Proposed: they persist but stop being
+  offered for re-approval after N base updates, and are then archived — visible in
+  history, out of the active surface.
+
+**Bases with no headings** anchor whole-body, so under v2's selective scheme any
+edit orphans everything on them — i.e. v2's worst case equals v1's normal case.
+Another reason v1 loses less than it appears to.
 
 ---
 
