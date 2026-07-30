@@ -386,7 +386,13 @@ class FakeGmailBackend:
         q_lower = (query or "").lower()
         for msg in self._messages.values():
             ids = set(msg.get("labelIds", []))
-            if not (wanted_labels & ids):
+            # AND, not OR (#2638): Gmail's users.messages.list documents
+            # multiple labelIds as "match ALL of the specified label IDs" --
+            # a set-intersection (any one label) check let a message with
+            # only "INBOX" match a ["INBOX", "UNREAD"] query, which made
+            # _PRE_SCAN_LABEL_IDS's old UNREAD narrowing a no-op in this fake
+            # and would have made the #2638 regression tests pass vacuously.
+            if not wanted_labels.issubset(ids):
                 continue
             if q_lower and not _query_matches(q_lower, msg):
                 continue

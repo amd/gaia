@@ -1322,12 +1322,23 @@ PRE_SCAN_ARCHIVE_CAP = 10
 # reaches the caller via ``totals["needs_review"]``.
 PRE_SCAN_NEEDS_REVIEW_CAP = 5
 
-# Adding UNREAD narrows the pre-scan listing query to unread mail only, so the
-# backend's resultSizeEstimate means "how many unread" (the honest coverage
-# denominator, #2584) instead of "how big is the inbox". triage_inbox (the
-# expensive full-triage tool) keeps its default ["INBOX"] query — this is
-# pre-scan-only.
-_PRE_SCAN_LABEL_IDS = ["INBOX", "UNREAD"]
+# Plain INBOX — read AND unread mail (#2638). Previously ["INBOX", "UNREAD"],
+# on the rationale that narrowing to unread-only made the listing query's
+# resultSizeEstimate mean "how many unread" instead of "how big is the
+# inbox" (#2584). That rationale no longer holds: #2584 ALSO stopped sourcing
+# the coverage denominator from resultSizeEstimate at all (it now comes from
+# labels().get(INBOX), see _fetch_inbox_counts below), so narrowing the
+# listing query bought nothing — while making the single highest-value
+# triage bucket (read-but-unanswered mail: opened on a phone, meant to
+# reply, forgot — invisible the moment it's opened) permanently invisible.
+# The attention view (attention_tools._scan_one_backend) and
+# list_waiting_on_you already scan all of INBOX regardless of read state;
+# this makes pre-scan agree with them instead of being the one narrower
+# surface. Decision: pre-scan covers read mail. If that decision reverses,
+# this comment and the coverage-line prose in pre_scan_inbox's docstring and
+# EmailTriageAgent._SYSTEM_PROMPT (both explicitly describe "read + unread")
+# must be updated together.
+_PRE_SCAN_LABEL_IDS = ["INBOX"]
 
 
 def _parse_epoch_millis(raw: Any) -> int:
@@ -1363,38 +1374,60 @@ def _needs_review_sort_key(decision: Mapping[str, Any]) -> tuple:
     return (-internal_date, _looks_automated(decision.get("from", "")))
 
 
-def _fetch_total_unread(gmail) -> Optional[int]:
-    """Exact unread-inbox count via ``labels().get`` — NOT ``list_messages``'s
-    ``resultSizeEstimate`` (#2584).
+def _fetch_inbox_counts(gmail) -> Dict[str, Optional[int]]:
+    """Exact INBOX message/unread counts via ONE ``labels().get`` call
+    (#2584, extended #2638) — NOT ``list_messages``'s ``resultSizeEstimate``.
 
     Measured against a real mailbox: ``resultSizeEstimate`` for
     ``label_ids=[INBOX, UNREAD]`` reported 201 while full pagination of the
     identical query found 523 real message ids — Google documents that field
     as approximate, and 2.6x off is not a fabricated-placeholder-grade lie
     (the Outlook page-size case) but it is still not honest enough to state
-    as the scan-coverage denominator. The label resource's ``messagesUnread``
-    is an exact integer. One call per SCAN, not per message — ``list_labels``
-    returns the minimal label form with no counts, so this must be
-    ``get_label``, not that.
+    as the scan-coverage denominator. The label resource's ``messagesTotal``
+    / ``messagesUnread`` are exact integers. One call per SCAN, not per
+    message — ``list_labels`` returns the minimal label form with no counts,
+    so this must be ``get_label``, not that.
+
+    Returns both counts from the SAME call (#2638): now that pre-scan covers
+    all of INBOX, not just unread, ``total_unread`` alone is no longer an
+    honest "how much of the inbox did this scan cover" denominator —
+    ``total`` (``messagesTotal``) is. Fetching both from one call, rather
+    than two separate helpers each hitting ``get_label`` on their own, keeps
+    this at the one-round-trip-per-scan cost #2643 cares about.
 
     Backends that can't provide an honest count (Outlook — Graph has no
-    equivalent resource) return ``messagesUnread: None`` from their own
-    ``get_label``, which flows straight through here with no per-provider
-    branching. A backend that doesn't implement ``get_label`` at all (a
-    minimal test double, or a future provider) degrades the same way: this
-    field is supplementary coverage metadata, never allowed to abort the
+    equivalent resource) return ``messagesTotal``/``messagesUnread: None``
+    from their own ``get_label``, which flows straight through here with no
+    per-provider branching. A backend that doesn't implement ``get_label``
+    at all (a minimal test double, or a future provider) degrades the same
+    way: this is supplementary coverage metadata, never allowed to abort the
     scan itself if it can't be produced.
     """
     get_label = getattr(gmail, "get_label", None)
     if not callable(get_label):
-        return None
+        return {"total": None, "unread": None}
     try:
         label = get_label("INBOX")
     except ConnectorsError as exc:
-        log.warning("pre-scan: get_label(INBOX) failed, total_unread unknown: %s", exc)
-        return None
-    value = (label or {}).get("messagesUnread")
-    return int(value) if isinstance(value, (int, float)) else None
+        log.warning("pre-scan: get_label(INBOX) failed, inbox counts unknown: %s", exc)
+        return {"total": None, "unread": None}
+    label = label or {}
+    total = label.get("messagesTotal")
+    unread = label.get("messagesUnread")
+    return {
+        "total": int(total) if isinstance(total, (int, float)) else None,
+        "unread": int(unread) if isinstance(unread, (int, float)) else None,
+    }
+
+
+def _fetch_total_unread(gmail) -> Optional[int]:
+    """Exact unread-inbox count — thin wrapper over ``_fetch_inbox_counts``
+    kept for ``attention_tools.build_attention_view_impl``'s own coverage
+    line, which (unlike pre-scan) never needed a ``total_inbox`` companion —
+    it has always scanned all of INBOX, so it never had #2638's
+    unread-only-denominator problem to begin with.
+    """
+    return _fetch_inbox_counts(gmail)["unread"]
 
 
 def needs_review_decision(r: Mapping[str, Any]) -> bool:
@@ -1580,6 +1613,7 @@ def pre_scan_inbox_impl(
             informational = []
 
         scanned = len(triage["results"])
+        inbox_counts = _fetch_inbox_counts(gmail)
         out = {
             "kind": "email_pre_scan",
             "urgent": urgent[: max(0, urgent_cap)],
@@ -1601,7 +1635,13 @@ def pre_scan_inbox_impl(
                 "needs_review": len(needs_review),
             },
             "scanned": scanned,
-            "total_unread": _fetch_total_unread(gmail),
+            "total_unread": inbox_counts["unread"],
+            # Whole-INBOX denominator (#2638) — now that the scan covers read
+            # + unread, this (not total_unread) is the honest "how much of
+            # the inbox did we look at" figure. Exact Gmail messagesTotal;
+            # None when the backend can't report it (Outlook), never a
+            # fabricated number.
+            "total_inbox": inbox_counts["total"],
             # Single-backend call: a backend failure always raises (never a
             # silent partial result), so this layer never degrades on its
             # own — only merge_pre_scan_backends' multi-mailbox fan-out can.
@@ -1658,6 +1698,8 @@ def merge_pre_scan_backends(
     scanned = 0
     total_unread = 0
     total_unread_unknown = False
+    total_inbox = 0
+    total_inbox_unknown = False
     merged_prefs_applied: Dict[str, Any] = {}
     mailbox_errors: List[Dict[str, Any]] = []
     for index, (provider, backend) in enumerate(provider_backends):
@@ -1716,6 +1758,14 @@ def merge_pre_scan_backends(
             total_unread_unknown = True
         else:
             total_unread += int(backend_total_unread)
+        backend_total_inbox = out.get("total_inbox")
+        if backend_total_inbox is None:
+            # Same honesty rule as total_unread above (#2638): Outlook can't
+            # report messagesTotal either, so the merged figure stays
+            # unknown rather than silently summing only the known mailbox.
+            total_inbox_unknown = True
+        else:
+            total_inbox += int(backend_total_inbox)
     result = {
         "kind": "email_pre_scan",
         "urgent": urgent[: max(0, PRE_SCAN_URGENT_CAP)],
@@ -1734,6 +1784,7 @@ def merge_pre_scan_backends(
         },
         "scanned": scanned,
         "total_unread": None if total_unread_unknown else total_unread,
+        "total_inbox": None if total_inbox_unknown else total_inbox,
         "degraded": bool(mailbox_errors),
     }
     if mailbox_errors and len(mailbox_errors) == len(backends):
@@ -2074,7 +2125,7 @@ class ReadToolsMixin:
         # a real triage isn't abandoned mid-run (#2114). pre_scan_inbox stays
         # the fast alternative for "what's urgent right now" asks.
         @tool(timeout=600.0)
-        def triage_inbox(max_messages: int = 25) -> str:
+        def triage_inbox(max_messages: int = 50) -> str:
             """Raw per-message classifier. NOT the tool for "triage my inbox".
 
             When the user asks to triage, review, or check their inbox, call
@@ -2103,7 +2154,7 @@ class ReadToolsMixin:
             ``results``) as the complete view when results are condensed.
             """
             try:
-                max_messages = max(1, min(int(max_messages or 25), scan_ceiling))
+                max_messages = max(1, min(int(max_messages or 50), scan_ceiling))
 
                 # Phase 2 (#1603): scan every connected mailbox, tag each item
                 # with its source mailbox, split the budget across mailboxes,
@@ -2147,7 +2198,7 @@ class ReadToolsMixin:
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
-        def pre_scan_inbox(max_messages: int = 25) -> str:
+        def pre_scan_inbox(max_messages: int = 50) -> str:
             """Pre-scan the inbox into a typed envelope for the chat
             triage card.
 
@@ -2160,18 +2211,23 @@ class ReadToolsMixin:
             confident about — a placeholder guess, not a real
             classification — so they are surfaced for you to look at
             rather than silently filed as informational or archived.
+            Covers read AND unread INBOX mail (#2638) — a message you
+            already opened but never answered is exactly the bucket this
+            view exists to surface.
 
             The result is a PARTIAL view of the mailbox, not the whole
             inbox: ``scanned`` reports how many messages were actually
-            looked at this call, and ``total_unread`` reports the
-            mailbox's unread count when known (Gmail; Outlook cannot
-            report this honestly and returns null). ALWAYS mention scan
-            coverage in your framing sentence when scanned is less than
-            total_unread — e.g. "12 of 508 unread scanned — 3
-            actionable, 2 need review." — never phrase a partial scan as
-            if it covered the whole inbox. When ``degraded`` is true or
-            ``mailbox_errors`` is non-empty, say which mailbox couldn't
-            be scanned.
+            looked at this call, and ``total_inbox`` reports the
+            mailbox's total INBOX message count when known (Gmail;
+            Outlook cannot report this honestly and returns null) —
+            ``total_unread`` is also present as a secondary "how many of
+            these are still unread" figure. ALWAYS mention scan coverage
+            in your framing sentence when scanned is less than
+            total_inbox — e.g. "50 of 812 in the inbox scanned (250
+            unread) — 3 actionable, 2 need review." — never phrase a
+            partial scan as if it covered the whole inbox. When
+            ``degraded`` is true or ``mailbox_errors`` is non-empty, say
+            which mailbox couldn't be scanned.
 
             The chat surface injects the triage card automatically from
             the tool result — do NOT copy, re-serialize, or paraphrase
@@ -2180,15 +2236,15 @@ class ReadToolsMixin:
             and truncates the prose summary before the user can read it.
             After this tool returns, write ONE short framing sentence
             (e.g. "Here's your inbox pre-scan — 3 actionable, 1 urgent,
-            12 of 508 unread scanned.") and stop. The card is already
-            visible to the user.
+            50 of 812 in the inbox scanned.") and stop. The card is
+            already visible to the user.
 
             Args:
-                max_messages: How many unread INBOX messages to scan
-                    (default 25, max 100).
+                max_messages: How many INBOX messages (read + unread) to
+                    scan (default 50, max 100).
             """
             try:
-                max_messages = max(1, min(int(max_messages or 25), scan_ceiling))
+                max_messages = max(1, min(int(max_messages or 50), scan_ceiling))
                 # Phase 2 (#1603): pre-scan every connected mailbox, tag each
                 # section item with its source mailbox, split the budget, merge.
                 return _envelope_ok(

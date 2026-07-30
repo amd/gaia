@@ -51,6 +51,44 @@ def _msg(msg_id: str, *, body_text: str = "Full body content here.") -> dict:
     }
 
 
+class TestListMessagesLabelIdsIsAndNotOr:
+    """Real Gmail's ``list_messages`` (``users.messages.list``) documents
+    multiple ``labelIds`` as AND -- "Only return messages with labels that
+    match all of the specified label IDs" -- not OR. The fake used set
+    INTERSECTION (OR: any one label matches), which silently made
+    ``_PRE_SCAN_LABEL_IDS = ["INBOX", "UNREAD"]`` (pre-#2638) match a READ
+    message that carries only INBOX -- the opposite of what that filter was
+    supposed to do, and the reason #2638's own regression tests need this
+    fixed to be meaningful (a test asserting "read mail is now included"
+    would pass vacuously without this fix, since the OLD filter never
+    excluded it in the fake to begin with)."""
+
+    def test_message_missing_one_of_two_requested_labels_is_excluded(self):
+        gmail = FakeGmailBackend()
+        gmail.add_message(_msg("read1"))  # _msg() defaults labelIds to ["INBOX"]
+        out = gmail.list_messages(label_ids=["INBOX", "UNREAD"], max_results=25)
+        assert out["messages"] == [], (
+            "a message with ONLY 'INBOX' must NOT match a query for "
+            "['INBOX', 'UNREAD'] -- Gmail's labelIds filter is AND, not OR"
+        )
+
+    def test_message_with_both_requested_labels_matches(self):
+        gmail = FakeGmailBackend()
+        msg = _msg("unread1")
+        msg["labelIds"] = ["INBOX", "UNREAD"]
+        gmail.add_message(msg)
+        out = gmail.list_messages(label_ids=["INBOX", "UNREAD"], max_results=25)
+        assert [m["id"] for m in out["messages"]] == ["unread1"]
+
+    def test_single_label_query_is_unaffected(self):
+        """The common case (every production call site but one) -- a
+        single-label query must keep working exactly as before."""
+        gmail = FakeGmailBackend()
+        gmail.add_message(_msg("m1"))
+        out = gmail.list_messages(label_ids=["INBOX"], max_results=25)
+        assert [m["id"] for m in out["messages"]] == ["m1"]
+
+
 class TestMetadataHeaderSetStaysInSync:
     def test_fake_gmail_header_set_matches_gmail_backend(self):
         """fake_gmail.py deliberately DUPLICATES this constant (see its
