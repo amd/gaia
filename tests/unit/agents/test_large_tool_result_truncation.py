@@ -334,3 +334,106 @@ class TestSignatureAndScalarInvariants:
         # AC6: the two latent unsafe branches are gone from the source.
         src = inspect.getsource(Agent._truncate_large_content)
         assert "[:max_chars]" not in src
+
+
+# ---------------------------------------------------------------------------
+# Unicode reaches the model as characters, not \uXXXX escapes
+# ---------------------------------------------------------------------------
+
+_NON_ASCII_SUBJECT = "Thank you for signing up – support AP’s mission"
+
+
+class TestUnicodeReachesModelAsCharacters:
+    def test_truncate_large_content_under_budget_keeps_characters(self):
+        agent = make_agent()
+        payload = {"subject": _NON_ASCII_SUBJECT}
+        result = agent._truncate_large_content(payload, max_chars=20000, as_json=True)
+        assert "–" in result and "’" in result
+        assert "\\u2013" not in result and "\\u2019" not in result
+        assert json.loads(result)["subject"] == _NON_ASCII_SUBJECT
+
+    def test_truncate_large_content_drop_items_path_keeps_characters(self):
+        # Force the _drop_items_to_fit branch (compact form exceeds max_chars)
+        # so the non-ASCII survivor item is re-serialized on every attempt.
+        agent = make_agent()
+        items = [_email_item(i) for i in range(3)]
+        items[0]["subject"] = _NON_ASCII_SUBJECT
+        payload = {"messages": items}
+        compact_len = len(json.dumps(payload))
+        result = agent._truncate_large_content(
+            payload, max_chars=compact_len - 50, as_json=True
+        )
+        parsed = json.loads(result)
+        subjects = [m["subject"] for m in parsed.get("messages", [])]
+        assert _NON_ASCII_SUBJECT in subjects
+        assert "\\u2013" not in result
+
+    def test_create_tool_message_keeps_characters(self):
+        agent = make_agent()
+        msg = agent._create_tool_message(
+            "pre_scan_inbox", {"subject": _NON_ASCII_SUBJECT}
+        )
+        text = msg["content"][0]["text"]
+        assert _NON_ASCII_SUBJECT in text
+        assert "\\u2013" not in text
+
+    def test_length_check_measures_true_length_not_escaped_length(self):
+        """A payload whose ESCAPED length would cross the truncation
+        threshold, but whose TRUE (unescaped) length does not, must not be
+        truncated -- the length check has to measure what is actually sent,
+        not an inflated ensure_ascii=True proxy for it. Each non-ASCII
+        character costs 6 chars escaped ("\\u2013") vs 1 real character, so a
+        run of them straddles the threshold very differently under the two
+        measurements -- letting a modest string prove the point precisely.
+        """
+        agent = make_agent()
+        threshold, _ = truncation_budget(agent.device)
+        overhead = len(json.dumps({"subject": ""}, ensure_ascii=False))
+        char_count = (threshold - overhead) // 3
+        text = "–" * char_count
+        true_len = len(json.dumps({"subject": text}, ensure_ascii=False))
+        escaped_len = len(json.dumps({"subject": text}, ensure_ascii=True))
+        assert true_len < threshold < escaped_len, (
+            "fixture must straddle the threshold under one measurement but "
+            f"not the other: true={true_len} escaped={escaped_len} "
+            f"threshold={threshold}"
+        )
+
+        conversation: list = []
+        result = agent._handle_large_tool_result(
+            "pre_scan_inbox", {"subject": text}, conversation
+        )
+        assert result == {
+            "subject": text
+        }, "should be returned untouched, not truncated"
+
+    def test_every_model_visible_json_dumps_call_disables_ascii_escaping(self):
+        """Source-level guard: every ``json.dumps`` call in this module that
+        can reach model-visible text passes ``ensure_ascii=False``. The one
+        exemption is the mutation-dedup cache-key hash, which is never shown
+        to the model and only needs internal consistency."""
+        tree = ast.parse(inspect.getsource(agent_module))
+        offenders = []
+        for node in ast.walk(tree):
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "dumps"
+            ):
+                continue
+            line = node.lineno
+            has_ensure_ascii_false = any(
+                kw.arg == "ensure_ascii"
+                and isinstance(kw.value, ast.Constant)
+                and kw.value.value is False
+                for kw in node.keywords
+            )
+            if not has_ensure_ascii_false:
+                offenders.append(line)
+        # The cache-key hash in _handle_large_tool_result's dedup helper is
+        # the sole allowed exemption -- assert its count rather than its
+        # exact line so an unrelated edit above it doesn't rot this test.
+        assert len(offenders) == 1, (
+            f"json.dumps call(s) without ensure_ascii=False at line(s) "
+            f"{offenders} -- model-visible text must never escape unicode"
+        )

@@ -2339,8 +2339,13 @@ Do NOT wrap conversational replies in JSON.
         """
         truncated_result = tool_result
         if isinstance(tool_result, (dict, list)):
-            # Use custom encoder to handle bytes and other non-serializable types
-            result_str = json.dumps(tool_result, default=self._json_serialize_fallback)
+            # Use custom encoder to handle bytes and other non-serializable types.
+            # ensure_ascii=False: this text reaches the model as prose, not a
+            # wire format re-parsed on the other end -- escaping would hand it
+            # literal \uXXXX sequences instead of the actual characters.
+            result_str = json.dumps(
+                tool_result, default=self._json_serialize_fallback, ensure_ascii=False
+            )
             threshold, target = truncation_budget(self.device)
             if len(result_str) > threshold:
                 # Truncate large results to prevent overwhelming the LLM. The
@@ -2563,7 +2568,7 @@ Do NOT wrap conversational replies in JSON.
 
         if not isinstance(text_content, str):
             text_content = json.dumps(
-                tool_output, default=self._json_serialize_fallback
+                tool_output, default=self._json_serialize_fallback, ensure_ascii=False
             )
 
         msg = {
@@ -2612,6 +2617,7 @@ Do NOT wrap conversational replies in JSON.
                         "arguments": json.dumps(
                             tc["tool_args"],
                             default=self._json_serialize_fallback,
+                            ensure_ascii=False,
                         ),
                     },
                 }
@@ -2681,7 +2687,9 @@ Do NOT wrap conversational replies in JSON.
         if isinstance(content, dict) and (
             "test_results" in content or "run_tests" in content
         ):
-            return json.dumps(content, default=self._json_serialize_fallback)
+            return json.dumps(
+                content, default=self._json_serialize_fallback, ensure_ascii=False
+            )
 
         if not isinstance(content, (dict, list)):
             content_str = str(content)
@@ -2689,7 +2697,12 @@ Do NOT wrap conversational replies in JSON.
                 return content_str
             return self._truncate_fallback_text(content_str, max_chars, as_json)
 
-        compact_str = json.dumps(content, default=self._json_serialize_fallback)
+        # ensure_ascii=False throughout this method: every returned string
+        # here is prose the model reads directly, not a wire format the
+        # caller re-parses -- escaping would hand it literal \uXXXX text.
+        compact_str = json.dumps(
+            content, default=self._json_serialize_fallback, ensure_ascii=False
+        )
         if len(compact_str) <= max_chars:
             return compact_str
 
@@ -2715,7 +2728,10 @@ Do NOT wrap conversational replies in JSON.
                             )
 
             result_str = json.dumps(
-                truncated, indent=2, default=self._json_serialize_fallback
+                truncated,
+                indent=2,
+                default=self._json_serialize_fallback,
+                ensure_ascii=False,
             )
             # Use larger limit for chunked responses since chunks are the actual data
             if len(result_str) <= max_chars * 3:  # Allow up to 60KB for chunked data
@@ -2723,7 +2739,10 @@ Do NOT wrap conversational replies in JSON.
             # If still too large, keep first 3 chunks only
             truncated["chunks"] = truncated["chunks"][:3]
             return json.dumps(
-                truncated, indent=2, default=self._json_serialize_fallback
+                truncated,
+                indent=2,
+                default=self._json_serialize_fallback,
+                ensure_ascii=False,
             )
 
         # Dict/list content (Jira "issues", email "messages"/"awaiting_reply",
@@ -2749,6 +2768,7 @@ Do NOT wrap conversational replies in JSON.
                 json.dumps(
                     {"truncated": True, "original_chars": len(text), "content": ""},
                     default=self._json_serialize_fallback,
+                    ensure_ascii=False,
                 )
             )
             budget = max(0, max_chars - envelope_overhead)
@@ -2759,6 +2779,7 @@ Do NOT wrap conversational replies in JSON.
                     "content": text[:budget],
                 },
                 default=self._json_serialize_fallback,
+                ensure_ascii=False,
             )
 
         half = max_chars // 2 - 20
@@ -2816,7 +2837,9 @@ Do NOT wrap conversational replies in JSON.
                         for key, items in lists.items()
                         if len(items) < totals[key]
                     }
-            return json.dumps(payload, default=self._json_serialize_fallback)
+            return json.dumps(
+                payload, default=self._json_serialize_fallback, ensure_ascii=False
+            )
 
         result = render()
         while len(result) > max_chars:
@@ -3265,7 +3288,9 @@ Do NOT wrap conversational replies in JSON.
                                 "total_steps": self.total_plan_steps,
                             }
                             plan_context_raw = json.dumps(
-                                plan_context, default=self._json_serialize_fallback
+                                plan_context,
+                                default=self._json_serialize_fallback,
+                                ensure_ascii=False,
                             )
                             if len(plan_context_raw) > 20000:
                                 # Prose call site: spliced into an f-string
@@ -3865,7 +3890,7 @@ Do NOT wrap conversational replies in JSON.
                 if deferred_tool:
                     plan_prompt += (
                         f"You initially wanted to use the {deferred_tool} tool with these arguments:\n"
-                        f"{json.dumps(deferred_args, indent=2, default=self._json_serialize_fallback)}\n\n"
+                        f"{json.dumps(deferred_args, indent=2, default=self._json_serialize_fallback, ensure_ascii=False)}\n\n"
                         "However, you MUST first create a plan. Please create a plan that includes this tool usage as a step.\n\n"
                     )
 
