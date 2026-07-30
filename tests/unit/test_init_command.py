@@ -77,8 +77,15 @@ class TestLemonadeInstaller(unittest.TestCase):
 
     @patch("platform.system")
     def test_is_platform_supported_macos(self, mock_system):
-        """Test platform support on macOS (not supported)."""
+        """Test platform support on macOS."""
         mock_system.return_value = "Darwin"
+        installer = LemonadeInstaller()
+        self.assertTrue(installer.is_platform_supported())
+
+    @patch("platform.system")
+    def test_is_platform_supported_unknown(self, mock_system):
+        """Test platform support on an unsupported OS."""
+        mock_system.return_value = "FreeBSD"
         installer = LemonadeInstaller()
         self.assertFalse(installer.is_platform_supported())
 
@@ -94,7 +101,7 @@ class TestLemonadeInstaller(unittest.TestCase):
     @patch("platform.system")
     def test_get_download_url_unsupported(self, mock_system):
         """Test download URL raises error for unsupported platform."""
-        mock_system.return_value = "Darwin"
+        mock_system.return_value = "FreeBSD"
         installer = LemonadeInstaller(target_version="9.1.4")
         with self.assertRaises(RuntimeError) as ctx:
             installer.get_download_url()
