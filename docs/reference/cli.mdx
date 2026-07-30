@@ -2033,6 +2033,162 @@ Manage agent memory: run day-zero onboarding and view memory statistics.
 
 ---
 
+## Skills
+
+<Card title="Agent Skills Spec" icon="puzzle-piece" href="/spec/agent-skills">
+  Portable `SKILL.md` capabilities — instructions, optional typed tools, and resources an agent loads only when relevant
+</Card>
+
+Author and manage agent skills. A skill is a directory whose only required file is `SKILL.md`; GAIA implements the [Agent Skills](https://agentskills.io) open standard, so a Claude Code skill loads unchanged.
+
+```bash
+gaia skill {list,info,create,import,export} [OPTIONS]
+```
+
+Skills are discovered from three roots, highest precedence first:
+
+| Root label | Location | Writable? |
+|------------|----------|:---------:|
+| `agent-bundled` | An agent package's own `skills/` directory | No |
+| `user` | `~/.gaia/skills/` (honors `GAIA_CONFIG_DIR`) | **Yes** — where `create` and `import` install |
+| `claude-import` | `./.claude/skills/` then `~/.claude/skills/` | No — read-only Claude Code import |
+
+### Subcommands
+
+| Action | Description |
+|--------|-------------|
+| `list` | List every discovered skill with its version, tier, root, and provided tools |
+| `info <name>` | Show one skill's manifest in detail |
+| `create <name>` | Scaffold a new skill directory |
+| `import <source>` | Copy a skill folder, `.zip`, or URL into `~/.gaia/skills/` |
+| `export <name>` | Export a skill to a `.zip` bundle |
+
+<Tabs>
+  <Tab title="list">
+    ```bash
+    gaia skill list [--json] [--root ROOT]
+    ```
+
+    | Option | Description |
+    |--------|-------------|
+    | `--json` | Emit JSON instead of a table (includes roots, shadowed copies, and parse errors) |
+    | `--root` | Only show skills from one root: `agent-bundled` \| `user` \| `claude-import` |
+
+    ```
+    NAME                         VERSION    TIER          ROOT           TOOLS
+    demo-skill                   0.1.0      experimental  user           example_tool
+    gaia-testing                 -          experimental  claude-import  -
+    ```
+
+    A skill shadowed by a higher-precedence copy of the same name is reported on stderr rather than hidden. A skill directory that fails to parse is listed with its error and the command exits `4`.
+  </Tab>
+
+  <Tab title="info">
+    ```bash
+    gaia skill info <name> [--json] [--body]
+    ```
+
+    | Option | Description |
+    |--------|-------------|
+    | `--json` | Emit JSON (including the full frontmatter) instead of text |
+    | `--body` | Also print the Markdown instructions |
+
+    Shows path, root, license, security tier, declared permissions, the tools the skill **provides** (namespaced `<skill>/<tool>`), the registry tools it **consumes** (`tools_required`), and any lower-precedence copies it shadows.
+  </Tab>
+
+  <Tab title="create">
+    ```bash
+    gaia skill create <name> [OPTIONS]
+    ```
+
+    | Option | Description |
+    |--------|-------------|
+    | `--dir` | Parent directory for the new skill (default: `~/.gaia/skills`) |
+    | `--description` | Description / trigger signal — the text the model reads to decide relevance |
+    | `--with-tools` | Also scaffold `tools.py` with an example `@tool` function |
+    | `--force` | Overwrite an existing skill directory |
+
+    Names must be lowercase-with-hyphens and match the directory name. The scaffold is validated through the real parser before it is written, so `create` can never emit a `SKILL.md` that `info` rejects.
+  </Tab>
+
+  <Tab title="import">
+    ```bash
+    gaia skill import <folder|zip|https-url> [OPTIONS]
+    ```
+
+    | Option | Description |
+    |--------|-------------|
+    | `--name` | Install under this name instead of the source's |
+    | `--force` | Overwrite an existing installed skill |
+
+    Copies into `~/.gaia/skills/`. **Imported skills re-earn trust:** the security tier is reset to `experimental` regardless of what the source claims, and the reset is reported. `.zip` bundles are checked for path traversal before extraction.
+  </Tab>
+
+  <Tab title="export">
+    ```bash
+    gaia skill export <name> [--output FILE.zip]
+    ```
+
+    | Option | Description |
+    |--------|-------------|
+    | `--output` | Destination `.zip` (default: `./<name>.zip`) |
+
+    Bundles the whole skill directory. Import it elsewhere with `gaia skill import <file>.zip`.
+  </Tab>
+</Tabs>
+
+**Examples:**
+
+<CodeGroup>
+```bash Scaffold a skill with tools
+gaia skill create web-research --with-tools \
+  --description "Search the web. Use when the user asks about current events."
+gaia skill info web-research --body
+```
+
+```bash See what's discoverable
+gaia skill list
+gaia skill list --root user            # only your own skills
+gaia skill list --json | jq '.roots'   # where GAIA looked
+```
+
+```bash Adopt a Claude Code skill
+gaia skill list --root claude-import   # what's already visible read-only
+gaia skill import ~/.claude/skills/my-skill    # take ownership, resets to experimental
+```
+
+```bash Share a skill
+gaia skill export web-research --output ./web-research.zip
+gaia skill import ./web-research.zip --name web-research-copy
+```
+</CodeGroup>
+
+**Exit codes:** `0` success · `2` missing/unknown subcommand · `3` skill not found · `4` invalid skill (bad manifest, name collision without `--force`, or a discovery root containing a malformed skill).
+
+### Loading a skill into an agent
+
+Skills are never globally active — an agent loads one explicitly, and its tools register under a `<skill-name>/<tool>` namespace:
+
+```python
+class WebAgent(Agent):
+    SKILL_DIRS = ["<package>/skills"]     # optional: bundle your own skills
+
+    def _register_tools(self):
+        self.load_skill("web-research")   # tools land under 'web-research/'
+```
+
+<Warning>
+**A skill declaring a local-capability permission is refused, not sandboxed.** `network` and `mcp` permissions bridge to the connector grant model and load fine. `filesystem`, `shell`, `database`, `desktop`, and `env` need the permission sandbox, which is deferred ([#1019](https://github.com/amd/gaia/issues/1019)) — until then `load_skill` fails with an actionable error rather than loading the skill unenforced.
+</Warning>
+
+<Note>
+`gaia skill install`, `remove`, `search`, `publish`, and `migrate` are **not implemented** and do not parse — they need the skill registry and land with the marketplace ([#2467](https://github.com/amd/gaia/issues/2467)). Use `import` / `export` for local distribution.
+</Note>
+
+[→ Agent Skills Spec](/spec/agent-skills) · [→ Skill Format Reference](/plans/skill-format)
+
+---
+
 ## Schedule
 
 Run a prompt on a recurring cron schedule and route its output to a sink. Schedules are stored in `~/.gaia/schedules.toml` (hand-editable). The `daemon` action runs a long-lived scheduler that fires each enabled schedule when due.
@@ -2117,7 +2273,7 @@ gaia schedule add \
 ```
 
 <Note>
-`--skill` is not yet implemented — `gaia schedule add --skill` is rejected with an error at add time pending the skill format ([#888](https://github.com/amd/gaia/issues/888)). Use `--prompt` for now.
+`--skill` is not yet implemented — `gaia schedule add --skill` is rejected with an error at add time. The [skills runtime](#skills) has shipped ([#888](https://github.com/amd/gaia/issues/888)), but the scheduler is not wired to it yet. Use `--prompt` for now.
 </Note>
 
 ---
@@ -3017,6 +3173,9 @@ For more help, see:
   </Card>
   <Card title="Agent Memory" icon="brain" href="/guides/memory">
     Persistent memory across sessions
+  </Card>
+  <Card title="Agent Skills" icon="puzzle-piece" href="/spec/agent-skills">
+    Portable SKILL.md capabilities
   </Card>
 </CardGroup>
 

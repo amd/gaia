@@ -271,6 +271,11 @@ class Agent(abc.ABC):
     # both render paths and the ``_openai_tools`` property.
     _active_tool_filter: Optional[List[str]] = None
 
+    # Skills (#888): lazily built manager + the skills loaded into this agent.
+    # Instance-level once set, so one agent's skills never leak into a sibling.
+    _skill_manager: Optional[Any] = None
+    _loaded_skills: Optional[Dict[str, Any]] = None
+
     # Define state constants
     STATE_PLANNING = "PLANNING"
     STATE_EXECUTING_PLAN = "EXECUTING_PLAN"
@@ -293,6 +298,12 @@ class Agent(abc.ABC):
 
     # Registry reads this to include dynamic MCP consumers in the Settings "Active for" panel.
     CONSUMES_MCP_SERVERS: ClassVar[bool] = False
+
+    # Agent-bundled skill directories (issue #888) — the highest-precedence
+    # discovery root. A packaged agent points this at its own ``skills/`` folder
+    # so the skills it ships always win over a same-named user or Claude Code
+    # copy. Empty = the agent bundles no skills.
+    SKILL_DIRS: ClassVar[List[str]] = []
 
     # Agent-specific tools that must be gated behind explicit user confirmation
     # (#1440). Subclasses override this to declare their own destructive/external
@@ -855,6 +866,158 @@ Do NOT wrap conversational replies in JSON.
         # Recompose the full system prompt via _compose_system_prompt() so that
         # mixin prompts, tool descriptions, and response format are all included.
         self._system_prompt_cache = self._compose_system_prompt()
+
+    # ------------------------------------------------------------------
+    # Skills (issue #888) — SKILL.md capabilities loaded at runtime
+    # ------------------------------------------------------------------
+
+    @property
+    def skill_manager(self):
+        """This agent's :class:`~gaia.skills.manager.SkillManager`.
+
+        Built lazily over the v1 discovery roots, with the agent's own
+        ``SKILL_DIRS`` as the highest-precedence root.
+        """
+        if getattr(self, "_skill_manager", None) is None:
+            from gaia.skills import SkillManager
+
+            self._skill_manager = SkillManager(agent_skill_dirs=self.SKILL_DIRS)
+        return self._skill_manager
+
+    @property
+    def loaded_skills(self) -> Dict[str, Any]:
+        """``{name: Skill}`` for every skill loaded into this agent."""
+        if getattr(self, "_loaded_skills", None) is None:
+            self._loaded_skills = {}
+        return self._loaded_skills
+
+    def load_skill(self, name: str, *, manager=None):
+        """Load a skill by name and scope it into this agent.
+
+        Resolves ``name`` across the discovery roots (agent-bundled →
+        ``~/.gaia/skills`` → read-only ``.claude/skills``), validates the
+        manifest, registers any tools the skill provides under the
+        ``<skill-name>/<tool>`` namespace, and injects its Markdown body into
+        the system prompt.
+
+        Args:
+            name: The skill's ``name`` (== its directory name).
+            manager: Optional :class:`~gaia.skills.manager.SkillManager` to
+                resolve against; defaults to :attr:`skill_manager`.
+
+        Returns:
+            The loaded :class:`~gaia.skills.format.Skill`.
+
+        Raises:
+            SkillNotFoundError: no discovery root contains that skill.
+            SkillValidationError: the manifest is invalid or contradicts
+                ``tools.py``. Nothing is registered.
+            SkillPermissionError: the skill declares a local-capability
+                permission (``filesystem``/``shell``/``database``/``desktop``/
+                ``env``), which this phase refuses rather than loading
+                unenforced.
+
+        Example:
+            class WebAgent(Agent):
+                def _register_tools(self):
+                    self.load_skill("web-research")
+        """
+        from gaia.skills import connector_requirements, refuse_unbridged_permissions
+        from gaia.skills.loader import register_skill_tools, unregister_skill_tools
+
+        resolver = manager if manager is not None else self.skill_manager
+
+        if name in self.loaded_skills:
+            logger.debug("Skill '%s' is already loaded for this agent", name)
+            return self.loaded_skills[name]
+
+        skill = resolver.load(name)
+
+        # Permission gate BEFORE any registration: a refused skill must not
+        # leave tools or prompt fragments behind.
+        permissions = skill.parsed_permissions()
+        refuse_unbridged_permissions(permissions, skill_name=skill.name)
+        requirements = connector_requirements(permissions, skill_name=skill.name)
+
+        registered = register_skill_tools(skill)
+        try:
+            if registered and self._instance_tools is not None:
+                self._instance_tools.update(registered)
+
+            if requirements:
+                # Shadow the ClassVar per instance — never mutate it, or one
+                # agent's skill would leak requirements into every sibling.
+                existing = list(self.REQUIRED_CONNECTORS)
+                for requirement in requirements:
+                    if requirement not in existing:
+                        existing.append(requirement)
+                self.REQUIRED_CONNECTORS = existing
+
+            self.loaded_skills[name] = skill
+            self.rebuild_system_prompt()
+        except Exception:
+            unregister_skill_tools(skill.name)
+            self.loaded_skills.pop(name, None)
+            raise
+
+        # tools_required names registry tools the skill CONSUMES. A name that is
+        # valid but not active in this agent is scoping, not a defect — log it so
+        # a skill that quietly can't run its recipe is diagnosable.
+        inactive = [t for t in skill.gaia.tools_required if t not in self._tools_registry]
+        if inactive:
+            logger.info(
+                "Skill '%s' expects tool(s) %s, which this agent does not have "
+                "registered — its instructions may not be fully executable here.",
+                skill.name,
+                ", ".join(inactive),
+            )
+
+        logger.info(
+            "Loaded skill '%s' (tier=%s, root=%s, %d tool(s), %d connector "
+            "requirement(s))",
+            skill.name,
+            skill.security_tier,
+            skill.root,
+            len(registered),
+            len(requirements),
+        )
+        return skill
+
+    def unload_skill(self, name: str) -> bool:
+        """Remove a loaded skill's tools and body. Returns True if it was loaded."""
+        from gaia.skills.loader import unregister_skill_tools
+
+        if name not in self.loaded_skills:
+            return False
+
+        removed = unregister_skill_tools(name)
+        if self._instance_tools is not None:
+            for key in removed:
+                self._instance_tools.pop(key, None)
+        self.loaded_skills.pop(name, None)
+        self.rebuild_system_prompt()
+        logger.info("Unloaded skill '%s'", name)
+        return True
+
+    def get_skills_system_prompt(self) -> str:
+        """Render the loaded skills' bodies as a system-prompt fragment.
+
+        Auto-discovered by ``_get_mixin_prompts()``, so a skill's instructions
+        reach the model as soon as it is loaded. Returns "" when no skill is
+        loaded, keeping every existing agent's prompt byte-identical.
+        """
+        skills = getattr(self, "_loaded_skills", None)
+        if not skills:
+            return ""
+
+        sections = []
+        for skill in skills.values():
+            if not skill.body:
+                continue
+            sections.append(f"--- SKILL: {skill.name} ---\n{skill.body}")
+        if not sections:
+            return ""
+        return "==== LOADED SKILLS ====\n" + "\n\n".join(sections)
 
     def list_tools(self, verbose: bool = True) -> None:
         """
