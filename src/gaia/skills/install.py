@@ -43,7 +43,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from gaia.hub.catalog import Fetcher
+from gaia.hub.catalog import Fetcher, get_hub_base_url
 from gaia.logger import get_logger
 from gaia.skills.errors import SkillError, SkillNotFoundError, SkillValidationError
 from gaia.skills.format import SKILL_FILENAME, Skill, parse_skill, validate_skill
@@ -294,7 +294,10 @@ def install_skill(
             version=version,
             requested=spec,
             source=SOURCE_HUB,
-            hub_url=base_url or "",
+            # Record the origin actually fetched from, not the flag: `base_url` is
+            # None whenever the hub came from GAIA_HUB_URL or the default, and
+            # "which hub did this come from" is the provenance the lock exists for.
+            hub_url=base_url or get_hub_base_url(),
             artifact_sha256=artifact.sha256,
             artifact_filename=artifact.filename,
             claimed_tier=claimed,

@@ -353,6 +353,10 @@ def test_install_lands_the_skill_and_records_the_lock(marketplace, tmp_path):
     assert entry.signature["role"] == "publisher"
     assert entry.artifact_sha256
     assert entry.permissions == ["network:read:*.brave.com"]
+    # The origin actually fetched from, not the --hub-url flag: the flag is unset
+    # whenever the hub came from GAIA_HUB_URL or the default, and "which hub did
+    # this come from" is the provenance the lock exists to answer.
+    assert entry.hub_url == marketplace.hub.BASE_URL
 
     # ...and the installed skill is discoverable and loadable.
     discovered = marketplace.manager.reload()
