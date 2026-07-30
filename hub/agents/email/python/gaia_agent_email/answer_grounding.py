@@ -195,6 +195,39 @@ def find_unqualified_negative_claim(
     return None
 
 
+# ``total_unread`` is a per-INBOX-label count -- a single mailbox's own
+# unread inbox, or (when several mailboxes are connected) the SUM of each
+# one's own INBOX count. It is never a whole-account or all-folders total,
+# so "across your mailboxes/accounts" always overclaims its scope, whether
+# one mailbox or several are connected.
+_CROSS_MAILBOX_UNREAD_CLAIM_RE = re.compile(
+    r"\bunread\b[^.!?]{0,60}\bacross\s+(?:your\s+|the\s+)?(?:connected\s+)?"
+    r"(?:mailboxes|accounts|inboxes)\b"
+    r"|\bacross\s+(?:your\s+|the\s+)?(?:connected\s+)?(?:mailboxes|accounts|inboxes)"
+    r"[^.!?]{0,60}\bunread\b",
+    re.IGNORECASE,
+)
+
+
+def find_unlicensed_cross_mailbox_claim(
+    final_answer: Optional[str], conversation: Optional[List[Dict[str, Any]]]
+) -> Optional[str]:
+    """Return a reason when ``final_answer`` describes this turn's
+    ``pre_scan_inbox`` ``total_unread`` as spanning multiple mailboxes or
+    accounts. Fires whenever a ``total_unread`` value was actually returned,
+    independent of how many mailboxes are connected — the field is
+    INBOX-label-scoped either way, never a whole-account total.
+    """
+    if not final_answer:
+        return None
+    envelope = last_tool_payload(conversation, "pre_scan_inbox")
+    if envelope is None or envelope.get("total_unread") is None:
+        return None
+    if _CROSS_MAILBOX_UNREAD_CLAIM_RE.search(final_answer):
+        return "describes total_unread as spanning multiple mailboxes/accounts"
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Guard 3 — internal payload scaffolding leaking into prose
 # ---------------------------------------------------------------------------
@@ -313,11 +346,13 @@ def ground_final_answer(result: Dict[str, Any]) -> Dict[str, Any]:
         result["result"] = UNGROUNDED_SUCCESS_FALLBACK
         return result
 
-    negative_claim_reason = find_unqualified_negative_claim(final_answer, conversation)
-    if negative_claim_reason:
+    contradiction_reason = find_unqualified_negative_claim(
+        final_answer, conversation
+    ) or find_unlicensed_cross_mailbox_claim(final_answer, conversation)
+    if contradiction_reason:
         logger.warning(
             "email agent: rewrote contradicted pre-scan claim — %s",
-            negative_claim_reason,
+            contradiction_reason,
         )
         envelope = last_tool_payload(conversation, "pre_scan_inbox")
         result["result"] = _honest_prescan_summary(envelope or {})
@@ -332,6 +367,7 @@ __all__ = [
     "decode_stray_unicode_escapes",
     "find_scaffolding_leak",
     "find_ungrounded_success_claim",
+    "find_unlicensed_cross_mailbox_claim",
     "find_unqualified_negative_claim",
     "ground_final_answer",
     "last_tool_payload",
