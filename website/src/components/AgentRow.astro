@@ -4,6 +4,9 @@
 
 // A published agent row in the hub list. The whole row is the link; it nudges
 // right on hover (padding-left 22px -> 26px).
+//
+// Deprecation is a struck-through name plus a badge, not a wrapper opacity: an
+// opacity multiplies the contrast of every text node inside it.
 import AgentIcon from './AgentIcon.astro';
 import { securityTierLabel, formatBytes, categoryLabel, type Agent } from '../data/catalog';
 
@@ -19,7 +22,6 @@ const size = agent.download_size_bytes > 0 ? formatBytes(agent.download_size_byt
   href={`/hub/${agent.id}`}
   class:list={[
     'agent-row group grid grid-cols-[44px_1fr] items-center gap-[18px] border-b border-g-border py-5 pl-[22px] pr-[22px] transition-[background-color,padding-left] duration-[250ms] ease-g-out hover:bg-g-surface2 hover:pl-[26px] sm:grid-cols-[44px_1fr_auto]',
-    agent.deprecated && 'opacity-50',
   ]}
   data-id={agent.id}
   data-name={agent.name.toLowerCase()}
@@ -36,11 +38,16 @@ const size = agent.download_size_bytes > 0 ? formatBytes(agent.download_size_byt
 
   <span class="min-w-0">
     <span class="flex flex-wrap items-center gap-x-[11px] gap-y-1.5">
-      <span class="font-display text-[17px] font-semibold text-g-text">{agent.name}</span>
+      <span
+        class:list={[
+          'font-display text-[17px] font-semibold',
+          agent.deprecated ? 'text-g-muted line-through' : 'text-g-text',
+        ]}>{agent.name}</span>
       <span class="mono text-[11.5px] text-g-faint">v{agent.latest_version}</span>
       <span class={agent.security_tier === 'verified' ? 'g-badge' : 'g-badge-muted'}>
         {securityTierLabel(agent.security_tier)}
       </span>
+      {agent.deprecated && <span class="g-badge-muted border-g-border2">Deprecated</span>}
     </span>
     <span class="mt-[5px] block text-[13.5px] leading-[1.55] text-g-muted">{agent.description}</span>
   </span>
