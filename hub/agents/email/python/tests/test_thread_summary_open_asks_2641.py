@@ -82,13 +82,12 @@ from gaia_agent_email.tools.read_tools import (  # noqa: E402
 
 # EXPECTED ImportError until #2641 lands — this is the red state.
 from gaia_agent_email.tools.summarize_tools import (  # noqa: E402
+    _THREAD_SYSTEM_PROMPT,
     DEFAULT_SUMMARY_CHAR_LIMIT,
     THREAD_SUMMARY_CHAR_LIMIT,
-    _THREAD_SYSTEM_PROMPT,
 )
 
 from gaia.agents.base.tools import _TOOL_REGISTRY  # noqa: E402
-
 from tests.fixtures.email.fake_gmail import FakeGmailBackend  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -213,7 +212,10 @@ class _CapturingChat:
     """
 
     def __init__(
-        self, *, digest: str = "CONDENSED_DIGEST_MARKER", summary: str = "thread summary"
+        self,
+        *,
+        digest: str = "CONDENSED_DIGEST_MARKER",
+        summary: str = "thread summary",
     ) -> None:
         self.calls: List[Dict[str, Any]] = []
         self._digest = digest
@@ -322,7 +324,9 @@ def test_meeting_signal_is_a_real_heuristic_detection_not_assumed():
     # Independently confirms the deterministic heuristic actually fires on
     # this fixture's newest body — the prompt-level assertion above is only
     # meaningful because this is true.
-    detection = detect_meeting_request_heuristic(_SUBJECT, _MSG4_STATUS_AND_MEETING_ASK[1])
+    detection = detect_meeting_request_heuristic(
+        _SUBJECT, _MSG4_STATUS_AND_MEETING_ASK[1]
+    )
     assert detection.is_meeting_request is True
     assert detection.confidence == "high"
 

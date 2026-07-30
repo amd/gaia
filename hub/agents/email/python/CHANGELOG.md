@@ -89,6 +89,21 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **Thread summaries now keep the newest message's open asks (#2641).** A
+  thread summary could reflect the opening question and an early reply while
+  dropping the newest message entirely — even when that message carried the
+  thread's only open ask and a concrete meeting proposal. Root cause: both
+  `summarize_thread`'s system and user-turn prompts only ever guarded EARLY
+  content ("do not drop a decision raised early..."); nothing asked the
+  model to protect what is still open in the latest message. Both prompts
+  now weigh the newest message's still-open asks equally, and a detected
+  meeting proposal — from the existing deterministic
+  `detect_meeting_request_heuristic`, run over the newest message's own
+  decoded body, never the sender's raw matched text — is named from that
+  signal rather than left to free-form generation. Thread summaries also get
+  a larger length bound (`THREAD_SUMMARY_CHAR_LIMIT`, 700 vs. the
+  single-message 300): several messages' decisions plus a new open ask plus
+  a meeting time cannot fit in the single-message cap.
 - **`POST /autonomy/run` refuses instead of silently no-oping while autonomy
   is `off` (#2528).** Previously the route returned HTTP 200 with the same
   empty-report shape whether autonomy was disabled or had genuinely run and
