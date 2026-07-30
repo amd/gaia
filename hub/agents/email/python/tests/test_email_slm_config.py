@@ -8,6 +8,11 @@ is a one-flag change; field names never hint
 at a cloud LLM (AC3); half-configured tasks fail loudly in ``validate()``;
 factories return ``None`` when unconfigured or when classifier construction
 fails. Hermetic: no Lemonade, no network, no download.
+
+One exception, at the bottom of the file: ``TestConfiguredCheckpointsPull`` is
+marked ``real_model`` and does the real Hugging Face pull + Lemonade load, so
+the shipped checkpoint ids are verified against the actual registry instead of a
+stub. It skips unless a Lemonade server answers.
 """
 
 from __future__ import annotations
@@ -30,11 +35,15 @@ from gaia_agent_email.config import ConfigurationError, EmailAgentConfig  # noqa
 from gaia_agent_email.tools import slm_common  # noqa: E402
 from gaia_agent_email.tools.slm_common import format_slm_input  # noqa: E402
 from gaia_agent_email.tools.slm_phishing import (  # noqa: E402
+    classify_phishing_slm,
     get_slm_phishing_classifier,
 )
 from gaia_agent_email.tools.slm_triage import (  # noqa: E402
+    classify_email_slm,
     get_slm_triage_classifier,
 )
+from gaia_agent_email.tools.triage_heuristics import ALL_CATEGORIES  # noqa: E402
+
 
 @pytest.fixture(autouse=True)
 def _reset_slm_cache():
@@ -73,6 +82,28 @@ class TestConfigFields:
         assert cfg.slm_triage_checkpoint
         assert cfg.slm_phishing_model
         assert cfg.slm_phishing_checkpoint
+
+    def test_checkpoint_defaults_agree_on_repo_owner_and_file(self):
+        # Both checkpoints live in one Hugging Face org and name the same GGUF
+        # file. Drift in either half (a differently-cased owner, a renamed
+        # file) is a first-pull failure on a cold machine, which no hermetic
+        # test can see — every other test here stubs the classifier build.
+        cfg = EmailAgentConfig()
+        owners, filenames = set(), set()
+        for checkpoint in (cfg.slm_triage_checkpoint, cfg.slm_phishing_checkpoint):
+            repo_id, _, filename = checkpoint.partition(":")
+            owner, _, name = repo_id.partition("/")
+            assert owner and name, f"{checkpoint!r} is not 'owner/repo:file.gguf'"
+            owners.add(owner)
+            filenames.add(filename)
+        assert owners == {"specific-AI"}, (
+            f"SLM checkpoint owners are {sorted(owners)}; the canonical "
+            "Hugging Face owner for both repos is 'specific-AI'."
+        )
+        assert filenames == {"bert-base-only.gguf"}, (
+            f"SLM checkpoints name {sorted(filenames)}; both repos publish "
+            "the same 'bert-base-only.gguf' weight file."
+        )
 
     def test_no_slm_field_name_hints_at_cloud_llm(self):
         slm_field_names = [
@@ -257,3 +288,62 @@ class TestFactoryFailSafe:
 
         monkeypatch.setattr(builtins, "__import__", _fake_import)
         assert get_slm_triage_classifier(cfg) is None
+        # The reason survives the fallback, so an inert SLM path is explainable
+        # after the log line has scrolled past.
+        assert "simulated import failure" in slm_common.slm_build_errors()["triage"]
+
+
+@pytest.mark.real_model
+@pytest.mark.real_slm_build
+class TestConfiguredCheckpointsPull:
+    """The configured checkpoints resolve on Hugging Face and load in Lemonade.
+
+    The only test here that pays for a real download and a real model load.
+    Everything else stubs the build, so a checkpoint id that does not resolve —
+    a renamed repo, a mistyped owner — passes the whole suite and fails on a
+    user's first scan instead. Skipped unless a Lemonade server answers.
+    """
+
+    @staticmethod
+    def _skip_unless_lemonade(base_url: str) -> None:
+        requests = pytest.importorskip("requests")
+        try:
+            requests.get(f"{base_url}/api/v1/health", timeout=5).raise_for_status()
+        except Exception as exc:  # noqa: BLE001 - any failure means "not usable"
+            pytest.skip(f"Lemonade Server not reachable at {base_url}: {exc}")
+
+    def test_triage_checkpoint_predicts_a_taxonomy_category(self):
+        pytest.importorskip("specific_ai_tools")
+        cfg = EmailAgentConfig()
+        self._skip_unless_lemonade(slm_common.resolve_base_url(cfg))
+
+        clf = get_slm_triage_classifier(cfg)
+        assert clf is not None, (
+            f"triage checkpoint {cfg.slm_triage_checkpoint!r} did not load; "
+            "see the ERROR log from gaia_agent_email.tools.slm_common."
+        )
+        result = classify_email_slm(
+            clf,
+            subject="Contract signature needed before Friday",
+            sender="legal@partner.example.com",
+            body="Please sign the attached amendment before the Friday deadline.",
+        )
+        assert result is not None and result["category"] in ALL_CATEGORIES
+
+    def test_phishing_checkpoint_predicts_a_boolean(self):
+        pytest.importorskip("specific_ai_tools")
+        cfg = EmailAgentConfig()
+        self._skip_unless_lemonade(slm_common.resolve_base_url(cfg))
+
+        clf = get_slm_phishing_classifier(cfg)
+        assert clf is not None, (
+            f"phishing checkpoint {cfg.slm_phishing_checkpoint!r} did not load; "
+            "see the ERROR log from gaia_agent_email.tools.slm_common."
+        )
+        verdict = classify_phishing_slm(
+            clf,
+            subject="Your mailbox will be deactivated — verify now",
+            sender="security@account-verify.example.net",
+            body="Confirm your password within 24 hours to keep your account.",
+        )
+        assert verdict in (True, False)

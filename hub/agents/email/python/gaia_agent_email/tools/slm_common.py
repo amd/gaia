@@ -12,9 +12,11 @@ Two properties this module guarantees for the whole SLM feature:
 
 - **Fail safe.** Building a classifier can fail for many benign reasons —
   Lemonade is unreachable, the model or checkpoint cannot be loaded, or the
-  classifier artifacts can't be resolved. Any such failure returns ``None``
-  (logged once) so the caller falls back to the existing heuristic + LLM flow.
-  This addon must never break the current path.
+  classifier artifacts can't be resolved. Any such failure returns ``None`` so
+  the caller falls back to the existing heuristic + LLM flow — this addon must
+  never break the current path — while logging at ERROR and recording the reason
+  in :func:`slm_build_errors`, since the failure only happens to someone who
+  explicitly asked for the classifiers.
 - **Build once.** The classifier is expensive to construct (it loads the GGUF
   encoder into Lemonade and pulls the classifier / tokenizer artifacts), so
   instances are cached process-wide keyed by ``(model, checkpoint, base_url)``
@@ -30,19 +32,20 @@ import os
 import threading
 from typing import Any, Optional, Tuple
 
+from gaia.llm.lemonade_client import DEFAULT_LEMONADE_URL
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
-
-# Default Lemonade server root — ``LemonadeEmbeddingClassifier`` appends
-# ``/v1/...`` and ``/api/v1/...`` itself. Matches agent resolution after
-# stripping a trailing ``/api/v1`` or ``/v1`` from chat-style base URLs.
-_DEFAULT_LEMONADE_BASE_URL = "http://localhost:13305"
 
 # Process-wide cache of built classifiers keyed by (model, checkpoint, base_url).
 # ``None`` is cached too, so a known-failed build is not retried on every email.
 _CACHE: dict[Tuple[str, str, str], Optional[Any]] = {}
 _CACHE_LOCK = threading.Lock()
+
+# Why each failed build failed, keyed by task. Cached ``None`` alone makes the
+# SLM path silently inert; this keeps the reason retrievable after the log line
+# has scrolled away.
+_BUILD_ERRORS: dict[str, str] = {}
 
 
 def format_slm_input(*, subject: str, sender: str, body: str) -> str:
@@ -76,12 +79,13 @@ def resolve_base_url(config: Any) -> str:
     """Return the Lemonade server root the SLM encoder should talk to.
 
     Mirrors ``EmailTriageAgent.__init__``: an explicit ``config.base_url`` wins,
-    otherwise ``LEMONADE_BASE_URL``, otherwise the local default. Chat-style
-    URLs ending in ``/api/v1`` or ``/v1`` are stripped to the server root.
+    otherwise ``LEMONADE_BASE_URL``, otherwise core's ``DEFAULT_LEMONADE_URL``.
+    Chat-style URLs ending in ``/api/v1`` or ``/v1`` are stripped to the server
+    root — ``LemonadeEmbeddingClassifier`` appends those paths itself.
     """
     base_url = getattr(config, "base_url", None)
     if not base_url:
-        base_url = os.getenv("LEMONADE_BASE_URL", _DEFAULT_LEMONADE_BASE_URL)
+        base_url = os.getenv("LEMONADE_BASE_URL", DEFAULT_LEMONADE_URL)
     return _lemonade_server_root(base_url)
 
 
@@ -124,23 +128,46 @@ def get_classifier(
                 base_url,
             )
         except Exception as exc:  # fail safe — any build failure → LLM/heuristic
-            log.warning(
-                "email SLM %s classifier unavailable (model=%s): %s: %s — "
-                "falling back to the heuristic + LLM flow",
+            reason = f"{type(exc).__name__}: {exc}"
+            _BUILD_ERRORS[task] = reason
+            # ERROR, not WARNING: only an operator who asked for the SLM gets here.
+            log.error(
+                "email SLM %s classifier unavailable (%s) — every message falls "
+                "back to the heuristic + LLM flow. Check that Lemonade answers "
+                "at %s and that model %r / checkpoint %r can be loaded, or turn "
+                "the classifiers off (GAIA_EMAIL_USE_SLM=false). Setup: "
+                "docs/guides/email.mdx, 'Small language model classifiers'.",
                 task,
+                reason,
+                base_url,
                 model,
-                type(exc).__name__,
-                exc,
+                checkpoint,
             )
 
         _CACHE[key] = classifier
         return classifier
 
 
+def slm_build_errors() -> dict[str, str]:
+    """Return ``task -> reason`` for every classifier build that has failed.
+
+    Lets a caller report *why* the SLM path is inert instead of only observing
+    that classifications came back from the heuristic + LLM flow.
+    """
+    with _CACHE_LOCK:
+        return dict(_BUILD_ERRORS)
+
+
 def _reset_cache_for_tests() -> None:
     """Clear the process-wide classifier cache (test-only helper)."""
     with _CACHE_LOCK:
         _CACHE.clear()
+        _BUILD_ERRORS.clear()
 
 
-__all__ = ["format_slm_input", "get_classifier", "resolve_base_url"]
+__all__ = [
+    "format_slm_input",
+    "get_classifier",
+    "resolve_base_url",
+    "slm_build_errors",
+]

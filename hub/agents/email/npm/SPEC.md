@@ -246,7 +246,7 @@ emits the canonical event vocabulary.
 | `GET /v1/email/agent/memory/{id}` | Memory status without changing it. |
 | `GET /v1/email/agent/autonomy/{id}` | Inspectable autonomy status: `{ level, enabled, trust_min_samples, trust_threshold, trusted_scope_count, scopes[] }` — the earned-trust ledger, never a black box. |
 | `POST /v1/email/agent/autonomy` | Set the autonomy level, `{ session_id, level }` where level ∈ `off` \| `suggest` \| `earn_trust` \| `full` (`off` = kill switch). Bad level → **400**. |
-| `POST /v1/email/agent/autonomy/run` | Trigger one observe→decide→act cycle, `{ session_id, max_messages? }` → `{ level, executed[], proposals[], decisions[], skipped }`. `decisions[]` (#2529) is a per-message log — `{ message_id, tool, action, outcome, reason, sender }` for every candidate considered, whatever the outcome — so a held-back decision (importance guard, confirm floor) is explained, not silent. The daemon clock / scheduler drives this in production. |
+| `POST /v1/email/agent/autonomy/run` | Trigger one observe→decide→act cycle, `{ session_id, max_messages? }` → `{ level, executed[], proposals[], decisions[], skipped }`. `decisions[]` (#2529) is a per-message log — `{ message_id, tool, action, outcome, reason, sender }` for every candidate considered, whatever the outcome — so a held-back decision (importance guard, confirm floor) is explained, not silent. The daemon clock / scheduler drives this in production. Refused with **409** while the session's level is `off` — the kill switch is never mistakable for "ran and found nothing to do" (#2528). |
 | `POST /v1/email/agent/autonomy/undo` | Reverse one auto-executed action and record the correction against its trust scope, `{ session_id, action_id }` → `{ action_id, action_type, message_id, undone, correction_captured }` (#2529). `action_id` comes from a prior `executed[]` entry. Unknown/expired/already-undone id → **409**; an action_type with no reversal implemented → **400**. `correction_captured` is `false` (mutation still reversed) when `action_id` wasn't an autonomy-executed action. |
 
 Sessions are in-process and single-tenant (the sidecar hosts one user's agent); one turn
@@ -333,6 +333,23 @@ land in a future schema bump:
   user's own outbound mail past a configurable window (default 3 days), most
   overdue first. **Detection only** — it never sends a nudge (any send stays
   confirmation-gated).
+- **Waiting-on-you detection (#2581):** `list_waiting_on_you` is the inbound
+  counterpart to `check_followups` — it scans every connected mailbox's inbox
+  for messages that ask directly for a reply, decision, or meeting time AND
+  sit in a thread with genuine back-and-forth already in it (multiple prior
+  exchanges, or one genuinely substantive prior message — a single one-line
+  prior contact is not enough on its own). Corroboration is deliberately
+  scoped to THIS thread's own history only — having emailed the same address
+  before, in some other thread, does not corroborate anything; "waiting on
+  your reply" means you're in a conversation and it's your turn, which a
+  one-off prior contact elsewhere doesn't establish. Precision-first by
+  design: a bare `?` or a human-looking sender name is never enough — both
+  are common in adversarial marketing mail — and a message the category
+  heuristic confidently calls promotional never qualifies regardless of
+  corroboration. A sender the user has told to stop contacting them
+  (address-normalized, so a plus-tagged variant can't dodge it) is
+  suppressed unconditionally. **Detection only**, read-only against the
+  mailbox.
 
 None of these are on the REST/MCP contract, so none of them moves `SCHEMA_VERSION`.
 

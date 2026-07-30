@@ -99,7 +99,23 @@ CATEGORY_PERSONAL = "PERSONAL"
 #   - POST /v1/email/query/{run_id}/respond — deliver the answer; the ORIGINAL
 #     stream resumes. 404 unknown run, 409 stale/unknown request_id.
 # No existing shape changed, so 2.5 consumers keep working (additive MINOR).
-SCHEMA_VERSION = "2.6"
+# 2.8 is additive over 2.7 (#2582): a new read-only attention-view surface
+#   - GET /v1/email/attention — the merged "what needs you" read-model: inbound
+#     waiting-on-you items (#2581), meeting proposals found during the scan
+#     (#2583, including messages that would otherwise collapse into the
+#     pre-scan envelope's bare informational_count), unreviewed messages
+#     (#2584), and open action items from prior triage. Computed on open and
+#     cached — never scheduler-driven — so the response carries its own
+#     ``cache_age_seconds`` / ``stale`` so a renderer never presents a cached
+#     result as current. No existing shape changed, so 2.7 consumers keep
+#     working (additive MINOR).
+# 2.9 is additive over 2.8 (#2638/#2643): EmailPreScanResult gains
+# ``total_inbox`` (exact whole-INBOX message count, Optional[int]) — pre-scan
+# now covers read + unread mail (#2638, previously unread-only on a rationale
+# #2584 itself made obsolete), so total_unread alone is no longer an honest
+# scan-coverage denominator; total_inbox is. No existing field changed, so
+# 2.8 consumers keep working (additive MINOR).
+SCHEMA_VERSION = "2.9"
 
 # Maximum number of items in a single batch request. Protects the single-tenant
 # local model slot from runaway batches. Enforced via Pydantic max_length.
@@ -538,8 +554,9 @@ class EmailTriageResult(_Strict):
     usage: Optional[TriageUsage] = Field(
         default=None,
         description=(
-            "LLM usage metrics (tokens + aggregate TPS) for this triage. Null on "
-            "the heuristic-only path where no LLM call was made. Compare "
+            "LLM usage metrics (tokens + aggregate TPS) for this triage. Null "
+            "whenever no LLM call was made — the heuristic-only path, or an "
+            "on-device SLM classification that resolved the category first. Compare "
             "prompt_tokens against the agent's context-window envelope "
             "(16K target / 32K max, #1892) to see how much of the window a "
             "payload consumed."
@@ -1269,6 +1286,14 @@ class PreScanItem(_Strict):
         default=None,
         description="Rationale for a suggested-archive row (the heuristic reason).",
     )
+    is_meeting_request: bool = Field(
+        default=False,
+        description=(
+            "True when the heuristic confidently detected a meeting/"
+            "scheduling request in this message's subject/snippet (#2583). "
+            "Read-only signal — detection makes no calendar changes."
+        ),
+    )
 
 
 class PreScanPreferencesApplied(_Strict):
@@ -1280,7 +1305,11 @@ class PreScanPreferencesApplied(_Strict):
     """
 
     priority_senders: List[str] = Field(
-        default_factory=list, description="Senders always treated as urgent."
+        default_factory=list,
+        description=(
+            "Senders surfaced/ordered ahead of others (#2632); does not "
+            "change category — content still decides urgency."
+        ),
     )
     low_priority_senders: List[str] = Field(
         default_factory=list, description="Senders always treated as low-priority."
@@ -1304,6 +1333,28 @@ class PreScanTotals(_Strict):
     suggested_archives: int = Field(
         default=0, description="Total suggested-archive messages found."
     )
+    needs_review: int = Field(
+        default=0,
+        description=(
+            "Total messages the heuristic was NOT confident about (#2584) — "
+            "surfaced for human review rather than filed under a placeholder "
+            "category guess."
+        ),
+    )
+
+
+class MailboxError(_Strict):
+    """One connected mailbox that failed during a pre-scan (#2584).
+
+    A partial failure never silently shrinks the result — every skipped
+    mailbox is named here so the caller can tell "empty inbox" apart from
+    "half the inbox couldn't be scanned".
+    """
+
+    mailbox: str = Field(
+        ..., description="Provider name of the failed mailbox ('google' / 'microsoft')."
+    )
+    error: str = Field(..., description="Actionable error message for the failure.")
 
 
 class EmailPreScanRequest(_Strict):
@@ -1344,7 +1395,21 @@ class EmailPreScanResult(_Strict):
     )
     informational_count: int = Field(
         default=0,
-        description="Count of informational (FYI/PERSONAL) messages — not listed.",
+        description=(
+            "Count of informational (FYI/PERSONAL) messages. Empty by "
+            "default in ``informational`` below (#2633) — request "
+            "``include_informational=True`` on the call to get the full "
+            "list instead of just this count."
+        ),
+    )
+    informational: List[PreScanItem] = Field(
+        default_factory=list,
+        description=(
+            "The informational (FYI/PERSONAL) messages this count "
+            "represents (#2633) — empty unless the caller passed "
+            "``include_informational=True``, so a bare count is never the "
+            "only way to audit what was filtered."
+        ),
     )
     suggested_archives: List[PreScanItem] = Field(
         default_factory=list,
@@ -1360,6 +1425,63 @@ class EmailPreScanResult(_Strict):
     totals: Optional[PreScanTotals] = Field(
         default=None, description="Pre-cap totals per bucket."
     )
+    needs_review: List[PreScanItem] = Field(
+        default_factory=list,
+        description=(
+            "Messages the heuristic was NOT confident about (capped, #2584) — "
+            "surfaced for human review rather than silently filed under a "
+            "placeholder category guess (e.g. an unconfident FYI or PROMOTIONAL "
+            "guess). ``why`` carries the heuristic's escalation reason."
+        ),
+    )
+    scanned: int = Field(
+        default=0,
+        description=(
+            "How many messages this pre-scan actually classified (sum across "
+            "every bucket, including needs_review) — the honest numerator for "
+            "'how much of the inbox did we look at' (#2584)."
+        ),
+    )
+    total_unread: Optional[int] = Field(
+        default=None,
+        description=(
+            "Exact total UNREAD message count in the scanned mailbox(es) — a "
+            "secondary coverage figure (#2584), NOT the scan-coverage "
+            "denominator since #2638 (pre-scan now covers read mail too; see "
+            "total_inbox for that). Gmail reports this via labels().get's "
+            "messagesUnread — an exact integer, not list_messages's "
+            "resultSizeEstimate (measured 2.6x off on a real mailbox). "
+            "Outlook has no equivalent honest source and reports null — "
+            "never a fabricated page-size number."
+        ),
+    )
+    total_inbox: Optional[int] = Field(
+        default=None,
+        description=(
+            "Exact total INBOX message count (read + unread) in the scanned "
+            "mailbox(es) — the honest denominator for scan coverage (#2638), "
+            "now that pre-scan covers all of INBOX, not just unread mail. "
+            "Gmail reports this via labels().get's messagesTotal — an exact "
+            "integer, sourced from the SAME call as total_unread (no extra "
+            "round-trip). Outlook has no equivalent honest source and "
+            "reports null — never a fabricated page-size number."
+        ),
+    )
+    degraded: bool = Field(
+        default=False,
+        description=(
+            "True when at least one connected mailbox could not be scanned "
+            "(see mailbox_errors) — the surviving mailboxes' results are still "
+            "shown, but coverage is partial (#2584)."
+        ),
+    )
+    mailbox_errors: Optional[List[MailboxError]] = Field(
+        default=None,
+        description=(
+            "Connected mailboxes that failed during this pre-scan, if any "
+            "(#2584) — surfaced to the caller, not only logged."
+        ),
+    )
 
 
 class EmailPreScanResponse(_Strict):
@@ -1369,6 +1491,167 @@ class EmailPreScanResponse(_Strict):
         default=SCHEMA_VERSION, description="Echoes the contract version."
     )
     result: EmailPreScanResult = Field(..., description="The pre-scan envelope.")
+
+
+# ---------------------------------------------------------------------------
+# ATTENTION VIEW (schema 2.8, #2582) — the read-only, no-prompt "what needs
+# you" surface rendered when the TUI/Agent UI opens the email agent. Merges
+# four signals that each already exist as their own tool: waiting-on-you
+# (#2581), meeting proposals (#2583), unreviewed messages (#2584), and open
+# action items from prior triage (#2110/#2525). Computed directly from the
+# underlying tools rather than derived from the pre-scan envelope above —
+# ``EmailPreScanResult.informational_count`` is a bare count with no rows, so
+# a meeting proposal in a confidently-classified informational message would
+# be silently invisible if this view depended on that envelope instead.
+# ---------------------------------------------------------------------------
+
+
+class AttentionItemKind(str, Enum):
+    """Why one attention-view item is here — the source signal it came from."""
+
+    MEETING_REQUEST = "meeting_request"
+    WAITING_ON_YOU = "waiting_on_you"
+    NEEDS_REVIEW = "needs_review"
+    ACTION_ITEM = "action_item"
+
+
+class AttentionItem(_Strict):
+    """One item the attention view surfaces, tagged with why it's here.
+
+    Passive data only — the view never acts on a message, so this carries no
+    action affordance, just enough to identify the message and explain the
+    reason a person should look at it.
+    """
+
+    kind: AttentionItemKind = Field(..., description="Which signal surfaced this item.")
+    message_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Provider message id (opaque). Null for an action_item with no "
+            "recoverable source message (e.g. a pre-#1605 task row)."
+        ),
+    )
+    thread_id: Optional[str] = Field(
+        default=None, description="Provider thread id, when known."
+    )
+    sender: str = Field(
+        default="", description="Raw 'From' header of the source message."
+    )
+    subject: str = Field(
+        default="",
+        description=(
+            "Subject line of the source message. For an action_item this is "
+            "the extracted action description, not an email subject."
+        ),
+    )
+    why: str = Field(
+        ..., description="Plain-language reason this item needs attention."
+    )
+    due_hint: Optional[str] = Field(
+        default=None,
+        description="Free-text due hint (action items only); null otherwise.",
+    )
+    mailbox: Optional[str] = Field(
+        default=None,
+        description=(
+            "Provider name ('google' / 'microsoft') this item came from. Set "
+            "only when more than one mailbox is connected — with a single "
+            "mailbox, tagging every row is noise, not information."
+        ),
+    )
+
+
+class AttentionCoverage(_Strict):
+    """How much of the mailbox this attention view actually covered.
+
+    Carries the same honesty fields #2584 established for the pre-scan
+    envelope, so the renderer can state what was scanned rather than let
+    'nothing needs you' read as an unqualified whole-mailbox claim.
+    """
+
+    scanned: int = Field(
+        default=0, description="Messages actually scanned across every mailbox."
+    )
+    total_unread: Optional[int] = Field(
+        default=None,
+        description=(
+            "Exact total unread count when the backend can report it "
+            "honestly (Gmail); null when it can't (Outlook) — never a "
+            "fabricated number."
+        ),
+    )
+    scan_truncated: bool = Field(
+        default=False,
+        description=(
+            "True when the scan hit its message ceiling in any connected "
+            "mailbox — older mail may exist beyond what was looked at."
+        ),
+    )
+    degraded: bool = Field(
+        default=False,
+        description="True when at least one connected mailbox could not be scanned.",
+    )
+    mailbox_errors: Optional[List[MailboxError]] = Field(
+        default=None,
+        description="Connected mailboxes that failed during this scan, if any.",
+    )
+
+
+class EmailAttentionResult(_Strict):
+    """The merged attention-view envelope — computed on open, then cached.
+
+    ``items == []`` is NOT itself a "nothing needs you" claim — it only means
+    nothing surfaced from what was actually scanned. A consumer MUST read
+    ``coverage`` before asserting the mailbox is clear, and must qualify the
+    claim when ``coverage.scan_truncated`` or ``coverage.degraded`` is set
+    (e.g. "of the 200 most recent" / "one mailbox couldn't be scanned") —
+    rendering an empty ``items`` list as an unqualified whole-mailbox claim is
+    the exact defect #2584 fixed one layer down for the pre-scan envelope.
+    """
+
+    kind: Literal["email_attention"] = Field(
+        default="email_attention",
+        description="Discriminator identifying this envelope shape.",
+    )
+    items: List[AttentionItem] = Field(
+        default_factory=list,
+        description="Every surfaced item, unordered across signal types.",
+    )
+    coverage: AttentionCoverage = Field(
+        ..., description="What this view actually scanned."
+    )
+    generated_at: str = Field(
+        ...,
+        description="UTC ISO-8601 timestamp of the underlying scan this result reflects.",
+    )
+    cache_age_seconds: float = Field(
+        default=0.0,
+        ge=0,
+        description=(
+            "Seconds since ``generated_at``. 0 on a freshly-computed result; "
+            "positive when served from cache — a renderer must label a "
+            "nonzero age rather than present a cached result as current."
+        ),
+    )
+    stale: bool = Field(
+        default=False,
+        description=(
+            "True when the cache exceeded its freshness threshold and a live "
+            "refresh was attempted but failed (e.g. a transient mailbox "
+            "error) — the result is last-known-good, not current."
+        ),
+    )
+
+
+class EmailAttentionResponse(_Strict):
+    """Top-level attention-view response envelope (#2582)."""
+
+    schema_version: str = Field(
+        default=SCHEMA_VERSION, description="Echoes the contract version."
+    )
+    result: EmailAttentionResult = Field(
+        ..., description="The attention-view envelope."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1523,6 +1806,12 @@ __all__ = [
     "EmailQuarantineResponse",
     "EmailUnquarantineRequest",
     "EmailUnquarantineResponse",
+    # Attention view (schema 2.8, #2582).
+    "AttentionItemKind",
+    "AttentionItem",
+    "AttentionCoverage",
+    "EmailAttentionResult",
+    "EmailAttentionResponse",
     # Calendar surface (schema 2.1, #1780).
     "CalendarEventDateTime",
     "CalendarEvent",

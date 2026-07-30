@@ -49,6 +49,7 @@ class OAuthClientNotConfiguredError(ConfigurationError):
     ):
         self.provider_id = provider_id
         self.provider_label = provider_label
+        self.console_steps = console_steps
         super().__init__(
             self._build_message(
                 provider_id, provider_label, console_steps, docs, example
@@ -86,6 +87,59 @@ class OAuthClientNotConfiguredError(ConfigurationError):
         )
 
 
+class MicrosoftTenantConflictError(ConfigurationError):
+    """``GAIA_MICROSOFT_TENANT`` disagrees with the tenant a Microsoft
+    connector resolves to on its own (plan amendment A2/A3, #2628).
+
+    Subclasses ``ConfigurationError`` (not bare ``ConnectorsError``) —
+    ``ConfigurationError`` is what ``api.list_connections``, ``tripwire_check``,
+    and the UI router's ``_connector_summary`` already catch per-provider, so
+    one misconfigured connector degrades to a warning row instead of taking
+    down the whole connections list or sweep.
+
+    Only raised on a genuine CONFLICT: the env var is no longer read for
+    tenant resolution at all, so merely setting it (to a value that happens
+    to agree with what the connector already resolves to) is a silent no-op
+    with a one-time deprecation log, not an error. This fires when the value
+    would have changed behaviour, or is a bare tenant GUID that is inherently
+    ambiguous between the personal and work/school connectors.
+    """
+
+    _OTHER_CONNECTOR = {"microsoft": "microsoft_work", "microsoft_work": "microsoft"}
+
+    def __init__(
+        self,
+        connector_id: str,
+        *,
+        env_value: str,
+        resolved_tenant: str,
+        ambiguous_guid: bool = False,
+    ):
+        self.connector_id = connector_id
+        self.env_value = env_value
+        self.resolved_tenant = resolved_tenant
+        other = self._OTHER_CONNECTOR.get(connector_id, "the other Microsoft connector")
+        if ambiguous_guid:
+            what = (
+                f"is a single tenant id, which is ambiguous between "
+                f"{connector_id!r} and {other!r}"
+            )
+        else:
+            what = (
+                f"disagrees with {connector_id!r}, which resolves to "
+                f"{resolved_tenant!r} from its own connector definition"
+            )
+        super().__init__(
+            f"GAIA_MICROSOFT_TENANT={env_value!r} {what}. This environment "
+            "variable is no longer read for tenant resolution — GAIA now "
+            f"resolves the tenant per connector. If you meant {connector_id!r}, "
+            f"remove the conflicting value; if you meant {other!r}, use that "
+            "connector instead (or set its Directory (tenant) ID setup field "
+            "for a single-tenant registration). Then `unset "
+            "GAIA_MICROSOFT_TENANT`. See docs/connectors/microsoft.mdx."
+        )
+
+
 class AuthRequiredError(ConnectorsError):
     """
     A caller cannot use a connection right now and must take a specific action.
@@ -100,6 +154,12 @@ class AuthRequiredError(ConnectorsError):
         AGENT_NOT_GRANTED = "agent_not_granted"
         CONNECTION_MISSING_SCOPES = "connection_missing_scopes"
         REAUTH_REQUIRED = "reauth_required"
+        # A6: distinct from REAUTH_REQUIRED — the stored connection was
+        # minted against a different OAuth tenant than the connector
+        # currently resolves to. The remedy differs (use the other
+        # Microsoft connector, not "just reconnect this one"), so callers
+        # must be able to branch on it separately.
+        TENANT_MISMATCH = "tenant_mismatch"
 
     def __init__(
         self,
@@ -150,6 +210,14 @@ class AuthRequiredError(ConnectorsError):
                 f"Connections, or run `gaia connectors connect "
                 f"{self.provider or '<provider>'}`. "
                 "See docs/runbooks/google-oauth-client.md."
+            )
+        if self.reason is AuthRequiredError.Reason.TENANT_MISMATCH:
+            return (
+                f"The stored {prov} connection was authenticated against a "
+                "different Microsoft tenant than the connector currently "
+                "resolves to. Reconnect from Settings → Connections, or run "
+                f"`gaia connectors connect {self.provider or '<provider>'}`. "
+                "See docs/connectors/microsoft.mdx."
             )
         # Fallback — should be unreachable since Reason is a closed enum.
         return f"Authentication required for {prov} (reason={self.reason.value})."
@@ -213,3 +281,108 @@ class FlowTimeoutError(ConnectorsError):
 
 class FlowInProgressError(ConnectorsError):
     """Another OAuth flow is already pending; only one at a time is supported."""
+
+
+class OAuthProviderError(ConnectorsError):
+    """A provider's OAuth endpoint rejected a request, with a structured reason.
+
+    Replaces raising ``ConnectorsError`` with the entire unbounded
+    ``response.text`` interpolated into the message (the literal #2590 bug):
+    ``error`` / ``error_description`` are the RFC 6749 / AADSTS fields the
+    provider actually returned, each truncated so a malformed or oversized
+    body can never reach model context unbounded — see
+    ``flow.classify_oauth_exception``, which is the only code meant to
+    inspect these fields programmatically.
+    """
+
+    _MAX_FIELD_LEN = 300
+
+    def __init__(
+        self,
+        provider: str,
+        *,
+        error: str = "",
+        error_description: str = "",
+        status_code: int | None = None,
+    ):
+        self.provider = provider
+        self.error = (error or "")[: self._MAX_FIELD_LEN]
+        self.error_description = (error_description or "")[: self._MAX_FIELD_LEN]
+        self.status_code = status_code
+        detail = self.error_description or self.error or "no error detail returned"
+        status = f" ({status_code})" if status_code else ""
+        super().__init__(f"{provider} OAuth request was rejected{status}: {detail}")
+
+
+class UnknownAgentError(ConnectorsError):
+    """One or more requested agent ids are not registered in the agent registry.
+
+    Distinct from ``gaia.daemon.sidecars.errors.UnknownAgentError`` (a
+    ``SidecarError``, unrelated hierarchy) — this one IS a ``ConnectorsError``
+    so the CLI's blanket ``except ConnectorsError`` and the router's
+    ``ConnectorsError -> HTTPException`` mapping both catch it uniformly.
+    """
+
+    def __init__(self, agent_ids: list[str]):
+        self.agent_ids = list(agent_ids)
+        super().__init__(
+            f"Unknown agent id(s): {', '.join(self.agent_ids)}. Check the "
+            "namespaced agent id (e.g. 'installed:email') via `gaia connectors "
+            "grants list` or the Agent UI's agent picker."
+        )
+
+
+class NoDeclaredScopesError(ConnectorsError):
+    """An agent declares no ``REQUIRED_CONNECTORS`` scopes for a connector."""
+
+    def __init__(self, agent_id: str, connector_id: str):
+        self.agent_id = agent_id
+        self.connector_id = connector_id
+        super().__init__(
+            f"Agent {agent_id!r} declares no REQUIRED_CONNECTORS scopes for "
+            f"connector {connector_id!r}, so there is nothing to authorize or "
+            "grant. Pass --scopes explicitly, or check the agent's "
+            "REQUIRED_CONNECTORS declaration."
+        )
+
+
+class ScopeNotAllowedError(ConnectorsError):
+    """A declared scope is outside the connector's ``available_scopes`` ceiling.
+
+    Raised by ``resolve_declared_scopes`` so an agent's own declaration can
+    never put a scope in front of the user's consent screen that the catalog
+    entry does not explicitly allow (#2603) — a half-fix would validate agent
+    identity but not scope values.
+    """
+
+    def __init__(self, agent_id: str, connector_id: str, scopes: list[str]):
+        self.agent_id = agent_id
+        self.connector_id = connector_id
+        self.scopes = list(scopes)
+        super().__init__(
+            f"Agent {agent_id!r} declares scope(s) {', '.join(self.scopes)} for "
+            f"connector {connector_id!r} that are outside its available_scopes "
+            "catalog entry. This is a catalog/agent mismatch — file a bug "
+            "rather than widening the request."
+        )
+
+
+class GrantAfterConnectError(ConnectorsError):
+    """A connection was persisted but the agent grant that should follow it failed.
+
+    Deliberately its own type — never merged into a generic ``ConnectorsError``
+    — so a caller that must not echo an arbitrary exception's text (it might
+    carry a credential) can still tell apart "the connection itself is fine,
+    only the grant write failed" from every other failure, and report that
+    honestly instead of a blanket "nothing was changed." See
+    ``onboarding_tools._setup_mailbox_access``.
+    """
+
+    def __init__(self, provider: str, agent_id: str, *, reason: str):
+        self.provider = provider
+        self.agent_id = agent_id
+        self.reason = reason
+        super().__init__(
+            f"Connected {provider!r} but failed to grant it to agent "
+            f"{agent_id!r}: {reason}."
+        )

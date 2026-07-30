@@ -343,6 +343,7 @@ def classify_category_heuristic(
     sender: str,
     label_ids: Iterable[str],
     body: str = "",
+    has_list_unsubscribe: bool = False,
     *,
     check_phishing: bool = True,
 ) -> HeuristicResult:
@@ -361,6 +362,14 @@ def classify_category_heuristic(
             disables body-level signals). Callers that have already decoded
             the full body should pass it; callers in the fast bulk-triage
             path may pass ``msg["snippet"]`` to avoid an extra decode.
+        has_list_unsubscribe: True when the message carries an RFC 2369
+            ``List-Unsubscribe`` header (#2643) -- a supplementary bulk-mail
+            signal sourced from headers alone (no body fetch needed).
+            Coverage where Gmail's own category labels miss bulk mail; it
+            never overrides a label, a subject-keyword match, an
+            automated-sender match, or an IMPORTANT/STARRED flag -- those
+            all resolve the message before this signal is ever consulted.
+            Defaults False so every existing caller is unaffected.
         check_phishing: When False, skip ``detect_phishing`` and leave
             ``is_phishing=False`` — used when the caller resolves phishing
             via the SLM (or a separate heuristic fallback) instead.
@@ -386,9 +395,7 @@ def classify_category_heuristic(
     # detect_phishing covers subject + sender-domain + body; the body channel
     # uses whatever text the caller provides (snippet or full decode).
     # Callers that own phishing (SLM-first) pass check_phishing=False.
-    is_phishing = (
-        detect_phishing(subject, sender, body) if check_phishing else False
-    )
+    is_phishing = detect_phishing(subject, sender, body) if check_phishing else False
     spam_signal = _spam_sender_signal(sender)
 
     # 1. Promotions -- confident, label-driven. Vetoed by a commitment
@@ -547,6 +554,37 @@ def classify_category_heuristic(
             confident=False,
             reason=f"Gmail flagged as {', '.join(matched)} -- escalating to LLM",
             matched_label_ids=tuple(matched),
+        )
+
+    # 8.5. List-Unsubscribe header -- supplementary bulk-mail signal (#2643).
+    # Reached ONLY when nothing above already resolved the message: no
+    # category label, no subject keyword, no automated-sender match, and
+    # no IMPORTANT/STARRED flag. RFC 2369 makes this header a more reliable
+    # bulk-mail signal than a body keyword scan, and it costs nothing extra
+    # to read (arrives with a metadata-only fetch). Same commitment-signal
+    # veto as the label rules above: a genuine deadline/consequence in the
+    # body still escalates to the LLM instead of being confidently archived.
+    if has_list_unsubscribe:
+        is_spam, spam_confident = _spam_fields(CATEGORY_PROMOTIONAL, spam_signal)
+        if commitment_signal:
+            return HeuristicResult(
+                category=CATEGORY_PROMOTIONAL,
+                is_spam=is_spam,
+                spam_confident=spam_confident,
+                is_phishing=is_phishing,
+                confident=False,
+                reason=(
+                    "List-Unsubscribe header present but body has a "
+                    "deadline/commitment signal -- escalating to LLM"
+                ),
+            )
+        return HeuristicResult(
+            category=CATEGORY_PROMOTIONAL,
+            is_spam=is_spam,
+            spam_confident=spam_confident,
+            is_phishing=is_phishing,
+            confident=True,
+            reason="List-Unsubscribe header present (RFC 2369 bulk-mail signal)",
         )
 
     # 9. No high-confidence heuristic matched -- escalate. Category is

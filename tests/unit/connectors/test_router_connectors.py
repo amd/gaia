@@ -20,6 +20,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from tests.unit.connectors.conftest import make_fake_agent_registry
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -50,6 +52,21 @@ def isolated_registry(monkeypatch, tmp_path):
             type="oauth_pkce",
             description="Google OAuth",
             default_scopes=("openid",),
+            # Ceiling for resolve_declared_scopes' ScopeNotAllowedError check
+            # (#2603). TestAuthorizeGrantAgents declares gmail.modify via
+            # make_fake_agent_registry; TestSidecarRegistrationEndToEnd and
+            # TestSidecarInstallNoRestart run the REAL server lifespan against
+            # the real email daemon-sidecar spec (all 4 scopes, see
+            # gaia.daemon.sidecars.spec.builtin_specs()["email"]) — every
+            # scope either exercises must be inside this fixture's
+            # available_scopes or the ceiling would reject it.
+            available_scopes=(
+                "https://www.googleapis.com/auth/gmail.modify",
+                "https://www.googleapis.com/auth/gmail.send",
+                "https://www.googleapis.com/auth/calendar.events",
+                "https://www.googleapis.com/auth/calendar.readonly",
+                "openid",
+            ),
             oauth_provider_ref="google",
         )
     )
@@ -297,31 +314,6 @@ class TestConfigureEndpoint:
 # ---------------------------------------------------------------------------
 
 
-def _fake_registry(nsid: str, connector_id: str, scopes: list[str]):
-    """Minimal AgentRegistry stand-in for the router's scope resolution."""
-    from dataclasses import dataclass, field
-    from typing import List
-
-    from gaia.connectors.providers.base import ConnectorRequirement
-
-    @dataclass
-    class FakeReg:
-        namespaced_agent_id: str
-        required_connections: List[ConnectorRequirement] = field(default_factory=list)
-
-    @dataclass
-    class FakeRegistry:
-        _regs: List[FakeReg]
-
-        def list(self):
-            return self._regs
-
-    cr = ConnectorRequirement(connector_id=connector_id, scopes=scopes)
-    return FakeRegistry(
-        _regs=[FakeReg(namespaced_agent_id=nsid, required_connections=[cr])]
-    )
-
-
 class TestAuthorizeGrantAgents:
     _SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
 
@@ -332,7 +324,7 @@ class TestAuthorizeGrantAgents:
             return_value={"flow_id": "f1", "authorization_url": "https://auth"}
         )
         monkeypatch.setattr("gaia.connectors.start_authorization", mock_start)
-        ui_api_client.app.state.agent_registry = _fake_registry(
+        ui_api_client.app.state.agent_registry = make_fake_agent_registry(
             "installed:email", "google", self._SCOPES
         )
 
@@ -365,7 +357,7 @@ class TestAuthorizeGrantAgents:
 
     def test_authorize_unknown_agent_is_404(self, ui_api_client, monkeypatch):
         monkeypatch.setattr("gaia.connectors.start_authorization", AsyncMock())
-        ui_api_client.app.state.agent_registry = _fake_registry(
+        ui_api_client.app.state.agent_registry = make_fake_agent_registry(
             "installed:email", "google", self._SCOPES
         )
         resp = ui_api_client.post(
@@ -380,7 +372,7 @@ class TestAuthorizeGrantAgents:
     ):
         monkeypatch.setattr("gaia.connectors.start_authorization", AsyncMock())
         # The agent declares microsoft, not google — no scopes for this connector.
-        ui_api_client.app.state.agent_registry = _fake_registry(
+        ui_api_client.app.state.agent_registry = make_fake_agent_registry(
             "installed:email", "microsoft", self._SCOPES
         )
         resp = ui_api_client.post(
@@ -400,7 +392,7 @@ class TestAuthorizeGrantAgents:
             return {"configured": True, "flow_id": "f1"}
 
         monkeypatch.setattr("gaia.ui.routers.connectors.configure", fake_configure)
-        ui_api_client.app.state.agent_registry = _fake_registry(
+        ui_api_client.app.state.agent_registry = make_fake_agent_registry(
             "installed:email", "google", self._SCOPES
         )
         resp = ui_api_client.post(
@@ -648,7 +640,7 @@ class TestAuthorizeDeviceEndpoint:
             AsyncMock(return_value=dict(self._DEVICE_INFO)),
         )
         monkeypatch.setattr("gaia.connectors.poll_device_flow", AsyncMock())
-        ui_api_client.app.state.agent_registry = _fake_registry(
+        ui_api_client.app.state.agent_registry = make_fake_agent_registry(
             "installed:email",
             "microsoft",
             ["https://graph.microsoft.com/Mail.ReadWrite"],

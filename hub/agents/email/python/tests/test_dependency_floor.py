@@ -9,6 +9,31 @@ core and the agent dies at startup with ImportError (#2112). These tests
 pin the floor to the symbol so the two can't silently drift apart again:
 if the floor is lowered, or the agent grows an import the declared floor
 doesn't cover, one of these fails.
+
+The guided Outlook walkthrough (#2590) adds a second such import:
+``gaia_agent_email.tools.setup_walkthrough`` imports ``gaia.connectors.
+setup_routes``, a brand-new core module that ships in the NEXT core
+release, not the current 0.22.0. **The pyproject floor cannot be bumped to
+express that yet** — a dependency declaration can only name a released
+version, and bumping it to an unreleased one makes the package
+uninstallable everywhere:
+
+    $ uv pip install --dry-run -e . -e hub/agents/email/python
+    × No solution found when resolving dependencies:
+    ╰─▶ Because only amd-gaia<0.23.0 is available and
+        gaia-agent-email==0.5.0 depends on amd-gaia[api]>=0.23.0, we can
+        conclude that gaia-agent-email==0.5.0 cannot be used. And because
+        only gaia-agent-email==0.5.0 is available and you require
+        gaia-agent-email, we can conclude that your requirements are
+        unsatisfiable.
+
+So the floor here stays at 0.22.0 (bump it once the release containing
+``setup_routes`` is cut) and this file only asserts the module is
+importable against whatever core IS resolved locally — it does not, and
+cannot, guard the published-sidecar-vs-old-core case. That gate belongs at
+publish time instead: see the core-version check in
+``.github/workflows/release_agent_email.yml``, which refuses to publish a
+build whose resolved core lacks ``gaia.connectors.setup_routes``.
 """
 
 from __future__ import annotations
@@ -46,6 +71,17 @@ def test_pyproject_floor_covers_registry_symbol():
         "0.22.0); a fresh resolver may select a core that ImportErrors at "
         "agent start (#2112)"
     )
+
+
+def test_setup_walkthrough_module_imports_and_setup_routes_symbol_exists():
+    """The import chain that would burn like #2112 IF the pyproject floor
+    could express it. It can't (see module docstring) — this only proves
+    the module resolves against whatever core is installed locally; the
+    real cross-version guard is the publish-time gate, not this test."""
+    import gaia_agent_email.tools.setup_walkthrough  # noqa: F401
+    from gaia.connectors.setup_routes import ROUTES
+
+    assert "microsoft" in ROUTES
 
 
 def test_manifest_floors_match_pyproject():

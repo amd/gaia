@@ -35,6 +35,8 @@ from gaia_agent_email.contract import (
     SCHEMA_VERSION,
     ActionItem,
     AttachmentMeta,
+    AttentionCoverage,
+    AttentionItem,
     BatchItemError,
     BatchItemResult,
     BatchTriageRequest,
@@ -54,6 +56,8 @@ from gaia_agent_email.contract import (
     EmailAddress,
     EmailArchiveRequest,
     EmailArchiveResponse,
+    EmailAttentionResponse,
+    EmailAttentionResult,
     EmailCategory,
     EmailMessage,
     EmailPreScanRequest,
@@ -454,13 +458,20 @@ def render_endpoint_spec_html() -> str:
     prescan_block = _endpoint_block(
         path="/v1/email/prescan",
         description=(
-            "Inbox pre-scan (#1778). Lists the most-recent inbox messages from "
-            "the connected mailbox and returns the aggregate triage-card "
-            "envelope the Agent UI renders — top urgent / actionable rows, an "
-            "informational count, and suggested archives, each with a heuristic "
-            "reason. Read-only: nothing is archived, marked, or sent. "
-            "Classification reuses the agent's pre_scan_inbox path. Fails loudly "
-            "when no mailbox is connected (503) or 2+ are (400)."
+            "Inbox pre-scan (#1778). Lists the most-recent INBOX messages — "
+            "read AND unread alike (#2638) — from the connected mailbox and "
+            "returns the aggregate triage-card envelope the Agent UI renders — "
+            "top urgent / actionable / needs-review rows, an informational "
+            "count, and suggested archives, each with a heuristic reason. "
+            "``needs_review`` (#2584) holds messages the heuristic was not "
+            "confident about; ``scanned`` / ``total_inbox`` / ``total_unread`` "
+            "/ ``degraded`` / ``mailbox_errors`` report how much of the mailbox "
+            "this pre-scan actually covered — ``total_inbox`` (exact whole-"
+            "INBOX count) is the coverage denominator since #2638, "
+            "``total_unread`` a secondary figure. Read-only: nothing is "
+            "archived, marked, or sent. Classification reuses the agent's "
+            "pre_scan_inbox path. Fails loudly when no mailbox is connected "
+            "(503) or 2+ are (400)."
         ),
         request_sections=[("EmailPreScanRequest", EmailPreScanRequest)],
         response_sections=[
@@ -505,6 +516,35 @@ def render_endpoint_spec_html() -> str:
             ("EmailBriefingResponse", EmailBriefingResponse),
             ("EmailPreScanResult", EmailPreScanResult),
             ("PreScanItem", PreScanItem),
+        ],
+    )
+
+    attention_block = _endpoint_block(
+        path="/v1/email/attention",
+        method="GET",
+        description=(
+            "The read-only 'what needs you' attention view (#2582), rendered "
+            "without a user prompt when the email agent opens. Merges four "
+            "signals by calling the underlying tools directly rather than the "
+            "pre-scan envelope: inbound waiting-on-you items (#2581), meeting "
+            "proposals found during the scan (#2583) -- including messages "
+            "that would otherwise collapse into the pre-scan envelope's bare "
+            "informational_count -- unreviewed messages (#2584), and open "
+            "action items from prior triage (#2110/#2525). Computed on open "
+            "and cached (no scheduler dependency): a call within the "
+            "freshness window returns the cached result with its real "
+            "cache_age_seconds; a failed refresh past that window falls back "
+            "to the last known-good result marked stale=true rather than "
+            "presenting it as current. items == [] is NOT itself a 'nothing "
+            "needs you' claim -- always read coverage first. Read-only "
+            "throughout: never archives, marks, replies, or sends."
+        ),
+        request_sections=[],
+        response_sections=[
+            ("EmailAttentionResponse", EmailAttentionResponse),
+            ("EmailAttentionResult", EmailAttentionResult),
+            ("AttentionItem", AttentionItem),
+            ("AttentionCoverage", AttentionCoverage),
         ],
     )
 
@@ -867,6 +907,46 @@ def render_endpoint_spec_html() -> str:
   <p class="desc">Report the session agent's memory state without changing it:
     <code>{ enabled, available, message }</code>.</p>
 </div>
+
+<div class="endpoint-block">
+  <span class="method-badge">GET</span>
+  <span class="path">/v1/email/agent/autonomy/{session_id}</span>
+  <p class="desc">Inspectable snapshot of the autonomy engine — level, trust
+    thresholds, and the earned-trust ledger:
+    <code>{ level, enabled, trust_min_samples, trust_threshold,
+    trusted_scope_count, scopes:[{ action_type, scope, positive, negative,
+    total, score, trusted }] }</code>. This is the read-model
+    <code>gaia email autonomy status</code> / <code>trust</code> render, so
+    autonomy behavior is always explainable. 404 if the session is unknown.</p>
+</div>
+
+<div class="endpoint-block">
+  <span class="method-badge">POST</span>
+  <span class="path">/v1/email/agent/autonomy</span>
+  <p class="desc">Set the autonomy level at runtime — pause/resume/kill.
+    Body: <code>{ "session_id": str, "level": "off"|"suggest"|"earn_trust"|"full" }</code>.
+    <code>off</code> is the kill switch. Returns
+    <code>{ level, enabled }</code>. <b>400</b> on an unknown level; 404 if
+    the session is unknown.</p>
+</div>
+
+<div class="endpoint-block">
+  <span class="method-badge">POST</span>
+  <span class="path">/v1/email/agent/autonomy/run</span>
+  <p class="desc">Trigger one observe-&gt;decide-&gt;act autonomy cycle now —
+    the <code>gaia email autonomy run</code> / daemon-scheduler driver seam.
+    Body: <code>{ "session_id": str, "max_messages"?: int (1-200, default 25) }</code>.
+    Returns <code>{ level, executed:[...], proposals:[...], skipped,
+    already_proposed }</code>. <b>409</b> while the session's level is
+    <code>off</code> — the kill switch refuses the run instead of returning
+    the same 200 shape a real, found-nothing cycle would (#2528), so a caller
+    can always tell "disabled" apart from "ran and found nothing to do". 404
+    if the session is unknown. <b>501</b> if this agent build does not expose
+    autonomy. <b>500</b> if a connected mailbox raises a connector error
+    (missing/expired/under-scoped credential) — the response <code>detail</code>
+    carries the actionable message and the exact <code>gaia connectors
+    connect ...</code> command to fix it (#2617), never a bare status code.</p>
+</div>
 """
 
     body = f"""<!DOCTYPE html>
@@ -926,6 +1006,8 @@ def render_endpoint_spec_html() -> str:
 {prescan_block}
 
 {briefing_block}
+
+{attention_block}
 
 {search_block}
 

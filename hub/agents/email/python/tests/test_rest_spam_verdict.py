@@ -132,8 +132,8 @@ def test_heuristic_confident_spam_verdict_wins():
 
 def _fake_gmail(message):
     class _FakeGmail:
-        def list_messages(self, label_ids=None, max_results=25):
-            return {"messages": [{"id": message["id"]}]}
+        def list_messages(self, label_ids=None, max_results=25, page_token=None):
+            return {"messages": [{"id": message["id"]}], "nextPageToken": None}
 
         def get_message(self, message_id):
             return message

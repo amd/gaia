@@ -20,9 +20,11 @@ icon: mail
 # tests/test_capability_matrix.py (AST-derived, reconciled against
 # __init__.py) and tests/test_email_agent.py (live registry, #1232);
 # a mismatch fails CI.
-tools_count: 59
+tools_count: 64
 
 language: python
+# NOTE (#2590): stays at 0.22.0, not the setup_routes floor — see the
+# comment on the dependencies floor in pyproject.toml.
 min_gaia_version: "0.22.0"
 models: [Gemma-4-E4B-it-GGUF]
 

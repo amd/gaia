@@ -37,6 +37,12 @@ const (
 	RequiredAgentsMinor = 1
 )
 
+// RequiredAPIVersion is the lowest host API this client can use, named in every
+// skew message so the user can tell whether their core is too old or too new.
+func RequiredAPIVersion() string {
+	return fmt.Sprintf("%d.%d", RequiredAPIMajor, RequiredAgentsMinor)
+}
+
 // Instance is the daemon's single-instance registry record (~/.gaia/host/instance.json,
 // mode 0600).
 type Instance struct {
@@ -145,11 +151,12 @@ func parseAPIVersion(v string) (major, minor int, err error) {
 func (i *Instance) CheckVersion() error {
 	major, _, err := parseAPIVersion(i.APIVersion)
 	if err != nil {
-		return &VersionError{Have: i.APIVersion, Reason: err.Error()}
+		return &VersionError{Have: i.APIVersion, Want: RequiredAPIVersion(), Reason: err.Error()}
 	}
 	if major != RequiredAPIMajor {
 		return &VersionError{
 			Have: i.APIVersion,
+			Want: RequiredAPIVersion(),
 			Reason: fmt.Sprintf("this client speaks MAJOR %d and cannot use MAJOR %d",
 				RequiredAPIMajor, major),
 		}
@@ -165,13 +172,13 @@ func (i *Instance) CheckAgentsFloor() error {
 	}
 	_, minor, err := parseAPIVersion(i.APIVersion)
 	if err != nil {
-		return &VersionError{Have: i.APIVersion, Reason: err.Error()}
+		return &VersionError{Have: i.APIVersion, Want: RequiredAPIVersion(), Reason: err.Error()}
 	}
 	if minor < RequiredAgentsMinor {
 		return &VersionError{
-			Have: i.APIVersion,
-			Reason: fmt.Sprintf("it predates the sidecar control plane + agent relay (needs v%d.%d+), "+
-				"so every agents route would 404", RequiredAPIMajor, RequiredAgentsMinor),
+			Have:   i.APIVersion,
+			Want:   RequiredAPIVersion(),
+			Reason: "it predates the sidecar control plane + agent relay, so every agents route would 404",
 		}
 	}
 	return nil

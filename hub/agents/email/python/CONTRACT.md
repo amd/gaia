@@ -5,7 +5,7 @@
 > **Component:** Email request/response contract (issue #1262)
 > **Module:** `gaia_agent_email.contract`
 > **Validation:** pydantic v2
-> **Schema version:** `2.6`
+> **Schema version:** `2.9`
 
 ---
 
@@ -31,7 +31,7 @@ stable shape.
 - **Fail loudly.** Every model forbids unknown fields (`extra="forbid"`). An
   off-contract payload raises a `ValidationError` naming the offending field,
   never a silently coerced result.
-- **Versioned.** `SCHEMA_VERSION` (`"2.6"`) is pinned in the module and echoed in
+- **Versioned.** `SCHEMA_VERSION` (`"2.9"`) is pinned in the module and echoed in
   every request and response so a consumer can detect a breaking change.
 
 ### Version history
@@ -52,6 +52,9 @@ the npm package accepts any higher MINOR), so the one breaking change below —
 | `2.4` | Additive (#2016): new streaming agent-loop surface — `POST /v1/email/query` (NL request in, the seven canonical SSE event types out) and `POST /v1/email/query/{run_id}/cancel`. No existing shape changed, so `2.3` consumers keep working. |
 | `2.5` | Additive (#2154): OAuth forward-OUT intake — `POST /v1/connections/{provider}` (the daemon forwards a short-lived access token, never a refresh token), `GET /v1/connections` (metadata only), `DELETE /v1/connections/{provider}`. No existing shape changed, so `2.4` consumers keep working. |
 | `2.6` | Additive (#2469): the agent can ask the user a question MID-RUN and carry on from the answer. New non-terminal SSE event `needs_input` {run_id, request_id, question, options[{value,label,description}], allow_free_text, sensitive?, respond_url, timeout_seconds?} and `POST /v1/email/query/{run_id}/respond` to answer it (404 unknown run, 409 stale request_id). `needs_confirmation` and its terminal, deny-by-default approval behaviour are unchanged. No existing shape changed, so `2.5` consumers keep working. |
+| `2.7` | Additive (#2583): `PreScanItem` gains `is_meeting_request` (bool, default `false`) — the deterministic meeting-request heuristic now runs during the inbox scan, not only on a single message a caller points at directly. No existing shape changed, so `2.6` consumers keep working. |
+| `2.8` | Additive (#2582): new read-only attention-view surface — `GET /v1/email/attention` merges inbound waiting-on-you items (#2581), meeting proposals found during the scan (#2583), unreviewed messages (#2584), and open action items (#2110/#2525) into one "what needs you" read-model, computed on open and cached. No existing shape changed, so `2.7` consumers keep working. |
+| `2.9` | Additive (#2638/#2643): `EmailPreScanResult` gains `total_inbox` (exact whole-INBOX message count, nullable). Pre-scan now scans read + unread INBOX mail, not unread-only (#2638) — `total_unread` alone stopped being an honest scan-coverage denominator once read mail counts too, so `total_inbox` is the new one. No existing field changed, so `2.8` consumers keep working. |
 
 ---
 
@@ -85,7 +88,7 @@ test asserts byte-for-byte equality, so drift in either place fails CI.
 
 | Field | Type | Notes |
 |---|---|---|
-| `schema_version` | string | Contract version. Defaults to `"2.6"`. |
+| `schema_version` | string | Contract version. Defaults to `"2.9"`. |
 | `payload` | `SingleEmailInput` \| `ThreadInput` | Discriminated on `kind`. |
 | `context` | `TriageContext` \| null | Optional; biases categorization/summary. |
 
@@ -257,7 +260,7 @@ single-use send-confirmation token.
 
 ```json
 {
-  "schema_version": "2.6",
+  "schema_version": "2.9",
   "payload": {
     "kind": "single",
     "principal": { "name": "Alice Example", "email": "alice@example.com" },
@@ -279,7 +282,7 @@ single-use send-confirmation token.
 
 ```json
 {
-  "schema_version": "2.6",
+  "schema_version": "2.9",
   "request_kind": "single",
   "result": {
     "category": "NEEDS_RESPONSE",
@@ -306,7 +309,7 @@ single-use send-confirmation token.
 
 ```json
 {
-  "schema_version": "2.6",
+  "schema_version": "2.9",
   "payload": {
     "kind": "thread",
     "principal": { "name": "Alice Example", "email": "alice@example.com" },
@@ -339,7 +342,7 @@ single-use send-confirmation token.
 
 ```json
 {
-  "schema_version": "2.6",
+  "schema_version": "2.9",
   "request_kind": "thread",
   "result": {
     "category": "NEEDS_RESPONSE",
@@ -366,7 +369,7 @@ triages up to `MAX_BATCH_SIZE` (**100**) emails or threads in one request: an
 
 | Field | Type | Notes |
 |---|---|---|
-| `schema_version` | string | Contract version. Defaults to `"2.6"`. |
+| `schema_version` | string | Contract version. Defaults to `"2.9"`. |
 | `items` | `(SingleEmailInput \| ThreadInput)[]` | 1–100 inputs, discriminated on `kind` — the same item shapes the single endpoint's `payload` accepts. Over 100 → `422`. |
 | `context` | `TriageContext` \| null | Optional; applied to **all** items. |
 
@@ -399,7 +402,7 @@ The MCP surface mirrors this with a `triage_email_batch` tool (the single
 
 ```json
 {
-  "schema_version": "2.6",
+  "schema_version": "2.9",
   "items": [
     {
       "kind": "single",
@@ -429,7 +432,7 @@ The MCP surface mirrors this with a `triage_email_batch` tool (the single
 
 ```json
 {
-  "schema_version": "2.6",
+  "schema_version": "2.9",
   "results": [
     {
       "index": 0,
@@ -508,12 +511,93 @@ or `date` (`YYYY-MM-DD` all-day). The Outlook backend defaults a missing
 
 ### Inbox pre-scan — `POST /v1/email/prescan` (#1778)
 
-A read-only, lightweight triage over recent inbox messages, reshaped into the
-scannable card the Agent UI renders. `EmailPreScanRequest` carries `max_messages`
-(1–100, default 25). `EmailPreScanResponse.result` is an `EmailPreScanResult`
-(`kind == "email_pre_scan"`) with capped `urgent` / `actionable` /
-`suggested_archives` lists of `PreScanItem`, an `informational_count`,
+A read-only, lightweight triage over recent INBOX messages — read AND unread
+alike (#2638) — reshaped into the scannable card the Agent UI renders.
+`EmailPreScanRequest` carries `max_messages` (1–100, default 50).
+`EmailPreScanResponse.result` is an `EmailPreScanResult` (`kind ==
+"email_pre_scan"`) with capped `urgent` / `actionable` / `suggested_archives` /
+`needs_review` lists of `PreScanItem`, an `informational_count`,
 `preferences_applied`, and pre-cap `totals`.
+
+`needs_review` (#2584) holds messages the heuristic classifier was NOT
+confident about — a placeholder category guess, not a real classification.
+It only overrides routing into the two LOW-SIGNAL buckets: `informational`
+and `suggested_archives`, which assert "you can ignore this" from what is
+often a placeholder guess. It never pulls a message out of `urgent` or
+`actionable` — an unconfident guess toward a high-signal category already
+errs toward surfacing, which is the direction to err in. Capped like the
+other three buckets and ordered newest-first (human senders before
+automated ones on a timestamp tie); `totals.needs_review` reports the full
+uncapped count.
+
+Every `PreScanItem` also carries `is_meeting_request` (#2583) — `true` when the
+deterministic heuristic (`detect_meeting_request_heuristic`) confidently detected
+a meeting/scheduling request in the message's subject/snippet. It is read-only
+(detection makes no calendar changes) and never escalates to the LLM classifier
+during pre-scan — it is gated on `is_meeting_request AND confidence == "high"`,
+never on confidence alone, since the heuristic's no-signal branch also reports
+`confidence == "high"` for a confident negative.
+
+Coverage-honesty fields (#2584, extended #2638), all on `EmailPreScanResult`
+directly: `scanned` (how many messages this call actually classified, across
+every bucket), `total_inbox` (the mailbox's EXACT total INBOX message count —
+read + unread — the scan-coverage denominator since #2638 widened the scan
+past unread-only), `total_unread` (the mailbox's EXACT unread-message count —
+a secondary figure, no longer the coverage denominator), both sourced from
+Gmail's `labels().get(id="INBOX")` (`messagesTotal` / `messagesUnread`) in
+ONE call, not `list_messages`'s `resultSizeEstimate`, which Google documents
+as approximate and measured 2.6x off on a real mailbox; both `null` for
+Outlook, which has no equivalent honest source — `null` propagates through a
+multi-mailbox merge if ANY connected mailbox's count is unknown), `degraded`
+(true when at least one connected mailbox could not be scanned), and
+`mailbox_errors` (the list of `{mailbox, error}` failures behind `degraded`,
+surfaced to the caller rather than only logged). A failed mailbox's share
+of `max_messages` is reclaimed by the mailboxes
+still to be tried, so a single dead connection never halves a healthy
+mailbox's scan budget.
+
+### Attention view — `GET /v1/email/attention` (#2582)
+
+The read-only "what needs you" view, rendered without a user prompt when the
+email agent opens. `EmailAttentionResponse.result` is an
+`EmailAttentionResult` (`kind == "email_attention"`) with an `items` list of
+`AttentionItem`, a `coverage` block, `generated_at`, `cache_age_seconds`, and
+`stale`.
+
+Each `AttentionItem.kind` names the signal it came from: `meeting_request`,
+`waiting_on_you`, `needs_review`, or `action_item`. Built by calling the
+underlying tools directly — `triage_inbox_impl` and
+`detect_waiting_on_you_impl` — rather than the `/prescan` envelope, because
+`EmailPreScanResult.informational_count` is a bare count with no per-message
+rows: a meeting proposal in a confidently-classified informational message
+(e.g. one carrying Gmail's `CATEGORY_UPDATES` label) would otherwise be
+silently invisible.
+
+**`items == []` is NOT itself a "nothing needs you" claim.** It only means
+nothing surfaced from what `coverage` says was actually scanned — always read
+`coverage` before asserting the mailbox is clear, and qualify the claim when
+`coverage.scan_truncated` or `coverage.degraded` is set (e.g. "of the 200
+most recent" / "one mailbox couldn't be scanned"). Rendering an empty
+`items` list as an unqualified whole-mailbox claim is the exact defect #2584
+fixed one layer down for the pre-scan envelope.
+
+`coverage` mirrors the pre-scan coverage-honesty fields: `scanned`,
+`total_unread` (null when a connected backend can't report it honestly),
+`scan_truncated` (the scan hit its message ceiling), `degraded`, and
+`mailbox_errors`.
+
+**Computed on open, then cached — no scheduler dependency.** There is no
+background job populating this (the daemon clock, #2379, deliberately
+carries no jobs — that's #2585, unbuilt). A call within the freshness
+window (`ATTENTION_CACHE_TTL_SECONDS`, 120s) returns the cached result
+verbatim with its real `cache_age_seconds`; past that window a fresh scan is
+attempted. A failed refresh (every connected mailbox erroring) falls back to
+the last known-good result marked `stale=true` rather than hard-failing a
+view the user has already seen once — with no prior cache at all, the
+failure propagates as a normal connector error (403/502/503).
+
+Read-only throughout: this endpoint never archives, marks, replies, or
+sends — proven by an id-set diff in the issue's real-world test evidence.
 
 ---
 

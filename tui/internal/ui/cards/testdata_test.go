@@ -2,6 +2,8 @@ package cards
 
 import (
 	"encoding/json"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -146,4 +148,35 @@ func raw(t *testing.T, s string) json.RawMessage {
 		t.Fatalf("fixture is not valid JSON: %s", s)
 	}
 	return json.RawMessage(s)
+}
+
+// rowNumberPattern matches a rendered card's numbered-row gutter once a
+// line's border and leading whitespace are trimmed away: digits, then AT
+// LEAST TWO spaces, then the sender column (box.row: " NN  sender  subject").
+// The coverage/footer line (coverageLine's "N inbox messages scanned...")
+// also starts with digits, but has exactly ONE space after them, so it does
+// not match -- this is what makes the pattern usable to tell a real row from
+// the footer, instead of a substring check that cannot (#2631 reflection C4).
+var rowNumberPattern = regexp.MustCompile(`^(\d+)\s{2,}\S`)
+
+// rowNumbers scrapes every numbered row's index out of a rendered card, in
+// render order, so a test can assert on the real sequence (e.g. with
+// reflect.DeepEqual) instead of a substring check that cannot tell
+// [1,2,3,4] apart from [1,1,2,4] (#2631 reflection C4).
+func rowNumbers(t *testing.T, rendered string) []int {
+	t.Helper()
+	var got []int
+	for _, line := range strings.Split(plain(rendered), "\n") {
+		body := strings.TrimSpace(strings.Trim(line, "│"))
+		m := rowNumberPattern.FindStringSubmatch(body)
+		if m == nil {
+			continue
+		}
+		n, err := strconv.Atoi(m[1])
+		if err != nil {
+			t.Fatalf("row number %q did not parse: %v", m[1], err)
+		}
+		got = append(got, n)
+	}
+	return got
 }

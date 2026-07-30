@@ -13,6 +13,10 @@ see :func:`_hermetic_slm_classifiers`.
 
 import pytest
 
+# ScriptedConsole / FakeAgent live in onboarding_fakes.py, NOT here — see that
+# module's docstring for why a bare `from conftest import ...` is unsafe
+# under CI's multi-root pytest invocation (test_email_agent.yml).
+
 
 @pytest.fixture(autouse=True)
 def _hermetic_slm_classifiers(request, monkeypatch):

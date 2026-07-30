@@ -64,7 +64,7 @@ func TestToolResultWithRenderDrawsACard(t *testing.T) {
 		t.Errorf("card = {render:%q tool:%q}, want {email_pre_scan pre_scan_inbox}", card.Render, card.ToolName)
 	}
 
-	rendered := ansi.Strip(m.renderMessage(card))
+	rendered := ansi.Strip(m.renderMessage(card, nil))
 	t.Logf("\n%s", rendered)
 	for _, want := range []string{"Inbox · 9 scanned", "URGENT", "Sarah Chen", "asked for a reply by Friday"} {
 		if !strings.Contains(rendered, want) {
@@ -88,7 +88,7 @@ func TestUnknownRenderStillDrawsACard(t *testing.T) {
 	})
 
 	card := lastCard(t, m)
-	rendered := ansi.Strip(m.renderMessage(&card))
+	rendered := ansi.Strip(m.renderMessage(&card, nil))
 	t.Logf("\n%s", rendered)
 	if !strings.Contains(rendered, "Unsupported card type") {
 		t.Errorf("unknown render did not degrade to the generic card:\n%s", rendered)
@@ -145,7 +145,7 @@ func TestCardFitsAn80ColumnTerminal(t *testing.T) {
 		Render: "email_pre_scan", Data: json.RawMessage(prescanPayload),
 	})
 
-	rendered := func() string { c := lastCard(t, m); return ansi.Strip(m.renderMessage(&c)) }()
+	rendered := func() string { c := lastCard(t, m); return ansi.Strip(m.renderMessage(&c, nil)) }()
 	for i, line := range strings.Split(rendered, "\n") {
 		if w := ansi.StringWidth(line); w > 80 {
 			t.Errorf("card line %d is %d columns wide, overflowing an 80-column terminal: %q", i, w, line)

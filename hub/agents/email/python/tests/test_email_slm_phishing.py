@@ -168,7 +168,9 @@ class TestClassifyPhishingSlm:
 
     def test_label_false_is_false(self):
         clf = _FakeClassifier(_FakePrediction(["False"]))
-        assert classify_phishing_slm(clf, subject="s", sender="a@b.c", body="b") is False
+        assert (
+            classify_phishing_slm(clf, subject="s", sender="a@b.c", body="b") is False
+        )
 
     def test_empty_labels_returns_none(self):
         clf = _FakeClassifier(_FakePrediction([]))
@@ -183,4 +185,6 @@ class TestClassifyPhishingSlm:
         assert classify_phishing_slm(clf, subject="s", sender="a@b.c", body="b") is None
 
     def test_none_classifier_returns_none(self):
-        assert classify_phishing_slm(None, subject="s", sender="a@b.c", body="b") is None
+        assert (
+            classify_phishing_slm(None, subject="s", sender="a@b.c", body="b") is None
+        )

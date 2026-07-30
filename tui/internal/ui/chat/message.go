@@ -55,6 +55,23 @@ func (m *Message) renderCard(w int) string {
 	return m.cardCache
 }
 
+// renderCardDeduped draws the card at w like renderCard, but skips any item
+// whose message_id is already in seen and folds the ids it ends up showing
+// into seen -- so a caller drawing more than one card in a turn threads the
+// accumulated set across calls. Always recomputes rather than using the width
+// cache: this card's visible content can legitimately differ call to call as
+// seen grows while sibling cards in the same turn are drawn. seen may be nil,
+// equivalent to renderCard.
+func (m *Message) renderCardDeduped(w int, seen map[string]bool) string {
+	rendered, ids := cards.RenderDeduped(m.Render, m.Data, w, seen)
+	if seen != nil {
+		for _, id := range ids {
+			seen[id] = true
+		}
+	}
+	return rendered
+}
+
 type ActivityItem struct {
 	Kind    string // "thinking", "tool", "step", "status"
 	Content string

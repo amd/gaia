@@ -47,6 +47,8 @@ from gaia.connectors.errors import (
     ConnectorsError,
     ConsentDeniedError,
     FlowTimeoutError,
+    GrantAfterConnectError,
+    OAuthProviderError,
 )
 from gaia.connectors.events import emit
 from gaia.connectors.pkce import compute_code_challenge, generate_code_verifier
@@ -417,12 +419,15 @@ async def _commit_grants(flow: _PendingFlow) -> None:
         try:
             grant_agent(flow.provider_id, agent_id, list(agent_scopes))
         except Exception as e:
-            raise ConnectorsError(
-                f"Connected {flow.provider_id!r} but failed to grant it to "
-                f"agent {agent_id!r}: {e}. The connection was saved; grant the "
-                f"agent manually from Settings → Connectors, or via "
-                f"`gaia connectors grants grant {flow.provider_id} {agent_id} "
-                f"--scopes {' '.join(agent_scopes)}`."
+            raise GrantAfterConnectError(
+                flow.provider_id,
+                agent_id,
+                reason=(
+                    f"{e}. The connection was saved; grant the agent manually "
+                    f"from Settings → Connectors, or via `gaia connectors "
+                    f"grants grant {flow.provider_id} {agent_id} --scopes "
+                    f"{' '.join(agent_scopes)}`"
+                ),
             ) from e
         await emit(
             "connector.grant.changed",
@@ -451,9 +456,20 @@ async def _exchange_code_for_tokens(flow: _PendingFlow, code: str) -> Dict[str, 
         response = await client.post(provider.token_url, data=body)
 
     if response.status_code != 200:
-        raise ConnectorsError(
-            f"Token exchange for {flow.provider_id} failed with status "
-            f"{response.status_code}: {response.text}. See docs/security/connections.mdx."
+        # Structured, bounded fields (#2590) — the previous behaviour
+        # interpolated the ENTIRE unbounded response.text into the message,
+        # so a caller that must not echo arbitrary exception text (it might
+        # ultimately carry provider-chosen content) had no way to report the
+        # failure at all short of a bare type name.
+        try:
+            err_payload = response.json()
+        except Exception:  # noqa: BLE001 — body may be empty/non-JSON
+            err_payload = {}
+        raise OAuthProviderError(
+            flow.provider_id,
+            error=err_payload.get("error", ""),
+            error_description=err_payload.get("error_description", response.text[:300]),
+            status_code=response.status_code,
         )
     payload = response.json()
     refresh_token = payload.get("refresh_token")
@@ -476,6 +492,10 @@ async def _exchange_code_for_tokens(flow: _PendingFlow, code: str) -> Dict[str, 
         refresh_token=refresh_token,
         scopes=flow.scopes,
         client_id_hash=provider.client_id_hash,
+        # D8: record the minting authority — None for providers with no
+        # concept of a tenant (e.g. Google), which save_connection omits
+        # from the blob entirely (A7-style contract).
+        tenant=getattr(provider, "tenant", None),
     )
 
     # No separate state-cache write needed — the keyring blob written
@@ -554,27 +574,35 @@ async def start_device_flow(provider_id: str, scopes: Iterable[str]) -> Dict[str
     async with httpx.AsyncClient(timeout=15.0) as client:
         resp = await client.post(device_code_url, data=body)
     if resp.status_code != 200:
-        # AADSTS9002346: the app registration is scoped to personal Microsoft
-        # accounts only, so the ``common`` endpoint (the default since v0.23.0)
-        # rejects it. Name the exact migration step instead of making the user
-        # decode the raw AADSTS error — a personal-account-only app must use the
-        # ``consumers`` tenant.
+        # AADSTS9002346 (D11, #2628): the app registration is scoped to
+        # personal Microsoft accounts only, so a non-consumers authority
+        # rejects it — under the split, that means it was registered for
+        # "microsoft" (consumers) but connected via "microsoft_work"
+        # (organizations, or a pinned Directory tenant id). Name the
+        # connector to use instead, never an env var (GAIA_MICROSOFT_TENANT
+        # is gone — it is not part of tenant resolution at all).
         if "AADSTS9002346" in resp.text:
+            other = "microsoft" if provider_id != "microsoft" else "microsoft_work"
             raise ConnectorsError(
                 f"Device-code request for {provider_id} was rejected: this app "
                 "registration is configured for personal Microsoft accounts only "
-                "(Outlook.com / Hotmail / Live), but GAIA now defaults to the "
-                "'common' tenant. Set GAIA_MICROSOFT_TENANT=consumers and connect "
-                "again, e.g.:\n"
-                "  GAIA_MICROSOFT_TENANT=consumers gaia connectors connect "
-                f"{provider_id} --device\n"
+                "(Outlook.com / Hotmail / Live). Reconnect using the "
+                f"{other!r} connector instead, e.g.:\n"
+                f"  gaia connectors connect {other} --device\n"
                 "See docs/connectors/microsoft."
             )
+        # D9: the client-id env var name is CONNECTOR-SPECIFIC
+        # (GAIA_MICROSOFT_CLIENT_ID for "microsoft",
+        # GAIA_MICROSOFT_WORK_CLIENT_ID for "microsoft_work") — never
+        # hard-coded to the personal one. Tenant is no longer an env var at
+        # all (D6); the only tenant knob left is microsoft_work's optional
+        # Directory (tenant) ID setup field.
+        client_id_env = f"GAIA_{provider_id.upper()}_CLIENT_ID"
         raise ConnectorsError(
             f"Device-code request for {provider_id} failed with status "
-            f"{resp.status_code}: {resp.text[:300]}. Check the client id / "
-            "tenant (GAIA_MICROSOFT_CLIENT_ID / GAIA_MICROSOFT_TENANT). See "
-            "docs/security/connections.mdx."
+            f"{resp.status_code}: {resp.text[:300]}. Check the client id "
+            f"({client_id_env}), or the Directory (tenant) ID setup field if "
+            f"you set one. See docs/connectors/microsoft.mdx."
         )
     d = resp.json()
     logger.info(
@@ -646,11 +674,18 @@ async def poll_device_flow(
                     f"Device-code sign-in for {provider_id} was declined."
                 )
             else:
-                raise ConnectorsError(
-                    f"Device-code polling for {provider_id} failed: "
-                    f"{err or resp.status_code}: "
-                    f"{err_payload.get('error_description', resp.text[:200])}. "
-                    "See docs/security/connections.mdx."
+                # Structured, bounded fields (#2590) — see OAuthProviderError.
+                # This is where an admin-consent-required rejection
+                # (AADSTS65001) actually surfaces during polling; a bare
+                # ConnectorsError with the response text glued in gave
+                # classify_oauth_exception nothing to inspect.
+                raise OAuthProviderError(
+                    provider_id,
+                    error=err,
+                    error_description=err_payload.get(
+                        "error_description", resp.text[:300]
+                    ),
+                    status_code=resp.status_code,
                 )
             if _time.monotonic() >= deadline:
                 raise FlowTimeoutError(
@@ -676,6 +711,7 @@ async def poll_device_flow(
         refresh_token=refresh_token,
         scopes=scopes_list,
         client_id_hash=provider.client_id_hash,
+        tenant=getattr(provider, "tenant", None),
     )
 
     if grant_agents:
@@ -685,11 +721,14 @@ async def poll_device_flow(
             try:
                 grant_agent(provider_id, agent_id, list(agent_scopes))
             except Exception as e:
-                raise ConnectorsError(
-                    f"Connected {provider_id!r} via device code but failed to "
-                    f"grant it to agent {agent_id!r}: {e}. Grant it manually "
-                    f"with `gaia connectors grants grant {provider_id} "
-                    f"{agent_id} --scopes {' '.join(agent_scopes)}`."
+                raise GrantAfterConnectError(
+                    provider_id,
+                    agent_id,
+                    reason=(
+                        f"{e}. Grant it manually with `gaia connectors grants "
+                        f"grant {provider_id} {agent_id} --scopes "
+                        f"{' '.join(agent_scopes)}`"
+                    ),
                 ) from e
 
     await emit(
@@ -712,3 +751,57 @@ async def poll_device_flow(
         "scopes": scopes_list,
         "connected_at": _time.time(),
     }
+
+
+# ---------------------------------------------------------------------------
+# Classification (#2590) — turn a raised OAuth failure into "which setup step
+# to redo", never into raw provider text reaching model context.
+# ---------------------------------------------------------------------------
+
+#: Marker Microsoft uses for "this account's tenant requires an admin to
+#: approve the app" — the one AADSTS code this route can actually produce
+#: (see setup_routes.MS_PERSONAL's public_client_flows / permissions steps).
+_ADMIN_CONSENT_MARKER = "AADSTS65001"
+
+
+def classify_oauth_exception(exc: Exception) -> tuple[str, str]:
+    """Classify a raised OAuth failure into ``(category, guidance)``.
+
+    ``category`` is one of ``authorization_declined``, ``expired_token``,
+    ``access_denied``, ``admin_consent_required``, or ``unrecognized``.
+    ``guidance`` names the setup step to redo where one is known.
+
+    Classifies ONLY what this route can actually produce (#2590 design §6) —
+    anything else is reported from ``OAuthProviderError``'s own BOUNDED
+    ``error`` / ``error_description`` fields, never ``str(exc)``: a provider
+    error body is not something GAIA generates, so nothing here may assume
+    it is safe to echo unbounded.
+    """
+    if isinstance(exc, ConsentDeniedError):
+        return "authorization_declined", (
+            "Sign-in was declined at the consent screen. Redo the sign-in "
+            "step and approve the requested permissions."
+        )
+    if isinstance(exc, FlowTimeoutError):
+        return "expired_token", (
+            "The sign-in code expired before it was approved. Redo the "
+            "sign-in step and enter the code promptly."
+        )
+    if isinstance(exc, OAuthProviderError):
+        error = exc.error
+        description = exc.error_description
+        if error == "access_denied":
+            return "access_denied", (
+                "Access was denied. Redo the sign-in step and approve the "
+                "requested permissions."
+            )
+        if error == "admin_consent_required" or _ADMIN_CONSENT_MARKER in description:
+            return "admin_consent_required", (
+                "This account's organization requires an administrator to "
+                "approve the app before it can sign in. Redo the "
+                "permissions step with an account that can grant consent, "
+                "or ask an administrator to approve it."
+            )
+        bounded = description or error or "no further detail was returned"
+        return "unrecognized", f"The provider rejected the request: {bounded}"
+    return "unrecognized", "The sign-in failed for an unrecognized reason."

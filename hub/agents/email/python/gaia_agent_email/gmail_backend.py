@@ -33,6 +33,9 @@ request header.
 from __future__ import annotations
 
 import base64
+import email as _email_parser
+import json
+import re
 import uuid
 from html.parser import HTMLParser
 from typing import (
@@ -67,9 +70,24 @@ log = get_logger(__name__)
 
 
 GMAIL_API_BASE = "https://gmail.googleapis.com/gmail/v1/users/me"
+GMAIL_BATCH_URL = "https://gmail.googleapis.com/batch/gmail/v1"
 GMAIL_LABEL_INBOX = "INBOX"
 GMAIL_LABEL_UNREAD = "UNREAD"
 GMAIL_LABEL_STARRED = "STARRED"
+
+# Headers requested on a ``format="metadata"`` fetch (#2643) — exactly what
+# the metadata-first triage scan needs: Subject/From for the category
+# heuristic, List-Unsubscribe for the RFC 2369 bulk-mail signal. A fixed,
+# narrow list (rather than every header a message carries) keeps the
+# metadata response small regardless of how many headers the sender added.
+# ``FakeGmailBackend`` filters to this same set so a hermetic run measures
+# the same shape live Gmail would return.
+METADATA_SCAN_HEADERS: Tuple[str, ...] = ("Subject", "From", "To", "Date", "List-Unsubscribe")
+
+# Gmail's documented per-batch subrequest ceiling. A caller passing more ids
+# than this to ``get_messages_batch`` is chunked into multiple batch calls,
+# never a single oversized request.
+_BATCH_MAX_SUBREQUESTS = 100
 
 
 # ---------------------------------------------------------------------------
@@ -105,8 +123,28 @@ class GmailBackend(Protocol):
         """
         ...
 
-    def get_message(self, message_id: str) -> Dict[str, Any]:
-        """Fetch a single message in full Gmail API v1 shape."""
+    def get_message(self, message_id: str, *, format: str = "full") -> Dict[str, Any]:
+        """Fetch a single message in Gmail API v1 shape.
+
+        ``format="full"`` (the default) is byte-identical to every call site
+        that predates #2643 — the full decoded body is present. ``format=
+        "metadata"`` returns headers (``METADATA_SCAN_HEADERS``) + labelIds +
+        snippet + internalDate, with NO body — cheap enough to run over an
+        entire scan, but callers must fetch ``format="full"`` again before
+        reading ``payload`` for actual content (metadata-mode ``payload`` has
+        no ``parts``/``body.data`` to decode).
+
+        NOTE: ``get_messages_batch`` (#2643 lever 2 — fetch many messages in
+        one round-trip) is intentionally NOT part of this Protocol. It is a
+        duck-typed, opt-in capability some backends provide (``LiveGmailBackend``,
+        ``FakeGmailBackend``) — declaring it here would force EVERY backend
+        (including ``LiveOutlookBackend``, which doesn't implement it) to grow
+        it just to keep satisfying ``isinstance(x, GmailBackend)``, which
+        several tests rely on. Callers detect it via
+        ``getattr(gmail, "get_messages_batch", None)`` and fall back to a
+        per-id ``get_message`` loop when it's absent — see
+        ``read_tools._fetch_messages``.
+        """
         ...
 
     def get_thread(self, thread_id: str) -> Dict[str, Any]:
@@ -115,6 +153,19 @@ class GmailBackend(Protocol):
 
     def list_labels(self) -> List[Dict[str, Any]]:
         """List all labels in the user's mailbox."""
+        ...
+
+    def get_label(self, label_id: str) -> Dict[str, Any]:
+        """Fetch one label with its exact message/thread counts (#2584).
+
+        ``list_labels()`` returns Gmail's MINIMAL label form (id/name/type
+        only, no counts) — this is the only call that returns the label
+        resource's ``messagesTotal`` / ``messagesUnread`` fields, which are
+        exact integers (unlike ``list_messages``'s ``resultSizeEstimate``,
+        which Google documents as approximate and can be off by 2x+ on a
+        real mailbox). Used to report accurate scan-coverage denominators,
+        not per-message — one call per scan, not per message.
+        """
         ...
 
     def archive_message(self, message_id: str) -> Dict[str, Any]:
@@ -409,6 +460,111 @@ def _extract_charset(headers: List[Dict[str, str]]) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
+# Gmail batch HTTP (#2643 lever 2) — hand-rolled multipart/mixed request and
+# response (de)serialization, mirroring the wire format Google's own
+# api-client libraries use: each subrequest/subresponse is one embedded raw
+# HTTP message inside a ``Content-Type: application/http`` MIME part.
+# Correlation between a request and its response is by that part's own
+# ``Content-ID`` — Google's docs do not promise response order matches
+# request order — never by position.
+# ---------------------------------------------------------------------------
+
+
+def _build_batch_request_body(ids: List[str], *, format: str, boundary: str) -> bytes:
+    """Build a multipart/mixed batch request body: one ``GET .../messages/{id}``
+    subrequest per id, each tagged ``Content-ID: <item{index}>``."""
+    query = f"format={format}"
+    if format == "metadata":
+        for h in METADATA_SCAN_HEADERS:
+            query += f"&metadataHeaders={h}"
+    parts: List[str] = []
+    for i, mid in enumerate(ids):
+        parts.append(
+            f"--{boundary}\r\n"
+            "Content-Type: application/http\r\n"
+            f"Content-ID: <item{i}>\r\n"
+            "\r\n"
+            f"GET /gmail/v1/users/me/messages/{mid}?{query} HTTP/1.1\r\n"
+            "\r\n"
+        )
+    parts.append(f"--{boundary}--\r\n")
+    return "".join(parts).encode("utf-8")
+
+
+_CONTENT_ID_INDEX_RE = re.compile(r"item(\d+)")
+_HTTP_STATUS_LINE_RE = re.compile(rb"^HTTP/\d(?:\.\d)?\s+(\d+)")
+
+
+def _parse_embedded_http_response(raw: bytes) -> Tuple[int, bytes]:
+    """Parse one embedded raw HTTP/1.1 response: status line + headers +
+    blank line + body. Returns ``(status_code, body_bytes)`` — header lines
+    are discarded, since every batch response body here is JSON and the
+    caller only needs the status and the payload.
+    """
+    raw = raw.lstrip(b"\r\n")
+    line_end = raw.find(b"\n")
+    status_line = raw[:line_end] if line_end != -1 else raw
+    match = _HTTP_STATUS_LINE_RE.match(status_line.rstrip(b"\r"))
+    if not match:
+        raise ValueError(
+            f"no parseable HTTP status line in batch response part: "
+            f"{status_line[:120]!r}"
+        )
+    status = int(match.group(1))
+    sep = raw.find(b"\r\n\r\n")
+    sep_len = 4
+    if sep == -1:
+        sep = raw.find(b"\n\n")
+        sep_len = 2
+    body = raw[sep + sep_len :] if sep != -1 else b""
+    return status, body
+
+
+def _parse_batch_response(
+    content_type: str, body: bytes
+) -> List[Tuple[int, int, bytes]]:
+    """Parse a Gmail batch multipart/mixed response.
+
+    Returns ``[(item_index, http_status, json_body_bytes), ...]`` — the
+    index is parsed from each part's own ``Content-ID`` (``response-item{N}``
+    or any string containing ``item{N}``), never assumed from the part's
+    position in the response, so a reordered response still correlates
+    correctly to the original request.
+    """
+    synthetic = (
+        b"Content-Type: "
+        + content_type.encode("ascii", errors="replace")
+        + b"\r\n\r\n"
+        + body
+    )
+    parsed = _email_parser.message_from_bytes(synthetic)
+    if not parsed.is_multipart():
+        raise ValueError(
+            f"batch response was not multipart (Content-Type: {content_type!r})"
+        )
+    out: List[Tuple[int, int, bytes]] = []
+    for part in parsed.get_payload():
+        content_id = part.get("Content-ID", "") or ""
+        id_match = _CONTENT_ID_INDEX_RE.search(content_id)
+        if not id_match:
+            raise ValueError(
+                f"batch response part had no parseable Content-ID: {content_id!r}"
+            )
+        idx = int(id_match.group(1))
+        raw = part.get_payload(decode=True)
+        if raw is None:
+            payload_text = part.get_payload()
+            raw = (
+                payload_text.encode("utf-8")
+                if isinstance(payload_text, str)
+                else b""
+            )
+        status, json_body = _parse_embedded_http_response(raw)
+        out.append((idx, status, json_body))
+    return out
+
+
+# ---------------------------------------------------------------------------
 # LiveGmailBackend
 # ---------------------------------------------------------------------------
 
@@ -533,8 +689,81 @@ class LiveGmailBackend:
             "resultSizeEstimate": data.get("resultSizeEstimate", 0),
         }
 
-    def get_message(self, message_id: str) -> Dict[str, Any]:
-        return self._get(f"/messages/{message_id}", params={"format": "full"})
+    def get_message(self, message_id: str, *, format: str = "full") -> Dict[str, Any]:
+        params: Dict[str, Any] = {"format": format}
+        if format == "metadata":
+            # Explicit, narrow header list -- Gmail's metadataHeaders filter
+            # (#2643) so the response never carries more than the scan needs.
+            params["metadataHeaders"] = list(METADATA_SCAN_HEADERS)
+        return self._get(f"/messages/{message_id}", params=params)
+
+    def get_messages_batch(
+        self, message_ids: Iterable[str], *, format: str = "full"
+    ) -> Dict[str, Dict[str, Any]]:
+        """Fetch multiple messages via Gmail's batch HTTP endpoint (#2643).
+
+        Chunks at ``_BATCH_MAX_SUBREQUESTS`` (Gmail's documented per-batch
+        subrequest ceiling). A single id skips the batch endpoint entirely —
+        multipart framing overhead is pure waste for one message — and calls
+        ``get_message`` directly. Every requested id is guaranteed a
+        corresponding entry in the returned map or the call raises
+        ``ConnectorsError``; a batch response with fewer parts than requested,
+        an unparseable part, or a non-2xx embedded response is never silently
+        dropped or substituted with a partial result.
+        """
+        ids = list(message_ids)
+        if not ids:
+            return {}
+        if len(ids) == 1:
+            return {ids[0]: self.get_message(ids[0], format=format)}
+        out: Dict[str, Dict[str, Any]] = {}
+        for start in range(0, len(ids), _BATCH_MAX_SUBREQUESTS):
+            chunk = ids[start : start + _BATCH_MAX_SUBREQUESTS]
+            out.update(self._batch_get_messages(chunk, format=format))
+        return out
+
+    def _batch_get_messages(
+        self, ids: List[str], *, format: str
+    ) -> Dict[str, Dict[str, Any]]:
+        boundary = f"batch_{uuid.uuid4().hex}"
+        body = _build_batch_request_body(ids, format=format, boundary=boundary)
+        headers = self._headers()
+        headers["Content-Type"] = f'multipart/mixed; boundary="{boundary}"'
+        resp = self._client.post(GMAIL_BATCH_URL, headers=headers, content=body)
+        if resp.status_code != 200:
+            self._raise_http(resp, "POST /batch/gmail/v1")
+        try:
+            parts = _parse_batch_response(
+                resp.headers.get("content-type", ""), resp.content
+            )
+        except ValueError as exc:
+            raise ConnectorsError(
+                f"Gmail batch response for {len(ids)} message(s) could not be "
+                f"parsed: {exc}"
+            ) from exc
+        by_index = {idx: (status, payload) for idx, status, payload in parts}
+        out: Dict[str, Dict[str, Any]] = {}
+        for i, mid in enumerate(ids):
+            if i not in by_index:
+                raise ConnectorsError(
+                    f"Gmail batch response had no part for message {mid!r} "
+                    f"(request index {i}) — {len(parts)} of {len(ids)} parts "
+                    "returned"
+                )
+            status, payload = by_index[i]
+            if status != 200:
+                raise ConnectorsError(
+                    f"Gmail batch GET for message {mid!r} returned {status}: "
+                    f"{payload[:300].decode('utf-8', errors='replace')!r}"
+                )
+            try:
+                out[mid] = json.loads(payload)
+            except json.JSONDecodeError as exc:
+                raise ConnectorsError(
+                    f"Gmail batch response for message {mid!r} was not valid "
+                    f"JSON: {exc}"
+                ) from exc
+        return out
 
     def get_thread(self, thread_id: str) -> Dict[str, Any]:
         return self._get(f"/threads/{thread_id}", params={"format": "full"})
@@ -542,6 +771,12 @@ class LiveGmailBackend:
     def list_labels(self) -> List[Dict[str, Any]]:
         data = self._get("/labels")
         return data.get("labels", [])
+
+    def get_label(self, label_id: str) -> Dict[str, Any]:
+        # labels().get (NOT list — list returns the minimal form with no
+        # counts) — the label resource's messagesTotal/messagesUnread are
+        # exact integers, unlike list_messages's resultSizeEstimate (#2584).
+        return self._get(f"/labels/{label_id}")
 
     # -- Mutate APIs --------------------------------------------------------
 
@@ -803,9 +1038,11 @@ def _get_gmail_token() -> str:
 
 __all__ = [
     "GMAIL_API_BASE",
+    "GMAIL_BATCH_URL",
     "GMAIL_LABEL_INBOX",
     "GMAIL_LABEL_STARRED",
     "GMAIL_LABEL_UNREAD",
+    "METADATA_SCAN_HEADERS",
     "GmailBackend",
     "LiveGmailBackend",
     "_get_gmail_token",

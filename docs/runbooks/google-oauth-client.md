@@ -114,9 +114,15 @@ What breaks during rotation:
 
 ## Verification submission
 
-Sensitive scopes (`gmail.*`, `drive.*`, etc.) require Google's
-verification before unverified users can authorize. Until then, only
-test users listed on the consent screen can complete the OAuth flow.
+Sensitive and Restricted scopes (`gmail.send`, `calendar.*` are
+Sensitive; `gmail.modify`, `gmail.readonly`, and `drive.readonly` are the
+stricter **Restricted** tier — read-only buys no relief there) require
+Google's verification before unverified users can authorize. `drive.file`
+is Non-sensitive and needs no verification. See the full tier table and
+sources at [`docs/connectors/google.mdx` → Declare scopes under Data
+access](../connectors/google.mdx#declare-scopes-under-data-access). Until
+verified, only test users listed on the consent screen can complete the
+OAuth flow.
 
 - **In-Cloud-Console flow:** Google Auth Platform → **Audience** →
   "Publish app" (old path: OAuth consent screen → "PUBLISH APP") → follow
@@ -128,7 +134,10 @@ test users listed on the consent screen can complete the OAuth flow.
 - **Test-mode token expiry:** while the app stays in Testing status,
   Google expires each test user's refresh token roughly **7 days** after
   consent, so testers must periodically reconnect. This is a Google policy
-  for unverified test apps, not a GAIA bug.
+  for unverified test apps, not a GAIA bug. Google waives it only when the
+  *only* scopes requested are a subset of `openid` / `email` / `profile`
+  — this client always requests Gmail/Calendar scopes, so the 7-day limit
+  applies here.
 
 ## Local development without a published client
 

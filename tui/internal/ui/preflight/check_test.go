@@ -319,6 +319,9 @@ func realCommands() []string {
 		"gaia connectors connect ",
 		"gaia connectors grants grant ",
 		"gaia connectors list",
+		// A host-API skew is fixed by upgrading the installed core, not by a
+		// restart — the version comes from the core, so a restart is a loop.
+		"pip install --upgrade amd-gaia",
 		// Reached only when the machine cannot name Lemonade's launcher
 		// (lemonadeRestartRemedy, !l.Found) — so it fires on a runner with no
 		// Lemonade installed and never on a developer box that has one.
@@ -489,12 +492,14 @@ func TestCheck(t *testing.T) {
 			name: "daemon speaks the wrong contract",
 			build: func() *fakeTransport {
 				f := newFake()
-				f.attachErr = &daemon.VersionError{Have: "1.0", Reason: "it predates the agent relay"}
+				f.attachErr = &daemon.VersionError{Have: "1.0", Want: "1.1", Reason: "it predates the agent relay"}
 				return f
 			},
 			wantStates:  map[string]State{KeyDaemon: StateFailed},
 			wantBlocker: KeyDaemon,
-			wantIn:      []string{"gaia daemon restart", "host API v1.0"},
+			// Both halves of the skew, and a remedy that can actually clear it:
+			// the version comes from the installed core, so a restart loops.
+			wantIn: []string{"host API v1.0", "v1.1", "pip install --upgrade amd-gaia"},
 			// Restarting a machine-wide daemon other clients share is not ours to do.
 			wantFix: FixNone,
 		},
@@ -874,7 +879,7 @@ func TestDaemonRowFixDependsOnWhyItFailed(t *testing.T) {
 		{"dead pid", &daemon.StaleError{Kind: daemon.StalePIDDead, Path: "/tmp/i.json", Reason: "its pid 1 is not running"}, FixStartDaemon},
 		{"port stolen", &daemon.StaleError{Kind: daemon.StaleForeign, Path: "/tmp/i.json", Reason: "served by something else"}, FixStartDaemon},
 		{"wedged", &daemon.StaleError{Kind: daemon.StaleUnresponsive, Path: "/tmp/i.json", Reason: "no answer"}, FixNone},
-		{"version skew", &daemon.VersionError{Have: "1.0", Reason: "too old"}, FixNone},
+		{"version skew", &daemon.VersionError{Have: "1.0", Want: "1.1", Reason: "too old"}, FixNone},
 		{"would not start", &daemon.StartError{Reason: "port bind failed"}, FixNone},
 	}
 	for _, tc := range cases {

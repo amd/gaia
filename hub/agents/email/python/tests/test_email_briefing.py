@@ -127,10 +127,18 @@ def test_briefing_job_produces_email_pre_scan_envelope():
         "urgent",
         "actionable",
         "informational_count",
+        # Full informational list, empty unless requested (#2633).
+        "informational",
         "suggested_archives",
         "suggested_drafts",
         "preferences_applied",
         "totals",
+        # Pre-scan coverage-honesty fields (#2584, extended #2638).
+        "needs_review",
+        "scanned",
+        "total_unread",
+        "total_inbox",
+        "degraded",
     }
     assert any(i["message_id"] == "m1" for i in briefing["suggested_archives"])
     assert record["generated_at"]  # stamped for the pull surface

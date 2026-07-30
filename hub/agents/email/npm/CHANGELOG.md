@@ -6,16 +6,23 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## Unreleased
 
-- **Opt-in preview: small on-device models can now decide phishing flags and
-  triage categories instead of keyword rules.** Turn it on with
-  `GAIA_EMAIL_USE_SLM=true` on the sidecar (or `use_slm=True` in config).
-  A compact classifier — running on the same local Lemonade server as the chat
-  model, so nothing leaves the machine — makes the phishing call, and a second
-  one labels the triage category before the bigger LLM is asked, which makes
-  triage faster on the messages it can answer (those results report no LLM
-  usage). It is experimental, so it stays off unless you turn it on. If the
-  models are unavailable for any reason, triage falls back to exactly the
-  previous behavior. No API shape changed.
+- **The agent can now tell you which inbound mail is waiting on your reply —
+  not just which of your own messages went unanswered.** Previously the agent
+  could only flag sent mail nobody replied to; a colleague's "did you get a
+  chance to look at this? can we meet Thursday?" was invisible to it. It now
+  also flags inbound messages that ask directly for a reply, a decision, or a
+  meeting time — but only when there's real corroboration that it's genuine
+  correspondence (an existing back-and-forth in the thread, or a sender
+  you've emailed before). A question mark or a convincing-looking sender name
+  is deliberately not enough on its own — both show up constantly in
+  marketing and cold-outreach mail, and a false "someone is waiting on you"
+  costs more trust than a missed one.
+- **Triggering an autonomy cycle while autonomy is switched off now tells you
+  so, instead of quietly reporting nothing happened.** `POST
+  /v1/email/agent/autonomy/run` used to return the same "nothing to do"
+  response whether autonomy was disabled or had genuinely run and found
+  nothing — there was no way to tell which. It now returns an error naming
+  the current level and how to turn autonomy back on.
 - **Asking the agent to draft a reply or forward now actually drafts one,
   instead of asking you to write it.** The agent would correctly find the
   right email, then ask you to supply the reply or forward text — the exact
@@ -27,6 +34,16 @@ behind any entry — API shapes, endpoints, and version semantics — see
   still uses your exact wording when you hand it over yourself. Sending is
   unchanged — every draft still needs your confirmation before it goes out
   (#2524).
+- **Opt-in preview: small on-device models can now decide phishing flags and
+  triage categories instead of keyword rules.** Turn it on with
+  `GAIA_EMAIL_USE_SLM=true` on the sidecar (or `use_slm=True` in config).
+  A compact classifier — running on the same local Lemonade server as the chat
+  model, so nothing leaves the machine — makes the phishing call, and a second
+  one labels the triage category before the bigger LLM is asked, which makes
+  triage faster on the messages it can answer (those results report no LLM
+  usage). It is experimental, so it stays off unless you turn it on. If the
+  models are unavailable for any reason, triage falls back to exactly the
+  previous behavior. No API shape changed.
 - **A trashed email is recoverable any time it's still in Trash — not just for
   a few seconds after you delete it.** The only way back used to be a short
   undo window right after trashing; miss it, and the agent told you the
@@ -74,7 +91,6 @@ behind any entry — API shapes, endpoints, and version semantics — see
   resumes. An unanswered question ends the run with an error rather than hanging.
   Approvals (`needs_confirmation`) are unchanged: still terminal, still
   deny-by-default (#2469).
-
 - **Work/school Outlook (Microsoft 365 / Entra ID) mailboxes now work, not just
   personal Outlook.com.** The Microsoft connector previously signed in only
   against the `consumers` tenant, so a corporate Microsoft 365 account was

@@ -100,6 +100,17 @@ jobs:
           done
           exit "${fail}"
 
+      # A manifest may not name a core release that cannot serve the host API its own
+      # binary needs. R2 paths are immutable, so this has to block before publish
+      # rather than be discovered by users. See
+      # tests/unit/test_component_host_api_contract.py.
+      - name: Assert each component's min_gaia_version can serve the host API
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet pyyaml pytest
+          python -m pytest tests/unit/test_component_host_api_contract.py -q
+
   # ── terminal-hub: build the 6 targets and publish them ──────────────────────
   terminal-hub:
     name: Publish terminal-hub

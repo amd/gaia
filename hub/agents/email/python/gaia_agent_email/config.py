@@ -259,7 +259,7 @@ class EmailAgentConfig:
     use_slm: bool = field(default_factory=default_use_slm)
     slm_triage_model: Optional[str] = "specific-ai-triage"
     slm_triage_checkpoint: Optional[str] = (
-        "specific-ai/email-agent-triage:bert-base-only.gguf"
+        "specific-AI/email-agent-triage:bert-base-only.gguf"
     )
     slm_phishing_model: Optional[str] = "specific-ai-phishing-detection"
     slm_phishing_checkpoint: Optional[str] = (
