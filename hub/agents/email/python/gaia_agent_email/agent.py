@@ -38,7 +38,13 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Dict, List, Optional
 
-from gaia_agent_email import action_store, schedule_store, task_store, trust
+from gaia_agent_email import (
+    action_store,
+    autonomy_kill,
+    schedule_store,
+    task_store,
+    trust,
+)
 from gaia_agent_email.answer_grounding import ground_final_answer
 from gaia_agent_email.config import ConfigurationError, EmailAgentConfig
 from gaia_agent_email.model_select import (
@@ -748,6 +754,7 @@ class EmailTriageAgent(
         schedule_store.init_schema(self)
         task_store.init_schema(self)
         trust.init_trust_schema(self)
+        autonomy_kill.init_schema(self)
         # Session preferences persist in state.db (like the trust ledger), so
         # they survive restarts independent of the embedding model / MemoryStore
         # (#2427). Must precede _load_persisted_preferences() below.
@@ -1481,6 +1488,17 @@ class EmailTriageAgent(
             confirm_floor=self.confirmation_required_tools(),
         )
 
+    def _autonomy_killed(self) -> bool:
+        """True when a kill is in effect for this mailbox (#2649).
+
+        Reads the persisted flag in shared ``state.db`` rather than
+        ``self.config.autonomy_level`` — this is what lets a kill issued
+        against one agent object (a REST/CLI session) reach a cycle running
+        on a different one (a scheduler-built agent, torn down after every
+        fire).
+        """
+        return autonomy_kill.is_killed(self)
+
     @staticmethod
     def _autonomy_candidate(row: Dict[str, Any]) -> Optional[tuple]:
         """Map a triage result to a candidate ``(tool, action_type)`` or None.
@@ -1539,6 +1557,14 @@ class EmailTriageAgent(
         loop ended early (``"autonomy_off"`` or ``"consecutive_failures"``),
         ``None`` when it ran to completion.
 
+        Kill propagation to the scheduler (#2649): the same live check also
+        consults :func:`autonomy_kill.is_killed`, the persisted flag in
+        shared ``state.db``. A scheduler-built agent is a different Python
+        object from the one a REST/CLI kill was issued against, so the
+        in-memory field above never reaches it — the persisted flag is what
+        does. Checked once at cycle start (skip the whole run, no inbox
+        scan) and again per row (stop an already-started cycle mid-batch).
+
         Partial-failure tolerance (#2625): a per-row execute failure is
         caught, recorded in ``report["errors"]`` (sanitized —
         :func:`_sanitize_autonomy_error`), and the cycle continues — up to
@@ -1564,6 +1590,9 @@ class EmailTriageAgent(
             "stopped": None,
         }
         policy = self._autonomy_policy()
+        if self._autonomy_killed():
+            report["stopped"] = "autonomy_off"
+            return report
         if not policy.enabled:
             return report
 
@@ -1610,8 +1639,13 @@ class EmailTriageAgent(
                 # before this loop starts, so they can never observe a kill
                 # fired mid-cycle). A plain str attribute is read/write-
                 # atomic under the GIL, so the worst case is staleness of
-                # exactly one row.
-                if self.config.autonomy_level == trust.LEVEL_OFF:
+                # exactly one row. Also re-check the persisted flag (#2649)
+                # so a kill issued against a DIFFERENT agent object — the
+                # scheduler's — is observed too, not just one on `self`.
+                if (
+                    self.config.autonomy_level == trust.LEVEL_OFF
+                    or self._autonomy_killed()
+                ):
                     report["stopped"] = "autonomy_off"
                     break
                 try:
@@ -1858,17 +1892,26 @@ class EmailTriageAgent(
     def set_autonomy_level(self, level: str) -> Dict[str, Any]:
         """Change the autonomy level at runtime (pause / resume / kill switch).
 
-        ``off`` is the kill switch. For a cycle already running against THIS
-        agent object — the REST/CLI session surface on a single-worker
-        sidecar (``agent_routes.py``) — the effect is pre-emptive, not just
-        "the next heartbeat is a no-op" (#2624): ``_run_email_autonomy_cycle``
-        re-reads this live field before executing each row and stops
-        mid-batch. The scheduler is the documented exception — each fire
-        builds its own agent from ``GAIA_EMAIL_AUTONOMY_LEVEL`` and never
-        touches this instance, so a kill issued here does not reach an
-        already-scheduled run (#2649). Returns the applied
-        status. Raises ``ValueError`` (translated to HTTP 400 at the
-        boundary) on an unknown level rather than silently ignoring it.
+        ``off`` is the kill switch, and it reaches both places autonomy runs:
+
+        - A cycle already running against THIS agent object — the REST/CLI
+          session surface on a single-worker sidecar (``agent_routes.py``) —
+          is pre-empted, not just made into a no-op next heartbeat (#2624):
+          ``_run_email_autonomy_cycle`` re-reads this live field before
+          executing each row and stops mid-batch.
+        - The scheduler (``autonomy_scheduler.py``), which builds a fresh
+          agent per fire and never touches this instance, is reached through
+          the persisted kill flag this call also writes
+          (``autonomy_kill.set_killed``, shared ``state.db``, #2649): a
+          scheduler-built agent checks the same flag at cycle start and
+          mid-batch, so a kill here stops an in-flight scheduled cycle and
+          keeps the next fire from running at the old level too. Setting any
+          other level clears the flag, so ``resume`` un-blocks the scheduler
+          as well as the calling session.
+
+        Returns the applied status. Raises ``ValueError`` (translated to
+        HTTP 400 at the boundary) on an unknown level rather than silently
+        ignoring it.
         """
         if level not in trust.AUTONOMY_LEVELS:
             raise ValueError(
@@ -1876,6 +1919,7 @@ class EmailTriageAgent(
                 f"got {level!r}"
             )
         self.config.autonomy_level = level
+        autonomy_kill.set_killed(self, killed=(level == trust.LEVEL_OFF))
         return {"level": level, "enabled": level != trust.LEVEL_OFF}
 
     def autonomy_status(self) -> Dict[str, Any]:

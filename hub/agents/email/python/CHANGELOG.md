@@ -152,6 +152,25 @@ contract version is tracked separately as
   coverage when the two disagree. Declines to correct once that cache is
   older than its own freshness window (120s), so a card the user has since
   cleared can't get "corrected" back into looking unresolved.
+- **`gaia email autonomy kill` now actually stops a scheduled cycle, not
+  just a REST/CLI session's (#2649).** The scheduler builds a brand-new,
+  stateless agent from environment variables on every fire and never
+  touched the live agent object `set_autonomy_level` mutated — the gap
+  #2624's fix explicitly called out as unresolved. `set_autonomy_level` now
+  also writes a persisted kill flag into the same `state.db` every agent
+  instance already shares (the trust ledger and session preferences do the
+  same); `_run_email_autonomy_cycle` checks it once at cycle start (so a
+  killed schedule stops hitting the mailbox at all) and again per message
+  (so a kill landing mid-cycle still pre-empts an already-running scheduled
+  run, the same way it already did for a REST/CLI session). Setting any
+  other level clears the flag, so a resume un-blocks the scheduler too.
+- **`gaia email autonomy run` now prints the error count and stop reason
+  (#2651).** #2625 added `report["errors"]`/`report["stopped"]` to the
+  autonomy cycle report, but the CLI's print function never read either
+  field — a run that hit per-message failures printed the identical clean
+  summary line as a fully successful one. It now prints `errors=<n>` on
+  the summary line and, when the cycle stopped early, a second
+  `stopped early: <reason>` line.
 - **The agent no longer narrates its own calendar-conflict verdict — and
   gets it backwards (#2571).** Asked to list calendar events and flag
   conflicts, the agent listed events correctly, then stated a conflict
