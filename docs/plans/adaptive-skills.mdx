@@ -300,7 +300,7 @@ sentence as a costume. Encode them structurally and they cost almost nothing.
 |:--:|---|---|---|---|
 | **0 — Data** | Facts the *tools* query directly | **Zero** — never enters the prompt | The agent's own `state.db` | **Shipped** (email agent) |
 | **1 — Selection** | Tool priors per goal | **Bounded** — ≤ `max_tools` schemas, net-zero at the cap | `tools_required` → the loader's `SKILL` term | **Shipped** ([#1451](https://github.com/amd/gaia/issues/1451)) |
-| **2 — Parameters** | Typed knobs bound to a named base section | Tens of tokens | `skill_deltas` | **PROPOSED** |
+| **2 — Parameters** | Typed knobs bound to a named base section | Tens of tokens | `skill_deltas` | **DEFERRED past v1** |
 | **3 — Prose** | Genuinely procedural knowledge | Hundreds of tokens, retrieval-gated | `skill_deltas` + embedding | **PROPOSED** |
 
 **The governing rule: a lesson is recorded at the lowest tier that can represent
@@ -467,7 +467,14 @@ a delta cannot smuggle in a tool the agent lacks — the invariant is enforced b
 construction, not by a check that could be forgotten.
 
 </Accordion>
-<Accordion title="Tier 2 — 'escalate CFO threads after 48h, not 72h' (tens of tokens, PROPOSED)">
+<Accordion title="Tier 2 — 'escalate CFO threads after 48h, not 72h' (DEFERRED past v1)">
+
+<Note>
+**Deferred past v1** — kept here because it is the clearest illustration of what a
+typed delta *would* buy, and because the [collapse hypothesis](#why-v1-ships-three-tiers-not-four)
+is stated against this exact example: if `followup_hours` is a value the escalation
+tool could read, the right fix is to wire the tool (tier 0), not to invent a tier.
+</Note>
 
 The authored `triage-inbox` skill has a section:
 
@@ -738,6 +745,11 @@ EffectiveSkill = base ⊕ deltas   where deltas = active, in-scope, non-orphaned
 tier-2 `exception` → tier-3 `preference` / `example`. Within a tier, later
 `created_at` wins; a superseded delta never applies. Tier-1 hints do not
 participate in text composition at all — they go to the loader.
+
+Because [tier 2 is deferred](#why-v1-ships-three-tiers-not-four), **v1's ladder is
+just base → tier-3 prose**, rendered in the appended *Learned adjustments* block.
+The full ladder is specified now so that adding tier 2 later is an insertion into a
+defined order rather than a redesign.
 
 **Resolution happens once, at session start.** The resolved fragment is cached
 for the session's lifetime. A delta approved mid-session takes effect on the
