@@ -8,7 +8,7 @@ computed (and got backwards — two events overlapping by 30 minutes were
 reported as "back-to-back and do not conflict"). ``detect_calendar_conflicts``
 itself was always correct; the tool simply never ran.
 
-Five layers, each deterministic (no LLM, no live calendar):
+Four layers, each deterministic (no LLM, no live calendar):
 
 1. System-prompt guidance mandating the conflict tool for conflict
    questions — substring pins against the real ``_SYSTEM_PROMPT`` constant.
@@ -24,10 +24,14 @@ Five layers, each deterministic (no LLM, no live calendar):
    alongside conflict language — a claim with zero tool grounding, the
    emptier and more dangerous cousin of (a) — see the "no calendar tool
    called at all" cases.
-4. ``_tool_names_from_conversation`` / ``_listed_event_count_from_conversation``
-   — the trace/result extractors the guard reads.
-5. ``EmailTriageAgent.process_query`` wiring — the guard actually runs on a
-   turn's result.
+4. ``EmailTriageAgent.process_query`` wiring — the guard actually runs on a
+   turn's result, via the single shared ``ground_final_answer`` hook in
+   ``answer_grounding.py`` (folded in — this used to be a standalone hook
+   in ``process_query`` itself; the trace extractor it read,
+   ``_tool_names_from_conversation``, is now the module-wide
+   ``answer_grounding.tools_called_this_turn``, already covered by
+   ``test_answer_grounding.py::TestSharedHelpers`` and
+   ``TestFindUngroundedCalendarConflictClaim`` — not duplicated here).
 """
 
 from __future__ import annotations
@@ -39,10 +43,7 @@ import pytest
 
 pytest.importorskip("gaia_agent_email")
 
-from gaia_agent_email.agent import (  # noqa: E402
-    _SYSTEM_PROMPT,
-    _tool_names_from_conversation,
-)
+from gaia_agent_email.agent import _SYSTEM_PROMPT  # noqa: E402
 from gaia_agent_email.tools.calendar_tools import (  # noqa: E402
     _listed_event_count_from_conversation,
     append_conflict_grounding_correction,
@@ -322,35 +323,11 @@ class TestAppendConflictGroundingCorrection:
 
 
 # ---------------------------------------------------------------------------
-# 4. Trace/result extractors the guard reads
+# ``_listed_event_count_from_conversation`` — the result extractor the guard
+# reads. (The tool-NAME extractor, formerly ``_tool_names_from_conversation``
+# in this module, is now ``answer_grounding.tools_called_this_turn`` — see
+# ``test_answer_grounding.py::TestSharedHelpers``, not duplicated here.)
 # ---------------------------------------------------------------------------
-
-
-class TestToolNamesFromConversation:
-    def test_extracts_tool_names_in_call_order(self):
-        conversation = [
-            {"role": "user", "content": "list events and flag conflicts"},
-            {
-                "role": "assistant",
-                "tool_calls": [{"function": {"name": "list_calendar_events"}}],
-            },
-            {"role": "tool", "content": "{}"},
-            {
-                "role": "assistant",
-                "tool_calls": [{"function": {"name": "detect_calendar_conflicts"}}],
-            },
-        ]
-        assert _tool_names_from_conversation(conversation) == [
-            "list_calendar_events",
-            "detect_calendar_conflicts",
-        ]
-
-    def test_empty_conversation_yields_no_tools(self):
-        assert _tool_names_from_conversation([]) == []
-
-    def test_ignores_assistant_messages_without_tool_calls(self):
-        conversation = [{"role": "assistant", "content": "final answer"}]
-        assert _tool_names_from_conversation(conversation) == []
 
 
 def _list_events_tool_result(*event_summaries: str) -> dict:
@@ -419,7 +396,9 @@ class TestListedEventCountFromConversation:
 
 
 # ---------------------------------------------------------------------------
-# 5. process_query wiring — the guard actually runs on a turn's result
+# 4. process_query wiring — the guard actually runs on a turn's result, via
+# the single shared ``ground_final_answer`` hook (folded — see module
+# docstring).
 # ---------------------------------------------------------------------------
 
 
@@ -480,6 +459,20 @@ class TestProcessQueryConflictGrounding:
                     ],
                 },
                 _list_events_tool_result("Budget sync", "Design review"),
+                # The guard now reads tool names from ``role: tool`` result
+                # entries (``answer_grounding.tools_called_this_turn``, the
+                # shape every real tool call actually produces via
+                # ``Agent._create_tool_message`` /
+                # ``Agent._truncate_large_content``'s conversation.append),
+                # not from the assistant's ``tool_calls`` request above — so
+                # a result entry for the SECOND tool call is required too.
+                {
+                    "role": "tool",
+                    "name": "detect_calendar_conflicts",
+                    "content": json.dumps(
+                        {"ok": True, "data": {"has_conflict": True, "conflicts": []}}
+                    ),
+                },
             ],
         }
         monkeypatch.setattr(Agent, "process_query", lambda self, *a, **k: dict(canned))

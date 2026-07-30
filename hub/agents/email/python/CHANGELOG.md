@@ -122,6 +122,55 @@ contract version is tracked separately as
   informational bucket was previously a bare count with no way to audit it
   ("95 informational, not listed") — passing the flag now returns the full
   id/sender/subject list for that count, at no extra scan cost.
+- **The assistant no longer narrates things the current turn's own tools
+  don't support (#2621, #2622, #2636, #2637).** Four related honesty
+  defects, all guarded by one new mechanism: a mutation ("archived",
+  "starred", "marked read", "moved to Trash", ...) was sometimes narrated
+  as done with zero tool calls in that turn (observed 7 times in one long
+  session, correlating with conversation length); `check_followups`
+  reported fewer awaiting-reply items than its own intact result actually
+  held, dropping a different subset on each of 3 fresh runs; a pre-scan's
+  framing sentence could claim "no urgent or actionable items" while its
+  own scan result carried non-empty urgent/actionable lists, or describe
+  a per-INBOX-scoped `total_unread` as spanning "across your connected
+  mailboxes"; and internal render/envelope scaffolding — a
+  `[shown to the user]` context marker, `[suggested_archives]`-style
+  envelope field names, raw provider message ids, undecoded `\uXXXX`
+  escapes — occasionally leaked into user-facing prose instead of being
+  summarized. New `gaia_agent_email.answer_grounding` module runs
+  deterministic post-checks on the final answer text at the
+  `process_query` output boundary: an ungrounded success claim or a
+  claim contradicted by the turn's own tool result gets replaced with a
+  grounded fallback, and scaffolding leaks get stripped in place.
+  `check_followups` now also returns an explicit `count` field so nothing
+  is left to miscount. The system prompt's pre-scan coverage note was
+  rewritten to state `scanned`/`total_unread` as two separate facts
+  rather than a "X of Y unread" fraction (matching the attention card's
+  own wording), and to forbid the cross-mailbox phrasing outright. Also
+  root-caused the unicode-escape leak: every `json.dumps` call in the
+  shared agent loop that builds model-visible tool-result text was
+  missing `ensure_ascii=False`, so non-ASCII characters in email subjects
+  reached the model as literal escape sequences — as a side effect, this
+  could also inflate a payload's measured length enough to trigger
+  truncation it did not actually need. Fixed at every call site in
+  `src/gaia/agents/base/agent.py`, benefiting every agent built on it, not
+  just email.
+- **Chat prose no longer contradicts the attention card already on screen
+  (#2636, the other half of the fix above).** The bug as originally filed
+  wasn't the pre-scan guard's territory: the attention card the Go TUI
+  renders (`GET /v1/email/attention`, sections MEETING PROPOSALS/NEEDS
+  REVIEW/ACTION ITEMS) could show real items while the same turn's answer
+  said "no urgent or actionable items found" — because that view is never
+  a tool call (`build_attention_view_impl` has no `@tool` wrapper; it only
+  serves the TUI's on-open render), so the model generating the answer had
+  no way to see it. `answer_grounding` now also reconciles the final
+  answer against the same in-process cache the card was rendered from
+  (extracted into a small new `attention_cache.py` so this stays possible
+  without pulling FastAPI into the dependency-light grounding module), and
+  appends — rather than replaces — a correction naming the card and its
+  coverage when the two disagree. Declines to correct once that cache is
+  older than its own freshness window (120s), so a card the user has since
+  cleared can't get "corrected" back into looking unresolved.
 - **`gaia email autonomy kill` now actually stops a scheduled cycle, not
   just a REST/CLI session's (#2649).** The scheduler builds a brand-new,
   stateless agent from environment variables on every fire and never
