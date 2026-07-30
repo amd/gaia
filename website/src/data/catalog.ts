@@ -122,16 +122,16 @@ async function fetchLiveCatalog(baseUrl: string): Promise<CatalogFile> {
   } catch (e) {
     throw new Error(
       `[catalog] Failed to fetch the live catalog from ${url}: ${(e as Error).message}. ` +
-        `HUB_CATALOG_URL is set, so the build must use the live hub — it will not ` +
-        `fall back to the bundled fixture. Start the agent-hub worker (see ` +
-        `workers/agent-hub/README.md) or unset HUB_CATALOG_URL to build from the fixture.`
+        `The website has no bundled fixture — the live hub is the only source, so the ` +
+        `build cannot continue. Check that the hub is reachable, or start a local ` +
+        `agent-hub worker and point HUB_CATALOG_URL at it (workers/agent-hub/README.md).`
     );
   }
   if (!res.ok) {
     throw new Error(
       `[catalog] Live catalog request to ${url} returned HTTP ${res.status}. ` +
         `Check that the agent-hub worker is healthy (GET /health) and has at least ` +
-        `one published agent, or unset HUB_CATALOG_URL to build from the fixture.`
+        `one published agent (workers/agent-hub/README.md).`
     );
   }
   const catalog = (await res.json()) as CatalogFile;
