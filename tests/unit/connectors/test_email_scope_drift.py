@@ -136,9 +136,18 @@ class TestAgentScopesAgreeAcrossSurfaces:
             assert (set(agent["required"]) | set(agent["optional"])) <= union
             assert union == set(fixture[provider]["connect_union"])
 
-    def test_default_required_scopes_by_provider_matches_all_scopes(self):
-        from gaia_agent_email.scopes import ALL_SCOPES
+    def test_default_required_scopes_by_provider_matches_required_scopes_not_all(self):
+        """#2730 D1: this gates a forwarded connection's usability at
+        ``import_forwarded_connection`` time — the same mail-only
+        enforcement the daemon's forward-out mint applies (D5). It must NOT
+        equal ALL_SCOPES: requiring calendar here would reject a mail-only
+        forwarded connection outright, the same all-or-nothing failure this
+        issue removes, just relocated to the import boundary."""
+        from gaia_agent_email.scopes import ALL_SCOPES, REQUIRED_SCOPES
 
         from gaia.connectors.api import _DEFAULT_REQUIRED_SCOPES_BY_PROVIDER
 
-        assert set(_DEFAULT_REQUIRED_SCOPES_BY_PROVIDER["google"]) == set(ALL_SCOPES)
+        assert set(_DEFAULT_REQUIRED_SCOPES_BY_PROVIDER["google"]) == set(
+            REQUIRED_SCOPES
+        )
+        assert set(_DEFAULT_REQUIRED_SCOPES_BY_PROVIDER["google"]) != set(ALL_SCOPES)
