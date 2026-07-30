@@ -1115,6 +1115,9 @@ def test_prescan_returns_card_envelope_shape(prescan_client):
         "urgent",
         "actionable",
         "informational_count",
+        # Full informational list, empty via REST (no include_informational
+        # request field yet, #2633) but always present for schema stability.
+        "informational",
         "suggested_archives",
         "suggested_drafts",
         "preferences_applied",
@@ -1129,6 +1132,7 @@ def test_prescan_returns_card_envelope_shape(prescan_client):
     for section in ("urgent", "actionable", "suggested_archives"):
         assert isinstance(result[section], list)
     assert isinstance(result["informational_count"], int)
+    assert result["informational"] == []
     assert result["suggested_drafts"] == []
     # The promotional message is surfaced as a suggested archive with a reason;
     # the plain message lands in the informational count (not listed).

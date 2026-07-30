@@ -127,6 +127,8 @@ def test_briefing_job_produces_email_pre_scan_envelope():
         "urgent",
         "actionable",
         "informational_count",
+        # Full informational list, empty unless requested (#2633).
+        "informational",
         "suggested_archives",
         "suggested_drafts",
         "preferences_applied",

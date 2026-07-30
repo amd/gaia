@@ -400,6 +400,23 @@ def _make_email_agent(fake_gmail, fake_calendar, tmp_path):
     return agent
 
 
+def _section_containing(pre_scan_data, addr):
+    """Which pre_scan_inbox section (if any) a sender's message landed in.
+
+    Checks the four list sections a message can appear in; returns None if
+    the address isn't found in any of them (e.g. it's informational and
+    only reflected in the count, or the corresponding message wasn't
+    matched by ``extract_sender_email``).
+    """
+    for section in ("urgent", "actionable", "suggested_archives", "needs_review"):
+        addresses = {
+            extract_sender_email(item["sender"]) for item in pre_scan_data[section]
+        }
+        if addr in addresses:
+            return section
+    return None
+
+
 class TestPreferenceTools:
     def _tool(self, name):
         from gaia.agents.base.tools import _TOOL_REGISTRY
@@ -531,8 +548,12 @@ class TestPreferenceTools:
         self, fake_gmail, fake_calendar, tmp_path
     ):
         """End-to-end: setting a priority sender via the tool, then
-        invoking pre_scan_inbox via the tool registry, must promote that
-        sender to ``urgent`` in the rendered envelope.
+        invoking pre_scan_inbox via the tool registry, must NOT change
+        that sender's rendered category (#2632) -- content decides
+        severity, a session preference never does. The live tool-registry
+        path is proven to have picked up the preference by comparing
+        against a baseline scan with no preference set: the same message
+        must land in the same section either way.
         """
         agent = _make_email_agent(fake_gmail, fake_calendar, tmp_path)
         try:
@@ -544,15 +565,28 @@ class TestPreferenceTools:
                 if h["name"].lower() == "from"
             )
             addr = extract_sender_email(first_sender)
-            self._tool("set_priority_sender")(addr)
 
+            baseline_envelope = json.loads(self._tool("pre_scan_inbox")(50))
+            assert baseline_envelope["ok"] is True
+            baseline_section = _section_containing(baseline_envelope["data"], addr)
+
+            self._tool("set_priority_sender")(addr)
             envelope = json.loads(self._tool("pre_scan_inbox")(50))
             assert envelope["ok"] is True
             data = envelope["data"]
+
             urgent_addresses = [
                 extract_sender_email(item["sender"]) for item in data["urgent"]
             ]
-            assert addr in urgent_addresses
+            assert addr not in urgent_addresses, (
+                "a priority-sender match must not force urgent; content "
+                f"alone decides severity. urgent={urgent_addresses}"
+            )
+            assert _section_containing(data, addr) == baseline_section, (
+                "priority-sender preference must not move this sender's "
+                f"message to a different section; baseline={baseline_section!r} "
+                f"with_pref={_section_containing(data, addr)!r}"
+            )
         finally:
             agent.close_db()
 
