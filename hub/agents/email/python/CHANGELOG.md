@@ -89,6 +89,91 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **Thread summaries now keep the newest message's open asks (#2641).** A
+  thread summary could reflect the opening question and an early reply while
+  dropping the newest message entirely — even when that message carried the
+  thread's only open ask and a concrete meeting proposal. Root cause: both
+  `summarize_thread`'s system and user-turn prompts only ever guarded EARLY
+  content ("do not drop a decision raised early..."); nothing asked the
+  model to protect what is still open in the latest message. Both prompts
+  now weigh the newest message's still-open asks equally, and a detected
+  meeting proposal — from the existing deterministic
+  `detect_meeting_request_heuristic`, run over the newest message's own
+  decoded body, never the sender's raw matched text — is named from that
+  signal rather than left to free-form generation. Thread summaries also get
+  a larger length bound (`THREAD_SUMMARY_CHAR_LIMIT`, 700 vs. the
+  single-message 300): several messages' decisions plus a new open ask plus
+  a meeting time cannot fit in the single-message cap.
+- **Mail-infrastructure banners no longer reach the summarizer as if they
+  were the message (#2642).** A sensitivity marking or external-sender
+  caution stamped at the top of a body sat exactly where a summarizer looks
+  for "who said this" — on one real thread it was read as the author's name
+  and attributed a colleague's statement to the banner text instead. New
+  `gaia_agent_email.body_normalize.normalize_email_body` strips a small,
+  enumerable set of known leading banners (never mid-message, never a body
+  that merely discusses one) before `_thread_message_blocks` /
+  `_format_message_for_llm` wrap the body for the model, with a hard cap on
+  how much any single strip can remove so a banner with no trailing blank
+  line can never take real content down with it. It also closes a
+  pre-existing gap where an inbound body carrying a literal
+  `<<<UNTRUSTED_EMAIL_BODY_END>>>`-shaped token was wrapped unscrubbed —
+  that scrub previously ran only on LLM output, never on inbound text.
+- **Fixed a data-loss bug in the #2642 banner stripper: it deleted real
+  content on real (CRLF) mail.** `normalize_email_body`'s paragraph-break
+  lookup only matched a bare `\n\n`, but an actual inbound body uses `\r\n`
+  (RFC 5322) — so the lookup always returned "no blank line found," the
+  strip fell back to its 300-char/5-newline removal cap, and that cap ate
+  one or two real paragraphs past the banner instead of just the banner.
+  Live testing against a real message caught this: the banner *and* the two
+  paragraphs following it were removed. `_BLANK_LINE_RE` is now CRLF-tolerant
+  (`\r?\n[ \t]*\r?\n`); the removal cap itself, the bounded scan window, and
+  every existing hard-negative case are unchanged.
+- **The autonomy kill switch now pre-empts a cycle already running, instead
+  of only affecting the next one (#2624).** A kill fired a second into a
+  25-message run used to be confirmed as "off" while the run carried on and
+  processed all 25 — the only enabled check read a `TrustPolicy` snapshot
+  frozen before the loop started, so nothing inside it could see a kill
+  fired mid-cycle. `_run_email_autonomy_cycle` now re-reads the live
+  autonomy level immediately before each message's execute call and stops
+  the batch there, recording why in the new `report["stopped"]` field
+  (`"autonomy_off"`). Scope: this is pre-emptive for a cycle running through
+  the REST/CLI session surface on a single-worker sidecar; the scheduler
+  builds a stateless agent per fire from environment variables and is
+  unaffected by a kill issued here (#2649). Killing one session
+  also now stops every other live session in the process, since the caller's
+  session id is not always the one an autonomy cycle happens to be running
+  under.
+- **A single per-message failure no longer discards the whole autonomy
+  report (#2625).** A transient provider error used to propagate past the
+  whole cycle, throwing away the record of every message already archived
+  or marked read for real — the caller got a bare 500 and no way to tell
+  what had actually changed short of querying the database by hand. The
+  cycle now catches a per-message failure, records it in the new
+  `report["errors"]` (exception type plus a redacted, length-capped
+  message — auth headers, tokens, and email addresses are stripped, never
+  the raw provider payload), and continues to the next
+  message — stopping only after 3 CONSECUTIVE failures (resets on any
+  success) so a systemic outage doesn't grind through the whole batch
+  logging one identical error per message. A bookkeeping-call failure
+  (recording the action for undo, clearing the re-proposal guard) that
+  happens *after* a message was already mutated is logged but never
+  reclassifies that message as failed. A cycle-level failure (triage
+  itself raising) still propagates, unchanged.
+- **The triage scan now actually follows pagination, and `scan_truncated`
+  tells the truth (#2634).** Raising the scan's `max_messages` above one
+  provider page used to do nothing — `triage_inbox_impl` issued a single
+  `list_messages` call and never followed the returned `nextPageToken`, so
+  asking for 500 messages still returned 100. Worse, the attention view's
+  `scan_truncated` was computed as `len(results) >= max_messages`, which
+  flips to "not truncated" the moment a request exceeds one page of real
+  mail — exactly when the scan is least complete. The scan now pages until
+  `max_messages` is collected or the mailbox is exhausted, de-duplicating
+  message ids across pages and clamping the accumulator client-side (Outlook's
+  continuation ignores `max_results` entirely). `scan_truncated` is now
+  derived solely from whether the last-fetched page's own cursor says more
+  mail exists, never from comparing request/response length — a mailbox
+  whose size exactly equals the request now correctly reports no truncation,
+  instead of the length-only formula's false positive.
 - **`POST /autonomy/run` refuses instead of silently no-oping while autonomy
   is `off` (#2528).** Previously the route returned HTTP 200 with the same
   empty-report shape whether autonomy was disabled or had genuinely run and

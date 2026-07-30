@@ -20,8 +20,9 @@ from __future__ import annotations
 import json
 import re
 from datetime import date
-from typing import Any, Callable, Dict, List, Mapping, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
+from gaia_agent_email.body_normalize import normalize_email_body
 from gaia_agent_email.config import default_inbox_scan_ceiling
 from gaia_agent_email.context_budget import (
     active_profile_ctx_size,
@@ -131,9 +132,9 @@ def _format_message_for_llm(
 ) -> Dict[str, Any]:
     """Reduce a Gmail-API-shape message to fields the LLM can act on.
 
-    The body is decoded via the production decoder and wrapped in the
-    untrusted-input delimiter so the LLM never confuses content with
-    instructions.
+    The body is decoded via the production decoder, stripped of known
+    mail-infrastructure banners (#2642), and wrapped in the untrusted-input
+    delimiter so the LLM never confuses content with instructions.
     """
     payload = msg.get("payload") or {}
     headers = {
@@ -141,6 +142,7 @@ def _format_message_for_llm(
         for h in payload.get("headers", [])
     }
     body, attachments = decode_message_body(payload)
+    body = normalize_email_body(body)
     body_chars_dropped = 0
     if body:
         body, body_chars_dropped = _truncate(body, body_limit)
@@ -343,16 +345,26 @@ def _thread_message_blocks(
     per_message_body_limit: int,
     start_index: int = 1,
     total_count: Optional[int] = None,
-) -> List[str]:
+) -> Tuple[List[str], List[str]]:
     """Render each message (already sorted) as one numbered, wrapped block.
 
     Shared by :func:`_format_thread_for_summary` (the full-thread join) and
     the #1889 over-budget fold path (message-boundary bucketing) so there is
     exactly one place that defines what a message block looks like — no
     duplicate formatting to drift.
+
+    Returns ``(blocks, decoded_bodies)`` — ``decoded_bodies`` is each message's
+    decoded, stripped, PRE-truncation body in the same order. A caller that
+    needs one message's own body (e.g. the #2641 meeting-signal scan over
+    the newest message) reuses ``decoded_bodies[-1]`` instead of paying for a
+    second MIME decode of the same payload — which would also feed the
+    heuristic the rendered block's header/delimiter framing rather than the
+    plain body, risking a false match against e.g. the ``Date:`` header's
+    own ``HH:MM:SS``.
     """
     total = total_count if total_count is not None else len(messages)
     blocks: List[str] = []
+    decoded_bodies: List[str] = []
     for offset, msg in enumerate(messages):
         idx = start_index + offset
         payload = msg.get("payload") or {}
@@ -362,15 +374,18 @@ def _thread_message_blocks(
         }
         body, _attachments = decode_message_body(payload)
         body = (body or "").strip()
+        body = normalize_email_body(body)  # strip infra banners (#2642)
+        decoded_bodies.append(body)
+        rendered_body = body
         if per_message_body_limit > 0 and len(body) > per_message_body_limit:
-            body = body[:per_message_body_limit] + "\n...[truncated]"
+            rendered_body = body[:per_message_body_limit] + "\n...[truncated]"
         blocks.append(
             f"--- Message {idx} of {total} ---\n"
             f"From: {headers.get('from', '')}\n"
             f"Date: {headers.get('date', '')}\n"
-            f"{wrap_untrusted_body(body)}"
+            f"{wrap_untrusted_body(rendered_body)}"
         )
-    return blocks
+    return blocks, decoded_bodies
 
 
 def _format_thread_for_summary(
@@ -408,13 +423,15 @@ def _format_thread_for_summary(
         )
         if effective_body_limit <= 0 or fair_share < effective_body_limit:
             effective_body_limit = fair_share
-    blocks = _thread_message_blocks(
+    blocks, _decoded_bodies = _thread_message_blocks(
         ordered, per_message_body_limit=effective_body_limit
     )
     return "\n\n".join(blocks)
 
 
-def _build_thread_user_prompt(subject: str, transcript: str) -> str:
+def _build_thread_user_prompt(
+    subject: str, transcript: str, *, meeting_detected: bool = False
+) -> str:
     """Build the user-turn prompt for whole-thread summarization.
 
     Unlike the single-email prompt, this does NOT clip the body to a single
@@ -422,14 +439,29 @@ def _build_thread_user_prompt(subject: str, transcript: str) -> str:
     message body is already individually wrapped + truncated by
     ``_format_thread_for_summary``. Re-clipping here would drop later
     messages and defeat full-thread comprehension.
+
+    ``meeting_detected`` is the deterministic, heuristic-only signal from
+    ``detect_meeting_request_heuristic`` run over the newest message's own
+    decoded body (#2641) — never the model's free-form read of the
+    transcript. A plain bool is the only thing this function accepts, so
+    ``MeetingDetection.signals``/``.reason`` (raw, sender-authored
+    substrings) can never reach the prompt; the note is a fixed,
+    non-authoritative sentence, not an asserted fact.
     """
-    return (
+    instruction = (
         "Summarize this email thread as a whole. Reflect decisions, asks, and "
         "outcomes from EVERY message — including earlier messages the latest "
-        "reply does not repeat.\n\n"
-        f"Subject: {subject}\n"
-        f"Thread (oldest first):\n{transcript}\n"
+        "reply does not repeat. Give the newest message's still-open asks the "
+        "same weight as an early decision: if the latest message raises an "
+        "unanswered question or a pending request, name it.\n"
     )
+    if meeting_detected:
+        instruction += (
+            "The newest message appears to propose a meeting time; if the "
+            "body actually names one, state the day and time in the "
+            "summary.\n"
+        )
+    return f"{instruction}\nSubject: {subject}\nThread (oldest first):\n{transcript}\n"
 
 
 def summarize_thread_impl(
@@ -524,9 +556,25 @@ def summarize_thread_impl(
         # byte-identical to the pre-existing uncapped renderer's output
         # (``_format_thread_for_summary(..., max_total_transcript_chars=None)``),
         # which delegates to the same ``_thread_message_blocks``.
-        blocks = _thread_message_blocks(
+        blocks, decoded_bodies = _thread_message_blocks(
             ordered, per_message_body_limit=per_message_body_limit
         )
+
+        # Deterministic meeting-request scan over the NEWEST message's own
+        # decoded body (#2641), reusing the decode above rather than paying
+        # for a second one — same heuristic triage_inbox runs on the
+        # snippet, but this path already has the full body, so use it.
+        from gaia_agent_email.tools.calendar_tools import (
+            detect_meeting_request_heuristic,
+        )
+
+        meeting = detect_meeting_request_heuristic(subject, decoded_bodies[-1])
+        # Same high-confidence-only gate as triage_inbox (~line 988) — a
+        # confidence="low" result always pairs with is_meeting_request=False
+        # today, but the explicit AND keeps this call site correct even if
+        # the heuristic's confidence semantics change later.
+        meeting_detected = meeting.is_meeting_request and meeting.confidence == "high"
+
         full_transcript = "\n\n".join(blocks)
         fold_stats: List[dict] = []
         if estimate_tokens(full_transcript) <= thread_budget_tokens():
@@ -553,7 +601,9 @@ def summarize_thread_impl(
             )
             transcript = "\n\n".join([condensed_block, blocks[-1]])
 
-        prompt = _build_thread_user_prompt(subject, transcript)
+        prompt = _build_thread_user_prompt(
+            subject, transcript, meeting_detected=meeting_detected
+        )
         try:
             response = chat.send_messages(
                 [{"role": "user", "content": prompt}],
@@ -890,6 +940,79 @@ def _apply_session_preferences(
     return out
 
 
+def _list_all_stubs(
+    gmail,
+    *,
+    label_ids: Optional[List[str]],
+    max_messages: int,
+) -> Dict[str, Any]:
+    """Page through ``gmail.list_messages`` until ``max_messages`` unique
+    stubs are collected or the backend has no more (#2634).
+
+    ``nextPageToken`` is followed verbatim across calls — for Outlook that
+    token IS the ``@odata.nextLink`` absolute URL, so re-deriving params
+    instead of passing it straight back would silently restart at page 1.
+    Never trusts a page to honour ``max_results``: Outlook's continuation
+    ignores it entirely and can hand back more than requested, so the
+    accumulator is clamped to ``max_messages`` after every page. Message
+    ids are de-duplicated across pages — a mailbox has no snapshot
+    isolation, so the same id can legitimately reappear on two pages if
+    the mailbox mutates mid-scan.
+
+    Each call requests ``max_results=`` however many messages are still
+    wanted, never a fixed page-size constant (a fixed constant would ask
+    for more than the caller's own budget on a later page).
+
+    A page-2+ failure propagates (never a silent partial result) — this
+    function adds no try/except around ``list_messages``, so whatever the
+    backend raises reaches the caller unchanged, consistent with the
+    fail-loud rule the rest of this package follows.
+
+    Returns ``{"stubs": [...], "scanned": int, "scan_truncated": bool,
+    "resultSizeEstimate": Any}``. ``scan_truncated`` is derived solely from
+    the last-fetched page's own cursor — never from ``len(stubs) >=
+    max_messages`` alone, which is honest only by coincidence and wrong
+    the moment a mailbox's true size exactly equals the request.
+    """
+    labels = list(label_ids) if label_ids else ["INBOX"]
+    stubs: List[Dict[str, Any]] = []
+    seen_ids: set = set()
+    page_token: Optional[str] = None
+    next_token: Optional[str] = None
+    result_size_estimate: Any = None
+    first_page = True
+
+    while len(stubs) < max_messages:
+        remaining = max_messages - len(stubs)
+        listing = gmail.list_messages(
+            label_ids=labels,
+            max_results=remaining,
+            page_token=page_token,
+        )
+        if first_page:
+            result_size_estimate = listing.get("resultSizeEstimate")
+            first_page = False
+        for stub in listing.get("messages", []) or []:
+            mid = stub.get("id")
+            if mid in seen_ids:
+                continue
+            seen_ids.add(mid)
+            stubs.append(stub)
+        if len(stubs) > max_messages:
+            stubs = stubs[:max_messages]
+        next_token = listing.get("nextPageToken")
+        if not next_token:
+            break
+        page_token = next_token
+
+    return {
+        "stubs": stubs,
+        "scanned": len(stubs),
+        "scan_truncated": bool(next_token),
+        "resultSizeEstimate": result_size_estimate,
+    }
+
+
 def triage_inbox_impl(
     gmail,
     *,
@@ -944,11 +1067,18 @@ def triage_inbox_impl(
     Returns a summary listing per-message classifications + a bucketed
     view via ``group_by_category``. Also passes through the listing call's
     raw ``resultSizeEstimate`` (whatever the backend reports — a real
-    mailbox estimate for Gmail, ``None`` for Outlook, #2584) so a caller
+    mailbox estimate for Gmail, ``None`` for Outlook, #2584) and an honest
+    ``scan_truncated`` (#2634 — True only when the backend's own paging
+    cursor says more mail exists beyond what was collected) so a caller
     like ``pre_scan_inbox_impl`` can report scan coverage without a second
     round-trip. ``label_ids`` defaults to ``["INBOX"]`` (this tool's
     existing behavior); a caller wanting a narrower query (e.g. unread-only
     for coverage honesty) can override it.
+
+    The listing itself pages via ``_list_all_stubs`` (#2634) until
+    ``max_messages`` is collected or the mailbox is exhausted — previously
+    this issued a single ``list_messages`` call and silently capped
+    coverage at one provider page regardless of what was requested.
     """
     # Local import breaks a real import cycle: calendar_tools imports
     # DEFAULT_BODY_LIMIT_CHARS from this module at module scope, so importing
@@ -959,12 +1089,12 @@ def triage_inbox_impl(
     with log_tool_call(
         "triage_inbox", {"max_messages": max_messages}, debug=debug
     ) as st:
-        listing = gmail.list_messages(
-            label_ids=list(label_ids) if label_ids else ["INBOX"],
-            max_results=max_messages,
+        listing = _list_all_stubs(
+            gmail, label_ids=label_ids, max_messages=max_messages
         )
+        stubs = listing["stubs"]
         results: List[Dict[str, Any]] = []
-        for stub in listing.get("messages", []):
+        for stub in stubs:
             msg = gmail.get_message(stub["id"])
             payload_headers = {
                 (h.get("name") or "").lower(): h.get("value", "")
@@ -1067,7 +1197,7 @@ def triage_inbox_impl(
                 try:
                     progress(
                         len(results),
-                        len(listing.get("messages", [])),
+                        len(stubs),
                         payload_headers.get("subject", "") or "(no subject)",
                     )
                 except Exception as exc:  # noqa: BLE001
@@ -1081,7 +1211,8 @@ def triage_inbox_impl(
         return {
             "results": results,
             "grouped": grouped,
-            "resultSizeEstimate": listing.get("resultSizeEstimate"),
+            "resultSizeEstimate": listing["resultSizeEstimate"],
+            "scan_truncated": listing["scan_truncated"],
         }
 
 
@@ -1721,6 +1852,7 @@ class ReadToolsMixin:
             try:
                 # Deferred import avoids a module-load cycle with summarize_tools.
                 from gaia_agent_email.tools.summarize_tools import (
+                    THREAD_SUMMARY_CHAR_LIMIT,
                     EmailSummarizeError,
                 )
 
@@ -1731,6 +1863,7 @@ class ReadToolsMixin:
                         backend,
                         chat,
                         thread_id=thread_id,
+                        max_chars=THREAD_SUMMARY_CHAR_LIMIT,
                         debug=debug_flag,
                     )
                 )
