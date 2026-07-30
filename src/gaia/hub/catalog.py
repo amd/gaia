@@ -459,9 +459,9 @@ def merge_with_registry(
             "name": entry.get("name", agent_id),
             "description": entry.get("description", ""),
             "category": entry.get("category", "general"),
-            # Package kind (#1716): agent | app | component. Drives the Hub
-            # page's Apps · Components · Agents lanes; defaults to "agent" for
-            # older catalog entries that predate the discriminator.
+            # Package kind (#1716): agent | app | component — never "skill",
+            # which the loop above already filtered out. Drives the Hub page's
+            # lanes; defaults to "agent" for entries predating the discriminator.
             "type": entry_package_type(entry),
             "icon": entry.get("icon", ""),
             "language": language,
