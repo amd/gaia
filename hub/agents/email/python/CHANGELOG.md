@@ -9,6 +9,20 @@ contract version is tracked separately as
 
 ### Added
 
+- **Inbox scans go metadata-first, cutting per-message cost so the default scan size can
+  rise from 25 to 50 (#2643).** Every scanned message used to cost one full-body fetch
+  regardless of whether the heuristic ever read the body — `pre_scan_inbox` and the
+  attention view never even wire an LLM classifier, so most of that body was fetched and
+  never decoded. The scan now fetches metadata only (headers, labels, snippet — no body),
+  runs the heuristic on that, and fetches a full body — batched, in as few round-trips as
+  the mail backend supports — only for messages that actually need LLM follow-up. A
+  `List-Unsubscribe` header (RFC 2369, arrives with the metadata fetch) is now a
+  supplementary confident-bulk-mail signal for messages Gmail's own category labels miss.
+  Classification is unchanged; a deadline/commitment signal in a bulk message's snippet
+  still escalates to the LLM exactly as before. The classifier's own escalation body is
+  also cut down to the sender's own new content (quoted reply chain and signature block
+  stripped, reusing `voice_profile`'s existing quote/signoff detection) before it reaches
+  the model — the one change here that affects what the LLM actually reads.
 - **Meeting-request detection now runs during the inbox scan, not only on a message you
   point at directly (#2583).** `detect_meeting_request_heuristic` has existed for over a
   year but nothing ever called it from `triage_inbox`/`pre_scan_inbox` — a colleague
@@ -89,6 +103,16 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **Inbox pre-scan now covers read mail, not just unread (#2638).** Pre-scan excluded
+  read mail on a rationale that a later fix in the same issue (#2584) had already made
+  moot — the coverage denominator moved to an exact `labels().get()` count independent
+  of the listing query, so narrowing that query to unread-only bought nothing while
+  making the single highest-value triage bucket (a message you opened but never
+  answered) permanently invisible the moment you read it. Pre-scan now scans all of
+  INBOX, matching the attention view and `list_waiting_on_you`, which never narrowed to
+  unread in the first place. `total_inbox` (exact whole-INBOX count, sourced from the
+  same call as the existing `total_unread`) is the new coverage denominator now that the
+  scan isn't unread-only; schema bumped to `2.9`.
 - **Thread summaries now keep the newest message's open asks (#2641).** A
   thread summary could reflect the opening question and an early reply while
   dropping the newest message entirely — even when that message carried the
