@@ -126,7 +126,8 @@ contract version is tracked separately as
   what had actually changed short of querying the database by hand. The
   cycle now catches a per-message failure, records it in the new
   `report["errors"]` (exception type plus a redacted, length-capped
-  message — never the raw provider payload), and continues to the next
+  message — auth headers, tokens, and email addresses are stripped, never
+  the raw provider payload), and continues to the next
   message — stopping only after 3 CONSECUTIVE failures (resets on any
   success) so a systemic outage doesn't grind through the whole batch
   logging one identical error per message. A bookkeeping-call failure
