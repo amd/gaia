@@ -10,11 +10,16 @@ import FeaturedCard from '../../components/FeaturedCard.astro';
 import AgentRow from '../../components/AgentRow.astro';
 import ComingSoonRow from '../../components/ComingSoonRow.astro';
 import StatBlock from '../../components/StatBlock.astro';
-import { getCatalog, categoryLabel, distinct } from '../../data/catalog';
+import { getCatalog, getAgentPackages, getSkills, categoryLabel, distinct } from '../../data/catalog';
 import { getInDevelopmentAgents } from '../../data/inDevelopment';
 
-const agents = await getCatalog();
-const soon = getInDevelopmentAgents(agents.map((a) => a.id));
+// Agents/apps/components and skills are separate lanes of one catalog (#2467):
+// a skill installs with `gaia skill install`, not the agent install path, so the
+// agent list must filter it out rather than render it as an installable agent.
+const published = await getCatalog();
+const agents = await getAgentPackages();
+const skills = await getSkills();
+const soon = getInDevelopmentAgents(published.map((a) => a.id));
 
 // Editorial pick: feature the email agent; fall back to the first non-deprecated
 // verified agent, else the first agent.
@@ -110,6 +115,29 @@ const stats = [
       </div>
     </div>
 
+    <!-- Skills lane (#2467). Rendered only once the hub has published skills, so
+         the page is unchanged until the marketplace has content. -->
+    {skills.length > 0 && (
+      <section class="mt-14">
+        <div class="flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <h2 class="font-display text-[22px] font-semibold tracking-[-0.015em]">Skills</h2>
+            <p class="mt-2 max-w-[560px] text-[14px] leading-[1.6] text-g-muted">
+              Reusable capabilities any agent can compose — install one with
+              <code class="mono text-[12.5px] text-g-text">gaia skill install &lt;name&gt;</code>.
+              Each carries a trust tier and the permissions it asks for.
+            </p>
+          </div>
+          <span class="mono text-[11px] uppercase tracking-[0.08em] text-g-faint">
+            {skills.length === 1 ? '1 skill' : `${skills.length} skills`}
+          </span>
+        </div>
+        <div class="mt-[22px] overflow-hidden rounded-g-card border border-g-border bg-g-surface">
+          {skills.map((skill) => <AgentRow agent={skill} />)}
+        </div>
+      </section>
+    )}
+
     <!-- Publish CTA -->
     <div class="mt-11 flex flex-wrap items-center justify-between gap-6 rounded-g-card border border-dashed border-g-border2 p-[30px]">
       <div>
@@ -133,7 +161,9 @@ const stats = [
 
 <script is:inline>
   (() => {
-    const published = Array.from(document.querySelectorAll('.agent-row'));
+    // Scoped to #hub-list: the Skills lane below renders the same row component
+    // and must not be swept into the agent list's filter counters.
+    const published = Array.from(document.querySelectorAll('#hub-list .agent-row'));
     const soon = Array.from(document.querySelectorAll('.soon-row'));
     const pills = Array.from(document.querySelectorAll('[data-filter]'));
     const search = document.getElementById('hub-search');

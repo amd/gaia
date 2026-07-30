@@ -273,6 +273,30 @@ gaia skill migrate ./hermes-skill/ --from auto   # see Compatibility
 gaia skill publish ./my-skill/         # marketplace (#647)
 ```
 
+### What the hub enforces at publish
+
+The marketplace lane is live on the Agent Hub Worker
+([#2467](https://github.com/amd/gaia/issues/2467)): `POST /publish/skill` takes
+the `SKILL.md` and re-validates this grammar server-side before a skill can enter
+the catalog. It is a gatekeeper, not a replacement for the loader's validation —
+a skill that fails any of these is rejected with the offending field named:
+
+- `name` and `description` are **required**; `name` matches
+  `^[a-z0-9]+(-[a-z0-9]+)*$` and is ≤64 chars, `description` is ≤1024.
+- `version` is **required to publish** (optional in the format itself) and must
+  be SemVer. `0.0.0` is refused — the unversioned sentinel can never become an
+  immutable release.
+- `metadata.gaia.security_tier` must be one of `verified` / `community` /
+  `experimental`, and the tier is gated by the pre-publish security audit
+  ([#2468](https://github.com/amd/gaia/issues/2468)) — a skill cannot claim a
+  tier whose gate it did not clear.
+- `permissions`, `tools`, `tools_required`, and `requirements` must match the
+  shapes above; the catalog entry carries them so an installer can show the
+  permission preview before anything is written to disk.
+
+See [Agent Skills → Agent Hub integration](/spec/agent-skills#agent-hub-integration)
+for the catalog shape and the storage/route layout.
+
 ### Agent UI dashboard support
 
 Acceptance #4 requires a skills management panel. The proposed `/api/skills`

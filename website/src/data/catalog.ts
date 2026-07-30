@@ -17,12 +17,14 @@
 // Nothing else in the app changes: pages consume getCatalog()/getAgent() only.
 
 export type SecurityTier = 'verified' | 'community' | 'experimental';
-export type AgentLanguage = 'python' | 'cpp' | 'go' | 'typescript';
+// `markdown` is the skills lane: an instruction-only skill ships no code.
+export type AgentLanguage = 'python' | 'cpp' | 'go' | 'typescript' | 'markdown';
 
 // What a catalog entry IS. Agents are the default; the terminal hub publishes
-// as a component and the Agent UI as an app, so a listing that shows only
-// agents must filter on this rather than assume every entry is one.
-export type PackageType = 'agent' | 'app' | 'component';
+// as a component, the Agent UI as an app, and marketplace skills as `skill`
+// (#2467) — so a listing that shows only agents must filter on this rather than
+// assume every entry is one.
+export type PackageType = 'agent' | 'app' | 'component' | 'skill';
 
 export interface AgentRequirements {
   min_memory_gb: number;
@@ -98,6 +100,43 @@ export interface Agent {
     size_bytes: number;
     files: { name: string; size_bytes: number }[];
   };
+  // Skill-lane fields from SKILL.md's metadata.gaia namespace (#2467). Present
+  // ONLY on `type: 'skill'` entries — read it through a `type` check, never
+  // unconditionally. `security_tier` and `permissions` stay top-level because
+  // they mean the same thing in both lanes.
+  skill_metadata?: SkillMetadata;
+}
+
+export interface SkillToolDecl {
+  name: string;
+  description: string;
+}
+
+// metadata.gaia.requirements — unrelated to the agent-lane AgentRequirements.
+export interface SkillRequirements {
+  model: string;
+  context: string;
+  python: string;
+  dependencies: string[];
+  node_dependencies: string[];
+  env_vars: string[];
+  hardware: { npu: string; gpu_vram: string };
+}
+
+export interface SkillMetadata {
+  // @tool functions the skill PROVIDES.
+  tools: SkillToolDecl[];
+  // Registry tool names the skill CONSUMES (the recipe contract).
+  tools_required: string[];
+  requirements: SkillRequirements;
+  // Pre-publish security-audit result (#2468); `unaudited` when the skill's
+  // tier made the scan advisory and none was supplied.
+  audit: {
+    verdict: 'ALLOW' | 'unaudited';
+    engine: string;
+    audited_at: string;
+    findings: number;
+  };
 }
 
 interface CatalogFile {
@@ -164,7 +203,11 @@ async function loadCatalog(): Promise<CatalogFile> {
   return liveCatalog;
 }
 
-/** All agents in the catalog, sorted: verified first, then alphabetical. */
+/**
+ * Every catalog entry, all lanes, sorted: verified first, then alphabetical.
+ * Use this when you genuinely want everything (e.g. generating a page per
+ * published package); use getAgentPackages()/getSkills() to render one lane.
+ */
 export async function getCatalog(): Promise<Agent[]> {
   const { agents } = await loadCatalog();
   const tierRank: Record<SecurityTier, number> = {
@@ -180,7 +223,21 @@ export async function getCatalog(): Promise<Agent[]> {
   });
 }
 
-/** A single agent by id, or undefined if not found. */
+/**
+ * The installable-package lanes (agents, apps, components) — everything the
+ * agent listing has always shown. Excludes skills, which install through
+ * `gaia skill install` and get their own lane (#2467).
+ */
+export async function getAgentPackages(): Promise<Agent[]> {
+  return (await getCatalog()).filter((a) => !isSkill(a));
+}
+
+/** The marketplace Skills lane (#2467). */
+export async function getSkills(): Promise<Agent[]> {
+  return (await getCatalog()).filter(isSkill);
+}
+
+/** A single catalog entry by id (any lane), or undefined if not found. */
 export async function getAgent(id: string): Promise<Agent | undefined> {
   const { agents } = await loadCatalog();
   return agents.find((a) => a.id === id);
@@ -202,6 +259,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   infrastructure: 'Infrastructure',
   healthcare: 'Healthcare',
   examples: 'Examples',
+  skills: 'Skills',
 };
 
 export function categoryLabel(category: string): string {
@@ -213,6 +271,7 @@ const LANGUAGE_LABELS: Record<AgentLanguage, string> = {
   cpp: 'C++',
   go: 'Go',
   typescript: 'TypeScript',
+  markdown: 'Markdown',
 };
 
 export function languageLabel(language: AgentLanguage): string {
@@ -296,7 +355,28 @@ export function isAgent(agent: Agent): boolean {
   return packageType(agent) === 'agent';
 }
 
+/** True for marketplace skills (#2467) — a different lane and a different installer. */
+export function isSkill(agent: Agent): boolean {
+  return packageType(agent) === 'skill';
+}
+
 export function installMethods(agent: Agent): InstallMethod[] {
+  // A skill is not an agent package: it installs into ~/.gaia/skills/ and is
+  // composed by any agent, so `gaia agent install` would not work for it.
+  if (isSkill(agent)) {
+    return [
+      {
+        key: 'skill',
+        label: 'GAIA',
+        command: `gaia skill install ${agent.id}`,
+        note:
+          agent.security_tier === 'experimental'
+            ? 'Experimental — installing requires --allow-experimental.'
+            : 'Installs into ~/.gaia/skills/ and can be composed by any agent.',
+      },
+    ];
+  }
+
   // A component/app is not installed *into* GAIA and has no PyPI wheel — it is
   // downloaded per platform. `gaia agent install <id>` would not work for it.
   // An npm package, where one exists, is a real second path (the Agent UI

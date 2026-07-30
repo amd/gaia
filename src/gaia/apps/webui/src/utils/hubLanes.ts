@@ -16,7 +16,7 @@
 
 import type { AgentInfo } from '../types';
 
-export type PackageType = 'agent' | 'app' | 'component';
+export type PackageType = 'agent' | 'app' | 'component' | 'skill';
 
 export interface LaneDef {
     key: PackageType;
@@ -28,17 +28,28 @@ export interface LaneDef {
 
 /**
  * Lane render order: Apps first (most user-facing), then Components, then
- * Agents. Mirrors the issue's "Apps · Components · Agents" segmentation.
+ * Agents, then Skills. Mirrors the issue's "Apps · Components · Agents"
+ * segmentation, with the marketplace Skills lane appended (#2467).
  */
 export const LANES: readonly LaneDef[] = [
     { key: 'app', title: 'Apps', subtitle: 'Full experiences you can launch' },
     { key: 'component', title: 'Components', subtitle: 'Reusable building blocks' },
     { key: 'agent', title: 'Agents', subtitle: 'Task-focused AI agents' },
+    { key: 'skill', title: 'Skills', subtitle: 'Capabilities any agent can compose' },
 ] as const;
 
-/** Normalize a catalog entry's package kind, defaulting to ``agent`` (#1716). */
+const PACKAGE_TYPES: readonly PackageType[] = ['app', 'component', 'agent', 'skill'];
+
+/** Normalize a catalog entry's package kind, defaulting to ``agent`` (#1716, #2467). */
 export function packageType(agent: AgentInfo): PackageType {
-    return agent.type === 'app' || agent.type === 'component' ? agent.type : 'agent';
+    return PACKAGE_TYPES.includes(agent.type as PackageType)
+        ? (agent.type as PackageType)
+        : 'agent';
+}
+
+/** True for marketplace skills — a different lane with a different installer. */
+export function isSkill(agent: AgentInfo): boolean {
+    return packageType(agent) === 'skill';
 }
 
 /** Grouped catalog: one array per lane, preserving input order within a lane. */
@@ -46,7 +57,7 @@ export type Lanes = Record<PackageType, AgentInfo[]>;
 
 /** Split the catalog into per-type lanes. */
 export function groupIntoLanes(catalog: AgentInfo[]): Lanes {
-    const lanes: Lanes = { app: [], component: [], agent: [] };
+    const lanes: Lanes = { app: [], component: [], agent: [], skill: [] };
     for (const a of catalog) {
         lanes[packageType(a)].push(a);
     }
