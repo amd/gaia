@@ -149,25 +149,21 @@ def test_second_call_within_ttl_reuses_cache(attention_client):
 
 
 def test_expired_cache_triggers_recompute(attention_client):
-    from gaia_agent_email import api_routes
+    from gaia_agent_email import api_routes, attention_cache
 
     first = attention_client.get("/v1/email/attention").json()["result"]
     # Force the cached entry to look older than the freshness window.
-    api_routes._attention_cache["_computed_at"] -= (
-        api_routes.ATTENTION_CACHE_TTL_SECONDS + 1
-    )
+    attention_cache.peek()["_computed_at"] -= api_routes.ATTENTION_CACHE_TTL_SECONDS + 1
     second = attention_client.get("/v1/email/attention").json()["result"]
     assert second["stale"] is False
     assert second["cache_age_seconds"] == 0.0
 
 
 def test_total_failure_with_warm_cache_falls_back_to_stale(attention_client):
-    from gaia_agent_email import api_routes
+    from gaia_agent_email import api_routes, attention_cache
 
     attention_client.get("/v1/email/attention")  # warm the cache
-    api_routes._attention_cache["_computed_at"] -= (
-        api_routes.ATTENTION_CACHE_TTL_SECONDS + 1
-    )
+    attention_cache.peek()["_computed_at"] -= api_routes.ATTENTION_CACHE_TTL_SECONDS + 1
     bad = _RaisingGmailBackend(user_email=USER_EMAIL)
     attention_client.app.dependency_overrides[api_routes.get_attention_backends] = (
         lambda: {"google": bad}
