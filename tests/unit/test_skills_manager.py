@@ -372,6 +372,15 @@ def test_unregister_removes_only_that_skills_tools(roots):
     assert "web-search/search_web" not in _TOOL_REGISTRY
 
 
+def test_the_refusal_cannot_be_bypassed_via_the_low_level_api(roots):
+    """``register_skill_tools`` is where a skill gains executable reach, so the
+    local-capability refusal holds there too — not only in ``Agent.load_skill``."""
+    copy_fixture("local-capability", roots["user"])
+    skill = make_manager(roots).load("local-capability")
+    with pytest.raises(SkillPermissionError, match="deferred to a later phase"):
+        register_skill_tools(skill)
+
+
 def test_instruction_only_skill_registers_no_tools(roots):
     copy_fixture("bare-standard", roots["user"])
     skill = make_manager(roots).load("bare-standard")

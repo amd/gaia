@@ -28,6 +28,7 @@ from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.logger import get_logger
 from gaia.skills.errors import FORMAT_DOCS_URL, SkillValidationError
 from gaia.skills.format import SKILL_TOOLS_FILENAME, Skill, SkillTool
+from gaia.skills.permissions import refuse_unbridged_permissions
 
 log = get_logger(__name__)
 
@@ -49,10 +50,17 @@ def register_skill_tools(skill: Skill) -> dict[str, dict[str, Any]]:
         for an instruction-only skill.
 
     Raises:
+        SkillPermissionError: if the skill declares a local-capability
+            permission this phase cannot enforce.
         SkillValidationError: if ``tools.py`` is missing, fails to import, or
             contradicts the declared ``metadata.gaia.tools``. The registry is
             left exactly as it was found.
     """
+    # Re-gated here, not only in Agent.load_skill: this is the function that
+    # actually hands a skill executable reach, so the refusal must hold no
+    # matter which entry point a caller uses.
+    refuse_unbridged_permissions(skill.parsed_permissions(), skill_name=skill.name)
+
     if not skill.gaia.tools:
         tools_path = skill.tools_path
         if tools_path is not None and tools_path.is_file():
