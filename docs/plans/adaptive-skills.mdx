@@ -52,7 +52,10 @@ sitting in the codebase unused for this purpose.
 
 GAIA does **not** invent adaptive skills. This design was stress-tested against
 shipped implementations rather than derived in isolation, and three of its
-mechanisms are adopted wholesale.
+mechanisms are adopted wholesale. Crediting the prior art before the contribution
+is a repo convention, not a courtesy — see
+[Skill Format → Prior art](/plans/skill-format#prior-art-credit-before-contribution)
+and [#893](https://github.com/amd/gaia/issues/893).
 
 | Source | What it contributes to this design |
 |---|---|
@@ -90,7 +93,7 @@ open question turned out to be already answered — inconsistently.
 | **Prefix stability: the loader is monotonic, so deltas must apply at session boundaries only.** | **Requirement holds; the premise is already violated in the worst possible place.** | See below. |
 | Procedures are atomic; chunk `references/`, never `SKILL.md` bodies. | **Holds, and the violation is live.** | The recall block hard-cuts the body at a character offset ([`procedural_memory.py:356`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/procedural_memory.py)) under a header telling the model these are proven steps to reuse ([`:361`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/procedural_memory.py)). Tracked as [#2676](https://github.com/amd/gaia/issues/2676). |
 
-### Correction 1 — "extend `procedures`" is wrong; "one database" is right
+### Correction 1: `procedures` cannot hold delta rows
 
 The `procedures` table cannot hold a delta row without lying about it. Every
 column and every read path assumes **the row is a standalone, recallable
@@ -121,7 +124,7 @@ file, one migration chain, one lineage idiom (`superseded_by` + `enabled`, never
 `DELETE`), one embedder — and a sibling `skill_deltas` table.** That keeps the
 `procedures` corpus meaning exactly what it means today.
 
-### Correction 2 — tier 1 is bounded, not free
+### Correction 2: tier 1 is bounded, not free
 
 Admitting a recalled procedure's `tools_required` renders that tool's schema into
 the `AVAILABLE TOOLS` block. Below `max_tools` that is real added text (~40–80
@@ -140,7 +143,7 @@ and the loader never touches `_TOOL_REGISTRY` at all
 So a tier-1 delta is **structurally incapable** of adding a tool the agent does
 not already have. It can only reorder what is already there.
 
-### Correction 3 — the KV-cache premise is already broken, at the front of the prompt
+### Correction 3: the KV-cache premise is already broken
 
 `_refresh_recalled_skills` runs **every user turn** ([`memory.py:2053`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py))
 and calls `rebuild_system_prompt()` whenever the recalled set changes
@@ -169,7 +172,7 @@ not one:
 The existing tier-3 recall path satisfies neither. Fixing it is a prerequisite
 sub-issue, adjacent to [#2676](https://github.com/amd/gaia/issues/2676), not a v2 nicety.
 
-### The open question that was already answered — inconsistently
+### The open question that was already answered inconsistently
 
 "Per-agent or per-user?" has a de-facto answer today, and it differs by agent.
 `procedures` has **no agent or context column**
@@ -434,10 +437,10 @@ action, remove a tool from a recipe.
 
 ---
 
-## Storage — one database, two tables
+## Storage: one database, two tables
 
 One SQLite file, one migration chain, one lineage idiom, one embedder — and a
-sibling table, for the three reasons in [Correction 1](#correction-1-extend-procedures-is-wrong-one-database-is-right).
+sibling table, for the three reasons in [Correction 1](#correction-1-procedures-cannot-hold-delta-rows).
 
 ### Minimal additive migration: v3 → v4 (PROPOSED)
 
@@ -765,7 +768,7 @@ work.
 off-state floors are decided; the three corrections above are recorded; every
 citation resolves.
 
-### Phase −1 — Prerequisite fixes on the shipped path (PROPOSED, unblocks everything)
+### Phase 0b — Prerequisite fixes on the shipped path (PROPOSED, unblocks everything)
 
 Not optional, and not part of v2 proper: the two invariants v2 depends on are
 currently violated by shipped code.
@@ -898,7 +901,7 @@ before any untrusted-provenance write path).
 
 **Blocked in practice by two shipped-code fixes** — [#2676](https://github.com/amd/gaia/issues/2676)
 (procedure atomicity) and the mid-session prompt-rebuild path
-([Correction 3](#correction-3-the-kv-cache-premise-is-already-broken-at-the-front-of-the-prompt)).
+([Correction 3](#correction-3-the-kv-cache-premise-is-already-broken)).
 Building an overlay on top of a recall path that truncates mid-step and rebuilds
 the prefix every turn would inherit both defects.
 
