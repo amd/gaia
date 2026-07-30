@@ -28,8 +28,16 @@ from gaia.skills.format import (
     Skill,
     SkillTool,
     parse_skill_file,
+    reset_security_tier,
 )
 from gaia.skills.manager import SkillManager
+from gaia.skills.migrate import (
+    VENDORS,
+    find_source_skills,
+    format_report,
+    install_migrated,
+    migrate_skill_dir,
+)
 
 log = get_logger(__name__)
 
@@ -122,6 +130,52 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
         "--output", default=None, help="Destination .zip (default: ./<name>.zip)"
     )
 
+    p_migrate = sub.add_parser(
+        "migrate",
+        help="Convert an OpenClaw or Hermes skill to GAIA format (stamped experimental)",
+        description=(
+            "Convert a foreign skill to GAIA's SKILL.md. Point it at one skill "
+            "directory or at a directory of them (a ClawHub checkout). Vendor fields "
+            "GAIA does not model are preserved under metadata.<vendor> and reported. "
+            "Every migrated skill lands at the experimental security tier."
+        ),
+    )
+    p_migrate.add_argument(
+        "source", help="Skill directory, its SKILL.md, or a directory of skills"
+    )
+    p_migrate.add_argument(
+        "--from",
+        dest="vendor",
+        default="auto",
+        choices=[*VENDORS, "auto"],
+        help="Source format (default: auto-detect from metadata.<vendor>)",
+    )
+    p_migrate.add_argument(
+        "--out",
+        dest="out",
+        default=None,
+        help="Write migrated skills here instead of installing into ~/.gaia/skills",
+    )
+    p_migrate.add_argument(
+        "--name",
+        default=None,
+        help="Migrate under this name (single-skill sources only)",
+    )
+    p_migrate.add_argument(
+        "--force", action="store_true", help="Replace an existing skill of the same name"
+    )
+    p_migrate.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report what would be migrated without writing anything",
+    )
+    p_migrate.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help="Emit the migration report as JSON",
+    )
+
 
 def handle(args: argparse.Namespace) -> int:
     """Dispatch a parsed ``gaia skill ...`` command. Returns an exit code."""
@@ -136,6 +190,7 @@ def handle(args: argparse.Namespace) -> int:
         "create": _handle_create,
         "import": _handle_import,
         "export": _handle_export,
+        "migrate": _handle_migrate,
     }
     handler = handlers.get(action)
     if handler is None:
@@ -328,8 +383,7 @@ def _handle_import(args: argparse.Namespace) -> int:
         # Imported skills re-earn trust: stamp experimental regardless of claim.
         imported = parse_skill_file(target, check_directory_name=False)
         imported.name = name
-        previous_tier = imported.gaia.security_tier
-        imported.gaia.security_tier = "experimental"
+        previous_tier = reset_security_tier(imported)
         imported.write(target / SKILL_FILENAME)
 
     print(f"✅ Imported skill '{name}' into {target}")
@@ -359,6 +413,73 @@ def _handle_export(args: argparse.Namespace) -> int:
 
     print(f"✅ Exported skill '{skill.name}' to {output}")
     print(f"   Import it elsewhere with: gaia skill import {output}")
+    return EXIT_OK
+
+
+def _handle_migrate(args: argparse.Namespace) -> int:
+    sources = find_source_skills(args.source)
+    if len(sources) > 1 and args.name:
+        sys.stderr.write(
+            f"❌ --name applies to a single skill, but {args.source} holds "
+            f"{len(sources)} skills. Migrate them one at a time to rename, or drop "
+            "--name to keep each skill's own name.\n"
+        )
+        return EXIT_USAGE
+
+    destination = Path(args.out).expanduser() if args.out else _manager().user_root
+    outcomes = [
+        migrate_skill_dir(source, vendor=args.vendor, name=args.name)
+        for source in sources
+    ]
+
+    installed: dict[str, str] = {}
+    if not args.dry_run:
+        for outcome in outcomes:
+            if outcome.migrated:
+                target = install_migrated(
+                    outcome, destination, force=args.force
+                )
+                installed[outcome.name] = str(target)
+
+    migrated = [o for o in outcomes if o.migrated]
+    refused = [o for o in outcomes if not o.migrated]
+
+    if getattr(args, "as_json", False):
+        payload = {
+            "source": str(args.source),
+            "destination": None if args.dry_run else str(destination),
+            "dry_run": bool(args.dry_run),
+            "total": len(outcomes),
+            "migrated": len(migrated),
+            "unmigratable": len(refused),
+            "skills": [
+                {**o.to_dict(), "installed_at": installed.get(o.name)} for o in outcomes
+            ],
+        }
+        print(json.dumps(payload, indent=2))
+        return EXIT_INVALID if refused else EXIT_OK
+
+    report = format_report(outcomes)
+    if report:
+        print(report, end="")
+
+    verb = "Would migrate" if args.dry_run else "Migrated"
+    print(f"{verb} {len(migrated)}/{len(outcomes)} skill(s) to GAIA format.")
+    if migrated and not args.dry_run:
+        print(f"   Installed into {destination}")
+        print(
+            "   Every migrated skill is at the experimental tier — review it, then: "
+            f"gaia skill info {migrated[0].name}"
+        )
+    if refused:
+        print(
+            f"\n{len(refused)} skill(s) could not be migrated (see ✗ above). v1 accepts "
+            "instruction-only and connector-backed skills; a skill needing local "
+            "shell, filesystem, database, desktop, or env access is refused rather "
+            "than silently stripped of the permission.",
+            file=sys.stderr,
+        )
+        return EXIT_INVALID
     return EXIT_OK
 
 
