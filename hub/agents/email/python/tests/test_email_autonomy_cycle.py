@@ -988,3 +988,30 @@ def test_cycle_level_failure_still_propagates(tmp_path):
     ):
         with pytest.raises(RuntimeError, match="backend down"):
             agent._run_email_autonomy_cycle()
+
+
+def test_error_report_redacts_and_truncates_sensitive_exception_text(tmp_path):
+    """#2625/adversarial-C5: ``report["errors"]`` is returned verbatim as an
+    HTTP 200 body and can be shipped off-box via ``gaia diagnostics``.
+    Provider/HTTP exceptions routinely embed request/response text — this
+    proves a bearer token embedded in the exception message is redacted and
+    an overlong message is capped, not passed through raw."""
+    messages = _ordered_promo_messages(1)
+    agent = _build_agent(tmp_path, messages, level=LEVEL_FULL)
+
+    secret_message = (
+        "502 Bad Gateway. Authorization: Bearer sekrit-token-abc123 "
+        "request-id=r1 " + ("x" * 500)
+    )
+
+    def _raise(action_type, row):
+        raise ConnectionError(secret_message)
+
+    with patch.object(agent, "_autonomy_execute", side_effect=_raise):
+        report = agent._run_email_autonomy_cycle()
+
+    assert len(report["errors"]) == 1, report["errors"]
+    error_text = report["errors"][0]["error"]
+    assert "sekrit-token-abc123" not in error_text
+    assert "[redacted]" in error_text
+    assert len(error_text) <= 220

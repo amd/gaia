@@ -432,16 +432,26 @@ def _normalize_plain_text_answer(text: str) -> str:
 # Redact common credential/token shapes out of a per-row autonomy failure's
 # exception text before it leaves the process (#2625 — adversarial C5).
 # Provider/HTTP client exceptions routinely embed request/response text —
-# auth headers, cookies, tokens — in ``str(exc)``.
+# auth headers, cookies, tokens — in ``str(exc)``. The header-name branch
+# consumes an optional "Bearer " prefix AND the token/value that follows it
+# as ONE match (a bare `\S+` after the header would stop at "Bearer" itself
+# and leave the actual token untouched); the second branch catches a bare
+# "Bearer <token>" with no header name in front of it.
 _AUTONOMY_ERROR_SENSITIVE_RE = re.compile(
-    r"(authorization|bearer|cookie|set-cookie|x-api-key|api[-_]?key|"
-    r"access[-_]?token|refresh[-_]?token)\s*[:=]\s*\S+",
+    r"\b(?P<header>authorization|cookie|set-cookie|x-api-key|api[-_]?key|"
+    r"access[-_]?token|refresh[-_]?token)\b\s*[:=]\s*(?:bearer\s+)?\S+"
+    r"|\bbearer\s+\S+",
     re.IGNORECASE,
 )
 #: Hard cap on a sanitized autonomy error's message length (#2625 — C5) — the
 #: length cap alone bounds how much of a raw provider payload can leak even
 #: past the pattern redaction above.
 _AUTONOMY_ERROR_MESSAGE_MAX_LEN = 200
+
+
+def _redact_autonomy_error_match(match: "re.Match[str]") -> str:
+    header = match.group("header")
+    return f"{header}: [redacted]" if header else "[redacted]"
 
 
 def _sanitize_autonomy_error(
@@ -455,7 +465,7 @@ def _sanitize_autonomy_error(
     safe) and a redacted, length-capped rendering of its message — never the
     raw provider payload.
     """
-    text = _AUTONOMY_ERROR_SENSITIVE_RE.sub(r"\1: [redacted]", str(exc))
+    text = _AUTONOMY_ERROR_SENSITIVE_RE.sub(_redact_autonomy_error_match, str(exc))
     if len(text) > _AUTONOMY_ERROR_MESSAGE_MAX_LEN:
         text = text[:_AUTONOMY_ERROR_MESSAGE_MAX_LEN].rstrip() + "…[truncated]"
     return {"message_id": message_id, "error_type": type(exc).__name__, "error": text}
@@ -1541,13 +1551,16 @@ class EmailTriageAgent(
                     executed = self._autonomy_execute(action_type, row)
                 except Exception as exc:
                     consecutive_failures += 1
-                    report["errors"].append(_sanitize_autonomy_error(message_id, exc))
+                    sanitized_error = _sanitize_autonomy_error(message_id, exc)
+                    report["errors"].append(sanitized_error)
+                    # Log the SANITIZED text, not the raw exception — `gaia
+                    # diagnostics` can bundle log files off-box too (#2625/C5).
                     logger.warning(
                         "autonomy cycle: row %s (%s) failed: %s: %s",
                         message_id,
                         action_type,
-                        type(exc).__name__,
-                        exc,
+                        sanitized_error["error_type"],
+                        sanitized_error["error"],
                     )
                     if consecutive_failures >= self.AUTONOMY_MAX_CONSECUTIVE_FAILURES:
                         report["stopped"] = "consecutive_failures"
@@ -1583,13 +1596,15 @@ class EmailTriageAgent(
                     except Exception as exc:
                         # Logged only — the row already succeeded and stays
                         # in `executed`; an audit-trail write failing must
-                        # not un-succeed it.
+                        # not un-succeed it. Sanitized for the same reason as
+                        # the execute-failure log above (#2625/C5).
+                        sanitized = _sanitize_autonomy_error(message_id, exc)
                         logger.warning(
                             "autonomy cycle: record_autonomy_action failed "
                             "for already-executed row %s: %s: %s",
                             message_id,
-                            type(exc).__name__,
-                            exc,
+                            sanitized["error_type"],
+                            sanitized["error"],
                         )
                 # A message we once proposed and now act on is resolved — clear
                 # its re-proposal guard so the row can't linger open.
@@ -1599,12 +1614,13 @@ class EmailTriageAgent(
                             self, message_id=message_id, action_type=action_type
                         )
                     except Exception as exc:
+                        sanitized = _sanitize_autonomy_error(message_id, exc)
                         logger.warning(
                             "autonomy cycle: resolve_proposal failed for "
                             "already-executed row %s: %s: %s",
                             message_id,
-                            type(exc).__name__,
-                            exc,
+                            sanitized["error_type"],
+                            sanitized["error"],
                         )
             elif decision.action in ("suggest", "draft"):
                 # Re-proposal guard: a message already proposed and not yet acted
