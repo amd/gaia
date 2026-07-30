@@ -377,6 +377,28 @@ contract version is tracked separately as
   `EmailTriageAgent`'s existing methods now delegate to. The confirm floor is unchanged and
   still inviolable at every level — broadening the candidate map cannot make a floor tool
   auto-executable.
+- **Bundled Agent Skills, and the active set keyed to the mailbox kind (#2466).**
+  The agent brought identical instincts to every mailbox — the same triage
+  judgement for one full of newsletters and booking confirmations as for one full
+  of meeting invites and outstanding commitments. It now bundles six
+  instruction-only skills under `gaia_agent_email/skills/<name>/SKILL.md` —
+  `inbox-triage`, `newsletter-digest`, `travel-itinerary`, `meeting-scheduling`,
+  `action-item-extraction`, `escalation-routing` — and `gaia-agent.yaml` groups
+  them into two sets: `personal` (triage + newsletters + travel) and `work`
+  (triage + meetings + action items + escalation), with `inbox-triage` in both
+  because sets overlap rather than partition. Exactly one set is active per
+  launch. `EmailTriageAgent.select_skill_set()` maps the connected mailbox's
+  account type onto a set — the kind GAIA now derives from the Microsoft
+  `id_token` `tid` claim at connect time — and `--skill-set` /
+  `GAIA_EMAIL_SKILL_SET` (`EmailAgentConfig.skill_set`) override it outright,
+  while `GAIA_EMAIL_ACCOUNT_TYPE` (`EmailAgentConfig.account_type`) pins the kind
+  instead. A Gmail-only mailbox has no equivalent claim, so its kind is genuinely
+  unknown and the manifest's `default_skill_set: personal` applies **explicitly**
+  — a work mailbox is never silently treated as personal — and an undeclared set
+  name raises naming the valid sets rather than falling back. The skills declare
+  no `tools:` and no `permissions:`, so `tools_count` stays 59 and the REST/MCP
+  contract, connector surface, and `SCHEMA_VERSION` are all unchanged; relocating
+  the agent's tool implementations into skills is separate work (#2672).
 
 - **Agent-led mailbox onboarding — the agent sets up its own access, in the
   conversation (#2469).** Hitting the agent without a usable mailbox used to

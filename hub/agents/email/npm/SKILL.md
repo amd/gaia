@@ -12,6 +12,14 @@ talks to it over local HTTP. There is **no Python** and no separate GAIA install
 
 Follow these steps to wire it into an app.
 
+> **This file is NOT one of the agent's own skills.** It is the integration
+> playbook — how *you* wire this npm package into an app. The sidecar separately
+> bundles six **Agent Skills** at `gaia_agent_email/skills/<name>/SKILL.md`, which
+> are instructions the *email agent itself* loads into its own prompt at runtime.
+> Same filename, different artifact: don't load those into your assistant, and
+> don't ship this one as an agent skill. See
+> [Skill sets](#skill-sets--pin-the-agents-behaviour-for-a-work-mailbox) below.
+
 ## 1. Install
 
 ```bash
@@ -325,6 +333,45 @@ rather than returning the same 200 shape a real, found-nothing cycle would (#252
 The Python host also ships a thin-client CLI over this same surface:
 `gaia email autonomy {status|set-level|pause|resume|run|trust|kill}` (#2516).
 
+## Skill sets — pin the agent's behaviour for a work mailbox
+
+The agent bundles six Agent Skills and activates one **set** per launch, so it
+approaches a personal mailbox differently from a work one. Nothing in the API
+changes — same endpoints, same tools, same permissions — only how the agent
+reasons about the mail.
+
+| Set | Skills it loads |
+|-----|-----------------|
+| `personal` (default) | `inbox-triage`, `newsletter-digest`, `travel-itinerary` |
+| `work` | `inbox-triage`, `meeting-scheduling`, `action-item-extraction`, `escalation-routing` |
+
+**It usually chooses for itself.** For an Outlook mailbox, GAIA records at connect
+time whether the Microsoft account is personal or work/school (from the `tid`
+tenant claim in the OAuth `id_token`), and the agent maps that onto the matching
+set. **Gmail carries no equivalent claim**, so a Gmail-only mailbox has an unknown
+kind and resolves through the manifest default — `personal`. A work Gmail mailbox
+is therefore something you should pin explicitly.
+
+Two ways to pin it at spawn time, both via `startSidecar` — use either, not both:
+
+```ts
+const sidecar = await startSidecar({
+  binaryPath,
+  port: 8131,
+  // CLI flag: validated against the declared sets, so a typo fails at startup.
+  extraArgs: ["--skill-set", "work"],
+  // Env var, equivalent — and the form to use if you spawn the binary yourself:
+  // env: { GAIA_EMAIL_SKILL_SET: "work" },
+});
+```
+
+Either one pins the set for **every** session that sidecar serves and overrides the
+mailbox-derived choice. To let the agent do the mapping but tell it what kind of
+mailbox it has, set `GAIA_EMAIL_ACCOUNT_TYPE` to `personal` or `work` instead.
+
+Only `personal` and `work` are declared. An undeclared name never silently falls
+back — the sidecar refuses to start and names the valid sets.
+
 ## Running in a server / long-lived app
 
 - **`fetchBinary` is a build step**, not per request (network + SHA verify). Run it
@@ -424,6 +471,11 @@ Until then the binary boots, but the first `triage` returns **HTTP 502**.
   routes for them yet, so don't look for `client.scheduleSend()` /
   `client.snooze()` / a voice, follow-up, or waiting-on-you method — they
   don't exist (and none of these moves `SCHEMA_VERSION`).
+- **A Gmail mailbox always gets the `personal` skill set unless you pin one.** The
+  set is normally derived from the Microsoft account kind, and Gmail exposes no
+  equivalent signal — so pass `--skill-set work` (or `GAIA_EMAIL_SKILL_SET=work`)
+  for a work Gmail mailbox, or the agent won't load the meeting / action-item /
+  escalation skills. This affects judgement only; no endpoint or tool changes.
 - **ESM-only.** `require("@amd-gaia/agent-email")` fails; use `import` / dynamic
   `import()`.
 
