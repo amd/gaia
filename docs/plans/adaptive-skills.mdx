@@ -378,7 +378,7 @@ exception; it may not rewrite the procedure.
 | `kind` | Tier | Payload shape | Applies as |
 |---|:--:|---|---|
 | `fact` | 0 | *(routed away — see below)* | Never a delta; a write to the agent's tier-0 store |
-| `tool-hint` | 1 | `{tools: [name, …]}` | Contributed to the loader's `skill_tools` list |
+| `tool-hint` | 1 | `{prefer: [name, …], drop: [name, …]}` — names must already be in the live registry | Contributed to (or withheld from) the loader's `skill_tools` list |
 | `parameter` | 2 | `{key, value, scope?}` — `key` allowlisted per base section | A typed knob read by the tool, or one rendered line |
 | `exception` | 2 | `{condition, action}` — `action` from a restrictive-only set | One rendered line under the anchored section |
 | `preference` | 3 | `{body}` ≤ 400 chars | Retrieval-gated prose under the anchored section |
