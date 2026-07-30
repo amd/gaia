@@ -501,6 +501,12 @@ const requirementRows = [
   if (pg) {
     const copyBtn = pg.querySelector<HTMLButtonElement>('[data-pg-copy]');
     const copyStatus = pg.querySelector<HTMLElement>('[data-pg-copy-status]');
+    // Clear then re-assert, so copying twice is announced twice.
+    const announceCopy = (msg: string) => {
+      if (!copyStatus) return;
+      copyStatus.textContent = '';
+      if (msg) requestAnimationFrame(() => { copyStatus.textContent = msg; });
+    };
     let revert: number | undefined;
     copyBtn?.addEventListener('click', async () => {
       const label = copyBtn.querySelector('.pg-copy-label');
@@ -508,13 +514,13 @@ const requirementRows = [
         clearTimeout(revert);
         revert = window.setTimeout(() => {
           if (label) label.textContent = 'copy';
-          if (copyStatus) copyStatus.textContent = '';
+          announceCopy('');
         }, ms);
       };
       try {
         await navigator.clipboard.writeText(copyBtn.dataset.pgCopy || '');
         if (label) label.textContent = 'copied';
-        if (copyStatus) copyStatus.textContent = 'Command copied to the clipboard.';
+        announceCopy('Command copied to the clipboard.');
         reset(1600);
       } catch {
         // Same non-secure-origin / permission case as InstallMethods: select the
@@ -528,7 +534,7 @@ const requirementRows = [
           sel?.removeAllRanges();
           sel?.addRange(range);
         }
-        if (copyStatus) copyStatus.textContent = 'Copying was blocked. The command is selected — press Control or Command + C to copy it.';
+        announceCopy('Copying was blocked. The command is selected — press Control or Command + C to copy it.');
         reset(2600);
       }
     });
