@@ -825,6 +825,104 @@ converts a one-shot attack into permanent compromise.
 
 ---
 
+## Interaction with local-capability skills ([#2672](https://github.com/amd/gaia/issues/2672))
+
+"Deltas may never widen permissions" is **necessary and not sufficient**, and the
+challenge that says so is correct. Permissions gate *whether* a capability exists;
+a delta steers *how* it is used inside a grant that was already given. Two
+examples that widen nothing and are still bad:
+
+- A skill granted `filesystem:write:./**` plus a learned delta *"when the user
+  asks to clean up, delete the oldest files in the working directory."*
+- A skill granted `shell:execute:git` plus *"if the branch has diverged, use
+  `git push --force`."*
+
+Both are inside the declared permission. Both are destructive. Neither trips a
+permission check, a tier check, or a tool-addition check. So three further
+controls:
+
+1. **Deltas inherit the tool-confirmation policy; they never bypass it.** A delta
+   whose instruction leads to a tool in the agent's confirmation set still hits
+   that gate at execution time — the email agent's `CONFIRMATION_REQUIRED_TOOLS`
+   ([`agent.py:453`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/agent.py))
+   unioned with the base `TOOLS_REQUIRING_CONFIRMATION`
+   ([`agent.py:152`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/agent.py)).
+   A delta can change *what the agent proposes*; it can never change *what
+   executes unattended*. This is the load-bearing control, and it already exists.
+2. **Trust class is the minimum of provenance trust and skill-capability trust.**
+   A delta on a skill carrying any local-capability permission
+   (`filesystem`/`shell`/`database`/`desktop`/`env` — the domains
+   [Skill Format](/plans/skill-format#permission-model) routes to the sandbox) is
+   **untrusted regardless of who authored it**, because being wrong there is
+   unrecoverable rather than annoying.
+3. **v1 does not allow deltas on capability-bearing skills at all.** Deltas are
+   restricted to skills whose `metadata.gaia.permissions` is empty or purely
+   connector-backed (`network:*`, `mcp:connect`). Note this is already the *only*
+   loadable class of skill: PR #2669's loader refuses a skill declaring a
+   local-capability permission outright rather than loading it unenforced
+   (`refuse_unbridged_permissions`). So the restriction costs nothing today and
+   becomes a real gate the moment #2672's sandbox lands and those skills become
+   loadable.
+
+Sequencing consequence: **adaptive skills must not ship deltas on
+capability-bearing skills before #2672's enforcement exists.** That is a hard
+dependency in one direction only — v2 does not block #2672, but the reverse
+combination (sandboxed capabilities plus unreviewed learned instructions steering
+them) is the compounding risk the challenge identifies.
+
+---
+
+## Privacy, retention, and deletion
+
+Deltas derive from real mail, real documents, real pages. [#2671](https://github.com/amd/gaia/issues/2671)
+covers graduation (private → shareable) and nothing covered the rest. Filed
+gap; needs its own issue.
+
+### Where learned data lives, and its posture today
+
+Deltas live in the same SQLite file as the rest of memory — `~/.gaia/memory.db`
+by default, or the agent's own path
+([`memory_store.py:354-357`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py);
+the email agent passes its own,
+[`agent.py:637-639`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/agent.py)).
+
+**It is not encrypted at rest, and neither is today's `memory.db`.** Deltas
+therefore add no *new* exposure — but they make an existing gap more acute,
+because a prose delta can quote message text where a knowledge row usually
+paraphrases. Encryption at rest is a memory-layer decision, out of scope here,
+and it should be named as an open gap rather than implied to be handled.
+
+### The controls that are in scope
+
+| Control | Rule |
+|---|---|
+| **Payloads carry the lesson, not the evidence** | A delta stores *"decline recruiters in two sentences"*, never the recruiter's email body. Provenance references session/turn ids — the `from_sessions` precedent ([`skill_synthesis.py:690`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py)) — never message content. **The single most important privacy control, and the cheapest.** |
+| **Incognito suppresses delta writes** | `_incognito` already no-ops memory writes ([`memory.py:421-423`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py)); deltas honor it identically, and the write path reports session-only honestly rather than claiming persistence — the pattern `set_priority_sender`'s `persisted` flag already sets. |
+| **Export** | `gaia skill deltas <name> --json` dumps what is stored, for inspection and portability. Legibility and portability are the same feature. |
+| **Hard delete** | `gaia memory forget --learned [--agent <id>] [--skill <name>]` **removes rows and their embeddings**, and purges the FAISS index — not just the row, or the vector keeps answering. |
+
+### The conflict worth naming: archive-never-delete vs. right-to-erasure
+
+Archive-never-delete is the correct default for *learning* operations: it is what
+makes a bad delta recoverable and lineage auditable, and it is the property
+`superseded_by` gives the whole store today. It is the **wrong** answer for a user
+who says "delete everything you learned about me."
+
+Resolution: these are two different operations and the spec should stop conflating
+them.
+
+- **Learning retirement** (supersede, revert, consolidate, decay) → archive. Never
+  deletes.
+- **User-initiated erasure** → genuinely deletes rows, embeddings, and index
+  entries. "The user asked to forget" outranks lineage, and a system that cannot
+  honor it has a compliance problem, not a design preference.
+
+`gaia skill reset <name>` is the *learning* operation (archive). Erasure is a
+separate, explicitly-named command, so nobody discovers that "reset" left the
+content on disk.
+
+---
+
 ## Rebase on base update: v1 is deliberately crude
 
 The base goes `v1.0 → v1.1` with deltas attached. **There is no prior art
@@ -981,18 +1079,80 @@ Fixture deltas live in `tests/fixtures/skill_deltas/` alongside the existing
 `tests/fixtures/skills/` set PR #2669 adds, so the on/off comparison is
 reproducible on any machine.
 
+### Blast radius: why email stays, but only half of it
+
+The challenge that email is the wrong first reference agent — highest value,
+highest stakes, and a wrong delta means mis-triaged important mail — is **half
+right, and the half that is right does not imply switching agents.**
+
+Rejected: proving the mechanism on a lower-stakes agent first (analyst, browser).
+Three reasons, and they compound:
+
+1. Neither ships a tier-0 store or an outcome ledger, so "proving the mechanism"
+   there means **building both from scratch** — the opposite of de-risking. Email
+   has both already ([`preference_tools.py:63`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/tools/preference_tools.py),
+   [`trust.py:336`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/trust.py)).
+2. **Low-stakes agents have low-value learning.** Nobody teaches the browser agent
+   anything worth remembering, so the eval delta would be unmeasurable — and an
+   unmeasurable reference example cannot satisfy the
+   [measured-value KPI](#kpis).
+3. What is learned on a low-stakes agent does not transfer to the agent that
+   actually needs it, so the risk is deferred rather than retired.
+
+Accepted instead: **cut the blast radius inside email rather than changing
+agents.** In v1, deltas may affect only **read-path and classification** tools —
+`triage_inbox`, `pre_scan_inbox`, `summarize_thread` — and never the write path:
+`send_draft`, `send_now`, `schedule_send`, `forward_message`, `accept_invite`,
+`decline_invite`, `create_event_from_email`, `trash_message`, `archive_message`.
+
+That set is not invented here; it is the agent's existing
+`CONFIRMATION_REQUIRED_TOOLS`
+([`agent.py:453`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/agent.py))
+plus the destructive/organizing tools. **So the v1 rule reduces to: a delta may
+change what the agent proposes and how it ranks, never what it sends, deletes, or
+files.** The worst outcome of a wrong delta is that an important message is
+ranked low and the user sees it later — bad, visible, and recoverable — rather
+than a message sent or archived on a learned instruction nobody reviewed.
+
+The write path opens up in v2, gated on the correction-non-recurrence KPI having
+held on the read path for a release.
+
 ---
 
 ## KPIs
 
+### Milestone-level: how we would know this was worth building
+
+Nothing previously answered that question, and it is the one a reviewer should ask
+first. Three metrics, each measurable with data the system already records or
+records as part of this milestone.
+
+| KPI | How it is measured | Target |
+|---|---|---|
+| **Correction non-recurrence** — the user-felt claim, and the only one that is falsifiable without a benchmark | From the trigger's own correction log (§[The learning trigger](#the-learning-trigger)): count distinct `(scope, lesson)` pairs the user states more than once within their next 20 sessions. Needs no eval harness and no judge model. | **≥70%** of corrections stated exactly once. A user repeating themselves is the failure this milestone exists to remove. |
+| **Measured eval delta with a provably inert off-state** | Two `gaia eval agent` runs on the email category, run **serially**: deltas-off must equal the committed baseline *exactly* (proves inertness), deltas-on with the fixture delta set must beat it. | Off = baseline (zero drift); on **≥ +5 points** with **zero** category regressions. Both halves required — a gain with a drifting off-state is unattributable. |
+| **Cost of learning** | Median and p100 resident tokens added per session vs. the configured budget, plus TTFT measured at the budget ceiling against a no-delta build. | p100 ≤ hard ceiling; **≤2% TTFT regression** at the ceiling. Guards against winning on quality by spending the 32K window. |
+
+<Warning>
+**Named anti-KPI: the number of things learned.** Hermes' "20+ skills → 40%
+faster" is vendor-adjacent and directional only — treat it as evidence the
+category is real, not as a target. A system optimized for delta count will
+manufacture deltas, and delta count is precisely the quantity the
+[learning budget](#consolidation-learning-budget-and-decay) exists to *bound*.
+Any dashboard that shows a growing count must show cost and non-recurrence beside
+it.
+</Warning>
+
+### Implementation-level
+
 | KPI | Type | Target |
 |---|---|---|
 | **Off-state byte-identity** | Headline (correctness) | `--no-learned-skills` produces a system prompt and `skill_tools` list byte-identical to a no-delta build. Hash-asserted in CI. |
-| **Tier discipline** | Headline (design) | ≥70% of accepted lessons land at tier ≤ 2. Prose is the exception; a rising tier-3 share means the classifier is failing. |
+| **Tier discipline** | Design | ≥50% of accepted lessons land at tier 0 or 1 in v1 (tier 2 is deferred, so the v1 bar is lower than a four-tier build would set). A rising tier-3 share is the signal to wire a tool, not to add a tier. |
 | **Resident cost of learning** | Efficiency | Median added resident tokens per session ≤ the configured budget, 100% of sessions ≤ hard ceiling. Zero mid-session prompt-prefix rebuilds attributable to deltas. |
 | **Promotion precision** | Safety | Zero deltas activated below the evidence threshold. Zero untrusted deltas applied without explicit approval. |
 | **Permission monotonicity** | Safety | Zero deltas that widen a permission, add a tool, or raise a tier — enforced at write time and asserted by test. |
-| **Rebase honesty** | Correctness | 100% of orphans surfaced; **zero** silently re-anchored; zero silently dropped. |
+| **Rebase honesty** | Correctness | 100% of deltas on a changed base surfaced; **zero** silently re-anchored; zero silently dropped. (v1 satisfies this by orphaning all of them.) |
 | **Atomicity** | Correctness | Zero deltas or procedure bodies delivered cut mid-step ([#2676](https://github.com/amd/gaia/issues/2676)). |
 | **Measured value** | Headline (product) | Deltas-on scorecard ≥ deltas-off on the email reference category, with the difference attributable to specific deltas. |
 | **Legibility** | Product | Every active delta is listable, diffable, and revertible individually. |
