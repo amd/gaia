@@ -122,6 +122,22 @@ contract version is tracked separately as
   truncation it did not actually need. Fixed at every call site in
   `src/gaia/agents/base/agent.py`, benefiting every agent built on it, not
   just email.
+- **Chat prose no longer contradicts the attention card already on screen
+  (#2636, the other half of the fix above).** The bug as originally filed
+  wasn't the pre-scan guard's territory: the attention card the Go TUI
+  renders (`GET /v1/email/attention`, sections MEETING PROPOSALS/NEEDS
+  REVIEW/ACTION ITEMS) could show real items while the same turn's answer
+  said "no urgent or actionable items found" — because that view is never
+  a tool call (`build_attention_view_impl` has no `@tool` wrapper; it only
+  serves the TUI's on-open render), so the model generating the answer had
+  no way to see it. `answer_grounding` now also reconciles the final
+  answer against the same in-process cache the card was rendered from
+  (extracted into a small new `attention_cache.py` so this stays possible
+  without pulling FastAPI into the dependency-light grounding module), and
+  appends — rather than replaces — a correction naming the card and its
+  coverage when the two disagree. Declines to correct once that cache is
+  older than its own freshness window (120s), so a card the user has since
+  cleared can't get "corrected" back into looking unresolved.
 - **Thread summaries now keep the newest message's open asks (#2641).** A
   thread summary could reflect the opening question and an early reply while
   dropping the newest message entirely — even when that message carried the
