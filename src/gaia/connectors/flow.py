@@ -579,8 +579,7 @@ async def start_device_flow(provider_id: str, scopes: Iterable[str]) -> Dict[str
         # rejects it — under the split, that means it was registered for
         # "microsoft" (consumers) but connected via "microsoft_work"
         # (organizations, or a pinned Directory tenant id). Name the
-        # connector to use instead, never an env var (GAIA_MICROSOFT_TENANT
-        # is gone — it is not part of tenant resolution at all).
+        # connector to use instead, never an env var.
         if "AADSTS9002346" in resp.text:
             other = "microsoft" if provider_id != "microsoft" else "microsoft_work"
             raise ConnectorsError(

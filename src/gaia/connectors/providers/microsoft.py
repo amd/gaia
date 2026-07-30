@@ -35,8 +35,6 @@ already separate their tiers:
      form (#2616).
   3. ``default_tenant=`` kwarg — the connector spec's own default
      (``ConnectorSpec.oauth_tenant``), passed by ``providers.get()``.
-``GAIA_MICROSOFT_TENANT`` is NOT in this chain (D6) — see
-``_check_env_tenant_conflict`` for its narrow, conflict-only role (A2/A3).
 
 Public-client PKCE: per the Microsoft identity platform docs, public clients
 (native/desktop, single-page apps) MUST NOT send a ``client_secret`` when
@@ -55,15 +53,11 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 import zlib
 from typing import Iterable, Sequence
 from urllib.parse import urlencode
 
-from gaia.connectors.errors import (
-    MicrosoftTenantConflictError,
-    OAuthClientNotConfiguredError,
-)
+from gaia.connectors.errors import OAuthClientNotConfiguredError
 from gaia.connectors.setup_routes import get_route, render_console_steps
 
 logger = logging.getLogger(__name__)
@@ -83,61 +77,6 @@ _PROVIDER_LABELS: dict[str, str] = {
     "microsoft": "Microsoft Personal",
     "microsoft_work": "Microsoft Work or School",
 }
-
-_GUID_RE = re.compile(
-    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
-)
-
-# One-time-per-process deprecation notice bookkeeping (A2) — a redundant-but-
-# agreeing GAIA_MICROSOFT_TENANT must not spam the log on every provider
-# construction (tokens.get_or_refresh constructs one per call).
-_env_tenant_deprecation_logged: set[str] = set()
-
-
-def _check_env_tenant_conflict(provider_id: str, resolved_tenant: str) -> None:
-    """Validate ``GAIA_MICROSOFT_TENANT`` against the resolved tenant (A2/A3).
-
-    The env var is NEVER part of tenant resolution (D6) — this function only
-    ever *rejects*, and only on genuine conflict:
-      - unset / empty: no-op.
-      - a bare tenant GUID: always a conflict (ambiguous between the two
-        Microsoft connectors, regardless of coincidental agreement).
-      - agrees with ``resolved_tenant``: a redundant no-op — proceed, but log
-        a one-time deprecation notice naming the replacement.
-      - disagrees: raise ``MicrosoftTenantConflictError`` naming the value,
-        this connector, the connector to use instead, and how to fix it.
-    """
-    raw = (os.environ.get("GAIA_MICROSOFT_TENANT") or "").strip()
-    if not raw:
-        return
-    if _GUID_RE.match(raw):
-        raise MicrosoftTenantConflictError(
-            provider_id,
-            env_value=raw,
-            resolved_tenant=resolved_tenant,
-            ambiguous_guid=True,
-        )
-    if raw == resolved_tenant:
-        if provider_id not in _env_tenant_deprecation_logged:
-            # Fully literal on purpose: no interpolated value reaches this
-            # sink. The line persists into `gaia diagnostics` bundles, and
-            # everything worth interpolating here (the env value, the
-            # connector, the resolved tenant) is either a credential-adjacent
-            # read or flagged as one. The conflict path below still names all
-            # of it — that is raised interactively to the user who set the
-            # variable and is not actionable without it.
-            logger.warning(
-                "GAIA_MICROSOFT_TENANT is set but deprecated and no longer "
-                "read — each Microsoft connector resolves its tenant from its "
-                "own definition. This is a one-time notice; unset "
-                "GAIA_MICROSOFT_TENANT to silence it."
-            )
-            _env_tenant_deprecation_logged.add(provider_id)
-        return
-    raise MicrosoftTenantConflictError(
-        provider_id, env_value=raw, resolved_tenant=resolved_tenant
-    )
-
 
 # Plain-language descriptions for the AgentUI consent dialog, mirroring the
 # Google provider's SCOPE_DESCRIPTIONS. The router/CLI render these strings;
@@ -279,14 +218,12 @@ class MicrosoftOAuthProvider:
 
         # D6/A16: three-tier tenant chain — explicit kwarg > stored override
         # (microsoft_work's optional "Directory (tenant) ID") > this
-        # connector's spec default. GAIA_MICROSOFT_TENANT is deliberately
-        # NOT a tier — see _check_env_tenant_conflict below.
+        # connector's spec default.
         resolved_tenant = (
             tenant
             if tenant is not None
             else stored.get("tenant") or default_tenant or _FALLBACK_TENANT
         )
-        _check_env_tenant_conflict(self.provider_id, resolved_tenant)
         self.tenant: str = resolved_tenant
         self.auth_url: str = (
             f"https://login.microsoftonline.com/{self.tenant}/oauth2/v2.0/authorize"

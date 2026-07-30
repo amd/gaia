@@ -290,7 +290,6 @@ MS_TOKEN_URL = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token"
 @pytest.fixture
 def microsoft_provider(monkeypatch):
     monkeypatch.setenv("GAIA_MICROSOFT_CLIENT_ID", "test-ms-client")
-    monkeypatch.delenv("GAIA_MICROSOFT_TENANT", raising=False)
     _registry.clear()
     from gaia.connectors.providers import get as get_provider
 
