@@ -54,6 +54,29 @@ func TestSanitizeStripsBareC0NotJustANSI(t *testing.T) {
 	}
 }
 
+// DEL (0x7F) is not C0 (0x00-0x1F) but is exactly as much a terminal control
+// byte, and a naive `r >= 0x20` check lets it through. Verified empirically
+// (a throwaway script) that ansi.Strip leaves it in place before writing this.
+func TestSanitizeStripsDEL(t *testing.T) {
+	got := Sanitize("hello\x7fworld")
+	if got != "helloworld" {
+		t.Fatalf("Sanitize(%q) = %q, want %q", "hello\x7fworld", got, "helloworld")
+	}
+}
+
+// C1 controls (U+0080-U+009F) are a second control range distinct from C0.
+// A VALID UTF-8 encoding of one (unlike a raw invalid byte, which would
+// decode as U+FFFD) survives both ansi.Strip and a `r >= 0x20` filter intact
+// — verified empirically before writing this test, the same way BEL and DEL
+// were checked, rather than assumed.
+func TestSanitizeStripsC1(t *testing.T) {
+	c1 := string(rune(0x9B)) // SCI, a C1 control, UTF-8 encoded as 0xC2 0x9B
+	got := Sanitize("hello" + c1 + "world")
+	if got != "helloworld" {
+		t.Fatalf("Sanitize did not strip a UTF-8-encoded C1 control: %q", got)
+	}
+}
+
 func TestSanitizePreservesNewlinesAndTabs(t *testing.T) {
 	const s = "line1\nline2\ttabbed"
 	if got := Sanitize(s); got != s {

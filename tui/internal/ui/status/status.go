@@ -66,16 +66,25 @@ func New(stepID, label string, level Level, disposition Disposition, summary str
 	}
 }
 
-// Sanitize strips ANSI escape sequences and bare C0 control bytes (other
-// than \n and \t) from s. ansi.Strip alone removes escape SEQUENCES — a
-// clear-screen CSI, an OSC set-title — but leaves a lone control byte like a
-// stray BEL sitting in the string, so this does a second pass over what is
-// left.
+// Sanitize strips ANSI escape sequences and bare control bytes (other than
+// \n and \t) from s. ansi.Strip alone removes escape SEQUENCES — a
+// clear-screen CSI, an OSC set-title — but leaves a lone control byte, such
+// as a stray BEL, a raw DEL, or a valid UTF-8 encoding of a C1 control
+// (U+0080-U+009F, e.g. a single-byte-CSI trigger), sitting in the string, so
+// this does a second pass over what is left. Each of those was verified to
+// survive ansi.Strip before this function was written to catch it, rather
+// than assumed.
 func Sanitize(s string) string {
 	s = ansi.Strip(s)
 	out := make([]rune, 0, len(s))
 	for _, r := range s {
-		if r == '\n' || r == '\t' || r >= 0x20 {
+		switch {
+		case r == '\n' || r == '\t':
+			out = append(out, r)
+		case r < 0x20, r == 0x7f, r >= 0x80 && r <= 0x9f:
+			// C0, DEL, and C1 control ranges.
+			continue
+		default:
 			out = append(out, r)
 		}
 	}
