@@ -150,6 +150,43 @@ class _SessionRegistry:
         self.delete(session_id)
         return self.get_or_create(session_id, **config_kwargs)
 
+    def broadcast_kill(self, *, exclude: Optional[str] = None) -> List[str]:
+        """Set every OTHER live session's autonomy level to ``off`` (#2624).
+
+        A kill is a safety action, so it must not depend on the caller
+        naming the right session id: both ``/autonomy`` and
+        ``/autonomy/run`` resolve ``registry.get(session_id)`` against this
+        same process-local map, and nothing reconciles a CLI kill fired at
+        the default ``"cli"`` id against a cycle actually running under a
+        different (e.g. Agent-UI) session — that kill would return 200 and
+        leave the real cycle untouched (adversarial C4). Best-effort per
+        session: one misbehaving agent is logged and skipped rather than
+        blocking the kill for the rest. Returns the session ids actually
+        stopped.
+        """
+        with self._lock:
+            sessions = list(self._sessions.values())
+        killed: List[str] = []
+        for session in sessions:
+            if session.session_id == exclude:
+                continue
+            setter = getattr(session.agent, "set_autonomy_level", None)
+            if not callable(setter):
+                continue
+            try:
+                setter(trust.LEVEL_OFF)
+            except (
+                Exception
+            ) as exc:  # pragma: no cover - defensive; must not block the rest
+                logger.warning(
+                    "autonomy kill broadcast: failed to stop session %s: %s",
+                    session.session_id,
+                    exc,
+                )
+                continue
+            killed.append(session.session_id)
+        return killed
+
 
 def _close_agent(agent: Any) -> None:
     """Best-effort teardown of an agent's DB handles on eviction."""
@@ -161,6 +198,10 @@ def _close_agent(agent: Any) -> None:
             logger.warning("agent session close_db failed: %s", exc)
 
 
+# #2624 — the kill-broadcast above only reaches sessions in THIS process's
+# map. The sidecar's ``server.py`` never passes uvicorn a ``workers>1``
+# (or an external multi-process runner), so one process == the whole
+# registry; that assumption breaks if the sidecar is ever run multi-worker.
 registry = _SessionRegistry()
 
 
@@ -388,7 +429,15 @@ async def autonomy_status(session_id: str) -> Dict[str, Any]:
 
 @router.post("/autonomy")
 async def set_autonomy(request: AutonomyLevelRequest) -> Dict[str, Any]:
-    """Set the autonomy level at runtime — pause/resume/kill (``off``)."""
+    """Set the autonomy level at runtime — pause/resume/kill (``off``).
+
+    Killing (``level="off"``) also broadcasts to every OTHER live session in
+    this process (#2624 — adversarial C4): the caller's session_id might not
+    be the one an autonomy cycle is actually running under (CLI default
+    ``"cli"`` vs. an Agent-UI session), and a kill that only reaches the
+    named session would report success while leaving the real cycle
+    untouched.
+    """
     session = registry.get(request.session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="No such session.")
@@ -398,9 +447,12 @@ async def set_autonomy(request: AutonomyLevelRequest) -> Dict[str, Any]:
             status_code=501, detail="This agent build does not expose autonomy."
         )
     try:
-        return setter(request.level)
+        result = setter(request.level)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if request.level == trust.LEVEL_OFF:
+        registry.broadcast_kill(exclude=request.session_id)
+    return result
 
 
 @router.post(
