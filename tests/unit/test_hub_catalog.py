@@ -256,3 +256,121 @@ def test_build_catalog_merges(tmp_path):
     assert by_id["demo"]["status"] == "update_available"
     assert by_id["chat"]["status"] == "installed"
     assert unified.offline is False
+
+
+# ---------------------------------------------------------------------------
+# Skills lane (#2467)
+# ---------------------------------------------------------------------------
+
+
+def _skill(name, version="0.1.0", **over):
+    """A catalog entry as the hub Worker emits it for a published skill."""
+    e = _entry(name, version=version, type="skill")
+    e.update(
+        {
+            "category": "skills",
+            "language": "python",
+            "security_tier": "experimental",
+            "permissions": ["network:read:*.brave.com"],
+            "tools_count": 1,
+            "skill_metadata": {
+                "tools": [{"name": "search_web", "description": "Search the web"}],
+                "tools_required": ["query_documents"],
+                "requirements": {
+                    "model": ">=7B",
+                    "context": "",
+                    "python": ">=3.10",
+                    "dependencies": [],
+                    "node_dependencies": [],
+                    "env_vars": ["BRAVE_API_KEY"],
+                    "hardware": {"npu": "", "gpu_vram": ""},
+                },
+                "audit": {
+                    "verdict": "unaudited",
+                    "engine": "",
+                    "audited_at": "",
+                    "findings": 0,
+                },
+            },
+        }
+    )
+    e.update(over)
+    return e
+
+
+def test_entry_package_type_defaults_to_agent():
+    # Entries published before the #1716 discriminator carry no `type` — they
+    # are agents, and must not be mistaken for a skill.
+    assert catalog.entry_package_type(_entry("weather")) == "agent"
+    assert catalog.is_skill_entry(_entry("weather")) is False
+    # An explicit null (a hand-edited/partial entry) is still an agent.
+    assert catalog.entry_package_type(_entry("weather", type=None)) == "agent"
+
+
+@pytest.mark.parametrize("pkg_type", ["agent", "app", "component"])
+def test_non_skill_lanes_are_not_skills(pkg_type):
+    assert catalog.is_skill_entry(_entry("x", type=pkg_type)) is False
+
+
+def test_skill_and_agent_entry_readers_split_the_catalog():
+    entries = [
+        _entry("chat"),
+        _skill("web-research"),
+        _entry("studio", type="app"),
+        _skill("incident-review"),
+    ]
+    assert [e["id"] for e in catalog.skill_entries(entries)] == [
+        "web-research",
+        "incident-review",
+    ]
+    assert [e["id"] for e in catalog.agent_entries(entries)] == ["chat", "studio"]
+    # The skill entry survives the filter intact — the CLI/UI read its
+    # tier + permissions + tools straight off it.
+    skill = catalog.skill_entries(entries)[0]
+    assert skill["security_tier"] == "experimental"
+    assert skill["permissions"] == ["network:read:*.brave.com"]
+    assert skill["skill_metadata"]["tools_required"] == ["query_documents"]
+
+
+def test_merge_with_registry_excludes_skills_from_the_agent_lane():
+    # A skill is not installable through the agent path, so surfacing it in the
+    # merged agent catalog would offer a broken install action.
+    merged = merge_with_registry(
+        [_entry("chat"), _skill("web-research"), _entry("studio", type="app")],
+        _FakeReg([]),
+        {},
+    )
+    assert [a["id"] for a in merged] == ["chat", "studio"]
+
+
+def test_merge_with_registry_ignores_an_installed_agent_named_like_a_skill():
+    # Defensive: a locally-registered agent keeps its own entry even when the
+    # catalog also lists a skill; ids are one namespace, so this should not
+    # happen, but the merge must not drop the registry agent if it ever does.
+    merged = merge_with_registry(
+        [_skill("web-research")],
+        _FakeReg([_Reg("web-research")]),
+        {},
+    )
+    assert [a["id"] for a in merged] == ["web-research"]
+    assert merged[0]["type"] == "agent"
+    assert merged[0]["status"] == "installed"
+
+
+def test_build_catalog_keeps_skills_out_of_the_unified_agent_list(tmp_path):
+    payload = json.dumps(_index(_entry("demo"), _skill("web-research"))).encode()
+
+    unified = build_catalog(
+        _FakeReg([]),
+        base_url="https://hub.test",
+        fetcher=lambda url: payload,
+        cache_path=tmp_path / "c.json",
+        force=True,
+    )
+    assert [a["id"] for a in unified.agents] == ["demo"]
+    # ...but it is still reachable on its own lane, not dropped on the floor.
+    assert [s["id"] for s in unified.skills] == ["web-research"]
+    payload = unified.to_dict()
+    assert [s["id"] for s in payload["skills"]] == ["web-research"]
+    # `total` stays the agent count — the number the Hub page has always shown.
+    assert payload["total"] == 1
