@@ -5,11 +5,11 @@ icon: "layer-group"
 ---
 
 <Info>
-  **Grounds on (exists today, verified on `main`):** [`src/gaia/agents/base/memory_store.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py) (`procedures` table `:283`, `put_skill` `:2532`, `search_skills` `:2674`, `supersede_skill` `:2735`, `touch_skills` `:2756`) · [`skill_synthesis.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py) (`reconcile_and_store` `:653`, `_nearest_enabled_procedure` `:580`, `SIMILARITY_TAU` `:58`) · [`procedural_memory.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/procedural_memory.py) (`recall_skill` `:181`, the procedures FAISS index `:50`) · [`tool_loader.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tool_loader.py) (`CORE ∪ SKILL ∪ SEMANTIC` `:224`, `DEFAULT_MAX_TOOLS = 14` `:72`) · [`agent.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/agent.py) (`_compose_system_prompt` `:596`) · the email agent's shipped preference store ([`preference_tools.py:64`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/tools/preference_tools.py)) and trust ledger ([`trust.py:336`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/trust.py)).
+  **Grounds on (exists today, verified on `main`):** [`src/gaia/agents/base/memory_store.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py) (`procedures` table `:283`, `put_skill` `:2532`, `search_skills` `:2674`, `supersede_skill` `:2735`, `touch_skills` `:2756`) · [`skill_synthesis.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py) (`reconcile_and_store` `:653`, `_nearest_enabled_procedure` `:580`, `SIMILARITY_TAU` `:58`) · [`procedural_memory.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/procedural_memory.py) (`recall_skill` `:181`, the procedures FAISS index `:50`) · [`tool_loader.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tool_loader.py) (`CORE ∪ SKILL ∪ SEMANTIC` `:224`, `DEFAULT_MAX_TOOLS = 14` `:72`) · [`agent.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/agent.py) (`_compose_system_prompt` `:596`) · the email agent's shipped preference store ([`preference_tools.py:63`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/tools/preference_tools.py)) and trust ledger ([`trust.py:336`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/trust.py)).
 
   **Proposed (not written yet):** `skill_deltas` (schema v4), the delta grammar and its section anchorer, `EffectiveSkill` resolution, the staged-write consent gate, the rebase/re-anchor pass, the learning budget, and `gaia skill deltas`. Every such symbol is marked **PROPOSED** where it appears.
 
-  **In flight (do not treat as shipped):** the Phase 1 `gaia.skills` loader — `SkillManager`, `Agent.load_skill` / `unload_skill` / `get_skills_system_prompt` — lives on PR [#2669](https://github.com/amd/gaia/pull/2669), **open and unmerged**. `src/gaia/skills/` does not exist on `main`. Also in flight: the `Skill` → `DistilledProcedure` rename (part of [#2671](https://github.com/amd/gaia/issues/2671)). **This document uses the new name `DistilledProcedure` throughout** for the synthesis intermediate; on `main` that class is still `skill_synthesis.Skill` ([`:158`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py)).
+  **In flight (do not treat as shipped):** the Phase 1 `gaia.skills` loader — `SkillManager`, `Agent.load_skill` / `unload_skill` / `get_skills_system_prompt` — lives on PR [#2669](https://github.com/amd/gaia/pull/2669), **open and unmerged**. `src/gaia/skills/` does not exist on `main`. Also in flight: the `Skill` → `DistilledProcedure` rename (part of [#2671](https://github.com/amd/gaia/issues/2671)). **This document uses the new name `DistilledProcedure` throughout** for the synthesis intermediate; on `main` that class is still `skill_synthesis.Skill` ([`:159`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py)).
 </Info>
 
 <Note>
@@ -88,7 +88,7 @@ open question turned out to be already answered — inconsistently.
 | Local constraints (32K NPU, ~4B model, 14 tools, 1500-char recall cap) drive the design. | **Holds, all four verified.** | [`lemonade_client.py:173-174`](https://github.com/amd/gaia/blob/main/src/gaia/llm/lemonade_client.py), [`:124`](https://github.com/amd/gaia/blob/main/src/gaia/llm/lemonade_client.py), [`tool_loader.py:72`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tool_loader.py), [`skill_synthesis.py:65`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py). |
 | Empirical gating is mandatory, not preferable. | **Holds — and there are already two implementations to reuse.** | `reconcile_and_store` promotes on `success_count` dominance ([`skill_synthesis.py:713`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py)); the email agent's `TrustLedger(min_samples=5, threshold=0.85)` tallies per-scope accept/reject outcomes ([`trust.py:345`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/trust.py)). |
 | **Prefix stability: the loader is monotonic, so deltas must apply at session boundaries only.** | **Requirement holds; the premise is already violated in the worst possible place.** | See below. |
-| Procedures are atomic; chunk `references/`, never `SKILL.md` bodies. | **Holds, and the violation is live.** | The recall block hard-cuts the body at a character offset ([`procedural_memory.py:353`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/procedural_memory.py)) under a header telling the model these are proven steps to reuse ([`:361`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/procedural_memory.py)). Tracked as [#2676](https://github.com/amd/gaia/issues/2676). |
+| Procedures are atomic; chunk `references/`, never `SKILL.md` bodies. | **Holds, and the violation is live.** | The recall block hard-cuts the body at a character offset ([`procedural_memory.py:356`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/procedural_memory.py)) under a header telling the model these are proven steps to reuse ([`:361`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/procedural_memory.py)). Tracked as [#2676](https://github.com/amd/gaia/issues/2676). |
 
 ### Correction 1 — "extend `procedures`" is wrong; "one database" is right
 
@@ -152,7 +152,7 @@ while the deliberately volatile tools block was moved **last** precisely to
 protect the prefix ([`:625-651`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/agent.py)).
 The docstring three lines above the refresh call even states that "the system
 prompt is left frozen so the LLM inference engine can reuse its KV cache across
-turns" ([`memory.py:2037-2040`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py)) —
+turns" ([`memory.py:2038-2039`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py)) —
 and then unfreezes it from the front.
 
 So the requirement ("deltas apply at session boundaries only") is right, but it
@@ -179,7 +179,7 @@ own `db_path` ([`agent.py:637-639`](https://github.com/amd/gaia/blob/main/hub/ag
 while ChatAgent takes the default `~/.gaia/memory.db`
 ([`memory_store.py:354-357`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py)).
 Meanwhile tier-0 preferences live in the email agent's own `state.db`
-([`preference_tools.py:64`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/tools/preference_tools.py)) —
+([`preference_tools.py:63`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/tools/preference_tools.py)) —
 per-agent by construction. **Deltas must carry an explicit scope column rather
 than inheriting whatever DB the host happened to open.**
 
@@ -234,9 +234,9 @@ everything it learns becomes a file destined for the context window. GAIA can do
 better because it has a tool layer between the model and the work.
 
 Note what tiers 0 and 1 buy beyond token cost: **they need no embedder.** When
-the embedding model is unreachable, or after `clear_embeddings()` nulls every
+the embedding model is unreachable, or after `clear_all_embeddings()` nulls every
 procedure vector on an embedder change
-([`memory_store.py:1500-1512`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py)),
+([`memory_store.py:1487-1512`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py)),
 tier-3 recall goes dark while tiers 0–2 keep working. Pushing learning down the
 stack buys robustness, not just tokens.
 
@@ -257,10 +257,10 @@ set_priority_sender("alice@example.com")
 ```
 
 This is **already shipped**: the table DDL is at
-[`preference_tools.py:64`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/tools/preference_tools.py),
+[`preference_tools.py:63`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/tools/preference_tools.py),
 the tool at [`:355`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/tools/preference_tools.py),
 and the consuming triage path is documented at
-[`:20-27`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/tools/preference_tools.py).
+[`:21-27`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/tools/preference_tools.py).
 The agent gets measurably better at *your* mail with **zero prompt growth** and
 no embedder dependency. Note also that the tool reports a `persisted` flag and
 refuses to claim durability it does not have — the honesty pattern every tier
@@ -500,9 +500,9 @@ additive; none changes a `procedures` signature.
 
 | Module | Reusable as-is | Needs extension | Must be new |
 |---|---|---|---|
-| `memory_store.py` | WAL + lock + migration harness ([`:373-470`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py)); the `procedures` accessors and their lineage semantics; `clear_embeddings` ([`:1500`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py)) | `_SCHEMA_SQL` + a v3→v4 marker bump; `clear_embeddings` should also null `skill_deltas.embedding` | `skill_deltas` table + its five accessors |
-| `skill_synthesis.py` | `DistilledProcedure.parse` / `to_skill_md` ([`:180`, `:255`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py)); `SynthesisConfig` + `load_synthesis_config` override pattern ([`:107`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py)); `cluster_by_goal`'s deterministic seeding ([`:500-502`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py)); `SIMILARITY_TAU` | A `DeltaConfig` sibling section in `memory_settings.json`; the ADD/UPDATE/NOOP *shape* re-applied to deltas keyed on `(base, anchor, kind)` instead of embedding cosine | The tier classifier; the delta reconciler; consolidation / umbrella merge |
-| `procedural_memory.py` | The FAISS add/search/rebuild trio ([`:50`, `:118`, `:145`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/procedural_memory.py)); the change-detect-then-rebuild guard ([`:418-425`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/procedural_memory.py)); the off-state ladder in `recall_skill`'s docstring ([`:196-207`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/procedural_memory.py)) — the model for this doc's off-state table | Give the delta corpus its **own** index; do not add deltas to `_proc_faiss_index` | Session-boundary resolution instead of per-turn refresh; the structural-boundary fix for [#2676](https://github.com/amd/gaia/issues/2676) |
+| `memory_store.py` | WAL + lock + migration harness ([`:373-470`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py)); the `procedures` accessors and their lineage semantics; `clear_all_embeddings` ([`:1487`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py)) | `_SCHEMA_SQL` + a v3→v4 marker bump; `clear_all_embeddings` should also null `skill_deltas.embedding` | `skill_deltas` table + its five accessors |
+| `skill_synthesis.py` | `DistilledProcedure.parse` / `to_skill_md` ([`:181`, `:255`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py)); `SynthesisConfig` + `load_synthesis_config` override pattern ([`:107`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py)); `cluster_by_goal`'s deterministic seeding ([`:500-502`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py)); `SIMILARITY_TAU` | A `DeltaConfig` sibling section in `memory_settings.json`; the ADD/UPDATE/NOOP *shape* re-applied to deltas keyed on `(base, anchor, kind)` instead of embedding cosine | The tier classifier; the delta reconciler; consolidation / umbrella merge |
+| `procedural_memory.py` | The FAISS add/search/rebuild trio ([`:50`, `:118`, `:145`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/procedural_memory.py)); the change-detect-then-rebuild guard ([`:418-425`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/procedural_memory.py)); the off-state ladder in `recall_skill`'s docstring ([`:193-207`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/procedural_memory.py)) — the model for this doc's off-state table | Give the delta corpus its **own** index; do not add deltas to `_proc_faiss_index` | Session-boundary resolution instead of per-turn refresh; the structural-boundary fix for [#2676](https://github.com/amd/gaia/issues/2676) |
 | `tool_loader.py` | **Everything.** `skill_tools` is the tier-1 mechanism and needs no change ([`:224-249`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tool_loader.py), [`:310-337`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tool_loader.py)) | Nothing. The caller supplies a longer list; the loader is agnostic | Nothing |
 | `memory.py` / `agent.py` | `_embed_text`, blob helpers, `GAIA_MEMORY_DISABLED` off-state ([`:393-412`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py)); `_get_mixin_prompts` auto-discovery ([`agent.py:549`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/agent.py)) | Prompt *position*: a learned fragment must not sit in the mixin prefix if it can change mid-session ([`agent.py:617-618`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/agent.py)) | `EffectiveSkill` resolution; the `--no-learned-skills` switch |
 | `src/gaia/skills/` (PR #2669) | Discovery roots + precedence + `shadowed()`; progressive disclosure levels; the permission refusal gate | `Skill` gains an `effective()` view; `get_skills_system_prompt` renders `base ⊕ deltas` | The section anchorer; the rebase pass; `gaia skill deltas` |
@@ -540,7 +540,7 @@ in this table produces a more-permissive result than the authored base.**
 | **`--no-learned-skills`** (or `skills.learned_enabled = false`) | Resolution short-circuits before any store read. The composed system prompt and the loader's `skill_tools` list are **byte-identical to a no-delta build** — asserted by a hash-equality test, not by inspection. |
 | **Memory disabled** (`GAIA_MEMORY_DISABLED=1`) | No store → no deltas → pure base ([`memory.py:393-412`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py) is the existing precedent). |
 | **Embedder unreachable** | Tier-3 retrieval yields nothing (matching `recall_skill`'s existing floor, [`procedural_memory.py:234-242`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/procedural_memory.py)). Tiers 0–2 unaffected — they need no vectors. |
-| **Embeddings cleared after an embedder change** ([`memory_store.py:1500`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py)) | Same as above: tier-3 dark until re-embedded; anchored tier-1/2 deltas keep applying. |
+| **Embeddings cleared after an embedder change** ([`memory_store.py:1487`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py)) | Same as above: tier-3 dark until re-embedded; anchored tier-1/2 deltas keep applying. |
 | **Base skill missing, renamed, or now shadowed by a different root** | Deltas are **orphaned, not applied**, and surfaced for review. Never re-attached to a same-named skill from a different root without confirmation. |
 | **Anchor section vanished on a base update** | Delta orphaned **visibly**; never silently dropped and never silently re-applied to different text. |
 | **Anchor digest changed but section still exists** | Delta applies but is flagged `stale` in inspection output. A changed section is a *warning*, not an orphan. |
@@ -866,19 +866,19 @@ settled above. What remains:
 | Procedure accessors | `put_skill`, `search_skills`, `supersede_skill`, `touch_skills` | `memory_store.py:2532`, `:2674`, `:2735`, `:2756` | **Exists** |
 | Row shape | `_row_to_procedure_dict` (14 cols; 15 with embedding) | `memory_store.py:2502`, `:2526` | **Exists** |
 | Migration harness | `_migrate_schema_locked`, v2→v3 marker bump | `memory_store.py:414`, `:457` | **Exists** — v4 mirrors it |
-| Embedding clear | `clear_embeddings` nulls procedure vectors | `memory_store.py:1500` | **Exists** — off-state input |
+| Embedding clear | `clear_all_embeddings` nulls procedure vectors | `memory_store.py:1487` | **Exists** — off-state input |
 | Reconcile | `reconcile_and_store` ADD/UPDATE/NOOP, no DELETE path | `skill_synthesis.py:653` | **Exists** |
 | Match-by-meaning | `_nearest_enabled_procedure` (cosine ≥ τ, 500-row scan cap) | `skill_synthesis.py:580`, `:87` | **Exists** — [#1818](https://github.com/amd/gaia/issues/1818) |
-| Synthesis intermediate | `Skill` (4 fields) — **being renamed `DistilledProcedure`** | `skill_synthesis.py:158` | **Exists**; rename in flight ([#2671](https://github.com/amd/gaia/issues/2671)) |
+| Synthesis intermediate | `Skill` (4 fields) — **being renamed `DistilledProcedure`** | `skill_synthesis.py:159` | **Exists**; rename in flight ([#2671](https://github.com/amd/gaia/issues/2671)) |
 | Thresholds | `SIMILARITY_TAU = 0.82`, `MAX_RECALL_BODY_CHARS = 1500` | `skill_synthesis.py:58`, `:65` | **Exists** |
 | Recall | `recall_skill` + the procedures FAISS index | `procedural_memory.py:181`, `:50` | **Exists** |
-| Recall→prompt | `_build_recalled_skills_prompt` (character-offset cut) | `procedural_memory.py:334`, `:353` | **Exists** — violates atomicity ([#2676](https://github.com/amd/gaia/issues/2676)) |
+| Recall→prompt | `_build_recalled_skills_prompt` (character-offset cut) | `procedural_memory.py:334`, `:356` | **Exists** — violates atomicity ([#2676](https://github.com/amd/gaia/issues/2676)) |
 | Mid-session rebuild | `_refresh_recalled_skills` → `rebuild_system_prompt()` per turn | `procedural_memory.py:399`, `memory.py:2053` | **Exists** — breaks the KV-prefix premise |
 | Tier-1 mechanism | `ToolLoader.select(skill_tools=…)`, `CORE > SKILL > SEMANTIC` | `tool_loader.py:224`, `:310` | **Exists** — reusable unchanged |
 | Tool cap | `DEFAULT_MAX_TOOLS = 14`, `DEFAULT_THRESHOLD = 0.20` | `tool_loader.py:72`, `:68` | **Exists** |
 | Prompt composition | mixins first, volatile tools last | `agent.py:617`, `:625-651` | **Exists** — position constraint |
 | Local envelope | `NPU_CTX_SIZE = 32768`, `GPU_CTX_SIZE = 65536`, `DEFAULT_MODEL_NAME` | `llm/lemonade_client.py:174`, `:173`, `:124` | **Exists** |
-| Tier-0 precedent | `email_preferences` table + `set_priority_sender` | `hub/agents/email/python/gaia_agent_email/tools/preference_tools.py:64`, `:355` | **Exists** — the tier-0 worked example |
+| Tier-0 precedent | `email_preferences` table + `set_priority_sender` | `hub/agents/email/python/gaia_agent_email/tools/preference_tools.py:63`, `:355` | **Exists** — the tier-0 worked example |
 | Empirical gate precedent | `TrustLedger(min_samples=5, threshold=0.85)`, `record_outcome` | `hub/agents/email/python/gaia_agent_email/trust.py:336`, `:358` | **Exists** — promotion shape to reuse |
 | Skills loader | `gaia.skills`, `SkillManager`, `Agent.load_skill` / `get_skills_system_prompt` | PR [#2669](https://github.com/amd/gaia/pull/2669) | **In flight — absent on `main`** |
 | Section parsing | anything that splits a `SKILL.md` body into named sections | — | **NOT FOUND** — new machinery |
