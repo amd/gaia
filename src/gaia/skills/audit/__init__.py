@@ -28,6 +28,8 @@ Or from the CLI::
     gaia skill audit ./my-skill/ --json
 """
 
+from gaia.skills.audit.code import CodeAnalysis, DomainUse, analyze_code, analyze_source
+from gaia.skills.audit.engine import audit_skill, audit_skill_object
 from gaia.skills.audit.findings import (
     AUDIT_ENGINE,
     CATEGORIES,
@@ -45,6 +47,13 @@ from gaia.skills.audit.findings import (
     python_sources,
     worst_severity,
 )
+from gaia.skills.audit.instructions import analyze_instructions
+from gaia.skills.audit.permission_truth import (
+    check_permission_truth,
+    observed_permission_strings,
+    undeclared_domains,
+)
+from gaia.skills.audit.supply import check_supply_chain
 from gaia.skills.audit.verdict import (
     TIER_BLOCK_THRESHOLD,
     TIER_REVIEW_THRESHOLD,
@@ -60,6 +69,20 @@ from gaia.skills.audit.verdict import (
 )
 
 __all__ = [
+    # Engine
+    "audit_skill",
+    "audit_skill_object",
+    # Analyzers
+    "analyze_code",
+    "analyze_source",
+    "analyze_instructions",
+    "check_permission_truth",
+    "check_supply_chain",
+    "observed_permission_strings",
+    "undeclared_domains",
+    "CodeAnalysis",
+    "DomainUse",
+    # Verdict / tier gating
     "verdict_for_tier",
     "severity_verdict",
     "clears_tier",
