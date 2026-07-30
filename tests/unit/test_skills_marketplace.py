@@ -195,7 +195,9 @@ def test_sign_then_verify_round_trips(tmp_path):
 
     key = make_key(tmp_path / "keys-root")
     directory = _bundle(tmp_path)
-    sign_bundle(directory, name="web-research", version="1.0.0", key=key, publisher="acme")
+    sign_bundle(
+        directory, name="web-research", version="1.0.0", key=key, publisher="acme"
+    )
     assert (directory / SIGNATURE_FILENAME).is_file()
 
     store = TrustStore(entries={}, path=tmp_path / "trusted-keys.json")
@@ -250,7 +252,9 @@ def test_tampering_with_a_signed_file_fails_verification(tmp_path):
 
     store = TrustStore(entries={}, path=tmp_path / "trusted-keys.json")
     with pytest.raises(SkillSignatureError, match="modified after signing"):
-        verify_bundle(directory, name="web-research", version="1.0.0", trust_store=store)
+        verify_bundle(
+            directory, name="web-research", version="1.0.0", trust_store=store
+        )
 
 
 def test_adding_a_file_after_signing_fails_verification(tmp_path):
@@ -269,7 +273,9 @@ def test_adding_a_file_after_signing_fails_verification(tmp_path):
 
     store = TrustStore(entries={}, path=tmp_path / "trusted-keys.json")
     with pytest.raises(SkillSignatureError, match="modified after signing"):
-        verify_bundle(directory, name="web-research", version="1.0.0", trust_store=store)
+        verify_bundle(
+            directory, name="web-research", version="1.0.0", trust_store=store
+        )
 
 
 def test_signature_does_not_transfer_between_versions(tmp_path):
@@ -286,7 +292,9 @@ def test_signature_does_not_transfer_between_versions(tmp_path):
 
     store = TrustStore(entries={}, path=tmp_path / "trusted-keys.json")
     with pytest.raises(SkillSignatureError, match="does not transfer"):
-        verify_bundle(directory, name="web-research", version="2.0.0", trust_store=store)
+        verify_bundle(
+            directory, name="web-research", version="2.0.0", trust_store=store
+        )
 
 
 def test_signature_from_an_untrusted_key_verifies_but_attests_nothing(tmp_path):
@@ -314,7 +322,10 @@ def test_signature_from_an_untrusted_key_verifies_but_attests_nothing(tmp_path):
 def test_amd_role_attests_verified_and_publisher_role_attests_community(tmp_path):
     from gaia.skills.signing import TrustStore, VerifiedSignature, attested_tier
 
-    assert attested_tier(VerifiedSignature(signed=True, key_id="k", role="amd")) == "verified"
+    assert (
+        attested_tier(VerifiedSignature(signed=True, key_id="k", role="amd"))
+        == "verified"
+    )
     assert (
         attested_tier(VerifiedSignature(signed=True, key_id="k", role="publisher"))
         == "community"
@@ -517,10 +528,18 @@ def test_search_matches_name_description_and_tool_names(tmp_path):
 
     hub = fake_hub(tmp_path)
     hub.put_manifest(
-        "web-research", "1.0.0", filename="a.zip", sha256="a", description="Search the web"
+        "web-research",
+        "1.0.0",
+        filename="a.zip",
+        sha256="a",
+        description="Search the web",
     )
     hub.put_manifest(
-        "incident-review", "1.0.0", filename="b.zip", sha256="b", description="Postmortems"
+        "incident-review",
+        "1.0.0",
+        filename="b.zip",
+        sha256="b",
+        description="Postmortems",
     )
     hub.rebuild_index()
 
@@ -546,7 +565,9 @@ def test_publish_request_parts_match_the_worker_contract():
     """The Worker rejects a body missing 'skill' or 'artifact' — assert the shape."""
     from gaia.skills.hub import PublishRequest
 
-    minimal = PublishRequest(skill_markdown="---\nname: x\n---\n", artifact_filename="x-1.0.0.zip")
+    minimal = PublishRequest(
+        skill_markdown="---\nname: x\n---\n", artifact_filename="x-1.0.0.zip"
+    )
     assert set(minimal.parts()) == {"skill", "artifact"}
 
     full = PublishRequest(

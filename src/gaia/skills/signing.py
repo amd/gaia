@@ -148,7 +148,9 @@ def keys_dir(skills_root: Path) -> Path:
     return Path(skills_root) / KEYS_DIRNAME
 
 
-def generate_key(skills_root: Path, *, name: str = "publisher", force: bool = False) -> SigningKey:
+def generate_key(
+    skills_root: Path, *, name: str = "publisher", force: bool = False
+) -> SigningKey:
     """Create an Ed25519 publisher keypair under ``<skills_root>/keys/``.
 
     The private key is written owner-read/write only. An existing key is never
@@ -210,7 +212,9 @@ def load_key(skills_root: Path, *, name: str = "publisher") -> SigningKey:
             f"the skill at '{LOWEST_TIER}' for everyone who installs it). See {_DOCS}"
         )
 
-    raw = _unb64(private_path.read_text(encoding="utf-8").strip(), what=f"{private_path}")
+    raw = _unb64(
+        private_path.read_text(encoding="utf-8").strip(), what=f"{private_path}"
+    )
     try:
         private = ed25519.Ed25519PrivateKey.from_private_bytes(raw)
     except ValueError as exc:
@@ -412,7 +416,9 @@ def verify_bundle(
             f"nothing. Refusing to install. See {_DOCS}"
         )
 
-    public_bytes = _unb64(record.get("public_key"), what=f"{signature_path}: public_key")
+    public_bytes = _unb64(
+        record.get("public_key"), what=f"{signature_path}: public_key"
+    )
     signature = _unb64(record.get("signature"), what=f"{signature_path}: signature")
 
     declared_id = record.get("key_id")
@@ -425,10 +431,14 @@ def verify_bundle(
 
     ed25519 = _ed25519()
     payload = signing_payload(
-        name=name, version=version, digests={str(k): str(v) for k, v in signed_digests.items()}
+        name=name,
+        version=version,
+        digests={str(k): str(v) for k, v in signed_digests.items()},
     )
     try:
-        ed25519.Ed25519PublicKey.from_public_bytes(public_bytes).verify(signature, payload)
+        ed25519.Ed25519PublicKey.from_public_bytes(public_bytes).verify(
+            signature, payload
+        )
     except Exception as exc:  # cryptography raises InvalidSignature
         raise SkillSignatureError(
             f"The signature in {signature_path} does not verify against its own "
@@ -442,7 +452,11 @@ def verify_bundle(
     actual = file_digests(directory)
     mismatched = sorted(
         set(actual) ^ set(signed_digests)
-        | {f for f in set(actual) & set(signed_digests) if actual[f] != signed_digests[f]}
+        | {
+            f
+            for f in set(actual) & set(signed_digests)
+            if actual[f] != signed_digests[f]
+        }
     )
     if mismatched:
         raise SkillSignatureError(

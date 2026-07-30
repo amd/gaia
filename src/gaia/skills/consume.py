@@ -177,7 +177,10 @@ def _parse_entry(
         )
 
     return SkillRequirement(
-        name=name.strip(), version=version.strip() or "*", required=required, origin=origin
+        name=name.strip(),
+        version=version.strip() or "*",
+        required=required,
+        origin=origin,
     )
 
 
@@ -290,7 +293,9 @@ def resolve_requirements(
                     f"the manifest. Run 'gaia skill list' to see what is installed."
                 )
             skipped[requirement.name] = reason
-            log.info("Optional skill '%s' is not installed — skipping", requirement.name)
+            log.info(
+                "Optional skill '%s' is not installed — skipping", requirement.name
+            )
             continue
 
         if not requirement.satisfied_by(skill):
@@ -308,7 +313,11 @@ def resolve_requirements(
                     "GAIA will not load a version the manifest excluded."
                 )
             skipped[requirement.name] = reason
-            log.info("Optional skill '%s' version mismatch — skipping (%s)", requirement.name, reason)
+            log.info(
+                "Optional skill '%s' version mismatch — skipping (%s)",
+                requirement.name,
+                reason,
+            )
             continue
 
         chosen[requirement.name] = skill
@@ -368,16 +377,16 @@ def _topological(order: Sequence[str], chosen: dict[str, Skill]) -> list[str]:
     return resolved
 
 
-def resolve_manifest(
-    manifest_path: Path, *, manager: SkillManager
-) -> ResolvedSkills:
+def resolve_manifest(manifest_path: Path, *, manager: SkillManager) -> ResolvedSkills:
     """Read a ``gaia-agent.yaml``'s ``skills:`` block and resolve it."""
     return resolve_requirements(
         load_manifest_requirements(manifest_path), manager=manager
     )
 
 
-def requirements_from_names(names: Iterable[str], *, origin: str = "") -> list[SkillRequirement]:
+def requirements_from_names(
+    names: Iterable[str], *, origin: str = ""
+) -> list[SkillRequirement]:
     """Build requirements from ``name`` / ``name@range`` strings.
 
     The entry point for callers holding a flat list — notably #2466's

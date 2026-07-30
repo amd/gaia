@@ -68,7 +68,9 @@ def _matches_clause(version: str, clause: str) -> bool:
 
     match = _OPERATOR_RE.match(clause)
     if match is None:  # pragma: no cover - the regex accepts any non-empty text
-        raise SkillValidationError(f"Could not parse version range {clause!r}. See {_DOCS}")
+        raise SkillValidationError(
+            f"Could not parse version range {clause!r}. See {_DOCS}"
+        )
     operator, target = match.group(1), match.group(2)
 
     if operator is None or operator == "==":
@@ -120,7 +122,11 @@ def matches(version: str, spec: Optional[str]) -> bool:
     normalized = (spec or "").strip()
     if normalized.lower() in ANY_SPECS:
         return True
-    return all(_matches_clause(version, clause) for clause in normalized.split(",") if clause.strip())
+    return all(
+        _matches_clause(version, clause)
+        for clause in normalized.split(",")
+        if clause.strip()
+    )
 
 
 def highest(versions: Iterable[str]) -> Optional[str]:

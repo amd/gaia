@@ -49,7 +49,9 @@ from gaia.skills.tiers import LOWEST_TIER
 log = get_logger(__name__)
 
 #: Files never shipped in a published bundle (build noise, VCS metadata, caches).
-EXCLUDED_NAMES = frozenset({".git", ".DS_Store", "__pycache__", ".pytest_cache", ".venv"})
+EXCLUDED_NAMES = frozenset(
+    {".git", ".DS_Store", "__pycache__", ".pytest_cache", ".venv"}
+)
 EXCLUDED_SUFFIXES = (".pyc", ".pyo")
 
 #: Changelog filename picked up from the skill directory, if present.
@@ -232,7 +234,7 @@ def _assert_publishable(skill: Skill, source: Path) -> None:
     if skill.version == "0.0.0":
         raise SkillValidationError(
             f"Skill '{skill.name}' is at version 0.0.0, the reserved "
-            "\"unversioned\" sentinel, which cannot be published. Bump it to a real "
+            '"unversioned" sentinel, which cannot be published. Bump it to a real '
             f"SemVer (e.g. 0.1.0) in {source / SKILL_FILENAME}. See "
             f"{_DOCS}#field-reference"
         )

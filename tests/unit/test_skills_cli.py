@@ -386,7 +386,7 @@ def test_missing_subcommand_returns_usage(run):
 
 
 def test_unknown_subcommand_returns_usage():
-    args = argparse.Namespace(skill_action="publish")
+    args = argparse.Namespace(skill_action="teleport")
     assert skills_cli.handle(args) == 2
 
 
@@ -470,15 +470,32 @@ def test_real_cli_create_list_info_export_import(tmp_path):
 
 
 @pytest.mark.slow
-def test_real_cli_help_lists_only_the_phase_1_verbs(tmp_path):
+def test_real_cli_help_lists_the_authoring_and_marketplace_verbs(tmp_path):
+    """Every advertised verb must actually work — no discoverable dead ends.
+
+    The marketplace verbs landed with #2467; before that this test asserted their
+    absence, because a verb a user can find in --help but cannot use is worse than
+    one that does not parse.
+    """
     (tmp_path / "fake-home").mkdir()
     result = _real_cli("--help", home=tmp_path, cwd=tmp_path)
     assert result.returncode == 0, result.stderr
-    for verb in ("list", "info", "create", "import", "export"):
-        assert verb in result.stdout
-    # The marketplace verbs belong to #2467 — not discoverable yet.
-    for verb in ("publish", "search", "install"):
-        assert f"    {verb}" not in result.stdout
+    for verb in (
+        # Local authoring (#888)
+        "list",
+        "info",
+        "create",
+        "import",
+        "export",
+        # Marketplace (#2467)
+        "search",
+        "install",
+        "remove",
+        "publish",
+        "keygen",
+        "trust",
+    ):
+        assert f"    {verb}" in result.stdout, f"'{verb}' is missing from --help"
 
 
 @pytest.mark.slow

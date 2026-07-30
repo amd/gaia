@@ -123,7 +123,9 @@ def search_skills(
     def haystack(entry: dict[str, Any]) -> str:
         metadata = entry.get("skill_metadata") or {}
         tools = " ".join(
-            str(t.get("name", "")) for t in (metadata.get("tools") or []) if isinstance(t, dict)
+            str(t.get("name", ""))
+            for t in (metadata.get("tools") or [])
+            if isinstance(t, dict)
         )
         return " ".join(
             [
@@ -205,7 +207,11 @@ class RemoteSkill:
         if not isinstance(raw, dict):
             artifacts = entry.get("artifacts") or []
             raw = artifacts[0] if artifacts and isinstance(artifacts[0], dict) else None
-        if not isinstance(raw, dict) or not raw.get("filename") or not raw.get("sha256"):
+        if (
+            not isinstance(raw, dict)
+            or not raw.get("filename")
+            or not raw.get("sha256")
+        ):
             raise SkillValidationError(
                 f"The hub manifest for skill '{self.name}' {version} has no artifact "
                 "with a filename and sha256, so the download cannot be verified. "

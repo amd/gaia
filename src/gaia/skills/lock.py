@@ -180,7 +180,9 @@ class SkillLock:
         document = {
             "schema_version": LOCK_SCHEMA_VERSION,
             "generated_at": _now(),
-            "skills": {name: self.entries[name].to_dict() for name in sorted(self.entries)},
+            "skills": {
+                name: self.entries[name].to_dict() for name in sorted(self.entries)
+            },
         }
         target.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
         self.path = target

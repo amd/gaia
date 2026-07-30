@@ -141,7 +141,10 @@ class AuditReport:
             )
 
         return cls(
-            verdict=verdict, engine=engine, audited_at=audited_at, findings=list(findings)
+            verdict=verdict,
+            engine=engine,
+            audited_at=audited_at,
+            findings=list(findings),
         )
 
 
@@ -270,6 +273,8 @@ def gate_for_publish(
         report_path: A pre-computed report to use instead of running the engine.
     """
     report = (
-        load_audit_report(report_path) if report_path is not None else run_audit(directory)
+        load_audit_report(report_path)
+        if report_path is not None
+        else run_audit(directory)
     )
     return assert_gate_cleared(report, skill_name=skill_name)

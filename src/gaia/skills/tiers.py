@@ -39,7 +39,11 @@ from __future__ import annotations
 
 from typing import Iterable, Sequence
 
-from gaia.skills.errors import FORMAT_DOCS_URL, SkillPermissionError, SkillValidationError
+from gaia.skills.errors import (
+    FORMAT_DOCS_URL,
+    SkillPermissionError,
+    SkillValidationError,
+)
 from gaia.skills.format import SECURITY_TIERS
 from gaia.skills.permissions import Permission
 

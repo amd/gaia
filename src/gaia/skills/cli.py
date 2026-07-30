@@ -148,7 +148,10 @@ def _add_marketplace_subparsers(sub: argparse._SubParsersAction) -> None:
         "query", nargs="?", default="", help="Substring to match (omit to list all)"
     )
     p_search.add_argument(
-        "--json", action="store_true", dest="as_json", help="Emit JSON instead of a table"
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help="Emit JSON instead of a table",
     )
     p_search.add_argument("--hub-url", default=None, help="Hub origin override")
 
@@ -188,7 +191,9 @@ def _add_marketplace_subparsers(sub: argparse._SubParsersAction) -> None:
         "--hub-url", default=None, help="Hub origin override (default: GAIA_HUB_URL)"
     )
     p_publish.add_argument(
-        "--key-name", default="publisher", help="Signing key to use (default: publisher)"
+        "--key-name",
+        default="publisher",
+        help="Signing key to use (default: publisher)",
     )
     p_publish.add_argument(
         "--publisher", default="", help="Publisher identity recorded in the signature"
@@ -557,7 +562,9 @@ def _handle_install(args: argparse.Namespace) -> int:
 
     print(f"✅ Installed skill '{result.name}' {result.version} → {result.path}")
     print(f"   requested   : {result.requested}")
-    print(f"   provenance  : {result.signature.describe() if result.signature else 'unsigned'}")
+    print(
+        f"   provenance  : {result.signature.describe() if result.signature else 'unsigned'}"
+    )
     print(f"   tier        : {result.installed_tier}")
     if result.downgraded:
         print(

@@ -196,7 +196,9 @@ def install_skill(
     artifact = remote.artifact(version)
     log.info("Resolved skill '%s' %s from pin %r", name, version, spec)
 
-    confirmer = confirm or ((lambda _prompt: True) if assume_yes else _interactive_confirm)
+    confirmer = confirm or (
+        (lambda _prompt: True) if assume_yes else _interactive_confirm
+    )
 
     with tempfile.TemporaryDirectory(prefix="gaia-skill-install-") as tmp:
         workdir = Path(tmp)
@@ -447,9 +449,7 @@ class RemoveResult:
     was_locked: bool = False
 
 
-def remove_skill(
-    name: str, *, manager: Optional[SkillManager] = None
-) -> RemoveResult:
+def remove_skill(name: str, *, manager: Optional[SkillManager] = None) -> RemoveResult:
     """Delete an installed skill from the user root and drop its lock entry.
 
     Only the writable user root is touched. An agent-bundled or Claude-imported

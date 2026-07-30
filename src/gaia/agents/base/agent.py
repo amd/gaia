@@ -67,6 +67,7 @@ def _skill_validation_error(message: str) -> Exception:
 
     return SkillValidationError(message)
 
+
 # Content truncation thresholds
 CHUNK_TRUNCATION_THRESHOLD = 5000
 CHUNK_TRUNCATION_SIZE = 2500

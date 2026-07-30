@@ -101,7 +101,9 @@ class FakeHub:
         name, version = skill.name, str(skill.version)
         digest = hashlib.sha256(request.artifact_bytes).hexdigest()
 
-        self.put_artifact(name, version, request.artifact_filename, request.artifact_bytes)
+        self.put_artifact(
+            name, version, request.artifact_filename, request.artifact_bytes
+        )
         self.put_skill_doc(name, version, request.skill_markdown)
         self.put_manifest(
             name,
@@ -125,12 +127,14 @@ class FakeHub:
 
     # -- object writers ----------------------------------------------------
 
-    def put_artifact(self, name: str, version: str, filename: str, payload: bytes) -> None:
+    def put_artifact(
+        self, name: str, version: str, filename: str, payload: bytes
+    ) -> None:
         self.objects[f"{self.BASE_URL}/skills/{name}/{version}/{filename}"] = payload
 
     def put_skill_doc(self, name: str, version: str, markdown: str) -> None:
-        self.objects[f"{self.BASE_URL}/skills/{name}/{version}/SKILL.md"] = markdown.encode(
-            "utf-8"
+        self.objects[f"{self.BASE_URL}/skills/{name}/{version}/SKILL.md"] = (
+            markdown.encode("utf-8")
         )
 
     def put_manifest(
@@ -242,7 +246,9 @@ def write_audit_report(tmp_path: Path, payload: dict | None = None) -> Path:
     directory = Path(tmp_path)
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / "audit.json"
-    path.write_text(json.dumps(payload if payload is not None else allow_report()), "utf-8")
+    path.write_text(
+        json.dumps(payload if payload is not None else allow_report()), "utf-8"
+    )
     return path
 
 

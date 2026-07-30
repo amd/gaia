@@ -128,7 +128,9 @@ def marketplace(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_publish_uploads_a_signed_bundle_and_lands_a_catalog_entry(marketplace, tmp_path):
+def test_publish_uploads_a_signed_bundle_and_lands_a_catalog_entry(
+    marketplace, tmp_path
+):
     marketplace.keygen()
     source = _write_source(tmp_path)
 
@@ -161,7 +163,9 @@ def test_publish_uploads_a_signed_bundle_and_lands_a_catalog_entry(marketplace, 
     assert "web-research/SIGNATURE.json" in names
 
     # The catalog entry is filterable as a skill.
-    index = json.loads(marketplace.hub.objects[f"{marketplace.hub.BASE_URL}/index.json"])
+    index = json.loads(
+        marketplace.hub.objects[f"{marketplace.hub.BASE_URL}/index.json"]
+    )
     entry = next(e for e in index["agents"] if e["id"] == "web-research")
     assert entry["type"] == "skill"
     assert entry["latest_version"] == "1.0.0"
@@ -254,7 +258,9 @@ def test_publish_fails_loudly_when_the_audit_engine_is_absent(marketplace, tmp_p
 
 
 @pytest.mark.parametrize("verdict", ["BLOCK", "REVIEW"])
-def test_publish_refuses_a_blocked_or_held_audit_verdict(marketplace, tmp_path, verdict):
+def test_publish_refuses_a_blocked_or_held_audit_verdict(
+    marketplace, tmp_path, verdict
+):
     from gaia.skills.audit_gate import SkillAuditFailedError
 
     marketplace.keygen()
@@ -280,13 +286,16 @@ def test_publish_refuses_an_audit_report_with_no_engine(marketplace, tmp_path):
     marketplace.keygen()
     source = _write_source(tmp_path)
     report = write_audit_report(
-        tmp_path / "anon", {"verdict": "ALLOW", "audited_at": "2026-07-30T00:00:00+00:00"}
+        tmp_path / "anon",
+        {"verdict": "ALLOW", "audited_at": "2026-07-30T00:00:00+00:00"},
     )
     with pytest.raises(SkillAuditUnavailableError, match="engine"):
         marketplace.publish(source, audit_report=report)
 
 
-def test_audit_gate_uses_the_engine_when_it_is_installed(marketplace, tmp_path, monkeypatch):
+def test_audit_gate_uses_the_engine_when_it_is_installed(
+    marketplace, tmp_path, monkeypatch
+):
     """When #2468 lands, the gate calls it — this pins the contract it must meet."""
     import sys
     import types
@@ -374,7 +383,9 @@ def test_install_refuses_a_pin_no_published_version_satisfies(marketplace, tmp_p
     assert not (marketplace.skills_root / "web-research").exists()
 
 
-def test_install_refuses_to_clobber_an_existing_install_without_force(marketplace, tmp_path):
+def test_install_refuses_to_clobber_an_existing_install_without_force(
+    marketplace, tmp_path
+):
     key = marketplace.keygen()
     marketplace.trust(key)
     marketplace.publish(_write_source(tmp_path))
@@ -442,9 +453,9 @@ def test_a_self_consistent_verified_claim_without_a_trusted_signature_is_downgra
     installed = (result.path / "SKILL.md").read_text("utf-8")
     assert "verified" not in installed
     assert marketplace.manager.reload()["web-research"].security_tier == "experimental"
-    assert SkillLock.load(marketplace.skills_root).get("web-research").installed_tier == (
-        "experimental"
-    )
+    assert SkillLock.load(marketplace.skills_root).get(
+        "web-research"
+    ).installed_tier == ("experimental")
 
 
 def _seed_hub_directly(marketplace, source, *, version):
@@ -463,7 +474,9 @@ def _seed_hub_directly(marketplace, source, *, version):
                 bundle.write(path, arcname=f"{name}/{path.relative_to(source)}")
     payload = archive.read_bytes()
     marketplace.hub.put_artifact(name, version, archive.name, payload)
-    marketplace.hub.put_skill_doc(name, version, (source / "SKILL.md").read_text("utf-8"))
+    marketplace.hub.put_skill_doc(
+        name, version, (source / "SKILL.md").read_text("utf-8")
+    )
     marketplace.hub.put_manifest(
         name,
         version,
@@ -487,10 +500,14 @@ def test_experimental_requires_allow_experimental(marketplace, tmp_path):
     assert result.installed_tier == "experimental"
 
 
-def test_untrusted_signature_drops_a_community_skill_to_experimental(marketplace, tmp_path):
+def test_untrusted_signature_drops_a_community_skill_to_experimental(
+    marketplace, tmp_path
+):
     """Signed by a stranger is integrity, not trust — so no community grant."""
     marketplace.keygen()  # signed, but the key is NOT added to the trust store
-    marketplace.publish(_write_source(tmp_path, tier="community", permissions=("network:read",)))
+    marketplace.publish(
+        _write_source(tmp_path, tier="community", permissions=("network:read",))
+    )
 
     result = marketplace.install("web-research", allow_experimental=True)
     assert result.signature.signed is True
@@ -514,7 +531,9 @@ def test_permission_ceiling_is_enforced_at_install(marketplace, tmp_path):
     """An experimental skill may not open an MCP connection."""
     key = marketplace.keygen()  # untrusted => attests experimental
     marketplace.publish(
-        _write_source(tmp_path, tier="experimental", permissions=("mcp:connect:mcp-tavily",))
+        _write_source(
+            tmp_path, tier="experimental", permissions=("mcp:connect:mcp-tavily",)
+        )
     )
     del key
 
@@ -538,7 +557,9 @@ def test_dangerous_grant_prompts_at_community_and_refusal_blocks_the_install(
 ):
     key = marketplace.keygen()
     marketplace.trust(key)
-    marketplace.publish(_write_source(tmp_path, tier="community", permissions=("network:write",)))
+    marketplace.publish(
+        _write_source(tmp_path, tier="community", permissions=("network:write",))
+    )
 
     prompts = []
 
@@ -559,7 +580,9 @@ def test_verified_skill_does_not_prompt_for_dangerous_grants(marketplace, tmp_pa
     """'Auto-grant, no prompt' is the whole point of the AMD-audited tier."""
     key = marketplace.keygen()
     marketplace.trust(key, role="amd", publisher="AMD")
-    marketplace.publish(_write_source(tmp_path, tier="verified", permissions=("network:write",)))
+    marketplace.publish(
+        _write_source(tmp_path, tier="verified", permissions=("network:write",))
+    )
 
     def fail(_prompt):
         raise AssertionError("a verified skill must not prompt for a declared grant")
@@ -568,10 +591,14 @@ def test_verified_skill_does_not_prompt_for_dangerous_grants(marketplace, tmp_pa
     assert result.installed_tier == "verified"
 
 
-def test_assume_yes_grants_dangerous_permissions_non_interactively(marketplace, tmp_path):
+def test_assume_yes_grants_dangerous_permissions_non_interactively(
+    marketplace, tmp_path
+):
     key = marketplace.keygen()
     marketplace.trust(key)
-    marketplace.publish(_write_source(tmp_path, tier="community", permissions=("network:write",)))
+    marketplace.publish(
+        _write_source(tmp_path, tier="community", permissions=("network:write",))
+    )
 
     result = marketplace.install("web-research", assume_yes=True)
     assert result.installed_tier == "community"
@@ -638,8 +665,10 @@ def test_install_refuses_a_bundle_whose_skill_md_disagrees_with_the_hub_object(
     marketplace.publish(_write_source(tmp_path))
 
     # Swap only the R2 SKILL.md object, keeping the signed bundle intact.
-    doctored = (tmp_path / "src" / "web-research" / "SKILL.md").read_text("utf-8").replace(
-        "network:read:*.brave.com", "network:write"
+    doctored = (
+        (tmp_path / "src" / "web-research" / "SKILL.md")
+        .read_text("utf-8")
+        .replace("network:read:*.brave.com", "network:write")
     )
     marketplace.hub.put_skill_doc("web-research", "1.0.0", doctored)
 
@@ -650,7 +679,9 @@ def test_install_refuses_a_bundle_whose_skill_md_disagrees_with_the_hub_object(
 def test_nothing_is_written_when_a_gate_refuses(marketplace, tmp_path):
     """A refused install must leave no partial state behind."""
     marketplace.keygen()
-    marketplace.publish(_write_source(tmp_path, tier="experimental", permissions=("network:read",)))
+    marketplace.publish(
+        _write_source(tmp_path, tier="experimental", permissions=("network:read",))
+    )
 
     with pytest.raises(SkillInstallError):
         marketplace.install("web-research")
@@ -693,7 +724,9 @@ def test_remove_refuses_a_read_only_root(tmp_path):
     bundled.mkdir(parents=True)
     copy_fixture("incident-review", bundled)
     manager = isolated_manager(
-        tmp_path, user_skills_root=tmp_path / "home" / "skills", agent_skill_dirs=[bundled]
+        tmp_path,
+        user_skills_root=tmp_path / "home" / "skills",
+        agent_skill_dirs=[bundled],
     )
 
     with pytest.raises(SkillInstallError, match="agent-bundled"):
