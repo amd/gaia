@@ -22,6 +22,7 @@ import re
 from datetime import date
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
+from gaia_agent_email.body_normalize import normalize_email_body
 from gaia_agent_email.config import default_inbox_scan_ceiling
 from gaia_agent_email.context_budget import (
     active_profile_ctx_size,
@@ -131,9 +132,9 @@ def _format_message_for_llm(
 ) -> Dict[str, Any]:
     """Reduce a Gmail-API-shape message to fields the LLM can act on.
 
-    The body is decoded via the production decoder and wrapped in the
-    untrusted-input delimiter so the LLM never confuses content with
-    instructions.
+    The body is decoded via the production decoder, stripped of known
+    mail-infrastructure banners (#2642), and wrapped in the untrusted-input
+    delimiter so the LLM never confuses content with instructions.
     """
     payload = msg.get("payload") or {}
     headers = {
@@ -141,6 +142,7 @@ def _format_message_for_llm(
         for h in payload.get("headers", [])
     }
     body, attachments = decode_message_body(payload)
+    body = normalize_email_body(body)
     body_chars_dropped = 0
     if body:
         body, body_chars_dropped = _truncate(body, body_limit)
@@ -351,10 +353,10 @@ def _thread_message_blocks(
     exactly one place that defines what a message block looks like — no
     duplicate formatting to drift.
 
-    Returns ``(blocks, raw_bodies)`` — ``raw_bodies`` is each message's
+    Returns ``(blocks, decoded_bodies)`` — ``decoded_bodies`` is each message's
     decoded, stripped, PRE-truncation body in the same order. A caller that
     needs one message's own body (e.g. the #2641 meeting-signal scan over
-    the newest message) reuses ``raw_bodies[-1]`` instead of paying for a
+    the newest message) reuses ``decoded_bodies[-1]`` instead of paying for a
     second MIME decode of the same payload — which would also feed the
     heuristic the rendered block's header/delimiter framing rather than the
     plain body, risking a false match against e.g. the ``Date:`` header's
@@ -362,7 +364,7 @@ def _thread_message_blocks(
     """
     total = total_count if total_count is not None else len(messages)
     blocks: List[str] = []
-    raw_bodies: List[str] = []
+    decoded_bodies: List[str] = []
     for offset, msg in enumerate(messages):
         idx = start_index + offset
         payload = msg.get("payload") or {}
@@ -372,7 +374,8 @@ def _thread_message_blocks(
         }
         body, _attachments = decode_message_body(payload)
         body = (body or "").strip()
-        raw_bodies.append(body)
+        body = normalize_email_body(body)  # strip infra banners (#2642)
+        decoded_bodies.append(body)
         rendered_body = body
         if per_message_body_limit > 0 and len(body) > per_message_body_limit:
             rendered_body = body[:per_message_body_limit] + "\n...[truncated]"
@@ -382,7 +385,7 @@ def _thread_message_blocks(
             f"Date: {headers.get('date', '')}\n"
             f"{wrap_untrusted_body(rendered_body)}"
         )
-    return blocks, raw_bodies
+    return blocks, decoded_bodies
 
 
 def _format_thread_for_summary(
@@ -420,7 +423,7 @@ def _format_thread_for_summary(
         )
         if effective_body_limit <= 0 or fair_share < effective_body_limit:
             effective_body_limit = fair_share
-    blocks, _raw_bodies = _thread_message_blocks(
+    blocks, _decoded_bodies = _thread_message_blocks(
         ordered, per_message_body_limit=effective_body_limit
     )
     return "\n\n".join(blocks)
@@ -553,7 +556,7 @@ def summarize_thread_impl(
         # byte-identical to the pre-existing uncapped renderer's output
         # (``_format_thread_for_summary(..., max_total_transcript_chars=None)``),
         # which delegates to the same ``_thread_message_blocks``.
-        blocks, raw_bodies = _thread_message_blocks(
+        blocks, decoded_bodies = _thread_message_blocks(
             ordered, per_message_body_limit=per_message_body_limit
         )
 
@@ -565,7 +568,7 @@ def summarize_thread_impl(
             detect_meeting_request_heuristic,
         )
 
-        meeting = detect_meeting_request_heuristic(subject, raw_bodies[-1])
+        meeting = detect_meeting_request_heuristic(subject, decoded_bodies[-1])
         # Same high-confidence-only gate as triage_inbox (~line 988) — a
         # confidence="low" result always pairs with is_meeting_request=False
         # today, but the explicit AND keeps this call site correct even if
