@@ -204,7 +204,7 @@ const requirementRows = [
           {hasTabs && <DocTabs tabs={docTabs} label={`${agent.name} documentation`} />}
 
           <div class="px-6 py-7">
-            <article
+            <div
               role={hasTabs ? 'tabpanel' : undefined}
               aria-labelledby={hasTabs ? 'doctab-readme' : undefined}
               id="docpanel-readme"
@@ -213,34 +213,34 @@ const requirementRows = [
             >
               <h2 class="sr-only">About {agent.name}</h2>
               <div set:html={readmeHtml} />
-            </article>
+            </div>
             {specHtml && (
-              <article role="tabpanel" id="docpanel-spec" aria-labelledby="doctab-spec" data-doc-panel="spec" class="doc max-w-[70ch]" hidden>
+              <div role="tabpanel" id="docpanel-spec" aria-labelledby="doctab-spec" data-doc-panel="spec" class="doc max-w-[70ch]" hidden>
                 <div set:html={specHtml} />
-              </article>
+              </div>
             )}
             {skillHtml && (
-              <article role="tabpanel" id="docpanel-skill" aria-labelledby="doctab-skill" data-doc-panel="skill" class="doc max-w-[70ch]" hidden>
+              <div role="tabpanel" id="docpanel-skill" aria-labelledby="doctab-skill" data-doc-panel="skill" class="doc max-w-[70ch]" hidden>
                 <div set:html={skillHtml} />
-              </article>
+              </div>
             )}
             {evaluationHtml && (
-              <article role="tabpanel" id="docpanel-evaluation" aria-labelledby="doctab-evaluation" data-doc-panel="evaluation" class="doc max-w-[70ch]" hidden>
+              <div role="tabpanel" id="docpanel-evaluation" aria-labelledby="doctab-evaluation" data-doc-panel="evaluation" class="doc max-w-[70ch]" hidden>
                 <div set:html={evaluationHtml} />
-              </article>
+              </div>
             )}
             {capabilityMatrixHtml && (
-              <article role="tabpanel" id="docpanel-capability_matrix" aria-labelledby="doctab-capability_matrix" data-doc-panel="capability_matrix" class="doc max-w-[70ch]" hidden>
+              <div role="tabpanel" id="docpanel-capability_matrix" aria-labelledby="doctab-capability_matrix" data-doc-panel="capability_matrix" class="doc max-w-[70ch]" hidden>
                 <div set:html={capabilityMatrixHtml} />
-              </article>
+              </div>
             )}
             {changelogHtml && (
-              <article role="tabpanel" id="docpanel-changelog" aria-labelledby="doctab-changelog" data-doc-panel="changelog" class="doc max-w-[70ch]" hidden>
+              <div role="tabpanel" id="docpanel-changelog" aria-labelledby="doctab-changelog" data-doc-panel="changelog" class="doc max-w-[70ch]" hidden>
                 <div set:html={changelogHtml} />
-              </article>
+              </div>
             )}
             {scorecardHtml && (
-              <article role="tabpanel" id="docpanel-scorecard" aria-labelledby="doctab-scorecard" data-doc-panel="scorecard" class="doc max-w-[70ch]" hidden>
+              <div role="tabpanel" id="docpanel-scorecard" aria-labelledby="doctab-scorecard" data-doc-panel="scorecard" class="doc max-w-[70ch]" hidden>
                 {agent.eval_scorecard_url && (
                   <p class="text-[13px] text-g-faint">
                     {hasScore && <span>Aggregate score <strong class="text-g-text">{scoreDisplay} / 100</strong>. </span>}
@@ -248,7 +248,7 @@ const requirementRows = [
                   </p>
                 )}
                 <div set:html={scorecardHtml} />
-              </article>
+              </div>
             )}
             {packageFiles.length > 0 && (
               <section role="tabpanel" id="docpanel-files" aria-labelledby="doctab-files" data-doc-panel="files" hidden>
