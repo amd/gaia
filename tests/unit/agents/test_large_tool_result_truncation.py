@@ -403,7 +403,9 @@ class TestUnicodeReachesModelAsCharacters:
         result = agent._handle_large_tool_result(
             "pre_scan_inbox", {"subject": text}, conversation
         )
-        assert result == {"subject": text}, "should be returned untouched, not truncated"
+        assert result == {
+            "subject": text
+        }, "should be returned untouched, not truncated"
 
     def test_every_model_visible_json_dumps_call_disables_ascii_escaping(self):
         """Source-level guard: every ``json.dumps`` call in this module that
