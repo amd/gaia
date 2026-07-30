@@ -342,7 +342,9 @@ class TestBlockNumberingSurvivesStripping:
 
     def test_block_count_and_numbering_match_message_count(self):
         ordered = sorted(_ISSUE_MESSAGES, key=lambda m: int(m["internalDate"]))
-        blocks = _thread_message_blocks(ordered, per_message_body_limit=4000)
+        blocks, _decoded_bodies = _thread_message_blocks(
+            ordered, per_message_body_limit=4000
+        )
         assert len(blocks) == len(ordered) == 2
         assert "--- Message 1 of 2 ---" in blocks[0]
         assert "--- Message 2 of 2 ---" in blocks[1]
@@ -356,7 +358,9 @@ class TestBlockNumberingSurvivesStripping:
             internal_date_ms=_BASE_MS,
             date_header="Wed, 22 Jul 2026 09:00:00 -0700",
         )
-        blocks = _thread_message_blocks([solo], per_message_body_limit=4000)
+        blocks, _decoded_bodies = _thread_message_blocks(
+            [solo], per_message_body_limit=4000
+        )
         assert len(blocks) == 1
         assert "--- Message 1 of 1 ---" in blocks[0]
 
@@ -374,7 +378,9 @@ class TestDelimiterIntegrityInThreadBlocks:
             internal_date_ms=_BASE_MS,
             date_header="Wed, 22 Jul 2026 09:00:00 -0700",
         )
-        blocks = _thread_message_blocks([forged], per_message_body_limit=4000)
+        blocks, _decoded_bodies = _thread_message_blocks(
+            [forged], per_message_body_limit=4000
+        )
         assert len(blocks) == 1
         block = blocks[0]
         assert block.count(UNTRUSTED_BODY_OPEN) == 1
