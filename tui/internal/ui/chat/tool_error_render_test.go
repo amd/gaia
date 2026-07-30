@@ -78,12 +78,13 @@ func TestFailedNonRenderToolChangesNothing(t *testing.T) {
 			t.Fatalf("a non-render tool result must not gain a new RoleError message: %+v", msg)
 		}
 	}
-	// "keeps its current value" — whatever today's markToolDone classifier
-	// (toolResultSucceeded) already computes, unchanged by this fix.
-	want := toolResultSucceeded(data)
+	// "keeps its current value": today's markToolDone classifier
+	// (toolResultSucceeded) has no top-level "ok"/"success" bool to read from
+	// this fixture, so it defaults to true — pinned literally, not derived
+	// from the function under test.
 	item := m.activity[0]
-	if item.Success == nil || *item.Success != want {
-		t.Errorf("tick changed for a non-render tool: got %v, want %v (today's classifier)", item.Success, want)
+	if item.Success == nil || !*item.Success {
+		t.Errorf("tick changed for a non-render tool: got %v, want true (today's classifier)", item.Success)
 	}
 }
 
@@ -171,8 +172,12 @@ func TestBatchFalsePositiveStaysHarmless(t *testing.T) {
 	truncated := `{\"succeeded\": [\"m1\", \"m2\", \"m3\"], \"failed\": [{\"message_id\": \"m4\", \"error\": \"not fou`
 	data := json.RawMessage(`{"summary":"` + truncated + `","success":true}`)
 
-	// Sanity: this fixture really does trip the classifier (otherwise the
-	// test below proves nothing about the gate).
+	// Sanity, deliberately kept: this fixture must really trip the
+	// classifier, or the assertions below prove nothing about the gate. When
+	// #2723 fixes the truncation heuristic, this misfire stops happening and
+	// this Fatalf will fire — that is the point, not a flake: it forces
+	// whoever lands #2723 to come back and re-examine this gate rather than
+	// silently letting the fixture go stale. Do not delete this on a "cleanup".
 	if outcome, _ := event.ToolOutcomeOf(event.CanonicalToolResultEvent{Tool: "archive_message_batch", Data: data}); outcome != event.ToolOutcomeFailed {
 		t.Fatalf("fixture setup: expected the classifier to misfire as Failed, got %s", outcome)
 	}
@@ -190,10 +195,12 @@ func TestBatchFalsePositiveStaysHarmless(t *testing.T) {
 			t.Fatalf("a non-render tool must never produce a card: %+v", msg)
 		}
 	}
-	want := toolResultSucceeded(data)
+	// The fixture carries a top-level "success":true, which is what today's
+	// classifier (toolResultSucceeded) reads — pinned literally, not derived
+	// from the function under test.
 	item := m.activity[0]
-	if item.Success == nil || *item.Success != want {
-		t.Errorf("tick must stay whatever today's classifier already computes: got %v, want %v", item.Success, want)
+	if item.Success == nil || !*item.Success {
+		t.Errorf("tick must stay whatever today's classifier already computes: got %v, want true", item.Success)
 	}
 }
 
