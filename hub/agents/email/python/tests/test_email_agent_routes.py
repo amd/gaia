@@ -30,12 +30,13 @@ pytest.importorskip("fastapi")
 
 from fastapi import FastAPI  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
+from gaia_agent_email import agent_routes  # noqa: E402
+
 from gaia.connectors.errors import (  # noqa: E402
     ConnectionRevokedError,
     ConnectorsError,
     ScopeMismatchError,
 )
-from gaia_agent_email import agent_routes  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Fake agent (drives the real SSEOutputHandler)
@@ -664,6 +665,50 @@ class TestAutonomyRoutes:
             json={"session_id": "s1", "action_id": "raise-scope-mismatch"},
         )
         assert r.status_code == 403
+
+    def test_run_cycle_503_on_agent_local_configuration_error_cold_start(
+        self, client, monkeypatch
+    ):
+        """#2617 follow-up: ``gaia_agent_email.config.ConfigurationError`` is a
+        SEPARATE class from ``gaia.connectors.errors.ConfigurationError`` --
+        a bare ``ValueError`` subclass sharing nothing in its MRO with
+        ``ConnectorsError``. ``EmailAgentConfig.resolve_mail_backends()``
+        raises it for real in the actual cold-start state (no mailbox
+        connected yet), and it escaped the route's ``except ConnectorsError``
+        as a textless 500 -- byte-identical to the bug #2617 exists to fix.
+
+        Drives the REAL ``resolve_mail_backends()`` (no injected exception):
+        every other test in this class injects a hand-raised
+        ``ConnectorsError``/sibling from a fake agent, which is exactly why
+        this shipped -- an injected-exception test can't catch a wrong
+        exception CLASS. The null keyring backend (reset via
+        ``keyring.core._keyring_backend = None`` so the new env var actually
+        takes effect) makes "no mailbox connected" the real, hermetic state
+        instead of depending on this machine's OS credential store.
+        """
+        import keyring
+        from gaia_agent_email.config import EmailAgentConfig
+
+        monkeypatch.setenv("PYTHON_KEYRING_BACKEND", "null")
+        monkeypatch.setattr(keyring.core, "_keyring_backend", None, raising=False)
+
+        class _ColdStartAgent(_FakeAgent):
+            def run_autonomy_cycle(self, context=None):
+                # No mocking: no mailbox connected under the null keyring
+                # backend, so this raises the real agent-local
+                # ConfigurationError, not a stand-in.
+                return EmailAgentConfig().resolve_mail_backends()
+
+        client.built["next"] = _ColdStartAgent()
+        self._mk(client)
+        client.post(
+            "/v1/email/agent/autonomy",
+            json={"session_id": "s1", "level": "earn_trust"},
+        )
+        insecure = TestClient(client.app_ref, raise_server_exceptions=False)
+        r = insecure.post("/v1/email/agent/autonomy/run", json={"session_id": "s1"})
+        assert r.status_code == 503
+        assert "No mailbox connected" in r.json()["detail"]
 
 
 class TestWorkerDiesWithoutTerminalEvent:
