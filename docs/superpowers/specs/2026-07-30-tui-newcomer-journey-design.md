@@ -101,10 +101,42 @@ Fedora RPMs are out of scope.
   `win-x64` and `win-arm64`.
 - Publish the component: bump both `hub/components/*/gaia-agent.yaml` to the release
   version and let `release_components.yml` run on the tag. Its version gate hard-fails
-  on a mismatch by design, because R2 paths are immutable.
+  on a mismatch by design, because R2 paths are immutable. **Gated on 2a below — do not
+  tag until the host API contract is satisfied**, or the published binary cannot talk to
+  the core it declares as its minimum.
 
 Elevation is unavoidable — the `.deb` needs sudo, the MSI needs UAC, the `.pkg` needs
 sudo. Say so before prompting.
+
+### 2a. The component cannot publish yet — host API contract break
+
+Found after this spec was first written, and it gates work item 2.
+
+The terminal hub needs daemon host API **v1.1+** (`tui/internal/daemon/instance.go:161`).
+No released core provides it:
+
+| Source | `DAEMON_API_VERSION` |
+| --- | --- |
+| repo `main` (`src/gaia/daemon/constants.py:23`) | `1.1` |
+| released 0.22.0 wheel, the latest release | `1` |
+
+Both component manifests declare `min_gaia_version: "0.22.0"`. So publishing today ships
+a binary that cannot talk to the core version it names as its own minimum — dead on
+arrival for anyone who installs the declared requirement. Reproduced: a source-built
+terminal hub against an installed 0.22.0 core fails preflight at 0 of 5 with "the running
+background service speaks host API v1, which this build cannot use".
+
+It is invisible to developers, whose editable install already serves 1.1. That is why it
+survived review, and it is the same fresh-versus-warm asymmetry as the Lemonade 404.
+
+Two consequences:
+
+- **Do not tag a component release until a core release ships API 1.1**, or until
+  `min_gaia_version` names a version that does.
+- `min_gaia_version` is a hardcoded string with nothing checking it against the real
+  contract. A test comparing two constants in the same tree cannot catch this, because
+  the break is between the tree and a *published artifact*. The guard must reason about
+  the released core's value.
 
 ### 3. macOS code signing
 
@@ -157,10 +189,65 @@ the no-silent-fallbacks rule:
   how both the Lemonade 404 and the empty binary channel survived review.
 - Per platform: Linux x64 and arm64, Windows x64, macOS arm64.
 
+## Verification status
+
+Each fix was checked against its own code, not against a claim.
+
+Verified working:
+
+- Lemonade acquisition — all five platform URLs probed against the real upstream v11.5.0
+  release: Linux x64 and arm64 200, macOS arm64 200, macOS x86_64 raises with a named
+  reason, Windows 200. The URL that 404'd is fixed.
+- Terminal hub help names whichever binary was invoked — built and run as both
+  `gaia-tui` and `gaia`.
+- The cold-state setup hint leads with the one-line installer; exit 1, message on
+  stderr, stdout empty.
+- `security_tier: verified` declared and parsing; the publishing guide's contradictory
+  claim replaced.
+- Browse hub, background service, model resolution, and agent start — verified against a
+  live daemon serving host API 1.1.
+
+Not verified:
+
+- **A real agent answer.** Blocked by the sidecar defect below.
+
+## Known defect blocking the last step
+
+The published email sidecar 0.5.0 (`apiVersion 2.4`) passes `_wait_for_health`, then
+stops listening while its process stays alive. Reproduced twice on independent fresh
+daemons, with the local model server alive throughout, so it is not an artifact of the
+model server dying. `lsof` shows zero LISTEN sockets on the port the daemon recorded, and
+shutdown needs SIGKILL after a 5s grace.
+
+Consequence: `runMailboxCheck` (`tui/internal/ui/preflight/check.go:723`) relays
+`GET /v1/<agent>/connectors` to a sidecar that never answers, so preflight stops at 4 of
+5 and no email query can run.
+
+Two supervision gaps belong to this repo regardless of the sidecar's own fault:
+
+- Health is checked once at startup and never re-checked, so the daemon reports "running"
+  for a process serving nothing.
+- The `Mailbox` row blames a mailbox when the agent itself is unreachable. An unreachable
+  sidecar belongs upstream of that row, since the check walk is documented to stop at the
+  first failure precisely so later rows do not mislead.
+
+Separately: `EmailConfig()` always attaches `MailboxCheck()`, but triage runs on the local
+model alone. A user with no email connector cannot try the headline feature even when the
+sidecar is healthy.
+
+## A note on measurement
+
+`~/.gaia` and the daemon are machine-global singletons. Git worktree isolation gives file
+isolation, not process or state isolation — two agents running `gaia daemon start/stop`
+destroy each other's results silently. Any daemon-derived reading taken while another
+process held the daemon must be discarded, not reported. Serialise daemon access.
+
 ## Out of scope
 
 - Absorbing the daemon into the Go binary.
-- The `gaia` / `gaia-dev` rename.
+- The `gaia` / `gaia-dev` rename. Blocked by `daemon/client.go:248`, which resolves
+  `gaia` on PATH expecting the Python CLI: the Go binary cannot take that name while it
+  shells out to it.
 - Fedora RPM support.
 - Intel Mac support for the Agent UI — there is no x64 build; this spec only stops the
   site offering one.
@@ -171,3 +258,5 @@ the no-silent-fallbacks rule:
   once signing is in place?
 - Is Linux arm64 a supported target, or explicitly unsupported despite the upstream
   asset existing?
+- Which core release will first ship host API 1.1, and does the component release wait
+  for it or ship with a corrected `min_gaia_version`?
