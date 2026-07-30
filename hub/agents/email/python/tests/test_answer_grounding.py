@@ -3,20 +3,27 @@
 """Tests for ``gaia_agent_email.answer_grounding`` — the deterministic
 post-checks the agent runs on its own final answer text before returning it.
 
-Covers four related honesty defects, all guarded by the same mechanism:
+Covers related honesty defects, all guarded by the same mechanism:
 
 - a mutation narrated as done with no matching tool call this turn
 - a "no urgent/actionable" claim contradicted by the same turn's own scan
 - "unread across your mailboxes" overclaiming a per-INBOX-scoped number
 - internal render/envelope scaffolding (markers, field-name labels, raw
   provider ids, undecoded unicode escapes) echoed into user-facing prose
+- a calendar conflict/overlap verdict narrated without ``detect_calendar_
+  conflicts`` actually running this turn (#2571 — folded in from what used
+  to be a standalone ``process_query`` hook)
+- a "nothing needs you" claim contradicted by the cached attention card
+  the TUI already rendered this process (#2636)
 
 Every pure function is tested directly, with no agent construction and no
 LLM/network access. ``TestProcessQueryWiring`` additionally proves the
 mechanism is actually wired into ``EmailTriageAgent.process_query``, not
-just correct in isolation. ``TestPromptWording`` locks the system prompt's
-own claims to what the code actually does, so the two cannot drift apart
-silently.
+just correct in isolation. ``TestGroundFinalAnswerComposition`` proves the
+calendar and attention-card checks — the two APPEND-only guards — compose
+sequentially rather than one short-circuiting the other. ``TestPromptWording``
+locks the system prompt's own claims to what the code actually does, so the
+two cannot drift apart silently.
 """
 
 from __future__ import annotations
@@ -44,6 +51,7 @@ from gaia_agent_email.answer_grounding import (  # noqa: E402
     decode_stray_unicode_escapes,
     find_attention_card_contradiction,
     find_scaffolding_leak,
+    find_ungrounded_calendar_conflict_claim,
     find_ungrounded_success_claim,
     find_unlicensed_cross_mailbox_claim,
     find_unqualified_negative_claim,
@@ -71,6 +79,32 @@ def _tool_entry(name: str, data: dict) -> dict:
         "role": "tool",
         "name": name,
         "content": [{"type": "text", "text": envelope}],
+    }
+
+
+def _list_events_tool_entry(event_count: int) -> dict:
+    """A ``role: tool`` entry for ``list_calendar_events`` shaped exactly as
+    ``calendar_tools._listed_event_count_from_conversation`` reads it: plain
+    JSON-string ``content`` (NOT the list-wrapped native-tool-calling block
+    ``_tool_entry`` above produces) holding ``{"ok": true, "data": {"events":
+    [...]}}``.
+    """
+    events = [{"id": str(i), "summary": f"event {i}"} for i in range(event_count)]
+    return {
+        "role": "tool",
+        "name": "list_calendar_events",
+        "content": json.dumps({"ok": True, "data": {"events": events}}),
+    }
+
+
+def _detect_conflicts_tool_entry() -> dict:
+    """A minimal ``role: tool`` entry recording that
+    ``detect_calendar_conflicts`` ran this turn — ``tools_called_this_turn``
+    only reads ``name``, so the content shape doesn't matter here."""
+    return {
+        "role": "tool",
+        "name": "detect_calendar_conflicts",
+        "content": json.dumps({"ok": True, "data": {"has_conflict": False}}),
     }
 
 
@@ -388,6 +422,60 @@ class TestDecodeStrayUnicodeEscapes:
 
 
 # ---------------------------------------------------------------------------
+# find_ungrounded_calendar_conflict_claim (#2571) — folded in from what used
+# to be a standalone calendar-only hook in EmailTriageAgent.process_query.
+# The detection logic itself lives in calendar_tools.response_has_ungrounded_
+# conflict_claim; this wrapper only supplies the turn's own tool trace.
+# ---------------------------------------------------------------------------
+
+
+class TestFindUngroundedCalendarConflictClaim:
+    def test_fires_when_events_listed_without_the_conflict_tool(self):
+        convo = [_list_events_tool_entry(2)]
+        reason = find_ungrounded_calendar_conflict_claim(
+            "These two events are back-to-back and do not conflict.", convo
+        )
+        assert reason is not None
+
+    def test_grounded_when_detect_calendar_conflicts_ran(self):
+        convo = [_list_events_tool_entry(2), _detect_conflicts_tool_entry()]
+        assert (
+            find_ungrounded_calendar_conflict_claim(
+                "These two events overlap by 30 minutes.", convo
+            )
+            is None
+        )
+
+    def test_not_flagged_below_two_listed_events(self):
+        convo = [_list_events_tool_entry(1)]
+        assert (
+            find_ungrounded_calendar_conflict_claim(
+                "This event doesn't conflict with anything.", convo
+            )
+            is None
+        )
+
+    def test_fires_with_no_calendar_tool_but_two_times_cited(self):
+        reason = find_ungrounded_calendar_conflict_claim(
+            "Your 7:00 AM and 7:30 AM meetings conflict.", []
+        )
+        assert reason is not None
+
+    def test_no_conflict_language_is_not_flagged(self):
+        convo = [_list_events_tool_entry(2)]
+        assert (
+            find_ungrounded_calendar_conflict_claim(
+                "Here are your two events today.", convo
+            )
+            is None
+        )
+
+    def test_empty_or_missing_answer_never_flagged(self):
+        assert find_ungrounded_calendar_conflict_claim("", []) is None
+        assert find_ungrounded_calendar_conflict_claim(None, []) is None
+
+
+# ---------------------------------------------------------------------------
 # ground_final_answer — the orchestration a real turn goes through
 # ---------------------------------------------------------------------------
 
@@ -553,6 +641,72 @@ class TestGroundFinalAnswerAttentionCard:
 
 
 # ---------------------------------------------------------------------------
+# ground_final_answer wiring for the calendar-conflict guard (#2571) — the
+# fold's own append-only check, exercised through the single orchestration
+# entry point rather than the pure function directly.
+# ---------------------------------------------------------------------------
+
+
+class TestGroundFinalAnswerCalendarConflict:
+    def test_appends_correction_without_destroying_original_text(self):
+        text = (
+            "Here are your events: Budget sync, Design review. These two "
+            "events are back-to-back and do not conflict."
+        )
+        result = {
+            "result": text,
+            "conversation": [_list_events_tool_entry(2)],
+        }
+        out = ground_final_answer(result)
+        assert text in out["result"]
+        assert "detect_calendar_conflicts" in out["result"]
+        assert out["result"] != text
+
+    def test_grounded_by_the_conflict_tool_is_left_untouched(self):
+        text = "These two events overlap by 30 minutes."
+        result = {
+            "result": text,
+            "conversation": [_list_events_tool_entry(2), _detect_conflicts_tool_entry()],
+        }
+        out = ground_final_answer(result)
+        assert out["result"] == text
+
+
+# ---------------------------------------------------------------------------
+# THE composition test — the fold's single most important guarantee. Both
+# the calendar-conflict (#2571) and attention-card (#2636) checks are
+# APPEND-only and independent of each other; an early ``return`` between
+# them (a bug the reference integration actually hit once) would silently
+# suppress whichever check runs second. Both must be able to fire, in
+# sequence, on the very same turn.
+# ---------------------------------------------------------------------------
+
+
+class TestGroundFinalAnswerComposition:
+    def test_calendar_and_attention_card_corrections_both_appear_on_one_turn(self):
+        _store_attention_view(items=[_attention_item("action_item")], scanned=7)
+        text = (
+            "Here are your events: Budget sync, Design review. These two "
+            "events are back-to-back and do not conflict. No action items "
+            "right now."
+        )
+        result = {
+            "result": text,
+            "conversation": [_list_events_tool_entry(2)],
+        }
+        out = ground_final_answer(result)
+
+        # The original answer survives untouched — both checks append.
+        assert text in out["result"]
+        # The calendar-conflict correction fired.
+        assert "detect_calendar_conflicts" in out["result"]
+        # The attention-card correction ALSO fired — neither short-circuited
+        # the other.
+        assert "attention card" in out["result"].lower()
+        assert "7" in out["result"]
+
+
+# ---------------------------------------------------------------------------
 # Wiring — EmailTriageAgent.process_query actually calls ground_final_answer
 # ---------------------------------------------------------------------------
 
@@ -660,6 +814,36 @@ class TestProcessQueryWiring:
                 out = agent.process_query("anything need my attention?")
             assert "No urgent or actionable items found." in out["result"]
             assert "attention card" in out["result"].lower()
+        finally:
+            agent.close_db()
+
+    def test_calendar_conflict_correction_is_appended_by_the_real_override(
+        self, tmp_path
+    ):
+        # #2571, folded from what used to be a standalone hook in
+        # process_query — must still fire through the single
+        # ground_final_answer call site, not a separate code path.
+        agent = _build_agent(tmp_path)
+        try:
+            text = (
+                "These two events are scheduled back-to-back and do not "
+                "conflict with each other."
+            )
+            canned = {
+                "status": "success",
+                "result": text,
+                "conversation": [
+                    {"role": "user", "content": "list my events and flag conflicts"},
+                    _list_events_tool_entry(2),
+                ],
+                "steps_taken": 1,
+            }
+            with patch(
+                "gaia.agents.base.agent.Agent.process_query", return_value=canned
+            ):
+                out = agent.process_query("list my events and flag conflicts")
+            assert text in out["result"]
+            assert "detect_calendar_conflicts" in out["result"]
         finally:
             agent.close_db()
 

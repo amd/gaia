@@ -30,7 +30,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from gaia_agent_email.body_normalize import normalize_email_body
 from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
@@ -701,6 +701,139 @@ def detect_calendar_conflicts_impl(
         }
 
 
+# ===========================================================================
+# Response grounding guard (#2571)
+# ===========================================================================
+#
+# The agent must never narrate its own conflict/overlap verdict from reading
+# listed start/end times — that judgement belongs to
+# ``detect_calendar_conflicts`` alone. This is a deliberately blunt,
+# deterministic grep-level check, not an attempt to parse the model's
+# reasoning. Two ways in:
+#
+# 1. The turn called ``list_calendar_events`` (the common case — the model
+#    saw real events and narrated its own verdict about them instead of
+#    calling the conflict tool). Gated on >=2 events actually listed: below
+#    that no conflict is even possible.
+# 2. The turn called NEITHER calendar tool at all, yet the response still
+#    states a conflict verdict citing >=2 specific times — a claim with no
+#    tool grounding whatsoever (the emptier, more dangerous cousin of (1);
+#    same shape as the "confident claim, empty tool trace" pattern seen
+#    elsewhere, e.g. #2621). Reuses ``_TIME_RE`` (already defined above for
+#    meeting-request time-signal detection) as the "cites specific events"
+#    signal, so an unrelated sentence like "conflicts with your stated
+#    preference" — no times in it — still doesn't trip this.
+
+_CONFLICT_VERDICT_RE = re.compile(
+    r"\bconflicts?\b|\boverlaps?\b|\bback-to-back\b|\bback to back\b|"
+    r"\bdouble[- ]book(?:ed|ing)?\b",
+    re.IGNORECASE,
+)
+
+# How many events must actually be visible for a conflict to even be
+# possible. Below this, "no conflicts" is trivially, arithmetically true.
+_MIN_EVENTS_FOR_A_POSSIBLE_CONFLICT = 2
+
+
+def _listed_event_count_from_conversation(
+    conversation: Iterable[Mapping[str, Any]],
+) -> int:
+    """Largest event count seen in any ``list_calendar_events`` tool result
+    this turn (0 if the tool never ran or every call errored/returned none).
+
+    Reads the same ``{"role": "tool", "name": ..., "content": ...}`` shape
+    ``_tool_names_from_conversation`` (agent.py) reads for tool names — this
+    reads the tool RESULT instead, to know how many events the model
+    actually saw. A malformed/error envelope has no ``data`` key and is
+    silently skipped here (not double-counted as a crash): it already
+    surfaced through the tool's own error envelope.
+
+    Takes the MAX across every call this turn (conversation is rebuilt fresh
+    per turn by the base ``Agent`` — never a prior turn's stale data), not
+    the first/last/sum: a model that re-lists with a different window still
+    saw the largest set at some point this turn, and summing would
+    double-count events returned by more than one overlapping-window call.
+    Biasing toward the larger count only makes this guard MORE likely to
+    ask for verification, never less — consistent with fail-loud over
+    fail-silent when the two calls disagree on scope.
+
+    ``list_calendar_events`` pages at ``max_results`` (25, unrequested by
+    this caller) with no follow-up pagination — a >25-event calendar is
+    under-counted against the true total, but never below 2 when 2+ exist,
+    since the page is a same-order prefix of the full result set, not a
+    filtered subset that could skip the earliest events.
+    """
+    max_count = 0
+    for msg in conversation:
+        if msg.get("role") != "tool" or msg.get("name") != "list_calendar_events":
+            continue
+        try:
+            payload = json.loads(msg.get("content") or "")
+        except (TypeError, ValueError):
+            continue
+        events = ((payload or {}).get("data") or {}).get("events")
+        if isinstance(events, list):
+            max_count = max(max_count, len(events))
+    return max_count
+
+
+def response_has_ungrounded_conflict_claim(
+    response_text: str,
+    tool_names: Iterable[str],
+    listed_event_count: int,
+) -> bool:
+    """True when ``response_text`` renders a conflict/overlap verdict that
+    ``detect_calendar_conflicts`` never computed in the same turn.
+
+    ``tool_names`` is every tool called this turn (order doesn't matter).
+    Always ``False`` once ``detect_calendar_conflicts`` is present — the
+    verdict IS grounded regardless of anything else below.
+
+    Two ways the rest can still be ``True``:
+
+    - ``list_calendar_events`` ran and returned >=2 events (below that, no
+      conflict is even possible, so "no conflicts" is trivially true and
+      not flagged).
+    - NEITHER calendar tool ran, but the response cites >=2 specific times
+      alongside conflict language — a claim with no tool call behind it at
+      all (the emptier, more dangerous case: nothing here even to
+      cross-check against).
+
+    A conflict-shaped word with no calendar tool touched and no cited times
+    (e.g. "that conflicts with your stated preference") is never flagged —
+    it isn't a calendar-conflict claim in the first place.
+    """
+    names = set(tool_names)
+    if "detect_calendar_conflicts" in names:
+        return False
+    if not response_text or not _CONFLICT_VERDICT_RE.search(response_text):
+        return False
+    if "list_calendar_events" in names:
+        return listed_event_count >= _MIN_EVENTS_FOR_A_POSSIBLE_CONFLICT
+    return len(_TIME_RE.findall(response_text)) >= _MIN_EVENTS_FOR_A_POSSIBLE_CONFLICT
+
+
+_UNGROUNDED_CONFLICT_CORRECTION = (
+    "\n\nNote: the conflict/overlap statement above was not verified — it "
+    "was read from the listed times rather than checked with the calendar "
+    "conflict tool. Ask me to check for conflicts and I will confirm with "
+    "detect_calendar_conflicts."
+)
+
+
+def append_conflict_grounding_correction(response_text: str) -> str:
+    """Append a correction notice to a response with an ungrounded conflict
+    claim.
+
+    Never deletes or edits the original text — the listed events themselves
+    came from a real tool call and stay useful; only the conflict verdict
+    specifically is flagged as unverified. Excising just the offending
+    sentence would require parsing free-form prose, which is exactly the
+    kind of guess this guard exists to avoid.
+    """
+    return (response_text or "") + _UNGROUNDED_CONFLICT_CORRECTION
+
+
 DEFAULT_LIST_WINDOW_DAYS = 30
 
 
@@ -955,7 +1088,11 @@ class CalendarToolsMixin:
         ) -> str:
             """List calendar events between two RFC 3339 timestamps.
 
-            Omit both to list the next 30 days (starting now)."""
+            Omit both to list the next 30 days (starting now). This tool only
+            lists events — it does NOT determine whether they conflict. For
+            any question about conflicts, overlaps, or double-booking, call
+            ``detect_calendar_conflicts`` instead of judging the listed
+            times yourself."""
             try:
                 return _envelope_ok(
                     list_calendar_events_impl(
@@ -1097,14 +1234,17 @@ class CalendarToolsMixin:
         def detect_calendar_conflicts(start_iso: str, end_iso: str) -> str:
             """Flag calendar events that conflict with a proposed time.
 
-            Read-only — reads the calendar but makes no changes. ``start_iso``
-            and ``end_iso`` are RFC 3339 timestamps bounding the proposed
-            meeting. Returns an envelope whose ``data`` has ``has_conflict``
-            (bool) and ``conflicts`` (the overlapping events, each with
-            ``id``/``summary``/``start``/``end``). Overlap is half-open: a
-            meeting ending exactly when another begins does NOT conflict. If
-            the calendar can't be read, this surfaces the error rather than
-            reporting a reassuring "no conflicts".
+            Call this whenever the user asks about conflicts, overlaps, or
+            double-booking — never judge overlap yourself from listed
+            start/end times. Read-only — reads the calendar but makes no
+            changes. ``start_iso`` and ``end_iso`` are RFC 3339 timestamps
+            bounding the proposed meeting. Returns an envelope whose
+            ``data`` has ``has_conflict`` (bool) and ``conflicts`` (the
+            overlapping events, each with ``id``/``summary``/``start``/
+            ``end``). Overlap is half-open: a meeting ending exactly when
+            another begins does NOT conflict. If the calendar can't be
+            read, this surfaces the error rather than reporting a
+            reassuring "no conflicts".
             """
             try:
                 return _envelope_ok(

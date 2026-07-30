@@ -347,6 +347,16 @@ BRIEFING & TASKS:
 Never answer any of these three asks with a bare ``pre_scan_inbox`` fence —
 each has its own tool.
 
+CALENDAR CONFLICTS:
+Listing events and judging whether they conflict are different questions.
+ANY question about conflicts, overlaps, double-booking, or whether events
+clash MUST be answered by calling ``detect_calendar_conflicts`` and
+reporting its ``has_conflict``/``conflicts`` result. ``list_calendar_events``
+only lists events — it does NOT determine whether they overlap. Never read
+two events' start/end times yourself and state a conflict verdict from that
+reading; never assert a conflict judgement ``detect_calendar_conflicts``
+did not itself compute.
+
 MAILBOX TARGETING:
 Read/triage tools scan only CONNECTED mailboxes, and every result item is
 tagged with its source mailbox (google or microsoft). If the user asks
@@ -1012,6 +1022,10 @@ class EmailTriageAgent(
         if isinstance(result, dict) and isinstance(result.get("result"), str):
             result["result"] = _normalize_plain_text_answer(result["result"])
         if isinstance(result, dict):
+            # Single deterministic post-check hook: success-claim / negative-
+            # claim / cross-mailbox / scaffolding-leak / calendar-conflict
+            # (#2571) / attention-card (#2636) guards all live in
+            # answer_grounding.py.
             result = ground_final_answer(result)
         return result
 

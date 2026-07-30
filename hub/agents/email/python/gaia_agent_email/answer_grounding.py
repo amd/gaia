@@ -27,6 +27,11 @@ from typing import Any, Dict, Iterator, List, Optional
 
 from gaia_agent_email.attention_cache import ATTENTION_CACHE_TTL_SECONDS
 from gaia_agent_email.attention_cache import peek as _peek_attention_cache
+from gaia_agent_email.tools.calendar_tools import (
+    _listed_event_count_from_conversation,
+    append_conflict_grounding_correction,
+    response_has_ungrounded_conflict_claim,
+)
 
 from gaia.logger import get_logger
 
@@ -316,7 +321,43 @@ def _honest_prescan_summary(envelope: Dict[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Guard 4 — negative claims contradicted by the cached ATTENTION CARD (#2636)
+# Guard 4 — a calendar conflict/overlap verdict the model narrated itself
+# instead of getting from detect_calendar_conflicts (#2571)
+# ---------------------------------------------------------------------------
+
+
+def find_ungrounded_calendar_conflict_claim(
+    final_answer: Optional[str], conversation: Optional[List[Dict[str, Any]]]
+) -> Optional[str]:
+    """Return a reason string when ``final_answer`` narrates a calendar
+    conflict/overlap verdict that this turn's own tool trace never computed;
+    ``None`` when the claim is grounded or the answer makes no such claim.
+
+    The actual detection is deterministic interval-adjacent text matching in
+    ``calendar_tools.response_has_ungrounded_conflict_claim`` — two ways in:
+    ``list_calendar_events`` ran and returned >=2 events (below that no
+    conflict is even possible), or NEITHER calendar tool ran at all but the
+    response still cites >=2 specific times alongside conflict language.
+    ``detect_calendar_conflicts`` having run this turn always grounds the
+    claim. Unlike the other guards in this module, the caller APPENDS a
+    correction rather than replacing the answer outright (see
+    ``append_conflict_grounding_correction``) — the listed events themselves
+    came from a real tool call and stay useful; only the self-narrated
+    verdict is unverified.
+    """
+    if not final_answer:
+        return None
+    tool_names = tools_called_this_turn(conversation)
+    listed_event_count = _listed_event_count_from_conversation(conversation or [])
+    if response_has_ungrounded_conflict_claim(
+        final_answer, tool_names, listed_event_count
+    ):
+        return "narrates a calendar conflict verdict without detect_calendar_conflicts"
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Guard 5 — negative claims contradicted by the cached ATTENTION CARD (#2636)
 # ---------------------------------------------------------------------------
 #
 # Unlike guard 2 above, the attention view is never a tool result in THIS
@@ -449,6 +490,15 @@ def ground_final_answer(result: Dict[str, Any]) -> Dict[str, Any]:
     claim that has already been shown false is not a base worth editing
     from. A replaced answer is not re-scanned by the other check: each
     fallback is already, by construction, clean of the pattern it replaces.
+
+    The calendar-conflict (#2571) and attention-card (#2636) checks run
+    last and, unlike the two above, APPEND a correction instead of
+    replacing the answer — in both cases the rest of the answer stays
+    useful and only a specific clause is unverified/contradicted. They
+    never run against text a prior contradiction check has already
+    replaced (those checks already ``return``), but they are independent
+    of each other and MUST both be allowed to fire on the same turn,
+    appending in sequence — neither may short-circuit the other.
     """
     final_answer = result.get("result")
     if not isinstance(final_answer, str) or not final_answer:
@@ -481,10 +531,24 @@ def ground_final_answer(result: Dict[str, Any]) -> Dict[str, Any]:
         result["result"] = _honest_prescan_summary(envelope or {})
         return result
 
-    # Appended, not replaced (unlike the pre_scan guard above): the false
-    # clause here is typically one clause inside an otherwise-useful answer
-    # (e.g. a drafted reply plus a wrong aside about "no action items"), so
-    # qualifying it costs the user less than scrubbing the whole message.
+    # Both remaining checks APPEND rather than replace (unlike the two
+    # contradiction checks above): the false clause is typically one aside
+    # inside an otherwise-useful answer (e.g. a drafted reply plus a wrong
+    # note about "no action items", or a conflict verdict tacked onto a
+    # correct event listing), so qualifying it costs the user less than
+    # scrubbing the whole message. Both are independent and may fire on the
+    # same turn — this must NOT be an if/elif or an early return, or one
+    # correction silently suppresses the other.
+    calendar_conflict_reason = find_ungrounded_calendar_conflict_claim(
+        final_answer, conversation
+    )
+    if calendar_conflict_reason:
+        logger.warning(
+            "email agent: appended ungrounded calendar-conflict correction — %s",
+            calendar_conflict_reason,
+        )
+        final_answer = append_conflict_grounding_correction(final_answer)
+
     attention_reason = find_attention_card_contradiction(final_answer)
     if attention_reason:
         logger.warning(
@@ -506,6 +570,7 @@ __all__ = [
     "decode_stray_unicode_escapes",
     "find_attention_card_contradiction",
     "find_scaffolding_leak",
+    "find_ungrounded_calendar_conflict_claim",
     "find_ungrounded_success_claim",
     "find_unlicensed_cross_mailbox_claim",
     "find_unqualified_negative_claim",
