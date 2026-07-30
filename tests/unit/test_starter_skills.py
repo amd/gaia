@@ -255,9 +255,7 @@ def test_every_starter_skill_is_discovered(pack_manager: SkillManager):
 
 
 @pytest.mark.parametrize("skill_dir", STARTER_DIRS, ids=_ids(STARTER_DIRS))
-def test_starter_skill_loads_with_its_body(
-    skill_dir: Path, pack_manager: SkillManager
-):
+def test_starter_skill_loads_with_its_body(skill_dir: Path, pack_manager: SkillManager):
     """Level 2 disclosure: the manager returns the full procedure."""
     skill = pack_manager.load(skill_dir.name)
 
