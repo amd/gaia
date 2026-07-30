@@ -344,15 +344,16 @@ contract version is tracked separately as
   instead of the length-only formula's false positive.
 - **A slow credential-store read no longer takes the whole sidecar down.**
   `GET /v1/email/connectors` read the OS credential store directly on the
-  asyncio event loop. That read can block without bound — on macOS a keychain
-  access by a binary the keychain ACL does not recognize raises an
-  authorization prompt, and a daemon-spawned background process never gets it
-  answered — so a single request wedged *every* route in the process,
-  `/health` included, while the process stayed alive and its supervisor went on
-  reporting it "running". Confirmed against the published 0.5.0 binary with a
-  stack sample: the loop's main thread sat in `SecItemCopyMatching`. The read
-  now runs off the loop, so a stuck credential store costs one request instead
-  of the entire sidecar.
+  asyncio event loop, and that read has no bounded worst case — on macOS it can
+  sit in `SecItemCopyMatching` waiting on an authorization decision a background
+  process never receives, and a corrupted or contended store can stall it too.
+  On the loop, a stall like that costs the whole process rather than one
+  request: nothing else can be scheduled until it returns, so every route stops
+  answering, `/health` included, while the process stays alive and its
+  supervisor goes on reporting it "running". Seen in the field on one machine
+  and captured with a stack sample of the parked loop. The read now runs off the
+  loop, so however long the credential store takes, the rest of the sidecar
+  keeps answering.
 
 - **`POST /autonomy/run` refuses instead of silently no-oping while autonomy
   is `off` (#2528).** Previously the route returned HTTP 200 with the same

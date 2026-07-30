@@ -43,11 +43,11 @@ const (
 	healthOK = `{"status":"ok"}`
 
 	// The relay's 503 for a sidecar that passed its startup handshake and has
-	// since stopped serving — the published-binary wedge: an async handler doing
-	// a blocking Keychain read parks the event loop and every route with it, pid
-	// and port intact, so the daemon's own listing keeps saying "running".
-	// VERBATIM from sidecars/manager.check_responsive, which nothing on the
-	// Python side pins — a reword there has to break a test here.
+	// since stopped serving: whatever parks the event loop — a blocking call, a
+	// hung dependency — takes every route with it while pid and port stay
+	// intact, so the daemon's own listing keeps saying "running".
+	// VERBATIM from sidecars/manager.check_responsive; the phrase the row
+	// matches on is pinned Python-side too (test_sidecar_alive_but_not_serving).
 	healthWedged = `{"detail":"email sidecar (pid 41999) is alive but did not answer ` +
 		`http://127.0.0.1:51234/health within 2.0s (ReadTimeout: ). It passed its startup ` +
 		"health check, so it has stopped serving since — typically a blocked event loop or " +

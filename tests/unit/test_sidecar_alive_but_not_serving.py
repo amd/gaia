@@ -4,14 +4,18 @@
 
 The startup health check (``_wait_for_health``) runs once and is never
 re-checked, and ``is_running`` only asks ``poll()`` whether the PROCESS exists.
-Between them they cannot see the failure that actually shipped: the published
-email sidecar passed its health check, then blocked its event loop on a
-credential-store read and stopped answering every route — while the process
-stayed alive, so the daemon reported it "running" indefinitely and the only
-symptom was an unrelated preflight row timing out ten seconds later.
+Between them they cannot see a sidecar that came up, passed its handshake, and
+later stopped serving — a blocked event loop, a wedged credential-store read, a
+hung dependency. The process stays alive through all of it, so the daemon goes
+on reporting "running" and the only symptom is an unrelated caller timing out
+much later against a row that had nothing to do with the fault.
 
-These tests pin the re-check: a live process whose port answers nothing is a
-loud, typed, actionable failure at the moment a caller tries to use it.
+Observed in the field: an email sidecar that answered ``/health`` and
+``/version``, then stopped answering every route while its process stayed up.
+What triggers that is environment-specific and not the point — the supervision
+gap is that the daemon could not TELL, and these tests pin the re-check that
+lets it: a live process whose port answers nothing is a loud, typed, actionable
+failure at the moment a caller tries to use it.
 """
 
 from __future__ import annotations
@@ -62,7 +66,7 @@ def _manager_bound_to(proc, port: int) -> mgr.AgentSidecarManager:
 def test_alive_process_that_serves_nothing_is_not_reported_healthy(
     alive_process, tmp_path
 ):
-    """The exact shipped failure: process up, port dead, daemon says 'running'."""
+    """The shape the daemon could not see: process up, port dead, state 'running'."""
     port = mgr.find_free_port()
     m = _manager_bound_to(alive_process, port)
     m.log_dir = tmp_path

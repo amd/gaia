@@ -2,16 +2,18 @@
 # SPDX-License-Identifier: MIT
 """A slow credential-store read must not take the whole sidecar down.
 
-``GET /v1/email/connectors`` reads the OS credential store. That read can block
-for an unbounded time — on macOS a keychain access by a binary the keychain ACL
-does not know raises an authorization prompt, and a daemon-spawned background
-process never gets it answered. Reproduced against the published 0.5.0 binary:
-one such request blocked ``SecItemCopyMatching`` on the asyncio event loop, so
-EVERY route stopped answering — including ``/health`` — while the process
-stayed alive and the daemon went on reporting it "running".
+``GET /v1/email/connectors`` reads the OS credential store. That read has no
+bounded worst case: on macOS a keychain access can sit in ``SecItemCopyMatching``
+waiting on an authorization decision that a background process never gets, and
+a corrupted or contended store can stall it too.
 
-The guard is that the blocking read happens off the event loop, so a stuck
-credential store costs one request instead of the entire process.
+Run on the event loop, a stall like that does not cost one request — it costs
+the whole process, ``/health`` included, because nothing else can be scheduled
+until it returns. That is what makes it invisible to a supervisor: the process
+stays alive and keeps its port, so it looks healthy while serving nothing.
+
+The guard is that the read happens off the loop, so however long the credential
+store takes, it costs one request and the rest of the sidecar keeps answering.
 """
 
 from __future__ import annotations
