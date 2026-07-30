@@ -2290,22 +2290,24 @@ def get_attention_backends() -> Dict[str, Any]:
 # the live scan, and every call within the freshness window reuses it.
 # ---------------------------------------------------------------------------
 
+from gaia_agent_email import attention_cache as _attention_cache_store  # noqa: E402
+from gaia_agent_email.attention_cache import ATTENTION_CACHE_TTL_SECONDS  # noqa: E402
+
 # Seconds a computed result is served verbatim (stale=False) before the next
 # call attempts a live refresh. Deliberately not parameterized by
 # max_messages — the TUI always calls this with its default, and keying the
 # cache on every possible parameter combination is complexity this single-
 # consumer surface does not need yet.
-ATTENTION_CACHE_TTL_SECONDS = 120.0
-
-_attention_cache: Optional[Dict[str, Any]] = None
-_attention_cache_lock = threading.Lock()
+#
+# Storage lives in ``attention_cache.py`` (a dependency-light leaf module),
+# not here, so ``answer_grounding.py``'s prose-vs-card contradiction guard
+# (#2636) can read the same cache without importing this FastAPI-heavy
+# module — re-exported here so existing call sites/tests are unaffected.
 
 
 def reset_attention_cache() -> None:
     """Clear the in-process attention-view cache. Test-only seam."""
-    global _attention_cache
-    with _attention_cache_lock:
-        _attention_cache = None
+    _attention_cache_store.reset()
 
 
 def _attention_view_with_age(
@@ -2328,10 +2330,8 @@ def _get_or_refresh_attention_view(
     successfully. With no prior cache at all, the failure propagates —
     there is nothing honest to fall back to.
     """
-    global _attention_cache
     now = time.time()
-    with _attention_cache_lock:
-        cached = _attention_cache
+    cached = _attention_cache_store.peek()
     if (
         cached is not None
         and (now - cached["_computed_at"]) < ATTENTION_CACHE_TTL_SECONDS
@@ -2348,10 +2348,8 @@ def _get_or_refresh_attention_view(
         if cached is not None:
             return _attention_view_with_age(cached, now=now, stale=True)
         raise
-    fresh["_computed_at"] = now
-    with _attention_cache_lock:
-        _attention_cache = fresh
-    return _attention_view_with_age(fresh, now=now, stale=False)
+    _attention_cache_store.store(fresh, computed_at=now)
+    return _attention_view_with_age(_attention_cache_store.peek(), now=now, stale=False)
 
 
 @router.get(

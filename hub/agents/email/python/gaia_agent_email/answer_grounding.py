@@ -22,7 +22,11 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from typing import Any, Dict, Iterator, List, Optional
+
+from gaia_agent_email.attention_cache import ATTENTION_CACHE_TTL_SECONDS
+from gaia_agent_email.attention_cache import peek as _peek_attention_cache
 
 from gaia.logger import get_logger
 
@@ -312,6 +316,125 @@ def _honest_prescan_summary(envelope: Dict[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Guard 4 — negative claims contradicted by the cached ATTENTION CARD (#2636)
+# ---------------------------------------------------------------------------
+#
+# Unlike guard 2 above, the attention view is never a tool result in THIS
+# turn's own trace: ``build_attention_view_impl`` has no ``@tool`` wrapper
+# (#2582 built it purely for the TUI to render on open, via
+# ``GET /v1/email/attention``), so the model generating ``final_answer`` has
+# no way to see it and cannot ground itself against it on its own. The one
+# honest source of "what the user is actually looking at right now" is the
+# process-global cache that route already populated -- ``server.py`` mounts
+# both that route and the agent's ``/query`` surface on one FastAPI app, and
+# the sidecar is single-tenant by design (``_SessionRegistry``, one user's
+# mailbox per process), so there is exactly one attention view to reconcile
+# against, never one per session. This guard is therefore deliberately
+# turn-INDEPENDENT: it does not require any tool call this turn, only that a
+# cached view exists and is still fresh enough to trust.
+
+_ATTENTION_CATEGORY_NOUNS = {
+    "meeting_request": r"meetings?|meeting\s+proposals?",
+    "waiting_on_you": r"(?:messages?\s+)?waiting\s+on\s+you",
+    "needs_review": r"(?:messages?\s+(?:worth|needing)\s+(?:a\s+)?review|reviews?)",
+    "action_item": r"action\s+items?",
+}
+_ATTENTION_CATEGORY_RE = {
+    kind: re.compile(rf"\bno\b[^.!?]{{0,40}}\b(?:{noun})\b", re.IGNORECASE)
+    for kind, noun in _ATTENTION_CATEGORY_NOUNS.items()
+}
+
+_ATTENTION_CATEGORY_LABELS = {
+    "meeting_request": "meeting proposal",
+    "waiting_on_you": "message waiting on you",
+    "needs_review": "message worth a closer look",
+    "action_item": "open action item",
+}
+
+
+def _attention_card_all_clear_claim(text: str) -> bool:
+    return bool(
+        _NO_URGENT_RE.search(text)
+        or _NO_ACTIONABLE_RE.search(text)
+        or _ALL_CLEAR_RE.search(text)
+    )
+
+
+def _attention_item_counts(cached: Dict[str, Any]) -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    for item in cached.get("items") or []:
+        kind = item.get("kind") if isinstance(item, dict) else None
+        if kind:
+            counts[kind] = counts.get(kind, 0) + 1
+    return counts
+
+
+def find_attention_card_contradiction(final_answer: Optional[str]) -> Optional[str]:
+    """Return a reason when ``final_answer`` asserts absence of a category
+    the cached attention card currently shows as non-empty, ``None`` when
+    there is nothing to reconcile against or the claim is grounded.
+
+    Declines to correct once the cache is older than
+    ``ATTENTION_CACHE_TTL_SECONDS`` -- the same freshness window
+    ``GET /v1/email/attention`` itself uses to decide a cached value is too
+    old to serve without recomputing. Past that window the items the card
+    showed may already be resolved, and asserting they are still open would
+    be #2636's own dishonesty pointed the other way; declining is a refusal
+    to assert something no longer supportable, not a silent fallback.
+    """
+    if not final_answer:
+        return None
+    cached = _peek_attention_cache()
+    if cached is None:
+        return None
+    age = time.time() - cached["_computed_at"]
+    if age > ATTENTION_CACHE_TTL_SECONDS:
+        return None
+    counts = _attention_item_counts(cached)
+    if not counts:
+        return None
+
+    if _attention_card_all_clear_claim(final_answer):
+        total = sum(counts.values())
+        return f"claims no urgent/actionable items while the attention card has {total}"
+
+    for kind, pattern in _ATTENTION_CATEGORY_RE.items():
+        if counts.get(kind) and pattern.search(final_answer):
+            return f"claims no {kind} while the attention card has {counts[kind]}"
+    return None
+
+
+def _attention_card_correction(cached: Dict[str, Any]) -> str:
+    """A short correction naming the surface and its coverage, built
+    straight from the cached envelope's own counts (#2636 AC 2)."""
+    counts = _attention_item_counts(cached)
+    parts = []
+    for kind, label in _ATTENTION_CATEGORY_LABELS.items():
+        n = counts.pop(kind, 0)
+        if n:
+            parts.append(f"{n} {label}{'s' if n != 1 else ''}")
+    for kind, n in counts.items():
+        if n:
+            parts.append(f"{n} {kind}")
+    listing = ", ".join(parts) if parts else "items still open"
+
+    coverage = cached.get("coverage") or {}
+    scanned = coverage.get("scanned")
+    coverage_text = (
+        f"{scanned} messages scanned"
+        if isinstance(scanned, int)
+        else "coverage unknown"
+    )
+    age = max(0.0, time.time() - cached["_computed_at"])
+    age_text = f"{int(age)}s" if age < 60 else f"{int(age // 60)}m"
+
+    return (
+        f"(Your attention card — updated {age_text} ago, {coverage_text} — "
+        f"still shows {listing}.)"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Orchestration — the single call site EmailTriageAgent.process_query uses
 # ---------------------------------------------------------------------------
 
@@ -358,6 +481,22 @@ def ground_final_answer(result: Dict[str, Any]) -> Dict[str, Any]:
         result["result"] = _honest_prescan_summary(envelope or {})
         return result
 
+    # Appended, not replaced (unlike the pre_scan guard above): the false
+    # clause here is typically one clause inside an otherwise-useful answer
+    # (e.g. a drafted reply plus a wrong aside about "no action items"), so
+    # qualifying it costs the user less than scrubbing the whole message.
+    attention_reason = find_attention_card_contradiction(final_answer)
+    if attention_reason:
+        logger.warning(
+            "email agent: appended attention-card correction — %s",
+            attention_reason,
+        )
+        cached = _peek_attention_cache()
+        if cached is not None:
+            final_answer = (
+                final_answer.rstrip() + "\n\n" + _attention_card_correction(cached)
+            )
+
     result["result"] = final_answer
     return result
 
@@ -365,6 +504,7 @@ def ground_final_answer(result: Dict[str, Any]) -> Dict[str, Any]:
 __all__ = [
     "UNGROUNDED_SUCCESS_FALLBACK",
     "decode_stray_unicode_escapes",
+    "find_attention_card_contradiction",
     "find_scaffolding_leak",
     "find_ungrounded_success_claim",
     "find_unlicensed_cross_mailbox_claim",

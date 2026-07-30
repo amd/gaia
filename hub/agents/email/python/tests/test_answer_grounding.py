@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import sys
+import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -36,10 +37,12 @@ if str(_REPO_ROOT) not in sys.path:
 
 pytest.importorskip("gaia_agent_email")
 
+from gaia_agent_email import attention_cache  # noqa: E402
 from gaia_agent_email.agent import EmailTriageAgent, _SYSTEM_PROMPT  # noqa: E402
 from gaia_agent_email.answer_grounding import (  # noqa: E402
     UNGROUNDED_SUCCESS_FALLBACK,
     decode_stray_unicode_escapes,
+    find_attention_card_contradiction,
     find_scaffolding_leak,
     find_ungrounded_success_claim,
     find_unlicensed_cross_mailbox_claim,
@@ -83,6 +86,57 @@ def _prescan_envelope(**overrides) -> dict:
     }
     base.update(overrides)
     return base
+
+
+def _attention_item(kind: str, **overrides) -> dict:
+    base = {
+        "kind": kind,
+        "message_id": "m1",
+        "thread_id": "t1",
+        "sender": "colleague@example.com",
+        "subject": "subject",
+        "why": "why",
+    }
+    base.update(overrides)
+    return base
+
+
+def _cached_attention_view(*, items: list, scanned: int = 100) -> dict:
+    """A record shaped like ``attention_cache.peek()``'s return value --
+    i.e. what ``GET /v1/email/attention`` last computed (minus
+    ``_computed_at``, which ``_store_attention_view`` stamps separately)."""
+    return {
+        "kind": "email_attention",
+        "items": items,
+        "coverage": {
+            "scanned": scanned,
+            "total_unread": None,
+            "scan_truncated": False,
+            "degraded": False,
+        },
+        "generated_at": "2026-01-01T00:00:00+00:00",
+    }
+
+
+def _store_attention_view(
+    *, items: list, scanned: int = 100, age_seconds: float = 0.0
+) -> None:
+    """Populate ``attention_cache`` as if ``GET /v1/email/attention`` had
+    computed this view ``age_seconds`` ago. Threads ``computed_at`` through
+    explicitly -- ``attention_cache.store`` stamps "now" by default, which
+    would silently discard a deliberately-aged fixture otherwise."""
+    view = _cached_attention_view(items=items, scanned=scanned)
+    attention_cache.store(view, computed_at=time.time() - age_seconds)
+
+
+@pytest.fixture(autouse=True)
+def _clean_attention_cache():
+    """The attention cache is a process-global (#2636) -- reset it around
+    every test in this module so one test's cached view can never leak into
+    another's assertions, regardless of run order."""
+    attention_cache.reset()
+    yield
+    attention_cache.reset()
 
 
 # ---------------------------------------------------------------------------
@@ -387,6 +441,118 @@ class TestGroundFinalAnswer:
 
 
 # ---------------------------------------------------------------------------
+# find_attention_card_contradiction — reconciles prose against the cached
+# attention view (#2636), which is NEVER a tool result in this turn's own
+# trace (build_attention_view_impl has no @tool wrapper -- #2582 built it
+# purely for the TUI's on-open render), so this guard is turn-INdependent
+# by necessity: it reads the same process-global cache api_routes.py's
+# GET /v1/email/attention already serves the TUI from.
+# ---------------------------------------------------------------------------
+
+
+class TestFindAttentionCardContradiction:
+    def test_no_cache_at_all_is_never_flagged(self):
+        # Card never rendered this process -- nothing to reconcile against,
+        # not a hidden fallback (there is genuinely no known card state).
+        assert (
+            find_attention_card_contradiction("No urgent or actionable items found.")
+            is None
+        )
+
+    def test_cached_but_empty_items_is_never_flagged(self):
+        _store_attention_view(items=[])
+        assert find_attention_card_contradiction("Nothing needs you right now.") is None
+
+    def test_all_clear_claim_contradicted_by_non_empty_card(self):
+        _store_attention_view(items=[_attention_item("action_item")], scanned=7)
+        reason = find_attention_card_contradiction(
+            "No urgent or actionable items found."
+        )
+        assert reason is not None
+        assert "1" in reason
+
+    def test_category_specific_claim_contradicted(self):
+        _store_attention_view(items=[_attention_item("meeting_request")])
+        reason = find_attention_card_contradiction("No meeting proposals right now.")
+        assert reason is not None
+        assert "meeting_request" in reason
+
+    def test_grounded_claim_naming_the_real_count_is_not_flagged(self):
+        _store_attention_view(items=[_attention_item("action_item")])
+        text = "You have 1 action item to review."
+        assert find_attention_card_contradiction(text) is None
+
+    def test_stale_cache_past_ttl_declines_to_correct(self):
+        from gaia_agent_email.attention_cache import ATTENTION_CACHE_TTL_SECONDS
+
+        _store_attention_view(
+            items=[_attention_item("action_item")],
+            age_seconds=ATTENTION_CACHE_TTL_SECONDS + 1,
+        )
+        # The card may since have been cleared -- correcting from data this
+        # old would risk asserting a since-resolved item is still open,
+        # which is #2636's own dishonesty pointed the other way.
+        assert find_attention_card_contradiction("No action items right now.") is None
+
+    def test_cache_just_within_ttl_still_corrects(self):
+        from gaia_agent_email.attention_cache import ATTENTION_CACHE_TTL_SECONDS
+
+        _store_attention_view(
+            items=[_attention_item("action_item")],
+            age_seconds=ATTENTION_CACHE_TTL_SECONDS - 1,
+        )
+        assert (
+            find_attention_card_contradiction("No action items right now.") is not None
+        )
+
+    def test_empty_or_missing_answer_never_flagged(self):
+        _store_attention_view(items=[_attention_item("action_item")])
+        assert find_attention_card_contradiction("") is None
+        assert find_attention_card_contradiction(None) is None
+
+
+# ---------------------------------------------------------------------------
+# ground_final_answer wiring for the attention-card guard -- appends a
+# correction rather than replacing (unlike the pre_scan guard above): the
+# false clause here is typically one clause inside an otherwise-useful
+# answer, so scrubbing the whole message is a worse trade for the user than
+# qualifying it (#2636).
+# ---------------------------------------------------------------------------
+
+
+class TestGroundFinalAnswerAttentionCard:
+    def test_appends_correction_without_destroying_original_text(self):
+        _store_attention_view(
+            items=[_attention_item("action_item"), _attention_item("meeting_request")],
+            scanned=42,
+        )
+        result = {
+            "result": "Hi! No urgent or actionable items found.",
+            "conversation": [],
+        }
+        out = ground_final_answer(result)
+        assert "Hi! No urgent or actionable items found." in out["result"]
+        assert "attention card" in out["result"].lower()
+        assert "42" in out["result"]
+
+    def test_no_cache_leaves_the_answer_untouched(self):
+        result = {"result": "No urgent or actionable items found.", "conversation": []}
+        out = ground_final_answer(result)
+        assert out["result"] == "No urgent or actionable items found."
+
+    def test_stale_cache_leaves_the_answer_untouched(self):
+        from gaia_agent_email.attention_cache import ATTENTION_CACHE_TTL_SECONDS
+
+        _store_attention_view(
+            items=[_attention_item("action_item")],
+            age_seconds=ATTENTION_CACHE_TTL_SECONDS + 1,
+        )
+        result = {"result": "No action items right now.", "conversation": []}
+        out = ground_final_answer(result)
+        assert out["result"] == "No action items right now."
+
+
+# ---------------------------------------------------------------------------
 # Wiring — EmailTriageAgent.process_query actually calls ground_final_answer
 # ---------------------------------------------------------------------------
 
@@ -467,6 +633,33 @@ class TestProcessQueryWiring:
             ):
                 out = agent.process_query("pre-scan my inbox")
             assert out["result"] == text
+        finally:
+            agent.close_db()
+
+    def test_attention_card_contradiction_is_appended_by_the_real_override(
+        self, tmp_path
+    ):
+        # #2636: the model never called any attention-view tool this turn
+        # (there isn't one -- build_attention_view_impl has no @tool wrapper),
+        # yet the cached card the TUI already rendered this process disagrees
+        # with the answer. The real process_query override must still catch it.
+        _store_attention_view(items=[_attention_item("action_item")], scanned=7)
+        agent = _build_agent(tmp_path)
+        try:
+            canned = {
+                "status": "success",
+                "result": "No urgent or actionable items found.",
+                "conversation": [
+                    {"role": "user", "content": "anything need my attention?"}
+                ],
+                "steps_taken": 1,
+            }
+            with patch(
+                "gaia.agents.base.agent.Agent.process_query", return_value=canned
+            ):
+                out = agent.process_query("anything need my attention?")
+            assert "No urgent or actionable items found." in out["result"]
+            assert "attention card" in out["result"].lower()
         finally:
             agent.close_db()
 
