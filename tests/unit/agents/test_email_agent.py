@@ -154,8 +154,16 @@ class TestToolRegistry:
         "profile_inbox",
         # Connection state (#2401)
         "list_connected_mailboxes",
+        # Agent-led mailbox onboarding (#2469) — pre-existing gap, this file
+        # never got these two when onboarding_tools.py landed.
+        "check_mailbox_access",
+        "setup_mailbox_access",
         # Follow-up tracking (#1606) — read-only detection
         "check_followups",
+        # Waiting-on-you detection (#2581) — inbound mail awaiting the
+        # user's reply (the opposite direction from check_followups);
+        # pre-existing gap, this file never got it when it landed.
+        "list_waiting_on_you",
         # Organize
         "archive_message",
         "mark_read",
@@ -187,7 +195,8 @@ class TestToolRegistry:
         # Delete
         "trash_message",
         "restore_message",
-        "permanent_delete",
+        "restore_trashed_message",
+        "search_trash",
         # Phishing quarantine (#1271)
         "quarantine_phishing_message",
         "unquarantine_message",
@@ -206,6 +215,12 @@ class TestToolRegistry:
         "set_low_priority_sender",
         "set_category_default",
         "clear_session_preferences",
+        # Per-entry preference removal + readback (#2520). Undoing one sender
+        # previously meant clear_session_preferences, which wiped all of them.
+        "remove_priority_sender",
+        "remove_low_priority_sender",
+        "remove_category_default",
+        "get_preferences",
         # Inbox profiling from memory (#1289)
         "profile_inbox",
         # Voice/style profile from Sent mail (#1607)
@@ -252,7 +267,6 @@ class TestConfirmationGating:
             "send_now",
             "schedule_send",
             "forward_message",
-            "permanent_delete",
             "accept_invite",
             "decline_invite",
             "create_event_from_email",
@@ -260,6 +274,16 @@ class TestConfirmationGating:
     )
     def test_destructive_tool_is_confirmation_gated(self, tool_name):
         assert tool_name in EmailTriageAgent.confirmation_required_tools()
+
+    def test_permanent_delete_is_not_a_registered_tool(self, agent):
+        """#2533: the tool is gone, not merely ungated — assert against the
+        real registry (not a hand list), so a regression that re-adds it is
+        caught even if this test file's own EXPECTED_TOOLS is never touched.
+        """
+        from gaia.agents.base.tools import _TOOL_REGISTRY
+
+        assert "permanent_delete" not in _TOOL_REGISTRY
+        assert "permanent_delete" not in EmailTriageAgent.confirmation_required_tools()
 
 
 class TestAC3LocalLLMOnly:

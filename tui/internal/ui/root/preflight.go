@@ -10,6 +10,8 @@ import (
 	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/daemon"
 	"github.com/amd/gaia/tui/internal/ui/preflight"
+
+	"github.com/amd/gaia/tui/internal/ui/theme"
 )
 
 // beginPreflight puts the readiness gate between the hub and the chat.
@@ -215,12 +217,12 @@ func (m RootModel) handleConnectKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 var (
-	connectTitle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("150"))
-	connectDim     = lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
-	connectDivider = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
-	connectText    = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-	connectCmd     = lipgloss.NewStyle().Foreground(lipgloss.Color("150"))
-	connectKey     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
+	connectTitle   = lipgloss.NewStyle().Bold(true).Foreground(theme.AccentBright)
+	connectDim     = lipgloss.NewStyle().Foreground(theme.Dim)
+	connectDivider = lipgloss.NewStyle().Foreground(theme.Divider)
+	connectText    = lipgloss.NewStyle().Foreground(theme.Text)
+	connectCmd     = lipgloss.NewStyle().Foreground(theme.Accent)
+	connectKey     = lipgloss.NewStyle().Bold(true).Foreground(theme.Info)
 )
 
 // outlookSetupDoc is where the Outlook path continues. It is a doc, not a

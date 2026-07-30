@@ -38,6 +38,7 @@ from typing import Iterable, Sequence
 from urllib.parse import urlencode
 
 from gaia.connectors.errors import OAuthClientNotConfiguredError
+from gaia.connectors.setup_routes import MS_PERSONAL, render_console_steps
 
 # Default login tenant. ``common`` accepts personal AND work/school accounts.
 # Overridable via GAIA_MICROSOFT_TENANT (a single-tenant Entra id, or
@@ -159,18 +160,12 @@ class MicrosoftOAuthProvider:
             raise OAuthClientNotConfiguredError(
                 "microsoft",
                 provider_label="Microsoft",
-                console_steps=(
-                    "  1. Register an app at https://portal.azure.com -> "
-                    "Microsoft Entra ID -> App registrations\n"
-                    "  2. Set the supported account type to 'any account' "
-                    "('common' audience — personal + work/school), and add a "
-                    "http://localhost redirect URI under Authentication -> "
-                    "Mobile & desktop applications\n"
-                    "  3. Add the Microsoft Graph delegated permissions you need "
-                    "(e.g. Mail.ReadWrite, Mail.Send, Calendars.ReadWrite)\n"
-                    "  4. Copy the Application (client) ID — this is a public "
-                    "(PKCE) client, so no client secret is needed"
-                ),
+                # Derived from setup_routes.MS_PERSONAL — the SAME steps drive
+                # the interactive guided walkthrough (#2590). Five hand-copies
+                # of this walkthrough have drifted apart in production before
+                # (#2116: a missing enable-APIs step produced a 403 on first
+                # use); rendering from one source is how that stops recurring.
+                console_steps=render_console_steps(MS_PERSONAL),
                 example=(
                     "  For the email agent, copy-paste (bash) after creating the "
                     "client above:\n"

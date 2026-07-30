@@ -2,30 +2,132 @@
 /* SPDX-License-Identifier: MIT */
 
 /* GAIA shared design tokens — single source of truth for website + Agent UI.
-   Values are RGB triplets so Tailwind opacity modifiers work
-   (rgb(var(--g-bg) / <alpha-value>)). Light is :root; dark overrides via
-   [data-theme="dark"], set pre-paint by the inline script in Layout.astro. */
+   Dark is the designed ground (the starfield and the whole surface system assume
+   it); light is a derived counterpart. Dark overrides via [data-theme="dark"],
+   set pre-paint by the inline script in Layout.astro.
+
+   Two token shapes, deliberately:
+     - RGB triplets  -> Tailwind opacity modifiers work (text-g-gold/40).
+     - Full rgba()   -> true translucency, so cards let the starfield through.
+                        No opacity modifier on these; use the -2 variant instead. */
 
 :root {
-  --g-bg: 252 252 250;        /* warm white */
-  --g-surface: 255 255 255;
-  --g-border: 232 232 229;
-  --g-text: 26 26 26;
-  --g-muted: 122 122 117;
-  --g-gold: 226 163 62;       /* #E2A33E — graphic gold (stripes, glows, icons) */
-  --g-gold-text: 154 111 38;  /* #9A6F26 — AA-contrast gold for text on light */
-  --g-glow: 0.20;             /* aurora opacity scale */
+  /* --- Ground --- */
+  --g-bg: 251 250 247;          /* #fbfaf7 warm white */
+  --g-bg2: 244 242 237;         /* #f4f2ed alternating band, footer */
+
+  /* --- Surfaces & hairlines (translucent) --- */
+  --g-surface: rgba(0, 0, 0, 0.022);
+  --g-surface2: rgba(0, 0, 0, 0.045);
+  --g-border: rgba(0, 0, 0, 0.10);
+  --g-border2: rgba(0, 0, 0, 0.16);
+  --g-hdr: rgba(251, 250, 247, 0.72);
+
+  /* --- Type --- */
+  --g-text: 23 23 26;           /* #17171a */
+  --g-muted: 92 92 99;          /* #5c5c63 */
+  /* AA on both grounds: 4.84:1 on bg, 4.52:1 on bg2. The design's lighter grey
+     measured 3.28:1, and g-faint carries 10-12.5px metadata, so no large-text
+     exemption applies. */
+  --g-faint: 110 110 118;       /* #6e6e76 */
+
+  /* --- Accent --- */
+  --g-gold: 231 163 60;         /* #E7A33C graphic gold */
+  --g-gold2: 201 134 31;        /* #C9861F hover/gradient end (darker on light) */
+  --g-gold-text: 143 99 23;     /* #8f6317 AA-contrast gold for text on light */
+  --g-gold-dim: rgba(143, 99, 23, 0.45);
+  --g-on-gold: 26 18 6;         /* #1a1206 text on a gold fill — never pure black */
+
+  /* --- Code panels: dark in BOTH themes (terminal syntax colors are tuned
+         for a dark ground and re-theming them would break the log palette). --- */
+  --g-code-bg: 11 11 13;        /* #0b0b0d */
+  --g-code-text: 217 217 212;   /* #d9d9d4 */
+
+  --g-glow: 0.20;               /* legacy aurora opacity scale */
 }
 
 [data-theme='dark'] {
-  --g-bg: 10 10 11;           /* #0a0a0b pure black */
-  --g-surface: 17 17 19;
-  --g-border: 31 31 34;
-  --g-text: 240 240 238;
-  --g-muted: 142 142 146;
-  --g-gold: 226 163 62;
-  --g-gold-text: 226 163 62;  /* gold passes AA on black */
+  --g-bg: 8 8 10;               /* #08080a */
+  --g-bg2: 13 14 17;            /* #0d0e11 */
+
+  --g-surface: rgba(255, 255, 255, 0.024);
+  --g-surface2: rgba(255, 255, 255, 0.04);
+  --g-border: rgba(255, 255, 255, 0.09);
+  --g-border2: rgba(255, 255, 255, 0.14);
+  --g-hdr: rgba(8, 8, 10, 0.6);
+
+  --g-text: 244 243 239;        /* #f4f3ef */
+  --g-muted: 154 154 160;       /* #9a9aa0 */
+  /* AA on both grounds: 4.70:1 on bg, 4.53:1 on bg2. The design's #5f5f66
+     measured 3.16:1 — see the light-theme note above. */
+  --g-faint: 122 122 129;       /* #7a7a81 */
+
+  --g-gold: 231 163 60;         /* #E7A33C */
+  --g-gold2: 244 196 107;       /* #F4C46B */
+  --g-gold-text: 231 163 60;    /* gold passes AA on #08080a (~8.9:1) */
+  --g-gold-dim: rgba(231, 163, 60, 0.5);
+  --g-on-gold: 26 18 6;
+
+  --g-code-bg: 11 11 13;
+  --g-code-text: 217 217 212;
+
   --g-glow: 0.38;
+}
+
+/* --- Elevation ------------------------------------------------------------ */
+/* Gold-tinted card lift and button glow. Theme-scoped: the dark values are the
+   designed ones; light needs real (neutral) shadow instead of a black wash. */
+:root {
+  --g-shadow-card: 0 18px 40px -22px rgba(23, 23, 26, 0.28),
+                   0 0 0 1px rgba(143, 99, 23, 0.14),
+                   0 10px 30px -18px rgba(231, 163, 60, 0.28);
+  --g-shadow-btn: 0 10px 24px -10px rgba(201, 134, 31, 0.45);
+  --g-shadow-terminal: 0 24px 60px -30px rgba(23, 23, 26, 0.35);
+}
+
+[data-theme='dark'] {
+  --g-shadow-card: 0 24px 60px -24px rgba(0, 0, 0, 0.7),
+                   0 0 0 1px rgba(231, 163, 60, 0.12),
+                   0 12px 40px -18px rgba(231, 163, 60, 0.25);
+  --g-shadow-btn: 0 10px 30px -10px rgba(231, 163, 60, 0.5);
+  --g-shadow-terminal: 0 30px 80px -30px rgba(0, 0, 0, 0.8);
+}
+
+/* --- Starfield palette ---------------------------------------------------- */
+/* Read by StarField.astro and handed to mountStarField(). Stars are graded by
+   stellar temperature, never gold — an all-gold field reads as a yellow cast.
+   Light mode inverts to slate points on warm white; packets stay gold. */
+:root {
+  --g-sky-stars: 90 100 130, 58 60 76, 112 96 66, 128 100 62;
+  --g-sky-line: 60, 70, 100;
+  --g-sky-line-alpha: 0.10;
+  --g-sky-glow: 60, 70, 100;
+  --g-sky-glow-alpha: 0.05;
+  --g-sky-packet-core: 255, 245, 225;
+}
+
+[data-theme='dark'] {
+  --g-sky-stars: 201 215 255, 248 247 255, 255 244 234, 255 210 161;
+  --g-sky-line: 190, 200, 225;
+  --g-sky-line-alpha: 0.045;
+  --g-sky-glow: 190, 200, 230;
+  --g-sky-glow-alpha: 0.045;
+  --g-sky-packet-core: 255, 240, 210;
+}
+
+/* --- Readability overlay -------------------------------------------------- */
+/* Verbatim from the design handoff — this is what keeps text legible over the
+   stars. Light mode uses the same geometry against the warm-white ground. */
+:root {
+  --g-sky-overlay:
+    radial-gradient(120% 80% at 78% 8%, transparent 40%, rgba(251, 250, 247, 0.55) 100%),
+    linear-gradient(180deg, rgba(251, 250, 247, 0.35) 0%, transparent 22%, transparent 60%, #fbfaf7 100%);
+}
+
+[data-theme='dark'] {
+  --g-sky-overlay:
+    radial-gradient(120% 80% at 78% 8%, transparent 40%, rgba(8, 8, 10, 0.55) 100%),
+    linear-gradient(180deg, rgba(8, 8, 10, 0.35) 0%, transparent 22%, transparent 60%, #08080a 100%);
 }
 
 /* Motion vocabulary */
@@ -38,9 +140,15 @@
   0%   { box-shadow: 0 0 0 0 rgb(var(--g-gold) / 0.45); }
   100% { box-shadow: 0 0 0 14px rgb(var(--g-gold) / 0); }
 }
+/* Hero entrance — children stagger in. 0.7s on the design's easing curve. */
 @keyframes g-rise {
-  from { opacity: 0; transform: translateY(12px); }
+  from { opacity: 0; transform: translateY(14px); }
   to   { opacity: 1; transform: translateY(0); }
+}
+/* Capability marquee — the list is duplicated, so -50% is one seamless loop. */
+@keyframes g-marquee {
+  from { transform: translate3d(0, 0, 0); }
+  to   { transform: translate3d(-50%, 0, 0); }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -48,5 +156,16 @@
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+    /* Without this, g-rise's `both` fill holds the hero invisible for the full
+       staggered delay and then pops it in. */
+    animation-delay: 0s !important;
   }
+  /* An animated full-viewport scroll is a vestibular trigger; the nav anchors and
+     doc-tab jumps would otherwise still smooth-scroll. */
+  html {
+    scroll-behavior: auto !important;
+  }
+  /* The marquee has no static resting state — stop it outright rather than
+     letting the 0.01ms override snap it to its end position. */
+  .g-marquee-track { animation: none !important; transform: none !important; }
 }

@@ -1,0 +1,42 @@
+---
+// Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+// A hub row for an agent that exists in the repo but is not published. It is a
+// <div>, not a link — there is nothing to open — and carries no version, size,
+// arrow, or hover state, because none of those exist before a release.
+import AgentIcon from './AgentIcon.astro';
+import { categoryLabel } from '../data/catalog';
+import type { InDevelopmentAgent } from '../data/inDevelopment';
+
+interface Props {
+  agent: InDevelopmentAgent;
+}
+
+const { agent } = Astro.props;
+---
+
+<div
+  class="soon-row grid grid-cols-[44px_1fr] items-center gap-[18px] border-b border-g-border px-[22px] py-[18px] opacity-[0.62] sm:grid-cols-[44px_1fr_auto]"
+  data-id={agent.id}
+  data-name={agent.name.toLowerCase()}
+  data-description={agent.description.toLowerCase()}
+  data-tags=""
+  data-category={agent.category}
+>
+  <span class="grid h-11 w-11 place-items-center rounded-[11px] border border-g-border text-g-faint">
+    <AgentIcon name={agent.icon} class="h-5 w-5" />
+  </span>
+
+  <span class="min-w-0">
+    <span class="flex flex-wrap items-center gap-x-[11px] gap-y-1.5">
+      <span class="font-display text-[16px] font-semibold text-g-muted">{agent.name}</span>
+      <span class="g-badge-muted border-g-border2">Coming soon</span>
+    </span>
+    <span class="mt-[5px] block text-[13px] leading-[1.55] text-g-faint">{agent.description}</span>
+  </span>
+
+  <span class="mono hidden text-[11px] uppercase tracking-[0.08em] text-g-faint sm:block">
+    {categoryLabel(agent.category)}
+  </span>
+</div>

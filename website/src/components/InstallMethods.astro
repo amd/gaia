@@ -24,7 +24,7 @@ const methods = installMethods(agent);
     <div
       role="tablist"
       aria-label={`How to install ${agent.name}`}
-      class="inline-flex flex-wrap gap-1 rounded-lg border border-g-border bg-g-surface p-1"
+      class="mb-3 inline-flex flex-wrap gap-1 rounded-g-btn border border-g-border bg-g-surface p-1"
     >
       {methods.map((m, i) => (
         <button
@@ -35,7 +35,7 @@ const methods = installMethods(agent);
           aria-selected={i === 0 ? 'true' : 'false'}
           tabindex={i === 0 ? 0 : -1}
           data-im-tab={m.key}
-          class="im-tab rounded-md px-3.5 py-1.5 text-[13px] font-medium text-g-muted transition-colors hover:text-g-text aria-selected:bg-g-gold aria-selected:font-semibold aria-selected:text-black"
+          class="im-tab rounded-md px-3.5 py-1.5 font-mono text-[12px] uppercase tracking-[0.06em] text-g-faint transition-colors duration-[250ms] ease-g-out hover:text-g-text aria-selected:bg-g-gold aria-selected:text-g-on-gold"
         >
           {m.label}
         </button>
@@ -50,19 +50,22 @@ const methods = installMethods(agent);
       aria-labelledby={`im-tab-${m.key}`}
       data-im-panel={m.key}
       hidden={i !== 0}
-      class="mt-3"
     >
-      <button
-        type="button"
-        data-im-copy={m.command}
-        aria-label={`Copy install command: ${m.command}`}
-        class="im-copy group flex w-full items-center gap-3 rounded-md border border-g-border bg-g-surface px-4 py-2.5 text-left font-mono text-[13px] text-g-text transition-colors hover:border-g-gold/50"
-      >
+      {/* Code chips stay dark in both themes (g-code-bg is theme-invariant), so
+          the controls inside them key off g-code-text rather than the page palette. */}
+      <div class="g-cmd gap-2.5 px-4 py-3.5 text-[13px]">
         <span class="select-none text-g-gold" aria-hidden="true">$</span>
-        <span class="min-w-0 flex-1 truncate">{m.command}</span>
-        <span class="im-copy-label flex-none select-none text-[11px] text-g-muted transition-colors group-hover:text-g-gold-text">copy</span>
-      </button>
-      {m.note && <p class="mt-2 text-[12.5px] text-g-muted">{m.note}</p>}
+        <code class="min-w-0 flex-1 overflow-x-auto whitespace-pre bg-transparent p-0">{m.command}</code>
+        <button
+          type="button"
+          data-im-copy={m.command}
+          aria-label={`Copy install command: ${m.command}`}
+          class="im-copy flex-none rounded-md border border-g-code-text/20 px-2.5 py-1 font-mono text-[11px] text-g-code-text/70 transition-colors duration-[250ms] ease-g-out hover:border-g-gold hover:text-g-gold"
+        >
+          <span class="im-copy-label select-none">copy</span>
+        </button>
+      </div>
+      {m.note && <p class="mt-2 text-[12.5px] text-g-faint">{m.note}</p>}
     </div>
   ))}
 </div>
@@ -96,20 +99,32 @@ const methods = installMethods(agent);
     });
 
     root.querySelectorAll<HTMLButtonElement>('.im-copy').forEach((btn) => {
+      let revert: number | undefined;
       btn.addEventListener('click', async () => {
+        const label = btn.querySelector('.im-copy-label');
         try {
           await navigator.clipboard.writeText(btn.dataset.imCopy || '');
         } catch {
-          return; // clipboard blocked (no HTTPS / permission) — do nothing loudly visible
+          // Clipboard is unavailable on any non-secure origin and can be
+          // permission-blocked on HTTPS. Select the text so the user can still
+          // copy it rather than silently pasting whatever they had before.
+          if (label) label.textContent = 'select & copy';
+          const code = btn.closest('.g-cmd, .g-cmd-plain')?.querySelector('code');
+          if (code) {
+            const range = document.createRange();
+            range.selectNodeContents(code);
+            const sel = getSelection();
+            sel?.removeAllRanges();
+            sel?.addRange(range);
+          }
+          clearTimeout(revert);
+          revert = window.setTimeout(() => { if (label) label.textContent = 'copy'; }, 2600);
+          return;
         }
-        btn.classList.remove('animate-g-pulse');
-        void btn.offsetWidth; // restart the pulse animation
-        btn.classList.add('animate-g-pulse');
-        const label = btn.querySelector('.im-copy-label');
-        if (label) {
-          label.textContent = 'copied';
-          setTimeout(() => (label.textContent = 'copy'), 1500);
-        }
+        if (!label) return;
+        label.textContent = 'copied';
+        clearTimeout(revert);
+        revert = window.setTimeout(() => (label.textContent = 'copy'), 1600);
       });
     });
   });

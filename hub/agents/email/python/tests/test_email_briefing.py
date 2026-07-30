@@ -33,6 +33,7 @@ from gaia_agent_email.briefing import (
     persist_briefing,
     run_briefing_job,
     seconds_until_next_run,
+    summarize_briefing,
 )
 
 
@@ -130,6 +131,11 @@ def test_briefing_job_produces_email_pre_scan_envelope():
         "suggested_drafts",
         "preferences_applied",
         "totals",
+        # Pre-scan coverage-honesty fields (#2584).
+        "needs_review",
+        "scanned",
+        "total_unread",
+        "degraded",
     }
     assert any(i["message_id"] == "m1" for i in briefing["suggested_archives"])
     assert record["generated_at"]  # stamped for the pull surface
@@ -300,3 +306,147 @@ def test_persist_briefing_is_atomic_and_loadable(tmp_path):
     persist_briefing(record, path=dest)
     assert load_latest_briefing(path=dest) == record
     assert not dest.with_suffix(".json.tmp").exists()
+
+
+# ---------------------------------------------------------------------------
+# #2525 — the briefing must carry a structured breakdown, not just a count.
+#
+# The pre-scan envelope already has the urgency/category counts, the
+# individual urgent/actionable items, and the applied preferences — the bug
+# was that the LLM was told to collapse all of it into "one short framing
+# sentence" and discard the rest. ``summarize_briefing`` computes the
+# breakdown deterministically (in code, not by the model) so the headline can
+# never assert an urgency judgement the classification did not itself make.
+# ---------------------------------------------------------------------------
+
+
+def _mixed_envelope() -> dict:
+    return {
+        "kind": "email_pre_scan",
+        "urgent": [
+            {
+                "message_id": "u1",
+                "thread_id": "t-u1",
+                "sender": "boss@corp.example",
+                "subject": "Server down — need you now",
+                "why": "urgent keyword + escalation",
+            }
+        ],
+        "actionable": [
+            {
+                "message_id": "a1",
+                "thread_id": "t-a1",
+                "sender": "alice@corp.example",
+                "subject": "Can you review this by EOD?",
+                "why": "needs a reply",
+            }
+        ],
+        "informational_count": 23,
+        "suggested_archives": [
+            {
+                "message_id": "s1",
+                "thread_id": "t-s1",
+                "sender": "deals@shop.example",
+                "subject": "50% off this weekend!",
+                "reason": "promotional",
+            }
+        ],
+        "suggested_drafts": [],
+        "preferences_applied": {
+            "priority_senders": ["boss@corp.example"],
+            "low_priority_senders": ["newsletters@techcrunch.com"],
+            "category_defaults": {},
+        },
+        "totals": {
+            "urgent": 1,
+            "actionable": 1,
+            "informational": 23,
+            "suggested_archives": 1,
+        },
+    }
+
+
+def _all_informational_envelope() -> dict:
+    return {
+        "kind": "email_pre_scan",
+        "urgent": [],
+        "actionable": [],
+        "informational_count": 25,
+        "suggested_archives": [],
+        "suggested_drafts": [],
+        "preferences_applied": {
+            "priority_senders": [],
+            "low_priority_senders": [],
+            "category_defaults": {},
+        },
+        "totals": {
+            "urgent": 0,
+            "actionable": 0,
+            "informational": 25,
+            "suggested_archives": 0,
+        },
+    }
+
+
+def test_briefing_summary_reports_all_three_counts():
+    summary = summarize_briefing(_mixed_envelope())
+
+    assert summary["breakdown"] == {
+        "urgent": 1,
+        "actionable": 1,
+        "informational": 23,
+        "suggested_archives": 1,
+    }
+    assert summary["total_scanned"] == 26
+    assert summary["needs_attention"] is True
+
+
+def test_briefing_summary_all_informational_states_it_plainly():
+    summary = summarize_briefing(_all_informational_envelope())
+
+    assert summary["needs_attention"] is False
+    assert summary["total_scanned"] == 25
+    assert summary["breakdown"]["informational"] == 25
+    # The headline must plainly say nothing needs attention, not pad it.
+    assert "nothing" in summary["headline"].lower()
+    assert "25" in summary["headline"]
+
+
+def test_briefing_summary_surfaces_messages_individually():
+    summary = summarize_briefing(_mixed_envelope())
+
+    # Not just a count — the actual urgent + actionable messages, individually.
+    subjects = {item["subject"] for item in summary["highlights"]}
+    assert subjects == {"Server down — need you now", "Can you review this by EOD?"}
+    urgencies = {item["message_id"]: item["urgency"] for item in summary["highlights"]}
+    assert urgencies == {"u1": "urgent", "a1": "actionable"}
+
+
+def test_briefing_summary_names_applied_preferences():
+    summary = summarize_briefing(_mixed_envelope())
+
+    assert "priority sender: boss@corp.example" in summary["preferences_applied"]
+    assert (
+        "low priority sender: newsletters@techcrunch.com"
+        in summary["preferences_applied"]
+    )
+
+
+def test_briefing_summary_never_asserts_unset_urgency():
+    # An envelope where the classifier found nothing urgent/actionable must
+    # never be summarized as needing attention, no matter what informational
+    # count is present — the honesty rule from #2525.
+    summary = summarize_briefing(_all_informational_envelope())
+    assert summary["needs_attention"] is False
+    assert summary["breakdown"]["urgent"] == 0
+    assert summary["breakdown"]["actionable"] == 0
+
+
+def test_briefing_summary_tolerates_missing_optional_fields():
+    # A stub/legacy envelope missing keys (e.g. a bare {"kind": "x"} persisted
+    # by an older build) must not crash the summary — it degrades to zeros.
+    summary = summarize_briefing({"kind": "x"})
+    assert summary["total_scanned"] == 0
+    assert summary["needs_attention"] is False
+    assert summary["highlights"] == []
+    assert summary["preferences_applied"] == []

@@ -56,20 +56,27 @@ _spec.loader.exec_module(capability_matrix)
 
 
 # ---------------------------------------------------------------------------
-# Ground truth (hard-coded, verified against the code as of 2026-07-13 —
-# see the plan for issue #2013 §1 for the derivation of every number below).
+# Ground truth (hard-coded, verified against the code as of 2026-07-27 —
+# see the plan for issue #2013 §1 for the derivation of the original numbers,
+# and #2520 for the preference_tools bump 4 -> 8).
 # ---------------------------------------------------------------------------
 
-# 15 mixins in gaia_agent_email/tools/, keyed by module stem, 58 tools total.
+# 16 mixins in gaia_agent_email/tools/, keyed by module stem, 64 tools total.
 _EXPECTED_TOOLS_BY_MIXIN = {
     "read_tools": 8,
     "organize_tools": 15,
     "reply_tools": 5,
     "calendar_tools": 6,
     "schedule_tools": 4,
-    "preference_tools": 4,
+    # #2520: remove_priority_sender, remove_low_priority_sender,
+    # remove_category_default, get_preferences added alongside the
+    # existing set_*/clear_session_preferences tools.
+    "preference_tools": 8,
     "briefing_tools": 3,
-    "delete_tools": 3,
+    # #2523/#2533: permanent_delete removed (never advertised — the scope it
+    # needs is never granted); restore_trashed_message + search_trash added
+    # (state-reconciling restore, independent of the undo window/action_id).
+    "delete_tools": 4,
     "phishing_tools": 2,
     "voice_tools": 2,
     "followup_tools": 1,
@@ -78,14 +85,16 @@ _EXPECTED_TOOLS_BY_MIXIN = {
     "connection_tools": 1,
     # #2469 agent-led onboarding: check_mailbox_access + setup_mailbox_access.
     "onboarding_tools": 2,
+    # #2581: list_waiting_on_you (inbound mail awaiting the user's reply).
+    "waiting_on_you_tools": 1,
 }
-_EXPECTED_TOOLS_TOTAL = 58
+_EXPECTED_TOOLS_TOTAL = 64
 assert sum(_EXPECTED_TOOLS_BY_MIXIN.values()) == _EXPECTED_TOOLS_TOTAL
 
 _EXPECTED_MCP_COUNT = 4
 _EXPECTED_EVAL_SUITE_COUNT = 6
-_EXPECTED_REST_FUNCTIONAL_COUNT = 22
-_EXPECTED_REST_IN_CONTRACT_COUNT = 25
+_EXPECTED_REST_FUNCTIONAL_COUNT = 23
+_EXPECTED_REST_IN_CONTRACT_COUNT = 26
 
 # The 6 eval suites are the *_gate_thresholds.json fixture stems at the repo
 # root (NOT under hub/agents/email/python/tests/ — this package ships no such
@@ -117,6 +126,7 @@ _EXPECTED_REST_OP_NAMES = {
     "search",
     "prescan",
     "briefing",
+    "attention",
     "draft",
     "send",
     "confirm",

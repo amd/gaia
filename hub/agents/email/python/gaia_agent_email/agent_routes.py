@@ -45,7 +45,6 @@ import asyncio
 import json
 import queue
 import threading
-import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException
@@ -53,6 +52,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from gaia.logger import get_logger
+from gaia_agent_email import trust
 
 logger = get_logger(__name__)
 
@@ -150,6 +150,43 @@ class _SessionRegistry:
         self.delete(session_id)
         return self.get_or_create(session_id, **config_kwargs)
 
+    def broadcast_kill(self, *, exclude: Optional[str] = None) -> List[str]:
+        """Set every OTHER live session's autonomy level to ``off`` (#2624).
+
+        A kill is a safety action, so it must not depend on the caller
+        naming the right session id: both ``/autonomy`` and
+        ``/autonomy/run`` resolve ``registry.get(session_id)`` against this
+        same process-local map, and nothing reconciles a CLI kill fired at
+        the default ``"cli"`` id against a cycle actually running under a
+        different (e.g. Agent-UI) session — that kill would return 200 and
+        leave the real cycle untouched (adversarial C4). Best-effort per
+        session: one misbehaving agent is logged and skipped rather than
+        blocking the kill for the rest. Returns the session ids actually
+        stopped.
+        """
+        with self._lock:
+            sessions = list(self._sessions.values())
+        killed: List[str] = []
+        for session in sessions:
+            if session.session_id == exclude:
+                continue
+            setter = getattr(session.agent, "set_autonomy_level", None)
+            if not callable(setter):
+                continue
+            try:
+                setter(trust.LEVEL_OFF)
+            except (
+                Exception
+            ) as exc:  # pragma: no cover - defensive; must not block the rest
+                logger.warning(
+                    "autonomy kill broadcast: failed to stop session %s: %s",
+                    session.session_id,
+                    exc,
+                )
+                continue
+            killed.append(session.session_id)
+        return killed
+
 
 def _close_agent(agent: Any) -> None:
     """Best-effort teardown of an agent's DB handles on eviction."""
@@ -161,6 +198,10 @@ def _close_agent(agent: Any) -> None:
             logger.warning("agent session close_db failed: %s", exc)
 
 
+# #2624 — the kill-broadcast above only reaches sessions in THIS process's
+# map. The sidecar's ``server.py`` never passes uvicorn a ``workers>1``
+# (or an external multi-process runner), so one process == the whole
+# registry; that assumption breaks if the sidecar is ever run multi-worker.
 registry = _SessionRegistry()
 
 
@@ -245,6 +286,13 @@ class AutonomyRunRequest(_Strict):
     session_id: str = Field(..., description="Session to run one autonomy cycle for.")
     max_messages: int = Field(
         25, ge=1, le=200, description="Inbox budget for this cycle."
+    )
+
+
+class AutonomyUndoRequest(_Strict):
+    session_id: str = Field(..., description="Session whose autonomy action to undo.")
+    action_id: str = Field(
+        ..., description="The action_id from a prior autonomy/run 'executed' entry."
     )
 
 
@@ -381,7 +429,15 @@ async def autonomy_status(session_id: str) -> Dict[str, Any]:
 
 @router.post("/autonomy")
 async def set_autonomy(request: AutonomyLevelRequest) -> Dict[str, Any]:
-    """Set the autonomy level at runtime — pause/resume/kill (``off``)."""
+    """Set the autonomy level at runtime — pause/resume/kill (``off``).
+
+    Killing (``level="off"``) also broadcasts to every OTHER live session in
+    this process (#2624 — adversarial C4): the caller's session_id might not
+    be the one an autonomy cycle is actually running under (CLI default
+    ``"cli"`` vs. an Agent-UI session), and a kill that only reaches the
+    named session would report success while leaving the real cycle
+    untouched.
+    """
     session = registry.get(request.session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="No such session.")
@@ -391,16 +447,33 @@ async def set_autonomy(request: AutonomyLevelRequest) -> Dict[str, Any]:
             status_code=501, detail="This agent build does not expose autonomy."
         )
     try:
-        return setter(request.level)
+        result = setter(request.level)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if request.level == trust.LEVEL_OFF:
+        registry.broadcast_kill(exclude=request.session_id)
+    return result
 
 
-@router.post("/autonomy/run")
+@router.post(
+    "/autonomy/run",
+    responses={
+        409: {
+            "description": (
+                "Autonomy is off for this session — the kill switch refuses "
+                "the run instead of silently doing nothing (#2528)."
+            )
+        }
+    },
+)
 async def run_autonomy(request: AutonomyRunRequest) -> Dict[str, Any]:
     """Trigger one observe->decide->act cycle now (the daemon/CLI driver seam).
 
     Runs on a worker thread — the cycle does mailbox I/O and local inference.
+    Refuses with HTTP 409 while the session's autonomy level is ``off`` (#2528)
+    — without this, "autonomy is disabled" and "autonomy ran and found
+    nothing to do" return the identical 200 shape, and a caller can't tell
+    them apart.
     """
     session = registry.get(request.session_id)
     if session is None:
@@ -410,7 +483,45 @@ async def run_autonomy(request: AutonomyRunRequest) -> Dict[str, Any]:
         raise HTTPException(
             status_code=501, detail="This agent build does not expose autonomy."
         )
+    status_fn = getattr(session.agent, "autonomy_status", None)
+    level = status_fn().get("level") if callable(status_fn) else None
+    if level == trust.LEVEL_OFF:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Autonomy is off for session '{request.session_id}' — the run "
+                "was refused, not silently skipped. POST /v1/email/agent/autonomy "
+                f'{{"session_id": "{request.session_id}", '
+                '"level": "suggest|earn_trust|full"} to enable it first.'
+            ),
+        )
     return await asyncio.to_thread(runner, {"max_messages": request.max_messages})
+
+
+@router.post("/autonomy/undo")
+async def undo_autonomy(request: AutonomyUndoRequest) -> Dict[str, Any]:
+    """Undo one autonomy-executed action, feeding a correction to the trust
+    ledger (#2529).
+
+    Without this the ledger can only ever ratchet trust up — no undo could
+    reach it except through the archive-only, conversational
+    ``undo_archive_batch`` tool. Runs on a worker thread (mailbox I/O).
+    """
+    session = registry.get(request.session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="No such session.")
+    undo_fn = getattr(session.agent, "undo_autonomy_action", None)
+    if not callable(undo_fn):
+        raise HTTPException(
+            status_code=501,
+            detail="This agent build does not expose autonomy undo.",
+        )
+    try:
+        return await asyncio.to_thread(undo_fn, request.action_id)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/confirm-tool")

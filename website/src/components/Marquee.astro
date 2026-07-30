@@ -1,0 +1,41 @@
+---
+// Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+// Right-to-left capability strip. The list is rendered twice so the -50%
+// keyframe loops seamlessly; the second copy is decorative and hidden from
+// assistive tech. The .g-marquee-track hook is what tokens.css stops under
+// prefers-reduced-motion (the strip has no static resting state).
+
+interface Props {
+  items: string[];
+  label?: string;
+  class?: string;
+}
+
+const { items, label = 'Agent capabilities', class: className = '' } = Astro.props;
+
+const MASK = 'linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent)';
+---
+
+<div
+  class:list={['overflow-hidden border-y border-g-border', className]}
+  style={`-webkit-mask-image:${MASK}; mask-image:${MASK};`}
+>
+  <div class="g-marquee-track flex w-max animate-g-marquee">
+    <ul class="flex" aria-label={label}>
+      {items.map((item) => (
+        <li class="mono inline-flex items-center gap-2.5 whitespace-nowrap px-[26px] py-[15px] text-[12.5px] text-g-muted">
+          <span class="text-g-gold-text" aria-hidden="true">▹</span>{item}
+        </li>
+      ))}
+    </ul>
+    <ul class="flex" aria-hidden="true">
+      {items.map((item) => (
+        <li class="mono inline-flex items-center gap-2.5 whitespace-nowrap px-[26px] py-[15px] text-[12.5px] text-g-muted">
+          <span class="text-g-gold-text" aria-hidden="true">▹</span>{item}
+        </li>
+      ))}
+    </ul>
+  </div>
+</div>

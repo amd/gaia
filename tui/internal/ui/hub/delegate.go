@@ -10,23 +10,26 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/amd/gaia/tui/internal/catalog"
+	"github.com/amd/gaia/tui/internal/ui/theme"
 )
 
 var (
 	categoryStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("243")).
+			Foreground(theme.Dim).
 			Italic(true)
 
 	versionStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("238"))
+			Foreground(theme.Faint)
 
-	selectedCursor = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("212")).
-			Bold(true).
-			Render("▸ ")
+	selectedCursorStyle = lipgloss.NewStyle().
+				Foreground(theme.Highlight).
+				Bold(true)
 
 	normalCursor = "  "
 )
+
+// Rendered per call — see the note on the dot helpers in styles.go.
+func selectedCursor() string { return selectedCursorStyle.Render("▸ ") }
 
 type agentDelegate struct{}
 
@@ -65,7 +68,7 @@ func (d agentDelegate) Render(w io.Writer, m list.Model, index int, item list.It
 
 	cursor := normalCursor
 	if isSelected {
-		cursor = selectedCursor
+		cursor = selectedCursor()
 	}
 
 	line1 := cursor + dot + " " + name + ver
@@ -119,15 +122,15 @@ func meta(agent catalog.Agent) string {
 func statusDotFor(status catalog.AgentStatus) string {
 	switch status {
 	case catalog.StatusActive:
-		return activeDot
+		return activeDot()
 	case catalog.StatusIdle:
-		return idleDot
+		return idleDot()
 	case catalog.StatusInstalled:
-		return installedDot
+		return installedDot()
 	case catalog.StatusAvailable:
-		return availableDot
+		return availableDot()
 	case catalog.StatusComingSoon:
-		return comingSoonDot
+		return comingSoonDot()
 	default:
 		return " "
 	}

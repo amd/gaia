@@ -92,12 +92,87 @@ class TestConnectGrantAgent:
     """`gaia connectors connect --grant-agent` folds connect + grant into one
     flow so the scopes can never drift (#2347 UX)."""
 
-    def test_grant_agent_without_scopes_is_a_usage_error(self):
+    @staticmethod
+    def _install_fake_agent_registry(monkeypatch, declared_scopes):
+        """Stand in for `AgentRegistry() -> .discover() -> register_installed_
+        sidecars()` (#2603) with a fake that resolves ``installed:email`` to
+        *declared_scopes* for ``google``, without importing gaia_agent_email
+        or touching disk."""
+        from dataclasses import dataclass, field
+        from typing import List
+
+        from gaia.connectors.providers.base import ConnectorRequirement
+
+        @dataclass
+        class FakeReg:
+            namespaced_agent_id: str
+            required_connections: List[ConnectorRequirement] = field(
+                default_factory=list
+            )
+
+        class FakeAgentRegistry:
+            def __init__(self, *_a, **_k):
+                cr = ConnectorRequirement(connector_id="google", scopes=declared_scopes)
+                self._regs = [
+                    FakeReg(
+                        namespaced_agent_id="installed:email",
+                        required_connections=[cr],
+                    )
+                ]
+
+            def discover(self):
+                pass
+
+            def list(self):
+                return self._regs
+
+        monkeypatch.setattr("gaia.agents.registry.AgentRegistry", FakeAgentRegistry)
+        monkeypatch.setattr(
+            "gaia.hub.installer.register_installed_sidecars",
+            lambda registry: None,
+        )
+
+    def test_grant_agent_without_scopes_derives_declared_scopes(self, monkeypatch):
+        declared = [
+            "https://www.googleapis.com/auth/gmail.modify",
+            "https://www.googleapis.com/auth/gmail.send",
+        ]
+        self._install_fake_agent_registry(monkeypatch, declared)
+
+        captured = {}
+
+        async def _fake_start(connector_id, *, scopes, grant_agents=None):
+            captured["connector_id"] = connector_id
+            captured["scopes"] = list(scopes)
+            captured["grant_agents"] = grant_agents
+            return {"flow_id": "F1", "authorization_url": "https://auth.example"}
+
+        async def _fake_complete(flow_id):
+            return {"account_email": "alice@example.com"}
+
+        monkeypatch.setattr("gaia.connectors.api.start_authorization", _fake_start)
+        monkeypatch.setattr(
+            "gaia.connectors.api.complete_authorization", _fake_complete
+        )
+
         rc, _out, err = _run(
             "connectors", "connect", "google", "--grant-agent", "installed:email"
         )
-        assert rc == 2
-        assert "--grant-agent requires --scopes" in err
+        assert rc == 0, err
+
+        # The grant is exactly the agent's declared scopes — sorted, no `openid`.
+        assert captured["grant_agents"] == {
+            "installed:email": [
+                "https://www.googleapis.com/auth/gmail.modify",
+                "https://www.googleapis.com/auth/gmail.send",
+            ]
+        }
+        # The authorize set is the UNION with the provider's default_scopes
+        # (AC3/C3 regression guard) — `openid` must not be silently dropped,
+        # and the derived/declared scopes must still be requested too.
+        assert "openid" in captured["scopes"]
+        assert "https://www.googleapis.com/auth/gmail.modify" in captured["scopes"]
+        assert "https://www.googleapis.com/auth/gmail.send" in captured["scopes"]
 
     def test_grant_agent_passes_grant_agents_to_the_flow(self, monkeypatch):
         captured = {}
@@ -114,6 +189,16 @@ class TestConnectGrantAgent:
         monkeypatch.setattr("gaia.connectors.api.start_authorization", _fake_start)
         monkeypatch.setattr(
             "gaia.connectors.api.complete_authorization", _fake_complete
+        )
+
+        # --scopes is explicit here, so resolve_declared_scopes must never run.
+        def _must_not_run(*_a, **_k):
+            raise AssertionError(
+                "resolve_declared_scopes must not run when --scopes is given"
+            )
+
+        monkeypatch.setattr(
+            "gaia.connectors.api.resolve_declared_scopes", _must_not_run
         )
 
         rc, out, _err = _run(

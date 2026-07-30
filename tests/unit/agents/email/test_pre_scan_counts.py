@@ -94,15 +94,31 @@ def _msg(
 # ``informational``; ``urgent``/``actionable`` are never heuristic-confident.
 # So a heuristic-only pre-scan buckets these messages as:
 #   low priority   : promo-labelled + promo-keyword + social      -> 3
-#   informational  : updates-labelled + automated-sender + no-match -> 3
-#   actionable     : IMPORTANT-labelled (confident=False)           -> 1
+#   informational  : updates-labelled + automated-sender           -> 2
+#   actionable     : IMPORTANT-labelled (confident=False, category
+#                     NEEDS_RESPONSE)                                -> 1
+#   needs_review   : no-match (confident=False, category FYI)        -> 1
 #   urgent         : (none — heuristic never emits urgent)          -> 0
+#
+# #2584 correction: this fixture's ``m_no_match`` ("Lunch next week?" from an
+# unlabeled colleague) is structurally the same case as the reported incident
+# — rule 9's terminal fallback, confident=False, category=FYI (a genuine
+# placeholder guess). Filing it under informational is exactly the bug this
+# issue fixes, so it now surfaces in needs_review instead.
+#
+# ``m_important`` (IMPORTANT label, confident=False, category=NEEDS_RESPONSE)
+# stays in ``actionable``: confident=False only overrides routing into the
+# two LOW-SIGNAL buckets (informational / suggested_archives) — it must
+# never pull a message OUT of a high-signal bucket, since an unconfident
+# guess toward urgent/actionable already errs toward surfacing, which is the
+# correct direction to err.
 _EXPECTED = {
     CATEGORY_URGENT: 0,
     CATEGORY_NEEDS_RESPONSE: 1,
-    CATEGORY_FYI: 3,
+    CATEGORY_FYI: 2,
     CATEGORY_PROMOTIONAL: 3,
 }
+_EXPECTED_NEEDS_REVIEW = 1
 
 
 @pytest.fixture
@@ -177,6 +193,9 @@ class TestPreScanCounts:
         assert totals["informational"] == _EXPECTED[CATEGORY_FYI]
         # Low-priority messages are surfaced as suggested archives.
         assert totals["suggested_archives"] == _EXPECTED[CATEGORY_PROMOTIONAL]
+        # Unconfident messages (#2584) — the no-match and IMPORTANT-labeled
+        # fixture rows — surface for review instead of being silently filed.
+        assert totals["needs_review"] == _EXPECTED_NEEDS_REVIEW
 
         # The scalar mirror of the informational bucket must agree.
         assert out["informational_count"] == _EXPECTED[CATEGORY_FYI]
@@ -186,6 +205,7 @@ class TestPreScanCounts:
         assert len(out["urgent"]) == _EXPECTED[CATEGORY_URGENT]
         assert len(out["actionable"]) == _EXPECTED[CATEGORY_NEEDS_RESPONSE]
         assert len(out["suggested_archives"]) == _EXPECTED[CATEGORY_PROMOTIONAL]
+        assert len(out["needs_review"]) == _EXPECTED_NEEDS_REVIEW
 
         # Sanity: every fixture message is accounted for in exactly one bucket.
         accounted = (
@@ -193,6 +213,7 @@ class TestPreScanCounts:
             + totals["actionable"]
             + totals["informational"]
             + totals["suggested_archives"]
+            + totals["needs_review"]
         )
         assert accounted == 7
 

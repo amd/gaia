@@ -3,47 +3,38 @@
 // SPDX-License-Identifier: MIT
 
 const currentYear = new Date().getFullYear();
+
+// Discord stays the INVITE link, not the README's channel deep link — a
+// channels/… URL only resolves for people already in the server.
+const LINKS = [
+  { label: 'Agent Hub', href: '/hub' },
+  { label: 'Docs', href: 'https://amd-gaia.ai/docs', external: true },
+  { label: 'GitHub', href: 'https://github.com/amd/gaia', external: true },
+  { label: 'Discord', href: 'https://discord.com/invite/5xXzkMu8Zk', external: true },
+];
 ---
 
-<footer class="py-12 px-4 sm:px-6 lg:px-8 border-t border-g-border">
-  <div class="max-w-7xl mx-auto">
-    <!-- Links -->
-    <div class="flex flex-wrap justify-center gap-8 mb-8 text-sm">
-      <a href="/hub" class="text-g-muted hover:text-g-text transition-colors">
-        Agent Hub
-      </a>
-      <a href="https://amd-gaia.ai/docs" target="_blank" rel="noopener noreferrer" class="text-g-muted hover:text-g-text transition-colors">
-        Docs
-      </a>
-      <a href="https://amd-gaia.ai/docs/quickstart" target="_blank" rel="noopener noreferrer" class="text-g-muted hover:text-g-text transition-colors">
-        Quick Start
-      </a>
-      <a href="https://github.com/amd/gaia" target="_blank" rel="noopener noreferrer" class="text-g-muted hover:text-g-text transition-colors">
-        GitHub
-      </a>
-      <a href="https://amd-gaia.ai/docs/sdk/examples" target="_blank" rel="noopener noreferrer" class="text-g-muted hover:text-g-text transition-colors">
-        Examples
-      </a>
-      <a href="https://pypi.org/project/amd-gaia" target="_blank" rel="noopener noreferrer" class="text-g-muted hover:text-g-text transition-colors">
-        PyPI
-      </a>
-      <a href="https://discord.com/invite/5xXzkMu8Zk" target="_blank" rel="noopener noreferrer" class="text-g-muted hover:text-g-text transition-colors">
-        Discord
-      </a>
-    </div>
-
-    <!-- Legal -->
-    <div class="text-center text-g-muted text-sm mb-6">
-      <p>
+<footer class="border-t border-g-border bg-g-bg2">
+  <div class="g-shell flex flex-col gap-6 py-12 sm:flex-row sm:items-center sm:justify-between">
+    <div>
+      <div class="flex items-baseline gap-2">
+        <span class="font-display text-[18px] font-semibold tracking-[-0.02em] text-g-text">GAIA</span>
+        <span class="mono text-[10px] text-g-faint">/ AMD</span>
+      </div>
+      <p class="mt-2 text-[12.5px] text-g-faint">
         MIT License &bull; &copy; 2024-{currentYear} Advanced Micro Devices, Inc.
       </p>
     </div>
 
-    <!-- Platform note -->
-    <div class="text-center">
-      <p class="text-g-muted text-sm">
-        Works on most Windows and Linux AI PCs. <span class="text-g-text">AMD Ryzen™ AI for best performance.</span>
-      </p>
-    </div>
+    <nav class="flex flex-wrap gap-x-7 gap-y-2">
+      {LINKS.map((l) => (
+        <a
+          href={l.href}
+          target={l.external ? '_blank' : undefined}
+          rel={l.external ? 'noopener noreferrer' : undefined}
+          class="text-[13px] text-g-muted transition-colors hover:text-g-text"
+        >{l.label}</a>
+      ))}
+    </nav>
   </div>
 </footer>

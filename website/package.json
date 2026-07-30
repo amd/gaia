@@ -9,7 +9,9 @@
     "build": "astro check && astro build",
     "preview": "astro preview",
     "astro": "astro",
-    "test": "vitest run"
+    "test": "vitest run",
+    "generate:agents": "node scripts/generate-in-development.mjs",
+    "check:agents": "node scripts/generate-in-development.mjs --check"
   },
   "dependencies": {
     "@astrojs/check": "^0.9.4",
@@ -17,7 +19,8 @@
     "astro": "^4.16.18",
     "prismjs": "^1.30.0",
     "tailwindcss": "^3.4.17",
-    "typescript": "^5.7.2"
+    "typescript": "^5.7.2",
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
     "@types/node": "^20.19.42",

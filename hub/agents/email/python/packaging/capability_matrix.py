@@ -124,6 +124,10 @@ OP_EVAL_COVERAGE: Dict[str, str] = {
     "search": _NO_EVAL_SENTINEL,
     "prescan": _NO_EVAL_SENTINEL,
     "briefing": "briefing",
+    # #2582 attention view: merges four already-tested read-only signals into
+    # one read-model -- contract/shape-tested (and the aggregator's own
+    # unit suite), no separate judged quality bar of its own.
+    "attention": _NO_EVAL_SENTINEL,
     "draft": "drafting",
     "send": _NO_EVAL_SENTINEL,
     "confirm": _NO_EVAL_SENTINEL,
@@ -539,9 +543,10 @@ def render_markdown(matrix: CapabilityMatrix) -> str:
         )
     lines.append(
         "- Additionally served but **out of the frozen contract** (footnote "
-        "context, not guarded machinery): `agent_routes.py` 8 session routes, "
-        "`connector_routes.py` 4 OAuth routes, `server.py` 2 inline probes "
-        "-- ~36 total routes served by the sidecar."
+        "context, not guarded machinery): `agent_routes.py` 12 session routes "
+        "(includes the autonomy control surface, #2529), `connector_routes.py` "
+        "4 OAuth routes, `server.py` 2 inline probes "
+        "-- ~43 total routes served by the sidecar."
     )
     lines.append("")
 

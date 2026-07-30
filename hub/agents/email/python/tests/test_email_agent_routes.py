@@ -116,6 +116,23 @@ class _FakeAgent:
             "skipped": 0,
         }
 
+    def undo_autonomy_action(self, action_id: str) -> dict:
+        """Routing-only fake — no real ledger logic, matching the style of
+        run_autonomy_cycle/autonomy_status above. Two sentinel ids let route
+        tests drive the RuntimeError -> 409 / ValueError -> 400 mapping
+        without a real trust ledger."""
+        if action_id == "raise-runtime":
+            raise RuntimeError("undo window has expired")
+        if action_id == "raise-value":
+            raise ValueError("bad action_id")
+        return {
+            "action_id": action_id,
+            "action_type": "archive",
+            "message_id": "m1",
+            "undone": True,
+            "correction_captured": True,
+        }
+
     def close_db(self) -> None:
         self.closed = True
 
@@ -432,8 +449,12 @@ class TestAutonomyRoutes:
         )
         assert r.status_code == 400
 
-    def test_run_cycle_returns_report(self, client):
+    def test_run_cycle_returns_report_when_enabled(self, client):
         self._mk(client)
+        client.post(
+            "/v1/email/agent/autonomy",
+            json={"session_id": "s1", "level": "earn_trust"},
+        )
         r = client.post("/v1/email/agent/autonomy/run", json={"session_id": "s1"})
         assert r.status_code == 200
         body = r.json()
@@ -442,6 +463,135 @@ class TestAutonomyRoutes:
     def test_run_cycle_404_without_session(self, client):
         r = client.post("/v1/email/agent/autonomy/run", json={"session_id": "nope"})
         assert r.status_code == 404
+
+    def test_run_cycle_refused_while_off(self, client):
+        """#2528: a session's default level is 'off' — /run must refuse with an
+        actionable error naming the current level, not silently return the
+        same 200 shape a real (found-nothing) run would."""
+        self._mk(client)
+        r = client.post("/v1/email/agent/autonomy/run", json={"session_id": "s1"})
+        assert r.status_code == 409
+        detail = r.json()["detail"]
+        assert "off" in detail
+        assert "/v1/email/agent/autonomy" in detail
+
+    def test_run_cycle_refused_while_off_after_explicit_kill(self, client):
+        """Same refusal after the level was explicitly killed mid-session, not
+        just at the untouched default."""
+        self._mk(client)
+        client.post(
+            "/v1/email/agent/autonomy",
+            json={"session_id": "s1", "level": "earn_trust"},
+        )
+        client.post(
+            "/v1/email/agent/autonomy", json={"session_id": "s1", "level": "off"}
+        )
+        r = client.post("/v1/email/agent/autonomy/run", json={"session_id": "s1"})
+        assert r.status_code == 409
+
+    def test_undo_returns_report(self, client):
+        self._mk(client)
+        r = client.post(
+            "/v1/email/agent/autonomy/undo",
+            json={"session_id": "s1", "action_id": "a1"},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert "undone" in body
+        assert "correction_captured" in body
+
+    def test_undo_404_without_session(self, client):
+        r = client.post(
+            "/v1/email/agent/autonomy/undo",
+            json={"session_id": "nope", "action_id": "a1"},
+        )
+        # An unmatched path 404s too — pin the actual detail text so this
+        # only goes green once the route exists AND does its own session
+        # lookup (matching the "No such session." convention used by every
+        # other route in this file), not by accident of the path missing.
+        assert r.status_code == 404
+        assert r.json()["detail"] == "No such session."
+
+    def test_undo_409_on_runtime_error(self, client):
+        self._mk(client)
+        r = client.post(
+            "/v1/email/agent/autonomy/undo",
+            json={"session_id": "s1", "action_id": "raise-runtime"},
+        )
+        assert r.status_code == 409
+
+    def test_undo_400_on_value_error(self, client):
+        self._mk(client)
+        r = client.post(
+            "/v1/email/agent/autonomy/undo",
+            json={"session_id": "s1", "action_id": "raise-value"},
+        )
+        assert r.status_code == 400
+
+    def test_run_cycle_returns_200_with_partial_report_on_per_message_error(
+        self, client
+    ):
+        """#2625: a per-message failure inside the cycle must not surface as
+        a bare 500 at the HTTP boundary. ``/autonomy/run`` declares no
+        ``response_model``, so a report carrying the new ``errors``/
+        ``stopped`` keys passes through verbatim with a 200."""
+        self._mk(client)
+        client.post(
+            "/v1/email/agent/autonomy",
+            json={"session_id": "s1", "level": "full"},
+        )
+        partial_report = {
+            "level": "full",
+            "executed": [{"message_id": "m1", "action": "archive"}],
+            "proposals": [],
+            "decisions": [],
+            "skipped": 0,
+            "already_proposed": 0,
+            "errors": [
+                {
+                    "message_id": "m2",
+                    "error_type": "ConnectionError",
+                    "error": "gmail: 502 Bad Gateway",
+                }
+            ],
+            "stopped": None,
+        }
+        agent = client.built["last"]
+        agent.run_autonomy_cycle = lambda context=None: partial_report
+        r = client.post("/v1/email/agent/autonomy/run", json={"session_id": "s1"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["executed"] == partial_report["executed"]
+        assert body["errors"] == partial_report["errors"]
+        assert body["stopped"] is None
+
+    def test_kill_broadcasts_to_every_other_session(self, client):
+        """#2624/adversarial-C4: the kill can hit a different agent object
+        than the one actually running a cycle — both routes resolve against
+        the module-level registry by session_id, and nothing reconciles a
+        CLI kill fired at the default 'cli' id against a cycle running
+        under a different (e.g. Agent-UI) session. Killing one session must
+        stop every OTHER live session too, not just the one named."""
+        self._mk(client, "s1")
+        self._mk(client, "s2")
+        client.post(
+            "/v1/email/agent/autonomy",
+            json={"session_id": "s1", "level": "earn_trust"},
+        )
+        client.post(
+            "/v1/email/agent/autonomy", json={"session_id": "s2", "level": "full"}
+        )
+
+        r = client.post(
+            "/v1/email/agent/autonomy", json={"session_id": "s1", "level": "off"}
+        )
+        assert r.json()["enabled"] is False
+
+        # s2 was never explicitly killed — the broadcast must have stopped
+        # it anyway.
+        r2 = client.get("/v1/email/agent/autonomy/s2")
+        assert r2.json()["level"] == "off"
+        assert r2.json()["enabled"] is False
 
 
 class TestWorkerDiesWithoutTerminalEvent:

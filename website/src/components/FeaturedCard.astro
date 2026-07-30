@@ -3,8 +3,12 @@
 // SPDX-License-Identifier: MIT
 
 import AgentIcon from './AgentIcon.astro';
-import AuroraBg from './AuroraBg.astro';
-import { type Agent, installMethods } from '../data/catalog';
+import {
+  installMethods,
+  languageLabel,
+  securityTierLabel,
+  type Agent,
+} from '../data/catalog';
 
 interface Props {
   agent: Agent;
@@ -12,30 +16,75 @@ interface Props {
 }
 
 const { agent, eyebrow = 'Featured' } = Astro.props;
-// Use the canonical primary install command (npm for npm agents, GAIA otherwise)
-// — same source as the detail page, so the card never shows a command the agent
-// can't actually be installed with.
+// The canonical primary install command (npm for npm agents, GAIA otherwise) —
+// same source as the detail page, so the card never shows a command the agent
+// cannot actually be installed with.
 const installCmd = installMethods(agent)[0].command;
+
+// Metadata grid. Every value comes from the catalog; a field the catalog does
+// not carry is omitted rather than rendered as an empty cell.
+const meta: { key: string; value: string }[] = [
+  { key: 'Author', value: agent.author },
+  { key: 'Language', value: languageLabel(agent.language) },
+];
+if (agent.tools_count > 0) meta.push({ key: 'Tools', value: String(agent.tools_count) });
+if (agent.eval_score != null) meta.push({ key: 'Eval score', value: `${agent.eval_score} / 100` });
+if (agent.requirements && agent.requirements.min_memory_gb > 0)
+  meta.push({ key: 'Memory', value: `${agent.requirements.min_memory_gb} GB` });
+if (agent.min_gaia_version) meta.push({ key: 'Min GAIA', value: agent.min_gaia_version });
 ---
 
 <a
   href={`/hub/${agent.id}`}
-  class="relative block overflow-hidden rounded-xl border border-g-border bg-g-surface p-7 sm:p-9 hover:border-g-gold/40 transition-colors"
+  class="featured block rounded-[16px] border border-g-border2 p-6 transition-all duration-[400ms] ease-g-out hover:-translate-y-[5px] hover:border-g-gold-dim hover:shadow-g-card sm:p-8"
 >
-  <AuroraBg />
-  <div class="relative">
-    <div class="text-[11px] font-bold tracking-[0.14em] uppercase text-g-gold-text mb-4">{eyebrow}</div>
-    <div class="flex items-center gap-3 mb-2">
-      <span class="w-9 h-9 rounded-lg border border-g-border bg-g-bg/60 flex items-center justify-center text-g-gold-text">
-        <AgentIcon name={agent.icon} class="w-5 h-5" />
-      </span>
-      <span class="text-xl font-bold tracking-tight text-g-text">{agent.name}</span>
-      <span class="font-mono text-[12px] text-g-muted">v{agent.latest_version}</span>
+  <div class="flex flex-wrap items-start justify-between gap-7">
+    <div class="min-w-0 flex-1 basis-[380px]">
+      <div class="mono mb-4 text-[11px] uppercase tracking-[0.14em] text-g-gold-text">{eyebrow}</div>
+
+      <div class="flex flex-wrap items-center gap-x-3.5 gap-y-2">
+        <span class="g-chip h-11 w-11 rounded-[11px] border-g-border2">
+          <AgentIcon name={agent.icon} class="h-[21px] w-[21px]" />
+        </span>
+        <h2 class="text-[24px] font-semibold tracking-[-0.025em] sm:text-[28px]">{agent.name}</h2>
+        <span class="mono text-[12px] text-g-faint">v{agent.latest_version}</span>
+        <span class={agent.security_tier === 'verified' ? 'g-badge' : 'g-badge-muted'}>
+          {securityTierLabel(agent.security_tier)}
+        </span>
+      </div>
+
+      <p class="mt-3.5 max-w-[520px] text-[15px] leading-[1.65] text-g-muted">{agent.description}</p>
+
+      <div class="mt-[22px] flex flex-wrap items-center gap-3.5">
+        <!-- Static chip, not a copy button — the whole card is a link and nested
+             interactive elements are invalid HTML. -->
+        <span class="g-cmd max-w-full break-all">
+          <span class="text-g-gold-text">$</span>{installCmd}
+        </span>
+        <span class="g-cta-link font-semibold">View agent →</span>
+      </div>
     </div>
-    <p class="text-[14px] text-g-muted max-w-md mb-6">{agent.description}</p>
-    <!-- Static chip, not a copy button — the whole card is a link; nested buttons are invalid HTML. -->
-    <span class="inline-flex max-w-full items-center break-all rounded-md border border-g-gold/40 px-4 py-2 font-mono text-[12px] text-g-gold-text">
-      $ {installCmd}
-    </span>
+
+    <div class="grid min-w-[250px] grid-cols-2 gap-x-[26px] gap-y-3.5">
+      {meta.map((item) => (
+        <div>
+          <div class="mono text-[10px] uppercase tracking-[0.1em] text-g-faint">{item.key}</div>
+          <div class="mt-1 text-[14px] text-g-text">{item.value}</div>
+        </div>
+      ))}
+    </div>
   </div>
 </a>
+
+<style>
+  /* Diagonal gold wash. Written here rather than as an arbitrary Tailwind value
+     so it can reference the theme's own gold token in both themes. */
+  .featured {
+    background-image: linear-gradient(
+      135deg,
+      rgb(var(--g-gold) / 0.06),
+      var(--g-surface) 45%,
+      transparent
+    );
+  }
+</style>
