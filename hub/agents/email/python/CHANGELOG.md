@@ -89,6 +89,39 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **The assistant no longer narrates things the current turn's own tools
+  don't support (#2621, #2622, #2636, #2637).** Four related honesty
+  defects, all guarded by one new mechanism: a mutation ("archived",
+  "starred", "marked read", "moved to Trash", ...) was sometimes narrated
+  as done with zero tool calls in that turn (observed 7 times in one long
+  session, correlating with conversation length); `check_followups`
+  reported fewer awaiting-reply items than its own intact result actually
+  held, dropping a different subset on each of 3 fresh runs; a pre-scan's
+  framing sentence could claim "no urgent or actionable items" while its
+  own scan result carried non-empty urgent/actionable lists, or describe
+  a per-INBOX-scoped `total_unread` as spanning "across your connected
+  mailboxes"; and internal render/envelope scaffolding — a
+  `[shown to the user]` context marker, `[suggested_archives]`-style
+  envelope field names, raw provider message ids, undecoded `\uXXXX`
+  escapes — occasionally leaked into user-facing prose instead of being
+  summarized. New `gaia_agent_email.answer_grounding` module runs
+  deterministic post-checks on the final answer text at the
+  `process_query` output boundary: an ungrounded success claim or a
+  claim contradicted by the turn's own tool result gets replaced with a
+  grounded fallback, and scaffolding leaks get stripped in place.
+  `check_followups` now also returns an explicit `count` field so nothing
+  is left to miscount. The system prompt's pre-scan coverage note was
+  rewritten to state `scanned`/`total_unread` as two separate facts
+  rather than a "X of Y unread" fraction (matching the attention card's
+  own wording), and to forbid the cross-mailbox phrasing outright. Also
+  root-caused the unicode-escape leak: every `json.dumps` call in the
+  shared agent loop that builds model-visible tool-result text was
+  missing `ensure_ascii=False`, so non-ASCII characters in email subjects
+  reached the model as literal escape sequences — as a side effect, this
+  could also inflate a payload's measured length enough to trigger
+  truncation it did not actually need. Fixed at every call site in
+  `src/gaia/agents/base/agent.py`, benefiting every agent built on it, not
+  just email.
 - **Thread summaries now keep the newest message's open asks (#2641).** A
   thread summary could reflect the opening question and an early reply while
   dropping the newest message entirely — even when that message carried the
