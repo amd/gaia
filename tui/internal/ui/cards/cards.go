@@ -25,24 +25,53 @@ import (
 //
 // width is the total width the card may occupy, borders included.
 func Render(renderKey string, data json.RawMessage, width int) string {
+	rendered, _ := RenderDeduped(renderKey, data, width, nil)
+	return rendered
+}
+
+// RenderDeduped draws a card exactly like Render, except for the two email
+// card types (email_pre_scan, email_attention): an item whose message_id is
+// already in seen is skipped rather than shown a second time, and every
+// message_id this card ends up showing is returned so a caller rendering
+// more than one card in one turn can thread the accumulated set into the
+// next call. Every other render key returns no ids and behaves exactly like
+// Render. seen may be nil, equivalent to Render (nothing is deduped).
+func RenderDeduped(renderKey string, data json.RawMessage, width int, seen map[string]bool) (rendered string, ids []string) {
 	key := strings.TrimSpace(renderKey)
 	if key == "" {
-		return renderUnsupported("(none)", data, width)
+		return renderUnsupported("(none)", data, width), nil
 	}
 	switch key {
 	case "email_pre_scan":
-		return renderEmailPreScan(data, width)
+		return renderEmailPreScan(data, width, seen)
 	case "email_attention":
-		return RenderEmailAttention(data, width)
+		return RenderEmailAttention(data, width, seen)
 	case "table":
-		return renderTable(data, width)
+		return renderTable(data, width), nil
 	case "key_value":
-		return renderKeyValue(data, width)
+		return renderKeyValue(data, width), nil
 	case "list":
-		return renderList(data, width)
+		return renderList(data, width), nil
 	case "image":
-		return renderImage(data, width)
+		return renderImage(data, width), nil
 	default:
-		return renderUnsupported(key, data, width)
+		return renderUnsupported(key, data, width), nil
 	}
+}
+
+// dedupByMessageID drops items whose id is already in seen (an item with an
+// empty id is never treated as a duplicate) and returns the surviving items
+// plus the non-empty ids they carry.
+func dedupByMessageID[T any](items []T, id func(T) string, seen map[string]bool) (kept []T, ids []string) {
+	for _, it := range items {
+		mid := strings.TrimSpace(id(it))
+		if mid != "" && seen[mid] {
+			continue
+		}
+		kept = append(kept, it)
+		if mid != "" {
+			ids = append(ids, mid)
+		}
+	}
+	return kept, ids
 }

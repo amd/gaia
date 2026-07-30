@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -142,6 +143,9 @@ type ChatModel struct {
 	queryStart   time.Time // tracks when the current query started
 	firstEvent   bool      // whether we've received the first event this turn
 	ttft         time.Duration
+
+	// pendingAttention buffers a fetch resolved mid-turn until that turn ends, so it never lands between a question and its reply.
+	pendingAttention json.RawMessage
 }
 
 func NewChatModel(c client.AgentClient, agentName string, initialQuery string, debug bool) ChatModel {
@@ -180,6 +184,15 @@ func NewChatModelFromHub(c client.AgentClient, agentID, agentName string, debug 
 	return m
 }
 
+// NewChatModelForCatalogAgent creates a standalone ChatModel (esc quits -- see
+// CanReturnToHub) for a real catalog agent, so agentID is the catalog id
+// rather than NewChatModel's default of the display name.
+func NewChatModelForCatalogAgent(c client.AgentClient, agentID, agentName string, debug bool) ChatModel {
+	m := NewChatModel(c, agentName, "", debug)
+	m.agentID = agentID
+	return m
+}
+
 // attentionAgentID is the one agent this on-open fetch applies to today.
 // Scoped by id rather than by capability alone so a future agent that
 // happens to reuse the AttentionFetcher interface for something unrelated
@@ -200,8 +213,24 @@ func (m ChatModel) Init() tea.Cmd {
 		// there's no initial query already about to run a turn, so the
 		// attention view never races the answer to what the user just asked.
 		cmds = append(cmds, m.fetchAttention())
+	} else if m.debug && m.attentionGateMismatch() {
+		// A client that could serve the attention view but an agentID that
+		// doesn't match must not fail with no signal at all.
+		fmt.Fprintf(os.Stderr,
+			"[DEBUG] attention fetch skipped: agentID %q has an AttentionFetcher client but does not match %q\n",
+			m.agentID, attentionAgentID)
 	}
 	return tea.Batch(cmds...)
+}
+
+// attentionGateMismatch reports whether m.client could serve the attention
+// view even though m.agentID didn't earn the fetch.
+func (m ChatModel) attentionGateMismatch() bool {
+	if m.agentID == attentionAgentID {
+		return false
+	}
+	_, hasFetcher := m.client.(client.AttentionFetcher)
+	return hasFetcher
 }
 
 // fetchAttention builds the Cmd that fetches the email agent's read-only
@@ -225,6 +254,26 @@ func (m ChatModel) fetchAttention() tea.Cmd {
 	}
 }
 
+// appendAttentionCard appends the attention card. Cross-card duplicate items
+// are resolved at render time (see Message.renderCard), not here.
+func (m *ChatModel) appendAttentionCard(data json.RawMessage) {
+	m.messages = append(m.messages, Message{
+		Role:   RoleCard,
+		Render: "email_attention",
+		Data:   data,
+	})
+}
+
+// drainPendingAttention appends a buffered attention card now that its turn has ended, whichever way it ended.
+func (m *ChatModel) drainPendingAttention() {
+	if m.pendingAttention == nil {
+		return
+	}
+	data := m.pendingAttention
+	m.pendingAttention = nil
+	m.appendAttentionCard(data)
+}
+
 func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
@@ -246,11 +295,12 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitForEvent(m.events)
 
 	case attentionFetchedMsg:
-		m.messages = append(m.messages, Message{
-			Role:   RoleCard,
-			Render: "email_attention",
-			Data:   msg.data,
-		})
+		if m.streaming {
+			// Buffer -- appending now would land the card between this turn's question and its reply.
+			m.pendingAttention = msg.data
+			return m, nil
+		}
+		m.appendAttentionCard(msg.data)
 		m.updateViewport()
 		return m, nil
 
@@ -297,6 +347,7 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			Role:    RoleError,
 			Content: msg.err.Error(),
 		})
+		m.drainPendingAttention()
 		m.activity = nil
 		m.updateViewport()
 		return m, nil
@@ -418,6 +469,7 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				Role:    RoleStatus,
 				Content: "cancelled",
 			})
+			m.drainPendingAttention()
 			m.updateViewport()
 			return m, nil
 		}
@@ -436,6 +488,7 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				Role:    RoleStatus,
 				Content: "cancelled",
 			})
+			m.drainPendingAttention()
 			m.updateViewport()
 			return m, nil
 		}
@@ -768,9 +821,18 @@ func (m *ChatModel) updateViewport() {
 		sb.WriteString("\n")
 	}
 
+	// seen accumulates message_ids across cards within one turn so a second
+	// card doesn't redraw an item its turn's first card already showed. It
+	// resets at each RoleUser message: a new turn's mail can legitimately
+	// repeat an id an earlier turn's card already rendered (still urgent on
+	// the next scan is not a duplicate), so dedup must not span turns.
+	seen := make(map[string]bool)
 	for i := range m.messages {
+		if m.messages[i].Role == RoleUser {
+			seen = make(map[string]bool)
+		}
 		// By index, not by value: rendering a card memoizes onto the message.
-		sb.WriteString(m.renderMessage(&m.messages[i]))
+		sb.WriteString(m.renderMessage(&m.messages[i], seen))
 		sb.WriteString("\n")
 	}
 
@@ -841,7 +903,10 @@ func (m ChatModel) wrapForPane(s string) string {
 	return components.WrapText(s, m.cardWidth())
 }
 
-func (m ChatModel) renderMessage(msg *Message) string {
+// renderMessage draws one message. seen threads cross-card dedup for the
+// RoleCard case (see Message.renderCardDeduped); pass nil for a standalone
+// render with no dedup.
+func (m ChatModel) renderMessage(msg *Message, seen map[string]bool) string {
 	switch msg.Role {
 	case RoleUser:
 		// A free-text answer to a mid-run question lands here and can be long.
@@ -888,7 +953,7 @@ func (m ChatModel) renderMessage(msg *Message) string {
 		return panel
 
 	case RoleCard:
-		return msg.renderCard(m.cardWidth())
+		return msg.renderCardDeduped(m.cardWidth(), seen)
 
 	case RoleError:
 		panelWidth := m.width - 4

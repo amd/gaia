@@ -9,6 +9,20 @@ contract version is tracked separately as
 
 ### Added
 
+- **Inbox scans go metadata-first, cutting per-message cost so the default scan size can
+  rise from 25 to 50 (#2643).** Every scanned message used to cost one full-body fetch
+  regardless of whether the heuristic ever read the body — `pre_scan_inbox` and the
+  attention view never even wire an LLM classifier, so most of that body was fetched and
+  never decoded. The scan now fetches metadata only (headers, labels, snippet — no body),
+  runs the heuristic on that, and fetches a full body — batched, in as few round-trips as
+  the mail backend supports — only for messages that actually need LLM follow-up. A
+  `List-Unsubscribe` header (RFC 2369, arrives with the metadata fetch) is now a
+  supplementary confident-bulk-mail signal for messages Gmail's own category labels miss.
+  Classification is unchanged; a deadline/commitment signal in a bulk message's snippet
+  still escalates to the LLM exactly as before. The classifier's own escalation body is
+  also cut down to the sender's own new content (quoted reply chain and signature block
+  stripped, reusing `voice_profile`'s existing quote/signoff detection) before it reaches
+  the model — the one change here that affects what the LLM actually reads.
 - **Meeting-request detection now runs during the inbox scan, not only on a message you
   point at directly (#2583).** `detect_meeting_request_heuristic` has existed for over a
   year but nothing ever called it from `triage_inbox`/`pre_scan_inbox` — a colleague
@@ -89,6 +103,222 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **A priority-sender match no longer forces a message to URGENT (#2632).**
+  `_apply_session_preferences` used to override the heuristic/LLM's category
+  outright the moment a sender matched the priority list — a Substack
+  newsletter from a priority sender got promoted straight to URGENT even
+  though the same decision's own reason line named Gmail's `CATEGORY_UPDATES`
+  label as the (non-urgent) verdict. The preference now only tags
+  `preference_applied` and updates the reason line for salience; category is
+  always decided by content. The low-priority-sender branch (an explicit
+  "downrank this sender" request) is unchanged.
+- **A short, first-person human message proposing continued business no
+  longer disappears into the informational tail (#2633).** The triage LLM
+  prompt gained a disambiguation rule + worked example (paired with a hard
+  negative so brevity alone doesn't now over-trigger `NEEDS_RESPONSE`) for
+  messages like "Nice meeting you ... let me know what you think" that carry
+  no explicit question mark or deadline but still warrant a reply.
+  Independently, `pre_scan_inbox` gained an `include_informational` flag: the
+  informational bucket was previously a bare count with no way to audit it
+  ("95 informational, not listed") — passing the flag now returns the full
+  id/sender/subject list for that count, at no extra scan cost.
+- **The assistant no longer narrates things the current turn's own tools
+  don't support (#2621, #2622, #2636, #2637).** Four related honesty
+  defects, all guarded by one new mechanism: a mutation ("archived",
+  "starred", "marked read", "moved to Trash", ...) was sometimes narrated
+  as done with zero tool calls in that turn (observed 7 times in one long
+  session, correlating with conversation length); `check_followups`
+  reported fewer awaiting-reply items than its own intact result actually
+  held, dropping a different subset on each of 3 fresh runs; a pre-scan's
+  framing sentence could claim "no urgent or actionable items" while its
+  own scan result carried non-empty urgent/actionable lists, or describe
+  a per-INBOX-scoped `total_unread` as spanning "across your connected
+  mailboxes"; and internal render/envelope scaffolding — a
+  `[shown to the user]` context marker, `[suggested_archives]`-style
+  envelope field names, raw provider message ids, undecoded `\uXXXX`
+  escapes — occasionally leaked into user-facing prose instead of being
+  summarized. New `gaia_agent_email.answer_grounding` module runs
+  deterministic post-checks on the final answer text at the
+  `process_query` output boundary: an ungrounded success claim or a
+  claim contradicted by the turn's own tool result gets replaced with a
+  grounded fallback, and scaffolding leaks get stripped in place.
+  `check_followups` now also returns an explicit `count` field so nothing
+  is left to miscount. The system prompt's pre-scan coverage note was
+  rewritten to state `scanned`/`total_unread` as two separate facts
+  rather than a "X of Y unread" fraction (matching the attention card's
+  own wording), and to forbid the cross-mailbox phrasing outright. Also
+  root-caused the unicode-escape leak: every `json.dumps` call in the
+  shared agent loop that builds model-visible tool-result text was
+  missing `ensure_ascii=False`, so non-ASCII characters in email subjects
+  reached the model as literal escape sequences — as a side effect, this
+  could also inflate a payload's measured length enough to trigger
+  truncation it did not actually need. Fixed at every call site in
+  `src/gaia/agents/base/agent.py`, benefiting every agent built on it, not
+  just email.
+- **Chat prose no longer contradicts the attention card already on screen
+  (#2636, the other half of the fix above).** The bug as originally filed
+  wasn't the pre-scan guard's territory: the attention card the Go TUI
+  renders (`GET /v1/email/attention`, sections MEETING PROPOSALS/NEEDS
+  REVIEW/ACTION ITEMS) could show real items while the same turn's answer
+  said "no urgent or actionable items found" — because that view is never
+  a tool call (`build_attention_view_impl` has no `@tool` wrapper; it only
+  serves the TUI's on-open render), so the model generating the answer had
+  no way to see it. `answer_grounding` now also reconciles the final
+  answer against the same in-process cache the card was rendered from
+  (extracted into a small new `attention_cache.py` so this stays possible
+  without pulling FastAPI into the dependency-light grounding module), and
+  appends — rather than replaces — a correction naming the card and its
+  coverage when the two disagree. Declines to correct once that cache is
+  older than its own freshness window (120s), so a card the user has since
+  cleared can't get "corrected" back into looking unresolved.
+- **`gaia email autonomy kill` now actually stops a scheduled cycle, not
+  just a REST/CLI session's (#2649).** The scheduler builds a brand-new,
+  stateless agent from environment variables on every fire and never
+  touched the live agent object `set_autonomy_level` mutated — the gap
+  #2624's fix explicitly called out as unresolved. `set_autonomy_level` now
+  also writes a persisted kill flag into the same `state.db` every agent
+  instance already shares (the trust ledger and session preferences do the
+  same); `_run_email_autonomy_cycle` checks it once at cycle start (so a
+  killed schedule stops hitting the mailbox at all) and again per message
+  (so a kill landing mid-cycle still pre-empts an already-running scheduled
+  run, the same way it already did for a REST/CLI session). Setting any
+  other level clears the flag, so a resume un-blocks the scheduler too.
+- **`gaia email autonomy run` now prints the error count and stop reason
+  (#2651).** #2625 added `report["errors"]`/`report["stopped"]` to the
+  autonomy cycle report, but the CLI's print function never read either
+  field — a run that hit per-message failures printed the identical clean
+  summary line as a fully successful one. It now prints `errors=<n>` on
+  the summary line and, when the cycle stopped early, a second
+  `stopped early: <reason>` line.
+- **The agent no longer narrates its own calendar-conflict verdict — and
+  gets it backwards (#2571).** Asked to list calendar events and flag
+  conflicts, the agent listed events correctly, then stated a conflict
+  conclusion it never computed: two events overlapping by 30 minutes were
+  reported as "back-to-back and do not conflict." `detect_calendar_conflicts`
+  was never called — only `list_calendar_events` ran, and the model judged
+  overlap from the listed times itself. The tool was always correct; it
+  simply never ran. `_SYSTEM_PROMPT` now has a CALENDAR CONFLICTS section
+  mandating the tool for any conflict/overlap/double-booking question, both
+  calendar tool docstrings state the same rule (the schema actually sent to
+  the model), and a new deterministic guard in `calendar_tools.py`
+  (`response_has_ungrounded_conflict_claim`) flags a conflict-judgement
+  reply that never called `detect_calendar_conflicts` and appends a
+  correction rather than letting the ungrounded verdict stand unqualified.
+- **Inbox pre-scan now covers read mail, not just unread (#2638).** Pre-scan excluded
+  read mail on a rationale that a later fix in the same issue (#2584) had already made
+  moot — the coverage denominator moved to an exact `labels().get()` count independent
+  of the listing query, so narrowing that query to unread-only bought nothing while
+  making the single highest-value triage bucket (a message you opened but never
+  answered) permanently invisible the moment you read it. Pre-scan now scans all of
+  INBOX, matching the attention view and `list_waiting_on_you`, which never narrowed to
+  unread in the first place. `total_inbox` (exact whole-INBOX count, sourced from the
+  same call as the existing `total_unread`) is the new coverage denominator now that the
+  scan isn't unread-only; schema bumped to `2.9`.
+- **Thread summaries now keep the newest message's open asks (#2641).** A
+  thread summary could reflect the opening question and an early reply while
+  dropping the newest message entirely — even when that message carried the
+  thread's only open ask and a concrete meeting proposal. Root cause: both
+  `summarize_thread`'s system and user-turn prompts only ever guarded EARLY
+  content ("do not drop a decision raised early..."); nothing asked the
+  model to protect what is still open in the latest message. Both prompts
+  now weigh the newest message's still-open asks equally, and a detected
+  meeting proposal — from the existing deterministic
+  `detect_meeting_request_heuristic`, run over the newest message's own
+  decoded body, never the sender's raw matched text — is named from that
+  signal rather than left to free-form generation. Thread summaries also get
+  a larger length bound (`THREAD_SUMMARY_CHAR_LIMIT`, 700 vs. the
+  single-message 300): several messages' decisions plus a new open ask plus
+  a meeting time cannot fit in the single-message cap.
+- **Mail-infrastructure banners no longer reach the summarizer as if they
+  were the message (#2642).** A sensitivity marking or external-sender
+  caution stamped at the top of a body sat exactly where a summarizer looks
+  for "who said this" — on one real thread it was read as the author's name
+  and attributed a colleague's statement to the banner text instead. New
+  `gaia_agent_email.body_normalize.normalize_email_body` strips a small,
+  enumerable set of known leading banners (never mid-message, never a body
+  that merely discusses one) before `_thread_message_blocks` /
+  `_format_message_for_llm` wrap the body for the model, with a hard cap on
+  how much any single strip can remove so a banner with no trailing blank
+  line can never take real content down with it. It also closes a
+  pre-existing gap where an inbound body carrying a literal
+  `<<<UNTRUSTED_EMAIL_BODY_END>>>`-shaped token was wrapped unscrubbed —
+  that scrub previously ran only on LLM output, never on inbound text.
+- **Fixed a data-loss bug in the #2642 banner stripper: it deleted real
+  content on real (CRLF) mail.** `normalize_email_body`'s paragraph-break
+  lookup only matched a bare `\n\n`, but an actual inbound body uses `\r\n`
+  (RFC 5322) — so the lookup always returned "no blank line found," the
+  strip fell back to its 300-char/5-newline removal cap, and that cap ate
+  one or two real paragraphs past the banner instead of just the banner.
+  Live testing against a real message caught this: the banner *and* the two
+  paragraphs following it were removed. `_BLANK_LINE_RE` is now CRLF-tolerant
+  (`\r?\n[ \t]*\r?\n`); the removal cap itself, the bounded scan window, and
+  every existing hard-negative case are unchanged.
+- **Banner stripping now reaches every path that builds a prompt from a raw
+  body, including a banner's copies inside a quoted reply trail (#2647,
+  #2653).** #2642 only protected the two thread/read rendering paths;
+  `summarize_message`, the LLM triage follow-up, and meeting-request
+  detection each built their own prompt straight from the decoded body, so
+  a leading banner could still reach the model on those three. All three
+  now call `normalize_email_body` before wrapping the body, same as the
+  read paths. Separately, a live sweep found the bigger source of banner
+  leakage: Outlook inlines the entire prior conversation into every reply,
+  so a banner stripped from one message's own top-of-body still showed up
+  a dozen times inside later replies' quoted trails — enough that one real
+  thread summary named the banner text ("AMD General") as if it were a
+  participant. `_thread_message_blocks` (used only by the two thread-SUMMARY
+  renderers, never a raw-content display tool) now also drops the quoted
+  trail via new `body_normalize.strip_quoted_trail` — reusing
+  `voice_profile.strip_quoted_text`, with a fallback to the original body
+  when a message's sole content is a quote, so a bare "+1" reply is never
+  turned into an empty block. On a 10-message thread with full-history
+  quoting this cut the transcript from 6,131 to 1,967 characters (68%
+  smaller) as a side effect of removing the duplication.
+- **The autonomy kill switch now pre-empts a cycle already running, instead
+  of only affecting the next one (#2624).** A kill fired a second into a
+  25-message run used to be confirmed as "off" while the run carried on and
+  processed all 25 — the only enabled check read a `TrustPolicy` snapshot
+  frozen before the loop started, so nothing inside it could see a kill
+  fired mid-cycle. `_run_email_autonomy_cycle` now re-reads the live
+  autonomy level immediately before each message's execute call and stops
+  the batch there, recording why in the new `report["stopped"]` field
+  (`"autonomy_off"`). Scope: this is pre-emptive for a cycle running through
+  the REST/CLI session surface on a single-worker sidecar; the scheduler
+  builds a stateless agent per fire from environment variables and is
+  unaffected by a kill issued here (#2649). Killing one session
+  also now stops every other live session in the process, since the caller's
+  session id is not always the one an autonomy cycle happens to be running
+  under.
+- **A single per-message failure no longer discards the whole autonomy
+  report (#2625).** A transient provider error used to propagate past the
+  whole cycle, throwing away the record of every message already archived
+  or marked read for real — the caller got a bare 500 and no way to tell
+  what had actually changed short of querying the database by hand. The
+  cycle now catches a per-message failure, records it in the new
+  `report["errors"]` (exception type plus a redacted, length-capped
+  message — auth headers, tokens, and email addresses are stripped, never
+  the raw provider payload), and continues to the next
+  message — stopping only after 3 CONSECUTIVE failures (resets on any
+  success) so a systemic outage doesn't grind through the whole batch
+  logging one identical error per message. A bookkeeping-call failure
+  (recording the action for undo, clearing the re-proposal guard) that
+  happens *after* a message was already mutated is logged but never
+  reclassifies that message as failed. A cycle-level failure (triage
+  itself raising) still propagates, unchanged.
+- **The triage scan now actually follows pagination, and `scan_truncated`
+  tells the truth (#2634).** Raising the scan's `max_messages` above one
+  provider page used to do nothing — `triage_inbox_impl` issued a single
+  `list_messages` call and never followed the returned `nextPageToken`, so
+  asking for 500 messages still returned 100. Worse, the attention view's
+  `scan_truncated` was computed as `len(results) >= max_messages`, which
+  flips to "not truncated" the moment a request exceeds one page of real
+  mail — exactly when the scan is least complete. The scan now pages until
+  `max_messages` is collected or the mailbox is exhausted, de-duplicating
+  message ids across pages and clamping the accumulator client-side (Outlook's
+  continuation ignores `max_results` entirely). `scan_truncated` is now
+  derived solely from whether the last-fetched page's own cursor says more
+  mail exists, never from comparing request/response length — a mailbox
+  whose size exactly equals the request now correctly reports no truncation,
+  instead of the length-only formula's false positive.
 - **`POST /autonomy/run` refuses instead of silently no-oping while autonomy
   is `off` (#2528).** Previously the route returned HTTP 200 with the same
   empty-report shape whether autonomy was disabled or had genuinely run and
@@ -168,6 +398,11 @@ contract version is tracked separately as
   with a body). `gaia email autonomy run` no longer prints the same error
   twice (`log.error` + `print`) either — one line on stderr, with the log
   record still available under `--logging-level debug`.
+  **Follow-up:** the "no mailbox connected yet" cold-start error is a
+  *different* `ConfigurationError` class (`gaia_agent_email.config`, not
+  `gaia.connectors.errors`) that shares no base class with `ConnectorsError`
+  — it still escaped `/autonomy/run` as a textless 500. Now caught
+  explicitly and mapped to 503, same as its connectors-side namesake.
 
 ### Fixed
 

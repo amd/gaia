@@ -710,6 +710,71 @@ class TestAutonomyRoutes:
         assert r.status_code == 503
         assert "No mailbox connected" in r.json()["detail"]
 
+    def test_run_cycle_returns_200_with_partial_report_on_per_message_error(
+        self, client
+    ):
+        """#2625: a per-message failure inside the cycle must not surface as
+        a bare 500 at the HTTP boundary. ``/autonomy/run`` declares no
+        ``response_model``, so a report carrying the new ``errors``/
+        ``stopped`` keys passes through verbatim with a 200."""
+        self._mk(client)
+        client.post(
+            "/v1/email/agent/autonomy",
+            json={"session_id": "s1", "level": "full"},
+        )
+        partial_report = {
+            "level": "full",
+            "executed": [{"message_id": "m1", "action": "archive"}],
+            "proposals": [],
+            "decisions": [],
+            "skipped": 0,
+            "already_proposed": 0,
+            "errors": [
+                {
+                    "message_id": "m2",
+                    "error_type": "ConnectionError",
+                    "error": "gmail: 502 Bad Gateway",
+                }
+            ],
+            "stopped": None,
+        }
+        agent = client.built["last"]
+        agent.run_autonomy_cycle = lambda context=None: partial_report
+        r = client.post("/v1/email/agent/autonomy/run", json={"session_id": "s1"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["executed"] == partial_report["executed"]
+        assert body["errors"] == partial_report["errors"]
+        assert body["stopped"] is None
+
+    def test_kill_broadcasts_to_every_other_session(self, client):
+        """#2624/adversarial-C4: the kill can hit a different agent object
+        than the one actually running a cycle — both routes resolve against
+        the module-level registry by session_id, and nothing reconciles a
+        CLI kill fired at the default 'cli' id against a cycle running
+        under a different (e.g. Agent-UI) session. Killing one session must
+        stop every OTHER live session too, not just the one named."""
+        self._mk(client, "s1")
+        self._mk(client, "s2")
+        client.post(
+            "/v1/email/agent/autonomy",
+            json={"session_id": "s1", "level": "earn_trust"},
+        )
+        client.post(
+            "/v1/email/agent/autonomy", json={"session_id": "s2", "level": "full"}
+        )
+
+        r = client.post(
+            "/v1/email/agent/autonomy", json={"session_id": "s1", "level": "off"}
+        )
+        assert r.json()["enabled"] is False
+
+        # s2 was never explicitly killed — the broadcast must have stopped
+        # it anyway.
+        r2 = client.get("/v1/email/agent/autonomy/s2")
+        assert r2.json()["level"] == "off"
+        assert r2.json()["enabled"] is False
+
 
 class TestWorkerDiesWithoutTerminalEvent:
     """The stream must report a dead worker, not close on a blank answer.

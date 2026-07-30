@@ -160,9 +160,11 @@ def _scan_one_backend(
         "items": items,
         "scanned": len(results),
         "total_unread": _fetch_total_unread(backend),
-        # Mirrors detect_waiting_on_you_impl's own truncation heuristic: a
-        # scan that returned exactly the ceiling likely didn't see everything.
-        "scan_truncated": len(results) >= max_messages
+        # Honest signal (#2634): driven by triage_inbox_impl's own paging
+        # cursor, never by "did we hit max_messages" alone — that formula
+        # is wrong the instant a mailbox's true size exactly equals the
+        # ceiling (nothing missed, but the length check still fires).
+        "scan_truncated": triage["scan_truncated"]
         or bool(waiting.get("scan_truncated")),
     }
 

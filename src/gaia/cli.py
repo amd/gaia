@@ -5425,10 +5425,14 @@ def _print_autonomy_run(body: dict) -> None:
     proposals = len(body.get("proposals") or [])
     skipped = int(body.get("skipped") or 0)
     already_proposed = int(body.get("already_proposed") or 0)
+    errors = len(body.get("errors") or [])
+    stopped = body.get("stopped")
     print(
         f"executed={executed} proposals={proposals} "
-        f"skipped={skipped} already_proposed={already_proposed}"
+        f"skipped={skipped} already_proposed={already_proposed} errors={errors}"
     )
+    if stopped:
+        print(f"stopped early: {stopped}")
 
 
 def handle_email_autonomy_command(args) -> None:
