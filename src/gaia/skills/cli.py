@@ -500,11 +500,31 @@ def _handle_export(args: argparse.Namespace) -> int:
 def _handle_search(args: argparse.Namespace) -> int:
     from gaia.skills.hub import search_skills
 
-    results = search_skills(args.query, base_url=args.hub_url)
+    found = search_skills(args.query, base_url=args.hub_url)
+    results = found.entries
 
     if getattr(args, "as_json", False):
-        print(json.dumps({"query": args.query, "skills": results}, indent=2))
+        print(
+            json.dumps(
+                {
+                    "query": args.query,
+                    "offline": found.offline,
+                    "generated_at": found.generated_at,
+                    "skills": results,
+                },
+                indent=2,
+            )
+        )
         return EXIT_OK
+
+    # Say so before the results, not after: a stale list read as current is how a
+    # user ends up installing something that was unpublished.
+    if found.offline:
+        print(
+            f"⚠ The hub was unreachable — showing the offline catalog cache "
+            f"(generated {found.generated_at or 'unknown'}). It may be stale.",
+            file=sys.stderr,
+        )
 
     if not results:
         target = f" matching {args.query!r}" if args.query else ""

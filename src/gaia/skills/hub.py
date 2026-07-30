@@ -89,6 +89,27 @@ def publish_url(base_url: Optional[str] = None) -> str:
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class SkillSearchResult:
+    """Matching skill entries plus where the catalog came from.
+
+    ``offline`` is part of the result, not a log line, because a stale catalog is
+    actionably different from a fresh one: a skill listed from cache may have been
+    unpublished, and one published since will be missing. Presenting cached
+    results as current is the quiet-wrong-answer failure mode.
+    """
+
+    entries: list[dict[str, Any]]
+    offline: bool = False
+    generated_at: Optional[str] = None
+
+    def __iter__(self):
+        return iter(self.entries)
+
+    def __len__(self) -> int:
+        return len(self.entries)
+
+
 def search_skills(
     query: str = "",
     *,
@@ -96,7 +117,7 @@ def search_skills(
     fetcher: Optional[Fetcher] = None,
     cache_path: Optional[Path] = None,
     force: bool = False,
-) -> list[dict[str, Any]]:
+) -> SkillSearchResult:
     """Catalog skill entries matching *query* (empty query = every skill).
 
     Matches case-insensitively against name, description, and declared tool
@@ -110,15 +131,30 @@ def search_skills(
         cache_path: Offline-cache location; pass a temp path in tests so the
             user's real ``~/.gaia/catalog-cache.json`` is never touched.
         force: Bypass the in-process TTL cache.
+
+    Raises:
+        SkillHubError: the catalog could not be produced at all — no network and
+            no usable cache. Translated from
+            :class:`gaia.hub.catalog.CatalogError`, which is a plain
+            ``RuntimeError`` and would otherwise escape the CLI's error handling
+            as a traceback.
     """
-    index = load_index(
-        base_url=base_url, fetcher=fetcher, cache_path=cache_path, force=force
-    )
+    from gaia.hub.catalog import CatalogError
+
+    try:
+        index = load_index(
+            base_url=base_url, fetcher=fetcher, cache_path=cache_path, force=force
+        )
+    except CatalogError as exc:
+        raise SkillHubError(
+            f"Could not reach the Agent Hub catalog and no offline copy is "
+            f"available: {exc} Check your network, or set GAIA_HUB_URL if you are "
+            "pointing at a private hub."
+        ) from exc
+
     entries = skill_entries(index.agents)
 
     needle = query.strip().lower()
-    if not needle:
-        return entries
 
     def haystack(entry: dict[str, Any]) -> str:
         metadata = entry.get("skill_metadata") or {}
@@ -136,7 +172,21 @@ def search_skills(
             ]
         ).lower()
 
-    return [entry for entry in entries if needle in haystack(entry)]
+    matched = (
+        entries
+        if not needle
+        else [entry for entry in entries if needle in haystack(entry)]
+    )
+    if index.offline:
+        log.warning(
+            "Serving %d skill(s) from the offline catalog cache (generated %s) — "
+            "the hub was unreachable, so this list may be stale",
+            len(matched),
+            index.generated_at or "unknown",
+        )
+    return SkillSearchResult(
+        entries=matched, offline=index.offline, generated_at=index.generated_at
+    )
 
 
 # ---------------------------------------------------------------------------

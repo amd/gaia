@@ -561,6 +561,55 @@ def test_search_matches_name_description_and_tool_names(tmp_path):
     assert search("nothing-matches-this") == []
 
 
+def test_search_flags_a_result_served_from_the_offline_cache(tmp_path):
+    """A stale catalog read as current is how a user installs something gone.
+
+    ``load_index`` degrades to its on-disk cache when the hub is unreachable. That
+    keeps search usable offline, but the staleness has to reach the caller — so it
+    is part of the result, not just a log line.
+    """
+    import json as json_mod
+
+    from gaia.skills.hub import search_skills
+    from tests.unit.skills_helpers import fake_hub
+
+    hub = fake_hub(tmp_path)
+    hub.put_manifest("web-research", "1.0.0", filename="a.zip", sha256="a")
+    hub.rebuild_index()
+
+    cache = tmp_path / "catalog-cache.json"
+    cache.write_text(
+        hub.objects[f"{hub.BASE_URL}/index.json"].decode("utf-8"), encoding="utf-8"
+    )
+    assert json_mod.loads(cache.read_text("utf-8"))["agents"]
+
+    def unreachable(_url):
+        raise ConnectionError("hub is down")
+
+    found = search_skills(
+        "", base_url=hub.BASE_URL, fetcher=unreachable, cache_path=cache, force=True
+    )
+    assert found.offline is True
+    assert [e["id"] for e in found.entries] == ["web-research"]
+
+
+def test_search_fails_loudly_with_no_hub_and_no_cache(tmp_path):
+    """CatalogError is a plain RuntimeError; unwrapped it escapes as a traceback."""
+    from gaia.skills.hub import SkillHubError, search_skills
+
+    def unreachable(_url):
+        raise ConnectionError("hub is down")
+
+    with pytest.raises(SkillHubError, match="no offline copy"):
+        search_skills(
+            "",
+            base_url="https://nope.test",
+            fetcher=unreachable,
+            cache_path=tmp_path / "absent-cache.json",
+            force=True,
+        )
+
+
 def test_publish_request_parts_match_the_worker_contract():
     """The Worker rejects a body missing 'skill' or 'artifact' — assert the shape."""
     from gaia.skills.hub import PublishRequest
