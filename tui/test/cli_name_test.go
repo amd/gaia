@@ -58,19 +58,53 @@ func TestLeadingTUIWordStillAccepted(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		suffix = ".exe"
 	}
-	installed := filepath.Join(t.TempDir(), "gaia-tui"+suffix)
-	copyExecutable(t, gaiaBin, installed)
 
-	out, err := exec.Command(installed, "tui", "version").CombinedOutput()
-	if err != nil {
-		t.Fatalf("gaia-tui tui version: %v\n%s", err, out)
+	for _, name := range []string{"gaia-tui", "gaia"} {
+		t.Run(name, func(t *testing.T) {
+			installed := filepath.Join(t.TempDir(), name+suffix)
+			copyExecutable(t, gaiaBin, installed)
+
+			// `version` needs no daemon; `list` is the documented line and must
+			// reach the same subcommand rather than dying on "unknown command".
+			for _, sub := range []string{"version", "list"} {
+				viaTUI, _ := exec.Command(installed, "tui", sub).CombinedOutput()
+				direct, _ := exec.Command(installed, sub).CombinedOutput()
+				if string(viaTUI) != string(direct) {
+					t.Errorf("`%s tui %s` and `%s %s` diverged:\n got %q\nwant %q",
+						name, sub, name, sub, viaTUI, direct)
+				}
+				if strings.Contains(string(viaTUI), "unknown command") {
+					t.Errorf("`%s tui %s` was not recognised:\n%s", name, sub, viaTUI)
+				}
+			}
+		})
 	}
-	direct, err := exec.Command(installed, "version").CombinedOutput()
-	if err != nil {
-		t.Fatalf("gaia-tui version: %v\n%s", err, direct)
+}
+
+// TestSymlinkedBinaryNamesTheLink covers the packaging shape where a symlink on
+// PATH points at a differently-named real binary (Homebrew, /usr/local/bin).
+// argv[0] is the link the user invoked, which is the name to print — resolving
+// it to the target would print a name they do not have.
+func TestSymlinkedBinaryNamesTheLink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation needs elevation on Windows")
 	}
-	if string(out) != string(direct) {
-		t.Errorf("`tui version` and `version` diverged:\n got %q\nwant %q", out, direct)
+	gaiaBin, _ := buildBinaries(t)
+
+	target := filepath.Join(t.TempDir(), "gaia-tui-v2")
+	copyExecutable(t, gaiaBin, target)
+
+	link := filepath.Join(t.TempDir(), "gaia-tui")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	out, err := exec.Command(link, "--help").CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s --help: %v\n%s", link, err, out)
+	}
+	if !strings.Contains(string(out), "gaia-tui [flags]") {
+		t.Errorf("help names the symlink target, not the link the user invoked:\n%s", out)
 	}
 }
 

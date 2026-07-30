@@ -118,8 +118,8 @@ func (e *RouteMissingError) Error() string {
 	// background service, not the Agent Hub" is the part that must survive.
 	return fmt.Sprintf(
 		"the GAIA background service is older than this GAIA: it has no %s route, so it "+
-			"cannot %s. Run `gaia daemon restart`, then retry.%s The daemon log is at %s.",
-		e.Path, e.Op, alternative, logPathForMessage())
+			"cannot %s. %s%s The daemon log is at %s.",
+		e.Path, e.Op, UpgradeCoreHint, alternative, logPathForMessage())
 }
 
 // IsRouteMissing reports whether a daemon answer describes a route the daemon
