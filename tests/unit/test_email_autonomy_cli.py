@@ -159,7 +159,6 @@ class TestAutonomyRunRefusal:
         assert exc.value.code == 1
         assert "could not reach" in capsys.readouterr().err
 
-
     def test_run_surfaces_connectors_error_detail_loudly(self, capsys):
         """#2617: when the sidecar route maps an unhandled ``ConnectorsError``
         to an HTTP 500 with a real ``detail`` body (the fix under test in
