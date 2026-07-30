@@ -53,7 +53,9 @@ from gaia.daemon.constants import (
 from gaia.daemon.sidecars import fetch
 from gaia.daemon.sidecars.errors import (
     HealthTimeoutError,
+    SidecarNotRunningError,
     SidecarSpawnError,
+    SidecarUnresponsiveError,
     VersionMismatchError,
 )
 from gaia.daemon.sidecars.spec import AgentSidecarSpec
@@ -66,6 +68,11 @@ _VALID_MODES = ("user", "dev")
 # Keep only the most recent N per-port sidecar logs; ephemeral ports mean a new
 # file per restart, which would otherwise accumulate without bound.
 _MAX_SIDECAR_LOGS = 5
+# Pre-relay readiness probe budget. /health touches nothing, so a healthy
+# sidecar answers in milliseconds; this only has to be long enough to survive
+# scheduling jitter, and short enough that a wedged sidecar is reported as such
+# instead of stalling the caller behind the relay's own read timeout.
+_READINESS_TIMEOUT = 2.0
 
 
 def find_free_port(host: str = _HOST) -> int:
@@ -350,6 +357,46 @@ class AgentSidecarManager:
         import requests
 
         return requests.get(url, timeout=timeout)
+
+    def check_responsive(self, timeout: float = _READINESS_TIMEOUT) -> None:
+        """Raise unless the sidecar answers ``/health`` right now.
+
+        ``is_running`` only proves the PROCESS exists. A sidecar whose event
+        loop is blocked keeps that process alive forever while serving nothing,
+        so the startup health check — which runs once and is never re-checked —
+        goes on reporting it healthy. This is the re-check, and it is
+        deliberately a single bounded probe: no retry loop, because a retry
+        would convert a hard failure into a longer hang and hide it.
+
+        Raises :class:`SidecarUnresponsiveError` (alive but not serving) or
+        :class:`SidecarNotRunningError` (process gone).
+        """
+        import requests
+
+        if not self.is_running:
+            raise SidecarNotRunningError(
+                f"{self.spec.agent_id} sidecar process is not running. Start it "
+                f"with `gaia daemon start-agent {self.spec.agent_id}`."
+            )
+        url = f"{self.base_url}/health"
+        try:
+            r = self._http_get(url, timeout=timeout)
+        except requests.exceptions.RequestException as e:
+            raise SidecarUnresponsiveError(
+                f"{self.spec.agent_id} sidecar (pid {self.pid}) is alive but did "
+                f"not answer {url} within {timeout}s ({type(e).__name__}: {e}). "
+                "It passed its startup health check, so it has stopped serving "
+                "since — typically a blocked event loop or a hung dependency. "
+                f"Restart it with `gaia daemon start-agent {self.spec.agent_id}` "
+                f"and check the sidecar log at {self._log_path or self.log_dir}."
+            ) from e
+        if r.status_code != 200:
+            raise SidecarUnresponsiveError(
+                f"{self.spec.agent_id} sidecar (pid {self.pid}) answered {url} "
+                f"with HTTP {r.status_code}, not 200. Restart it with "
+                f"`gaia daemon start-agent {self.spec.agent_id}` and check the "
+                f"sidecar log at {self._log_path or self.log_dir}."
+            )
 
     def _open_log(self, port: int):
         # Redirect the sidecar's stdout+stderr to a per-port file. A plain PIPE

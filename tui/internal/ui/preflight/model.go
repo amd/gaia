@@ -306,7 +306,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.focus = 0
 		}
-		if !m.rep.Blocked() && !m.opts.ManualProceed {
+		// A row the user can fix with one keypress holds the screen even when it
+		// does not block: the mailbox row is exactly that, and handing off past it
+		// would take `f connect a mailbox` away with the screen it was on.
+		if !m.rep.Blocked() && !m.opts.ManualProceed && !m.rep.HasOneKeyFix() {
 			if m.rep.HasHalt() {
 				// Three edits together: the tick, the phase, and the note each
 				// independently claim the launch is starting.

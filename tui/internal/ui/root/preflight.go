@@ -20,7 +20,7 @@ import (
 // is a fact with no expiry notice — the daemon can be killed, its client token
 // rotates on every restart, Lemonade can unload the model, a mailbox grant can be
 // revoked from the web — so a cached pass would open a chat that cannot answer
-// while claiming it had been verified. An all-green pass costs one attach, two
+// while claiming it had been verified. An all-green pass costs one attach, three
 // relayed GETs, and one bounded relayed mailbox read, and is held ~800ms; that is
 // the price of the answer being true now.
 func (m RootModel) beginPreflight(agent catalog.Agent) (tea.Model, tea.Cmd) {
@@ -124,14 +124,15 @@ func (m RootModel) cancelFromGate() (tea.Model, tea.Cmd) {
 	m.closeGate()
 	m.activeView = viewHub
 
-	// Backing out of a gate that had a real blocker leaves the user staring at a
-	// hub that looks like nothing happened. Say which row stopped it.
-	if blocker, blocked := rep.Blocker(); blocked {
+	// Backing out of a gate that found something leaves the user staring at a hub
+	// that looks like nothing happened. Say which row it was — the one that
+	// refused the launch, or the one the user was being asked to fix.
+	if row, found := attentionRow(rep); found {
 		// One line, and no trailing call to action: the hub truncates its status
 		// row at the terminal width, and a hint that gets cut mid-word is worse
 		// than the footer's own "enter run".
 		m.hub.SetStatus(fmt.Sprintf("%s did not start — %s is %s",
-			rep.AgentName, blocker.Label, blocker.Line))
+			rep.AgentName, row.Label, row.Line))
 	}
 
 	var cmds []tea.Cmd
@@ -139,6 +140,19 @@ func (m RootModel) cancelFromGate() (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.sizeCmd())
 	}
 	return m, tea.Batch(cmds...)
+}
+
+// attentionRow is the row worth naming after a gate the user left: the one that
+// refused the launch, or — when nothing did — the one it was asking them to fix.
+func attentionRow(rep preflight.Report) (preflight.Row, bool) {
+	if blocker, blocked := rep.Blocker(); blocked {
+		return blocker, true
+	}
+	idx := rep.FirstAttention()
+	if idx < 0 || rep.Rows[idx].State != preflight.StateFailed {
+		return preflight.Row{}, false
+	}
+	return rep.Rows[idx], true
 }
 
 func (m RootModel) sizeCmd() tea.Cmd {

@@ -37,6 +37,23 @@ const (
 
 	agentsEmpty = `{"agents":[]}`
 
+	// GET /v1/email/health — HealthResponse (api_routes.email_health). It touches
+	// no mailbox, no model and no network, so only a sidecar that is SERVING can
+	// produce it.
+	healthOK = `{"status":"ok"}`
+
+	// The relay's 503 for a sidecar that passed its startup handshake and has
+	// since stopped serving — the published-binary wedge: an async handler doing
+	// a blocking Keychain read parks the event loop and every route with it, pid
+	// and port intact, so the daemon's own listing keeps saying "running".
+	// VERBATIM from sidecars/manager.check_responsive, which nothing on the
+	// Python side pins — a reword there has to break a test here.
+	healthWedged = `{"detail":"email sidecar (pid 41999) is alive but did not answer ` +
+		`http://127.0.0.1:51234/health within 2.0s (ReadTimeout: ). It passed its startup ` +
+		"health check, so it has stopped serving since — typically a blocked event loop or " +
+		"a hung dependency. Restart it with `gaia daemon start-agent email` and check the " +
+		`sidecar log at ~/.gaia/agents/email/logs/email-1.log."}`
+
 	initReady = `{"ready":true,"lemonade":{"reachable":true,` +
 		`"base_url":"http://localhost:8000/api/v1","version":"8.1.10","min_version":"8.1.0",` +
 		`"compatible":true},"model":{"id":"Gemma-4-E4B-it-GGUF","present":true,"loadable":null,` +
@@ -229,6 +246,7 @@ func newFake() *fakeTransport {
 		info: DaemonInfo{PID: 41822, Port: 51230, APIVersion: "1.1"},
 		bodies: map[string]Response{
 			"GET /daemon/v1/agents":    {Status: 200, Body: []byte(agentsRunning)},
+			"GET /v1/email/health":     {Status: 200, Body: []byte(healthOK)},
 			"GET /v1/email/init":       {Status: 200, Body: []byte(initReady)},
 			"GET /v1/email/connectors": {Status: 200, Body: []byte(connectorsReady)},
 			"POST /v1/email/search":    {Status: 200, Body: []byte(searchOK)},
@@ -315,6 +333,7 @@ func realCommands() []string {
 		"gaia daemon start",
 		"gaia daemon restart",
 		"gaia daemon start-agent ",
+		"gaia daemon stop-agent ",
 		"gaia daemon agents",
 		"gaia hub install ",
 		"gaia init",
@@ -454,13 +473,18 @@ func TestCheck(t *testing.T) {
 		// wantStates is keyed by row key. Rows omitted are not asserted.
 		wantStates map[string]State
 		wantReady  bool
-		// wantBlocker is the key of the row that must be the first failure, "" for none.
+		// wantBlocker is the key of the row that must REFUSE the launch, "" for
+		// none. An optional row never refuses one, however it failed.
 		wantBlocker string
-		// wantIn asserts substrings on the blocking row's rendered remedy.
+		// wantAttention is the key of the row the user must act on. It is the
+		// blocker whenever there is one, so it defaults to wantBlocker; a failed
+		// optional row is the case where the two differ.
+		wantAttention string
+		// wantIn asserts substrings on the acted-on row's rendered remedy.
 		wantIn []string
 		// wantNotIn asserts what the remedy must NOT say.
 		wantNotIn []string
-		// wantFix is the fix the blocking row offers.
+		// wantFix is the fix the acted-on row offers.
 		wantFix FixKind
 		// mustNotCall names paths the walk must not reach (stop at first failure).
 		mustNotCall []call
@@ -517,6 +541,74 @@ func TestCheck(t *testing.T) {
 			wantIn:      []string{"gaia daemon start-agent email"},
 			wantFix:     FixStartSidecar,
 			mustNotCall: []call{{"GET", "/v1/email/init"}},
+		},
+		{
+			// THE WEDGE. The daemon's listing says "running" because the PROCESS is
+			// there; the agent itself takes the request and never answers. Blaming
+			// the mailbox for that — which is what the Mailbox row's timeout used to
+			// say — points the user at the one thing that is not broken.
+			name: "the agent is registered and running but never answers",
+			build: func() *fakeTransport {
+				f := newFake()
+				f.errs["GET /v1/email/health"] = &daemon.RequestError{
+					Op: "call GET /v1/email/health through the background service",
+					Detail: "context deadline exceeded (Client.Timeout or context " +
+						"cancellation while reading body)",
+				}
+				return f
+			},
+			wantStates: map[string]State{
+				KeyDaemon: StateOK, KeySidecar: StateFailed, KeyLemonade: StatePending,
+				KeyModel: StatePending, KeyMailbox: StatePending,
+			},
+			wantBlocker: KeySidecar,
+			wantIn: []string{
+				"running, not answering", "never replied",
+				"gaia daemon stop-agent email && gaia daemon start-agent email",
+				"~/.gaia/agents/email/logs/",
+			},
+			// The mailbox is not the subject and must not be named as one.
+			wantNotIn: []string{"mailbox", "Mailbox"},
+			// start-agent ATTACHES to a registered sidecar, so a one-key start
+			// would report success and change nothing.
+			wantFix: FixNone,
+			// And nothing downstream is probed over an agent that cannot answer.
+			mustNotCall: []call{
+				{"GET", "/v1/email/init"}, {"GET", "/v1/email/connectors"},
+				{"POST", "/v1/email/search"},
+			},
+		},
+		{
+			// Same wedge, seen by the daemon first: its pre-relay probe finds the
+			// sidecar alive but no longer serving and 503s with that verdict.
+			name: "the background service cannot get an answer out of the agent",
+			build: func() *fakeTransport {
+				return newFake().with("GET /v1/email/health", 503, healthWedged)
+			},
+			wantStates: map[string]State{
+				KeySidecar: StateFailed, KeyLemonade: StatePending, KeyMailbox: StatePending,
+			},
+			wantBlocker: KeySidecar,
+			wantIn: []string{
+				"running, not answering", "could not get an answer out of it",
+				"gaia daemon stop-agent email",
+			},
+			wantFix:     FixNone,
+			mustNotCall: []call{{"GET", "/v1/email/init"}},
+		},
+		{
+			// An agent with no health route still ANSWERED, and an answer off the
+			// event loop is the whole question. Reading a 404 as a dead agent would
+			// fail every sidecar older than this check.
+			name: "an agent without a health route still counts as answering",
+			build: func() *fakeTransport {
+				return newFake().with("GET /v1/email/health", 404, `{"detail":"Not Found"}`)
+			},
+			wantStates: map[string]State{
+				KeyDaemon: StateOK, KeySidecar: StateOK, KeyLemonade: StateOK,
+				KeyModel: StateOK, KeyMailbox: StateOK,
+			},
+			wantReady: true,
 		},
 		{
 			name: "agent not installed",
@@ -591,7 +683,10 @@ func TestCheck(t *testing.T) {
 			wantStates: map[string]State{
 				KeyModel: StateOK, KeyMailbox: StateFailed,
 			},
-			wantBlocker: KeyMailbox,
+			// Failed, named, and NOT a refusal: triage classifies the payload in
+			// the request, so a query must still be able to run.
+			wantBlocker:   "",
+			wantAttention: KeyMailbox,
 			wantIn: []string{
 				"gaia connectors connect google", "installed:email",
 				// The union, not just the send scope: --scopes REPLACES the
@@ -606,8 +701,8 @@ func TestCheck(t *testing.T) {
 			build: func() *fakeTransport {
 				return newFake().with("GET /v1/email/connectors", 200, connectorsNoSend)
 			},
-			wantStates:  map[string]State{KeyMailbox: StateFailed},
-			wantBlocker: KeyMailbox,
+			wantStates:    map[string]State{KeyMailbox: StateFailed},
+			wantAttention: KeyMailbox,
 			wantIn: []string{
 				"you@gmail.com", "sign-in has no send access",
 				"signed in without the send scope",
@@ -628,8 +723,8 @@ func TestCheck(t *testing.T) {
 			build: func() *fakeTransport {
 				return newFake().with("GET /v1/email/connectors", 200, connectorsNoGrant)
 			},
-			wantStates:  map[string]State{KeyMailbox: StateFailed},
-			wantBlocker: KeyMailbox,
+			wantStates:    map[string]State{KeyMailbox: StateFailed},
+			wantAttention: KeyMailbox,
 			wantIn: []string{
 				"you@gmail.com", "send access not granted",
 				"does include send permission",
@@ -651,7 +746,7 @@ func TestCheck(t *testing.T) {
 			wantStates: map[string]State{
 				KeyModel: StateOK, KeyMailbox: StateFailed,
 			},
-			wantBlocker: KeyMailbox,
+			wantAttention: KeyMailbox,
 			wantIn: []string{
 				"sign-in no longer works",
 				"no forwarded 'google' credential is available",
@@ -667,10 +762,10 @@ func TestCheck(t *testing.T) {
 			build: func() *fakeTransport {
 				return newFake().with("POST /v1/email/search", 403, searchRevoked)
 			},
-			wantStates:  map[string]State{KeyMailbox: StateFailed},
-			wantBlocker: KeyMailbox,
-			wantIn:      []string{"revoked upstream", "gaia connectors connect google"},
-			wantFix:     FixConnectMailbox,
+			wantStates:    map[string]State{KeyMailbox: StateFailed},
+			wantAttention: KeyMailbox,
+			wantIn:        []string{"revoked upstream", "gaia connectors connect google"},
+			wantFix:       FixConnectMailbox,
 		},
 		{
 			// The RELAY gave up, not the mailbox. Blaming the mailbox would hand the
@@ -804,21 +899,33 @@ func TestCheck(t *testing.T) {
 				if blocker.Key != tt.wantBlocker {
 					t.Fatalf("blocker = %q, want %q\n%s", blocker.Key, tt.wantBlocker, rep)
 				}
-				assertRealCommand(t, blocker)
-				if blocker.Fix != tt.wantFix {
-					t.Errorf("blocker fix = %v, want %v", blocker.Fix, tt.wantFix)
+			}
+
+			attention := tt.wantAttention
+			if attention == "" {
+				attention = tt.wantBlocker
+			}
+			if attention != "" {
+				idx := rep.FirstAttention()
+				if idx < 0 || rep.Rows[idx].Key != attention {
+					t.Fatalf("the user is pointed at %d, want the %q row\n%s", idx, attention, rep)
+				}
+				row := rep.Rows[idx]
+				assertRealCommand(t, row)
+				if row.Fix != tt.wantFix {
+					t.Errorf("%q fix = %v, want %v", row.Key, row.Fix, tt.wantFix)
 				}
 				text := fmt.Sprintf("%s %s %s %s %s",
-					blocker.Line, blocker.Detail, blocker.Remedy.Action,
-					blocker.Remedy.Command, blocker.Remedy.Where)
+					row.Line, row.Detail, row.Remedy.Action,
+					row.Remedy.Command, row.Remedy.Where)
 				for _, want := range tt.wantIn {
 					if !strings.Contains(text, want) {
-						t.Errorf("blocking row does not mention %q; it says: %s", want, text)
+						t.Errorf("the %q row does not mention %q; it says: %s", row.Key, want, text)
 					}
 				}
 				for _, unwanted := range tt.wantNotIn {
 					if strings.Contains(text, unwanted) {
-						t.Errorf("blocking row must not mention %q; it says: %s", unwanted, text)
+						t.Errorf("the %q row must not mention %q; it says: %s", row.Key, unwanted, text)
 					}
 				}
 			}
@@ -845,6 +952,7 @@ func TestEveryFailedRowIsActionable(t *testing.T) {
 		"creds dead":  newFake().with("POST /v1/email/search", 502, searchNoForwardedCredential),
 		"revoked":     newFake().with("POST /v1/email/search", 403, searchRevoked),
 		"sidecar":     newFake().with("GET /daemon/v1/agents", 200, agentsStopped),
+		"wedged":      newFake().with("GET /v1/email/health", 503, healthWedged),
 	}
 	for name, f := range scenarios {
 		t.Run(name, func(t *testing.T) {
@@ -1520,7 +1628,199 @@ func TestIndeterminateIsNeitherReadyNorBlocking(t *testing.T) {
 	}
 }
 
+// --- the agent that is running but not answering ------------------------------
+
+// The wedge, end to end: an agent whose event loop is parked keeps its pid and
+// its port, so the daemon's listing says "running" forever. Every row below it
+// then times out, and the FIRST of those used to be the Mailbox — which reported
+// "cannot be checked" and sent the user to their mailbox over an agent that had
+// stopped answering anything.
+func TestAnAgentThatNeverAnswersIsNamedInsteadOfTheMailbox(t *testing.T) {
+	f := newFake().with("GET /v1/email/health", 503, healthWedged)
+	rep := Check(context.Background(), f, EmailConfig())
+
+	sidecar, _ := rep.Find(KeySidecar)
+	if sidecar.State != StateFailed {
+		t.Fatalf("a sidecar that answers nothing = %s, want failed\n%s", sidecar.State.Word(), rep)
+	}
+	if !strings.Contains(sidecar.Line, "not answering") {
+		t.Errorf("the row does not say what is wrong: %q", sidecar.Line)
+	}
+	assertRealCommand(t, sidecar)
+	if !strings.Contains(sidecar.Remedy.Command, "stop-agent") {
+		t.Errorf("the remedy attaches to the stuck process instead of replacing it: %q",
+			sidecar.Remedy.Command)
+	}
+	if sidecar.Remedy.Where == "" {
+		t.Error("the row does not say where to look next")
+	}
+
+	// The mailbox is not asked, not accused, and says what it is waiting on.
+	mailbox, _ := rep.Find(KeyMailbox)
+	if mailbox.State != StatePending {
+		t.Fatalf("mailbox = %s, want pending — nothing about it was learned\n%s",
+			mailbox.State.Word(), rep)
+	}
+	if !strings.Contains(mailbox.Detail, sidecar.Label) {
+		t.Errorf("the mailbox row does not name what it is waiting on: %q", mailbox.Detail)
+	}
+	if strings.Contains(mailbox.Line, "cannot be checked") ||
+		strings.Contains(mailbox.Remedy.Command, "connectors connect") {
+		t.Errorf("a wedged agent was reported as a mailbox problem: %q / %q",
+			mailbox.Line, mailbox.Remedy.Command)
+	}
+	// And the blocker the user is sent to is the agent.
+	blocker, _ := rep.Blocker()
+	if blocker.Key != KeySidecar {
+		t.Errorf("blocker = %q, want the agent row\n%s", blocker.Key, rep)
+	}
+}
+
+// The probe is one bounded call and it has to be visible in `d` — including what
+// it cost, which is the only way anyone can tell whether the gate got slower.
+func TestTheLivenessProbeIsOneCallAndIsRecorded(t *testing.T) {
+	f := newFake()
+	rep := Check(context.Background(), f, EmailConfig())
+
+	row, _ := rep.Find(KeySidecar)
+	if row.State != StateOK {
+		t.Fatalf("a healthy agent = %s, want ok\n%s", row.State.Word(), rep)
+	}
+	for _, want := range []string{"sidecar probe: GET /v1/email/health", "HTTP 200", "ms"} {
+		if !strings.Contains(row.Raw, want) {
+			t.Errorf("the probe trace does not record %q:\n%s", want, row.Raw)
+		}
+	}
+	// The agents listing it started from is still there — `d` must show both.
+	if !strings.Contains(row.Raw, "agent_id") {
+		t.Errorf("the probe trace replaced the agents listing:\n%s", row.Raw)
+	}
+
+	var probes int
+	for _, c := range f.calls {
+		if c.method == "GET" && c.path == "/v1/email/health" {
+			probes++
+		}
+	}
+	if probes != 1 {
+		t.Errorf("the gate probed the agent %d times; one launch is one probe", probes)
+	}
+}
+
+// A probe that never reached the daemon is not an agent that went quiet. The
+// row's line and its cause have to name the same subject, or the user restarts
+// the wrong thing.
+func TestADaemonThatDropsTheProbeIsNotReportedAsASilentAgent(t *testing.T) {
+	f := newFake()
+	f.errs["GET /v1/email/health"] = &daemon.RequestError{
+		Op: "call GET /v1/email/health through the background service", Detail: "connection refused"}
+
+	rep := Check(context.Background(), f, EmailConfig())
+	row, _ := rep.Find(KeySidecar)
+
+	if row.State != StateFailed {
+		t.Fatalf("state = %s, want failed\n%s", row.State.Word(), rep)
+	}
+	if strings.Contains(row.Line, "not answering") {
+		t.Errorf("a dead background service was reported as a silent agent: %q", row.Line)
+	}
+	if !strings.Contains(row.Detail, "background service") {
+		t.Errorf("the row does not name what actually failed: %q", row.Detail)
+	}
+	if strings.Contains(row.Remedy.Command, "stop-agent") {
+		t.Errorf("the remedy restarts an agent over a background service that is gone: %q",
+			row.Remedy.Command)
+	}
+	assertRealCommand(t, row)
+}
+
+// A sidecar the daemon has not started is not one that stopped answering: the
+// row must keep the remedy that STARTS it, and must not pay for a probe of a
+// process that is not there.
+func TestAStoppedSidecarIsNotProbedOrDiagnosedAsWedged(t *testing.T) {
+	f := newFake().with("GET /daemon/v1/agents", 200, agentsStopped)
+	rep := Check(context.Background(), f, EmailConfig())
+
+	row, _ := rep.Find(KeySidecar)
+	if row.Fix != FixStartSidecar {
+		t.Errorf("fix = %v, want the one-key start", row.Fix)
+	}
+	if strings.Contains(row.Remedy.Command, "stop-agent") {
+		t.Errorf("a sidecar that was never started is told to stop first: %q", row.Remedy.Command)
+	}
+	if f.called("GET", "/v1/email/health") {
+		t.Error("the gate probed a sidecar the daemon says is not running")
+	}
+}
+
 // --- the mailbox: four states, four remedies ---------------------------------
+
+// A mailbox is what the email agent's MAIL operations need — not what the agent
+// needs to run. POST /v1/email/triage classifies the subject and body carried in
+// the request ("No mail is read or sent"), so `run email --query …` must still
+// work with nothing connected. The row is still a loud failure; it just does not
+// refuse the run.
+func TestAMissingMailboxDoesNotRefuseARunThatDoesNotNeedOne(t *testing.T) {
+	for name, body := range map[string]string{
+		"nothing connected":      connectorsNone,
+		"no send scope":          connectorsNoSend,
+		"the agent has no grant": connectorsNoGrant,
+	} {
+		t.Run(name, func(t *testing.T) {
+			rep := Check(context.Background(),
+				newFake().with("GET /v1/email/connectors", 200, body), EmailConfig())
+
+			if rep.Blocked() {
+				t.Errorf("a mailbox-free capability was refused over the mailbox\n%s", rep)
+			}
+			if _, blocked := rep.Blocker(); blocked {
+				t.Error("the mailbox row was reported as what refuses the launch")
+			}
+			// Not softened: still proven broken, still [!], still the row the user
+			// is pointed at, still carrying the fix.
+			row, _ := rep.Find(KeyMailbox)
+			if row.State != StateFailed {
+				t.Fatalf("mailbox = %s, want failed — it IS unusable\n%s", row.State.Word(), rep)
+			}
+			if rep.Ready() {
+				t.Error("a report with an unusable mailbox called itself ready")
+			}
+			idx := rep.FirstAttention()
+			if idx < 0 || rep.Rows[idx].Key != KeyMailbox {
+				t.Errorf("the cursor is not on the row that needs the user\n%s", rep)
+			}
+			if row.Fix != FixConnectMailbox || row.Remedy.Empty() {
+				t.Errorf("the row lost the fix that makes it actionable: fix=%v remedy=%+v",
+					row.Fix, row.Remedy)
+			}
+			assertRealCommand(t, row)
+		})
+	}
+}
+
+// The rows the agent DOES need still refuse: making the mailbox non-blocking
+// must not make anything else non-blocking.
+func TestOnlyTheMailboxRowIsExemptFromRefusingTheLaunch(t *testing.T) {
+	cases := map[string]*fakeTransport{
+		"daemon": func() *fakeTransport {
+			f := newFake()
+			f.attachErr = &daemon.NotRunningError{Path: "/tmp/i.json"}
+			return f
+		}(),
+		"sidecar":  newFake().with("GET /daemon/v1/agents", 200, agentsStopped),
+		"wedged":   newFake().with("GET /v1/email/health", 503, healthWedged),
+		"lemonade": newFake().with("GET /v1/email/init", 503, initUnreachable),
+		"model":    newFake().with("GET /v1/email/init", 503, initModelMissing),
+	}
+	for name, f := range cases {
+		t.Run(name, func(t *testing.T) {
+			rep := Check(context.Background(), f, EmailConfig())
+			if !rep.Blocked() {
+				t.Fatalf("a precondition the agent needs stopped refusing the launch\n%s", rep)
+			}
+		})
+	}
+}
 
 // The four states the connector list plus one read can tell apart. Each needs
 // its own sentence: one "reconnect your mailbox" for all of them is what makes
@@ -1793,6 +2093,23 @@ func TestRelayAuthoredAnswersAreNeverBlamedOnTheMailbox(t *testing.T) {
 	row, _ := rep.Find(KeyMailbox)
 	if row.State != StateFailed {
 		t.Errorf("the sidecar's own 503 = %s, want failed\n%s", row.State.Word(), rep)
+	}
+}
+
+// A sidecar that wedges DURING the walk — the reported failure exactly: the
+// liveness probe passed, and the process parked on a later call. The mailbox row
+// then gets the daemon's "alive but not serving" verdict, which says nothing
+// about the mailbox and must not cost the user a browser sign-in.
+func TestASidecarThatWedgesMidWalkIsNotBlamedOnTheMailbox(t *testing.T) {
+	rep := Check(context.Background(),
+		newFake().with("POST /v1/email/search", 503, healthWedged), EmailConfig())
+	row, _ := rep.Find(KeyMailbox)
+
+	if row.State != StateUnknown {
+		t.Fatalf("a wedged sidecar was reported as %s, want unknown\n%s", row.State.Word(), rep)
+	}
+	if strings.Contains(row.Remedy.Command, "connectors connect") || row.Fix == FixConnectMailbox {
+		t.Errorf("a wedged sidecar is answered with an OAuth sign-in: %q", row.Remedy.Command)
 	}
 }
 

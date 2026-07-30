@@ -24,6 +24,7 @@ callback route. It only starts the flow and waits for it.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -97,9 +98,8 @@ def _can_send(provider: str) -> bool:
         return False
 
 
-@router.get("/connectors")
-async def list_email_connectors() -> Dict[str, Any]:
-    """Status of the mailbox connectors the email agent can send from."""
+def _read_connector_status() -> Dict[str, Any]:
+    """Blocking read of the connector store. Never call this on the event loop."""
     from gaia.connectors.api import connected_mailbox_providers, get_connection
 
     connected = set(connected_mailbox_providers())
@@ -116,6 +116,15 @@ async def list_email_connectors() -> Dict[str, Any]:
             }
         )
     return {"agent_id": EMAIL_AGENT_ID, "providers": providers}
+
+
+@router.get("/connectors")
+async def list_email_connectors() -> Dict[str, Any]:
+    """Status of the mailbox connectors the email agent can send from."""
+    # Off-loop: these reads hit the OS credential store, which can block
+    # indefinitely on a keychain authorization prompt the user never sees. On
+    # the loop that wedges every route in the process, including /health.
+    return await asyncio.to_thread(_read_connector_status)
 
 
 def _mail_scopes_for_provider(provider: str) -> tuple:
