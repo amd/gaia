@@ -42,6 +42,7 @@ from __future__ import annotations
 
 from typing import Callable, Dict, List, Optional, Tuple
 
+from gaia.connectors.providers.base import ConnectorRequirement
 from gaia.daemon.sidecars.errors import UnknownAgentError
 from gaia.daemon.sidecars.spec import AgentSidecarSpec
 from gaia.logger import get_logger
@@ -82,6 +83,7 @@ class ConnectionForwarder:
         connected_providers: Optional[Callable[[], List[str]]] = None,
         http_post: Optional[Callable[..., object]] = None,
         http_delete: Optional[Callable[..., object]] = None,
+        get_connection: Optional[Callable[[str], Optional[dict]]] = None,
     ):
         self._specs = dict(specs)
         self._mint = mint or self._default_mint
@@ -91,6 +93,17 @@ class ConnectionForwarder:
         )
         self._http_post = http_post or self._default_http_post
         self._http_delete = http_delete or self._default_http_delete
+        # (#2730 D5) The connection's own real scopes — reported alongside the
+        # ledger grant so a forward never claims scope coverage the STORED
+        # token doesn't actually have. Injectable so tests never touch the
+        # real keyring.
+        self._get_connection = get_connection or self._default_get_connection
+
+    @staticmethod
+    def _default_get_connection(provider: str) -> Optional[dict]:
+        from gaia.connectors.api import get_connection
+
+        return get_connection(provider)
 
     # -- default seams (production wiring) ---------------------------------
 
@@ -157,6 +170,19 @@ class ConnectionForwarder:
         scopes = self._list_grants(provider).get(grant_agent_id)
         return list(scopes) if scopes else None
 
+    def _requirement(
+        self, spec: AgentSidecarSpec, provider: str
+    ) -> Optional[ConnectorRequirement]:
+        """The per-agent ``ConnectorRequirement`` declaring what *provider*
+        requests/requires for this agent, or ``None`` when the spec declares
+        no requirement (#2730 D5) — the ~14 pre-existing specs with no
+        ``required_connections`` entry keep today's all-of-the-ledger mint
+        unchanged rather than narrowing to an undeclared subset."""
+        for cr in spec.required_connections:
+            if cr.connector_id == provider:
+                return cr
+        return None
+
     # -- forwarding --------------------------------------------------------
 
     def forward_provider(
@@ -168,6 +194,16 @@ class ConnectionForwarder:
         agent (the daemon never forwards a credential the user did not grant). A
         mint failure from a revoked/absent connection re-raises the connectors
         error AND withdraws any stale forward from the sidecar.
+
+        The mint (#2730 D5) is scoped to the agent's REQUIRED subset for
+        *provider* — not the whole ledger claim — so an optional (e.g.
+        calendar) scope the connection lacks degrades that capability loudly
+        at use time instead of taking mail down with it. What gets reported
+        to the sidecar is the intersection of the connection's REAL stored
+        scopes with the ledger grant: never wider than what this agent was
+        actually granted (the connection may be shared with other agents
+        that widened it), and never wider than what the mint's bearer token
+        can really be used for.
         """
         spec = self._spec(agent_id)
         grant_agent_id = self._grant_agent_id(spec)
@@ -177,22 +213,26 @@ class ConnectionForwarder:
                 f"'{agent_id}'. Forwardable: "
                 f"{', '.join(spec.forward_providers) or 'none'}."
             )
+        requirement = self._requirement(spec, provider)
         granted = self._granted_scopes(provider, grant_agent_id)
         if granted is None:
+            full_scopes = " ".join(requirement.scopes) if requirement else "<scopes>"
             raise NotGrantedError(
                 f"agent '{agent_id}' ({grant_agent_id}) has no grant for "
                 f"'{provider}'. Connect the account and grant the agent in one "
                 f"command — no Agent UI required:\n"
-                f"  gaia connectors connect {provider} --scopes <scopes> "
+                f"  gaia connectors connect {provider} --scopes {full_scopes} "
                 f"--grant-agent {grant_agent_id}\n"
                 f"(`gaia connectors connect {provider}` prints the full OAuth-client "
                 f"setup if the connector isn't configured yet.) In the Agent UI you "
                 f"can instead use Settings -> Connections."
             )
 
+        required = list(requirement.required_scopes) if requirement else granted
+
         try:
             token, expires_at = self._mint(
-                provider=provider, scopes=granted, agent_id=grant_agent_id
+                provider=provider, scopes=required, agent_id=grant_agent_id
             )
         except Exception as e:
             # A revoked / not-connected mint is loud here; also withdraw any
@@ -215,18 +255,32 @@ class ConnectionForwarder:
                 )
             raise
 
-        self._post_forward(base_url, bearer, provider, token, granted, expires_at)
+        if requirement is not None:
+            # Report the connection's REAL scopes intersected with the
+            # ledger grant — never the ledger's raw (possibly over-claiming)
+            # value. See the docstring above; only exercised for specs that
+            # actually declare a requirement, so specs that don't stay on
+            # today's exact (ledger-only) behavior.
+            connection = self._get_connection(provider)
+            connection_scopes = connection.get("scopes", []) if connection else []
+            forwarded_scopes = [s for s in connection_scopes if s in granted]
+        else:
+            forwarded_scopes = granted
+
+        self._post_forward(
+            base_url, bearer, provider, token, forwarded_scopes, expires_at
+        )
         logger.info(
             "forward-out: forwarded '%s' access token to agent '%s' (%d scopes, "
             "expires_at=%.0f)",
             provider,
             agent_id,
-            len(granted),
+            len(forwarded_scopes),
             expires_at,
         )
         return {
             "provider": provider,
-            "scopes": granted,
+            "scopes": forwarded_scopes,
             "expires_at": expires_at,
             "forwarded": True,
         }
