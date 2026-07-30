@@ -24,11 +24,11 @@ type attentionItem struct {
 	Mailbox   string `json:"mailbox"`
 }
 
-// messageError is one message that could not be fetched during a scan
-// (#2716) — e.g. a Gmail rate-limit that survived retry. Distinct from
-// mailboxError: every OTHER message in the same mailbox is still present in
-// items, so this renders as a narrower note than the mailbox-error banner,
-// never as a reason to doubt the rest of the card.
+// messageError is one message that could not be fetched during a scan --
+// e.g. a Gmail rate-limit that survived retry. Distinct from mailboxError:
+// every OTHER message in the same mailbox is still present in items, so
+// this renders as a narrower note than the mailbox-error banner, never as
+// a reason to doubt the rest of the card.
 type messageError struct {
 	MessageID string `json:"message_id"`
 	Error     string `json:"error"`
@@ -215,12 +215,12 @@ func (a emailAttention) renderStaleness(b *box) {
 }
 
 // renderMessageErrorBanner names how many messages Gmail rate-limited past
-// their retry budget (#2716) — without this, a degraded scan would render
-// as an ordinary card with silently fewer items, indistinguishable from
-// nothing-needs-you, which is the exact silent-fallback shape this repo's
-// fail-loudly rule forbids. Deliberately terser than the mailbox-error
-// banner: a handful of skipped messages out of a whole scan is a much
-// smaller event than a mailbox not being scanned at all.
+// their retry budget -- without this, a degraded scan would render as an
+// ordinary card with silently fewer items, indistinguishable from
+// nothing-needs-you, a silent-fallback shape this repo's fail-loudly rule
+// forbids. Deliberately terser than the mailbox-error banner: a handful of
+// skipped messages out of a whole scan is a much smaller event than a
+// mailbox not being scanned at all.
 func (a emailAttention) renderMessageErrorBanner(b *box) {
 	n := len(a.Coverage.MessageErrors)
 	if n == 0 {

@@ -1182,16 +1182,15 @@ def triage_inbox_impl(
     this issued a single ``list_messages`` call and silently capped
     coverage at one provider page regardless of what was requested.
 
-    ``on_rate_limit`` (#2716): ``"raise"`` (the default) preserves the
-    original contract byte-for-byte — a Gmail rate-limit that survives
-    retry propagates as ``RateLimitedError``, exactly as any other
-    ``ConnectorsError`` always has. ``"skip"`` degrades instead: a
-    rate-limited message is left out of ``results`` (never a half-built
-    decision) and its id is added to the returned ``dropped_ids`` list.
-    Callers that need every message or nothing (the LLM-facing tool, the
-    chat-surface pre-scan) keep the default; only the read-only attention
-    view opts into ``"skip"``, since surfacing 99 of 100 signals beats a
-    500 over one rate-limited message.
+    ``on_rate_limit``: ``"raise"`` (the default) preserves the original
+    contract — a Gmail rate-limit that survives retry propagates as
+    ``RateLimitedError``, like any other ``ConnectorsError``. ``"skip"``
+    degrades instead: a rate-limited message is left out of ``results``
+    (never a half-built decision) and its id is added to the returned
+    ``dropped_ids`` list. Callers that need every message or nothing (the
+    LLM-facing tool, the chat-surface pre-scan) keep the default; only the
+    read-only attention view opts into ``"skip"``, since surfacing 99 of
+    100 signals beats a 500 over one rate-limited message.
     """
     # Local import breaks a real import cycle: calendar_tools imports
     # DEFAULT_BODY_LIMIT_CHARS from this module at module scope, so importing

@@ -44,13 +44,11 @@ from typing import Any, Dict, Iterable, List, Optional, cast
 _METADATA_SCAN_HEADERS = ("Subject", "From", "To", "Date", "List-Unsubscribe")
 _METADATA_HEADER_NAMES = {h.lower() for h in _METADATA_SCAN_HEADERS}
 
-# Mirrors LiveGmailBackend's own chunking ceiling (#2643, tightened by #2720
-# to stay under Gmail's per-user concurrent-request limit -- see
+# Mirrors LiveGmailBackend's own chunking ceiling (see
 # gmail_backend._BATCH_MAX_SUBREQUESTS) so a hermetic get_messages_batch
 # round-trip COUNT means the same thing it would against live Gmail -- a
 # benchmark run against this fake is directly comparable to a live one on
-# this axis. Kept in sync by
-# test_gmail_batch_429_retry_2716.py::test_fake_and_live_chunk_size_match.
+# this axis.
 _BATCH_MAX_SUBREQUESTS = 25
 
 # ---------------------------------------------------------------------------
@@ -341,9 +339,8 @@ class FakeGmailBackend:
         self._labels: List[Dict[str, Any]] = _DEFAULT_SYSTEM_LABELS[:]
         self._drafts: Dict[str, Dict[str, Any]] = {}
         self._next_draft_seq = 1
-        # Opt-in simulation of Gmail's real per-user concurrency limit
-        # (#2716) -- None (the default) means every batch succeeds
-        # regardless of size, matching this fixture's pre-#2716 behaviour.
+        # Opt-in simulation of Gmail's real per-user concurrency limit --
+        # None (the default) means every batch succeeds regardless of size.
         # Set to a Gmail-like value (e.g. gmail_backend._BATCH_MAX_SUBREQUESTS)
         # to make a regression test prove production code never sends an
         # oversized chunk, independent of whatever that constant is set to.

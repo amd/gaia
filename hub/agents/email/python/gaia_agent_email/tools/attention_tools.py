@@ -135,14 +135,13 @@ def _scan_one_backend(
     ``RateLimitedError``) — the caller decides whether that's a per-mailbox
     partial failure or a total one.
 
-    ``on_rate_limit="skip"`` (#2716): this is the ONLY ``triage_inbox_impl``
-    caller that opts into message-level degradation — the LLM-facing triage
-    tool and the chat-surface pre-scan both keep the fail-loud default, since
-    silently changing what they return has no AC covering it. A message that
-    Gmail rate-limited past its retry budget is left out of ``results``
-    rather than crashing this read-only, no-prompt view; its id is reported
-    in ``dropped_message_ids`` so the caller can record it as a coverage gap
-    instead of it just vanishing.
+    This is the ONLY ``triage_inbox_impl`` caller that opts into
+    message-level degradation (``on_rate_limit="skip"``) — the LLM-facing
+    triage tool and the chat-surface pre-scan both keep the fail-loud
+    default. A message that Gmail rate-limited past its retry budget is
+    left out of ``results`` rather than crashing this read-only,
+    no-prompt view; its id is reported in ``dropped_message_ids`` so the
+    caller can record it as a coverage gap instead of it just vanishing.
     """
     triage = triage_inbox_impl(
         backend,
@@ -173,9 +172,8 @@ def _scan_one_backend(
             backend, max_inbox=waiting_budget, debug=debug
         )
     except RateLimitedError as exc:
-        # get_thread runs once per thread (#2716 D5/AC-4d) -- exhaustion
-        # here degrades the waiting-on-you signal for this mailbox rather
-        # than raising through to a mailbox-level failure.
+        # Exhaustion here degrades the waiting-on-you signal for this
+        # mailbox rather than raising through to a mailbox-level failure.
         waiting = {"waiting_on_you": [], "scan_truncated": False}
         dropped_message_ids.extend(exc.message_ids or ["<waiting_on_you_scan>"])
     for w in waiting["waiting_on_you"]:
@@ -257,8 +255,8 @@ def build_attention_view_impl(
             total_unread_total += out["total_unread"]
         scan_truncated = scan_truncated or out["scan_truncated"]
         for mid in out.get("dropped_message_ids") or []:
-            # A message-level rate-limit is NOT a mailbox failure (#2716) —
-            # the rest of this mailbox's results are still present above.
+            # A message-level rate-limit is NOT a mailbox failure — the
+            # rest of this mailbox's results are still present above.
             message_errors.append(
                 {
                     "message_id": mid,

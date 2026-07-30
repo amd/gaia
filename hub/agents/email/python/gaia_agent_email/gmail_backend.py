@@ -94,22 +94,18 @@ METADATA_SCAN_HEADERS: Tuple[str, ...] = (
     "List-Unsubscribe",
 )
 
-# Gmail enforces a per-user CONCURRENT request limit, not a documented
-# numeric ceiling -- a 100-subrequest batch reliably trips it (measured
-# against a live mailbox, #2720: 100 -> cold 429 in 0.3s; 25 -> OK in 0.7s;
-# 10 -> OK in 1.3s; n=50 only survived paced >=3s apart and failed
-# immediately after a prior 429, which this file's own back-to-back chunk
-# loop does not do). A caller passing more ids than this to
-# ``get_messages_batch`` is chunked into multiple sequential batch calls,
-# never a single oversized request. Override for testing/tuning without a
-# new release (this ships as a frozen-binary sidecar).
+# Gmail enforces a per-user CONCURRENT request limit: 100 ids in one batch
+# reliably 429s; 25 is the largest size measured safe back-to-back. A caller
+# passing more ids than this to ``get_messages_batch`` is chunked into
+# multiple sequential batch calls, never a single oversized request.
+# Override for testing/tuning without a new release (this ships as a
+# frozen-binary sidecar).
 _BATCH_MAX_SUBREQUESTS = int(
     os.environ.get("GAIA_EMAIL_GMAIL_BATCH_MAX_SUBREQUESTS", "25")
 )
 
-# Retry budget for a Gmail 429 (per-user concurrency limit): K total
-# attempts (1 initial + K-1 retries), truncated exponential backoff with
-# jitter, per Google's documented formula
+# Retry budget for a Gmail 429: K total attempts (1 initial + K-1 retries),
+# truncated exponential backoff with jitter, per Google's documented formula
 # (https://developers.google.com/gmail/api/reference/quota, "Start retry
 # periods at least one second after the error"). Retry k (1-indexed) sleeps
 # min(2**(k-1) + jitter, max_backoff) -- 1s, 2s, 4s for k=1..3 at the
@@ -135,9 +131,9 @@ _CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
 
 def _sanitize_preview(text: str) -> str:
     """Strip C0/DEL control bytes from upstream text before it reaches a
-    user's terminal (#2716) -- the deleted ``!r`` used to do this
-    incidentally; ``errors="replace"`` alone does not, since well-formed
-    UTF-8 carrying real ESC/CSI/OSC bytes passes straight through it."""
+    user's terminal -- ``errors="replace"`` alone does not, since
+    well-formed UTF-8 carrying real ESC/CSI/OSC bytes passes straight
+    through it."""
     return _CONTROL_CHARS_RE.sub(" ", text)
 
 
@@ -150,11 +146,11 @@ def _backoff_seconds(attempt: int) -> float:
 def _parse_retry_after(value: Optional[str]) -> Optional[float]:
     """Parse an HTTP ``Retry-After`` header: delta-seconds or an RFC 7231
     HTTP-date. Returns ``None`` on anything unparseable so the caller falls
-    through to the backoff formula. Gmail does not document sending this
-    header (#2716 finding 5) -- never depended upon, only honoured when
-    present. Clamped to ``[1, _RATE_LIMIT_MAX_BACKOFF_SECONDS]`` so a
-    hostile or buggy value (``0``, negative, or huge) can't cause a
-    tight-loop retry or an unbounded stall.
+    through to the backoff formula -- Gmail does not document sending this
+    header, so it is honoured when present but never depended upon.
+    Clamped to ``[1, _RATE_LIMIT_MAX_BACKOFF_SECONDS]`` so a hostile or
+    buggy value (``0``, negative, or huge) can't cause a tight-loop retry
+    or an unbounded stall.
     """
     if not value:
         return None
@@ -747,7 +743,7 @@ class LiveGmailBackend:
 
     def _do_request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
         """Issue one HTTP request, retrying up to ``_RATE_LIMIT_MAX_ATTEMPTS``
-        total attempts when Gmail returns 429 (#2716/#2720 D5) -- shared by
+        total attempts when Gmail returns 429 -- shared by
         ``_get``/``_post``/``_delete`` so ``get_thread`` and the single-id
         ``get_message`` short-circuit in ``get_messages_batch`` get the same
         retry the batch path gets, not just the batch endpoint itself. The
@@ -828,13 +824,13 @@ class LiveGmailBackend:
         """Fetch multiple messages via Gmail's batch HTTP endpoint (#2643).
 
         Chunks at ``_BATCH_MAX_SUBREQUESTS`` (kept under Gmail's per-user
-        concurrency limit, #2720). A single id skips the batch endpoint
-        entirely — multipart framing overhead is pure waste for one message
-        — and calls ``get_message`` directly; that path retries a 429 too
-        (via ``_get``), it just never touches the batch wire format.
+        concurrency limit). A single id skips the batch endpoint entirely —
+        multipart framing overhead is pure waste for one message — and
+        calls ``get_message`` directly; that path retries a 429 too (via
+        ``_get``), it just never touches the batch wire format.
 
         A 429 — either on the outer batch POST or embedded in one
-        sub-response — is retried with bounded backoff (#2716); only the
+        sub-response — is retried with bounded backoff; only the
         ids that actually 429'd are re-sent, correlated by message-id
         string (never by an index inherited from a shrunk retry batch,
         which is renumbered from zero). Every requested id is guaranteed a
