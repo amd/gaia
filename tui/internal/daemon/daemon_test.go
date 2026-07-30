@@ -345,7 +345,7 @@ func TestEnsureAgentRejectsMinorBelowAgentsFloor(t *testing.T) {
 	if !asError(err, &ve) {
 		t.Fatalf("expected *VersionError, got %#v (%v)", err, err)
 	}
-	if !strings.Contains(err.Error(), "v1.1+") {
+	if !strings.Contains(err.Error(), "v1.1") {
 		t.Errorf("error must name the required floor: %v", err)
 	}
 	if f.sawPath("POST " + APIPrefix + "/agents/email/ensure") {
@@ -931,5 +931,70 @@ func TestGaiaDaemonStartMissingCLIRemediation(t *testing.T) {
 	installer := strings.Index(msg, "https://amd-gaia.ai/install.sh")
 	if repoPath >= 0 && repoPath < installer {
 		t.Errorf("the repo-only remediation leads the message:\n%s", msg)
+	}
+}
+
+// TestVersionErrorNamesBothVersions pins the two halves of a skew message.
+// Naming only what was found ("speaks host API v1") leaves the user unable to
+// tell whether their core is too old or too new.
+func TestVersionErrorNamesBothVersions(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		version string
+	}{
+		{"below the agents floor", "1.0"},
+		{"minor omitted entirely", "1"},
+		{"major skew", "2.0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inst := &Instance{APIVersion: tc.version}
+			err := inst.CheckAgentsFloor()
+			if err == nil {
+				t.Fatalf("v%s must not pass the agents floor", tc.version)
+			}
+			var ve *VersionError
+			if !asError(err, &ve) {
+				t.Fatalf("expected *VersionError, got %#v", err)
+			}
+
+			if ve.Have != tc.version {
+				t.Errorf("Have = %q, want %q", ve.Have, tc.version)
+			}
+			if ve.Want != RequiredAPIVersion() {
+				t.Errorf("Want = %q, want %q", ve.Want, RequiredAPIVersion())
+			}
+
+			msg := err.Error()
+			for _, want := range []string{"v" + tc.version, "v" + RequiredAPIVersion()} {
+				if !strings.Contains(msg, want) {
+					t.Errorf("message does not name %q:\n%s", want, msg)
+				}
+			}
+
+			// The version is a property of the installed core, so a restart
+			// relaunches the same one. Telling the user to restart loops forever.
+			if !strings.Contains(msg, "pip install --upgrade amd-gaia") {
+				t.Errorf("message does not name the upgrade that clears this:\n%s", msg)
+			}
+			if !strings.Contains(msg, "brings the same one back") {
+				t.Errorf("message does not say a restart cannot clear this:\n%s", msg)
+			}
+		})
+	}
+}
+
+// RequiredAPIVersion is what the message promises the user; if it drifts from
+// the constants the floor check uses, the message sends them to a wrong version.
+func TestRequiredAPIVersionMatchesTheFloorItChecks(t *testing.T) {
+	major, minor, err := parseAPIVersion(RequiredAPIVersion())
+	if err != nil {
+		t.Fatalf("RequiredAPIVersion() is unparseable: %v", err)
+	}
+	if major != RequiredAPIMajor || minor != RequiredAgentsMinor {
+		t.Errorf("RequiredAPIVersion() = %q, but the floor is %d.%d",
+			RequiredAPIVersion(), RequiredAPIMajor, RequiredAgentsMinor)
+	}
+	if err := (&Instance{APIVersion: RequiredAPIVersion()}).CheckAgentsFloor(); err != nil {
+		t.Errorf("the version the message tells users to install must pass: %v", err)
 	}
 }

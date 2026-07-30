@@ -54,19 +54,28 @@ func (e *StaleError) Error() string {
 }
 
 // VersionError means the running daemon speaks a contract this client cannot
-// use — a MAJOR skew, or a MINOR below the agents/relay floor. The remedy is
-// always a daemon restart: an app update replaced the client while the old
-// daemon kept running.
+// use — a MAJOR skew, or a MINOR below the agents/relay floor.
+//
+// The version is a property of the installed GAIA core, not of the running
+// process, so a restart relaunches the same one. Aligning the two means
+// upgrading the core.
 type VersionError struct {
 	Have   string
+	Want   string
 	Reason string
 }
 
 func (e *VersionError) Error() string {
 	return fmt.Sprintf(
-		"the running GAIA daemon speaks host API v%s: %s. "+
-			"Run `gaia daemon restart`, then retry.", e.Have, e.Reason)
+		"the running GAIA daemon speaks host API v%s, but this app needs v%s or newer: %s. %s",
+		e.Have, e.Want, e.Reason, UpgradeCoreHint)
 }
+
+// UpgradeCoreHint is the remedy for any host-API skew. It says a restart is not
+// the fix, so a user who tries one does not loop on it.
+const UpgradeCoreHint = "Upgrade the installed GAIA core so it matches this app: " +
+	"`pip install --upgrade amd-gaia`, or re-run the installer from https://amd-gaia.ai. " +
+	"The version comes from the installed core, so `gaia daemon restart` brings the same one back."
 
 // StartError means we could not bring a daemon up (lock contention, launch
 // failure, or it never registered in time).
