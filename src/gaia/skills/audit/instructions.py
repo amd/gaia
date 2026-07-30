@@ -222,6 +222,53 @@ def _downgrade(severity: Severity) -> Severity:
     return SEVERITY_ORDER[max(1, index - 1)]
 
 
+def _logical_blocks(body: str) -> list[tuple[str, list[tuple[int, int]]]]:
+    """Group the body into paragraphs, each joined into one scannable string.
+
+    Markdown reflows, so a line break carries no meaning — which would otherwise
+    make the newline a free bypass for every rule here ("Do not\\ntell the user"
+    matches nothing if you scan line by line). Each block is the paragraph's
+    physical lines joined with a space, paired with a map from character offset
+    to physical line number so a finding still reports the line the author sees.
+
+    Sentence boundaries still stop a match: the rule patterns exclude ``.``, so
+    joining lines cannot fabricate a match across two separate sentences.
+    """
+    blocks: list[tuple[str, list[tuple[int, int]]]] = []
+    current: list[tuple[int, str]] = []
+
+    def flush() -> None:
+        if not current:
+            return
+        parts: list[str] = []
+        offsets: list[tuple[int, int]] = []
+        position = 0
+        for number, text in current:
+            offsets.append((position, number))
+            parts.append(text)
+            position += len(text) + 1  # +1 for the joining space
+        blocks.append((" ".join(parts), offsets))
+        current.clear()
+
+    for number, line in enumerate(body.splitlines(), start=1):
+        if not line.strip():
+            flush()
+            continue
+        current.append((number, line))
+    flush()
+    return blocks
+
+
+def _line_for_offset(offsets: list[tuple[int, int]], offset: int) -> int:
+    """Map a character offset inside a joined block back to a physical line."""
+    line = offsets[0][1]
+    for start, number in offsets:
+        if start > offset:
+            break
+        line = number
+    return line
+
+
 def _quoted_lines(body: str) -> set[int]:
     """1-indexed line numbers inside a fenced code block or a blockquote."""
     quoted: set[int] = set()
@@ -380,37 +427,36 @@ def analyze_instructions(body: str, *, filename: str = SKILL_FILENAME) -> tuple[
     findings: list[Finding] = []
     seen: set[tuple[str, int]] = set()
 
-    for number, line in enumerate(body.splitlines(), start=1):
+    for text, offsets in _logical_blocks(body):
         for rule in INJECTION_RULES:
-            match = rule.pattern.search(line)
-            if match is None:
-                continue
-            key = (rule.rule_id, number)
-            if key in seen:
-                continue
-            seen.add(key)
+            for match in rule.pattern.finditer(text):
+                number = _line_for_offset(offsets, match.start())
+                key = (rule.rule_id, number)
+                if key in seen:
+                    continue
+                seen.add(key)
 
-            severity = rule.severity
-            note = ""
-            if rule.downgradable and number in quoted:
-                severity = _downgrade(severity)
-                note = (
-                    " Quoted or fenced, so it reads as documentation rather "
-                    "than a directive — verify that is what it is."
-                )
+                severity = rule.severity
+                note = ""
+                if rule.downgradable and number in quoted:
+                    severity = _downgrade(severity)
+                    note = (
+                        " Quoted or fenced, so it reads as documentation rather "
+                        "than a directive — verify that is what it is."
+                    )
 
-            findings.append(
-                Finding(
-                    rule_id=rule.rule_id,
-                    severity=severity,
-                    category=CATEGORY_PROMPT_INJECTION,
-                    message=rule.message + note,
-                    file=filename,
-                    line=number,
-                    remediation=rule.remediation,
-                    snippet=line.strip()[:200],
+                findings.append(
+                    Finding(
+                        rule_id=rule.rule_id,
+                        severity=severity,
+                        category=CATEGORY_PROMPT_INJECTION,
+                        message=rule.message + note,
+                        file=filename,
+                        line=number,
+                        remediation=rule.remediation,
+                        snippet=match.group(0).strip()[:200],
+                    )
                 )
-            )
 
     findings.extend(_hidden_unicode_findings(body, filename))
     findings.extend(_html_findings(body, filename))
