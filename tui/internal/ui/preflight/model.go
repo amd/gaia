@@ -308,15 +308,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if !m.rep.Blocked() && !m.opts.ManualProceed {
 			if m.rep.HasHalt() {
-				// A row that will actually bite the user (the reported bug: a
-				// model loaded at less than the profile's context window) does
-				// not get a timer. Three edits together, not one: no tick is
-				// scheduled below, phase stays off phaseDone so trailerLines
-				// never renders "Starting <agent>…", and the note says the
-				// launch is WAITING rather than starting anyway — removing the
-				// tick alone would still leave the screen claiming to proceed.
+				// Three edits together: the tick, the phase, and the note each
+				// independently claim the launch is starting.
 				m.note = "Waiting — " + m.unverifiedSummary()
-				return m, nil
+				return m, m.haltOutcomesCmd()
 			}
 			// Nothing failed, and nothing unproven is consequential enough to
 			// hold for. Indeterminate rows do not block the launch — the
@@ -500,6 +495,21 @@ func (m Model) unverifiedSummary() string {
 func (m Model) proceed() tea.Cmd {
 	agentID := m.cfg.AgentID
 	return func() tea.Msg { return ProceedMsg{AgentID: agentID} }
+}
+
+// haltOutcomesCmd emits one status.Outcome per HaltingRows() row, for the
+// host's listener to act on. Only reached from the HasHalt() branch above —
+// a Blocked() report never calls this, so an offerable failure (a mailbox
+// the agent repairs in conversation) never gets a second prompt in front of
+// the one it already offers.
+func (m Model) haltOutcomesCmd() tea.Cmd {
+	rows := m.rep.HaltingRows()
+	cmds := make([]tea.Cmd, 0, len(rows))
+	for _, row := range rows {
+		o := row.Outcome()
+		cmds = append(cmds, func() tea.Msg { return o })
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m Model) View() string { return m.render() }

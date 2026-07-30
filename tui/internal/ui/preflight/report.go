@@ -293,20 +293,38 @@ func (r Report) OfferableDespiteFailure() bool {
 	return failed
 }
 
-// HasHalt reports whether any non-OK row should hold the screen. Notify is
-// the value a row must opt INTO to auto-proceed — anything else, including a
-// forgotten DispositionUnset, holds. Inverted on purpose: the alternative
-// (require == DispositionHalt) reproduces the exact bug this issue exists to
-// fix, one field at a time — a row nobody assigned a Disposition to would
-// silently proceed instead of loudly halting. A row that IS Halt or that
-// nobody decided about both hold; only a deliberate Notify skips it.
+// needsHalt is shared by HasHalt and HaltingRows so the two can never
+// disagree about which rows count. Notify is the value a row must opt INTO
+// to auto-proceed — anything else, including a forgotten DispositionUnset,
+// holds. Inverted on purpose: the alternative (require == DispositionHalt)
+// reproduces the exact bug this issue exists to fix, one field at a time — a
+// row nobody assigned a Disposition to would silently proceed instead of
+// loudly halting.
+func (r Row) needsHalt() bool {
+	return r.State != StateOK && r.Disposition != status.DispositionNotify
+}
+
+// HasHalt reports whether any row in the report needsHalt.
 func (r Report) HasHalt() bool {
 	for _, row := range r.Rows {
-		if row.State != StateOK && row.Disposition != status.DispositionNotify {
+		if row.needsHalt() {
 			return true
 		}
 	}
 	return false
+}
+
+// HaltingRows returns the rows that needsHalt, for building the Outcomes a
+// listener sees. Emission is level-triggered: Check resolves every row in
+// one pass, so this is called once per report, not streamed per row.
+func (r Report) HaltingRows() []Row {
+	var out []Row
+	for _, row := range r.Rows {
+		if row.needsHalt() {
+			out = append(out, row)
+		}
+	}
+	return out
 }
 
 // OKCount is how many preconditions proved ready.

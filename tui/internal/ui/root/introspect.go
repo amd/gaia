@@ -39,5 +39,11 @@ func (m RootModel) ControlSnapshot() control.Snapshot {
 	if m.showHelp {
 		snap.Overlay = "help"
 	}
+	// Halt wins over every other overlay — same precedence as View() and the
+	// keyboard ownership in Update. The underlying View stays whatever it
+	// already was, so /status never blinds to "unknown" while held.
+	if m.Halted() {
+		snap.Overlay = "halt"
+	}
 	return snap
 }

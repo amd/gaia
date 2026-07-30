@@ -12,6 +12,7 @@ import (
 	"github.com/amd/gaia/tui/internal/ui/components"
 	"github.com/amd/gaia/tui/internal/ui/hub"
 	"github.com/amd/gaia/tui/internal/ui/preflight"
+	"github.com/amd/gaia/tui/internal/ui/status"
 )
 
 type view int
@@ -45,6 +46,19 @@ type RootModel struct {
 	// pfTransport is built on first launch and reused for the session.
 	pfTransport preflight.Transport
 	pfOpts      preflight.Options
+
+	// halted is every Outcome currently holding the screen, in arrival order
+	// (rendered in precedence order — see orderedHaltRows). Empty means
+	// nothing is halting.
+	halted []status.Outcome
+	// suppressed is every StepID a person has already dismissed this
+	// session — per-process, never persisted, so a permanently-unknown row
+	// does not re-halt on every re-check.
+	suppressed map[string]bool
+	// listeners decide whether an Outcome halts. The subscribe seam the
+	// issue asks for; defaults to one entry with no registration API beyond
+	// it.
+	listeners []Listener
 }
 
 // WithPreflight points the readiness gate at a specific transport and tunes its
@@ -61,6 +75,8 @@ func NewRootModel(cat *catalog.Catalog, debug bool) RootModel {
 		activeView: viewHub,
 		catalog:    cat,
 		debug:      debug,
+		suppressed: map[string]bool{},
+		listeners:  []Listener{haltOnDisposition},
 	}
 	// One hub client for the session: it caches the daemon instance whose token
 	// authorized the last call, and that token rotates on every daemon restart.
@@ -76,6 +92,8 @@ func NewRootModelWithHub(cat *catalog.Catalog, hc *catalog.HubClient, debug bool
 		activeView: viewHub,
 		catalog:    cat,
 		debug:      debug,
+		suppressed: map[string]bool{},
+		listeners:  []Listener{haltOnDisposition},
 	}
 	m.hub = hub.NewHubModel(cat, hc, debug)
 	return m
@@ -129,6 +147,9 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m.openConnectHandoff(msg.Provider)
 
+	case status.Outcome:
+		return m.applyOutcome(msg)
+
 	case chat.ReturnToHubMsg:
 		return m.returnToHub(msg.AgentID)
 
@@ -143,6 +164,12 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// The halt notice owns every key while it is up, above showHelp and
+		// connectHandoff both — it is raised at the moment something is
+		// already wrong, so it gets first claim on the keyboard.
+		if m.Halted() {
+			return m.handleHaltKey(msg)
+		}
 		if m.showHelp {
 			// Any key dismisses help overlay
 			m.showHelp = false
@@ -202,6 +229,12 @@ func (m RootModel) View() string {
 		if m.chat != nil {
 			base = m.chat.View()
 		}
+	}
+
+	// The halt notice renders above showHelp too — same precedence as the
+	// keyboard ownership in Update.
+	if m.Halted() {
+		return renderHaltNotice(m.halted, base, m.width, m.height)
 	}
 
 	if m.showHelp {

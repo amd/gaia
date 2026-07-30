@@ -1996,8 +1996,12 @@ func TestTheShortfallHoldsTheScreenAndStillNamesTheWindow(t *testing.T) {
 	updated, cmd := updated.(Model).Update(reportMsg{rep: Check(context.Background(), f, EmailConfig())})
 	m = updated.(Model)
 
+	// cmd is no longer nil — it carries the halt Outcome the host listens
+	// for — but it must not be the tick toward an automatic ProceedMsg.
 	if cmd != nil {
-		t.Fatalf("a Halt row scheduled a command — the launch must wait for a person, not a timer: %T", cmd())
+		if _, ok := cmd().(proceedTickMsg); ok {
+			t.Fatal("a Halt row scheduled the auto-proceed tick — the launch must wait for a person, not a timer")
+		}
 	}
 	screen := ansi.Strip(m.View())
 	if strings.Contains(screen, "Starting anyway") {

@@ -18,6 +18,7 @@ import (
 	"github.com/amd/gaia/tui/internal/ui/hub"
 	"github.com/amd/gaia/tui/internal/ui/preflight"
 	"github.com/amd/gaia/tui/internal/ui/root"
+	"github.com/amd/gaia/tui/internal/ui/status"
 )
 
 // These tests cover the seam between the hub and the readiness gate: that a
@@ -198,6 +199,25 @@ func (g *gateTransport) mailboxCredentialsRejected() *gateTransport {
 	g.searchBody = map[string]any{
 		"detail": "no forwarded 'google' credential is available to the email sidecar. " +
 			"The connection may not be granted to this agent, or it was revoked/withdrawn.",
+	}
+	return g
+}
+
+// ctxShortfall leaves every generic row green except the model, loaded with a
+// window under the profile's target — the reported bug: an agent that works
+// for ordinary turns and fails a document-sized request. 25037 mirrors the
+// value check_test.go's initCtxShortfall fixture already relies on being
+// below profileCtxTarget() in the test environment.
+func (g *gateTransport) ctxShortfall() *gateTransport {
+	g.initBody = map[string]any{
+		"ready": true,
+		"lemonade": map[string]any{
+			"reachable": true, "base_url": "http://localhost:8000/api/v1",
+			"version": "8.2.0", "min_version": "8.1.0", "compatible": true,
+		},
+		"model": map[string]any{
+			"id": "Gemma-4-E4B-it-GGUF", "present": true, "ctx_size": 25037,
+		},
 	}
 	return g
 }
@@ -901,4 +921,206 @@ func TestEveryGateStateFitsEightyByTwentyFour(t *testing.T) {
 			}
 		})
 	}
+}
+
+// --- the halt notice ---------------------------------------------------------
+//
+// A DispositionHalt row now holds the screen for a person instead of naming
+// itself and passing by. TestACtxShortfallHaltsTheRealGate drives the real
+// Check() pipeline for the row this issue exists to fix; the rest inject a
+// synthetic status.Outcome directly, since no current check can produce two
+// simultaneous halting rows — that scenario is about the notice mechanism,
+// not about any one row.
+
+// The reported bug, through the real gate end to end: a ctx-shortfall report
+// halts instead of auto-proceeding, the control-API state says so without
+// blinding the view, and the notice names the window that will fail.
+func TestACtxShortfallHaltsTheRealGate(t *testing.T) {
+	d := newRootDriver(t, readyGateTransport().ctxShortfall(), 100, 30)
+	d.launchEmail()
+
+	if !d.m.Halted() {
+		t.Fatalf("a ctx-shortfall report did not halt:\n%s", d.screen())
+	}
+	snap := d.m.ControlSnapshot()
+	if snap.Overlay != "halt" {
+		t.Errorf("Overlay = %q, want %q", snap.Overlay, "halt")
+	}
+	if snap.View != "preflight" {
+		t.Errorf("View = %q, want %q — a halt must not blind the automation's view", snap.View, "preflight")
+	}
+	if !strings.Contains(d.flat(), "25037") {
+		t.Errorf("the notice does not show the window that will fail:\n%s", d.screen())
+	}
+
+	d.send(keyEnter())
+	if d.m.Halted() {
+		t.Error("enter did not dismiss the halt")
+	}
+	if d.m.ControlSnapshot().Overlay == "halt" {
+		t.Error("Overlay still reports halt after dismiss")
+	}
+	// The dismiss must not ALSO reach the gate behind it: still on the
+	// preflight screen, not launched into chat by the same keypress.
+	if got := d.view(); got != "preflight" {
+		t.Fatalf("view after dismissing the halt = %q, want preflight — the dismiss reached the screen behind it", got)
+	}
+}
+
+// ctrl+c quits on the FIRST press while halted, never swallowed by the
+// notice — the halt is raised at the moment something is already wrong, the
+// worst time to make the escape hatch need two presses.
+func TestCtrlCQuitsOnFirstPressWhileHalted(t *testing.T) {
+	d := newRootDriver(t, readyGateTransport().ctxShortfall(), 100, 30)
+	d.launchEmail()
+	if !d.m.Halted() {
+		t.Fatal("test setup: want the gate halted")
+	}
+
+	cmd := d.sendNoPump(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if cmd == nil {
+		t.Fatal("ctrl+c while halted produced no command")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("ctrl+c while halted produced %T, want tea.QuitMsg", cmd())
+	}
+}
+
+// Dismissing a halt suppresses that StepID for the session: pressing r
+// re-runs the checks, the row is still bad, and it must not halt a second
+// time — without this, a permanently-unknown row (this is exactly one) would
+// re-halt on every single re-check, reintroducing the confirm-fatigue the
+// whole Notify/Halt split exists to avoid for rows that cannot be halts.
+func TestReCheckDoesNotReHaltTheSameStepID(t *testing.T) {
+	d := newRootDriver(t, readyGateTransport().ctxShortfall(), 100, 30)
+	d.launchEmail()
+	if !d.m.Halted() {
+		t.Fatal("test setup: want the gate halted")
+	}
+
+	d.send(keyEnter()) // dismiss
+	if d.m.Halted() {
+		t.Fatal("test setup: dismiss did not clear the halt")
+	}
+
+	// r now reaches the gate — the notice is gone — and re-runs the same
+	// checks against the same still-bad transport.
+	d.send(key("r"))
+	if d.m.Halted() {
+		t.Error("re-checking re-halted on the same row this session already dismissed")
+	}
+	if got := d.view(); got != "preflight" {
+		t.Fatalf("view after re-check = %q, want preflight", got)
+	}
+}
+
+// A resize (not a key) must still reach the gate behind the notice — the
+// notice owns the KEYBOARD, not every message. Proven by the rendered width
+// actually narrowing, which only happens if the message reached the
+// preflight model's own Update, not just RootModel's.
+func TestNonKeyMessagesPassThroughWhileHalted(t *testing.T) {
+	d := newRootDriver(t, readyGateTransport().ctxShortfall(), 100, 30)
+	d.launchEmail()
+	if !d.m.Halted() {
+		t.Fatal("test setup: want the gate halted")
+	}
+
+	d.send(tea.WindowSizeMsg{Width: 40, Height: 20})
+	for i, line := range strings.Split(d.screen(), "\n") {
+		if w := ansi.StringWidth(line); w > 40 {
+			t.Fatalf("line %d is %d columns wide after a 40-column resize while halted — "+
+				"the resize did not reach the screen behind the notice:\n%s", i, w, d.screen())
+		}
+	}
+}
+
+// A spinner.TickMsg specifically must reach a gate that is still Busy() —
+// the acceptance criterion's literal case. sendNoPump keeps the gate's
+// Init() from running so it is still phaseChecking when the halt lands,
+// which only a synthetic Outcome can arrange (the real pipeline cannot halt
+// before its own report exists).
+func TestASpinnerTickReachesABusyGateWhileHalted(t *testing.T) {
+	d := newRootDriver(t, readyGateTransport(), 100, 30)
+	agent := d.cat.Get("email")
+	if agent == nil {
+		t.Fatal("test setup: the email agent is missing from the catalog")
+	}
+	d.sendNoPump(hub.LaunchAgentMsg{Agent: *agent})
+	if d.view() != "preflight" {
+		t.Fatalf("test setup: want preflight, got %q", d.view())
+	}
+
+	d.send(status.Outcome{
+		StepID: "synthetic", Label: "Synthetic",
+		Level: status.LevelUnknown, Disposition: status.DispositionHalt, Summary: "test",
+	})
+	if !d.m.Halted() {
+		t.Fatal("test setup: the synthetic Outcome did not halt")
+	}
+
+	if cmd := d.sendNoPump(spinner.TickMsg{}); cmd == nil {
+		t.Fatal("a spinner tick produced no command while halted — it did not reach the checking gate")
+	}
+}
+
+// Two rows can be halting at once (an unadvertised Lemonade version does not
+// halt, but a future Halt row alongside the ctx shortfall could), and one
+// dismiss must clear both. Ordered so a known failure is listed before an
+// unproven row — the same precedence unverifiedSummary already uses.
+func TestTwoSimultaneousHaltingRowsProduceOneNoticeAndOneDismissClearsBoth(t *testing.T) {
+	d := newRootDriver(t, readyGateTransport(), 100, 30)
+	d.send(status.Outcome{StepID: "a", Label: "Row A", Level: status.LevelUnknown,
+		Disposition: status.DispositionHalt, Summary: "row a is unproven"})
+	d.send(status.Outcome{StepID: "b", Label: "Row B", Level: status.LevelFailed,
+		Disposition: status.DispositionHalt, Summary: "row b is broken"})
+
+	if !d.m.Halted() {
+		t.Fatal("test setup: want halted")
+	}
+	flat := d.flat()
+	for _, want := range []string{"Row A", "Row B"} {
+		if !strings.Contains(flat, want) {
+			t.Errorf("the notice does not list %q:\n%s", want, d.screen())
+		}
+	}
+	if strings.Index(flat, "Row B") > strings.Index(flat, "Row A") {
+		t.Errorf("a known failure must be listed before an unproven row:\n%s", d.screen())
+	}
+
+	d.send(keyEnter())
+	if d.m.Halted() {
+		t.Error("one dismiss did not clear both rows")
+	}
+}
+
+// A halt reaches the app the same way from either screen it can be raised
+// from — the notice is not wired to one view.
+func TestCrossScreenHaltingWorksFromHubAndFromPreflight(t *testing.T) {
+	t.Run("hub", func(t *testing.T) {
+		d := newRootDriver(t, readyGateTransport(), 100, 30)
+		if d.view() != "hub" {
+			t.Fatalf("test setup: want hub, got %q", d.view())
+		}
+		d.send(status.Outcome{StepID: "hub-synthetic", Label: "Synthetic",
+			Level: status.LevelFailed, Disposition: status.DispositionHalt, Summary: "test"})
+		if !d.m.Halted() {
+			t.Error("a synthetic halting Outcome while in the hub did not halt")
+		}
+	})
+	t.Run("preflight", func(t *testing.T) {
+		// ManualProceed keeps an all-green gate parked on the preflight
+		// screen instead of auto-proceeding to chat during the synchronous
+		// pump — this sub-test is about the SCREEN, not the report.
+		opts := preflight.Options{ReadyHold: time.Millisecond, ManualProceed: true}
+		d := newRootDriverOpts(t, readyGateTransport(), 100, 30, opts)
+		d.launchEmail()
+		if d.view() != "preflight" {
+			t.Fatalf("test setup: want preflight, got %q", d.view())
+		}
+		d.send(status.Outcome{StepID: "preflight-synthetic", Label: "Synthetic",
+			Level: status.LevelFailed, Disposition: status.DispositionHalt, Summary: "test"})
+		if !d.m.Halted() {
+			t.Error("a synthetic halting Outcome while in preflight did not halt")
+		}
+	})
 }
