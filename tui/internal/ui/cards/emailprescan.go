@@ -167,19 +167,42 @@ func isPreScanEnvelope(data json.RawMessage) bool {
 	return false
 }
 
-func renderEmailPreScan(data json.RawMessage, width int) string {
+// renderEmailPreScan draws the inbox pre-scan card.
+//
+// seen is the set of message_ids a card rendered earlier in the same turn
+// already showed (nil for a standalone render with no dedup). An item whose
+// id is already in seen is skipped; every non-empty id this call renders is
+// returned so a later card can be threaded against it too. An item with no
+// message_id is never treated as a duplicate.
+func renderEmailPreScan(data json.RawMessage, width int, seen map[string]bool) (string, []string) {
 	var p emailPreScan
 	if err := json.Unmarshal(data, &p); err != nil {
-		return renderInvalid("email_pre_scan", err.Error(), data, width)
+		return renderInvalid("email_pre_scan", err.Error(), data, width), nil
 	}
 	if k := strings.TrimSpace(p.Kind); k != "" && k != "email_pre_scan" {
-		return renderInvalid("email_pre_scan", "kind is "+k+", expected email_pre_scan", data, width)
+		return renderInvalid("email_pre_scan", "kind is "+k+", expected email_pre_scan", data, width), nil
 	}
 	// `null` and `{}` both unmarshal cleanly into the zero envelope, which would
 	// render as "Nothing needs you" — a malformed payload telling the user their
 	// inbox is clear. Require the envelope to actually be one.
 	if !isPreScanEnvelope(data) {
-		return renderInvalid("email_pre_scan", "payload carries no pre-scan fields", data, width)
+		return renderInvalid("email_pre_scan", "payload carries no pre-scan fields", data, width), nil
+	}
+
+	hadItems := !p.isEmpty()
+	var ids, moreIDs []string
+	byMessageID := func(it preScanItem) string { return it.MessageID }
+	p.Urgent, ids = dedupByMessageID(p.Urgent, byMessageID, seen)
+	p.Actionable, moreIDs = dedupByMessageID(p.Actionable, byMessageID, seen)
+	ids = append(ids, moreIDs...)
+	p.NeedsReview, moreIDs = dedupByMessageID(p.NeedsReview, byMessageID, seen)
+	ids = append(ids, moreIDs...)
+	p.SuggestedArchives, moreIDs = dedupByMessageID(p.SuggestedArchives, byMessageID, seen)
+	ids = append(ids, moreIDs...)
+	if hadItems && p.isEmpty() {
+		// Every item was already shown by an earlier card this turn -- this
+		// card would add nothing, so it does not render at all.
+		return "", nil
 	}
 
 	totals := p.totalsOrDerived()
@@ -190,7 +213,7 @@ func renderEmailPreScan(data json.RawMessage, width int) string {
 
 	if p.isEmpty() {
 		p.renderEmpty(b, totals)
-		return b.render()
+		return b.render(), ids
 	}
 
 	itemRows := [][]int{
@@ -245,7 +268,7 @@ func renderEmailPreScan(data json.RawMessage, width int) string {
 			b.addWrapped("  ", line)
 		}
 	}
-	return b.render()
+	return b.render(), ids
 }
 
 // renderMailboxErrors draws the per-account warning banner. A broken grant on

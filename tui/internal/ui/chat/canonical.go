@@ -121,6 +121,8 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			Steps:     usage.Steps,
 			ToolsUsed: usage.ToolsUsed,
 		})
+		// Drain here, not on doneMsg: streaming flips false in THIS handler, and doneMsg fires later, after a second query could already be in flight.
+		m.drainPendingAttention()
 		m.streaming = false
 		m.activity = nil
 		// The turn is over, so any question it was waiting on is dead. Leaving
@@ -142,6 +144,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		m.flushBuffer()
 		m.resolveConfirmationOnTurnEnd()
 		m.messages = append(m.messages, Message{Role: RoleError, Content: e.Detail})
+		m.drainPendingAttention()
 		m.streaming = false
 		m.activity = nil
 		m.question = nil
