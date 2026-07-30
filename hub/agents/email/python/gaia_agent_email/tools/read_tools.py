@@ -940,6 +940,79 @@ def _apply_session_preferences(
     return out
 
 
+def _list_all_stubs(
+    gmail,
+    *,
+    label_ids: Optional[List[str]],
+    max_messages: int,
+) -> Dict[str, Any]:
+    """Page through ``gmail.list_messages`` until ``max_messages`` unique
+    stubs are collected or the backend has no more (#2634).
+
+    ``nextPageToken`` is followed verbatim across calls — for Outlook that
+    token IS the ``@odata.nextLink`` absolute URL, so re-deriving params
+    instead of passing it straight back would silently restart at page 1.
+    Never trusts a page to honour ``max_results``: Outlook's continuation
+    ignores it entirely and can hand back more than requested, so the
+    accumulator is clamped to ``max_messages`` after every page. Message
+    ids are de-duplicated across pages — a mailbox has no snapshot
+    isolation, so the same id can legitimately reappear on two pages if
+    the mailbox mutates mid-scan.
+
+    Each call requests ``max_results=`` however many messages are still
+    wanted, never a fixed page-size constant (a fixed constant would ask
+    for more than the caller's own budget on a later page).
+
+    A page-2+ failure propagates (never a silent partial result) — this
+    function adds no try/except around ``list_messages``, so whatever the
+    backend raises reaches the caller unchanged, consistent with the
+    fail-loud rule the rest of this package follows.
+
+    Returns ``{"stubs": [...], "scanned": int, "scan_truncated": bool,
+    "resultSizeEstimate": Any}``. ``scan_truncated`` is derived solely from
+    the last-fetched page's own cursor — never from ``len(stubs) >=
+    max_messages`` alone, which is honest only by coincidence and wrong
+    the moment a mailbox's true size exactly equals the request.
+    """
+    labels = list(label_ids) if label_ids else ["INBOX"]
+    stubs: List[Dict[str, Any]] = []
+    seen_ids: set = set()
+    page_token: Optional[str] = None
+    next_token: Optional[str] = None
+    result_size_estimate: Any = None
+    first_page = True
+
+    while len(stubs) < max_messages:
+        remaining = max_messages - len(stubs)
+        listing = gmail.list_messages(
+            label_ids=labels,
+            max_results=remaining,
+            page_token=page_token,
+        )
+        if first_page:
+            result_size_estimate = listing.get("resultSizeEstimate")
+            first_page = False
+        for stub in listing.get("messages", []) or []:
+            mid = stub.get("id")
+            if mid in seen_ids:
+                continue
+            seen_ids.add(mid)
+            stubs.append(stub)
+        if len(stubs) > max_messages:
+            stubs = stubs[:max_messages]
+        next_token = listing.get("nextPageToken")
+        if not next_token:
+            break
+        page_token = next_token
+
+    return {
+        "stubs": stubs,
+        "scanned": len(stubs),
+        "scan_truncated": bool(next_token),
+        "resultSizeEstimate": result_size_estimate,
+    }
+
+
 def triage_inbox_impl(
     gmail,
     *,
@@ -994,11 +1067,18 @@ def triage_inbox_impl(
     Returns a summary listing per-message classifications + a bucketed
     view via ``group_by_category``. Also passes through the listing call's
     raw ``resultSizeEstimate`` (whatever the backend reports — a real
-    mailbox estimate for Gmail, ``None`` for Outlook, #2584) so a caller
+    mailbox estimate for Gmail, ``None`` for Outlook, #2584) and an honest
+    ``scan_truncated`` (#2634 — True only when the backend's own paging
+    cursor says more mail exists beyond what was collected) so a caller
     like ``pre_scan_inbox_impl`` can report scan coverage without a second
     round-trip. ``label_ids`` defaults to ``["INBOX"]`` (this tool's
     existing behavior); a caller wanting a narrower query (e.g. unread-only
     for coverage honesty) can override it.
+
+    The listing itself pages via ``_list_all_stubs`` (#2634) until
+    ``max_messages`` is collected or the mailbox is exhausted — previously
+    this issued a single ``list_messages`` call and silently capped
+    coverage at one provider page regardless of what was requested.
     """
     # Local import breaks a real import cycle: calendar_tools imports
     # DEFAULT_BODY_LIMIT_CHARS from this module at module scope, so importing
@@ -1009,12 +1089,12 @@ def triage_inbox_impl(
     with log_tool_call(
         "triage_inbox", {"max_messages": max_messages}, debug=debug
     ) as st:
-        listing = gmail.list_messages(
-            label_ids=list(label_ids) if label_ids else ["INBOX"],
-            max_results=max_messages,
+        listing = _list_all_stubs(
+            gmail, label_ids=label_ids, max_messages=max_messages
         )
+        stubs = listing["stubs"]
         results: List[Dict[str, Any]] = []
-        for stub in listing.get("messages", []):
+        for stub in stubs:
             msg = gmail.get_message(stub["id"])
             payload_headers = {
                 (h.get("name") or "").lower(): h.get("value", "")
@@ -1117,7 +1197,7 @@ def triage_inbox_impl(
                 try:
                     progress(
                         len(results),
-                        len(listing.get("messages", [])),
+                        len(stubs),
                         payload_headers.get("subject", "") or "(no subject)",
                     )
                 except Exception as exc:  # noqa: BLE001
@@ -1131,7 +1211,8 @@ def triage_inbox_impl(
         return {
             "results": results,
             "grouped": grouped,
-            "resultSizeEstimate": listing.get("resultSizeEstimate"),
+            "resultSizeEstimate": listing["resultSizeEstimate"],
+            "scan_truncated": listing["scan_truncated"],
         }
 
 
