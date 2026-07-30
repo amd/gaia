@@ -95,9 +95,11 @@ function Install-Gaia {
         Write-Warning "GAIA is already installed at $GAIA_HOME"
         Write-Step "Checking for updates..."
 
+        # uv, not `python -m pip`: `uv venv` creates the environment without pip,
+        # so the pip form fails on every re-run.
         # --upgrade exits 0 when there is nothing to do, so non-zero is a real
         # failure, not "already current".
-        & "$GAIA_VENV\Scripts\python.exe" -m pip install --upgrade amd-gaia --quiet
+        & uv pip install --python "$GAIA_VENV\Scripts\python.exe" --upgrade amd-gaia --quiet
         if ($LASTEXITCODE -ne 0) {
             Write-Error "Failed to update the GAIA package in $GAIA_VENV (exit $LASTEXITCODE)."
             Write-Host "  Fix:  re-run this installer, or delete $GAIA_HOME to start clean." -ForegroundColor $COLOR_YELLOW
@@ -129,18 +131,12 @@ function Install-Gaia {
     }
     Write-Success "Virtual environment created"
 
-    # Activate virtual environment
     Write-Step "Installing GAIA package..."
-    try {
-        $activateScript = "$GAIA_VENV\Scripts\Activate.ps1"
-        & $activateScript
-    }
-    catch {
-        Write-Error "Failed to activate the virtual environment at $GAIA_VENV`: $_"
-        exit 1
-    }
 
-    & uv pip install amd-gaia
+    # Target the venv python rather than running Activate.ps1: that is a script
+    # on disk, so a Restricted execution policy blocks it even though the
+    # piped-in installer itself is exempt.
+    & uv pip install --python "$GAIA_VENV\Scripts\python.exe" amd-gaia
     if ($LASTEXITCODE -ne 0) {
         Write-Error "Failed to install the GAIA package (uv exit $LASTEXITCODE)."
         Write-Host "  Fix:  re-run this installer; if it persists report it at" -ForegroundColor $COLOR_YELLOW

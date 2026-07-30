@@ -193,7 +193,12 @@ BASH_ONLY = [
 @pytest.mark.parametrize("construct", BASH_ONLY)
 def test_sh_is_free_of_bash_only_syntax(sh_text, construct):
     """`curl … | sh` runs under dash on Debian/Ubuntu, which dies on these."""
-    assert construct not in sh_text
+    # Comments may name a construct to explain why it is avoided; only the
+    # executable lines have to be free of it.
+    code = "\n".join(
+        line for line in sh_text.splitlines() if not line.lstrip().startswith("#")
+    )
+    assert construct not in code
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell")
