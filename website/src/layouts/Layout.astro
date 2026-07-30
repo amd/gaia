@@ -150,9 +150,10 @@ const canonicalURL = new URL(Astro.url.pathname, Astro.site);
   }
 
   /* Visible focus ring everywhere. The prototypes style hover but not focus;
-     pills, tabs, search and the copy button all need this. */
+     pills, tabs, search and the copy button all need this. --g-focus is themed
+     because the graphic gold is only 2.07:1 on the light ground. */
   :focus-visible {
-    outline: 2px solid rgb(var(--g-gold));
+    outline: 2px solid rgb(var(--g-focus));
     outline-offset: 2px;
     border-radius: 2px;
   }
