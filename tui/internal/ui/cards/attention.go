@@ -137,7 +137,9 @@ func RenderEmailAttention(data json.RawMessage, width int, seen map[string]bool)
 		if shownAny {
 			b.blank()
 		}
-		row = a.section(b, "OTHER", other, row)
+		// Result deliberately dropped: this is the last section, so the running
+		// counter has no further reader. Assigning it tripped ineffassign.
+		a.section(b, "OTHER", other, row)
 	}
 
 	if footer := a.coverageFooterLine(); footer != "" {
