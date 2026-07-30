@@ -49,3 +49,11 @@ test = ["pytest"]
 
 [tool.setuptools.packages.find]
 include = ["gaia_agent_email*"]
+
+# Bundled Agent Skills (#2466) are data, not modules — without this they are
+# absent from an installed wheel and SKILL_DIRS points at nothing. gaia-agent.yaml
+# is listed for the packaged layout (the release pipeline stages a copy inside the
+# package); in a source checkout the agent resolves the canonical one at the
+# package root.
+[tool.setuptools.package-data]
+gaia_agent_email = ["skills/*/SKILL.md", "skills/*/*.py", "gaia-agent.yaml"]

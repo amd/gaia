@@ -22,6 +22,11 @@ from urllib.parse import urlparse
 
 from gaia.agents.base.agent import default_max_steps
 from gaia.connectors.api import connected_mailbox_providers, get_connection
+from gaia.connectors.errors import ConnectorsError
+from gaia.connectors.providers.microsoft import ACCOUNT_TYPES
+from gaia.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class ConfigurationError(ValueError):
@@ -120,6 +125,41 @@ def default_inbox_scan_ceiling() -> int:
             "default."
         )
     return value
+
+
+SKILL_SET_ENV = "GAIA_EMAIL_SKILL_SET"
+ACCOUNT_TYPE_ENV = "GAIA_EMAIL_ACCOUNT_TYPE"
+
+
+def default_skill_set() -> Optional[str]:
+    """Read an explicit skill-set override from ``GAIA_EMAIL_SKILL_SET``.
+
+    ``None`` (unset) means "let the agent resolve one" — the account-type
+    selector, then the manifest's ``default_skill_set``. The name itself is
+    validated by the framework against the manifest's declared sets, so a typo
+    fails at startup naming the valid names rather than here with less context.
+    """
+    return os.environ.get(SKILL_SET_ENV, "").strip() or None
+
+
+def default_account_type() -> Optional[str]:
+    """Read an explicit account kind from ``GAIA_EMAIL_ACCOUNT_TYPE``.
+
+    ``personal`` or ``work``; unset means "derive it from the connected
+    mailbox". A malformed value raises rather than being ignored — an operator
+    who set it meant to pin the behaviour, and silently discarding the value
+    would activate the wrong skill set.
+    """
+    raw = os.environ.get(ACCOUNT_TYPE_ENV, "").strip().lower()
+    if not raw:
+        return None
+    if raw not in ACCOUNT_TYPES:
+        raise ConfigurationError(
+            f"{ACCOUNT_TYPE_ENV}={raw!r} is not a valid account type. Use one "
+            f"of: {', '.join(ACCOUNT_TYPES)}, or unset it to derive the kind "
+            "from the connected mailbox."
+        )
+    return raw
 
 
 @dataclass
@@ -233,6 +273,14 @@ class EmailAgentConfig:
     autonomy_level: str = "off"
     autonomy_trust_min_samples: int = 5
     autonomy_trust_threshold: float = 0.85
+    # Agent Skills (#2466). ``skill_set`` is the explicit override (the
+    # ``--skill-set`` flag / GAIA_EMAIL_SKILL_SET) and beats everything.
+    # ``account_type`` pins the mailbox kind the selector maps to a set; unset
+    # means "derive it from the connected mailbox" — the Microsoft id_token
+    # ``tid`` claim recorded at connect time. Gmail has no equivalent claim, so a
+    # Gmail-only mailbox resolves through the manifest's ``default_skill_set``.
+    skill_set: Optional[str] = field(default_factory=default_skill_set)
+    account_type: Optional[str] = field(default_factory=default_account_type)
 
     def validate(self) -> None:
         """Run startup-time invariants. Called from the agent's __init__.
@@ -304,6 +352,43 @@ class EmailAgentConfig:
                 f"EmailAgentConfig.autonomy_trust_threshold must be in (0, 1], "
                 f"got {self.autonomy_trust_threshold!r}."
             )
+        if self.account_type is not None and self.account_type not in ACCOUNT_TYPES:
+            raise ConfigurationError(
+                f"EmailAgentConfig.account_type must be one of "
+                f"{list(ACCOUNT_TYPES)} or None, got {self.account_type!r}. "
+                "Leave it None to derive the kind from the connected mailbox."
+            )
+
+    def resolve_account_type(self) -> Optional[str]:
+        """The mailbox kind that keys skill-set selection (#2466).
+
+        Resolution order:
+          1. An explicit ``account_type`` (config field / ``GAIA_EMAIL_ACCOUNT_TYPE``).
+          2. The kind recorded on the connected Microsoft mailbox, derived from
+             the id_token ``tid`` claim at connect time.
+          3. ``None`` — unknown.
+
+        ``None`` is a real answer, not a failure: a Gmail-only mailbox has no
+        Microsoft tenant to inspect, so there is nothing to classify. The caller
+        must then resolve a skill set through the manifest's ``default_skill_set``
+        explicitly, rather than treating an unknown mailbox as personal.
+        """
+        if self.account_type:
+            return self.account_type
+        try:
+            connection = get_connection("microsoft") or {}
+        except ConnectorsError as e:
+            # The connection store is unreadable (no keyring backend, corrupt
+            # blob). The kind is unknown, which the caller handles explicitly.
+            logger.warning(
+                "Could not read the Microsoft connection to derive the account "
+                "type (%s) — the mailbox kind is unknown, so the manifest's "
+                "default skill set applies. Set GAIA_EMAIL_ACCOUNT_TYPE to pin "
+                "it.",
+                e,
+            )
+            return None
+        return connection.get("account_type") or None
 
     def resolved_db_path(self) -> str:
         """Return the SQLite path with ``$HOME`` expanded.
