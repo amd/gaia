@@ -46,6 +46,7 @@ from gaia.llm.lemonade_client import (
 if TYPE_CHECKING:
     from gaia.agents.base.goal_store import Goal, Proposal
     from gaia.connectors.providers.base import ConnectorRequirement
+    from gaia.skills import Skill, SkillManager
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -872,7 +873,7 @@ Do NOT wrap conversational replies in JSON.
     # ------------------------------------------------------------------
 
     @property
-    def skill_manager(self):
+    def skill_manager(self) -> "SkillManager":
         """This agent's :class:`~gaia.skills.manager.SkillManager`.
 
         Built lazily over the v1 discovery roots, with the agent's own
@@ -885,13 +886,15 @@ Do NOT wrap conversational replies in JSON.
         return self._skill_manager
 
     @property
-    def loaded_skills(self) -> Dict[str, Any]:
+    def loaded_skills(self) -> Dict[str, "Skill"]:
         """``{name: Skill}`` for every skill loaded into this agent."""
         if getattr(self, "_loaded_skills", None) is None:
             self._loaded_skills = {}
         return self._loaded_skills
 
-    def load_skill(self, name: str, *, manager=None):
+    def load_skill(
+        self, name: str, *, manager: Optional["SkillManager"] = None
+    ) -> "Skill":
         """Load a skill by name and scope it into this agent.
 
         Resolves ``name`` across the discovery roots (agent-bundled →
