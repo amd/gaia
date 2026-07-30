@@ -16,8 +16,9 @@ seams and is the only stateful caller.
 
 Two corpora, one format: the on-disk #691 ``SKILL.md`` schema is *referenced*
 here, never redefined.  The LLM emits only the four *derived* fields
-(``name``, ``when_to_use``, ``tools_required``, body); ``DistilledProcedure.parse`` validates
-that intermediate shape and ``DistilledProcedure.to_skill_md`` injects the two *fixed*
+(``name``, ``when_to_use``, ``tools_required``, body);
+``DistilledProcedure.parse`` validates that intermediate shape and
+``DistilledProcedure.to_skill_md`` injects the two *fixed*
 constants (``license: MIT``, ``version: 1.0.0``) and maps to the canonical
 document.  See ``docs/plans/skill-synthesis.mdx`` "The format contract".
 
@@ -192,7 +193,8 @@ class DistilledProcedure:
                 tags / code fences by ``distill_cluster``).
 
         Returns:
-            A validated ``DistilledProcedure``, or ``None`` for ``SKIP`` / malformed input.
+            A validated ``DistilledProcedure``, or ``None`` for ``SKIP`` /
+            malformed input.
         """
         if intermediate_md is None:
             return None
@@ -537,7 +539,7 @@ def cluster_by_goal(
 def distill_cluster(
     cluster: GoalCluster, send_messages_fn: Callable
 ) -> Optional[DistilledProcedure]:
-    """DISTILL — one low-temperature LLM call turning a cluster into a ``DistilledProcedure``.
+    """DISTILL — one low-temp call turning a cluster into a procedure.
 
     Reuses the same ``self.chat.send_messages`` seam the extraction /
     consolidation passes use (no new client).  The response is stripped of think

@@ -215,8 +215,9 @@ class ProceduralMemoryMixin:
                 so a recalling turn reads the settings file only once.
 
         Returns:
-            Matched ``DistilledProcedure`` objects (full bodies; injection truncates, the row
-            keeps the full body), best match first; ``[]`` on any off-state.
+            Matched ``DistilledProcedure`` objects (full bodies; injection
+            truncates, the row keeps the full body), best match first; ``[]``
+            on any off-state.
         """
         from gaia.agents.base.memory import (
             _load_memory_settings,  # deferred (cycle break)
@@ -400,8 +401,9 @@ class ProceduralMemoryMixin:
         """Recompute the per-turn recalled-skill state for ``goal``.
 
         Recalls the matching procedures **once** and caches both consumers'
-        inputs: ``self._recalled_skills`` (the matched ``DistilledProcedure`` objects, read by
-        the tool loader through ``_recalled_skill_tools`` — #1451) and the
+        inputs: ``self._recalled_skills`` (the matched ``DistilledProcedure``
+        objects, read by the tool loader through ``_recalled_skill_tools`` —
+        #1451) and the
         rendered ``self._recalled_skill_prompt`` (the system-prompt block, read by
         ``get_recalled_skills_system_prompt`` — #887).  The single recall keeps
         the loader's SKILL signal free (no second ``recall_skill``).
