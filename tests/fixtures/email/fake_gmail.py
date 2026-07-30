@@ -44,11 +44,14 @@ from typing import Any, Dict, Iterable, List, Optional, cast
 _METADATA_SCAN_HEADERS = ("Subject", "From", "To", "Date", "List-Unsubscribe")
 _METADATA_HEADER_NAMES = {h.lower() for h in _METADATA_SCAN_HEADERS}
 
-# Mirrors LiveGmailBackend's own chunking ceiling (#2643) so a hermetic
-# get_messages_batch round-trip COUNT means the same thing it would against
-# live Gmail -- a benchmark run against this fake is directly comparable to
-# a live one on this axis.
-_BATCH_MAX_SUBREQUESTS = 100
+# Mirrors LiveGmailBackend's own chunking ceiling (#2643, tightened by #2720
+# to stay under Gmail's per-user concurrent-request limit -- see
+# gmail_backend._BATCH_MAX_SUBREQUESTS) so a hermetic get_messages_batch
+# round-trip COUNT means the same thing it would against live Gmail -- a
+# benchmark run against this fake is directly comparable to a live one on
+# this axis. Kept in sync by
+# test_gmail_batch_429_retry_2716.py::test_fake_and_live_chunk_size_match.
+_BATCH_MAX_SUBREQUESTS = 25
 
 # ---------------------------------------------------------------------------
 # mbox → Gmail-API translator
