@@ -26,10 +26,19 @@ next to its ``agent.py`` — no subclass hook, no registration call.
 ``tools_required`` depends on is loaded first. A cycle raises instead of picking a
 winner: a "topological order" that silently breaks ties is not an order.
 
-**``skill_sets:`` belongs to #2466.** That issue owns the set grammar and its
-expansion. It plugs in here by producing :class:`SkillRequirement` values and
-handing them to :func:`resolve_requirements`, so there is exactly one resolution
-path and one place that enforces conflicts. Do not add a second grammar.
+**Overlap with #2466 — read before editing either.** That issue owns the
+*declaration grammar*: ``skills:``, ``skill_sets:``, and ``default_skill_set:``,
+parsed into ``SkillSets`` / ``SkillRef`` by ``gaia.skills.sets``. Its ``SkillRef``
+records a ``version`` but explicitly does not act on it — *"no constraint solving
+happens until the marketplace phase (#2467) can install versioned skills."* This
+module owns exactly that missing half: matching a declared range against what is
+installed, ordering by dependency, and splitting required from optional.
+
+The two were built concurrently and both parse ``skills:``. When they land
+together, **``sets.py`` should own the parsing** and this module's parsing should
+go, keeping :func:`resolve_requirements` reachable via
+:func:`requirements_from_refs` — which is duck-typed so neither module imports the
+other. Do not grow a third grammar in the meantime.
 """
 
 from __future__ import annotations
@@ -389,11 +398,45 @@ def requirements_from_names(
 ) -> list[SkillRequirement]:
     """Build requirements from ``name`` / ``name@range`` strings.
 
-    The entry point for callers holding a flat list — notably #2466's
-    ``skill_sets:`` expansion, which turns a set into the skills it contains and
-    then resolves them through :func:`resolve_requirements` like any other block.
+    The entry point for callers holding a flat list rather than a manifest block.
     """
     return [
         _parse_entry(name, where=origin or "<names>", index=i, origin=origin)
         for i, name in enumerate(names)
     ]
+
+
+def requirements_from_refs(
+    refs: Iterable[Any], *, origin: str = ""
+) -> list[SkillRequirement]:
+    """Adapt any ``name``/``version``/``required`` objects into requirements.
+
+    The seam for #2466's ``skill_sets:``. That issue owns the declaration grammar
+    — ``skills:``, ``skill_sets:``, ``default_skill_set:`` — and its ``SkillRef``
+    states outright that ``version`` is *"a declaration surface only … no
+    constraint solving happens until the marketplace phase (#2467) can install
+    versioned skills."* This function is that missing half: hand it the refs a set
+    resolved to and pass the result to :func:`resolve_requirements` to get version
+    matching, dependency ordering, and the required/optional split.
+
+    Duck-typed on purpose (``.name`` / ``.version`` / ``.required``) so neither
+    module has to import the other, and so whichever lands second is a wire-up
+    rather than a rewrite.
+    """
+    requirements: list[SkillRequirement] = []
+    for ref in refs:
+        name = getattr(ref, "name", None)
+        if not isinstance(name, str) or not name.strip():
+            raise SkillValidationError(
+                f"{origin or 'skill reference'}: expected an object with a non-empty "
+                f"'name', got {ref!r}."
+            )
+        requirements.append(
+            SkillRequirement(
+                name=name.strip(),
+                version=(getattr(ref, "version", None) or "*").strip() or "*",
+                required=bool(getattr(ref, "required", True)),
+                origin=origin,
+            )
+        )
+    return requirements

@@ -348,6 +348,68 @@ def test_an_unversioned_skill_cannot_satisfy_a_pin(tmp_path):
     ).names == ["web-research"]
 
 
+def test_requirements_from_refs_adapts_a_skill_set_expansion(tmp_path):
+    """The seam #2466's ``skill_sets:`` uses to get version resolution.
+
+    Its ``SkillRef`` parses a ``version`` but explicitly does not act on one until
+    this phase. Duck-typed so neither module imports the other, and so whichever
+    lands second is a wire-up rather than a rewrite.
+    """
+    from dataclasses import dataclass as dc
+
+    from gaia.skills.consume import requirements_from_refs
+
+    @dc(frozen=True)
+    class ForeignSkillRef:
+        """Stands in for gaia.skills.sets.SkillRef, field-for-field."""
+
+        name: str
+        version: str = None
+        required: bool = True
+
+    root = tmp_path / "home" / "skills"
+    _install(root, "inbox-triage", version="1.4.0")
+    _install(root, "meeting-scheduling", version="0.9.0")
+    manager = isolated_manager(tmp_path, user_skills_root=root)
+
+    requirements = requirements_from_refs(
+        [
+            ForeignSkillRef("inbox-triage", ">=1.0.0"),
+            # A ref with no version must mean "any", not "no version".
+            ForeignSkillRef("meeting-scheduling", None, False),
+        ],
+        origin="skill_sets:triage",
+    )
+    assert [(r.name, r.version, r.required) for r in requirements] == [
+        ("inbox-triage", ">=1.0.0", True),
+        ("meeting-scheduling", "*", False),
+    ]
+    assert sorted(resolve_requirements(requirements, manager=manager).names) == [
+        "inbox-triage",
+        "meeting-scheduling",
+    ]
+
+    # And the version a set declared is actually enforced through this path.
+    with pytest.raises(SkillValidationError, match="Version conflict"):
+        resolve_requirements(
+            requirements_from_refs(
+                [ForeignSkillRef("meeting-scheduling", ">=2.0.0")],
+                origin="skill_sets:triage",
+            ),
+            manager=manager,
+        )
+
+
+def test_requirements_from_refs_rejects_an_object_with_no_name():
+    from gaia.skills.consume import requirements_from_refs
+
+    class Nameless:
+        version = ">=1.0.0"
+
+    with pytest.raises(SkillValidationError, match="non-empty"):
+        requirements_from_refs([Nameless()], origin="skill_sets:x")
+
+
 def test_dependency_order_puts_a_tool_provider_first(tmp_path):
     """A skill consuming another's tool must load after it, whatever the order."""
     root = tmp_path / "home" / "skills"
