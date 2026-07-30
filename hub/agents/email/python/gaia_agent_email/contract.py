@@ -1304,7 +1304,11 @@ class PreScanPreferencesApplied(_Strict):
     """
 
     priority_senders: List[str] = Field(
-        default_factory=list, description="Senders always treated as urgent."
+        default_factory=list,
+        description=(
+            "Senders surfaced/ordered ahead of others (#2632); does not "
+            "change category — content still decides urgency."
+        ),
     )
     low_priority_senders: List[str] = Field(
         default_factory=list, description="Senders always treated as low-priority."
@@ -1390,7 +1394,21 @@ class EmailPreScanResult(_Strict):
     )
     informational_count: int = Field(
         default=0,
-        description="Count of informational (FYI/PERSONAL) messages — not listed.",
+        description=(
+            "Count of informational (FYI/PERSONAL) messages. Empty by "
+            "default in ``informational`` below (#2633) — request "
+            "``include_informational=True`` on the call to get the full "
+            "list instead of just this count."
+        ),
+    )
+    informational: List[PreScanItem] = Field(
+        default_factory=list,
+        description=(
+            "The informational (FYI/PERSONAL) messages this count "
+            "represents (#2633) — empty unless the caller passed "
+            "``include_informational=True``, so a bare count is never the "
+            "only way to audit what was filtered."
+        ),
     )
     suggested_archives: List[PreScanItem] = Field(
         default_factory=list,

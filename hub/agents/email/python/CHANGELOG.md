@@ -103,6 +103,25 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **A priority-sender match no longer forces a message to URGENT (#2632).**
+  `_apply_session_preferences` used to override the heuristic/LLM's category
+  outright the moment a sender matched the priority list — a Substack
+  newsletter from a priority sender got promoted straight to URGENT even
+  though the same decision's own reason line named Gmail's `CATEGORY_UPDATES`
+  label as the (non-urgent) verdict. The preference now only tags
+  `preference_applied` and updates the reason line for salience; category is
+  always decided by content. The low-priority-sender branch (an explicit
+  "downrank this sender" request) is unchanged.
+- **A short, first-person human message proposing continued business no
+  longer disappears into the informational tail (#2633).** The triage LLM
+  prompt gained a disambiguation rule + worked example (paired with a hard
+  negative so brevity alone doesn't now over-trigger `NEEDS_RESPONSE`) for
+  messages like "Nice meeting you ... let me know what you think" that carry
+  no explicit question mark or deadline but still warrant a reply.
+  Independently, `pre_scan_inbox` gained an `include_informational` flag: the
+  informational bucket was previously a bare count with no way to audit it
+  ("95 informational, not listed") — passing the flag now returns the full
+  id/sender/subject list for that count, at no extra scan cost.
 - **The assistant no longer narrates things the current turn's own tools
   don't support (#2621, #2622, #2636, #2637).** Four related honesty
   defects, all guarded by one new mechanism: a mutation ("archived",

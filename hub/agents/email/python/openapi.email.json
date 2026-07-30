@@ -1385,9 +1385,17 @@
             "title": "Degraded",
             "type": "boolean"
           },
+          "informational": {
+            "description": "The informational (FYI/PERSONAL) messages this count represents (#2633) — empty unless the caller passed ``include_informational=True``, so a bare count is never the only way to audit what was filtered.",
+            "items": {
+              "$ref": "#/components/schemas/PreScanItem"
+            },
+            "title": "Informational",
+            "type": "array"
+          },
           "informational_count": {
             "default": 0,
-            "description": "Count of informational (FYI/PERSONAL) messages — not listed.",
+            "description": "Count of informational (FYI/PERSONAL) messages. Empty by default in ``informational`` below (#2633) — request ``include_informational=True`` on the call to get the full list instead of just this count.",
             "title": "Informational Count",
             "type": "integer"
           },
@@ -2648,7 +2656,7 @@
             "type": "array"
           },
           "priority_senders": {
-            "description": "Senders always treated as urgent.",
+            "description": "Senders surfaced/ordered ahead of others (#2632); does not change category — content still decides urgency.",
             "items": {
               "type": "string"
             },
