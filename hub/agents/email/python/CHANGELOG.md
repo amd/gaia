@@ -135,6 +135,21 @@ contract version is tracked separately as
   happens *after* a message was already mutated is logged but never
   reclassifies that message as failed. A cycle-level failure (triage
   itself raising) still propagates, unchanged.
+- **The triage scan now actually follows pagination, and `scan_truncated`
+  tells the truth (#2634).** Raising the scan's `max_messages` above one
+  provider page used to do nothing — `triage_inbox_impl` issued a single
+  `list_messages` call and never followed the returned `nextPageToken`, so
+  asking for 500 messages still returned 100. Worse, the attention view's
+  `scan_truncated` was computed as `len(results) >= max_messages`, which
+  flips to "not truncated" the moment a request exceeds one page of real
+  mail — exactly when the scan is least complete. The scan now pages until
+  `max_messages` is collected or the mailbox is exhausted, de-duplicating
+  message ids across pages and clamping the accumulator client-side (Outlook's
+  continuation ignores `max_results` entirely). `scan_truncated` is now
+  derived solely from whether the last-fetched page's own cursor says more
+  mail exists, never from comparing request/response length — a mailbox
+  whose size exactly equals the request now correctly reports no truncation,
+  instead of the length-only formula's false positive.
 - **`POST /autonomy/run` refuses instead of silently no-oping while autonomy
   is `off` (#2528).** Previously the route returned HTTP 200 with the same
   empty-report shape whether autonomy was disabled or had genuinely run and
