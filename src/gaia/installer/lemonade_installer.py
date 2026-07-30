@@ -791,6 +791,17 @@ class LemonadeInstaller:
                     f"Retry manually: {manual_cmd}"
                 ),
             )
+        except KeyboardInterrupt:
+            # Ctrl-C at the sudo prompt is BaseException — without this it escapes
+            # every caller's `except Exception` as a raw traceback.
+            return InstallResult(
+                success=False,
+                error=(
+                    "Installation cancelled at the administrator prompt. "
+                    f"To install without sudo prompting, run 'sudo -v' first, "
+                    f"or install manually: {manual_cmd}"
+                ),
+            )
         except FileNotFoundError as e:
             return InstallResult(
                 success=False, error=f"Required command not found: {e}"
@@ -903,6 +914,11 @@ class LemonadeInstaller:
                             "configure passwordless sudo, or run gaia init as root."
                         ),
                     )
+            elif not is_root:
+                self._announce(
+                    "Administrator rights are required to add the Lemonade PPA — "
+                    "sudo will ask for your password."
+                )
 
             env = os.environ.copy()
             if non_interactive:
