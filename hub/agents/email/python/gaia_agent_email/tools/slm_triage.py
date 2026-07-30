@@ -5,9 +5,10 @@
 Mirrors ``llm_triage.py`` but backed by a ``LemonadeEmbeddingClassifier`` whose
 output labels ARE the five triage categories
 (``triage_heuristics.ALL_CATEGORIES``). This runs BEFORE the LLM classifier:
-when a heuristic is not confident, the SLM gets first crack at the category, and
-if it produces a usable label the (slower) LLM classify call is skipped entirely
-for that message.
+when a heuristic is not confident, the SLM gets first crack at the category and a
+usable label settles it — the LLM never overwrites it. The classify call itself is
+only avoided when the heuristic also settled ``is_spam``; otherwise it still runs
+for the spam verdict alone.
 
 ``classify_email_slm`` returns the same-shaped ``{category, confidence, source}``
 mapping the LLM path uses for its category fields, or ``None`` when the SLM

@@ -240,8 +240,10 @@ path.
 </Warning>
 
 - **Triage category** — when a heuristic isn't confident, the triage SLM
-  classifies first. On a hit the LLM classify call is *skipped*. `force_llm`
-  skips the SLM and forces the LLM instead.
+  classifies first, and its answer is the category. The LLM classify call is
+  skipped only when the heuristic already settled `is_spam`; otherwise it still
+  runs for the spam verdict alone and its category opinion is discarded.
+  `force_llm` skips the SLM and forces the LLM instead.
 - **Phishing detection** — when the phishing SLM returns a usable result, that
   result is used alone (phishing heuristics are not run). If SLM is off or
   returns nothing, the agent falls back to `detect_phishing`.

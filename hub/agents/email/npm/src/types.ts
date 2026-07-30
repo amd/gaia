@@ -201,8 +201,7 @@ export interface DraftReply {
 
 /**
  * LLM usage metrics for a triage (contract.py: TriageUsage — schema 2.0).
- * Null whenever no LLM call was made — the heuristic-only path, or an on-device
- * SLM classification that resolved the category first.
+ * Null on the heuristic-only path where no LLM call was made.
  */
 export interface TriageUsage {
   /** Sum of input tokens across the LLM calls. */
@@ -240,7 +239,7 @@ export interface EmailTriageResult {
   suggested_action?: "reply" | "none" | "archive";
   /** Echoes the provider message-id / thread-id from the request. */
   message_id?: string | null;
-  /** LLM usage metrics; null when no LLM call was made (heuristic or SLM path). */
+  /** LLM usage metrics; null on the heuristic-only path. */
   usage?: TriageUsage | null;
   /** Attachment metadata of the analyzed message/thread, echoed (schema 2.2). */
   attachments?: AttachmentMeta[];

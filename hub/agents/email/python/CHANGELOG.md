@@ -346,9 +346,10 @@ contract version is tracked separately as
   (`specific-ai-tools`, served by the same local Lemonade server as the chat
   model) can run ahead of the LLM. Phishing is decided by the SLM alone when it
   answers — the keyword/domain heuristic is not consulted for that message —
-  and the triage SLM resolves the category before the (slower) LLM classify
-  call whenever the heuristic is not confident, which also leaves `usage` null
-  for messages the LLM never saw. Every SLM path fails safe: an unreachable
+  and the triage SLM decides the category whenever the heuristic is not
+  confident. The LLM classify call is skipped only when the heuristic already
+  settled `is_spam`; otherwise it still runs for the spam verdict and its
+  category answer is discarded. Every SLM path fails safe: an unreachable
   server, a failed model pull, a prediction error, or a label outside the
   taxonomy falls back to the existing heuristic + LLM flow, so the previous
   behavior is the floor, not the risk. Enable with `use_slm=True` or

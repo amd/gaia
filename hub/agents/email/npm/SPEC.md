@@ -447,7 +447,7 @@ limit) — a larger file fails the send loudly rather than being truncated.
 | `action_items` | `ActionItem[]` | Each `{ description, due_hint?, type?: "text" \| "link", url? }`; may be empty. |
 | `suggested_action` | `"reply" \| "none" \| "archive"` | `"reply"` for URGENT/NEEDS_RESPONSE, `"archive"` for PROMOTIONAL, else `"none"`. |
 | `draft` | `DraftScaffold \| null` | A proposed reply **scaffold** (`{ to, subject }` — no body) when one is suggested (schema 2.3). Triage never composes reply prose; compose the body yourself and call `draft()` for a full `DraftReply` + confirmation token. |
-| `usage` | `TriageUsage \| null` | LLM token/latency metrics; `null` whenever no LLM call was made — the heuristic-only path, or an on-device SLM classification that resolved the category first. |
+| `usage` | `TriageUsage \| null` | LLM token/latency metrics; `null` on the heuristic-only path. |
 | `attachments` | `AttachmentMeta[]` | Metadata (`{ filename, mime_type, size_bytes, attachment_id? }`) of the analyzed message's attachments, echoed from the request for downstream processing (schema 2.2; empty when none). |
 
 The full request/response types are exported from the package (`src/types.ts`) for

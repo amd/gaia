@@ -39,9 +39,9 @@ behind any entry — API shapes, endpoints, and version semantics — see
   `GAIA_EMAIL_USE_SLM=true` on the sidecar (or `use_slm=True` in config).
   A compact classifier — running on the same local Lemonade server as the chat
   model, so nothing leaves the machine — makes the phishing call, and a second
-  one labels the triage category before the bigger LLM is asked, which makes
-  triage faster on the messages it can answer (those results report no LLM
-  usage). It is experimental, so it stays off unless you turn it on. If the
+  one labels the triage category, taking that decision away from the bigger LLM
+  (which is still consulted for the spam verdict when the rules can't settle it).
+  It is experimental, so it stays off unless you turn it on. If the
   models are unavailable for any reason, triage falls back to exactly the
   previous behavior. No API shape changed.
 - **A trashed email is recoverable any time it's still in Trash — not just for
