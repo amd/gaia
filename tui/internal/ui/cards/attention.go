@@ -69,16 +69,32 @@ func isAttentionEnvelope(data json.RawMessage) bool {
 // outer width. Exported (unlike the /query card renderers) because it is
 // invoked directly by the chat model on open, not through Render()'s
 // tool_result dispatch.
-func RenderEmailAttention(data json.RawMessage, width int) string {
+//
+// seen is the set of message_ids a card rendered earlier in the same turn
+// already showed (pass nil, or use Render, for a standalone render with no
+// dedup). An item whose id is already in seen is skipped; every non-empty id
+// this call renders is returned so a later card can be threaded against it
+// too. An item with no message_id is never treated as a duplicate.
+func RenderEmailAttention(data json.RawMessage, width int, seen map[string]bool) (string, []string) {
 	var a emailAttention
 	if err := json.Unmarshal(data, &a); err != nil {
-		return renderInvalid("email_attention", err.Error(), data, width)
+		return renderInvalid("email_attention", err.Error(), data, width), nil
 	}
 	if k := strings.TrimSpace(a.Kind); k != "" && k != "email_attention" {
-		return renderInvalid("email_attention", "kind is "+k+", expected email_attention", data, width)
+		return renderInvalid("email_attention", "kind is "+k+", expected email_attention", data, width), nil
 	}
 	if !isAttentionEnvelope(data) {
-		return renderInvalid("email_attention", "payload carries no attention-view fields", data, width)
+		return renderInvalid("email_attention", "payload carries no attention-view fields", data, width), nil
+	}
+
+	hadItems := len(a.Items) > 0
+	var ids []string
+	a.Items, ids = dedupByMessageID(a.Items, func(it attentionItem) string { return it.MessageID }, seen)
+	if hadItems && len(a.Items) == 0 {
+		// Every item was already shown by an earlier card this turn -- this
+		// card would add nothing, so (unlike a genuinely empty scan) it does
+		// not render at all rather than claiming "Nothing needs you".
+		return "", nil
 	}
 
 	b := newBox(a.title(), width)
@@ -88,7 +104,7 @@ func RenderEmailAttention(data json.RawMessage, width int) string {
 
 	if len(a.Items) == 0 {
 		a.renderEmpty(b)
-		return b.render()
+		return b.render(), ids
 	}
 
 	sections := []struct {
@@ -128,7 +144,7 @@ func RenderEmailAttention(data json.RawMessage, width int) string {
 		b.blank()
 		b.addWrapped("  ", footer)
 	}
-	return b.render()
+	return b.render(), ids
 }
 
 // title must be identifiable on its own — the pre-scan card can appear in the same transcript.

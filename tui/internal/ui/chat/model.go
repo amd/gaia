@@ -228,26 +228,14 @@ func (m ChatModel) fetchAttention() tea.Cmd {
 	}
 }
 
-// appendAttentionCard skips the render when a pre-scan card already covered this session — the two surfaces would otherwise duplicate every shared message.
+// appendAttentionCard appends the attention card. Cross-card duplicate items
+// are resolved at render time (see Message.renderCard), not here.
 func (m *ChatModel) appendAttentionCard(data json.RawMessage) {
-	if m.hasPreScanCard() {
-		return
-	}
 	m.messages = append(m.messages, Message{
 		Role:   RoleCard,
 		Render: "email_attention",
 		Data:   data,
 	})
-}
-
-// hasPreScanCard reports whether an email_pre_scan card has rendered anywhere in the session so far.
-func (m ChatModel) hasPreScanCard() bool {
-	for i := range m.messages {
-		if m.messages[i].Role == RoleCard && m.messages[i].Render == "email_pre_scan" {
-			return true
-		}
-	}
-	return false
 }
 
 // drainPendingAttention appends a buffered attention card now that its turn has ended, whichever way it ended.
