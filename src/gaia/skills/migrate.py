@@ -89,8 +89,6 @@ _NAMESPACES: dict[str, tuple[str, ...]] = {
 _PY_MANAGERS = frozenset({"uv", "pip", "pipx", "python", "poetry"})
 _NODE_MANAGERS = frozenset({"node", "npm", "pnpm", "yarn", "bun"})
 
-_ISSUE_SANDBOX = "https://github.com/amd/gaia/issues/1019"
-
 
 @dataclass
 class MigrationOutcome:
@@ -173,6 +171,10 @@ class _VendorFields:
     origin: str
     fields: dict[str, Any]
     key: Optional[str] = None
+    #: Set when the namespace exists but is not a mapping — there is nothing to
+    #: map, and the value is carried through verbatim rather than dropped.
+    non_mapping: Any = None
+    has_non_mapping: bool = False
 
 
 def _looks_like_openclaw(block: Any) -> bool:
@@ -220,6 +222,8 @@ def _locate_vendor_fields(frontmatter: dict, vendor: str) -> _VendorFields:
                     origin=_ORIGIN_METADATA_NS,
                     fields=dict(block) if isinstance(block, dict) else {},
                     key=key,
+                    non_mapping=None if isinstance(block, dict) else block,
+                    has_non_mapping=not isinstance(block, dict),
                 )
 
     # 2. The namespace hoisted to the top level (seen in the wild).
@@ -231,6 +235,8 @@ def _locate_vendor_fields(frontmatter: dict, vendor: str) -> _VendorFields:
                 origin=_ORIGIN_TOP_NS,
                 fields=dict(block) if isinstance(block, dict) else {},
                 key=key,
+                non_mapping=None if isinstance(block, dict) else block,
+                has_non_mapping=not isinstance(block, dict),
             )
 
     # 3/4. Vendor fields inlined with no namespace key at all.
@@ -253,7 +259,10 @@ def _locate_vendor_fields(frontmatter: dict, vendor: str) -> _VendorFields:
             )
 
     return _VendorFields(
-        label=f"metadata.{names[0]}", origin=_ORIGIN_METADATA_NS, fields={}, key=names[0]
+        label=f"metadata.{names[0]}",
+        origin=_ORIGIN_METADATA_NS,
+        fields={},
+        key=names[0],
     )
 
 
@@ -459,7 +468,8 @@ def _map_openclaw(
     )
     if consumed_requires:
         leftover_requires = {
-            k: v for k, v in (block.get("requires") or {}).items()
+            k: v
+            for k, v in (block.get("requires") or {}).items()
             if k not in consumed_requires
         }
         if leftover_requires:
@@ -538,7 +548,8 @@ def _map_hermes(
     )
     if consumed_requires:
         leftover_requires = {
-            k: v for k, v in (block.get("requires") or {}).items()
+            k: v
+            for k, v in (block.get("requires") or {}).items()
             if k not in consumed_requires
         }
         if leftover_requires:
@@ -630,7 +641,11 @@ def migrate_text(
     )
     located = _locate_vendor_fields(frontmatter, vendor)
     namespace, block = located.label, located.fields
-    if located.origin in (_ORIGIN_TOP_NS, _ORIGIN_METADATA_INLINE, _ORIGIN_FRONTMATTER_INLINE):
+    if located.origin in (
+        _ORIGIN_TOP_NS,
+        _ORIGIN_METADATA_INLINE,
+        _ORIGIN_FRONTMATTER_INLINE,
+    ):
         outcome.notes.append(
             f"{source}: this skill's {vendor} fields are at '{located.label}', not the "
             f"documented metadata.{_NAMESPACES[vendor][0]}. They were migrated from "
@@ -643,7 +658,10 @@ def migrate_text(
         and key != located.key
         and (
             key in frontmatter
-            or (isinstance(frontmatter.get("metadata"), dict) and key in frontmatter["metadata"])
+            or (
+                isinstance(frontmatter.get("metadata"), dict)
+                and key in frontmatter["metadata"]
+            )
         )
     ]
     if duplicates:
@@ -690,6 +708,7 @@ def migrate_text(
     # --- vendor namespace ------------------------------------------------
     gaia = GaiaMetadata()
     requirements = SkillRequirements()
+    remaining: Any = {}
     if block:
         remaining = _MAPPERS[vendor](
             block,
@@ -698,18 +717,37 @@ def migrate_text(
             gaia=gaia,
             requirements=requirements,
         )
+    elif located.has_non_mapping:
+        # e.g. `metadata.openclaw: "some string"`. Nothing to map, but the value
+        # is carried through verbatim rather than dropped on the floor.
+        remaining = located.non_mapping
+        outcome.notes.append(
+            f"{source}: {namespace} is a "
+            f"{type(located.non_mapping).__name__}, not a mapping, so there were no "
+            "fields to migrate. Its value was preserved verbatim; the skill migrated "
+            "as instruction-only."
+        )
     else:
-        remaining = {}
         outcome.notes.append(
             f"{source}: {namespace} is absent or empty — migrated as an "
             "instruction-only skill."
         )
     gaia.requirements = requirements
 
+    log.debug(
+        "Migrating %s: vendor=%s namespace=%s origin=%s mapped=%d note(s)=%d",
+        source,
+        vendor,
+        namespace,
+        located.origin,
+        len(outcome.mapped),
+        len(outcome.notes),
+    )
+
     # --- carry the rest of metadata through ------------------------------
     # Whatever the mapper did not consume goes back exactly where it came from,
     # so a round-trip through GAIA never silently relocates a vendor's fields.
-    consumed = set(block) - set(remaining)
+    consumed = set(block) - set(remaining) if isinstance(remaining, dict) else set()
     other_metadata: dict[str, Any] = {}
     raw_metadata = frontmatter.get("metadata")
     if isinstance(raw_metadata, dict):
@@ -777,9 +815,7 @@ def migrate_text(
     # capability is refused with the runtime's own message — not stripped to
     # make the migration look like it worked.
     try:
-        refuse_unbridged_permissions(
-            skill.parsed_permissions(), skill_name=skill.name
-        )
+        refuse_unbridged_permissions(skill.parsed_permissions(), skill_name=skill.name)
     except SkillPermissionError as exc:
         outcome.blockers.append(f"{exc}")
         return outcome
@@ -837,7 +873,9 @@ def find_source_skills(path: Path | str) -> list[Path]:
             "its SKILL.md, or a directory containing several skill directories."
         )
     if path.is_file():
-        return [path.parent]
+        # Return the file itself, not its directory — pointing at ./OTHER.md must
+        # migrate that file, never a SKILL.md that happens to sit beside it.
+        return [path]
     if (path / SKILL_FILENAME).is_file():
         return [path]
 
@@ -919,9 +957,7 @@ def format_report(outcomes: Sequence[MigrationOutcome]) -> str:
                     f"{skill.security_tier} (migrated skills re-earn trust)"
                 )
             if skill.gaia.permissions:
-                lines.append(
-                    f"   permissions  : {', '.join(skill.gaia.permissions)}"
-                )
+                lines.append(f"   permissions  : {', '.join(skill.gaia.permissions)}")
         else:
             lines.append(f"❌ {outcome.name}  (unmigratable)")
             lines.append(f"   source       : {outcome.source}")

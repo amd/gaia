@@ -162,7 +162,9 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
         help="Migrate under this name (single-skill sources only)",
     )
     p_migrate.add_argument(
-        "--force", action="store_true", help="Replace an existing skill of the same name"
+        "--force",
+        action="store_true",
+        help="Replace an existing skill of the same name",
     )
     p_migrate.add_argument(
         "--dry-run",
@@ -436,9 +438,7 @@ def _handle_migrate(args: argparse.Namespace) -> int:
     if not args.dry_run:
         for outcome in outcomes:
             if outcome.migrated:
-                target = install_migrated(
-                    outcome, destination, force=args.force
-                )
+                target = install_migrated(outcome, destination, force=args.force)
                 installed[outcome.name] = str(target)
 
     migrated = [o for o in outcomes if o.migrated]

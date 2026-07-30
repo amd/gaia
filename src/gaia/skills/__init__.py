@@ -54,6 +54,16 @@ from gaia.skills.format import (
     validate_skill,
 )
 from gaia.skills.loader import register_skill_tools, unregister_skill_tools
+from gaia.skills.manager import (
+    ROOT_AGENT_BUNDLED,
+    ROOT_CLAUDE_IMPORT,
+    ROOT_USER,
+    SkillManager,
+    SkillRoot,
+    get_default_manager,
+    reset_default_manager,
+    user_skills_dir,
+)
 from gaia.skills.migrate import (
     HERMES_NAMESPACES,
     OPENCLAW_NAMESPACES,
@@ -67,16 +77,6 @@ from gaia.skills.migrate import (
     install_migrated,
     migrate_skill_dir,
     migrate_text,
-)
-from gaia.skills.manager import (
-    ROOT_AGENT_BUNDLED,
-    ROOT_CLAUDE_IMPORT,
-    ROOT_USER,
-    SkillManager,
-    SkillRoot,
-    get_default_manager,
-    reset_default_manager,
-    user_skills_dir,
 )
 from gaia.skills.permissions import (
     CONNECTOR_BRIDGED_DOMAINS,

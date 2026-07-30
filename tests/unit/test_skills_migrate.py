@@ -99,7 +99,7 @@ description: Draft release notes from a changelog.
 version: 1.2.0
 metadata:
   openclaw:
-    emoji: "\U0001F4DD"
+    emoji: "\U0001f4dd"
     homepage: https://example.invalid/notes
     requires:
       env: [CHANGELOG_PATH]
@@ -154,7 +154,7 @@ def test_unmodeled_vendor_fields_survive_under_metadata_openclaw(tmp_path):
     outcome = migrate_skill_dir(source, vendor=VENDOR_OPENCLAW)
 
     preserved = outcome.skill.other_metadata["openclaw"]
-    assert preserved["emoji"] == "\U0001F4DD"
+    assert preserved["emoji"] == "\U0001f4dd"
     assert preserved["homepage"] == "https://example.invalid/notes"
 
     # ...and they survive a trip to disk and back.
@@ -414,12 +414,47 @@ def test_missing_frontmatter_is_a_blocker_not_a_crash(tmp_path):
     write_source(sources, "release-notes", OPENCLAW_INSTRUCTION_ONLY)
 
     outcomes = [
-        migrate_skill_dir(d, vendor=VENDOR_OPENCLAW) for d in find_source_skills(sources)
+        migrate_skill_dir(d, vendor=VENDOR_OPENCLAW)
+        for d in find_source_skills(sources)
     ]
 
     assert sorted(o.migrated for o in outcomes) == [False, True]
     refused = next(o for o in outcomes if not o.migrated)
     assert "no YAML frontmatter" in refused.blockers[0]
+
+
+def test_non_mapping_vendor_block_is_preserved_not_dropped(tmp_path):
+    """`metadata.openclaw: "a string"` has no fields, but must not vanish."""
+    text = """---
+name: weird
+description: Vendor block is a string, not a mapping.
+metadata:
+  openclaw: "just-a-string"
+---
+
+# Weird
+"""
+    source = write_source(tmp_path / "src", "weird", text)
+    outcome = migrate_skill_dir(source, vendor=VENDOR_OPENCLAW)
+
+    assert outcome.migrated, outcome.blockers
+    assert outcome.skill.other_metadata == {"openclaw": "just-a-string"}
+    assert any("not a mapping" in note for note in outcome.notes)
+
+    target = install_migrated(outcome, tmp_path / "dest")
+    assert parse_skill_file(target).other_metadata == {"openclaw": "just-a-string"}
+
+
+def test_find_source_skills_uses_the_file_it_was_given(tmp_path):
+    """Pointing at ./OTHER.md must not silently migrate a sibling SKILL.md."""
+    directory = write_source(
+        tmp_path / "src", "release-notes", OPENCLAW_INSTRUCTION_ONLY
+    )
+    other = directory / "OTHER.md"
+    other.write_text(HERMES_PDF_EXTRACT, encoding="utf-8")
+
+    assert find_source_skills(other) == [other]
+    assert migrate_skill_dir(other).vendor == VENDOR_HERMES
 
 
 def test_name_and_version_are_coerced_with_a_note(tmp_path):
@@ -524,9 +559,7 @@ def test_the_real_corpus_is_actually_present():
     assert (REAL_FIXTURES / "PROVENANCE.md").is_file()
 
 
-@pytest.mark.parametrize(
-    "skill_dir", _real_fixture_dirs(), ids=lambda p: p.name
-)
+@pytest.mark.parametrize("skill_dir", _real_fixture_dirs(), ids=lambda p: p.name)
 def test_real_openclaw_skill_migrates_or_reports_why(tmp_path, skill_dir):
     """Every real skill reaches a defined verdict — never a crash, never both.
 
