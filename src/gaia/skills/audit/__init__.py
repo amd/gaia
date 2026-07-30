@@ -44,6 +44,7 @@ from gaia.skills.audit.findings import (
     Severity,
     auditable_files,
     content_digest,
+    manifest_digest,
     python_sources,
     worst_severity,
 )
@@ -112,6 +113,7 @@ __all__ = [
     "CATEGORY_TIER_CLAIM",
     "worst_severity",
     "content_digest",
+    "manifest_digest",
     "auditable_files",
     "python_sources",
 ]

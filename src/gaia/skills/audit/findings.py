@@ -144,6 +144,8 @@ class AuditReport:
     #: Every tier whose gate these findings clear. Empty means none.
     cleared_tiers: tuple[str, ...] = ()
     content_digest: str = ""
+    #: sha256 over SKILL.md alone — the digest the hub Worker can recompute.
+    manifest_digest: str = ""
     audited_at: str = field(default_factory=lambda: _utc_now_iso())
     engine: str = AUDIT_ENGINE
 
@@ -202,6 +204,7 @@ class AuditReport:
             "security_tier": self.security_tier,
             "cleared_tiers": list(self.cleared_tiers),
             "content_digest": self.content_digest,
+            "manifest_digest": self.manifest_digest,
             # Human-facing summary.
             "reason": self.reason,
             "counts": self.counts_by_severity(),
@@ -219,6 +222,7 @@ class AuditReport:
             findings=tuple(Finding.from_dict(f) for f in data.get("findings", [])),
             cleared_tiers=tuple(data.get("cleared_tiers", [])),
             content_digest=data.get("content_digest", ""),
+            manifest_digest=data.get("manifest_digest", ""),
             audited_at=data["audited_at"],
             engine=data.get("engine", AUDIT_ENGINE),
         )
@@ -236,6 +240,7 @@ class AuditReport:
                 "security_tier": self.security_tier,
                 "cleared_tiers": list(self.cleared_tiers),
                 "content_digest": self.content_digest,
+            "manifest_digest": self.manifest_digest,
                 "counts": self.counts_by_severity(),
             },
         )
@@ -290,6 +295,23 @@ def content_digest(directory: Path | str) -> str:
         digest.update(b"\x00")
         digest.update(payload)
     return f"sha256:{digest.hexdigest()}"
+
+
+def manifest_digest(skill_markdown: str) -> str:
+    """A ``sha256:<hex>`` over the ``SKILL.md`` text alone.
+
+    Separate from :func:`content_digest` for one practical reason: the hub
+    Worker receives ``SKILL.md`` as a text form part but the rest of the skill as
+    a packaged archive, so this is the digest it can actually **recompute** and
+    therefore enforce. It covers the surface that decides trust —
+    ``security_tier``, ``permissions``, ``version``, and the instruction body —
+    so a report cannot be replayed against a different manifest.
+
+    Line endings are normalized to ``\\n`` so a CRLF checkout does not produce a
+    different digest from the LF bytes an author audited.
+    """
+    normalized = skill_markdown.replace("\r\n", "\n").replace("\r", "\n")
+    return f"sha256:{hashlib.sha256(normalized.encode('utf-8')).hexdigest()}"
 
 
 def python_sources(directory: Path | str) -> list[Path]:

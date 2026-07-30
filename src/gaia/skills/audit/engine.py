@@ -24,6 +24,7 @@ from gaia.skills.audit.findings import (
     AuditReport,
     Finding,
     content_digest,
+    manifest_digest,
     python_sources,
 )
 from gaia.skills.audit.instructions import analyze_instructions
@@ -99,6 +100,9 @@ def audit_skill_object(skill: Skill, *, directory: Optional[Path] = None) -> Aud
             )
         )
         digest = content_digest(directory)
+        manifest = manifest_digest(
+            (directory / SKILL_FILENAME).read_text(encoding="utf-8")
+        )
     else:
         log.debug(
             "Auditing skill '%s' without a directory: instruction analyzers only.",
@@ -112,6 +116,7 @@ def audit_skill_object(skill: Skill, *, directory: Optional[Path] = None) -> Aud
             )
         )
         digest = ""
+        manifest = manifest_digest(skill.to_markdown())
 
     tier = skill.security_tier
     verdict, reason = verdict_for_tier(findings, tier)
@@ -131,6 +136,7 @@ def audit_skill_object(skill: Skill, *, directory: Optional[Path] = None) -> Aud
         findings=tuple(findings),
         cleared_tiers=cleared,
         content_digest=digest,
+        manifest_digest=manifest,
     )
 
 

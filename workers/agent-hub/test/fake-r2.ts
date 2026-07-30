@@ -7,6 +7,9 @@
  * handlers run under plain Vitest without Miniflare or a real bucket.
  */
 
+import { manifestDigest } from "../src/audit";
+import { parseSkillManifest } from "../src/skill-manifest";
+
 interface StoredObject {
   key: string;
   bytes: Uint8Array;
@@ -276,14 +279,52 @@ export function sampleSkill(
   return `---\n${lines.join("\n")}\n---\n\n${body}`;
 }
 
-/** A cleared audit report (#2468) for tests that publish a gated tier. */
-export function allowAudit(findings: number = 0): string {
-  return JSON.stringify({
-    verdict: "ALLOW",
+/**
+ * A cleared, correctly-BOUND audit report (#2468) for tests that publish a
+ * gated tier.
+ *
+ * It derives `skill`, `version`, and `manifest_digest` from the SKILL.md being
+ * published, because a gated tier now requires the report to name exactly what
+ * it audited. Overrides exist so a test can break one binding at a time.
+ *
+ * Note this helper can mint a report claiming any `clearedTiers` it likes —
+ * which is precisely the forgery the gate cannot prevent (see the "What this
+ * gate is NOT" section in `src/audit.ts`). These tests exercise the Worker's
+ * enforcement, not the engine's honesty.
+ */
+export async function allowAudit(
+  skillMarkdown: string,
+  overrides: {
+    findings?: number;
+    verdict?: string;
+    skill?: string;
+    version?: string;
+    tier?: string;
+    clearedTiers?: string[];
+    manifestDigest?: string;
+    /** Field names to delete, for the missing-binding cases. */
+    omit?: string[];
+  } = {}
+): Promise<string> {
+  const { manifest } = parseSkillManifest(skillMarkdown);
+  const findings = overrides.findings ?? 0;
+  const report: Record<string, unknown> = {
+    verdict: overrides.verdict ?? "ALLOW",
     engine: "gaia-skill-audit/0.1.0",
     audited_at: "2026-07-29T00:00:00.000Z",
     findings: Array.from({ length: findings }, (_, i) => ({ id: `f${i}` })),
-  });
+    skill: overrides.skill ?? manifest.name,
+    version: overrides.version ?? manifest.version,
+    security_tier: overrides.tier ?? manifest.security_tier,
+    cleared_tiers: overrides.clearedTiers ?? [
+      overrides.tier ?? manifest.security_tier,
+    ],
+    content_digest: `sha256:${"00".repeat(32)}`,
+    manifest_digest:
+      overrides.manifestDigest ?? (await manifestDigest(skillMarkdown)),
+  };
+  for (const field of overrides.omit ?? []) delete report[field];
+  return JSON.stringify(report);
 }
 
 /** A valid sample gaia-agent.yaml for tests. */
