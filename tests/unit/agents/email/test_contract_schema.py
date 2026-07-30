@@ -355,11 +355,14 @@ def test_schema_version_unchanged_by_multi_inbox():
     additive over 2.8 (#2638/#2643): EmailPreScanResult gains total_inbox
     (Optional[int]) — pre-scan now scans read + unread INBOX mail rather than
     unread-only, so total_unread alone stopped being an honest scan-coverage
-    denominator — no existing field changed. If this fails, someone changed
-    the version unexpectedly; that requires an explicit version negotiation,
-    not a drive-by edit.
+    denominator — no existing field changed. 2.10 is additive over 2.9
+    (#2716): AttentionCoverage gains message_errors (Optional[List[
+    MessageError]]) — a Gmail rate-limit surviving retry now degrades one
+    message instead of the whole scan — no existing field changed. If this
+    fails, someone changed the version unexpectedly; that requires an
+    explicit version negotiation, not a drive-by edit.
     """
-    assert SCHEMA_VERSION == "2.9"
+    assert SCHEMA_VERSION == "2.10"
 
 
 def test_triage_result_gained_no_new_required_field():

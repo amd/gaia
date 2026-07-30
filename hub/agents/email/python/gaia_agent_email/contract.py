@@ -115,7 +115,13 @@ CATEGORY_PERSONAL = "PERSONAL"
 # #2584 itself made obsolete), so total_unread alone is no longer an honest
 # scan-coverage denominator; total_inbox is. No existing field changed, so
 # 2.8 consumers keep working (additive MINOR).
-SCHEMA_VERSION = "2.9"
+# 2.10 is additive over 2.9 (#2716): AttentionCoverage gains
+# ``message_errors`` (Optional[List[MessageError]]) — a Gmail rate-limit
+# that survives retry now degrades one message instead of the whole scan;
+# ``degraded`` can now be True for a message-level gap as well as a
+# mailbox-level one. No existing field changed, so 2.9 consumers keep
+# working (additive MINOR).
+SCHEMA_VERSION = "2.10"
 
 # Maximum number of items in a single batch request. Protects the single-tenant
 # local model slot from runaway batches. Enforced via Pydantic max_length.
@@ -1356,6 +1362,19 @@ class MailboxError(_Strict):
     error: str = Field(..., description="Actionable error message for the failure.")
 
 
+class MessageError(_Strict):
+    """One message that could not be fetched during a scan (#2716).
+
+    Distinct from ``MailboxError``: a rate-limited message is NOT a mailbox
+    failure — every other message in that mailbox's scan is still present
+    in the result. Not reusable as ``MailboxError`` since that model has no
+    ``message_id`` field.
+    """
+
+    message_id: str = Field(..., description="Provider message id that failed.")
+    error: str = Field(..., description="Actionable error message for the failure.")
+
+
 class EmailPreScanRequest(_Strict):
     """Request envelope for an inbox pre-scan (#1778). Read-only."""
 
@@ -1588,11 +1607,27 @@ class AttentionCoverage(_Strict):
     )
     degraded: bool = Field(
         default=False,
-        description="True when at least one connected mailbox could not be scanned.",
+        description=(
+            "True when at least one connected mailbox could not be scanned "
+            "(see mailbox_errors), OR at least one individual message could "
+            "not be fetched after Gmail rate-limited it past its retry "
+            "budget (see message_errors, #2716) — either way, the "
+            "surviving results are still shown, but coverage is partial."
+        ),
     )
     mailbox_errors: Optional[List[MailboxError]] = Field(
         default=None,
         description="Connected mailboxes that failed during this scan, if any.",
+    )
+    message_errors: Optional[List[MessageError]] = Field(
+        default=None,
+        description=(
+            "Individual messages that could not be fetched during this "
+            "scan, if any (#2716) — e.g. a Gmail rate-limit that survived "
+            "retry. Every other message in the same mailbox is still "
+            "included in ``items``; this is a per-message gap, not a "
+            "mailbox failure."
+        ),
     )
 
 
@@ -1805,10 +1840,11 @@ __all__ = [
     "EmailQuarantineResponse",
     "EmailUnquarantineRequest",
     "EmailUnquarantineResponse",
-    # Attention view (schema 2.8, #2582).
+    # Attention view (schema 2.8, #2582; message_errors added #2716).
     "AttentionItemKind",
     "AttentionItem",
     "AttentionCoverage",
+    "MessageError",
     "EmailAttentionResult",
     "EmailAttentionResponse",
     # Calendar surface (schema 2.1, #1780).

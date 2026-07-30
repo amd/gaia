@@ -38,7 +38,6 @@ from gaia_agent_email.tools.attention_tools import (  # noqa: E402
 )
 
 from gaia.connectors.errors import ConnectorsError  # noqa: E402
-
 from tests.fixtures.email.fake_gmail import FakeGmailBackend  # noqa: E402
 
 USER_EMAIL = "user@example.com"
@@ -201,9 +200,10 @@ class TestWaitingOnYouSurfacing:
 
 class TestActionItems:
     def test_open_action_items_are_included_when_db_given(self):
-        from gaia.database.mixin import DatabaseMixin
         from gaia_agent_email import task_store
         from gaia_agent_email.contract import ActionItem
+
+        from gaia.database.mixin import DatabaseMixin
 
         class _DB(DatabaseMixin):
             pass
@@ -328,6 +328,38 @@ class TestPartialAndTotalMailboxFailure:
     def test_no_backends_raises_value_error(self):
         with pytest.raises(ValueError):
             build_attention_view_impl({})
+
+
+class TestPartialMessageRateLimit:
+    """#2716 -- a message-level rate-limit is recorded in
+    coverage.message_errors, NEVER as a mailbox_errors entry, and never
+    escalated to the whole-mailbox raise path."""
+
+    def test_rate_limited_message_recorded_not_fatal(self):
+        gmail = FakeGmailBackend(user_email=USER_EMAIL, rate_limit_subrequest_ceiling=0)
+        gmail.add_message(_PLAIN_UNCONFIDENT)
+        out = build_attention_view_impl({"google": gmail})
+        assert out["coverage"]["degraded"] is True
+        message_errors = out["coverage"]["message_errors"]
+        assert message_errors and message_errors[0]["message_id"] == (
+            _PLAIN_UNCONFIDENT["id"]
+        )
+        assert out["coverage"].get("mailbox_errors") is None
+        assert out["items"] == []
+
+    def test_message_rate_limit_in_one_of_two_mailboxes_keeps_the_other(self):
+        good = _backend(_MEETING_IN_INFORMATIONAL)
+        degraded = FakeGmailBackend(
+            user_email=USER_EMAIL, rate_limit_subrequest_ceiling=0
+        )
+        degraded.add_message(_PLAIN_UNCONFIDENT)
+        out = build_attention_view_impl({"google": good, "microsoft": degraded})
+        assert out["coverage"]["degraded"] is True
+        assert out["coverage"]["message_errors"]
+        assert out["coverage"].get("mailbox_errors") is None
+        # The healthy mailbox's item is still present.
+        meeting_items = [i for i in out["items"] if i["kind"] == "meeting_request"]
+        assert len(meeting_items) == 1
 
 
 class TestZeroMutationGuarantee:

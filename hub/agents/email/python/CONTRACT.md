@@ -5,7 +5,7 @@
 > **Component:** Email request/response contract (issue #1262)
 > **Module:** `gaia_agent_email.contract`
 > **Validation:** pydantic v2
-> **Schema version:** `2.9`
+> **Schema version:** `2.10`
 
 ---
 
@@ -31,7 +31,7 @@ stable shape.
 - **Fail loudly.** Every model forbids unknown fields (`extra="forbid"`). An
   off-contract payload raises a `ValidationError` naming the offending field,
   never a silently coerced result.
-- **Versioned.** `SCHEMA_VERSION` (`"2.9"`) is pinned in the module and echoed in
+- **Versioned.** `SCHEMA_VERSION` (`"2.10"`) is pinned in the module and echoed in
   every request and response so a consumer can detect a breaking change.
 
 ### Version history
@@ -55,6 +55,7 @@ the npm package accepts any higher MINOR), so the one breaking change below —
 | `2.7` | Additive (#2583): `PreScanItem` gains `is_meeting_request` (bool, default `false`) — the deterministic meeting-request heuristic now runs during the inbox scan, not only on a single message a caller points at directly. No existing shape changed, so `2.6` consumers keep working. |
 | `2.8` | Additive (#2582): new read-only attention-view surface — `GET /v1/email/attention` merges inbound waiting-on-you items (#2581), meeting proposals found during the scan (#2583), unreviewed messages (#2584), and open action items (#2110/#2525) into one "what needs you" read-model, computed on open and cached. No existing shape changed, so `2.7` consumers keep working. |
 | `2.9` | Additive (#2638/#2643): `EmailPreScanResult` gains `total_inbox` (exact whole-INBOX message count, nullable). Pre-scan now scans read + unread INBOX mail, not unread-only (#2638) — `total_unread` alone stopped being an honest scan-coverage denominator once read mail counts too, so `total_inbox` is the new one. No existing field changed, so `2.8` consumers keep working. |
+| `2.10` | Additive (#2716): `AttentionCoverage` gains `message_errors` (list of `{message_id, error}`, nullable) and `degraded` can now be `true` for a message-level gap, not only a mailbox-level one. A Gmail rate-limit that survives retry now drops the one affected message instead of failing the whole attention scan — every other message in the same mailbox is still present in `items`. No existing field changed, so `2.9` consumers keep working. |
 
 ---
 
@@ -88,7 +89,7 @@ test asserts byte-for-byte equality, so drift in either place fails CI.
 
 | Field | Type | Notes |
 |---|---|---|
-| `schema_version` | string | Contract version. Defaults to `"2.9"`. |
+| `schema_version` | string | Contract version. Defaults to `"2.10"`. |
 | `payload` | `SingleEmailInput` \| `ThreadInput` | Discriminated on `kind`. |
 | `context` | `TriageContext` \| null | Optional; biases categorization/summary. |
 
@@ -260,7 +261,7 @@ single-use send-confirmation token.
 
 ```json
 {
-  "schema_version": "2.9",
+  "schema_version": "2.10",
   "payload": {
     "kind": "single",
     "principal": { "name": "Alice Example", "email": "alice@example.com" },
@@ -282,7 +283,7 @@ single-use send-confirmation token.
 
 ```json
 {
-  "schema_version": "2.9",
+  "schema_version": "2.10",
   "request_kind": "single",
   "result": {
     "category": "NEEDS_RESPONSE",
@@ -309,7 +310,7 @@ single-use send-confirmation token.
 
 ```json
 {
-  "schema_version": "2.9",
+  "schema_version": "2.10",
   "payload": {
     "kind": "thread",
     "principal": { "name": "Alice Example", "email": "alice@example.com" },
@@ -342,7 +343,7 @@ single-use send-confirmation token.
 
 ```json
 {
-  "schema_version": "2.9",
+  "schema_version": "2.10",
   "request_kind": "thread",
   "result": {
     "category": "NEEDS_RESPONSE",
@@ -369,7 +370,7 @@ triages up to `MAX_BATCH_SIZE` (**100**) emails or threads in one request: an
 
 | Field | Type | Notes |
 |---|---|---|
-| `schema_version` | string | Contract version. Defaults to `"2.9"`. |
+| `schema_version` | string | Contract version. Defaults to `"2.10"`. |
 | `items` | `(SingleEmailInput \| ThreadInput)[]` | 1–100 inputs, discriminated on `kind` — the same item shapes the single endpoint's `payload` accepts. Over 100 → `422`. |
 | `context` | `TriageContext` \| null | Optional; applied to **all** items. |
 
@@ -402,7 +403,7 @@ The MCP surface mirrors this with a `triage_email_batch` tool (the single
 
 ```json
 {
-  "schema_version": "2.9",
+  "schema_version": "2.10",
   "items": [
     {
       "kind": "single",
@@ -432,7 +433,7 @@ The MCP surface mirrors this with a `triage_email_batch` tool (the single
 
 ```json
 {
-  "schema_version": "2.9",
+  "schema_version": "2.10",
   "results": [
     {
       "index": 0,
@@ -583,8 +584,12 @@ fixed one layer down for the pre-scan envelope.
 
 `coverage` mirrors the pre-scan coverage-honesty fields: `scanned`,
 `total_unread` (null when a connected backend can't report it honestly),
-`scan_truncated` (the scan hit its message ceiling), `degraded`, and
-`mailbox_errors`.
+`scan_truncated` (the scan hit its message ceiling), `degraded`,
+`mailbox_errors`, and `message_errors` (#2716) — the list of
+`{message_id, error}` messages that could not be fetched (e.g. a Gmail
+rate-limit that survived retry). A message-level failure is NOT a mailbox
+failure: every other message in that mailbox's scan is still present in
+`items`, and `degraded` is `true` for either kind of gap.
 
 **Computed on open, then cached — no scheduler dependency.** There is no
 background job populating this (the daemon clock, #2379, deliberately
