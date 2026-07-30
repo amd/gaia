@@ -346,7 +346,11 @@ def test_tools_register_under_the_skill_namespace(roots):
 def test_a_skill_tool_may_shadow_an_existing_registry_name(roots):
     """The ``<skill>/<tool>`` namespace exists so a skill can provide a tool the
     framework already has — loading must not clobber or drop either one."""
-    original = {"name": "search_web", "description": "the framework's", "parameters": {}}
+    original = {
+        "name": "search_web",
+        "description": "the framework's",
+        "parameters": {},
+    }
     _TOOL_REGISTRY["search_web"] = original
 
     copy_fixture("web-search", roots["user"])

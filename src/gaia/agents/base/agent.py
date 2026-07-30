@@ -963,7 +963,9 @@ Do NOT wrap conversational replies in JSON.
         # tools_required names registry tools the skill CONSUMES. A name that is
         # valid but not active in this agent is scoping, not a defect — log it so
         # a skill that quietly can't run its recipe is diagnosable.
-        inactive = [t for t in skill.gaia.tools_required if t not in self._tools_registry]
+        inactive = [
+            t for t in skill.gaia.tools_required if t not in self._tools_registry
+        ]
         if inactive:
             logger.info(
                 "Skill '%s' expects tool(s) %s, which this agent does not have "
