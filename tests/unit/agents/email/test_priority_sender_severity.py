@@ -112,7 +112,9 @@ class TestPriorityMatchNeverElevatesToUrgent:
         PROMOTIONAL either: the message's real content decided FYI, and a
         sender preference is not content.
         """
-        triage = triage_inbox_impl(_gmail(), max_messages=25, session_preferences=_prefs({_PRIORITY_ADDR}))
+        triage = triage_inbox_impl(
+            _gmail(), max_messages=25, session_preferences=_prefs({_PRIORITY_ADDR})
+        )
         decision = triage["results"][0]
 
         assert decision["category"] != "URGENT"
@@ -125,7 +127,9 @@ class TestPriorityMatchNeverElevatesToUrgent:
         (the pre-fix line literally said 'priority sender ... URGENT'
         while quoting the heuristic's own non-urgent verdict next to it).
         """
-        triage = triage_inbox_impl(_gmail(), max_messages=25, session_preferences=_prefs({_PRIORITY_ADDR}))
+        triage = triage_inbox_impl(
+            _gmail(), max_messages=25, session_preferences=_prefs({_PRIORITY_ADDR})
+        )
         rationale = triage["results"][0]["rationale"]
 
         assert "urgent" not in rationale.lower()
@@ -138,14 +142,14 @@ class TestPriorityMatchNeverElevatesToUrgent:
         unchanged relative to a priority-sender match on the same sender —
         i.e. the preference must not move severity in either direction.
         """
-        baseline = triage_inbox_impl(_gmail(), max_messages=25, session_preferences=_prefs())
+        baseline = triage_inbox_impl(
+            _gmail(), max_messages=25, session_preferences=_prefs()
+        )
         with_pref = triage_inbox_impl(
             _gmail(), max_messages=25, session_preferences=_prefs({_PRIORITY_ADDR})
         )
 
-        assert (
-            baseline["results"][0]["category"] == with_pref["results"][0]["category"]
-        )
+        assert baseline["results"][0]["category"] == with_pref["results"][0]["category"]
 
     def test_pre_scan_does_not_place_priority_sender_newsletter_in_urgent(self):
         """Full pre_scan_inbox_impl path (the surface the TUI card renders
