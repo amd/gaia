@@ -23,7 +23,10 @@ import re
 from datetime import date
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
-from gaia_agent_email.body_normalize import normalize_email_body
+from gaia_agent_email.body_normalize import (
+    normalize_email_body,
+    strip_reply_chain_and_signature,
+)
 from gaia_agent_email.config import default_inbox_scan_ceiling
 from gaia_agent_email.context_budget import (
     active_profile_ctx_size,
@@ -1261,6 +1264,12 @@ def triage_inbox_impl(
             if item["escalate"]:
                 full_msg = full_by_id[item["stub_id"]]
                 body_text, _ = decode_message_body(full_msg.get("payload") or {})
+                # #2643 lever 4: cut the quoted reply chain and signature
+                # block before the classifier reads it -- boilerplate that
+                # costs tokens without changing the category decision. Not
+                # applied to any read-tool display path (get_message et al.)
+                # -- only this LLM-classification input.
+                body_text = strip_reply_chain_and_signature(body_text)
                 llm = classifier(
                     subject=decision["subject"],
                     sender=decision["from"],

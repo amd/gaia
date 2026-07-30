@@ -1,7 +1,8 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """Strip known mail-infrastructure banners from an inbound body before it
-reaches the model (#2642).
+reaches the model (#2642), plus the shared quoted-reply-chain and
+signature-block reduction (#2643 lever 4).
 
 Conservative by design: recognizes a small, enumerable set of banner
 openers, only at the true top of a body, with a capped removal. A body that
@@ -20,13 +21,30 @@ for every message, which needs a ``gaia eval agent`` run first (tracked in
 everywhere — a ``<<<TOKEN>>>``-shaped string is never legitimate content —
 so those three paths call it directly before their own
 ``wrap_untrusted_body``.
+
+``strip_reply_chain_and_signature`` (#2643) is the SHARED seam this module
+and ``voice_profile.py`` were converging toward: rather than a second
+implementation of quote/signature detection, it reuses
+``voice_profile.strip_quoted_text`` (quote-chain removal) and
+``voice_profile._SIGNOFF_RE`` / ``_SIGNOFF_SCAN_LINES`` (the existing
+signoff-phrase detector, originally built for voice-profile STYLE analysis
+in ``analyze_sent_bodies``) to ALSO cut the trailing signature block. Wired
+ONLY into ``tools.read_tools.triage_inbox_impl``'s classifier-escalation
+body — the LLM classification path, where quoted history and a signature
+block are boilerplate that cost tokens without changing the category
+decision. Deliberately NOT wired into the read-tool display paths
+(``get_message`` / ``get_thread`` / ``summarize_thread`` /
+``_format_message_for_llm`` / ``_thread_message_blocks``) — a user asking to
+read a message wants to see the whole thing, quoted chain included; only the
+LLM's OWN classification input is reduced. This is an eval-affecting
+surface (unlike the rest of #2643): it changes body text the model reads.
 """
 
 from __future__ import annotations
 
 import re
 import unicodedata
-from typing import Optional, Pattern, Tuple
+from typing import List, Optional, Pattern, Tuple
 
 # Untrusted-body delimiter shape; single quantified class, no nested
 # quantifiers, so an unclosed match stays linear-time (see
@@ -172,3 +190,50 @@ def normalize_email_body(body: str) -> str:
     removal_end = max(match.end(), _capped_removal_end(window))
     removal_end = min(removal_end, len(window))
     return rest[removal_end:]
+
+
+def strip_reply_chain_and_signature(body: str) -> str:
+    """Cut ``body`` down to the sender's own new content (#2643 lever 4).
+
+    Two passes, both reusing ``voice_profile``'s existing machinery rather
+    than a second implementation:
+
+    1. ``voice_profile.strip_quoted_text`` — drops everything from the first
+       attribution line ("On ... wrote:", "--- Original Message ---") or
+       ``>``-quoted line onward.
+    2. A bottom-up scan over the trailing ``_SIGNOFF_SCAN_LINES`` lines (the
+       same window and the same ``_SIGNOFF_RE`` pattern
+       ``analyze_sent_bodies`` uses to find a voice profile's signoff) for
+       the LAST line that is JUST a signoff phrase ("Best,", "Cheers") —
+       everything from that line onward (the signoff plus the signature
+       block beneath it: name, title, phone, disclaimer) is cut.
+
+    Intended for body text about to reach an LLM for classification, where
+    the quoted history and signature are boilerplate that cost tokens
+    without changing the category decision — NOT for a read-tool display
+    path, where a user reading a message wants to see the whole thing.
+    """
+    if not body:
+        return body
+
+    # Deferred import: avoids a module-load-order dependency between
+    # body_normalize.py and voice_profile.py (neither currently imports the
+    # other at module scope) purely for this one reuse.
+    from gaia_agent_email.voice_profile import (
+        _SIGNOFF_RE,
+        _SIGNOFF_SCAN_LINES,
+        strip_quoted_text,
+    )
+
+    without_quotes = strip_quoted_text(body)
+    lines = without_quotes.splitlines()
+
+    window_start = max(0, len(lines) - _SIGNOFF_SCAN_LINES)
+    cut_at: Optional[int] = None
+    for idx in range(len(lines) - 1, window_start - 1, -1):
+        if _SIGNOFF_RE.match(lines[idx].strip()):
+            cut_at = idx
+            break
+
+    kept: List[str] = lines[:cut_at] if cut_at is not None else lines
+    return "\n".join(kept).strip()
