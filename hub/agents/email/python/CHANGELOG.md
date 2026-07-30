@@ -9,6 +9,20 @@ contract version is tracked separately as
 
 ### Added
 
+- **Inbox scans go metadata-first, cutting per-message cost so the default scan size can
+  rise from 25 to 50 (#2643).** Every scanned message used to cost one full-body fetch
+  regardless of whether the heuristic ever read the body — `pre_scan_inbox` and the
+  attention view never even wire an LLM classifier, so most of that body was fetched and
+  never decoded. The scan now fetches metadata only (headers, labels, snippet — no body),
+  runs the heuristic on that, and fetches a full body — batched, in as few round-trips as
+  the mail backend supports — only for messages that actually need LLM follow-up. A
+  `List-Unsubscribe` header (RFC 2369, arrives with the metadata fetch) is now a
+  supplementary confident-bulk-mail signal for messages Gmail's own category labels miss.
+  Classification is unchanged; a deadline/commitment signal in a bulk message's snippet
+  still escalates to the LLM exactly as before. The classifier's own escalation body is
+  also cut down to the sender's own new content (quoted reply chain and signature block
+  stripped, reusing `voice_profile`'s existing quote/signoff detection) before it reaches
+  the model — the one change here that affects what the LLM actually reads.
 - **Meeting-request detection now runs during the inbox scan, not only on a message you
   point at directly (#2583).** `detect_meeting_request_heuristic` has existed for over a
   year but nothing ever called it from `triage_inbox`/`pre_scan_inbox` — a colleague
@@ -89,6 +103,16 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **Inbox pre-scan now covers read mail, not just unread (#2638).** Pre-scan excluded
+  read mail on a rationale that a later fix in the same issue (#2584) had already made
+  moot — the coverage denominator moved to an exact `labels().get()` count independent
+  of the listing query, so narrowing that query to unread-only bought nothing while
+  making the single highest-value triage bucket (a message you opened but never
+  answered) permanently invisible the moment you read it. Pre-scan now scans all of
+  INBOX, matching the attention view and `list_waiting_on_you`, which never narrowed to
+  unread in the first place. `total_inbox` (exact whole-INBOX count, sourced from the
+  same call as the existing `total_unread`) is the new coverage denominator now that the
+  scan isn't unread-only; schema bumped to `2.9`.
 - **Thread summaries now keep the newest message's open asks (#2641).** A
   thread summary could reflect the opening question and an early reply while
   dropping the newest message entirely — even when that message carried the
@@ -128,6 +152,26 @@ contract version is tracked separately as
   paragraphs following it were removed. `_BLANK_LINE_RE` is now CRLF-tolerant
   (`\r?\n[ \t]*\r?\n`); the removal cap itself, the bounded scan window, and
   every existing hard-negative case are unchanged.
+- **Banner stripping now reaches every path that builds a prompt from a raw
+  body, including a banner's copies inside a quoted reply trail (#2647,
+  #2653).** #2642 only protected the two thread/read rendering paths;
+  `summarize_message`, the LLM triage follow-up, and meeting-request
+  detection each built their own prompt straight from the decoded body, so
+  a leading banner could still reach the model on those three. All three
+  now call `normalize_email_body` before wrapping the body, same as the
+  read paths. Separately, a live sweep found the bigger source of banner
+  leakage: Outlook inlines the entire prior conversation into every reply,
+  so a banner stripped from one message's own top-of-body still showed up
+  a dozen times inside later replies' quoted trails — enough that one real
+  thread summary named the banner text ("AMD General") as if it were a
+  participant. `_thread_message_blocks` (used only by the two thread-SUMMARY
+  renderers, never a raw-content display tool) now also drops the quoted
+  trail via new `body_normalize.strip_quoted_trail` — reusing
+  `voice_profile.strip_quoted_text`, with a fallback to the original body
+  when a message's sole content is a quote, so a bare "+1" reply is never
+  turned into an empty block. On a 10-message thread with full-history
+  quoting this cut the transcript from 6,131 to 1,967 characters (68%
+  smaller) as a side effect of removing the duplication.
 - **The autonomy kill switch now pre-empts a cycle already running, instead
   of only affecting the next one (#2624).** A kill fired a second into a
   25-message run used to be confirmed as "off" while the run carried on and

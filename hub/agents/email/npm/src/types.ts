@@ -402,11 +402,19 @@ export interface EmailPreScanResult {
   /** How many messages this pre-scan actually classified (#2584). */
   scanned: number;
   /**
-   * Estimated total unread messages in the scanned mailbox(es) (#2584).
-   * Gmail reports a real estimate; Outlook cannot and reports null — never
-   * a fabricated number.
+   * Exact total unread message count in the scanned mailbox(es) (#2584) — a
+   * secondary figure, NOT the scan-coverage denominator since #2638 (see
+   * total_inbox for that). Gmail reports an exact count; Outlook cannot and
+   * reports null — never a fabricated number.
    */
   total_unread?: number | null;
+  /**
+   * Exact total INBOX message count, read + unread (#2638) — the honest
+   * scan-coverage denominator now that pre-scan covers all of INBOX, not
+   * unread-only. Gmail reports an exact count, sourced from the same call as
+   * total_unread; Outlook cannot and reports null — never a fabricated number.
+   */
+  total_inbox?: number | null;
   /** True when at least one connected mailbox could not be scanned (#2584). */
   degraded: boolean;
   /** Connected mailboxes that failed during this pre-scan, if any (#2584). */
