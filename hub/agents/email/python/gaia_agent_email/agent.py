@@ -57,6 +57,7 @@ from gaia_agent_email.supervision import is_daemon_supervised
 from gaia_agent_email.tools.briefing_tools import BriefingToolsMixin
 from gaia_agent_email.tools.calendar_tools import (
     CalendarToolsMixin,
+    _listed_event_count_from_conversation,
     append_conflict_grounding_correction,
     response_has_ungrounded_conflict_claim,
 )
@@ -1003,8 +1004,12 @@ class EmailTriageAgent(
             result["result"] = _normalize_plain_text_answer(result["result"])
             # Flag a conflict verdict the model narrated itself instead of
             # getting from detect_calendar_conflicts (#2571).
-            tool_names = _tool_names_from_conversation(result.get("conversation") or [])
-            if response_has_ungrounded_conflict_claim(result["result"], tool_names):
+            conversation = result.get("conversation") or []
+            tool_names = _tool_names_from_conversation(conversation)
+            listed_event_count = _listed_event_count_from_conversation(conversation)
+            if response_has_ungrounded_conflict_claim(
+                result["result"], tool_names, listed_event_count
+            ):
                 result["result"] = append_conflict_grounding_correction(
                     result["result"]
                 )

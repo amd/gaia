@@ -723,22 +723,55 @@ _CONFLICT_VERDICT_RE = re.compile(
 )
 
 
+def _listed_event_count_from_conversation(
+    conversation: Iterable[Mapping[str, Any]],
+) -> int:
+    """Largest event count seen in any ``list_calendar_events`` tool result
+    this turn (0 if the tool never ran or every call errored/returned none).
+
+    Reads the same ``{"role": "tool", "name": ..., "content": ...}`` shape
+    ``_tool_names_from_conversation`` (agent.py) reads for tool names — this
+    reads the tool RESULT instead, to know how many events the model
+    actually saw. A malformed/error envelope has no ``data`` key and is
+    silently skipped here (not double-counted as a crash): it already
+    surfaced through the tool's own error envelope.
+    """
+    max_count = 0
+    for msg in conversation:
+        if msg.get("role") != "tool" or msg.get("name") != "list_calendar_events":
+            continue
+        try:
+            payload = json.loads(msg.get("content") or "")
+        except (TypeError, ValueError):
+            continue
+        events = ((payload or {}).get("data") or {}).get("events")
+        if isinstance(events, list):
+            max_count = max(max_count, len(events))
+    return max_count
+
+
 def response_has_ungrounded_conflict_claim(
-    response_text: str, tool_names: Iterable[str]
+    response_text: str,
+    tool_names: Iterable[str],
+    listed_event_count: int,
 ) -> bool:
     """True when ``response_text`` renders a conflict/overlap verdict but
     ``detect_calendar_conflicts`` never ran in the same turn.
 
     ``tool_names`` is every tool called this turn (order doesn't matter).
-    Returns ``False`` whenever ``detect_calendar_conflicts`` is present
-    (the verdict IS grounded) or ``list_calendar_events`` is absent (the
-    turn never touched the calendar, so conflict-shaped words belong to
-    something else entirely).
+    Returns ``False`` whenever ``detect_calendar_conflicts`` is present (the
+    verdict IS grounded), ``list_calendar_events`` is absent (the turn never
+    touched the calendar, so conflict-shaped words belong to something else
+    entirely), or ``listed_event_count`` is under 2 — with zero or one event
+    listed, no conflict is even possible, so "no conflicts" is trivially
+    true without the tool and is not an ungrounded claim.
     """
     names = set(tool_names)
     if "detect_calendar_conflicts" in names:
         return False
     if "list_calendar_events" not in names:
+        return False
+    if listed_event_count < 2:
         return False
     return bool(response_text) and bool(_CONFLICT_VERDICT_RE.search(response_text))
 

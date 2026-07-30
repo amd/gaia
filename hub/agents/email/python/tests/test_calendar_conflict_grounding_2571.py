@@ -8,7 +8,7 @@ computed (and got backwards — two events overlapping by 30 minutes were
 reported as "back-to-back and do not conflict"). ``detect_calendar_conflicts``
 itself was always correct; the tool simply never ran.
 
-Four layers, each deterministic (no LLM, no live calendar):
+Five layers, each deterministic (no LLM, no live calendar):
 
 1. System-prompt guidance mandating the conflict tool for conflict
    questions — substring pins against the real ``_SYSTEM_PROMPT`` constant.
@@ -16,13 +16,19 @@ Four layers, each deterministic (no LLM, no live calendar):
    ``detect_calendar_conflicts`` — pins against the real ``_TOOL_REGISTRY``
    descriptions (the schema actually sent to the model).
 3. ``response_has_ungrounded_conflict_claim`` / ``append_conflict_grounding_correction``
-   — the pure, deterministic grounding guard.
-4. ``EmailTriageAgent.process_query`` wiring — the guard actually runs on a
+   — the pure, deterministic grounding guard. Gated on at least 2 events
+   actually listed: with 0 or 1 events, no conflict is even possible, so
+   "no conflicts" is trivially true without the tool — see
+   ``TestResponseHasUngroundedConflictClaim`` "sparse calendar" cases.
+4. ``_tool_names_from_conversation`` / ``_listed_event_count_from_conversation``
+   — the trace/result extractors the guard reads.
+5. ``EmailTriageAgent.process_query`` wiring — the guard actually runs on a
    turn's result.
 """
 
 from __future__ import annotations
 
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -34,6 +40,7 @@ from gaia_agent_email.agent import (  # noqa: E402
     _tool_names_from_conversation,
 )
 from gaia_agent_email.tools.calendar_tools import (  # noqa: E402
+    _listed_event_count_from_conversation,
     append_conflict_grounding_correction,
     response_has_ungrounded_conflict_claim,
 )
@@ -131,6 +138,7 @@ class TestResponseHasUngroundedConflictClaim:
             response_has_ungrounded_conflict_claim(
                 "These two events are back-to-back and do not conflict.",
                 ["list_calendar_events"],
+                2,
             )
             is True
         )
@@ -140,6 +148,7 @@ class TestResponseHasUngroundedConflictClaim:
             response_has_ungrounded_conflict_claim(
                 "These two events are back-to-back and do not conflict.",
                 ["list_calendar_events", "detect_calendar_conflicts"],
+                2,
             )
             is False
         )
@@ -149,6 +158,7 @@ class TestResponseHasUngroundedConflictClaim:
             response_has_ungrounded_conflict_claim(
                 "Here are your upcoming events.",
                 ["list_calendar_events"],
+                2,
             )
             is False
         )
@@ -161,6 +171,7 @@ class TestResponseHasUngroundedConflictClaim:
             response_has_ungrounded_conflict_claim(
                 "That preference conflicts with an existing rule.",
                 ["get_preferences"],
+                0,
             )
             is False
         )
@@ -170,6 +181,7 @@ class TestResponseHasUngroundedConflictClaim:
             response_has_ungrounded_conflict_claim(
                 "You are double-booked this morning.",
                 ["list_calendar_events"],
+                2,
             )
             is True
         )
@@ -177,18 +189,67 @@ class TestResponseHasUngroundedConflictClaim:
             response_has_ungrounded_conflict_claim(
                 "Your 9am and 9:30am events overlap.",
                 ["list_calendar_events"],
+                2,
             )
             is True
         )
 
     def test_empty_response_never_fires(self):
         assert (
-            response_has_ungrounded_conflict_claim("", ["list_calendar_events"])
+            response_has_ungrounded_conflict_claim("", ["list_calendar_events"], 2)
             is False
         )
 
     def test_no_tools_at_all_never_fires(self):
-        assert response_has_ungrounded_conflict_claim("conflict!", []) is False
+        assert response_has_ungrounded_conflict_claim("conflict!", [], 0) is False
+
+    # -- sparse calendar: 0 or 1 events means no conflict is even possible --
+    # A real mailbox's calendar may be empty (or hold a single event), in
+    # which case "no conflicts" is trivially, arithmetically true without
+    # ever calling the tool — that is not the ungrounded-narration bug this
+    # guard targets, and must not be flagged.
+
+    def test_does_not_fire_with_zero_events_listed(self):
+        assert (
+            response_has_ungrounded_conflict_claim(
+                "You have no events today, so there's nothing to conflict.",
+                ["list_calendar_events"],
+                0,
+            )
+            is False
+        )
+
+    def test_does_not_fire_with_exactly_one_event_listed(self):
+        assert (
+            response_has_ungrounded_conflict_claim(
+                "You have one event today; it doesn't conflict with anything.",
+                ["list_calendar_events"],
+                1,
+            )
+            is False
+        )
+
+    def test_fires_with_exactly_two_events_listed(self):
+        # The boundary where a conflict first becomes possible — and the
+        # issue's own repro (2 planted events).
+        assert (
+            response_has_ungrounded_conflict_claim(
+                "These two events do not conflict.",
+                ["list_calendar_events"],
+                2,
+            )
+            is True
+        )
+
+    def test_fires_with_more_than_two_events_listed(self):
+        assert (
+            response_has_ungrounded_conflict_claim(
+                "None of your events conflict with each other.",
+                ["list_calendar_events"],
+                5,
+            )
+            is True
+        )
 
 
 class TestAppendConflictGroundingCorrection:
@@ -205,7 +266,7 @@ class TestAppendConflictGroundingCorrection:
 
 
 # ---------------------------------------------------------------------------
-# _tool_names_from_conversation — the trace extractor the guard reads
+# 4. Trace/result extractors the guard reads
 # ---------------------------------------------------------------------------
 
 
@@ -236,8 +297,73 @@ class TestToolNamesFromConversation:
         assert _tool_names_from_conversation(conversation) == []
 
 
+def _list_events_tool_result(*event_summaries: str) -> dict:
+    """A ``{"role": "tool", ...}`` conversation entry shaped like a real
+    ``list_calendar_events`` result — the exact envelope
+    ``_envelope_ok({"events": [...]})`` produces."""
+    events = [{"id": s, "summary": s} for s in event_summaries]
+    return {
+        "role": "tool",
+        "name": "list_calendar_events",
+        "content": json.dumps({"ok": True, "data": {"events": events}}),
+    }
+
+
+class TestListedEventCountFromConversation:
+    def test_zero_events_returns_zero(self):
+        conversation = [_list_events_tool_result()]
+        assert _listed_event_count_from_conversation(conversation) == 0
+
+    def test_one_event_returns_one(self):
+        conversation = [_list_events_tool_result("Budget sync")]
+        assert _listed_event_count_from_conversation(conversation) == 1
+
+    def test_multiple_events_returns_the_count(self):
+        conversation = [_list_events_tool_result("Budget sync", "Design review", "1:1")]
+        assert _listed_event_count_from_conversation(conversation) == 3
+
+    def test_tool_never_called_returns_zero(self):
+        conversation = [{"role": "assistant", "content": "no tools this turn"}]
+        assert _listed_event_count_from_conversation(conversation) == 0
+
+    def test_takes_the_max_across_multiple_calls(self):
+        conversation = [
+            _list_events_tool_result("A"),
+            _list_events_tool_result("A", "B", "C"),
+        ]
+        assert _listed_event_count_from_conversation(conversation) == 3
+
+    def test_error_envelope_is_skipped_not_crashed(self):
+        conversation = [
+            {
+                "role": "tool",
+                "name": "list_calendar_events",
+                "content": json.dumps({"ok": False, "error": "backend unreachable"}),
+            }
+        ]
+        assert _listed_event_count_from_conversation(conversation) == 0
+
+    def test_malformed_json_is_skipped_not_crashed(self):
+        conversation = [
+            {"role": "tool", "name": "list_calendar_events", "content": "not json"}
+        ]
+        assert _listed_event_count_from_conversation(conversation) == 0
+
+    def test_ignores_other_tools_results(self):
+        conversation = [
+            {
+                "role": "tool",
+                "name": "detect_calendar_conflicts",
+                "content": json.dumps(
+                    {"ok": True, "data": {"has_conflict": True, "conflicts": []}}
+                ),
+            }
+        ]
+        assert _listed_event_count_from_conversation(conversation) == 0
+
+
 # ---------------------------------------------------------------------------
-# 4. process_query wiring — the guard actually runs on a turn's result
+# 5. process_query wiring — the guard actually runs on a turn's result
 # ---------------------------------------------------------------------------
 
 
@@ -248,8 +374,8 @@ class TestProcessQueryConflictGrounding:
         from gaia.agents.base.agent import Agent
 
         # This is the issue's exact repro text and trace: one tool
-        # (list_calendar_events), a self-narrated (and wrong) conflict
-        # verdict.
+        # (list_calendar_events, returning 2 overlapping events), a
+        # self-narrated (and wrong) conflict verdict.
         canned = {
             "status": "success",
             "result": (
@@ -265,6 +391,10 @@ class TestProcessQueryConflictGrounding:
                     "role": "assistant",
                     "tool_calls": [{"function": {"name": "list_calendar_events"}}],
                 },
+                _list_events_tool_result(
+                    "GAIA-M59-FIXTURE Budget sync",
+                    "GAIA-M59-FIXTURE Overlapping design review",
+                ),
             ],
         }
         monkeypatch.setattr(Agent, "process_query", lambda self, *a, **k: dict(canned))
@@ -293,6 +423,7 @@ class TestProcessQueryConflictGrounding:
                         {"function": {"name": "detect_calendar_conflicts"}},
                     ],
                 },
+                _list_events_tool_result("Budget sync", "Design review"),
             ],
         }
         monkeypatch.setattr(Agent, "process_query", lambda self, *a, **k: dict(canned))
@@ -314,11 +445,57 @@ class TestProcessQueryConflictGrounding:
                     "role": "assistant",
                     "tool_calls": [{"function": {"name": "list_calendar_events"}}],
                 },
+                _list_events_tool_result("Budget sync", "Design review"),
             ],
         }
         monkeypatch.setattr(Agent, "process_query", lambda self, *a, **k: dict(canned))
 
         result = agent.process_query("List my calendar events.")
+
+        assert result["result"] == canned["result"]
+
+    def test_leaves_response_untouched_on_an_empty_calendar(self, agent, monkeypatch):
+        """The real mailbox's calendar may be empty (#2571 dispatcher
+        follow-up): with zero events listed, "no conflicts" is trivially
+        true and must NOT be rewritten as if it were an ungrounded guess."""
+        from gaia.agents.base.agent import Agent
+
+        canned = {
+            "status": "success",
+            "result": "You have no upcoming events, so there are no conflicts.",
+            "conversation": [
+                {
+                    "role": "assistant",
+                    "tool_calls": [{"function": {"name": "list_calendar_events"}}],
+                },
+                _list_events_tool_result(),  # zero events
+            ],
+        }
+        monkeypatch.setattr(Agent, "process_query", lambda self, *a, **k: dict(canned))
+
+        result = agent.process_query("List my calendar events and flag conflicts.")
+
+        assert result["result"] == canned["result"]
+
+    def test_leaves_response_untouched_with_a_single_event(self, agent, monkeypatch):
+        """Same as the empty-calendar case: one event can't conflict with
+        itself, so no correction is warranted."""
+        from gaia.agents.base.agent import Agent
+
+        canned = {
+            "status": "success",
+            "result": "You have one event today; it doesn't conflict with anything.",
+            "conversation": [
+                {
+                    "role": "assistant",
+                    "tool_calls": [{"function": {"name": "list_calendar_events"}}],
+                },
+                _list_events_tool_result("Budget sync"),
+            ],
+        }
+        monkeypatch.setattr(Agent, "process_query", lambda self, *a, **k: dict(canned))
+
+        result = agent.process_query("List my calendar events and flag conflicts.")
 
         assert result["result"] == canned["result"]
 
