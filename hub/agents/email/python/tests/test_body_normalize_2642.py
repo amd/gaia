@@ -167,6 +167,42 @@ class TestSpanCap:
         assert removed_prefix.count("\n") <= body_normalize._MAX_BANNER_REMOVAL_LINES
 
 
+class TestCRLFBodies:
+    """CRLF (``\\r\\n``) is the real wire format for an email body (RFC 5322)
+    — every fixture above uses a bare ``\\n``, which hid a bug where a CRLF
+    blank-line boundary was never recognized as the banner's paragraph end.
+    The removal cap then fell back to the 5-newline line cap and ate real
+    content past the banner. Reproduces the shape of the live message from
+    the issue's real-world test (synthetic content, same structure)."""
+
+    _CRLF_PARA1 = (
+        "There are quite a number of ways that you could help out, from "
+        "testing to reviewing pull requests."
+    )
+    _CRLF_PARA2 = "What aligns best with you?"
+
+    def test_crlf_blank_line_boundary_is_recognized_content_survives(self):
+        banner_para = f"{_AMD_GENERAL_BANNER}\r\n\r\n"
+        rest = f"Hi,\r\n\r\n{self._CRLF_PARA1}\r\n\r\n{self._CRLF_PARA2}\r\n"
+        body = banner_para + rest
+        out = body_normalize.normalize_email_body(body)
+        assert _AMD_GENERAL_BANNER not in out
+        # The banner's own paragraph is removed, nothing more — every
+        # subsequent CRLF paragraph survives verbatim.
+        assert out == rest
+        assert "Hi," in out
+        assert self._CRLF_PARA1 in out
+        assert self._CRLF_PARA2 in out
+
+    def test_crlf_hard_negative_quoting_the_banner_later_is_untouched(self):
+        banner_crlf = _EXTERNAL_SOURCE_BANNER.replace("\n", "\r\n")
+        body = (
+            "Sure - for reference, here's what our footer looks like:\r\n\r\n"
+            f"{banner_crlf}\r\n\r\nThat's the standard wording."
+        )
+        assert body_normalize.normalize_email_body(body) == body
+
+
 class TestUnicodeObfuscation:
     """AC7 — a banner prefixed with a zero-width space / BOM is still
     recognized and stripped."""

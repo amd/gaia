@@ -118,6 +118,16 @@ contract version is tracked separately as
   pre-existing gap where an inbound body carrying a literal
   `<<<UNTRUSTED_EMAIL_BODY_END>>>`-shaped token was wrapped unscrubbed —
   that scrub previously ran only on LLM output, never on inbound text.
+- **Fixed a data-loss bug in the #2642 banner stripper: it deleted real
+  content on real (CRLF) mail.** `normalize_email_body`'s paragraph-break
+  lookup only matched a bare `\n\n`, but an actual inbound body uses `\r\n`
+  (RFC 5322) — so the lookup always returned "no blank line found," the
+  strip fell back to its 300-char/5-newline removal cap, and that cap ate
+  one or two real paragraphs past the banner instead of just the banner.
+  Live testing against a real message caught this: the banner *and* the two
+  paragraphs following it were removed. `_BLANK_LINE_RE` is now CRLF-tolerant
+  (`\r?\n[ \t]*\r?\n`); the removal cap itself, the bounded scan window, and
+  every existing hard-negative case are unchanged.
 - **`POST /autonomy/run` refuses instead of silently no-oping while autonomy
   is `off` (#2528).** Previously the route returned HTTP 200 with the same
   empty-report shape whether autonomy was disabled or had genuinely run and

@@ -105,8 +105,9 @@ def _nth_newline_end(text: str, n: int) -> Optional[int]:
 
 
 # End of the banner's own paragraph: a newline, optional same-line
-# whitespace, then another newline.
-_BLANK_LINE_RE = re.compile(r"\n[ \t]*\n")
+# whitespace, then another newline. CRLF-tolerant (RFC 5322 wire format) —
+# each `\n` may be preceded by a `\r` that a plain `[ \t]*` would not match.
+_BLANK_LINE_RE = re.compile(r"\r?\n[ \t]*\r?\n")
 
 
 def _paragraph_break_end(text: str) -> Optional[int]:
