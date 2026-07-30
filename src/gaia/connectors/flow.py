@@ -52,6 +52,7 @@ from gaia.connectors.errors import (
 )
 from gaia.connectors.events import emit
 from gaia.connectors.pkce import compute_code_challenge, generate_code_verifier
+from gaia.connectors.prior_state import resolve_or_reject_empty_scopes
 from gaia.connectors.providers import get as get_provider
 from gaia.connectors.store import save_connection
 
@@ -218,7 +219,9 @@ async def start_authorization(
             await _teardown_flow(stale_id)
 
     provider = get_provider(provider_id)
-    scopes_list = list(scopes) or list(provider.default_scopes)
+    scopes_list = resolve_or_reject_empty_scopes(
+        provider_id, scopes, provider.default_scopes
+    )
 
     code_verifier = generate_code_verifier()
     challenge = compute_code_challenge(code_verifier)
@@ -568,7 +571,9 @@ async def start_device_flow(provider_id: str, scopes: Iterable[str]) -> Dict[str
             "Use start_authorization (browser loopback) instead. See "
             "docs/security/connections.mdx."
         )
-    scopes_list = list(scopes) or list(provider.default_scopes)
+    scopes_list = resolve_or_reject_empty_scopes(
+        provider_id, scopes, provider.default_scopes
+    )
     body = provider.device_code_request_body(scopes_list)
 
     async with httpx.AsyncClient(timeout=15.0) as client:
@@ -643,7 +648,9 @@ async def poll_device_flow(
     import time as _time
 
     provider = get_provider(provider_id)
-    scopes_list = list(scopes) or list(provider.default_scopes)
+    scopes_list = resolve_or_reject_empty_scopes(
+        provider_id, scopes, provider.default_scopes
+    )
     body = provider.device_token_request_body(device_code)
     poll_interval = max(int(interval), 1)
     deadline = _time.monotonic() + max(int(expires_in), poll_interval)

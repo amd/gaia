@@ -167,7 +167,10 @@ async def configure_email_connector(
         "client_id": body.client_id,
         "client_secret": body.client_secret,
     }
-    if body.scopes is not None:
+    # ``not body.scopes`` (not ``is not None``) so an explicit empty list
+    # takes the union path too, instead of slipping through to configure()'s
+    # own empty-scopes handling as a bare "[]" (#2730 site 13).
+    if body.scopes:
         config["scopes"] = body.scopes
     else:
         config["scopes"] = _build_scope_union(provider)

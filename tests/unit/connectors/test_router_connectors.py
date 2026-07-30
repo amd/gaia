@@ -382,6 +382,49 @@ class TestAuthorizeGrantAgents:
         )
         assert resp.status_code == 400
 
+    def test_authorize_empty_scopes_with_grant_agents_widens_to_declared_union(
+        self, ui_api_client, monkeypatch
+    ):
+        """D0/AC-8 (#2730), router half: an omitted ``scopes`` body must not
+        reach ``start_authorization`` empty when ``grant_agents`` names an
+        agent — that would either raise (a connection already exists) or,
+        worse, silently fall back to the provider's identity-only defaults
+        on a first connect, ignoring what the caller actually asked to
+        grant."""
+        mock_start = AsyncMock(
+            return_value={"flow_id": "f1", "authorization_url": "https://auth"}
+        )
+        monkeypatch.setattr("gaia.connectors.start_authorization", mock_start)
+        ui_api_client.app.state.agent_registry = make_fake_agent_registry(
+            "installed:email", "google", self._SCOPES
+        )
+
+        resp = ui_api_client.post(
+            "/api/connectors/google/authorize",
+            json={"grant_agents": ["installed:email"]},
+            headers=UI_HEADER,
+        )
+        assert resp.status_code == 200, resp.text
+        _, kwargs = mock_start.call_args
+        assert kwargs["scopes"] == self._SCOPES
+
+    def test_authorize_empty_scopes_with_no_grant_agents_passes_through_empty(
+        self, ui_api_client, monkeypatch
+    ):
+        """No grant_agents to derive a union from — the router must not
+        guess either; it defers to start_authorization's own D0 guard."""
+        mock_start = AsyncMock(
+            return_value={"flow_id": "f1", "authorization_url": "https://auth"}
+        )
+        monkeypatch.setattr("gaia.connectors.start_authorization", mock_start)
+
+        resp = ui_api_client.post(
+            "/api/connectors/google/authorize", json={}, headers=UI_HEADER
+        )
+        assert resp.status_code == 200, resp.text
+        _, kwargs = mock_start.call_args
+        assert kwargs["scopes"] == []
+
     def test_configure_resolves_grant_agents_into_config(
         self, ui_api_client, monkeypatch
     ):

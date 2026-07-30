@@ -349,6 +349,24 @@ def _resolve_grant_scopes(
         ) from e
 
 
+def _widen_empty_scopes(
+    scopes: List[str], grant_map: Dict[str, List[str]]
+) -> List[str]:
+    """Same contract as the CLI's bare ``connect`` (#2730 D0/AC-8): an empty
+    ``scopes`` body must not silently reach ``start_authorization`` narrower
+    than what the request's own ``grant_agents`` already declare. When the
+    caller supplied scopes explicitly, or resolved no grant map at all,
+    return unchanged — ``start_authorization``'s own D0 guard decides the
+    genuinely-empty case (raise on an existing connection, fall back to
+    ``default_scopes`` on a real first connect)."""
+    if scopes or not grant_map:
+        return scopes
+    union: set = set()
+    for agent_scopes in grant_map.values():
+        union.update(agent_scopes)
+    return sorted(union)
+
+
 def _connector_summary(connector_id: str) -> Dict[str, Any]:
     """Build a summary dict for one connector: spec fields + live state.
 
@@ -852,7 +870,9 @@ async def authorize(
     grant_map = _resolve_grant_scopes(request, connector_id, body.grant_agents)
     try:
         return await connections.start_authorization(
-            connector_id, scopes=body.scopes, grant_agents=grant_map or None
+            connector_id,
+            scopes=_widen_empty_scopes(body.scopes, grant_map),
+            grant_agents=grant_map or None,
         )
     except ConnectorsError as e:
         raise _raise_http_for(e) from e
@@ -884,7 +904,9 @@ async def authorize_device(
     """
     grant_map = _resolve_grant_scopes(request, connector_id, body.grant_agents)
     try:
-        info = await connections.start_device_flow(connector_id, scopes=body.scopes)
+        info = await connections.start_device_flow(
+            connector_id, scopes=_widen_empty_scopes(body.scopes, grant_map)
+        )
     except ConnectorsError as e:
         raise _raise_http_for(e) from e
 

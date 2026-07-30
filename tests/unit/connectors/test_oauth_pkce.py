@@ -182,6 +182,37 @@ class TestConfigure:
         assert "email" in called_scopes
 
     @pytest.mark.asyncio
+    async def test_empty_scopes_against_existing_connection_raises(
+        self, monkeypatch, tmp_path
+    ):
+        """D0 (#2730): ``configure`` with no scopes must not silently narrow
+        an existing connection to the provider's identity-only defaults."""
+        monkeypatch.setattr("gaia.connectors.grants.Path.home", lambda: tmp_path)
+        monkeypatch.setenv("GAIA_GOOGLE_CLIENT_ID", "test.apps.example")
+        monkeypatch.setenv("GAIA_GOOGLE_CLIENT_SECRET", "GOCSPX-test")
+        from gaia.connectors.providers import _registry
+        from gaia.connectors.providers import get as get_provider
+        from gaia.connectors.store import save_connection
+
+        _registry.clear()
+        save_connection(
+            provider="google",
+            account_email="alice@example.com",
+            refresh_token="seed",
+            scopes=["https://www.googleapis.com/auth/gmail.modify"],
+            client_id_hash=get_provider("google").client_id_hash,
+        )
+        spec = _make_spec()
+        handler = OAuthPkceHandler()
+
+        with patch(
+            "gaia.connectors.oauth_pkce.start_authorization",
+            new=AsyncMock(side_effect=AssertionError("must not start a flow")),
+        ):
+            with pytest.raises(ConnectorsError):
+                await handler.configure(spec, {})
+
+    @pytest.mark.asyncio
     async def test_first_run_persists_client_credentials(self, monkeypatch):
         # First-time setup path: client_id + client_secret in config land
         # in the keyring, the cached provider instance is evicted so the
