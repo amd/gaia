@@ -481,6 +481,15 @@ export interface AttentionItem {
   mailbox?: string | null;
 }
 
+/** One message that could not be fetched during a scan (contract.py: MessageError, #2716). Distinct
+ * from MailboxError -- every OTHER message in the same mailbox's scan is still present in `items`. */
+export interface MessageError {
+  /** Provider message id that failed. */
+  message_id: string;
+  /** Actionable error message for the failure. */
+  error: string;
+}
+
 /** How much of the mailbox the attention view actually covered (contract.py: AttentionCoverage). */
 export interface AttentionCoverage {
   /** Messages actually scanned across every mailbox. */
@@ -489,10 +498,14 @@ export interface AttentionCoverage {
   total_unread?: number | null;
   /** True when the scan hit its message ceiling in any connected mailbox. */
   scan_truncated: boolean;
-  /** True when at least one connected mailbox could not be scanned. */
+  /** True when at least one connected mailbox could not be scanned, OR at least one individual
+   * message could not be fetched after a rate-limit survived retry (#2716). */
   degraded: boolean;
   /** Connected mailboxes that failed during this scan, if any. */
   mailbox_errors?: MailboxError[] | null;
+  /** Individual messages that could not be fetched during this scan, if any (#2716) — e.g. a Gmail
+   * rate-limit that survived retry. A per-message gap, not a mailbox failure. */
+  message_errors?: MessageError[] | null;
 }
 
 /**
