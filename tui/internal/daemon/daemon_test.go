@@ -902,3 +902,34 @@ func TestDoFailsWhenTheRefreshedTokenIsAlsoRejected(t *testing.T) {
 		t.Errorf("error should explain the auth failure: %v", err)
 	}
 }
+
+// TestGaiaDaemonStartMissingCLIRemediation guards the first error a newcomer
+// hits. Someone who downloaded only this binary has no clone, so a remediation
+// that leads with `pip install -e .` points at a workflow they cannot perform.
+func TestGaiaDaemonStartMissingCLIRemediation(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+
+	_, err := gaiaDaemonStart(context.Background())
+	if err == nil {
+		t.Fatal("expected an error with `gaia` absent from PATH")
+	}
+	msg := err.Error()
+
+	for _, want := range []string{
+		"https://amd-gaia.ai/install.sh",
+		"https://amd-gaia.ai/install.ps1",
+		"pip install amd-gaia",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("remediation is missing %q:\n%s", want, msg)
+		}
+	}
+
+	// The contributor path may stay as a trailing note, but it must not be the
+	// headline a newcomer reads first.
+	repoPath := strings.Index(msg, "pip install -e .")
+	installer := strings.Index(msg, "https://amd-gaia.ai/install.sh")
+	if repoPath >= 0 && repoPath < installer {
+		t.Errorf("the repo-only remediation leads the message:\n%s", msg)
+	}
+}
