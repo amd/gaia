@@ -104,6 +104,37 @@ contract version is tracked separately as
   a larger length bound (`THREAD_SUMMARY_CHAR_LIMIT`, 700 vs. the
   single-message 300): several messages' decisions plus a new open ask plus
   a meeting time cannot fit in the single-message cap.
+- **The autonomy kill switch now pre-empts a cycle already running, instead
+  of only affecting the next one (#2624).** A kill fired a second into a
+  25-message run used to be confirmed as "off" while the run carried on and
+  processed all 25 — the only enabled check read a `TrustPolicy` snapshot
+  frozen before the loop started, so nothing inside it could see a kill
+  fired mid-cycle. `_run_email_autonomy_cycle` now re-reads the live
+  autonomy level immediately before each message's execute call and stops
+  the batch there, recording why in the new `report["stopped"]` field
+  (`"autonomy_off"`). Scope: this is pre-emptive for a cycle running through
+  the REST/CLI session surface on a single-worker sidecar; the scheduler
+  builds a stateless agent per fire from environment variables and is
+  unaffected by a kill issued here (#2649). Killing one session
+  also now stops every other live session in the process, since the caller's
+  session id is not always the one an autonomy cycle happens to be running
+  under.
+- **A single per-message failure no longer discards the whole autonomy
+  report (#2625).** A transient provider error used to propagate past the
+  whole cycle, throwing away the record of every message already archived
+  or marked read for real — the caller got a bare 500 and no way to tell
+  what had actually changed short of querying the database by hand. The
+  cycle now catches a per-message failure, records it in the new
+  `report["errors"]` (exception type plus a redacted, length-capped
+  message — auth headers, tokens, and email addresses are stripped, never
+  the raw provider payload), and continues to the next
+  message — stopping only after 3 CONSECUTIVE failures (resets on any
+  success) so a systemic outage doesn't grind through the whole batch
+  logging one identical error per message. A bookkeeping-call failure
+  (recording the action for undo, clearing the re-proposal guard) that
+  happens *after* a message was already mutated is logged but never
+  reclassifies that message as failed. A cycle-level failure (triage
+  itself raising) still propagates, unchanged.
 - **The triage scan now actually follows pagination, and `scan_truncated`
   tells the truth (#2634).** Raising the scan's `max_messages` above one
   provider page used to do nothing — `triage_inbox_impl` issued a single
