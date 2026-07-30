@@ -7,7 +7,9 @@ icon: "puzzle-piece"
 <Info>
   **Grounds on (exists today):** [`src/gaia/skills/`](https://github.com/amd/gaia/tree/main/src/gaia/skills) — the shipped runtime: `format.py` (parser/writer/validator), `manager.py` (`SkillManager`, discovery + precedence), `loader.py` (`<skill>/<tool>` registration), `permissions.py` (grammar + connector bridge), `cli.py` (`gaia skill`) · [`src/gaia/agents/base/agent.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/agent.py) (`Agent.load_skill`, `unload_skill`, `SKILL_DIRS`, `skill_manager`, `loaded_skills`) · [`src/gaia/agents/base/tools.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tools.py) (`@tool`, `_TOOL_REGISTRY`) · [`src/gaia/agents/registry.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/registry.py) (`KNOWN_TOOLS`, `namespaced_agent_id`) · [`src/gaia/connectors/providers/base.py`](https://github.com/amd/gaia/blob/main/src/gaia/connectors/providers/base.py) (`ConnectorRequirement`) · [`src/gaia/ui/routers/agents.py`](https://github.com/amd/gaia/blob/main/src/gaia/ui/routers/agents.py) (`/api/agents`, the panel to mirror)
 
-  **Still proposed (not written yet):** the `/api/skills` router and Agent UI panel, `gaia skill install|remove|search|publish|update` (marketplace, [#2467](https://github.com/amd/gaia/issues/2467)), `gaia skill migrate` (Phase 3), the permission sandbox for local-capability domains, and tier-ceiling enforcement ([#1019](https://github.com/amd/gaia/issues/1019)). Every such symbol is marked **PROPOSED** where it appears.
+  **Also exists (hub side):** [`workers/agent-hub/src/`](https://github.com/amd/gaia/tree/main/workers/agent-hub/src) — the `skill` catalog lane, the `skills/` R2 namespace, `POST /publish/skill` validating this grammar server-side, and the pre-publish audit gate ([#2467](https://github.com/amd/gaia/issues/2467)).
+
+  **Still proposed (not written yet):** the `/api/skills` router and Agent UI panel, every `gaia skill install|remove|search|publish|update` verb — the CLI half of the marketplace, so nothing calls the hub endpoints above yet — `gaia skill migrate` (Phase 3), the permission sandbox for local-capability domains, and tier-ceiling enforcement ([#1019](https://github.com/amd/gaia/issues/1019)). Every such symbol is marked **PROPOSED** where it appears.
 </Info>
 
 <Note>
@@ -353,6 +355,38 @@ acceptance asked for `list`/`install`/`remove`: `list` shipped, and
 `import`/`export` cover the local half of install/remove without a registry. The
 registry-backed pair lands with the marketplace.
 </Note>
+
+### What the hub enforces at publish
+
+The **server** half of the marketplace exists ahead of the CLI verbs above: the
+Agent Hub Worker serves `POST /publish/skill` and a `skill` catalog lane
+([#2467](https://github.com/amd/gaia/issues/2467)). Nothing in `gaia skill` calls
+it yet — `publish` is still PROPOSED — so today the endpoint is reachable only by
+a direct HTTP POST, and the hub has no published skills.
+
+That endpoint re-validates this grammar server-side before a skill may enter the
+catalog. It is a gatekeeper, not a replacement for the loader's validation above:
+a skill can be locally valid and still be refused publication. Rejections name
+the offending field.
+
+- `name` and `description` are **required**; `name` matches
+  `^[a-z0-9]+(-[a-z0-9]+)*$` and is ≤64 chars, `description` is ≤1024.
+- `version` is **required to publish** (optional in the format itself, where a
+  skill may be unversioned) and must be SemVer. `0.0.0` is refused — the
+  unversioned sentinel can never become an immutable release.
+- `metadata.gaia.security_tier` must be one of `verified` / `community` /
+  `experimental`, and the tier is gated by the pre-publish security audit
+  ([#2468](https://github.com/amd/gaia/issues/2468)) — `community` and `verified`
+  cannot publish without a cleared report.
+- `permissions`, `tools`, `tools_required`, and `requirements` must match the
+  shapes above; the catalog entry carries them so an installer can show the
+  permission preview before anything is written to disk.
+
+Skill names share one namespace with agent ids, so a name already taken by a
+published agent is refused (and vice versa).
+
+See [Agent Skills → Agent Hub integration](/spec/agent-skills#agent-hub-integration)
+for the catalog shape and the storage/route layout.
 
 ### Agent UI dashboard support
 
@@ -901,9 +935,14 @@ migrate --from {hermes,openclaw,auto}`.
 - `migrate` output validates and lands `experimental` for Hermes and OpenClaw
   inputs.
 
-### Phase 4 — Marketplace + consumer wiring (PROPOSED; #647 / #887 / #1451)
+### Phase 4 — Marketplace + consumer wiring (PARTIAL; #647 / #2467 / #887 / #1451)
 
-Publish/registry REST; #887 emits conformant `SKILL.md`; #1451 unions
+The **hub side shipped** with [#2467](https://github.com/amd/gaia/issues/2467): a
+`skill` catalog lane, the `skills/` R2 namespace, `POST /publish/skill` with
+server-side validation of this grammar, and the [#2468](https://github.com/amd/gaia/issues/2468)
+audit gate. **Still PROPOSED:** every `gaia skill` verb that would use it
+(`publish`/`install`/`search`/`remove`/`update`), the lock file, and install-time
+tier enforcement; plus #887 emitting conformant `SKILL.md` and #1451 unioning
 `tools_required`.
 
 **Success criteria:**
@@ -955,7 +994,9 @@ implementation-level questions for whoever builds the runtime:
 ## Current state of the code
 
 The format is grounded on real primitives, and the Phase 1 runtime now **exists**.
-Only the enforcement, REST/UI, and marketplace layers are greenfield.
+The enforcement and REST/UI layers are still greenfield. The marketplace is split:
+its **hub-side** catalog lane and publish validation exist, while every `gaia
+skill` verb that would talk to them does not.
 
 | Area | Symbol / fact | `file:line` | State |
 |---|---|---|---|
@@ -982,6 +1023,7 @@ Only the enforcement, REST/UI, and marketplace layers are greenfield.
 | **Permission sandbox / tier-ceiling enforcement** | — | **NOT FOUND** | **Greenfield — PROPOSED** (#1019) |
 | **`/api/skills` router + UI panel** | — | **NOT FOUND** | **Greenfield — PROPOSED** |
 | **`gaia skill install\|remove\|search\|publish\|update\|migrate`** | — | **NOT FOUND** | **Greenfield — PROPOSED** (#2467 / Phase 3) |
+| Hub catalog lane (server side) | `skill` catalog `type`, `POST /publish/skill`, `skills/` R2 prefix, SKILL.md publish validation, audit gate | `workers/agent-hub/src/` | **Exists** (#2467) — no client verb calls it yet |
 | **Project-local `./.gaia/skills/` + registry-lock root** | — | **NOT FOUND** | **Deferred — PROPOSED** |
 
 ---
