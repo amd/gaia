@@ -53,6 +53,7 @@ from gaia.skills.audit.permission_truth import (
     observed_permission_strings,
     undeclared_domains,
 )
+from gaia.skills.audit.report import render_json, render_sarif, render_text
 from gaia.skills.audit.supply import check_supply_chain
 from gaia.skills.audit.verdict import (
     TIER_BLOCK_THRESHOLD,
@@ -69,6 +70,10 @@ from gaia.skills.audit.verdict import (
 )
 
 __all__ = [
+    # Rendering
+    "render_text",
+    "render_json",
+    "render_sarif",
     # Engine
     "audit_skill",
     "audit_skill_object",
