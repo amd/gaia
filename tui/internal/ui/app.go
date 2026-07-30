@@ -232,7 +232,7 @@ func RunAgent(agentID, query, model string, debug bool, timeout time.Duration, c
 		return res.ExitCode, nil
 	}
 
-	model_ := chat.NewChatModel(c, agent.Name, "", debug)
+	model_ := chat.NewChatModelForCatalogAgent(c, agent.ID, agent.Name, debug)
 	if err := run(model_, debug, ctrl); err != nil {
 		return 1, err
 	}

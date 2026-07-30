@@ -94,6 +94,26 @@ func TestFetchAttentionSkippedWhenInitialQueryPresent(t *testing.T) {
 	}
 }
 
+// newAttentionTestModel above hand-sets m.agentID after construction, which
+// would mask a regression in how RunAgent actually builds the model. This
+// drives the real constructor RunAgent calls, with a display name that
+// differs in case from the id, the way the catalog's real "email"/"Email"
+// entry does.
+func TestFetchAttentionOnOpenViaDirectCLIConstructionUsesCatalogID(t *testing.T) {
+	c := &fakeAttentionClient{data: json.RawMessage(sampleAttentionJSON)}
+	m := NewChatModelForCatalogAgent(c, "email", "Email", false)
+	m.width, m.height = 100, 30
+
+	cmd := m.Init()
+	found := findBatchedMsg(cmd, func(msg tea.Msg) bool {
+		_, ok := msg.(attentionFetchedMsg)
+		return ok
+	})
+	if found == nil {
+		t.Fatal("Init() did not dispatch an attention fetch through the direct-CLI construction path (RunAgent)")
+	}
+}
+
 func TestFetchAttentionSkippedForNonEmailAgent(t *testing.T) {
 	c := &fakeAttentionClient{data: json.RawMessage(sampleAttentionJSON)}
 	m := newAttentionTestModel(t, c, "code", "")
@@ -102,6 +122,32 @@ func TestFetchAttentionSkippedForNonEmailAgent(t *testing.T) {
 	_ = findBatchedMsg(cmd, func(tea.Msg) bool { return false })
 	if c.fetchCalls != 0 {
 		t.Errorf("attention fetch was called %d times for a non-email agent; want 0", c.fetchCalls)
+	}
+}
+
+// The id gate used to fail silently: an agent whose client could serve the
+// attention view but whose agentID happened not to match got no fetch and no
+// explanation. attentionGateMismatch names that condition so it can be
+// logged instead of swallowed.
+func TestAttentionGateMismatchDetectsFetcherClientWithWrongAgentID(t *testing.T) {
+	cases := []struct {
+		name    string
+		agentID string
+		client  client.AgentClient
+		want    bool
+	}{
+		{"matching id, fetcher client", "email", &fakeAttentionClient{}, false},
+		{"mismatched id, fetcher client", "code", &fakeAttentionClient{}, true},
+		{"mismatched id, no fetcher", "code", &nullClient{}, false},
+		{"matching id, no fetcher", "email", &nullClient{}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newAttentionTestModel(t, tc.client, tc.agentID, "")
+			if got := m.attentionGateMismatch(); got != tc.want {
+				t.Errorf("attentionGateMismatch() = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 
