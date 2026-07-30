@@ -319,6 +319,9 @@ class Agent(abc.ABC):
     _skill_sets: Optional[Any] = None
     _requested_skill_set: Optional[str] = None
     _active_skill_set: Optional[str] = None
+    # Names the last ``load_skill_set`` loaded, so switching sets unloads only
+    # what a set brought in — never a skill the agent loaded itself.
+    _skill_set_loaded: Optional[List[str]] = None
 
     # Define state constants
     STATE_PLANNING = "PLANNING"
@@ -1154,11 +1157,13 @@ Do NOT wrap conversational replies in JSON.
             return {}
 
         resolution = self.resolve_skill_set(requested)
-        wanted = {ref.name: ref for ref in resolution.skills}
+        wanted = {ref.name for ref in resolution.skills}
 
-        # Switching sets: drop anything the previous resolution loaded that the
-        # new one does not declare, so a stale set never bleeds into the prompt.
-        for stale in [name for name in self.loaded_skills if name not in wanted]:
+        # Switching sets: drop what the PREVIOUS resolution loaded and this one
+        # does not declare, so a stale set never bleeds into the prompt. Scoped
+        # to set-loaded names only — a skill the agent loaded itself via
+        # ``load_skill`` is not a set's to unload.
+        for stale in [n for n in (self._skill_set_loaded or []) if n not in wanted]:
             self.unload_skill(stale)
 
         loaded: Dict[str, "Skill"] = {}
@@ -1176,6 +1181,7 @@ Do NOT wrap conversational replies in JSON.
                 )
 
         self._active_skill_set = resolution.name
+        self._skill_set_loaded = list(loaded)
         logger.info(
             "Skill set '%s' active (chosen by: %s) — loaded %d of %d declared "
             "skill(s): %s",

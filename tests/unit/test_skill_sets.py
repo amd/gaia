@@ -316,6 +316,7 @@ class _StubAgent:
     _skill_sets = None
     _requested_skill_set = None
     _active_skill_set = None
+    _skill_set_loaded = None
 
     skill_manager = Agent.skill_manager
     skill_sets = Agent.skill_sets
@@ -455,6 +456,27 @@ def test_agent_switching_sets_unloads_the_previous_one(tmp_path, bundled):
     assert sorted(agent.loaded_skills) == ["inbox-triage", "meeting-scheduling"]
     assert "newsletter-digest" not in agent.get_skills_system_prompt()
     assert "meeting-scheduling" in agent.get_skills_system_prompt()
+
+
+def test_switching_sets_leaves_a_hand_loaded_skill_alone(tmp_path, bundled):
+    """A skill the agent loaded itself is not a set's to unload."""
+    agent = _agent(
+        tmp_path,
+        bundled,
+        skill_sets={
+            "personal": ["newsletter-digest"],
+            "work": ["meeting-scheduling"],
+        },
+        default_skill_set="personal",
+    )
+    agent.load_skill_set()
+    agent.load_skill("inbox-triage")  # not in any set — loaded imperatively
+
+    agent.load_skill_set("work")
+
+    assert "inbox-triage" in agent.loaded_skills
+    assert "newsletter-digest" not in agent.loaded_skills
+    assert "meeting-scheduling" in agent.loaded_skills
 
 
 def test_agent_missing_required_skill_fails_loudly(tmp_path, bundled):
