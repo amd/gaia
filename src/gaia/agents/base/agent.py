@@ -2796,9 +2796,7 @@ Do NOT wrap conversational replies in JSON.
         totals = {key: len(items) for key, items in lists.items()}
 
         def render() -> str:
-            dropped_any = any(
-                len(items) < totals[key] for key, items in lists.items()
-            )
+            dropped_any = any(len(items) < totals[key] for key, items in lists.items())
             if is_root_list:
                 payload: Any = list(lists["__root__"])
                 if dropped_any:

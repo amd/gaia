@@ -250,9 +250,7 @@ class TestLoggerReceivesWarning:
         caplog.clear()
 
         payload = _messages_payload(key="messages")
-        original_len = len(
-            json.dumps(payload, default=agent._json_serialize_fallback)
-        )
+        original_len = len(json.dumps(payload, default=agent._json_serialize_fallback))
         conversation: list = []
 
         notices = []
