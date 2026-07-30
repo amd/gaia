@@ -55,7 +55,8 @@ type Options struct {
 	// Defaults to 800ms.
 	ReadyHold time.Duration
 	// ManualProceed keeps the screen up until the user presses enter, even when
-	// everything is ready. Used by tests and by `--debug`.
+	// everything is ready. Test-only: the sole caller of WithPreflight is
+	// test/preflight_gate_test.go, not any interactive flag.
 	ManualProceed bool
 	// Logf receives diagnostics. Never given a token.
 	Logf func(format string, args ...any)
@@ -306,7 +307,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.focus = 0
 		}
 		if !m.rep.Blocked() && !m.opts.ManualProceed {
-			// Nothing failed. Indeterminate rows do not block the launch — the
+			if m.rep.HasHalt() {
+				// A row that will actually bite the user (the reported bug: a
+				// model loaded at less than the profile's context window) does
+				// not get a timer. Three edits together, not one: no tick is
+				// scheduled below, phase stays off phaseDone so trailerLines
+				// never renders "Starting <agent>…", and the note says the
+				// launch is WAITING rather than starting anyway — removing the
+				// tick alone would still leave the screen claiming to proceed.
+				m.note = "Waiting — " + m.unverifiedSummary()
+				return m, nil
+			}
+			// Nothing failed, and nothing unproven is consequential enough to
+			// hold for. Indeterminate rows do not block the launch — the
 			// sidecar itself does not treat an unadvertised version as fatal, and
 			// making the user press enter on EVERY launch against such a server
 			// would train them to press it without reading. They are held longer

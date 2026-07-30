@@ -1983,22 +1983,28 @@ func TestAnAdequateOrUnknownWindowIsNotWarnedAbout(t *testing.T) {
 	}
 }
 
-// The shortfall row is named while the agent starts, rather than passing by in
-// the 800ms an all-green screen gets. That naming is the whole point: it is the
-// only place the user learns which inputs will fail.
-func TestTheShortfallIsNamedDuringTheHandoff(t *testing.T) {
+// The shortfall row is now DispositionHalt — the reported bug is exactly that
+// it used to name itself and pass by in the 2500ms hold an indeterminate
+// screen got, launching over an input that will fail. It now holds the
+// screen for a person instead: no tick, no claim of starting, and the number
+// the user needs (25037) still on screen — the naming was never the problem,
+// the silent proceeding was.
+func TestTheShortfallHoldsTheScreenAndStillNamesTheWindow(t *testing.T) {
 	f := newFake().with("GET /v1/email/init", 200, initCtxShortfall)
 	m := New(f, EmailConfig(), Options{ReadyHold: time.Millisecond})
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	updated, cmd := updated.(Model).Update(reportMsg{rep: Check(context.Background(), f, EmailConfig())})
 	m = updated.(Model)
 
-	if cmd == nil {
-		t.Fatal("a short window stopped the hand-off; it must not block the launch")
+	if cmd != nil {
+		t.Fatalf("a Halt row scheduled a command — the launch must wait for a person, not a timer: %T", cmd())
 	}
 	screen := ansi.Strip(m.View())
-	if !strings.Contains(screen, "Starting anyway") {
-		t.Errorf("the shortfall is not named while the agent starts:\n%s", screen)
+	if strings.Contains(screen, "Starting anyway") {
+		t.Errorf("the screen still claims to be starting anyway over a Halt row:\n%s", screen)
+	}
+	if strings.Contains(screen, "Starting "+EmailConfig().AgentName+"…") {
+		t.Errorf("the screen claims to be starting while a Halt row is unresolved:\n%s", screen)
 	}
 	if !strings.Contains(screen, "25037") {
 		t.Errorf("the hand-off never shows the window that will fail:\n%s", screen)
