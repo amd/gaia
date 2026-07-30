@@ -25,6 +25,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 from gaia_agent_email.body_normalize import (
     normalize_email_body,
+    strip_quoted_trail,
     strip_reply_chain_and_signature,
 )
 from gaia_agent_email.config import default_inbox_scan_ceiling
@@ -358,13 +359,20 @@ def _thread_message_blocks(
     duplicate formatting to drift.
 
     Returns ``(blocks, decoded_bodies)`` — ``decoded_bodies`` is each message's
-    decoded, stripped, PRE-truncation body in the same order. A caller that
-    needs one message's own body (e.g. the #2641 meeting-signal scan over
-    the newest message) reuses ``decoded_bodies[-1]`` instead of paying for a
-    second MIME decode of the same payload — which would also feed the
-    heuristic the rendered block's header/delimiter framing rather than the
-    plain body, risking a false match against e.g. the ``Date:`` header's
-    own ``HH:MM:SS``.
+    decoded, banner-stripped, PRE-quote-strip, PRE-truncation body in the same
+    order. A caller that needs one message's own body (e.g. the #2641
+    meeting-signal scan over the newest message) reuses ``decoded_bodies[-1]``
+    instead of paying for a second MIME decode of the same payload — which
+    would also feed the heuristic the rendered block's header/delimiter
+    framing rather than the plain body, risking a false match against e.g.
+    the ``Date:`` header's own ``HH:MM:SS``. The RENDERED block body is
+    additionally quote-trail-stripped (#2653, ``strip_quoted_trail``) — this
+    function is used exclusively by the two thread-SUMMARY renderers, where
+    every earlier message's own block already carries its own content, so an
+    inlined quoted copy of it in a later reply is pure duplication (and, per
+    #2653, where a stripped banner reappears). ``decoded_bodies`` stays
+    quote-INTACT so the #2641 meeting-signal scan and any other reuse of the
+    return value are unaffected by this change.
     """
     total = total_count if total_count is not None else len(messages)
     blocks: List[str] = []
@@ -380,9 +388,12 @@ def _thread_message_blocks(
         body = (body or "").strip()
         body = normalize_email_body(body)  # strip infra banners (#2642)
         decoded_bodies.append(body)
-        rendered_body = body
-        if per_message_body_limit > 0 and len(body) > per_message_body_limit:
-            rendered_body = body[:per_message_body_limit] + "\n...[truncated]"
+        transcript_body = strip_quoted_trail(body)  # drop inlined quote trail (#2653)
+        rendered_body = transcript_body
+        if per_message_body_limit > 0 and len(transcript_body) > per_message_body_limit:
+            rendered_body = (
+                transcript_body[:per_message_body_limit] + "\n...[truncated]"
+            )
         blocks.append(
             f"--- Message {idx} of {total} ---\n"
             f"From: {headers.get('from', '')}\n"
