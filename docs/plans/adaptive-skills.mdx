@@ -64,7 +64,7 @@ and [#893](https://github.com/amd/gaia/issues/893).
 | **Mem0** | The ADD / UPDATE / NOOP reconciliation shape already implemented by `reconcile_and_store` ([`skill_synthesis.py:653`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py)). |
 | **Zep** | The insert-new-then-supersede lineage (`superseded_by`) that keeps history immutable while the head moves — already implemented by `supersede_skill` ([`memory_store.py:2735`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py)). |
 | **OverlayFS / Docker layers / the CSS cascade** | The general copy-on-write shape: an immutable base plus a mutable layer, base recoverable by discarding the layer. |
-| **`git rebase` / three-way merge** | The vocabulary for [rebase on base update](#rebase-on-base-update-highest-risk) — re-anchor, orphan, conflict. The *mechanism* is not reusable (a delta is typed, not a text hunk), only the failure taxonomy. |
+| **`git rebase` / three-way merge** | The vocabulary for [rebase on base update](#rebase-on-base-update-v1-is-deliberately-crude) — re-anchor, orphan, conflict. The *mechanism* is not reusable (a delta is typed, not a text hunk), only the failure taxonomy. |
 
 **GAIA's contribution** is the part none of the above solves: applying a learned
 overlay to a **third-party authored** skill that can be updated upstream, which
@@ -553,7 +553,7 @@ and the compounding-error risk live.
 Hermes creates a skill autonomously after a complex task — 5+ tool calls. It is
 cheap and concrete, and GAIA's equivalent already exists and is **stricter**:
 synthesis requires a goal to recur across `MIN_OCCURRENCES = 3` sessions at
-`MIN_SUCCESS_RATE = 0.80` ([`skill_synthesis.py:51-55`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py)) —
+`MIN_SUCCESS_RATE = 0.80` ([`skill_synthesis.py:52-55`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py)) —
 repetition *and* measured success, not merely complexity. A 5-tool-call heuristic
 fires on one hard task that may have gone badly.
 
@@ -1160,77 +1160,124 @@ it.
 
 ---
 
+## Entry gate: what "milestone 60 validated" means
+
+[#2674](https://github.com/amd/gaia/issues/2674) says do not start until milestone
+60 ships "and is validated," which was undefined and therefore unenforceable.
+Concrete exit criteria — all seven, not a majority:
+
+| # | Criterion | Why it is the gate |
+|:--:|---|---|
+| 1 | PR [#2669](https://github.com/amd/gaia/pull/2669) merged; `gaia.skills` exists on `main`; [#888](https://github.com/amd/gaia/issues/888)'s acceptance criteria closed | Today `src/gaia/skills/` is absent on `main`. There is no base to overlay. |
+| 2 | [#2676](https://github.com/amd/gaia/issues/2676) and [#2686](https://github.com/amd/gaia/issues/2686) fixed | The recall path truncates procedures mid-step and rebuilds the prompt from its head. Every v2 tier that renders text inherits both. |
+| 3 | **The `SKILL.md` frontmatter and the discovery roots have gone one full release cycle without a breaking change** | **The real gate.** Deltas anchor to the base's shape; if the shape is still moving, every stored delta is invalidated by a format revision rather than by a skill update. |
+| 4 | ≥1 authored skill shipped inside a released hub package and loaded by a released agent — not a test fixture | Fixtures prove the parser. A shipped skill proves the packaging, discovery, and precedence path a delta will attach through. |
+| 5 | `gaia skill list \| info \| create \| import \| export` exercised from a **cold start** — empty `~/.gaia/skills`, no prior state | Per CLAUDE.md's cold-state rule: a warm dev box hides exactly the first-run failures a new user hits. |
+| 6 | An eval run on the email category with skills loaded vs. not, showing no regression against the committed baseline | Establishes the baseline v2's deltas-off run must reproduce exactly. Without it there is nothing to measure a delta against. |
+| 7 | ≥1 skill authored by someone who did not write the format spec | Proves the documentation, not the code. If only the author can write a valid skill, third-party bases — the whole reason an overlay is needed — will not exist. |
+
+Criteria 3 and 7 are the ones most likely to be waved through and the ones most
+likely to cost the milestone if they are.
+
+---
+
 ## Phased build
 
 Each phase holds the prior floor until it lands. **Phase 1 does not start until
-milestone 60 ships and is validated** — the whole design rests on the authored
-layer being stable, and building an overlay against a moving base wastes the
-work.
+every [entry-gate](#entry-gate-what-milestone-60-validated-means) criterion is
+met** — the whole design rests on the authored layer being stable, and building an
+overlay against a moving base wastes the work.
+
+The phases below reflect the [adversarial review](#adversarial-review-the-nine-challenges):
+the classifier, tier 2, and selective re-anchoring have moved out of v1.
 
 ### Phase 0 — Architecture (this revision)
 
-**Success criteria:** the layer/tier model, delta grammar, anchoring scheme, and
-off-state floors are decided; the three corrections above are recorded; every
-citation resolves.
+**Success criteria:** the layer/tier model, the delta grammar, the anchoring
+scheme, and the off-state floors are decided; the four corrections and the nine
+review verdicts are recorded; every citation resolves.
 
-### Phase 0b — Prerequisite fixes on the shipped path (PROPOSED, unblocks everything)
+### Phase 0b — Prerequisite fixes on the shipped path (PROPOSED; unblocks everything)
 
-Not optional, and not part of v2 proper: the two invariants v2 depends on are
-currently violated by shipped code.
+Not optional and not part of v2 proper: three invariants v2 depends on are
+currently violated or absent in shipped code.
 
 **Success criteria:**
 - Recalled-procedure bodies cut at a structural boundary or drop whole
   ([#2676](https://github.com/amd/gaia/issues/2676)).
-- The recalled-procedure prompt fragment no longer rebuilds the system prompt
-  from the mixin prefix mid-session, or is moved to the volatile tail.
+- The recalled-procedure fragment no longer rebuilds the prompt from the mixin
+  prefix mid-session, or moves to the volatile tail
+  ([#2686](https://github.com/amd/gaia/issues/2686)).
 - `gaia eval agent` forces a deterministic memory/learning off-state.
+- **Outcome attribution exists** — something increments a procedure's or delta's
+  counters after adoption, on a user-observable signal
+  ([Correction 4](#correction-4-the-empirical-promotion-gate-has-no-counter)).
+  Without it, "promotion gates on track record" cannot be implemented.
 
-### Phase 1 — Delta store + grammar (PROPOSED)
+### Phase 1 — Delta store + bounded grammar (PROPOSED)
 
-`skill_deltas` at schema v4, the five store accessors, the typed grammar, the
-section anchorer. **No consumer** — writes and reads only via tests.
+`skill_deltas` at schema v4, the five store accessors, the `tool-hint` /
+`preference` / `example` kinds, and the write-time anchor recorder. **No
+consumer** — writes and reads only via tests. No classifier; tier is declared at
+the write site.
 
-**Success criteria:** a v3 database migrates to v4 with no row rewritten; a
-delta round-trips; the anchorer is deterministic across whitespace changes; no
-`procedures` read path changes behavior.
+**Success criteria:** a v1/v2/v3 database migrates to v4 with no row rewritten; a
+delta round-trips; the anchor recorder is deterministic across whitespace changes;
+every `procedures` read path is byte-identical with deltas present.
 
 ### Phase 2 — Resolution + off-states (PROPOSED)
 
-`EffectiveSkill = base ⊕ deltas`, precedence, session-boundary resolution,
+`EffectiveSkill = base ⊕ deltas`, precedence, session-start-only resolution,
 `--no-learned-skills`, eval isolation, tier-1 wiring into the existing
-`skill_tools` list.
+`skill_tools` list, and the appended **Learned adjustments** render block.
 
 **Success criteria:** the off-state hash test passes; a tier-1 delta changes tool
-selection without changing prompt bytes elsewhere; a tier-2 delta renders one
-line under its anchored section.
+selection without changing prompt bytes elsewhere; every off-state row resolves to
+the authored base.
 
-### Phase 3 — Write path + consent gate (PROPOSED; needs [#2468](https://github.com/amd/gaia/issues/2468))
+### Phase 3 — Trigger + write path + consent gate (PROPOSED; needs [#2468](https://github.com/amd/gaia/issues/2468))
 
-Staged proposals, reviewable diffs, trusted/untrusted split, injection scanning,
-the evidence-based promotion gate, the tier classifier.
+The three trigger signals, staged proposals with reviewable diffs, the
+trusted/untrusted split, injection scanning, and the evidence-based promotion gate
+(which requires Phase 0b's attribution).
 
-**Success criteria:** an untrusted-provenance delta cannot reach the model
-without explicit approval at any setting; a delta that would widen a permission
-is refused at write time; a `fact`-shaped lesson routes to tier 0 and writes no
-delta.
+**Success criteria:** an untrusted-provenance delta cannot reach the model without
+explicit approval at any setting; a delta that would widen a permission is refused
+at write time; a fact-shaped lesson writes a tier-0 row and no delta; v1's
+read-path-only restriction is enforced, not documented.
 
-### Phase 4 — Rebase on base update (PROPOSED; highest risk)
+### Phase 4 — Tier-0 generalization + legibility (PROPOSED)
 
-Re-anchor, stale marking, visible orphaning, conflict reporting.
+The shared `learned_facts` seam and its declared-consumer registry, then
+`gaia skill deltas` + the UI panel — including the *inert fact* report that makes
+a learned-but-unconsulted fact visible.
 
-**Success criteria:** a base update re-anchors clean deltas, marks reworded
-sections stale, orphans vanished anchors visibly, and re-anchors **nothing** by
-similarity.
+**Success criteria:** a second agent adopts tier 0 without writing its own store;
+a fact with zero declared consumers is reported as inert; every active delta is
+listable, diffable, and revertible.
 
-### Phase 5 — Consolidation, budget, decay, inspection, graduation (PROPOSED)
+### Phase 5 — Budget, consolidation, decay (PROPOSED)
 
-Umbrella merge, the enforced learning budget, the `last_used_at` consumer,
-`gaia skill deltas` + the UI panel, and graduation of a proven delta set into an
-authored skill via [#2671](https://github.com/amd/gaia/issues/2671).
+The enforced ceiling over authored **and** learned resident content, umbrella
+merge through the staged gate, and the first `last_used_at` consumer.
 
-**Success criteria:** the budget ceiling holds under a synthetic 200-delta
-corpus without truncating anything mid-step; consolidation proposals go through
-the same staged gate; graduation produces a valid publishable `SKILL.md`.
+**Success criteria:** the ceiling holds under a synthetic 200-delta corpus with
+nothing cut mid-step; consolidation supersedes rather than deletes.
+
+### Phase 6 — Deferred by evidence, not by schedule (PROPOSED)
+
+Each item here ships only when data from earlier phases says it is needed:
+
+| Item | Ships when |
+|---|---|
+| **Tier 2 (typed parameters)** | Tier-3 prose deltas are observed carrying values a tool could read *and* wiring the tool proved insufficient — i.e. the [collapse hypothesis](#why-v1-ships-three-tiers-not-four) is falsified. |
+| **Selective re-anchoring** ([#2680](https://github.com/amd/gaia/issues/2680)) | Observed base-update frequency makes orphan-all a real review burden. |
+| **Deltas on the write path** | Correction non-recurrence has held on the read path for a full release. |
+| **Deltas on capability-bearing skills** | [#2672](https://github.com/amd/gaia/issues/2672)'s sandbox enforcement exists. |
+| **Inference-based learning** | The consent gate and injection scanning have run in the field without a persisted-injection incident. |
+| **Graduation of a delta set** ([#2671](https://github.com/amd/gaia/issues/2671)) | A user has a delta set worth publishing — which requires everything above to have worked. |
+
+---
 
 ---
 
@@ -1246,13 +1293,15 @@ settled above. What remains:
    while ChatAgent does not ([evidence](#the-open-question-that-was-already-answered-inconsistently)).
    The `scope` column makes the choice explicit; **which default** is open.
    Sharing is more useful and leaks more.
-2. **Tier classifier: rules or model-assisted?** A rule-based classifier is
-   auditable and will misfile; a model-assisted one is more flexible and is a ~4B
-   model making a judgment call — the thing this design otherwise refuses to
-   trust. Provisional: rules first, with a visible "could not classify" path.
-3. **Conflict detection for tier-3 deltas** on rebase — see
-   [what is honestly unsolved](#what-is-honestly-unsolved). Prototype before
-   committing.
+2. **What is the outcome signal for attribution?** A correction, an undo, an
+   accepted suggestion, or an explicit thumbs-down —
+   [Correction 4](#correction-4-the-empirical-promotion-gate-has-no-counter) shows
+   tool-call non-error is available and nearly worthless. Whatever is chosen becomes
+   the definition of "empirical" for the whole milestone, so it deserves a decision
+   rather than a default.
+3. **Does the tier-2 collapse hypothesis hold?** If every learned value a tool
+   could read should just be wired into the tool, tier 2 never ships. v1 is
+   designed to answer this from data rather than argument.
 4. **Deltas on a shadowed skill.** Precedence roots mean a same-named skill can
    appear in two roots (PR #2669 `SkillManager.shadowed`). Does a delta follow
    the *name* or the *(name, root)* pair? Following the name is more forgiving and
@@ -1280,6 +1329,11 @@ settled above. What remains:
 | Synthesis intermediate | `Skill` (4 fields) — **being renamed `DistilledProcedure`** | `skill_synthesis.py:159` | **Exists**; rename in flight ([#2671](https://github.com/amd/gaia/issues/2671)) |
 | Thresholds | `SIMILARITY_TAU = 0.82`, `MAX_RECALL_BODY_CHARS = 1500` | `skill_synthesis.py:58`, `:65` | **Exists** |
 | Recall | `recall_skill` + the procedures FAISS index | `procedural_memory.py:181`, `:50` | **Exists** |
+| Counters | `success_count`/`attempt_count` written at insert, **never incremented after** | `memory_store.py:2613` (unreachable from synthesis), `skill_synthesis.py:693-704` | **Gap** — the empirical gate has no counter ([Correction 4](#correction-4-the-empirical-promotion-gate-has-no-counter)) |
+| Success semantics | `success_count` counts tool calls that did not raise, not endorsed outcomes | `memory_store.py:2855-2858` | **Exists** — weaker signal than `MIN_SUCCESS_RATE` implies |
+| Outcome ledger shape | `TrustLedger.record_outcome(action_type, scope, positive)` | `hub/agents/email/python/gaia_agent_email/trust.py:358` | **Exists** — no link from a delta to a scope |
+| Confirmation gate | `TOOLS_REQUIRING_CONFIRMATION` ∪ agent `CONFIRMATION_REQUIRED_TOOLS` | `agent.py:152`, `hub/agents/email/python/gaia_agent_email/agent.py:453` | **Exists** — deltas inherit it, never bypass it |
+| Tier-0 reach | 59 `@tool` registrations in the email package; **1** module consumes a learned preference | `hub/agents/email/python/gaia_agent_email/tools/read_tools.py` | **Exists** — the integration cost tier 0 hides |
 | Recall→prompt | `_build_recalled_skills_prompt` (character-offset cut) | `procedural_memory.py:334`, `:356` | **Exists** — violates atomicity ([#2676](https://github.com/amd/gaia/issues/2676)) |
 | Mid-session rebuild | `_refresh_recalled_skills` → `rebuild_system_prompt()` per turn | `procedural_memory.py:399`, `memory.py:2053` | **Exists** — breaks the KV-prefix premise |
 | Tier-1 mechanism | `ToolLoader.select(skill_tools=…)`, `CORE > SKILL > SEMANTIC` | `tool_loader.py:224`, `:310` | **Exists** — reusable unchanged |
