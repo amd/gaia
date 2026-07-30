@@ -133,3 +133,29 @@ def test_relay_connection_refuses_a_wedged_sidecar(alive_process, tmp_path):
 
     with pytest.raises(SidecarUnresponsiveError):
         registry.connection("toy")
+
+
+def test_wedged_and_dead_details_keep_the_phrases_the_tui_matches_on(
+    alive_process, tmp_path
+):
+    """These two messages are a cross-language contract, not just prose.
+
+    The TUI tells a relay-authored refusal apart from a mailbox that refused
+    something by matching these phrases (``relayGaveUp`` in
+    ``tui/internal/ui/preflight/check.go``); without that it renders a wedged
+    sidecar as a broken mailbox and offers a browser sign-in that fixes
+    nothing. Rewording either message is a real behaviour change on the Go
+    side, so it fails here — at the source — instead of only in a Go fixture.
+    """
+    from gaia.daemon.sidecars.registry import SidecarRegistry
+
+    m = _manager_bound_to(alive_process, mgr.find_free_port())
+    m.log_dir = tmp_path
+    with pytest.raises(SidecarUnresponsiveError) as wedged:
+        m.check_responsive(timeout=1.0)
+    assert "is alive but did not answer" in str(wedged.value).lower()
+
+    registry = SidecarRegistry({"toy": _TOY_SPEC})
+    with pytest.raises(SidecarNotRunningError) as dead:
+        registry.connection("toy")
+    assert "no running sidecar" in str(dead.value).lower()
