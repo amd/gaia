@@ -17,9 +17,11 @@ icon: "layer-group"
 
 **Module:** `gaia.agents.base` (extends the shipped memory layer) + `gaia.skills` (extends the in-flight loader). **No overlay code exists.** The design is grounded on the live `procedures` corpus, the live tool loader, and the live email-agent preference/trust stores.
 
-**Status:** **Architecture = decided** (this revision, after a code review of the shipped machinery). **Runtime = proposed.** Three claims from the umbrella issue's discussion were **corrected** by that review — see [What the code review corrected](#what-the-code-review-corrected). [Skill Format](/plans/skill-format) owns the on-disk field grammar; [Skill Synthesis](/plans/skill-synthesis) owns the synthesized-procedure loop; this document owns the *overlay* on an **authored** skill.
+**Status:** **Architecture = decided** (this revision, after a code review of the shipped machinery plus an adversarial review of the milestone). **Runtime = proposed.** Four claims the umbrella issue treats as settled were **corrected** by the code review — see [What the code review corrected](#what-the-code-review-corrected) — and nine challenges from the adversarial pass moved four of the five riskiest items out of v1, see [Adversarial review](#adversarial-review-the-nine-challenges). [Skill Format](/plans/skill-format) owns the on-disk field grammar; [Skill Synthesis](/plans/skill-synthesis) owns the synthesized-procedure loop; this document owns the *overlay* on an **authored** skill.
 
-**Target consumers:** [#888](https://github.com/amd/gaia/issues/888) (loader/format — blocking), [#2671](https://github.com/amd/gaia/issues/2671) (graduation bridge), [#2468](https://github.com/amd/gaia/issues/2468) (injection analyzer), [#2466](https://github.com/amd/gaia/issues/2466) (email reference agent), [#1451](https://github.com/amd/gaia/issues/1451) (tool-loader `SKILL` term), [#2676](https://github.com/amd/gaia/issues/2676) (procedure atomicity).
+**Sub-issues this document specifies:** [#2677](https://github.com/amd/gaia/issues/2677) (tiered store), [#2678](https://github.com/amd/gaia/issues/2678) (resolution + off-states), [#2679](https://github.com/amd/gaia/issues/2679) (write path), [#2680](https://github.com/amd/gaia/issues/2680) (rebase), [#2681](https://github.com/amd/gaia/issues/2681) (legibility), [#2682](https://github.com/amd/gaia/issues/2682) (budget + consolidation + decay), [#2683](https://github.com/amd/gaia/issues/2683) (email reference agent). Three scopes are **not yet covered by any issue**: the [learning trigger](#the-learning-trigger), [privacy/retention/deletion](#privacy-retention-and-deletion), and [outcome attribution](#correction-4-the-empirical-promotion-gate-has-no-counter).
+
+**Target consumers:** [#888](https://github.com/amd/gaia/issues/888) (loader/format — blocking), [#2671](https://github.com/amd/gaia/issues/2671) (graduation bridge), [#2468](https://github.com/amd/gaia/issues/2468) (injection analyzer), [#2466](https://github.com/amd/gaia/issues/2466) (email reference agent), [#1451](https://github.com/amd/gaia/issues/1451) (tool-loader `SKILL` term), [#2672](https://github.com/amd/gaia/issues/2672) (skill sandbox — see [local-capability skills](#interaction-with-local-capability-skills-2672)), [#2676](https://github.com/amd/gaia/issues/2676) + [#2686](https://github.com/amd/gaia/issues/2686) (the two shipped-path defects v2 inherits).
 </Note>
 
 ---
@@ -1358,11 +1360,19 @@ settled above. What remains:
 [#2468](https://github.com/amd/gaia/issues/2468) (injection analyzer, required
 before any untrusted-provenance write path).
 
-**Blocked in practice by two shipped-code fixes** — [#2676](https://github.com/amd/gaia/issues/2676)
-(procedure atomicity) and the mid-session prompt-rebuild path
-([Correction 3](#correction-3-the-kv-cache-premise-is-already-broken)).
-Building an overlay on top of a recall path that truncates mid-step and rebuilds
-the prefix every turn would inherit both defects.
+**Blocked in practice by three shipped-code gaps** —
+[#2676](https://github.com/amd/gaia/issues/2676) (procedure atomicity),
+[#2686](https://github.com/amd/gaia/issues/2686) (the mid-session prompt rebuild,
+[Correction 3](#correction-3-the-kv-cache-premise-is-already-broken)), and the
+missing outcome attribution
+([Correction 4](#correction-4-the-empirical-promotion-gate-has-no-counter), no
+issue yet). Building an overlay on a recall path that truncates mid-step, rebuilds
+the prefix every turn, and has no counter to gate promotion on would inherit all
+three.
+
+**Entry gate.** See [what "milestone 60 validated" means](#entry-gate-what-milestone-60-validated-means) —
+seven criteria, of which "the format has gone a full release cycle without a
+breaking change" is the real one.
 
 **Builds on (shipped):** [#887](https://github.com/amd/gaia/issues/887) /
 [#1451](https://github.com/amd/gaia/issues/1451) — `procedural_memory.py`,
