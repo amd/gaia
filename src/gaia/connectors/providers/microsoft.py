@@ -119,14 +119,17 @@ def _check_env_tenant_conflict(provider_id: str, resolved_tenant: str) -> None:
         )
     if raw == resolved_tenant:
         if provider_id not in _env_tenant_deprecation_logged:
+            # Deliberately does NOT echo the env var's value. It is only ever
+            # a tenant id, but this line persists into `gaia diagnostics`
+            # bundles, so the value stays out of it; the conflict error below
+            # still names it, because that is shown interactively to the user
+            # who set it and is useless without it.
             logger.warning(
-                "GAIA_MICROSOFT_TENANT=%r is deprecated and no longer read — "
-                "%r already resolves to %r from its own connector "
+                "GAIA_MICROSOFT_TENANT is set but deprecated and no longer "
+                "read — %r resolves its tenant from its own connector "
                 "definition. This is a one-time notice; unset "
                 "GAIA_MICROSOFT_TENANT to silence it.",
-                raw,
                 provider_id,
-                resolved_tenant,
             )
             _env_tenant_deprecation_logged.add(provider_id)
         return

@@ -205,7 +205,7 @@ class TestRegistryWorkConnector:
             providers.get("microsoft_work")
         steps = exc.value.console_steps
         assert steps != render_console_steps(MS_PERSONAL)
-        assert "portal.azure.com" in steps
+        assert "https://portal.azure.com" in steps
         assert "Application (client) ID" in steps
 
     def test_example_block_uses_own_connector_id(self, monkeypatch):
