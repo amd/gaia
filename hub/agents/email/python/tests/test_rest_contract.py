@@ -1122,10 +1122,11 @@ def test_prescan_returns_card_envelope_shape(prescan_client):
         "suggested_drafts",
         "preferences_applied",
         "totals",
-        # Pre-scan coverage-honesty fields (#2584).
+        # Pre-scan coverage-honesty fields (#2584, extended #2638).
         "needs_review",
         "scanned",
         "total_unread",
+        "total_inbox",
         "degraded",
         "mailbox_errors",
     }

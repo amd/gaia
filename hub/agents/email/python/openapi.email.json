@@ -332,7 +332,7 @@
             "type": "array"
           },
           "schema_version": {
-            "default": "2.8",
+            "default": "2.9",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -357,7 +357,7 @@
             "type": "array"
           },
           "schema_version": {
-            "default": "2.8",
+            "default": "2.9",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -434,7 +434,7 @@
             "title": "Provider"
           },
           "schema_version": {
-            "default": "2.8",
+            "default": "2.9",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -621,7 +621,7 @@
             "title": "Location"
           },
           "schema_version": {
-            "default": "2.8",
+            "default": "2.9",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -661,7 +661,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.8",
+            "default": "2.9",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -692,7 +692,7 @@
             "type": "array"
           },
           "schema_version": {
-            "default": "2.8",
+            "default": "2.9",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -728,7 +728,7 @@
             "title": "Provider"
           },
           "schema_version": {
-            "default": "2.8",
+            "default": "2.9",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -768,7 +768,7 @@
             "type": "boolean"
           },
           "schema_version": {
-            "default": "2.8",
+            "default": "2.9",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -919,7 +919,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.8",
+            "default": "2.9",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1032,7 +1032,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.8",
+            "default": "2.9",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1062,7 +1062,7 @@
             "description": "The attention-view envelope."
           },
           "schema_version": {
-            "default": "2.8",
+            "default": "2.9",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1137,7 +1137,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.8",
+            "default": "2.9",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1337,7 +1337,7 @@
             "type": "integer"
           },
           "schema_version": {
-            "default": "2.8",
+            "default": "2.9",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -1355,7 +1355,7 @@
             "description": "The pre-scan envelope."
           },
           "schema_version": {
-            "default": "2.8",
+            "default": "2.9",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1460,6 +1460,18 @@
             "title": "Suggested Drafts",
             "type": "array"
           },
+          "total_inbox": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Exact total INBOX message count (read + unread) in the scanned mailbox(es) — the honest denominator for scan coverage (#2638), now that pre-scan covers all of INBOX, not just unread mail. Gmail reports this via labels().get's messagesTotal — an exact integer, sourced from the SAME call as total_unread (no extra round-trip). Outlook has no equivalent honest source and reports null — never a fabricated page-size number.",
+            "title": "Total Inbox"
+          },
           "total_unread": {
             "anyOf": [
               {
@@ -1469,7 +1481,7 @@
                 "type": "null"
               }
             ],
-            "description": "Exact total UNREAD message count in the scanned mailbox(es), the denominator for scan coverage (#2584). Gmail reports this via labels().get's messagesUnread — an exact integer, not list_messages's resultSizeEstimate (measured 2.6x off on a real mailbox). Outlook has no equivalent honest source and reports null — never a fabricated page-size number.",
+            "description": "Exact total UNREAD message count in the scanned mailbox(es) — a secondary coverage figure (#2584), NOT the scan-coverage denominator since #2638 (pre-scan now covers read mail too; see total_inbox for that). Gmail reports this via labels().get's messagesUnread — an exact integer, not list_messages's resultSizeEstimate (measured 2.6x off on a real mailbox). Outlook has no equivalent honest source and reports null — never a fabricated page-size number.",
             "title": "Total Unread"
           },
           "totals": {
@@ -1575,7 +1587,7 @@
             "type": "boolean"
           },
           "schema_version": {
-            "default": "2.8",
+            "default": "2.9",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1647,7 +1659,7 @@
             "title": "Query"
           },
           "schema_version": {
-            "default": "2.8",
+            "default": "2.9",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -1698,7 +1710,7 @@
             "title": "Query"
           },
           "schema_version": {
-            "default": "2.8",
+            "default": "2.9",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1919,7 +1931,7 @@
             "title": "Payload"
           },
           "schema_version": {
-            "default": "2.8",
+            "default": "2.9",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -1949,7 +1961,7 @@
             "description": "The structured analysis."
           },
           "schema_version": {
-            "default": "2.8",
+            "default": "2.9",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -2115,7 +2127,7 @@
             "type": "integer"
           },
           "schema_version": {
-            "default": "2.8",
+            "default": "2.9",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -2183,7 +2195,7 @@
             "type": "boolean"
           },
           "schema_version": {
-            "default": "2.8",
+            "default": "2.9",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -2323,7 +2335,7 @@
             "type": "array"
           },
           "schema_version": {
-            "default": "2.8",
+            "default": "2.9",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -3130,7 +3142,7 @@
   "info": {
     "description": "REST surface for the GAIA Email Triage agent (/v1/email/*). Cross-implementation contract for the npm client and native builds.",
     "title": "GAIA Email Agent API",
-    "version": "2.8"
+    "version": "2.9"
   },
   "openapi": "3.1.0",
   "paths": {

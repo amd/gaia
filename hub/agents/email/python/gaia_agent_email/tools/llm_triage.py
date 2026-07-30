@@ -27,7 +27,7 @@ import json
 import re
 from typing import Any, Callable, List, Mapping, Optional
 
-from gaia_agent_email.body_normalize import scrub_delimiter_tokens
+from gaia_agent_email.body_normalize import normalize_email_body
 from gaia_agent_email.tools.triage_heuristics import ALL_CATEGORIES
 
 from gaia.logger import get_logger
@@ -197,7 +197,7 @@ def _build_user_prompt(
         f"Classify this email.\n\n"
         f"Subject: {subject}\n"
         f"From: {sender}\n"
-        f"Body:\n{wrap_untrusted_body(scrub_delimiter_tokens((body or '').strip()))}\n"
+        f"Body:\n{wrap_untrusted_body(normalize_email_body((body or '').strip()))}\n"
     )
 
 

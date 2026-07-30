@@ -183,6 +183,30 @@ func TestChatModelFromHub(t *testing.T) {
 	}
 }
 
+// A direct launch has no RootModel underneath it to handle ReturnToHubMsg.
+// Constructing it the way NewChatModelFromHub does (fromHub=true) would make
+// Esc dispatch that message into a program that never consumes it -- Esc
+// would silently stop quitting. This pins the direct launch's actual
+// contract: esc quits.
+func TestChatModelDirectCLILaunchQuitsOnEscInsteadOfReturningToHub(t *testing.T) {
+	m := chat.NewChatModelForCatalogAgent(nil, "email", "Email", false)
+
+	if m.CanReturnToHub() {
+		t.Fatal("a direct `chat --agent` launch must not claim it can return to a hub that isn't running")
+	}
+
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m = updated.(chat.ChatModel)
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if cmd == nil {
+		t.Fatal("esc produced no command on a direct launch")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("esc on a direct launch produced %T, want tea.QuitMsg", cmd())
+	}
+}
+
 func TestBinaryDiscovery(t *testing.T) {
 	cat := catalog.NewCatalog()
 	cat.DiscoverBinaries()
