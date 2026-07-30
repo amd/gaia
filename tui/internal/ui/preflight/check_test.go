@@ -1038,6 +1038,23 @@ func TestReportHasHalt(t *testing.T) {
 	}
 }
 
+// A row nobody assigned a Disposition to must halt, not silently proceed —
+// the exact failure shape (something not okay, nobody decided, launch
+// happens anyway) that this whole issue exists to fix, just relocated to a
+// single forgotten field. Notify is the value a row opts INTO to skip
+// holding the screen; DispositionUnset is not that, so it must hold too.
+// Built directly rather than through Check(), because check.go now declares
+// a Disposition at every branch it has today — this proves what HasHalt does
+// on a row a FUTURE branch forgets to declare one for.
+func TestHasHaltDefaultsToHaltingOnAnUndeclaredDisposition(t *testing.T) {
+	rep := Report{Rows: []Row{
+		{Key: "mystery", State: StateFailed, Disposition: status.DispositionUnset},
+	}}
+	if !rep.HasHalt() {
+		t.Fatal("a non-OK row with no declared Disposition must halt, not silently proceed")
+	}
+}
+
 // The security review found two paths that put upstream server text into a
 // row unsanitized: checkInit assigns body.hint() to Detail verbatim (the
 // modelListUnreadable branch, check.go:427), and Ladder's fallback builds a

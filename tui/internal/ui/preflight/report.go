@@ -293,13 +293,16 @@ func (r Report) OfferableDespiteFailure() bool {
 	return failed
 }
 
-// HasHalt reports whether any non-OK row's Disposition is Halt. This is what
-// gates the screen-does-not-lie behaviour in preflight/model.go: a report
-// holding only Notify rows (an unadvertised Lemonade version, 2+ linked
-// mailboxes) keeps today's auto-proceed; a report with a Halt row does not.
+// HasHalt reports whether any non-OK row should hold the screen. Notify is
+// the value a row must opt INTO to auto-proceed — anything else, including a
+// forgotten DispositionUnset, holds. Inverted on purpose: the alternative
+// (require == DispositionHalt) reproduces the exact bug this issue exists to
+// fix, one field at a time — a row nobody assigned a Disposition to would
+// silently proceed instead of loudly halting. A row that IS Halt or that
+// nobody decided about both hold; only a deliberate Notify skips it.
 func (r Report) HasHalt() bool {
 	for _, row := range r.Rows {
-		if row.State != StateOK && row.Disposition == status.DispositionHalt {
+		if row.State != StateOK && row.Disposition != status.DispositionNotify {
 			return true
 		}
 	}
