@@ -120,12 +120,12 @@ _RATE_LIMIT_MAX_ATTEMPTS = int(
 _RATE_LIMIT_MAX_BACKOFF_SECONDS = float(
     os.environ.get("GAIA_EMAIL_GMAIL_RATE_LIMIT_MAX_BACKOFF_SECONDS", "32")
 )
-# Wall-clock budget SHARED across every chunk of one get_messages_batch call
-# (not reset per chunk) -- otherwise a multi-chunk scan retries each chunk
-# independently and the worst case balloons toward
+# Wall-clock budget shared across every chunk of one get_messages_batch call:
+# computed once by get_messages_batch and threaded into each
+# _batch_get_messages call, not reset per chunk -- otherwise a multi-chunk
+# scan retries each chunk independently and the worst case balloons toward
 # chunks * max_attempts * max_backoff, uncomfortably close to the TUI's 60s
-# request timeout. Once exceeded, retrying stops and whatever has been
-# gathered is surfaced via RateLimitedError.partial_results.
+# request timeout.
 _RATE_LIMIT_BUDGET_SECONDS = float(
     os.environ.get("GAIA_EMAIL_GMAIL_RATE_LIMIT_BUDGET_SECONDS", "20")
 )
@@ -862,10 +862,13 @@ class LiveGmailBackend:
                 ) from exc
         out: Dict[str, Dict[str, Any]] = {}
         failed_ids: List[str] = []
+        deadline = time.monotonic() + _RATE_LIMIT_BUDGET_SECONDS
         for start in range(0, len(ids), _BATCH_MAX_SUBREQUESTS):
             chunk = ids[start : start + _BATCH_MAX_SUBREQUESTS]
             try:
-                out.update(self._batch_get_messages(chunk, format=format))
+                out.update(
+                    self._batch_get_messages(chunk, format=format, deadline=deadline)
+                )
             except RateLimitedError as exc:
                 out.update(exc.partial_results)
                 failed_ids.extend(exc.message_ids)
@@ -885,14 +888,21 @@ class LiveGmailBackend:
         return out
 
     def _batch_get_messages(
-        self, ids: List[str], *, format: str
+        self, ids: List[str], *, format: str, deadline: Optional[float] = None
     ) -> Dict[str, Dict[str, Any]]:
         """Fetch exactly ``ids`` via one or more batch POSTs, retrying only
-        the ids Gmail 429'd (D1) until they resolve or the shared retry
-        budget for THIS chunk is exhausted."""
+        the ids Gmail 429'd until they resolve or ``deadline`` passes.
+
+        ``deadline`` is a ``time.monotonic()`` timestamp shared across every
+        chunk of the caller's ``get_messages_batch`` call, so retries on
+        chunk 2 draw down the same budget chunk 1 already spent rather than
+        getting a fresh one. Defaults to a self-computed deadline so a
+        direct caller (e.g. a test) still gets a working budget.
+        """
         out: Dict[str, Dict[str, Any]] = {}
         pending = list(ids)
-        deadline = time.monotonic() + _RATE_LIMIT_BUDGET_SECONDS
+        if deadline is None:
+            deadline = time.monotonic() + _RATE_LIMIT_BUDGET_SECONDS
         for attempt in range(1, _RATE_LIMIT_MAX_ATTEMPTS + 1):
             boundary = f"batch_{uuid.uuid4().hex}"
             body = _build_batch_request_body(pending, format=format, boundary=boundary)

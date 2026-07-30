@@ -318,6 +318,66 @@ class TestExhaustionAndPartialResults:
         assert any(t in msg for t in ("retry", "rate limit", "try again"))
 
 
+class TestSharedBudgetAcrossChunks:
+    def test_sustained_429_shares_one_budget_not_chunks_times_budget(self, monkeypatch):
+        """The ``_RATE_LIMIT_BUDGET_SECONDS`` wall-clock budget must be
+        computed ONCE per ``get_messages_batch`` call and shared across every
+        chunk -- not recomputed fresh per chunk, which would let a sustained
+        429 burn a full budget per chunk and balloon total wait time and POST
+        count toward chunks * budget instead of staying bounded by one
+        budget."""
+        import gaia_agent_email.gmail_backend as gmail_backend_module
+
+        fake_now = {"t": 0.0}
+
+        def fake_monotonic():
+            return fake_now["t"]
+
+        def fake_sleep(seconds):
+            fake_now["t"] += seconds
+
+        monkeypatch.setattr(gmail_backend_module.time, "monotonic", fake_monotonic)
+        monkeypatch.setattr(gmail_backend_module.time, "sleep", fake_sleep)
+        monkeypatch.setattr(gmail_backend_module, "_RATE_LIMIT_BUDGET_SECONDS", 10.0)
+        monkeypatch.setattr(gmail_backend_module, "_RATE_LIMIT_MAX_ATTEMPTS", 4)
+        # Deterministic backoff -- the jitter in the real formula would make
+        # the elapsed-time assertions below flaky.
+        monkeypatch.setattr(
+            gmail_backend_module, "_backoff_seconds", lambda attempt: 3.0
+        )
+
+        post_count = {"n": 0}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            post_count["n"] += 1
+            return httpx.Response(429, json=_rate_limit_body())
+
+        backend, _calls = _backend(handler)
+        # 2 chunks: _BATCH_MAX_SUBREQUESTS ids + 1 trailing id.
+        ids = [f"id{i}" for i in range(_BATCH_MAX_SUBREQUESTS + 1)]
+
+        with pytest.raises(RateLimitedError):
+            backend.get_messages_batch(ids, format="full")
+
+        # Worked out by hand for budget=10, backoff=3, max_attempts=4:
+        #   chunk 1 (25 ids): 4 POSTs at t=0,3,6,9, exhausts on attempt==max.
+        #   chunk 2 (1 id):   2 POSTs at t=9,12 -- attempt 1 starts just
+        #     under the shared deadline (9 < 10) so it retries once more,
+        #     then attempt 2 sees the deadline has passed and raises.
+        # A per-chunk-fresh budget (the bug) would instead let chunk 2 run
+        # its own full 4 attempts (POSTs at t=9,12,15,18), for 8 total POSTs
+        # and ~18s elapsed -- not bounded by one budget.
+        assert post_count["n"] == 6, (
+            f"expected 6 POSTs bounded by ONE shared budget, got "
+            f"{post_count['n']} (chunks*max_attempts=8 would mean the "
+            "budget was NOT shared across chunks)"
+        )
+        assert fake_now["t"] == 12.0, (
+            f"expected ~12s elapsed under a single shared 10s budget, got "
+            f"{fake_now['t']}s"
+        )
+
+
 class TestSanitizedErrorMessages:
     def test_embedded_non_429_failure_strips_control_bytes(self):
         def handler(request: httpx.Request) -> httpx.Response:
