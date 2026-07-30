@@ -43,11 +43,15 @@ log = get_logger(__name__)
 DESCRIPTION_SOURCE = f"{SKILL_FILENAME} (description)"
 
 
-def audit_skill(directory: Path | str) -> AuditReport:
+def audit_skill(directory: Path | str, *, tier: Optional[str] = None) -> AuditReport:
     """Audit a skill directory and return its report.
 
     Args:
         directory: The skill directory (the one containing ``SKILL.md``).
+        tier: Audit as though the skill claimed this tier instead of its declared
+            one, so an author can check a claim before making it. The whole
+            verdict — including the tier-claim findings — is computed for it; a
+            report must never name one tier while its findings name another.
 
     Returns:
         An :class:`~gaia.skills.audit.findings.AuditReport` whose verdict is
@@ -62,11 +66,14 @@ def audit_skill(directory: Path | str) -> AuditReport:
     # check_directory_name=False: the audit runs on unpacked bundles and CI
     # checkouts where the folder name is not the author's choice.
     skill = parse_skill_file(directory, check_directory_name=False)
-    return audit_skill_object(skill, directory=directory)
+    return audit_skill_object(skill, directory=directory, tier=tier)
 
 
 def audit_skill_object(
-    skill: Skill, *, directory: Optional[Path] = None
+    skill: Skill,
+    *,
+    directory: Optional[Path] = None,
+    tier: Optional[str] = None,
 ) -> AuditReport:
     """Audit an already-parsed :class:`Skill`.
 
@@ -74,7 +81,14 @@ def audit_skill_object(
         skill: The parsed skill.
         directory: Its directory. Defaults to ``skill.directory``; when neither
             is available only the instruction analyzers run (there are no files
-            to scan).
+            to scan), and ``manifest_digest`` is taken over the *re-serialized*
+            manifest rather than the original bytes — so a report produced that
+            way will not satisfy the publish path, which compares against the
+            uploaded ``SKILL.md``.
+        tier: Audit as though the skill claimed this tier instead of its declared
+            one. The whole verdict, including the tier-claim findings, is computed
+            for it — a report must never name one tier while its findings name
+            another.
     """
     directory = Path(directory) if directory is not None else skill.directory
 
@@ -120,19 +134,19 @@ def audit_skill_object(
         digest = ""
         manifest = manifest_digest(skill.to_markdown())
 
-    tier = skill.security_tier
-    verdict, reason = verdict_for_tier(findings, tier)
+    claimed = tier or skill.security_tier
+    verdict, reason = verdict_for_tier(findings, claimed)
     cleared = cleared_tiers(findings)
 
     # Explain the tier outcome in the findings list. These are advisory by
     # construction ('info' gates nothing at any tier), so appending them after
     # the gate cannot change the verdict they describe.
-    findings.extend(_tier_claim_findings(tier, cleared))
+    findings.extend(_tier_claim_findings(claimed, cleared))
 
     return AuditReport(
         skill=skill.name,
         version=skill.version,
-        security_tier=tier,
+        security_tier=claimed,
         verdict=verdict,
         reason=reason,
         findings=tuple(findings),

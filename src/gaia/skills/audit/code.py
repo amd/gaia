@@ -484,6 +484,8 @@ METHOD_SINKS: dict[str, Sink] = {
     "chmod": Sink("filesystem", "write"),
     "symlink_to": Sink("filesystem", "write"),
     "hardlink_to": Sink("filesystem", "write"),
+    # Path(...).open(mode) — level refined from the mode argument below.
+    "open": Sink("filesystem", "read"),
 }
 
 #: Names that are network *writes* when they appear as the final attribute.
@@ -507,8 +509,14 @@ _NETWORK_WRITE_VERBS = frozenset(
     }
 )
 
+#: Top-level module names that own at least one sink, so ``sp = subprocess``
+#: can be recognised as aliasing a module the audit cares about.
+_SINK_MODULE_ROOTS = frozenset(
+    {key.split(".")[0] for key in SINKS if "." in key} | set(MODULE_PREFIX_SINKS)
+)
+
 #: Builtin sinks — matched by bare name only when not shadowed locally.
-_BUILTIN_SINKS = frozenset({"eval", "exec", "compile", "__import__", "open"})
+_BUILTIN_SINKS = frozenset({"eval", "exec", "compile", "__import__", "open", "getattr"})
 
 #: Paths whose mere mention means credential access.
 _CREDENTIAL_PATTERNS: tuple[tuple[str, str], ...] = (
@@ -616,13 +624,56 @@ class _Analyzer(ast.NodeVisitor):
 
     # -- the interesting bit --------------------------------------------
 
+    def visit_Assign(self, node: ast.Assign) -> None:
+        """Follow ``o = open`` / ``sp = subprocess`` so an alias is not an escape."""
+        if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            resolved = self._resolve(node.value)
+            if resolved is not None and (
+                resolved in SINKS or resolved.split(".")[0] in _SINK_MODULE_ROOTS
+            ):
+                self.aliases[node.targets[0].id] = resolved
+        self.generic_visit(node)
+
     def visit_Call(self, node: ast.Call) -> None:
         dotted = self._resolve(node.func)
-        if dotted is not None:
+        if dotted == "getattr":
+            self._handle_getattr(node)
+        elif dotted is not None:
             self._match_sink(node, dotted)
         else:
             self._match_method(node)
         self.generic_visit(node)
+
+    def _handle_getattr(self, node: ast.Call) -> None:
+        """Resolve or flag ``getattr(module, name)`` on an imported module.
+
+        Reflection over a local object is ordinary; reflection over an imported
+        module is how ``os.system`` gets spelled when someone does not want it
+        found. A literal name is resolved to its real sink; a computed one cannot
+        be, so it is flagged rather than assumed harmless.
+        """
+        if not node.args:
+            return
+        base = self._resolve(node.args[0])
+        if base is None or base not in self.aliases.values():
+            return  # not an imported module — ordinary reflection
+
+        name_arg = node.args[1] if len(node.args) > 1 else None
+        if isinstance(name_arg, ast.Constant) and isinstance(name_arg.value, str):
+            dotted = f"{base}.{name_arg.value}"
+            if dotted in SINKS or base in MODULE_PREFIX_SINKS:
+                self._match_sink(node, dotted)
+            return
+
+        self._add_finding(
+            "code.exec.dynamic_attribute",
+            "high",
+            f"Looks up an attribute of the '{base}' module by a computed name, "
+            "so what it actually calls cannot be read from the source.",
+            node.lineno,
+            f"Call the function directly ({base}.<name>(...)). A computed "
+            "attribute name hides the call from this audit and from a reviewer.",
+        )
 
     def visit_Name(self, node: ast.Name) -> None:
         if isinstance(node.ctx, ast.Load) and node.id in {"builtins", "__builtins__"}:
@@ -726,10 +777,14 @@ class _Analyzer(ast.NodeVisitor):
         sink = METHOD_SINKS.get(node.func.attr)
         if sink is None or not sink.domain:
             return
+        level = sink.level
+        if node.func.attr == "open":
+            # On the method form the mode is the first positional argument.
+            level = _open_mode_level(node, mode_index=0)
         self.domain_uses.append(
             DomainUse(
                 domain=sink.domain,
-                level=sink.level,
+                level=level,
                 file=self.filename,
                 line=node.lineno,
                 detail=f".{node.func.attr}()",
@@ -869,11 +924,15 @@ def _has_shell_true(node: ast.Call) -> bool:
     return False
 
 
-def _open_mode_level(node: ast.Call) -> str:
-    """Return ``write`` when an ``open()`` call can modify the file."""
+def _open_mode_level(node: ast.Call, *, mode_index: int = 1) -> str:
+    """Return ``write`` when an ``open()`` call can modify the file.
+
+    ``mode_index`` is 1 for the builtin (``open(path, mode)``) and 0 for the
+    method form (``Path(path).open(mode)``).
+    """
     mode: Optional[ast.expr] = None
-    if len(node.args) >= 2:
-        mode = node.args[1]
+    if len(node.args) > mode_index:
+        mode = node.args[mode_index]
     for keyword in node.keywords:
         if keyword.arg == "mode":
             mode = keyword.value

@@ -446,23 +446,17 @@ def _handle_export(args: argparse.Namespace) -> int:
 
 def _handle_audit(args: argparse.Namespace) -> int:
     """Run the pre-publish security audit (issue #2468)."""
-    from dataclasses import replace
-
     from gaia.skills.audit import (
         SEVERITY_ORDER,
         audit_skill,
         render_json,
         render_sarif,
         render_text,
-        verdict_for_tier,
     )
 
-    report = audit_skill(args.path)
-
-    tier = getattr(args, "tier", None)
-    if tier and tier != report.security_tier:
-        verdict, reason = verdict_for_tier(report.findings, tier)
-        report = replace(report, security_tier=tier, verdict=verdict, reason=reason)
+    # The tier override goes into the audit, not onto the report afterwards, so
+    # the verdict and its tier-claim findings always agree with each other.
+    report = audit_skill(args.path, tier=getattr(args, "tier", None))
 
     show_snippets = getattr(args, "show_snippets", False)
 

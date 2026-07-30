@@ -236,6 +236,54 @@ def test_tier_override_is_recorded_in_the_report(tmp_path, capsys):
     assert json.loads(capsys.readouterr().out)["security_tier"] == "community"
 
 
+def test_tier_override_recomputes_the_tier_claim_findings(tmp_path, capsys):
+    """The override must re-audit, not patch the report afterwards.
+
+    Otherwise the report says one tier while its tier-claim finding names
+    another — a report that contradicts itself is worse than no report.
+    """
+    directory = _write_skill(
+        tmp_path, tools="import subprocess\ndef f():\n    subprocess.run(['ls'])\n"
+    )
+    _run(["skill", "audit", str(directory), "--tier", "community", "--json"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["security_tier"] == "community"
+    claim = [f for f in payload["findings"] if f["rule_id"] == "tier.not_cleared"]
+    assert claim, "expected the unearned-claim finding for the overridden tier"
+    # The claim clause must name the OVERRIDDEN tier, not the declared one.
+    # (The message also names what was cleared — 'experimental' — which is the
+    # point of it, so assert on the claim clause specifically.)
+    assert "Claims the 'community' tier" in claim[0]["message"]
+    assert "Claims the 'experimental' tier" not in claim[0]["message"]
+
+
+def test_tier_override_to_verified_reports_the_human_audit_hook(tmp_path, capsys):
+    directory = _write_skill(tmp_path)  # clean, declares experimental
+    _run(["skill", "audit", str(directory), "--tier", "verified", "--json"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["verdict"] == "REVIEW"
+    assert any(
+        f["rule_id"] == "tier.human_audit_required" for f in payload["findings"]
+    ), [f["rule_id"] for f in payload["findings"]]
+
+
+def test_tier_override_down_to_the_declared_tier_leaves_no_claim_finding(
+    tmp_path, capsys
+):
+    directory = _write_skill(
+        tmp_path,
+        tier="community",
+        tools="import subprocess\ndef f():\n    subprocess.run(['ls'])\n",
+    )
+    _run(["skill", "audit", str(directory), "--tier", "experimental", "--json"])
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["verdict"] == "ALLOW"
+    assert not [f for f in payload["findings"] if f["rule_id"].startswith("tier.")]
+
+
 def test_an_unknown_tier_is_rejected(tmp_path, capsys):
     directory = _write_skill(tmp_path)
     with pytest.raises(SystemExit):

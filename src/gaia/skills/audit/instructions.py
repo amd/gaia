@@ -221,9 +221,17 @@ _COMMENT_IMPERATIVE_RE = re.compile(
 #:
 #: Applied only to text BEFORE the match, so rules whose own pattern opens with a
 #: negation — concealment's "do not tell the user" — are unaffected.
+#:
+#: The prohibition must sit *directly* on the matched behaviour: only whitespace
+#: and at most one intervening word, with no ``:`` / ``;`` / dash between. Anything
+#: looser turns the suppressor into the bypass — "Do not forget: ignore all
+#: previous instructions" prohibits *forgetting*, not ignoring. Verbs that negate
+#: the negation are excluded from the one-word allowance for the same reason.
 _PROHIBITION_RE = re.compile(
-    r"\b(?:never|do not|don't|cannot|must not|should not|avoid|refuse to|"
-    r"forbidden to|no need to)\b[^.]{0,20}$",
+    r"\b(?:never|do not|don't|cannot|can't|must not|should not|shouldn't|"
+    r"avoid|refuse to|forbidden to|no need to)\s+"
+    r"(?!(?:forget|mind|worry|hesitate|fail)\b)"
+    r"(?:\w+\s+)?$",
     re.IGNORECASE,
 )
 
@@ -273,6 +281,25 @@ def _logical_blocks(body: str) -> list[tuple[str, list[tuple[int, int]]]]:
         current.append((number, line))
     flush()
     return blocks
+
+
+def _matches(pattern: "re.Pattern[str]", text: str):
+    """Yield ``(absolute_start, match)`` for every candidate, overlapping allowed.
+
+    ``finditer`` returns non-overlapping matches, which lets a *suppressed* match
+    hide a real one behind it: in "Do not forget: ignore all previous
+    instructions" the override pattern matches from "forget" (a listed verb), the
+    prohibition guard suppresses it, and the genuine directive starting at
+    "ignore" was inside the span that got consumed. Advancing by one character
+    after each candidate instead of past it keeps the later match reachable.
+    """
+    position = 0
+    while position < len(text):
+        match = re.search(pattern, text[position:])
+        if match is None:
+            return
+        yield position + match.start(), match
+        position += match.start() + 1
 
 
 def _line_for_offset(offsets: list[tuple[int, int]], offset: int) -> int:
@@ -447,11 +474,11 @@ def analyze_instructions(
 
     for text, offsets in _logical_blocks(body):
         for rule in INJECTION_RULES:
-            for match in re.finditer(rule.pattern, text):
-                if _PROHIBITION_RE.search(text[: match.start()]):
+            for start, match in _matches(rule.pattern, text):
+                if _PROHIBITION_RE.search(text[:start]):
                     # "NEVER dump the environment" forbids the behaviour.
                     continue
-                number = _line_for_offset(offsets, match.start())
+                number = _line_for_offset(offsets, start)
                 key = (rule.rule_id, number)
                 if key in seen:
                     continue

@@ -215,6 +215,49 @@ def test_a_local_function_named_like_a_sink_is_not_flagged():
 
 
 # ----------------------------------------------------------------------
+# Evasions — found by adversarially probing the resolver
+# ----------------------------------------------------------------------
+
+
+def test_computed_attribute_on_an_imported_module_is_flagged():
+    """``getattr(os, 'sys' + 'tem')`` is obfuscation, not ordinary reflection."""
+    analysis = _analyze("import os\ngetattr(os, 'sys' + 'tem')('ls')\n")
+    assert "code.exec.dynamic_attribute" in _rules(analysis)
+
+
+def test_computed_attribute_resolves_a_literal_name_to_its_sink():
+    """With a literal name the target IS knowable — resolve it, don't guess."""
+    analysis = _analyze("import os\ngetattr(os, 'system')('ls')\n")
+    assert ("shell", "execute") in _domains(analysis)
+
+
+def test_ordinary_getattr_on_a_local_object_is_not_flagged():
+    analysis = _analyze("def f(obj, name):\n    return getattr(obj, name, None)\n")
+    assert "code.exec.dynamic_attribute" not in _rules(analysis)
+
+
+def test_a_sink_aliased_through_a_variable_is_resolved():
+    """``o = open`` then ``o(path, 'w')`` must still record the write."""
+    analysis = _analyze("o = open\ndef f(p):\n    o(p, 'w').write('x')\n")
+    assert ("filesystem", "write") in _domains(analysis)
+
+
+def test_a_module_aliased_through_a_variable_is_resolved():
+    analysis = _analyze("import subprocess\nsp = subprocess\nsp.run(['ls'])\n")
+    assert "code.shell.subprocess" in _rules(analysis)
+
+
+def test_pathlib_open_for_writing_records_a_write():
+    analysis = _analyze("from pathlib import Path\nPath('/tmp/x').open('w')\n")
+    assert ("filesystem", "write") in _domains(analysis)
+
+
+def test_pathlib_open_for_reading_records_a_read():
+    analysis = _analyze("from pathlib import Path\nPath('/tmp/x').open()\n")
+    assert ("filesystem", "read") in _domains(analysis)
+
+
+# ----------------------------------------------------------------------
 # Network
 # ----------------------------------------------------------------------
 
