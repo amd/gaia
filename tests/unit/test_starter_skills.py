@@ -329,6 +329,27 @@ def test_rss_digest_registers_its_declared_tool(pack_manager: SkillManager):
         _TOOL_REGISTRY.update(before)
 
 
+def test_the_guides_run_a_skill_snippet_still_type_checks():
+    """Pins the API that ``docs/guides/starter-skills.mdx`` tells users to call.
+
+    The guide's only runnable snippet is ``ChatAgent(...).load_skill(name)``
+    followed by ``process_query``. Renaming any of those would leave the guide
+    quietly wrong, which is worse than no guide at all.
+    """
+    chat_agent = pytest.importorskip("gaia_agent_chat.agent")
+
+    assert hasattr(chat_agent.ChatAgent, "load_skill")
+    assert hasattr(chat_agent.ChatAgent, "unload_skill")
+    assert hasattr(chat_agent.ChatAgent, "process_query")
+    assert not hasattr(chat_agent.ChatAgent, "query"), (
+        "ChatAgent grew a 'query' method — the guide documents 'process_query'; "
+        "reconcile the two"
+    )
+    # The guide claims the default profile is the one that registers the web,
+    # RAG, scratchpad, and memory tools these skills consume.
+    assert chat_agent.ChatAgentConfig().prompt_profile == "full"
+
+
 # ----------------------------------------------------------------------
 # Forkability — the pack's whole reason to exist
 # ----------------------------------------------------------------------

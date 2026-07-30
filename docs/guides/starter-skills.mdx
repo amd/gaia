@@ -58,7 +58,7 @@ from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 agent = ChatAgent(ChatAgentConfig())
 agent.load_skill("research-report")     # body joins the system prompt
 
-print(agent.query("What's the current state of NPU support in llama.cpp?"))
+print(agent.process_query("What's the current state of NPU support in llama.cpp?"))
 ```
 
 `load_skill` resolves the name across the discovery roots, validates the
