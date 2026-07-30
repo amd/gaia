@@ -448,6 +448,28 @@ async def _commit_grants(flow: _PendingFlow) -> None:
         )
 
 
+def _resolve_granted_scopes(
+    payload: Dict[str, Any], requested: "list[str]"
+) -> "list[str]":
+    """The scopes a token-exchange response actually granted (#2730 D6).
+
+    Per RFC 6749 §5.1 the token endpoint returns ``scope`` only when the
+    granted set differs from what was requested; its absence means "as
+    requested." Google's granular-consent screen lets a user untick Calendar
+    while approving Gmail, so trusting the request unconditionally (what this
+    code did before) records a connection that lies about carrying scopes the
+    user declined — every downstream coverage check then passes against a
+    fabricated record instead of catching the shortfall here, loudly, with an
+    actionable message.
+    """
+    raw = payload.get("scope") or ""
+    returned = raw.split()
+    if not returned:
+        return list(requested)
+    requested_set = set(requested)
+    return [s for s in returned if s in requested_set]
+
+
 async def _exchange_code_for_tokens(flow: _PendingFlow, code: str) -> Dict[str, Any]:
     """Run the token-exchange step and persist the connection."""
     provider = get_provider(flow.provider_id)
@@ -488,12 +510,13 @@ async def _exchange_code_for_tokens(flow: _PendingFlow, code: str) -> Dict[str, 
     account_email = await _resolve_account_email(
         provider, payload.get("id_token", ""), payload.get("access_token", "")
     )
+    granted_scopes = _resolve_granted_scopes(payload, flow.scopes)
 
     save_connection(
         provider=flow.provider_id,
         account_email=account_email or "default",
         refresh_token=refresh_token,
-        scopes=flow.scopes,
+        scopes=granted_scopes,
         client_id_hash=provider.client_id_hash,
         # D8: record the minting authority — None for providers with no
         # concept of a tenant (e.g. Google), which save_connection omits
@@ -521,7 +544,7 @@ async def _exchange_code_for_tokens(flow: _PendingFlow, code: str) -> Dict[str, 
     state_dict = {
         "provider": flow.provider_id,
         "account_email": account_email or "default",
-        "scopes": flow.scopes,
+        "scopes": granted_scopes,
         "connected_at": _time.time(),
     }
     # Emit both the new framework event-name (matches the SSE router
@@ -710,12 +733,13 @@ async def poll_device_flow(
     account_email = await _resolve_account_email(
         provider, payload.get("id_token", ""), payload.get("access_token", "")
     )
+    granted_scopes = _resolve_granted_scopes(payload, scopes_list)
 
     save_connection(
         provider=provider_id,
         account_email=account_email,
         refresh_token=refresh_token,
-        scopes=scopes_list,
+        scopes=granted_scopes,
         client_id_hash=provider.client_id_hash,
         tenant=getattr(provider, "tenant", None),
     )
@@ -749,12 +773,12 @@ async def poll_device_flow(
         "device-flow: connected provider=%s account=%s scopes=%d",
         provider_id,
         account_email,
-        len(scopes_list),
+        len(granted_scopes),
     )
     return {
         "provider": provider_id,
         "account_email": account_email,
-        "scopes": scopes_list,
+        "scopes": granted_scopes,
         "connected_at": _time.time(),
     }
 

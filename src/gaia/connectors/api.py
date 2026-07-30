@@ -81,11 +81,15 @@ logger = logging.getLogger(__name__)
 # ``get_access_token`` still enforces per-agent scope coverage at the point an
 # agent actually requests a token.
 _DEFAULT_REQUIRED_SCOPES_BY_PROVIDER: dict[str, tuple[str, ...]] = {
-    # Built-in Email Triage Agent (#962) mailbox union.
+    # Built-in Email Triage Agent (#962) mailbox union — MUST equal
+    # gaia_agent_email/scopes.py's ALL_SCOPES (#2730 site 6: this used to
+    # omit calendar.readonly, silently accepting a forwarded connection that
+    # could not satisfy every calendar tool).
     "google": (
-        "https://www.googleapis.com/auth/gmail.modify",
-        "https://www.googleapis.com/auth/gmail.send",
-        "https://www.googleapis.com/auth/calendar.events",
+        "https://www.googleapis.com/auth/gmail.modify",  # from gaia_agent_email/scopes.py
+        "https://www.googleapis.com/auth/gmail.send",  # from gaia_agent_email/scopes.py
+        "https://www.googleapis.com/auth/calendar.events",  # from gaia_agent_email/scopes.py
+        "https://www.googleapis.com/auth/calendar.readonly",  # from gaia_agent_email/scopes.py
     ),
 }
 

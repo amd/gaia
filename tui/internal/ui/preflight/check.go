@@ -674,28 +674,36 @@ type connectorsBody struct {
 const emailAgentGrantID = "installed:email"
 
 // connectScopes is the EXACT scope list a reconnect must request, per provider:
-// the connector's default_scopes ∪ the agent's mail scopes, mirroring
-// connector_routes._build_scope_union.
+// the connector's default_scopes ∪ the agent's FULL requested union (mail +
+// calendar), mirroring connector_routes._build_scope_union post-#2730 D3.
+// Guarded against drift from the Python side by
+// tests/fixtures/connectors/email_scopes.json (see
+// TestConnectScopesMatchesTheSharedFixture in check_test.go) — edit the
+// fixture's connect_union alongside this map, never one without the other.
 //
 // The union is not decoration. `gaia connectors connect --scopes` REPLACES the
 // provider defaults rather than adding to them (flow.py: `list(scopes) or
-// list(provider.default_scopes)`), so a remedy naming only the send scope
-// authorizes an account the agent can no longer read — and the mailbox row
-// would then go green over a mailbox that is worse off than before.
+// list(provider.default_scopes)`), so a remedy naming only the mail scopes
+// authorizes an account with less than it had before — the exact silent
+// narrowing #2730 removes. Every connect path now requests the same wide
+// union; only the daemon's forward-out mint narrows to what it enforces.
 var connectScopes = map[string][]string{
 	"google": {
 		// catalog/google.py default_scopes
 		"openid", "email", "profile",
-		// gaia_agent_email.scopes.GMAIL_SCOPES
+		// gaia_agent_email.scopes.ALL_SCOPES (GMAIL_SCOPES + CALENDAR_SCOPES)
 		"https://www.googleapis.com/auth/gmail.modify",
 		"https://www.googleapis.com/auth/gmail.send",
+		"https://www.googleapis.com/auth/calendar.events",
+		"https://www.googleapis.com/auth/calendar.readonly",
 	},
 	"microsoft": {
 		// catalog/microsoft.py default_scopes
 		"openid", "offline_access", "https://graph.microsoft.com/User.Read",
-		// gaia_agent_email.outlook_scopes.OUTLOOK_MAIL_SCOPES
+		// gaia_agent_email.outlook_scopes.OUTLOOK_ALL_SCOPES (OUTLOOK_MAIL_SCOPES + OUTLOOK_CALENDAR_SCOPES)
 		"https://graph.microsoft.com/Mail.ReadWrite",
 		"https://graph.microsoft.com/Mail.Send",
+		"https://graph.microsoft.com/Calendars.ReadWrite",
 	},
 }
 
@@ -709,23 +717,14 @@ var sendScopes = map[string]string{
 }
 
 // connectCommand is the one command that fixes every mailbox state: it
-// re-authorizes with the mail scope union AND grants it to the agent in the same
-// flow, so the token and the grant can never disagree.
+// re-authorizes with the FULL requested union (mail + calendar) AND grants it
+// to the agent in the same flow, so the token and the grant can never
+// disagree, and never end up narrower than what the Agent UI would have
+// granted for the same account (#2730 D3).
 //
 // Deliberately NOT `gaia connectors grants grant`: that cannot add a scope the
 // stored token never carried, so on its own it would trade "cannot send" for
 // "cannot read".
-//
-// KNOWN LIMIT, and it is not this row's to fix: `--grant-agent` writes the same
-// ledger entry `grants grant` does (cli.py -> flow.py -> grants.grant_agent), so
-// whatever union is named below is what the account ends up with. This one
-// mirrors the sidecar's own connect flow (connector_routes._build_scope_union,
-// mail scopes only, "no calendar scopes") — which is NARROWER than the union the
-// agent registers as required (gaia_agent_email ALL_SCOPES = mail + calendar,
-// what the Agent UI grants). A user who connected through the Agent UI and runs
-// this command therefore keeps mail and loses calendar. Widening it here alone
-// would put the TUI and the sidecar's own flow at odds; both lists have to move
-// together.
 func connectCommand(provider string) string {
 	scopes, ok := connectScopes[provider]
 	if !ok {
