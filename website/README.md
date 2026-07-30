@@ -127,6 +127,7 @@ website/
 │   ├── scripts/
 │   │   └── starfield.js
 │   └── env.d.ts
+├── .railwayignore                   # Excluded from the `railway up` upload
 ├── astro.config.mjs
 ├── postcss.config.mjs
 ├── railway.json                     # Railway build + start commands
