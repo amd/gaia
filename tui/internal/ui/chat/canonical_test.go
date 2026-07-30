@@ -130,7 +130,7 @@ func TestCanonicalToolCallAndResult(t *testing.T) {
 	if card.Render != "table" {
 		t.Errorf("card render = %q, want table", card.Render)
 	}
-	if rendered := m.renderMessage(card); !strings.Contains(rendered, "a@b.c") {
+	if rendered := m.renderMessage(card, nil); !strings.Contains(rendered, "a@b.c") {
 		t.Errorf("table card did not draw its row:\n%s", rendered)
 	}
 }

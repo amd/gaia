@@ -41,6 +41,7 @@ from gaia.llm.lemonade_client import (
     DEFAULT_MODEL_NAME,
     GPU_CTX_SIZE,
     is_context_overflow_error,
+    truncation_budget,
 )
 
 if TYPE_CHECKING:
@@ -2338,14 +2339,20 @@ Do NOT wrap conversational replies in JSON.
         """
         truncated_result = tool_result
         if isinstance(tool_result, (dict, list)):
-            # Use custom encoder to handle bytes and other non-serializable types
-            result_str = json.dumps(tool_result, default=self._json_serialize_fallback)
-            if (
-                len(result_str) > 30000
-            ):  # Threshold for truncation (appropriate for 32K context)
-                # Truncate large results to prevent overwhelming the LLM
+            # Use custom encoder to handle bytes and other non-serializable types.
+            # ensure_ascii=False: this text reaches the model as prose, not a
+            # wire format re-parsed on the other end -- escaping would hand it
+            # literal \uXXXX sequences instead of the actual characters.
+            result_str = json.dumps(
+                tool_result, default=self._json_serialize_fallback, ensure_ascii=False
+            )
+            threshold, target = truncation_budget(self.device)
+            if len(result_str) > threshold:
+                # Truncate large results to prevent overwhelming the LLM. The
+                # result is re-parsed just below, so this path must always
+                # come back as valid JSON (#2620).
                 truncated_str = self._truncate_large_content(
-                    tool_result, max_chars=20000  # Increased for 32K context
+                    tool_result, max_chars=target, as_json=True
                 )
                 try:
                     truncated_result = json.loads(truncated_str)
@@ -2355,6 +2362,16 @@ Do NOT wrap conversational replies in JSON.
                 # Notify user about truncation
                 self.console.print_info(
                     f"Note: Large result ({len(result_str)} chars) truncated for LLM context"
+                )
+                # SilentConsole.print_info is a no-op, so every packaged/sidecar
+                # agent needs the real logger to make truncation diagnosable.
+                logger.warning(
+                    "Tool result for %s truncated: %d chars exceeded the %d-char "
+                    "cap for this device profile (target %d)",
+                    tool_name,
+                    len(result_str),
+                    threshold,
+                    target,
                 )
                 if self.debug:
                     print(f"[DEBUG] Tool result truncated from {len(result_str)} chars")
@@ -2544,11 +2561,14 @@ Do NOT wrap conversational replies in JSON.
         if isinstance(tool_output, str):
             text_content = tool_output
         else:
+            # Prose call site: text_content is spliced into a message's text
+            # field, never json.loads'd -- stays on the default prose path,
+            # not the JSON-safe envelope (#2620, reflection C2).
             text_content = self._truncate_large_content(tool_output, max_chars=2000)
 
         if not isinstance(text_content, str):
             text_content = json.dumps(
-                tool_output, default=self._json_serialize_fallback
+                tool_output, default=self._json_serialize_fallback, ensure_ascii=False
             )
 
         msg = {
@@ -2597,6 +2617,7 @@ Do NOT wrap conversational replies in JSON.
                         "arguments": json.dumps(
                             tc["tool_args"],
                             default=self._json_serialize_fallback,
+                            ensure_ascii=False,
                         ),
                     },
                 }
@@ -2638,10 +2659,26 @@ Do NOT wrap conversational replies in JSON.
 
         return "<non-serializable>"
 
-    def _truncate_large_content(self, content: Any, max_chars: int = 2000) -> str:
+    def _truncate_large_content(
+        self, content: Any, max_chars: int = 20000, as_json: bool = False
+    ) -> str:
         """
         Truncate large content to prevent overwhelming the LLM.
-        Defaults to 20000 chars which is appropriate for 32K token context window.
+
+        Defaults to 20000 chars, appropriate for the NPU's 32K token context
+        window (``_handle_large_tool_result`` scales this per device profile
+        via ``truncation_budget``). Whole list items are dropped from the end
+        rather than slicing the serialized text, so the result never cuts
+        through the middle of a record (#2620).
+
+        Set ``as_json=True`` when the caller will ``json.loads`` the result
+        (today, only ``_handle_large_tool_result``) -- its last-resort
+        fallback then wraps the sliced text in a JSON envelope so the output
+        always parses. Prose callers (spliced directly into an LLM prompt
+        string, e.g. ``_create_tool_message``) get the plain slice they
+        always got: wrapping prose in an escaped JSON blob would waste an
+        already-tight budget on punctuation the reader never needed
+        (reflection C2).
         """
 
         # If we have test_results in the output we don't want to
@@ -2650,23 +2687,24 @@ Do NOT wrap conversational replies in JSON.
         if isinstance(content, dict) and (
             "test_results" in content or "run_tests" in content
         ):
-            return json.dumps(content, default=self._json_serialize_fallback)
-
-        # Convert to string (use compact JSON first to check size)
-        if isinstance(content, (dict, list)):
-            compact_str = json.dumps(content, default=self._json_serialize_fallback)
-            # Only use indented format if we need to truncate anyway
-            content_str = (
-                json.dumps(content, indent=2, default=self._json_serialize_fallback)
-                if len(compact_str) > max_chars
-                else compact_str
+            return json.dumps(
+                content, default=self._json_serialize_fallback, ensure_ascii=False
             )
-        else:
-            content_str = str(content)
 
-        # Return as-is if within limits
-        if len(content_str) <= max_chars:
-            return content_str
+        if not isinstance(content, (dict, list)):
+            content_str = str(content)
+            if len(content_str) <= max_chars:
+                return content_str
+            return self._truncate_fallback_text(content_str, max_chars, as_json)
+
+        # ensure_ascii=False throughout this method: every returned string
+        # here is prose the model reads directly, not a wire format the
+        # caller re-parses -- escaping would hand it literal \uXXXX text.
+        compact_str = json.dumps(
+            content, default=self._json_serialize_fallback, ensure_ascii=False
+        )
+        if len(compact_str) <= max_chars:
+            return compact_str
 
         # For responses with chunks (e.g., search results, document retrieval)
         if (
@@ -2690,7 +2728,10 @@ Do NOT wrap conversational replies in JSON.
                             )
 
             result_str = json.dumps(
-                truncated, indent=2, default=self._json_serialize_fallback
+                truncated,
+                indent=2,
+                default=self._json_serialize_fallback,
+                ensure_ascii=False,
             )
             # Use larger limit for chunked responses since chunks are the actual data
             if len(result_str) <= max_chars * 3:  # Allow up to 60KB for chunked data
@@ -2698,39 +2739,124 @@ Do NOT wrap conversational replies in JSON.
             # If still too large, keep first 3 chunks only
             truncated["chunks"] = truncated["chunks"][:3]
             return json.dumps(
-                truncated, indent=2, default=self._json_serialize_fallback
+                truncated,
+                indent=2,
+                default=self._json_serialize_fallback,
+                ensure_ascii=False,
             )
 
-        # For Jira responses, keep first 3 issues
-        if (
-            isinstance(content, dict)
-            and "issues" in content
-            and isinstance(content["issues"], list)
-        ):
-            truncated = {
-                **content,
-                "issues": content["issues"][:3],
-                "truncated": True,
-                "total": len(content["issues"]),
-            }
-            return json.dumps(
-                truncated, indent=2, default=self._json_serialize_fallback
-            )[:max_chars]
+        # Dict/list content (Jira "issues", email "messages"/"awaiting_reply",
+        # a bare list, ...): drop whole trailing items -- never slice inside
+        # one -- so the result always re-serializes cleanly (#2620).
+        dropped = self._drop_items_to_fit(content, max_chars)
+        if dropped is not None:
+            return dropped
 
-        # For lists, keep first 3 items
-        if isinstance(content, list):
-            truncated = (
-                content[:3] + [{"truncated": f"{len(content) - 3} more"}]
-                if len(content) > 3
-                else content
+        # Last resort: no list to trim (a scalar-only dict), or the single
+        # surviving item still doesn't fit -- see _drop_items_to_fit.
+        return self._truncate_fallback_text(compact_str, max_chars, as_json)
+
+    def _truncate_fallback_text(self, text: str, max_chars: int, as_json: bool) -> str:
+        """Last-resort slice when there is no whole item left to drop.
+
+        ``as_json`` callers get a JSON envelope (``json.dumps`` escapes the
+        slice, so the result always parses); prose callers get the plain
+        mid-slice they always got (#2620, reflection C2).
+        """
+        if as_json:
+            envelope_overhead = len(
+                json.dumps(
+                    {"truncated": True, "original_chars": len(text), "content": ""},
+                    default=self._json_serialize_fallback,
+                    ensure_ascii=False,
+                )
             )
+            budget = max(0, max_chars - envelope_overhead)
             return json.dumps(
-                truncated, indent=2, default=self._json_serialize_fallback
-            )[:max_chars]
+                {
+                    "truncated": True,
+                    "original_chars": len(text),
+                    "content": text[:budget],
+                },
+                default=self._json_serialize_fallback,
+                ensure_ascii=False,
+            )
 
-        # Simple truncation
         half = max_chars // 2 - 20
-        return f"{content_str[:half]}\n...[truncated]...\n{content_str[-half:]}"
+        return f"{text[:half]}\n...[truncated]...\n{text[-half:]}"
+
+    def _drop_items_to_fit(self, content: Any, max_chars: int) -> Optional[str]:
+        """Fit ``content`` under ``max_chars`` by dropping whole items from
+        the end of its largest list member, re-serializing through
+        ``json.dumps`` on every attempt so the result is always valid JSON
+        (#2620). Handles a bare list, or a dict with one or more
+        list-valued fields (trimming whichever field currently holds the
+        most items first, repeating across fields as needed -- reflection
+        A2).
+
+        Returns ``None`` when there is no list to trim, or when even the
+        single item surviving across every field still exceeds
+        ``max_chars`` -- the caller then falls back to a text slice rather
+        than silently discarding that last item's content (reflection C3).
+        """
+        is_root_list = isinstance(content, list)
+        if is_root_list:
+            lists: Dict[str, List[Any]] = {"__root__": list(content)}
+            base: Dict[str, Any] = {}
+        else:
+            lists = {
+                key: list(value)
+                for key, value in content.items()
+                if isinstance(value, list) and value
+            }
+            base = {key: value for key, value in content.items() if key not in lists}
+
+        if not lists:
+            return None
+
+        totals = {key: len(items) for key, items in lists.items()}
+
+        def render() -> str:
+            dropped_any = any(len(items) < totals[key] for key, items in lists.items())
+            if is_root_list:
+                payload: Any = list(lists["__root__"])
+                if dropped_any:
+                    payload.append(
+                        {
+                            "truncated": True,
+                            "returned": len(lists["__root__"]),
+                            "total": totals["__root__"],
+                        }
+                    )
+            else:
+                payload = {**base, **lists}
+                if dropped_any:
+                    payload["truncated"] = True
+                    payload["truncated_fields"] = {
+                        key: {"returned": len(items), "total": totals[key]}
+                        for key, items in lists.items()
+                        if len(items) < totals[key]
+                    }
+            return json.dumps(
+                payload, default=self._json_serialize_fallback, ensure_ascii=False
+            )
+
+        result = render()
+        while len(result) > max_chars:
+            candidates = [key for key, items in lists.items() if items]
+            if not candidates:
+                return None
+            if sum(len(items) for items in lists.values()) <= 1:
+                # The last surviving item alone doesn't fit even with the
+                # marker overhead. Dropping it would silently return an
+                # empty shell; hand off to the text-slice fallback instead,
+                # which preserves a sliced fragment of it (reflection C3).
+                return None
+            largest = max(candidates, key=lambda key: len(lists[key]))
+            lists[largest].pop()
+            result = render()
+
+        return result
 
     def _namespaced_agent_id(self) -> Optional[str]:
         """Return the registry-assigned namespaced agent id, or None.
@@ -3162,9 +3288,14 @@ Do NOT wrap conversational replies in JSON.
                                 "total_steps": self.total_plan_steps,
                             }
                             plan_context_raw = json.dumps(
-                                plan_context, default=self._json_serialize_fallback
+                                plan_context,
+                                default=self._json_serialize_fallback,
+                                ensure_ascii=False,
                             )
                             if len(plan_context_raw) > 20000:
+                                # Prose call site: spliced into an f-string
+                                # prompt below, never json.loads'd (#2620,
+                                # reflection C2).
                                 plan_context_str = self._truncate_large_content(
                                     plan_context, max_chars=20000
                                 )
@@ -3242,7 +3373,9 @@ Do NOT wrap conversational replies in JSON.
                         "ERROR RECOVERY: Handling previous error"
                     )
 
-                    # Truncate previous outputs if too large to avoid overwhelming the LLM
+                    # Truncate previous outputs if too large to avoid overwhelming the LLM.
+                    # Prose call site: spliced into the recovery prompt below,
+                    # never json.loads'd (#2620, reflection C2).
                     truncated_outputs = (
                         self._truncate_large_content(previous_outputs, max_chars=500)
                         if previous_outputs
@@ -3757,7 +3890,7 @@ Do NOT wrap conversational replies in JSON.
                 if deferred_tool:
                     plan_prompt += (
                         f"You initially wanted to use the {deferred_tool} tool with these arguments:\n"
-                        f"{json.dumps(deferred_args, indent=2, default=self._json_serialize_fallback)}\n\n"
+                        f"{json.dumps(deferred_args, indent=2, default=self._json_serialize_fallback, ensure_ascii=False)}\n\n"
                         "However, you MUST first create a plan. Please create a plan that includes this tool usage as a step.\n\n"
                     )
 

@@ -288,6 +288,41 @@ func TestPreScanNeedsReviewOnlyIsNotEmptyState(t *testing.T) {
 	assertNotContains(t, out, "Nothing needs you.")
 }
 
+// ---------------------------------------------------------------------------
+// #2631 -- RenderDeduped's seen threading. The chat model only ever calls
+// this with the pre-scan card rendering first (seen still empty), but the
+// primitive is shared with the attention card and must behave correctly
+// when a pre-scan section is the one losing an item, not just the other way
+// round -- exercised directly here rather than relying on ordering that
+// happens to hold true today.
+// ---------------------------------------------------------------------------
+
+const preScanTwoSectionsOneItemEach = `{
+  "kind": "email_pre_scan",
+  "urgent": [
+    {"message_id":"u1","sender":"a@x.com","subject":"UrgentDup","why":"r1"}
+  ],
+  "actionable": [
+    {"message_id":"a1","sender":"b@x.com","subject":"ActionableUnique","why":"r2"}
+  ],
+  "suggested_archives": [],
+  "needs_review": [],
+  "totals": {"urgent": 1, "actionable": 1, "informational": 0, "suggested_archives": 0, "needs_review": 0}
+}`
+
+func TestPreScanRenderDedupedDropsSeenItemAndEmptiedSection(t *testing.T) {
+	seen := map[string]bool{"u1": true}
+	out, ids := RenderDeduped("email_pre_scan", raw(t, preScanTwoSectionsOneItemEach), width80, seen)
+	t.Logf("\n%s", plain(out))
+
+	assertNotContains(t, out, "URGENT", "UrgentDup")
+	assertContains(t, out, "NEEDS A REPLY", "ActionableUnique")
+
+	if len(ids) != 1 || ids[0] != "a1" {
+		t.Errorf(`returned ids = %v, want exactly ["a1"] -- u1 was already seen and must not be re-added`, ids)
+	}
+}
+
 func TestDisplaySender(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
 		{`"Sarah Chen" <sarah@example.com>`, "Sarah Chen"},

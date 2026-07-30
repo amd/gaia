@@ -24,7 +24,9 @@ icon: terminal
 tools_count: 0
 models: []
 
-min_gaia_version: "0.22.0"
+# 0.22.0's wheel serves host API 1; this binary needs 1.1 for the control plane and
+# the /v1/<agent>/* relay, so the floor is the next core release.
+min_gaia_version: "0.23.0"
 
 requirements:
   # The binary is statically linked with CGO_ENABLED=0 and holds no model. The

@@ -69,16 +69,32 @@ func isAttentionEnvelope(data json.RawMessage) bool {
 // outer width. Exported (unlike the /query card renderers) because it is
 // invoked directly by the chat model on open, not through Render()'s
 // tool_result dispatch.
-func RenderEmailAttention(data json.RawMessage, width int) string {
+//
+// seen is the set of message_ids a card rendered earlier in the same turn
+// already showed (pass nil, or use Render, for a standalone render with no
+// dedup). An item whose id is already in seen is skipped; every non-empty id
+// this call renders is returned so a later card can be threaded against it
+// too. An item with no message_id is never treated as a duplicate.
+func RenderEmailAttention(data json.RawMessage, width int, seen map[string]bool) (string, []string) {
 	var a emailAttention
 	if err := json.Unmarshal(data, &a); err != nil {
-		return renderInvalid("email_attention", err.Error(), data, width)
+		return renderInvalid("email_attention", err.Error(), data, width), nil
 	}
 	if k := strings.TrimSpace(a.Kind); k != "" && k != "email_attention" {
-		return renderInvalid("email_attention", "kind is "+k+", expected email_attention", data, width)
+		return renderInvalid("email_attention", "kind is "+k+", expected email_attention", data, width), nil
 	}
 	if !isAttentionEnvelope(data) {
-		return renderInvalid("email_attention", "payload carries no attention-view fields", data, width)
+		return renderInvalid("email_attention", "payload carries no attention-view fields", data, width), nil
+	}
+
+	hadItems := len(a.Items) > 0
+	var ids []string
+	a.Items, ids = dedupByMessageID(a.Items, func(it attentionItem) string { return it.MessageID }, seen)
+	if hadItems && len(a.Items) == 0 {
+		// Every item was already shown by an earlier card this turn -- this
+		// card would add nothing, so (unlike a genuinely empty scan) it does
+		// not render at all rather than claiming "Nothing needs you".
+		return "", nil
 	}
 
 	b := newBox(a.title(), width)
@@ -88,7 +104,7 @@ func RenderEmailAttention(data json.RawMessage, width int) string {
 
 	if len(a.Items) == 0 {
 		a.renderEmpty(b)
-		return b.render()
+		return b.render(), ids
 	}
 
 	sections := []struct {
@@ -102,6 +118,7 @@ func RenderEmailAttention(data json.RawMessage, width int) string {
 	}
 
 	shownAny := false
+	row := 0
 	for _, sec := range sections {
 		items := a.itemsOfKind(sec.kind)
 		if len(items) == 0 {
@@ -110,28 +127,29 @@ func RenderEmailAttention(data json.RawMessage, width int) string {
 		if shownAny {
 			b.blank()
 		}
-		a.section(b, sec.label, items)
+		row = a.section(b, sec.label, items, row)
 		shownAny = true
 	}
 	// An item whose kind the server introduced after this client was built
 	// still gets shown — under a generic header — rather than silently
-	// dropped from the card.
+	// dropped from the card. It inherits the running counter, not a reset.
 	if other := a.itemsOfUnknownKind(sections); len(other) > 0 {
 		if shownAny {
 			b.blank()
 		}
-		a.section(b, "OTHER", other)
+		row = a.section(b, "OTHER", other, row)
 	}
 
 	if footer := a.coverageFooterLine(); footer != "" {
 		b.blank()
 		b.addWrapped("  ", footer)
 	}
-	return b.render()
+	return b.render(), ids
 }
 
+// title must be identifiable on its own — the pre-scan card can appear in the same transcript.
 func (a emailAttention) title() string {
-	return fmt.Sprintf("Attention · %d scanned", a.Coverage.Scanned)
+	return fmt.Sprintf("Needs you · %d inbox messages scanned", a.Coverage.Scanned)
 }
 
 func (a emailAttention) itemsOfKind(kind string) []attentionItem {
@@ -211,11 +229,13 @@ func (a emailAttention) renderEmpty(b *box) {
 // looked at — used both by the empty state and, when items ARE present, as
 // the closing footer so a populated card cannot be read as "this is
 // everything" either.
+//
+// "unread" must modify TotalUnread only — Scanned counts read mail too.
 func (a emailAttention) coverageLine() string {
 	c := a.Coverage
-	line := itoa(c.Scanned) + " scanned"
+	line := itoa(c.Scanned) + " inbox messages scanned"
 	if c.TotalUnread != nil {
-		line = itoa(c.Scanned) + " of " + itoa(*c.TotalUnread) + " unread scanned"
+		line += " · " + itoa(*c.TotalUnread) + " unread"
 	}
 	if c.ScanTruncated {
 		line += " (of the " + itoa(c.Scanned) + " most recent — older mail may exist)"
@@ -229,7 +249,8 @@ func (a emailAttention) coverageFooterLine() string {
 	return a.coverageLine() + "."
 }
 
-func (a emailAttention) section(b *box, label string, items []attentionItem) {
+// section draws one bucket and returns the running row number — numbers must stay unique across the whole card, not just within one section.
+func (a emailAttention) section(b *box, label string, items []attentionItem, start int) int {
 	show := len(items)
 	if show > maxAttentionSectionRows {
 		show = maxAttentionSectionRows
@@ -240,7 +261,9 @@ func (a emailAttention) section(b *box, label string, items []attentionItem) {
 	}
 	b.sectionHeader(label, count)
 
-	for n, it := range items[:show] {
+	n := start
+	for _, it := range items[:show] {
+		n++
 		sender := displaySender(it.Sender)
 		if it.Kind == "action_item" && strings.TrimSpace(it.Sender) == "" {
 			sender = "(action item)"
@@ -248,7 +271,7 @@ func (a emailAttention) section(b *box, label string, items []attentionItem) {
 		if it.Mailbox != "" {
 			sender = mailboxLabel(it.Mailbox) + " · " + sender
 		}
-		b.row(n+1, sender, it.Subject)
+		b.row(n, sender, it.Subject)
 		detail := it.Why
 		if it.DueHint != "" {
 			detail = strings.TrimSuffix(detail, ".") + " — due " + it.DueHint
@@ -260,4 +283,5 @@ func (a emailAttention) section(b *box, label string, items []attentionItem) {
 	if extra := len(items) - show; extra > 0 {
 		b.add(rationaleIndent + "+" + itoa(extra) + " more")
 	}
+	return n
 }

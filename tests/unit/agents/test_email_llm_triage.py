@@ -255,8 +255,8 @@ class TestTriageInboxImplWiring:
         (e.g. an auto-generated anonymous sender) needs no LLM call at all."""
 
         class _SingleMessageGmail:
-            def list_messages(self, label_ids=None, max_results=25):
-                return {"messages": [{"id": "spam-1"}]}
+            def list_messages(self, label_ids=None, max_results=25, page_token=None):
+                return {"messages": [{"id": "spam-1"}], "nextPageToken": None}
 
             def get_message(self, msg_id):
                 return {

@@ -50,6 +50,10 @@ _ALLOWED_BACKEND_CALLS = {
     "list_messages",
     "get_thread",
     "get_message",
+    # Batched read (#2643) -- fetches multiple messages in one round-trip,
+    # exactly as read-only as get_message above; the triage scan loop uses
+    # it whenever the backend supports it.
+    "get_messages_batch",
     "get_label",
 }
 
@@ -234,8 +238,27 @@ class TestCoverageHonesty:
         assert out["coverage"]["degraded"] is False
         assert out["coverage"].get("mailbox_errors") is None
 
-    def test_scan_truncated_when_ceiling_hit(self):
+    def test_scan_truncated_false_when_ceiling_exactly_matches_mailbox_size(self):
+        """Regression guard (#2634): hitting the ceiling is NOT the same as
+        mail remaining unseen. This mailbox has exactly 1 message and the
+        ceiling is 1 -- nothing was missed, so scan_truncated must be False.
+        The pre-fix formula (``len(results) >= max_messages``) said True
+        here for the wrong reason; FakeGmailBackend never signals a real
+        next page, so this is also the only honest answer it can give.
+        """
         gmail = _backend(_PLAIN_UNCONFIDENT)
+        out = build_attention_view_impl({"google": gmail}, max_messages=1)
+        assert out["coverage"]["scan_truncated"] is False
+
+    def test_scan_truncated_true_when_backend_signals_more_pages(self):
+        """FakeGmailBackend itself never pages (#2634's R1c keeps the
+        shared fixture single-page-only), so this minimal test-local
+        override reports a truthy ``nextPageToken`` on its first call to
+        prove ``build_attention_view_impl`` surfaces a genuine "more mail
+        exists" signal end to end, not just "did we hit the ceiling".
+        """
+        gmail = _MorePagesGmailBackend(user_email=USER_EMAIL)
+        gmail.add_message(_PLAIN_UNCONFIDENT)
         out = build_attention_view_impl({"google": gmail}, max_messages=1)
         assert out["coverage"]["scan_truncated"] is True
 
@@ -251,6 +274,30 @@ class TestCoverageHonesty:
 class _RaisingGmailBackend(FakeGmailBackend):
     def list_messages(self, **kwargs):
         raise ConnectorsError("token expired")
+
+
+class _MorePagesGmailBackend(FakeGmailBackend):
+    """Reports a truthy ``nextPageToken`` on its first ``list_messages``
+    call only (#2634). ``FakeGmailBackend`` itself always returns
+    ``nextPageToken: None`` -- it is shared by ~13 test files and is
+    deliberately NOT taught real pagination here. Returning the token only
+    once (regardless of what ``page_token`` a caller passes back) means a
+    caller that never needs a second page never triggers one; a caller
+    that DOES ask again gets an honestly-exhausted response instead of the
+    same page forever.
+    """
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._paged_once = False
+
+    def list_messages(self, **kwargs: Any) -> Dict[str, Any]:
+        out = super().list_messages(**kwargs)
+        if not self._paged_once and out["messages"]:
+            out = dict(out)
+            out["nextPageToken"] = "more"
+            self._paged_once = True
+        return out
 
 
 class TestPartialAndTotalMailboxFailure:
