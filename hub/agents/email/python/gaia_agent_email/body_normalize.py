@@ -3,28 +3,17 @@
 """Strip known mail-infrastructure banners from an inbound body before it
 reaches the model (#2642).
 
-Corporate mail gateways stamp boilerplate at the very top of a message body
--- a sensitivity marking, an external-sender caution -- that sits inside the
-region a summarizer scans for "who said this." Left in place, the banner can
-outcompete the real sender for the role of author: a real thread produced a
-summary attributing a decision to "AMD General" (the classification
-marking) because the marking sat exactly where the model expected the
-author's own words to begin.
-
-This module is deliberately conservative: it recognizes a small, enumerable
-set of known banner openers, only at the true top of a body, and never
-removes more than a small capped span. A message that legitimately
-*discusses* one of these phrases -- rather than opening with it -- is left
-untouched (see the hard-negative tests in
-``tests/test_body_normalize_2642.py``).
+Conservative by design: recognizes a small, enumerable set of banner
+openers, only at the true top of a body, with a capped removal. A body that
+merely discusses one of these phrases (rather than opening with it) is left
+untouched — see the hard-negative tests in
+``tests/test_body_normalize_2642.py``.
 
 Called from ``tools.read_tools._thread_message_blocks`` and
-``_format_message_for_llm`` on the raw decoded body, before
-``wrap_untrusted_body``. Not wired into every body-to-prompt path in this
-package -- ``tools.summarize_tools``, ``tools.llm_triage`` and
-``tools.calendar_tools`` each build their own LLM prompt directly from a
-decoded body and are unaffected by this module; see the #2642 plan for what
-this increment covers.
+``_format_message_for_llm``, on the raw decoded body, before
+``wrap_untrusted_body``. Not wired into ``tools.summarize_tools``,
+``tools.llm_triage``, or ``tools.calendar_tools`` — each builds its own LLM
+prompt directly from a decoded body and is unaffected by this module.
 """
 
 from __future__ import annotations
@@ -33,50 +22,30 @@ import re
 import unicodedata
 from typing import Optional, Pattern, Tuple
 
-# Matches a literal untrusted-body delimiter (or any similarly-shaped
-# ``<<<TOKEN>>>`` marker). A single quantified character class with no
-# nested quantifiers, so matching cost stays linear even over an unclosed
-# 50 KB run (see TestNoPathologicalRuntime) -- never the source of a hang.
-# Mirrors thread_fold._DELIMITER_TOKEN_RE, which only scrubs the fold LLM's
-# *output*; this one runs on every inbound body, closing the matching
-# input-side hole (a literal delimiter token in a raw body was, until now,
-# wrapped unscrubbed).
+# Untrusted-body delimiter shape; single quantified class, no nested
+# quantifiers, so an unclosed match stays linear-time (see
+# TestNoPathologicalRuntime) instead of a hang.
 _DELIMITER_TOKEN_RE = re.compile(r"<<<[A-Z0-9_]+>>>")
 
-# Only the leading ~2 KB of a body is ever scanned for a banner opener --
-# real banners sit at the true top, and bounding the window means banner
-# detection costs the same whether the body is 500 bytes or 500 KB.
+# Banner detection only ever scans this leading prefix, so cost is
+# independent of body size.
 _SCAN_WINDOW_CHARS = 2048
 
-# Hard ceiling on any single removed span, regardless of what a matched
-# trigger would otherwise consume. Without this, a sender who opens with a
-# banner-shaped line and never sends a following blank line would have their
-# real content folded into the deleted span -- reproducing the "summary
-# omits the real message" failure this change exists to prevent.
+# Hard cap on any single removed span, regardless of what a matched trigger
+# would otherwise consume.
 _MAX_BANNER_REMOVAL_CHARS = 300
 _MAX_BANNER_REMOVAL_LINES = 5
 
-# Categories treated as invisible formatting/control noise at the leading
-# edge. A zero-width space (U+200B) or BOM (U+FEFF) sitting in front of a
-# banner would otherwise defeat every ``^``-anchored pattern below --
-# ``str.strip()`` does not remove them (they are not ``str.isspace()``), so
-# a caller's own ``.strip()`` cannot be relied on to have cleared them.
+# Cf/Cc characters (e.g. ZWSP, BOM) are not ``str.isspace()`` — stripped
+# before anchoring so one can't hide a banner from every ``^`` pattern.
 _INVISIBLE_CATEGORIES = ("Cf", "Cc")
 
-# Each pattern identifies the START of a known mail-infrastructure banner,
-# anchored at position 0 of the (bounded, normalized) scan window -- a body
-# that merely discusses one of these phrases mid-sentence, or quotes it
-# later in a reply, never matches. That anchoring is what keeps this
-# conservative rather than "delete anything that looks like boilerplate."
-# Bounded: no nested quantifiers, so matching cost is linear in the window.
+# Anchored at position 0 of the scan window — a body merely discussing one
+# of these phrases (not opening with it) never matches.
 _BANNER_TRIGGERS: Tuple[Pattern[str], ...] = (
-    # A bare classification marking occupying its own first line -- the
-    # "AMD General" style header some corporate mail gateways stamp above
-    # the real body.
+    # A classification marking alone on its own first line.
     re.compile(r"^AMD General[ \t]*(?:\r?\n|$)"),
-    # The external-sender caution sentence gateways prepend. The banner
-    # text continues past this clause (same or next line), so the trigger
-    # only needs to recognize the opening, not the full boilerplate.
+    # The external-sender caution opener; the banner continues past this.
     re.compile(r"^Caution: This message originated from an External Source\.?"),
 )
 
@@ -114,8 +83,8 @@ def _nth_newline_end(text: str, n: int) -> Optional[int]:
     return None
 
 
-# A blank line: a newline, optional same-line horizontal whitespace, then
-# another newline. Marks the end of the banner's own paragraph.
+# End of the banner's own paragraph: a newline, optional same-line
+# whitespace, then another newline.
 _BLANK_LINE_RE = re.compile(r"\n[ \t]*\n")
 
 
@@ -130,11 +99,8 @@ def _capped_removal_end(window: str) -> int:
     """How many leading characters of ``window`` to remove, given it opens
     with a recognized banner trigger.
 
-    Prefers the natural end of the banner's own paragraph (through the next
-    blank line) when that fits under BOTH hard caps; otherwise cuts at
-    whichever cap binds first. Never removes more than
-    ``_MAX_BANNER_REMOVAL_CHARS`` characters, and never a span containing
-    more than ``_MAX_BANNER_REMOVAL_LINES`` newlines.
+    Prefers the natural end of the banner's own paragraph when that fits
+    under both hard caps; otherwise cuts at whichever cap binds first.
     """
     char_cap = min(len(window), _MAX_BANNER_REMOVAL_CHARS)
     bounded = window[:char_cap]
@@ -151,27 +117,19 @@ def _capped_removal_end(window: str) -> int:
 
 def normalize_email_body(body: str) -> str:
     """Strip forged delimiter tokens and known infrastructure banners from
-    a raw, decoded email body -- before ``wrap_untrusted_body``.
+    a raw, decoded email body — before ``wrap_untrusted_body``.
 
-    Two independent passes:
-
-    1. Unconditional, full-body delimiter-token scrub -- never conditional
-       on whether a banner is also found (closes the input-side forgery
-       hole described in the module docstring).
-    2. Leading-banner detection over a bounded ~2 KB prefix window, with a
-       capped removal.
-
-    A body that does not open with a recognized banner is returned exactly
-    as given, aside from the delimiter scrub in step 1.
+    Two independent passes: (1) an unconditional, full-body delimiter-token
+    scrub, then (2) leading-banner detection over a bounded prefix window
+    with a capped removal. A body that does not open with a recognized
+    banner is returned exactly as given, aside from pass 1.
     """
     if not body:
         return body
 
-    # 1. Unconditional delimiter scrub -- full body, any length (linear-time
-    # regardless; see TestNoPathologicalRuntime).
+    # Unconditional — not gated on whether a banner is also found below.
     body = _DELIMITER_TOKEN_RE.sub("", body)
 
-    # 2. Leading-banner detection, bounded window.
     leading_len = _leading_invisible_len(body)
     rest = body[leading_len:]
     window = rest[:_SCAN_WINDOW_CHARS]
@@ -180,20 +138,15 @@ def normalize_email_body(body: str) -> str:
     if len(normalized_window) == len(window):
         match = _match_banner_trigger(normalized_window)
     else:
-        # NFKC changed the window's length (a rare compatibility
-        # decomposition) -- offsets in the normalized text would no longer
-        # line up with `window`, so fall back to the raw text rather than
-        # risk slicing at the wrong point. A homoglyph-spelled banner that
-        # also happens to trigger a length-changing decomposition is a
-        # known, unexercised gap of this fallback.
+        # Length-changing NFKC decomposition — offsets would no longer line
+        # up with `window`, so match the raw text instead of risking a
+        # misaligned slice.
         match = _match_banner_trigger(window)
 
     if match is None:
         return body
 
-    # The removal span always covers at least the recognized trigger itself
-    # (never leaves a partial banner fragment behind), extended to the
-    # banner's natural paragraph end when that fits under both caps.
+    # Never less than the trigger's own match — no partial banner left behind.
     removal_end = max(match.end(), _capped_removal_end(window))
     removal_end = min(removal_end, len(window))
     return rest[removal_end:]
