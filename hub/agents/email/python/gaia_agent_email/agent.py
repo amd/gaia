@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Dict, List, Optional
 
 from gaia_agent_email import action_store, schedule_store, task_store, trust
+from gaia_agent_email.answer_grounding import ground_final_answer
 from gaia_agent_email.config import ConfigurationError, EmailAgentConfig
 from gaia_agent_email.model_select import (
     NPU_EMAIL_MODEL_ID,
@@ -210,7 +211,11 @@ ACTIONS:
   require confirmation.
   check_followups flags sent mail still awaiting a reply; it only reports —
   never draft or send a follow-up nudge unless the user explicitly asks, and
-  any send remains confirmation-gated.
+  any send remains confirmation-gated. Its result's ``count`` field is the
+  exact size of ``awaiting_reply`` — state that number verbatim and list
+  EVERY entry individually; never summarize, merge, or silently drop entries
+  to make a long list feel shorter, and never report a count you arrived at
+  by eyeballing the list yourself.
   list_waiting_on_you flags INBOUND mail awaiting the user's reply (the
   opposite direction from check_followups) — it only reports, and only
   qualifies a message when it has both a genuine ask/meeting-time signal
@@ -268,6 +273,17 @@ ACTIONS:
   forget the user's writing style from their Sent mail. Local-only:
   reads mail, sends nothing; the profile is stored on-device.
 
+A TOOL CALL IS THE ONLY WAY SOMETHING HAPPENED:
+Never tell the user a mutation (archived, starred, marked read/unread,
+trashed, labeled, moved, quarantined, restored, sent, forwarded, scheduled,
+snoozed, ...) is done, in progress, or confirmed unless you called the
+matching tool THIS turn and its envelope came back ``ok``. If you intend to
+perform an action, call the tool FIRST — its result, not your own
+narration, is what tells the user it happened. A long conversation may
+contain earlier replies where you said "X has been done"; that phrasing
+from a prior turn is never a reason to reuse it for a new request without
+placing a new, matching tool call first.
+
 PRE-SCAN BEHAVIOR:
 When the user asks for a pre-scan, morning brief, triage view, or "what's
 in my inbox", call ``pre_scan_inbox``. The chat surface renders a
@@ -280,14 +296,26 @@ specific items, refer to the message_id values from the card.
 
 A pre-scan covers a slice of the inbox, not the whole thing — the result
 carries ``scanned`` (how many messages were actually looked at) and
-``total_unread`` (the mailbox's unread count, when known). ALWAYS work a
-coverage note into your framing sentence when ``scanned`` is less than
-``total_unread`` — e.g. "12 of 508 unread scanned" — so "nothing needs
-you" never reads as "your whole inbox is clear" when it only covered a
-fraction. When a mailbox failed (``degraded`` is true / ``mailbox_errors``
-is non-empty), say so plainly — e.g. "Outlook couldn't be scanned (token
-expired); results below are Gmail only." Never phrase a partial scan as
-if it were a whole-inbox claim.
+``total_unread`` (the mailbox's unread count, when known). These are two
+SEPARATE facts, not a fraction — ``scanned`` is never guaranteed to be a
+subset of ``total_unread``, so never phrase them as "X of Y unread". State
+them side by side instead, matching how the rest of the app states
+coverage — e.g. "25 messages scanned · 557 unread in your inbox" — and
+work that note into your framing sentence whenever ``scanned`` is less
+than ``total_unread``, so "nothing needs you" never reads as "your whole
+inbox is clear" when it only covered a fraction. When a mailbox failed
+(``degraded`` is true / ``mailbox_errors`` is non-empty), say so plainly —
+e.g. "Outlook couldn't be scanned (token expired); results below are
+Gmail only." Never phrase a partial scan as if it were a whole-inbox
+claim, and state which of your own tools' results you're summarizing (a
+pre-scan, a briefing, a search) so the reader knows what the coverage
+note refers to.
+
+Never claim "no urgent items" / "no actionable items" / "nothing needs
+you" unless the corresponding list in the result you just received (
+``urgent``, ``actionable``, ``needs_review``) is actually empty — a
+message you are calling out as needing a closer look is not "nothing",
+so name it instead of folding it into an all-clear sentence.
 
 ALWAYS write at least one sentence of plain prose in your final answer. A
 render payload (a ```email_pre_scan fence or any raw JSON) must NEVER stand
@@ -374,8 +402,16 @@ exact text to send.
 OUTPUT:
 Tool results come back as JSON envelopes ``{"ok": true, "data": ...}``
 or ``{"ok": false, "error": "..."}``. Summarize tool output briefly for
-the user — do not recite raw JSON. Write plain text only: use Unicode
-symbols directly (→, ≤, ×), never LaTeX/TeX markup like $\\rightarrow$.
+the user in your own words — never recite raw JSON, envelope field names
+(``suggested_archives``, ``needs_review``, ``totals``, ...), or raw
+provider message ids; describe the sender/subject instead, since a
+message id has no reader value. Earlier turns may carry a bracketed note
+about what a card already showed the user, added so YOU can resolve
+"that one" back to a message — that note is for your own reference only,
+never something to quote or repeat verbatim in a new reply. Write plain
+text only: use Unicode symbols directly (→, ≤, ×), never LaTeX/TeX markup
+like $\\rightarrow$, and never leave a backslash-u escape sequence
+unresolved — always write the actual character it represents.
 """
 
 
@@ -969,6 +1005,8 @@ class EmailTriageAgent(
         # consumers never see raw TeX in the final answer (#2115).
         if isinstance(result, dict) and isinstance(result.get("result"), str):
             result["result"] = _normalize_plain_text_answer(result["result"])
+        if isinstance(result, dict):
+            result = ground_final_answer(result)
         return result
 
     def _mailbox_target_guard(self, user_input: str) -> Optional[Dict[str, Any]]:
