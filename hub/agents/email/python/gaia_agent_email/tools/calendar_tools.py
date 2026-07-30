@@ -709,18 +709,30 @@ def detect_calendar_conflicts_impl(
 # listed start/end times — that judgement belongs to
 # ``detect_calendar_conflicts`` alone. This is a deliberately blunt,
 # deterministic grep-level check, not an attempt to parse the model's
-# reasoning: it fires on conflict-judgement language appearing in a turn
-# that read the calendar (``list_calendar_events`` ran) but never called the
-# one tool authorized to answer a conflict question. Scoping to a
-# calendar-touching turn keeps an unrelated sentence (e.g. "conflicts with
-# your stated preference") from tripping it on turns that never listed
-# events.
+# reasoning. Two ways in:
+#
+# 1. The turn called ``list_calendar_events`` (the common case — the model
+#    saw real events and narrated its own verdict about them instead of
+#    calling the conflict tool). Gated on >=2 events actually listed: below
+#    that no conflict is even possible.
+# 2. The turn called NEITHER calendar tool at all, yet the response still
+#    states a conflict verdict citing >=2 specific times — a claim with no
+#    tool grounding whatsoever (the emptier, more dangerous cousin of (1);
+#    same shape as the "confident claim, empty tool trace" pattern seen
+#    elsewhere, e.g. #2621). Reuses ``_TIME_RE`` (already defined above for
+#    meeting-request time-signal detection) as the "cites specific events"
+#    signal, so an unrelated sentence like "conflicts with your stated
+#    preference" — no times in it — still doesn't trip this.
 
 _CONFLICT_VERDICT_RE = re.compile(
     r"\bconflicts?\b|\boverlaps?\b|\bback-to-back\b|\bback to back\b|"
     r"\bdouble[- ]book(?:ed|ing)?\b",
     re.IGNORECASE,
 )
+
+# How many events must actually be visible for a conflict to even be
+# possible. Below this, "no conflicts" is trivially, arithmetically true.
+_MIN_EVENTS_FOR_A_POSSIBLE_CONFLICT = 2
 
 
 def _listed_event_count_from_conversation(
@@ -735,6 +747,21 @@ def _listed_event_count_from_conversation(
     actually saw. A malformed/error envelope has no ``data`` key and is
     silently skipped here (not double-counted as a crash): it already
     surfaced through the tool's own error envelope.
+
+    Takes the MAX across every call this turn (conversation is rebuilt fresh
+    per turn by the base ``Agent`` — never a prior turn's stale data), not
+    the first/last/sum: a model that re-lists with a different window still
+    saw the largest set at some point this turn, and summing would
+    double-count events returned by more than one overlapping-window call.
+    Biasing toward the larger count only makes this guard MORE likely to
+    ask for verification, never less — consistent with fail-loud over
+    fail-silent when the two calls disagree on scope.
+
+    ``list_calendar_events`` pages at ``max_results`` (25, unrequested by
+    this caller) with no follow-up pagination — a >25-event calendar is
+    under-counted against the true total, but never below 2 when 2+ exist,
+    since the page is a same-order prefix of the full result set, not a
+    filtered subset that could skip the earliest events.
     """
     max_count = 0
     for msg in conversation:
@@ -755,25 +782,35 @@ def response_has_ungrounded_conflict_claim(
     tool_names: Iterable[str],
     listed_event_count: int,
 ) -> bool:
-    """True when ``response_text`` renders a conflict/overlap verdict but
-    ``detect_calendar_conflicts`` never ran in the same turn.
+    """True when ``response_text`` renders a conflict/overlap verdict that
+    ``detect_calendar_conflicts`` never computed in the same turn.
 
     ``tool_names`` is every tool called this turn (order doesn't matter).
-    Returns ``False`` whenever ``detect_calendar_conflicts`` is present (the
-    verdict IS grounded), ``list_calendar_events`` is absent (the turn never
-    touched the calendar, so conflict-shaped words belong to something else
-    entirely), or ``listed_event_count`` is under 2 — with zero or one event
-    listed, no conflict is even possible, so "no conflicts" is trivially
-    true without the tool and is not an ungrounded claim.
+    Always ``False`` once ``detect_calendar_conflicts`` is present — the
+    verdict IS grounded regardless of anything else below.
+
+    Two ways the rest can still be ``True``:
+
+    - ``list_calendar_events`` ran and returned >=2 events (below that, no
+      conflict is even possible, so "no conflicts" is trivially true and
+      not flagged).
+    - NEITHER calendar tool ran, but the response cites >=2 specific times
+      alongside conflict language — a claim with no tool call behind it at
+      all (the emptier, more dangerous case: nothing here even to
+      cross-check against).
+
+    A conflict-shaped word with no calendar tool touched and no cited times
+    (e.g. "that conflicts with your stated preference") is never flagged —
+    it isn't a calendar-conflict claim in the first place.
     """
     names = set(tool_names)
     if "detect_calendar_conflicts" in names:
         return False
-    if "list_calendar_events" not in names:
+    if not response_text or not _CONFLICT_VERDICT_RE.search(response_text):
         return False
-    if listed_event_count < 2:
-        return False
-    return bool(response_text) and bool(_CONFLICT_VERDICT_RE.search(response_text))
+    if "list_calendar_events" in names:
+        return listed_event_count >= _MIN_EVENTS_FOR_A_POSSIBLE_CONFLICT
+    return len(_TIME_RE.findall(response_text)) >= _MIN_EVENTS_FOR_A_POSSIBLE_CONFLICT
 
 
 _UNGROUNDED_CONFLICT_CORRECTION = (

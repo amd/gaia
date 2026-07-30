@@ -16,10 +16,14 @@ Five layers, each deterministic (no LLM, no live calendar):
    ``detect_calendar_conflicts`` — pins against the real ``_TOOL_REGISTRY``
    descriptions (the schema actually sent to the model).
 3. ``response_has_ungrounded_conflict_claim`` / ``append_conflict_grounding_correction``
-   — the pure, deterministic grounding guard. Gated on at least 2 events
-   actually listed: with 0 or 1 events, no conflict is even possible, so
-   "no conflicts" is trivially true without the tool — see
-   ``TestResponseHasUngroundedConflictClaim`` "sparse calendar" cases.
+   — the pure, deterministic grounding guard. Two ways in: (a)
+   ``list_calendar_events`` ran with >=2 events listed (below that, no
+   conflict is even possible, so "no conflicts" is trivially true without
+   the tool — see the "sparse calendar" cases), or (b) NEITHER calendar
+   tool ran at all, but the response still cites >=2 specific times
+   alongside conflict language — a claim with zero tool grounding, the
+   emptier and more dangerous cousin of (a) — see the "no calendar tool
+   called at all" cases.
 4. ``_tool_names_from_conversation`` / ``_listed_event_count_from_conversation``
    — the trace/result extractors the guard reads.
 5. ``EmailTriageAgent.process_query`` wiring — the guard actually runs on a
@@ -249,6 +253,58 @@ class TestResponseHasUngroundedConflictClaim:
                 5,
             )
             is True
+        )
+
+    # -- no calendar tool called at all: the emptier, more dangerous case --
+    # A conflict verdict citing specific times with NEITHER calendar tool in
+    # the trace has nothing at all to cross-check against (dispatcher
+    # follow-up on #2571, same failure shape as #2621's "confident claim,
+    # empty tool trace"). ``listed_event_count`` is necessarily 0 here since
+    # nothing was ever listed.
+
+    def test_fires_with_no_calendar_tool_called_but_two_times_cited(self):
+        assert (
+            response_has_ungrounded_conflict_claim(
+                "Your 7:00 AM and 7:30 AM meetings conflict.",
+                ["search_messages"],
+                0,
+            )
+            is True
+        )
+
+    def test_fires_with_no_tools_called_at_all_but_two_times_cited(self):
+        assert (
+            response_has_ungrounded_conflict_claim(
+                "Your 7:00 AM and 7:30 AM meetings conflict.",
+                [],
+                0,
+            )
+            is True
+        )
+
+    def test_does_not_fire_with_no_calendar_tool_and_only_one_time_cited(self):
+        # One concrete time isn't enough to describe two conflicting events.
+        assert (
+            response_has_ungrounded_conflict_claim(
+                "Your 7:00 AM meeting doesn't conflict with anything.",
+                ["search_messages"],
+                0,
+            )
+            is False
+        )
+
+    def test_does_not_fire_with_no_calendar_tool_and_no_times_cited(self):
+        # Conflict-shaped word, no calendar tool, no times cited at all —
+        # this is not a calendar-conflict claim in the first place (e.g. a
+        # preferences clash), matching
+        # ``test_does_not_fire_when_the_calendar_was_never_listed`` above.
+        assert (
+            response_has_ungrounded_conflict_claim(
+                "That preference conflicts with an existing rule.",
+                ["get_preferences"],
+                0,
+            )
+            is False
         )
 
 
@@ -498,6 +554,28 @@ class TestProcessQueryConflictGrounding:
         result = agent.process_query("List my calendar events and flag conflicts.")
 
         assert result["result"] == canned["result"]
+
+    def test_appends_correction_when_conflict_claimed_with_zero_tool_calls(
+        self, agent, monkeypatch
+    ):
+        """Dispatcher follow-up: a conflict verdict with NO calendar tool
+        call at all (matching #2621's "confident claim, empty tool trace"
+        shape) has nothing to cross-check against — the most dangerous
+        version of this bug, and must still be caught."""
+        from gaia.agents.base.agent import Agent
+
+        canned = {
+            "status": "success",
+            "result": "Your 7:00 AM and 7:30 AM meetings conflict with each other.",
+            "conversation": [],  # no tool_calls at all this turn
+        }
+        monkeypatch.setattr(Agent, "process_query", lambda self, *a, **k: dict(canned))
+
+        result = agent.process_query("Do my morning meetings conflict?")
+
+        assert result["result"].startswith(canned["result"])
+        assert "detect_calendar_conflicts" in result["result"]
+        assert result["result"] != canned["result"]
 
 
 if __name__ == "__main__":
