@@ -209,7 +209,7 @@ func TestBatchFalsePositiveStaysHarmless(t *testing.T) {
 // carry a real ESC byte via a \u001b escape, so this path is live, not
 // theoretical.
 func TestFailedRenderErrorSanitizesControlBytesPreservesNewlines(t *testing.T) {
-	malicious := "line one\n\x1b[31mred\x1b[0m line two\x07 line three"
+	malicious := "archived 5\tfailed 2\r\nline three\n\x1b[31mred\x1b[0m line four\x07 line five"
 	encoded, err := json.Marshal(malicious)
 	if err != nil {
 		t.Fatal(err)
@@ -235,10 +235,25 @@ func TestFailedRenderErrorSanitizesControlBytesPreservesNewlines(t *testing.T) {
 	if strings.ContainsRune(errMsg.Content, 0x07) {
 		t.Errorf("C0 byte (BEL) reached Message.Content: %q", errMsg.Content)
 	}
+	// A tab keeps the word break (becomes a space, per cards.clean()'s
+	// convention) rather than vanishing and running the words together.
+	if strings.ContainsRune(errMsg.Content, '\t') {
+		t.Errorf("tab byte reached Message.Content: %q", errMsg.Content)
+	}
+	if !strings.Contains(errMsg.Content, "archived 5 failed 2") {
+		t.Errorf("a tab must become a space, not disappear: %q", errMsg.Content)
+	}
+	// \r\n must collapse to a single \n, not leave \r or a blank line behind.
+	if strings.ContainsRune(errMsg.Content, '\r') {
+		t.Errorf("CR byte reached Message.Content: %q", errMsg.Content)
+	}
+	if !strings.Contains(errMsg.Content, "failed 2\nline three") {
+		t.Errorf("\\r\\n must collapse to a single \\n: %q", errMsg.Content)
+	}
 	if !strings.Contains(errMsg.Content, "\n") {
 		t.Errorf("an embedded newline must survive sanitization (the remedy command needs its own line): %q", errMsg.Content)
 	}
-	if !strings.Contains(errMsg.Content, "line one") || !strings.Contains(errMsg.Content, "line three") {
+	if !strings.Contains(errMsg.Content, "archived 5") || !strings.Contains(errMsg.Content, "line five") {
 		t.Errorf("message text lost content during sanitization: %q", errMsg.Content)
 	}
 }
