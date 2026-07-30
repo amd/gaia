@@ -443,6 +443,12 @@ _AUTONOMY_ERROR_SENSITIVE_RE = re.compile(
     r"|\bbearer\s+\S+",
     re.IGNORECASE,
 )
+# A recipient/sender address embedded in a provider exception (e.g. "delivery
+# failed for alice@example.com") is redacted too — fully, not partially
+# masked. ``message_id`` already identifies which message failed, so the
+# address adds no debugging value a caller doesn't already have, and this
+# report/log text can end up in a public bug report via `gaia diagnostics`.
+_AUTONOMY_ERROR_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 #: Hard cap on a sanitized autonomy error's message length (#2625 — C5) — the
 #: length cap alone bounds how much of a raw provider payload can leak even
 #: past the pattern redaction above.
@@ -463,9 +469,12 @@ def _sanitize_autonomy_error(
     (``agent_routes.py``'s ``/autonomy/run``) and can be shipped off-box in a
     ``gaia diagnostics`` bundle. This keeps the exception *type* (always
     safe) and a redacted, length-capped rendering of its message — never the
-    raw provider payload.
+    raw provider payload. Redaction runs BEFORE the length cap: truncating
+    first could cut a credential or address in half, leaving a mangled
+    fragment the patterns below no longer recognize (and so don't redact).
     """
     text = _AUTONOMY_ERROR_SENSITIVE_RE.sub(_redact_autonomy_error_match, str(exc))
+    text = _AUTONOMY_ERROR_EMAIL_RE.sub("[redacted-email]", text)
     if len(text) > _AUTONOMY_ERROR_MESSAGE_MAX_LEN:
         text = text[:_AUTONOMY_ERROR_MESSAGE_MAX_LEN].rstrip() + "…[truncated]"
     return {"message_id": message_id, "error_type": type(exc).__name__, "error": text}

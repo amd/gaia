@@ -1015,3 +1015,51 @@ def test_error_report_redacts_and_truncates_sensitive_exception_text(tmp_path):
     assert "sekrit-token-abc123" not in error_text
     assert "[redacted]" in error_text
     assert len(error_text) <= 220
+
+
+def test_error_report_redacts_email_addresses(tmp_path):
+    """#2625/adversarial-C5 (coordinator follow-up): a recipient/sender
+    address embedded in the exception text must be redacted too, not just
+    credential headers — ``message_id`` already identifies which message
+    failed, so the address adds no debugging value a caller doesn't already
+    have."""
+    messages = _ordered_promo_messages(1)
+    agent = _build_agent(tmp_path, messages, level=LEVEL_FULL)
+
+    def _raise(action_type, row):
+        raise RuntimeError("delivery failed for alice.smith@realdomain.example")
+
+    with patch.object(agent, "_autonomy_execute", side_effect=_raise):
+        report = agent._run_email_autonomy_cycle()
+
+    assert len(report["errors"]) == 1, report["errors"]
+    error_text = report["errors"][0]["error"]
+    assert "alice.smith@realdomain.example" not in error_text
+    assert "[redacted" in error_text
+
+
+def test_error_report_redacts_email_straddling_truncation_boundary(tmp_path):
+    """#2625/adversarial-C5 (coordinator follow-up): redaction must run
+    BEFORE the length cap. Places the email so it STARTS before the cutoff
+    and ENDS after it — if truncation ran first, the cut would land mid-
+    domain, the mangled remainder ("...@realdomain.exam") would no longer
+    match a complete-TLD email pattern, and the (unredacted) local part
+    "alice.smith" would survive into the final report."""
+    from gaia_agent_email.agent import _AUTONOMY_ERROR_MESSAGE_MAX_LEN as cap
+
+    messages = _ordered_promo_messages(1)
+    agent = _build_agent(tmp_path, messages, level=LEVEL_FULL)
+
+    email = "alice.smith@realdomain.example"
+    prefix = "delivery failed: " + "z" * max(0, cap - 15 - len("delivery failed: "))
+    assert len(prefix) < cap < len(prefix) + len(email), "email must straddle the cap"
+
+    def _raise(action_type, row):
+        raise RuntimeError(prefix + email + " (additional trailing context)")
+
+    with patch.object(agent, "_autonomy_execute", side_effect=_raise):
+        report = agent._run_email_autonomy_cycle()
+
+    error_text = report["errors"][0]["error"]
+    assert "alice.smith" not in error_text
+    assert "@realdomain" not in error_text
