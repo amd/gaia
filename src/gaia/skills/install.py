@@ -46,7 +46,13 @@ from typing import Any, Callable, Optional
 from gaia.hub.catalog import Fetcher, get_hub_base_url
 from gaia.logger import get_logger
 from gaia.skills.errors import SkillError, SkillNotFoundError, SkillValidationError
-from gaia.skills.format import SKILL_FILENAME, Skill, parse_skill, validate_skill
+from gaia.skills.format import (
+    SKILL_FILENAME,
+    SKILL_TOOLS_FILENAME,
+    Skill,
+    parse_skill,
+    validate_skill,
+)
 from gaia.skills.hub import (
     download_artifact,
     fetch_skill_doc,
@@ -354,12 +360,24 @@ def _gate_tier(
             if claimed != tier
             else "it is published at that tier"
         )
+        # Name the concrete risk when the skill ships code. "Unsandboxed" is
+        # abstract; "its tools.py runs in your agent's process" is the decision the
+        # user is actually being asked to make.
+        code_warning = (
+            f" This skill ships {SKILL_TOOLS_FILENAME} providing "
+            f"{', '.join(skill.tool_names)} — that Python is imported and run "
+            "in your agent's own process, with your agent's access, the first "
+            "time the skill loads."
+            if skill.gaia.tools
+            else " This skill is instruction-only: it ships no code, but its "
+            "instructions still reach the model."
+        )
         raise SkillInstallError(
             f"Skill '{skill.name}' installs at '{LOWEST_TIER}' because {why}. "
             f"Experimental skills are neither signed by a publisher GAIA trusts nor "
-            "audited, and v1 has no sandbox to contain one, so installing is an "
-            "explicit choice: re-run with --allow-experimental if you trust the "
-            f"source. See {_DOCS}"
+            f"audited, and v1 has no sandbox to contain one.{code_warning} "
+            "Installing is therefore an explicit choice: re-run with "
+            f"--allow-experimental if you trust the source. See {_DOCS}"
         )
 
     risky = dangerous_grants(permissions)

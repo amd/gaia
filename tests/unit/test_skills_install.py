@@ -545,6 +545,55 @@ def test_experimental_requires_allow_experimental(marketplace, tmp_path):
     assert result.installed_tier == "experimental"
 
 
+def test_the_experimental_refusal_names_the_code_the_user_would_be_running(
+    marketplace, tmp_path
+):
+    """ "Unsandboxed" is abstract; naming tools.py is the actual decision."""
+    marketplace.keygen()
+    source = _write_source(tmp_path, tier="experimental", permissions=("network:read",))
+    (source / "tools.py").write_text(
+        "from gaia.agents.base.tools import tool\n\n\n"
+        "@tool\ndef search_web(query: str) -> dict:\n"
+        '    """Search the web."""\n    return {"q": query}\n',
+        "utf-8",
+    )
+    skill_md = source / "SKILL.md"
+    skill_md.write_text(
+        skill_md.read_text("utf-8").replace(
+            "    permissions:",
+            "    tools:\n"
+            "      - name: search_web\n"
+            "        description: Search the web.\n"
+            "        parameters:\n"
+            "          query:\n"
+            "            type: string\n"
+            "            required: true\n"
+            "    permissions:",
+        ),
+        "utf-8",
+    )
+    marketplace.publish(source)
+
+    with pytest.raises(SkillInstallError) as excinfo:
+        marketplace.install("web-research")
+    message = str(excinfo.value)
+    assert "tools.py" in message
+    assert "search_web" in message
+    assert "your agent's own process" in message
+
+
+def test_the_experimental_refusal_says_so_when_a_skill_ships_no_code(
+    marketplace, tmp_path
+):
+    marketplace.keygen()
+    marketplace.publish(
+        _write_source(tmp_path, tier="experimental", permissions=("network:read",))
+    )
+
+    with pytest.raises(SkillInstallError, match="instruction-only"):
+        marketplace.install("web-research")
+
+
 def test_untrusted_signature_drops_a_community_skill_to_experimental(
     marketplace, tmp_path
 ):
