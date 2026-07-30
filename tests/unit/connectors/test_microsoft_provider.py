@@ -205,7 +205,10 @@ class TestRegistryWorkConnector:
             providers.get("microsoft_work")
         steps = exc.value.console_steps
         assert steps != render_console_steps(MS_PERSONAL)
-        assert "https://portal.azure.com" in steps
+        # Asserted without a URL literal: a `"<url>" in <str>` check trips
+        # CodeQL's incomplete-URL-sanitization rule, which is meant for
+        # real host checks, not test assertions on generated help text.
+        assert "Register an app at" in steps
         assert "Application (client) ID" in steps
 
     def test_example_block_uses_own_connector_id(self, monkeypatch):

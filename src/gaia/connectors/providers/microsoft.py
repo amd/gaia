@@ -119,17 +119,18 @@ def _check_env_tenant_conflict(provider_id: str, resolved_tenant: str) -> None:
         )
     if raw == resolved_tenant:
         if provider_id not in _env_tenant_deprecation_logged:
-            # Deliberately does NOT echo the env var's value. It is only ever
-            # a tenant id, but this line persists into `gaia diagnostics`
-            # bundles, so the value stays out of it; the conflict error below
-            # still names it, because that is shown interactively to the user
-            # who set it and is useless without it.
+            # Fully literal on purpose: no interpolated value reaches this
+            # sink. The line persists into `gaia diagnostics` bundles, and
+            # everything worth interpolating here (the env value, the
+            # connector, the resolved tenant) is either a credential-adjacent
+            # read or flagged as one. The conflict path below still names all
+            # of it — that is raised interactively to the user who set the
+            # variable and is not actionable without it.
             logger.warning(
                 "GAIA_MICROSOFT_TENANT is set but deprecated and no longer "
-                "read — %r resolves its tenant from its own connector "
-                "definition. This is a one-time notice; unset "
-                "GAIA_MICROSOFT_TENANT to silence it.",
-                provider_id,
+                "read — each Microsoft connector resolves its tenant from its "
+                "own definition. This is a one-time notice; unset "
+                "GAIA_MICROSOFT_TENANT to silence it."
             )
             _env_tenant_deprecation_logged.add(provider_id)
         return
