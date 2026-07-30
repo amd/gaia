@@ -157,3 +157,122 @@ class TestAutonomyRunRefusal:
                 cli.handle_email_autonomy_command(ns)
         assert exc.value.code == 1
         assert "could not reach" in capsys.readouterr().err
+
+
+class TestPrintAutonomyRun:
+    """Direct tests of ``_print_autonomy_run`` (#2651) — no existing coverage
+    before this. ``errors``/``stopped`` (added to the report by #2624/#2625)
+    reached the JSON body over REST already; this print function silently
+    dropped both, so a CLI user saw the same clean summary line whether the
+    run succeeded cleanly or hit failures partway through."""
+
+    def test_clean_run_shows_zero_errors_and_no_stop_line(self, capsys):
+        cli._print_autonomy_run(
+            {
+                "executed": [{"message_id": "m1"}],
+                "proposals": [],
+                "skipped": 2,
+                "already_proposed": 0,
+                "errors": [],
+                "stopped": None,
+            }
+        )
+        out = capsys.readouterr().out
+        assert "executed=1 proposals=0 skipped=2 already_proposed=0 errors=0" in out
+        assert "stopped early" not in out
+
+    def test_nonzero_errors_are_counted(self, capsys):
+        cli._print_autonomy_run(
+            {
+                "executed": [{"message_id": "m1"}],
+                "proposals": [],
+                "skipped": 0,
+                "already_proposed": 0,
+                "errors": [
+                    {
+                        "message_id": "m2",
+                        "error_type": "ConnectionError",
+                        "error": "502",
+                    },
+                    {
+                        "message_id": "m3",
+                        "error_type": "ConnectionError",
+                        "error": "502",
+                    },
+                ],
+                "stopped": None,
+            }
+        )
+        out = capsys.readouterr().out
+        assert "errors=2" in out
+
+    def test_consecutive_failures_stop_reason_is_printed(self, capsys):
+        cli._print_autonomy_run(
+            {
+                "executed": [],
+                "proposals": [],
+                "skipped": 0,
+                "already_proposed": 0,
+                "errors": [{"message_id": f"m{i}"} for i in range(3)],
+                "stopped": "consecutive_failures",
+            }
+        )
+        out = capsys.readouterr().out
+        assert "stopped early: consecutive_failures" in out
+
+    def test_autonomy_off_stop_reason_is_printed(self, capsys):
+        cli._print_autonomy_run(
+            {
+                "executed": [],
+                "proposals": [],
+                "skipped": 0,
+                "already_proposed": 0,
+                "errors": [],
+                "stopped": "autonomy_off",
+            }
+        )
+        out = capsys.readouterr().out
+        assert "stopped early: autonomy_off" in out
+
+    def test_missing_keys_default_safely(self, capsys):
+        """A minimal/older-shaped body (missing errors/stopped) must not
+        raise — the same ``.get()``-with-default pattern the other whitelist
+        fields already use keeps this backward compatible."""
+        cli._print_autonomy_run({"executed": [], "proposals": []})
+        out = capsys.readouterr().out
+        assert "errors=0" in out
+        assert "stopped early" not in out
+
+
+class TestAutonomyRunEndToEnd:
+    def test_run_prints_error_count_and_stop_reason_via_relay(self, capsys):
+        ns = argparse.Namespace(
+            autonomy_action="run", session_id="cli", max_messages=25
+        )
+
+        def fake_relay(agent_id, method, path, *, json_body=None):
+            if path == "agent/session":
+                return {"session_id": "cli", "created": False}
+            return {
+                "executed": [{"message_id": "m1"}],
+                "proposals": [],
+                "skipped": 0,
+                "already_proposed": 0,
+                "errors": [
+                    {
+                        "message_id": "m2",
+                        "error_type": "ConnectionError",
+                        "error": "502",
+                    }
+                ],
+                "stopped": "consecutive_failures",
+            }
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr("gaia.daemon.agent_control.relay_json", fake_relay)
+            with pytest.raises(SystemExit) as exc:
+                cli.handle_email_autonomy_command(ns)
+        assert exc.value.code == 0
+        out = capsys.readouterr().out
+        assert "errors=1" in out
+        assert "stopped early: consecutive_failures" in out
