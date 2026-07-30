@@ -5523,6 +5523,13 @@ def handle_email_autonomy_command(args) -> None:
     except DaemonError as e:
         # Sidecar unreachable, autonomy off and refusing /run (#2528), or any
         # other relay failure — surfaced loudly, never a silent empty result.
+        # #2617: this does print the same text twice (log.error to stdout,
+        # then the stderr print below) -- kept deliberately. log.error is the
+        # durable record `gaia diagnostics` bundles from ~/.gaia/gaia.log;
+        # dropping it would make a reported failure invisible to a bug
+        # report. The stderr print matches the ❌ convention every other
+        # `except DaemonError` handler in this file uses. The duplicate line
+        # is cosmetic; a missing log record is not.
         log.error("email autonomy %s failed: %s", action, e)
         print(f"❌ {e}", file=sys.stderr)
         sys.exit(1)
