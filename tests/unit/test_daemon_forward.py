@@ -198,8 +198,14 @@ def test_forward_provider_ungranted_raises_not_granted_and_posts_nothing():
 def test_ungranted_error_is_headless_first_and_complete():
     """This is the FIRST error a cold headless box hits on `gaia email` (#2347),
     so it must lead with the CLI (connect + grant, matching scopes), point at
-    where the OAuth-client setup surfaces, and only then mention the UI."""
-    fwd, _ = _forwarder(grants={})
+    where the OAuth-client setup surfaces, and only then mention the UI.
+
+    Uses a spec WITH a declared ConnectorRequirement (#2730 D5/MF-3/MF-4) —
+    the real production email spec always has one (verified against
+    ``builtin_specs()["email"]``), so this is the shape a real headless user
+    actually hits. The no-requirement shape is a distinct, separately-tested
+    case (see ``test_ungranted_error_with_no_declared_requirement_names_the_gap``)."""
+    fwd, _ = _forwarder(grants={}, spec=_SPEC_WITH_REQUIRED_CONNECTIONS)
     with pytest.raises(NotGrantedError) as exc:
         fwd.forward_provider(
             "email", "google", base_url="http://127.0.0.1:9", bearer="b"
@@ -210,6 +216,23 @@ def test_ungranted_error_is_headless_first_and_complete():
     assert "--grant-agent installed:email" in msg
     # CLI leads; the UI is the fallback, not the headline.
     assert msg.index("gaia connectors connect") < msg.index("Settings -> Connections")
+
+
+def test_ungranted_error_with_no_declared_requirement_names_the_gap():
+    """#2730 MF-3: a spec with no ConnectorRequirement for the provider must
+    NOT print an uncopyable `--scopes <scopes>` placeholder (AC-9a scans
+    source for exactly that literal). It must instead name the real gap —
+    the missing AgentSidecarSpec declaration — so the message stays
+    actionable without a placeholder."""
+    fwd, _ = _forwarder(grants={})  # default _SPEC has no required_connections
+    with pytest.raises(NotGrantedError) as exc:
+        fwd.forward_provider(
+            "email", "google", base_url="http://127.0.0.1:9", bearer="b"
+        )
+    msg = str(exc.value)
+    assert "<scope" not in msg
+    assert "ConnectorRequirement" in msg
+    assert "google" in msg
 
 
 def test_forward_provider_unforwardable_provider_raises():

@@ -214,15 +214,41 @@ class ConnectionForwarder:
                 f"{', '.join(spec.forward_providers) or 'none'}."
             )
         requirement = self._requirement(spec, provider)
+        if requirement is None:
+            # Every forwarding spec MUST declare a ConnectorRequirement for
+            # each of its forward_providers (#2730) — without one there is no
+            # real scope list to print, and the mint below falls back to
+            # trusting the ledger's raw claim (today's pre-#2730 behaviour)
+            # instead of an explicitly-declared required subset. That is a
+            # silent regression waiting to happen the next time a forwarding
+            # sidecar is added without one; log it loudly so it is visible.
+            logger.warning(
+                "forward-out: agent '%s' has no ConnectorRequirement declared "
+                "for '%s' in its AgentSidecarSpec.required_connections; minting "
+                "against the full ledger claim instead of a declared required "
+                "subset. Add one so this provider's remedy can name real "
+                "scopes and its mint can narrow to what is actually required.",
+                agent_id,
+                provider,
+            )
         granted = self._granted_scopes(provider, grant_agent_id)
         if granted is None:
-            full_scopes = " ".join(requirement.scopes) if requirement else "<scopes>"
+            if requirement is not None:
+                scope_command = (
+                    f"  gaia connectors connect {provider} --scopes "
+                    f"{' '.join(requirement.scopes)} --grant-agent {grant_agent_id}\n"
+                )
+            else:
+                scope_command = (
+                    f"agent '{agent_id}' declares no ConnectorRequirement for "
+                    f"'{provider}' — add one to its AgentSidecarSpec.required_connections "
+                    "before this remedy can name real scopes.\n"
+                )
             raise NotGrantedError(
                 f"agent '{agent_id}' ({grant_agent_id}) has no grant for "
                 f"'{provider}'. Connect the account and grant the agent in one "
                 f"command — no Agent UI required:\n"
-                f"  gaia connectors connect {provider} --scopes {full_scopes} "
-                f"--grant-agent {grant_agent_id}\n"
+                f"{scope_command}"
                 f"(`gaia connectors connect {provider}` prints the full OAuth-client "
                 f"setup if the connector isn't configured yet.) In the Agent UI you "
                 f"can instead use Settings -> Connections."
