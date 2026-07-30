@@ -20,6 +20,22 @@
  * There is deliberately NO always-ALLOW default. A tier whose gate requires an
  * audit and arrives without one is REJECTED with an actionable error (see
  * {@link TIERS_REQUIRING_AUDIT}), never quietly waved through.
+ *
+ * ── Known gap: the report is not yet BOUND to what it audited ──────────────
+ * TODO(#2468): a report is accepted on shape + verdict alone. Nothing checks
+ * that it was produced for THIS skill, THIS version, or THIS tier, so an ALLOW
+ * earned by an `experimental` audit can be replayed onto a `verified` publish,
+ * an old version's report onto a new version, or one skill's onto another. The
+ * binding fields (`skill`, `version`, `cleared_tiers`, `content_digest`) and
+ * their checks land with the audit engine.
+ *
+ * Those checks close REPLAY, not FORGERY. The report is publisher-supplied and
+ * unsigned — nothing here verifies its provenance — so a hostile publisher can
+ * still fabricate one whose digest matches their own bytes. Making the verdict
+ * unforgeable needs an attestation the publisher cannot mint (#1710 signing, a
+ * CI-held key, or the Worker running the audit itself), not a stricter parse.
+ * Until then this gate is a guard against mistakes and stale reports, and must
+ * not be described as a security boundary against a motivated publisher.
  */
 
 import { HttpError } from "./http";
