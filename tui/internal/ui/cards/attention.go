@@ -102,6 +102,7 @@ func RenderEmailAttention(data json.RawMessage, width int) string {
 	}
 
 	shownAny := false
+	row := 0
 	for _, sec := range sections {
 		items := a.itemsOfKind(sec.kind)
 		if len(items) == 0 {
@@ -110,17 +111,18 @@ func RenderEmailAttention(data json.RawMessage, width int) string {
 		if shownAny {
 			b.blank()
 		}
-		a.section(b, sec.label, items)
+		row = a.section(b, sec.label, items, row)
 		shownAny = true
 	}
 	// An item whose kind the server introduced after this client was built
 	// still gets shown — under a generic header — rather than silently
-	// dropped from the card.
+	// dropped from the card. It inherits the running counter too: it is a
+	// fifth section, not a reset back to row 1 (#2631).
 	if other := a.itemsOfUnknownKind(sections); len(other) > 0 {
 		if shownAny {
 			b.blank()
 		}
-		a.section(b, "OTHER", other)
+		row = a.section(b, "OTHER", other, row)
 	}
 
 	if footer := a.coverageFooterLine(); footer != "" {
@@ -130,8 +132,13 @@ func RenderEmailAttention(data json.RawMessage, width int) string {
 	return b.render()
 }
 
+// title names both what this card is and what it actually looked at. Plain
+// "Attention · N scanned" is a tautology that reads as generic status noise
+// next to the pre-scan card's own "Inbox · N scanned" — when both cards can
+// appear in the same transcript, each has to be identifiable on its own
+// (#2631).
 func (a emailAttention) title() string {
-	return fmt.Sprintf("Attention · %d scanned", a.Coverage.Scanned)
+	return fmt.Sprintf("Needs you · %d inbox messages scanned", a.Coverage.Scanned)
 }
 
 func (a emailAttention) itemsOfKind(kind string) []attentionItem {
@@ -211,11 +218,17 @@ func (a emailAttention) renderEmpty(b *box) {
 // looked at — used both by the empty state and, when items ARE present, as
 // the closing footer so a populated card cannot be read as "this is
 // everything" either.
+//
+// Scanned counts every inbox message the scan looked at, read and unread
+// alike — it is never itself an unread count, so "unread" must always
+// modify TotalUnread specifically, never appear as if it qualified Scanned
+// (the #2635 defect read "N of M unread scanned", overstating unread
+// coverage by conflating the two).
 func (a emailAttention) coverageLine() string {
 	c := a.Coverage
-	line := itoa(c.Scanned) + " scanned"
+	line := itoa(c.Scanned) + " inbox messages scanned"
 	if c.TotalUnread != nil {
-		line = itoa(c.Scanned) + " of " + itoa(*c.TotalUnread) + " unread scanned"
+		line += " · " + itoa(*c.TotalUnread) + " unread"
 	}
 	if c.ScanTruncated {
 		line += " (of the " + itoa(c.Scanned) + " most recent — older mail may exist)"
@@ -229,7 +242,13 @@ func (a emailAttention) coverageFooterLine() string {
 	return a.coverageLine() + "."
 }
 
-func (a emailAttention) section(b *box, label string, items []attentionItem) {
+// section draws one bucket and returns the running row number, threading a
+// counter across every call the way emailprescan.go's section() already
+// does — so a message's row number is unique and increasing across the
+// WHOLE card, not just within its own section (#2631; row numbers restarting
+// per section made "archive number 2" ambiguous when two sections each had
+// their own row 2).
+func (a emailAttention) section(b *box, label string, items []attentionItem, start int) int {
 	show := len(items)
 	if show > maxAttentionSectionRows {
 		show = maxAttentionSectionRows
@@ -240,7 +259,9 @@ func (a emailAttention) section(b *box, label string, items []attentionItem) {
 	}
 	b.sectionHeader(label, count)
 
-	for n, it := range items[:show] {
+	n := start
+	for _, it := range items[:show] {
+		n++
 		sender := displaySender(it.Sender)
 		if it.Kind == "action_item" && strings.TrimSpace(it.Sender) == "" {
 			sender = "(action item)"
@@ -248,7 +269,7 @@ func (a emailAttention) section(b *box, label string, items []attentionItem) {
 		if it.Mailbox != "" {
 			sender = mailboxLabel(it.Mailbox) + " · " + sender
 		}
-		b.row(n+1, sender, it.Subject)
+		b.row(n, sender, it.Subject)
 		detail := it.Why
 		if it.DueHint != "" {
 			detail = strings.TrimSuffix(detail, ".") + " — due " + it.DueHint
@@ -260,4 +281,5 @@ func (a emailAttention) section(b *box, label string, items []attentionItem) {
 	if extra := len(items) - show; extra > 0 {
 		b.add(rationaleIndent + "+" + itoa(extra) + " more")
 	}
+	return n
 }
