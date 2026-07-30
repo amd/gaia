@@ -67,10 +67,26 @@ versa (`409 id_conflict`).
   claiming `community` or `verified` unless a cleared audit report rides along in
   the `audit` part; `BLOCK` is rejected (`403`), `REVIEW` is held (`409`), and an
   `experimental` skill published without a report is recorded honestly as
-  `unaudited` rather than stamped `ALLOW`. The verdict-enforcement half lives in
+  `unaudited` rather than stamped `ALLOW`. Enforcement lives in
   [`src/audit.ts`](./src/audit.ts); the scanning engine that *produces* the
-  verdict is issue [#2468](https://github.com/amd/gaia/issues/2468) and runs
-  publisher-side as `gaia skill audit`.
+  verdict is `gaia skill audit`
+  ([#2468](https://github.com/amd/gaia/issues/2468), `src/gaia/skills/audit/`)
+  and runs publisher-side or in CI.
+- **The report is bound to what it audited.** The claimed `security_tier` must
+  appear in the report's `cleared_tiers`, and its `skill`, `version`, and
+  `manifest_digest` must match the publish — otherwise an ALLOW earned as
+  `experimental` for v1.0.0 could publish v1.1.0 as `verified`. Failures are
+  `audit_tier_not_cleared` (403), `audit_skill_mismatch` (400), `audit_stale`
+  (428), and `audit_digest_mismatch` (400). For a gated tier a *missing* binding
+  field is refused too, or omitting it would be the bypass.
+  <br />**These close replay and accident, not forgery.** The report is
+  publisher-supplied and unsigned, so a hostile publisher can fabricate one whose
+  every field agrees. The stored record therefore says
+  `attestation: "publisher-asserted"` — read it as "self-consistent", never as
+  "AMD vouches for this". An unforgeable verdict needs signing
+  ([#1710](https://github.com/amd/gaia/issues/1710)) or the Worker running the
+  audit itself. `content_digest` (the whole tree) is recorded but not recomputed
+  here, because the tree arrives as an archive this Worker does not unpack.
 
 ## R2 bucket layout
 
@@ -261,7 +277,7 @@ workers/agent-hub/
 │   ├── multipart.ts       # form-part + artifact helpers shared by both lanes
 │   ├── manifest.ts        # gaia-agent.yaml validation + semver
 │   ├── skill-manifest.ts  # SKILL.md front-matter validation (skill-format grammar)
-│   ├── audit.ts           # security-audit gate for skill publishes (#2468 seam)
+│   ├── audit.ts           # security-audit gate + report binding for skill publishes (#2468)
 │   ├── catalog.ts         # per-agent/per-skill manifest + index.json rebuild
 │   ├── storage.ts         # R2 key layout + read/write helpers
 │   ├── http.ts            # HttpError + JSON response helpers

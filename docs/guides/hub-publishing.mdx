@@ -403,11 +403,25 @@ SemVer + immutability rules, the same `security_tier` vocabulary, and the same
 
 - **A version is required, and `0.0.0` is rejected** — that value is the
   format's "unversioned" sentinel, so it can never become an immutable release.
-- **`community` and `verified` need a cleared security audit.** The publish call
-  refuses those tiers unless a passing audit report rides along
-  ([#2468](https://github.com/amd/gaia/issues/2468)); an `experimental` skill may
-  publish without one and is recorded as `unaudited` rather than stamped as
-  passing.
+- **`community` and `verified` need a cleared security audit.** Produce the
+  report with `gaia skill audit ./<skill>/ --json`
+  ([#2468](https://github.com/amd/gaia/issues/2468)) and attach it as the `audit`
+  form part. The publish call refuses those tiers without one; an `experimental`
+  skill may publish without a report and is recorded as `unaudited` rather than
+  stamped as passing.
+
+  Two consequences worth knowing before you publish:
+
+  - **You cannot claim a tier the audit did not clear.** The report lists the
+    tiers your findings actually cleared and the hub checks the claim against it.
+    Check before you claim with `gaia skill audit ./<skill>/ --tier community`.
+    `verified` is never cleared by the automated scan — it needs the AMD audit on
+    top of a passing one, so a spotless skill claiming it earns `REVIEW`.
+  - **Every version re-earns its verdict.** The report is bound to the skill,
+    the version, and a digest of the `SKILL.md` you audited, so re-run the audit
+    after any edit. Publishing a bumped version with the previous report fails
+    with `audit_stale`, and editing the manifest after auditing fails with
+    `audit_digest_mismatch`.
 
 Skill names share one namespace with agent ids, so a name already taken by a
 published agent is rejected (and vice versa).

@@ -1,11 +1,15 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """
-CLI for ``gaia skill {list|info|create|import|export}``.
+CLI for ``gaia skill {list|info|create|import|export|audit}``.
 
 ``install`` / ``search`` / ``publish`` belong to the marketplace phase
 (issue #2467) and are deliberately absent — not even as stubs, so a user never
 discovers a verb that cannot work.
+
+``audit`` runs the pre-publish security gate (issue #2468) that the hub also runs
+at publish time, so an author can self-check before publishing rather than
+discovering a rejection.
 """
 
 from __future__ import annotations

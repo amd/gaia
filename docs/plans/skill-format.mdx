@@ -277,6 +277,76 @@ to `experimental`, surfaced by `gaia skill info`, and reset to `experimental` on
 [Phase 2](#phased-build).
 </Note>
 
+### Pre-publish security audit
+
+Every skill passes an automated audit before it can enter the hub catalog
+([#2468](https://github.com/amd/gaia/issues/2468)). Authors run the same engine
+locally, so a clean local audit is what a successful publish requires:
+
+```bash
+gaia skill audit ./my-skill/                    # ALLOW / REVIEW / BLOCK + file:line findings
+gaia skill audit ./my-skill/ --tier community   # would it clear the tier I want to claim?
+gaia skill audit ./my-skill/ --json             # the payload the publish path attaches
+```
+
+Exit codes are distinct so CI can branch: `0` allow, `5` review, `6` block, `4`
+the skill could not be parsed. **A skill the audit cannot read is never passed** —
+there is nothing to audit and nothing to publish.
+
+Four analyzers run over the directory. Nothing imports the skill, runs its code,
+or touches the network, so auditing a hostile skill is itself safe — this is a
+static gate, and the runtime sandbox remains [Phase 2](#phased-build).
+
+| Analyzer | What it looks for |
+|---|---|
+| **Code** (`tools.py`, `scripts/`, any `*.py`) | Dangerous constructs regardless of what was declared: `eval`/`exec`, `shell=True`, dynamic import, `pickle.loads`, native libraries, credential-file reads, bulk `os.environ` harvesting, encoded payloads fed to `exec`. AST-based, so `os.system` in a docstring is not a finding and `from os import system as sh` is. |
+| **Permission truth** | Diffs the domains the code actually touches against `metadata.gaia.permissions`. An undeclared domain, an insufficient level (declared `read`, performs a write), use despite an explicit `<domain>:none`, or a write outside a declared scope are all **hard findings** — the declaration is what the consent prompt and the Phase 2 sandbox are built on. Over-declaration is advisory: asking for less than you declared cannot hurt the user. |
+| **Supply chain** | Imports of packages the manifest never declares, dependencies fetched from outside a package index (`git+`, a URL, a path), and unpinned versions — an unpinned dependency means the code audited today is not the code that runs tomorrow. |
+| **Instruction body** | Prompt-injection and jailbreak patterns in the Markdown body *and* the `description`. Both reach the model: the description from discovery onward, the body once the skill triggers. |
+
+**Tier-scaled rigor.** The same findings produce different verdicts depending on
+the tier a skill claims, which is what makes the tiers above mean something at
+publish time:
+
+| Claimed tier | Verdict |
+|---|---|
+| `experimental` | Advisory — findings are surfaced but do not gate. `critical` still blocks: there is no tier at which shipping known-malicious code is acceptable. |
+| `community` | `high` forces `REVIEW`, `critical` blocks. |
+| `verified` | `medium` forces `REVIEW`, `high` blocks — **and the automated gate never grants it.** A spotless skill claiming `verified` earns `REVIEW`: "cleared the robot, awaiting the human." |
+
+**A skill cannot be stamped a tier whose gate it did not clear.** The report lists
+the tiers its findings actually cleared, and the hub compares the claimed tier
+against that list — so an unearned claim is *refused*, not recorded. `verified`
+never appears in that list, which is what stops a publisher self-stamping the top
+tier; the AMD audit is what adds it.
+
+**A new version re-earns its verdict.** The report is bound to the skill name, the
+version, and a digest of the audited bytes, so a report cannot be replayed onto a
+different publish. CI re-runs the full audit on every PR touching a skill, with no
+"already audited" short-circuit.
+
+<Warning>
+**The gate proves consistency, not trustworthiness.** The audit report is a
+publisher-supplied form part with no attestation, so the binding checks close
+*replay and accident* — stale reports, forgotten re-audits, careless tier bumps —
+but not *forgery*. A hostile publisher can fabricate a report whose every field
+agrees, including the digest over their own files.
+
+That is why a recorded verdict says `attestation: "publisher-asserted"`. Read it
+as "self-consistent", never as "AMD vouches for this". Making a verdict
+unforgeable needs an attestation the publisher cannot mint — report signing with
+a CI-held key ([#1710](https://github.com/amd/gaia/issues/1710)), or the hub
+running the audit itself — not a stricter parse.
+</Warning>
+
+**Disclosure.** Findings name `file:line` and the fix, but the offending source
+text is withheld from every report unless a caller passes `--show-snippets`
+locally. In CI the per-finding detail goes to the repo's private Security → Code
+scanning tab as SARIF; the PR comment carries verdicts, tiers, and counts only.
+`REVIEW` currently refuses the publish rather than admitting it — the quarantine
+lane and its maintainer sign-off workflow are
+[#2675](https://github.com/amd/gaia/issues/2675).
+
 ### Tool registration
 
 A skill's `tools` map onto the existing decorator and registry. On load, the
@@ -326,10 +396,14 @@ gaia skill info <name> [--json] [--body]
 gaia skill create <name> [--dir DIR] [--description TEXT] [--with-tools] [--force]
 gaia skill import <folder|zip|https-url> [--name NAME] [--force]
 gaia skill export <name> [--output FILE.zip]
+gaia skill audit <dir> [--json] [--output FILE] [--sarif FILE] [--path-prefix DIR]
+                       [--tier TIER] [--fail-on SEVERITY] [--show-snippets]
 ```
 
 Exit codes are distinct so scripts can branch: `0` ok, `2` usage, `3` not found,
-`4` invalid (including a discovery root containing a malformed skill).
+`4` invalid (including a discovery root containing a malformed skill), and — for
+`audit` — `5` review, `6` block. `REVIEW` and `BLOCK` are separate codes so CI can
+hold a skill for sign-off without reporting it as rejected.
 
 **Still PROPOSED** — the registry/marketplace verbs belong to
 [#2467](https://github.com/amd/gaia/issues/2467) /
@@ -958,11 +1032,30 @@ implementation-level questions for whoever builds the runtime:
    marketplace (#647)?
 3. **`/api/skills` install sources.** Registry-only, or also local path / URL?
    The latter widens the install-time security surface.
-4. **Body-injection scanning.** Static scanning of instruction bodies for
-   injection patterns at import — required for `community`+, advisory for
-   `experimental`? (Also open in
-   [Agent Skills → Open questions](/spec/agent-skills#open-questions); resolve in
-   one place.)
+4. ~~**Body-injection scanning.**~~ **Resolved by
+   [#2468](https://github.com/amd/gaia/issues/2468): every skill's body is
+   scanned, and the tier decides the consequence.** The "required for
+   `community`+, advisory for `experimental`" split was the right instinct, but it
+   does not need to be its own policy — body findings feed the same tier gate as
+   code findings, so the split falls out for free: at `experimental` a body
+   finding is surfaced and does not gate, at `community` it forces `REVIEW`, at
+   `verified` a `medium` is already enough to hold it. See
+   [Pre-publish security audit](#pre-publish-security-audit) for the scan itself.
+
+   Two decisions inside it are worth recording, because both trade precision
+   against evasion:
+
+   - **Fenced and quoted text is downgraded one step, never ignored.** A skill
+     that documents injection patterns so the model can *refuse* them is the good
+     case, so blocking it would punish the careful author. But fenced text still
+     reaches the model — models do not reliably treat it as inert data — so a
+     code block buys a severity step, not a pass. Otherwise "put the directive in
+     a fence" would be the standing bypass.
+   - **Prohibitions are not directives.** "NEVER dump the environment" is the
+     security instruction, not a request for one, so a prohibition immediately
+     before a match suppresses it. Rules whose own pattern opens with a negation
+     (concealment's "do not tell the user") are unaffected, because the check
+     looks only at text *before* the match.
 5. ~~**`docs/spec/` relocation.**~~ **Settled with Phase 1: this document stays in
    `docs/plans/`.** [Agent Skills](/spec/agent-skills) is the spec surface — it
    already lives in `docs/spec/` and satisfies #691's "documented in `docs/spec/`"

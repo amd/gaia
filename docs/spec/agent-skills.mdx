@@ -10,7 +10,8 @@ icon: "puzzle-piece"
 **Shipped:** the `gaia.skills` runtime — `SKILL.md` parser + validator, the three
 discovery roots with auditable precedence, progressive disclosure,
 `<skill>/<tool>` tool registration, `Agent.load_skill` / `unload_skill`, and
-`gaia skill list|info|create|import|export`.
+`gaia skill list|info|create|import|export`, and the pre-publish security
+audit (`gaia skill audit`, [#2468](https://github.com/amd/gaia/issues/2468)).
 
 **Still proposed:** the permission sandbox and tier-ceiling enforcement
 ([#1019](https://github.com/amd/gaia/issues/1019)), the skill marketplace and
@@ -453,6 +454,15 @@ agent id (the hub rejects the publish).
   rather than stamped as having passed — the catalog never implies an audit that
   did not happen.
 
+  The verdict is **bound to what it audited** — skill, version, claimed tier, and
+  a digest of the `SKILL.md` — so a report cannot be replayed onto a different
+  publish, and a new version re-earns its verdict. The claimed tier must appear in
+  the report's `cleared_tiers`, which is what makes "cannot claim a tier it did
+  not clear" enforced rather than recorded. Because the report is
+  publisher-supplied and unsigned, a recorded verdict is marked
+  `publisher-asserted`: it means self-consistent, not vouched for. See
+  [Skill Format → Pre-publish security audit](/plans/skill-format#pre-publish-security-audit).
+
 **Verification.** Install-time integrity uses the same mechanism as agents: the
 per-skill `manifest.json` records the Worker-computed SHA-256 of every published
 artifact, and the installer checks the bytes it downloaded against it.
@@ -540,8 +550,15 @@ standard intentionally leaves open.
 
 - **Tool-skill execution in foreign runtimes.** How much of a GAIA tool skill
   should degrade vs. fail when run by a host that can't enforce its permissions?
-- **Body-injection trust.** Static scanning of instruction bodies for injection
-  patterns at import — required for `community`+, advisory for `experimental`?
+- ~~**Body-injection trust.**~~ **Resolved by
+  [#2468](https://github.com/amd/gaia/issues/2468).** Every skill's body is
+  scanned for injection patterns at publish, and the claimed tier decides the
+  consequence rather than a separate policy: advisory at `experimental`, forcing
+  `REVIEW` at `community`, and gated on a `medium` at `verified`. Run it yourself
+  with `gaia skill audit ./<skill>/`. The precision trade-offs (fenced text is
+  downgraded one step rather than ignored; a prohibition is not a directive) are
+  recorded in
+  [Skill Format → Open questions](/plans/skill-format#open-questions).
 - **Versioning of bundled vs standalone.** Reconciling an agent-pinned bundled
   skill with a newer standalone install of the same `name`.
 
