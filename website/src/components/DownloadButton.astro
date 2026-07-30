@@ -43,35 +43,37 @@ const sizeCls = size === 'lg' ? 'px-6 py-3 text-[14px]' : 'px-3.5 py-1.5 text-[1
     TARGET_LABELS,
   } from '../scripts/download-target';
 
-  (async () => {
+  (() => {
     const els = document.querySelectorAll<HTMLAnchorElement>('[data-download-cta]');
     if (!els.length) return;
 
-    try {
-      const target = await resolveDownloadTarget(navigator);
-      if (target) {
-        els.forEach((el) => {
-          const label = el.querySelector('[data-dl-label]');
-          if (label) label.textContent = `Agent UI for ${TARGET_LABELS[target]}`;
-        });
-      }
-
-      // Best-effort: latest version + the installer asset for that target.
-      const res = await fetch('https://api.github.com/repos/amd/gaia/releases/latest');
-      if (!res.ok) return;
-      const rel = await res.json();
-      const ver: string = rel.tag_name;
-      const assets: { name: string; browser_download_url: string }[] = rel.assets || [];
-      const url = target
-        ? assets.find((a) => TARGET_ASSETS[target].test(a.name))?.browser_download_url
-        : undefined;
+    const setText = (selector: string, text: string) =>
       els.forEach((el) => {
-        if (url) el.href = url;
-        const v = el.querySelector('[data-dl-version]');
-        if (v && ver) v.textContent = ver;
+        const node = el.querySelector(selector);
+        if (node) node.textContent = text;
       });
-    } catch {
-      /* keep the releases-page fallback */
-    }
+
+    // Kept independent: a stalled architecture probe must not withhold the
+    // version, and a failed release fetch must not withhold the label. Either
+    // one resolving to null just leaves the releases-page href in place.
+    const targetPromise = resolveDownloadTarget(navigator).catch(() => null);
+    const releasePromise = fetch('https://api.github.com/repos/amd/gaia/releases/latest')
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null);
+
+    targetPromise.then((target) => {
+      if (target) setText('[data-dl-label]', `Agent UI for ${TARGET_LABELS[target]}`);
+    });
+
+    releasePromise.then((rel) => {
+      if (rel?.tag_name) setText('[data-dl-version]', rel.tag_name);
+    });
+
+    Promise.all([targetPromise, releasePromise]).then(([target, rel]) => {
+      if (!target || !rel) return;
+      const assets: { name: string; browser_download_url: string }[] = rel.assets || [];
+      const url = assets.find((a) => TARGET_ASSETS[target].test(a.name))?.browser_download_url;
+      if (url) els.forEach((el) => (el.href = url));
+    });
   })();
 </script>

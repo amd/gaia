@@ -3,11 +3,9 @@
 // SPDX-License-Identifier: MIT
 
 // The two ways to run GAIA, given peer billing: the Agent UI (Electron desktop
-// app) and the terminal hub (the Go binary in tui/). Both are becoming hub
-// components published to the catalog, so this deliberately carries no install
-// command and no release-asset deep link — the Agent UI CTA is the existing
-// OS-detecting DownloadButton, and the terminal hub points at the Hub, which is
-// where its catalog entry will render its own versions, platforms and sizes.
+// app) and the terminal hub (the Go binary in tui/). The Agent UI CTA is the
+// OS-detecting DownloadButton; the terminal hub carries the one-line installer
+// until its hub component entry is published.
 //
 // Naming is the product's own: "Agent UI" and "terminal hub" (cobra Short
 // "GAIA Terminal Agent Hub"). Never "Agent TUI" — it appears nowhere.
