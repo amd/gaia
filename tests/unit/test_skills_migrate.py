@@ -673,6 +673,27 @@ def test_cli_migrate_json_report(run_cli, tmp_path):
     assert by_name["git-status"]["blockers"]
 
 
+def test_cli_migrate_reports_a_collision_without_hiding_the_batch(run_cli, tmp_path):
+    """An install collision on one skill must not suppress the others' report."""
+    sources = tmp_path / "src"
+    write_source(sources, "release-notes", OPENCLAW_INSTRUCTION_ONLY)
+    write_source(sources, "pdf-extract", HERMES_PDF_EXTRACT)
+
+    # Pre-install one so the second pass collides on it.
+    rc, _, _ = run_cli(str(sources / "release-notes"), "--from", "openclaw")
+    assert rc == 0
+
+    rc, out, err = run_cli(str(sources))
+
+    assert rc == 4
+    # The collision is named, and distinguished from being unmigratable.
+    assert "could not be written" in err
+    assert "release-notes" in err
+    assert "unmigratable" not in out
+    # The other skill still migrated and installed.
+    assert (tmp_path / "gaia-home" / "skills" / "pdf-extract").is_dir()
+
+
 def test_cli_migrate_out_directory(run_cli, tmp_path):
     source = write_source(tmp_path / "src", "release-notes", OPENCLAW_INSTRUCTION_ONLY)
     out_dir = tmp_path / "elsewhere"

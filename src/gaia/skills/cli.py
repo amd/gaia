@@ -435,11 +435,20 @@ def _handle_migrate(args: argparse.Namespace) -> int:
     ]
 
     installed: dict[str, str] = {}
+    install_errors: dict[str, str] = {}
     if not args.dry_run:
         for outcome in outcomes:
-            if outcome.migrated:
+            if not outcome.migrated:
+                continue
+            try:
                 target = install_migrated(outcome, destination, force=args.force)
-                installed[outcome.name] = str(target)
+            except SkillError as exc:
+                # One collision must not hide the report for the rest of a batch.
+                # Tracked apart from `blockers`: the skill migrated fine, it just
+                # could not be written, which is a different thing to tell a user.
+                install_errors[outcome.name] = f"{exc}"
+                continue
+            installed[outcome.name] = str(target)
 
     migrated = [o for o in outcomes if o.migrated]
     refused = [o for o in outcomes if not o.migrated]
@@ -452,12 +461,18 @@ def _handle_migrate(args: argparse.Namespace) -> int:
             "total": len(outcomes),
             "migrated": len(migrated),
             "unmigratable": len(refused),
+            "install_errors": install_errors,
             "skills": [
-                {**o.to_dict(), "installed_at": installed.get(o.name)} for o in outcomes
+                {
+                    **o.to_dict(),
+                    "installed_at": installed.get(o.name),
+                    "install_error": install_errors.get(o.name),
+                }
+                for o in outcomes
             ],
         }
         print(json.dumps(payload, indent=2))
-        return EXIT_INVALID if refused else EXIT_OK
+        return EXIT_INVALID if (refused or install_errors) else EXIT_OK
 
     report = format_report(outcomes)
     if report:
@@ -465,12 +480,21 @@ def _handle_migrate(args: argparse.Namespace) -> int:
 
     verb = "Would migrate" if args.dry_run else "Migrated"
     print(f"{verb} {len(migrated)}/{len(outcomes)} skill(s) to GAIA format.")
-    if migrated and not args.dry_run:
-        print(f"   Installed into {destination}")
+    if installed and not args.dry_run:
+        print(f"   Installed {len(installed)} into {destination}")
         print(
             "   Every migrated skill is at the experimental tier — review it, then: "
-            f"gaia skill info {migrated[0].name}"
+            f"gaia skill info {next(iter(installed))}"
         )
+    if install_errors:
+        print(
+            f"\n{len(install_errors)} skill(s) migrated but could not be written:",
+            file=sys.stderr,
+        )
+        for name, message in install_errors.items():
+            print(f"  {name}: {message}", file=sys.stderr)
+        if not refused:
+            return EXIT_INVALID
     if refused:
         print(
             f"\n{len(refused)} skill(s) could not be migrated (see ✗ above). v1 accepts "
