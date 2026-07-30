@@ -492,6 +492,10 @@ async def _exchange_code_for_tokens(flow: _PendingFlow, code: str) -> Dict[str, 
         refresh_token=refresh_token,
         scopes=flow.scopes,
         client_id_hash=provider.client_id_hash,
+        # D8: record the minting authority — None for providers with no
+        # concept of a tenant (e.g. Google), which save_connection omits
+        # from the blob entirely (A7-style contract).
+        tenant=getattr(provider, "tenant", None),
     )
 
     # No separate state-cache write needed — the keyring blob written
@@ -570,27 +574,35 @@ async def start_device_flow(provider_id: str, scopes: Iterable[str]) -> Dict[str
     async with httpx.AsyncClient(timeout=15.0) as client:
         resp = await client.post(device_code_url, data=body)
     if resp.status_code != 200:
-        # AADSTS9002346: the app registration is scoped to personal Microsoft
-        # accounts only, so the ``common`` endpoint (the default since v0.23.0)
-        # rejects it. Name the exact migration step instead of making the user
-        # decode the raw AADSTS error — a personal-account-only app must use the
-        # ``consumers`` tenant.
+        # AADSTS9002346 (D11, #2628): the app registration is scoped to
+        # personal Microsoft accounts only, so a non-consumers authority
+        # rejects it — under the split, that means it was registered for
+        # "microsoft" (consumers) but connected via "microsoft_work"
+        # (organizations, or a pinned Directory tenant id). Name the
+        # connector to use instead, never an env var (GAIA_MICROSOFT_TENANT
+        # is gone — it is not part of tenant resolution at all).
         if "AADSTS9002346" in resp.text:
+            other = "microsoft" if provider_id != "microsoft" else "microsoft_work"
             raise ConnectorsError(
                 f"Device-code request for {provider_id} was rejected: this app "
                 "registration is configured for personal Microsoft accounts only "
-                "(Outlook.com / Hotmail / Live), but GAIA now defaults to the "
-                "'common' tenant. Set GAIA_MICROSOFT_TENANT=consumers and connect "
-                "again, e.g.:\n"
-                "  GAIA_MICROSOFT_TENANT=consumers gaia connectors connect "
-                f"{provider_id} --device\n"
+                "(Outlook.com / Hotmail / Live). Reconnect using the "
+                f"{other!r} connector instead, e.g.:\n"
+                f"  gaia connectors connect {other} --device\n"
                 "See docs/connectors/microsoft."
             )
+        # D9: the client-id env var name is CONNECTOR-SPECIFIC
+        # (GAIA_MICROSOFT_CLIENT_ID for "microsoft",
+        # GAIA_MICROSOFT_WORK_CLIENT_ID for "microsoft_work") — never
+        # hard-coded to the personal one. Tenant is no longer an env var at
+        # all (D6); the only tenant knob left is microsoft_work's optional
+        # Directory (tenant) ID setup field.
+        client_id_env = f"GAIA_{provider_id.upper()}_CLIENT_ID"
         raise ConnectorsError(
             f"Device-code request for {provider_id} failed with status "
-            f"{resp.status_code}: {resp.text[:300]}. Check the client id / "
-            "tenant (GAIA_MICROSOFT_CLIENT_ID / GAIA_MICROSOFT_TENANT). See "
-            "docs/security/connections.mdx."
+            f"{resp.status_code}: {resp.text[:300]}. Check the client id "
+            f"({client_id_env}), or the Directory (tenant) ID setup field if "
+            f"you set one. See docs/connectors/microsoft.mdx."
         )
     d = resp.json()
     logger.info(
@@ -699,6 +711,7 @@ async def poll_device_flow(
         refresh_token=refresh_token,
         scopes=scopes_list,
         client_id_hash=provider.client_id_hash,
+        tenant=getattr(provider, "tenant", None),
     )
 
     if grant_agents:

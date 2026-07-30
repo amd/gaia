@@ -457,6 +457,50 @@ class TestConfigure:
         assert rc == 2
         assert "--set" in err or "--json" in err
 
+    def test_microsoft_and_microsoft_work_keep_distinct_credentials(self):
+        # A1 (CRITICAL) driven through the real CLI entry point: configuring
+        # BOTH Microsoft connectors must never let one clobber the other's
+        # stored client id — this is the exact failure oauth_provider_ref
+        # collision would produce.
+        rc1, out1, _ = _run(
+            "connectors",
+            "configure",
+            "microsoft",
+            "--client-id",
+            "personal-client-id",
+            "--client-secret",
+            "unused-secret-a",
+        )
+        rc2, out2, _ = _run(
+            "connectors",
+            "configure",
+            "microsoft_work",
+            "--client-id",
+            "work-client-id",
+            "--client-secret",
+            "unused-secret-b",
+        )
+        assert rc1 == 0 and "Configured microsoft" in out1
+        assert rc2 == 0 and "Configured microsoft_work" in out2
+
+        from gaia.connectors.store import peek_provider_credentials
+
+        assert peek_provider_credentials("microsoft")["client_id"] == (
+            "personal-client-id"
+        )
+        assert peek_provider_credentials("microsoft_work")["client_id"] == (
+            "work-client-id"
+        )
+
+        from gaia.connectors.providers import get as get_provider
+
+        personal = get_provider("microsoft")
+        work = get_provider("microsoft_work")
+        assert personal.client_id == "personal-client-id"
+        assert work.client_id == "work-client-id"
+        assert personal.tenant == "consumers"
+        assert work.tenant == "organizations"
+
 
 class TestConfigureSecretlessPublicClient:
     """#1638: ``configure`` must not demand --client-secret for providers

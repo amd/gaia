@@ -198,6 +198,7 @@ def _authorize_access(
     stored = load_connection(
         provider,
         current_client_id_hash=prov.client_id_hash,
+        current_tenant=getattr(prov, "tenant", None),
         account_email=account_email,
     )
     if stored is None:
@@ -397,9 +398,13 @@ def list_connections() -> List[Dict[str, Any]]:
             )
             continue
         try:
-            blob = load_connection(provider, current_client_id_hash=prov.client_id_hash)
+            blob = load_connection(
+                provider,
+                current_client_id_hash=prov.client_id_hash,
+                current_tenant=getattr(prov, "tenant", None),
+            )
         except AuthRequiredError:
-            # Tripwire fired — the entry has been cleared. Skip.
+            # Tripwire fired (hash OR tenant) — the entry has been cleared. Skip.
             continue
         if blob is None:
             continue
@@ -700,10 +705,14 @@ def tripwire_check() -> None:
             logger.warning("tripwire: provider %s misconfigured: %s", provider_id, e)
             continue
         try:
-            load_connection(provider_id, current_client_id_hash=prov.client_id_hash)
+            load_connection(
+                provider_id,
+                current_client_id_hash=prov.client_id_hash,
+                current_tenant=getattr(prov, "tenant", None),
+            )
         except AuthRequiredError:
-            # Tripwire fired — load_connection already cleared the
-            # entry; nothing else to do here.
+            # Tripwire fired (hash OR tenant) — load_connection already
+            # cleared the entry; nothing else to do here.
             logger.info("tripwire: provider %s entry cleared by tripwire", provider_id)
         except Exception as e:
             logger.warning("tripwire: provider %s check failed: %s", provider_id, e)

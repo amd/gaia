@@ -1595,11 +1595,18 @@ gaia connectors <subcommand> [OPTIONS]
 gaia connectors connect google
 ```
 
-```bash Authorize Microsoft (device code, no app registration)
-# Personal Outlook.com or work/school Microsoft 365 (common tenant).
-# Supply a pre-registered public client id; GAIA prints a code + URL.
+```bash Authorize Microsoft Personal (device code, no app registration)
+# Outlook.com / Hotmail / Live. Supply a pre-registered public client id;
+# GAIA prints a code + URL.
 export GAIA_MICROSOFT_CLIENT_ID=<application-client-id>
 gaia connectors connect microsoft --device
+```
+
+```bash Authorize Microsoft Work or School (device code)
+# Microsoft 365 / Entra ID — a SEPARATE connector from personal Microsoft,
+# connectable at the same time. Its own client id env var.
+export GAIA_MICROSOFT_WORK_CLIENT_ID=<application-client-id>
+gaia connectors connect microsoft_work --device
 ```
 
 ```bash Configure an MCP server token
@@ -1613,8 +1620,11 @@ gaia connectors grants grant google builtin:chat --scopes gmail.readonly
 
 The `--device` flag on `connect` uses the RFC 8628 device-code flow instead of
 the browser redirect — required for Microsoft zero-setup sign-in (no Azure app
-registration or loopback redirect URI). Pin `GAIA_MICROSOFT_TENANT` to restrict
-sign-in to one tenant (`organizations`, `consumers`, or a specific Entra id).
+registration or loopback redirect URI). Which authority a Microsoft connector
+signs in against is fixed by the connector itself (`microsoft` → `consumers`,
+`microsoft_work` → `organizations`) — to restrict `microsoft_work` to one
+Entra tenant, set its optional Directory (tenant) ID setup field instead of an
+environment variable; see [the Microsoft connector guide](/connectors/microsoft#migrating-from-gaia-microsoft-tenant).
 
 [→ Connectors Guide](/connectors) · [→ Connectors SDK](/sdk/infrastructure/connectors)
 
