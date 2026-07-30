@@ -177,16 +177,26 @@ def _scope_findings(use: DomainUse, scopes: Sequence[str]) -> list[Finding]:
         return []
     if _within_scope(target, scopes):
         return []
+    # The declared scope is public catalog metadata so it can appear in the
+    # message; the literal target is extracted from source, so it goes in the
+    # snippet only.
     return [
-        _finding(
-            "permission.scope_violation",
-            "high",
-            f"Targets {target!r}, which is outside the declared "
-            f"'{use.domain}' scope ({', '.join(scopes)}).",
-            use,
-            f"Keep the access inside the declared scope, or widen the "
-            f"declaration to cover {target!r}. A scope the code ignores gives "
-            f"the installing user a false picture. See {_PERMISSION_DOCS}",
+        Finding(
+            rule_id="permission.scope_violation",
+            severity="high",
+            category=CATEGORY_PERMISSION_TRUTH,
+            message=(
+                f"Targets a path outside the declared '{use.domain}' scope "
+                f"({', '.join(scopes)})."
+            ),
+            file=use.file,
+            line=use.line,
+            remediation=(
+                "Keep the access inside the declared scope, or widen the "
+                "declaration to cover it. A scope the code ignores gives the "
+                f"installing user a false picture. See {_PERMISSION_DOCS}"
+            ),
+            snippet=f"{use.detail} -> {target}",
         )
     ]
 

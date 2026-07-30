@@ -37,6 +37,10 @@ EXIT_OK = 0
 EXIT_USAGE = 2
 EXIT_NOT_FOUND = 3
 EXIT_INVALID = 4
+#: ``gaia skill audit`` verdicts. Distinct codes so CI can hold a skill for
+#: review without treating it as a rejection (issue #2468).
+EXIT_REVIEW = 5
+EXIT_BLOCK = 6
 
 _DEFAULT_DESCRIPTION = (
     "Describe what this skill does and when the model should use it. "
@@ -122,6 +126,71 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
         "--output", default=None, help="Destination .zip (default: ./<name>.zip)"
     )
 
+    _add_audit_parser(sub)
+
+
+def _add_audit_parser(sub: argparse._SubParsersAction) -> None:
+    """Register ``gaia skill audit`` (issue #2468).
+
+    Kept in its own function so the marketplace verbs landing alongside it in
+    this file stay easy to merge.
+    """
+    from gaia.skills.audit import SEVERITY_ORDER
+    from gaia.skills.format import SECURITY_TIERS
+
+    p_audit = sub.add_parser(
+        "audit",
+        help="Run the pre-publish security audit on a skill directory",
+        description=(
+            "Scan a skill's code and its instruction body, then print an "
+            "ALLOW / REVIEW / BLOCK verdict with file:line findings. This is "
+            "the same engine the hub runs at publish time, so a clean local "
+            "audit is what a successful publish requires. Exit codes: "
+            f"{EXIT_OK} allow, {EXIT_REVIEW} review, {EXIT_BLOCK} block, "
+            f"{EXIT_INVALID} the skill could not be parsed."
+        ),
+    )
+    p_audit.add_argument("path", help="Skill directory (the one containing SKILL.md)")
+    p_audit.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help="Emit the machine-readable report on stdout (the payload the hub "
+        "publish path consumes as its 'audit' part)",
+    )
+    p_audit.add_argument(
+        "--output",
+        default=None,
+        help="Write the JSON report to this file as well",
+    )
+    p_audit.add_argument(
+        "--sarif",
+        default=None,
+        help="Write SARIF 2.1.0 to this file, for upload to GitHub code scanning",
+    )
+    p_audit.add_argument(
+        "--tier",
+        default=None,
+        choices=SECURITY_TIERS,
+        help="Audit against this tier instead of the one the skill declares — "
+        "check a claim before making it",
+    )
+    p_audit.add_argument(
+        "--fail-on",
+        default=None,
+        dest="fail_on",
+        choices=[s for s in SEVERITY_ORDER if s != "info"],
+        help="Exit non-zero when any finding reaches this severity, even if the "
+        "tier's own gate would allow it",
+    )
+    p_audit.add_argument(
+        "--show-snippets",
+        action="store_true",
+        dest="show_snippets",
+        help="Include the offending source text. Withheld by default so "
+        "exploitable detail stays out of shared logs and artifacts.",
+    )
+
 
 def handle(args: argparse.Namespace) -> int:
     """Dispatch a parsed ``gaia skill ...`` command. Returns an exit code."""
@@ -136,6 +205,7 @@ def handle(args: argparse.Namespace) -> int:
         "create": _handle_create,
         "import": _handle_import,
         "export": _handle_export,
+        "audit": _handle_audit,
     }
     handler = handlers.get(action)
     if handler is None:
@@ -360,6 +430,57 @@ def _handle_export(args: argparse.Namespace) -> int:
     print(f"✅ Exported skill '{skill.name}' to {output}")
     print(f"   Import it elsewhere with: gaia skill import {output}")
     return EXIT_OK
+
+
+def _handle_audit(args: argparse.Namespace) -> int:
+    """Run the pre-publish security audit (issue #2468)."""
+    from dataclasses import replace
+
+    from gaia.skills.audit import (
+        SEVERITY_ORDER,
+        audit_skill,
+        render_json,
+        render_sarif,
+        render_text,
+        verdict_for_tier,
+    )
+
+    report = audit_skill(args.path)
+
+    tier = getattr(args, "tier", None)
+    if tier and tier != report.security_tier:
+        verdict, reason = verdict_for_tier(report.findings, tier)
+        report = replace(report, security_tier=tier, verdict=verdict, reason=reason)
+
+    show_snippets = getattr(args, "show_snippets", False)
+
+    if getattr(args, "as_json", False):
+        print(render_json(report, include_snippets=show_snippets))
+    else:
+        print(render_text(report, include_snippets=show_snippets))
+
+    if getattr(args, "output", None):
+        destination = Path(args.output)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(
+            render_json(report, include_snippets=show_snippets), encoding="utf-8"
+        )
+
+    if getattr(args, "sarif", None):
+        destination = Path(args.sarif)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(
+            render_sarif(report, include_snippets=show_snippets), encoding="utf-8"
+        )
+
+    fail_on = getattr(args, "fail_on", None)
+    if fail_on and report.worst is not None:
+        if SEVERITY_ORDER.index(report.worst) >= SEVERITY_ORDER.index(fail_on):
+            return EXIT_BLOCK
+
+    return {"ALLOW": EXIT_OK, "REVIEW": EXIT_REVIEW, "BLOCK": EXIT_BLOCK}[
+        report.verdict
+    ]
 
 
 # ----------------------------------------------------------------------

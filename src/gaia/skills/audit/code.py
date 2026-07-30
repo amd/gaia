@@ -656,10 +656,12 @@ class _Analyzer(ast.NodeVisitor):
     def _check_string_literal(self, value: str, line: int) -> None:
         for pattern, description in _CREDENTIAL_PATTERNS:
             if re.search(pattern, value):
+                # The path itself goes in the snippet, never the message: a
+                # message is safe to post publicly, a snippet is not.
                 self._add_finding(
                     "code.credentials.file_access",
                     "high",
-                    f"References {description} ({value!r}).",
+                    f"References {description}.",
                     line,
                     "A skill has no legitimate reason to read the user's "
                     "credentials. Take the value it needs as a declared "
