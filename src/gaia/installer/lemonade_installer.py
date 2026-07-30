@@ -5,13 +5,14 @@
 Lemonade Server Installer
 
 Handles detection, download, and installation of Lemonade Server
-from GitHub releases for Windows and Linux platforms.
+from GitHub releases for Windows, Linux, and macOS.
 """
 
 import logging
 import os
 import platform
 import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -37,6 +38,30 @@ except ImportError:
 
 # GitHub release URL patterns
 GITHUB_RELEASE_BASE = "https://github.com/lemonade-sdk/lemonade/releases/download"
+GITHUB_RELEASE_TAG_BASE = "https://github.com/lemonade-sdk/lemonade/releases/tag"
+
+# Upstream .deb assets carry a distro infix: lemonade-server_<ver>-debian13_<arch>.deb
+LINUX_DEB_DISTRO_TAG = "debian13"
+
+# platform.machine() varies by OS/libc for the same hardware.
+DEB_ARCH_BY_MACHINE = {
+    "x86_64": "amd64",
+    "amd64": "amd64",
+    "aarch64": "arm64",
+    "arm64": "arm64",
+}
+
+
+class LemonadeAssetError(RuntimeError):
+    """A release asset could not be verified.
+
+    ``definitive`` distinguishes "upstream says it's gone" (fatal) from
+    "we couldn't ask" (a network or proxy failure the real download may survive).
+    """
+
+    def __init__(self, message: str, definitive: bool):
+        super().__init__(message)
+        self.definitive = definitive
 
 
 @dataclass
@@ -95,6 +120,7 @@ class LemonadeInstaller:
         self.progress_callback = progress_callback
         self.minimal = minimal
         self.system = platform.system().lower()
+        self.machine = platform.machine().lower()
         self.console = console
 
     def _print_status(self, message: str, style: str = "dim"):
@@ -104,6 +130,13 @@ class LemonadeInstaller:
         elif not self.console:
             # Only log if no console provided (to avoid duplicate output)
             log.debug(message)
+
+    def _announce(self, message: str) -> None:
+        """Print a message the user must see, console or not."""
+        if self.console and RICH_AVAILABLE:
+            self.console.print(f"   [yellow]{message}[/yellow]")
+        else:
+            print(f"   {message}")
 
     def refresh_path_from_registry(self) -> None:
         """Refresh PATH from Windows registry after MSI install."""
@@ -221,15 +254,31 @@ class LemonadeInstaller:
         except (ValueError, IndexError):
             return None
 
+    @property
+    def release_page_url(self) -> str:
+        """Upstream release page — the authoritative list of published assets."""
+        return f"{GITHUB_RELEASE_TAG_BASE}/v{self.target_version}"
+
+    def _deb_arch(self) -> str:
+        """Map platform.machine() to the Debian arch used in upstream asset names."""
+        arch = DEB_ARCH_BY_MACHINE.get(self.machine)
+        if arch is None:
+            raise RuntimeError(
+                f"Architecture '{self.machine}' has no Lemonade Linux package. "
+                f"Upstream v{self.target_version} publishes amd64 (x86_64) and "
+                f"arm64 (aarch64) .deb assets only — see {self.release_page_url}."
+            )
+        return arch
+
     def get_download_url(self) -> str:
         """
-        Get the download URL for the current platform.
+        Get the download URL for the current platform and architecture.
 
         Returns:
             Download URL for the installer
 
         Raises:
-            RuntimeError: If platform is not supported
+            RuntimeError: If the platform or architecture is not supported
         """
         version = self.target_version
 
@@ -241,28 +290,107 @@ class LemonadeInstaller:
                 # Full installer
                 return f"{GITHUB_RELEASE_BASE}/v{version}/lemonade.msi"
         elif self.system == "linux":
-            # Linux DEB - filename includes version (no minimal variant yet)
-            # Note: v10.0.0+ changed naming from lemonade_ to lemonade-server_
+            # Linux DEB - no minimal variant yet.
+            # Note: v10.0.0+ changed naming from lemonade_ to lemonade-server_,
+            # and the asset carries a distro infix (see LINUX_DEB_DISTRO_TAG).
             return (
-                f"{GITHUB_RELEASE_BASE}/v{version}/lemonade-server_{version}_amd64.deb"
+                f"{GITHUB_RELEASE_BASE}/v{version}/lemonade-server_"
+                f"{version}-{LINUX_DEB_DISTRO_TAG}_{self._deb_arch()}.deb"
             )
+        elif self.system == "darwin":
+            # The .pkg ships arm64-only binaries and installs cleanly on Intel,
+            # so an unguarded install would only fail later at "Bad CPU type".
+            if self.machine not in ("arm64", "aarch64"):
+                raise RuntimeError(
+                    f"Architecture '{self.machine}' has no Lemonade macOS package. "
+                    f"Upstream v{self.target_version} publishes an Apple-Silicon-only "
+                    f".pkg — see {self.release_page_url}.\n"
+                    "On an Apple Silicon Mac this means Python is running under "
+                    "Rosetta; re-run GAIA with a native arm64 Python."
+                )
+            return f"{GITHUB_RELEASE_BASE}/v{version}/Lemonade-{version}-Darwin.pkg"
         else:
             raise RuntimeError(
                 f"Platform '{self.system}' is not supported. "
-                "GAIA init only supports Windows and Linux."
+                "GAIA init only supports Windows, Linux, and macOS."
             )
 
     def get_installer_filename(self) -> str:
-        """Get the installer filename for the current platform."""
-        if self.system == "windows":
-            if self.minimal:
-                return "lemonade-server-minimal.msi"
-            else:
-                return "lemonade.msi"
-        elif self.system == "linux":
-            return f"lemonade-server_{self.target_version}_amd64.deb"
-        else:
-            raise RuntimeError(f"Platform '{self.system}' is not supported.")
+        """Get the installer filename for the current platform.
+
+        Derived from the download URL so the two can never drift apart.
+        """
+        return self.get_download_url().rsplit("/", 1)[-1]
+
+    def _missing_asset_error(self, url: str, detail: str) -> str:
+        """Error for an asset upstream no longer serves — a rename or a pulled release."""
+        return (
+            f"Lemonade v{self.target_version} installer asset {detail}.\n"
+            f"  URL:      {url}\n"
+            f"  Platform: {self.system}/{self.machine}\n"
+            "Upstream may have renamed or dropped this asset. Check the published "
+            f"asset list at {self.release_page_url}. If it moved, report it at "
+            "https://github.com/amd/gaia/issues — maintainers: update "
+            "LEMONADE_VERSION (src/gaia/version.py) or the asset-name pattern in "
+            "src/gaia/installer/lemonade_installer.py."
+        )
+
+    def _unreachable_asset_error(self, url: str, detail: str) -> str:
+        """Error for a network/proxy failure — says nothing about the asset itself."""
+        return (
+            f"Could not reach the Lemonade download server ({detail}).\n"
+            f"  URL: {url}\n"
+            "Check your network connection or proxy settings and retry."
+        )
+
+    def verify_download_url(self, url: Optional[str] = None, timeout: int = 30) -> str:
+        """Confirm the constructed asset URL resolves before attempting a download.
+
+        Args:
+            url: URL to check (defaults to the URL for this platform/arch)
+            timeout: Seconds to wait for the HEAD request
+
+        Returns:
+            The verified URL
+
+        Raises:
+            LemonadeAssetError: If the URL does not return HTTP 200. ``definitive``
+                is True only when upstream positively reports the asset gone
+                (404/410); transient network or proxy failures set it False.
+        """
+        url = url or self.get_download_url()
+        request = urllib.request.Request(
+            url, method="HEAD", headers={"User-Agent": "GAIA-Installer/1.0"}
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                status = getattr(response, "status", None) or response.getcode()
+        except urllib.error.HTTPError as e:
+            if e.code in (404, 410):
+                raise LemonadeAssetError(
+                    self._missing_asset_error(url, f"was not found (HTTP {e.code})"),
+                    definitive=True,
+                ) from e
+            # A proxy or WAF can reject HEAD while serving the GET fine.
+            raise LemonadeAssetError(
+                self._unreachable_asset_error(url, f"HTTP {e.code} {e.reason}"),
+                definitive=False,
+            ) from e
+        except urllib.error.URLError as e:
+            raise LemonadeAssetError(
+                self._unreachable_asset_error(url, str(e.reason)), definitive=False
+            ) from e
+        except TimeoutError as e:
+            raise LemonadeAssetError(
+                self._unreachable_asset_error(url, f"timed out after {timeout}s"),
+                definitive=False,
+            ) from e
+
+        if status != 200:
+            raise LemonadeAssetError(
+                self._unreachable_asset_error(url, f"HTTP {status}"), definitive=False
+            )
+        return url
 
     def download_installer(self, dest_dir: Optional[str] = None) -> Path:
         """
@@ -277,7 +405,15 @@ class LemonadeInstaller:
         Raises:
             RuntimeError: If download fails
         """
+        # Pre-flight the asset so an upstream rename fails here — with the URL and
+        # where to find the real asset list — instead of mid-download.
         url = self.get_download_url()
+        try:
+            self.verify_download_url(url)
+        except LemonadeAssetError as e:
+            if e.definitive:
+                raise
+            log.warning("Could not pre-flight %s; downloading anyway: %s", url, e)
         filename = self.get_installer_filename()
 
         if dest_dir:
@@ -295,7 +431,8 @@ class LemonadeInstaller:
                     log.debug(f"Removed existing installer at {dest_path}")
                 except PermissionError:
                     # File is locked, use a unique filename instead
-                    unique_name = f"lemonade_{uuid.uuid4().hex[:8]}.msi"
+                    suffix = Path(filename).suffix
+                    unique_name = f"lemonade_{uuid.uuid4().hex[:8]}{suffix}"
                     dest_path = Path(tempfile.gettempdir()) / unique_name
                     log.debug(f"Using unique filename: {dest_path}")
 
@@ -326,11 +463,10 @@ class LemonadeInstaller:
 
         except urllib.error.HTTPError as e:
             if e.code == 404:
-                raise RuntimeError(
-                    f"Lemonade v{self.target_version} not found. "
-                    "Please check https://github.com/lemonade-sdk/lemonade/releases "
-                    "for available versions."
-                )
+                raise LemonadeAssetError(
+                    self._missing_asset_error(url, "was not found (HTTP 404)"),
+                    definitive=True,
+                ) from e
             raise RuntimeError(f"Download failed: HTTP {e.code} - {e.reason}")
         except urllib.error.URLError as e:
             raise RuntimeError(f"Download failed: {e.reason}")
@@ -351,6 +487,12 @@ class LemonadeInstaller:
                 return self._install_windows(installer_path, silent)
             elif self.system == "linux":
                 return self._install_via_ppa(non_interactive=silent)
+            elif self.system == "darwin":
+                if installer_path is None or not installer_path.exists():
+                    return InstallResult(
+                        success=False, error=f"Installer not found: {installer_path}"
+                    )
+                return self._install_macos(installer_path, non_interactive=silent)
             else:
                 return InstallResult(
                     success=False, error=f"Platform '{self.system}' is not supported"
@@ -555,6 +697,128 @@ class LemonadeInstaller:
         except Exception as e:
             return InstallResult(success=False, error=str(e))
 
+    def _install_macos(
+        self, installer_path: Path, non_interactive: bool = False
+    ) -> InstallResult:
+        """Install on macOS with `installer -pkg <path> -target /`.
+
+        The .pkg writes to /Applications, /usr/local/bin and /Library/Launch*,
+        so it needs admin rights. The sudo requirement is announced before sudo
+        is ever invoked — never a bare, unexplained password prompt.
+        """
+        manual_cmd = f"sudo installer -pkg {shlex.quote(str(installer_path))} -target /"
+        is_root = hasattr(os, "geteuid") and os.geteuid() == 0
+        sudo_prefix = [] if is_root else ["sudo"]
+
+        try:
+            if not is_root:
+                cached = subprocess.run(
+                    ["sudo", "-n", "true"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    stdin=subprocess.DEVNULL,
+                    check=False,
+                )
+                if cached.returncode != 0:
+                    if non_interactive:
+                        return InstallResult(
+                            success=False,
+                            error=(
+                                "Installing Lemonade on macOS requires administrator "
+                                "rights, but this run is non-interactive and sudo "
+                                "needs a password.\n"
+                                "Run 'sudo -v' first and retry, or install manually:\n"
+                                f"  {manual_cmd}"
+                            ),
+                        )
+                    # Must reach the user even with no Rich console (gaia install
+                    # --lemonade constructs the installer without one).
+                    self._announce(
+                        "Administrator rights are required to install Lemonade — "
+                        "sudo will ask for your password."
+                    )
+
+            cmd = sudo_prefix + [
+                "installer",
+                "-pkg",
+                str(installer_path),
+                "-target",
+                "/",
+            ]
+            self._print_status(f"Running: {' '.join(cmd)}")
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=600, check=False
+            )
+
+            if result.returncode != 0:
+                return InstallResult(
+                    success=False,
+                    error=(
+                        f"installer failed with code {result.returncode}:\n"
+                        f"{(result.stdout + result.stderr).strip()}\n"
+                        f"Retry manually: {manual_cmd}"
+                    ),
+                )
+
+            # `installer` can exit 0 while MDM or a blocked payload leaves nothing
+            # behind, so trust the probe rather than the exit code.
+            verify = self.check_installation()
+            if not verify.installed:
+                return InstallResult(
+                    success=False,
+                    error=(
+                        "installer reported success but Lemonade was not found "
+                        "afterwards (looked for lemond/lemonade in /usr/local/bin "
+                        "and /Applications/lemonade-app.app).\n"
+                        f"Probe error: {verify.error}\n"
+                        f"Try installing manually: {manual_cmd}"
+                    ),
+                )
+
+            installed_version = verify.version or self.target_version
+            return InstallResult(
+                success=True,
+                version=installed_version,
+                message=f"Installed Lemonade v{installed_version}",
+            )
+
+        except subprocess.TimeoutExpired:
+            return InstallResult(
+                success=False,
+                error=(
+                    "macOS installer timed out after 600s. "
+                    f"Retry manually: {manual_cmd}"
+                ),
+            )
+        except FileNotFoundError as e:
+            return InstallResult(
+                success=False, error=f"Required command not found: {e}"
+            )
+
+    @staticmethod
+    def _uninstall_macos() -> InstallResult:
+        """macOS: the upstream .pkg ships no uninstaller, so say so and hand over steps.
+
+        Paths and pkgutil identifiers come from the v11.5.0 .pkg BOMs.
+        """
+        return InstallResult(
+            success=False,
+            error=(
+                "Automatic uninstall is not supported on macOS — the Lemonade .pkg "
+                "ships no uninstaller. Remove it manually:\n"
+                "  sudo launchctl bootout system "
+                "/Library/LaunchDaemons/com.lemonade.server.plist\n"
+                "  sudo rm -f /Library/LaunchDaemons/com.lemonade.server.plist "
+                "/Library/LaunchAgents/com.lemonade.tray.plist\n"
+                "  sudo rm -rf /Applications/lemonade-app.app\n"
+                "  sudo rm -f /usr/local/bin/lemonade /usr/local/bin/lemond "
+                "/usr/local/bin/lemonade-tray\n"
+                "  pkgutil --pkgs | grep '^com.lemonade.server' | "
+                "xargs -n1 sudo pkgutil --forget"
+            ),
+        )
+
     @staticmethod
     def _check_linux_version() -> Optional[str]:
         """
@@ -729,7 +993,7 @@ class LemonadeInstaller:
 
     def is_platform_supported(self) -> bool:
         """Check if the current platform is supported for installation."""
-        return self.system in ("windows", "linux")
+        return self.system in ("windows", "linux", "darwin")
 
     def get_platform_name(self) -> str:
         """Get a friendly name for the current platform."""
@@ -757,6 +1021,8 @@ class LemonadeInstaller:
                 return self._uninstall_windows(silent)
             elif self.system == "linux":
                 return self._uninstall_linux()
+            elif self.system == "darwin":
+                return self._uninstall_macos()
             else:
                 return InstallResult(
                     success=False, error=f"Platform '{self.system}' is not supported"
