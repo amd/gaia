@@ -142,6 +142,9 @@ type ChatModel struct {
 	queryStart   time.Time // tracks when the current query started
 	firstEvent   bool      // whether we've received the first event this turn
 	ttft         time.Duration
+
+	// pendingAttention buffers a fetch resolved mid-turn until that turn ends, so it never lands between a question and its reply.
+	pendingAttention json.RawMessage
 }
 
 func NewChatModel(c client.AgentClient, agentName string, initialQuery string, debug bool) ChatModel {
@@ -225,6 +228,38 @@ func (m ChatModel) fetchAttention() tea.Cmd {
 	}
 }
 
+// appendAttentionCard skips the render when a pre-scan card already covered this session — the two surfaces would otherwise duplicate every shared message.
+func (m *ChatModel) appendAttentionCard(data json.RawMessage) {
+	if m.hasPreScanCard() {
+		return
+	}
+	m.messages = append(m.messages, Message{
+		Role:   RoleCard,
+		Render: "email_attention",
+		Data:   data,
+	})
+}
+
+// hasPreScanCard reports whether an email_pre_scan card has rendered anywhere in the session so far.
+func (m ChatModel) hasPreScanCard() bool {
+	for i := range m.messages {
+		if m.messages[i].Role == RoleCard && m.messages[i].Render == "email_pre_scan" {
+			return true
+		}
+	}
+	return false
+}
+
+// drainPendingAttention appends a buffered attention card now that its turn has ended, whichever way it ended.
+func (m *ChatModel) drainPendingAttention() {
+	if m.pendingAttention == nil {
+		return
+	}
+	data := m.pendingAttention
+	m.pendingAttention = nil
+	m.appendAttentionCard(data)
+}
+
 func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
@@ -246,11 +281,12 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitForEvent(m.events)
 
 	case attentionFetchedMsg:
-		m.messages = append(m.messages, Message{
-			Role:   RoleCard,
-			Render: "email_attention",
-			Data:   msg.data,
-		})
+		if m.streaming {
+			// Buffer -- appending now would land the card between this turn's question and its reply.
+			m.pendingAttention = msg.data
+			return m, nil
+		}
+		m.appendAttentionCard(msg.data)
 		m.updateViewport()
 		return m, nil
 
@@ -297,6 +333,7 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			Role:    RoleError,
 			Content: msg.err.Error(),
 		})
+		m.drainPendingAttention()
 		m.activity = nil
 		m.updateViewport()
 		return m, nil
@@ -418,6 +455,7 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				Role:    RoleStatus,
 				Content: "cancelled",
 			})
+			m.drainPendingAttention()
 			m.updateViewport()
 			return m, nil
 		}
@@ -436,6 +474,7 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				Role:    RoleStatus,
 				Content: "cancelled",
 			})
+			m.drainPendingAttention()
 			m.updateViewport()
 			return m, nil
 		}
