@@ -171,6 +171,12 @@ def test_highest_cleared_tier_is_none_when_nothing_clears():
 
 def test_a_tier_is_never_cleared_unless_its_own_gate_passed():
     """The invariant behind 'cannot be stamped a tier it did not clear'."""
-    for findings in [(), (_f("low"),), (_f("medium"),), (_f("high"),), (_f("critical"),)]:
+    for findings in [
+        (),
+        (_f("low"),),
+        (_f("medium"),),
+        (_f("high"),),
+        (_f("critical"),),
+    ]:
         for tier in ("experimental", "community", "verified"):
             assert clears_tier(findings, tier) == (tier in cleared_tiers(findings))

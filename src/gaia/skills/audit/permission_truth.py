@@ -84,7 +84,9 @@ def _within_scope(target: str, scopes: Iterable[str]) -> bool:
         if scope == "*":
             return True
         candidate = PurePosixPath(scope.replace("\\", "/")).as_posix().lstrip("./")
-        if normalized == candidate or normalized.startswith(candidate.rstrip("/") + "/"):
+        if normalized == candidate or normalized.startswith(
+            candidate.rstrip("/") + "/"
+        ):
             return True
     return False
 

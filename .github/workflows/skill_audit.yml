@@ -190,33 +190,10 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "Totals: $allow allow, $review review, $block block, $invalid unparseable"
 
-      # `gaia skill audit` emits SARIF paths relative to the skill directory
-      # (SKILL.md, tools.py). Code scanning anchors alerts by repo-relative path,
-      # so prefix each location with the skill's directory before uploading.
-      - name: Anchor SARIF locations to repository paths
-        if: steps.detect.outputs.skills != '[]'
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          import json
-          from pathlib import Path
-
-          for line in Path("skill-audit-reports/exit-codes.txt").read_text().splitlines():
-              directory, slug, _rc = line.rsplit(" ", 2)
-              sarif = Path("skill-audit-reports") / f"{slug}.sarif"
-              if not sarif.exists():
-                  continue
-              doc = json.loads(sarif.read_text())
-              for run in doc.get("runs", []):
-                  for result in run.get("results", []):
-                      for location in result.get("locations", []):
-                          artifact = location["physicalLocation"]["artifactLocation"]
-                          uri = artifact.get("uri", "")
-                          if not uri.startswith(f"{directory}/"):
-                              artifact["uri"] = f"{directory}/{uri}" if uri else f"{directory}/SKILL.md"
-              sarif.write_text(json.dumps(doc, indent=2))
-              print(f"anchored {sarif} -> {directory}/")
-          PY
+      # SARIF locations are already repo-anchored: `gaia skill audit` prefixes
+      # them with the audited path relative to the working directory, and this
+      # job runs from the repo root. `--path-prefix` overrides it if that ever
+      # stops being true.
 
       # SUMMARY ONLY. Verdict, tiers, counts, and rule ids — never a finding
       # message, never a snippet. Detail is reachable only through the private
@@ -356,21 +333,22 @@ jobs:
       # PR comment all happen even when a skill is blocked.
       - name: Enforce verdict
         if: steps.detect.outputs.skills != '[]'
+        env:
+          BLOCK_COUNT: ${{ steps.audit.outputs.block_count }}
+          REVIEW_COUNT: ${{ steps.audit.outputs.review_count }}
+          INVALID_COUNT: ${{ steps.audit.outputs.invalid_count }}
         run: |
           set -euo pipefail
-          block='${{ steps.audit.outputs.block_count }}'
-          review='${{ steps.audit.outputs.review_count }}'
-          invalid='${{ steps.audit.outputs.invalid_count }}'
-          if [ "${review:-0}" -gt 0 ]; then
-            echo "::warning title=Skill audit::$review skill(s) returned REVIEW — they clear a lower tier than they claim. Not blocking."
+          if [ "${REVIEW_COUNT:-0}" -gt 0 ]; then
+            echo "::warning title=Skill audit::$REVIEW_COUNT skill(s) returned REVIEW — they clear a lower tier than they claim. Not blocking."
           fi
-          if [ "${invalid:-0}" -gt 0 ]; then
-            echo "::error title=Skill audit::$invalid skill(s) could not be parsed. A skill the audit cannot read cannot be cleared."
+          if [ "${INVALID_COUNT:-0}" -gt 0 ]; then
+            echo "::error title=Skill audit::$INVALID_COUNT skill(s) could not be parsed. A skill the audit cannot read cannot be cleared."
           fi
-          if [ "${block:-0}" -gt 0 ]; then
-            echo "::error title=Skill audit::$block skill(s) BLOCKED. See the Security > Code scanning tab for the findings."
+          if [ "${BLOCK_COUNT:-0}" -gt 0 ]; then
+            echo "::error title=Skill audit::$BLOCK_COUNT skill(s) BLOCKED. See the Security > Code scanning tab for the findings."
           fi
-          if [ "${block:-0}" -gt 0 ] || [ "${invalid:-0}" -gt 0 ]; then
+          if [ "${BLOCK_COUNT:-0}" -gt 0 ] || [ "${INVALID_COUNT:-0}" -gt 0 ]; then
             exit 1
           fi
           echo "Skill audit passed."
@@ -408,16 +386,21 @@ jobs:
 
       - name: Resolve SARIF for this skill
         id: sarif
+        # Via env, not inline interpolation: the value is a path, never shell.
+        env:
+          SKILL_DIR: ${{ matrix.skill }}
         run: |
           set -euo pipefail
-          slug=$(echo '${{ matrix.skill }}' | tr '/' '_')
+          slug=$(echo "$SKILL_DIR" | tr '/' '_')
           file="skill-audit-reports/$slug.sarif"
           if [ -f "$file" ]; then
-            echo "file=$file" >> "$GITHUB_OUTPUT"
-            echo "category=skill-audit-$slug" >> "$GITHUB_OUTPUT"
+            {
+              echo "file=$file"
+              echo "category=skill-audit-$slug"
+            } >> "$GITHUB_OUTPUT"
           else
             # No SARIF means the skill could not be parsed — the gate already failed on it.
-            echo "No SARIF for ${{ matrix.skill }} (unparseable skill); nothing to upload."
+            echo "No SARIF for $SKILL_DIR (unparseable skill); nothing to upload."
             echo "file=" >> "$GITHUB_OUTPUT"
           fi
 

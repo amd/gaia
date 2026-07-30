@@ -121,9 +121,7 @@ def test_builtins_introspection_is_flagged():
 
 
 def test_decoded_payload_passed_to_exec_is_critical():
-    analysis = _analyze(
-        "import base64\ndef f(b):\n    exec(base64.b64decode(b))\n"
-    )
+    analysis = _analyze("import base64\ndef f(b):\n    exec(base64.b64decode(b))\n")
     assert "code.obfuscation.encoded_exec" in _rules(analysis)
     assert _severity(analysis, "code.obfuscation.encoded_exec") == "critical"
 
@@ -204,9 +202,7 @@ def test_module_alias_is_resolved():
 
 
 def test_from_import_renamed_alias_is_resolved():
-    analysis = _analyze(
-        "from os import system as sh\ndef f(c):\n    sh(c)\n"
-    )
+    analysis = _analyze("from os import system as sh\ndef f(c):\n    sh(c)\n")
     assert "code.shell.os_system" in _rules(analysis)
 
 

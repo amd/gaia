@@ -20,8 +20,8 @@ from __future__ import annotations
 import json
 
 from gaia.skills.audit.findings import (
-    SEVERITY_ORDER,
     AUDIT_ENGINE,
+    SEVERITY_ORDER,
     AuditReport,
     Severity,
 )
@@ -59,7 +59,9 @@ def render_text(report: AuditReport, *, include_snippets: bool = False) -> str:
     """Render a human-readable report for the skill's author."""
     lines: list[str] = []
     icon = _VERDICT_ICON.get(report.verdict, "")
-    lines.append(f"{report.verdict} {icon}  {report.skill} {report.version or ''}".rstrip())
+    lines.append(
+        f"{report.verdict} {icon}  {report.skill} {report.version or ''}".rstrip()
+    )
     lines.append(f"  {report.reason}")
     lines.append("")
     lines.append(f"  claimed tier : {report.security_tier}")
@@ -131,7 +133,9 @@ def render_sarif(
                 "id": finding.rule_id,
                 "name": finding.rule_id,
                 "shortDescription": {"text": finding.message},
-                "fullDescription": {"text": f"{finding.message} {finding.remediation}".strip()},
+                "fullDescription": {
+                    "text": f"{finding.message} {finding.remediation}".strip()
+                },
                 "defaultConfiguration": {
                     "level": _SARIF_LEVEL.get(finding.severity, "warning")
                 },

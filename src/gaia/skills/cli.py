@@ -169,6 +169,14 @@ def _add_audit_parser(sub: argparse._SubParsersAction) -> None:
         help="Write SARIF 2.1.0 to this file, for upload to GitHub code scanning",
     )
     p_audit.add_argument(
+        "--path-prefix",
+        default=None,
+        dest="path_prefix",
+        help="Prefix SARIF result paths with this repository-relative directory, "
+        "so code scanning anchors findings to real files when the skill is "
+        "nested in a checkout (default: the audited path itself)",
+    )
+    p_audit.add_argument(
         "--tier",
         default=None,
         choices=SECURITY_TIERS,
@@ -469,8 +477,14 @@ def _handle_audit(args: argparse.Namespace) -> int:
     if getattr(args, "sarif", None):
         destination = Path(args.sarif)
         destination.parent.mkdir(parents=True, exist_ok=True)
+        # Default the prefix to the audited path so SARIF uploaded from a repo
+        # checkout anchors to the real file, not a bare 'tools.py' at the root.
+        prefix = getattr(args, "path_prefix", None)
+        if prefix is None:
+            prefix = _repo_relative_prefix(args.path)
         destination.write_text(
-            render_sarif(report, include_snippets=show_snippets), encoding="utf-8"
+            render_sarif(report, include_snippets=show_snippets, path_prefix=prefix),
+            encoding="utf-8",
         )
 
     fail_on = getattr(args, "fail_on", None)
@@ -481,6 +495,20 @@ def _handle_audit(args: argparse.Namespace) -> int:
     return {"ALLOW": EXIT_OK, "REVIEW": EXIT_REVIEW, "BLOCK": EXIT_BLOCK}[
         report.verdict
     ]
+
+
+def _repo_relative_prefix(audited_path: str) -> str:
+    """The audited directory relative to the repo root, for SARIF paths.
+
+    Falls back to an empty prefix (paths relative to the skill) when the skill is
+    outside the working directory — an absolute or ``../`` SARIF path would be
+    rejected by code scanning, so no prefix is better than a wrong one.
+    """
+    try:
+        relative = Path(audited_path).resolve().relative_to(Path.cwd().resolve())
+    except ValueError:
+        return ""
+    return relative.as_posix()
 
 
 # ----------------------------------------------------------------------

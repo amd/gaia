@@ -87,7 +87,12 @@ def test_text_shows_snippets_when_asked():
 
 def test_clean_report_says_so_without_a_findings_table():
     text = render_text(
-        _report(verdict="ALLOW", findings=(), reason="No findings.", cleared_tiers=("experimental", "community"))
+        _report(
+            verdict="ALLOW",
+            findings=(),
+            reason="No findings.",
+            cleared_tiers=("experimental", "community"),
+        )
     )
     assert text.splitlines()[0].strip().startswith("ALLOW")
     assert "No findings" in text

@@ -65,7 +65,9 @@ def audit_skill(directory: Path | str) -> AuditReport:
     return audit_skill_object(skill, directory=directory)
 
 
-def audit_skill_object(skill: Skill, *, directory: Optional[Path] = None) -> AuditReport:
+def audit_skill_object(
+    skill: Skill, *, directory: Optional[Path] = None
+) -> AuditReport:
     """Audit an already-parsed :class:`Skill`.
 
     Args:
@@ -173,8 +175,7 @@ def _tier_claim_findings(tier: str, cleared: tuple[str, ...]) -> list[Finding]:
             severity="info",
             category=CATEGORY_TIER_CLAIM,
             message=(
-                f"Claims the '{tier}' tier but the findings only clear "
-                f"'{highest}'."
+                f"Claims the '{tier}' tier but the findings only clear " f"'{highest}'."
             ),
             file=SKILL_FILENAME,
             line=0,

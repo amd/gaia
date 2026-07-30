@@ -104,6 +104,7 @@ setup(
         "gaia.connectors.catalog",
         "gaia.connectors.providers",
         "gaia.skills",
+        "gaia.skills.audit",
     ],
     package_data={
         "gaia.eval": [

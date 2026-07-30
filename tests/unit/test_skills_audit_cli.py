@@ -149,10 +149,63 @@ def test_sarif_output_is_written(tmp_path):
     assert sarif["runs"][0]["results"]
 
 
-def test_snippets_are_withheld_unless_requested(tmp_path, capsys):
+def test_sarif_paths_are_anchored_to_the_repo_by_default(tmp_path, monkeypatch):
+    """Code scanning needs a repo-relative path, not a bare 'tools.py'."""
+    root = tmp_path / "repo"
+    (root / "hub" / "skills").mkdir(parents=True)
     directory = _write_skill(
-        tmp_path, tools="KEY_FILE = '/home/u/.ssh/id_rsa'\n"
+        root / "hub" / "skills",
+        tools="import requests\ndef f(u):\n    return requests.get(u).text\n",
     )
+    monkeypatch.chdir(root)
+    destination = tmp_path / "audit.sarif"
+    _run(["skill", "audit", "hub/skills/demo", "--sarif", str(destination)])
+
+    uri = json.loads(destination.read_text())["runs"][0]["results"][0]["locations"][0][
+        "physicalLocation"
+    ]["artifactLocation"]["uri"]
+    assert uri == "hub/skills/demo/tools.py"
+    assert directory.exists()
+
+
+def test_sarif_path_prefix_can_be_overridden(tmp_path):
+    directory = _write_skill(
+        tmp_path, tools="import requests\ndef f(u):\n    return requests.get(u).text\n"
+    )
+    destination = tmp_path / "audit.sarif"
+    _run(
+        [
+            "skill",
+            "audit",
+            str(directory),
+            "--sarif",
+            str(destination),
+            "--path-prefix",
+            "vendor/skills/demo",
+        ]
+    )
+    uri = json.loads(destination.read_text())["runs"][0]["results"][0]["locations"][0][
+        "physicalLocation"
+    ]["artifactLocation"]["uri"]
+    assert uri == "vendor/skills/demo/tools.py"
+
+
+def test_a_skill_outside_the_cwd_gets_no_prefix_rather_than_a_bad_one(tmp_path):
+    """An absolute or '../' SARIF path is rejected by code scanning."""
+    directory = _write_skill(
+        tmp_path, tools="import requests\ndef f(u):\n    return requests.get(u).text\n"
+    )
+    destination = tmp_path / "audit.sarif"
+    _run(["skill", "audit", str(directory), "--sarif", str(destination)])
+    uri = json.loads(destination.read_text())["runs"][0]["results"][0]["locations"][0][
+        "physicalLocation"
+    ]["artifactLocation"]["uri"]
+    assert uri == "tools.py"
+    assert not uri.startswith(("/", ".."))
+
+
+def test_snippets_are_withheld_unless_requested(tmp_path, capsys):
+    directory = _write_skill(tmp_path, tools="KEY_FILE = '/home/u/.ssh/id_rsa'\n")
     _run(["skill", "audit", str(directory)])
     assert "id_rsa" not in capsys.readouterr().out
 
@@ -199,9 +252,7 @@ def test_fail_on_turns_an_advisory_finding_into_a_failure(tmp_path):
         tmp_path, tools="import subprocess\ndef f():\n    subprocess.run(['ls'])\n"
     )
     assert _run(["skill", "audit", str(directory)]) == EXIT_OK
-    assert (
-        _run(["skill", "audit", str(directory), "--fail-on", "high"]) == EXIT_BLOCK
-    )
+    assert _run(["skill", "audit", str(directory), "--fail-on", "high"]) == EXIT_BLOCK
 
 
 def test_fail_on_does_not_fire_below_the_threshold(tmp_path):

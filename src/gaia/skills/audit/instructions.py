@@ -140,17 +140,20 @@ INJECTION_RULES: tuple[InjectionRule, ...] = (
         r"\b(?:system prompt|system message|your instructions|"
         r"the instructions above|the text above|your prompt)\b",
         "Attempts to extract the agent's system prompt or instructions.",
-        "A skill has no need for the agent's own instructions. Remove the "
-        "request.",
+        "A skill has no need for the agent's own instructions. Remove the request.",
     ),
     _rule(
         "body.injection.credential_request",
         "high",
         r"~?/?\.ssh/|\bid_rsa\b|\.aws/credentials|\bnetrc\b|\.git-credentials"
-        r"|\b(?:read|open|cat|print|show|list|include|output)\b[^.\n]{0,40}?"
+        # Verb-led: naming a secret is normal (declaring env_vars, documenting
+        # setup); asking the model to go *read* one is not. The ALL_CAPS branch
+        # is an object of the verb for that reason, never a standalone match.
+        r"|\b(?:read|open|cat|print|show|list|include|output|reveal|dump|echo)\b"
+        r"[^.\n]{0,40}?"
         r"(?:\.env\b|\bapi[_ ]key\b|\baccess[_ ]token\b|\bsecret[_ ]key\b|"
-        r"\bpassword\b|\bcredentials\b)"
-        r"|\b[A-Z][A-Z0-9]*_(?:API_KEY|TOKEN|SECRET|PASSWORD)\b",
+        r"\bpassword\b|\bcredentials\b|"
+        r"[A-Z][A-Z0-9]*_(?:API_KEY|TOKEN|SECRET|PASSWORD)\b)",
         "Instructs the model to read credentials or secrets.",
         "Take secrets through a declared 'requirements.env_vars' entry or a "
         "connector grant. A skill must never instruct the model to go read "
@@ -208,6 +211,19 @@ _HTML_COMMENT_RE = re.compile(r"<!--(.*?)-->", re.DOTALL)
 _COMMENT_IMPERATIVE_RE = re.compile(
     r"\b(?:always|never|must|ignore|disregard|call|execute|run|send|post|"
     r"delete|bypass|skip|do not tell|instead)\b",
+    re.IGNORECASE,
+)
+
+#: A prohibition immediately before a match means the body is *forbidding* the
+#: behaviour, not asking for it. Security-conscious skills are full of these
+#: ("NEVER dump the environment", "Do not run credential flows"), and flagging
+#: them punishes exactly the authors who are being careful.
+#:
+#: Applied only to text BEFORE the match, so rules whose own pattern opens with a
+#: negation — concealment's "do not tell the user" — are unaffected.
+_PROHIBITION_RE = re.compile(
+    r"\b(?:never|do not|don't|cannot|must not|should not|avoid|refuse to|"
+    r"forbidden to|no need to)\b[^.]{0,20}$",
     re.IGNORECASE,
 )
 
@@ -409,7 +425,9 @@ def _encoded_payload_findings(body: str, filename: str) -> list[Finding]:
     return findings
 
 
-def analyze_instructions(body: str, *, filename: str = SKILL_FILENAME) -> tuple[Finding, ...]:
+def analyze_instructions(
+    body: str, *, filename: str = SKILL_FILENAME
+) -> tuple[Finding, ...]:
     """Scan an instruction body for prompt-injection patterns.
 
     Args:
@@ -429,7 +447,10 @@ def analyze_instructions(body: str, *, filename: str = SKILL_FILENAME) -> tuple[
 
     for text, offsets in _logical_blocks(body):
         for rule in INJECTION_RULES:
-            for match in rule.pattern.finditer(text):
+            for match in re.finditer(rule.pattern, text):
+                if _PROHIBITION_RE.search(text[: match.start()]):
+                    # "NEVER dump the environment" forbids the behaviour.
+                    continue
                 number = _line_for_offset(offsets, match.start())
                 key = (rule.rule_id, number)
                 if key in seen:

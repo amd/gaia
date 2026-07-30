@@ -53,9 +53,20 @@ CATEGORIES = (
 #: Directory / file names excluded from the digest and from analysis. Build
 #: caches must not invalidate an otherwise-valid audit report.
 DIGEST_EXCLUDED_DIRS = frozenset(
-    {"__pycache__", ".git", ".mypy_cache", ".pytest_cache", ".ruff_cache", "node_modules"}
+    {
+        "__pycache__",
+        ".git",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        "node_modules",
+    }
 )
 DIGEST_EXCLUDED_SUFFIXES = frozenset({".pyc", ".pyo", ".so", ".zip"})
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 def worst_severity(findings: Iterable["Finding"]) -> Optional[Severity]:
@@ -146,7 +157,7 @@ class AuditReport:
     content_digest: str = ""
     #: sha256 over SKILL.md alone — the digest the hub Worker can recompute.
     manifest_digest: str = ""
-    audited_at: str = field(default_factory=lambda: _utc_now_iso())
+    audited_at: str = field(default_factory=_utc_now_iso)
     engine: str = AUDIT_ENGINE
 
     # ------------------------------------------------------------------
@@ -240,14 +251,10 @@ class AuditReport:
                 "security_tier": self.security_tier,
                 "cleared_tiers": list(self.cleared_tiers),
                 "content_digest": self.content_digest,
-            "manifest_digest": self.manifest_digest,
+                "manifest_digest": self.manifest_digest,
                 "counts": self.counts_by_severity(),
             },
         )
-
-
-def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 # ----------------------------------------------------------------------
