@@ -2520,6 +2520,25 @@ ctrl+c.
   with `d` and `delete`, which made "go back" a destructive action.
 </Note>
 
+#### Waiting on a consequential readiness problem
+
+Most readiness rows that cannot be verified are named on screen and the
+launch continues — the sidecar itself does not treat them as fatal (an
+unadvertised Lemonade version, for instance). A handful are consequential
+enough to hold instead: right now, a model loaded into a smaller context
+window than this machine's profile expects, since a document-sized request
+against it comes back `context_length_exceeded` rather than an answer. When
+that happens the screen waits for `enter` instead of proceeding on its own,
+and the notice lists every such row at once if more than one applies.
+
+If that classification is ever wrong for your setup, restore the old
+behaviour — name it, don't hold — until a release changes the
+classification itself:
+
+```bash
+GAIA_TUI_NO_GATE=1 gaia tui
+```
+
 #### Theme (light vs dark terminals)
 
 The hub asks the terminal for its background colour on startup and picks a

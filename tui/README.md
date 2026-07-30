@@ -51,7 +51,17 @@ server is reachable at a compatible version, the model is downloaded, plus any
 per-agent checks. Each row shows what failed and the command that fixes it.
 
 A check that cannot be determined renders `[?]` rather than a checkmark, and
-never counts as ready.
+never counts as ready. Most of those are named on screen and the launch
+continues — the sidecar itself does not treat them as fatal. A handful are
+consequential enough to hold instead: right now, a model loaded into a
+smaller context window than this machine's profile expects, since a
+document-sized request against it fails. If that classification is ever
+wrong for your setup, `GAIA_TUI_NO_GATE=1` restores the old behaviour (name
+it, don't hold) until a release changes the classification itself:
+
+```bash
+GAIA_TUI_NO_GATE=1 gaia
+```
 
 ## Theming
 

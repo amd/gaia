@@ -3,6 +3,7 @@ package preflight
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -38,6 +39,18 @@ const (
 	// could not be verified — long enough to read what went unproven.
 	unknownHold = 2500 * time.Millisecond
 )
+
+// EnvNoGate restores the pre-halt auto-proceed behaviour, matching the
+// existing env-override precedent (theme.EnvTheme, components.EnvStyle). A
+// TUI binary cannot be hot-patched: if a Halt classification turns out wrong
+// for someone in the field, this is their way past it until a release with
+// the fix reaches them, rather than pressing a key on every single launch.
+const EnvNoGate = "GAIA_TUI_NO_GATE"
+
+// noGateOverride reports whether EnvNoGate is set.
+func noGateOverride() bool {
+	return os.Getenv(EnvNoGate) == "1"
+}
 
 type phase int
 
@@ -307,7 +320,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.focus = 0
 		}
 		if !m.rep.Blocked() && !m.opts.ManualProceed {
-			if m.rep.HasHalt() {
+			if m.rep.HasHalt() && !noGateOverride() {
 				// Three edits together: the tick, the phase, and the note each
 				// independently claim the launch is starting.
 				m.note = "Waiting — " + m.unverifiedSummary()

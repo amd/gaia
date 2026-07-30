@@ -3,6 +3,7 @@ package preflight
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -411,6 +412,102 @@ func TestADispositionHaltRowNoLongerAutoProceeds(t *testing.T) {
 	}
 	if _, ok := cmd().(ProceedMsg); !ok {
 		t.Fatalf("enter on a Halt report produced %T, want ProceedMsg", cmd())
+	}
+}
+
+// GAIA_TUI_NO_GATE is the escape hatch: a TUI binary cannot be hot-patched,
+// so if a Halt classification is wrong in the field, this restores today's
+// auto-proceed rather than making affected users press a key on every launch
+// until a release reaches them.
+func TestGAIATUINoGateRestoresAutoProceedOverAHaltRow(t *testing.T) {
+	t.Setenv(EnvNoGate, "1")
+
+	f := newFake().with("GET /v1/email/init", 200, initCtxShortfall)
+	rep := Check(t.Context(), f, EmailConfig())
+	if !rep.HasHalt() {
+		t.Fatal("test setup: want a Halt row present")
+	}
+
+	m := New(f, EmailConfig(), Options{ReadyHold: time.Millisecond})
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	updated, cmd := updated.(Model).Update(reportMsg{rep: rep})
+	m = updated.(Model)
+
+	if cmd == nil {
+		t.Fatal("GAIA_TUI_NO_GATE=1 did not schedule the hand-off")
+	}
+	if _, ok := cmd().(proceedTickMsg); !ok {
+		t.Fatalf("GAIA_TUI_NO_GATE=1 scheduled %T, want proceedTickMsg", cmd())
+	}
+	screen := strings.Join(strings.Fields(ansi.Strip(m.View())), " ")
+	if !strings.Contains(screen, "Starting anyway") {
+		t.Errorf("GAIA_TUI_NO_GATE=1 did not restore the auto-proceed copy:\n%s", screen)
+	}
+}
+
+// The default (unset) behaviour must still halt — a test that only checks
+// the override is set could pass even if the env var leaked into every run.
+func TestGAIATUINoGateUnsetStillHalts(t *testing.T) {
+	if got := os.Getenv(EnvNoGate); got != "" {
+		t.Fatalf("test setup: %s is %q in the environment, want unset", EnvNoGate, got)
+	}
+
+	f := newFake().with("GET /v1/email/init", 200, initCtxShortfall)
+	rep := Check(t.Context(), f, EmailConfig())
+
+	m := New(f, EmailConfig(), Options{ReadyHold: time.Millisecond})
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	_, cmd := updated.(Model).Update(reportMsg{rep: rep})
+
+	if cmd != nil {
+		if _, ok := cmd().(proceedTickMsg); ok {
+			t.Fatal("a Halt row auto-proceeded with GAIA_TUI_NO_GATE unset")
+		}
+	}
+}
+
+// Blocked() is untouched by the Halt/Notify split: a real failure never gets
+// a tick, before or after this issue.
+func TestBlockedReportSchedulesNoTick(t *testing.T) {
+	f := newFake().with("GET /daemon/v1/agents", 200, agentsStopped)
+	rep := Check(t.Context(), f, EmailConfig())
+	if !rep.Blocked() {
+		t.Fatal("test setup: want a blocked report")
+	}
+
+	m := New(f, EmailConfig(), Options{ReadyHold: time.Millisecond})
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	_, cmd := updated.(Model).Update(reportMsg{rep: rep})
+
+	if cmd != nil {
+		t.Fatalf("a blocked report scheduled %T — Blocked() must never auto-proceed", cmd())
+	}
+}
+
+// BLOCKER-1's other guard, at the model layer: 2+ linked mailboxes is a
+// StateUnknown, DispositionNotify row (report.go/check.go), so it must still
+// schedule the hold and proceed — never halt. A blanket rule here would fire
+// on every launch with 2+ mailboxes linked, forever.
+func TestMultiMailboxReportSchedulesTheHoldNotAHalt(t *testing.T) {
+	f := newFake().with("GET /v1/email/connectors", 200, connectorsBoth)
+	rep := Check(t.Context(), f, EmailConfig())
+	if rep.Blocked() || rep.Ready() {
+		t.Fatalf("test setup: want Blocked()==false && Ready()==false, got Blocked=%v Ready=%v",
+			rep.Blocked(), rep.Ready())
+	}
+	if rep.HasHalt() {
+		t.Fatal("test setup: guards BLOCKER-1 — multi-mailbox must never be a Halt row")
+	}
+
+	m := New(f, EmailConfig(), Options{ReadyHold: time.Millisecond})
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	_, cmd := updated.(Model).Update(reportMsg{rep: rep})
+
+	if cmd == nil {
+		t.Fatal("a multi-mailbox report did not schedule the hand-off — BLOCKER-1 would fire on every launch with 2+ mailboxes linked")
+	}
+	if _, ok := cmd().(proceedTickMsg); !ok {
+		t.Fatalf("multi-mailbox report scheduled %T, want proceedTickMsg", cmd())
 	}
 }
 
