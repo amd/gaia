@@ -64,29 +64,44 @@ async function proxy(target, request, { label, origin, hint, cf }) {
   return response;
 }
 
+// Never throw for a config error: a thrown Worker renders Cloudflare's generic
+// "Error 1101" page, which names neither this Worker nor the cause.
+function configError(detail) {
+  console.error(`website-router: ${detail}`);
+  return new Response(
+    `website-router: ${detail}\n\nSet it under [vars] in ` +
+      `workers/website-router/wrangler.toml to the Railway public hostname of the ` +
+      `'website' service — a bare hostname such as ` +
+      `website-production-82ab.up.railway.app, with no scheme, port, path or ` +
+      `spaces — then redeploy with \`npx wrangler deploy\`.\n`,
+    {
+      status: 502,
+      headers: {
+        "content-type": "text/plain; charset=utf-8",
+        "cache-control": "no-store",
+      },
+    }
+  );
+}
+
 // `url.hostname = x` silently ignores anything that is not a bare host, so a
 // pasted "https://host" would leave the target on amd-gaia.ai and quietly serve
 // the whole apex from Mintlify. Read it back instead of trusting the setter.
 function resolveWebsiteOrigin(env) {
   const origin = env && env.WEBSITE_ORIGIN;
   if (!origin) {
-    throw new Error(
-      "website-router: WEBSITE_ORIGIN is not set. Add it under [vars] in " +
-        "workers/website-router/wrangler.toml (value: the Railway public " +
-        "hostname of the 'website' service, e.g. website-production-82ab.up.railway.app) " +
-        "and redeploy with `npx wrangler deploy`."
-    );
+    return { error: configError("WEBSITE_ORIGIN is not set.") };
   }
   const probe = new URL("https://placeholder.invalid/");
   probe.hostname = origin;
   if (probe.hostname !== origin.toLowerCase()) {
-    throw new Error(
-      `website-router: WEBSITE_ORIGIN in workers/website-router/wrangler.toml is not a ` +
-        `bare hostname (got "${origin}"). Use "website-production-82ab.up.railway.app", ` +
-        `not a full URL, and no scheme, port, path or spaces.`
-    );
+    return {
+      error: configError(
+        `WEBSITE_ORIGIN is not a bare hostname (got "${origin}").`
+      ),
+    };
   }
-  return probe.hostname;
+  return { origin: probe.hostname };
 }
 
 export default {
@@ -107,7 +122,9 @@ export default {
       });
     }
 
-    const websiteOrigin = resolveWebsiteOrigin(env);
+    const { origin: websiteOrigin, error: configFailure } =
+      resolveWebsiteOrigin(env);
+    if (configFailure) return configFailure;
 
     // Everything else -> the Railway website.
     const target = new URL(url.toString());

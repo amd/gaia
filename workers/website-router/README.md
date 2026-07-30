@@ -30,9 +30,15 @@ npx wrangler deploy          # creates/updates the amd-gaia.ai/* route
 ## Rollback (revert to docs-only on the apex)
 
 Delete the `amd-gaia.ai/*` route — traffic falls back to the zone origin (Mintlify).
-Remove the `routes` entry from `wrangler.toml` and redeploy, or delete the route in
-the Cloudflare dashboard (Workers &rarr; website-router &rarr; Triggers) / via the API.
-To take the Worker down entirely: `npx wrangler delete`.
+Do it in the Cloudflare dashboard (Workers &rarr; website-router &rarr; Settings &rarr;
+Domains & Routes) or via the API. To take the Worker down entirely:
+
+```bash
+npx wrangler delete   # removes the Worker and its routes
+```
+
+(`wrangler triggers` only has a `deploy` subcommand — there is no route-delete
+command, so route removal is a dashboard/API action.)
 
 ## Configuration
 
@@ -43,9 +49,11 @@ no code change.
 It must be a **bare hostname** (`website-production-82ab.up.railway.app`) — no
 scheme, port or path. `url.hostname = …` silently ignores anything else, so a
 pasted `https://…` would leave the target on `amd-gaia.ai` and quietly serve the
-whole apex from Mintlify. The Worker reads the value back after assigning it and
-throws an error naming the var if it is missing or malformed, rather than falling
-back to a guess.
+whole apex from Mintlify. The Worker reads the value back after assigning it and,
+if the var is missing or malformed, serves a 502 naming the var and the expected
+shape rather than falling back to a guess. It does **not** throw — a thrown Worker
+renders Cloudflare's generic "Error 1101" page, which names neither this Worker nor
+the cause.
 
 ## When an origin is down
 
