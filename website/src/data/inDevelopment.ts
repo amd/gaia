@@ -24,7 +24,10 @@
 import snapshot from './in-development.json';
 
 export interface InDevelopmentAgent {
+  /** Directory name under hub/agents/. */
   id: string;
+  /** The manifest's own `id` — what the catalog serves once published. */
+  manifestId: string;
   name: string;
   description: string;
   category: string;
@@ -45,8 +48,12 @@ if (ALL.length === 0) {
  * Agents that exist in `hub/agents/` but are not in the published catalog,
  * sorted by name. Pass the ids of every published agent so a freshly published
  * one leaves this list the moment the catalog picks it up.
+ *
+ * Matched on BOTH ids: the catalog keys on the manifest `id`, this snapshot on
+ * the directory, and they disagree for some agents — matching only one would
+ * render a just-published agent in the published grid and here at once.
  */
 export function getInDevelopmentAgents(publishedIds: Iterable<string>): InDevelopmentAgent[] {
   const published = new Set(publishedIds);
-  return ALL.filter((a) => !published.has(a.id));
+  return ALL.filter((a) => !published.has(a.id) && !published.has(a.manifestId));
 }
