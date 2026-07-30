@@ -1438,7 +1438,7 @@ Expected: FAIL on the first two — `gaia` is present and `gaia-dev` is absent.
 
 Replace `setup.py:333-338`:
 
-```python
+```text
         "console_scripts": [
             # `gaia` is the Go binary (tui/). This package must not install a
             # second program under that name — see
