@@ -431,9 +431,9 @@ refuses to claim durability it does not have — the honesty pattern every tier
 should copy.
 
 **v2's job here is not to build this. It is to (a) generalize the pattern so any
-agent can declare a tier-0 store, and (b) make the tier classifier route
-sender-shaped lessons here instead of writing "Alice is important" into a
-prompt.**
+agent can declare a tier-0 store without hand-rolling one, and (b) make the write
+site route sender-shaped lessons here instead of writing "Alice is important" into
+a prompt.**
 
 </Accordion>
 <Accordion title="Tier 1 — 'for inbox cleanup, this recipe works' (bounded, shipped today)">
@@ -529,9 +529,12 @@ matches its trigger above τ (`SIMILARITY_TAU = 0.82`,
 reusing the FAISS mechanism `reconcile_and_store` already maintains.
 
 Tier 3 must remain a **genuine** escape hatch. A lesson forced into a tier too
-weak to hold it is worse than a lesson that cost 200 tokens — the tier
-classifier's failure mode is burying knowledge, and that is the second-highest
-risk in this milestone after rebase.
+weak to hold it is worse than a lesson that cost 200 tokens — burying knowledge in
+a representation that cannot carry it is the failure mode that would have made a
+tier classifier the second-riskiest item in the milestone. Deleting the classifier
+and [declaring the tier at the write site](#why-v1-ships-three-tiers-not-four)
+retires that risk rather than mitigating it: the only lessons that reach tier 3 are
+the ones no shipped mechanism claimed.
 
 </Accordion>
 </AccordionGroup>
@@ -597,8 +600,8 @@ exception; it may not rewrite the procedure.
 | `example` | 3 | `{input, output}` ≤ 400 chars total | Retrieval-gated worked example |
 
 **`fact` is deliberately not storable as a delta.** If a lesson is a fact the
-tools can query, the classifier must route it to tier 0 and the delta write must
-be refused. Allowing prose facts is how a 32K window silently fills with things
+tools can query, the write site routes it to tier 0 and the delta write is
+refused. Allowing prose facts is how a 32K window silently fills with things
 that could have been rows.
 
 ### Section anchoring, not line offsets
@@ -728,7 +731,7 @@ additive; none changes a `procedures` signature.
 | Module | Reusable as-is | Needs extension | Must be new |
 |---|---|---|---|
 | `memory_store.py` | WAL + lock + migration harness ([`:373-470`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py)); the `procedures` accessors and their lineage semantics; `clear_all_embeddings` ([`:1487`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py)) | `_SCHEMA_SQL` + a v3→v4 marker bump; `clear_all_embeddings` should also null `skill_deltas.embedding` | `skill_deltas` table + its five accessors |
-| `skill_synthesis.py` | `DistilledProcedure.parse` / `to_skill_md` ([`:181`, `:255`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py)); `SynthesisConfig` + `load_synthesis_config` override pattern ([`:107`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py)); `cluster_by_goal`'s deterministic seeding ([`:500-502`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py)); `SIMILARITY_TAU` | A `DeltaConfig` sibling section in `memory_settings.json`; the ADD/UPDATE/NOOP *shape* re-applied to deltas keyed on `(base, anchor, kind)` instead of embedding cosine | The tier classifier; the delta reconciler; consolidation / umbrella merge |
+| `skill_synthesis.py` | `DistilledProcedure.parse` / `to_skill_md` ([`:181`, `:255`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py)); `SynthesisConfig` + `load_synthesis_config` override pattern ([`:107`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py)); `cluster_by_goal`'s deterministic seeding ([`:500-502`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py)); `SIMILARITY_TAU` | A `DeltaConfig` sibling section in `memory_settings.json`; the ADD/UPDATE/NOOP *shape* re-applied to deltas keyed on `(base, anchor, kind)` instead of embedding cosine | The delta reconciler; consolidation / umbrella merge; outcome attribution ([Correction 4](#correction-4-the-empirical-promotion-gate-has-no-counter)). **Not** a tier classifier — deleted from v1 |
 | `procedural_memory.py` | The FAISS add/search/rebuild trio ([`:50`, `:118`, `:145`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/procedural_memory.py)); the change-detect-then-rebuild guard ([`:418-425`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/procedural_memory.py)); the off-state ladder in `recall_skill`'s docstring ([`:193-207`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/procedural_memory.py)) — the model for this doc's off-state table | Give the delta corpus its **own** index; do not add deltas to `_proc_faiss_index` | Session-boundary resolution instead of per-turn refresh; the structural-boundary fix for [#2676](https://github.com/amd/gaia/issues/2676) |
 | `tool_loader.py` | **Everything.** `skill_tools` is the tier-1 mechanism and needs no change ([`:224-249`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tool_loader.py), [`:310-337`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tool_loader.py)) | Nothing. The caller supplies a longer list; the loader is agnostic | Nothing |
 | `memory.py` / `agent.py` | `_embed_text`, blob helpers, `GAIA_MEMORY_DISABLED` off-state ([`:393-412`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py)); `_get_mixin_prompts` auto-discovery ([`agent.py:549`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/agent.py)) | Prompt *position*: a learned fragment must not sit in the mixin prefix if it can change mid-session ([`agent.py:617-618`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/agent.py)) | `EffectiveSkill` resolution; the `--no-learned-skills` switch |
@@ -801,10 +804,11 @@ observe → classify tier → propose (staged) → review diff → approve → a
    the agent got it wrong, or the outcome ledger records a rejection. Inference
    from observed behavior stays behind a setting until the safety rails have run
    in the field. This is the conservative fork and it is deliberate.
-2. **Classify.** The tier classifier picks the lowest tier that holds the lesson.
-   A `fact`-shaped lesson is routed to the agent's tier-0 store and **no delta is
-   written**. A lesson the classifier cannot place is surfaced to the user rather
-   than defaulted into prose.
+2. **Route, don't classify.** The tier is **declared by whatever captured the
+   lesson**: a preference-tool call is tier 0 by construction, a recipe outcome is
+   tier 1 by construction, everything else is tier 3. A `fact`-shaped lesson writes
+   a tier-0 row and **no delta**. There is no general classifier to misfile
+   anything — see [why v1 ships three tiers](#why-v1-ships-three-tiers-not-four).
 3. **Stage.** The delta is written `status = 'staged'` — stored, inert, invisible
    to resolution. Nothing a staged delta contains reaches the model.
 4. **Review.** `gaia skill deltas <name> --pending` shows a **reviewable diff**
