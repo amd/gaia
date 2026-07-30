@@ -2,6 +2,7 @@ package preflight
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/amd/gaia/tui/internal/daemon"
+	"github.com/amd/gaia/tui/internal/ui/status"
 )
 
 // --- fixtures ---------------------------------------------------------------
@@ -867,6 +869,293 @@ func TestEveryFailedRowIsActionable(t *testing.T) {
 	}
 }
 
+// Every non-OK row (Failed or Unknown) must declare a real Disposition —
+// DispositionUnset on such a row is a bug, not a pass, the same way an
+// unset State would be. This is the "go vet-style exhaustiveness test":
+// every branch in check.go that resolves a row to Failed or Unknown is
+// exercised here, and a new branch that forgets to set Disposition fails
+// this test rather than silently defaulting to "proceed".
+//
+// wantDisposition also locks the two BLOCKER-1 guards (the lemonade-version
+// and multi-mailbox rows must be Notify, never Halt, or a blanket rule would
+// halt on 44-100% of launches) and the one row this issue exists to fix (the
+// ctx shortfall must be Halt).
+func TestEveryNonOKRowDeclaresADisposition(t *testing.T) {
+	tests := []struct {
+		name            string
+		build           func() *fakeTransport
+		wantKey         string
+		wantDisposition status.Disposition
+	}{
+		{"daemon not running", func() *fakeTransport {
+			f := newFake()
+			f.attachErr = &daemon.NotRunningError{Path: "/tmp/instance.json"}
+			return f
+		}, KeyDaemon, status.DispositionHalt},
+		{"daemon version skew", func() *fakeTransport {
+			f := newFake()
+			f.attachErr = &daemon.VersionError{Have: "1.0", Reason: "it predates the agent relay"}
+			return f
+		}, KeyDaemon, status.DispositionHalt},
+		{"sidecar list: transport error", func() *fakeTransport {
+			f := newFake()
+			f.errs["GET /daemon/v1/agents"] = &daemon.RequestError{Op: "list agents", Detail: "boom"}
+			return f
+		}, KeySidecar, status.DispositionHalt},
+		{"sidecar list: bad status", func() *fakeTransport {
+			return newFake().with("GET /daemon/v1/agents", 500, `{"detail":"boom"}`)
+		}, KeySidecar, status.DispositionHalt},
+		{"sidecar list: unreadable json", func() *fakeTransport {
+			return newFake().with("GET /daemon/v1/agents", 200, `not json`)
+		}, KeySidecar, status.DispositionHalt},
+		{"sidecar: not started", func() *fakeTransport {
+			return newFake().with("GET /daemon/v1/agents", 200, agentsStopped)
+		}, KeySidecar, status.DispositionHalt},
+		{"sidecar: not installed", func() *fakeTransport {
+			return newFake().with("GET /daemon/v1/agents", 200, agentsEmpty)
+		}, KeySidecar, status.DispositionHalt},
+		{"lemonade: transport error", func() *fakeTransport {
+			f := newFake()
+			f.errs["GET /v1/email/init"] = &daemon.RequestError{Op: "check readiness", Detail: "boom"}
+			return f
+		}, KeyLemonade, status.DispositionHalt},
+		{"lemonade: bad status", func() *fakeTransport {
+			return newFake().with("GET /v1/email/init", 500, `{"detail":"boom"}`)
+		}, KeyLemonade, status.DispositionHalt},
+		{"lemonade: unparseable body", func() *fakeTransport {
+			return newFake().with("GET /v1/email/init", 200, `<html>not json</html>`)
+		}, KeyLemonade, status.DispositionHalt},
+		{"lemonade: unreachable", func() *fakeTransport {
+			return newFake().with("GET /v1/email/init", 503, initUnreachable)
+		}, KeyLemonade, status.DispositionHalt},
+		{"lemonade: model list unreadable", func() *fakeTransport {
+			return newFake().with("GET /v1/email/init", 503, initModelListUnreadable)
+		}, KeyLemonade, status.DispositionHalt},
+		{"lemonade: too old", func() *fakeTransport {
+			return newFake().with("GET /v1/email/init", 503, initTooOld)
+		}, KeyLemonade, status.DispositionHalt},
+		{"lemonade: version unknown — guards BLOCKER-1", func() *fakeTransport {
+			return newFake().with("GET /v1/email/init", 200, initUnknownVersion)
+		}, KeyLemonade, status.DispositionNotify},
+		{"model: missing", func() *fakeTransport {
+			return newFake().with("GET /v1/email/init", 503, initModelMissing)
+		}, KeyModel, status.DispositionHalt},
+		{"model: ctx shortfall — the reported bug", func() *fakeTransport {
+			return newFake().with("GET /v1/email/init", 200, initCtxShortfall)
+		}, KeyModel, status.DispositionHalt},
+		{"mailbox: connectors transport error", func() *fakeTransport {
+			f := newFake()
+			f.errs["GET /v1/email/connectors"] = &daemon.RequestError{Op: "list connectors", Detail: "boom"}
+			return f
+		}, KeyMailbox, status.DispositionNotify},
+		{"mailbox: connectors bad status", func() *fakeTransport {
+			return newFake().with("GET /v1/email/connectors", 500, `{"detail":"boom"}`)
+		}, KeyMailbox, status.DispositionNotify},
+		{"mailbox: connectors unreadable json", func() *fakeTransport {
+			return newFake().with("GET /v1/email/connectors", 200, `not json`)
+		}, KeyMailbox, status.DispositionNotify},
+		{"mailbox: not connected", func() *fakeTransport {
+			return newFake().with("GET /v1/email/connectors", 200, connectorsNone)
+		}, KeyMailbox, status.DispositionNotify},
+		{"mailbox: no send scope", func() *fakeTransport {
+			return newFake().with("GET /v1/email/connectors", 200, connectorsNoSend)
+		}, KeyMailbox, status.DispositionNotify},
+		{"mailbox: no grant", func() *fakeTransport {
+			return newFake().with("GET /v1/email/connectors", 200, connectorsNoGrant)
+		}, KeyMailbox, status.DispositionNotify},
+		{"mailbox: credentials rejected", func() *fakeTransport {
+			return newFake().with("POST /v1/email/search", 502, searchNoForwardedCredential)
+		}, KeyMailbox, status.DispositionNotify},
+		{"mailbox: revoked", func() *fakeTransport {
+			return newFake().with("POST /v1/email/search", 403, searchRevoked)
+		}, KeyMailbox, status.DispositionNotify},
+		{"mailbox: inconclusive, multi-linked — guards BLOCKER-1", func() *fakeTransport {
+			return newFake().with("GET /v1/email/connectors", 200, connectorsBoth)
+		}, KeyMailbox, status.DispositionNotify},
+		{"mailbox: inconclusive, relay drop", func() *fakeTransport {
+			return newFake().with("POST /v1/email/search", 502, searchRelayDown)
+		}, KeyMailbox, status.DispositionNotify},
+		{"mailbox: inconclusive, sidecar gone", func() *fakeTransport {
+			return newFake().with("POST /v1/email/search", 503, searchRelay503)
+		}, KeyMailbox, status.DispositionNotify},
+		{"mailbox: inconclusive, token lapsed", func() *fakeTransport {
+			return newFake().with("POST /v1/email/search", 502, searchTokenLapsed)
+		}, KeyMailbox, status.DispositionNotify},
+		{"mailbox: inconclusive, no read route", func() *fakeTransport {
+			return newFake().with("POST /v1/email/search", 404, `{"detail":"Not Found"}`)
+		}, KeyMailbox, status.DispositionNotify},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rep := Check(context.Background(), tt.build(), EmailConfig())
+			row, ok := rep.Find(tt.wantKey)
+			if !ok {
+				t.Fatalf("no row %q in report:\n%s", tt.wantKey, rep)
+			}
+			if row.State != StateFailed && row.State != StateUnknown {
+				t.Fatalf("row %q state = %s, want Failed or Unknown\n%s", tt.wantKey, row.State.Word(), rep)
+			}
+			if row.Disposition == status.DispositionUnset {
+				t.Fatalf("row %q (%s) has no Disposition — a non-OK row must always declare one\n%s",
+					tt.wantKey, row.State.Word(), rep)
+			}
+			if row.Disposition != tt.wantDisposition {
+				t.Errorf("row %q disposition = %v, want %v", tt.wantKey, row.Disposition, tt.wantDisposition)
+			}
+		})
+	}
+}
+
+// HasHalt is what preflight/model.go's reportMsg handler will gate the
+// screen-does-not-lie behaviour on. It must be true precisely when a Halt
+// row is present and false for a report holding only Notify rows — even
+// when those Notify rows are themselves the BLOCKER-1 guard cases.
+func TestReportHasHalt(t *testing.T) {
+	cases := []struct {
+		name  string
+		build func() *fakeTransport
+		want  bool
+	}{
+		{"all ready", newFake, false},
+		{"lemonade version unknown — Notify only", func() *fakeTransport {
+			return newFake().with("GET /v1/email/init", 200, initUnknownVersion)
+		}, false},
+		{"multi-mailbox — Notify only, guards BLOCKER-1", func() *fakeTransport {
+			return newFake().with("GET /v1/email/connectors", 200, connectorsBoth)
+		}, false},
+		{"ctx shortfall — Halt, the reported bug", func() *fakeTransport {
+			return newFake().with("GET /v1/email/init", 200, initCtxShortfall)
+		}, true},
+		{"daemon down — Halt (already blocks today)", func() *fakeTransport {
+			f := newFake()
+			f.attachErr = &daemon.NotRunningError{Path: "/tmp/instance.json"}
+			return f
+		}, true},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			rep := Check(context.Background(), tt.build(), EmailConfig())
+			if got := rep.HasHalt(); got != tt.want {
+				t.Errorf("HasHalt() = %v, want %v\n%s", got, tt.want, rep)
+			}
+		})
+	}
+}
+
+// A row nobody assigned a Disposition to must halt, not silently proceed —
+// the exact failure shape (something not okay, nobody decided, launch
+// happens anyway) that this whole issue exists to fix, just relocated to a
+// single forgotten field. Notify is the value a row opts INTO to skip
+// holding the screen; DispositionUnset is not that, so it must hold too.
+// Built directly rather than through Check(), because check.go now declares
+// a Disposition at every branch it has today — this proves what HasHalt does
+// on a row a FUTURE branch forgets to declare one for.
+func TestHasHaltDefaultsToHaltingOnAnUndeclaredDisposition(t *testing.T) {
+	rep := Report{Rows: []Row{
+		{Key: "mystery", State: StateFailed, Disposition: status.DispositionUnset},
+	}}
+	if !rep.HasHalt() {
+		t.Fatal("a non-OK row with no declared Disposition must halt, not silently proceed")
+	}
+}
+
+// The security review found two paths that put upstream server text into a
+// row unsanitized: checkInit assigns body.hint() to Detail verbatim (the
+// modelListUnreadable branch, check.go:427), and Ladder's fallback builds a
+// Cause with %s — not %q — over upstream/transport text (ladder.go's
+// transport() and Text() fallbacks). Fixing those existing render paths is
+// out of scope for this issue; what matters here is the NEW surface this
+// issue adds — Outcome — which must not carry the payload through, even
+// though the row it was built from still does.
+func TestAHostileHintCannotEscapeIntoAnOutcome(t *testing.T) {
+	const payload = "\x1b[2J\x1b]0;pwned\x07"
+	hint := "Lemonade is reachable but its model list could not be read " + payload
+
+	// Built via json.Marshal, not a hand-quoted string literal: %q escapes a
+	// control byte Go's way (`\x1b`), which is not a legal JSON escape and
+	// would make json.Unmarshal fail the whole body rather than exercise the
+	// modelListUnreadable branch this test targets. Marshal escapes it the
+	// JSON way (``), which decodes back to the real byte — proven with
+	// a throwaway script before writing this fixture this way.
+	type initFixture struct {
+		Ready    bool `json:"ready"`
+		Lemonade struct {
+			Reachable  bool   `json:"reachable"`
+			BaseURL    string `json:"base_url"`
+			Version    string `json:"version"`
+			MinVersion string `json:"min_version"`
+			Compatible bool   `json:"compatible"`
+		} `json:"lemonade"`
+		Model struct {
+			ID      string `json:"id"`
+			Present bool   `json:"present"`
+		} `json:"model"`
+		Hint string `json:"hint"`
+	}
+	fixture := initFixture{Ready: false, Hint: hint}
+	fixture.Lemonade.Reachable = true
+	fixture.Lemonade.BaseURL = "http://localhost:13305/api/v1"
+	fixture.Lemonade.Version = "10.2.1"
+	fixture.Lemonade.MinVersion = "10.2.0"
+	fixture.Lemonade.Compatible = true
+	fixture.Model.ID = "Gemma-4-E4B-it-GGUF"
+	fixture.Model.Present = false
+	body, err := json.Marshal(fixture)
+	if err != nil {
+		t.Fatalf("test setup: could not marshal the fixture: %v", err)
+	}
+	f := newFake().with("GET /v1/email/init", 503, string(body))
+
+	rep := Check(context.Background(), f, EmailConfig())
+	row, ok := rep.Find(KeyLemonade)
+	if !ok {
+		t.Fatal("no lemonade row")
+	}
+	if row.State != StateFailed {
+		t.Fatalf("row state = %s, want Failed\n%s", row.State.Word(), rep)
+	}
+	if !strings.Contains(row.Detail, "\x1b") {
+		t.Fatalf("test setup: row.Detail should still carry the raw escape — that is what "+
+			"proves the sanitizing boundary is Outcome(), not the row itself: %q", row.Detail)
+	}
+
+	o := row.Outcome()
+	if strings.ContainsAny(o.Summary, "\x1b\x07") {
+		t.Fatalf("Outcome().Summary carries raw control bytes: %q", o.Summary)
+	}
+	if o.Disposition == status.DispositionUnset {
+		t.Fatal("Outcome() dropped the row's Disposition")
+	}
+}
+
+// Same boundary via the OTHER unsanitized path: a transport-error Detail
+// reaching a Cause through Ladder's %s fallback.
+func TestAHostileTransportDetailCannotEscapeIntoAnOutcome(t *testing.T) {
+	const payload = "\x1b[2J\x1b]0;pwned\x07"
+	f := newFake()
+	f.errs["GET /daemon/v1/agents"] = &daemon.RequestError{
+		Op: "list the agents the background service supervises", Detail: payload,
+	}
+
+	rep := Check(context.Background(), f, EmailConfig())
+	row, ok := rep.Find(KeySidecar)
+	if !ok {
+		t.Fatal("no sidecar row")
+	}
+	if row.State != StateFailed {
+		t.Fatalf("row state = %s, want Failed\n%s", row.State.Word(), rep)
+	}
+	if !strings.Contains(row.Detail, "\x1b") {
+		t.Fatalf("test setup: row.Detail should still carry the raw escape: %q", row.Detail)
+	}
+
+	o := row.Outcome()
+	if strings.ContainsAny(o.Summary, "\x1b\x07") {
+		t.Fatalf("Outcome().Summary carries raw control bytes: %q", o.Summary)
+	}
+}
+
 // The daemon row must distinguish "start one" from "this one is unusable": a
 // version skew is never fixed by starting a second daemon.
 func TestDaemonRowFixDependsOnWhyItFailed(t *testing.T) {
@@ -1699,22 +1988,32 @@ func TestAnAdequateOrUnknownWindowIsNotWarnedAbout(t *testing.T) {
 	}
 }
 
-// The shortfall row is named while the agent starts, rather than passing by in
-// the 800ms an all-green screen gets. That naming is the whole point: it is the
-// only place the user learns which inputs will fail.
-func TestTheShortfallIsNamedDuringTheHandoff(t *testing.T) {
+// The shortfall row is now DispositionHalt — the reported bug is exactly that
+// it used to name itself and pass by in the 2500ms hold an indeterminate
+// screen got, launching over an input that will fail. It now holds the
+// screen for a person instead: no tick, no claim of starting, and the number
+// the user needs (25037) still on screen — the naming was never the problem,
+// the silent proceeding was.
+func TestTheShortfallHoldsTheScreenAndStillNamesTheWindow(t *testing.T) {
 	f := newFake().with("GET /v1/email/init", 200, initCtxShortfall)
 	m := New(f, EmailConfig(), Options{ReadyHold: time.Millisecond})
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	updated, cmd := updated.(Model).Update(reportMsg{rep: Check(context.Background(), f, EmailConfig())})
 	m = updated.(Model)
 
-	if cmd == nil {
-		t.Fatal("a short window stopped the hand-off; it must not block the launch")
+	// cmd is no longer nil — it carries the halt Outcome the host listens
+	// for — but it must not be the tick toward an automatic ProceedMsg.
+	if cmd != nil {
+		if _, ok := cmd().(proceedTickMsg); ok {
+			t.Fatal("a Halt row scheduled the auto-proceed tick — the launch must wait for a person, not a timer")
+		}
 	}
 	screen := ansi.Strip(m.View())
-	if !strings.Contains(screen, "Starting anyway") {
-		t.Errorf("the shortfall is not named while the agent starts:\n%s", screen)
+	if strings.Contains(screen, "Starting anyway") {
+		t.Errorf("the screen still claims to be starting anyway over a Halt row:\n%s", screen)
+	}
+	if strings.Contains(screen, "Starting "+EmailConfig().AgentName+"…") {
+		t.Errorf("the screen claims to be starting while a Halt row is unresolved:\n%s", screen)
 	}
 	if !strings.Contains(screen, "25037") {
 		t.Errorf("the hand-off never shows the window that will fail:\n%s", screen)

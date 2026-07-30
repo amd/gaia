@@ -97,10 +97,18 @@ func (m *RootModel) closeGate() {
 	}
 	m.pending = nil
 	m.connect = nil
+	// Whatever was halting belonged to THIS gate session — leaving it, by
+	// proceeding or backing out, resolves it. Automation's Overlay must not
+	// keep reading "halt" once the gate that raised it is gone.
+	m.halted = nil
 }
 
 func (m RootModel) proceedFromGate() (tea.Model, tea.Cmd) {
 	agent := *m.pending
+	// Before closeGate clears halted: proceeding IS the deliberate choice
+	// the halt exists to gate, so mark these StepIDs accepted for the rest
+	// of the session before the record of them is gone.
+	m.suppressHalted()
 	m.closeGate()
 	// Back to the hub FIRST. launchAgent stays where it is and reports the reason
 	// when a client cannot be built, and "where it is" has to be a screen that
