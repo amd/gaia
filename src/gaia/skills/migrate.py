@@ -151,36 +151,110 @@ class MigrationOutcome:
 # ----------------------------------------------------------------------
 
 
-def detect_vendor(frontmatter: dict) -> Optional[str]:
-    """Return the vendor whose namespace this frontmatter carries, if any.
+#: Fields that identify a block as OpenClaw's even with no namespace key around
+#: it. Real published skills put these directly under ``metadata`` or at the top
+#: level about as often as they nest them properly.
+_OPENCLAW_SHAPE = frozenset(
+    {"requires", "install", "primaryEnv", "envVars", "emoji", "skillKey", "always"}
+)
 
-    Detection is by ``metadata.<vendor>`` key alone — the field GAIA's own
-    format reserves for exactly this. A skill carrying no vendor namespace is
-    already a plain Agent Skills document; it needs no migration, so ``None``
-    is returned rather than a guess.
+# Where a vendor's fields were found — decides where leftovers are written back.
+_ORIGIN_METADATA_NS = "metadata-namespace"
+_ORIGIN_TOP_NS = "top-level-namespace"
+_ORIGIN_METADATA_INLINE = "metadata-inline"
+_ORIGIN_FRONTMATTER_INLINE = "frontmatter-inline"
+
+
+@dataclass
+class _VendorFields:
+    """A vendor's fields plus where they were found, so leftovers go back there."""
+
+    label: str
+    origin: str
+    fields: dict[str, Any]
+    key: Optional[str] = None
+
+
+def _looks_like_openclaw(block: Any) -> bool:
+    """True when a mapping carries OpenClaw-shaped fields under no namespace."""
+    return isinstance(block, dict) and bool(_OPENCLAW_SHAPE & set(block))
+
+
+def detect_vendor(frontmatter: dict) -> Optional[str]:
+    """Return the vendor whose fields this frontmatter carries, if any.
+
+    Probes the ``metadata.<vendor>`` namespace first — the field GAIA's own
+    format reserves for exactly this — then the shapes real published skills
+    actually use: the namespace hoisted to the top level, and the vendor's
+    fields inlined with no namespace at all. A document with none of those is
+    already a plain Agent Skills skill and needs no migration, so ``None`` is
+    returned rather than a guess.
     """
     metadata = frontmatter.get("metadata")
-    if not isinstance(metadata, dict):
-        return None
     for vendor in VENDORS:
-        if any(key in metadata for key in _NAMESPACES[vendor]):
+        names = _NAMESPACES[vendor]
+        if isinstance(metadata, dict) and any(key in metadata for key in names):
             return vendor
+        if any(key in frontmatter for key in names):
+            return vendor
+
+    if _looks_like_openclaw(metadata) or _looks_like_openclaw(frontmatter):
+        return VENDOR_OPENCLAW
     return None
 
 
-def _vendor_block(frontmatter: dict, vendor: str) -> tuple[str, dict[str, Any]]:
-    """Return the (namespace key, block) this vendor's fields live under."""
+def _locate_vendor_fields(frontmatter: dict, vendor: str) -> _VendorFields:
+    """Find this vendor's fields wherever the source actually put them."""
     metadata = frontmatter.get("metadata")
-    if not isinstance(metadata, dict):
-        return _NAMESPACES[vendor][0], {}
-    for key in _NAMESPACES[vendor]:
-        block = metadata.get(key)
-        if isinstance(block, dict):
-            return key, dict(block)
-        if key in metadata:
-            # Present but not a mapping — nothing to read, but say so.
-            return key, {}
-    return _NAMESPACES[vendor][0], {}
+    names = _NAMESPACES[vendor]
+
+    # 1. The documented home: metadata.<vendor>. First alias wins — several real
+    #    skills duplicate the same payload under two aliases for back-compat, and
+    #    merging them would double-count every requirement.
+    if isinstance(metadata, dict):
+        for key in names:
+            if key in metadata:
+                block = metadata[key]
+                return _VendorFields(
+                    label=f"metadata.{key}",
+                    origin=_ORIGIN_METADATA_NS,
+                    fields=dict(block) if isinstance(block, dict) else {},
+                    key=key,
+                )
+
+    # 2. The namespace hoisted to the top level (seen in the wild).
+    for key in names:
+        if key in frontmatter:
+            block = frontmatter[key]
+            return _VendorFields(
+                label=key,
+                origin=_ORIGIN_TOP_NS,
+                fields=dict(block) if isinstance(block, dict) else {},
+                key=key,
+            )
+
+    # 3/4. Vendor fields inlined with no namespace key at all.
+    if vendor == VENDOR_OPENCLAW:
+        if _looks_like_openclaw(metadata):
+            return _VendorFields(
+                label="metadata",
+                origin=_ORIGIN_METADATA_INLINE,
+                fields={k: v for k, v in metadata.items() if k != "gaia"},
+            )
+        if _looks_like_openclaw(frontmatter):
+            return _VendorFields(
+                label="(frontmatter)",
+                origin=_ORIGIN_FRONTMATTER_INLINE,
+                fields={
+                    k: v
+                    for k, v in frontmatter.items()
+                    if k in _OPENCLAW_SHAPE or k == "os"
+                },
+            )
+
+    return _VendorFields(
+        label=f"metadata.{names[0]}", origin=_ORIGIN_METADATA_NS, fields={}, key=names[0]
+    )
 
 
 # ----------------------------------------------------------------------
@@ -238,13 +312,19 @@ def _string_list(value: Any) -> list[str]:
 
 
 def _env_var_names(entries: Any) -> list[str]:
-    """Pull env var names out of OpenClaw's ``envVars: [{name: ...}]`` shape."""
+    """Pull env var names out of OpenClaw's ``envVars`` shape.
+
+    Documented as ``[{name: ..., required: ..., description: ...}]``; published
+    skills also use ``key`` for the same field, and plain strings.
+    """
     names: list[str] = []
     for entry in entries if isinstance(entries, (list, tuple)) else []:
         if isinstance(entry, dict):
-            name = entry.get("name")
-            if isinstance(name, str) and name.strip():
-                names.append(name.strip())
+            for field_name in ("name", "key"):
+                value = entry.get(field_name)
+                if isinstance(value, str) and value.strip():
+                    names.append(value.strip())
+                    break
         elif isinstance(entry, str) and entry.strip():
             names.append(entry.strip())
     return names
@@ -295,7 +375,7 @@ def _map_requires(
         return set()
 
     consumed: set[str] = set()
-    prefix = f"metadata.{namespace}.requires"
+    prefix = f"{namespace}.requires"
 
     # `env` declares which variables must be present — exactly GAIA's advisory
     # requirements.env_vars. It grants no capability, so it is not an `env:read`
@@ -354,7 +434,7 @@ def _map_requires(
     if leftover:
         outcome.notes.append(
             f"{prefix} keys {', '.join(leftover)} have no GAIA equivalent and were "
-            f"preserved under metadata.{namespace} for review."
+            f"preserved under {namespace} for review."
         )
     return consumed
 
@@ -387,17 +467,21 @@ def _map_openclaw(
         else:
             remaining.pop("requires", None)
 
-    env_names = _string_list(block.get("primaryEnv")) + _env_var_names(
-        block.get("envVars")
+    # `env` as a sibling of `requires` is the envVars shape under another name.
+    env_names = (
+        _string_list(block.get("primaryEnv"))
+        + _env_var_names(block.get("envVars"))
+        + _env_var_names(block.get("env"))
+        + _env_var_names(block.get("optionalEnv"))
     )
     if env_names:
         added = [e for e in env_names if e not in requirements.env_vars]
         requirements.env_vars.extend(added)
         outcome.mapped.append(
-            f"metadata.{namespace}.primaryEnv/envVars → "
+            f"{namespace}.primaryEnv/envVars/env → "
             f"metadata.gaia.requirements.env_vars ({', '.join(env_names)})"
         )
-        # envVars carries per-variable descriptions GAIA does not model, so the
+        # envVars/env carry per-variable descriptions GAIA does not model, so the
         # block stays for reference; primaryEnv is fully expressed by env_vars.
         remaining.pop("primaryEnv", None)
 
@@ -414,22 +498,22 @@ def _map_openclaw(
                 unmapped.append(entry)
         if requirements.dependencies or requirements.node_dependencies:
             outcome.mapped.append(
-                f"metadata.{namespace}.install → metadata.gaia.requirements "
+                f"{namespace}.install → metadata.gaia.requirements "
                 "dependencies/node_dependencies"
             )
         if unmapped:
             outcome.notes.append(
-                f"metadata.{namespace}.install has {len(unmapped)} entry(ies) whose "
+                f"{namespace}.install has {len(unmapped)} entry(ies) whose "
                 "package manager GAIA does not model (brew/go/cargo/nix and friends). "
                 "GAIA never runs install steps — install those yourself. The full "
-                f"install list is preserved under metadata.{namespace}."
+                f"install list is preserved under {namespace}."
             )
 
     advisory = [k for k in ("os", "always", "skillKey", "nix", "config") if k in block]
     if advisory:
         outcome.notes.append(
-            f"metadata.{namespace} keys {', '.join(advisory)} are OpenClaw runtime "
-            f"directives GAIA does not act on; preserved under metadata.{namespace}."
+            f"{namespace} keys {', '.join(advisory)} are OpenClaw runtime "
+            f"directives GAIA does not act on; preserved under {namespace}."
         )
     return remaining
 
@@ -465,8 +549,8 @@ def _map_hermes(
     descriptive = [k for k in ("category", "tags", "author") if k in block]
     if descriptive:
         outcome.notes.append(
-            f"metadata.{namespace} keys {', '.join(descriptive)} are descriptive "
-            f"metadata GAIA does not model; preserved under metadata.{namespace}."
+            f"{namespace} keys {', '.join(descriptive)} are descriptive "
+            f"metadata GAIA does not model; preserved under {namespace}."
         )
     return remaining
 
@@ -505,7 +589,19 @@ def migrate_text(
             namespace to migrate from.
     """
     source_path = Path(source)
-    frontmatter, body = split_frontmatter(text, source=str(source))
+    try:
+        frontmatter, body = split_frontmatter(text, source=str(source))
+    except SkillValidationError as exc:
+        # ~5% of published OpenClaw skills ship no frontmatter at all. That is a
+        # per-skill blocker, not a reason to abort a whole collection.
+        return MigrationOutcome(
+            source=source_path,
+            vendor=vendor if vendor in VENDORS else "unknown",
+            blockers=[
+                f"{exc} A skill with no frontmatter has no name or description to "
+                "migrate; add them to the source and migrate again."
+            ],
+        )
 
     if vendor == "auto":
         detected = detect_vendor(frontmatter)
@@ -532,7 +628,31 @@ def migrate_text(
         vendor=vendor,
         source_name=raw_name.strip() if isinstance(raw_name, str) else None,
     )
-    namespace, block = _vendor_block(frontmatter, vendor)
+    located = _locate_vendor_fields(frontmatter, vendor)
+    namespace, block = located.label, located.fields
+    if located.origin in (_ORIGIN_TOP_NS, _ORIGIN_METADATA_INLINE, _ORIGIN_FRONTMATTER_INLINE):
+        outcome.notes.append(
+            f"{source}: this skill's {vendor} fields are at '{located.label}', not the "
+            f"documented metadata.{_NAMESPACES[vendor][0]}. They were migrated from "
+            "where they actually are."
+        )
+    duplicates = [
+        key
+        for key in _NAMESPACES[vendor][1:]
+        if located.key
+        and key != located.key
+        and (
+            key in frontmatter
+            or (isinstance(frontmatter.get("metadata"), dict) and key in frontmatter["metadata"])
+        )
+    ]
+    if duplicates:
+        outcome.notes.append(
+            f"{source}: '{located.label}' was used; the equivalent alias(es) "
+            f"{', '.join(duplicates)} are also present and were preserved unread "
+            "rather than merged (merging would double-count every requirement). "
+            "Delete the stale one after reviewing."
+        )
 
     # --- required base fields -------------------------------------------
     resolved_name, rename_note = _normalize_name(name or frontmatter.get("name"))
@@ -581,21 +701,26 @@ def migrate_text(
     else:
         remaining = {}
         outcome.notes.append(
-            f"{source}: metadata.{namespace} is absent or empty — migrated as an "
+            f"{source}: {namespace} is absent or empty — migrated as an "
             "instruction-only skill."
         )
     gaia.requirements = requirements
 
     # --- carry the rest of metadata through ------------------------------
+    # Whatever the mapper did not consume goes back exactly where it came from,
+    # so a round-trip through GAIA never silently relocates a vendor's fields.
+    consumed = set(block) - set(remaining)
     other_metadata: dict[str, Any] = {}
     raw_metadata = frontmatter.get("metadata")
     if isinstance(raw_metadata, dict):
         for key, value in raw_metadata.items():
             if key == "gaia":
                 continue
-            if key == namespace:
+            if located.origin == _ORIGIN_METADATA_NS and key == located.key:
                 if remaining:
                     other_metadata[key] = remaining
+            elif located.origin == _ORIGIN_METADATA_INLINE and key in consumed:
+                continue
             else:
                 other_metadata[key] = value
 
@@ -609,9 +734,17 @@ def migrate_text(
             gaia.security_tier = claimed_tier.strip()
 
     known_top_level = {"name", "description", "license", "version", "metadata"}
-    extra_fields = {
-        k: v for k, v in frontmatter.items() if k not in known_top_level
-    }
+    extra_fields: dict[str, Any] = {}
+    for key, value in frontmatter.items():
+        if key in known_top_level:
+            continue
+        if located.origin == _ORIGIN_TOP_NS and key == located.key:
+            if remaining:
+                extra_fields[key] = remaining
+            continue
+        if located.origin == _ORIGIN_FRONTMATTER_INLINE and key in consumed:
+            continue
+        extra_fields[key] = value
     if extra_fields:
         outcome.notes.append(
             f"{source}: top-level key(s) {', '.join(sorted(extra_fields))} are not part "
