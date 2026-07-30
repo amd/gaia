@@ -218,6 +218,39 @@ class ScopeMismatchError(ConnectorsError):
         )
 
 
+class RateLimitedError(ConnectorsError):
+    """A provider rate-limited a request and every retry attempt was exhausted.
+
+    Core (not hub-local) so ``format_connector_error``'s ``isinstance``
+    dispatch can recognize it from any agent package. ``message_ids`` names
+    the items that never succeeded; ``partial_results`` carries whatever
+    DID succeed before the budget ran out, so a caller can degrade to a
+    partial result instead of discarding the whole request.
+    """
+
+    def __init__(
+        self,
+        provider: str,
+        *,
+        message_ids: Iterable[str] | None = None,
+        partial_results: dict | None = None,
+        message: str | None = None,
+    ):
+        self.provider = provider
+        self.message_ids = list(message_ids or [])
+        self.partial_results = dict(partial_results or {})
+        super().__init__(message or self._default_message())
+
+    def _default_message(self) -> str:
+        ids = ", ".join(self.message_ids) or "<unknown>"
+        return (
+            f"{self.provider} rate-limited the request for message(s) {ids} "
+            "after exhausting retries. This is a transient per-user "
+            "concurrency limit, not a permanent failure — try again in a "
+            "minute."
+        )
+
+
 class ConsentDeniedError(ConnectorsError):
     """User denied consent in OAuth flow (``?error=access_denied``)."""
 

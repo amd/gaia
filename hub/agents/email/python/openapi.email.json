@@ -98,7 +98,7 @@
         "properties": {
           "degraded": {
             "default": false,
-            "description": "True when at least one connected mailbox could not be scanned.",
+            "description": "True when at least one connected mailbox could not be scanned (see mailbox_errors), OR at least one individual message could not be fetched after Gmail rate-limited it past its retry budget (see message_errors, #2716) — either way, the surviving results are still shown, but coverage is partial.",
             "title": "Degraded",
             "type": "boolean"
           },
@@ -116,6 +116,21 @@
             ],
             "description": "Connected mailboxes that failed during this scan, if any.",
             "title": "Mailbox Errors"
+          },
+          "message_errors": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/MessageError"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Individual messages that could not be fetched during this scan, if any (#2716) — e.g. a Gmail rate-limit that survived retry. Every other message in the same mailbox is still included in ``items``; this is a per-message gap, not a mailbox failure.",
+            "title": "Message Errors"
           },
           "scan_truncated": {
             "default": false,
@@ -332,7 +347,7 @@
             "type": "array"
           },
           "schema_version": {
-            "default": "2.9",
+            "default": "2.10",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -357,7 +372,7 @@
             "type": "array"
           },
           "schema_version": {
-            "default": "2.9",
+            "default": "2.10",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -434,7 +449,7 @@
             "title": "Provider"
           },
           "schema_version": {
-            "default": "2.9",
+            "default": "2.10",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -621,7 +636,7 @@
             "title": "Location"
           },
           "schema_version": {
-            "default": "2.9",
+            "default": "2.10",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -661,7 +676,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.9",
+            "default": "2.10",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -692,7 +707,7 @@
             "type": "array"
           },
           "schema_version": {
-            "default": "2.9",
+            "default": "2.10",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -728,7 +743,7 @@
             "title": "Provider"
           },
           "schema_version": {
-            "default": "2.9",
+            "default": "2.10",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -768,7 +783,7 @@
             "type": "boolean"
           },
           "schema_version": {
-            "default": "2.9",
+            "default": "2.10",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -919,7 +934,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.9",
+            "default": "2.10",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1032,7 +1047,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.9",
+            "default": "2.10",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1062,7 +1077,7 @@
             "description": "The attention-view envelope."
           },
           "schema_version": {
-            "default": "2.9",
+            "default": "2.10",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1137,7 +1152,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.9",
+            "default": "2.10",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1337,7 +1352,7 @@
             "type": "integer"
           },
           "schema_version": {
-            "default": "2.9",
+            "default": "2.10",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -1355,7 +1370,7 @@
             "description": "The pre-scan envelope."
           },
           "schema_version": {
-            "default": "2.9",
+            "default": "2.10",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1587,7 +1602,7 @@
             "type": "boolean"
           },
           "schema_version": {
-            "default": "2.9",
+            "default": "2.10",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1659,7 +1674,7 @@
             "title": "Query"
           },
           "schema_version": {
-            "default": "2.9",
+            "default": "2.10",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -1710,7 +1725,7 @@
             "title": "Query"
           },
           "schema_version": {
-            "default": "2.9",
+            "default": "2.10",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1931,7 +1946,7 @@
             "title": "Payload"
           },
           "schema_version": {
-            "default": "2.9",
+            "default": "2.10",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -1961,7 +1976,7 @@
             "description": "The structured analysis."
           },
           "schema_version": {
-            "default": "2.9",
+            "default": "2.10",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -2127,7 +2142,7 @@
             "type": "integer"
           },
           "schema_version": {
-            "default": "2.9",
+            "default": "2.10",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -2195,7 +2210,7 @@
             "type": "boolean"
           },
           "schema_version": {
-            "default": "2.9",
+            "default": "2.10",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -2335,7 +2350,7 @@
             "type": "array"
           },
           "schema_version": {
-            "default": "2.9",
+            "default": "2.10",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -2535,6 +2550,28 @@
           "error"
         ],
         "title": "MailboxError",
+        "type": "object"
+      },
+      "MessageError": {
+        "additionalProperties": false,
+        "description": "One message that could not be fetched during a scan (#2716).\n\nDistinct from ``MailboxError``: a rate-limited message is NOT a mailbox\nfailure — every other message in that mailbox's scan is still present\nin the result. Not reusable as ``MailboxError`` since that model has no\n``message_id`` field.",
+        "properties": {
+          "error": {
+            "description": "Actionable error message for the failure.",
+            "title": "Error",
+            "type": "string"
+          },
+          "message_id": {
+            "description": "Provider message id that failed.",
+            "title": "Message Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message_id",
+          "error"
+        ],
+        "title": "MessageError",
         "type": "object"
       },
       "OutgoingAttachment": {
@@ -3142,7 +3179,7 @@
   "info": {
     "description": "REST surface for the GAIA Email Triage agent (/v1/email/*). Cross-implementation contract for the npm client and native builds.",
     "title": "GAIA Email Agent API",
-    "version": "2.9"
+    "version": "2.10"
   },
   "openapi": "3.1.0",
   "paths": {

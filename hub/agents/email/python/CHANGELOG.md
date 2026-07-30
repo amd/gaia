@@ -103,6 +103,29 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **A Gmail rate-limit no longer kills the whole scan (#2720, #2716).** Gmail
+  enforces a per-user concurrent-request limit, and the metadata-first batch
+  fetch (#2643) was oversized enough to reliably trip it — one 429'd
+  sub-request discarded the other 99 already-successful results and the
+  entire attention view/triage scan failed, surfacing a raw
+  `CONNECTOR_ERROR: All connected mailboxes failed` (or, worse, the raw
+  upstream JSON payload verbatim on the terminal). The batch subrequest
+  ceiling is now 25 (measured against a live mailbox — 100 cold-429s, 25
+  succeeds), a 429 is retried with bounded backoff (honouring `Retry-After`
+  on the outer request), and a message that's still rate-limited after
+  retrying is dropped individually — the attention view now shows every
+  other message and reports the dropped one in `coverage.message_errors`,
+  instead of failing the whole scan for everyone. `get_thread` (used by
+  waiting-on-you detection on every scan) and the single-message fetch path
+  get the same retry, not just the batch endpoint. The raw upstream error
+  payload — previously interpolated with `repr()`, which could put terminal
+  control/escape bytes on a user's screen — is now sanitized before it
+  reaches any error message. The three tunables (batch size, retry
+  attempts, backoff ceiling) are environment-overridable
+  (`GAIA_EMAIL_GMAIL_BATCH_MAX_SUBREQUESTS`,
+  `GAIA_EMAIL_GMAIL_RATE_LIMIT_MAX_ATTEMPTS`,
+  `GAIA_EMAIL_GMAIL_RATE_LIMIT_MAX_BACKOFF_SECONDS`) so a bad value can be
+  corrected without a new release.
 - **A priority-sender match no longer forces a message to URGENT (#2632).**
   `_apply_session_preferences` used to override the heuristic/LLM's category
   outright the moment a sender matched the priority list — a Substack

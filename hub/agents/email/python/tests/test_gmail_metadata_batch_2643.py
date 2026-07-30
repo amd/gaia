@@ -25,8 +25,7 @@ import json
 
 import httpx
 import pytest
-
-from gaia_agent_email.gmail_backend import LiveGmailBackend, METADATA_SCAN_HEADERS
+from gaia_agent_email.gmail_backend import METADATA_SCAN_HEADERS, LiveGmailBackend
 
 from gaia.connectors.errors import ConnectorsError
 
@@ -222,24 +221,25 @@ class TestGetMessagesBatch:
         with pytest.raises(ConnectorsError):
             backend.get_messages_batch(["m1", "m2"], format="full")
 
-    def test_more_than_100_ids_are_chunked_into_multiple_batches(self):
+    def test_more_than_chunk_cap_ids_are_chunked_into_multiple_batches(self):
+        from gaia_agent_email.gmail_backend import _BATCH_MAX_SUBREQUESTS
+
         seen_chunk_sizes = []
 
         def handler(request: httpx.Request) -> httpx.Response:
             n_parts = request.content.count(b"Content-Type: application/http")
             seen_chunk_sizes.append(n_parts)
             boundary = "chunkb"
-            parts = [
-                (f"response-item{i}", 200, {"echo": i}) for i in range(n_parts)
-            ]
+            parts = [(f"response-item{i}", 200, {"echo": i}) for i in range(n_parts)]
             return _batch_response(boundary, parts)
 
         backend, calls = _backend(handler)
         ids = [f"id{i}" for i in range(150)]
         out = backend.get_messages_batch(ids, format="full")
-        assert len(calls) == 2, "150 ids at a 100-cap must cost exactly 2 round-trips"
-        assert seen_chunk_sizes == [100, 50], (
-            "first chunk must cap at Gmail's 100-subrequest batch limit, "
-            f"got {seen_chunk_sizes}"
+        expected_calls = -(-150 // _BATCH_MAX_SUBREQUESTS)  # ceil division
+        assert len(calls) == expected_calls
+        assert seen_chunk_sizes[0] == _BATCH_MAX_SUBREQUESTS, (
+            "first chunk must cap at Gmail's per-user-concurrency-safe batch "
+            f"size, got {seen_chunk_sizes}"
         )
         assert set(out) == set(ids), "every requested id must resolve, across chunks"

@@ -65,7 +65,7 @@ from gaia_agent_email.verbose import (
 )
 
 from gaia.agents.base.tools import tool
-from gaia.connectors.errors import ConnectorsError
+from gaia.connectors.errors import ConnectorsError, RateLimitedError
 from gaia.connectors.formatting import format_connector_error
 from gaia.logger import get_logger
 
@@ -1036,8 +1036,8 @@ def _list_all_stubs(
 
 
 def _fetch_messages(
-    gmail, ids: List[str], *, format: str
-) -> Dict[str, Dict[str, Any]]:
+    gmail, ids: List[str], *, format: str, on_rate_limit: str = "raise"
+) -> Tuple[Dict[str, Dict[str, Any]], List[str]]:
     """Fetch ``ids`` in as few round-trips as ``gmail`` supports (#2643).
 
     Prefers the backend's own ``get_messages_batch`` — a duck-typed
@@ -1051,34 +1051,55 @@ def _fetch_messages(
     ``TypeError`` raised inside a real ``get_message`` for missing format
     support and silently swallow a genuine bug.
 
-    Every id in ``ids`` is guaranteed a corresponding entry in the returned
-    map, or this raises — a backend handing back fewer than requested is a
-    silently partial scan, which this package never allows (mirrors
-    ``_list_all_stubs``'s page-failure-propagates rule and
-    ``EnvelopeBudgetExceeded``'s fail-loud contract elsewhere in this file).
+    Returns ``(fetched, dropped_ids)``. With the default ``on_rate_limit=
+    "raise"``, ``dropped_ids`` is always empty and the original all-or-
+    nothing contract holds unchanged: every id in ``ids`` is guaranteed a
+    corresponding entry in ``fetched``, or this raises — a backend handing
+    back fewer than requested is a silently partial scan, which this
+    package never allows (mirrors ``_list_all_stubs``'s
+    page-failure-propagates rule and ``EnvelopeBudgetExceeded``'s
+    fail-loud contract elsewhere in this file).
+
+    ``on_rate_limit="skip"`` catches ONLY ``RateLimitedError`` — never a
+    bare ``ConnectorsError``, so a genuine 404/auth failure still aborts
+    loudly — keeps whatever messages the backend already fetched, and
+    reports the rate-limited ids via ``dropped_ids`` instead of raising.
+    A known-skipped id is never "missing": only an id absent from both
+    ``fetched`` and ``dropped_ids`` (a real backend bug) still raises.
     """
     if not ids:
-        return {}
+        return {}, []
+    dropped: List[str] = []
     batch_fn = getattr(gmail, "get_messages_batch", None)
     if callable(batch_fn):
-        out = dict(batch_fn(ids, format=format))
+        try:
+            out = dict(batch_fn(ids, format=format))
+        except RateLimitedError as exc:
+            if on_rate_limit != "skip":
+                raise
+            out = dict(exc.partial_results)
+            dropped = list(exc.message_ids)
     else:
         supports_format = "format" in inspect.signature(gmail.get_message).parameters
-        out = {
-            mid: (
-                gmail.get_message(mid, format=format)
-                if supports_format
-                else gmail.get_message(mid)
-            )
-            for mid in ids
-        }
-    missing = [mid for mid in ids if mid not in out]
+        out = {}
+        for mid in ids:
+            try:
+                out[mid] = (
+                    gmail.get_message(mid, format=format)
+                    if supports_format
+                    else gmail.get_message(mid)
+                )
+            except RateLimitedError:
+                if on_rate_limit != "skip":
+                    raise
+                dropped.append(mid)
+    missing = [mid for mid in ids if mid not in out and mid not in dropped]
     if missing:
         raise RuntimeError(
             f"mail backend returned {len(out)} of {len(ids)} requested "
             f"message(s) during a triage scan; missing: {missing[:5]}"
         )
-    return out
+    return out, dropped
 
 
 def triage_inbox_impl(
@@ -1091,6 +1112,7 @@ def triage_inbox_impl(
     classifier: Optional[Callable[..., Mapping[str, Any]]] = None,
     debug: bool = False,
     progress: Optional[Callable[[int, int, str], None]] = None,
+    on_rate_limit: str = "raise",
 ) -> Dict[str, Any]:
     """Triage the inbox using heuristic fast path + LLM fallback.
 
@@ -1159,6 +1181,16 @@ def triage_inbox_impl(
     ``max_messages`` is collected or the mailbox is exhausted — previously
     this issued a single ``list_messages`` call and silently capped
     coverage at one provider page regardless of what was requested.
+
+    ``on_rate_limit``: ``"raise"`` (the default) preserves the original
+    contract — a Gmail rate-limit that survives retry propagates as
+    ``RateLimitedError``, like any other ``ConnectorsError``. ``"skip"``
+    degrades instead: a rate-limited message is left out of ``results``
+    (never a half-built decision) and its id is added to the returned
+    ``dropped_ids`` list. Callers that need every message or nothing (the
+    LLM-facing tool, the chat-surface pre-scan) keep the default; only the
+    read-only attention view opts into ``"skip"``, since surfacing 99 of
+    100 signals beats a 500 over one rate-limited message.
     """
     # Local import breaks a real import cycle: calendar_tools imports
     # DEFAULT_BODY_LIMIT_CHARS from this module at module scope, so importing
@@ -1169,18 +1201,24 @@ def triage_inbox_impl(
     with log_tool_call(
         "triage_inbox", {"max_messages": max_messages}, debug=debug
     ) as st:
-        listing = _list_all_stubs(
-            gmail, label_ids=label_ids, max_messages=max_messages
-        )
+        listing = _list_all_stubs(gmail, label_ids=label_ids, max_messages=max_messages)
         stubs = listing["stubs"]
         stub_ids = [stub["id"] for stub in stubs]
 
         # Phase 1: metadata-only fetch for the whole scan (#2643 lever 1+2).
-        metadata_by_id = _fetch_messages(gmail, stub_ids, format="metadata")
+        metadata_by_id, metadata_dropped_ids = _fetch_messages(
+            gmail, stub_ids, format="metadata", on_rate_limit=on_rate_limit
+        )
 
         prepared: List[Dict[str, Any]] = []
         escalate_ids: List[str] = []
         for stub in stubs:
+            if stub["id"] in metadata_dropped_ids:
+                # Rate-limited away (on_rate_limit="skip") -- no metadata to
+                # classify with, so this message is simply absent from the
+                # result rather than a half-built decision. Its id is
+                # reported via dropped_ids below.
+                continue
             msg = metadata_by_id[stub["id"]]
             payload_headers = {
                 (h.get("name") or "").lower(): h.get("value", "")
@@ -1271,12 +1309,20 @@ def triage_inbox_impl(
         # Phase 2: full-body fetch ONLY for messages phase 1 flagged for LLM
         # follow-up (#2643 lever 1+2) — empty (and zero round-trips) whenever
         # nothing escalates, e.g. pre_scan_inbox's classifier=None path.
-        full_by_id = (
-            _fetch_messages(gmail, escalate_ids, format="full") if escalate_ids else {}
+        full_by_id, full_dropped_ids = (
+            _fetch_messages(
+                gmail, escalate_ids, format="full", on_rate_limit=on_rate_limit
+            )
+            if escalate_ids
+            else ({}, [])
         )
 
         results: List[Dict[str, Any]] = []
         for item in prepared:
+            if item["escalate"] and item["stub_id"] in full_dropped_ids:
+                # Rate-limited during the phase-2 body fetch -- same
+                # skip-not-crash treatment as a phase-1 drop above.
+                continue
             decision = item["decision"]
             heuristic = item["heuristic"]
             if item["escalate"]:
@@ -1332,6 +1378,10 @@ def triage_inbox_impl(
             "grouped": grouped,
             "resultSizeEstimate": listing["resultSizeEstimate"],
             "scan_truncated": listing["scan_truncated"],
+            # Message ids skipped under on_rate_limit="skip" -- always empty
+            # under the default "raise" (any drop would have propagated as
+            # RateLimitedError instead of reaching this return).
+            "dropped_ids": metadata_dropped_ids + full_dropped_ids,
         }
 
 

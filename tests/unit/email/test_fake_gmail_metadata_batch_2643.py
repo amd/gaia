@@ -172,19 +172,22 @@ class TestGetMessagesBatch:
         )
         assert get_message_calls == []
 
-    def test_batch_chunks_at_the_same_100_boundary_as_live_gmail(self):
+    def test_batch_chunks_at_the_same_boundary_as_live_gmail(self):
+        from gaia_agent_email.gmail_backend import _BATCH_MAX_SUBREQUESTS
+
         gmail = FakeGmailBackend()
         ids = [f"m{i}" for i in range(150)]
         for mid in ids:
             gmail.add_message(_msg(mid))
         gmail.get_messages_batch(ids, format="full")
         batch_calls = [c for c in gmail.transport.calls if c[0] == "get_messages_batch"]
-        assert len(batch_calls) == 2, (
-            "150 ids must chunk into 2 round-trips (100 + 50), matching "
-            f"LiveGmailBackend's chunking -- got {len(batch_calls)}"
+        expected_calls = -(-150 // _BATCH_MAX_SUBREQUESTS)  # ceil division
+        assert len(batch_calls) == expected_calls, (
+            f"150 ids must chunk to match LiveGmailBackend's chunking -- "
+            f"got {len(batch_calls)}, expected {expected_calls}"
         )
         sizes = sorted(len(c[1]["message_ids"]) for c in batch_calls)
-        assert sizes == [50, 100]
+        assert max(sizes) == _BATCH_MAX_SUBREQUESTS
 
     def test_empty_batch_makes_no_call(self):
         gmail = FakeGmailBackend()
