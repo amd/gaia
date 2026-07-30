@@ -38,7 +38,13 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Dict, List, Optional
 
-from gaia_agent_email import action_store, autonomy_kill, schedule_store, task_store, trust
+from gaia_agent_email import (
+    action_store,
+    autonomy_kill,
+    schedule_store,
+    task_store,
+    trust,
+)
 from gaia_agent_email.config import ConfigurationError, EmailAgentConfig
 from gaia_agent_email.model_select import (
     NPU_EMAIL_MODEL_ID,

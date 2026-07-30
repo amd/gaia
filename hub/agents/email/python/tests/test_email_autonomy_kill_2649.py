@@ -35,8 +35,6 @@ import pytest
 
 pytest.importorskip("gaia_agent_email")
 
-from gaia.database.mixin import DatabaseMixin  # noqa: E402
-
 from gaia_agent_email import autonomy_kill  # noqa: E402
 from gaia_agent_email.agent import EmailTriageAgent  # noqa: E402
 from gaia_agent_email.autonomy_scheduler import (  # noqa: E402
@@ -47,6 +45,7 @@ from gaia_agent_email.autonomy_scheduler import (  # noqa: E402
 from gaia_agent_email.config import EmailAgentConfig  # noqa: E402
 from gaia_agent_email.trust import LEVEL_EARN_TRUST, LEVEL_FULL, LEVEL_OFF  # noqa: E402
 
+from gaia.database.mixin import DatabaseMixin  # noqa: E402
 from tests.fixtures.email.fake_gmail import FakeGmailBackend  # noqa: E402
 
 
