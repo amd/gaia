@@ -115,7 +115,7 @@ contract version is tracked separately as
   (`"autonomy_off"`). Scope: this is pre-emptive for a cycle running through
   the REST/CLI session surface on a single-worker sidecar; the scheduler
   builds a stateless agent per fire from environment variables and is
-  unaffected by a kill issued here (tracked separately). Killing one session
+  unaffected by a kill issued here (#2649). Killing one session
   also now stops every other live session in the process, since the caller's
   session id is not always the one an autonomy cycle happens to be running
   under.

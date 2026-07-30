@@ -1799,7 +1799,7 @@ class EmailTriageAgent(
         mid-batch. The scheduler is the documented exception — each fire
         builds its own agent from ``GAIA_EMAIL_AUTONOMY_LEVEL`` and never
         touches this instance, so a kill issued here does not reach an
-        already-scheduled run (tracked separately). Returns the applied
+        already-scheduled run (#2649). Returns the applied
         status. Raises ``ValueError`` (translated to HTTP 400 at the
         boundary) on an unknown level rather than silently ignoring it.
         """
