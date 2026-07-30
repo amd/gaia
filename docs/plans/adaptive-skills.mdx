@@ -172,6 +172,52 @@ not one:
 The existing tier-3 recall path satisfies neither. Fixing it is a prerequisite
 sub-issue, adjacent to [#2676](https://github.com/amd/gaia/issues/2676), not a v2 nicety.
 
+### Correction 4: the empirical promotion gate has no counter
+
+The design's central safety claim — promote on measured track record, never on
+model judgment — rests on `success_count` / `attempt_count`. Those columns are
+**written once, at insert, from the cluster that produced the row, and never
+updated again.**
+
+`reconcile_and_store` always inserts with `skill_id=None`
+([`skill_synthesis.py:693-704`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py)),
+so `put_skill`'s update branch — the only `UPDATE … success_count` in the store
+([`memory_store.py:2613`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py)) —
+is unreachable from the synthesis path. There is no `increment`, no
+`record_procedure_outcome`, nothing. A recalled procedure that is used and fails
+twenty times carries the same counters it was born with.
+
+Worse, what those counters measure is not what the design assumes. `iter_sessions`
+increments `success_count` per **tool call that did not error**
+([`memory_store.py:2855-2858`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py)),
+so `MIN_SUCCESS_RATE = 0.80` ([`skill_synthesis.py:55`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py))
+reads "80% of tool calls returned without raising" — not "the user got what they
+wanted." A procedure can be born with a 100% rate having produced a completely
+wrong answer, provided every tool returned cleanly.
+
+So the empirical gate as it stands is **a proxy measured on the raw sessions
+before distillation, not a track record of the artifact after adoption.** Two
+consequences for v2:
+
+1. **Outcome attribution is a prerequisite, not a detail.** Something must record
+   "delta D (or procedure P) was in context on this turn, and the turn's outcome
+   was positive/negative," and increment the right row. The shape already exists
+   in the email agent — `TrustLedger.record_outcome(db, action_type, scope,
+   positive)` keyed per scope
+   ([`trust.py:358`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/trust.py)) —
+   but nothing links a *delta* to a *scope*. This needs its own issue; without it
+   [#2679](https://github.com/amd/gaia/issues/2679)'s "promotion requires a track
+   record, not a model assertion" is unimplementable for deltas.
+2. **The outcome signal must be user-observable, not tool-return-code.** A
+   correction, an undo, an accepted suggestion — the things the trust ledger
+   already counts. Tool-call non-error is available and nearly worthless as a
+   quality signal, and it is what would get used by default if nobody says
+   otherwise.
+
+**This is the most consequential gap found in either review pass, because it
+invalidates an assumption both the umbrella issue and this document treat as
+already satisfied.**
+
 ### The open question that was already answered inconsistently
 
 "Per-agent or per-user?" has a de-facto answer today, and it differs by agent.
@@ -185,6 +231,30 @@ Meanwhile tier-0 preferences live in the email agent's own `state.db`
 ([`preference_tools.py:63`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/tools/preference_tools.py)) —
 per-agent by construction. **Deltas must carry an explicit scope column rather
 than inheriting whatever DB the host happened to open.**
+
+### Adversarial review: the nine challenges
+
+A second review pass challenged nine points. All nine are addressed; two are
+accepted only in part, and one is accepted *further* than proposed.
+
+| # | Challenge | Verdict | Addressed in |
+|:--:|---|---|---|
+| 1 | Tier 0 is oversold — "zero cost" hides integration cost | **Accepted.** Quantified: the email agent registers 59 tools; **two** consult the learned store. | [Integration cost](#the-honest-cost-of-tier-0-integration-not-inference) |
+| 2 | Four tiers may be over-engineered for v1 | **Accepted in part — and revised further than asked.** v1 ships tiers **0, 1, 3**; tier 2 is deferred; the *tier classifier* is deleted and replaced by declaration at the write site. | [Why v1 ships three tiers](#why-v1-ships-three-tiers-not-four) |
+| 3 | Nothing owns the learning trigger | **Accepted — needs its own issue.** Three shipped signals, no new detector. | [The learning trigger](#the-learning-trigger) |
+| 4 | No milestone-level success metric | **Accepted.** Three measured KPIs plus one named anti-KPI. | [KPIs](#kpis) |
+| 5 | Rebase may be premature | **Accepted, plainly.** v1 orphans **all** deltas on a base change; anchors are recorded but not acted on. Materially de-risks the milestone. | [Rebase](#rebase-on-base-update-v1-is-deliberately-crude) |
+| 6 | The "validated" gate is undefined | **Accepted.** Seven concrete exit criteria. | [Entry gate](#entry-gate-what-milestone-60-validated-means) |
+| 7 | Privacy and deletion are unscoped | **Accepted — needs its own issue.** Includes the archive-never-delete ↔ right-to-erasure conflict, named rather than glossed. | [Privacy](#privacy-retention-and-deletion) |
+| 8 | Email may be the wrong first reference agent | **Accepted in part; rejected in the form proposed.** Keep email; restrict v1 deltas to read-path tools so a wrong delta mis-ranks rather than mis-sends. | [Blast radius](#blast-radius-why-email-stays-but-only-half-of-it) |
+| 9 | Phase-2 sandbox interaction unaddressed | **Accepted.** "Never widen" is necessary and insufficient; v1 forbids deltas on local-capability skills outright. | [Local-capability skills](#interaction-with-local-capability-skills-2672) |
+
+The net effect is a **materially smaller v1**: no tier classifier, no tier-2
+grammar, no selective re-anchoring, no deltas on capability-bearing skills. What
+remains is the spine — a delta store, an appended learned block, tier-0/1
+wiring, the consent gate, legibility, a budget, and orphan-on-change. Four of the
+five things most likely to be wrong on the first attempt are deferred behind
+evidence rather than built speculatively.
 
 ---
 
@@ -242,6 +312,93 @@ procedure vector on an embedder change
 ([`memory_store.py:1487-1512`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py)),
 tier-3 recall goes dark while tiers 0–2 keep working. Pushing learning down the
 stack buys robustness, not just tokens.
+
+### The honest cost of tier 0: integration, not inference
+
+Tier 0's "zero cost" claim is true about **inference** and misleading about
+**engineering**, and the correction is the same shape as
+[Correction 2](#correction-2-tier-1-is-bounded-not-free): a cost was moved, not
+removed. Learning stored as data costs nothing to carry — but it only helps a tool
+that was written to read it.
+
+The shipped numbers, counted on the email agent:
+
+| Measure | Count |
+|---|---:|
+| `@tool` registrations in the package | **59** |
+| Modules that touch `_session_preferences` | **3** (`agent.py`, `preference_tools.py`, `read_tools.py`) |
+| Modules that *consume* a learned preference | **1** — `read_tools.py` (`triage_inbox`, `pre_scan_inbox`) |
+
+So a user can mark a sender important and **57 of 59 tools will not care.** The
+per-tool integration is small (read a dict, branch), but it is paid once per tool,
+by hand, and it is invisible when skipped. That last part is the real hazard:
+
+<Warning>
+**The silent no-op is worse than the token cost.** A tier-0 fact written to a
+store no tool reads looks exactly like successful learning — the write succeeds,
+the confirmation says "saved", and behavior never changes. A tier-3 prose delta at
+least reaches the model. **Tier 0 trades a visible cost for an invisible failure
+mode**, and nothing in the current design would surface it.
+</Warning>
+
+Two mitigations, both cheap, both required:
+
+1. **A shared opt-in seam, not a bespoke store per agent.** Today the email
+   agent's preferences are a hand-rolled table plus an instance dict. Generalize
+   it once on the memory layer: a `learned_facts` table (namespace, key, value,
+   scope, provenance) plus one accessor a tool calls in a single line —
+   `self.learned("priority_senders", default=frozenset())`. An agent author opts a
+   tool in by calling it; nothing else changes. This is the same
+   extract-shared-logic move [`KNOWN_TOOLS`](https://github.com/amd/gaia/blob/main/src/gaia/agents/registry.py)
+   already applies to tool mixins.
+2. **Declared consumers, so the gap is legible.** A tool that honors a tier-0
+   namespace declares it (a `@tool(learns_from=…)` argument or a mixin-level
+   registry). Then `gaia skill deltas` can render *"12 senders marked important —
+   honored by `triage_inbox`, `pre_scan_inbox`"*, and a fact with **zero** declared
+   consumers is reported as inert rather than presented as learned. Without this,
+   the legibility work in [#2681](https://github.com/amd/gaia/issues/2681) shows a
+   count that does not mean what a user will read it to mean.
+
+**Revised claim, for the record:** tier 0 has *zero resident context cost and
+zero embedder dependency, at the price of one small, explicit integration per
+consuming tool, and it must report which tools consume it.* "Zero cost" without
+that qualifier should not appear in any issue or doc.
+
+### Why v1 ships three tiers, not four
+
+The challenge — that a four-tier taxonomy built before we know what users teach
+agents is speculative — is right, and the answer is not "keep four for elegance"
+nor "cut to 0 and 3". It is that **two of the four tiers are not new machinery at
+all, and the genuinely speculative part is the classifier, not the tiers.**
+
+| Tier | Is the mechanism new? | v1 |
+|:--:|---|---|
+| **0 — Data** | No. Shipped in the email agent ([`preference_tools.py:63`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/tools/preference_tools.py)). Needs generalizing, not inventing. | **Ship** |
+| **1 — Selection** | No. Shipped as `ToolLoader.select(skill_tools=…)` ([`tool_loader.py:310`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tool_loader.py)) for #1451. A delta feeding it is a wire-up, not a mechanism. | **Ship** |
+| **2 — Parameters** | **Yes** — typed payloads, allowlisted keys per section, a rendering path, plus the anchoring it depends on. | **Defer** |
+| **3 — Prose** | Partly. The retrieval + injection path is shipped for procedures ([`procedural_memory.py:334`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/procedural_memory.py)); deltas reuse it. | **Ship** |
+
+Dropping tier 1 would not save building anything — it would decline to use
+something that already exists and costs at most 14 tool schemas. Dropping tier 2
+saves real work. And there is a design reason to suspect tier 2 was never a tier:
+
+> **The tier-2 collapse hypothesis.** If a learned value *can* be read by a tool,
+> it is tier 0. If it *cannot*, prose is the only thing that can carry it. Tier 2
+> — "a typed value the model reads as one rendered line" — is tier 0 for values
+> whose tool has not been wired yet, plus a rendering convention. If that holds,
+> tier 2 should never be built; the right fix is to wire the tool.
+
+Defer it and find out. A threshold expressed as one short tier-3 sentence costs
+roughly twenty tokens, which is not worth a new grammar, a new payload validator,
+and a new anchoring dependency before a single user has taught an agent anything.
+
+**The tier classifier is deleted from v1 entirely.** In its place: the tier is
+**declared at the write site** by whatever captured the lesson — a preference tool
+call is tier 0 by construction, a recipe outcome is tier 1 by construction,
+everything else is tier 3. No general classifier, no misclassification risk, and
+[#2677](https://github.com/amd/gaia/issues/2677)'s requirement that a
+misclassified delta be promotable between tiers becomes cheap because the only
+move is 3 → 0 (write the tool that reads it).
 
 ### Worked examples — the email agent ([#2466](https://github.com/amd/gaia/issues/2466))
 
