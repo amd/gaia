@@ -20,7 +20,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 
 from gaia.agents.base.skill_synthesis import (
-    Skill,
+    DistilledProcedure,
     SynthesisConfig,
     cluster_by_goal,
     distill_cluster,
@@ -180,7 +180,7 @@ class ProceduralMemoryMixin:
 
     def recall_skill(
         self, goal: str, top_k: int = 2, similarity_tau: Optional[float] = None
-    ) -> List[Skill]:
+    ) -> List[DistilledProcedure]:
         """Recall stored procedures whose trigger matches ``goal`` (vector search).
 
         The RECALL half of the procedural loop and the consumer the tool-loader
@@ -215,7 +215,7 @@ class ProceduralMemoryMixin:
                 so a recalling turn reads the settings file only once.
 
         Returns:
-            Matched ``Skill`` objects (full bodies; injection truncates, the row
+            Matched ``DistilledProcedure`` objects (full bodies; injection truncates, the row
             keeps the full body), best match first; ``[]`` on any off-state.
         """
         from gaia.agents.base.memory import (
@@ -250,7 +250,7 @@ class ProceduralMemoryMixin:
             if similarity_tau is not None
             else load_synthesis_config(_load_memory_settings()).similarity_tau
         )
-        skills: List[Skill] = []
+        skills: List[DistilledProcedure] = []
         recalled_ids: List[str] = []
         for procedure_id, score in matches:
             if score < tau:
@@ -267,7 +267,7 @@ class ProceduralMemoryMixin:
                 continue
             row = rows[0]
             skills.append(
-                Skill(
+                DistilledProcedure(
                     name=row["name"],
                     when_to_use=row["when_to_use"],
                     body=row["markdown_body"],
@@ -291,7 +291,7 @@ class ProceduralMemoryMixin:
 
     def _recall_skills_for_turn(
         self, goal: str
-    ) -> Tuple[List[Skill], Optional[SynthesisConfig]]:
+    ) -> Tuple[List[DistilledProcedure], Optional[SynthesisConfig]]:
         """Recall the procedures matching ``goal`` once, with the resolved config.
 
         The single per-turn recall pass shared by both consumers:
@@ -332,7 +332,7 @@ class ProceduralMemoryMixin:
         return skills, config
 
     def _build_recalled_skills_prompt(
-        self, skills: List[Skill], config: Optional[SynthesisConfig]
+        self, skills: List[DistilledProcedure], config: Optional[SynthesisConfig]
     ) -> str:
         """Render the recalled-procedure system-prompt section from ``skills``.
 
@@ -400,7 +400,7 @@ class ProceduralMemoryMixin:
         """Recompute the per-turn recalled-skill state for ``goal``.
 
         Recalls the matching procedures **once** and caches both consumers'
-        inputs: ``self._recalled_skills`` (the matched ``Skill`` objects, read by
+        inputs: ``self._recalled_skills`` (the matched ``DistilledProcedure`` objects, read by
         the tool loader through ``_recalled_skill_tools`` — #1451) and the
         rendered ``self._recalled_skill_prompt`` (the system-prompt block, read by
         ``get_recalled_skills_system_prompt`` — #887).  The single recall keeps
