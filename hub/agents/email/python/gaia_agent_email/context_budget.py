@@ -122,18 +122,39 @@ def active_profile_ctx_size() -> int:
     return profile_ctx_size(device)
 
 
+# Chars per token for prose-heavy Markdown, measured on real hardware: the
+# verbatim 60-email envelope was 23,965 chars → ~11.4K tokens (see
+# ``estimate_tokens_json``). ``estimate_tokens``' chars//4 prose ratio therefore
+# under-counts by ~2x, which is fine for a *capacity* estimate and wrong for a
+# *budget subtraction* — under-crediting the skill cost is how the post-tool turn
+# 400s. Round pessimistically, always.
+_SKILL_BODY_CHARS_PER_TOKEN = 2.1
+
+
 def skill_prompt_tokens(agent) -> int:
     """Token cost of the Agent Skills bodies loaded into *agent*'s prompt.
 
-    Zero when the agent has no skills loaded, which keeps every pre-#2466
-    budget calculation byte-identical. Measured off the rendered fragment the
-    agent actually injects, so a trimmed or extended skill body is reflected
-    without touching a constant.
+    Zero when the agent has no skills loaded, which keeps every pre-#2466 budget
+    calculation byte-identical. Measured off the rendered fragment the agent
+    actually injects, so a trimmed or extended skill body is reflected without
+    touching a constant.
+
+    Deliberately pessimistic (``_SKILL_BODY_CHARS_PER_TOKEN``, not
+    ``estimate_tokens``): this figure is *subtracted* from the envelope, so an
+    under-count silently hands the tool result budget the prompt is already
+    using. Over-crediting costs exemplar slots; under-crediting costs a 400.
     """
     render = getattr(agent, "get_skills_system_prompt", None)
     if not callable(render):
         return 0
-    return estimate_tokens(render())
+    fragment = render()
+    if not fragment:
+        return 0
+    # Never below the generic estimate — this is a floor, not a replacement.
+    return max(
+        estimate_tokens(fragment),
+        int(len(fragment) / _SKILL_BODY_CHARS_PER_TOKEN) + 1,
+    )
 
 
 def estimate_tokens(text: str) -> int:

@@ -283,8 +283,18 @@ def _parse_ref_list(
     raw: Any, field_name: str, where: str, *, allow_empty: bool = True
 ) -> Tuple[SkillRef, ...]:
     """Parse a list of skill references (plain strings and/or mappings)."""
-    if raw is None:
+    # A bare ``work:`` key with nothing indented under it parses as None. For a
+    # set that is the same authoring mistake as an empty list — checked before
+    # the None shortcut, or the emptiness error below is unreachable.
+    if raw is None and allow_empty:
         return ()
+    if raw is None:
+        raise SkillValidationError(
+            f"'{field_name}:'{where} names no skills. A skill set must list at "
+            f"least one skill (a bare '{field_name.split('.')[-1]}:' key with "
+            f"nothing under it parses as empty), or be removed. "
+            f"See {_SETS_DOCS_URL}."
+        )
     if isinstance(raw, str) or not isinstance(raw, Sequence):
         raise SkillValidationError(
             f"'{field_name}:'{where} must be a list of skill names (or "

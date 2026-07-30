@@ -66,6 +66,7 @@ from gaia.connectors.store import (
 from gaia.connectors.store import list_connections as _store_list
 from gaia.connectors.store import (
     load_connection,
+    peek_connection,
 )
 from gaia.connectors.tokens import get_or_refresh
 
@@ -447,6 +448,7 @@ def import_forwarded_connection(
     refresh_token: str,
     scopes: List[str],
     account_email: str = "",
+    account_type: Optional[str] = None,
     grant_agents: Optional[List[str]] = None,
     required_scopes: Optional[List[str]] = None,
     connected_at: Optional[float] = None,
@@ -536,6 +538,13 @@ def import_forwarded_connection(
 
     # 6. Persist the connection (refresh_token + metadata) → ``<provider>:default``
     #    keyed by the forwarded client's hash so the tripwire passes coherently.
+    #    ``save_connection`` rewrites the whole blob, so the account kind must be
+    #    threaded through explicitly or a forwarded grant silently downgrades an
+    #    already-classified mailbox to unknown (#2466). A caller that knows the
+    #    kind passes it; otherwise the stored value carries over.
+    resolved_account_type = account_type or (
+        (peek_connection(provider) or {}).get("account_type")
+    )
     save_connection(
         provider=provider,
         account_email=account,
@@ -543,6 +552,7 @@ def import_forwarded_connection(
         scopes=list(scopes),
         client_id_hash=prov.client_id_hash,
         connected_at=connected_at,
+        account_type=resolved_account_type,
     )
 
     # 7. Evict any stale access-token cache entry so the next get_or_refresh
@@ -742,7 +752,6 @@ def connected_mailbox_providers() -> list[str]:
     # imports a no-op. Mirrors the pattern in _require_mcp_server_for_activation.
     import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
     from gaia.connectors.registry import REGISTRY
-    from gaia.connectors.store import peek_connection
 
     result: list[str] = []
     for spec in REGISTRY.all():

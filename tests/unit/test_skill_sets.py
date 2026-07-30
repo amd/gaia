@@ -201,6 +201,12 @@ def test_skills_for_prepends_the_always_on_list():
             "not a valid",
         ),
         ({"skills": "inbox-triage"}, "must be a list"),
+        # A bare `work:` key with nothing indented under it — the likeliest
+        # authoring slip, and it must not validate into a set that loads nothing.
+        (
+            {"skill_sets": {"work": None}, "default_skill_set": "work"},
+            "names no skills",
+        ),
     ],
 )
 def test_malformed_declarations_fail_loudly(blocks, expected):
@@ -514,6 +520,84 @@ def test_agent_without_a_manifest_loads_nothing(tmp_path, bundled):
     assert agent.load_skill_set() == {}
     assert agent.loaded_skills == {}
     assert agent.get_skills_system_prompt() == ""
+
+
+def test_explicit_request_on_a_set_less_agent_is_never_discarded(tmp_path, bundled):
+    """The request must raise, not evaporate.
+
+    An agent with no declarations is falsy, and an early return on that would
+    drop the user's explicit ``--skill-set`` with no error and no log line — the
+    exact silent fallback the spec says cannot happen.
+    """
+    agent = _StubAgent(
+        isolated_manager(tmp_path, agent_skill_dirs=[bundled]), skill_set="work"
+    )
+    with pytest.raises(SkillSetError, match="declares no 'skill_sets:' block"):
+        agent.load_skill_set()
+
+    # And passed directly, not just via the constructor.
+    plain = _StubAgent(isolated_manager(tmp_path, agent_skill_dirs=[bundled]))
+    with pytest.raises(SkillSetError, match="declares no 'skill_sets:' block"):
+        plain.load_skill_set("work")
+
+
+def test_a_failed_switch_leaves_the_agent_exactly_as_it_was(tmp_path, bundled):
+    """All-or-nothing: a half-switched agent lies about what it is carrying.
+
+    Loading the new set before retiring the old one, and rolling back what this
+    call added, keeps ``active_skill_set``, the prompt, and the internal
+    tracking mutually consistent after a failure.
+    """
+    agent = _agent(
+        tmp_path,
+        bundled,
+        skill_sets={
+            "personal": ["inbox-triage", "newsletter-digest"],
+            "work": ["meeting-scheduling", "not-bundled-anywhere"],
+        },
+        default_skill_set="personal",
+    )
+    agent.load_skill_set()
+    before = sorted(agent.loaded_skills)
+    assert before == ["inbox-triage", "newsletter-digest"]
+
+    with pytest.raises(Exception, match="not-bundled-anywhere"):
+        agent.load_skill_set("work")
+
+    # Still the personal set, in full, and nothing from 'work' left behind.
+    assert agent.active_skill_set == "personal"
+    assert sorted(agent.loaded_skills) == before
+    prompt = agent.get_skills_system_prompt()
+    assert "meeting-scheduling" not in prompt
+    assert "newsletter-digest" in prompt
+
+    # And the failure did not corrupt tracking: a later successful switch still
+    # retires exactly the personal set.
+    agent.load_skill_set("personal")
+    assert agent.active_skill_set == "personal"
+    assert sorted(agent.loaded_skills) == before
+
+
+def test_two_agents_keep_their_own_sets(tmp_path, bundled):
+    """Skill-set state is per instance — a sibling must not see it."""
+    blocks = dict(
+        skill_sets={
+            "personal": ["newsletter-digest"],
+            "work": ["meeting-scheduling"],
+        },
+        default_skill_set="personal",
+    )
+    first = _agent(tmp_path, bundled, skill_set="personal", **blocks)
+    second = _agent(tmp_path, bundled, skill_set="work", **blocks)
+    first.load_skill_set()
+    second.load_skill_set()
+
+    assert first.active_skill_set == "personal"
+    assert second.active_skill_set == "work"
+    assert list(first.loaded_skills) == ["newsletter-digest"]
+    assert list(second.loaded_skills) == ["meeting-scheduling"]
+    assert "meeting-scheduling" not in first.get_skills_system_prompt()
+    assert "newsletter-digest" not in second.get_skills_system_prompt()
 
 
 # ----------------------------------------------------------------------

@@ -193,28 +193,91 @@ def test_an_unknown_account_type_leaves_the_key_absent():
     assert blob.get("account_type") is None
 
 
-def test_refresh_token_rotation_preserves_the_account_type():
-    """A rotation re-saves the blob; losing the kind would silently reclassify."""
+def test_refresh_token_rotation_preserves_the_account_type(monkeypatch):
+    """Drive the REAL rotation path, not a hand-rolled copy of it.
+
+    ``tokens.get_or_refresh`` re-saves the whole blob when the provider rotates
+    the refresh token. Asserting on a locally-repeated ``save_connection`` would
+    pass even if the production call dropped the argument — the "mocks prove we
+    called it, not that the call is valid" trap from CLAUDE.md.
+    """
+    import asyncio
+
+    from gaia.connectors import tokens
+
     save_connection(
         provider="microsoft",
         account_email="user@contoso.com",
         refresh_token="rt-1",
         scopes=["openid"],
-        client_id_hash="hash",
+        client_id_hash="test-hash",
         account_type=ACCOUNT_TYPE_WORK,
     )
-    stored = peek_connection("microsoft")
 
-    save_connection(
-        provider="microsoft",
-        account_email=stored["account_email"],
-        refresh_token="rt-2",
-        scopes=stored["scopes"],
-        client_id_hash="hash",
-        connected_at=stored["connected_at"],
-        account_type=stored.get("account_type"),
-    )
+    class _Provider:
+        provider_id = "microsoft"
+        client_id_hash = "test-hash"
 
+    async def _fake_refresh(provider, refresh_token):
+        assert refresh_token == "rt-1"
+        return "access-2", "rt-2", 3600  # rotated refresh token
+
+    monkeypatch.setattr(tokens, "get_provider", lambda p: _Provider())
+    monkeypatch.setattr(tokens, "_refresh_token", _fake_refresh)
+
+    token = asyncio.run(tokens.get_or_refresh("microsoft"))
+
+    assert token == "access-2"
     rotated = peek_connection("microsoft")
     assert rotated["refresh_token"] == "rt-2"
     assert rotated["account_type"] == ACCOUNT_TYPE_WORK
+
+
+def test_a_forwarded_connection_does_not_erase_a_recorded_account_type(monkeypatch):
+    """``import_forwarded_connection`` rewrites the blob from scratch (#1292 Path A).
+
+    Without carrying the kind through, an OEM/Electron host forwarding its own
+    grant for an already-classified work mailbox would reset it to unknown — and
+    the email agent would silently drop to the personal skill set.
+    """
+    from gaia.connectors import api
+
+    save_connection(
+        provider="microsoft",
+        account_email="user@contoso.com",
+        refresh_token="rt-1",
+        scopes=["openid", "https://graph.microsoft.com/Mail.ReadWrite"],
+        client_id_hash="old-hash",
+        account_type=ACCOUNT_TYPE_WORK,
+    )
+
+    api.import_forwarded_connection(
+        provider="microsoft",
+        client_id="forwarded-client",
+        client_secret="forwarded-secret",
+        refresh_token="rt-forwarded",
+        scopes=["openid", "https://graph.microsoft.com/Mail.ReadWrite"],
+        account_email="user@contoso.com",
+        required_scopes=[],
+    )
+
+    blob = peek_connection("microsoft")
+    assert blob["refresh_token"] == "rt-forwarded"
+    assert blob["account_type"] == ACCOUNT_TYPE_WORK
+
+
+def test_a_forwarded_connection_can_state_the_account_type(monkeypatch):
+    """A host that knows the kind can supply it — nothing was recorded before."""
+    from gaia.connectors import api
+
+    api.import_forwarded_connection(
+        provider="microsoft",
+        client_id="forwarded-client",
+        client_secret="forwarded-secret",
+        refresh_token="rt-forwarded",
+        scopes=["openid"],
+        account_email="user@contoso.com",
+        account_type=ACCOUNT_TYPE_WORK,
+        required_scopes=[],
+    )
+    assert peek_connection("microsoft")["account_type"] == ACCOUNT_TYPE_WORK

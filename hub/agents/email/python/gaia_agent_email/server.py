@@ -203,21 +203,25 @@ def build_app():
 app = build_app()
 
 
-def _declared_skill_sets() -> list[str]:
-    """Skill-set names this build declares, for --skill-set help and validation.
+def _read_declared_skill_sets() -> list[str]:
+    """Skill-set names this build declares. Raises if the manifest is unreadable."""
+    from gaia.hub.manifest import parse as parse_manifest
 
-    Reads the agent's own manifest. Returns ``[]`` if it cannot be read — the
-    flag's *validation* still runs at agent construction, where the framework
-    raises with the authoritative list, so an unreadable manifest degrades the
-    help text and nothing else.
+    from gaia_agent_email.agent import EmailTriageAgent
+
+    return list(parse_manifest(EmailTriageAgent.SKILL_MANIFEST).skill_sets.set_names)
+
+
+def _declared_skill_sets() -> list[str]:
+    """Declared set names for the ``--skill-set`` help string, or ``[]``.
+
+    Help-text only, so an unreadable manifest degrades the wording rather than
+    breaking ``--help``. **Never use this to validate a requested name** — a
+    swallowed read error would turn validation into "accept anything". Use
+    :func:`_read_declared_skill_sets`, which raises.
     """
     try:
-        from gaia.hub.manifest import parse as parse_manifest
-
-        from gaia_agent_email.agent import EmailTriageAgent
-
-        manifest = parse_manifest(EmailTriageAgent.SKILL_MANIFEST)
-        return list(manifest.skill_sets.set_names)
+        return _read_declared_skill_sets()
     except Exception as e:  # noqa: BLE001 — help text only
         log.debug("Could not read declared skill sets for --skill-set help: %s", e)
         return []
@@ -287,21 +291,36 @@ def main(argv=None) -> int:
     if args.port == 4001:
         parser.error("port 4001 is reserved and must never be used")
 
-    if args.skill_set:
-        declared = _declared_skill_sets()
-        if declared and args.skill_set not in declared:
+    # Validate a pinned skill set here, at startup, rather than letting the first
+    # session fail — and validate the env-var form identically to the flag, since
+    # the docs tell integrators the two are equivalent. The flag wins when both
+    # are set.
+    requested_set = args.skill_set or os.environ.get(SKILL_SET_ENV, "").strip()
+    if requested_set:
+        source = (
+            "--skill-set" if args.skill_set else f"{SKILL_SET_ENV} in the environment"
+        )
+        try:
+            declared = _read_declared_skill_sets()
+        except Exception as exc:  # noqa: BLE001 — re-raised as a CLI error below
             parser.error(
-                f"--skill-set {args.skill_set!r} is not declared by this agent. "
-                f"Valid sets: {', '.join(declared)}."
+                f"{source} requested skill set {requested_set!r}, but this "
+                f"build's declared sets could not be read: {exc}"
+            )
+        if requested_set not in declared:
+            parser.error(
+                f"{source} requested skill set {requested_set!r}, which this "
+                f"agent does not declare. Valid sets: {', '.join(declared)}."
             )
         # Every agent session is built per-request inside the app (which is
         # constructed at import time), so the override travels by env var —
         # inherited by the --reload child process too.
-        os.environ[SKILL_SET_ENV] = args.skill_set
+        os.environ[SKILL_SET_ENV] = requested_set
         log.info(
-            "Email sidecar: skill set pinned to %r for every session "
+            "Email sidecar: skill set pinned to %r via %s for every session "
             "(overrides mailbox account-type selection).",
-            args.skill_set,
+            requested_set,
+            source,
         )
 
     reload = bool(args.reload or args.dev)

@@ -1147,38 +1147,74 @@ Do NOT wrap conversational replies in JSON.
         worse than one that refuses to launch.
 
         Called automatically at the end of ``Agent.__init__``. Call it again with
-        a different name to switch sets mid-session — skills from the previous
-        set are unloaded first, so the two never overlap.
+        a different name to switch sets mid-session; the previous set's skills are
+        unloaded once the new set has loaded, so the two never overlap.
+
+        **All-or-nothing.** A failure part-way through leaves the agent exactly as
+        it was — the previous set still loaded, ``active_skill_set`` still
+        accurate. A half-switched agent reporting one set while carrying another's
+        skills is worse than a raised error.
+
+        Note the switch is not sticky: a later bare ``load_skill_set()`` re-runs
+        the full resolution and returns to whatever that yields (the explicit
+        ``skill_set`` passed to ``__init__``, else the hook, else the default).
+        Pass the name again to stay on it.
         """
         from gaia.skills.errors import SkillNotFoundError
 
         declarations = self.skill_sets
+        explicit = requested if requested is not None else self._requested_skill_set
         if not declarations:
+            if (explicit or "").strip():
+                # Never drop an explicit request on the floor — resolve() raises
+                # with the actionable "this agent declares no skill_sets" message.
+                declarations.resolve(requested=explicit)
             return {}
 
         resolution = self.resolve_skill_set(requested)
         wanted = {ref.name for ref in resolution.skills}
+        previously_loaded = list(self._skill_set_loaded or [])
 
-        # Switching sets: drop what the PREVIOUS resolution loaded and this one
-        # does not declare, so a stale set never bleeds into the prompt. Scoped
-        # to set-loaded names only — a skill the agent loaded itself via
-        # ``load_skill`` is not a set's to unload.
-        for stale in [n for n in (self._skill_set_loaded or []) if n not in wanted]:
-            self.unload_skill(stale)
-
+        # Load the new set BEFORE dropping the old one, and track what this call
+        # actually brought in, so a failure can be undone completely.
         loaded: Dict[str, "Skill"] = {}
-        for ref in resolution.skills:
-            try:
-                loaded[ref.name] = self.load_skill(ref.name)
-            except SkillNotFoundError:
-                if ref.required:
-                    raise
-                logger.warning(
-                    "Optional skill '%s' (skill set '%s') was not found in any "
-                    "discovery root — continuing without it.",
-                    ref.name,
-                    resolution.name,
-                )
+        newly_loaded: List[str] = []
+        try:
+            for ref in resolution.skills:
+                already_present = ref.name in self.loaded_skills
+                try:
+                    loaded[ref.name] = self.load_skill(ref.name)
+                except SkillNotFoundError:
+                    if ref.required:
+                        raise
+                    logger.warning(
+                        "Optional skill '%s' (skill set '%s') was not found in "
+                        "any discovery root — continuing without it.",
+                        ref.name,
+                        resolution.name,
+                    )
+                    continue
+                if not already_present:
+                    newly_loaded.append(ref.name)
+        except Exception:
+            # Roll back to the pre-call state: drop only what this call added,
+            # and leave _active_skill_set / _skill_set_loaded untouched so the
+            # agent keeps reporting the set it is actually carrying.
+            for name in newly_loaded:
+                self.unload_skill(name)
+            logger.error(
+                "Skill set '%s' failed to load; the agent is unchanged and skill "
+                "set '%s' remains active.",
+                resolution.name,
+                self._active_skill_set or "(none)",
+            )
+            raise
+
+        # The new set is fully loaded — now retire the previous one's leftovers.
+        # Scoped to set-loaded names, so a skill the agent loaded itself via
+        # ``load_skill`` is never a set's to unload.
+        for stale in [n for n in previously_loaded if n not in wanted]:
+            self.unload_skill(stale)
 
         self._active_skill_set = resolution.name
         self._skill_set_loaded = list(loaded)

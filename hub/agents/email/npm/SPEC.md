@@ -711,9 +711,11 @@ Three consequences worth knowing:
 
 - **Gmail has no equivalent claim**, so a Gmail-only mailbox has no account type to
   read. The kind is genuinely **unknown**, and the manifest's `default_skill_set`
-  applies **explicitly** — a work mailbox is never silently treated as personal by
-  assumption. Pin `GAIA_EMAIL_ACCOUNT_TYPE` or `--skill-set` when the mailbox kind
-  matters.
+  applies. Be clear about what that means: a *work* Gmail mailbox does get the
+  `personal` set — not because anything inferred it from the mailbox, but because
+  that is the declared default, and the resolution is logged. Nothing guesses;
+  nothing is silent; the default is still a default. **Pin
+  `GAIA_EMAIL_ACCOUNT_TYPE=work` or `--skill-set work` for a work Gmail mailbox.**
 - **The kind is recorded when the connection is made.** A Microsoft mailbox
   connected before this feature shipped carries no `account_type` until it is
   reconnected, so it too resolves through the default.

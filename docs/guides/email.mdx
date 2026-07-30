@@ -398,9 +398,12 @@ The set is chosen in this order:
 
 **Gmail resolves to the default.** Google has no equivalent of the Microsoft
 tenant claim, so a Gmail mailbox's kind is genuinely unknown and the declared
-default applies — it is never inferred to be personal from the mailbox contents.
-If you drive a work Gmail account, set `GAIA_EMAIL_ACCOUNT_TYPE=work` (or pass
-`--skill-set work`).
+default applies. In practice that means a *work* Gmail mailbox gets the
+`personal` set — by declared default, and logged, rather than by anything
+inferring the kind from your mail. **If you drive a work Gmail account, set
+`GAIA_EMAIL_ACCOUNT_TYPE=work` or pass `--skill-set work`.** The same holds for a
+Microsoft mailbox connected before this shipped: it carries no recorded kind
+until you reconnect it.
 
 Inspect what loaded with `gaia skill list`, or read the startup log line naming
 the active set and the rule that chose it. Full mechanism:

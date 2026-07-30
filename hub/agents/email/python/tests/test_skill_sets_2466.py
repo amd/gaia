@@ -11,6 +11,7 @@ it — which is the whole claim under test.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -152,6 +153,65 @@ def test_declared_tools_required_all_exist_in_the_agents_registry(tmp_path, monk
 def test_the_manifest_is_locatable_from_a_source_checkout():
     assert _locate_agent_manifest() == _MANIFEST
     assert Path(EmailTriageAgent.SKILL_MANIFEST).is_file()
+
+
+def test_the_manifest_is_locatable_from_an_installed_wheel_layout(monkeypatch):
+    """In a wheel there is no directory above the package to read it from.
+
+    ``package-data`` globs cannot reach outside their own package, so the build
+    stages a copy INSIDE ``gaia_agent_email/``. If only that copy exists, the
+    resolver must still find it — otherwise every ``pip install`` produces an
+    agent that cannot be constructed at all.
+    """
+    import tempfile
+
+    from gaia_agent_email import agent as agent_module
+
+    with tempfile.TemporaryDirectory() as raw:
+        root = Path(raw)
+        in_package = root / "gaia_agent_email" / "gaia-agent.yaml"
+        in_package.parent.mkdir(parents=True)
+        in_package.write_text(_MANIFEST.read_text(encoding="utf-8"), encoding="utf-8")
+        # Only the packaged copy exists — the checkout location does not.
+        assert not (root / "gaia-agent.yaml").exists()
+
+        monkeypatch.setattr(
+            agent_module,
+            "_MANIFEST_CANDIDATES",
+            (in_package, root / "gaia-agent.yaml"),
+        )
+        assert agent_module._locate_agent_manifest() == in_package
+
+
+def test_the_build_stages_the_manifest_into_the_package(tmp_path):
+    """The build_py hook is what makes the wheel layout above exist."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "email_build_hooks", _PKG_ROOT / "_build_hooks.py"
+    )
+    hooks = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(hooks)
+
+    class _FakeBuildPy(hooks.build_py):
+        def __init__(self, build_lib):
+            self.build_lib = str(build_lib)
+
+        def announce(self, msg, level=1):
+            pass
+
+    _FakeBuildPy(tmp_path)._stage_agent_manifest()
+
+    staged = tmp_path / "gaia_agent_email" / "gaia-agent.yaml"
+    assert staged.is_file()
+    assert staged.read_text(encoding="utf-8") == _MANIFEST.read_text(encoding="utf-8")
+
+
+def test_pyproject_wires_the_build_hook_and_the_skill_package_data():
+    """Both halves are required; either one missing breaks a wheel install."""
+    text = (_PKG_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert 'build_py = "_build_hooks.build_py"' in text
+    assert "skills/*/SKILL.md" in text
 
 
 def test_the_frozen_binary_bundles_the_skills_and_the_manifest():
@@ -357,6 +417,86 @@ def test_loaded_skills_shrink_the_triage_envelope_budget(tmp_path, monkeypatch):
     )
 
 
+def test_the_whole_post_tool_turn_fits_the_window_with_skills_loaded(
+    tmp_path, monkeypatch
+):
+    """The behavioural claim, not the arithmetic identity.
+
+    Reproduces the shape of the real 400: system prompt (with the work set's
+    bodies) + a condensed triage envelope + the response reserve must all fit
+    ``CONTEXT_TARGET_TOKENS``. Sizing the envelope against a fixed cost that
+    predates skills is what pushed a limit-12 request to 16,602 tokens against a
+    16,384 window.
+
+    Sized at ``DEFAULT_INBOX_SCAN_CEILING`` — the per-call ceiling a real
+    interactive triage can reach. (Well beyond it the envelope's ``grouped``
+    verdict map alone exceeds the budget and the condenser cannot trim it; that
+    floor is independent of skills — it is identical with zero skill cost — so it
+    is not this change's to fix.)
+    """
+    from gaia_agent_email.config import DEFAULT_INBOX_SCAN_CEILING
+    from gaia_agent_email.context_budget import (
+        CONTEXT_TARGET_TOKENS,
+        _RESPONSE_RESERVE_TOKENS,
+        envelope_budget_tokens,
+        estimate_tokens,
+        estimate_tokens_json,
+        skill_prompt_tokens,
+    )
+    from gaia_agent_email.tools.triage_condense import condense_triage_result
+
+    agent = _build_agent(tmp_path, monkeypatch, account_type=ACCOUNT_TYPE_WORK)
+    cost = skill_prompt_tokens(agent)
+
+    # A triage result well over the envelope budget, so the condenser must act.
+    n = DEFAULT_INBOX_SCAN_CEILING
+    result = {
+        "results": [
+            {
+                "id": f"{i:032x}",
+                "subject": f"Subject line number {i} with some realistic length",
+                "from": f"sender{i}@example.invalid",
+                "category": "FYI",
+                "rationale": "A rationale sentence of the kind the classifier emits.",
+            }
+            for i in range(n)
+        ],
+        "grouped": {f"{i:032x}": "FYI" for i in range(n)},
+        "total": n,
+    }
+
+    condensed = condense_triage_result(result, extra_fixed_tokens=cost)
+    envelope_tokens = estimate_tokens_json(json.dumps(condensed, default=str))
+
+    assert envelope_tokens <= envelope_budget_tokens(cost)
+
+    # The prompt the model re-reads on the post-tool turn, end to end.
+    prompt_tokens = estimate_tokens(agent.system_prompt)
+    total = prompt_tokens + envelope_tokens + _RESPONSE_RESERVE_TOKENS
+    assert total <= CONTEXT_TARGET_TOKENS, (
+        f"post-tool turn would be ~{total} tokens against a "
+        f"{CONTEXT_TARGET_TOKENS} window (prompt {prompt_tokens} + envelope "
+        f"{envelope_tokens} + reserve {_RESPONSE_RESERVE_TOKENS})"
+    )
+
+
+def test_the_skill_cost_estimate_is_pessimistic(tmp_path, monkeypatch):
+    """A budget SUBTRACTION must never under-count.
+
+    ``estimate_tokens``' chars//4 prose ratio under-counts real Markdown by
+    roughly 2x (the module's own measured figure is ~2.1 chars/token). Crediting
+    the envelope only half of what the skills actually cost is how the turn
+    overflows anyway.
+    """
+    from gaia_agent_email.context_budget import estimate_tokens, skill_prompt_tokens
+
+    agent = _build_agent(tmp_path, monkeypatch, account_type=ACCOUNT_TYPE_WORK)
+    fragment = agent.get_skills_system_prompt()
+
+    assert skill_prompt_tokens(agent) >= estimate_tokens(fragment)
+    assert skill_prompt_tokens(agent) >= int(len(fragment) / 2.1)
+
+
 def test_the_bundled_skill_bodies_stay_within_their_prompt_budget(tmp_path):
     """Cap the per-set prompt cost so a future edit can't quietly refill the ctx.
 
@@ -446,3 +586,43 @@ def test_skill_set_flag_help_lists_the_declared_sets():
     from gaia_agent_email.server import _declared_skill_sets
 
     assert _declared_skill_sets() == ["personal", "work"]
+
+
+def test_an_invalid_env_var_is_rejected_at_startup_like_the_flag(monkeypatch, capsys):
+    """The docs call the env var equivalent to the flag — so it must validate.
+
+    Left unchecked, ``GAIA_EMAIL_SKILL_SET=buisness`` started a healthy-looking
+    sidecar whose every session then raised on construction.
+    """
+    from gaia_agent_email import server
+
+    monkeypatch.setenv(SKILL_SET_ENV, "buisness")
+    with pytest.raises(SystemExit):
+        server.main(["serve"])
+    assert "Valid sets: personal, work" in capsys.readouterr().err
+
+
+def test_a_valid_env_var_is_accepted_at_startup(monkeypatch):
+    from gaia_agent_email import server
+
+    monkeypatch.setenv(SKILL_SET_ENV, "work")
+    with patch("uvicorn.run") as run:
+        assert server.main(["serve", "--port", "8198"]) == 0
+    assert run.called
+
+
+def test_an_unreadable_manifest_cannot_wave_a_requested_set_through(monkeypatch, capsys):
+    """Validation must fail loudly, not degrade to "accept anything".
+
+    The help-text helper swallows read errors by design; using it to validate
+    would mean a build with an unreadable manifest accepts any name.
+    """
+    from gaia_agent_email import server
+
+    def boom():
+        raise RuntimeError("manifest unreadable")
+
+    monkeypatch.setattr(server, "_read_declared_skill_sets", boom)
+    with pytest.raises(SystemExit):
+        server.main(["serve", "--skill-set", "work"])
+    assert "could not be read" in capsys.readouterr().err

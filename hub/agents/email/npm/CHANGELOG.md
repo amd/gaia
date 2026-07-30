@@ -6,7 +6,6 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## Unreleased
 
-<<<<<<< HEAD
 - **The agent can now tell you which inbound mail is waiting on your reply —
   not just which of your own messages went unanswered.** Previously the agent
   could only flag sent mail nobody replied to; a colleague's "did you get a
@@ -35,7 +34,6 @@ behind any entry — API shapes, endpoints, and version semantics — see
   still uses your exact wording when you hand it over yourself. Sending is
   unchanged — every draft still needs your confirmation before it goes out
   (#2524).
-=======
 - **The agent now works differently for a personal mailbox than for a work one.**
   It used to bring exactly the same instincts to both: the same triage advice for
   a mailbox full of newsletters and flight confirmations as for one full of
@@ -49,7 +47,6 @@ behind any entry — API shapes, endpoints, and version semantics — see
   `env: { GAIA_EMAIL_SKILL_SET: "work" }`. This changes how the agent approaches
   your mail, not what it can do: same endpoints, same tools, same permissions, no
   schema bump (#2466).
->>>>>>> 7f92c02f (docs(email): document bundled skills and account-keyed skill sets)
 - **A trashed email is recoverable any time it's still in Trash — not just for
   a few seconds after you delete it.** The only way back used to be a short
   undo window right after trashing; miss it, and the agent told you the

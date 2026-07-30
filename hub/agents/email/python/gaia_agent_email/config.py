@@ -370,8 +370,15 @@ class EmailAgentConfig:
 
         ``None`` is a real answer, not a failure: a Gmail-only mailbox has no
         Microsoft tenant to inspect, so there is nothing to classify. The caller
-        must then resolve a skill set through the manifest's ``default_skill_set``
-        explicitly, rather than treating an unknown mailbox as personal.
+        then resolves through the manifest's ``default_skill_set`` — a declared
+        default, reached explicitly and logged, rather than a kind inferred from
+        the mailbox.
+
+        Note this reads the Microsoft connection regardless of ``mail_provider``:
+        the account kind describes the *user*, not which mailbox this run happens
+        to read, so a Gmail-filtered run on a machine with a work Microsoft
+        account still resolves ``work``. Set ``account_type`` explicitly if that
+        is not what you want.
         """
         if self.account_type:
             return self.account_type
