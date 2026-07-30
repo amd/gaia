@@ -104,6 +104,30 @@ contract version is tracked separately as
   a larger length bound (`THREAD_SUMMARY_CHAR_LIMIT`, 700 vs. the
   single-message 300): several messages' decisions plus a new open ask plus
   a meeting time cannot fit in the single-message cap.
+- **Mail-infrastructure banners no longer reach the summarizer as if they
+  were the message (#2642).** A sensitivity marking or external-sender
+  caution stamped at the top of a body sat exactly where a summarizer looks
+  for "who said this" — on one real thread it was read as the author's name
+  and attributed a colleague's statement to the banner text instead. New
+  `gaia_agent_email.body_normalize.normalize_email_body` strips a small,
+  enumerable set of known leading banners (never mid-message, never a body
+  that merely discusses one) before `_thread_message_blocks` /
+  `_format_message_for_llm` wrap the body for the model, with a hard cap on
+  how much any single strip can remove so a banner with no trailing blank
+  line can never take real content down with it. It also closes a
+  pre-existing gap where an inbound body carrying a literal
+  `<<<UNTRUSTED_EMAIL_BODY_END>>>`-shaped token was wrapped unscrubbed —
+  that scrub previously ran only on LLM output, never on inbound text.
+- **Fixed a data-loss bug in the #2642 banner stripper: it deleted real
+  content on real (CRLF) mail.** `normalize_email_body`'s paragraph-break
+  lookup only matched a bare `\n\n`, but an actual inbound body uses `\r\n`
+  (RFC 5322) — so the lookup always returned "no blank line found," the
+  strip fell back to its 300-char/5-newline removal cap, and that cap ate
+  one or two real paragraphs past the banner instead of just the banner.
+  Live testing against a real message caught this: the banner *and* the two
+  paragraphs following it were removed. `_BLANK_LINE_RE` is now CRLF-tolerant
+  (`\r?\n[ \t]*\r?\n`); the removal cap itself, the bounded scan window, and
+  every existing hard-negative case are unchanged.
 - **The autonomy kill switch now pre-empts a cycle already running, instead
   of only affecting the next one (#2624).** A kill fired a second into a
   25-message run used to be confirmed as "off" while the run carried on and

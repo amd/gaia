@@ -32,6 +32,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
+from gaia_agent_email.body_normalize import scrub_delimiter_tokens
 from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 from gaia_agent_email.tools.read_tools import DEFAULT_BODY_LIMIT_CHARS
 from gaia_agent_email.verbose import log_tool_call
@@ -202,6 +203,7 @@ def _nearest_time_within(
             if distance <= window and (best is None or distance < best[0]):
                 best = (distance, t_text)
     return best[1] if best else None
+
 
 # Concrete time / date signals. ``\b`` word boundaries keep "monday" from
 # matching inside another token.
@@ -408,7 +410,7 @@ def _build_llm_user_prompt(subject: str, body: str) -> str:
     # prompt is trained to treat as data.
     from gaia_agent_email.tools.read_tools import wrap_untrusted_body
 
-    clipped = (body or "").strip()[:DEFAULT_BODY_LIMIT_CHARS]
+    clipped = scrub_delimiter_tokens((body or "").strip())[:DEFAULT_BODY_LIMIT_CHARS]
     return (
         "Does this email ask to schedule a meeting?\n\n"
         f"Subject: {subject}\n"
