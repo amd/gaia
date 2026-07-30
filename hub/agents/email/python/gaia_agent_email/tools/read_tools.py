@@ -17,6 +17,7 @@ module because every read tool that returns body bytes needs to honor it.
 
 from __future__ import annotations
 
+import inspect
 import json
 import re
 from datetime import date
@@ -1013,6 +1014,52 @@ def _list_all_stubs(
     }
 
 
+def _fetch_messages(
+    gmail, ids: List[str], *, format: str
+) -> Dict[str, Dict[str, Any]]:
+    """Fetch ``ids`` in as few round-trips as ``gmail`` supports (#2643).
+
+    Prefers the backend's own ``get_messages_batch`` — a duck-typed
+    capability, not a formal ``GmailBackend`` Protocol method (see that
+    Protocol's ``get_message`` docstring for why) — when present. Otherwise
+    falls back to a per-id ``get_message`` loop, passing ``format`` only when
+    the backend's ``get_message`` actually accepts it: checked ONCE via
+    signature introspection (mirrors the existing ``progress``-support check
+    a few lines below in the ``triage_inbox`` tool wrapper), never a
+    try/except around the call itself, which could mistake an unrelated
+    ``TypeError`` raised inside a real ``get_message`` for missing format
+    support and silently swallow a genuine bug.
+
+    Every id in ``ids`` is guaranteed a corresponding entry in the returned
+    map, or this raises — a backend handing back fewer than requested is a
+    silently partial scan, which this package never allows (mirrors
+    ``_list_all_stubs``'s page-failure-propagates rule and
+    ``EnvelopeBudgetExceeded``'s fail-loud contract elsewhere in this file).
+    """
+    if not ids:
+        return {}
+    batch_fn = getattr(gmail, "get_messages_batch", None)
+    if callable(batch_fn):
+        out = dict(batch_fn(ids, format=format))
+    else:
+        supports_format = "format" in inspect.signature(gmail.get_message).parameters
+        out = {
+            mid: (
+                gmail.get_message(mid, format=format)
+                if supports_format
+                else gmail.get_message(mid)
+            )
+            for mid in ids
+        }
+    missing = [mid for mid in ids if mid not in out]
+    if missing:
+        raise RuntimeError(
+            f"mail backend returned {len(out)} of {len(ids)} requested "
+            f"message(s) during a triage scan; missing: {missing[:5]}"
+        )
+    return out
+
+
 def triage_inbox_impl(
     gmail,
     *,
@@ -1032,21 +1079,31 @@ def triage_inbox_impl(
     movement. It must never break the scan — callers get their exceptions
     swallowed and logged, because narration is not worth losing a triage over.
 
-    For each message: fetch metadata, run the heuristic. If the heuristic
-    is confident, record its category as the triage decision. Otherwise
-    (and always for ``urgent`` vs ``actionable``, which depend on body
-    content) the message needs LLM follow-up.
+    Two-phase fetch (#2643): phase 1 fetches METADATA ONLY for every scanned
+    message (subject/from/labelIds/snippet/List-Unsubscribe — no body) and
+    runs the heuristic on that alone. Phase 2 fetches the FULL body, but only
+    for messages phase 1 flagged as needing LLM follow-up — most real inboxes
+    resolve confidently from labels/snippet/headers and never reach phase 2
+    at all. Both phases batch through ``_fetch_messages``, so a full scan
+    costs at most 2 round-trips to the mail backend regardless of message
+    count (barring Gmail's 100-subrequest batch chunking on very large
+    scans). If the heuristic is confident, its category is the triage
+    decision. Otherwise (and always for ``urgent`` vs ``actionable``, which
+    depend on body content) the message needs LLM follow-up.
 
     LLM follow-up (#1107): when ``classifier`` is provided, a heuristic
-    ``confident=False`` message has its body read and classified by the
-    LLM via ``classifier(subject=, sender=, body=, message_id=)`` →
+    ``confident=False`` message has its REAL decoded body (phase 2's fetch,
+    never the phase-1 metadata stub) read and classified by the LLM via
+    ``classifier(subject=, sender=, body=, message_id=)`` →
     ``{category, is_spam, confidence, reasoning}``. The result is recorded
     with ``confident=True`` and ``source="llm"``. If the classifier raises
     (LLM unreachable, unparseable output, or an out-of-taxonomy category)
     the exception propagates — we never silently default to
     ``informational``. When ``classifier`` is None, the message is left
     flagged (``confident=False``) for a caller that sequences LLM calls
-    itself — preserving the heuristic-only path.
+    itself — preserving the heuristic-only path, AND phase 2 never runs at
+    all for that scan (``pre_scan_inbox_impl`` never wires a classifier, so
+    it never pays for a body fetch nobody reads).
 
     ``is_spam`` follow-up (#1906) is independent of category confidence: the
     heuristic only commits ``is_spam`` for a narrow, mechanical sender-pattern
@@ -1057,7 +1114,9 @@ def triage_inbox_impl(
 
     When ``force_llm`` is True, every message is routed to the classifier
     (if provided) regardless of heuristic confidence — used for
-    benchmarking to measure true inference cost across all emails.
+    benchmarking to measure true inference cost across all emails. Phase 2
+    then fetches every message's full body, matching the pre-#2643 cost for
+    that specific (opt-in, benchmarking-only) mode.
 
     When ``session_preferences`` is provided, sender-based overrides
     (priority / low-priority) are layered on top of the heuristic before
@@ -1093,9 +1152,15 @@ def triage_inbox_impl(
             gmail, label_ids=label_ids, max_messages=max_messages
         )
         stubs = listing["stubs"]
-        results: List[Dict[str, Any]] = []
+        stub_ids = [stub["id"] for stub in stubs]
+
+        # Phase 1: metadata-only fetch for the whole scan (#2643 lever 1+2).
+        metadata_by_id = _fetch_messages(gmail, stub_ids, format="metadata")
+
+        prepared: List[Dict[str, Any]] = []
+        escalate_ids: List[str] = []
         for stub in stubs:
-            msg = gmail.get_message(stub["id"])
+            msg = metadata_by_id[stub["id"]]
             payload_headers = {
                 (h.get("name") or "").lower(): h.get("value", "")
                 for h in (msg.get("payload") or {}).get("headers", [])
@@ -1105,6 +1170,11 @@ def triage_inbox_impl(
                 sender=payload_headers.get("from", ""),
                 label_ids=msg.get("labelIds", []),
                 body=msg.get("snippet", ""),
+                # RFC 2369 bulk-mail signal (#2643) — arrives with the
+                # metadata fetch above, no body read needed.
+                has_list_unsubscribe=bool(
+                    (payload_headers.get("list-unsubscribe", "") or "").strip()
+                ),
             )
             # Meeting-request detection (#2583) — reads the same already-
             # fetched snippet as the category heuristic above, never the
@@ -1155,21 +1225,47 @@ def triage_inbox_impl(
 
             # LLM follow-up (#1107; is_spam added #1906): re-classify when the
             # heuristic is not confident about category OR not confident about
-            # is_spam (or force_llm), if a classifier is wired in. Raises on
-            # failure — never silently defaults the category. Category and
+            # is_spam (or force_llm), if a classifier is wired in. Category and
             # is_spam are applied independently: a spam-only escalation must
             # not let the LLM silently override an already-confident category,
-            # and vice versa.
+            # and vice versa. Only messages that need it are queued for the
+            # phase-2 full-body fetch below.
             needs_llm = (
                 not heuristic.confident or not heuristic.spam_confident or force_llm
             )
-            if classifier is not None and needs_llm:
-                body_text, _ = decode_message_body(msg.get("payload") or {})
+            escalate = classifier is not None and needs_llm
+            if escalate:
+                escalate_ids.append(stub["id"])
+            prepared.append(
+                {
+                    "stub_id": stub["id"],
+                    "decision": decision,
+                    "heuristic": heuristic,
+                    "escalate": escalate,
+                    "subject_for_progress": payload_headers.get("subject", "")
+                    or "(no subject)",
+                }
+            )
+
+        # Phase 2: full-body fetch ONLY for messages phase 1 flagged for LLM
+        # follow-up (#2643 lever 1+2) — empty (and zero round-trips) whenever
+        # nothing escalates, e.g. pre_scan_inbox's classifier=None path.
+        full_by_id = (
+            _fetch_messages(gmail, escalate_ids, format="full") if escalate_ids else {}
+        )
+
+        results: List[Dict[str, Any]] = []
+        for item in prepared:
+            decision = item["decision"]
+            heuristic = item["heuristic"]
+            if item["escalate"]:
+                full_msg = full_by_id[item["stub_id"]]
+                body_text, _ = decode_message_body(full_msg.get("payload") or {})
                 llm = classifier(
                     subject=decision["subject"],
                     sender=decision["from"],
                     body=body_text,
-                    message_id=msg["id"],
+                    message_id=decision["id"],
                 )
                 if not heuristic.confident or force_llm:
                     decision["category"] = llm["category"]
@@ -1184,7 +1280,7 @@ def triage_inbox_impl(
 
             decision = _apply_session_preferences(decision, prefs)
             log_triage_decision(
-                message_id=msg["id"],
+                message_id=decision["id"],
                 category=decision["category"],
                 is_spam=decision["is_spam"],
                 is_phishing=decision["is_phishing"],
@@ -1195,11 +1291,7 @@ def triage_inbox_impl(
             results.append(decision)
             if progress is not None:
                 try:
-                    progress(
-                        len(results),
-                        len(stubs),
-                        payload_headers.get("subject", "") or "(no subject)",
-                    )
+                    progress(len(results), len(stubs), item["subject_for_progress"])
                 except Exception as exc:  # noqa: BLE001
                     log.debug("triage progress callback failed: %s", exc)
         grouped = group_by_category(results)

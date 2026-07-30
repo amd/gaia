@@ -50,6 +50,10 @@ _ALLOWED_BACKEND_CALLS = {
     "list_messages",
     "get_thread",
     "get_message",
+    # Batched read (#2643) -- fetches multiple messages in one round-trip,
+    # exactly as read-only as get_message above; the triage scan loop uses
+    # it whenever the backend supports it.
+    "get_messages_batch",
     "get_label",
 }
 
