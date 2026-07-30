@@ -152,6 +152,26 @@ contract version is tracked separately as
   paragraphs following it were removed. `_BLANK_LINE_RE` is now CRLF-tolerant
   (`\r?\n[ \t]*\r?\n`); the removal cap itself, the bounded scan window, and
   every existing hard-negative case are unchanged.
+- **Banner stripping now reaches every path that builds a prompt from a raw
+  body, including a banner's copies inside a quoted reply trail (#2647,
+  #2653).** #2642 only protected the two thread/read rendering paths;
+  `summarize_message`, the LLM triage follow-up, and meeting-request
+  detection each built their own prompt straight from the decoded body, so
+  a leading banner could still reach the model on those three. All three
+  now call `normalize_email_body` before wrapping the body, same as the
+  read paths. Separately, a live sweep found the bigger source of banner
+  leakage: Outlook inlines the entire prior conversation into every reply,
+  so a banner stripped from one message's own top-of-body still showed up
+  a dozen times inside later replies' quoted trails — enough that one real
+  thread summary named the banner text ("AMD General") as if it were a
+  participant. `_thread_message_blocks` (used only by the two thread-SUMMARY
+  renderers, never a raw-content display tool) now also drops the quoted
+  trail via new `body_normalize.strip_quoted_trail` — reusing
+  `voice_profile.strip_quoted_text`, with a fallback to the original body
+  when a message's sole content is a quote, so a bare "+1" reply is never
+  turned into an empty block. On a 10-message thread with full-history
+  quoting this cut the transcript from 6,131 to 1,967 characters (68%
+  smaller) as a side effect of removing the duplication.
 - **The autonomy kill switch now pre-empts a cycle already running, instead
   of only affecting the next one (#2624).** A kill fired a second into a
   25-message run used to be confirmed as "off" while the run carried on and
