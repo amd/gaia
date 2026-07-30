@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -183,6 +184,15 @@ func NewChatModelFromHub(c client.AgentClient, agentID, agentName string, debug 
 	return m
 }
 
+// NewChatModelForCatalogAgent creates a standalone ChatModel (esc quits -- see
+// CanReturnToHub) for a real catalog agent, so agentID is the catalog id
+// rather than NewChatModel's default of the display name.
+func NewChatModelForCatalogAgent(c client.AgentClient, agentID, agentName string, debug bool) ChatModel {
+	m := NewChatModel(c, agentName, "", debug)
+	m.agentID = agentID
+	return m
+}
+
 // attentionAgentID is the one agent this on-open fetch applies to today.
 // Scoped by id rather than by capability alone so a future agent that
 // happens to reuse the AttentionFetcher interface for something unrelated
@@ -203,8 +213,24 @@ func (m ChatModel) Init() tea.Cmd {
 		// there's no initial query already about to run a turn, so the
 		// attention view never races the answer to what the user just asked.
 		cmds = append(cmds, m.fetchAttention())
+	} else if m.debug && m.attentionGateMismatch() {
+		// A client that could serve the attention view but an agentID that
+		// doesn't match must not fail with no signal at all.
+		fmt.Fprintf(os.Stderr,
+			"[DEBUG] attention fetch skipped: agentID %q has an AttentionFetcher client but does not match %q\n",
+			m.agentID, attentionAgentID)
 	}
 	return tea.Batch(cmds...)
+}
+
+// attentionGateMismatch reports whether m.client could serve the attention
+// view even though m.agentID didn't earn the fetch.
+func (m ChatModel) attentionGateMismatch() bool {
+	if m.agentID == attentionAgentID {
+		return false
+	}
+	_, hasFetcher := m.client.(client.AttentionFetcher)
+	return hasFetcher
 }
 
 // fetchAttention builds the Cmd that fetches the email agent's read-only

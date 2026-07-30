@@ -109,7 +109,13 @@ CATEGORY_PERSONAL = "PERSONAL"
 #     ``cache_age_seconds`` / ``stale`` so a renderer never presents a cached
 #     result as current. No existing shape changed, so 2.7 consumers keep
 #     working (additive MINOR).
-SCHEMA_VERSION = "2.8"
+# 2.9 is additive over 2.8 (#2638/#2643): EmailPreScanResult gains
+# ``total_inbox`` (exact whole-INBOX message count, Optional[int]) — pre-scan
+# now covers read + unread mail (#2638, previously unread-only on a rationale
+# #2584 itself made obsolete), so total_unread alone is no longer an honest
+# scan-coverage denominator; total_inbox is. No existing field changed, so
+# 2.8 consumers keep working (additive MINOR).
+SCHEMA_VERSION = "2.9"
 
 # Maximum number of items in a single batch request. Protects the single-tenant
 # local model slot from runaway batches. Enforced via Pydantic max_length.
@@ -1420,11 +1426,25 @@ class EmailPreScanResult(_Strict):
     total_unread: Optional[int] = Field(
         default=None,
         description=(
-            "Exact total UNREAD message count in the scanned mailbox(es), "
-            "the denominator for scan coverage (#2584). Gmail reports this "
-            "via labels().get's messagesUnread — an exact integer, not "
-            "list_messages's resultSizeEstimate (measured 2.6x off on a "
-            "real mailbox). Outlook has no equivalent honest source and "
+            "Exact total UNREAD message count in the scanned mailbox(es) — a "
+            "secondary coverage figure (#2584), NOT the scan-coverage "
+            "denominator since #2638 (pre-scan now covers read mail too; see "
+            "total_inbox for that). Gmail reports this via labels().get's "
+            "messagesUnread — an exact integer, not list_messages's "
+            "resultSizeEstimate (measured 2.6x off on a real mailbox). "
+            "Outlook has no equivalent honest source and reports null — "
+            "never a fabricated page-size number."
+        ),
+    )
+    total_inbox: Optional[int] = Field(
+        default=None,
+        description=(
+            "Exact total INBOX message count (read + unread) in the scanned "
+            "mailbox(es) — the honest denominator for scan coverage (#2638), "
+            "now that pre-scan covers all of INBOX, not just unread mail. "
+            "Gmail reports this via labels().get's messagesTotal — an exact "
+            "integer, sourced from the SAME call as total_unread (no extra "
+            "round-trip). Outlook has no equivalent honest source and "
             "reports null — never a fabricated page-size number."
         ),
     )

@@ -294,26 +294,28 @@ actionable, 1 suggested archive.") and stop. The user can see the card;
 do not re-state its contents in prose. For follow-up questions about
 specific items, refer to the message_id values from the card.
 
-A pre-scan covers a slice of the inbox, not the whole inbox — the result
-carries ``scanned`` (how many of the most recent inbox messages were
-actually looked at) and ``total_unread`` (that mailbox's own unread
-count, when known — never a total across every connected mailbox, even
-when more than one is connected: each contributes only its own INBOX
-count, so describe it as "in your inbox", never "across your mailboxes"
-or "across your accounts"). ``scanned`` and ``total_unread`` are two
-SEPARATE facts, not a fraction — ``scanned`` is never guaranteed to be a
-subset of ``total_unread``, so never phrase them as "X of Y unread". State
-them side by side instead, matching how the rest of the app states
-coverage — e.g. "100 inbox messages scanned · 557 unread (of the 100 most
-recent — older mail may exist)" — and work that note into your framing
-sentence whenever ``scanned`` is less than ``total_unread``, so "nothing
-needs you" never reads as "your whole inbox is clear" when it only
-covered the most recent slice. When a mailbox failed (``degraded`` is
-true / ``mailbox_errors`` is non-empty), say so plainly — e.g. "Outlook
-couldn't be scanned (token expired); results below are Gmail only."
-Never phrase a partial scan as if it were a whole-inbox claim, and state
-which of your own tools' results you're summarizing (a pre-scan, a
-briefing, a search) so the reader knows what the coverage note refers to.
+A pre-scan covers a slice of the inbox, not the whole inbox, and covers
+READ and unread mail alike (#2638 — a message you already opened but never
+answered is exactly what this view exists to surface). The result carries
+``scanned`` (how many messages were actually looked at), ``total_inbox``
+(the mailbox's total INBOX count, when known — the honest whole-population
+denominator now that the scan isn't unread-only), and ``total_unread`` (how
+many of the mailbox's messages are still unread — a secondary figure, not
+the coverage denominator). ``scanned`` and ``total_unread`` are two
+SEPARATE facts, not a fraction of one another, so never phrase them as
+"X of Y unread". ``total_unread`` is also always single-mailbox /
+INBOX-scoped and ``None`` for a backend that can't report it (e.g.
+Outlook) — never describe it as spanning "across your mailboxes" or
+"across your accounts"; say "in your inbox" instead. ALWAYS work a
+coverage note into your framing sentence when ``scanned`` is less than
+``total_inbox`` — e.g. "50 of 812 in the inbox scanned (250 unread)" — so
+"nothing needs you" never reads as "your whole inbox is clear" when it
+only covered a fraction. When a mailbox failed (``degraded`` is true /
+``mailbox_errors`` is non-empty), say so plainly — e.g. "Outlook couldn't
+be scanned (token expired); results below are Gmail only." Never phrase a
+partial scan as if it were a whole-inbox claim, and state which of your
+own tools' results you're summarizing (a pre-scan, a briefing, a search)
+so the reader knows what the coverage note refers to.
 
 Never claim "no urgent items" / "no actionable items" / "nothing needs
 you" unless the corresponding list in the result you just received (
