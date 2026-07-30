@@ -55,7 +55,12 @@ from gaia_agent_email.scopes import (
 )
 from gaia_agent_email.supervision import is_daemon_supervised
 from gaia_agent_email.tools.briefing_tools import BriefingToolsMixin
-from gaia_agent_email.tools.calendar_tools import CalendarToolsMixin
+from gaia_agent_email.tools.calendar_tools import (
+    CalendarToolsMixin,
+    _listed_event_count_from_conversation,
+    append_conflict_grounding_correction,
+    response_has_ungrounded_conflict_claim,
+)
 from gaia_agent_email.tools.connection_tools import ConnectionToolsMixin
 from gaia_agent_email.tools.delete_tools import DeleteToolsMixin
 from gaia_agent_email.tools.followup_tools import FollowupToolsMixin
@@ -323,6 +328,16 @@ BRIEFING & TASKS:
 Never answer any of these three asks with a bare ``pre_scan_inbox`` fence —
 each has its own tool.
 
+CALENDAR CONFLICTS:
+Listing events and judging whether they conflict are different questions.
+ANY question about conflicts, overlaps, double-booking, or whether events
+clash MUST be answered by calling ``detect_calendar_conflicts`` and
+reporting its ``has_conflict``/``conflicts`` result. ``list_calendar_events``
+only lists events — it does NOT determine whether they overlap. Never read
+two events' start/end times yourself and state a conflict verdict from that
+reading; never assert a conflict judgement ``detect_calendar_conflicts``
+did not itself compute.
+
 MAILBOX TARGETING:
 Read/triage tools scan only CONNECTED mailboxes, and every result item is
 tagged with its source mailbox (google or microsoft). If the user asks
@@ -437,6 +452,24 @@ def _normalize_plain_text_answer(text: str) -> str:
         return _LATEX_SYMBOLS["\\" + m.group(1)]
 
     return _LATEX_CMD_RE.sub(_sub, text)
+
+
+def _tool_names_from_conversation(conversation: List[Dict[str, Any]]) -> List[str]:
+    """Every tool name invoked this turn, in call order.
+
+    Mirrors the base ``Agent``'s own max-steps tool tally
+    (``_generate_max_steps_message``) — same shape, read for a different
+    purpose (grounding checks rather than a step-limit summary).
+    """
+    names: List[str] = []
+    for msg in conversation:
+        if msg.get("role") != "assistant":
+            continue
+        for call in msg.get("tool_calls") or []:
+            name = ((call or {}).get("function") or {}).get("name")
+            if name:
+                names.append(name)
+    return names
 
 
 # Redact common credential/token shapes out of a per-row autonomy failure's
@@ -979,6 +1012,17 @@ class EmailTriageAgent(
         # consumers never see raw TeX in the final answer (#2115).
         if isinstance(result, dict) and isinstance(result.get("result"), str):
             result["result"] = _normalize_plain_text_answer(result["result"])
+            # Flag a conflict verdict the model narrated itself instead of
+            # getting from detect_calendar_conflicts (#2571).
+            conversation = result.get("conversation") or []
+            tool_names = _tool_names_from_conversation(conversation)
+            listed_event_count = _listed_event_count_from_conversation(conversation)
+            if response_has_ungrounded_conflict_claim(
+                result["result"], tool_names, listed_event_count
+            ):
+                result["result"] = append_conflict_grounding_correction(
+                    result["result"]
+                )
         return result
 
     def _mailbox_target_guard(self, user_input: str) -> Optional[Dict[str, Any]]:
