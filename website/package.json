@@ -18,6 +18,7 @@
     "@astrojs/tailwind": "^5.1.4",
     "astro": "^4.16.18",
     "prismjs": "^1.30.0",
+    "serve": "^14.2.6",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.2",
     "yaml": "^2.9.0"
@@ -28,5 +29,8 @@
     "autoprefixer": "^10.4.20",
     "postcss": "^8.4.49",
     "vitest": "^2.1.8"
+  },
+  "engines": {
+    "node": "22.x"
   }
 }
