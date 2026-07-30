@@ -846,9 +846,7 @@ def test_kill_mid_cycle_stops_the_run(tmp_path):
             agent.config.autonomy_level = LEVEL_OFF
         return result
 
-    with patch.object(
-        agent, "_autonomy_execute", side_effect=_side_effecting_execute
-    ):
+    with patch.object(agent, "_autonomy_execute", side_effect=_side_effecting_execute):
         report = agent._run_email_autonomy_cycle()
 
     assert len(report["executed"]) == 3, report["executed"]

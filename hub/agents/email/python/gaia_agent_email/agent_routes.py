@@ -175,7 +175,9 @@ class _SessionRegistry:
                 continue
             try:
                 setter(trust.LEVEL_OFF)
-            except Exception as exc:  # pragma: no cover - defensive; must not block the rest
+            except (
+                Exception
+            ) as exc:  # pragma: no cover - defensive; must not block the rest
                 logger.warning(
                     "autonomy kill broadcast: failed to stop session %s: %s",
                     session.session_id,

@@ -444,7 +444,9 @@ _AUTONOMY_ERROR_SENSITIVE_RE = re.compile(
 _AUTONOMY_ERROR_MESSAGE_MAX_LEN = 200
 
 
-def _sanitize_autonomy_error(message_id: Optional[str], exc: Exception) -> Dict[str, Any]:
+def _sanitize_autonomy_error(
+    message_id: Optional[str], exc: Exception
+) -> Dict[str, Any]:
     """Redact + length-cap a per-row autonomy failure (#2625 — adversarial C5).
 
     ``report["errors"]`` is returned verbatim as an HTTP 200 body
@@ -1539,9 +1541,7 @@ class EmailTriageAgent(
                     executed = self._autonomy_execute(action_type, row)
                 except Exception as exc:
                     consecutive_failures += 1
-                    report["errors"].append(
-                        _sanitize_autonomy_error(message_id, exc)
-                    )
+                    report["errors"].append(_sanitize_autonomy_error(message_id, exc))
                     logger.warning(
                         "autonomy cycle: row %s (%s) failed: %s: %s",
                         message_id,
@@ -1549,10 +1549,7 @@ class EmailTriageAgent(
                         type(exc).__name__,
                         exc,
                     )
-                    if (
-                        consecutive_failures
-                        >= self.AUTONOMY_MAX_CONSECUTIVE_FAILURES
-                    ):
+                    if consecutive_failures >= self.AUTONOMY_MAX_CONSECUTIVE_FAILURES:
                         report["stopped"] = "consecutive_failures"
                         break
                     continue
