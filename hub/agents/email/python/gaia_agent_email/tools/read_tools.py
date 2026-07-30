@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import date
-from typing import Any, Callable, Dict, List, Mapping, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 from gaia_agent_email.config import default_inbox_scan_ceiling
 from gaia_agent_email.context_budget import (
@@ -343,16 +343,26 @@ def _thread_message_blocks(
     per_message_body_limit: int,
     start_index: int = 1,
     total_count: Optional[int] = None,
-) -> List[str]:
+) -> Tuple[List[str], List[str]]:
     """Render each message (already sorted) as one numbered, wrapped block.
 
     Shared by :func:`_format_thread_for_summary` (the full-thread join) and
     the #1889 over-budget fold path (message-boundary bucketing) so there is
     exactly one place that defines what a message block looks like — no
     duplicate formatting to drift.
+
+    Returns ``(blocks, raw_bodies)`` — ``raw_bodies`` is each message's
+    decoded, stripped, PRE-truncation body in the same order. A caller that
+    needs one message's own body (e.g. the #2641 meeting-signal scan over
+    the newest message) reuses ``raw_bodies[-1]`` instead of paying for a
+    second MIME decode of the same payload — which would also feed the
+    heuristic the rendered block's header/delimiter framing rather than the
+    plain body, risking a false match against e.g. the ``Date:`` header's
+    own ``HH:MM:SS``.
     """
     total = total_count if total_count is not None else len(messages)
     blocks: List[str] = []
+    raw_bodies: List[str] = []
     for offset, msg in enumerate(messages):
         idx = start_index + offset
         payload = msg.get("payload") or {}
@@ -362,15 +372,17 @@ def _thread_message_blocks(
         }
         body, _attachments = decode_message_body(payload)
         body = (body or "").strip()
+        raw_bodies.append(body)
+        rendered_body = body
         if per_message_body_limit > 0 and len(body) > per_message_body_limit:
-            body = body[:per_message_body_limit] + "\n...[truncated]"
+            rendered_body = body[:per_message_body_limit] + "\n...[truncated]"
         blocks.append(
             f"--- Message {idx} of {total} ---\n"
             f"From: {headers.get('from', '')}\n"
             f"Date: {headers.get('date', '')}\n"
-            f"{wrap_untrusted_body(body)}"
+            f"{wrap_untrusted_body(rendered_body)}"
         )
-    return blocks
+    return blocks, raw_bodies
 
 
 def _format_thread_for_summary(
@@ -408,13 +420,15 @@ def _format_thread_for_summary(
         )
         if effective_body_limit <= 0 or fair_share < effective_body_limit:
             effective_body_limit = fair_share
-    blocks = _thread_message_blocks(
+    blocks, _raw_bodies = _thread_message_blocks(
         ordered, per_message_body_limit=effective_body_limit
     )
     return "\n\n".join(blocks)
 
 
-def _build_thread_user_prompt(subject: str, transcript: str) -> str:
+def _build_thread_user_prompt(
+    subject: str, transcript: str, *, meeting_detected: bool = False
+) -> str:
     """Build the user-turn prompt for whole-thread summarization.
 
     Unlike the single-email prompt, this does NOT clip the body to a single
@@ -422,14 +436,29 @@ def _build_thread_user_prompt(subject: str, transcript: str) -> str:
     message body is already individually wrapped + truncated by
     ``_format_thread_for_summary``. Re-clipping here would drop later
     messages and defeat full-thread comprehension.
+
+    ``meeting_detected`` is the deterministic, heuristic-only signal from
+    ``detect_meeting_request_heuristic`` run over the newest message's own
+    decoded body (#2641) — never the model's free-form read of the
+    transcript. A plain bool is the only thing this function accepts, so
+    ``MeetingDetection.signals``/``.reason`` (raw, sender-authored
+    substrings) can never reach the prompt; the note is a fixed,
+    non-authoritative sentence, not an asserted fact.
     """
-    return (
+    instruction = (
         "Summarize this email thread as a whole. Reflect decisions, asks, and "
         "outcomes from EVERY message — including earlier messages the latest "
-        "reply does not repeat.\n\n"
-        f"Subject: {subject}\n"
-        f"Thread (oldest first):\n{transcript}\n"
+        "reply does not repeat. Give the newest message's still-open asks the "
+        "same weight as an early decision: if the latest message raises an "
+        "unanswered question or a pending request, name it.\n"
     )
+    if meeting_detected:
+        instruction += (
+            "The newest message appears to propose a meeting time; if the "
+            "body actually names one, state the day and time in the "
+            "summary.\n"
+        )
+    return f"{instruction}\nSubject: {subject}\nThread (oldest first):\n{transcript}\n"
 
 
 def summarize_thread_impl(
@@ -524,9 +553,25 @@ def summarize_thread_impl(
         # byte-identical to the pre-existing uncapped renderer's output
         # (``_format_thread_for_summary(..., max_total_transcript_chars=None)``),
         # which delegates to the same ``_thread_message_blocks``.
-        blocks = _thread_message_blocks(
+        blocks, raw_bodies = _thread_message_blocks(
             ordered, per_message_body_limit=per_message_body_limit
         )
+
+        # Deterministic meeting-request scan over the NEWEST message's own
+        # decoded body (#2641), reusing the decode above rather than paying
+        # for a second one — same heuristic triage_inbox runs on the
+        # snippet, but this path already has the full body, so use it.
+        from gaia_agent_email.tools.calendar_tools import (
+            detect_meeting_request_heuristic,
+        )
+
+        meeting = detect_meeting_request_heuristic(subject, raw_bodies[-1])
+        # Same high-confidence-only gate as triage_inbox (~line 988) — a
+        # confidence="low" result always pairs with is_meeting_request=False
+        # today, but the explicit AND keeps this call site correct even if
+        # the heuristic's confidence semantics change later.
+        meeting_detected = meeting.is_meeting_request and meeting.confidence == "high"
+
         full_transcript = "\n\n".join(blocks)
         fold_stats: List[dict] = []
         if estimate_tokens(full_transcript) <= thread_budget_tokens():
@@ -553,7 +598,9 @@ def summarize_thread_impl(
             )
             transcript = "\n\n".join([condensed_block, blocks[-1]])
 
-        prompt = _build_thread_user_prompt(subject, transcript)
+        prompt = _build_thread_user_prompt(
+            subject, transcript, meeting_detected=meeting_detected
+        )
         try:
             response = chat.send_messages(
                 [{"role": "user", "content": prompt}],
@@ -1721,6 +1768,7 @@ class ReadToolsMixin:
             try:
                 # Deferred import avoids a module-load cycle with summarize_tools.
                 from gaia_agent_email.tools.summarize_tools import (
+                    THREAD_SUMMARY_CHAR_LIMIT,
                     EmailSummarizeError,
                 )
 
@@ -1731,6 +1779,7 @@ class ReadToolsMixin:
                         backend,
                         chat,
                         thread_id=thread_id,
+                        max_chars=THREAD_SUMMARY_CHAR_LIMIT,
                         debug=debug_flag,
                     )
                 )
