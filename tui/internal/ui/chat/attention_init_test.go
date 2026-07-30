@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/amd/gaia/tui/internal/client"
 	"github.com/amd/gaia/tui/internal/event"
@@ -263,10 +264,13 @@ func TestAttentionFetchAppendsImmediatelyWhenNotStreaming(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// #2631 -- one coherent surface. When a pre-scan card has already rendered
-// this session, the attention card is redundant (both describe "what needs
-// you" from different taxonomies over roughly the same inbox state) and is
-// suppressed rather than shown a second time.
+// #2631 -- shared items render once. The pre-scan and attention cards do not
+// share a taxonomy (meeting_request/waiting_on_you/action_item exist only on
+// the attention card), so a duplicate is resolved per item, not by
+// suppressing whichever card renders second -- that would throw away
+// meeting proposals and action items the attention card exists to surface.
+// Whole-card suppression only happens as a side effect of every one of a
+// card's items turning out to be a duplicate.
 // ---------------------------------------------------------------------------
 
 const preScanCardForSuppressionTest = `{
@@ -280,90 +284,171 @@ const preScanCardForSuppressionTest = `{
   "totals": {"urgent": 1, "actionable": 0, "informational": 0, "suggested_archives": 0, "needs_review": 0}
 }`
 
-func TestAttentionCardSuppressedWhenPreScanAlreadyRenderedThisSession(t *testing.T) {
-	m, _ := newTestModel(t)
-	m.messages = append(m.messages, Message{
-		Role:   RoleCard,
-		Render: "email_pre_scan",
-		Data:   json.RawMessage(preScanCardForSuppressionTest),
-	})
+const preScanWithSharedAndUnique = `{
+  "kind": "email_pre_scan",
+  "urgent": [
+    {"message_id":"MSG_A","sender":"a@example.com","subject":"F-Bombs","why":"urgent"}
+  ],
+  "actionable": [
+    {"message_id":"MSG_B","sender":"b@example.com","subject":"PreScanOnlySubject","why":"needs a reply"}
+  ],
+  "suggested_archives": [],
+  "needs_review": [],
+  "totals": {"urgent": 1, "actionable": 1, "informational": 0, "suggested_archives": 0, "needs_review": 0}
+}`
 
-	updated, _ := m.Update(attentionFetchedMsg{data: json.RawMessage(sampleAttentionJSON)})
+const attentionWithSharedAndUnique = `{
+  "kind":"email_attention",
+  "items":[
+    {"kind":"waiting_on_you","message_id":"MSG_A","sender":"a@example.com","subject":"F-Bombs","why":"waiting"},
+    {"kind":"action_item","message_id":"MSG_C","sender":"c@example.com","subject":"AttentionOnlySubject","why":"open item"}
+  ],
+  "coverage":{"scanned":2,"total_unread":2},
+  "generated_at":"x","cache_age_seconds":0.0,"stale":false
+}`
+
+const attentionAllDuplicateOfPreScan = `{
+  "kind":"email_attention",
+  "items":[
+    {"kind":"waiting_on_you","message_id":"MSG_A","sender":"a@example.com","subject":"F-Bombs (attention copy)","why":"still waiting"}
+  ],
+  "coverage":{"scanned":1,"total_unread":1},
+  "generated_at":"x","cache_age_seconds":0.0,"stale":false
+}`
+
+const attentionActionItemsWithNullMessageID = `{
+  "kind":"email_attention",
+  "items":[
+    {"kind":"action_item","message_id":null,"sender":"a@example.com","subject":"Renew the domain","why":"expires Friday"},
+    {"kind":"action_item","message_id":null,"sender":"b@example.com","subject":"Approve the invoice","why":"awaiting sign-off"}
+  ],
+  "coverage":{"scanned":2,"total_unread":2},
+  "generated_at":"x","cache_age_seconds":0.0,"stale":false
+}`
+
+// preScanWithNullMessageIDItem's own urgent item also has no message_id --
+// the pre-scan card renders first, so this is what proves a missing id from
+// an EARLIER card can't poison a later card's missing-id items either: if
+// dedup ever keyed on the empty string, this card's own null id would enter
+// the turn's seen set and the attention card's null-id items would come out
+// looking like duplicates of it.
+const preScanWithNullMessageIDItem = `{
+  "kind": "email_pre_scan",
+  "urgent": [
+    {"message_id":null,"sender":"legal@example.com","subject":"Follow up with Legal","why":"urgent"}
+  ],
+  "actionable": [],
+  "suggested_archives": [],
+  "needs_review": [],
+  "totals": {"urgent": 1, "actionable": 0, "informational": 0, "suggested_archives": 0, "needs_review": 0}
+}`
+
+// renderOverlappingTurn drives one real turn where a pre-scan card renders
+// mid-stream and an attention fetch resolves during that same turn -- so it
+// buffers and drains right after the reply, per #2639 -- the one shape in
+// which these two card types can ever land in the same turn. It returns the
+// fully rendered, ANSI-stripped transcript, exercising the real
+// updateViewport/renderMessage wiring rather than a re-implementation of it.
+func renderOverlappingTurn(t *testing.T, preScanData, attentionData json.RawMessage) string {
+	t.Helper()
+	m, _ := newTestModel(t)
+	m.width, m.height = 100, 60
+	m.resize()
+
+	updated, _ := m.Update(sendQueryMsg{query: "triage my inbox"})
 	m = updated.(ChatModel)
 
-	if hasAttentionCard(m) {
-		t.Errorf("attention card rendered even though a pre-scan card already covered this session; messages: %+v", m.messages)
+	m = feed(t, m, event.CanonicalToolResultEvent{
+		Type: "tool_result", Tool: "pre_scan_inbox",
+		Render: "email_pre_scan", Data: preScanData,
+	})
+
+	updated2, _ := m.Update(attentionFetchedMsg{data: attentionData})
+	m = updated2.(ChatModel)
+
+	m = feed(t, m, event.CanonicalFinalEvent{Type: "final", Answer: "here is your triage"})
+
+	return ansi.Strip(m.viewport.View())
+}
+
+// #2631 -- when every item an attention card would show is a duplicate of
+// something the turn's pre-scan card already rendered, the attention card
+// ends up with nothing left to say and is suppressed. This is the only case
+// where dropping the whole card is correct, and it falls out of the
+// per-item logic rather than a separate whole-card check.
+func TestAttentionCardSuppressedWhenEveryItemAlreadyShownByPreScan(t *testing.T) {
+	view := renderOverlappingTurn(t,
+		json.RawMessage(preScanCardForSuppressionTest),
+		json.RawMessage(attentionAllDuplicateOfPreScan))
+	t.Logf("\n%s", view)
+
+	if !strings.Contains(view, "F-Bombs") {
+		t.Error("the surviving pre-scan card lost its own content")
 	}
-	if len(m.messages) != 1 {
-		t.Errorf("expected only the pre-scan card to remain, got %d messages: %+v", len(m.messages), m.messages)
+	if strings.Contains(view, "attention copy") {
+		t.Error("the duplicate attention item rendered even though its message_id was already shown by the pre-scan card")
+	}
+	if strings.Contains(view, "Needs you") {
+		t.Error("attention card title rendered even though every one of its items was a duplicate -- the whole card should be suppressed")
 	}
 }
 
-// TestOverlappingTurnRendersEachSharedSubjectOnce is the #2631 "no message id
-// twice" acceptance criterion, read literally off the issue: an attention
-// envelope and a pre-scan envelope sharing a message must not both draw it.
-//
-// The chosen fix (plan's Adversarial Reflection, Option B) suppresses the
-// WHOLE attention card once a pre-scan card has rendered, rather than
-// merging the two card types into one combined render. That means the
-// shared subject renders exactly once (via the surviving pre-scan card) and
-// the pre-scan-only subject is untouched -- but an attention-only subject
-// does not render AT ALL in this turn, because the whole card it lived in
-// was suppressed, not merged.
-//
-// That is the design's own documented trade-off ("what B gives up" in the
-// plan), not a bug this test papers over: it is asserted here explicitly,
-// both ways, rather than claiming a per-item merge that was not built.
-func TestOverlappingTurnRendersEachSharedSubjectOnceAndDropsAttentionOnlyContent(t *testing.T) {
-	m, _ := newTestModel(t)
-	m.width, m.height = 100, 30
+// TestOverlappingTurnDedupsSharedItemButKeepsBothCardsUniqueContent is the
+// #2631 "no message id twice" acceptance criterion, read literally off the
+// issue: an attention envelope and a pre-scan envelope sharing a message
+// must not both draw it. Unlike the whole-card-suppression design this
+// replaces, each card's own unique content survives: the shared subject
+// renders exactly once, the pre-scan-only subject is untouched, and the
+// attention-only subject (a taxonomy the pre-scan card has no equivalent
+// for) still renders too. A section left with nothing after dedup is
+// dropped, not shown with a hollow "0" count.
+func TestOverlappingTurnDedupsSharedItemButKeepsBothCardsUniqueContent(t *testing.T) {
+	view := renderOverlappingTurn(t,
+		json.RawMessage(preScanWithSharedAndUnique),
+		json.RawMessage(attentionWithSharedAndUnique))
+	t.Logf("\n%s", view)
 
-	const preScanWithSharedAndUnique = `{
-	  "kind": "email_pre_scan",
-	  "urgent": [
-	    {"message_id":"MSG_A","sender":"a@example.com","subject":"F-Bombs","why":"urgent"}
-	  ],
-	  "actionable": [
-	    {"message_id":"MSG_B","sender":"b@example.com","subject":"PreScanOnlySubject","why":"needs a reply"}
-	  ],
-	  "suggested_archives": [],
-	  "needs_review": [],
-	  "totals": {"urgent": 1, "actionable": 1, "informational": 0, "suggested_archives": 0, "needs_review": 0}
-	}`
-	m.messages = append(m.messages, Message{
-		Role:   RoleCard,
-		Render: "email_pre_scan",
-		Data:   json.RawMessage(preScanWithSharedAndUnique),
-	})
-
-	const attentionWithSharedAndUnique = `{
-	  "kind":"email_attention",
-	  "items":[
-	    {"kind":"waiting_on_you","message_id":"MSG_A","sender":"a@example.com","subject":"F-Bombs","why":"waiting"},
-	    {"kind":"action_item","message_id":"MSG_C","sender":"c@example.com","subject":"AttentionOnlySubject","why":"open item"}
-	  ],
-	  "coverage":{"scanned":2,"total_unread":2},
-	  "generated_at":"x","cache_age_seconds":0.0,"stale":false
-	}`
-	updated, _ := m.Update(attentionFetchedMsg{data: json.RawMessage(attentionWithSharedAndUnique)})
-	m = updated.(ChatModel)
-
-	var sb strings.Builder
-	for i := range m.messages {
-		sb.WriteString(m.renderMessage(&m.messages[i]))
-		sb.WriteString("\n")
-	}
-	rendered := sb.String()
-	t.Logf("\n%s", rendered)
-
-	if n := strings.Count(rendered, "F-Bombs"); n != 1 {
+	if n := strings.Count(view, "F-Bombs"); n != 1 {
 		t.Errorf("shared subject rendered %d times, want exactly 1", n)
 	}
-	if !strings.Contains(rendered, "PreScanOnlySubject") {
-		t.Error("the surviving pre-scan card lost its own unique content")
+	if !strings.Contains(view, "PreScanOnlySubject") {
+		t.Error("the pre-scan card lost its own unique content")
 	}
-	if strings.Contains(rendered, "AttentionOnlySubject") {
-		t.Error("attention-only subject rendered even though the whole attention card should be suppressed -- if this now passes, re-check whether suppression narrowed to per-item and update this test's assumptions")
+	if !strings.Contains(view, "AttentionOnlySubject") {
+		t.Error("the attention card's own unique content was dropped -- per-item dedup must not suppress the whole card when it still has something to say")
+	}
+	if strings.Contains(view, "WAITING ON YOU") {
+		t.Error("the WAITING ON YOU section should have been dropped -- its only item was deduped away, so an empty section must not render")
+	}
+	if !strings.Contains(view, "ACTION ITEMS") {
+		t.Error("the ACTION ITEMS section, whose one item is not a duplicate, should still render")
+	}
+	if !strings.Contains(view, "Needs you") {
+		t.Error("the attention card itself should still render -- it still has real content (the action item)")
+	}
+}
+
+// #2631 -- action items legitimately carry no message_id (they are not tied
+// to one specific message), so an empty id must never be treated as a
+// duplicate: not of a real id already in play, not of another empty-id item
+// in the very same card, and -- the sharpest case -- not of an empty id an
+// EARLIER card in the same turn also carried. The pre-scan fixture here has
+// its own null-id item specifically to prove that last case: seen must never
+// gain an "" entry that a later card's null-id items could collide with.
+func TestAttentionItemsWithNoMessageIDAreNeverDedupedAsDuplicates(t *testing.T) {
+	view := renderOverlappingTurn(t,
+		json.RawMessage(preScanWithNullMessageIDItem),
+		json.RawMessage(attentionActionItemsWithNullMessageID))
+	t.Logf("\n%s", view)
+
+	if !strings.Contains(view, "Follow up with Legal") {
+		t.Error("the pre-scan card's own null-message_id item was dropped")
+	}
+	if !strings.Contains(view, "Renew the domain") {
+		t.Error("a null-message_id action item was dropped -- an empty id must never be treated as a duplicate")
+	}
+	if !strings.Contains(view, "Approve the invoice") {
+		t.Error("a second null-message_id action item was dropped -- empty ids must not be deduped against each other either")
 	}
 }
 

@@ -795,9 +795,18 @@ func (m *ChatModel) updateViewport() {
 		sb.WriteString("\n")
 	}
 
+	// seen accumulates message_ids across cards within one turn so a second
+	// card doesn't redraw an item its turn's first card already showed. It
+	// resets at each RoleUser message: a new turn's mail can legitimately
+	// repeat an id an earlier turn's card already rendered (still urgent on
+	// the next scan is not a duplicate), so dedup must not span turns.
+	seen := make(map[string]bool)
 	for i := range m.messages {
+		if m.messages[i].Role == RoleUser {
+			seen = make(map[string]bool)
+		}
 		// By index, not by value: rendering a card memoizes onto the message.
-		sb.WriteString(m.renderMessage(&m.messages[i]))
+		sb.WriteString(m.renderMessage(&m.messages[i], seen))
 		sb.WriteString("\n")
 	}
 
@@ -868,7 +877,10 @@ func (m ChatModel) wrapForPane(s string) string {
 	return components.WrapText(s, m.cardWidth())
 }
 
-func (m ChatModel) renderMessage(msg *Message) string {
+// renderMessage draws one message. seen threads cross-card dedup for the
+// RoleCard case (see Message.renderCardDeduped); pass nil for a standalone
+// render with no dedup.
+func (m ChatModel) renderMessage(msg *Message, seen map[string]bool) string {
 	switch msg.Role {
 	case RoleUser:
 		// A free-text answer to a mid-run question lands here and can be long.
@@ -915,7 +927,7 @@ func (m ChatModel) renderMessage(msg *Message) string {
 		return panel
 
 	case RoleCard:
-		return msg.renderCard(m.cardWidth())
+		return msg.renderCardDeduped(m.cardWidth(), seen)
 
 	case RoleError:
 		panelWidth := m.width - 4
