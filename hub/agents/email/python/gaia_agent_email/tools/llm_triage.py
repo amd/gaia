@@ -27,6 +27,7 @@ import json
 import re
 from typing import Any, Callable, List, Mapping, Optional
 
+from gaia_agent_email.body_normalize import scrub_delimiter_tokens
 from gaia_agent_email.tools.triage_heuristics import ALL_CATEGORIES
 
 from gaia.logger import get_logger
@@ -103,7 +104,7 @@ _SYSTEM_PROMPT = (
     "(URGENT > NEEDS_RESPONSE > PROMOTIONAL > PERSONAL > FYI).\n"
     "\n"
     "SPAM (separate from category -- a PROMOTIONAL email is not "
-    "automatically spam): set \"is_spam\" true only for unsolicited, "
+    'automatically spam): set "is_spam" true only for unsolicited, '
     "indiscriminate mass-market junk mail -- pharmacy/drug ads, "
     "prize/lottery/inheritance scams, adult content, or garbled "
     "filter-evasion spelling (e.g. 'v1agra', 'cia1is'). A marketing email "
@@ -180,7 +181,7 @@ def _build_user_prompt(
         f"Classify this email.\n\n"
         f"Subject: {subject}\n"
         f"From: {sender}\n"
-        f"Body:\n{wrap_untrusted_body((body or '').strip())}\n"
+        f"Body:\n{wrap_untrusted_body(scrub_delimiter_tokens((body or '').strip()))}\n"
     )
 
 

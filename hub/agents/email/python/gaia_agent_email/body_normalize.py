@@ -9,11 +9,17 @@ merely discusses one of these phrases (rather than opening with it) is left
 untouched — see the hard-negative tests in
 ``tests/test_body_normalize_2642.py``.
 
-Called from ``tools.read_tools._thread_message_blocks`` and
-``_format_message_for_llm``, on the raw decoded body, before
-``wrap_untrusted_body``. Not wired into ``tools.summarize_tools``,
-``tools.llm_triage``, or ``tools.calendar_tools`` — each builds its own LLM
-prompt directly from a decoded body and is unaffected by this module.
+``normalize_email_body`` (banner + delimiter scrub) is called from
+``tools.read_tools._thread_message_blocks`` and ``_format_message_for_llm``,
+on the raw decoded body, before ``wrap_untrusted_body``. Banner stripping is
+NOT yet wired into ``tools.summarize_tools``, ``tools.llm_triage``, or
+``tools.calendar_tools`` — each builds its own LLM prompt directly from a
+decoded body, and extending it there changes triage/classification output
+for every message, which needs a ``gaia eval agent`` run first (tracked in
+#2647). The delimiter scrub alone (``scrub_delimiter_tokens``) IS safe
+everywhere — a ``<<<TOKEN>>>``-shaped string is never legitimate content —
+so those three paths call it directly before their own
+``wrap_untrusted_body``.
 """
 
 from __future__ import annotations
@@ -48,6 +54,21 @@ _BANNER_TRIGGERS: Tuple[Pattern[str], ...] = (
     # The external-sender caution opener; the banner continues past this.
     re.compile(r"^Caution: This message originated from an External Source\.?"),
 )
+
+
+def scrub_delimiter_tokens(body: str) -> str:
+    """Strip any ``<<<...>>>``-shaped delimiter token from ``body``.
+
+    Safe to call on ANY inbound body, unconditionally — a real message never
+    legitimately contains this exact shape, so removing it cannot change a
+    classification or summary outcome. Public so every body-to-prompt path
+    can close the input-side forgery hole (see module docstring) without
+    waiting on the banner-stripping side of ``normalize_email_body``, which
+    is eval-affecting on some of those paths.
+    """
+    if not body:
+        return body
+    return _DELIMITER_TOKEN_RE.sub("", body)
 
 
 def _leading_invisible_len(text: str) -> int:
@@ -128,7 +149,7 @@ def normalize_email_body(body: str) -> str:
         return body
 
     # Unconditional — not gated on whether a banner is also found below.
-    body = _DELIMITER_TOKEN_RE.sub("", body)
+    body = scrub_delimiter_tokens(body)
 
     leading_len = _leading_invisible_len(body)
     rest = body[leading_len:]
