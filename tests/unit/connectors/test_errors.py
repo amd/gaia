@@ -21,7 +21,6 @@ from gaia.connectors.errors import (
     ConsentDeniedError,
     FlowInProgressError,
     FlowTimeoutError,
-    MicrosoftTenantConflictError,
     OAuthClientNotConfiguredError,
     ScopeMismatchError,
 )
@@ -218,44 +217,3 @@ class TestOAuthClientNotConfiguredError:
         s = str(self._err(example=None))
         assert "For the email agent" not in s
         assert "gaia connectors connect google --scopes <scope> ... --grant-agent" in s
-
-
-class TestMicrosoftTenantConflictError:
-    """A2/A3 (#2628): the env var is validated for CONFLICT, never presence.
-
-    Subclasses ConfigurationError (not bare ConnectorsError) so the existing
-    per-provider ``except ConfigurationError`` guards in api.list_connections,
-    tripwire_check, and the UI router's _connector_summary degrade this to a
-    single warning row instead of breaking the entire sweep.
-    """
-
-    def test_is_a_configuration_error_not_bare_connectors_error(self):
-        err = MicrosoftTenantConflictError(
-            "microsoft", env_value="organizations", resolved_tenant="consumers"
-        )
-        assert isinstance(err, ConfigurationError)
-        assert isinstance(err, ConnectorsError)
-
-    def test_disagreement_message_names_value_connector_and_fix(self):
-        err = MicrosoftTenantConflictError(
-            "microsoft", env_value="organizations", resolved_tenant="consumers"
-        )
-        s = str(err)
-        assert "organizations" in s  # the value
-        assert "microsoft" in s  # the connector
-        assert "microsoft_work" in s  # the connector to use instead
-        assert "unset GAIA_MICROSOFT_TENANT" in s
-
-    def test_ambiguous_guid_message_names_both_connectors(self):
-        err = MicrosoftTenantConflictError(
-            "microsoft_work",
-            env_value="aaaabbbb-cccc-dddd-eeee-ffff00001111",
-            resolved_tenant="organizations",
-            ambiguous_guid=True,
-        )
-        s = str(err)
-        assert "aaaabbbb-cccc-dddd-eeee-ffff00001111" in s
-        assert "ambiguous" in s.lower()
-        assert "microsoft_work" in s
-        assert "microsoft" in s
-        assert "unset GAIA_MICROSOFT_TENANT" in s

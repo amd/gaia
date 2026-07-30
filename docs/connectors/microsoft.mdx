@@ -22,8 +22,7 @@ time**, each with its own client credentials and its own grant list:
 The authority each connector signs in against is **spec data**, not an
 environment variable — every connect, refresh, and daemon restart resolves it
 the same way, regardless of what environment the process happens to be
-running in. See [Migrating from `GAIA_MICROSOFT_TENANT`](#migrating-from-gaia-microsoft-tenant)
-if you previously relied on that variable.
+running in.
 
 There are two ways to sign in to either connector:
 
@@ -195,30 +194,6 @@ gaia connectors grants grant microsoft installed:email \
   `GAIA_MICROSOFT_CLIENT_ID` / `GAIA_MICROSOFT_WORK_CLIENT_ID`, or use the
   browser flow with your own app registration.
 </Note>
-
-## Migrating from `GAIA_MICROSOFT_TENANT`
-
-`GAIA_MICROSOFT_TENANT` is **no longer read anywhere** — tenant is resolved
-from the connector you connect (`microsoft` → `consumers`, `microsoft_work` →
-`organizations`, or a pinned Directory tenant ID on `microsoft_work`'s setup
-form). If you still have `GAIA_MICROSOFT_TENANT` set in a shell profile,
-service unit, or `.env` file:
-
-- If it was `consumers` (a personal-Outlook setup): your `microsoft`
-  connection already resolves to `consumers` on its own — the variable is a
-  now-redundant no-op. GAIA logs a one-time deprecation notice; **unset
-  it** to silence that and avoid confusion later.
-- If it was `organizations` or a specific Entra tenant id (a work/school
-  setup): reconnect via the **`microsoft_work`** connector instead — GAIA
-  will raise an actionable error naming this if you leave the old value set.
-  A single-tenant registration should set the **Directory (tenant) ID**
-  setup field on `microsoft_work` (Step 3 above) rather than the env var.
-
-This is why a background-service restart used to silently drop a work/school
-mailbox: `GAIA_MICROSOFT_TENANT` was set in an interactive shell but not in
-the daemon's environment, so the daemon refreshed against the wrong
-authority. Tenant now comes from the connector itself, so the daemon and your
-shell always agree.
 
 ## Common issues
 

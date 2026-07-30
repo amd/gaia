@@ -13,8 +13,7 @@ invariants that the later mail/calendar leads depend on:
   tenant) and ``microsoft_work`` (Work or School, ``organizations`` tenant,
   optionally narrowed by a stored Directory/tenant id override). Tenant is
   spec data (``ConnectorSpec.oauth_tenant``), never an environment variable
-  (D6) — ``GAIA_MICROSOFT_TENANT`` only ever REJECTS on conflict (A2/A3),
-  covered in ``TestEnvVarConflict`` below.
+  (D6).
 - Public/native PKCE client: ``token_request_body`` / ``refresh_request_body``
   carry NO ``client_secret`` unless one is explicitly configured (Microsoft
   forbids secrets for public clients — unlike Google, which requires one).
@@ -39,7 +38,7 @@ import zlib
 import pytest
 
 from gaia.connectors import providers
-from gaia.connectors.errors import ConfigurationError, MicrosoftTenantConflictError
+from gaia.connectors.errors import ConfigurationError
 from gaia.connectors.providers.base import OAuthProvider
 
 PERSONAL_AUTH_URL = "https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize"
@@ -62,28 +61,12 @@ def _reset_registry():
     providers._registry.update(saved)  # type: ignore[attr-defined]
 
 
-@pytest.fixture(autouse=True)
-def _reset_env_tenant_deprecation_log():
-    """The one-time deprecation-log bookkeeping is process-global; reset it
-    between tests so one test's "already logged" state can't hide another
-    test's assertion about the first occurrence."""
-    from gaia.connectors.providers import microsoft as ms_mod
-
-    ms_mod._env_tenant_deprecation_logged.clear()
-    yield
-    ms_mod._env_tenant_deprecation_logged.clear()
-
-
 @pytest.fixture
 def _ms_env(monkeypatch):
     monkeypatch.setenv(
         "GAIA_MICROSOFT_CLIENT_ID", "11112222-bbbb-3333-cccc-4444dddd5555"
     )
     monkeypatch.delenv("GAIA_MICROSOFT_CLIENT_SECRET", raising=False)
-    # No test should silently inherit an ambient GAIA_MICROSOFT_TENANT from
-    # the developer's shell — it now only ever REJECTS on conflict (A2), so
-    # a stray value would turn an unrelated test red.
-    monkeypatch.delenv("GAIA_MICROSOFT_TENANT", raising=False)
     return "11112222-bbbb-3333-cccc-4444dddd5555"
 
 
@@ -284,89 +267,6 @@ class TestStoredTenantOverride:
         assert prov.tenant == "organizations"
 
 
-class TestEnvVarConflict:
-    """A2/A3: GAIA_MICROSOFT_TENANT is validated for CONFLICT only — never
-    honoured, never rejected merely for being set."""
-
-    def test_unset_is_a_no_op(self, monkeypatch, _ms_env):
-        # _ms_env already deletes it; construction must simply succeed.
-        prov = providers.get("microsoft")
-        assert prov.tenant == "consumers"
-
-    def test_agreeing_value_is_a_no_op_with_one_time_deprecation_log(
-        self, monkeypatch, _ms_env, caplog
-    ):
-        import logging
-
-        monkeypatch.setenv("GAIA_MICROSOFT_TENANT", "consumers")
-        with caplog.at_level(logging.WARNING):
-            prov = providers.get("microsoft")
-        assert prov.tenant == "consumers"
-        deprecation_logs = [
-            r for r in caplog.records if "GAIA_MICROSOFT_TENANT" in r.getMessage()
-        ]
-        assert len(deprecation_logs) == 1
-
-    def test_agreeing_value_logs_only_once_per_provider(
-        self, monkeypatch, _ms_env, caplog
-    ):
-        import logging
-
-        monkeypatch.setenv("GAIA_MICROSOFT_TENANT", "consumers")
-        with caplog.at_level(logging.WARNING):
-            providers.get("microsoft")
-            providers._registry.clear()  # type: ignore[attr-defined]
-            providers.get("microsoft")
-        deprecation_logs = [
-            r for r in caplog.records if "GAIA_MICROSOFT_TENANT" in r.getMessage()
-        ]
-        assert len(deprecation_logs) == 1
-
-    def test_disagreeing_value_raises_conflict_error(self, monkeypatch, _ms_env):
-        monkeypatch.setenv("GAIA_MICROSOFT_TENANT", "organizations")
-        with pytest.raises(MicrosoftTenantConflictError) as exc:
-            providers.get("microsoft")
-        assert isinstance(exc.value, ConfigurationError)
-        msg = str(exc.value)
-        assert "organizations" in msg
-        assert "microsoft_work" in msg
-        assert "unset GAIA_MICROSOFT_TENANT" in msg
-
-    def test_disagreeing_value_on_work_connector_names_microsoft(self, monkeypatch):
-        monkeypatch.setenv("GAIA_MICROSOFT_WORK_CLIENT_ID", "work-id")
-        monkeypatch.setenv("GAIA_MICROSOFT_TENANT", "consumers")
-        with pytest.raises(MicrosoftTenantConflictError) as exc:
-            providers.get("microsoft_work")
-        assert "microsoft_work" in str(exc.value)
-
-    def test_bare_guid_always_raises_even_if_it_would_have_matched(self, monkeypatch):
-        # A2: a bare tenant GUID is inherently ambiguous between the two
-        # connectors — it raises even in the (unlikely) case that it's the
-        # SAME GUID a work connector's own tenant_id override would resolve
-        # to. Ambiguity, not disagreement, is what triggers this branch.
-        from gaia.connectors.store import save_provider_credentials
-
-        guid = "deadbeef-0000-1111-2222-333344445555"
-        monkeypatch.setenv("GAIA_MICROSOFT_WORK_CLIENT_ID", "work-id")
-        monkeypatch.setenv("GAIA_MICROSOFT_TENANT", guid)
-        save_provider_credentials("microsoft_work", client_id="work-id", tenant=guid)
-        with pytest.raises(MicrosoftTenantConflictError) as exc:
-            providers.get("microsoft_work")
-        assert "ambiguous" in str(exc.value).lower()
-
-    def test_conflict_error_is_a_configuration_error_subclass(
-        self, monkeypatch, _ms_env
-    ):
-        # A3: NOT a bare ConnectorsError — api.list_connections and
-        # tripwire_check only catch ConfigurationError per-provider.
-        from gaia.connectors.errors import ConnectorsError
-
-        monkeypatch.setenv("GAIA_MICROSOFT_TENANT", "organizations")
-        with pytest.raises(ConnectorsError) as exc:
-            providers.get("microsoft")
-        assert isinstance(exc.value, ConfigurationError)
-
-
 class TestProviderIdInstanceAttribute:
     """D4: provider_id must be a per-INSTANCE attribute, not shared class
     state — two providers constructed in the same process must never
@@ -525,7 +425,6 @@ class TestDeviceCodeFlow:
         assert "client_secret" not in body
 
     def test_device_token_body_confidential_includes_secret(self, monkeypatch):
-        monkeypatch.delenv("GAIA_MICROSOFT_TENANT", raising=False)
         monkeypatch.setenv("GAIA_MICROSOFT_CLIENT_ID", "conf-client")
         monkeypatch.setenv("GAIA_MICROSOFT_CLIENT_SECRET", "super-secret")
         prov = providers.get("microsoft")

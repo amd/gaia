@@ -293,30 +293,3 @@ class TestTenantMismatchThreading:
         )
         tripwire_check()
         assert peek_connection("microsoft") is None
-
-    def test_tripwire_check_continues_past_a_conflicting_env_var(
-        self, monkeypatch, tmp_path, seeded
-    ):
-        # A3-required test: MicrosoftTenantConflictError (a ConfigurationError
-        # subclass) must not abort the whole sweep — google (seeded by the
-        # fixture) must still be checked.
-        from gaia.connectors.api import tripwire_check
-        from gaia.connectors.store import peek_connection
-
-        monkeypatch.setenv("GAIA_MICROSOFT_CLIENT_ID", "test-ms-client")
-        monkeypatch.setenv("GAIA_MICROSOFT_TENANT", "organizations")
-        monkeypatch.setattr("gaia.connectors.grants.Path.home", lambda: tmp_path)
-        _registry.clear()
-        # No get_provider("microsoft") call here — the whole point is that
-        # provider CONSTRUCTION fails (the conflicting env var), before any
-        # client_id_hash comparison could happen.
-        save_connection(
-            provider="microsoft",
-            account_email="user@outlook.com",
-            refresh_token="ms-rt",
-            scopes=["Mail.ReadWrite"],
-            client_id_hash="whatever-not-checked-because-provider-build-fails",
-        )
-        tripwire_check()  # must not raise despite the conflicting env var
-        # google's own entry (seeded by the `seeded` fixture) is untouched.
-        assert peek_connection("google") is not None

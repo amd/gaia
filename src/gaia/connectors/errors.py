@@ -87,59 +87,6 @@ class OAuthClientNotConfiguredError(ConfigurationError):
         )
 
 
-class MicrosoftTenantConflictError(ConfigurationError):
-    """``GAIA_MICROSOFT_TENANT`` disagrees with the tenant a Microsoft
-    connector resolves to on its own (plan amendment A2/A3, #2628).
-
-    Subclasses ``ConfigurationError`` (not bare ``ConnectorsError``) —
-    ``ConfigurationError`` is what ``api.list_connections``, ``tripwire_check``,
-    and the UI router's ``_connector_summary`` already catch per-provider, so
-    one misconfigured connector degrades to a warning row instead of taking
-    down the whole connections list or sweep.
-
-    Only raised on a genuine CONFLICT: the env var is no longer read for
-    tenant resolution at all, so merely setting it (to a value that happens
-    to agree with what the connector already resolves to) is a silent no-op
-    with a one-time deprecation log, not an error. This fires when the value
-    would have changed behaviour, or is a bare tenant GUID that is inherently
-    ambiguous between the personal and work/school connectors.
-    """
-
-    _OTHER_CONNECTOR = {"microsoft": "microsoft_work", "microsoft_work": "microsoft"}
-
-    def __init__(
-        self,
-        connector_id: str,
-        *,
-        env_value: str,
-        resolved_tenant: str,
-        ambiguous_guid: bool = False,
-    ):
-        self.connector_id = connector_id
-        self.env_value = env_value
-        self.resolved_tenant = resolved_tenant
-        other = self._OTHER_CONNECTOR.get(connector_id, "the other Microsoft connector")
-        if ambiguous_guid:
-            what = (
-                f"is a single tenant id, which is ambiguous between "
-                f"{connector_id!r} and {other!r}"
-            )
-        else:
-            what = (
-                f"disagrees with {connector_id!r}, which resolves to "
-                f"{resolved_tenant!r} from its own connector definition"
-            )
-        super().__init__(
-            f"GAIA_MICROSOFT_TENANT={env_value!r} {what}. This environment "
-            "variable is no longer read for tenant resolution — GAIA now "
-            f"resolves the tenant per connector. If you meant {connector_id!r}, "
-            f"remove the conflicting value; if you meant {other!r}, use that "
-            "connector instead (or set its Directory (tenant) ID setup field "
-            "for a single-tenant registration). Then `unset "
-            "GAIA_MICROSOFT_TENANT`. See docs/connectors/microsoft.mdx."
-        )
-
-
 class AuthRequiredError(ConnectorsError):
     """
     A caller cannot use a connection right now and must take a specific action.
