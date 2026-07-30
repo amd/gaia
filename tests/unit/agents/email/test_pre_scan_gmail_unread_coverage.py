@@ -1,15 +1,22 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """
-Acceptance tests for pre-scan's Gmail coverage honesty (#2584).
+Acceptance tests for pre-scan's Gmail coverage honesty (#2584, revised #2638).
 
-Two bugs, one field:
+Two bugs, one field -- #2584's original fix, #2638 revised the first:
 
-1. ``triage_inbox_impl`` (called by ``pre_scan_inbox_impl``) used to list
-   messages with ``label_ids=["INBOX"]`` only -- never ``UNREAD`` -- so
+1. #2584: ``triage_inbox_impl`` (called by ``pre_scan_inbox_impl``) used to
+   list messages with ``label_ids=["INBOX"]`` only -- never ``UNREAD`` -- so
    whatever coverage number came off that listing described total inbox
-   size, not the unread count a "what's new" pre-scan actually wants to
-   report. Fixed by adding ``UNREAD`` to the scanning query's label filter.
+   size, not the unread count a "what's new" pre-scan actually wanted to
+   report. #2584 added ``UNREAD`` to the scanning query's label filter.
+
+   #2638 REVERSED this specific piece: narrowing to unread-only made the
+   single highest-value triage bucket (read-but-unanswered mail) invisible,
+   and the rationale for the narrowing (below) had already been made moot by
+   point 2 -- so pre-scan's query is back to plain ``["INBOX"]`` (read +
+   unread), matching the attention view and waiting-on-you, which never
+   added the UNREAD narrowing in the first place.
 
 2. ``total_unread`` was originally sourced from that same listing call's
    ``resultSizeEstimate``. Measured against a real mailbox, that field
@@ -18,7 +25,12 @@ Two bugs, one field:
    and 2.6x off is not an honest scan-coverage denominator. Fixed by
    sourcing ``total_unread`` from Gmail's ``labels().get(id="INBOX")``
    instead, whose ``messagesUnread`` is an exact integer -- one call per
-   scan, not per message, never derived from ``list_messages`` at all.
+   scan, not per message, never derived from ``list_messages`` at all. This
+   part of #2584 is UNCHANGED by #2638 -- only the listing query's label
+   filter reversed; the get_label-based count sourcing (this class) did not.
+   #2638 additionally adds ``total_inbox`` (``messagesTotal``, same call) as
+   the honest denominator now that the scan itself isn't unread-only; see
+   ``test_prescan_read_mail_2638.py`` for that field's own tests.
 """
 
 from __future__ import annotations
@@ -88,8 +100,12 @@ def _unread_inbox(n: int = _N_UNREAD_FIXTURE_MESSAGES) -> FakeGmailBackend:
     return gmail
 
 
-class TestGmailUnreadLabelFilter:
-    def test_list_messages_called_with_unread_label_filter(self):
+class TestGmailInboxLabelFilterCoversReadMail:
+    def test_list_messages_called_without_an_unread_label_filter(self):
+        """#2638 reversed #2584's UNREAD narrowing: pre-scan now queries
+        plain INBOX so read-but-unanswered mail is scanned too, matching
+        the attention view and waiting-on-you (neither ever narrowed to
+        UNREAD)."""
         gmail = _unread_inbox()
 
         pre_scan_inbox_impl(gmail, max_messages=25)
@@ -97,11 +113,12 @@ class TestGmailUnreadLabelFilter:
         list_calls = [c for c in gmail.transport.calls if c[0] == "list_messages"]
         assert list_calls, "pre-scan never called list_messages"
         label_ids_seen = list_calls[0][1].get("label_ids") or []
-        assert "UNREAD" in label_ids_seen, (
-            "pre-scan must filter by UNREAD (not just INBOX) so total_unread "
-            f"means unread count, not inbox size; label_ids passed were "
-            f"{label_ids_seen!r}"
+        assert "UNREAD" not in label_ids_seen, (
+            "pre-scan must NOT filter by UNREAD (#2638) -- narrowing the "
+            "query makes read-but-unanswered mail permanently invisible; "
+            f"label_ids passed were {label_ids_seen!r}"
         )
+        assert "INBOX" in label_ids_seen
 
 
 class TestTotalUnreadField:
