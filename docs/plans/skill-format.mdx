@@ -157,6 +157,75 @@ The field name **`tools_required` is locked** as the cross-spec contract with
 | `metadata.gaia.tools` | list | no | Provided `@tool` declarations. Default: none (instruction-only). |
 | `metadata.gaia.tools_required` | list | no | Registry tool names consumed (recipe contract). Default: `[]`. |
 
+### Manifest-side grammar: `skills`, `skill_sets`, `default_skill_set`
+
+The fields above describe one skill. An **agent** declares which skills it
+composes in its `gaia-agent.yaml`, using three top-level keys
+([#2466](https://github.com/amd/gaia/issues/2466)):
+
+```yaml
+# Always-on: loaded on every launch, whichever set is active.
+skills:
+  - mailbox-hygiene                 # plain-string form
+  - name: incident-review           # mapping form
+    version: ">=0.1.0"
+    required: false
+
+# Named, mutually-exclusive bundles. Exactly ONE is active per launch.
+skill_sets:
+  personal: [inbox-triage, newsletter-digest]
+  work: [inbox-triage, meeting-scheduling]
+
+# Required whenever skill_sets is non-empty.
+default_skill_set: personal
+```
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `skills` | list | no | Always-on skill references. Default: `[]`. |
+| `skill_sets` | map | no | Set name → skill references. Default: `{}`. |
+| `default_skill_set` | string | only when `skill_sets` is non-empty | Which set applies when nothing selects one. |
+
+Each entry in `skills` or a set's list is either a **skill name** or a mapping:
+
+| Key | Type | Required | Description |
+|---|---|---|---|
+| `name` | string | yes | A skill name per [naming](#naming). |
+| `version` | string | no | SemVer or range. **Recorded, not resolved** in this phase — see below. |
+| `required` | bool | no | Default `true`. A missing `required: false` skill is logged and skipped; a missing required one fails the launch. |
+
+**Set names** use the same slug shape as skill names, capped at 32 chars:
+`^[a-z0-9]([a-z0-9-]{0,30}[a-z0-9])?$`.
+
+**Sets overlap; they do not partition.** The same skill may appear in several
+sets — that is how a shared capability stays available across contexts. What a
+set may *not* do is re-declare a skill already in the always-on `skills:` list;
+that is a contradiction (an always-on skill loads for every set) and fails to
+parse.
+
+Every malformed shape fails at manifest-parse time with a message naming the
+fix — a list that repeats a name, an empty set, a `default_skill_set` naming an
+undeclared set, an unrecognized key in a reference mapping, a non-boolean
+`required`. There is no partial acceptance: an agent either declares a coherent
+set of skills or does not load.
+
+<Note>
+**`version:` is a declaration surface only in this phase.** It is parsed,
+validated as a non-empty string, and surfaced — but no constraint solving
+happens until [#2467](https://github.com/amd/gaia/issues/2467) can install
+versioned skills from the marketplace. Until then, a bundled skill's version is
+whatever the agent package ships. This mirrors how `network:` permissions are
+recorded but not enforced in Phase 1.
+</Note>
+
+Selection semantics — the order a set is chosen in, the selector hook, and the
+fail-loud behaviour on an undeclared name — belong to the integration surface and
+live in [Agent Skills → Skill sets](/spec/agent-skills#skill-sets). The grammar
+above is implemented once, in
+[`gaia/skills/sets.py`](https://github.com/amd/gaia/blob/main/src/gaia/skills/sets.py),
+and consumed by both the manifest validator and the runtime, so the two cannot
+drift.
+
 ### Naming
 
 Skill names follow the Agent Skills rule: `^[a-z0-9]+(-[a-z0-9]+)*$`, ≤64 chars,
@@ -410,8 +479,10 @@ build against `OpenClawAdapter`.
   [Correcting the prior spec](#correcting-the-prior-spec)).
 - **Agent Manifest ([#462](https://github.com/amd/gaia/issues/462))** — a
   `gaia-agent.yaml` references skills by name + version range; `SKILL.md` is the
-  skill-level complement. The `skills:` block and its resolution live in
-  [Agent Skills → Agent Hub integration](/spec/agent-skills#agent-hub-integration).
+  skill-level complement. The keys are specified in
+  [manifest-side grammar](#manifest-side-grammar-skills-skill_sets-default_skill_set)
+  above; how a set is selected per launch is in
+  [Agent Skills → Skill sets](/spec/agent-skills#skill-sets).
 - **Agent bundles** — skill packaging relates to the existing agent bundle format
   (`.zip` + `bundle.json`, `BUNDLE_FORMAT_VERSION = 1`,
   [`export_import.py:40`](https://github.com/amd/gaia/blob/main/src/gaia/installer/export_import.py)).

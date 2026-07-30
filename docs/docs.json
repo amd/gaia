@@ -120,6 +120,7 @@
                     "group": "Build & Extend",
                     "pages": [
                       "guides/custom-agent",
+                      "guides/composing-skills",
                       "guides/hub-publishing"
                     ]
                   },
