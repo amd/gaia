@@ -33,6 +33,7 @@ from gaia_agent_email.context_budget import (
     active_profile_ctx_size,
     envelope_budget_tokens,
     estimate_tokens_json,
+    skill_prompt_tokens,
 )
 from gaia_agent_email.gmail_backend import decode_message_body
 from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
@@ -2289,7 +2290,13 @@ class ReadToolsMixin:
                     log.debug("triage: host signature unreadable (%s)", exc)
 
                 return _envelope_ok(
-                    condense_triage_result(agent._triage_all_backends(**kwargs))
+                    condense_triage_result(
+                        agent._triage_all_backends(**kwargs),
+                        # Loaded skill bodies are prompt text the agent re-reads
+                        # on the post-tool turn (#2466) — give the envelope back
+                        # what they cost, or the turn overflows the window.
+                        extra_fixed_tokens=skill_prompt_tokens(agent),
+                    )
                 )
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))

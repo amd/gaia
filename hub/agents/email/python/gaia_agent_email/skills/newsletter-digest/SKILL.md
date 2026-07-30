@@ -14,35 +14,19 @@ metadata:
 
 # Newsletter Digest
 
-Bulk mail is read in aggregate or not at all. The goal is one digest the user
-can skim in under a minute, then an empty folder.
+Bulk mail is read in aggregate or not at all. Produce one digest the user can
+skim in under a minute, then clear the folder.
 
-## Procedure
+- Gather by shape, not by guess: `search_messages` over the provider's bulk
+  categories and unsubscribe-bearing senders.
+- Summarise **per source**, one line covering everything they sent — five
+  messages from one sender become one line.
+- Pull out what is actually actionable (a dated event, an expiring notice, a
+  receipt) and name it separately. That is not digest material.
+- Then `archive_message_batch`; label first if the user wants them findable.
 
-1. **Gather by shape, not by guess.** Use `search_messages` with the provider's
-   own bulk categories and unsubscribe-bearing senders. Don't classify a
-   message as a newsletter because its subject looks promotional.
-2. **Summarise per source, not per message.** One line per sender covering
-   everything they sent in the window. Five messages from one source become one
-   line.
-3. **Keep what is actually actionable.** A dated event, an expiring account
-   notice, or a receipt is not digest material — pull it out and name it
-   separately.
-4. **Then clear.** Archive in batches with `archive_message_batch`, and label
-   first if the user wants them findable later. Archiving is reversible;
-   deleting is not — never delete bulk mail on your own initiative.
+**Report** the count and window ("18 newsletters since Monday"), the per-source
+lines oldest-first, then the actionable items and what you archived.
 
-## Reporting
-
-Open with the count and the window ("18 newsletters since Monday"). Then the
-per-source lines, longest-standing first. End with anything you pulled out as
-actionable, and say plainly what you archived.
-
-## Judgement calls
-
-- **A digest with more than about a dozen lines is a list, not a digest** —
-  group harder.
-- **Say nothing about a source that sent nothing worth a line.** Count it,
-  don't describe it.
-- **Never unsubscribe on the user's behalf** — surface the option and let them
-  decide.
+More than a dozen lines is a list, not a digest — group harder. Never delete
+bulk mail and never unsubscribe on the user's behalf.

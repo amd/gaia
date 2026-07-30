@@ -16,40 +16,23 @@ metadata:
 
 # Meeting Scheduling
 
-Every meeting request resolves to one of three answers: **yes**, **no**, or
-**not then**. Get to one of the three; never leave it open.
+Every request resolves to **yes**, **no**, or **not then**. Reach one of the
+three; never leave it open.
 
-## Procedure
+- Confirm it is a request (`detect_meeting_request`) — a date in an email is not
+  an invitation.
+- Check before answering: `detect_calendar_conflicts` for the slot,
+  `list_calendar_events` for the surrounding day. A free slot wedged between two
+  calls is worth flagging.
+- Free and relevant → recommend accepting. Conflicting → offer at most three
+  genuinely free alternatives. Not the user's concern → recommend declining with
+  a one-line reason.
+- Accepting, declining, and proposing all notify the organiser: `draft_reply`,
+  show it, wait. Never RSVP because the slot looked free.
 
-1. **Confirm it is a request.** `detect_meeting_request` — an email mentioning a
-   date is not necessarily asking for a meeting.
-2. **Check the calendar before answering.** `detect_calendar_conflicts` for the
-   proposed slot, and `list_calendar_events` for the surrounding day. A slot
-   that is technically free but wedged between two other meetings is worth
-   flagging.
-3. **Pick the answer:**
-   - Free and clearly relevant → recommend accepting.
-   - Conflicting → offer the nearest genuinely free alternatives, at most three.
-   - Not relevant to the user → recommend declining, with a one-line reason.
-4. **Accepting or declining an invitation notifies the organiser** — always
-   confirm with the user first. Same for a reply that proposes a new time:
-   `draft_reply`, show it, wait.
+**Report** request, verdict, reason — in that order. Include the time zone
+whenever participants are not obviously in one.
 
-## Reporting
-
-State the request, the verdict, and the reason in that order:
-
-> Thursday 14:00, 30 min, project sync — **conflicts** with an existing call at
-> 14:00. Nearest free: Thu 15:30, Fri 10:00.
-
-Include the time zone whenever the participants are not obviously in one.
-
-## Judgement calls
-
-- **A time range is not a time.** "Sometime Thursday" needs a proposal, not an
-  acceptance.
-- **Recurring requests need the whole series checked**, not just the first
-  instance.
-- **Working hours are a constraint, not a suggestion** — do not propose a slot
-  outside the pattern the user's own calendar shows.
-- **Never accept on the user's behalf** because the slot looks free.
+A time range is not a time; "sometime Thursday" needs a proposal. Recurring
+requests need the whole series checked. Do not propose a slot outside the working
+pattern the user's own calendar shows.

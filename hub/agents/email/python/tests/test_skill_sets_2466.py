@@ -330,6 +330,58 @@ def test_switching_sets_at_runtime_replaces_the_previous_one(tmp_path, monkeypat
 
 
 # ----------------------------------------------------------------------
+# Context budget: skills cost prompt tokens the tool result must give back
+# ----------------------------------------------------------------------
+
+
+def test_loaded_skills_shrink_the_triage_envelope_budget(tmp_path, monkeypatch):
+    """A skill body is prompt text the post-tool turn re-reads.
+
+    Regression guard: at the pinned 16,384-token envelope, adding the personal
+    set's skill bodies to the system prompt without taking them back out of the
+    tool-result budget pushed a limit-12 triage request to 16,602 tokens and the
+    run 400'd with ``context_length_exceeded``. Measured on hardware, not
+    theorised.
+    """
+    from gaia_agent_email.context_budget import (
+        envelope_budget_tokens,
+        skill_prompt_tokens,
+    )
+
+    agent = _build_agent(tmp_path, monkeypatch, account_type=ACCOUNT_TYPE_WORK)
+    cost = skill_prompt_tokens(agent)
+
+    assert cost > 0, "the work set loads four skill bodies; they cannot be free"
+    assert envelope_budget_tokens(extra_fixed_tokens=cost) == (
+        envelope_budget_tokens() - cost
+    )
+
+
+def test_the_bundled_skill_bodies_stay_within_their_prompt_budget(tmp_path):
+    """Cap the per-set prompt cost so a future edit can't quietly refill the ctx.
+
+    The envelope the triage tool has left is ``6144 - <set cost>``; a set costing
+    more than ~1,500 tokens starves the bulk-triage result envelope on the
+    16K-ctx hardware this agent targets.
+    """
+    from gaia.hub.manifest import parse as parse_manifest
+    from gaia_agent_email.context_budget import estimate_tokens
+
+    manager = _isolated_manager(tmp_path)
+    bodies = {s.name: manager.load(s.name).body for s in manager.list_skills()}
+    sets = parse_manifest(EmailTriageAgent.SKILL_MANIFEST).skill_sets
+
+    for name in sets.set_names:
+        cost = sum(
+            estimate_tokens(bodies[ref.name]) for ref in sets.skills_for(name)
+        )
+        assert cost <= 1500, (
+            f"skill set {name!r} costs ~{cost} prompt tokens, over the 1500 cap "
+            "— trim the SKILL.md bodies or shrink the set"
+        )
+
+
+# ----------------------------------------------------------------------
 # Config + env plumbing
 # ----------------------------------------------------------------------
 
