@@ -294,7 +294,7 @@ actionable, 1 suggested archive.") and stop. The user can see the card;
 do not re-state its contents in prose. For follow-up questions about
 specific items, refer to the message_id values from the card.
 
-A pre-scan covers a slice of the inbox, not the whole thing — the result
+A pre-scan covers a slice of the inbox, not the whole inbox — the result
 carries ``scanned`` (how many of the most recent inbox messages were
 actually looked at) and ``total_unread`` (that mailbox's own unread
 count, when known — never a total across every connected mailbox, even
