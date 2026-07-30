@@ -465,6 +465,51 @@ def test_fetch_rss_fails_loudly_instead_of_returning_an_empty_digest(
     assert "entries" not in result
 
 
+def test_fetch_rss_refuses_a_dtd_hidden_behind_prolog_padding():
+    """The DTD guard must not be escapable by padding the prolog.
+
+    A windowed scan of the first N bytes is bypassed by a large leading
+    comment; the guard scans the whole prolog instead.
+    """
+    padded = (
+        b'<?xml version="1.0"?>'
+        + b"<!-- "
+        + b"x" * 8000
+        + b" -->"
+        + b'<!DOCTYPE l [<!ENTITY a "b">]>'
+        + b"<rss><item><title>t</title></item></rss>"
+    )
+
+    result = _load_rss_tools().parse_feed(padded, source="x", max_entries=10)
+
+    assert "DTD" in result.get("error", "")
+
+
+@pytest.mark.parametrize(
+    "description",
+    [
+        b"&lt;!DOCTYPE html&gt; escaped markup",
+        b"<![CDATA[<!DOCTYPE html><p>x</p>]]>",
+    ],
+    ids=["escaped", "cdata"],
+)
+def test_fetch_rss_accepts_a_feed_whose_content_embeds_a_doctype(description: bytes):
+    """Feeds routinely carry HTML in a description — that is content, not a DTD.
+
+    Scanning the whole payload for ``<!DOCTYPE`` would reject these.
+    """
+    payload = (
+        b'<?xml version="1.0"?><rss><channel><title>T</title><item>'
+        b"<title>a</title><description>" + description + b"</description>"
+        b"</item></channel></rss>"
+    )
+
+    result = _load_rss_tools().parse_feed(payload, source="x", max_entries=10)
+
+    assert "error" not in result
+    assert result["count"] == 1
+
+
 def test_the_guide_consumes_lists_match_the_manifests():
     """The guide names each skill's tools; drift makes it quietly wrong."""
     guide = (REPO_ROOT / "docs" / "guides" / "starter-skills.mdx").read_text(

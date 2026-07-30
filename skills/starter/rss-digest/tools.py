@@ -19,8 +19,9 @@ from gaia.agents.base.tools import tool
 _ATOM_NS = "{http://www.w3.org/2005/Atom}"
 
 _DOCTYPE_RE = re.compile(rb"<!DOCTYPE", re.IGNORECASE)
-# A DTD may only appear in the prolog, so scanning the head is sufficient.
-_DOCTYPE_SCAN_BYTES = 4096
+# The root element is the first tag opening with a letter; `<?xml`, `<!--`, and
+# `<!DOCTYPE` all sort before it. Everything earlier is the prolog.
+_ROOT_START_RE = re.compile(rb"<[A-Za-z]")
 
 
 def _text(element: Any, *names: str) -> str:
@@ -102,8 +103,11 @@ def parse_feed(payload: bytes, *, source: str, max_entries: int) -> dict:
     Split out from the tool so the parsing rules are testable without network.
     """
     # Entity expansion is a DoS vector and stdlib ElementTree performs it. A
-    # real RSS/Atom feed never needs a DTD, so refuse one outright.
-    if _DOCTYPE_RE.search(payload[:_DOCTYPE_SCAN_BYTES]):
+    # real RSS/Atom feed never needs a DTD, so refuse one outright. Only the
+    # prolog is scanned: "<!DOCTYPE" inside an entry's embedded HTML is content.
+    root_start = _ROOT_START_RE.search(payload)
+    prolog = payload[: root_start.start()] if root_start else payload
+    if _DOCTYPE_RE.search(prolog):
         return {
             "error": f"{source} declares a DTD (<!DOCTYPE>). Feeds do not need one "
             "and entity expansion is a denial-of-service vector, so it was refused."
