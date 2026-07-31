@@ -2111,8 +2111,8 @@ def build_parser():
     s_add_what.add_argument("--prompt", help="One-shot prompt to run on each fire")
     s_add_what.add_argument(
         "--skill",
-        help="Skill to run — not supported yet (blocked on #888); "
-        "rejected at add time. Use --prompt instead.",
+        help="Skill to run — the scheduler is not wired to the skills runtime "
+        "yet; rejected at add time. Use --prompt instead.",
     )
     s_add.add_argument(
         "--sink",
@@ -3184,6 +3184,12 @@ Examples:
 
     connectors_cli.add_subparser(subparsers)
 
+    # Skills runtime (issue #888) — SKILL.md discovery, scaffolding, and
+    # import/export. The subparser tree lives in gaia.skills.cli.
+    from gaia.skills import cli as skills_cli
+
+    skills_cli.add_subparser(subparsers)
+
     # Persistent CLI config (~/.gaia/config.json) — e.g. a default model so
     # users don't have to pass --model on every chat/llm/prompt (issue #98).
     config_parser = subparsers.add_parser(
@@ -3324,17 +3330,18 @@ def _handle_schedule(args):
     store = TomlScheduleStore()
 
     if action == "add":
-        # --skill schedules would register fine but raise on every fire
-        # (skill-format resolution is blocked on #888) — reject up front.
+        # --skill schedules would register fine but raise on every fire: the
+        # skills runtime exists, the scheduler just doesn't invoke it yet.
         if getattr(args, "skill", None):
             print(
-                f"❌ Cannot add schedule {args.name!r}: --skill is not supported yet "
-                "(skill-format resolution is blocked on #888), so a skill-backed "
-                "schedule would never produce output.\n"
+                f"❌ Cannot add schedule {args.name!r}: --skill is not supported yet. "
+                "The skills runtime ships (see 'gaia skill list'), but the scheduler "
+                "is not wired to it, so a skill-backed schedule would never produce "
+                "output.\n"
                 "Use --prompt instead, e.g.:\n"
                 f'  gaia schedule add --name {args.name} --cron "{args.cron}" '
                 '--prompt "<text>"\n'
-                "Track progress: https://github.com/amd/gaia/issues/888",
+                "Track progress: https://github.com/amd/gaia/issues/1019",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -4839,6 +4846,13 @@ Let me know your answer!
         from gaia.connectors import cli as connectors_cli  # pylint: disable=reimported
 
         rc = connectors_cli.handle(args)
+        sys.exit(rc)
+
+    # Handle Skills command (issue #888)
+    if args.action == "skill":
+        from gaia.skills import cli as skills_cli  # pylint: disable=reimported
+
+        rc = skills_cli.handle(args)
         sys.exit(rc)
 
     # Handle Diagnostics command

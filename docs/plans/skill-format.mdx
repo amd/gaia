@@ -5,17 +5,17 @@ icon: "puzzle-piece"
 ---
 
 <Info>
-  **Grounds on (exists today):** [`src/gaia/agents/base/tools.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tools.py) (`@tool`, `_TOOL_REGISTRY`) · [`src/gaia/agents/registry.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/registry.py) (`KNOWN_TOOLS`, `namespaced_agent_id`) · [`src/gaia/connectors/providers/base.py`](https://github.com/amd/gaia/blob/main/src/gaia/connectors/providers/base.py) (`ConnectorRequirement`) · [`src/gaia/ui/routers/agents.py`](https://github.com/amd/gaia/blob/main/src/gaia/ui/routers/agents.py) (`/api/agents`, the panel to mirror)
+  **Grounds on (exists today):** [`src/gaia/skills/`](https://github.com/amd/gaia/tree/main/src/gaia/skills) — the shipped runtime: `format.py` (parser/writer/validator), `manager.py` (`SkillManager`, discovery + precedence), `loader.py` (`<skill>/<tool>` registration), `permissions.py` (grammar + connector bridge), `cli.py` (`gaia skill`) · [`src/gaia/agents/base/agent.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/agent.py) (`Agent.load_skill`, `unload_skill`, `SKILL_DIRS`, `skill_manager`, `loaded_skills`) · [`src/gaia/agents/base/tools.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tools.py) (`@tool`, `_TOOL_REGISTRY`) · [`src/gaia/agents/registry.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/registry.py) (`KNOWN_TOOLS`, `namespaced_agent_id`) · [`src/gaia/connectors/providers/base.py`](https://github.com/amd/gaia/blob/main/src/gaia/connectors/providers/base.py) (`ConnectorRequirement`) · [`src/gaia/ui/routers/agents.py`](https://github.com/amd/gaia/blob/main/src/gaia/ui/routers/agents.py) (`/api/agents`, the panel to mirror)
 
-  **Proposed runtime (not written yet):** the `gaia.skills` loader, the `gaia skill` CLI, and the `/api/skills` router. Every such symbol is marked **PROPOSED** where it appears.
+  **Still proposed (not written yet):** the `/api/skills` router and Agent UI panel, `gaia skill install|remove|search|publish|update` (marketplace, [#2467](https://github.com/amd/gaia/issues/2467)), `gaia skill migrate` (Phase 3), the permission sandbox for local-capability domains, and tier-ceiling enforcement ([#1019](https://github.com/amd/gaia/issues/1019)). Every such symbol is marked **PROPOSED** where it appears.
 </Info>
 
 <Note>
 **Component:** the `SKILL.md` field grammar — the on-disk contract for GAIA's skill ecosystem (issue [#691](https://github.com/amd/gaia/issues/691)).
 
-**Module:** `gaia.skills` — **PROPOSED, greenfield.** No loader, CLI, or registry code exists. The contract is grounded on the live tool registry in `gaia.agents.base.tools`.
+**Module:** `gaia.skills` — **shipped** ([#888](https://github.com/amd/gaia/issues/888)). The parser, validator, discovery, tool loader, permission grammar, and `gaia skill list|info|create|import|export` all exist. The contract is grounded on the live tool registry in `gaia.agents.base.tools`.
 
-**Status:** **Format = decided** (this revision). **Runtime = proposed.** The companion [Agent Skills](/spec/agent-skills) spec owns the *integration surface* (discovery, scoping, progressive disclosure); this document is authoritative for the *field grammar*.
+**Status:** **Format = decided.** **Runtime = Phase 1 shipped**; enforcement (sandbox, tier ceilings), the REST/UI surface, and the marketplace verbs remain proposed. The companion [Agent Skills](/spec/agent-skills) spec owns the *integration surface* (discovery, scoping, progressive disclosure); this document is authoritative for the *field grammar*.
 
 **Target consumers:** [#887](https://github.com/amd/gaia/issues/887) (skill auto-synthesis), [#553](https://github.com/amd/gaia/issues/553) (self-improving agent), [#1451](https://github.com/amd/gaia/issues/1451) (tool-loader Part 3), [#647](https://github.com/amd/gaia/issues/647) (skill marketplace), [#648](https://github.com/amd/gaia/issues/648) (OEM bundling), [#462](https://github.com/amd/gaia/issues/462) (Agent Manifest).
 </Note>
@@ -170,19 +170,33 @@ unique within a discovery root; precedence between roots is defined in
 Permissions follow `<domain>:<level>` with an optional `:scope` qualifier. There
 are no implicit grants — a skill declares every domain it touches.
 
-| Domain | Levels | Maps to |
-|---|---|---|
-| `filesystem` | `read`, `write`, `none` | Local-capability domain (new; enforced by the skill sandbox). |
-| `network` | `read`, `write`, `none` | Connector scope (see bridge below). |
-| `shell` | `execute`, `none` | Local-capability domain (new). |
-| `mcp` | `connect`, `none` | Connector scope (MCP-server connectors). |
-| `env` | `read`, `none` | Environment beyond declared `env_vars`. |
-| `database` | `read`, `write`, `none` | Local-capability domain (new). |
-| `desktop` | `control`, `none` | Local-capability domain (new). |
+| Domain | Levels | Maps to | Runtime state |
+|---|---|---|---|
+| `network` | `read`, `write`, `none` | Connector scope (see bridge below). | **Bridged** — resolves to a `ConnectorRequirement` |
+| `mcp` | `connect`, `none` | Connector scope (MCP-server connectors). | **Bridged** — resolves to a `ConnectorRequirement` |
+| `filesystem` | `read`, `write`, `none` | Local-capability domain (new; needs the skill sandbox). | **Refused at load** |
+| `shell` | `execute`, `none` | Local-capability domain (new). | **Refused at load** |
+| `database` | `read`, `write`, `none` | Local-capability domain (new). | **Refused at load** |
+| `desktop` | `control`, `none` | Local-capability domain (new). | **Refused at load** |
+| `env` | `read`, `none` | Environment beyond declared `env_vars`. | **Refused at load** |
 
 Scopes narrow a grant: `filesystem:read:~/.gaia/data/**`,
 `network:read:*.brave.com`, `shell:execute:git,npm`. An unscoped grant covers
-the whole domain.
+the whole domain — except `mcp:connect`, where a scope is mandatory (below).
+Grammar violations — an empty entry, a missing level, an unknown domain, or a
+level the domain does not define — fail loudly at parse time.
+
+<Warning>
+**A local-capability permission is refused, not sandboxed.** Until the sandbox
+lands ([#1019](https://github.com/amd/gaia/issues/1019)), loading a skill that
+declares `filesystem` / `shell` / `database` / `desktop` / `env` raises
+`SkillPermissionError` naming the offending grants. GAIA will not load a grant it
+cannot enforce, and will not pretend to enforce one.
+
+`<domain>:none` is inert in both directions: it produces no requirement and never
+triggers a refusal, because an explicit *denial* asks for less than the default.
+`filesystem:none` therefore loads fine.
+</Warning>
 
 #### Bridge to the connector grant model — no parallel ledger
 
@@ -195,17 +209,46 @@ inventing a second grant system:
   `ConnectorRequirement(connector_id, scopes, reason)`
   ([`connectors/providers/base.py:23`](https://github.com/amd/gaia/blob/main/src/gaia/connectors/providers/base.py)) —
   the same frozen primitive agents already declare via
-  `REQUIRED_CONNECTORS` ([`agent.py:295`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/agent.py)).
+  `REQUIRED_CONNECTORS` ([`agent.py:297`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/agent.py)).
   The skill's `permissions` become the agent's connector requirements when the
-  skill is scoped in.
+  skill is loaded — appended to a **per-instance** copy, never to the ClassVar, so
+  one agent's skill cannot leak requirements into a sibling.
 - `filesystem:*`, `shell:*`, `database:*`, `desktop:*`, `env:*` are **new
-  local-capability domains** with no connector equivalent. They are enforced by
-  the skill sandbox (PROPOSED — see [Phased build](#phased-build)).
+  local-capability domains** with no connector equivalent. Until the skill sandbox
+  lands (PROPOSED — see [Phased build](#phased-build)) a skill declaring one is
+  refused outright.
 
 Per-agent scoping reuses the `namespaced_agent_id` keying
 (`builtin:` / `custom:sha256:` / `installed:`,
 [`registry.py:392`](https://github.com/amd/gaia/blob/main/src/gaia/agents/registry.py))
 that already isolates agent grants today.
+
+#### Two decisions the runtime made where this spec was ambiguous
+
+The bridge above did not say what happens when a permission's scope has no
+counterpart in the connector catalog. The implementation
+([`permissions.py`](https://github.com/amd/gaia/blob/main/src/gaia/skills/permissions.py))
+settled both cases, and these are now part of the contract:
+
+1. **`mcp:connect` must name a catalog connector.** A bare `mcp:connect` is a
+   validation error, not a wildcard — the error lists the available connector ids
+   and points at `gaia connectors list`. So is `mcp:connect:<unknown-id>`. An
+   unscoped MCP grant would mean "connect to any MCP server", which is exactly the
+   ambient authority the permission model exists to prevent.
+2. **An unmatched `network:*` scope resolves to a reserved `network`
+   pseudo-connector-id.** Nothing in the catalog represents raw outbound HTTP, so
+   `network:read:*.brave.com` becomes
+   `ConnectorRequirement(connector_id="network", scopes=("read:*.brave.com",), …)`.
+   If the scope *does* name a real catalog connector, the requirement targets that
+   connector instead.
+
+<Warning>
+**The `network` pseudo-requirement is a declaration surface, not enforcement.** It
+records what egress a skill asked for so `gaia skill info` and a future egress
+policy can read it. **Phase 1 does not enforce network egress** — a loaded skill's
+code can reach any host its process can. Do not treat a
+`network:read:*.brave.com` grant as a firewall.
+</Warning>
 
 ### Security tiers
 
@@ -228,16 +271,18 @@ version bump.
 is a **run-time, per-action** verdict. Security tiers are an **install-time trust
 ladder** that sets the *ceiling* a skill's permissions may reach. They are
 complementary, not the same axis: a `verified` skill still has each action
-adjudicated at run time by governance. This tier system is **greenfield** — it
-does not exist in code yet.
+adjudicated at run time by governance. The tier **field** ships (parsed, defaulted
+to `experimental`, surfaced by `gaia skill info`, and reset to `experimental` on
+`gaia skill import`), but the **ceiling it implies is not yet enforced** — see
+[Phase 2](#phased-build).
 </Note>
 
 ### Tool registration
 
-A skill's `tools` map onto the existing decorator and registry. On load
-(PROPOSED), the runtime registers each `@tool` under a `<skill-name>/<tool-name>`
-namespace into `_TOOL_REGISTRY` to prevent collisions when an agent composes
-multiple skills — the same namespacing
+A skill's `tools` map onto the existing decorator and registry. On load, the
+runtime imports the skill's `tools.py` and registers each `@tool` under a
+`<skill-name>/<tool-name>` namespace into `_TOOL_REGISTRY` to prevent collisions
+when an agent composes multiple skills — the same namespacing
 [Agent Skills](/spec/agent-skills#scoping-into-an-agent) describes. The skill's
 `tools.py` uses the standard `@tool` decorator unchanged:
 
@@ -251,27 +296,63 @@ def search_web(query: str, max_results: int = 5) -> dict:
     ...
 ```
 
-The loader validates that every `tools` entry has a matching `@tool` function,
-parameter names/types match the signature, and the return is JSON-serializable —
-**failing loudly** (no partial load) on mismatch, as
-[Agent Skills](/spec/agent-skills#scoping-into-an-agent) requires.
+**The manifest is the contract, in both directions.** The loader rejects the skill
+— registering nothing — when any of these holds:
+
+| Mismatch | Why it fails |
+|---|---|
+| A declared tool has no `@tool` function | The manifest advertises capability the code does not deliver. If the function exists but is undecorated, the error says so. |
+| `tools.py` registers a tool the manifest does not declare | The manifest is what a user audits before granting; an undeclared tool is an unaudited one. |
+| Parameter names differ from the signature | The error names which side each stray parameter came from. |
+| A parameter's `required` flag contradicts the signature's default | Silent drift between docs and behavior. |
+| A parameter's declared `type` contradicts the annotation | Only checked when the decorator could infer a type — an un-inferable annotation has nothing to contradict. |
+| `tools` declared but no `tools.py` on disk | Either add the module or drop `tools` to make it instruction-only. |
+| `tools.py` fails to import | The error names the exception and points at `requirements.dependencies`. |
+
+Every failure restores `_TOOL_REGISTRY` (and `sys.modules`) byte-for-byte — there
+is **no partial load**, as [Agent Skills](/spec/agent-skills#scoping-into-an-agent)
+requires. Shipping a `tools.py` while declaring no `tools` is not an error: the
+module is simply not imported, and the skill loads instruction-only.
 
 ### CLI
 
-The acceptance-required trio plus the natural neighbors. **All PROPOSED** — no
-`gaia skill` subcommand exists in [`cli.py`](https://github.com/amd/gaia/blob/main/src/gaia/cli.py) yet.
+**Shipped verbs** ([`gaia/skills/cli.py`](https://github.com/amd/gaia/blob/main/src/gaia/skills/cli.py)) —
+authoring and local management. Full flag reference in
+[CLI Reference → Skills](/reference/cli#skills).
 
 ```bash
-gaia skill list                       # acceptance #5
-gaia skill install web-research        # acceptance #5
-gaia skill install some-skill --allow-experimental
-gaia skill remove web-research         # acceptance #5
-gaia skill info web-research
-gaia skill search "web search"
-gaia skill update web-research
-gaia skill migrate ./hermes-skill/ --from auto   # see Compatibility
-gaia skill publish ./my-skill/         # marketplace (#647)
+gaia skill list [--json] [--root agent-bundled|user|claude-import]
+gaia skill info <name> [--json] [--body]
+gaia skill create <name> [--dir DIR] [--description TEXT] [--with-tools] [--force]
+gaia skill import <folder|zip|https-url> [--name NAME] [--force]
+gaia skill export <name> [--output FILE.zip]
 ```
+
+Exit codes are distinct so scripts can branch: `0` ok, `2` usage, `3` not found,
+`4` invalid (including a discovery root containing a malformed skill).
+
+**Still PROPOSED** — the registry/marketplace verbs belong to
+[#2467](https://github.com/amd/gaia/issues/2467) /
+[#647](https://github.com/amd/gaia/issues/647), and `migrate` to Phase 3:
+
+```bash
+gaia skill install web-research        # PROPOSED — marketplace
+gaia skill install some-skill --allow-experimental   # PROPOSED
+gaia skill remove web-research         # PROPOSED — marketplace
+gaia skill search "web search"         # PROPOSED — marketplace
+gaia skill update web-research         # PROPOSED — marketplace
+gaia skill publish ./my-skill/         # PROPOSED — marketplace
+gaia skill migrate ./hermes-skill/ --from auto   # PROPOSED — Phase 3
+```
+
+<Note>
+**The proposed verbs are absent, not stubbed.** `gaia skill install` is not a
+command that prints "not implemented" — it does not parse, so a user cannot
+discover a verb that cannot work. [#691](https://github.com/amd/gaia/issues/691)'s
+acceptance asked for `list`/`install`/`remove`: `list` shipped, and
+`import`/`export` cover the local half of install/remove without a registry. The
+registry-backed pair lands with the marketplace.
+</Note>
 
 ### Agent UI dashboard support
 
@@ -289,8 +370,11 @@ POST   /api/skills/install         # install from registry/path                P
 DELETE /api/skills/{name}          # remove                                    PROPOSED
 ```
 
-There is **no `/api/skills` router today** — the dashboard is greenfield and
-degrades to empty until the loader lands (see [Off-states](#off-states-safe-floors)).
+There is **no `/api/skills` router today** — the dashboard is greenfield. The data
+it needs now exists (`SkillManager.list_skills()`, and `gaia skill list --json` /
+`gaia skill info --json` already emit the list and detail shapes), so the router is
+a thin wrapper rather than new machinery. Until it ships the panel is absent, not
+broken (see [Off-states](#off-states-safe-floors)).
 
 ### Cross-format compatibility & migration
 
@@ -344,6 +428,17 @@ build against `OpenClawAdapter`.
 Six worked examples. The three for existing agents (acceptance #6) declare only
 tool names that exist in the current registry. All parse as YAML; tool skills
 round-trip against their `tools.py`.
+
+<Warning>
+**Several examples declare permissions Phase 1 refuses.** `rag-search` (4a) and
+`file-operations` (4c) declare `filesystem:*`, and the migrated `git-status` (6)
+declares `shell:execute:git`. These are **valid manifests** — they parse and
+validate — but `load_skill` refuses them until the sandbox lands
+([#1019](https://github.com/amd/gaia/issues/1019)), because GAIA will not load a
+grant it cannot enforce. They are kept here as the format's target state; the
+examples that load **today** are the instruction-only ones (1, 3) and the
+`network`/`mcp`-scoped ones (2, 4b).
+</Warning>
 
 <AccordionGroup>
 <Accordion title="1. Minimal instruction-only skill (bare standard)">
@@ -647,9 +742,12 @@ breaks because a GAIA feature is absent.
 | **Bare standard skill** (only `name` + `description`) | Loads as an **instruction-only** skill: `security_tier: experimental`, no tools, no permissions. The most restrictive defaults. Matches [Agent Skills → compatibility rule](/spec/agent-skills#manifest-format). |
 | **No `metadata.gaia` block** | All GAIA fields take their omitted-defaults (above). A standard runtime ignores `metadata.gaia` entirely → lossless both directions. |
 | **`compatibility` / `allowed-tools` present** | Ignored (not part of GAIA's adopted base). The skill still parses. |
-| **`tools_required` names a tool unknown to the framework** | **Fails loudly** at validation — an actionable error names the unresolvable tool, matching the `tools`↔`tools.py` and tier-ceiling checks and GAIA's fail-loudly policy. (A name that is *valid but simply not active in the current agent's registry* is scoping, not a defect: it is omitted from selection and logged, never silently invented — see [Open question 1](#open-questions).) |
-| **Loader not yet shipped** (today) | The format is an inert contract — nothing reads it, so nothing can misbehave. `/api/skills`, the registry, and `migrate` degrade to absent. |
-| **Tier signal unavailable** | Falls to `experimental` — the most-restrictive tier — never to a more-permissive default. |
+| **`tools_required` names a tool unknown to the framework** | **Not yet checked.** The Phase 1 validator coerces `tools_required` to strings and stops there — no catalog lookup runs, because the active registry is assembled dynamically (see [Open question 1](#open-questions)). The field is inert until #1451 consumes it. When the check does land, an unknown name **fails loudly**; a name that is *valid but simply not active in the current agent's registry* stays scoping, not a defect — omitted from selection and logged, never silently invented. |
+| **Skill directory fails to parse** | Skipped from discovery **and surfaced** — logged at ERROR, listed in `SkillManager.discovery_errors`, printed by `gaia skill list`, which exits `4`. Never quietly missing. |
+| **Two roots ship the same skill `name`** | The higher-precedence copy wins and the loser stays visible via `SkillManager.shadowed()` / `gaia skill info`. Precedence is auditable, not silent. |
+| **A skill body references a file outside its own directory** | Rejected — `SkillManager.resource_path` refuses traversal, as does `.zip` import. |
+| **Enforcement layers not yet shipped** | `/api/skills`, the registry, `migrate`, tier ceilings, and the sandbox degrade to **absent**, not permissive: an unenforceable permission refuses the load rather than loading unguarded. |
+| **Tier signal unavailable** | Falls to `experimental` — the most-restrictive tier — never to a more-permissive default. Imported skills are re-stamped `experimental` regardless of the tier they claim. |
 
 **Future-gated phases are additive with precedence.** The `tools_required`
 signal that #1451 consumes returns `[]` cleanly until #887 lands
@@ -690,10 +788,18 @@ OpenClaw `metadata.openclaw`).
 - **`compatibility` and `allowed-tools` are not part of GAIA's base.** The prior
   reliance on `allowed-tools` for permission scoping is removed; permissions come
   from `metadata.gaia.permissions`.
-- **Every runtime symbol is greenfield.** `SkillManager`, `gaia.skills`,
-  `load_skill()`, `~/.gaia/skills/`, the registry REST API, and `/api/skills` do
-  **not** exist in code (verified absent on `main`). They are a contract for
-  unwritten code, marked PROPOSED throughout.
+- **The five-root discovery list is superseded by three.** Project-local
+  `./.gaia/skills/` and the registry-lock root are deferred — see
+  [Agent Skills → Discovery](/spec/agent-skills#discovery-locations).
+- **Still greenfield, still PROPOSED:** the permission sandbox and tier-ceiling
+  enforcement, `/api/skills` and the UI panel, and
+  `gaia skill install|remove|search|publish|update|migrate`. Do not build against
+  these.
+
+**No longer a retraction — these now exist** ([#888](https://github.com/amd/gaia/issues/888)):
+`gaia.skills`, `SkillManager`, `Agent.load_skill`, `~/.gaia/skills/`, and
+`gaia skill list|info|create|import|export`. An earlier revision of this document
+said they were "verified absent on `main`"; that is no longer true.
 </Warning>
 
 ---
@@ -708,7 +814,7 @@ speed. The bar:
 | **Cross-spec field-name match** | Headline (contract) | `tools_required` (and every other emitted field) is byte-identical across #887, #1451, and this spec — zero drift. |
 | **Lossless round-trip** | Correctness | A bare agentskills.io skill loads in GAIA unchanged; a GAIA skill's standard fields parse in a standard runtime with `metadata.gaia` ignored, no parse break. |
 | **Migration fidelity** | Correctness | `gaia skill migrate` output validates against this schema and lands `experimental`. |
-| **No hallucinated runtime** | Grounding | Every cited symbol resolves on `main` or is marked PROPOSED. (Met by this revision.) |
+| **No hallucinated runtime** | Grounding | Every cited symbol resolves on `main` or is marked PROPOSED. (Met — the Phase 1 symbols now resolve in `src/gaia/skills/`.) |
 | **Example validity** | Grounding | Every example parses as YAML; each tool skill's `tools` block round-trips against its `tools.py`. |
 | **Acceptance coverage** | Completeness | 100% of #691's acceptance criteria map to a section (see [Traceability](#acceptance-criteria-traceability)). |
 
@@ -716,10 +822,10 @@ speed. The bar:
 
 ## Phased build
 
-The format (Phase 0) is decided in this PR; the runtime is greenfield and ships
-in additive phases. Each phase holds the prior floor until it lands.
+The format (Phase 0) and the runtime core (Phase 1) have shipped; the remaining
+phases are additive. Each phase holds the prior floor until it lands.
 
-### Phase 0 — Format contract (this revision)
+### Phase 0 — Format contract (**SHIPPED**)
 
 **Success criteria:**
 - Schema decided: adopted base + `metadata.gaia`; `tools` vs `tools_required`
@@ -731,29 +837,58 @@ in additive phases. Each phase holds the prior floor until it lands.
   registry tool names.
 - Traceability covers 100% of #691 acceptance criteria.
 
-### Phase 1 — Loader, validator, CLI core (PROPOSED)
+### Phase 1 — Loader, validator, discovery, CLI core (**SHIPPED**, [#888](https://github.com/amd/gaia/issues/888))
 
-`gaia.skills` parses + validates `metadata.gaia`, registers `tools` under the
-`<skill>/<tool>` namespace into `_TOOL_REGISTRY`, and ships
-`gaia skill list|install|remove`. Discovery roots per
-[Agent Skills](/spec/agent-skills#discovery-loading-and-scoping).
+**What landed:**
 
-**Success criteria:**
-- A tool skill loads and its tools register and call.
-- A bare standard skill loads instruction-only.
-- Validation fails **loudly** on a tools/`tools.py` mismatch or a permission that
-  exceeds the tier ceiling — no partial load.
+- **`gaia.skills.format`** — `SKILL.md` parser, writer, and validator (`Skill`,
+  `SkillTool`, `SkillRequirements`, `GaiaMetadata`, `parse_skill`,
+  `parse_skill_file`, `parse_skill_metadata`, `validate_skill`). Round-trip is
+  identity: unknown top-level keys, other `metadata.<vendor>` namespaces, and
+  unknown `metadata.gaia` keys are all preserved, so passing a foreign skill
+  through GAIA loses nothing. `compatibility` / `allowed-tools` /
+  `disallowed-tools` parse and are ignored, exactly as specified above.
+- **`gaia.skills.manager`** — `SkillManager` over **three** roots
+  (`agent-bundled` → `user` → `claude-import`), progressive disclosure
+  (`discover` = frontmatter, `load` = + body, `resource_path` = on-demand files,
+  traversal-checked), auditable shadowing (`shadowed()`), surfaced parse failures
+  (`discovery_errors`), and optional hot-reload via `start_watching()`.
+- **`gaia.skills.loader`** — imports `tools.py` and registers each `@tool` as
+  `<skill>/<tool>` in `_TOOL_REGISTRY`, cross-checking the manifest against the
+  real signatures. **No partial load:** any failure restores the registry
+  byte-for-byte.
+- **`gaia.skills.permissions`** — the `<domain>:<level>[:scope]` grammar, the
+  connector bridge for `network`/`mcp`, and the loud refusal of local-capability
+  domains.
+- **`Agent.load_skill` / `unload_skill` / `SKILL_DIRS` / `skill_manager` /
+  `loaded_skills`** — plus `get_skills_system_prompt()`, auto-discovered by
+  `_get_mixin_prompts()`, which returns `""` when no skill is loaded so every
+  existing agent's prompt stays byte-identical.
+- **`gaia skill list|info|create|import|export`.**
 
-### Phase 2 — Permission enforcement + tier ceilings + connector bridge (PROPOSED)
+**Success criteria — met:**
+- A tool skill loads and its tools register and call under `<skill>/<tool>`.
+- A bare standard skill loads instruction-only at `security_tier: experimental`.
+- Validation fails **loudly** on a `tools`↔`tools.py` mismatch — missing tool,
+  undeclared extra, parameter-name mismatch, required/optional flip, or type
+  contradiction — with no partial load.
 
-`<domain>:<level>` enforced by the sandbox; `network`/`mcp` permissions resolve
-to `ConnectorRequirement` at scope-time; tier ceiling enforced; `experimental`
-sandbox.
+**Deliberately deferred out of Phase 1:** tier-ceiling enforcement (a permission
+above its tier still loads if its domain is bridged), the project-local
+`./.gaia/skills/` root, the registry-lock root, and network-egress enforcement.
+
+### Phase 2 — Permission enforcement + tier ceilings + sandbox (PROPOSED, [#1019](https://github.com/amd/gaia/issues/1019))
+
+The **connector bridge shipped early**, in Phase 1: `network:*` / `mcp:connect`
+already resolve to `ConnectorRequirement` at load-time. What remains is
+*enforcement* — the sandbox that makes local-capability domains loadable at all,
+tier ceilings, and network-egress policy over the declared `network` requirements.
 
 **Success criteria:**
 - A skill requesting a permission above its tier ceiling fails to load.
-- A `network:*` / `mcp:connect` permission produces the matching connector grant
-  requirement; `filesystem`/`shell`/`database`/`desktop` route to the sandbox.
+- `filesystem`/`shell`/`database`/`desktop`/`env` route to the sandbox and **load**
+  instead of being refused.
+- A declared `network:<level>:<scope>` actually constrains egress.
 
 ### Phase 3 — Agent UI dashboard + migration (PROPOSED)
 
@@ -804,17 +939,23 @@ implementation-level questions for whoever builds the runtime:
    `experimental`? (Also open in
    [Agent Skills → Open questions](/spec/agent-skills#open-questions); resolve in
    one place.)
-5. **`docs/spec/` relocation.** #691 acceptance says "documented in
-   `docs/spec/`"; this doc stays in `docs/plans/` until the loader ships. Does the
-   move to `docs/spec/` (and the `docs.json` update) happen with Phase 1, or
-   earlier?
+5. ~~**`docs/spec/` relocation.**~~ **Settled with Phase 1: this document stays in
+   `docs/plans/`.** [Agent Skills](/spec/agent-skills) is the spec surface — it
+   already lives in `docs/spec/` and satisfies #691's "documented in `docs/spec/`"
+   acceptance. Moving this doc too would split the field grammar from the
+   architecture across two directories for no reader benefit, and would break every
+   inbound `/plans/skill-format` link, including the ones the runtime's own error
+   messages emit (`FORMAT_DOCS_URL` in
+   [`skills/errors.py`](https://github.com/amd/gaia/blob/main/src/gaia/skills/errors.py)
+   points at `https://amd-gaia.ai/docs/plans/skill-format`). Revisit only if the
+   two documents ever merge.
 
 ---
 
 ## Current state of the code
 
-The format is grounded on real primitives; the skill runtime is **entirely
-greenfield**.
+The format is grounded on real primitives, and the Phase 1 runtime now **exists**.
+Only the enforcement, REST/UI, and marketplace layers are greenfield.
 
 | Area | Symbol / fact | `file:line` | State |
 |---|---|---|---|
@@ -831,7 +972,17 @@ greenfield**.
 | Agents UI router | `/api/agents` list/detail/export/import | `ui/routers/agents.py:130`, `:174`, `:184`, `:222` | **Exists** — `/api/skills` mirrors it |
 | Bundle format | `.zip` + `bundle.json`, `BUNDLE_FORMAT_VERSION = 1` | `installer/export_import.py:40` | **Exists** |
 | Builder template | scaffolds `agent.py`, emits no `SKILL.md` | `agents/builder/template.py` | **Exists** |
-| **Skill loader / `SkillManager` / `gaia.skills` / `load_skill` / `gaia skill` CLI / `~/.gaia/skills/` loader / `/api/skills`** | — | **NOT FOUND** | **Greenfield — PROPOSED** |
+| Skill parser / validator | `Skill`, `parse_skill`, `parse_skill_file`, `parse_skill_metadata`, `validate_skill` | `skills/format.py` | **Exists** (#888) |
+| Discovery + precedence | `SkillManager`, `SkillRoot`, `ROOT_AGENT_BUNDLED`/`ROOT_USER`/`ROOT_CLAUDE_IMPORT`, `user_skills_dir()` | `skills/manager.py` | **Exists** (#888) — 3 roots |
+| Tool registration | `register_skill_tools`, `unregister_skill_tools` (`<skill>/<tool>`, no partial load) | `skills/loader.py` | **Exists** (#888) |
+| Permission grammar + bridge | `Permission`, `parse_permissions`, `connector_requirements`, `refuse_unbridged_permissions`, `CONNECTOR_BRIDGED_DOMAINS`, `LOCAL_CAPABILITY_DOMAINS` | `skills/permissions.py` | **Exists** (#888) — bridge only |
+| Agent integration | `load_skill`, `unload_skill`, `SKILL_DIRS`, `skill_manager`, `loaded_skills`, `get_skills_system_prompt` | `agents/base/agent.py` | **Exists** (#888) |
+| CLI | `gaia skill list\|info\|create\|import\|export` | `skills/cli.py` | **Exists** (#888) |
+| Errors | `SkillError`, `SkillValidationError`, `SkillNotFoundError`, `SkillPermissionError` | `skills/errors.py` | **Exists** (#888) |
+| **Permission sandbox / tier-ceiling enforcement** | — | **NOT FOUND** | **Greenfield — PROPOSED** (#1019) |
+| **`/api/skills` router + UI panel** | — | **NOT FOUND** | **Greenfield — PROPOSED** |
+| **`gaia skill install\|remove\|search\|publish\|update\|migrate`** | — | **NOT FOUND** | **Greenfield — PROPOSED** (#2467 / Phase 3) |
+| **Project-local `./.gaia/skills/` + registry-lock root** | — | **NOT FOUND** | **Deferred — PROPOSED** |
 
 ---
 
@@ -868,9 +1019,9 @@ verbatim, mapped to its section and what it guarantees a consumer.
 
 | #691 acceptance criterion | Section | What it guarantees |
 |---|---|---|
-| ☐ SKILL.md spec documented in `docs/spec/` | This doc (kept in `docs/plans/` until the loader ships — see [Open question 5](#open-questions)) | A single authoritative field grammar. |
-| ☐ Permission model defined with granular `domain:level` syntax | [Permission model](#permission-model) | `<domain>:<level>:scope` grammar + the `ConnectorRequirement` bridge — no parallel grant ledger. |
-| ☐ Security tiers defined with promotion path | [Security tiers](#security-tiers) | Three install-time tiers + `experimental→community→verified`, distinct from run-time governance. |
-| ☐ Agent UI configuration dashboard has skills management panel | [Agent UI dashboard support](#agent-ui-dashboard-support) | A `/api/skills` shape mirroring the live `/api/agents` panel (PROPOSED). |
-| ☐ CLI: `gaia skill list`, `install`, `remove` | [CLI](#cli) | The required trio, specified (PROPOSED). |
-| ☐ Example skills written for 3 existing agents | [Example skills](#example-skills) 4a–4c | `rag-search`, `web-research`, `file-operations` — each using only real registry tool names. |
+| ☑ SKILL.md spec documented in `docs/spec/` | [Agent Skills](/spec/agent-skills) is the `docs/spec/` surface; this doc stays in `docs/plans/` as the field grammar — settled, see [Open question 5](#open-questions) | A single authoritative field grammar. |
+| ☑ Permission model defined with granular `domain:level` syntax | [Permission model](#permission-model) | `<domain>:<level>:scope` grammar + the `ConnectorRequirement` bridge — no parallel grant ledger. Grammar and bridge **implemented**; enforcement of local-capability domains deferred (they refuse). |
+| ☑ Security tiers defined with promotion path | [Security tiers](#security-tiers) | Three install-time tiers + `experimental→community→verified`, distinct from run-time governance. Field **implemented**; ceilings deferred to Phase 2. |
+| ☐ Agent UI configuration dashboard has skills management panel | [Agent UI dashboard support](#agent-ui-dashboard-support) | A `/api/skills` shape mirroring the live `/api/agents` panel (**PROPOSED** — Phase 3). |
+| ◐ CLI: `gaia skill list`, `install`, `remove` | [CLI](#cli) | `list` **shipped**, alongside `info`/`create`/`import`/`export`. `install`/`remove` need the registry and land with the marketplace ([#2467](https://github.com/amd/gaia/issues/2467)). |
+| ☑ Example skills written for 3 existing agents | [Example skills](#example-skills) 4a–4c | `rag-search`, `web-research`, `file-operations` — each using only real registry tool names. |

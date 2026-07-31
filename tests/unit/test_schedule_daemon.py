@@ -209,13 +209,13 @@ class TestRunnerFire:
         mock_dispatch.assert_called_once_with("file", {"path": "/tmp/x.md"}, "out")
 
     def test_fire_skill_only_raises_not_implemented(self, mocker):
-        # --skill resolution is blocked on #888; fire must fail loudly, never
+        # The scheduler cannot run skills yet; fire must fail loudly, never
         # reach the agent or the sink.
         mock_sdk_cls = mocker.patch(_AGENT_SDK)
         mock_dispatch = mocker.patch.object(runner.sinks, "dispatch")
 
         sched = Schedule(name="s", cron="* * * * *", skill="my-skill")
-        with pytest.raises(NotImplementedError, match="#888"):
+        with pytest.raises(NotImplementedError, match="cannot run skills yet"):
             runner.fire(sched)
 
         mock_sdk_cls.return_value.send.assert_not_called()
@@ -235,5 +235,5 @@ class TestResolveInput:
 
     def test_skill_raises_not_implemented(self):
         sched = Schedule(name="s", cron="* * * * *", skill="sk")
-        with pytest.raises(NotImplementedError, match="skill-format"):
+        with pytest.raises(NotImplementedError, match="cannot run skills yet"):
             runner.resolve_input(sched)
