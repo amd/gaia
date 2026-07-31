@@ -95,8 +95,8 @@ def test_add_prompt_constructs_schedule_from_parsed_args(parser, mock_store, cap
     assert "0 7 * * 1-5" in out
 
 
-def test_add_skill_variant_is_rejected_until_888(parser, mock_store, capsys):
-    """A --skill schedule would register but never fire, so `add` rejects it (#888)."""
+def test_add_skill_variant_is_rejected(parser, mock_store, capsys):
+    """A --skill schedule would register but never fire, so `add` rejects it."""
     args = _parse(
         parser,
         [
@@ -120,7 +120,7 @@ def test_add_skill_variant_is_rejected_until_888(parser, mock_store, capsys):
     err = capsys.readouterr().err
     assert "--skill is not supported yet" in err
     assert "--prompt" in err  # names the workaround
-    assert "888" in err  # points at the tracking issue
+    assert "1019" in err  # points at the tracking issue
 
 
 def test_add_default_sink_without_to_has_empty_sink_args(parser, mock_store):
