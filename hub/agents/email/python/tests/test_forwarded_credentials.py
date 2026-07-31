@@ -91,6 +91,34 @@ def test_scope_short_error_names_the_missing_scopes_in_the_cli_command():
     assert "{provider}" not in msg  # f-string bug regression guard
 
 
+def test_missing_credential_error_interpolates_real_all_scopes_not_a_placeholder():
+    """#2730 D3/AC-9a: sites 16-17's `--scopes <scopes>` placeholder becomes
+    the real ALL_SCOPES (mail + calendar) union — never REQUIRED_SCOPES,
+    which would reproduce the exact silent-narrowing bug this issue removes."""
+    from gaia_agent_email.scopes import ALL_SCOPES
+
+    with pytest.raises(ConnectorsError) as exc:
+        forwarded_credentials.get_forwarded_token("google", ["s1"])
+    msg = str(exc.value)
+    assert "<scope" not in msg
+    for scope in ALL_SCOPES:
+        assert scope in msg
+
+
+def test_expired_token_error_interpolates_real_all_scopes_not_a_placeholder():
+    from gaia_agent_email.scopes import ALL_SCOPES
+
+    forwarded_credentials.set_forwarded(
+        "google", access_token="tok", scopes=["s1"], expires_at=_PAST
+    )
+    with pytest.raises(ConnectorsError) as exc:
+        forwarded_credentials.get_forwarded_token("google", ["s1"])
+    msg = str(exc.value)
+    assert "<scope" not in msg
+    for scope in ALL_SCOPES:
+        assert scope in msg
+
+
 def test_get_expired_token_raises_loudly():
     forwarded_credentials.set_forwarded(
         "google", access_token="tok", scopes=["s1"], expires_at=_PAST

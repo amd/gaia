@@ -216,6 +216,11 @@ def _authorize_access(
     if missing:
         raise AuthRequiredError(
             AuthRequiredError.Reason.CONNECTION_MISSING_SCOPES,
+            # The connection's current scopes ∪ what's now missing — never
+            # just the missing subset (#2730 D0): `--scopes` REPLACES rather
+            # than adds, so a remedy naming only the gap would drop whatever
+            # the connection legitimately already has.
+            full_scopes=sorted(granted_scopes | set(missing)),
             provider=provider,
             agent_id=resolved_agent,
             missing_scopes=missing,
