@@ -862,7 +862,9 @@ OpenClaw `metadata.openclaw`).
 **Retractions — do not build against these:**
 
 - **`OpenClawAdapter` runtime adapter is dropped from v1.** Compatibility is
-  migration-only (`gaia skill migrate`); the runtime adapter is deferred.
+  migration-only — via `gaia skill migrate`, which **ships**
+  ([#692](https://github.com/amd/gaia/issues/692)); it is the *runtime* adapter
+  that is deferred, not the migration path.
 - **The flat top-level schema is superseded.** `permissions`, `security_tier`,
   `requirements`, and `tools` are now under `metadata.gaia`. Top-level `version`
   is the *only* GAIA superset key outside `metadata`.
@@ -881,6 +883,8 @@ OpenClaw `metadata.openclaw`).
 `gaia.skills`, `SkillManager`, `Agent.load_skill`, `~/.gaia/skills/`, and
 `gaia skill list|info|create|import|export`. An earlier revision of this document
 said they were "verified absent on `main`"; that is no longer true.
+`gaia skill migrate` and `gaia.skills.migrate` joined them in
+[#692](https://github.com/amd/gaia/issues/692).
 </Warning>
 
 ---
@@ -1063,11 +1067,12 @@ Only the enforcement, REST/UI, and marketplace layers are greenfield.
 | Permission grammar + bridge | `Permission`, `parse_permissions`, `connector_requirements`, `refuse_unbridged_permissions`, `CONNECTOR_BRIDGED_DOMAINS`, `LOCAL_CAPABILITY_DOMAINS` | `skills/permissions.py` | **Exists** (#888) — bridge only |
 | Agent integration | `load_skill`, `unload_skill`, `SKILL_DIRS`, `skill_manager`, `loaded_skills`, `get_skills_system_prompt` | `agents/base/agent.py` | **Exists** (#888) |
 | CLI | `gaia skill list\|info\|create\|import\|export` | `skills/cli.py` | **Exists** (#888) |
+| Migration | `migrate_text`, `migrate_skill_dir`, `install_migrated`, `detect_vendor`; `gaia skill migrate` | `skills/migrate.py` | **Exists** (#692) — OpenClaw/Hermes → GAIA |
+| Trust reset | `reset_security_tier()` — one path shared by `import` and `migrate` | `skills/format.py` | **Exists** (#692) |
 | Errors | `SkillError`, `SkillValidationError`, `SkillNotFoundError`, `SkillPermissionError` | `skills/errors.py` | **Exists** (#888) |
 | **Permission sandbox / tier-ceiling enforcement** | — | **NOT FOUND** | **Greenfield — PROPOSED** (#1019) |
 | **`/api/skills` router + UI panel** | — | **NOT FOUND** | **Greenfield — PROPOSED** |
 | **`gaia skill install\|remove\|search\|publish\|update`** | — | **NOT FOUND** | **Greenfield — PROPOSED** (#2467) |
-| **`gaia skill migrate`** | [`skills/migrate.py`](https://github.com/amd/gaia/blob/main/src/gaia/skills/migrate.py) | **SHIPPED** | OpenClaw/Hermes → GAIA (#692) |
 | **Project-local `./.gaia/skills/` + registry-lock root** | — | **NOT FOUND** | **Deferred — PROPOSED** |
 
 ---
@@ -1109,5 +1114,5 @@ verbatim, mapped to its section and what it guarantees a consumer.
 | ☑ Permission model defined with granular `domain:level` syntax | [Permission model](#permission-model) | `<domain>:<level>:scope` grammar + the `ConnectorRequirement` bridge — no parallel grant ledger. Grammar and bridge **implemented**; enforcement of local-capability domains deferred (they refuse). |
 | ☑ Security tiers defined with promotion path | [Security tiers](#security-tiers) | Three install-time tiers + `experimental→community→verified`, distinct from run-time governance. Field **implemented**; ceilings deferred to Phase 2. |
 | ☐ Agent UI configuration dashboard has skills management panel | [Agent UI dashboard support](#agent-ui-dashboard-support) | A `/api/skills` shape mirroring the live `/api/agents` panel (**PROPOSED** — Phase 3). |
-| ◐ CLI: `gaia skill list`, `install`, `remove` | [CLI](#cli) | `list` **shipped**, alongside `info`/`create`/`import`/`export`. `install`/`remove` need the registry and land with the marketplace ([#2467](https://github.com/amd/gaia/issues/2467)). |
+| ◐ CLI: `gaia skill list`, `install`, `remove` | [CLI](#cli) | `list` **shipped**, alongside `info`/`create`/`import`/`export`/`migrate`. `install`/`remove` need the registry and land with the marketplace ([#2467](https://github.com/amd/gaia/issues/2467)). |
 | ☑ Example skills written for 3 existing agents | [Example skills](#example-skills) 4a–4c | `rag-search`, `web-research`, `file-operations` — each using only real registry tool names. |

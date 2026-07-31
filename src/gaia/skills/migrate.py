@@ -623,14 +623,14 @@ def migrate_text(
                 "A skill with no vendor namespace is already a plain Agent Skills "
                 "document — install it directly with 'gaia skill import'. To force a "
                 f"format anyway, pass --from openclaw or --from hermes. See {FORMAT_DOCS_URL}"
-                "#cross-format-compatibility-migration"
+                "#cross-format-compatibility--migration"
             )
         vendor = detected
     elif vendor not in VENDORS:
         raise SkillValidationError(
             f"Unknown migration source {vendor!r}. Supported: "
             f"{', '.join(VENDORS)}, or 'auto' to detect. See {FORMAT_DOCS_URL}"
-            "#cross-format-compatibility-migration"
+            "#cross-format-compatibility--migration"
         )
 
     raw_name = frontmatter.get("name")
