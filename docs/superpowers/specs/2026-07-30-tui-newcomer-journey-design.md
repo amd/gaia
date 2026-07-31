@@ -138,12 +138,27 @@ Two consequences:
   the break is between the tree and a *published artifact*. The guard must reason about
   the released core's value.
 
-### 3. macOS code signing
+### 3. macOS code signing — narrower than first assumed
 
-Gatekeeper quarantines an unsigned downloaded binary: "cannot be opened because the
-developer cannot be verified." Signing and notarizing the terminal-hub binary requires
-an Apple Developer identity in CI. Tracked as its own piece of work; the macOS path is
-not usable without it.
+This spec originally recorded Gatekeeper as blocking the macOS path outright. Measured
+on Apple Silicon, that is wrong for the installer route and right for the browser route.
+
+A binary fetched with `curl -fsSL` — which is exactly what `install_tui` does — carries
+only `com.apple.provenance`, **not** `com.apple.quarantine`, and an unsigned ad-hoc Mach-O
+downloaded that way executes normally. Quarantine is applied by applications that opt into
+`LSFileQuarantineEnabled` (browsers, Mail); `curl` does not.
+
+So:
+
+- **`curl … | sh` on macOS is not blocked by Gatekeeper.** Notarization is not a
+  prerequisite for the one-line install path.
+- **Downloading the binary from the hub page in a browser is** — that file is quarantined
+  and produces "cannot be opened because the developer cannot be verified."
+
+Signing and notarizing still matters, because the hub page is a first-class way to obtain
+the component and #2708's own copy points users at it. It needs an Apple Developer identity
+in CI. But it gates the *download* journey, not the *installer* journey, and the two can
+ship independently.
 
 ### 4. Correct the website's platform claims
 
