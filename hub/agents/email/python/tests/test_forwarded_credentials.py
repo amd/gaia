@@ -145,6 +145,36 @@ def test_reforward_overwrites_expired_and_recovers(monkeypatch):
     assert forwarded_credentials.get_forwarded_token("google", ["s1"]) == "fresh"
 
 
+def test_calendar_only_gap_names_the_missing_calendar_scope_with_a_real_command():
+    """AC-13 unit half (#2730). D5 makes this path newly reachable in normal
+    operation: before this PR a calendar-less connection failed the mint
+    outright (total outage, mail included) — a calendar tool's own error
+    never had a chance to fire. After D5, mail keeps working and calendar
+    tools fail individually, so the quality of THIS error is now
+    load-bearing where it used to be unreachable. A forwarded credential
+    carrying only mail scopes, asked for calendar scopes, must raise loudly
+    naming the exact missing calendar scope(s) with a copy-pasteable
+    command — never a placeholder."""
+    from gaia_agent_email.scopes import CALENDAR_SCOPES, GMAIL_SCOPES
+
+    forwarded_credentials.set_forwarded(
+        "google", access_token="tok", scopes=list(GMAIL_SCOPES), expires_at=_FUTURE
+    )
+    with pytest.raises(ConnectorsError) as exc:
+        forwarded_credentials.get_forwarded_token("google", list(CALENDAR_SCOPES))
+    msg = str(exc.value)
+    for scope in CALENDAR_SCOPES:
+        assert scope in msg
+    assert "<scope" not in msg
+    assert "gaia connectors connect google --scopes" in msg
+    assert "--grant-agent installed:email" in msg
+    # The command must still cover the mail scopes already held — --scopes
+    # REPLACES rather than adds, so a calendar-only suggestion would drop
+    # working mail access on reconnect.
+    for scope in GMAIL_SCOPES:
+        assert scope in msg
+
+
 def test_get_scope_short_token_raises_and_names_missing():
     forwarded_credentials.set_forwarded(
         "google", access_token="tok", scopes=["s1"], expires_at=_FUTURE
