@@ -250,8 +250,11 @@ class ScopeMismatchError(ConnectorsError):
         prov = self.provider or "connection"
         pid = self.provider or "<provider>"
         missing = ", ".join(self.missing_scopes) or "<none>"
-        # Currently-granted ∪ required — never just the missing subset
-        # (#2730 D0): `--scopes` REPLACES rather than adds.
+        # granted ∪ required — NEVER just the missing subset. `--scopes`
+        # REPLACES the connection's scopes rather than adding to them, so a
+        # remedy naming only the gap would authorize an account that has
+        # lost everything it already had (#2730 D0). Do not "simplify" this
+        # to `missing_scopes` alone — that reintroduces the bug.
         full_scopes = sorted(set(self.granted) | set(self.required))
         return (
             f"The {prov} stored connection is missing required scopes "

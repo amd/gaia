@@ -73,7 +73,20 @@ def _remedy_source_roots() -> "list[Path]":
     architecture-documentation prose (e.g. a docstring mentioning a future
     ``gaia api`` subcommand) that was never meant to be validated as a
     literal, parseable invocation — that is a materially different, wider
-    claim than AC-9a makes."""
+    claim than AC-9a makes.
+
+    NOT covered, deliberately: ``hub/agents/email/python/gaia_agent_email/**``
+    (e.g. ``onboarding_tools.py``, which does emit remedies). Two of its
+    module docstrings (``onboarding_tools.py``, ``question.py``) deliberately
+    quote the OLD placeholder-shaped UX as the bad behaviour they replaced —
+    scanning that directory would need AST-level "is this a docstring vs. a
+    live f-string" discrimination to avoid flagging its own history, which is
+    machinery disproportionate to the risk here: every remedy in that package
+    now derives its scopes from ``gaia_agent_email/scopes.py`` /
+    ``outlook_scopes.py`` (the single source of truth, #2730 D2) rather than
+    a hand-written literal, so the class of bug this scan exists to catch is
+    already structurally harder to reintroduce there. A chosen boundary, not
+    a missed one."""
     return [DAEMON_ROOT, CONNECTORS_ERRORS, FORWARDED_CREDENTIALS]
 
 

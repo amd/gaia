@@ -216,10 +216,12 @@ def _authorize_access(
     if missing:
         raise AuthRequiredError(
             AuthRequiredError.Reason.CONNECTION_MISSING_SCOPES,
-            # The connection's current scopes ∪ what's now missing — never
-            # just the missing subset (#2730 D0): `--scopes` REPLACES rather
-            # than adds, so a remedy naming only the gap would drop whatever
-            # the connection legitimately already has.
+            # granted ∪ missing — NEVER just the missing subset. `--scopes`
+            # REPLACES the connection's scopes rather than adding to them
+            # (flow.py: `list(scopes) or list(provider.default_scopes)`),
+            # so a remedy naming only the gap would authorize an account
+            # that has lost everything it already had (#2730 D0). Do not
+            # "simplify" this to `missing` alone — that reintroduces the bug.
             full_scopes=sorted(granted_scopes | set(missing)),
             provider=provider,
             agent_id=resolved_agent,
