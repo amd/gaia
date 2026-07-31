@@ -467,6 +467,7 @@
               "spec/agent-skills",
               "plans/skill-format",
               "plans/skill-synthesis",
+              "plans/adaptive-skills",
               "plans/oem-bundling"
             ]
           },
