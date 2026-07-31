@@ -7,8 +7,42 @@ contract version is tracked separately as
 
 ## [Unreleased]
 
+### Fixed
+
+- **A reconnect with no explicit `--scopes` could silently overwrite a working
+  mail+calendar connection with identity-only sign-in scopes (#2730).**
+  `list(scopes) or list(provider.default_scopes)` at four `gaia.connectors`
+  entry points meant an empty scope request against a provider that already
+  had a connection or an agent grant silently fell back to
+  `openid`/`email`/`profile` — including via the exact command GAIA's own
+  error text told a user to run. That fallback is now rejected with an
+  actionable error whenever prior state exists; a genuine first-time connect
+  is unaffected. `connect_scopes()`'s own silent `except Exception` (reading
+  the credentialed `OAuthProvider`'s `default_scopes`, unreachable before an
+  OAuth client is configured — exactly the state a first-time self-repair
+  runs in) now reads the catalog spec's `default_scopes` instead, which needs
+  no credentials and removes the failure case rather than papering over it.
+- **The daemon's forward-out mint was all-or-nothing: a connection missing
+  even one optional (calendar) scope lost mail too (#2730).**
+  `ConnectionForwarder.forward_provider` now mints against each agent's
+  declared REQUIRED subset only (`scopes.py::REQUIRED_SCOPES` — mail only;
+  calendar is requested at consent but never gates the mint), and reports the
+  sidecar the intersection of the connection's real stored scopes with the
+  ledger grant, never the ledger's raw claim (a shared connection widened by
+  a different agent can no longer over-grant this one).
+
 ### Added
 
+- **`scopes.py`/`outlook_scopes.py` gained `REQUIRED_SCOPES` (mail only) —
+  the request/enforce split (#2730).** `ALL_SCOPES` (mail + calendar) is what
+  every connect path requests at consent; `REQUIRED_SCOPES` is the narrower
+  subset the daemon's forward-out mint enforces. `mailbox_state.py` gained
+  `requested_scopes()` alongside the existing `required_scopes()` gate, so
+  the in-chat self-repair flow requests the same full union every other
+  surface does instead of narrowing an existing connection on autonomous
+  repair. A checked-in fixture
+  (`tests/fixtures/connectors/email_scopes.json`) now guards both the Python
+  and the TUI's Go scope lists against drifting apart.
 - **Inbox scans go metadata-first, cutting per-message cost so the default scan size can
   rise from 25 to 50 (#2643).** Every scanned message used to cost one full-body fetch
   regardless of whether the heuristic ever read the body — `pre_scan_inbox` and the

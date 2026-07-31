@@ -237,6 +237,87 @@ class TestConnectGrantAgent:
         assert rc == 0
         assert captured["grant_agents"] is None
 
+    def test_bare_connect_with_existing_grant_derives_declared_union(self, monkeypatch):
+        """AC-8 (#2730): the command GAIA's own error text tells a user to
+        run — `gaia connectors connect google` with NO flags — must not
+        silently narrow an existing grant to identity-only scopes. With
+        installed:email already granted, it authorizes
+        declared ∪ default_scopes (7 scopes for google)."""
+        TestConnectGrantAgent._install_fake_agent_registry(
+            monkeypatch,
+            [
+                "https://www.googleapis.com/auth/gmail.modify",
+                "https://www.googleapis.com/auth/gmail.send",
+                "https://www.googleapis.com/auth/calendar.events",
+                "https://www.googleapis.com/auth/calendar.readonly",
+            ],
+        )
+        from gaia.connectors.grants import grant_agent
+
+        grant_agent(
+            "google",
+            "installed:email",
+            ["https://www.googleapis.com/auth/gmail.modify"],
+        )
+
+        captured = {}
+
+        async def _fake_start(connector_id, *, scopes, grant_agents=None):
+            captured["scopes"] = sorted(scopes)
+            captured["grant_agents"] = grant_agents
+            return {"flow_id": "F1", "authorization_url": "https://auth.example"}
+
+        async def _fake_complete(flow_id):
+            return {"account_email": "alice@example.com"}
+
+        monkeypatch.setattr("gaia.connectors.api.start_authorization", _fake_start)
+        monkeypatch.setattr(
+            "gaia.connectors.api.complete_authorization", _fake_complete
+        )
+
+        rc, _out, err = _run("connectors", "connect", "google")
+        assert rc == 0, err
+        assert captured["scopes"] == sorted(
+            {
+                "openid",
+                "email",
+                "profile",
+                "https://www.googleapis.com/auth/gmail.modify",
+                "https://www.googleapis.com/auth/gmail.send",
+                "https://www.googleapis.com/auth/calendar.events",
+                "https://www.googleapis.com/auth/calendar.readonly",
+            }
+        )
+        assert len(captured["scopes"]) == 7
+        # Bare connect never grants — it only authorizes.
+        assert captured["grant_agents"] is None
+
+    def test_bare_connect_with_no_grants_defers_to_start_authorization(
+        self, monkeypatch
+    ):
+        """No agent holds a grant for this connector, so the CLI has nothing
+        to derive a scope union from. It must NOT guess a narrower list
+        itself — it sends nothing and lets `start_authorization`'s own D0
+        guard decide (raise on an existing connection, or fall back to
+        default_scopes for a genuine first-time connect)."""
+        captured = {}
+
+        async def _fake_start(connector_id, *, scopes, grant_agents=None):
+            captured["scopes"] = list(scopes)
+            return {"flow_id": "F1", "authorization_url": "https://auth.example"}
+
+        async def _fake_complete(flow_id):
+            return {"account_email": "bob@example.com"}
+
+        monkeypatch.setattr("gaia.connectors.api.start_authorization", _fake_start)
+        monkeypatch.setattr(
+            "gaia.connectors.api.complete_authorization", _fake_complete
+        )
+
+        rc, _out, err = _run("connectors", "connect", "google")
+        assert rc == 0, err
+        assert captured["scopes"] == []
+
 
 class TestStatus:
     def test_status_empty(self):

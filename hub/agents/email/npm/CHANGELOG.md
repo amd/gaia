@@ -6,6 +6,20 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## Unreleased
 
+- **Reconnecting your mailbox with no flags — the exact command GAIA's own
+  error message told you to run — could silently wipe your permissions
+  instead of fixing them.** A bare `gaia connectors connect google` (or the
+  same reconnect from a first-time self-repair conversation) used to fall
+  back to identity-only sign-in scopes whenever it wasn't told exactly what
+  to ask for, overwriting a working mail-plus-calendar connection with
+  nothing usable. That path now fails with a clear, copy-pasteable command
+  instead of guessing, and every surface — the CLI, the Agent UI, this
+  package's own connector setup, and the in-chat self-repair flow — now asks
+  for the same scopes so none of them can quietly narrow what another one
+  granted. Separately, calendar access is now clearly **optional**: a mailbox
+  missing only calendar permission still triages, drafts, and sends normally,
+  and calendar tools name the exact scope to add instead of taking the whole
+  mailbox down with them (#2730).
 - **The agent can now tell you which inbound mail is waiting on your reply —
   not just which of your own messages went unanswered.** Previously the agent
   could only flag sent mail nobody replied to; a colleague's "did you get a

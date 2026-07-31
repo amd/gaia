@@ -69,6 +69,22 @@ class TestConnectorRequirement:
         req = ConnectorRequirement(connector_id="google", scopes=["a", "b"], reason="r")
         assert isinstance(req.scopes, tuple)
 
+    def test_required_scopes_defaults_to_scopes(self):
+        """#2730 D5 mitigation: every existing construction site (~14 of
+        them) builds a ConnectorRequirement without ``required_scopes`` —
+        this proves they keep today's all-required semantics unchanged
+        rather than assuming it."""
+        req = ConnectorRequirement(connector_id="google", scopes=["a", "b"])
+        assert req.required_scopes == ("a", "b")
+
+    def test_required_scopes_can_narrow_the_scopes(self):
+        req = ConnectorRequirement(
+            connector_id="google", scopes=["a", "b"], required_scopes=["a"]
+        )
+        assert req.scopes == ("a", "b")
+        assert req.required_scopes == ("a",)
+        assert isinstance(req.required_scopes, tuple)
+
 
 class TestRegistry:
     def test_get_unknown_provider_raises_keyerror(self):

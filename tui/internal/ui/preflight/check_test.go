@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -1557,22 +1558,87 @@ func TestTheModelRowKeepsItsRawAnswerWhenLemonadeFails(t *testing.T) {
 	}
 }
 
+// emailScopesFixture mirrors tests/fixtures/connectors/email_scopes.json —
+// the single checked-in source both this package's Go tests and
+// tests/unit/connectors/test_email_scope_drift.py's Python tests diff
+// against, so a one-sided edit to either language's scope constants fails a
+// test on whichever side moved (#2730 D2a).
+type emailScopesFixture struct {
+	Google    providerScopesFixture `json:"google"`
+	Microsoft providerScopesFixture `json:"microsoft"`
+}
+
+type providerScopesFixture struct {
+	ConnectUnion []string `json:"connect_union"`
+}
+
+// loadEmailScopesFixture reads the shared fixture from the repo root. This
+// package lives at tui/internal/ui/preflight — four levels below the root.
+func loadEmailScopesFixture(t *testing.T) emailScopesFixture {
+	t.Helper()
+	path := filepath.Join("..", "..", "..", "..", "tests", "fixtures", "connectors", "email_scopes.json")
+	raw, err := os.ReadFile(path) // #nosec G304 -- fixed relative path to a checked-in fixture
+	if err != nil {
+		t.Fatalf("could not read the shared scope fixture at %s: %v", path, err)
+	}
+	var fixture emailScopesFixture
+	if err := json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatalf("could not parse the shared scope fixture: %v", err)
+	}
+	return fixture
+}
+
+func sameScopeSet(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	set := make(map[string]bool, len(got))
+	for _, v := range got {
+		set[v] = true
+	}
+	for _, v := range want {
+		if !set[v] {
+			return false
+		}
+	}
+	return true
+}
+
+// connectScopes must equal the fixture's connect_union — structured
+// extraction diffed against a checked-in JSON value, not a regex scrape of
+// Go source (fragile against a gofmt reflow or a third provider). Drift on
+// either side (a Go edit or a Python-side scopes.py edit that updates the
+// fixture) fails here.
+func TestConnectScopesMatchesTheSharedFixture(t *testing.T) {
+	fixture := loadEmailScopesFixture(t)
+	cases := map[string][]string{
+		"google":    fixture.Google.ConnectUnion,
+		"microsoft": fixture.Microsoft.ConnectUnion,
+	}
+	for provider, want := range cases {
+		got, ok := connectScopes[provider]
+		if !ok {
+			t.Errorf("connectScopes has no entry for %q", provider)
+			continue
+		}
+		if !sameScopeSet(got, want) {
+			t.Errorf("connectScopes[%q] = %v, want (fixture connect_union) %v", provider, got, want)
+		}
+	}
+}
+
 // The connect remedy must request the SAME scope union the sidecar's own
 // /configure builds — --scopes replaces the provider defaults, so a short list
-// authorizes a mailbox the agent cannot read.
+// authorizes a mailbox the agent cannot read. Reads the shared fixture rather
+// than an inline `want` map so this test's name (which claims "the full
+// union") is actually what it asserts.
 func TestConnectCommandRequestsTheFullScopeUnion(t *testing.T) {
-	for provider, want := range map[string][]string{
-		"google": {
-			"openid", "email", "profile",
-			"https://www.googleapis.com/auth/gmail.modify",
-			"https://www.googleapis.com/auth/gmail.send",
-		},
-		"microsoft": {
-			"openid", "offline_access", "https://graph.microsoft.com/User.Read",
-			"https://graph.microsoft.com/Mail.ReadWrite",
-			"https://graph.microsoft.com/Mail.Send",
-		},
-	} {
+	fixture := loadEmailScopesFixture(t)
+	cases := map[string][]string{
+		"google":    fixture.Google.ConnectUnion,
+		"microsoft": fixture.Microsoft.ConnectUnion,
+	}
+	for provider, want := range cases {
 		cmd := connectCommand(provider)
 		for _, scope := range want {
 			if !strings.Contains(cmd, scope) {
