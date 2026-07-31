@@ -22,6 +22,7 @@ from gaia.connectors.errors import (
     FlowInProgressError,
     FlowTimeoutError,
     OAuthClientNotConfiguredError,
+    RateLimitedError,
     ScopeMismatchError,
 )
 
@@ -41,14 +42,24 @@ class TestHierarchy:
 
 
 class TestAuthRequiredErrorReason:
-    def test_reason_enum_has_exactly_four_values(self):
+    def test_reason_enum_has_exactly_five_values(self):
+        # A6: TENANT_MISMATCH added — distinct from REAUTH_REQUIRED because
+        # the remedy differs (use the other Microsoft connector, not "just
+        # reconnect this one").
         values = {r.value for r in AuthRequiredError.Reason}
         assert values == {
             "not_connected",
             "agent_not_granted",
             "connection_missing_scopes",
             "reauth_required",
+            "tenant_mismatch",
         }
+
+    def test_tenant_mismatch_is_distinct_from_reauth_required(self):
+        assert (
+            AuthRequiredError.Reason.TENANT_MISMATCH
+            is not AuthRequiredError.Reason.REAUTH_REQUIRED
+        )
 
     def test_reason_enum_is_string_serializable(self):
         # Router serializes reasons into JSON; enum must coerce to str cleanly.
@@ -122,6 +133,33 @@ class TestScopeMismatchError:
             provider="google",
         )
         assert sorted(err.missing_scopes) == ["b", "c"]
+
+
+class TestRateLimitedError:
+    def test_is_a_connectors_error(self):
+        assert issubclass(RateLimitedError, ConnectorsError)
+
+    def test_attributes_set(self):
+        err = RateLimitedError(
+            "google",
+            message_ids=["m1", "m3"],
+            partial_results={"m2": {"id": "m2"}},
+        )
+        assert err.provider == "google"
+        assert err.message_ids == ["m1", "m3"]
+        assert err.partial_results == {"m2": {"id": "m2"}}
+
+    def test_default_message_names_provider_and_ids_and_remedy(self):
+        err = RateLimitedError("google", message_ids=["m1"])
+        msg = str(err).lower()
+        assert "google" in msg
+        assert "m1" in msg
+        assert "retry" in msg or "try again" in msg
+
+    def test_defaults_are_empty_not_none(self):
+        err = RateLimitedError("google")
+        assert err.message_ids == []
+        assert err.partial_results == {}
 
 
 class TestConnectionRevokedError:

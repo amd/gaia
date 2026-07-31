@@ -131,6 +131,15 @@ jobs:
           echo ""
           pytest tests/integration/test_database_agent.py -v --tb=short
 
+      - name: Run Lemonade release-asset resolution test
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+        run: |
+          echo "=== Resolving Lemonade installer URLs against live upstream ==="
+          echo "Catches an upstream asset rename before it 404s gaia init"
+          echo ""
+          pytest tests/integration/test_lemonade_release_assets.py -v --tb=short
+
       - name: Run daemon integration tests
         env:
           GAIA_MEMORY_DISABLED: "1"

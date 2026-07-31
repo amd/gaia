@@ -29,6 +29,8 @@ export default {
         'g-on-gold': 'rgb(var(--g-on-gold) / <alpha-value>)',
         'g-code-bg': 'rgb(var(--g-code-bg) / <alpha-value>)',
         'g-code-text': 'rgb(var(--g-code-text) / <alpha-value>)',
+        'g-code-faint': 'rgb(var(--g-code-faint) / <alpha-value>)',
+        'g-focus': 'rgb(var(--g-focus) / <alpha-value>)',
 
         // Translucent — no opacity modifier.
         'g-surface': 'var(--g-surface)',

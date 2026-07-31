@@ -29,24 +29,38 @@
 // what makes a gate either dishonest or useless:
 //
 //   - Is it proven ready?   Report.Ready() — false for an unknown row, always.
-//   - Is it proven broken?  Report.Blocked() — false for an unknown row.
-//   - Does the launch stop? Only on Blocked.
+//   - Is it proven broken?  A failed row — including an optional one.
+//   - Does the launch stop? Report.Blocked() for a failed row the AGENT needs
+//     (StateFailed and not Optional); for an unknown row, its Disposition.
 //
-// So an unknown row renders `[?]`, keeps Ready() false, is named on screen
-// while the agent starts, and does not stop the launch. The alternative —
-// demanding a keypress every time — was rejected deliberately: the condition is
-// one the user cannot fix (their Lemonade build simply does not report a
-// version), so the prompt would fire on every single launch forever. A prompt
-// that always fires and never means anything is dismissed reflexively, and it
-// devalues every other prompt in the product. The signal is kept; the ritual is
-// not.
+// So an unknown row renders `[?]` and keeps Ready() false either way. Most of
+// them — an unadvertised Lemonade version, two mailboxes linked so neither
+// can be probed — are Disposition Notify: named on screen while the agent
+// starts, launch not stopped. The alternative — demanding a keypress every
+// time — was rejected deliberately for these: the condition is one the user
+// cannot fix (their Lemonade build simply does not report a version), so the
+// prompt would fire on every single launch forever. A prompt that always
+// fires and never means anything is dismissed reflexively, and it devalues
+// every other prompt in the product. The signal is kept; the ritual is not.
 //
-// A row that is genuinely broken still blocks, and no keystroke moves past it.
+// A handful of unknown rows are Disposition Halt instead — a model loaded
+// into a context window smaller than the profile pins, where a document-sized
+// request comes back context_length_exceeded. Unlike the Notify cases, this
+// one is consequential and not something re-checking clears on its own, so it
+// holds for a person rather than proceeding silently. See internal/ui/status
+// for how a Halt row reaches the rest of the app.
+//
+// A row that is genuinely broken (StateFailed) still blocks via Report.Blocked
+// unless it is one the agent itself can repair once the conversation starts
+// (Report.OfferableDespiteFailure) — that one keystroke opens the door to the
+// repair instead of a second gate in front of it.
 package preflight
 
 import (
 	"fmt"
 	"strings"
+
+	"github.com/amd/gaia/tui/internal/ui/status"
 )
 
 // State is a precondition's answer. Pending and Unknown are deliberately
@@ -165,12 +179,59 @@ type Row struct {
 	Fix FixKind
 	// Provider is the mailbox provider a FixConnectMailbox targets.
 	Provider string
+	// Optional marks a row that gates a CAPABILITY rather than the launch: the
+	// agent starts and answers without it, and only the asks that need it fail.
+	// It is probed like any other, renders [!] when it fails, keeps Ready()
+	// false, is what FirstAttention puts the cursor on, and carries a remedy —
+	// it just does not refuse the run. The mailbox is one: email triage
+	// classifies the payload carried in the request and never reads a mailbox,
+	// so a missing mailbox must not refuse a triage query.
+	Optional bool
 	// Raw is the probe's raw answer (JSON body or error text), shown by `d`.
 	Raw string
+	// Disposition is what the checklist does when this row is not OK — Halt
+	// or Notify. Set by the check that produces the row, because the check
+	// is what knows whether being unverified will actually bite the user.
+	// DispositionUnset on a StateFailed or StateUnknown row is a bug — see
+	// TestEveryNonOKRowDeclaresADisposition.
+	Disposition status.Disposition
 }
 
 // NeedsAttention reports whether the row is anything other than proved ready.
 func (r Row) NeedsAttention() bool { return r.State != StateOK }
+
+// levelFor maps a row's State onto the status package's Level. Pending and
+// Checking are transient placeholders, not a resolved answer, so both map to
+// LevelUnset — consistent with LevelUnset never being a decided disposition
+// either.
+func levelFor(s State) status.Level {
+	switch s {
+	case StateOK:
+		return status.LevelOK
+	case StateUnknown:
+		return status.LevelUnknown
+	case StateFailed:
+		return status.LevelFailed
+	default:
+		return status.LevelUnset
+	}
+}
+
+// Outcome converts the row into the status package's shared vocabulary, for
+// anything listening for a consequential state (see internal/ui/status and
+// RootModel's listener). Summary is sanitized through status.New — Line and
+// Detail can carry upstream server text verbatim (checkInit assigns
+// body.hint() straight to Detail, and Ladder builds causes with %s over
+// upstream/transport text), and this is the boundary where that text stops
+// being trusted, even though the row itself still carries it unsanitized for
+// the existing on-screen remedy rendering.
+func (r Row) Outcome() status.Outcome {
+	summary := r.Detail
+	if summary == "" {
+		summary = r.Line
+	}
+	return status.New(r.Key, r.Label, levelFor(r.State), r.Disposition, summary)
+}
 
 // Stable row keys. The first four are generic to any sidecar agent that
 // implements GET /v1/<agent>/init; KeyMailbox is email-specific and arrives
@@ -205,12 +266,30 @@ func (r Report) Ready() bool {
 	return true
 }
 
-// Blocked reports whether at least one precondition proved NOT ready. A report
-// that is neither Ready nor Blocked has only indeterminate rows: the user may
-// proceed, but the screen must say what could not be verified.
+// Blocked reports whether at least one precondition of RUNNING the agent proved
+// NOT ready. A report that is neither Ready nor Blocked has nothing proven
+// broken that the agent needs: the user may proceed, but the screen must say
+// what could not be verified — or what failed without stopping the launch.
+//
+// Optional rows are excluded (see Row.Optional). They are still failures and
+// still say so; they are just failures of a capability the ask may not need, and
+// refusing every launch over one would make a mailbox-free triage impossible.
 func (r Report) Blocked() bool {
 	for _, row := range r.Rows {
-		if row.State == StateFailed {
+		if row.State == StateFailed && !row.Optional {
+			return true
+		}
+	}
+	return false
+}
+
+// HasOneKeyFix reports whether a row that still needs attention offers a fix the
+// user can apply from here. Such a row holds the screen even when nothing
+// blocks: auto-proceeding past a mailbox that is not connected would take the
+// `f` that connects it away with the screen it was on.
+func (r Report) HasOneKeyFix() bool {
+	for _, row := range r.Rows {
+		if row.NeedsAttention() && row.Fix != FixNone {
 			return true
 		}
 	}
@@ -239,6 +318,40 @@ func (r Report) OfferableDespiteFailure() bool {
 		failed = true
 	}
 	return failed
+}
+
+// needsHalt is shared by HasHalt and HaltingRows so the two can never
+// disagree about which rows count. Notify is the value a row must opt INTO
+// to auto-proceed — anything else, including a forgotten DispositionUnset,
+// holds. Inverted on purpose: the alternative (require == DispositionHalt)
+// reproduces the exact bug this issue exists to fix, one field at a time — a
+// row nobody assigned a Disposition to would silently proceed instead of
+// loudly halting.
+func (r Row) needsHalt() bool {
+	return r.State != StateOK && r.Disposition != status.DispositionNotify
+}
+
+// HasHalt reports whether any row in the report needsHalt.
+func (r Report) HasHalt() bool {
+	for _, row := range r.Rows {
+		if row.needsHalt() {
+			return true
+		}
+	}
+	return false
+}
+
+// HaltingRows returns the rows that needsHalt, for building the Outcomes a
+// listener sees. Emission is level-triggered: Check resolves every row in
+// one pass, so this is called once per report, not streamed per row.
+func (r Report) HaltingRows() []Row {
+	var out []Row
+	for _, row := range r.Rows {
+		if row.needsHalt() {
+			out = append(out, row)
+		}
+	}
+	return out
 }
 
 // OKCount is how many preconditions proved ready.
@@ -291,11 +404,12 @@ func (r Report) Find(key string) (Row, bool) {
 	return Row{}, false
 }
 
-// Blocker returns the first failed row, or false when nothing failed. It is what
-// an integrator logs or shows in a one-line status when preflight refuses.
+// Blocker returns the first failed row that refuses the launch, or false when
+// none does. It is what an integrator logs or shows in a one-line status when
+// preflight refuses, so it mirrors Blocked and skips Optional rows.
 func (r Report) Blocker() (Row, bool) {
 	for _, row := range r.Rows {
-		if row.State == StateFailed {
+		if row.State == StateFailed && !row.Optional {
 			return row, true
 		}
 	}

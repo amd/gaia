@@ -62,6 +62,19 @@ const partialFailureAttention = `{
   "stale": false
 }`
 
+// #2716 -- a message-level rate-limit, distinct from a mailbox-level one:
+// mailbox_errors is empty/absent, only message_errors is populated.
+const messageRateLimitedAttention = `{
+  "kind": "email_attention",
+  "items": [
+    {"kind": "meeting_request", "message_id": "m1", "sender": "Sarah Chen <sarah@corp.example>", "subject": "Team sync", "why": "looks like it's proposing a meeting or a time to talk"}
+  ],
+  "coverage": {"scanned": 12, "total_unread": null, "scan_truncated": false, "degraded": true, "mailbox_errors": null, "message_errors": [{"message_id": "m9", "error": "Gmail rate-limited this message after exhausting retries. Try again in a minute."}]},
+  "generated_at": "2026-07-28T12:00:00+00:00",
+  "cache_age_seconds": 0.0,
+  "stale": false
+}`
+
 func TestAttentionPopulated(t *testing.T) {
 	out := Render("email_attention", raw(t, populatedAttention), width80)
 	t.Logf("\n%s", plain(out))
@@ -154,6 +167,22 @@ func TestAttentionPartialFailureSurfacesConnectorError(t *testing.T) {
 		// The surviving mailbox's item is still shown, tagged with its source.
 		"Gmail", "Team sync",
 	)
+}
+
+func TestAttentionMessageRateLimitSurfacesAsCountNotMailboxError(t *testing.T) {
+	out := Render("email_attention", raw(t, messageRateLimitedAttention), width80)
+	t.Logf("\n%s", plain(out))
+
+	assertWidth(t, out, width80)
+	assertContains(t, out,
+		"1 message couldn't be fetched (rate-limited)",
+		"try again in a",
+		"Results below are unaffected",
+		// The surviving item is still shown.
+		"Team sync",
+	)
+	assertNotContains(t, plain(out), "wasn't scanned")
+	assertNotContains(t, plain(out), "accounts weren't scanned")
 }
 
 func TestAttentionMalformedPayloadDegradesVisibly(t *testing.T) {

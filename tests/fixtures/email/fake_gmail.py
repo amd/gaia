@@ -44,11 +44,12 @@ from typing import Any, Dict, Iterable, List, Optional, cast
 _METADATA_SCAN_HEADERS = ("Subject", "From", "To", "Date", "List-Unsubscribe")
 _METADATA_HEADER_NAMES = {h.lower() for h in _METADATA_SCAN_HEADERS}
 
-# Mirrors LiveGmailBackend's own chunking ceiling (#2643) so a hermetic
-# get_messages_batch round-trip COUNT means the same thing it would against
-# live Gmail -- a benchmark run against this fake is directly comparable to
-# a live one on this axis.
-_BATCH_MAX_SUBREQUESTS = 100
+# Mirrors LiveGmailBackend's own chunking ceiling (see
+# gmail_backend._BATCH_MAX_SUBREQUESTS) so a hermetic get_messages_batch
+# round-trip COUNT means the same thing it would against live Gmail -- a
+# benchmark run against this fake is directly comparable to a live one on
+# this axis.
+_BATCH_MAX_SUBREQUESTS = 25
 
 # ---------------------------------------------------------------------------
 # mbox → Gmail-API translator
@@ -330,6 +331,7 @@ class FakeGmailBackend:
         *,
         user_email: str = "user@example.com",
         transport: Optional[FakeGmailTransport] = None,
+        rate_limit_subrequest_ceiling: Optional[int] = None,
     ):
         self._user_email = user_email
         self._transport = transport or FakeGmailTransport()
@@ -337,6 +339,12 @@ class FakeGmailBackend:
         self._labels: List[Dict[str, Any]] = _DEFAULT_SYSTEM_LABELS[:]
         self._drafts: Dict[str, Dict[str, Any]] = {}
         self._next_draft_seq = 1
+        # Opt-in simulation of Gmail's real per-user concurrency limit --
+        # None (the default) means every batch succeeds regardless of size.
+        # Set to a Gmail-like value (e.g. gmail_backend._BATCH_MAX_SUBREQUESTS)
+        # to make a regression test prove production code never sends an
+        # oversized chunk, independent of whatever that constant is set to.
+        self._rate_limit_subrequest_ceiling = rate_limit_subrequest_ceiling
         if mbox_path is not None:
             self.load_mbox(mbox_path)
 
@@ -432,6 +440,25 @@ class FakeGmailBackend:
         out: Dict[str, Dict[str, Any]] = {}
         for start in range(0, len(ids), _BATCH_MAX_SUBREQUESTS):
             chunk = ids[start : start + _BATCH_MAX_SUBREQUESTS]
+            if (
+                self._rate_limit_subrequest_ceiling is not None
+                and len(chunk) > self._rate_limit_subrequest_ceiling
+            ):
+                from gaia.connectors.errors import RateLimitedError
+
+                raise RateLimitedError(
+                    "google",
+                    message_ids=list(chunk),
+                    partial_results=dict(out),
+                    message=(
+                        f"Gmail rate-limited a {len(chunk)}-message batch "
+                        f"fetch (exceeds the "
+                        f"{self._rate_limit_subrequest_ceiling}-subrequest "
+                        "safe ceiling) after exhausting retries. Try again "
+                        "in a minute — this is a transient per-user "
+                        "concurrency limit."
+                    ),
+                )
             self._transport.record(
                 "get_messages_batch", message_ids=list(chunk), format=format
             )

@@ -12,6 +12,7 @@ import (
 	"github.com/amd/gaia/tui/internal/ui/components"
 	"github.com/amd/gaia/tui/internal/ui/hub"
 	"github.com/amd/gaia/tui/internal/ui/preflight"
+	"github.com/amd/gaia/tui/internal/ui/status"
 )
 
 type view int
@@ -45,6 +46,23 @@ type RootModel struct {
 	// pfTransport is built on first launch and reused for the session.
 	pfTransport preflight.Transport
 	pfOpts      preflight.Options
+
+	// halted is every Outcome the active screen is currently holding on.
+	// RootModel does not render it or intercept keys for it — the screen
+	// that raised it (preflight.Model) already pauses itself and shows its
+	// own explanation; this is purely a state flag automation reads via
+	// ControlSnapshot's Overlay. Cleared when the gate closes, whether by
+	// proceeding or backing out.
+	halted []status.Outcome
+	// suppressed is every StepID the user has already proceeded past this
+	// session — per-process, never persisted, so relaunching the same agent
+	// does not report a fresh halt for a row already accepted once. It does
+	// NOT change what the screen itself asks for on each launch.
+	suppressed map[string]bool
+	// listeners decide whether an Outcome halts. The subscribe seam the
+	// issue asks for; defaults to one entry with no registration API beyond
+	// it.
+	listeners []Listener
 }
 
 // WithPreflight points the readiness gate at a specific transport and tunes its
@@ -61,6 +79,8 @@ func NewRootModel(cat *catalog.Catalog, debug bool) RootModel {
 		activeView: viewHub,
 		catalog:    cat,
 		debug:      debug,
+		suppressed: map[string]bool{},
+		listeners:  []Listener{haltOnDisposition},
 	}
 	// One hub client for the session: it caches the daemon instance whose token
 	// authorized the last call, and that token rotates on every daemon restart.
@@ -76,6 +96,8 @@ func NewRootModelWithHub(cat *catalog.Catalog, hc *catalog.HubClient, debug bool
 		activeView: viewHub,
 		catalog:    cat,
 		debug:      debug,
+		suppressed: map[string]bool{},
+		listeners:  []Listener{haltOnDisposition},
 	}
 	m.hub = hub.NewHubModel(cat, hc, debug)
 	return m
@@ -128,6 +150,9 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m.openConnectHandoff(msg.Provider)
+
+	case status.Outcome:
+		return m.applyOutcome(msg)
 
 	case chat.ReturnToHubMsg:
 		return m.returnToHub(msg.AgentID)

@@ -129,8 +129,11 @@ class TestMetadataFirstNoEscalation:
         assert _metadata_format_ids(gmail) == {f"m{i}" for i in range(20)}
 
     def test_a_single_metadata_batch_call_covers_the_whole_scan(self):
+        from gaia_agent_email.gmail_backend import _BATCH_MAX_SUBREQUESTS
+
+        scan_size = _BATCH_MAX_SUBREQUESTS  # exactly one chunk's worth
         gmail = FakeGmailBackend()
-        for i in range(30):
+        for i in range(scan_size):
             gmail.add_message(
                 _msg(
                     f"m{i}",
@@ -140,13 +143,13 @@ class TestMetadataFirstNoEscalation:
                     body="Nothing to see here.",
                 )
             )
-        triage_inbox_impl(gmail, max_messages=30)
+        triage_inbox_impl(gmail, max_messages=scan_size)
         metadata_calls = [
             c for c in _batch_calls(gmail) if c[1].get("format") == "metadata"
         ]
         assert len(metadata_calls) == 1, (
-            "30 ids under the 100-subrequest batch ceiling must cost exactly "
-            f"ONE metadata round-trip, got {len(metadata_calls)}"
+            f"{scan_size} ids at the batch subrequest ceiling must cost "
+            f"exactly ONE metadata round-trip, got {len(metadata_calls)}"
         )
 
 
@@ -409,8 +412,14 @@ class TestNOTUSStyleCommitmentVetoStillEscalates:
         out = triage_inbox_impl(gmail, max_messages=1, classifier=_classifier)
         result = out["results"][0]
         assert result["confident"] is False or result["source"] == "llm"
-        assert result["category"] == CATEGORY_PROMOTIONAL or result["category"] == "NEEDS_RESPONSE"
-        assert "deadline/commitment signal" in result["rationale"] or result["source"] == "llm"
+        assert (
+            result["category"] == CATEGORY_PROMOTIONAL
+            or result["category"] == "NEEDS_RESPONSE"
+        )
+        assert (
+            "deadline/commitment signal" in result["rationale"]
+            or result["source"] == "llm"
+        )
         # The full body must have reached the classifier -- proves the
         # commitment-signal escalation correctly triggered a real
         # format="full" re-fetch, not a metadata-only stub.

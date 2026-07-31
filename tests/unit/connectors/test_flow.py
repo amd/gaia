@@ -113,6 +113,53 @@ class TestSuccessPath:
         assert result["scopes"] == ["openid"]
 
 
+class TestTenantRecordedOnConnect:
+    """D8 (#2628): the loopback exchange must record the minting authority
+    on the connection blob — the very first place a tenant value exists to
+    record, and the only place a legacy (no-tenant) blob would otherwise
+    come from forever."""
+
+    @pytest.fixture
+    def microsoft_provider(self, monkeypatch):
+        monkeypatch.setenv("GAIA_MICROSOFT_CLIENT_ID", "test-ms-client")
+        _registry.clear()
+        from gaia.connectors.providers import get as get_provider
+
+        return get_provider("microsoft")
+
+    @respx.mock
+    async def test_successful_exchange_records_the_tenant(self, microsoft_provider):
+        respx.post(microsoft_provider.token_url).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "access_token": "fresh-access",
+                    "refresh_token": "fresh-refresh",
+                    "expires_in": 3600,
+                    "scope": "openid",
+                    "id_token": (
+                        "header." "eyJlbWFpbCI6ICJhbGljZUBleGFtcGxlLmNvbSJ9" ".sig"
+                    ),
+                },
+            )
+        )
+        respx.route(host="127.0.0.1").pass_through()
+
+        info = await start_authorization("microsoft", scopes=["openid"])
+        params = parse_qs(urlparse(info["authorization_url"]).query)
+        redirect_uri = params["redirect_uri"][0]
+        state = params["state"][0]
+
+        async with httpx.AsyncClient() as c:
+            await c.get(f"{redirect_uri}?code=test-code&state={state}")
+        await asyncio.wait_for(complete_authorization(info["flow_id"]), timeout=2.0)
+
+        from gaia.connectors.store import peek_connection
+
+        blob = peek_connection("microsoft")
+        assert blob["tenant"] == "consumers"
+
+
 class TestStateValidation:
     @respx.mock
     async def test_missing_state_returns_400(self, google_provider):

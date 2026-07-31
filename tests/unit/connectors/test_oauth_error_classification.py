@@ -38,7 +38,6 @@ MAIL_READ = "https://graph.microsoft.com/Mail.Read"
 def _ms_env(monkeypatch):
     monkeypatch.setenv("GAIA_MICROSOFT_CLIENT_ID", "test-client-id")
     monkeypatch.delenv("GAIA_MICROSOFT_CLIENT_SECRET", raising=False)
-    monkeypatch.delenv("GAIA_MICROSOFT_TENANT", raising=False)
     from gaia.connectors import providers
 
     providers._registry.clear()

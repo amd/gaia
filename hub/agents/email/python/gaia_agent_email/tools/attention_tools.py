@@ -42,7 +42,7 @@ from gaia_agent_email.tools.waiting_on_you_tools import (
     detect_waiting_on_you_impl,
 )
 
-from gaia.connectors.errors import ConnectorsError
+from gaia.connectors.errors import ConnectorsError, RateLimitedError
 from gaia.connectors.formatting import format_connector_error
 from gaia.logger import get_logger
 
@@ -129,13 +129,26 @@ def _scan_one_backend(
 ) -> Dict[str, Any]:
     """Run the triage scan + waiting-on-you detection against one mailbox.
 
-    Returns a dict with ``items``, ``scanned``, ``total_unread``, and
-    ``scan_truncated``. Raises whatever the backend raises (``ConnectorsError``
-    family) — the caller decides whether that's a per-mailbox partial failure
-    or a total one.
+    Returns a dict with ``items``, ``scanned``, ``total_unread``,
+    ``scan_truncated``, and ``dropped_message_ids``. Raises whatever the
+    backend raises (``ConnectorsError`` family, but see below for
+    ``RateLimitedError``) — the caller decides whether that's a per-mailbox
+    partial failure or a total one.
+
+    This is the ONLY ``triage_inbox_impl`` caller that opts into
+    message-level degradation (``on_rate_limit="skip"``) — the LLM-facing
+    triage tool and the chat-surface pre-scan both keep the fail-loud
+    default. A message that Gmail rate-limited past its retry budget is
+    left out of ``results`` rather than crashing this read-only,
+    no-prompt view; its id is reported in ``dropped_message_ids`` so the
+    caller can record it as a coverage gap instead of it just vanishing.
     """
     triage = triage_inbox_impl(
-        backend, max_messages=max_messages, label_ids=["INBOX"], debug=debug
+        backend,
+        max_messages=max_messages,
+        label_ids=["INBOX"],
+        debug=debug,
+        on_rate_limit="skip",
     )
     results = triage["results"]
 
@@ -151,8 +164,18 @@ def _scan_one_backend(
         elif needs_review_decision(r):
             items.append(_needs_review_item(r, provider))
 
+    dropped_message_ids: List[str] = list(triage.get("dropped_ids") or [])
+
     waiting_budget = waiting_on_you_max_inbox or _WAITING_ON_YOU_DEFAULT_MAX_INBOX
-    waiting = detect_waiting_on_you_impl(backend, max_inbox=waiting_budget, debug=debug)
+    try:
+        waiting = detect_waiting_on_you_impl(
+            backend, max_inbox=waiting_budget, debug=debug
+        )
+    except RateLimitedError as exc:
+        # Exhaustion here degrades the waiting-on-you signal for this
+        # mailbox rather than raising through to a mailbox-level failure.
+        waiting = {"waiting_on_you": [], "scan_truncated": False}
+        dropped_message_ids.extend(exc.message_ids or ["<waiting_on_you_scan>"])
     for w in waiting["waiting_on_you"]:
         items.append(_waiting_on_you_item(w, provider))
 
@@ -166,6 +189,7 @@ def _scan_one_backend(
         # ceiling (nothing missed, but the length check still fires).
         "scan_truncated": triage["scan_truncated"]
         or bool(waiting.get("scan_truncated")),
+        "dropped_message_ids": dropped_message_ids,
     }
 
 
@@ -207,6 +231,7 @@ def build_attention_view_impl(
     total_unread_unknown = False
     scan_truncated = False
     mailbox_errors: List[Dict[str, Any]] = []
+    message_errors: List[Dict[str, Any]] = []
 
     for provider, backend in backends.items():
         try:
@@ -229,6 +254,18 @@ def build_attention_view_impl(
         else:
             total_unread_total += out["total_unread"]
         scan_truncated = scan_truncated or out["scan_truncated"]
+        for mid in out.get("dropped_message_ids") or []:
+            # A message-level rate-limit is NOT a mailbox failure — the
+            # rest of this mailbox's results are still present above.
+            message_errors.append(
+                {
+                    "message_id": mid,
+                    "error": (
+                        "Gmail rate-limited this message after exhausting "
+                        "retries. Try again in a minute."
+                    ),
+                }
+            )
 
     if mailbox_errors and len(mailbox_errors) == len(backends):
         raise ConnectorsError(
@@ -246,10 +283,12 @@ def build_attention_view_impl(
         "scanned": scanned_total,
         "total_unread": None if total_unread_unknown else total_unread_total,
         "scan_truncated": scan_truncated,
-        "degraded": bool(mailbox_errors),
+        "degraded": bool(mailbox_errors) or bool(message_errors),
     }
     if mailbox_errors:
         coverage["mailbox_errors"] = mailbox_errors
+    if message_errors:
+        coverage["message_errors"] = message_errors
 
     return {
         "kind": "email_attention",

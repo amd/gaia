@@ -220,3 +220,76 @@ class TestPublicSurface:
         )
         providers = {row["provider"] for row in list_connections()}
         assert {"google", "microsoft"} <= providers
+
+
+class TestTenantMismatchThreading:
+    """A18: the tenant tripwire must actually fire on every production
+    call site that resolves a live credential, not only inside
+    store.load_connection's own unit tests."""
+
+    def _seed_microsoft_with_recorded_tenant(self, monkeypatch, tmp_path, tenant):
+        monkeypatch.setenv("GAIA_MICROSOFT_CLIENT_ID", "test-ms-client")
+        monkeypatch.setattr("gaia.connectors.grants.Path.home", lambda: tmp_path)
+        _registry.clear()
+        from gaia.connectors.providers import get as get_provider
+
+        ms = get_provider("microsoft")
+        save_connection(
+            provider="microsoft",
+            account_email="user@outlook.com",
+            refresh_token="ms-rt",
+            scopes=["Mail.ReadWrite"],
+            client_id_hash=ms.client_id_hash,
+            tenant=tenant,
+        )
+        return ms
+
+    async def test_get_access_token_raises_tenant_mismatch(self, monkeypatch, tmp_path):
+        self._seed_microsoft_with_recorded_tenant(
+            monkeypatch, tmp_path, "organizations"
+        )
+        with _agent_context("installed:email"):
+            grant_agent("microsoft", "installed:email", ["Mail.ReadWrite"])
+            with pytest.raises(AuthRequiredError) as exc:
+                await get_access_token(provider="microsoft", scopes=["Mail.ReadWrite"])
+        assert exc.value.reason is AuthRequiredError.Reason.TENANT_MISMATCH
+
+    def test_authorize_access_itself_raises_eagerly(self, monkeypatch, tmp_path):
+        # Isolates api._authorize_access specifically — the eager
+        # pre-network-round-trip check — from get_or_refresh's OWN (already
+        # correct) tenant check, so this call site's threading is proven
+        # independently rather than riding on get_or_refresh's coattails.
+        from gaia.connectors.api import _authorize_access
+
+        self._seed_microsoft_with_recorded_tenant(
+            monkeypatch, tmp_path, "organizations"
+        )
+        with pytest.raises(AuthRequiredError) as exc:
+            _authorize_access(
+                provider="microsoft",
+                scopes=["Mail.ReadWrite"],
+                agent_id=None,
+                account_email="default",
+            )
+        assert exc.value.reason is AuthRequiredError.Reason.TENANT_MISMATCH
+
+    def test_list_connections_clears_mismatched_row(self, monkeypatch, tmp_path):
+        self._seed_microsoft_with_recorded_tenant(
+            monkeypatch, tmp_path, "organizations"
+        )
+        rows = list_connections()
+        # The tripwire fires inside list_connections' load_connection call —
+        # the mismatched row is cleared, mirroring existing hash-tripwire
+        # behaviour (a AuthRequiredError there is caught and the row
+        # skipped), never a crash of the whole listing.
+        assert not any(r["provider"] == "microsoft" for r in rows)
+
+    def test_tripwire_check_clears_mismatched_connection(self, monkeypatch, tmp_path):
+        from gaia.connectors.api import tripwire_check
+        from gaia.connectors.store import peek_connection
+
+        self._seed_microsoft_with_recorded_tenant(
+            monkeypatch, tmp_path, "organizations"
+        )
+        tripwire_check()
+        assert peek_connection("microsoft") is None

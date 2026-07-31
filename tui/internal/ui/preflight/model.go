@@ -55,7 +55,8 @@ type Options struct {
 	// Defaults to 800ms.
 	ReadyHold time.Duration
 	// ManualProceed keeps the screen up until the user presses enter, even when
-	// everything is ready. Used by tests and by `--debug`.
+	// everything is ready. Test-only: the sole caller of WithPreflight is
+	// test/preflight_gate_test.go, not any interactive flag.
 	ManualProceed bool
 	// Logf receives diagnostics. Never given a token.
 	Logf func(format string, args ...any)
@@ -305,8 +306,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.focus = 0
 		}
-		if !m.rep.Blocked() && !m.opts.ManualProceed {
-			// Nothing failed. Indeterminate rows do not block the launch — the
+		// A row the user can fix with one keypress holds the screen even when it
+		// does not block: the mailbox row is exactly that, and handing off past it
+		// would take `f connect a mailbox` away with the screen it was on.
+		if !m.rep.Blocked() && !m.opts.ManualProceed && !m.rep.HasOneKeyFix() {
+			if m.rep.HasHalt() {
+				// Three edits together: the tick, the phase, and the note each
+				// independently claim the launch is starting.
+				m.note = "Waiting — " + m.unverifiedSummary()
+				return m, m.haltOutcomesCmd()
+			}
+			// Nothing failed, and nothing unproven is consequential enough to
+			// hold for. Indeterminate rows do not block the launch — the
 			// sidecar itself does not treat an unadvertised version as fatal, and
 			// making the user press enter on EVERY launch against such a server
 			// would train them to press it without reading. They are held longer
@@ -487,6 +498,21 @@ func (m Model) unverifiedSummary() string {
 func (m Model) proceed() tea.Cmd {
 	agentID := m.cfg.AgentID
 	return func() tea.Msg { return ProceedMsg{AgentID: agentID} }
+}
+
+// haltOutcomesCmd emits one status.Outcome per HaltingRows() row, for the
+// host's listener to act on. Only reached from the HasHalt() branch above —
+// a Blocked() report never calls this, so an offerable failure (a mailbox
+// the agent repairs in conversation) never gets a second prompt in front of
+// the one it already offers.
+func (m Model) haltOutcomesCmd() tea.Cmd {
+	rows := m.rep.HaltingRows()
+	cmds := make([]tea.Cmd, 0, len(rows))
+	for _, row := range rows {
+		o := row.Outcome()
+		cmds = append(cmds, func() tea.Msg { return o })
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m Model) View() string { return m.render() }

@@ -103,6 +103,48 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **A Gmail rate-limit no longer kills the whole scan (#2720, #2716).** Gmail
+  enforces a per-user concurrent-request limit, and the metadata-first batch
+  fetch (#2643) was oversized enough to reliably trip it — one 429'd
+  sub-request discarded the other 99 already-successful results and the
+  entire attention view/triage scan failed, surfacing a raw
+  `CONNECTOR_ERROR: All connected mailboxes failed` (or, worse, the raw
+  upstream JSON payload verbatim on the terminal). The batch subrequest
+  ceiling is now 25 (measured against a live mailbox — 100 cold-429s, 25
+  succeeds), a 429 is retried with bounded backoff (honouring `Retry-After`
+  on the outer request), and a message that's still rate-limited after
+  retrying is dropped individually — the attention view now shows every
+  other message and reports the dropped one in `coverage.message_errors`,
+  instead of failing the whole scan for everyone. `get_thread` (used by
+  waiting-on-you detection on every scan) and the single-message fetch path
+  get the same retry, not just the batch endpoint. The raw upstream error
+  payload — previously interpolated with `repr()`, which could put terminal
+  control/escape bytes on a user's screen — is now sanitized before it
+  reaches any error message. The three tunables (batch size, retry
+  attempts, backoff ceiling) are environment-overridable
+  (`GAIA_EMAIL_GMAIL_BATCH_MAX_SUBREQUESTS`,
+  `GAIA_EMAIL_GMAIL_RATE_LIMIT_MAX_ATTEMPTS`,
+  `GAIA_EMAIL_GMAIL_RATE_LIMIT_MAX_BACKOFF_SECONDS`) so a bad value can be
+  corrected without a new release.
+- **A priority-sender match no longer forces a message to URGENT (#2632).**
+  `_apply_session_preferences` used to override the heuristic/LLM's category
+  outright the moment a sender matched the priority list — a Substack
+  newsletter from a priority sender got promoted straight to URGENT even
+  though the same decision's own reason line named Gmail's `CATEGORY_UPDATES`
+  label as the (non-urgent) verdict. The preference now only tags
+  `preference_applied` and updates the reason line for salience; category is
+  always decided by content. The low-priority-sender branch (an explicit
+  "downrank this sender" request) is unchanged.
+- **A short, first-person human message proposing continued business no
+  longer disappears into the informational tail (#2633).** The triage LLM
+  prompt gained a disambiguation rule + worked example (paired with a hard
+  negative so brevity alone doesn't now over-trigger `NEEDS_RESPONSE`) for
+  messages like "Nice meeting you ... let me know what you think" that carry
+  no explicit question mark or deadline but still warrant a reply.
+  Independently, `pre_scan_inbox` gained an `include_informational` flag: the
+  informational bucket was previously a bare count with no way to audit it
+  ("95 informational, not listed") — passing the flag now returns the full
+  id/sender/subject list for that count, at no extra scan cost.
 - **The assistant no longer narrates things the current turn's own tools
   don't support (#2621, #2622, #2636, #2637).** Four related honesty
   defects, all guarded by one new mechanism: a mutation ("archived",
@@ -300,6 +342,19 @@ contract version is tracked separately as
   mail exists, never from comparing request/response length — a mailbox
   whose size exactly equals the request now correctly reports no truncation,
   instead of the length-only formula's false positive.
+- **A slow credential-store read no longer takes the whole sidecar down.**
+  `GET /v1/email/connectors` read the OS credential store directly on the
+  asyncio event loop, and that read has no bounded worst case — on macOS it can
+  sit in `SecItemCopyMatching` waiting on an authorization decision a background
+  process never receives, and a corrupted or contended store can stall it too.
+  On the loop, a stall like that costs the whole process rather than one
+  request: nothing else can be scheduled until it returns, so every route stops
+  answering, `/health` included, while the process stays alive and its
+  supervisor goes on reporting it "running". Seen in the field on one machine
+  and captured with a stack sample of the parked loop. The read now runs off the
+  loop, so however long the credential store takes, the rest of the sidecar
+  keeps answering.
+
 - **`POST /autonomy/run` refuses instead of silently no-oping while autonomy
   is `off` (#2528).** Previously the route returned HTTP 200 with the same
   empty-report shape whether autonomy was disabled or had genuinely run and
@@ -364,6 +419,26 @@ contract version is tracked separately as
   `available_mailbox_providers()` + `get_connection`), so a disconnect →
   reconnect made without restarting GAIA is reflected on the next question.
   The reactive fail-loud errors on mailbox *operations* are unchanged.
+
+- **`POST /autonomy/run` and `/autonomy/undo` no longer collapse an actionable
+  connector error into a bare, textless HTTP 500 (#2617).** Both routes let a
+  `ConnectorsError` from mailbox I/O (e.g. no forwarded credential) escape
+  unhandled, so FastAPI turned the agent's own detailed message — what's
+  missing and the exact `gaia connectors connect ...` command to fix it —
+  into a plain "Internal Server Error" with no body, which the CLI then
+  reduced further to the string `HTTP 500`. Both routes now catch
+  `ConnectorsError` and re-raise as an `HTTPException` carrying the real
+  message, mapped to status per the same table used by the Agent UI's
+  connectors router (`ConfigurationError` → 503, `AuthRequiredError` →
+  401/403, any other `ConnectorsError`, the observed case, stays 500 — now
+  with a body). `gaia email autonomy run` no longer prints the same error
+  twice (`log.error` + `print`) either — one line on stderr, with the log
+  record still available under `--logging-level debug`.
+  **Follow-up:** the "no mailbox connected yet" cold-start error is a
+  *different* `ConfigurationError` class (`gaia_agent_email.config`, not
+  `gaia.connectors.errors`) that shares no base class with `ConnectorsError`
+  — it still escaped `/autonomy/run` as a textless 500. Now caught
+  explicitly and mapped to 503, same as its connectors-side namesake.
 
 ### Fixed
 

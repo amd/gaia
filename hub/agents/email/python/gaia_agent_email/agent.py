@@ -1445,7 +1445,9 @@ class EmailTriageAgent(
                 new_promotions,
             )
 
-    def _pre_scan_all_backends(self, *, max_messages: int) -> dict:
+    def _pre_scan_all_backends(
+        self, *, max_messages: int, include_informational: bool = False
+    ) -> dict:
         """Pre-scan every connected mailbox, tag each item, merge under budget.
 
         Same TOTAL-budget split as ``_triage_all_backends``. Each section item
@@ -1456,6 +1458,9 @@ class EmailTriageAgent(
         When one backend raises ``ConnectorsError`` (e.g. a revoked agent grant),
         the error is recorded in ``mailbox_errors`` and the loop continues with
         the remaining backends. Non-``ConnectorsError`` exceptions still propagate.
+
+        ``include_informational`` (#2633) is forwarded to
+        ``merge_pre_scan_backends`` — see that function's docstring.
         """
         from gaia_agent_email.tools.read_tools import merge_pre_scan_backends
 
@@ -1465,6 +1470,7 @@ class EmailTriageAgent(
             max_messages=max_messages,
             session_preferences=getattr(self, "_session_preferences", None),
             force_llm=bool(getattr(self.config, "force_llm", False)),
+            include_informational=include_informational,
             debug=bool(getattr(self.config, "debug", False)),
             remember_mailbox=self._remember_message_mailbox,
         )

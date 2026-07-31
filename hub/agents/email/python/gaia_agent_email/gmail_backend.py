@@ -35,8 +35,13 @@ from __future__ import annotations
 import base64
 import email as _email_parser
 import json
+import os
+import random
 import re
+import time
 import uuid
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 from typing import (
     Any,
@@ -51,19 +56,18 @@ from typing import (
 )
 
 import httpx
+from gaia_agent_email.google_errors import (
+    access_not_configured_message,
+    access_not_configured_url,
+)
 from gaia_agent_email.scopes import (
     AGENT_NAMESPACED_ID,
     GMAIL_SCOPES,
     SCOPE_GMAIL_FULL_MAILBOX,
 )
 
-from gaia_agent_email.google_errors import (
-    access_not_configured_message,
-    access_not_configured_url,
-)
-
 from gaia.connectors.api import get_access_token_sync
-from gaia.connectors.errors import ConnectorsError, ScopeMismatchError
+from gaia.connectors.errors import ConnectorsError, RateLimitedError, ScopeMismatchError
 from gaia.logger import get_logger
 
 log = get_logger(__name__)
@@ -82,12 +86,89 @@ GMAIL_LABEL_STARRED = "STARRED"
 # metadata response small regardless of how many headers the sender added.
 # ``FakeGmailBackend`` filters to this same set so a hermetic run measures
 # the same shape live Gmail would return.
-METADATA_SCAN_HEADERS: Tuple[str, ...] = ("Subject", "From", "To", "Date", "List-Unsubscribe")
+METADATA_SCAN_HEADERS: Tuple[str, ...] = (
+    "Subject",
+    "From",
+    "To",
+    "Date",
+    "List-Unsubscribe",
+)
 
-# Gmail's documented per-batch subrequest ceiling. A caller passing more ids
-# than this to ``get_messages_batch`` is chunked into multiple batch calls,
-# never a single oversized request.
-_BATCH_MAX_SUBREQUESTS = 100
+# Gmail enforces a per-user CONCURRENT request limit: 100 ids in one batch
+# reliably 429s; 25 is the largest size measured safe back-to-back. A caller
+# passing more ids than this to ``get_messages_batch`` is chunked into
+# multiple sequential batch calls, never a single oversized request.
+# Override for testing/tuning without a new release (this ships as a
+# frozen-binary sidecar).
+_BATCH_MAX_SUBREQUESTS = int(
+    os.environ.get("GAIA_EMAIL_GMAIL_BATCH_MAX_SUBREQUESTS", "25")
+)
+
+# Retry budget for a Gmail 429: K total attempts (1 initial + K-1 retries),
+# truncated exponential backoff with jitter, per Google's documented formula
+# (https://developers.google.com/gmail/api/reference/quota, "Start retry
+# periods at least one second after the error"). Retry k (1-indexed) sleeps
+# min(2**(k-1) + jitter, max_backoff) -- 1s, 2s, 4s for k=1..3 at the
+# defaults below.
+_RATE_LIMIT_MAX_ATTEMPTS = int(
+    os.environ.get("GAIA_EMAIL_GMAIL_RATE_LIMIT_MAX_ATTEMPTS", "4")
+)
+_RATE_LIMIT_MAX_BACKOFF_SECONDS = float(
+    os.environ.get("GAIA_EMAIL_GMAIL_RATE_LIMIT_MAX_BACKOFF_SECONDS", "32")
+)
+# Wall-clock budget shared across every chunk of one get_messages_batch call:
+# computed once by get_messages_batch and threaded into each
+# _batch_get_messages call, not reset per chunk -- otherwise a multi-chunk
+# scan retries each chunk independently and the worst case balloons toward
+# chunks * max_attempts * max_backoff, uncomfortably close to the TUI's 60s
+# request timeout.
+_RATE_LIMIT_BUDGET_SECONDS = float(
+    os.environ.get("GAIA_EMAIL_GMAIL_RATE_LIMIT_BUDGET_SECONDS", "20")
+)
+
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _sanitize_preview(text: str) -> str:
+    """Strip C0/DEL control bytes from upstream text before it reaches a
+    user's terminal -- ``errors="replace"`` alone does not, since
+    well-formed UTF-8 carrying real ESC/CSI/OSC bytes passes straight
+    through it."""
+    return _CONTROL_CHARS_RE.sub(" ", text)
+
+
+def _backoff_seconds(attempt: int) -> float:
+    """Truncated exponential backoff with jitter for retry *k* (1-indexed)."""
+    jitter = random.uniform(0, 1.0)
+    return min(2 ** (attempt - 1) + jitter, _RATE_LIMIT_MAX_BACKOFF_SECONDS)
+
+
+def _parse_retry_after(value: Optional[str]) -> Optional[float]:
+    """Parse an HTTP ``Retry-After`` header: delta-seconds or an RFC 7231
+    HTTP-date. Returns ``None`` on anything unparseable so the caller falls
+    through to the backoff formula -- Gmail does not document sending this
+    header, so it is honoured when present but never depended upon.
+    Clamped to ``[1, _RATE_LIMIT_MAX_BACKOFF_SECONDS]`` so a hostile or
+    buggy value (``0``, negative, or huge) can't cause a tight-loop retry
+    or an unbounded stall.
+    """
+    if not value:
+        return None
+    try:
+        seconds = float(value)
+    except ValueError:
+        try:
+            dt = parsedate_to_datetime(value)
+        except (TypeError, ValueError, IndexError):
+            return None
+        if dt is None:
+            return None
+        if dt.tzinfo is None:
+            # Legacy two-digit-year HTTP-date forms parse as naive --
+            # treat as UTC rather than comparing naive vs aware and raising.
+            dt = dt.replace(tzinfo=timezone.utc)
+        seconds = (dt - datetime.now(timezone.utc)).total_seconds()
+    return max(1.0, min(seconds, _RATE_LIMIT_MAX_BACKOFF_SECONDS))
 
 
 # ---------------------------------------------------------------------------
@@ -554,11 +635,7 @@ def _parse_batch_response(
         raw = part.get_payload(decode=True)
         if raw is None:
             payload_text = part.get_payload()
-            raw = (
-                payload_text.encode("utf-8")
-                if isinstance(payload_text, str)
-                else b""
-            )
+            raw = payload_text.encode("utf-8") if isinstance(payload_text, str) else b""
         status, json_body = _parse_embedded_http_response(raw)
         out.append((idx, status, json_body))
     return out
@@ -629,6 +706,16 @@ class LiveGmailBackend:
         # Authorization header.
         if response.status_code == 401:
             raise ConnectorsError(self._unauthorized_message(where))
+        if response.status_code == 429:
+            raise RateLimitedError(
+                "google",
+                message=(
+                    f"Gmail API {where} was rate-limited (429) and retries "
+                    f"were exhausted: {_sanitize_preview(response.text[:300])}. "
+                    "This is a transient per-user concurrency limit, not a "
+                    "permanent failure — try again in a minute."
+                ),
+            )
         enable_url = access_not_configured_url(response)
         if enable_url:
             raise ConnectorsError(
@@ -636,27 +723,61 @@ class LiveGmailBackend:
             )
         raise ConnectorsError(
             f"Gmail API {where} returned {response.status_code}: "
-            f"{response.text[:300]}"
+            f"{_sanitize_preview(response.text[:300])}"
         )
 
-    def _get(self, path: str, *, params: Optional[dict] = None) -> Any:
-        resp = self._client.get(
-            f"{GMAIL_API_BASE}{path}", headers=self._headers(), params=params
+    def _sleep_before_retry(self, attempt: int, retry_after: Optional[str]) -> None:
+        # No credential-bearing values in this log line -- never headers,
+        # never response.request, never an httpx exception object, which
+        # could carry the Authorization header set in ``_headers()``.
+        delay = _parse_retry_after(retry_after)
+        if delay is None:
+            delay = _backoff_seconds(attempt)
+        log.warning(
+            "Gmail API rate-limited (429); retrying attempt %d/%d in %.1fs",
+            attempt + 1,
+            _RATE_LIMIT_MAX_ATTEMPTS,
+            delay,
         )
+        time.sleep(delay)
+
+    def _do_request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+        """Issue one HTTP request, retrying up to ``_RATE_LIMIT_MAX_ATTEMPTS``
+        total attempts when Gmail returns 429 -- shared by
+        ``_get``/``_post``/``_delete`` so ``get_thread`` and the single-id
+        ``get_message`` short-circuit in ``get_messages_batch`` get the same
+        retry the batch path gets, not just the batch endpoint itself. The
+        final response (success, a non-429 failure, or an exhausted 429) is
+        returned unchanged; the caller still does its own status check and
+        raise via ``_raise_http``.
+        """
+        deadline = time.monotonic() + _RATE_LIMIT_BUDGET_SECONDS
+        resp = self._client.request(method, url, headers=self._headers(), **kwargs)
+        attempt = 1
+        while (
+            resp.status_code == 429
+            and attempt < _RATE_LIMIT_MAX_ATTEMPTS
+            and time.monotonic() < deadline
+        ):
+            self._sleep_before_retry(attempt, resp.headers.get("Retry-After"))
+            attempt += 1
+            resp = self._client.request(method, url, headers=self._headers(), **kwargs)
+        return resp
+
+    def _get(self, path: str, *, params: Optional[dict] = None) -> Any:
+        resp = self._do_request("GET", f"{GMAIL_API_BASE}{path}", params=params)
         if resp.status_code != 200:
             self._raise_http(resp, f"GET {path}")
         return resp.json()
 
     def _post(self, path: str, *, json_body: Optional[dict] = None) -> Any:
-        resp = self._client.post(
-            f"{GMAIL_API_BASE}{path}", headers=self._headers(), json=json_body
-        )
+        resp = self._do_request("POST", f"{GMAIL_API_BASE}{path}", json=json_body)
         if resp.status_code not in (200, 201, 204):
             self._raise_http(resp, f"POST {path}")
         return resp.json() if resp.text else {}
 
     def _delete(self, path: str) -> None:
-        resp = self._client.delete(f"{GMAIL_API_BASE}{path}", headers=self._headers())
+        resp = self._do_request("DELETE", f"{GMAIL_API_BASE}{path}")
         if resp.status_code not in (200, 204):
             self._raise_http(resp, f"DELETE {path}")
 
@@ -702,68 +823,153 @@ class LiveGmailBackend:
     ) -> Dict[str, Dict[str, Any]]:
         """Fetch multiple messages via Gmail's batch HTTP endpoint (#2643).
 
-        Chunks at ``_BATCH_MAX_SUBREQUESTS`` (Gmail's documented per-batch
-        subrequest ceiling). A single id skips the batch endpoint entirely —
-        multipart framing overhead is pure waste for one message — and calls
-        ``get_message`` directly. Every requested id is guaranteed a
-        corresponding entry in the returned map or the call raises
-        ``ConnectorsError``; a batch response with fewer parts than requested,
-        an unparseable part, or a non-2xx embedded response is never silently
-        dropped or substituted with a partial result.
+        Chunks at ``_BATCH_MAX_SUBREQUESTS`` (kept under Gmail's per-user
+        concurrency limit). A single id skips the batch endpoint entirely —
+        multipart framing overhead is pure waste for one message — and
+        calls ``get_message`` directly; that path retries a 429 too (via
+        ``_get``), it just never touches the batch wire format.
+
+        A 429 — either on the outer batch POST or embedded in one
+        sub-response — is retried with bounded backoff; only the
+        ids that actually 429'd are re-sent, correlated by message-id
+        string (never by an index inherited from a shrunk retry batch,
+        which is renumbered from zero). Every requested id is guaranteed a
+        corresponding entry in the returned map, OR the call raises
+        ``RateLimitedError`` (a ``ConnectorsError``) once every chunk has
+        been attempted, carrying whatever DID succeed in
+        ``.partial_results`` and the ids that never resolved in
+        ``.message_ids`` — earlier chunks' results are never discarded
+        because a later chunk exhausted its retry budget. A non-429
+        failure (a genuine 404/403/500) still raises ``ConnectorsError``
+        immediately, unretried, exactly as before.
         """
         ids = list(message_ids)
         if not ids:
             return {}
         if len(ids) == 1:
-            return {ids[0]: self.get_message(ids[0], format=format)}
+            try:
+                return {ids[0]: self.get_message(ids[0], format=format)}
+            except RateLimitedError as exc:
+                raise RateLimitedError(
+                    exc.provider,
+                    message_ids=[ids[0]],
+                    partial_results=exc.partial_results,
+                    message=str(exc),
+                ) from exc
         out: Dict[str, Dict[str, Any]] = {}
+        failed_ids: List[str] = []
+        deadline = time.monotonic() + _RATE_LIMIT_BUDGET_SECONDS
         for start in range(0, len(ids), _BATCH_MAX_SUBREQUESTS):
             chunk = ids[start : start + _BATCH_MAX_SUBREQUESTS]
-            out.update(self._batch_get_messages(chunk, format=format))
+            try:
+                out.update(
+                    self._batch_get_messages(chunk, format=format, deadline=deadline)
+                )
+            except RateLimitedError as exc:
+                out.update(exc.partial_results)
+                failed_ids.extend(exc.message_ids)
+        if failed_ids:
+            raise RateLimitedError(
+                "google",
+                message_ids=failed_ids,
+                partial_results=out,
+                message=(
+                    f"Gmail rate-limited the batch fetch for {len(failed_ids)} "
+                    f"of {len(ids)} message(s) after exhausting retries "
+                    f"({failed_ids[:5]}{'...' if len(failed_ids) > 5 else ''}). "
+                    "This is a transient per-user concurrency limit — try "
+                    "again in a minute."
+                ),
+            )
         return out
 
     def _batch_get_messages(
-        self, ids: List[str], *, format: str
+        self, ids: List[str], *, format: str, deadline: Optional[float] = None
     ) -> Dict[str, Dict[str, Any]]:
-        boundary = f"batch_{uuid.uuid4().hex}"
-        body = _build_batch_request_body(ids, format=format, boundary=boundary)
-        headers = self._headers()
-        headers["Content-Type"] = f'multipart/mixed; boundary="{boundary}"'
-        resp = self._client.post(GMAIL_BATCH_URL, headers=headers, content=body)
-        if resp.status_code != 200:
-            self._raise_http(resp, "POST /batch/gmail/v1")
-        try:
-            parts = _parse_batch_response(
-                resp.headers.get("content-type", ""), resp.content
-            )
-        except ValueError as exc:
-            raise ConnectorsError(
-                f"Gmail batch response for {len(ids)} message(s) could not be "
-                f"parsed: {exc}"
-            ) from exc
-        by_index = {idx: (status, payload) for idx, status, payload in parts}
+        """Fetch exactly ``ids`` via one or more batch POSTs, retrying only
+        the ids Gmail 429'd until they resolve or ``deadline`` passes.
+
+        ``deadline`` is a ``time.monotonic()`` timestamp shared across every
+        chunk of the caller's ``get_messages_batch`` call, so retries on
+        chunk 2 draw down the same budget chunk 1 already spent rather than
+        getting a fresh one. Defaults to a self-computed deadline so a
+        direct caller (e.g. a test) still gets a working budget.
+        """
         out: Dict[str, Dict[str, Any]] = {}
-        for i, mid in enumerate(ids):
-            if i not in by_index:
-                raise ConnectorsError(
-                    f"Gmail batch response had no part for message {mid!r} "
-                    f"(request index {i}) — {len(parts)} of {len(ids)} parts "
-                    "returned"
-                )
-            status, payload = by_index[i]
-            if status != 200:
-                raise ConnectorsError(
-                    f"Gmail batch GET for message {mid!r} returned {status}: "
-                    f"{payload[:300].decode('utf-8', errors='replace')!r}"
-                )
+        pending = list(ids)
+        if deadline is None:
+            deadline = time.monotonic() + _RATE_LIMIT_BUDGET_SECONDS
+        for attempt in range(1, _RATE_LIMIT_MAX_ATTEMPTS + 1):
+            boundary = f"batch_{uuid.uuid4().hex}"
+            body = _build_batch_request_body(pending, format=format, boundary=boundary)
+            headers = self._headers()
+            headers["Content-Type"] = f'multipart/mixed; boundary="{boundary}"'
+            resp = self._client.post(GMAIL_BATCH_URL, headers=headers, content=body)
+            exhausted = (
+                attempt == _RATE_LIMIT_MAX_ATTEMPTS or time.monotonic() >= deadline
+            )
+            if resp.status_code == 429:
+                # The whole batch was rejected before Gmail parsed any
+                # sub-request -- a real Retry-After header may be present
+                # here (unlike the embedded case below, whose headers are
+                # discarded by the parser).
+                if exhausted:
+                    raise RateLimitedError(
+                        "google", message_ids=pending, partial_results=out
+                    )
+                self._sleep_before_retry(attempt, resp.headers.get("Retry-After"))
+                continue
+            if resp.status_code != 200:
+                self._raise_http(resp, "POST /batch/gmail/v1")
             try:
-                out[mid] = json.loads(payload)
-            except json.JSONDecodeError as exc:
+                parts = _parse_batch_response(
+                    resp.headers.get("content-type", ""), resp.content
+                )
+            except ValueError as exc:
                 raise ConnectorsError(
-                    f"Gmail batch response for message {mid!r} was not valid "
-                    f"JSON: {exc}"
+                    f"Gmail batch response for {len(pending)} message(s) "
+                    f"could not be parsed: {exc}"
                 ) from exc
-        return out
+            by_index = {idx: (status, payload) for idx, status, payload in parts}
+            retry_ids: List[str] = []
+            for i, mid in enumerate(pending):
+                if i not in by_index:
+                    raise ConnectorsError(
+                        f"Gmail batch response had no part for message "
+                        f"{mid!r} (request index {i}) — {len(parts)} of "
+                        f"{len(pending)} parts returned"
+                    )
+                status, payload = by_index[i]
+                if status == 429:
+                    retry_ids.append(mid)
+                    continue
+                if status != 200:
+                    raise ConnectorsError(
+                        f"Gmail batch GET for message {mid!r} returned "
+                        f"{status}: "
+                        f"{_sanitize_preview(payload[:300].decode('utf-8', errors='replace'))}"
+                    )
+                try:
+                    out[mid] = json.loads(payload)
+                except json.JSONDecodeError as exc:
+                    raise ConnectorsError(
+                        f"Gmail batch response for message {mid!r} was not "
+                        f"valid JSON: {exc}"
+                    ) from exc
+            if not retry_ids:
+                return out
+            if exhausted:
+                raise RateLimitedError(
+                    "google", message_ids=retry_ids, partial_results=out
+                )
+            # Embedded sub-response headers are discarded by
+            # ``_parse_embedded_http_response`` (never parsed for
+            # Retry-After) -- backoff formula only.
+            self._sleep_before_retry(attempt, retry_after=None)
+            pending = retry_ids
+        # Unreachable (the loop always returns or raises above), but keeps
+        # this fail-loud if the attempt-count invariant is ever broken.
+        raise RateLimitedError("google", message_ids=pending, partial_results=out)
 
     def get_thread(self, thread_id: str) -> Dict[str, Any]:
         return self._get(f"/threads/{thread_id}", params={"format": "full"})

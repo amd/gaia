@@ -65,7 +65,7 @@ from gaia_agent_email.verbose import (
 )
 
 from gaia.agents.base.tools import tool
-from gaia.connectors.errors import ConnectorsError
+from gaia.connectors.errors import ConnectorsError, RateLimitedError
 from gaia.connectors.formatting import format_connector_error
 from gaia.logger import get_logger
 
@@ -910,10 +910,17 @@ def _apply_session_preferences(
 ) -> Dict[str, Any]:
     """Layer session-scoped sender overrides onto a heuristic decision.
 
-    Mutates a copy of ``decision`` and returns it. Sender overrides take
-    precedence over the heuristic; the original heuristic rationale is
-    preserved alongside the override reason so the UI / logs still see
-    why the heuristic would have classified the message differently.
+    Mutates a copy of ``decision`` and returns it.
+
+    Resolution rule (#2632): a priority-sender match never overrides
+    ``category`` — content (the heuristic or the LLM) decides severity,
+    a sender preference only raises salience. "I care about this sender"
+    is not "this message is urgent": a newsletter from a priority sender
+    stays exactly as low-signal as its content says, tagged with
+    ``preference_applied`` so a caller can still surface/order it earlier.
+    The low-priority-sender branch is unchanged — it still commits
+    PROMOTIONAL, since that is an explicit user request to downrank a
+    sender rather than an inferred one.
 
     Safety override: a phishing-flagged message bypasses BOTH priority
     and low-priority sender preferences. A user can't safely promote a
@@ -937,12 +944,12 @@ def _apply_session_preferences(
             out["preference_applied"] = "skipped_phishing_or_spam"
         return out
     if sender_addr and sender_addr in priority_senders:
-        out["category"] = CATEGORY_URGENT
-        out["confident"] = True
         out["preference_applied"] = "priority_sender"
         out["rationale"] = (
-            f"priority sender (session preference): {sender_addr} "
-            f"[heuristic said: {decision.get('rationale', '')}]"
+            f"priority sender (session preference): {sender_addr} -- "
+            "raises salience only, category unchanged (content "
+            f"classified it {decision.get('category')}: "
+            f"{decision.get('rationale', '')})"
         )
     elif sender_addr and sender_addr in low_priority_senders:
         out["category"] = CATEGORY_PROMOTIONAL
@@ -1029,8 +1036,8 @@ def _list_all_stubs(
 
 
 def _fetch_messages(
-    gmail, ids: List[str], *, format: str
-) -> Dict[str, Dict[str, Any]]:
+    gmail, ids: List[str], *, format: str, on_rate_limit: str = "raise"
+) -> Tuple[Dict[str, Dict[str, Any]], List[str]]:
     """Fetch ``ids`` in as few round-trips as ``gmail`` supports (#2643).
 
     Prefers the backend's own ``get_messages_batch`` — a duck-typed
@@ -1044,34 +1051,55 @@ def _fetch_messages(
     ``TypeError`` raised inside a real ``get_message`` for missing format
     support and silently swallow a genuine bug.
 
-    Every id in ``ids`` is guaranteed a corresponding entry in the returned
-    map, or this raises — a backend handing back fewer than requested is a
-    silently partial scan, which this package never allows (mirrors
-    ``_list_all_stubs``'s page-failure-propagates rule and
-    ``EnvelopeBudgetExceeded``'s fail-loud contract elsewhere in this file).
+    Returns ``(fetched, dropped_ids)``. With the default ``on_rate_limit=
+    "raise"``, ``dropped_ids`` is always empty and the original all-or-
+    nothing contract holds unchanged: every id in ``ids`` is guaranteed a
+    corresponding entry in ``fetched``, or this raises — a backend handing
+    back fewer than requested is a silently partial scan, which this
+    package never allows (mirrors ``_list_all_stubs``'s
+    page-failure-propagates rule and ``EnvelopeBudgetExceeded``'s
+    fail-loud contract elsewhere in this file).
+
+    ``on_rate_limit="skip"`` catches ONLY ``RateLimitedError`` — never a
+    bare ``ConnectorsError``, so a genuine 404/auth failure still aborts
+    loudly — keeps whatever messages the backend already fetched, and
+    reports the rate-limited ids via ``dropped_ids`` instead of raising.
+    A known-skipped id is never "missing": only an id absent from both
+    ``fetched`` and ``dropped_ids`` (a real backend bug) still raises.
     """
     if not ids:
-        return {}
+        return {}, []
+    dropped: List[str] = []
     batch_fn = getattr(gmail, "get_messages_batch", None)
     if callable(batch_fn):
-        out = dict(batch_fn(ids, format=format))
+        try:
+            out = dict(batch_fn(ids, format=format))
+        except RateLimitedError as exc:
+            if on_rate_limit != "skip":
+                raise
+            out = dict(exc.partial_results)
+            dropped = list(exc.message_ids)
     else:
         supports_format = "format" in inspect.signature(gmail.get_message).parameters
-        out = {
-            mid: (
-                gmail.get_message(mid, format=format)
-                if supports_format
-                else gmail.get_message(mid)
-            )
-            for mid in ids
-        }
-    missing = [mid for mid in ids if mid not in out]
+        out = {}
+        for mid in ids:
+            try:
+                out[mid] = (
+                    gmail.get_message(mid, format=format)
+                    if supports_format
+                    else gmail.get_message(mid)
+                )
+            except RateLimitedError:
+                if on_rate_limit != "skip":
+                    raise
+                dropped.append(mid)
+    missing = [mid for mid in ids if mid not in out and mid not in dropped]
     if missing:
         raise RuntimeError(
             f"mail backend returned {len(out)} of {len(ids)} requested "
             f"message(s) during a triage scan; missing: {missing[:5]}"
         )
-    return out
+    return out, dropped
 
 
 def triage_inbox_impl(
@@ -1084,6 +1112,7 @@ def triage_inbox_impl(
     classifier: Optional[Callable[..., Mapping[str, Any]]] = None,
     debug: bool = False,
     progress: Optional[Callable[[int, int, str], None]] = None,
+    on_rate_limit: str = "raise",
 ) -> Dict[str, Any]:
     """Triage the inbox using heuristic fast path + LLM fallback.
 
@@ -1152,6 +1181,16 @@ def triage_inbox_impl(
     ``max_messages`` is collected or the mailbox is exhausted — previously
     this issued a single ``list_messages`` call and silently capped
     coverage at one provider page regardless of what was requested.
+
+    ``on_rate_limit``: ``"raise"`` (the default) preserves the original
+    contract — a Gmail rate-limit that survives retry propagates as
+    ``RateLimitedError``, like any other ``ConnectorsError``. ``"skip"``
+    degrades instead: a rate-limited message is left out of ``results``
+    (never a half-built decision) and its id is added to the returned
+    ``dropped_ids`` list. Callers that need every message or nothing (the
+    LLM-facing tool, the chat-surface pre-scan) keep the default; only the
+    read-only attention view opts into ``"skip"``, since surfacing 99 of
+    100 signals beats a 500 over one rate-limited message.
     """
     # Local import breaks a real import cycle: calendar_tools imports
     # DEFAULT_BODY_LIMIT_CHARS from this module at module scope, so importing
@@ -1162,18 +1201,24 @@ def triage_inbox_impl(
     with log_tool_call(
         "triage_inbox", {"max_messages": max_messages}, debug=debug
     ) as st:
-        listing = _list_all_stubs(
-            gmail, label_ids=label_ids, max_messages=max_messages
-        )
+        listing = _list_all_stubs(gmail, label_ids=label_ids, max_messages=max_messages)
         stubs = listing["stubs"]
         stub_ids = [stub["id"] for stub in stubs]
 
         # Phase 1: metadata-only fetch for the whole scan (#2643 lever 1+2).
-        metadata_by_id = _fetch_messages(gmail, stub_ids, format="metadata")
+        metadata_by_id, metadata_dropped_ids = _fetch_messages(
+            gmail, stub_ids, format="metadata", on_rate_limit=on_rate_limit
+        )
 
         prepared: List[Dict[str, Any]] = []
         escalate_ids: List[str] = []
         for stub in stubs:
+            if stub["id"] in metadata_dropped_ids:
+                # Rate-limited away (on_rate_limit="skip") -- no metadata to
+                # classify with, so this message is simply absent from the
+                # result rather than a half-built decision. Its id is
+                # reported via dropped_ids below.
+                continue
             msg = metadata_by_id[stub["id"]]
             payload_headers = {
                 (h.get("name") or "").lower(): h.get("value", "")
@@ -1264,12 +1309,20 @@ def triage_inbox_impl(
         # Phase 2: full-body fetch ONLY for messages phase 1 flagged for LLM
         # follow-up (#2643 lever 1+2) — empty (and zero round-trips) whenever
         # nothing escalates, e.g. pre_scan_inbox's classifier=None path.
-        full_by_id = (
-            _fetch_messages(gmail, escalate_ids, format="full") if escalate_ids else {}
+        full_by_id, full_dropped_ids = (
+            _fetch_messages(
+                gmail, escalate_ids, format="full", on_rate_limit=on_rate_limit
+            )
+            if escalate_ids
+            else ({}, [])
         )
 
         results: List[Dict[str, Any]] = []
         for item in prepared:
+            if item["escalate"] and item["stub_id"] in full_dropped_ids:
+                # Rate-limited during the phase-2 body fetch -- same
+                # skip-not-crash treatment as a phase-1 drop above.
+                continue
             decision = item["decision"]
             heuristic = item["heuristic"]
             if item["escalate"]:
@@ -1325,6 +1378,10 @@ def triage_inbox_impl(
             "grouped": grouped,
             "resultSizeEstimate": listing["resultSizeEstimate"],
             "scan_truncated": listing["scan_truncated"],
+            # Message ids skipped under on_rate_limit="skip" -- always empty
+            # under the default "raise" (any drop would have propagated as
+            # RateLimitedError instead of reaching this return).
+            "dropped_ids": metadata_dropped_ids + full_dropped_ids,
         }
 
 
@@ -1479,6 +1536,7 @@ def pre_scan_inbox_impl(
     needs_review_cap: int = PRE_SCAN_NEEDS_REVIEW_CAP,
     session_preferences: Optional[Mapping[str, Any]] = None,
     force_llm: bool = False,
+    include_informational: bool = False,
     debug: bool = False,
 ) -> Dict[str, Any]:
     """Pre-scan the inbox for the chat surface.
@@ -1496,6 +1554,15 @@ def pre_scan_inbox_impl(
     sender overrides shape the underlying classification, and category
     defaults applied here move informational items into
     ``suggested_archives`` when the user has previously asked for that.
+
+    ``include_informational`` (#2633): the default envelope carries only
+    ``informational_count`` — a bare number, on purpose, so the default
+    card stays scannable. But a bare count is unauditable: a caller has no
+    way to tell a correctly-filtered newsletter from a miscategorized
+    message that needed a reply. When True, the ``informational`` field
+    carries the full list (id/sender/subject/why) of every message this
+    call classified informational, bounded only by ``max_messages`` — the
+    same list this function already builds internally, just not discarded.
 
     A ``confident=False`` heuristic result is a placeholder guess, not a
     real classification. It overrides routing into the two LOW-SIGNAL
@@ -1639,6 +1706,10 @@ def pre_scan_inbox_impl(
             "urgent": urgent[: max(0, urgent_cap)],
             "actionable": actionable[: max(0, actionable_cap)],
             "informational_count": len(informational),
+            # #2633: empty unless the caller opted in — the full list was
+            # already computed above, so honoring the flag costs nothing
+            # beyond what this call already did.
+            "informational": informational if include_informational else [],
             "suggested_archives": suggested_archives[: max(0, archive_cap)],
             "suggested_drafts": [],
             "needs_review": needs_review[: max(0, needs_review_cap)],
@@ -1684,6 +1755,7 @@ def merge_pre_scan_backends(
     max_messages: int = 25,
     session_preferences: Optional[Mapping[str, Any]] = None,
     force_llm: bool = False,
+    include_informational: bool = False,
     debug: bool = False,
     remember_mailbox: Optional[Callable[[Optional[str], str], None]] = None,
 ) -> Dict[str, Any]:
@@ -1706,6 +1778,10 @@ def merge_pre_scan_backends(
     half the budget to a dead one. ``remember_mailbox`` is the agent's
     optional message-id -> mailbox recorder for action routing; the stateless
     REST path omits it.
+
+    ``include_informational`` (#2633) is forwarded verbatim to every
+    per-backend ``pre_scan_inbox_impl`` call; the merged ``informational``
+    list is tagged with ``mailbox`` the same way the other four sections are.
     """
     prefs = session_preferences
     provider_backends = list(backends.items())
@@ -1714,6 +1790,7 @@ def merge_pre_scan_backends(
     actionable: List[Dict[str, Any]] = []
     suggested_archives: List[Dict[str, Any]] = []
     needs_review: List[Dict[str, Any]] = []
+    informational: List[Dict[str, Any]] = []
     informational_count = 0
     scanned = 0
     total_unread = 0
@@ -1737,6 +1814,7 @@ def merge_pre_scan_backends(
                 max_messages=per_backend,
                 session_preferences=prefs,
                 force_llm=force_llm,
+                include_informational=include_informational,
                 debug=debug,
             )
         except ConnectorsError as exc:
@@ -1761,6 +1839,7 @@ def merge_pre_scan_backends(
             ("actionable", actionable),
             ("suggested_archives", suggested_archives),
             ("needs_review", needs_review),
+            ("informational", informational),
         ):
             for item in out.get(section, []):
                 item["mailbox"] = provider
@@ -1791,6 +1870,7 @@ def merge_pre_scan_backends(
         "urgent": urgent[: max(0, PRE_SCAN_URGENT_CAP)],
         "actionable": actionable[: max(0, PRE_SCAN_ACTIONABLE_CAP)],
         "informational_count": informational_count,
+        "informational": informational,
         "suggested_archives": suggested_archives[: max(0, PRE_SCAN_ARCHIVE_CAP)],
         "suggested_drafts": [],
         "needs_review": needs_review[: max(0, PRE_SCAN_NEEDS_REVIEW_CAP)],
@@ -2218,7 +2298,9 @@ class ReadToolsMixin:
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
-        def pre_scan_inbox(max_messages: int = 50) -> str:
+        def pre_scan_inbox(
+            max_messages: int = 50, include_informational: bool = False
+        ) -> str:
             """Pre-scan the inbox into a typed envelope for the chat
             triage card.
 
@@ -2234,6 +2316,17 @@ class ReadToolsMixin:
             Covers read AND unread INBOX mail (#2638) — a message you
             already opened but never answered is exactly the bucket this
             view exists to surface.
+
+            ``informational_count`` alone is a bare number — it is NOT
+            proof every one of those messages is truly low-priority
+            (#2633). When the user asks what got filtered, what's in the
+            informational count, or to double-check nothing important was
+            skipped, call this tool AGAIN with ``include_informational=True``
+            — the ``informational`` field then carries the full id/sender/
+            subject list for that count instead of an empty list, at no
+            extra scan cost (same underlying data, already computed).
+            Leave it False for a normal triage request — the point of the
+            count is to keep the default card short.
 
             The result is a PARTIAL view of the mailbox, not the whole
             inbox: ``scanned`` reports how many messages were actually
@@ -2262,13 +2355,19 @@ class ReadToolsMixin:
             Args:
                 max_messages: How many INBOX messages (read + unread) to
                     scan (default 50, max 100).
+                include_informational: When True, return the full
+                    informational message list instead of just its count
+                    (default False — see above).
             """
             try:
                 max_messages = max(1, min(int(max_messages or 50), scan_ceiling))
                 # Phase 2 (#1603): pre-scan every connected mailbox, tag each
                 # section item with its source mailbox, split the budget, merge.
                 return _envelope_ok(
-                    agent._pre_scan_all_backends(max_messages=max_messages)
+                    agent._pre_scan_all_backends(
+                        max_messages=max_messages,
+                        include_informational=bool(include_informational),
+                    )
                 )
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))

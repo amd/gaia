@@ -101,6 +101,12 @@ class AuthRequiredError(ConnectorsError):
         AGENT_NOT_GRANTED = "agent_not_granted"
         CONNECTION_MISSING_SCOPES = "connection_missing_scopes"
         REAUTH_REQUIRED = "reauth_required"
+        # A6: distinct from REAUTH_REQUIRED — the stored connection was
+        # minted against a different OAuth tenant than the connector
+        # currently resolves to. The remedy differs (use the other
+        # Microsoft connector, not "just reconnect this one"), so callers
+        # must be able to branch on it separately.
+        TENANT_MISMATCH = "tenant_mismatch"
 
     def __init__(
         self,
@@ -152,6 +158,14 @@ class AuthRequiredError(ConnectorsError):
                 f"{self.provider or '<provider>'}`. "
                 "See docs/runbooks/google-oauth-client.md."
             )
+        if self.reason is AuthRequiredError.Reason.TENANT_MISMATCH:
+            return (
+                f"The stored {prov} connection was authenticated against a "
+                "different Microsoft tenant than the connector currently "
+                "resolves to. Reconnect from Settings → Connections, or run "
+                f"`gaia connectors connect {self.provider or '<provider>'}`. "
+                "See docs/connectors/microsoft.mdx."
+            )
         # Fallback — should be unreachable since Reason is a closed enum.
         return f"Authentication required for {prov} (reason={self.reason.value})."
 
@@ -201,6 +215,39 @@ class ScopeMismatchError(ConnectorsError):
             f"Connections, or run `gaia connectors connect "
             f"{self.provider or '<provider>'} --scopes <scope> ...`. "
             "See docs/sdk/infrastructure/connections.mdx."
+        )
+
+
+class RateLimitedError(ConnectorsError):
+    """A provider rate-limited a request and every retry attempt was exhausted.
+
+    Core (not hub-local) so ``format_connector_error``'s ``isinstance``
+    dispatch can recognize it from any agent package. ``message_ids`` names
+    the items that never succeeded; ``partial_results`` carries whatever
+    DID succeed before the budget ran out, so a caller can degrade to a
+    partial result instead of discarding the whole request.
+    """
+
+    def __init__(
+        self,
+        provider: str,
+        *,
+        message_ids: Iterable[str] | None = None,
+        partial_results: dict | None = None,
+        message: str | None = None,
+    ):
+        self.provider = provider
+        self.message_ids = list(message_ids or [])
+        self.partial_results = dict(partial_results or {})
+        super().__init__(message or self._default_message())
+
+    def _default_message(self) -> str:
+        ids = ", ".join(self.message_ids) or "<unknown>"
+        return (
+            f"{self.provider} rate-limited the request for message(s) {ids} "
+            "after exhausting retries. This is a transient per-user "
+            "concurrency limit, not a permanent failure — try again in a "
+            "minute."
         )
 
 

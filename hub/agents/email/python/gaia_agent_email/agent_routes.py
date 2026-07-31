@@ -49,10 +49,23 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
+
+# ConfigurationError alias: this is gaia_agent_email.config.ConfigurationError,
+# a bare ValueError subclass -- a SEPARATE class from
+# gaia.connectors.errors.ConfigurationError imported above, sharing nothing in
+# its MRO with ConnectorsError. Aliased so the two never get conflated again.
+from gaia_agent_email import trust
+from gaia_agent_email.config import ConfigurationError as AgentConfigurationError
 from pydantic import BaseModel, ConfigDict, Field
 
+from gaia.connectors.errors import (
+    AuthRequiredError,
+    ConfigurationError,
+    ConnectionRevokedError,
+    ConnectorsError,
+    ScopeMismatchError,
+)
 from gaia.logger import get_logger
-from gaia_agent_email import trust
 
 logger = get_logger(__name__)
 
@@ -301,6 +314,36 @@ class AutonomyUndoRequest(_Strict):
 # ---------------------------------------------------------------------------
 
 
+def _connectors_error_to_http(exc: ConnectorsError) -> HTTPException:
+    """Map a ``ConnectorsError`` escaping mailbox I/O to its HTTP status.
+
+    Mirrors the canonical table at ``src/gaia/ui/routers/connectors.py:13-24``
+    (#2617) so an autonomy-route failure and a UI-router failure never
+    disagree on status code for the same exception type. The bug this fixes
+    was never the status code — it was letting the exception (and its
+    already-actionable message) escape uncaught as a textless 500.
+    """
+    if isinstance(exc, ConfigurationError):
+        return HTTPException(status_code=503, detail=str(exc))
+    if isinstance(exc, AuthRequiredError):
+        if exc.reason in (
+            AuthRequiredError.Reason.NOT_CONNECTED,
+            AuthRequiredError.Reason.REAUTH_REQUIRED,
+        ):
+            return HTTPException(status_code=401, detail=str(exc))
+        return HTTPException(status_code=403, detail=str(exc))
+    # ConnectionRevokedError / ScopeMismatchError are ConnectorsError SIBLINGS
+    # of AuthRequiredError (errors.py:159,175), not subclasses of it — a
+    # revoked grant is the headline scenario for this route, so missing these
+    # would silently fall through to 500 for exactly the case a client most
+    # needs to tell apart from a server-side failure.
+    if isinstance(exc, ConnectionRevokedError):
+        return HTTPException(status_code=401, detail=str(exc))
+    if isinstance(exc, ScopeMismatchError):
+        return HTTPException(status_code=403, detail=str(exc))
+    return HTTPException(status_code=500, detail=str(exc))
+
+
 def _memory_status(agent: Any) -> MemoryStatusResponse:
     """Read the agent's memory status, tolerating agents without the toggle."""
     status_fn = getattr(agent, "memory_status", None)
@@ -495,7 +538,18 @@ async def run_autonomy(request: AutonomyRunRequest) -> Dict[str, Any]:
                 '"level": "suggest|earn_trust|full"} to enable it first.'
             ),
         )
-    return await asyncio.to_thread(runner, {"max_messages": request.max_messages})
+    try:
+        return await asyncio.to_thread(runner, {"max_messages": request.max_messages})
+    except ConnectorsError as exc:
+        raise _connectors_error_to_http(exc) from exc
+    except AgentConfigurationError as exc:
+        # Agent-local ConfigurationError (config.py), NOT a ConnectorsError --
+        # raised by resolve_mail_backends() for the cold-start "no mailbox
+        # connected yet" state, reached via _triage_all_backends ->
+        # _refresh_mail_backends. The except above never sees it. Maps to 503
+        # to match the canonical ConfigurationError row at
+        # ui/routers/connectors.py:13-24; its message is already actionable.
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.post("/autonomy/undo")
@@ -518,9 +572,15 @@ async def undo_autonomy(request: AutonomyUndoRequest) -> Dict[str, Any]:
         )
     try:
         return await asyncio.to_thread(undo_fn, request.action_id)
+    except ConnectorsError as exc:
+        raise _connectors_error_to_http(exc) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
+        # Covers AgentConfigurationError too (it subclasses ValueError), but
+        # undo_autonomy_action routes via the already-resolved self._backends
+        # dict, never resolve_mail_backends() -- so that class can't actually
+        # reach here; no separate 503 clause needed like in run_autonomy above.
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
