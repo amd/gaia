@@ -139,9 +139,11 @@ and turns on one **set** of them per run:
   and deciding what needs escalating.
 
 It picks the set automatically for an Outlook mailbox — a personal Microsoft
-account gets the personal set, a work or school account gets the work set. Gmail
-doesn't tell anyone which kind it is, so a Gmail mailbox gets the personal set
-unless you say otherwise.
+account gets the personal set, a work or school account gets the work set. Two
+mailboxes need you to say which you want: Gmail, which doesn't expose the kind at
+all, and a work or school Microsoft account, whose connector the agent doesn't
+offer yet ([#2629](https://github.com/amd/gaia/issues/2629)). Both fall back to
+the personal set until you pin one.
 
 To pin it yourself, start the sidecar with the set you want:
 

@@ -127,6 +127,11 @@ def default_inbox_scan_ceiling() -> int:
     return value
 
 
+# Microsoft-family connector ids, in registry order (#2628 split the single
+# ``microsoft`` connector into a personal one and ``microsoft_work``). The
+# account kind is recorded on whichever the user connected.
+_MICROSOFT_CONNECTOR_IDS = ("microsoft", "microsoft_work")
+
 SKILL_SET_ENV = "GAIA_EMAIL_SKILL_SET"
 ACCOUNT_TYPE_ENV = "GAIA_EMAIL_ACCOUNT_TYPE"
 
@@ -364,8 +369,13 @@ class EmailAgentConfig:
 
         Resolution order:
           1. An explicit ``account_type`` (config field / ``GAIA_EMAIL_ACCOUNT_TYPE``).
-          2. The kind recorded on the connected Microsoft mailbox, derived from
-             the id_token ``tid`` claim at connect time.
+          2. The kind recorded on a connected Microsoft mailbox, derived from the
+             id_token ``tid`` claim at connect time. Both Microsoft connectors are
+             consulted in registry order (#2628 split ``microsoft`` — personal,
+             ``consumers`` authority — from ``microsoft_work``); the first with a
+             recorded kind wins. Today only ``microsoft`` is in this agent's
+             ``REQUIRED_CONNECTORS``, so ``microsoft_work`` is checked purely so
+             this keeps working when #2629 wires it up.
           3. ``None`` — unknown.
 
         ``None`` is a real answer, not a failure: a Gmail-only mailbox has no
@@ -383,7 +393,11 @@ class EmailAgentConfig:
         if self.account_type:
             return self.account_type
         try:
-            connection = get_connection("microsoft") or {}
+            for connector_id in _MICROSOFT_CONNECTOR_IDS:
+                recorded = (get_connection(connector_id) or {}).get("account_type")
+                if recorded:
+                    return recorded
+            return None
         except ConnectorsError as e:
             # The connection store is unreadable (no keyring backend, corrupt
             # blob). The kind is unknown, which the caller handles explicitly.
@@ -395,7 +409,6 @@ class EmailAgentConfig:
                 e,
             )
             return None
-        return connection.get("account_type") or None
 
     def resolved_db_path(self) -> str:
         """Return the SQLite path with ``$HOME`` expanded.

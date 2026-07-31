@@ -94,6 +94,7 @@ _PROVIDER_LABELS: dict[str, str] = {
     "microsoft_work": "Microsoft Work or School",
 }
 
+
 def account_type_for_tenant(tenant_id: str | None) -> str | None:
     """Classify a Microsoft account from its id_token ``tid`` claim.
 

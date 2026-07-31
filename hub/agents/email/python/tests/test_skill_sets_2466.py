@@ -468,7 +468,7 @@ def test_the_whole_post_tool_turn_fits_the_window_with_skills_loaded(
     condensed = condense_triage_result(result, extra_fixed_tokens=cost)
     envelope_tokens = estimate_tokens_json(json.dumps(condensed, default=str))
 
-    assert envelope_tokens <= envelope_budget_tokens(cost)
+    assert envelope_tokens <= envelope_budget_tokens(extra_fixed_tokens=cost)
 
     # The prompt the model re-reads on the post-tool turn, end to end.
     prompt_tokens = estimate_tokens(agent.system_prompt)

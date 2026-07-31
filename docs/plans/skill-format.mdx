@@ -5,7 +5,7 @@ icon: "puzzle-piece"
 ---
 
 <Info>
-  **Grounds on (exists today):** [`src/gaia/skills/`](https://github.com/amd/gaia/tree/main/src/gaia/skills) — the shipped runtime: `format.py` (parser/writer/validator), `manager.py` (`SkillManager`, discovery + precedence), `loader.py` (`<skill>/<tool>` registration), `permissions.py` (grammar + connector bridge), `cli.py` (`gaia skill`) · [`src/gaia/agents/base/agent.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/agent.py) (`Agent.load_skill`, `unload_skill`, `SKILL_DIRS`, `skill_manager`, `loaded_skills`) · [`src/gaia/agents/base/tools.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tools.py) (`@tool`, `_TOOL_REGISTRY`) · [`src/gaia/agents/registry.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/registry.py) (`KNOWN_TOOLS`, `namespaced_agent_id`) · [`src/gaia/connectors/providers/base.py`](https://github.com/amd/gaia/blob/main/src/gaia/connectors/providers/base.py) (`ConnectorRequirement`) · [`src/gaia/ui/routers/agents.py`](https://github.com/amd/gaia/blob/main/src/gaia/ui/routers/agents.py) (`/api/agents`, the panel to mirror)
+  **Grounds on (exists today):** [`src/gaia/skills/`](https://github.com/amd/gaia/tree/main/src/gaia/skills) — the shipped runtime: `format.py` (parser/writer/validator), `manager.py` (`SkillManager`, discovery + precedence), `loader.py` (`<skill>/<tool>` registration), `permissions.py` (grammar + connector bridge), `cli.py` (`gaia skill`), `sets.py` (the `skills:` / `skill_sets:` grammar) · [`src/gaia/agents/base/agent.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/agent.py) (`Agent.load_skill`, `unload_skill`, `SKILL_DIRS`, `skill_manager`, `loaded_skills`, `SKILL_MANIFEST`, `load_skill_set`, `select_skill_set`) · [`src/gaia/agents/base/tools.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tools.py) (`@tool`, `_TOOL_REGISTRY`) · [`src/gaia/agents/registry.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/registry.py) (`KNOWN_TOOLS`, `namespaced_agent_id`) · [`src/gaia/connectors/providers/base.py`](https://github.com/amd/gaia/blob/main/src/gaia/connectors/providers/base.py) (`ConnectorRequirement`) · [`src/gaia/ui/routers/agents.py`](https://github.com/amd/gaia/blob/main/src/gaia/ui/routers/agents.py) (`/api/agents`, the panel to mirror)
 
   **Still proposed (not written yet):** the `/api/skills` router and Agent UI panel, `gaia skill install|remove|search|publish|update` (marketplace, [#2467](https://github.com/amd/gaia/issues/2467)), `gaia skill migrate` (Phase 3), the permission sandbox for local-capability domains, and tier-ceiling enforcement ([#1019](https://github.com/amd/gaia/issues/1019)). Every such symbol is marked **PROPOSED** where it appears.
 </Info>
@@ -935,6 +935,13 @@ phases are additive. Each phase holds the prior floor until it lands.
 - **`gaia.skills.permissions`** — the `<domain>:<level>[:scope]` grammar, the
   connector bridge for `network`/`mcp`, and the loud refusal of local-capability
   domains.
+- **`gaia.skills.sets`** ([#2466](https://github.com/amd/gaia/issues/2466)) — the
+  declarative `skills:` / `skill_sets:` / `default_skill_set:` manifest grammar
+  (see [Manifest-side grammar](#manifest-side-grammar-skills-skill_sets-default_skill_set)),
+  parsed once and shared by `gaia.hub.manifest` and the base `Agent`, plus
+  per-launch selection (`SKILL_MANIFEST`, `select_skill_set`, `load_skill_set`).
+  An undeclared set name raises `SkillSetError` rather than falling back. The
+  email agent is the reference consumer.
 - **`Agent.load_skill` / `unload_skill` / `SKILL_DIRS` / `skill_manager` /
   `loaded_skills`** — plus `get_skills_system_prompt()`, auto-discovered by
   `_get_mixin_prompts()`, which returns `""` when no skill is loaded so every
@@ -1052,8 +1059,11 @@ Only the enforcement, REST/UI, and marketplace layers are greenfield.
 | Tool registration | `register_skill_tools`, `unregister_skill_tools` (`<skill>/<tool>`, no partial load) | `skills/loader.py` | **Exists** (#888) |
 | Permission grammar + bridge | `Permission`, `parse_permissions`, `connector_requirements`, `refuse_unbridged_permissions`, `CONNECTOR_BRIDGED_DOMAINS`, `LOCAL_CAPABILITY_DOMAINS` | `skills/permissions.py` | **Exists** (#888) — bridge only |
 | Agent integration | `load_skill`, `unload_skill`, `SKILL_DIRS`, `skill_manager`, `loaded_skills`, `get_skills_system_prompt` | `agents/base/agent.py` | **Exists** (#888) |
+| Skill-set grammar | `SkillRef`, `SkillSets`, `SkillSetResolution`, `parse_skill_sets` | `skills/sets.py` | **Exists** (#2466) — `skills:` / `skill_sets:` / `default_skill_set:` |
+| Manifest wiring | `AgentManifest.skill_sets` | `hub/manifest.py` | **Exists** (#2466) — malformed blocks raise `ManifestError` |
+| Skill-set selection | `SKILL_MANIFEST`, `skill_sets`, `select_skill_set`, `resolve_skill_set`, `load_skill_set`, `active_skill_set` | `agents/base/agent.py` | **Exists** (#2466) — one set per launch |
 | CLI | `gaia skill list\|info\|create\|import\|export` | `skills/cli.py` | **Exists** (#888) |
-| Errors | `SkillError`, `SkillValidationError`, `SkillNotFoundError`, `SkillPermissionError` | `skills/errors.py` | **Exists** (#888) |
+| Errors | `SkillError`, `SkillValidationError`, `SkillNotFoundError`, `SkillPermissionError`, `SkillSetError` | `skills/errors.py` | **Exists** (#888, #2466) |
 | **Permission sandbox / tier-ceiling enforcement** | — | **NOT FOUND** | **Greenfield — PROPOSED** (#1019) |
 | **`/api/skills` router + UI panel** | — | **NOT FOUND** | **Greenfield — PROPOSED** |
 | **`gaia skill install\|remove\|search\|publish\|update\|migrate`** | — | **NOT FOUND** | **Greenfield — PROPOSED** (#2467 / Phase 3) |

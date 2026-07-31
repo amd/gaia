@@ -716,6 +716,13 @@ Three consequences worth knowing:
   that is the declared default, and the resolution is logged. Nothing guesses;
   nothing is silent; the default is still a default. **Pin
   `GAIA_EMAIL_ACCOUNT_TYPE=work` or `--skill-set work` for a work Gmail mailbox.**
+- **The work path is not reachable through this agent yet.** GAIA now splits
+  Microsoft into two connectors — `microsoft` (personal, `consumers` authority)
+  and `microsoft_work` — and only `microsoft` is in this agent's
+  `REQUIRED_CONNECTORS` ([#2629](https://github.com/amd/gaia/issues/2629) tracks
+  the rest). The derivation reads both connectors, so it starts working the moment
+  that lands; until then, pin `work` explicitly. The `tid` classification itself is
+  already correct for either.
 - **The kind is recorded when the connection is made.** A Microsoft mailbox
   connected before this feature shipped carries no `account_type` until it is
   reconnected, so it too resolves through the default.
