@@ -598,6 +598,20 @@ An endpoint that works on the **content you pass in the request** is **standalon
 on the live Gmail/Outlook mailbox or calendar** requires the **Google or Microsoft
 connector** (OAuth), configured in GAIA under *Settings → Connectors*.
 
+**Mail is required; calendar is requested but optional (#2730).** Every connect
+path (GAIA's Agent UI, the CLI, and this sidecar's own `/configure` route) asks
+for the full mail + calendar scope union up front, so accepting everything at
+once never means a second consent round-trip. But only the mail scopes
+(`gmail.modify`/`gmail.send` on Google, `Mail.ReadWrite`/`Mail.Send` on
+Outlook) gate whether the mailbox works at all — a connection that declined
+calendar, or was granted before calendar scopes existed, still triages, drafts,
+and sends. Calendar tools (`listCalendarEvents`, `createCalendarEvent`,
+`respondToCalendarEvent`) are the only ones that require the calendar scopes,
+and they fail loudly — naming the exact missing scope and the reconnect
+command — rather than silently no-opping. This is the request/enforce split:
+what's *asked for* at consent time is wider than what's *required* to mint a
+working token.
+
 `send` resolves its OAuth token from the **local GAIA connector store**
 (`gaia.connectors`) on the host — `EmailSendRequest` has **no `access_token`
 field** (`provider` is only a routing hint). There is **no way to pass or forward a
