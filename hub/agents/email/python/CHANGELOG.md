@@ -411,6 +411,22 @@ contract version is tracked separately as
   `EmailTriageAgent`'s existing methods now delegate to. The confirm floor is unchanged and
   still inviolable at every level — broadening the candidate map cannot make a floor tool
   auto-executable.
+- **On-device SLM classifiers for phishing and triage category (experimental,
+  `use_slm=False` by default).** Two compact embedding classifiers
+  (`specific-ai-tools`, served by the same local Lemonade server as the chat
+  model) can run ahead of the LLM. Phishing is decided by the SLM alone when it
+  answers — the keyword/domain heuristic is not consulted for that message —
+  and the triage SLM decides the category whenever the heuristic is not
+  confident. The LLM classify call is skipped only when the heuristic already
+  settled `is_spam`; otherwise it still runs for the spam verdict and its
+  category answer is discarded. Every SLM path fails safe: an unreachable
+  server, a failed model pull, a prediction error, or a label outside the
+  taxonomy falls back to the existing heuristic + LLM flow, so the previous
+  behavior is the floor, not the risk. Enable with `use_slm=True` or
+  `GAIA_EMAIL_USE_SLM=true` — the `slm_triage_*` / `slm_phishing_*` model +
+  checkpoint pairs on `EmailAgentConfig` ship preconfigured. A half-configured
+  pair fails `validate()` loudly, and an unparseable `GAIA_EMAIL_USE_SLM` raises
+  instead of silently defaulting to off.
 
 - **Agent-led mailbox onboarding — the agent sets up its own access, in the
   conversation (#2469).** Hitting the agent without a usable mailbox used to

@@ -48,6 +48,16 @@ behind any entry — API shapes, endpoints, and version semantics — see
   still uses your exact wording when you hand it over yourself. Sending is
   unchanged — every draft still needs your confirmation before it goes out
   (#2524).
+- **Opt-in preview: small on-device models can now decide phishing flags and
+  triage categories instead of keyword rules.** Turn it on with
+  `GAIA_EMAIL_USE_SLM=true` on the sidecar (or `use_slm=True` in config).
+  A compact classifier — running on the same local Lemonade server as the chat
+  model, so nothing leaves the machine — makes the phishing call, and a second
+  one labels the triage category, taking that decision away from the bigger LLM
+  (which is still consulted for the spam verdict when the rules can't settle it).
+  It is experimental, so it stays off unless you turn it on. If the
+  models are unavailable for any reason, triage falls back to exactly the
+  previous behavior. No API shape changed.
 - **A trashed email is recoverable any time it's still in Trash — not just for
   a few seconds after you delete it.** The only way back used to be a short
   undo window right after trashing; miss it, and the agent told you the
@@ -95,7 +105,6 @@ behind any entry — API shapes, endpoints, and version semantics — see
   resumes. An unanswered question ends the run with an error rather than hanging.
   Approvals (`needs_confirmation`) are unchanged: still terminal, still
   deny-by-default (#2469).
-
 - **Work/school Outlook (Microsoft 365 / Entra ID) mailboxes now work, not just
   personal Outlook.com.** The Microsoft connector previously signed in only
   against the `consumers` tenant, so a corporate Microsoft 365 account was

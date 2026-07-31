@@ -55,6 +55,7 @@ from typing import Any, Dict, Iterator, List, Literal, NoReturn, Optional, Tuple
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, StreamingResponse
 from gaia_agent_email import caller_auth
+from gaia_agent_email.config import EmailAgentConfig
 from gaia_agent_email.context_budget import estimate_tokens, thread_budget_tokens
 from gaia_agent_email.contract import (
     ActionItem,
@@ -114,6 +115,7 @@ from gaia_agent_email.tools.thread_fold import (
 from gaia_agent_email.tools.triage_heuristics import (
     classify_category_heuristic,
     default_action_for,
+    detect_phishing,
 )
 from gaia_agent_email.tools.usage import aggregate_usage_stats
 from gaia_agent_email.version import AGENT_VERSION, API_VERSION
@@ -488,6 +490,9 @@ class EmailTriageService:
     message the heuristic cannot confidently classify.
     """
 
+    def __init__(self, config: Optional[EmailAgentConfig] = None) -> None:
+        self.config = config if config is not None else EmailAgentConfig()
+
     # -- Public: contract path ---------------------------------------------
 
     def triage_request(
@@ -818,17 +823,45 @@ class EmailTriageService:
     ) -> EmailTriageResult:
         """Build a result using LLM escalation when heuristic confidence is low.
 
+        When ``use_slm`` is on (experimental, off by default), the triage SLM
+        runs before the LLM and the phishing SLM decides ``is_phishing`` alone.
+        Any SLM miss falls back to the existing heuristic + LLM path.
+
         ``extra_call_stats`` seeds the usage accumulator with stats from a
         call made before this method runs (e.g. #1889's thread-fold digest
         call) so the reported ``usage`` covers every LLM call the request
         actually made, not just the classify/summarize pair.
         """
         from gaia_agent_email.tools.llm_triage import classify_email_llm
+        from gaia_agent_email.tools.slm_phishing import (
+            classify_phishing_slm,
+            get_slm_phishing_classifier,
+        )
+        from gaia_agent_email.tools.slm_triage import (
+            classify_email_slm,
+            get_slm_triage_classifier,
+        )
         from gaia_agent_email.tools.summarize_tools import summarize_email_llm
 
         heuristic = classify_category_heuristic(
-            subject=subject, sender=sender_raw, label_ids=label_ids
+            subject=subject,
+            sender=sender_raw,
+            label_ids=label_ids,
+            check_phishing=False,
         )
+
+        # Phishing: the SLM decides alone when it answers; otherwise (disabled
+        # or an unusable answer) the deterministic heuristic decides.
+        is_phishing: Optional[bool] = None
+        if self.config.use_slm:
+            is_phishing = classify_phishing_slm(
+                get_slm_phishing_classifier(self.config),
+                subject=subject,
+                sender=sender_raw,
+                body=body,
+            )
+        if is_phishing is None:
+            is_phishing = detect_phishing(subject, sender_raw, body)
 
         # Per-call LLM stats accumulate here so the result can report aggregate
         # usage (#1540). Reuses AgentResponse.stats — no new measurement.
@@ -836,10 +869,40 @@ class EmailTriageService:
 
         # Escalate to the LLM when the heuristic is unsure of the category OR
         # abstains on spam (spam_confident=False, where content-based spam
-        # exclusively lives). Mirrors read_tools.py so REST and the agent loop
-        # reach the same verdict on identical input (#2124).
+        # exclusively lives). SLM may resolve category first; spam still needs
+        # the LLM when the heuristic abstains. Mirrors read_tools.py so REST
+        # and the agent loop reach the same verdict on identical input (#2124).
         llm_result: Optional[dict] = None
-        if not heuristic.confident or not heuristic.spam_confident:
+        category_from_llm = False
+        if heuristic.confident:
+            category = EmailCategory(heuristic.category)
+        else:
+            slm_result = (
+                classify_email_slm(
+                    get_slm_triage_classifier(self.config),
+                    subject=subject,
+                    sender=sender_raw,
+                    body=body,
+                    message_id=message_id or "",
+                )
+                if self.config.use_slm
+                else None
+            )
+            if slm_result is not None:
+                category = EmailCategory(slm_result["category"])
+            else:
+                llm_result = classify_email_llm(
+                    chat,
+                    subject=subject,
+                    sender=sender_raw,
+                    body=body,
+                    collect_stats=call_stats,
+                    context=context,
+                )
+                category = EmailCategory(llm_result["category"])
+                category_from_llm = True
+
+        if not heuristic.spam_confident and llm_result is None:
             llm_result = classify_email_llm(
                 chat,
                 subject=subject,
@@ -848,11 +911,6 @@ class EmailTriageService:
                 collect_stats=call_stats,
                 context=context,
             )
-
-        if heuristic.confident:
-            category = EmailCategory(heuristic.category)
-        else:
-            category = EmailCategory(llm_result["category"])
 
         # Heuristic wins only when spam-confident; otherwise the LLM decides.
         if heuristic.spam_confident:
@@ -876,17 +934,19 @@ class EmailTriageService:
             reply_to=reply_to,
             principal=principal,
             is_spam=is_spam,
-            is_phishing=heuristic.is_phishing,
+            is_phishing=is_phishing,
         )
+        # Only the LLM's own category carries its suggested_action; a spam-only
+        # escalation must not restyle an action derived from another category.
         suggested_action = (
             llm_result.get("suggested_action")
-            if not heuristic.confident
+            if category_from_llm
             else default_action_for(category.value)
         ) or default_action_for(category.value)
         return EmailTriageResult(
             category=category,
             is_spam=is_spam,
-            is_phishing=heuristic.is_phishing,
+            is_phishing=is_phishing,
             summary=summary,
             action_items=action_items,
             draft=draft,
@@ -1696,6 +1756,11 @@ def _run_prescan(backend, *, max_messages: int) -> dict:
     :class:`EmailPreScanResult`. A :class:`_MultiMailboxPrescanBackend` fans out
     over every connected mailbox via the shared ``merge_pre_scan_backends`` — the
     same consolidation the agent loop runs — so the Agent UI sees one result.
+
+    Heuristic-only by design: unlike the agent loop, this path wires no SLM (and
+    no LLM) classifier, so a pre-scan stays a cheap, deterministic sweep whose
+    latency does not depend on model residency. ``POST /v1/email/triage`` is the
+    REST surface where the classifiers apply.
     """
     from gaia_agent_email.tools.read_tools import (
         merge_pre_scan_backends,
