@@ -2151,7 +2151,7 @@ Skills are discovered from three roots, highest precedence first:
     | `--fail-on SEVERITY` | Exit non-zero when any finding reaches this severity, even if the tier would allow it |
     | `--show-snippets` | Include the offending source text (withheld by default) |
 
-    Runs the pre-publish security audit ([#2468](https://github.com/amd/gaia/issues/2468)) over a skill's code *and* its instruction body, printing an `ALLOW` / `REVIEW` / `BLOCK` verdict with `file:line` findings and the fix for each. This is the same engine the hub runs at publish time, so a clean local audit is what a successful publish requires.
+    Runs the pre-publish security audit ([#2468](https://github.com/amd/gaia/issues/2468)) over a skill's code *and* its instruction body, printing an `ALLOW` / `REVIEW` / `BLOCK` verdict with `file:line` findings and the fix for each. This is the same engine the **Skill Audit** PR check runs, so a clean local audit is the whole requirement for a skill-submission PR: `BLOCK` fails the check, `REVIEW` holds it for maintainer sign-off, `ALLOW` passes. Skills are contributed by pull request — there is no self-serve publish.
 
     **Exit codes:** `0` allow · `5` review · `6` block · `4` the skill could not be parsed. `REVIEW` and `BLOCK` are distinct so CI can hold a skill without reporting it as rejected.
 

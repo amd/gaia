@@ -446,6 +446,11 @@ agent id (the hub rejects the publish).
 - A SemVer `version` is **required** to publish, and `0.0.0` — the format's
   "unversioned" sentinel — is rejected, so it can never become an immutable
   release.
+- **Skills enter the catalog by pull request.** There is no self-serve publish
+  API — the Worker authenticates against a maintainer-held `PUBLISH_TOKENS`
+  secret, the same curation model agents use. A contributor opens a PR against
+  `skills/community/<name>/`, the audit runs as a required check, and a maintainer
+  publishes after merge. Merging is not itself a tier promotion.
 - The **pre-publish security audit**
   ([#2468](https://github.com/amd/gaia/issues/2468)) gates the tier a skill may
   claim. `community` and `verified` are refused without a cleared report;

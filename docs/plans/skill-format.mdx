@@ -280,8 +280,16 @@ to `experimental`, surfaced by `gaia skill info`, and reset to `experimental` on
 ### Pre-publish security audit
 
 Every skill passes an automated audit before it can enter the hub catalog
-([#2468](https://github.com/amd/gaia/issues/2468)). Authors run the same engine
-locally, so a clean local audit is what a successful publish requires:
+([#2468](https://github.com/amd/gaia/issues/2468)).
+
+Skills are contributed **by pull request** — there is no self-serve publish path
+(the hub's publish endpoint is gated on a maintainer-held token secret), so the
+PR check *is* the gate: `BLOCK` fails it, `REVIEW` holds the PR for maintainer
+sign-off, `ALLOW` passes. Submit under `skills/community/<name>/`; see
+[Publishing to the Hub → Publishing a skill](/guides/hub-publishing#publishing-a-skill-instead-of-an-agent).
+
+Authors run the same engine locally, so a clean local audit is the whole
+requirement:
 
 ```bash
 gaia skill audit ./my-skill/                    # ALLOW / REVIEW / BLOCK + file:line findings

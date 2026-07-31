@@ -3,16 +3,21 @@
 #
 # Pre-merge security audit for GAIA skills (issue #2468). A skill is code plus a
 # natural-language instruction body that an agent will follow, so a PR that adds
-# or edits one is a PR that adds or edits agent behaviour. This workflow is the
-# CI half of the same gate the hub runs at publish time: what fails here is what
-# a `gaia hub publish` would refuse.
+# or edits one is a PR that adds or edits agent behaviour.
+#
+# Skills are contributed BY PULL REQUEST — there is no self-serve publish API
+# (`PUBLISH_TOKENS` is a maintainer-held wrangler secret, `auth.ts`), the same way
+# agents are contributed today. That makes this workflow the PRIMARY contributor
+# path, not a secondary check: it is the thing standing between a contributed
+# skill and users, so it is built to STOP A MERGE.
 #
 # Two layers, mirroring claude-security-audit.yml:
-#   1. DETERMINISTIC layer (`gaia skill audit`) — the GATE. Known-bad patterns in
-#      the skill's code, permission claims that its code contradicts, and
-#      supply-chain checks, scored against the tier the skill claims. BLOCK (exit
-#      6) or an unparseable skill (exit 4) fails the job; REVIEW (exit 5) is
-#      surfaced loudly but does not block.
+#   1. DETERMINISTIC layer (`gaia skill audit`) — the GATE, and a REQUIRED check.
+#      Known-bad patterns in the skill's code, permission claims that its code
+#      contradicts, and supply-chain checks, scored against the tier the skill
+#      claims. BLOCK (exit 6) and unparseable (exit 4) FAIL and cannot be
+#      overridden. REVIEW (exit 5) FAILS until a maintainer applies the
+#      `skill-audit-reviewed` label — held for sign-off, not waved through.
 #   2. REASONING layer (Claude) — ADVISORY, never a gate. Reads each changed
 #      skill's instruction body and tools and judges what regex and AST cannot:
 #      instructions that are individually innocuous but hostile in combination,
@@ -43,12 +48,13 @@ name: Skill Audit
 on:
   pull_request:
     branches: [ main ]
-    types: [opened, synchronize, reopened, ready_for_review]
-    paths:
-      - '**/SKILL.md'
-      - '**/skills/**'
-      - 'hub/skills/**'
-      - '.github/workflows/skill_audit.yml'
+    # `labeled`/`unlabeled` are here so applying the sign-off label re-runs the
+    # gate instead of needing a manual re-run.
+    types: [opened, synchronize, reopened, ready_for_review, labeled, unlabeled]
+    # NO `paths:` filter, deliberately. This check is REQUIRED, and GitHub leaves
+    # a required check that never ran sitting as pending forever — a path filter
+    # would make every non-skill PR unmergeable. The job instead runs everywhere
+    # and no-ops in ~15s when the PR touches no skill.
   merge_group:
   workflow_dispatch:
 
@@ -250,13 +256,17 @@ jobs:
           lines.append("")
           if blocked:
               lines.append(
-                  "❌ **Blocking.** A skill was blocked or could not be parsed, so this check "
-                  "fails. The hub would refuse to publish it in the same state."
+                  "❌ **Blocking — no override.** A skill was blocked or could not be parsed, "
+                  "so this check fails and no label bypasses it. Fix the findings and push "
+                  "again; the hub would refuse to publish it in this state either."
               )
           elif review:
               lines.append(
-                  "⏸️ **Needs review — not blocking.** These skills clear a lower tier than "
-                  "they claim. Merge is allowed; the tier claim is what a human has to confirm."
+                  "⏸️ **Held for maintainer sign-off.** These skills clear a lower tier than "
+                  "they claim, so this check fails until a maintainer adds the "
+                  "`skill-audit-reviewed` label (which re-runs it automatically). Sign-off "
+                  "unblocks the merge only — the verdict on record stays REVIEW, so publishing "
+                  "still refuses the skill, and merging is not a tier promotion."
               )
           else:
               lines.append("✅ All audited skills cleared the tier they claim.")
@@ -331,24 +341,49 @@ jobs:
 
       # The gate itself. Kept last so the artifact, the SARIF hand-off, and the
       # PR comment all happen even when a skill is blocked.
+      #
+      # Skills are contributed by pull request, so this check is the thing
+      # standing between a contributed skill and users:
+      #   BLOCK / unparseable -> fail. No override; a rejected skill is rejected.
+      #   REVIEW              -> fail UNTIL a maintainer applies SIGNOFF_LABEL.
+      #   ALLOW               -> pass.
+      #
+      # The label unblocks the MERGE only. It does not alter the recorded verdict
+      # or promote a tier: publishing still runs the same gate server-side
+      # (`assertAuditGate`), which refuses a REVIEW verdict regardless of what
+      # any label says. See the note printed below.
       - name: Enforce verdict
         if: steps.detect.outputs.skills != '[]'
         env:
           BLOCK_COUNT: ${{ steps.audit.outputs.block_count }}
           REVIEW_COUNT: ${{ steps.audit.outputs.review_count }}
           INVALID_COUNT: ${{ steps.audit.outputs.invalid_count }}
+          SIGNED_OFF: ${{ contains(github.event.pull_request.labels.*.name, 'skill-audit-reviewed') }}
         run: |
           set -euo pipefail
-          if [ "${REVIEW_COUNT:-0}" -gt 0 ]; then
-            echo "::warning title=Skill audit::$REVIEW_COUNT skill(s) returned REVIEW — they clear a lower tier than they claim. Not blocking."
-          fi
+          failed=0
+
           if [ "${INVALID_COUNT:-0}" -gt 0 ]; then
-            echo "::error title=Skill audit::$INVALID_COUNT skill(s) could not be parsed. A skill the audit cannot read cannot be cleared."
+            echo "::error title=Skill audit::$INVALID_COUNT skill(s) could not be parsed. A skill the audit cannot read cannot be cleared, and no label overrides that."
+            failed=1
           fi
+
           if [ "${BLOCK_COUNT:-0}" -gt 0 ]; then
-            echo "::error title=Skill audit::$BLOCK_COUNT skill(s) BLOCKED. See the Security > Code scanning tab for the findings."
+            echo "::error title=Skill audit::$BLOCK_COUNT skill(s) BLOCKED. Fix the findings and push again — sign-off does not override a BLOCK. Findings are in the Security > Code scanning tab."
+            failed=1
           fi
-          if [ "${BLOCK_COUNT:-0}" -gt 0 ] || [ "${INVALID_COUNT:-0}" -gt 0 ]; then
+
+          if [ "${REVIEW_COUNT:-0}" -gt 0 ]; then
+            if [ "${SIGNED_OFF}" = "true" ]; then
+              echo "::notice title=Skill audit::$REVIEW_COUNT skill(s) returned REVIEW and a maintainer applied 'skill-audit-reviewed'. Merge is unblocked."
+              echo "NOTE: sign-off unblocks this PR only. The verdict on record is still REVIEW, so publishing this skill remains refused until it earns ALLOW (or the quarantine lane, issue #2675, ships). Merging is not a tier promotion."
+            else
+              echo "::error title=Skill audit::$REVIEW_COUNT skill(s) returned REVIEW — they clear a lower tier than they claim, so a maintainer has to look. Fix the findings, or have a maintainer add the 'skill-audit-reviewed' label to this PR (that re-runs this check automatically)."
+              failed=1
+            fi
+          fi
+
+          if [ "$failed" -ne 0 ]; then
             exit 1
           fi
           echo "Skill audit passed."
