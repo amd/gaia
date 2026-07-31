@@ -29,8 +29,9 @@
 // what makes a gate either dishonest or useless:
 //
 //   - Is it proven ready?   Report.Ready() — false for an unknown row, always.
-//   - Is it proven broken?  Report.Blocked() — false for an unknown row.
-//   - Does the launch stop? Depends on the row's Disposition (see Row).
+//   - Is it proven broken?  A failed row — including an optional one.
+//   - Does the launch stop? Report.Blocked() for a failed row the AGENT needs
+//     (StateFailed and not Optional); for an unknown row, its Disposition.
 //
 // So an unknown row renders `[?]` and keeps Ready() false either way. Most of
 // them — an unadvertised Lemonade version, two mailboxes linked so neither
@@ -178,6 +179,14 @@ type Row struct {
 	Fix FixKind
 	// Provider is the mailbox provider a FixConnectMailbox targets.
 	Provider string
+	// Optional marks a row that gates a CAPABILITY rather than the launch: the
+	// agent starts and answers without it, and only the asks that need it fail.
+	// It is probed like any other, renders [!] when it fails, keeps Ready()
+	// false, is what FirstAttention puts the cursor on, and carries a remedy —
+	// it just does not refuse the run. The mailbox is one: email triage
+	// classifies the payload carried in the request and never reads a mailbox,
+	// so a missing mailbox must not refuse a triage query.
+	Optional bool
 	// Raw is the probe's raw answer (JSON body or error text), shown by `d`.
 	Raw string
 	// Disposition is what the checklist does when this row is not OK — Halt
@@ -257,12 +266,30 @@ func (r Report) Ready() bool {
 	return true
 }
 
-// Blocked reports whether at least one precondition proved NOT ready. A report
-// that is neither Ready nor Blocked has only indeterminate rows: the user may
-// proceed, but the screen must say what could not be verified.
+// Blocked reports whether at least one precondition of RUNNING the agent proved
+// NOT ready. A report that is neither Ready nor Blocked has nothing proven
+// broken that the agent needs: the user may proceed, but the screen must say
+// what could not be verified — or what failed without stopping the launch.
+//
+// Optional rows are excluded (see Row.Optional). They are still failures and
+// still say so; they are just failures of a capability the ask may not need, and
+// refusing every launch over one would make a mailbox-free triage impossible.
 func (r Report) Blocked() bool {
 	for _, row := range r.Rows {
-		if row.State == StateFailed {
+		if row.State == StateFailed && !row.Optional {
+			return true
+		}
+	}
+	return false
+}
+
+// HasOneKeyFix reports whether a row that still needs attention offers a fix the
+// user can apply from here. Such a row holds the screen even when nothing
+// blocks: auto-proceeding past a mailbox that is not connected would take the
+// `f` that connects it away with the screen it was on.
+func (r Report) HasOneKeyFix() bool {
+	for _, row := range r.Rows {
+		if row.NeedsAttention() && row.Fix != FixNone {
 			return true
 		}
 	}
@@ -377,11 +404,12 @@ func (r Report) Find(key string) (Row, bool) {
 	return Row{}, false
 }
 
-// Blocker returns the first failed row, or false when nothing failed. It is what
-// an integrator logs or shows in a one-line status when preflight refuses.
+// Blocker returns the first failed row that refuses the launch, or false when
+// none does. It is what an integrator logs or shows in a one-line status when
+// preflight refuses, so it mirrors Blocked and skips Optional rows.
 func (r Report) Blocker() (Row, bool) {
 	for _, row := range r.Rows {
-		if row.State == StateFailed {
+		if row.State == StateFailed && !row.Optional {
 			return row, true
 		}
 	}

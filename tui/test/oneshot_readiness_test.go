@@ -145,6 +145,39 @@ func TestOneShotReadinessProceedsPastAnUnverifiableRow(t *testing.T) {
 	}
 }
 
+// A triage query reads no mail: POST /v1/email/triage classifies the subject and
+// body carried in the request. So `run email --query …` must still work with no
+// mailbox connected — while still saying, on stderr, that the mailbox is not
+// usable and what to run about it.
+func TestOneShotRunsAMailboxFreeQueryAndStillWarnsAboutTheMailbox(t *testing.T) {
+	var errW bytes.Buffer
+	rep := ui.ReportReadiness(context.Background(),
+		readyGateTransport().mailboxMissing(), emailConfig(), &errW)
+
+	if rep.Blocked() {
+		t.Fatalf("a query that needs no mailbox was refused over the mailbox:\n%s", rep)
+	}
+	if _, blocked := rep.Blocker(); blocked {
+		t.Error("the mailbox row was reported as what refuses the run")
+	}
+	// Refused is not the same as unmentioned: the row is a failure and says so.
+	row, _ := rep.Find("mailbox")
+	if row.State != preflight.StateFailed {
+		t.Errorf("mailbox = %s, want failed — nothing about it works", row.State.Word())
+	}
+	msg := flatten(errW.String())
+	for _, want := range []string{
+		"Mailbox", "not connected", "gaia connectors connect google",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("the run said nothing about the unusable mailbox (%q):\n%s", want, errW.String())
+		}
+	}
+	if strings.Contains(msg, "Nothing was sent to the Email agent") {
+		t.Errorf("the run refused a query that needs no mailbox:\n%s", errW.String())
+	}
+}
+
 // --- a stand-in for the real daemon relay -----------------------------------
 
 // relayDaemon is the daemon side of a one-shot: the control plane, the agent

@@ -43,6 +43,11 @@ type gateTransport struct {
 	initByAgent map[string]initAnswer
 	// connectors is the answer to GET /v1/<agent>/connectors.
 	connectors map[string]any
+	// healthStatus and healthBody are the answer to the sidecar row's liveness
+	// probe, GET /v1/<agent>/health. The daemon's listing only proves a PROCESS
+	// exists, so the gate asks the agent itself before probing anything below it.
+	healthStatus int
+	healthBody   map[string]any
 	// searchStatus and searchBody are the answer to the mailbox row's credential
 	// probe, POST /v1/<agent>/search. A connector list that says "connected and
 	// granted" is not evidence the mailbox works, so the gate reads it — and this
@@ -52,6 +57,7 @@ type gateTransport struct {
 
 	starts   int
 	ensures  int
+	healths  int
 	searches int
 }
 
@@ -84,6 +90,8 @@ func readyGateTransport() *gateTransport {
 					}},
 			},
 		},
+		healthStatus: http.StatusOK,
+		healthBody:   map[string]any{"status": "ok"},
 		searchStatus: http.StatusOK,
 		// EmailSearchResponse: `count` is required there, so a body without it is
 		// not the shape the sidecar serializes.
@@ -129,6 +137,9 @@ func (g *gateTransport) Do(_ context.Context, _, path string, _ []byte) (preflig
 			}
 		}
 		return jsonResponse(http.StatusOK, map[string]any{"agents": agents})
+	case strings.HasSuffix(path, "/health"):
+		g.healths++
+		return jsonResponse(g.healthStatus, g.healthBody)
 	case strings.HasSuffix(path, "/init"):
 		if answer, ok := g.initByAgent[agentFromPath(path)]; ok {
 			return jsonResponse(answer.status, answer.body)
@@ -190,6 +201,21 @@ func (g *gateTransport) modelMissing() *gateTransport {
 // state that asks the host to open a connector flow.
 func (g *gateTransport) mailboxMissing() *gateTransport {
 	g.connectors = map[string]any{"agent_id": "email", "providers": []map[string]any{}}
+	return g
+}
+
+// sidecarWedged is the state the daemon's agent listing cannot see: the process
+// is alive, registered and "running", and its event loop is parked, so it
+// answers nothing. The daemon's pre-relay probe reports it on the next relayed
+// call. VERBATIM from sidecars/manager.check_responsive.
+func (g *gateTransport) sidecarWedged() *gateTransport {
+	g.healthStatus = http.StatusServiceUnavailable
+	g.healthBody = map[string]any{
+		"detail": "email sidecar (pid 41999) is alive but did not answer " +
+			"http://127.0.0.1:51234/health within 2.0s (ReadTimeout: ). It passed its " +
+			"startup health check, so it has stopped serving since — typically a blocked " +
+			"event loop or a hung dependency.",
+	}
 	return g
 }
 
@@ -465,6 +491,39 @@ func TestAMailboxWhoseCredentialsAreRejectedNeverGreenLightsALaunch(t *testing.T
 	d.send(keyEnter())
 	if got := d.view(); got != "chat" {
 		t.Fatalf("enter over a repairable mailbox = %q, want chat\n%s", got, d.screen())
+	}
+}
+
+// An agent that is "running" and answers nothing must be named as such. The gate
+// used to show `[ok] Email agent 0.5.0 · running` and then blame the mailbox for
+// the timeout that followed — sending the user to the one part that was fine.
+func TestAnAgentThatAnswersNothingIsNamedOnItsOwnRow(t *testing.T) {
+	d := newRootDriver(t, readyGateTransport().sidecarWedged(), 80, 24)
+	d.launchEmail()
+
+	if got := d.view(); got != "preflight" {
+		t.Fatalf("a wedged agent landed on %q, want preflight\n%s", got, d.screen())
+	}
+	screen := d.flat()
+	for _, want := range []string{
+		"Email agent", "not answering",
+		"run: gaia daemon stop-agent email && gaia daemon start-agent email",
+		"~/.gaia/agents/email/logs/",
+	} {
+		if !strings.Contains(screen, want) {
+			t.Errorf("the gate does not show %q:\n%s", want, d.screen())
+		}
+	}
+	// The rows below it were never asked, so none of them may be blamed.
+	if strings.Contains(screen, "cannot be checked") {
+		t.Errorf("a row below the wedged agent reported a failure of its own:\n%s", d.screen())
+	}
+	if g := d.transport(); g.searches != 0 {
+		t.Errorf("the gate read the mailbox through an agent that answers nothing: %d reads", g.searches)
+	}
+	// And it never claims the agent is fine.
+	if strings.Contains(screen, "0.5.0 · running (pid") {
+		t.Errorf("the agent row still reads as healthy:\n%s", d.screen())
 	}
 }
 
