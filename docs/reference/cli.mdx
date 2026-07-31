@@ -2542,10 +2542,10 @@ gaia hub uninstall email           # stops the sidecar first, then removes the d
   by both `install` and `uninstall`.
 - **Trust gate.** Any agent outside the `verified` security tier runs
   third-party code on your machine, so it is refused (HTTP 403) until you pass
-  `--trust`. `email` is `experimental`, so `gaia hub install email` alone fails
-  with the remedy named. Nothing infers the opt-in for you, and there is no
-  bypass — a client (TUI, UI) renders this as a "Trust & Install" confirmation
-  and retries with `trusted: true`.
+  `--trust`, with the remedy named in the error. A manifest that omits
+  `security_tier` counts as `experimental` and is gated the same way. Nothing
+  infers the opt-in for you, and there is no bypass — a client (TUI, UI) renders
+  this as a "Trust & Install" confirmation and retries with `trusted: true`.
 - Requires the daemon extras (`pip install "amd-gaia[ui]"`), same as `gaia daemon`.
 
 <Note>
@@ -2838,10 +2838,10 @@ gaia hub uninstall email           # stops the sidecar first, then removes the d
   by both `install` and `uninstall`.
 - **Trust gate.** Any agent outside the `verified` security tier runs
   third-party code on your machine, so it is refused (HTTP 403) until you pass
-  `--trust`. `email` is `experimental`, so `gaia hub install email` alone fails
-  with the remedy named. Nothing infers the opt-in for you, and there is no
-  bypass — a client (TUI, UI) renders this as a "Trust & Install" confirmation
-  and retries with `trusted: true`.
+  `--trust`, with the remedy named in the error. A manifest that omits
+  `security_tier` counts as `experimental` and is gated the same way. Nothing
+  infers the opt-in for you, and there is no bypass — a client (TUI, UI) renders
+  this as a "Trust & Install" confirmation and retries with `trusted: true`.
 - Requires the daemon extras (`pip install "amd-gaia[ui]"`), same as `gaia daemon`.
 
 <Note>
