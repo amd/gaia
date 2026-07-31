@@ -24,7 +24,11 @@ import (
 type ExtraCheck struct {
 	Key   string
 	Label string
-	Run   func(ctx context.Context, t Transport, cfg Config) Row
+	// Optional marks a check that gates a CAPABILITY rather than the launch —
+	// see Row.Optional. Its verdict is reported in full; it just does not stop
+	// the walk or refuse the run.
+	Optional bool
+	Run      func(ctx context.Context, t Transport, cfg Config) Row
 }
 
 // Config parameterises a readiness check.
@@ -101,9 +105,11 @@ func Check(ctx context.Context, t Transport, cfg Config) Report {
 
 	for _, extra := range cfg.Extras {
 		row := extra.Run(ctx, t, cfg)
-		row.Key, row.Label = extra.Key, extra.Label
+		row.Key, row.Label, row.Optional = extra.Key, extra.Label, extra.Optional
 		setRow(&rep, row)
-		if row.State == StateFailed {
+		// An optional row is reported, never a stop sign: it gates a capability
+		// the ask may not need, and halting here would hide the rows below it.
+		if row.State == StateFailed && !extra.Optional {
 			markPending(&rep)
 			return rep
 		}
@@ -121,7 +127,7 @@ func blankRows(cfg Config) []Row {
 		{Key: KeyModel, Label: "AI model"},
 	}
 	for _, extra := range cfg.Extras {
-		rows = append(rows, Row{Key: extra.Key, Label: extra.Label})
+		rows = append(rows, Row{Key: extra.Key, Label: extra.Label, Optional: extra.Optional})
 	}
 	for i := range rows {
 		rows[i].State = StatePending
@@ -272,6 +278,18 @@ func checkSidecar(ctx context.Context, t Transport, cfg Config, rep *Report) Sta
 			continue
 		}
 		if a.State == "running" {
+			live := probeSidecarAnswers(ctx, t, cfg)
+			row.Raw = strings.TrimSpace(row.Raw + "\n\n" + live.trace)
+			if !live.answered {
+				row.State = StateFailed
+				row.Line = live.line
+				row.Detail = live.cause
+				row.Remedy = live.remedy
+				// `gaia daemon start-agent` ATTACHES to a registered sidecar, so a
+				// one-key "start the agent" would report success and change nothing.
+				row.Fix = FixNone
+				return row.commit(rep)
+			}
 			row.State = StateOK
 			row.Line = describeSidecar(a.AgentVersion, a.PID)
 			return row.commit(rep)
@@ -312,6 +330,112 @@ func describeSidecar(version *string, pid *int) string {
 		parts = append(parts, "running")
 	}
 	return strings.Join(parts, " · ")
+}
+
+// sidecarProbeTimeout bounds the one call that proves the agent's own process is
+// serving. GET /v1/<agent>/health touches no mailbox, no model and no network,
+// so a healthy sidecar answers in milliseconds on loopback; past this the
+// process is not answering rather than answering slowly.
+const sidecarProbeTimeout = 10 * time.Second
+
+// sidecarLiveness is what the liveness probe established, plus the words for the
+// row it produces.
+type sidecarLiveness struct {
+	answered bool
+	// line is the row's one-liner, so the subject it names matches the cause.
+	line   string
+	cause  string
+	remedy Remedy
+	// trace is appended to Row.Raw so `d` shows the probe and what it cost.
+	trace string
+}
+
+// probeSidecarAnswers asks the agent's own process to say something.
+//
+// The daemon's agent listing reports what its REGISTRY records, and a sidecar
+// whose event loop is blocked keeps its pid, keeps its port, and serves nothing
+// — so "running" is a claim about a process, not about an agent that answers.
+// That gap is what put "cannot be checked" on the Mailbox row over an agent that
+// had stopped answering every route it has.
+//
+// ANY answer proves the loop is alive: a 404 from an agent with no health route
+// still came off it. Only a call that never produced one — a transport failure,
+// or a relay saying it could not get an answer out of the sidecar — means the
+// process is not serving.
+func probeSidecarAnswers(ctx context.Context, t Transport, cfg Config) sidecarLiveness {
+	path := "/v1/" + cfg.AgentID + "/health"
+
+	ctx, cancel := context.WithTimeout(ctx, sidecarProbeTimeout)
+	defer cancel()
+
+	start := time.Now()
+	resp, err := t.Do(ctx, http.MethodGet, path, nil)
+	took := time.Since(start)
+	trace := func(outcome string) string {
+		return fmt.Sprintf("sidecar probe: GET %s -> %s in %dms", path, outcome, took.Milliseconds())
+	}
+
+	if err != nil {
+		if !timedOut(err) {
+			// Not the agent going quiet: the TUI dials exactly one host, so a
+			// refused or reset connection is the background service itself.
+			d := Ladder{AgentID: cfg.AgentID}.Error("reach the "+cfg.AgentName+" agent", err)
+			return sidecarLiveness{
+				line:   "cannot be reached",
+				cause:  d.Cause,
+				remedy: d.AsRemedy(),
+				trace:  trace("no answer: " + err.Error()),
+			}
+		}
+		return sidecarLiveness{
+			line: "running, not answering",
+			cause: fmt.Sprintf(
+				"The background service says the %s agent is running, but the agent itself "+
+					"never replied — it took the request and held it, so every call to it hangs, "+
+					"this check included. Nothing below it can be checked until it answers.",
+				cfg.AgentName),
+			remedy: restartSidecarRemedy(cfg.AgentID),
+			trace:  trace("no answer: " + err.Error()),
+		}
+	}
+
+	detail := jsonDetail(resp.Body)
+	outcome := fmt.Sprintf("HTTP %d %s", resp.Status, strings.TrimSpace(string(resp.Body)))
+	if (resp.Status == http.StatusBadGateway || resp.Status == http.StatusServiceUnavailable) &&
+		relayGaveUp(detail) {
+		return sidecarLiveness{
+			line: "running, not answering",
+			cause: fmt.Sprintf(
+				"The background service says the %s agent is running, but it could not get an "+
+					"answer out of it. %s", cfg.AgentName, detailSuffix(firstSentence(detail))),
+			remedy: restartSidecarRemedy(cfg.AgentID),
+			trace:  trace(outcome),
+		}
+	}
+	return sidecarLiveness{answered: true, trace: trace(outcome)}
+}
+
+// restartSidecarRemedy is the fix for a sidecar that is registered but not
+// serving. It stops before it starts on purpose: `start-agent` spawns-or-ATTACHES,
+// so on its own it attaches to the very process that is stuck and reports
+// success. Only replacing the process clears it.
+func restartSidecarRemedy(agentID string) Remedy {
+	return Remedy{
+		Action: "Stop the agent, then start it again — `start-agent` on its own attaches to " +
+			"the process that is already registered, so it would change nothing.",
+		Command: fmt.Sprintf("gaia daemon stop-agent %s && gaia daemon start-agent %s", agentID, agentID),
+		Where:   fmt.Sprintf("~/.gaia/agents/%s/logs/", agentID),
+	}
+}
+
+// timedOut reports whether a call was given up on rather than refused. The
+// daemon client reports a deadline as text on its own error type rather than
+// wrapping context.DeadlineExceeded, so both forms are checked.
+func timedOut(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	return containsAny(strings.ToLower(err.Error()), "timed out", "timeout", "deadline exceeded")
 }
 
 // ---------------------------------------------------------------------------
@@ -749,11 +873,22 @@ func connectCommand(provider string) string {
 // all — so the row went green over a mailbox whose very first read 502s. See
 // mailboxProbeBodyJSON and mailboxProbeTimeout for what that read costs and why
 // it is bounded.
+//
+// It is an OPTIONAL check (Row.Optional), which is not the same as a soft one:
+// the row still proves what it can and still fails loudly when the mailbox is
+// unusable. What it must not do is refuse the launch, because the agent's
+// capabilities do not all need a mailbox — POST /v1/<agent>/triage classifies
+// the subject and body carried IN the request ("No mail is read or sent"), so a
+// user with nothing connected must still be able to run a triage query. The
+// mailbox operations — search, send, archive, quarantine, pre-scan, briefing —
+// fail on their own, with the sidecar's own error, and this row is what warns
+// them first.
 func MailboxCheck() ExtraCheck {
 	return ExtraCheck{
-		Key:   KeyMailbox,
-		Label: "Mailbox",
-		Run:   runMailboxCheck,
+		Key:      KeyMailbox,
+		Label:    "Mailbox",
+		Optional: true,
+		Run:      runMailboxCheck,
 	}
 }
 
@@ -1116,15 +1251,18 @@ func finishMailboxRow(row Row, res probeResult, p *connectorEntry, cfg Config) R
 // answering it with a browser sign-in hides the one fix that works.
 //
 // The relay names itself in every body it authors, and this depends on that
-// wording: its two 502s say "sidecar for agent '<id>'" (relay.py) and its 503
-// says the agent "has no running sidecar to relay to"
-// (sidecars/registry.connection). Nothing on the Python side pins those strings,
-// so the fixtures in check_test.go carry them VERBATIM — a reword there breaks a
-// test here rather than silently turning a dead sidecar into a dead mailbox.
+// wording: its two 502s say "sidecar for agent '<id>'" (relay.py), its 503 for a
+// dead sidecar says the agent "has no running sidecar to relay to", and its 503
+// for a live one that stopped serving says the process "is alive but did not
+// answer" its own health route (sidecars/manager.check_responsive). Nothing on
+// the Python side pins those strings, so the fixtures in check_test.go carry
+// them VERBATIM — a reword there breaks a test here rather than silently turning
+// a wedged sidecar into a dead mailbox.
 func relayGaveUp(detail string) bool {
 	d := strings.ToLower(detail)
 	return strings.Contains(d, "sidecar for agent") ||
-		strings.Contains(d, "no running sidecar")
+		strings.Contains(d, "no running sidecar") ||
+		strings.Contains(d, "is alive but did not answer")
 }
 
 // transientCredentialGap reports whether the sidecar said the forwarded token

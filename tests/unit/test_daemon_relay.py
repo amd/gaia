@@ -221,6 +221,11 @@ class _FakeManager:
     def is_running(self):
         return self._running
 
+    def check_responsive(self, timeout=None):
+        """Stands in for the real readiness re-probe: a started fake serves."""
+        if not self._running:
+            raise SidecarNotRunningError(f"{self.spec.agent_id} sidecar not running")
+
     def start(self):
         self.resolved_mode = "user"
         self.pid = 4321

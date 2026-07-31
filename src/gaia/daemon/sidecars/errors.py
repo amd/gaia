@@ -86,6 +86,18 @@ class SidecarNotRunningError(SidecarError):
     """The agent is registered but has no running sidecar to talk to."""
 
 
+class SidecarUnresponsiveError(SidecarError):
+    """The sidecar process is alive but no longer answering its own /health.
+
+    Distinct from :class:`SidecarNotRunningError` (no process) and
+    :class:`HealthTimeoutError` (never came up at all): the process passed its
+    startup handshake and has since stopped serving — a blocked event loop, a
+    wedged credential-store read, or a hung dependency. The process being alive
+    is why this cannot be detected by ``poll()``, and why the startup health
+    check alone reports it as healthy forever.
+    """
+
+
 class CapacityError(SidecarError):
     """Starting another sidecar would exceed the live-sidecar cap."""
 

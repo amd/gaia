@@ -376,6 +376,19 @@ contract version is tracked separately as
   mail exists, never from comparing request/response length — a mailbox
   whose size exactly equals the request now correctly reports no truncation,
   instead of the length-only formula's false positive.
+- **A slow credential-store read no longer takes the whole sidecar down.**
+  `GET /v1/email/connectors` read the OS credential store directly on the
+  asyncio event loop, and that read has no bounded worst case — on macOS it can
+  sit in `SecItemCopyMatching` waiting on an authorization decision a background
+  process never receives, and a corrupted or contended store can stall it too.
+  On the loop, a stall like that costs the whole process rather than one
+  request: nothing else can be scheduled until it returns, so every route stops
+  answering, `/health` included, while the process stays alive and its
+  supervisor goes on reporting it "running". Seen in the field on one machine
+  and captured with a stack sample of the parked loop. The read now runs off the
+  loop, so however long the credential store takes, the rest of the sidecar
+  keeps answering.
+
 - **`POST /autonomy/run` refuses instead of silently no-oping while autonomy
   is `off` (#2528).** Previously the route returned HTTP 200 with the same
   empty-report shape whether autonomy was disabled or had genuinely run and
