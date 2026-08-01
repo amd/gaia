@@ -151,6 +151,104 @@ class TestDangerousOperators:
 
 
 # ---------------------------------------------------------------------------
+# find / sort / uniq write & exec side-doors (CWE-184: find -exec bypass)
+# ---------------------------------------------------------------------------
+
+
+class TestFindActionGuards:
+    """find is whitelisted as read-only, but several predicates run, delete,
+    or write files. These must be blocked or find becomes a whitelist bypass.
+    """
+
+    def test_find_exec_blocked(self):
+        result = validate("find /tmp -maxdepth 0 -exec touch /tmp/canary {} +")
+        assert result is not None
+        assert result["status"] == "error"
+        assert "find" in result["error"].lower()
+
+    def test_find_execdir_blocked(self):
+        result = validate("find /tmp -execdir touch {} +")
+        assert result is not None
+
+    def test_find_ok_blocked(self):
+        assert validate("find /tmp -name x -ok rm {} ;") is not None
+
+    def test_find_okdir_blocked(self):
+        assert validate("find /tmp -okdir rm {} ;") is not None
+
+    def test_find_delete_blocked(self):
+        assert validate("find /tmp -name x -delete") is not None
+
+    def test_find_fprint_blocked(self):
+        assert validate("find . -fprint /tmp/canary") is not None
+
+    def test_find_fprintf_blocked(self):
+        assert validate("find . -fprintf /tmp/canary hi") is not None
+
+    def test_find_fls_blocked(self):
+        assert validate("find . -fls /tmp/canary") is not None
+
+    def test_find_exec_uppercase_blocked(self):
+        # Token is lowercased before matching, so case tricks don't help.
+        assert validate("find /tmp -EXEC touch {} +") is not None
+
+    # Read-only predicates must still be allowed
+    def test_find_print_allowed(self):
+        assert validate("find /tmp -maxdepth 2 -print") is None
+
+    def test_find_printf_allowed(self):
+        # -printf writes to STDOUT (read-only); must not be confused with -fprintf.
+        assert validate("find . -printf %p") is None
+
+    def test_find_ls_allowed(self):
+        assert validate("find . -ls") is None
+
+    def test_find_name_type_allowed(self):
+        assert validate("find . -name foo.py -type f") is None
+
+
+class TestSortOutputGuard:
+    def test_sort_output_short_blocked(self):
+        result = validate("sort -o /tmp/canary /etc/hostname")
+        assert result is not None
+        assert result["status"] == "error"
+
+    def test_sort_output_long_blocked(self):
+        assert validate("sort --output=/tmp/canary /etc/hostname") is not None
+
+    def test_sort_output_attached_blocked(self):
+        # -oFILE attached form must not slip past.
+        assert validate("sort -o/tmp/canary /etc/hostname") is not None
+
+    def test_sort_output_bundled_blocked(self):
+        # Bundled short cluster -ro == -r -o.
+        assert validate("sort -ro /tmp/canary /etc/hostname") is not None
+
+    def test_sort_plain_allowed(self):
+        assert validate("sort file.txt") is None
+
+    def test_sort_flags_allowed(self):
+        assert validate("sort -r -u file.txt") is None
+
+
+class TestUniqOutputGuard:
+    def test_uniq_output_file_blocked(self):
+        result = validate("uniq in.txt out.txt")
+        assert result is not None
+        assert result["status"] == "error"
+
+    def test_uniq_single_input_allowed(self):
+        assert validate("uniq file.txt") is None
+
+    def test_uniq_count_flag_allowed(self):
+        assert validate("uniq -c file.txt") is None
+
+    def test_uniq_value_flag_not_counted_as_operand(self):
+        # -f consumes '2'; only one operand (file.txt) remains -> allowed.
+        assert validate("uniq -f 2 file.txt") is None
+
+
+# ---------------------------------------------------------------------------
 # PowerShell cmdlet filtering
 # ---------------------------------------------------------------------------
 
