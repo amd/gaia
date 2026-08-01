@@ -3,8 +3,9 @@
 """Unit tests for the skill-synthesis pipeline (procedural memory, #887).
 
 Covers the pure pipeline in ``gaia.agents.base.skill_synthesis``:
-``Skill.parse`` / ``Skill.to_skill_md`` round-trip and the #691 emit/inject
-split, ``load_synthesis_config`` overrides, ``cluster_by_goal`` grouping at the
+``DistilledProcedure.parse`` / ``DistilledProcedure.to_skill_md`` round-trip and
+the #691 emit/inject split, ``load_synthesis_config`` overrides,
+``cluster_by_goal`` grouping at the
 cosine threshold, ``distill_cluster`` contract-shape + fail-loud split, and
 ``reconcile_and_store`` ADD / UPDATE / NOOP (never DELETE).
 
@@ -25,9 +26,9 @@ from gaia.agents.base.skill_synthesis import (
     DISTILL_SYSTEM_PROMPT,
     DISTILL_TEMPERATURE,
     SIMILARITY_TAU,
+    DistilledProcedure,
     GoalCluster,
     ReconcileResult,
-    Skill,
     SynthesisConfig,
     _build_distill_user_prompt,
     _nearest_enabled_procedure,
@@ -36,6 +37,11 @@ from gaia.agents.base.skill_synthesis import (
     load_synthesis_config,
     reconcile_and_store,
 )
+
+try:  # The on-disk SKILL.md format (#888) — absent until that lands.
+    from gaia.skills import format as _SKILLS_FORMAT
+except ImportError:
+    _SKILLS_FORMAT = None
 
 
 @pytest.fixture
@@ -104,15 +110,15 @@ def _cluster(goal="do the thing", n=3, tools=("a", "b", "c")):
 
 
 # ===========================================================================
-# Skill.parse / to_skill_md — the emit/inject split
+# DistilledProcedure.parse / to_skill_md — the emit/inject split
 # ===========================================================================
 
 
 class TestSkillParse:
-    """Skill.parse validates the intermediate four-field shape."""
+    """DistilledProcedure.parse validates the intermediate four-field shape."""
 
     def test_parses_valid_intermediate(self):
-        skill = Skill.parse(_INTERMEDIATE_MD)
+        skill = DistilledProcedure.parse(_INTERMEDIATE_MD)
         assert skill is not None
         assert skill.name == "triage-support-ticket"
         assert skill.when_to_use.startswith("Triage an inbound support ticket")
@@ -122,15 +128,17 @@ class TestSkillParse:
         assert "license" not in skill.body
 
     def test_skip_sentinel_returns_none(self):
-        assert Skill.parse("SKIP") is None
-        assert Skill.parse("  SKIP  ") is None
+        assert DistilledProcedure.parse("SKIP") is None
+        assert DistilledProcedure.parse("  SKIP  ") is None
 
     def test_missing_frontmatter_returns_none(self):
-        assert Skill.parse("# Just a heading\n\nno frontmatter here") is None
+        assert (
+            DistilledProcedure.parse("# Just a heading\n\nno frontmatter here") is None
+        )
 
     def test_empty_returns_none(self):
-        assert Skill.parse("") is None
-        assert Skill.parse(None) is None
+        assert DistilledProcedure.parse("") is None
+        assert DistilledProcedure.parse(None) is None
 
     @pytest.mark.parametrize(
         "bad_name",
@@ -138,12 +146,12 @@ class TestSkillParse:
     )
     def test_invalid_name_rejected(self, bad_name):
         md = _INTERMEDIATE_MD.replace("triage-support-ticket", bad_name, 1)
-        assert Skill.parse(md) is None
+        assert DistilledProcedure.parse(md) is None
 
     def test_name_over_64_chars_rejected(self):
         long_name = "a" * 65
         md = _INTERMEDIATE_MD.replace("triage-support-ticket", long_name, 1)
-        assert Skill.parse(md) is None
+        assert DistilledProcedure.parse(md) is None
 
     def test_empty_when_to_use_rejected(self):
         md = """\
@@ -156,11 +164,11 @@ tools_required: [a]
 # Body
 1. step
 """
-        assert Skill.parse(md) is None
+        assert DistilledProcedure.parse(md) is None
 
     def test_empty_body_rejected(self):
         md = "---\nname: valid-name\nwhen_to_use: trigger text\ntools_required: [a]\n---\n"
-        assert Skill.parse(md) is None
+        assert DistilledProcedure.parse(md) is None
 
     def test_tools_required_defaults_to_empty_list(self):
         md = """\
@@ -172,7 +180,7 @@ when_to_use: A procedure that consumes no registry tools.
 # Body
 1. think
 """
-        skill = Skill.parse(md)
+        skill = DistilledProcedure.parse(md)
         assert skill is not None
         assert skill.tools_required == []
 
@@ -181,12 +189,12 @@ when_to_use: A procedure that consumes no registry tools.
             "tools_required: [query_documents, read_file, remember]",
             "tools_required: [1, 2, 3]",
         )
-        assert Skill.parse(md) is None
+        assert DistilledProcedure.parse(md) is None
 
     def test_tolerates_code_fence_free_intermediate(self):
-        # Skill.parse expects fence-free text (distill_cluster strips fences),
+        # DistilledProcedure.parse expects fence-free text (distill_cluster strips fences),
         # but a stray trailing newline must not break parsing.
-        skill = Skill.parse(_INTERMEDIATE_MD + "\n\n")
+        skill = DistilledProcedure.parse(_INTERMEDIATE_MD + "\n\n")
         assert skill is not None
 
 
@@ -194,7 +202,7 @@ class TestSkillToSkillMd:
     """to_skill_md injects the fixed constants and emits a valid #691 document."""
 
     def test_round_trips_to_valid_691_document(self):
-        skill = Skill.parse(_INTERMEDIATE_MD)
+        skill = DistilledProcedure.parse(_INTERMEDIATE_MD)
         doc = skill.to_skill_md()
 
         # Split frontmatter from body and parse the YAML.
@@ -215,11 +223,35 @@ class TestSkillToSkillMd:
         assert "# Triage a Support Ticket" in body
 
     def test_when_to_use_maps_to_description_not_when_to_use(self):
-        skill = Skill.parse(_INTERMEDIATE_MD)
+        skill = DistilledProcedure.parse(_INTERMEDIATE_MD)
         front = yaml.safe_load(skill.to_skill_md().split("---\n", 2)[1])
         # The on-disk schema uses `description`, never the intermediate label.
         assert "when_to_use" not in front
         assert "description" in front
+
+    @pytest.mark.skipif(
+        _SKILLS_FORMAT is None,
+        reason="gaia.skills (the #888 on-disk format) is not available",
+    )
+    def test_renders_a_document_the_format_validator_accepts(self):
+        """The rendered document survives the real ``gaia.skills`` validator.
+
+        ``to_skill_md`` claims its output "validates under the Agent Skills
+        format"; this asserts it against the actual parser rather than a
+        hand-rolled YAML check, so the two halves cannot drift apart silently.
+        """
+        parse_skill = _SKILLS_FORMAT.parse_skill
+        validate_skill = _SKILLS_FORMAT.validate_skill
+
+        skill = DistilledProcedure.parse(_INTERMEDIATE_MD)
+        parsed = parse_skill(skill.to_skill_md(), source="<synthesized>")
+        validate_skill(parsed, source="<synthesized>")
+
+        assert parsed.name == skill.name
+        assert parsed.description == skill.when_to_use
+        assert parsed.version == "1.0.0"
+        assert parsed.license == "MIT"
+        assert parsed.gaia.tools_required == skill.tools_required
 
 
 # ===========================================================================
@@ -472,7 +504,7 @@ class TestBuildDistillUserPrompt:
 
 class TestReconcileAndStore:
     def _candidate(self, name="triage-support-ticket"):
-        return Skill(
+        return DistilledProcedure(
             name=name,
             when_to_use="Triage an inbound support ticket end to end.",
             body="# Triage\n1. step\n## Edge cases\n- escalate",
@@ -558,7 +590,7 @@ class TestReconcileAndStore:
             attempt_count=2,
             embedding=v,
         )
-        drifted = Skill(
+        drifted = DistilledProcedure(
             name="summarize-my-unread-emails",  # drifted name, same goal
             when_to_use="Summarize my unread emails.",
             body="# New\n1. better step",
@@ -606,7 +638,7 @@ class TestReconcileAndStore:
             attempt_count=50,
             embedding=v,
         )
-        drifted = Skill(
+        drifted = DistilledProcedure(
             name="summarize-my-unread-emails",
             when_to_use="Summarize my unread emails.",
             body="weaker",

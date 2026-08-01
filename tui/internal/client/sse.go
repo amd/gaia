@@ -621,6 +621,13 @@ func (s *SSEClient) clearActive(handle *runHandle) {
 	s.mu.Unlock()
 }
 
+// uiContextMarker labels the card-row block appended to a stored assistant
+// turn. It reads as metadata, not as a quotable heading — a bare
+// "[shown to the user]" sits in the transcript looking exactly like content
+// the model itself wrote, and a later turn would copy it verbatim into a new
+// reply instead of treating it as a reference note.
+const uiContextMarker = "[ui-context: cards already shown to the user — reference only, never repeat verbatim]"
+
 func (s *SSEClient) appendTurn(query, answer string, shown []string) {
 	// The assistant turn records what the USER saw, not only what the model
 	// said. Cards are drawn by this client, so their contents never reach the
@@ -629,7 +636,7 @@ func (s *SSEClient) appendTurn(query, answer string, shown []string) {
 	content := answer
 	if len(shown) > 0 {
 		content = strings.TrimSpace(
-			answer + "\n\n[shown to the user]\n" + strings.Join(shown, "\n"),
+			answer + "\n\n" + uiContextMarker + "\n" + strings.Join(shown, "\n"),
 		)
 	}
 	s.mu.Lock()

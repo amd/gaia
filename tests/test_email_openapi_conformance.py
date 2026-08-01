@@ -939,6 +939,48 @@ def test_attention_conforms_to_spec(client, committed_spec):
     assert result["cache_age_seconds"] == 0.0
 
 
+def test_attention_message_rate_limit_degrades_not_500s(client, committed_spec):
+    """AC-4b (#2716) -- a message rate-limited past its retry budget must
+    render as a 200 with coverage.degraded/message_errors, not a 500.
+
+    ``AttentionCoverage`` sets ``extra="forbid"`` and
+    ``EmailAttentionResult.model_validate(out)`` runs OUTSIDE the route's
+    ``except ConnectorsError`` block (api_routes.py) -- an undeclared
+    ``message_errors`` key would raise an uncaught ``ValidationError`` here,
+    the same failure class this issue exists to remove, one layer up.
+    """
+    from gaia_agent_email.api_routes import (
+        get_attention_backends,
+        reset_attention_cache,
+    )
+
+    from tests.fixtures.email.fake_gmail import FakeGmailBackend
+
+    reset_attention_cache()
+    gmail = FakeGmailBackend(
+        user_email="me@example.com", rate_limit_subrequest_ceiling=0
+    )
+    gmail.add_message(_attention_backend_message())
+    client.app.dependency_overrides[get_attention_backends] = lambda: {"google": gmail}
+    try:
+        resp = client.get("/v1/email/attention")
+    finally:
+        client.app.dependency_overrides.pop(get_attention_backends, None)
+        reset_attention_cache()
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    schema_name = _schema_name_from_response(
+        committed_spec, "get", "/v1/email/attention"
+    )
+    _assert_body_conforms(committed_spec, schema_name, body)
+    coverage = body["result"]["coverage"]
+    assert coverage["degraded"] is True
+    assert coverage["message_errors"]
+    assert coverage["message_errors"][0]["message_id"] == "a1"
+    assert coverage.get("mailbox_errors") in (None, [])
+
+
 def test_attention_without_mailbox_returns_503(client, in_memory_keyring):
     """GET /attention with no mailbox connected fails loud with the
     documented 503, mirroring /prescan — same real-resolver, no-override

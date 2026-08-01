@@ -204,8 +204,8 @@ func (f *fakeDaemon) handleInstall(w http.ResponseWriter, r *http.Request) {
 	}
 	f.mu.Unlock()
 
-	// Mirrors the real daemon: `email` is in the experimental tier, so an
-	// install without an explicit opt-in is a 403 naming --trust.
+	// Mirrors the real daemon for a non-verified agent: an install without an
+	// explicit opt-in is a 403 naming --trust.
 	if !trusted {
 		w.WriteHeader(http.StatusForbidden)
 		writeJSON(w, map[string]any{"detail": "installing 'email' runs code AMD has not verified. " +

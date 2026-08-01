@@ -248,7 +248,10 @@ func gaiaDaemonStart(ctx context.Context) (*exec.Cmd, error) {
 	bin, err := exec.LookPath("gaia")
 	if err != nil {
 		return nil, &StartError{Reason: "the `gaia` CLI is not on PATH, so the daemon cannot be launched. " +
-			"Install GAIA (`pip install -e .` in the repo, or the released wheel) and retry"}
+			"Install GAIA with `curl -fsSL https://amd-gaia.ai/install.sh | sh` " +
+			"(on Windows: `irm https://amd-gaia.ai/install.ps1 | iex`), or `pip install amd-gaia` " +
+			"into the Python environment on your PATH, then retry. " +
+			"From a clone of the repo, `pip install -e .` works too"}
 	}
 	return exec.CommandContext(ctx, bin, "daemon", "start"), nil
 }

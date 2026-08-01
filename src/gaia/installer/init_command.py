@@ -705,7 +705,7 @@ class InitCommand:
             self._print_error(
                 f"Platform '{platform_name}' is not supported for automatic installation."
             )
-            self._print("   GAIA init only supports Windows and Linux.")
+            self._print("   GAIA init only supports Windows, Linux, and macOS.")
             self._print(
                 "   Please install Lemonade Server manually from: https://www.lemonade-server.ai"
             )
@@ -988,6 +988,14 @@ class InitCommand:
             True on success, False on failure
         """
         self._print("")
+
+        # macOS has no scripted uninstall, but `installer -pkg` upgrades in place —
+        # calling uninstall() would only print removal instructions the user
+        # doesn't need.
+        if self.installer.system == "darwin":
+            self._print(f"   Upgrading Lemonade v{old_version} in place...")
+            return self._install_lemonade()
+
         if RICH_AVAILABLE and self.console:
             self.console.print(
                 f"   [bold]Uninstalling[/bold] Lemonade [red]v{old_version}[/red]..."
@@ -1043,7 +1051,12 @@ class InitCommand:
                 plain_label = _re.sub(r"\[.*?\]", "", label)
                 self._print(f"   {plain_label}")
 
-            if installer_path is not None and not self.yes:
+            # macOS installs run headless via `installer -pkg`; only the MSI pops a window.
+            if (
+                installer_path is not None
+                and not self.yes
+                and self.installer.system == "windows"
+            ):
                 if RICH_AVAILABLE and self.console:
                     self.console.print()
                     self.console.print(

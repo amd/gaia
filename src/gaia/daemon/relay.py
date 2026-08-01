@@ -36,8 +36,9 @@ stops occupying the single-tenant LLM slot. Best-effort by design: the sidecar
 may already be dead, so transport failures are logged, never raised.
 
 Loud errors, no silent fallbacks: unknown agent → 404 naming the registered
-ids; registered-but-not-running → 503 naming the ensure remedy; upstream
-unreachable mid-flight → 502 carrying the transport error.
+ids; registered-but-not-running, or alive but no longer answering its own
+``/health`` → 503 naming the remedy; upstream unreachable mid-flight → 502
+carrying the transport error.
 """
 
 from __future__ import annotations
@@ -52,8 +53,13 @@ from typing import Optional
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
+from starlette.concurrency import run_in_threadpool
 
-from gaia.daemon.sidecars.errors import SidecarNotRunningError, UnknownAgentError
+from gaia.daemon.sidecars.errors import (
+    SidecarNotRunningError,
+    SidecarUnresponsiveError,
+    UnknownAgentError,
+)
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -266,10 +272,12 @@ def build_relay_router(token: str, registry):
     @router.api_route("/v1/{agent_id}/{path:path}", methods=RELAY_METHODS)
     async def relay(agent_id: str, path: str, request: Request):
         try:
-            base_url, bearer = registry.connection(agent_id)
+            # Off-loop: connection() probes the sidecar's /health, and a blocking
+            # probe here would wedge the daemon exactly like the sidecar it checks.
+            base_url, bearer = await run_in_threadpool(registry.connection, agent_id)
         except UnknownAgentError as e:
             raise HTTPException(status_code=404, detail=str(e)) from e
-        except SidecarNotRunningError as e:
+        except (SidecarNotRunningError, SidecarUnresponsiveError) as e:
             raise HTTPException(status_code=503, detail=str(e)) from e
 
         body = await request.body()

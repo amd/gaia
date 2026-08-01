@@ -458,15 +458,18 @@ def render_endpoint_spec_html() -> str:
     prescan_block = _endpoint_block(
         path="/v1/email/prescan",
         description=(
-            "Inbox pre-scan (#1778). Lists the most-recent unread inbox messages "
-            "from the connected mailbox and returns the aggregate triage-card "
-            "envelope the Agent UI renders — top urgent / actionable / "
-            "needs-review rows, an informational count, and suggested archives, "
-            "each with a heuristic reason. ``needs_review`` (#2584) holds "
-            "messages the heuristic was not confident about; ``scanned`` / "
-            "``total_unread`` / ``degraded`` / ``mailbox_errors`` report how much "
-            "of the mailbox this pre-scan actually covered. Read-only: nothing "
-            "is archived, marked, or sent. Classification reuses the agent's "
+            "Inbox pre-scan (#1778). Lists the most-recent INBOX messages — "
+            "read AND unread alike (#2638) — from the connected mailbox and "
+            "returns the aggregate triage-card envelope the Agent UI renders — "
+            "top urgent / actionable / needs-review rows, an informational "
+            "count, and suggested archives, each with a heuristic reason. "
+            "``needs_review`` (#2584) holds messages the heuristic was not "
+            "confident about; ``scanned`` / ``total_inbox`` / ``total_unread`` "
+            "/ ``degraded`` / ``mailbox_errors`` report how much of the mailbox "
+            "this pre-scan actually covered — ``total_inbox`` (exact whole-"
+            "INBOX count) is the coverage denominator since #2638, "
+            "``total_unread`` a secondary figure. Read-only: nothing is "
+            "archived, marked, or sent. Classification reuses the agent's "
             "pre_scan_inbox path. Fails loudly when no mailbox is connected "
             "(503) or 2+ are (400)."
         ),
@@ -938,7 +941,11 @@ def render_endpoint_spec_html() -> str:
     <code>off</code> — the kill switch refuses the run instead of returning
     the same 200 shape a real, found-nothing cycle would (#2528), so a caller
     can always tell "disabled" apart from "ran and found nothing to do". 404
-    if the session is unknown.</p>
+    if the session is unknown. <b>501</b> if this agent build does not expose
+    autonomy. <b>500</b> if a connected mailbox raises a connector error
+    (missing/expired/under-scoped credential) — the response <code>detail</code>
+    carries the actionable message and the exact <code>gaia connectors
+    connect ...</code> command to fix it (#2617), never a bare status code.</p>
 </div>
 """
 

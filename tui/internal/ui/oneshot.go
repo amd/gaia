@@ -545,15 +545,23 @@ func ReportReadiness(
 func writeReadiness(errW io.Writer, rep preflight.Report) {
 	blocker, blocked := rep.Blocker()
 	if !blocked {
-		// Nothing failed. Anything that could not be VERIFIED is still named —
-		// the run proceeds, but silence here would read as "all clear" — and it
-		// keeps its remedy, which is the only thing that makes it fixable.
+		// Nothing the agent needs failed. Anything that could not be VERIFIED is
+		// still named — the run proceeds, but silence here would read as "all
+		// clear" — and it keeps its remedy, which is the only thing that makes it
+		// fixable.
 		for _, row := range rep.Rows {
 			if !row.NeedsAttention() {
 				continue
 			}
-			fmt.Fprintf(errW, "  ⚠️  %s: %s (could not be verified — continuing)\n",
-				row.Label, row.Line)
+			// A row that PROVED broken is not one that "could not be verified":
+			// only an optional row reaches here failed, and the ask it gates is
+			// what will fail, so say that rather than softening it.
+			verdict := "could not be verified"
+			if row.State == preflight.StateFailed {
+				verdict = "not working; only the asks that need it will fail"
+			}
+			fmt.Fprintf(errW, "  ⚠️  %s: %s (%s — continuing)\n",
+				row.Label, row.Line, verdict)
 			if row.Remedy.Command != "" {
 				fmt.Fprintf(errW, "      run: %s\n", row.Remedy.Command)
 			}

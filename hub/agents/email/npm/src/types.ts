@@ -402,11 +402,19 @@ export interface EmailPreScanResult {
   /** How many messages this pre-scan actually classified (#2584). */
   scanned: number;
   /**
-   * Estimated total unread messages in the scanned mailbox(es) (#2584).
-   * Gmail reports a real estimate; Outlook cannot and reports null — never
-   * a fabricated number.
+   * Exact total unread message count in the scanned mailbox(es) (#2584) — a
+   * secondary figure, NOT the scan-coverage denominator since #2638 (see
+   * total_inbox for that). Gmail reports an exact count; Outlook cannot and
+   * reports null — never a fabricated number.
    */
   total_unread?: number | null;
+  /**
+   * Exact total INBOX message count, read + unread (#2638) — the honest
+   * scan-coverage denominator now that pre-scan covers all of INBOX, not
+   * unread-only. Gmail reports an exact count, sourced from the same call as
+   * total_unread; Outlook cannot and reports null — never a fabricated number.
+   */
+  total_inbox?: number | null;
   /** True when at least one connected mailbox could not be scanned (#2584). */
   degraded: boolean;
   /** Connected mailboxes that failed during this pre-scan, if any (#2584). */
@@ -473,6 +481,15 @@ export interface AttentionItem {
   mailbox?: string | null;
 }
 
+/** One message that could not be fetched during a scan (contract.py: MessageError, #2716). Distinct
+ * from MailboxError -- every OTHER message in the same mailbox's scan is still present in `items`. */
+export interface MessageError {
+  /** Provider message id that failed. */
+  message_id: string;
+  /** Actionable error message for the failure. */
+  error: string;
+}
+
 /** How much of the mailbox the attention view actually covered (contract.py: AttentionCoverage). */
 export interface AttentionCoverage {
   /** Messages actually scanned across every mailbox. */
@@ -481,10 +498,14 @@ export interface AttentionCoverage {
   total_unread?: number | null;
   /** True when the scan hit its message ceiling in any connected mailbox. */
   scan_truncated: boolean;
-  /** True when at least one connected mailbox could not be scanned. */
+  /** True when at least one connected mailbox could not be scanned, OR at least one individual
+   * message could not be fetched after a rate-limit survived retry (#2716). */
   degraded: boolean;
   /** Connected mailboxes that failed during this scan, if any. */
   mailbox_errors?: MailboxError[] | null;
+  /** Individual messages that could not be fetched during this scan, if any (#2716) — e.g. a Gmail
+   * rate-limit that survived retry. A per-message gap, not a mailbox failure. */
+  message_errors?: MessageError[] | null;
 }
 
 /**

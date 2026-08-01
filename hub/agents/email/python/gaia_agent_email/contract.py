@@ -109,7 +109,19 @@ CATEGORY_PERSONAL = "PERSONAL"
 #     ``cache_age_seconds`` / ``stale`` so a renderer never presents a cached
 #     result as current. No existing shape changed, so 2.7 consumers keep
 #     working (additive MINOR).
-SCHEMA_VERSION = "2.8"
+# 2.9 is additive over 2.8 (#2638/#2643): EmailPreScanResult gains
+# ``total_inbox`` (exact whole-INBOX message count, Optional[int]) — pre-scan
+# now covers read + unread mail (#2638, previously unread-only on a rationale
+# #2584 itself made obsolete), so total_unread alone is no longer an honest
+# scan-coverage denominator; total_inbox is. No existing field changed, so
+# 2.8 consumers keep working (additive MINOR).
+# 2.10 is additive over 2.9 (#2716): AttentionCoverage gains
+# ``message_errors`` (Optional[List[MessageError]]) — a Gmail rate-limit
+# that survives retry now degrades one message instead of the whole scan;
+# ``degraded`` can now be True for a message-level gap as well as a
+# mailbox-level one. No existing field changed, so 2.9 consumers keep
+# working (additive MINOR).
+SCHEMA_VERSION = "2.10"
 
 # Maximum number of items in a single batch request. Protects the single-tenant
 # local model slot from runaway batches. Enforced via Pydantic max_length.
@@ -1298,7 +1310,11 @@ class PreScanPreferencesApplied(_Strict):
     """
 
     priority_senders: List[str] = Field(
-        default_factory=list, description="Senders always treated as urgent."
+        default_factory=list,
+        description=(
+            "Senders surfaced/ordered ahead of others (#2632); does not "
+            "change category — content still decides urgency."
+        ),
     )
     low_priority_senders: List[str] = Field(
         default_factory=list, description="Senders always treated as low-priority."
@@ -1346,6 +1362,19 @@ class MailboxError(_Strict):
     error: str = Field(..., description="Actionable error message for the failure.")
 
 
+class MessageError(_Strict):
+    """One message that could not be fetched during a scan (#2716).
+
+    Distinct from ``MailboxError``: a rate-limited message is NOT a mailbox
+    failure — every other message in that mailbox's scan is still present
+    in the result. Not reusable as ``MailboxError`` since that model has no
+    ``message_id`` field.
+    """
+
+    message_id: str = Field(..., description="Provider message id that failed.")
+    error: str = Field(..., description="Actionable error message for the failure.")
+
+
 class EmailPreScanRequest(_Strict):
     """Request envelope for an inbox pre-scan (#1778). Read-only."""
 
@@ -1384,7 +1413,21 @@ class EmailPreScanResult(_Strict):
     )
     informational_count: int = Field(
         default=0,
-        description="Count of informational (FYI/PERSONAL) messages — not listed.",
+        description=(
+            "Count of informational (FYI/PERSONAL) messages. Empty by "
+            "default in ``informational`` below (#2633) — request "
+            "``include_informational=True`` on the call to get the full "
+            "list instead of just this count."
+        ),
+    )
+    informational: List[PreScanItem] = Field(
+        default_factory=list,
+        description=(
+            "The informational (FYI/PERSONAL) messages this count "
+            "represents (#2633) — empty unless the caller passed "
+            "``include_informational=True``, so a bare count is never the "
+            "only way to audit what was filtered."
+        ),
     )
     suggested_archives: List[PreScanItem] = Field(
         default_factory=list,
@@ -1420,11 +1463,25 @@ class EmailPreScanResult(_Strict):
     total_unread: Optional[int] = Field(
         default=None,
         description=(
-            "Exact total UNREAD message count in the scanned mailbox(es), "
-            "the denominator for scan coverage (#2584). Gmail reports this "
-            "via labels().get's messagesUnread — an exact integer, not "
-            "list_messages's resultSizeEstimate (measured 2.6x off on a "
-            "real mailbox). Outlook has no equivalent honest source and "
+            "Exact total UNREAD message count in the scanned mailbox(es) — a "
+            "secondary coverage figure (#2584), NOT the scan-coverage "
+            "denominator since #2638 (pre-scan now covers read mail too; see "
+            "total_inbox for that). Gmail reports this via labels().get's "
+            "messagesUnread — an exact integer, not list_messages's "
+            "resultSizeEstimate (measured 2.6x off on a real mailbox). "
+            "Outlook has no equivalent honest source and reports null — "
+            "never a fabricated page-size number."
+        ),
+    )
+    total_inbox: Optional[int] = Field(
+        default=None,
+        description=(
+            "Exact total INBOX message count (read + unread) in the scanned "
+            "mailbox(es) — the honest denominator for scan coverage (#2638), "
+            "now that pre-scan covers all of INBOX, not just unread mail. "
+            "Gmail reports this via labels().get's messagesTotal — an exact "
+            "integer, sourced from the SAME call as total_unread (no extra "
+            "round-trip). Outlook has no equivalent honest source and "
             "reports null — never a fabricated page-size number."
         ),
     )
@@ -1550,11 +1607,27 @@ class AttentionCoverage(_Strict):
     )
     degraded: bool = Field(
         default=False,
-        description="True when at least one connected mailbox could not be scanned.",
+        description=(
+            "True when at least one connected mailbox could not be scanned "
+            "(see mailbox_errors), OR at least one individual message could "
+            "not be fetched after Gmail rate-limited it past its retry "
+            "budget (see message_errors, #2716) — either way, the "
+            "surviving results are still shown, but coverage is partial."
+        ),
     )
     mailbox_errors: Optional[List[MailboxError]] = Field(
         default=None,
         description="Connected mailboxes that failed during this scan, if any.",
+    )
+    message_errors: Optional[List[MessageError]] = Field(
+        default=None,
+        description=(
+            "Individual messages that could not be fetched during this "
+            "scan, if any (#2716) — e.g. a Gmail rate-limit that survived "
+            "retry. Every other message in the same mailbox is still "
+            "included in ``items``; this is a per-message gap, not a "
+            "mailbox failure."
+        ),
     )
 
 
@@ -1767,10 +1840,11 @@ __all__ = [
     "EmailQuarantineResponse",
     "EmailUnquarantineRequest",
     "EmailUnquarantineResponse",
-    # Attention view (schema 2.8, #2582).
+    # Attention view (schema 2.8, #2582; message_errors added #2716).
     "AttentionItemKind",
     "AttentionItem",
     "AttentionCoverage",
+    "MessageError",
     "EmailAttentionResult",
     "EmailAttentionResponse",
     # Calendar surface (schema 2.1, #1780).

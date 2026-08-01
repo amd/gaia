@@ -55,16 +55,19 @@ function readManifest(dir, id) {
     if (typeof value !== 'string' || value.trim() === '') {
       throw new Error(
         `[generate-in-development] ${file} has no usable '${key}'. Every agent manifest ` +
-          `must declare name/description/category/icon — the hub list renders them ` +
+          `must declare id/name/description/category/icon — the hub list renders them ` +
           `verbatim and will not invent a placeholder.`
       );
     }
     return value.trim();
   };
-  // The id comes from the DIRECTORY, not the manifest: manifests disagree with
-  // their own folder (hub/agents/analyst declares `id: data`).
+  // Two ids, deliberately. `id` is the DIRECTORY, which manifests disagree with
+  // (hub/agents/analyst declares `id: data`). `manifestId` is what the live
+  // catalog serves once the agent publishes, so the "in development" filter can
+  // drop the row under either name.
   return {
     id,
+    manifestId: field('id'),
     name: field('name'),
     description: field('description'),
     category: field('category'),

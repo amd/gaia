@@ -81,11 +81,17 @@ logger = logging.getLogger(__name__)
 # ``get_access_token`` still enforces per-agent scope coverage at the point an
 # agent actually requests a token.
 _DEFAULT_REQUIRED_SCOPES_BY_PROVIDER: dict[str, tuple[str, ...]] = {
-    # Built-in Email Triage Agent (#962) mailbox union.
+    # Built-in Email Triage Agent (#962) mailbox union — MUST equal
+    # gaia_agent_email/scopes.py's REQUIRED_SCOPES (mail only). Calendar is
+    # DELIBERATELY absent (#2730 D1): this gates whether a forwarded
+    # connection (Path A, #1292) is usable at import time, and calendar is
+    # requested but never required, mirroring the same enforcement the
+    # daemon's forward-out mint applies. Requiring it here would reject a
+    # mail-only forwarded connection outright — the exact all-or-nothing
+    # failure this issue removes, just relocated to the import boundary.
     "google": (
-        "https://www.googleapis.com/auth/gmail.modify",
-        "https://www.googleapis.com/auth/gmail.send",
-        "https://www.googleapis.com/auth/calendar.events",
+        "https://www.googleapis.com/auth/gmail.modify",  # from gaia_agent_email/scopes.py
+        "https://www.googleapis.com/auth/gmail.send",  # from gaia_agent_email/scopes.py
     ),
 }
 
@@ -198,6 +204,7 @@ def _authorize_access(
     stored = load_connection(
         provider,
         current_client_id_hash=prov.client_id_hash,
+        current_tenant=getattr(prov, "tenant", None),
         account_email=account_email,
     )
     if stored is None:
@@ -209,6 +216,13 @@ def _authorize_access(
     if missing:
         raise AuthRequiredError(
             AuthRequiredError.Reason.CONNECTION_MISSING_SCOPES,
+            # granted ∪ missing — NEVER just the missing subset. `--scopes`
+            # REPLACES the connection's scopes rather than adding to them
+            # (flow.py: `list(scopes) or list(provider.default_scopes)`),
+            # so a remedy naming only the gap would authorize an account
+            # that has lost everything it already had (#2730 D0). Do not
+            # "simplify" this to `missing` alone — that reintroduces the bug.
+            full_scopes=sorted(granted_scopes | set(missing)),
             provider=provider,
             agent_id=resolved_agent,
             missing_scopes=missing,
@@ -397,9 +411,13 @@ def list_connections() -> List[Dict[str, Any]]:
             )
             continue
         try:
-            blob = load_connection(provider, current_client_id_hash=prov.client_id_hash)
+            blob = load_connection(
+                provider,
+                current_client_id_hash=prov.client_id_hash,
+                current_tenant=getattr(prov, "tenant", None),
+            )
         except AuthRequiredError:
-            # Tripwire fired — the entry has been cleared. Skip.
+            # Tripwire fired (hash OR tenant) — the entry has been cleared. Skip.
             continue
         if blob is None:
             continue
@@ -700,10 +718,14 @@ def tripwire_check() -> None:
             logger.warning("tripwire: provider %s misconfigured: %s", provider_id, e)
             continue
         try:
-            load_connection(provider_id, current_client_id_hash=prov.client_id_hash)
+            load_connection(
+                provider_id,
+                current_client_id_hash=prov.client_id_hash,
+                current_tenant=getattr(prov, "tenant", None),
+            )
         except AuthRequiredError:
-            # Tripwire fired — load_connection already cleared the
-            # entry; nothing else to do here.
+            # Tripwire fired (hash OR tenant) — load_connection already
+            # cleared the entry; nothing else to do here.
             logger.info("tripwire: provider %s entry cleared by tripwire", provider_id)
         except Exception as e:
             logger.warning("tripwire: provider %s check failed: %s", provider_id, e)

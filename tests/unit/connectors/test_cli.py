@@ -237,6 +237,87 @@ class TestConnectGrantAgent:
         assert rc == 0
         assert captured["grant_agents"] is None
 
+    def test_bare_connect_with_existing_grant_derives_declared_union(self, monkeypatch):
+        """AC-8 (#2730): the command GAIA's own error text tells a user to
+        run — `gaia connectors connect google` with NO flags — must not
+        silently narrow an existing grant to identity-only scopes. With
+        installed:email already granted, it authorizes
+        declared ∪ default_scopes (7 scopes for google)."""
+        TestConnectGrantAgent._install_fake_agent_registry(
+            monkeypatch,
+            [
+                "https://www.googleapis.com/auth/gmail.modify",
+                "https://www.googleapis.com/auth/gmail.send",
+                "https://www.googleapis.com/auth/calendar.events",
+                "https://www.googleapis.com/auth/calendar.readonly",
+            ],
+        )
+        from gaia.connectors.grants import grant_agent
+
+        grant_agent(
+            "google",
+            "installed:email",
+            ["https://www.googleapis.com/auth/gmail.modify"],
+        )
+
+        captured = {}
+
+        async def _fake_start(connector_id, *, scopes, grant_agents=None):
+            captured["scopes"] = sorted(scopes)
+            captured["grant_agents"] = grant_agents
+            return {"flow_id": "F1", "authorization_url": "https://auth.example"}
+
+        async def _fake_complete(flow_id):
+            return {"account_email": "alice@example.com"}
+
+        monkeypatch.setattr("gaia.connectors.api.start_authorization", _fake_start)
+        monkeypatch.setattr(
+            "gaia.connectors.api.complete_authorization", _fake_complete
+        )
+
+        rc, _out, err = _run("connectors", "connect", "google")
+        assert rc == 0, err
+        assert captured["scopes"] == sorted(
+            {
+                "openid",
+                "email",
+                "profile",
+                "https://www.googleapis.com/auth/gmail.modify",
+                "https://www.googleapis.com/auth/gmail.send",
+                "https://www.googleapis.com/auth/calendar.events",
+                "https://www.googleapis.com/auth/calendar.readonly",
+            }
+        )
+        assert len(captured["scopes"]) == 7
+        # Bare connect never grants — it only authorizes.
+        assert captured["grant_agents"] is None
+
+    def test_bare_connect_with_no_grants_defers_to_start_authorization(
+        self, monkeypatch
+    ):
+        """No agent holds a grant for this connector, so the CLI has nothing
+        to derive a scope union from. It must NOT guess a narrower list
+        itself — it sends nothing and lets `start_authorization`'s own D0
+        guard decide (raise on an existing connection, or fall back to
+        default_scopes for a genuine first-time connect)."""
+        captured = {}
+
+        async def _fake_start(connector_id, *, scopes, grant_agents=None):
+            captured["scopes"] = list(scopes)
+            return {"flow_id": "F1", "authorization_url": "https://auth.example"}
+
+        async def _fake_complete(flow_id):
+            return {"account_email": "bob@example.com"}
+
+        monkeypatch.setattr("gaia.connectors.api.start_authorization", _fake_start)
+        monkeypatch.setattr(
+            "gaia.connectors.api.complete_authorization", _fake_complete
+        )
+
+        rc, _out, err = _run("connectors", "connect", "google")
+        assert rc == 0, err
+        assert captured["scopes"] == []
+
 
 class TestStatus:
     def test_status_empty(self):
@@ -456,6 +537,140 @@ class TestConfigure:
         )
         assert rc == 2
         assert "--set" in err or "--json" in err
+
+    def test_microsoft_and_microsoft_work_keep_distinct_credentials(self):
+        # A1 (CRITICAL) driven through the real CLI entry point: configuring
+        # BOTH Microsoft connectors must never let one clobber the other's
+        # stored client id — this is the exact failure oauth_provider_ref
+        # collision would produce.
+        rc1, out1, _ = _run(
+            "connectors",
+            "configure",
+            "microsoft",
+            "--client-id",
+            "personal-client-id",
+            "--client-secret",
+            "unused-secret-a",
+        )
+        rc2, out2, _ = _run(
+            "connectors",
+            "configure",
+            "microsoft_work",
+            "--client-id",
+            "work-client-id",
+            "--client-secret",
+            "unused-secret-b",
+        )
+        assert rc1 == 0 and "Configured microsoft" in out1
+        assert rc2 == 0 and "Configured microsoft_work" in out2
+
+        from gaia.connectors.store import peek_provider_credentials
+
+        assert peek_provider_credentials("microsoft")["client_id"] == (
+            "personal-client-id"
+        )
+        assert peek_provider_credentials("microsoft_work")["client_id"] == (
+            "work-client-id"
+        )
+
+        from gaia.connectors.providers import get as get_provider
+
+        personal = get_provider("microsoft")
+        work = get_provider("microsoft_work")
+        assert personal.client_id == "personal-client-id"
+        assert work.client_id == "work-client-id"
+        assert personal.tenant == "consumers"
+        assert work.tenant == "organizations"
+
+
+class TestConfigureSecretlessPublicClient:
+    """#1638: ``configure`` must not demand --client-secret for providers
+    whose token endpoint rejects one (Microsoft/Entra public PKCE clients).
+    Google's requirement is unchanged.
+    """
+
+    def test_configure_microsoft_without_secret_succeeds(self, monkeypatch):
+        monkeypatch.delenv("GAIA_MICROSOFT_CLIENT_ID", raising=False)
+        monkeypatch.delenv("GAIA_MICROSOFT_CLIENT_SECRET", raising=False)
+
+        rc, out, _err = _run(
+            "connectors",
+            "configure",
+            "microsoft",
+            "--client-id",
+            "cli-test-guid",
+        )
+        assert rc == 0
+        assert "Configured microsoft" in out
+
+        from gaia.connectors.store import peek_provider_credentials
+
+        creds = peek_provider_credentials("microsoft")
+        # Exact equality, not truthiness: a loose `not creds["client_secret"]`
+        # check would pass for both "" and the None this fix must prevent.
+        assert creds == {"client_id": "cli-test-guid", "client_secret": ""}
+
+    def test_configure_google_without_secret_still_exits_2(self):
+        rc, _out, err = _run(
+            "connectors",
+            "configure",
+            "google",
+            "--client-id",
+            "id.apps.googleusercontent.com",
+        )
+        assert rc == 2
+        assert "client-secret" in err
+        assert "Google" in err or "google" in err
+
+    def test_client_secret_without_id_still_exits_2(self):
+        # Unchanged regardless of provider: --client-secret alone is a
+        # usage error.
+        rc, _out, err = _run(
+            "connectors",
+            "configure",
+            "microsoft",
+            "--client-secret",
+            "should-not-be-sent",
+        )
+        assert rc == 2
+        assert "client-id" in err
+
+    def test_configure_then_provider_resolves_without_env(self, monkeypatch):
+        """The actual payoff (#1638): after `configure microsoft
+        --client-id`, the provider resolves the id with no env var set —
+        proven at the provider-construction seam, not through `connect`
+        (which mocks start_authorization and would pass either way)."""
+        monkeypatch.delenv("GAIA_MICROSOFT_CLIENT_ID", raising=False)
+        monkeypatch.delenv("GAIA_MICROSOFT_CLIENT_SECRET", raising=False)
+
+        rc, _out, _err = _run(
+            "connectors", "configure", "microsoft", "--client-id", "cli-test-guid"
+        )
+        assert rc == 0
+
+        _registry.clear()
+        from gaia.connectors.providers import get as get_provider
+
+        assert get_provider("microsoft").client_id == "cli-test-guid"
+
+    def test_cli_reads_the_shared_constant_not_a_copy(self, monkeypatch):
+        """Structural guard: the CLI must consult
+        oauth_pkce.PROVIDERS_REQUIRING_CLIENT_SECRET directly, not a copy
+        of the rule, so flipping the shared constant moves both providers'
+        behavior together."""
+        from gaia.connectors import oauth_pkce
+
+        monkeypatch.setattr(
+            oauth_pkce, "PROVIDERS_REQUIRING_CLIENT_SECRET", frozenset({"microsoft"})
+        )
+        assert _run("connectors", "configure", "microsoft", "--client-id", "x")[0] == 2
+        assert _run("connectors", "configure", "google", "--client-id", "y")[0] == 0
+
+    def test_help_no_longer_implies_a_universal_secret_requirement(self):
+        rc, out, _err = _run("connectors", "configure", "--help")
+        assert rc == 0
+        assert "requires --client-secret" not in out
+        assert "google" in out.lower()
 
 
 class TestDisconnect:

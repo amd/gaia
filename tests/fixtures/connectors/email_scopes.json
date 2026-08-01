@@ -1,0 +1,49 @@
+{
+  "_source": "hub/agents/email/python/gaia_agent_email/scopes.py and outlook_scopes.py — hand-maintained, guarded by tests/unit/connectors/test_email_scope_drift.py (Python) and tui/internal/ui/preflight/check_test.go (Go). Edit the source constants first, then this fixture, then let the guards confirm agreement.",
+  "google": {
+    "agent_scopes": {
+      "required": [
+        "https://www.googleapis.com/auth/gmail.modify",
+        "https://www.googleapis.com/auth/gmail.send"
+      ],
+      "optional": [
+        "https://www.googleapis.com/auth/calendar.events",
+        "https://www.googleapis.com/auth/calendar.readonly"
+      ]
+    },
+    "identity_scopes": {
+      "catalog": ["openid", "email", "profile"],
+      "provider": ["openid", "https://www.googleapis.com/auth/userinfo.email"]
+    },
+    "connect_union": [
+      "openid",
+      "email",
+      "profile",
+      "https://www.googleapis.com/auth/gmail.modify",
+      "https://www.googleapis.com/auth/gmail.send",
+      "https://www.googleapis.com/auth/calendar.events",
+      "https://www.googleapis.com/auth/calendar.readonly"
+    ]
+  },
+  "microsoft": {
+    "agent_scopes": {
+      "required": [
+        "https://graph.microsoft.com/Mail.ReadWrite",
+        "https://graph.microsoft.com/Mail.Send"
+      ],
+      "optional": ["https://graph.microsoft.com/Calendars.ReadWrite"]
+    },
+    "identity_scopes": {
+      "catalog": ["openid", "offline_access", "https://graph.microsoft.com/User.Read"],
+      "provider": ["openid", "offline_access", "https://graph.microsoft.com/User.Read"]
+    },
+    "connect_union": [
+      "openid",
+      "offline_access",
+      "https://graph.microsoft.com/User.Read",
+      "https://graph.microsoft.com/Mail.ReadWrite",
+      "https://graph.microsoft.com/Mail.Send",
+      "https://graph.microsoft.com/Calendars.ReadWrite"
+    ]
+  }
+}

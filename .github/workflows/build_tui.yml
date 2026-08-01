@@ -23,6 +23,13 @@ on:
     paths:
       - 'tui/**'
       - 'src/gaia/daemon/**'
+      # The Python side of the email-scope drift guard (#2730 D2a) — a
+      # one-sided edit to the source-of-truth scope constants (or the shared
+      # fixture both sides diff against) must still run the Go test that
+      # checks connectScopes against them, or drift ships silently.
+      - 'hub/agents/email/python/gaia_agent_email/scopes.py'
+      - 'hub/agents/email/python/gaia_agent_email/outlook_scopes.py'
+      - 'tests/fixtures/connectors/email_scopes.json'
       - '.github/workflows/build_tui.yml'
   pull_request:
     # NO `branches:` filter on purpose. It used to be `branches: [main]`, which
@@ -38,6 +45,13 @@ on:
     paths:
       - 'tui/**'
       - 'src/gaia/daemon/**'
+      # The Python side of the email-scope drift guard (#2730 D2a) — a
+      # one-sided edit to the source-of-truth scope constants (or the shared
+      # fixture both sides diff against) must still run the Go test that
+      # checks connectScopes against them, or drift ships silently.
+      - 'hub/agents/email/python/gaia_agent_email/scopes.py'
+      - 'hub/agents/email/python/gaia_agent_email/outlook_scopes.py'
+      - 'tests/fixtures/connectors/email_scopes.json'
       - '.github/workflows/build_tui.yml'
   merge_group:
   workflow_dispatch:

@@ -37,19 +37,24 @@ fixture; new tests should use `synthetic_inbox.mbox`.
 
 ## Size / category split
 
-- **299 messages** (`generate_mbox.TOTAL_MESSAGES` — always the committed seed
+- **307 messages** (`generate_mbox.TOTAL_MESSAGES` — always the committed seed
   size; derive counts from it, never hardcode), covering the **five** schema-2.0
   taxonomy categories (`URGENT`, `NEEDS_RESPONSE`, `FYI`, `PROMOTIONAL`,
   `PERSONAL`).
 - The authoritative taxonomy is `ALL_CATEGORIES` in the email agent's
   `triage_heuristics` (now in the `gaia-agent-email` wheel); the builder imports it
   so the corpus can't carry a label outside it.
-- Distribution: **54** each of URGENT / NEEDS_RESPONSE / FYI, **104** PROMOTIONAL
-  (the 54-per-category quota plus the unconditional Enron-spam carve-out,
-  #1906/#1911), and **33** PERSONAL (the scarcest bucket in the source — all
-  eligible PERSONAL are taken). Balanced on purpose so per-category accuracy is
-  meaningful and PERSONAL (#1437) is measurable. The spam/phishing axes are
-  non-empty (57 spam, 97 phishing) so they stay scoreable.
+- Distribution: **55** URGENT, **60** NEEDS_RESPONSE, **55** FYI, **104**
+  PROMOTIONAL (the 54-per-category quota plus the unconditional Enron-spam
+  carve-out, #1906/#1911), and **33** PERSONAL (the scarcest bucket in the
+  source — all eligible PERSONAL are taken). URGENT/NEEDS_RESPONSE/FYI sit a
+  little above the original 54-per-category quota because of small
+  hand-added regression batches keyed to a specific issue (e.g.
+  `commitment_synth_2113`, #2113; `boundary_synth_2633`, #2633) — see
+  `source_dataset` in the seed for provenance per record. Balanced on
+  purpose so per-category accuracy is meaningful and PERSONAL (#1437) is
+  measurable. The spam/phishing axes are non-empty (57 spam, 97 phishing)
+  so they stay scoreable.
 - The corpus stays under the 1 MB CI size guard (~380 KB).
 
 ## ground_truth.json keying

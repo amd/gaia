@@ -1,0 +1,20 @@
+name = "website-router"
+main = "src/index.js"
+compatibility_date = "2025-01-29"
+
+# No workers.dev hostname: this Worker serves the production apex only. A second
+# public hostname would be duplicate content for crawlers and an unmonitored
+# alternate ingress to production.
+workers_dev = false
+
+# Owns the amd-gaia.ai apex: /docs* stays on Mintlify (same-zone fetch -> origin),
+# everything else is reverse-proxied to the Railway Astro website. hub.amd-gaia.ai
+# is a separate Worker (workers/agent-hub) on its own custom domain and is NOT
+# matched by this route.
+routes = [{ pattern = "amd-gaia.ai/*", zone_name = "amd-gaia.ai" }]
+
+# Keep [vars] last: in TOML every key after a table header belongs to that table.
+[vars]
+# Railway public hostname of the Astro site in website/. Update here (not in
+# src/index.js) when the Railway service URL changes.
+WEBSITE_ORIGIN = "website-production-82ab.up.railway.app"

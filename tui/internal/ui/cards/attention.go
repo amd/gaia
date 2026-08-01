@@ -24,12 +24,23 @@ type attentionItem struct {
 	Mailbox   string `json:"mailbox"`
 }
 
+// messageError is one message that could not be fetched during a scan --
+// e.g. a Gmail rate-limit that survived retry. Distinct from mailboxError:
+// every OTHER message in the same mailbox is still present in items, so
+// this renders as a narrower note than the mailbox-error banner, never as
+// a reason to doubt the rest of the card.
+type messageError struct {
+	MessageID string `json:"message_id"`
+	Error     string `json:"error"`
+}
+
 type attentionCoverage struct {
 	Scanned       int            `json:"scanned"`
 	TotalUnread   *int           `json:"total_unread"`
 	ScanTruncated bool           `json:"scan_truncated"`
 	Degraded      bool           `json:"degraded"`
 	MailboxErrors []mailboxError `json:"mailbox_errors"`
+	MessageErrors []messageError `json:"message_errors"`
 }
 
 type emailAttention struct {
@@ -101,6 +112,7 @@ func RenderEmailAttention(data json.RawMessage, width int, seen map[string]bool)
 
 	a.renderStaleness(b)
 	renderMailboxErrorBanner(b, a.Coverage.MailboxErrors)
+	a.renderMessageErrorBanner(b)
 
 	if len(a.Items) == 0 {
 		a.renderEmpty(b)
@@ -201,6 +213,29 @@ func (a emailAttention) renderStaleness(b *box) {
 	} else {
 		b.addWrapped("  ", fmt.Sprintf("(as of %s ago)", formatAttentionAge(age)))
 	}
+	b.blank()
+}
+
+// renderMessageErrorBanner names how many messages Gmail rate-limited past
+// their retry budget -- without this, a degraded scan would render as an
+// ordinary card with silently fewer items, indistinguishable from
+// nothing-needs-you, a silent-fallback shape this repo's fail-loudly rule
+// forbids. Deliberately terser than the mailbox-error banner: a handful of
+// skipped messages out of a whole scan is a much smaller event than a
+// mailbox not being scanned at all.
+func (a emailAttention) renderMessageErrorBanner(b *box) {
+	n := len(a.Coverage.MessageErrors)
+	if n == 0 {
+		return
+	}
+	noun := "message"
+	if n != 1 {
+		noun = "messages"
+	}
+	b.addWrapped("  ", fmt.Sprintf(
+		"[!] %d %s couldn't be fetched (rate-limited) — try again in a minute. Results below are unaffected.",
+		n, noun,
+	))
 	b.blank()
 }
 

@@ -124,6 +124,12 @@ is forwarded to the agent by the daemon — sidecar contract 2.5, #2154; a stand
 integrator using this package is unaffected and resolves the mailbox from the local
 GAIA connector store.)
 
+Mail is **required**; calendar is **requested but optional** — consent asks for
+both up front so you're never prompted twice, but declining calendar (or
+connecting with an older, mail-only grant) still leaves you with a fully
+working triage/reply/send mailbox. Calendar tools fail loudly, naming the
+exact scope to add, only when you actually try to use one.
+
 Want to try it without writing code? Run `npx @amd-gaia/agent-email playground`
 for a local page to test triage, drafting, and a live send.
 
