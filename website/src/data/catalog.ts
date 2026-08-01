@@ -161,16 +161,16 @@ async function fetchLiveCatalog(baseUrl: string): Promise<CatalogFile> {
   } catch (e) {
     throw new Error(
       `[catalog] Failed to fetch the live catalog from ${url}: ${(e as Error).message}. ` +
-        `HUB_CATALOG_URL is set, so the build must use the live hub — it will not ` +
-        `fall back to the bundled fixture. Start the agent-hub worker (see ` +
-        `workers/agent-hub/README.md) or unset HUB_CATALOG_URL to build from the fixture.`
+        `The website has no bundled fixture — the live hub is the only source, so the ` +
+        `build cannot continue. Check that the hub is reachable, or start a local ` +
+        `agent-hub worker and point HUB_CATALOG_URL at it (workers/agent-hub/README.md).`
     );
   }
   if (!res.ok) {
     throw new Error(
       `[catalog] Live catalog request to ${url} returned HTTP ${res.status}. ` +
         `Check that the agent-hub worker is healthy (GET /health) and has at least ` +
-        `one published agent, or unset HUB_CATALOG_URL to build from the fixture.`
+        `one published agent (workers/agent-hub/README.md).`
     );
   }
   const catalog = (await res.json()) as CatalogFile;
@@ -437,10 +437,14 @@ export function installMethods(agent: Agent): InstallMethod[] {
   return methods;
 }
 
+// Wording mirrors the Agent UI's trust gate (src/gaia/apps/webui/src/utils/hubLanes.ts)
+// so the same tier never reads differently in two places. Describe only what the
+// hub actually enforces — there is no publisher-signing scheme and no Python
+// sandbox, so neither may be implied here.
 const SECURITY_TIER_DESCRIPTIONS: Record<SecurityTier, string> = {
   verified: 'Built and reviewed by AMD.',
-  community: 'Publisher-signed but not reviewed by AMD — install with the usual third-party caution.',
-  experimental: 'Opt-in only; may run outside the Python sandbox. Review the source before installing.',
+  community: 'Community-published — not audited by AMD. Install with the usual third-party caution.',
+  experimental: 'Unreviewed and may be unstable. Review the source before installing.',
 };
 
 export function securityTierDescription(tier: SecurityTier): string {

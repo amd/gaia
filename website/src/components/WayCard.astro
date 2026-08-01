@@ -34,7 +34,9 @@ const { n, icon, who, title, body, code, cta, href, external = false } = Astro.p
   <h3 class="g-h-card">{title}</h3>
   <p class="g-body mb-5 mt-2.5">{body}</p>
 
-  <div class="g-cmd-plain mt-auto overflow-x-auto text-[12px]">
+  {/* Focusable: the command overflows at narrow widths, and a scroll region no
+      keyboard user can reach hides the tail of it. */}
+  <div tabindex="0" class="g-cmd-plain mt-auto overflow-x-auto text-[12px]">
     <span class="text-g-gold" aria-hidden="true">$</span>
     <span class="whitespace-nowrap">{code}</span>
   </div>

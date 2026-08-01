@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/amd/gaia/tui/internal/daemon"
+	"github.com/amd/gaia/tui/internal/ui/status"
 )
 
 // settle applies a fresh Check result the way Init's command would.
@@ -325,11 +326,23 @@ func TestEnterOnABlockedReportSaysWhy(t *testing.T) {
 
 // Nothing failed but something could not be verified: the launch proceeds (the
 // sidecar does not treat it as fatal) while naming what went unproven.
+//
+// This exercises the DispositionNotify path specifically — the unadvertised
+// Lemonade version is one of the two BLOCKER-1 guard rows. It is pinned with
+// an explicit Disposition assertion so a future change that accidentally
+// flips this row's Disposition to Halt fails HERE, with a message that says
+// why, rather than only surfacing as a silent behaviour change a user
+// reports weeks later.
 func TestAnIndeterminateReportProceedsButSaysWhatItCouldNotVerify(t *testing.T) {
 	f := newFake().with("GET /v1/email/init", 200, initUnknownVersion)
+	rep := Check(t.Context(), f, EmailConfig())
+	if row, ok := rep.Find(KeyLemonade); !ok || row.Disposition != status.DispositionNotify {
+		t.Fatalf("test setup: want the lemonade row DispositionNotify, got %+v", row)
+	}
+
 	m := New(f, EmailConfig(), Options{ReadyHold: time.Millisecond})
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
-	updated, cmd := updated.(Model).Update(reportMsg{rep: Check(t.Context(), f, EmailConfig())})
+	updated, cmd := updated.(Model).Update(reportMsg{rep: rep})
 	m = updated.(Model)
 
 	if cmd == nil {
@@ -344,6 +357,105 @@ func TestAnIndeterminateReportProceedsButSaysWhatItCouldNotVerify(t *testing.T) 
 	}
 	if _, ok := cmd().(proceedTickMsg); !ok {
 		t.Fatalf("scheduled %T", cmd())
+	}
+}
+
+// The reported bug: a DispositionHalt row (the ctx shortfall) must not
+// auto-proceed. tea.Cmd is func() tea.Msg and Go can only compare it to nil,
+// so this asserts the absence of the automatic path behaviourally, in three
+// parts, matching the acceptance criterion exactly.
+func TestADispositionHaltRowNoLongerAutoProceeds(t *testing.T) {
+	f := newFake().with("GET /v1/email/init", 200, initCtxShortfall)
+	rep := Check(t.Context(), f, EmailConfig())
+	if rep.Blocked() || rep.Ready() {
+		t.Fatalf("test setup: want Blocked()==false && Ready()==false, got Blocked=%v Ready=%v",
+			rep.Blocked(), rep.Ready())
+	}
+	if !rep.HasHalt() {
+		t.Fatal("test setup: want a Halt row present")
+	}
+
+	m := New(f, EmailConfig(), Options{ReadyHold: time.Millisecond})
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	updated, cmd := updated.(Model).Update(reportMsg{rep: rep})
+	m = updated.(Model)
+
+	// 1. Whatever cmd is, it must not be a tick toward ProceedMsg. Run it
+	// under a deadline (the idiom TestCancelStopsAnInFlightFix already uses
+	// for in-flight work) so a regression to the 2500ms tick trips the
+	// deadline instead of stalling the suite.
+	if cmd != nil {
+		done := make(chan tea.Msg, 1)
+		go func() { done <- cmd() }()
+		select {
+		case msg := <-done:
+			if _, ok := msg.(proceedTickMsg); ok {
+				t.Fatal("reportMsg with a Halt row scheduled the auto-proceed tick")
+			}
+		case <-time.After(200 * time.Millisecond):
+			t.Fatal("cmd from a Halt report did not resolve within 200ms — a regression to the 2500ms tick")
+		}
+	}
+
+	// 2. No live path to ProceedMsg survives a stale tick landing anyway.
+	if _, tick := m.Update(proceedTickMsg{}); tick != nil {
+		t.Fatalf("a stray proceedTickMsg still launched the agent after a Halt report: %T", tick())
+	}
+
+	// 3. The deliberate path — pressing enter — still works: only the
+	// automatic path was removed.
+	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if cmd == nil {
+		t.Fatal("enter on a Halt report produced no command")
+	}
+	if _, ok := cmd().(ProceedMsg); !ok {
+		t.Fatalf("enter on a Halt report produced %T, want ProceedMsg", cmd())
+	}
+}
+
+// Blocked() is untouched by the Halt/Notify split: a real failure never gets
+// a tick, before or after this issue.
+func TestBlockedReportSchedulesNoTick(t *testing.T) {
+	f := newFake().with("GET /daemon/v1/agents", 200, agentsStopped)
+	rep := Check(t.Context(), f, EmailConfig())
+	if !rep.Blocked() {
+		t.Fatal("test setup: want a blocked report")
+	}
+
+	m := New(f, EmailConfig(), Options{ReadyHold: time.Millisecond})
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	_, cmd := updated.(Model).Update(reportMsg{rep: rep})
+
+	if cmd != nil {
+		t.Fatalf("a blocked report scheduled %T — Blocked() must never auto-proceed", cmd())
+	}
+}
+
+// BLOCKER-1's other guard, at the model layer: 2+ linked mailboxes is a
+// StateUnknown, DispositionNotify row (report.go/check.go), so it must still
+// schedule the hold and proceed — never halt. A blanket rule here would fire
+// on every launch with 2+ mailboxes linked, forever.
+func TestMultiMailboxReportSchedulesTheHoldNotAHalt(t *testing.T) {
+	f := newFake().with("GET /v1/email/connectors", 200, connectorsBoth)
+	rep := Check(t.Context(), f, EmailConfig())
+	if rep.Blocked() || rep.Ready() {
+		t.Fatalf("test setup: want Blocked()==false && Ready()==false, got Blocked=%v Ready=%v",
+			rep.Blocked(), rep.Ready())
+	}
+	if rep.HasHalt() {
+		t.Fatal("test setup: guards BLOCKER-1 — multi-mailbox must never be a Halt row")
+	}
+
+	m := New(f, EmailConfig(), Options{ReadyHold: time.Millisecond})
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	_, cmd := updated.(Model).Update(reportMsg{rep: rep})
+
+	if cmd == nil {
+		t.Fatal("a multi-mailbox report did not schedule the hand-off — BLOCKER-1 would fire on every launch with 2+ mailboxes linked")
+	}
+	if _, ok := cmd().(proceedTickMsg); !ok {
+		t.Fatalf("multi-mailbox report scheduled %T, want proceedTickMsg", cmd())
 	}
 }
 

@@ -111,12 +111,16 @@ async def get_or_refresh(
         if not _is_expired(entry):
             return entry.access_token  # type: ignore[return-value]
 
-        # The store raises AuthRequiredError(REAUTH_REQUIRED) directly when
-        # the client_id_hash tripwire fires; we let that propagate without
-        # interpretation. ``None`` means the user never connected.
+        # The store raises AuthRequiredError(REAUTH_REQUIRED / TENANT_MISMATCH)
+        # directly when the client_id_hash / tenant tripwire fires; we let
+        # that propagate without interpretation. ``None`` means the user
+        # never connected. ``current_tenant`` (A18) is the LIVE provider's
+        # resolved tenant — ``getattr`` because non-Microsoft providers
+        # (Google) have no ``.tenant`` attribute at all.
         stored = load_connection(
             provider_id,
             current_client_id_hash=provider.client_id_hash,
+            current_tenant=getattr(provider, "tenant", None),
             account_email=account_email,
         )
         if stored is None:
@@ -124,12 +128,54 @@ async def get_or_refresh(
                 AuthRequiredError.Reason.NOT_CONNECTED, provider=provider_id
             )
 
-        new_access, new_refresh, expires_in = await _refresh_token(
-            provider, stored["refresh_token"]
-        )
+        try:
+            new_access, new_refresh, expires_in = await _refresh_token(
+                provider, stored["refresh_token"]
+            )
+        except ConnectorsError as e:
+            # A5: enrich with split-related guidance ONLY for a genuine
+            # OAuth-protocol rejection — ConnectionRevokedError (400
+            # invalid_grant) or the generic-400/non-200 bare ConnectorsError
+            # branch — on a LEGACY blob (no recorded tenant: "we don't know"
+            # is the only case where the split is a plausible cause, not a
+            # confirmed one). ConfigurationError and AuthRequiredError are
+            # ALSO ConnectorsError subclasses but must propagate unchanged —
+            # they name a different, already-precise cause (missing secret /
+            # rejected client) that split-language would only muddy.
+            # httpx.* exceptions are not ConnectorsError at all and are
+            # never caught here — they propagate raw (no try/except wraps
+            # the token POST itself).
+            if (
+                not isinstance(e, (ConfigurationError, AuthRequiredError))
+                and stored.get("tenant") is None
+                and provider_id in ("microsoft", "microsoft_work")
+            ):
+                other = "microsoft_work" if provider_id == "microsoft" else "microsoft"
+                account_kind = (
+                    "work/school" if provider_id == "microsoft" else "personal"
+                )
+                enriched = (
+                    f"{e} This looks like it could be the Microsoft connector "
+                    f"split (#2628): if this account is a {account_kind} "
+                    f"account, reconnect via the {other!r} connector instead."
+                )
+                if isinstance(e, ConnectionRevokedError):
+                    raise ConnectionRevokedError(provider_id, message=enriched) from e
+                raise ConnectorsError(enriched) from e
+            raise
 
         # Refresh-token rotation: if the provider returned a new refresh
         # token, persist it before exposing the access token to callers.
+        # A4: prefer the RECORDED tenant — it is a historical fact about
+        # which authority minted THIS refresh token, and Microsoft rotates
+        # the token on every refresh, so dropping it here loses the
+        # diagnostic within one daemon tick. A legacy blob (no recorded
+        # tenant) has no such fact to preserve, and a successful refresh IS
+        # proof the live provider's tenant just minted the token we are
+        # about to persist — record it then, upgrading the blob out of
+        # "legacy" exactly once, on proof, rather than leaving it legacy
+        # forever (which would keep re-triggering the A5 split-language
+        # guess on every future unrelated failure).
         if new_refresh and new_refresh != stored["refresh_token"]:
             save_connection(
                 provider=provider_id,
@@ -138,6 +184,7 @@ async def get_or_refresh(
                 scopes=stored.get("scopes", []),
                 client_id_hash=provider.client_id_hash,
                 connected_at=stored.get("connected_at"),
+                tenant=stored.get("tenant") or getattr(provider, "tenant", None),
             )
 
         entry.access_token = new_access
@@ -210,12 +257,21 @@ async def _refresh_token(
         #     credentials in Settings → Connections).
         #   - Secret is present but token rejected → AuthRequiredError (fix:
         #     reconnect from Settings → Connections).
+        # Public PKCE clients (Microsoft/Entra) never have a secret — that's
+        # the correct, expected state, not a misconfiguration — so only
+        # providers in PROVIDERS_REQUIRING_CLIENT_SECRET take the
+        # config-missing branch (#1638).
         try:
             err_payload = response.json()
         except Exception:
             err_payload = {}
+        from gaia.connectors.oauth_pkce import PROVIDERS_REQUIRING_CLIENT_SECRET
+
         client_secret = getattr(provider, "client_secret", None)
-        if not client_secret:
+        if (
+            not client_secret
+            and provider.provider_id in PROVIDERS_REQUIRING_CLIENT_SECRET
+        ):
             raise ConfigurationError(
                 f"Token endpoint returned 401 for {provider.provider_id}: "
                 "client_secret is not configured. Open Settings → Connections "

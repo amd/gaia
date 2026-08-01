@@ -27,6 +27,7 @@ import json
 import re
 from typing import Any, Callable, List, Mapping, Optional
 
+from gaia_agent_email.body_normalize import normalize_email_body
 from gaia_agent_email.tools.triage_heuristics import ALL_CATEGORIES
 
 from gaia.logger import get_logger
@@ -85,6 +86,13 @@ _SYSTEM_PROMPT = (
     "4. explicit same-day or hours deadline with a named responsible action "
     "-> URGENT.\n"
     "5. personal email with no current action needed -> PERSONAL.\n"
+    "6. a short, first-person message from a named human proposing to "
+    "continue a business or professional relationship (e.g. 'let's talk "
+    "more', 'hope we can work together', 'let me know what you think') "
+    "still needs your reply even with no question mark or deadline -> "
+    "NEEDS_RESPONSE. Brevity and a friendly tone are not FYI signals by "
+    "themselves -- judge FYI by WHO is writing and WHY (an automated "
+    "system reporting status), never by message length.\n"
     "\n"
     "EXAMPLES:\n"
     "- Subject: 'URGENT: 50% off ends tonight!' -> PROMOTIONAL "
@@ -97,13 +105,22 @@ _SYSTEM_PROMPT = (
     "(same-day, explicit action, system crisis).\n"
     "- Subject: 'Hope you're well! Thinking of you' -> PERSONAL "
     "(personal, no current action required).\n"
+    "- Subject: 'Nice meeting you' -- three short sentences from a named "
+    "person proposing to grow a business relationship together and "
+    "closing with 'let me know what you think' -> NEEDS_RESPONSE (a "
+    "first-person human ask, not a status update -- length alone is not "
+    "a signal).\n"
+    "- Subject: 'Your subscription receipt' -- three short sentences from "
+    "billing@service.example confirming a charge -> FYI (short too, but "
+    "automated and requires nothing from you -- the difference is who is "
+    "writing and why, not how long the message is).\n"
     "\n"
     "When genuinely unsure between two adjacent categories, prefer the "
     "lower-urgency one "
     "(URGENT > NEEDS_RESPONSE > PROMOTIONAL > PERSONAL > FYI).\n"
     "\n"
     "SPAM (separate from category -- a PROMOTIONAL email is not "
-    "automatically spam): set \"is_spam\" true only for unsolicited, "
+    'automatically spam): set "is_spam" true only for unsolicited, '
     "indiscriminate mass-market junk mail -- pharmacy/drug ads, "
     "prize/lottery/inheritance scams, adult content, or garbled "
     "filter-evasion spelling (e.g. 'v1agra', 'cia1is'). A marketing email "
@@ -180,7 +197,7 @@ def _build_user_prompt(
         f"Classify this email.\n\n"
         f"Subject: {subject}\n"
         f"From: {sender}\n"
-        f"Body:\n{wrap_untrusted_body((body or '').strip())}\n"
+        f"Body:\n{wrap_untrusted_body(normalize_email_body((body or '').strip()))}\n"
     )
 
 

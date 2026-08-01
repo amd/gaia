@@ -200,10 +200,12 @@ def test_active_state_delegates_to_loader_select():
 
 
 def _skill(name: str, tools: list[str]):
-    """A minimal recalled Skill carrying ``tools_required``."""
-    from gaia.agents.base.skill_synthesis import Skill
+    """A minimal recalled DistilledProcedure carrying ``tools_required``."""
+    from gaia.agents.base.skill_synthesis import DistilledProcedure
 
-    return Skill(name=name, when_to_use="trigger", body="# body", tools_required=tools)
+    return DistilledProcedure(
+        name=name, when_to_use="trigger", body="# body", tools_required=tools
+    )
 
 
 def test_recalled_skill_tools_flattens_and_dedupes_in_order():

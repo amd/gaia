@@ -46,6 +46,12 @@ type fakeRelay struct {
 	// onEnsure runs after a successful ensure — used to simulate a daemon
 	// restart (and therefore a token rotation) mid-Send.
 	onEnsure func()
+	// attentionStatus, when non-zero, is the HTTP status GET /v1/<agent>/attention
+	// returns instead of attentionBody (e.g. 503 for "no mailbox connected").
+	attentionStatus int
+	// attentionBody is the raw JSON body GET /v1/<agent>/attention returns on
+	// success (attentionStatus == 0, defaulting to 200).
+	attentionBody string
 
 	mu          sync.Mutex
 	token       string
@@ -150,6 +156,22 @@ func (f *fakeRelay) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"apiVersion":%q,"agentVersion":"0.5.0"}`, f.contractVersion)
+
+	case strings.HasSuffix(r.URL.Path, "/attention"):
+		if r.Method != http.MethodGet {
+			f.t.Errorf("attention request method = %q, want GET", r.Method)
+		}
+		if f.attentionStatus != 0 {
+			w.WriteHeader(f.attentionStatus)
+			_, _ = w.Write([]byte(`{"detail":"no mailbox connected"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		body := f.attentionBody
+		if body == "" {
+			body = `{"schema_version":"2.8","result":{"kind":"email_attention","items":[],"coverage":{"scanned":0},"generated_at":"x","cache_age_seconds":0.0,"stale":false}}`
+		}
+		_, _ = w.Write([]byte(body))
 
 	case strings.HasSuffix(r.URL.Path, "/cancel"):
 		parts := strings.Split(r.URL.Path, "/")

@@ -278,7 +278,7 @@ func TestKeysDriveTheRightActions(t *testing.T) {
 		f := newFake().with("GET /v1/email/connectors", 200, connectorsNone)
 		m, lines := renderAt(t, f, 80, 24)
 		screen := strings.Join(lines, "\n")
-		if !strings.Contains(screen, "start anyway") {
+		if !strings.Contains(screen, "continue") {
 			t.Errorf("a repairable mailbox hid the launch that reaches the fix:\n%s", screen)
 		}
 		if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}); cmd == nil {

@@ -126,7 +126,7 @@ class _MinimalHandler(OutputHandler):
     def pretty_print_json(self, data, title=None):
         pass
 
-    def print_error(self, error_message):
+    def print_error(self, error_message, recoverable=False):
         pass
 
     def print_warning(self, warning_message):

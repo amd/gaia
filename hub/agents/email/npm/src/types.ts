@@ -331,6 +331,12 @@ export interface PreScanItem {
   why?: string | null;
   /** Rationale for a suggested-archive row. */
   reason?: string | null;
+  /**
+   * True when the heuristic confidently detected a meeting/scheduling
+   * request in this message's subject/snippet (#2583). Read-only signal —
+   * detection makes no calendar changes.
+   */
+  is_meeting_request: boolean;
 }
 
 /** Session preferences that shaped a pre-scan (contract.py: PreScanPreferencesApplied). */
@@ -349,6 +355,16 @@ export interface PreScanTotals {
   actionable: number;
   informational: number;
   suggested_archives: number;
+  /** Total messages the heuristic was not confident about (#2584). */
+  needs_review: number;
+}
+
+/** One connected mailbox that failed during a pre-scan (contract.py: MailboxError, #2584). */
+export interface MailboxError {
+  /** Provider name of the failed mailbox ('google' / 'microsoft'). */
+  mailbox: string;
+  /** Actionable error message for the failure. */
+  error: string;
 }
 
 /** Request envelope for an inbox pre-scan (contract.py: EmailPreScanRequest). */
@@ -377,6 +393,32 @@ export interface EmailPreScanResult {
   preferences_applied?: PreScanPreferencesApplied | null;
   /** Pre-cap totals per bucket. */
   totals?: PreScanTotals | null;
+  /**
+   * Messages the heuristic was NOT confident about (capped, #2584) —
+   * surfaced for human review rather than silently filed under a
+   * placeholder category guess.
+   */
+  needs_review: PreScanItem[];
+  /** How many messages this pre-scan actually classified (#2584). */
+  scanned: number;
+  /**
+   * Exact total unread message count in the scanned mailbox(es) (#2584) — a
+   * secondary figure, NOT the scan-coverage denominator since #2638 (see
+   * total_inbox for that). Gmail reports an exact count; Outlook cannot and
+   * reports null — never a fabricated number.
+   */
+  total_unread?: number | null;
+  /**
+   * Exact total INBOX message count, read + unread (#2638) — the honest
+   * scan-coverage denominator now that pre-scan covers all of INBOX, not
+   * unread-only. Gmail reports an exact count, sourced from the same call as
+   * total_unread; Outlook cannot and reports null — never a fabricated number.
+   */
+  total_inbox?: number | null;
+  /** True when at least one connected mailbox could not be scanned (#2584). */
+  degraded: boolean;
+  /** Connected mailboxes that failed during this pre-scan, if any (#2584). */
+  mailbox_errors?: MailboxError[] | null;
 }
 
 /** Top-level pre-scan response envelope (contract.py: EmailPreScanResponse). */
@@ -400,6 +442,102 @@ export interface EmailBriefingResponse {
   generated_at: string;
   /** The pre-scan envelope the scheduled run produced. */
   briefing: EmailPreScanResult;
+}
+
+// ---------------------------------------------------------------------------
+// Attention view (contract.py — schema 2.8, #2582). The read-only "what
+// needs you" surface, rendered without a user prompt when the email agent
+// opens. Built by calling triage_inbox_impl / detect_waiting_on_you_impl
+// directly rather than the pre-scan envelope above — informational_count is
+// a bare count with no rows, so a meeting proposal in a confidently-
+// classified informational message would otherwise be invisible.
+// ---------------------------------------------------------------------------
+
+/** Which signal surfaced an AttentionItem (contract.py: AttentionItemKind). */
+export type AttentionItemKind =
+  | "meeting_request"
+  | "waiting_on_you"
+  | "needs_review"
+  | "action_item";
+
+/** One item the attention view surfaces (contract.py: AttentionItem). Passive
+ * data only — never an action affordance; the view never acts on a message. */
+export interface AttentionItem {
+  /** Which signal surfaced this item. */
+  kind: AttentionItemKind;
+  /** Provider message id (opaque); null for an action_item with no recoverable source message. */
+  message_id?: string | null;
+  /** Provider thread id, when known. */
+  thread_id?: string | null;
+  /** Raw "From" header of the source message. */
+  sender: string;
+  /** Subject line — for an action_item this is the extracted action description, not an email subject. */
+  subject: string;
+  /** Plain-language reason this item needs attention. */
+  why: string;
+  /** Free-text due hint (action items only); null otherwise. */
+  due_hint?: string | null;
+  /** Provider name ('google' / 'microsoft'); set only when more than one mailbox is connected. */
+  mailbox?: string | null;
+}
+
+/** One message that could not be fetched during a scan (contract.py: MessageError, #2716). Distinct
+ * from MailboxError -- every OTHER message in the same mailbox's scan is still present in `items`. */
+export interface MessageError {
+  /** Provider message id that failed. */
+  message_id: string;
+  /** Actionable error message for the failure. */
+  error: string;
+}
+
+/** How much of the mailbox the attention view actually covered (contract.py: AttentionCoverage). */
+export interface AttentionCoverage {
+  /** Messages actually scanned across every mailbox. */
+  scanned: number;
+  /** Exact total unread count when the backend can report it honestly; null otherwise (never fabricated). */
+  total_unread?: number | null;
+  /** True when the scan hit its message ceiling in any connected mailbox. */
+  scan_truncated: boolean;
+  /** True when at least one connected mailbox could not be scanned, OR at least one individual
+   * message could not be fetched after a rate-limit survived retry (#2716). */
+  degraded: boolean;
+  /** Connected mailboxes that failed during this scan, if any. */
+  mailbox_errors?: MailboxError[] | null;
+  /** Individual messages that could not be fetched during this scan, if any (#2716) — e.g. a Gmail
+   * rate-limit that survived retry. A per-message gap, not a mailbox failure. */
+  message_errors?: MessageError[] | null;
+}
+
+/**
+ * The merged attention-view envelope (contract.py: EmailAttentionResult).
+ *
+ * `items == []` is NOT itself a "nothing needs you" claim — it only means
+ * nothing surfaced from what `coverage` says was actually scanned. Always
+ * read `coverage` (and qualify the claim when `scan_truncated` or
+ * `degraded` is set) before asserting the mailbox is clear — the exact
+ * defect #2584 fixed one layer down for the pre-scan envelope.
+ */
+export interface EmailAttentionResult {
+  /** Discriminator identifying this envelope shape. */
+  kind: "email_attention";
+  /** Every surfaced item, unordered across signal types. */
+  items: AttentionItem[];
+  /** What this view actually scanned. */
+  coverage: AttentionCoverage;
+  /** UTC ISO-8601 timestamp of the underlying scan this result reflects. */
+  generated_at: string;
+  /** Seconds since generated_at — 0 when freshly computed, positive when served from cache. */
+  cache_age_seconds: number;
+  /** True when a live refresh past the cache's freshness window failed and this is last-known-good, not current. */
+  stale: boolean;
+}
+
+/** Top-level attention-view response envelope (contract.py: EmailAttentionResponse). */
+export interface EmailAttentionResponse {
+  /** Echoes the contract version. */
+  schema_version: string;
+  /** The attention-view envelope. */
+  result: EmailAttentionResult;
 }
 
 // ---------------------------------------------------------------------------

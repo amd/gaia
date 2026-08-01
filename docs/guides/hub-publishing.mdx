@@ -184,13 +184,20 @@ interfaces:                  # the ways your agent can be used (see "Standalone 
 ```
 
 <Note>
-A few fields are **not** yours to set: `download_size_bytes` is measured by the
-server when you publish. `security_tier` defaults to `experimental` and only
-becomes `community` / `verified` through review — setting it yourself does nothing
-(the example agents set `experimental` just to be explicit). `permissions` is
-optional. The website turns all of these into the install switcher, platform
-badges, and requirement/permission/tier cards automatically — you don't build any
-of that.
+`download_size_bytes` is **not** yours to set — the server measures it when you
+publish. `permissions` is optional.
+
+`security_tier` **is** read from your manifest, and it matters. Omit it and you get
+the most restrictive tier (`experimental`), which means users can only install your
+agent by passing an explicit `--trust` opt-in. The value you write is what the hub
+publishes for whatever version becomes the new latest; publishing an *older* version
+leaves the displayed tier alone. What stops you from simply claiming `verified` is
+the review gate, not the parser — publishing goes through a maintainer, and the tier
+you declare is part of what gets reviewed. The example agents declare `experimental`
+because that is genuinely their tier.
+
+The website turns all of these into the install switcher, platform badges, and
+requirement/permission/tier cards automatically — you don't build any of that.
 </Note>
 
 **How GAIA actually finds your agent.** After someone installs your package, GAIA

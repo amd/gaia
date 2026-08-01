@@ -555,6 +555,14 @@ class ReplyToolsMixin:
             or paste the exact subject first. If several messages match it lists
             them so you can pick; if none match it says so.
 
+            ``body`` is the finished reply text — you write it, in this same
+            call. Read the source message (call get_message/get_thread first if
+            you have not already seen it) and compose a reply that addresses it,
+            honoring any constraints the user stated (length, tone, points to
+            hit). Do NOT ask the user to dictate the wording before drafting —
+            that defeats the point of being asked to draft. Use the user's own
+            words verbatim only when they hand you exact text to send.
+
             ``mailbox`` (optional) names the source mailbox so the draft is
             created in the right account when multiple mailboxes are connected.
             ``attachments`` (optional) is a comma-separated list of full paths
@@ -608,6 +616,11 @@ class ReplyToolsMixin:
             message_id: str, to: str, body: str = "", mailbox: str = ""
         ) -> str:
             """Create a forward draft for a message (does NOT send).
+
+            ``body`` is an optional note prepended above the forwarded content —
+            you write it yourself from whatever the user asked for (e.g. "with a
+            one-line note"); leave it empty only for a bare forward with no note.
+            Do NOT ask the user to dictate the note before drafting.
 
             ``mailbox`` (optional) routes when multiple mailboxes are connected.
             """

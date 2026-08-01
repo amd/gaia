@@ -67,12 +67,12 @@ const WAYS = [
   },
 ];
 
-// Counts come from the CAPABILITY_MATRIX.md of the PUBLISHED release (the hub
-// catalog's `capability_matrix`), not the working tree — the repo copy runs ahead
-// of what anyone can install (it already says 22 verbs for an unreleased version).
+// Names the surfaces, never their counts. The catalog carries the published
+// CAPABILITY_MATRIX.md as raw markdown, so there is no field to derive a count
+// from — and a hardcoded one goes stale on the agent's next release.
 const INTEGRATION_POINTS = [
-  'Local REST sidecar (18 verbs)',
-  'MCP server (4 tools)',
+  'Local REST sidecar',
+  'MCP server',
   'CLI + pipe interfaces',
   'SDK: RAG · vision · tools · voice',
 ];
@@ -86,7 +86,7 @@ const INSTALLS = [
   {
     label: 'npm',
     cmd: 'npm install -g @amd-gaia/agent-ui',
-    note: 'The Agent UI, also packaged as an installer for Windows, macOS, and Linux.',
+    note: 'The Agent UI as a browser app. A separate desktop installer covers Windows, Linux, and Apple Silicon Macs.',
   },
   {
     label: 'model',

@@ -861,6 +861,142 @@ def test_prescan_without_mailbox_returns_503(client, in_memory_keyring):
 
 
 # ---------------------------------------------------------------------------
+# Attention view (schema 2.8, #2582) — the merged "what needs you" read-model.
+# ---------------------------------------------------------------------------
+
+
+def _attention_backend_message() -> dict:
+    """A minimal Gmail-API-v1-shaped message for the attention aggregator.
+
+    Needs ``internalDate`` (unlike ``_gmail_search_message``) — the
+    aggregator's ``detect_waiting_on_you_impl`` call sorts every scanned
+    message by follow-up age and raises loudly on a message with none.
+    """
+    import base64
+
+    data = base64.urlsafe_b64encode(b"Please review by Friday.").decode().rstrip("=")
+    return {
+        "id": "a1",
+        "threadId": "t-a1",
+        "snippet": "please review",
+        "labelIds": ["INBOX", "UNREAD"],
+        "internalDate": "1750000000000",
+        "payload": {
+            "mimeType": "text/plain",
+            "headers": [
+                {"name": "Subject", "value": "Prod incident"},
+                {"name": "From", "value": "Sarah Chen <sarah@example.com>"},
+                {"name": "To", "value": "me@example.com"},
+                {"name": "Date", "value": "Mon, 01 Jan 2026 10:00:00 +0000"},
+            ],
+            "body": {"data": data},
+        },
+        "sizeEstimate": len(data),
+    }
+
+
+def test_attention_conforms_to_spec(client, committed_spec):
+    """GET /attention returns a body conforming to EmailAttentionResponse.
+
+    The mailbox backend is injected via ``app.dependency_overrides`` (same
+    seam ``hub/agents/email/python/tests/test_attention_endpoint.py`` uses),
+    so no live mail is touched — the running server still exercises the real
+    route, cache, and aggregator. Needs the full ``FakeGmailBackend`` (not
+    ``_FakeSearchBackend``) because the attention aggregator also calls
+    ``detect_waiting_on_you_impl``, which needs ``get_user_email()``.
+    """
+    from gaia_agent_email.api_routes import (
+        get_attention_backends,
+        reset_attention_cache,
+    )
+
+    from tests.fixtures.email.fake_gmail import FakeGmailBackend
+
+    reset_attention_cache()
+    gmail = FakeGmailBackend(user_email="me@example.com")
+    gmail.add_message(_attention_backend_message())
+    client.app.dependency_overrides[get_attention_backends] = lambda: {"google": gmail}
+    try:
+        resp = client.get("/v1/email/attention")
+    finally:
+        client.app.dependency_overrides.pop(get_attention_backends, None)
+        reset_attention_cache()
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    schema_name = _schema_name_from_response(
+        committed_spec, "get", "/v1/email/attention"
+    )
+    assert schema_name == "EmailAttentionResponse"
+    for key in _required_keys(committed_spec, schema_name):
+        assert key in body, f"required key {key!r} missing from /attention response"
+    _assert_body_conforms(committed_spec, schema_name, body)
+
+    assert body["schema_version"] == API_VERSION
+    result = body["result"]
+    assert result["kind"] == "email_attention"
+    assert result["stale"] is False
+    assert result["cache_age_seconds"] == 0.0
+
+
+def test_attention_message_rate_limit_degrades_not_500s(client, committed_spec):
+    """AC-4b (#2716) -- a message rate-limited past its retry budget must
+    render as a 200 with coverage.degraded/message_errors, not a 500.
+
+    ``AttentionCoverage`` sets ``extra="forbid"`` and
+    ``EmailAttentionResult.model_validate(out)`` runs OUTSIDE the route's
+    ``except ConnectorsError`` block (api_routes.py) -- an undeclared
+    ``message_errors`` key would raise an uncaught ``ValidationError`` here,
+    the same failure class this issue exists to remove, one layer up.
+    """
+    from gaia_agent_email.api_routes import (
+        get_attention_backends,
+        reset_attention_cache,
+    )
+
+    from tests.fixtures.email.fake_gmail import FakeGmailBackend
+
+    reset_attention_cache()
+    gmail = FakeGmailBackend(
+        user_email="me@example.com", rate_limit_subrequest_ceiling=0
+    )
+    gmail.add_message(_attention_backend_message())
+    client.app.dependency_overrides[get_attention_backends] = lambda: {"google": gmail}
+    try:
+        resp = client.get("/v1/email/attention")
+    finally:
+        client.app.dependency_overrides.pop(get_attention_backends, None)
+        reset_attention_cache()
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    schema_name = _schema_name_from_response(
+        committed_spec, "get", "/v1/email/attention"
+    )
+    _assert_body_conforms(committed_spec, schema_name, body)
+    coverage = body["result"]["coverage"]
+    assert coverage["degraded"] is True
+    assert coverage["message_errors"]
+    assert coverage["message_errors"][0]["message_id"] == "a1"
+    assert coverage.get("mailbox_errors") in (None, [])
+
+
+def test_attention_without_mailbox_returns_503(client, in_memory_keyring):
+    """GET /attention with no mailbox connected fails loud with the
+    documented 503, mirroring /prescan — same real-resolver, no-override
+    pattern, since the attention view resolves its backends the same way.
+    """
+    from gaia_agent_email.api_routes import reset_attention_cache
+
+    reset_attention_cache()
+    try:
+        resp = client.get("/v1/email/attention")
+    finally:
+        reset_attention_cache()
+    assert resp.status_code == 503
+
+
+# ---------------------------------------------------------------------------
 # Scheduled daily briefing (#1608 additive)
 # ---------------------------------------------------------------------------
 
@@ -972,6 +1108,10 @@ def test_all_documented_paths_covered(committed_spec):
         ("post", "/v1/connections/{provider}"),
         ("get", "/v1/connections"),
         ("delete", "/v1/connections/{provider}"),
+        # Attention view (schema 2.8, #2582) — the merged "what needs you"
+        # read-model. Conformance: test_attention_conforms_to_spec /
+        # test_attention_without_mailbox_returns_503, above.
+        ("get", "/v1/email/attention"),
     }
     assert documented == expected, (
         f"Spec has routes not covered by conformance tests: "

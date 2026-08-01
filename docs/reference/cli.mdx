@@ -298,7 +298,7 @@ GAIA works with Lemonade Server in two modes:
 </Tabs>
 
 <Warning>
-**Platform Support:** Automatic installation supports Windows (MSI) and Linux (DEB) only. macOS users should install Lemonade Server manually from [lemonade-server.ai](https://www.lemonade-server.ai).
+**Platform Support:** Automatic installation supports Windows (MSI), Linux (`ppa:lemonade-team/stable`, Ubuntu 24.04+), and macOS on Apple Silicon (`.pkg`, requires admin rights). Intel Macs and other architectures have no upstream Lemonade build — install manually from [lemonade-server.ai](https://www.lemonade-server.ai).
 </Warning>
 
 <Tip>
@@ -1072,6 +1072,28 @@ gaia email -v -q "Triage my inbox"  # verbose logs for benchmarking
 
 [→ Full Email Triage Agent Documentation](/guides/email)
 
+#### `gaia email autonomy` — autonomy control
+
+A thin client over the sidecar's `/v1/email/agent/autonomy*` REST routes, relayed
+through the daemon like every other `gaia email` command (same auth path — no
+sidecar bearer ever reaches the CLI).
+
+```bash
+gaia email autonomy status                    # current level + trust summary
+gaia email autonomy trust                     # earned-trust ledger
+gaia email autonomy set-level earn_trust       # set the level explicitly
+gaia email autonomy pause                      # stop autonomous activity
+gaia email autonomy resume --level earn_trust  # resume (default: earn_trust)
+gaia email autonomy kill                       # kill switch — level -> off
+gaia email autonomy run --max-messages 25      # trigger one cycle now
+```
+
+All subcommands share one persistent `--session-id` (default `cli`) — autonomy
+state lives on that session's in-memory agent, not on disk, so a level you set
+stays set across invocations that use the same session. `run` refuses with an
+actionable error while the level is `off` (#2528) instead of silently reporting
+that nothing happened.
+
 ---
 
 ### SD Command
@@ -1573,11 +1595,18 @@ gaia connectors <subcommand> [OPTIONS]
 gaia connectors connect google
 ```
 
-```bash Authorize Microsoft (device code, no app registration)
-# Personal Outlook.com or work/school Microsoft 365 (common tenant).
-# Supply a pre-registered public client id; GAIA prints a code + URL.
+```bash Authorize Microsoft Personal (device code, no app registration)
+# Outlook.com / Hotmail / Live. Supply a pre-registered public client id;
+# GAIA prints a code + URL.
 export GAIA_MICROSOFT_CLIENT_ID=<application-client-id>
 gaia connectors connect microsoft --device
+```
+
+```bash Authorize Microsoft Work or School (device code)
+# Microsoft 365 / Entra ID — a SEPARATE connector from personal Microsoft,
+# connectable at the same time. Its own client id env var.
+export GAIA_MICROSOFT_WORK_CLIENT_ID=<application-client-id>
+gaia connectors connect microsoft_work --device
 ```
 
 ```bash Configure an MCP server token
@@ -1591,8 +1620,11 @@ gaia connectors grants grant google builtin:chat --scopes gmail.readonly
 
 The `--device` flag on `connect` uses the RFC 8628 device-code flow instead of
 the browser redirect — required for Microsoft zero-setup sign-in (no Azure app
-registration or loopback redirect URI). Pin `GAIA_MICROSOFT_TENANT` to restrict
-sign-in to one tenant (`organizations`, `consumers`, or a specific Entra id).
+registration or loopback redirect URI). Which authority a Microsoft connector
+signs in against is fixed by the connector itself (`microsoft` → `consumers`,
+`microsoft_work` → `organizations`) — to restrict `microsoft_work` to one
+Entra tenant, set its optional Directory (tenant) ID setup field instead of an
+environment variable; see [the Microsoft connector guide](/connectors/microsoft#migrating-from-gaia-microsoft-tenant).
 
 [→ Connectors Guide](/connectors) · [→ Connectors SDK](/sdk/infrastructure/connectors)
 
@@ -2458,7 +2490,7 @@ gaia daemon stop       # graceful shutdown (tree-kills daemon + every sidecar)
 gaia daemon restart    # stop then start
 gaia daemon logs [--lines N] [--follow]   # tail the daemon log
 gaia daemon agents                        # list supervised sidecar agents
-gaia daemon start-agent email [--mode user|dev]  # start/attach one sidecar
+gaia daemon start-agent email [--mode user|dev] [--dev-src-dir <path>]  # start/attach one sidecar
 gaia daemon stop-agent email              # stop one sidecar, daemon stays up
 ```
 
@@ -2469,8 +2501,8 @@ gaia daemon stop-agent email              # stop one sidecar, daemon stays up
 | `stop` | — | Shut the daemon down (tree-killing every sidecar) and release `~/.gaia/host/instance.json`. |
 | `restart` | — | `stop` followed by `start`. |
 | `logs` | `--lines`, `--follow` | Print (or stream) the daemon log tail. |
-| `agents` | — | List every registered sidecar agent: id, state, and (when running) mode, pid, port, contract version — never the bearer token. Dev-mode entries also show their source dir. |
-| `start-agent <id>` | `--mode user\|dev` | Start (or attach to) one agent's sidecar, auto-starting the daemon if needed. Requesting a mode different from the running sidecar's is a loud conflict — stop it first. |
+| `agents` | — | List every registered sidecar agent: id, state, and (when running) mode, pid, port, contract version — never the bearer token. Dev-mode entries also show their source dir; user-mode and stopped entries always report `dev_src_dir: null`. |
+| `start-agent <id>` | `--mode user\|dev`, `--dev-src-dir <path>` | Start (or attach to) one agent's sidecar, auto-starting the daemon if needed. Requesting a mode different from the running sidecar's is a loud conflict — stop it first. For `--mode dev`, this shell's own checkout is resolved (via `git rev-parse --show-toplevel`, or the explicit `--dev-src-dir` escape hatch) and compared — never executed — against the checkout the daemon is already anchored to; a mismatch is refused loudly, naming both checkouts and the fix (restart the daemon from a Python environment/editable install rooted at your checkout — a per-user daemon otherwise silently serves whichever checkout launched it, regardless of where you run the CLI from). |
 | `stop-agent <id>` | — | Tree-kill one agent's sidecar; the daemon keeps running. Attach-only: no daemon running → clear error, exit 1. A sidecar surviving the kill is a loud failure, never silent. |
 
 **Daemon HTTP surface** (the daemon serves no OpenAPI schema, so this is the
@@ -2534,10 +2566,10 @@ gaia hub uninstall email           # stops the sidecar first, then removes the d
   by both `install` and `uninstall`.
 - **Trust gate.** Any agent outside the `verified` security tier runs
   third-party code on your machine, so it is refused (HTTP 403) until you pass
-  `--trust`. `email` is `experimental`, so `gaia hub install email` alone fails
-  with the remedy named. Nothing infers the opt-in for you, and there is no
-  bypass — a client (TUI, UI) renders this as a "Trust & Install" confirmation
-  and retries with `trusted: true`.
+  `--trust`, with the remedy named in the error. A manifest that omits
+  `security_tier` counts as `experimental` and is gated the same way. Nothing
+  infers the opt-in for you, and there is no bypass — a client (TUI, UI) renders
+  this as a "Trust & Install" confirmation and retries with `trusted: true`.
 - Requires the daemon extras (`pip install "amd-gaia[ui]"`), same as `gaia daemon`.
 
 <Note>
@@ -2678,6 +2710,33 @@ ctrl+c.
   with `d` and `delete`, which made "go back" a destructive action.
 </Note>
 
+#### Waiting on a consequential readiness problem
+
+Most readiness rows that cannot be verified are named on screen and the
+launch continues — the sidecar itself does not treat them as fatal (an
+unadvertised Lemonade version, for instance). A handful are consequential
+enough to hold instead: right now, a model loaded into a smaller context
+window than this machine's profile expects, since a document-sized request
+against it comes back `context_length_exceeded` rather than an answer. When
+that happens the screen waits for `enter` instead of proceeding on its own,
+and the notice lists every such row at once if more than one applies.
+
+#### Theme (light vs dark terminals)
+
+The hub asks the terminal for its background colour on startup and picks a
+light or dark palette to match, so text stays readable either way. Over SSH,
+inside tmux, or in a CI log where the terminal never answers that query, force
+a mode instead of guessing:
+
+```bash
+GAIA_TUI_THEME=light gaia tui    # or: dark
+```
+
+<Note>
+  `GAIA_TUI_THEME` also accepts `auto` (the default) to re-enable
+  detection.
+</Note>
+
 ---
 
 ### TUI Control API
@@ -2803,10 +2862,10 @@ gaia hub uninstall email           # stops the sidecar first, then removes the d
   by both `install` and `uninstall`.
 - **Trust gate.** Any agent outside the `verified` security tier runs
   third-party code on your machine, so it is refused (HTTP 403) until you pass
-  `--trust`. `email` is `experimental`, so `gaia hub install email` alone fails
-  with the remedy named. Nothing infers the opt-in for you, and there is no
-  bypass — a client (TUI, UI) renders this as a "Trust & Install" confirmation
-  and retries with `trusted: true`.
+  `--trust`, with the remedy named in the error. A manifest that omits
+  `security_tier` counts as `experimental` and is gated the same way. Nothing
+  infers the opt-in for you, and there is no bypass — a client (TUI, UI) renders
+  this as a "Trust & Install" confirmation and retries with `trusted: true`.
 - Requires the daemon extras (`pip install "amd-gaia[ui]"`), same as `gaia daemon`.
 
 <Note>

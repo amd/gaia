@@ -6,6 +6,58 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## Unreleased
 
+- **Reconnecting your mailbox with no flags — the exact command GAIA's own
+  error message told you to run — could silently wipe your permissions
+  instead of fixing them.** A bare `gaia connectors connect google` (or the
+  same reconnect from a first-time self-repair conversation) used to fall
+  back to identity-only sign-in scopes whenever it wasn't told exactly what
+  to ask for, overwriting a working mail-plus-calendar connection with
+  nothing usable. That path now fails with a clear, copy-pasteable command
+  instead of guessing, and every surface — the CLI, the Agent UI, this
+  package's own connector setup, and the in-chat self-repair flow — now asks
+  for the same scopes so none of them can quietly narrow what another one
+  granted. Separately, calendar access is now clearly **optional**: a mailbox
+  missing only calendar permission still triages, drafts, and sends normally,
+  and calendar tools name the exact scope to add instead of taking the whole
+  mailbox down with them (#2730).
+- **The agent can now tell you which inbound mail is waiting on your reply —
+  not just which of your own messages went unanswered.** Previously the agent
+  could only flag sent mail nobody replied to; a colleague's "did you get a
+  chance to look at this? can we meet Thursday?" was invisible to it. It now
+  also flags inbound messages that ask directly for a reply, a decision, or a
+  meeting time — but only when there's real corroboration that it's genuine
+  correspondence (an existing back-and-forth in the thread, or a sender
+  you've emailed before). A question mark or a convincing-looking sender name
+  is deliberately not enough on its own — both show up constantly in
+  marketing and cold-outreach mail, and a false "someone is waiting on you"
+  costs more trust than a missed one.
+- **Triggering an autonomy cycle while autonomy is switched off now tells you
+  so, instead of quietly reporting nothing happened.** `POST
+  /v1/email/agent/autonomy/run` used to return the same "nothing to do"
+  response whether autonomy was disabled or had genuinely run and found
+  nothing — there was no way to tell which. It now returns an error naming
+  the current level and how to turn autonomy back on.
+- **Asking the agent to draft a reply or forward now actually drafts one,
+  instead of asking you to write it.** The agent would correctly find the
+  right email, then ask you to supply the reply or forward text — the exact
+  thing you'd asked it to write. Nothing told it that composing the message
+  was its own job (that instruction only existed once it had learned your
+  writing style from enough sent mail, so it never applied to a fresh
+  mailbox). It now writes the reply or forward itself from the original
+  message plus whatever you specified (length, tone, points to hit), and
+  still uses your exact wording when you hand it over yourself. Sending is
+  unchanged — every draft still needs your confirmation before it goes out
+  (#2524).
+- **Opt-in preview: small on-device models can now decide phishing flags and
+  triage categories instead of keyword rules.** Turn it on with
+  `GAIA_EMAIL_USE_SLM=true` on the sidecar (or `use_slm=True` in config).
+  A compact classifier — running on the same local Lemonade server as the chat
+  model, so nothing leaves the machine — makes the phishing call, and a second
+  one labels the triage category, taking that decision away from the bigger LLM
+  (which is still consulted for the spam verdict when the rules can't settle it).
+  It is experimental, so it stays off unless you turn it on. If the
+  models are unavailable for any reason, triage falls back to exactly the
+  previous behavior. No API shape changed.
 - **A trashed email is recoverable any time it's still in Trash — not just for
   a few seconds after you delete it.** The only way back used to be a short
   undo window right after trashing; miss it, and the agent told you the
@@ -19,6 +71,19 @@ behind any entry — API shapes, endpoints, and version semantics — see
   mailbox for one rare action), so every attempt failed. Asked directly, the
   agent used to say it could do it anyway. Now it says plainly it can only
   move mail to Trash.
+- **Full autonomy now does more than archive, explains its decisions, and can be undone.**
+  Previously the proactive `earn_trust`/`full` loop only ever archived low-signal mail —
+  every other reversible action the trust model already declared (marking mail read,
+  starring, labeling) was unreachable, the run report never said *why* a message was held
+  back, and there was no way to undo an auto-executed action other than the archive-only
+  `undo_archive_batch` tool. Now: FYI mail is marked read instead of archived (it stays
+  visible, just no longer sits unread); `POST /v1/email/agent/autonomy/run` returns a new
+  `decisions[]` field explaining every candidate's outcome and reason, including "held back
+  for confirmation" and "held back — provider-flagged IMPORTANT"; and a new
+  `POST /v1/email/agent/autonomy/undo` reverses any auto-executed action and records the
+  correction against its trust scope, the same negative-feedback loop `undo_archive_batch`
+  already gave archives. The destructive floor (send/forward/permanent-delete/RSVP/quarantine)
+  is unaffected — it was already inviolable and stays that way at every level (#2529).
 - **The agent sets up your mailbox itself, in the conversation.** Before, hitting
   the email agent without a working mailbox produced an error and a shell command
   to go run somewhere else — a dead end for anyone in a terminal or chat window.
@@ -40,7 +105,6 @@ behind any entry — API shapes, endpoints, and version semantics — see
   resumes. An unanswered question ends the run with an error rather than hanging.
   Approvals (`needs_confirmation`) are unchanged: still terminal, still
   deny-by-default (#2469).
-
 - **Work/school Outlook (Microsoft 365 / Entra ID) mailboxes now work, not just
   personal Outlook.com.** The Microsoft connector previously signed in only
   against the `consumers` tenant, so a corporate Microsoft 365 account was

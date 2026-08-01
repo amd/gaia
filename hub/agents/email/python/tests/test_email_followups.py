@@ -455,3 +455,22 @@ class TestToolSurface:
         payload = json.loads(check_followups(window_days=-1))
         assert payload["ok"] is False
         assert "window_days" in payload["error"]
+
+    def test_tool_reports_explicit_count_matching_a_large_intact_list(self):
+        # A real mailbox with 22 sent messages still awaiting reply is the
+        # exact shape a model has been observed under-enumerating -- an
+        # explicit, pre-counted total removes the need to count at all.
+        gmail = _backend(
+            *(
+                _sent_real_now(f"s{i}", thread_id=f"t{i}", age_days=5 + i)
+                for i in range(22)
+            )
+        )
+        host = _Host(gmail)
+        check_followups = _registered_tool(host)
+
+        payload = json.loads(check_followups(max_sent=50))
+        assert payload["ok"] is True
+        data = payload["data"]
+        assert len(data["awaiting_reply"]) == 22
+        assert data["count"] == 22

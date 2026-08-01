@@ -573,3 +573,123 @@ class TestRuntimeMemoryToggle:
             assert agent.is_memory_enabled() is True
         finally:
             agent.close_db()
+
+
+# ---------------------------------------------------------------------------
+# #2519 — degraded-memory-state must be user-visible, and correctly diagnosed
+# ---------------------------------------------------------------------------
+
+
+def _build_agent_with_failing_embedder(
+    tmp_path: Path, embed_exc: Exception
+) -> EmailTriageAgent:
+    """Build an EmailTriageAgent whose embedding connectivity probe fails.
+
+    ``_get_embedder()`` succeeds (Lemonade's client object constructs fine)
+    but ``_embed_text()`` — the actual connectivity probe run by
+    ``init_memory()`` — raises *embed_exc*, exercising the same except branch
+    a real 404 model-not-found or connection failure would hit.
+    """
+    cfg = EmailAgentConfig(
+        gmail_backend=_MinimalMailBackend(),
+        calendar_backend=_MinimalCalendarBackend(),
+        db_path=str(tmp_path / "state.db"),
+        memory_db_path=str(tmp_path / "memory.db"),
+        silent_mode=True,
+        debug=False,
+        memory_enabled=True,
+    )
+    with (
+        patch("gaia.agents.base.agent.AgentSDK") as mock_sdk,
+        patch(
+            "gaia.agents.base.memory.MemoryMixin._get_embedder",
+            return_value=MagicMock(),
+        ),
+        patch(
+            "gaia.agents.base.memory.MemoryMixin._embed_text",
+            side_effect=embed_exc,
+        ),
+    ):
+        mock_sdk.return_value = MagicMock()
+        return EmailTriageAgent(config=cfg)
+
+
+class TestMemoryDegradedStateNotice:
+    """#2519: a failed embedding probe must be user-visible and correctly
+    diagnosed — not just a log line, and not blamed on the wrong cause."""
+
+    def test_model_not_pulled_produces_visible_notice(self, tmp_path, monkeypatch):
+        """Lemonade reachable but the embedding model was never pulled (the
+        real #2519 scenario: a 404 model_not_found response) — the agent
+        prints a user-visible notice AND memory_status() names the real
+        cause, not GAIA_MEMORY_DISABLED.
+        """
+        monkeypatch.delenv("GAIA_MEMORY_DISABLED", raising=False)
+        model_not_found = RuntimeError(
+            "Embedding failed: Error generating embeddings: Request failed "
+            "with status 404: {\"error\":{\"code\":\"model_not_found\","
+            "\"message\":\"Model 'user.embeddinggemma-300m-GGUF' was not "
+            'found."}}'
+        )
+        with patch(
+            "gaia.agents.base.console.AgentConsole.print_warning"
+        ) as mock_warn:
+            agent = _build_agent_with_failing_embedder(tmp_path, model_not_found)
+        try:
+            # (1) surfaced where the user is — not just logged.
+            mock_warn.assert_called_once()
+            notice = mock_warn.call_args[0][0]
+
+            # (2) names the REAL cause (model never pulled), not the wrong one.
+            assert "not been pulled" in notice
+            assert "user.embeddinggemma-300m-GGUF" in notice
+            assert "GAIA_MEMORY_DISABLED" not in notice
+
+            status = agent.memory_status()
+            assert status["available"] is False
+            assert status["enabled"] is False
+            assert "not been pulled" in status["message"]
+            assert "GAIA_MEMORY_DISABLED" not in status["message"]
+        finally:
+            agent.close_db()
+
+    def test_service_unreachable_produces_different_notice(
+        self, tmp_path, monkeypatch
+    ):
+        """A genuinely unreachable Lemonade produces a DIFFERENT message than
+        the model-not-pulled case — the remedies aren't interchangeable."""
+        monkeypatch.delenv("GAIA_MEMORY_DISABLED", raising=False)
+        connection_refused = RuntimeError(
+            "Embedding failed: Error generating embeddings: "
+            "Connection refused (localhost:13305)"
+        )
+        with patch(
+            "gaia.agents.base.console.AgentConsole.print_warning"
+        ) as mock_warn:
+            agent = _build_agent_with_failing_embedder(tmp_path, connection_refused)
+        try:
+            mock_warn.assert_called_once()
+            notice = mock_warn.call_args[0][0]
+
+            assert "unreachable" in notice
+            assert "start" in notice.lower()
+            assert "not been pulled" not in notice
+
+            status = agent.memory_status()
+            assert status["available"] is False
+            assert "unreachable" in status["message"]
+            assert "not been pulled" not in status["message"]
+        finally:
+            agent.close_db()
+
+    def test_available_embedder_emits_no_notice(self, tmp_path):
+        """When the embedder is reachable, no degraded-state notice fires."""
+        with patch(
+            "gaia.agents.base.console.AgentConsole.print_warning"
+        ) as mock_warn:
+            agent = _build_agent(tmp_path)
+        try:
+            mock_warn.assert_not_called()
+            assert agent.memory_status()["available"] is True
+        finally:
+            agent.close_db()

@@ -189,6 +189,76 @@ def persist_briefing(record: Dict[str, Any], path: Optional[Path] = None) -> Pat
     return dest
 
 
+def summarize_briefing(envelope: Dict[str, Any]) -> Dict[str, Any]:
+    """Deterministic, testable breakdown of a pre-scan envelope (#2525).
+
+    ``get_briefing`` was returning the full ``email_pre_scan`` envelope but
+    telling the model to collapse it into "one short framing sentence" —
+    unlike ``pre_scan_inbox``, no card renders for the briefing, so that
+    sentence was the entire user-visible answer. Every field the envelope
+    already computed (urgency counts, the individual urgent/actionable
+    messages, applied preferences) was silently discarded.
+
+    This function reads that breakdown directly off the envelope's own
+    counts and lists — it never infers or judges anything the classifier did
+    not already decide, so a ``needs_attention`` of ``False`` is only ever
+    true when the pre-scan itself found zero urgent/actionable messages.
+    Missing/legacy envelope shapes degrade to zero counts rather than
+    raising, since a stale persisted record may predate this field.
+    """
+    totals = envelope.get("totals") or {}
+    urgent_n = int(totals.get("urgent", 0) or 0)
+    actionable_n = int(totals.get("actionable", 0) or 0)
+    informational_n = int(
+        totals.get("informational", envelope.get("informational_count", 0)) or 0
+    )
+    archive_n = int(totals.get("suggested_archives", 0) or 0)
+    total_scanned = urgent_n + actionable_n + informational_n + archive_n
+
+    needs_attention = urgent_n > 0 or actionable_n > 0
+    if needs_attention:
+        headline = (
+            f"{total_scanned} messages scanned: {urgent_n} urgent, "
+            f"{actionable_n} waiting on a reply."
+        )
+    else:
+        headline = (
+            f"Nothing needs attention — {total_scanned} messages scanned, "
+            "all informational."
+        )
+
+    highlights = [
+        {**item, "urgency": "urgent"} for item in envelope.get("urgent") or []
+    ] + [{**item, "urgency": "actionable"} for item in envelope.get("actionable") or []]
+
+    prefs = envelope.get("preferences_applied") or {}
+    preferences_applied = [
+        f"priority sender: {sender}" for sender in prefs.get("priority_senders") or []
+    ]
+    preferences_applied += [
+        f"low priority sender: {sender}"
+        for sender in prefs.get("low_priority_senders") or []
+    ]
+    preferences_applied += [
+        f"{category} default: {default}"
+        for category, default in (prefs.get("category_defaults") or {}).items()
+    ]
+
+    return {
+        "total_scanned": total_scanned,
+        "breakdown": {
+            "urgent": urgent_n,
+            "actionable": actionable_n,
+            "informational": informational_n,
+            "suggested_archives": archive_n,
+        },
+        "needs_attention": needs_attention,
+        "headline": headline,
+        "highlights": highlights,
+        "preferences_applied": preferences_applied,
+    }
+
+
 def load_latest_briefing(path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
     """Return the latest persisted briefing record, or ``None`` if no
     briefing has been generated yet.
@@ -375,4 +445,5 @@ __all__ = [
     "persist_briefing",
     "run_briefing_job",
     "seconds_until_next_run",
+    "summarize_briefing",
 ]

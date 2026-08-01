@@ -431,7 +431,7 @@ stored procedure declares the exact `tools_required` for that recipe.
 
 #### How Part 3 shipped (implementation reference)
 
-**The loader stays memory-agnostic.** `recall_skill` and `Skill` are *not*
+**The loader stays memory-agnostic.** `recall_skill` and `DistilledProcedure` are *not*
 imported into `tool_loader.py` (that would be an upward dependency). Instead
 `ChatAgent` — the composition layer — flattens the recalled procedures'
 `tools_required` into a `List[str]` and passes it to `select()` via a new
@@ -442,7 +442,7 @@ never learns what a skill is.
 cost).** `recall_skill` already runs once per turn in
 `MemoryMixin._refresh_recalled_skills` (before tool selection, via the
 `process_query` → `super()` ordering). Part 3 refactors that method to cache the
-matched `Skill` objects in `self._recalled_skills` alongside the rendered
+matched `DistilledProcedure` objects in `self._recalled_skills` alongside the rendered
 prompt; `_recalled_skill_tools()` reads that cache. So the SKILL signal adds
 **no** second embed/FAISS call — TTFT is the whole point of the loader.
 

@@ -499,7 +499,8 @@ def start_install(
     (``gaia hub install <id> --trust`` / a UI "Trust & Install" confirmation). It
     defaults to False and is never inferred: a non-verified package runs
     third-party code on the user's machine, so the refusal has to be the
-    default. ``email`` is in the ``experimental`` tier, so it needs it.
+    default. A manifest that omits ``security_tier`` counts as ``experimental``
+    and is gated the same way.
 
     Raises:
         UnsupervisedAgentError: reserved built-in id.

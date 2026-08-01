@@ -80,21 +80,13 @@ There are two ways to connect Google depending on how you use GAIA.
 
     Both flags are required together — Google rejects token requests that omit the secret even for Desktop-app PKCE clients.
 
-    **Step 2 — Sign in and grant the email agent in one command.** Pass the
-    email agent's scopes explicitly with `--scopes` (a bare
-    `gaia connectors connect google` requests only the default
-    `openid`/`email`/`profile` and mailbox calls would later fail with a scope
-    error), and add `--grant-agent installed:email` so the same scopes are
-    granted to the agent in the same flow — no separate `grants grant` step, and
-    the connect/grant scopes can never drift:
+    **Step 2 — Sign in and grant the email agent in one command.**
+    `--grant-agent installed:email` alone is enough — GAIA reads the scopes
+    the email agent already declares and authorizes + grants them in the
+    same flow, so there's no `--scopes` list to type out or keep in sync:
 
     ```bash
-    gaia connectors connect google \
-      --grant-agent installed:email \
-      --scopes https://www.googleapis.com/auth/gmail.modify \
-               https://www.googleapis.com/auth/gmail.send \
-               https://www.googleapis.com/auth/calendar.events \
-               https://www.googleapis.com/auth/calendar.readonly
+    gaia connectors connect google --grant-agent installed:email
     ```
 
     The command prints an authorization URL. Open it in a browser **on the
@@ -104,10 +96,17 @@ There are two ways to connect Google depending on how you use GAIA.
     scope, and the flow finishes.
 
     <Note>
-    Prefer to do it in two explicit steps? Run `gaia connectors connect google
-    --scopes …` first, then `gaia connectors grants grant google installed:email
-    --scopes …` with the **same** scopes. `--grant-agent` just folds those into
-    one flow (which is what the Agent UI does).
+    Want a narrower grant instead? Pass `--scopes` explicitly — but note it
+    does **not** union with the provider's default scopes, so a hand-typed
+    list that omits `openid` can still connect while resolving to `Connected
+    as default` instead of your real address. Prefer two explicit steps
+    instead of the combined flow? Run `gaia connectors connect google
+    --scopes …` first (authorize), then `gaia connectors grants grant google
+    installed:email --scopes …` (grant) with a matching list — `--grant-agent`
+    just runs both steps together and derives the scopes for you. See the
+    [Google connector guide's scope
+    table](/connectors/google#declare-scopes-under-data-access) for what each
+    scope buys.
     </Note>
 
     Skip this and the first email tool call fails with
@@ -228,6 +227,61 @@ scheduled run). An invalid value fails sidecar startup with an actionable error
 rather than guessing a schedule. Push delivery and a cross-agent morning brief
 are planned on the autonomy engine (#555).
 
+## Small language model classifiers
+
+The agent can run compact SLMs **before** the main LLM for two triage tasks,
+using the same local Lemonade server as the chat model. Every SLM call **fails
+safe**: if unavailable or unusable, the agent falls back to the heuristic + LLM
+path.
+
+<Warning>
+**Experimental — off by default.** Enable it with `GAIA_EMAIL_USE_SLM=true` (or
+`use_slm=True` on the config).
+</Warning>
+
+- **Triage category** — when a heuristic isn't confident, the triage SLM
+  classifies first, and its answer is the category. The LLM classify call is
+  skipped only when the heuristic already settled `is_spam`; otherwise it still
+  runs for the spam verdict alone and its category opinion is discarded.
+  `force_llm` skips the SLM and forces the LLM instead.
+- **Phishing detection** — when the phishing SLM returns a usable result, that
+  result is used alone (phishing heuristics are not run). If SLM is off or
+  returns nothing, the agent falls back to `detect_phishing`.
+
+Configure via `EmailAgentConfig` (`use_slm`, `slm_triage_model` /
+`slm_triage_checkpoint`, `slm_phishing_model` / `slm_phishing_checkpoint`). The
+model and checkpoint pairs ship preconfigured, so enabling both classifiers is
+just `use_slm=True` — or `GAIA_EMAIL_USE_SLM=true` in the environment, which is
+how you enable it for `gaia email` or the sidecar without touching code (an
+unparseable value fails loudly rather than defaulting to off). A task activates
+only when **both** its model and checkpoint are set; one without the other fails
+startup. On first use each classifier is pulled into Lemonade (a one-time
+download); a failed pull is logged as an error naming the model and how to fix
+it, and the agent runs its heuristic + LLM path as before.
+
+In a bulk inbox scan both classifiers read the same subject + snippet the
+heuristic reads, so turning them on never adds a message fetch — the full body is
+still read only for messages that escalate to the LLM. On `POST /v1/email/triage`
+the caller supplies the body, so there the classifiers see all of it.
+
+<Note>
+**Raise Lemonade's model limit to 2 before enabling both classifiers.** Lemonade
+counts loaded models **per model type**, not in one shared pool: the chat model
+occupies an `llm` slot, and the two classifiers are embedding models that compete
+only with each other. So the arithmetic is 1 LLM + 2 embeddings, never three
+models fighting over the same slots — but at the default limit of 1 per type the
+second classifier evicts the first on every message, and each eviction costs a
+reload.
+
+```bash
+lemonade config set max_loaded_models=2
+```
+
+Confirm it took effect with `GET /api/v1/health`, whose `max_models` field is
+keyed by type — `"embedding": 2` is the value that matters here. With that set,
+`all_models_loaded` holds the chat model and both classifiers at once.
+</Note>
+
 ## Action surface
 
 ### Read
@@ -340,7 +394,14 @@ There is no setting, flag, or "auto-send" mode that bypasses this — it's a saf
 
 ## Phishing handling
 
-The agent uses a multi-signal detector — subject keyword pairs, suspicious sender domain, and body-level phrases — to set `is_phishing` on every triage result. Detection is heuristic-only (no LLM, deterministic), precision-first, and never auto-acts.
+By default `is_phishing` comes from a multi-signal heuristic — subject keyword
+pairs, suspicious sender domain, and body-level phrases. With the experimental
+`use_slm=True`, the phishing SLM classifies first and its result becomes the
+sole decision; if it fails safe the heuristic decides. Detection never uses the
+chat LLM, is precision-first, and never auto-acts.
+
+See [Small language model classifiers](#small-language-model-classifiers) for
+how the phishing SLM is configured.
 
 When you ask the agent to quarantine a flagged message, it:
 
@@ -412,6 +473,22 @@ The sidecar binds an ephemeral local port (never 4001). Dev mode loads
 package's `packaging/` directory does not collide with the PyPI `packaging`
 library. If the source package is missing, dev mode fails loudly with the
 `uv pip install -e` remedy — it never silently falls back to the binary.
+
+Dev mode always runs from **the daemon's own checkout** — the daemon (a
+per-user singleton) is never told to spawn from an arbitrary path a caller
+sends it. `gaia daemon start-agent email --mode dev` and `gaia chat --ui`
+resolve *your own* checkout (via `git rev-parse --show-toplevel` against your
+shell's cwd, or an explicit `--dev-src-dir <path>`) and send it to the daemon
+purely for comparison. If it matches the checkout the daemon is already
+running from, nothing changes; if it doesn't, the daemon refuses loudly,
+naming both checkouts and the fix — restart the daemon from a Python
+environment/editable install rooted at your checkout (a bare `cd` there does
+not help if one virtualenv is shared across checkouts, since the daemon's
+default source dir follows the Python environment that launched it, not its
+cwd). This exists because a per-user daemon started from checkout A silently
+served checkout A's source to a `--mode dev` request made from checkout B —
+a testing-integrity bug, not a runtime one, but one that makes a passing test
+meaningless without saying so.
 
 **Operational behavior:**
 - The **daemon owns the sidecar lifecycle**. Closing the Agent UI no longer

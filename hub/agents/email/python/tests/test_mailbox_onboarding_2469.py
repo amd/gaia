@@ -23,6 +23,8 @@ import json
 import time
 
 import pytest
+from onboarding_fakes import FakeAgent as _FakeAgent
+from onboarding_fakes import ScriptedConsole as _ScriptedConsole
 from gaia_agent_email import mailbox_state as ms
 from gaia_agent_email import question as q
 from gaia_agent_email.tools import onboarding_tools as ob
@@ -34,32 +36,8 @@ GMAIL_SCOPES = [
 
 
 # ---------------------------------------------------------------------------
-# Fakes
+# Fakes — shared with every onboarding test module, see conftest.py.
 # ---------------------------------------------------------------------------
-
-
-class _ScriptedConsole:
-    """Records every question asked and replies from a fixed script."""
-
-    def __init__(self, answers):
-        self.answers = list(answers)
-        self.asked = []
-        self.info = []
-
-    def request_user_input_blocking(self, **kwargs):
-        self.asked.append(kwargs)
-        if not self.answers:
-            return q.NO_RESPONSE
-        return self.answers.pop(0)
-
-    def print_info(self, message):
-        self.info.append(message)
-
-
-class _FakeAgent:
-    def __init__(self, answers=(), can_answer_questions=True):
-        self.console = _ScriptedConsole(answers)
-        self.can_answer_questions = can_answer_questions
 
 
 def _connection(scopes=None, email="kalin@example.com", error=None):
@@ -106,6 +84,7 @@ def connectors(monkeypatch):
 
     class _Provider:
         provider_id = "google"
+        default_scopes = ("openid", "https://www.googleapis.com/auth/userinfo.email")
 
         @property
         def client_id(self):
@@ -272,6 +251,51 @@ def test_not_granted_is_fixed_locally_with_no_browser(connectors):
     assert connectors["grants"], "the grant was never written"
 
 
+def test_success_message_quotes_the_terminal_probe_not_a_mid_flow_value(
+    connectors, monkeypatch
+):
+    """#2590 AC5: success is reported only after the TERMINAL
+    inspect_provider(probe=True) call. Plant a differing mid-flow value (the
+    account email the INITIAL survey() saw) and assert the final message
+    quotes the LAST call's value, not a cached earlier one."""
+    connectors["connection"] = _connection(email="stale@example.com")
+    connectors["granted"] = False
+    agent = _FakeAgent(answers=["yes"])
+
+    calls = {"n": 0}
+    real_get_connection = connectors["connection"]
+
+    def get_connection(provider):
+        if provider != "google":
+            return None
+        calls["n"] += 1
+        # First call: the INITIAL ms.survey(probe=True) inside _setup_flow.
+        # Every call after: the grant has landed and the account is now the
+        # REAL one — the terminal inspect_provider() call must see this.
+        if calls["n"] == 1:
+            return real_get_connection
+        return _connection(email="current@example.com")
+
+    monkeypatch.setattr("gaia.connectors.api.get_connection", get_connection)
+
+    def after_grant(provider, agent_id, scopes):
+        connectors["granted"] = True
+
+    import gaia.connectors.grants as grants
+
+    original = grants.grant_agent
+    grants.grant_agent = lambda p, a, s: (original(p, a, s), after_grant(p, a, s))[0]
+    try:
+        out = _run(agent)
+    finally:
+        grants.grant_agent = original
+
+    assert out["ok"] is True
+    assert out["data"]["account_email"] == "current@example.com"
+    assert "current@example.com" in out["data"]["message"]
+    assert "stale@example.com" not in out["data"]["message"]
+
+
 def test_reauth_required_says_the_sign_in_stopped_working(connectors):
     from gaia.connectors.errors import ConnectionRevokedError
 
@@ -380,6 +404,30 @@ def test_oauth_flow_grants_the_agent_in_the_same_pass(connectors):
     assert any("https://accounts/auth" in m for m in agent.console.info)
 
 
+def test_walkthrough_reauth_requests_the_full_union_not_just_mail(connectors):
+    """AC-12 (#2730): given an existing google connection carrying ALL_SCOPES,
+    self-repair's OAuth request must be default ∪ ALL_SCOPES (mail +
+    calendar) — not the mail-only union it sent before. Sending mail-only
+    here is exactly what silently drops an existing calendar grant on
+    reconnect. ``required_scopes()`` (the GRANT) stays unchanged — it is the
+    usability gate, not the request."""
+    from gaia_agent_email.scopes import ALL_SCOPES
+
+    connectors["connection"] = _connection(scopes=ALL_SCOPES)
+    agent = _FakeAgent(answers=["yes"])
+
+    ob._run_oauth(agent, "google")
+
+    assert len(connectors["configured"]) == 1
+    _, config = connectors["configured"][0]
+    requested = set(config["scopes"])
+    for scope in ALL_SCOPES:
+        assert scope in requested, (scope, requested)
+    # required_scopes() is still the mail-only GATE — the grant, unchanged.
+    assert config["grant_agents"] == {ms.AGENT_ID: GMAIL_SCOPES}
+    assert ms.required_scopes("google") == GMAIL_SCOPES
+
+
 def test_missing_oauth_client_is_explained_before_it_is_asked_for(connectors):
     """The honest limit: the user still supplies their own client id + secret."""
     connectors["connection"] = None
@@ -441,6 +489,39 @@ def test_a_fix_that_did_not_fix_it_is_reported_as_failure(connectors):
 
     assert out["ok"] is False
     assert "still isn't usable" in out["error"]
+
+
+def test_connected_but_grant_failed_is_reported_honestly_not_as_nothing_changed(
+    connectors,
+):
+    """#2590: save_connection runs before the grant commits. If the grant
+    write fails the connection IS persisted — the generic catch-all used to
+    say "Nothing was changed", which is false. It must say what actually
+    happened: connected, not yet permitted."""
+    from gaia.connectors.errors import GrantAfterConnectError
+
+    connectors["connection"] = None
+
+    async def failing_complete_authorization(flow_id):
+        raise GrantAfterConnectError(
+            "google", ms.AGENT_ID, reason="disk full"
+        )
+
+    import gaia.connectors.flow as flow_mod
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(flow_mod, "complete_authorization", failing_complete_authorization)
+    try:
+        agent = _FakeAgent(answers=["google", "yes"])
+        out = _run(agent)
+    finally:
+        monkeypatch.undo()
+
+    assert out["ok"] is True
+    assert out["data"]["changed"] is True
+    assert "connected" in out["data"]["message"].lower()
+    assert "nothing was changed" not in out["data"]["message"].lower()
+    assert "disk full" in out["data"]["message"]
 
 
 # ---------------------------------------------------------------------------

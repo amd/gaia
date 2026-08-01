@@ -11,6 +11,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/amd/gaia/tui/internal/catalog"
+
+	"github.com/amd/gaia/tui/internal/ui/theme"
 )
 
 // pollInterval paces install-status polling. The daemon writes progress from a
@@ -159,17 +161,17 @@ func (s installState) done() bool {
 var (
 	installBorder = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
-			BorderForeground(lipgloss.Color("114")).
+			BorderForeground(theme.Accent).
 			Padding(1, 2)
 
 	installFailBorder = lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).
-				BorderForeground(lipgloss.Color("203")).
+				BorderForeground(theme.Danger).
 				Padding(1, 2)
 
-	barFill  = lipgloss.NewStyle().Foreground(lipgloss.Color("114"))
-	barEmpty = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
-	failText = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
+	barFill  = lipgloss.NewStyle().Foreground(theme.Accent)
+	barEmpty = lipgloss.NewStyle().Foreground(theme.Divider)
+	failText = lipgloss.NewStyle().Foreground(theme.Danger)
 )
 
 func (s installState) View(width int) string {
