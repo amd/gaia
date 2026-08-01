@@ -240,6 +240,15 @@ the connected-but-not-granted case needs no browser at all (a local permission w
 and connecting Google still requires the user to supply their own OAuth client ID and
 secret, so expect a `sensitive: true` question on that path.
 
+**Mail-required, calendar-optional (#2730).** Every setup/reconnect path — this
+self-repair flow included — requests the full mail + calendar scope union at
+consent time, but only the mail scopes gate whether the flow reports success. A
+user who declines calendar still ends up with a working mailbox; calendar
+tools raise their own actionable error, naming the exact scope, the first time
+one is actually called. Do not "fix" a self-repair flow that requests only
+mail scopes — that narrower request is the bug this issue removed, not a
+simplification to reintroduce.
+
 ## Stateful agent surface (`/v1/email/agent/*`, 0.4.0)
 
 Everything above is **stateless** — you send a payload, the sidecar analyzes it, no

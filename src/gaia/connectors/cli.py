@@ -370,6 +370,43 @@ def _handle_connect(args: argparse.Namespace) -> int:
         provider = get_provider(args.connector_id)
         scopes = sorted(set(declared_scopes) | set(provider.default_scopes))
         grant_agents = {grant_agent: declared_scopes}
+    elif not explicit_scopes:
+        # Bare `connect` — no --scopes, no --grant-agent (#2730 D0/AC-8). This
+        # is the exact command GAIA's own error text tells a user to run, so
+        # it must not silently narrow an existing connection. Derive the
+        # request from whatever agents already hold a grant for this
+        # connector, the same declared-scopes machinery --grant-agent uses,
+        # rather than requiring --grant-agent up front before it applies.
+        from gaia.connectors.grants import list_agent_grants
+
+        granted_agent_ids = sorted(list_agent_grants(args.connector_id).keys())
+        if granted_agent_ids:
+            from gaia.agents.registry import AgentRegistry
+            from gaia.connectors.registry import REGISTRY
+            from gaia.hub.installer import register_installed_sidecars
+
+            registry = AgentRegistry()
+            registry.discover()
+            register_installed_sidecars(registry)
+            resolved = resolve_declared_scopes(
+                registry, args.connector_id, granted_agent_ids
+            )
+            declared: set = set()
+            for agent_scopes in resolved.values():
+                declared.update(agent_scopes)
+            # The catalog spec's default_scopes (not the raw OAuthProvider's)
+            # — the same source connector_routes._build_scope_union and the
+            # TUI's connectScopes union against, so a bare connect matches
+            # what every other surface would request for the same account.
+            catalog_defaults = REGISTRY.get(args.connector_id).default_scopes
+            scopes = sorted(declared | set(catalog_defaults))
+        else:
+            # No granted agent to derive a union from. Send nothing and let
+            # start_authorization's own D0 guard decide: raise loudly if a
+            # connection already exists (never guess a narrower list), or
+            # fall back to default_scopes for a genuine first-time connect.
+            scopes = []
+        grant_agents = None
     else:
         scopes = explicit_scopes
         # One-flow connect + grant: authorize the scopes AND grant them to the

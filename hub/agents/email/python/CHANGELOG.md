@@ -7,8 +7,42 @@ contract version is tracked separately as
 
 ## [Unreleased]
 
+### Fixed
+
+- **A reconnect with no explicit `--scopes` could silently overwrite a working
+  mail+calendar connection with identity-only sign-in scopes (#2730).**
+  `list(scopes) or list(provider.default_scopes)` at four `gaia.connectors`
+  entry points meant an empty scope request against a provider that already
+  had a connection or an agent grant silently fell back to
+  `openid`/`email`/`profile` — including via the exact command GAIA's own
+  error text told a user to run. That fallback is now rejected with an
+  actionable error whenever prior state exists; a genuine first-time connect
+  is unaffected. `connect_scopes()`'s own silent `except Exception` (reading
+  the credentialed `OAuthProvider`'s `default_scopes`, unreachable before an
+  OAuth client is configured — exactly the state a first-time self-repair
+  runs in) now reads the catalog spec's `default_scopes` instead, which needs
+  no credentials and removes the failure case rather than papering over it.
+- **The daemon's forward-out mint was all-or-nothing: a connection missing
+  even one optional (calendar) scope lost mail too (#2730).**
+  `ConnectionForwarder.forward_provider` now mints against each agent's
+  declared REQUIRED subset only (`scopes.py::REQUIRED_SCOPES` — mail only;
+  calendar is requested at consent but never gates the mint), and reports the
+  sidecar the intersection of the connection's real stored scopes with the
+  ledger grant, never the ledger's raw claim (a shared connection widened by
+  a different agent can no longer over-grant this one).
+
 ### Added
 
+- **`scopes.py`/`outlook_scopes.py` gained `REQUIRED_SCOPES` (mail only) —
+  the request/enforce split (#2730).** `ALL_SCOPES` (mail + calendar) is what
+  every connect path requests at consent; `REQUIRED_SCOPES` is the narrower
+  subset the daemon's forward-out mint enforces. `mailbox_state.py` gained
+  `requested_scopes()` alongside the existing `required_scopes()` gate, so
+  the in-chat self-repair flow requests the same full union every other
+  surface does instead of narrowing an existing connection on autonomous
+  repair. A checked-in fixture
+  (`tests/fixtures/connectors/email_scopes.json`) now guards both the Python
+  and the TUI's Go scope lists against drifting apart.
 - **Inbox scans go metadata-first, cutting per-message cost so the default scan size can
   rise from 25 to 50 (#2643).** Every scanned message used to cost one full-body fetch
   regardless of whether the heuristic ever read the body — `pre_scan_inbox` and the
@@ -401,6 +435,22 @@ contract version is tracked separately as
   no `tools:` and no `permissions:`, so `tools_count` stays 59 and the REST/MCP
   contract, connector surface, and `SCHEMA_VERSION` are all unchanged; relocating
   the agent's tool implementations into skills is separate work (#2672).
+- **On-device SLM classifiers for phishing and triage category (experimental,
+  `use_slm=False` by default).** Two compact embedding classifiers
+  (`specific-ai-tools`, served by the same local Lemonade server as the chat
+  model) can run ahead of the LLM. Phishing is decided by the SLM alone when it
+  answers — the keyword/domain heuristic is not consulted for that message —
+  and the triage SLM decides the category whenever the heuristic is not
+  confident. The LLM classify call is skipped only when the heuristic already
+  settled `is_spam`; otherwise it still runs for the spam verdict and its
+  category answer is discarded. Every SLM path fails safe: an unreachable
+  server, a failed model pull, a prediction error, or a label outside the
+  taxonomy falls back to the existing heuristic + LLM flow, so the previous
+  behavior is the floor, not the risk. Enable with `use_slm=True` or
+  `GAIA_EMAIL_USE_SLM=true` — the `slm_triage_*` / `slm_phishing_*` model +
+  checkpoint pairs on `EmailAgentConfig` ship preconfigured. A half-configured
+  pair fails `validate()` loudly, and an unparseable `GAIA_EMAIL_USE_SLM` raises
+  instead of silently defaulting to off.
 
 - **Agent-led mailbox onboarding — the agent sets up its own access, in the
   conversation (#2469).** Hitting the agent without a usable mailbox used to

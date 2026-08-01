@@ -344,6 +344,8 @@ def classify_category_heuristic(
     label_ids: Iterable[str],
     body: str = "",
     has_list_unsubscribe: bool = False,
+    *,
+    check_phishing: bool = True,
 ) -> HeuristicResult:
     """Classify a single message using fast keyword + label-ID rules.
 
@@ -368,6 +370,9 @@ def classify_category_heuristic(
             automated-sender match, or an IMPORTANT/STARRED flag -- those
             all resolve the message before this signal is ever consulted.
             Defaults False so every existing caller is unaffected.
+        check_phishing: When False, skip ``detect_phishing`` and leave
+            ``is_phishing=False`` — used when the caller resolves phishing
+            via the SLM (or a separate heuristic fallback) instead.
 
     Returns:
         A :class:`HeuristicResult`. When ``confident=False`` the caller
@@ -389,7 +394,8 @@ def classify_category_heuristic(
     # category itself -- compute once up front so spam/phishing can co-fire.
     # detect_phishing covers subject + sender-domain + body; the body channel
     # uses whatever text the caller provides (snippet or full decode).
-    is_phishing = detect_phishing(subject, sender, body)
+    # Callers that own phishing (SLM-first) pass check_phishing=False.
+    is_phishing = detect_phishing(subject, sender, body) if check_phishing else False
     spam_signal = _spam_sender_signal(sender)
 
     # 1. Promotions -- confident, label-driven. Vetoed by a commitment

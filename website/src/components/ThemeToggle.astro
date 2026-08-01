@@ -1,27 +1,35 @@
 ---
 // Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
+
+// Which icon shows is driven by html[data-theme], which Layout.astro sets
+// pre-paint — so the button is never an empty box, even if this component's
+// script never runs. aria-pressed is added by the script, because without it
+// the button doesn't toggle anything and claiming a state would be a lie.
 ---
 <button
   id="theme-toggle"
   type="button"
-  aria-label="Toggle color theme"
+  aria-label="Dark theme"
   class="rounded-g-btn border border-transparent p-2 text-g-muted transition-colors hover:border-g-border hover:text-g-text"
 >
-  <!-- sun (shown in dark mode) -->
-  <svg data-icon="sun" class="w-4 h-4 hidden" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32 1.41 1.41M2 12h2m16 0h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
-  <!-- moon (shown in light mode) -->
-  <svg data-icon="moon" class="w-4 h-4 hidden" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+  <svg data-icon="sun" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.41 1.41m11.32 11.32 1.41 1.41M2 12h2m16 0h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+  <svg data-icon="moon" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
 </button>
+
+<style>
+  /* Sun in dark mode, moon otherwise — including when data-theme is absent, so
+     one icon is always painted. */
+  :global(html[data-theme='dark']) #theme-toggle [data-icon='moon'],
+  :global(html:not([data-theme='dark'])) #theme-toggle [data-icon='sun'] {
+    display: none;
+  }
+</style>
 
 <script>
   const btn = document.getElementById('theme-toggle')!;
-  const sun = btn.querySelector('[data-icon="sun"]')!;
-  const moon = btn.querySelector('[data-icon="moon"]')!;
   const render = () => {
-    const dark = document.documentElement.dataset.theme === 'dark';
-    sun.classList.toggle('hidden', !dark);
-    moon.classList.toggle('hidden', dark);
+    btn.setAttribute('aria-pressed', String(document.documentElement.dataset.theme === 'dark'));
   };
   btn.addEventListener('click', () => {
     const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';

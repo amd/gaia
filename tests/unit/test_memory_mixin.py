@@ -3640,10 +3640,10 @@ class TestRecallSkill:
 
 
 def _recalled_skill(name, body, when_to_use="trigger", tools_required=None):
-    """A Skill object as recall_skill would return it (for the pure renderer)."""
-    from gaia.agents.base.skill_synthesis import Skill
+    """A DistilledProcedure object as recall_skill would return it (for the pure renderer)."""
+    from gaia.agents.base.skill_synthesis import DistilledProcedure
 
-    return Skill(
+    return DistilledProcedure(
         name=name,
         when_to_use=when_to_use,
         body=body,
@@ -3707,7 +3707,7 @@ class TestRecallOnceProcedureCache:
     """
 
     def test_refresh_caches_recalled_skills_for_the_loader(self, mixin_host):
-        """The matched Skill objects are cached, and their tools flatten+dedupe."""
+        """The matched DistilledProcedure objects are cached, and their tools flatten+dedupe."""
         pytest.importorskip("faiss")
         _seed_procedure(
             mixin_host,
