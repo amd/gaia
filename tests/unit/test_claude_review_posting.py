@@ -38,9 +38,7 @@ def runner():
     return _load("claude-run.yml")
 
 
-@pytest.mark.parametrize(
-    "job,require", [("pr-review", True), ("pr-rereview", False)]
-)
+@pytest.mark.parametrize("job,require", [("pr-review", True), ("pr-rereview", False)])
 def test_review_jobs_delegate_posting_to_the_workflow(claude, job, require):
     """Both review jobs hand a file to claude-run.yml instead of posting inline."""
     with_ = claude["jobs"][job]["with"]
