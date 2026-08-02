@@ -1178,7 +1178,10 @@ def stream_discovery():
 
     def _generate():
         try:
-            from gaia.agents.base.discovery import SystemDiscovery
+            from gaia.agents.base.discovery import (
+                SystemDiscovery,
+                unsupported_reason,
+            )
 
             discovery = SystemDiscovery()
 
@@ -1204,12 +1207,16 @@ def stream_discovery():
             for source_key in _DISCOVERY_SOURCES:
                 label = _DISCOVERY_SOURCE_LABELS.get(source_key, source_key)
                 yield _sse({"type": "log", "message": f"Scanning {label}..."})
+                reason = unsupported_reason(source_key)
+                if reason:
+                    yield _sse({"type": "log", "message": f"  {label}: {reason}"})
+                    continue
                 scanner = scan_map.get(source_key)
                 if scanner is None:
                     yield _sse(
                         {
                             "type": "log",
-                            "message": f"  {label}: not available on this platform",
+                            "message": f"  {label}: no scanner is registered for this source",
                         }
                     )
                     continue

@@ -7,28 +7,32 @@ Scans the user's machine to discover projects, installed apps, browser data,
 git repos, and email accounts. Each method returns a list of dicts (discovered
 facts) that are NOT stored directly — the caller presents them for user review.
 
-stdlib only. Windows-focused. Never crashes — catches exceptions, returns
-partial results.
+Cross-platform (Windows / macOS / Linux). No third-party dependencies — stdlib
+plus ``gaia.logger``. Never crashes — catches exceptions, returns partial
+results. A source with no scanner for the running platform is reported by name,
+never silently empty; see :func:`unsupported_reason`.
 """
 
 import configparser
 import json
-import logging
 import os
+import plistlib
 import re
 import shutil
 import sqlite3
 import tempfile
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
+
+from gaia.logger import get_logger
 
 try:
     import winreg  # Windows only
 except ImportError:
     winreg = None  # type: ignore[assignment]  # Linux / macOS
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # ============================================================================
 # Constants
@@ -303,6 +307,53 @@ _WORK_DOMAINS = {
     "docs.google.com",
     "drive.google.com",
 }
+
+# Email addresses, as they appear in credential dumps and mail-client config
+_EMAIL_PATTERN = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
+
+# Mail-plist keys whose values hold the USER's own address. Everything else in
+# a mail plist (previous recipients, signatures) belongs to other people and is
+# deliberately not harvested. Compared lowercased.
+_PLIST_ACCOUNT_KEYS = frozenset(
+    {
+        "emailaddresses",
+        "emailaddress",
+        "accountemailaddresses",
+        "address",
+        "acct",
+        "fullusername",
+        "username",
+    }
+)
+
+# Mail hosts queried one-by-one in the macOS Keychain. `security` cannot
+# enumerate items, so the set of hosts to ask about has to be fixed up front.
+_MACOS_KEYCHAIN_MAIL_HOSTS = (
+    "imap.gmail.com",
+    "smtp.gmail.com",
+    "outlook.office365.com",
+    "smtp.office365.com",
+    "imap-mail.outlook.com",
+    "imap.mail.yahoo.com",
+    "imap.mail.me.com",
+    "smtp.mail.me.com",
+)
+
+# `security` exit code for "the item could not be found" (errSecItemNotFound)
+_SECURITY_ITEM_NOT_FOUND = 44
+
+# System-wide application directories. /System/Applications is deliberately
+# absent: the ~40 Apple stock apps on every Mac would swamp the review list.
+_MACOS_APP_DIRS: Tuple[Path, ...] = (Path("/Applications"),)
+
+# System-wide freedesktop entry directories, including the Flatpak and Snap
+# export dirs — that is how those two surface their GUI apps.
+_LINUX_DESKTOP_DIRS: Tuple[Path, ...] = (
+    Path("/usr/share/applications"),
+    Path("/usr/local/share/applications"),
+    Path("/var/lib/flatpak/exports/share/applications"),
+    Path("/var/lib/snapd/desktop/applications"),
+)
 
 
 # ============================================================================
@@ -580,12 +631,23 @@ def _safe_read_json(path: Path) -> Optional[dict]:
 
 
 def _safe_copy_and_query_sqlite(
-    db_path: Path, query: str, params: tuple = ()
+    db_path: Path, query: str, params: tuple = (), label: str = ""
 ) -> List[tuple]:
     """Copy a SQLite DB to temp dir and query it (avoids lock issues).
 
     Browsers hold locks on their databases; copying first is required.
-    Returns empty list on any error.
+
+    Args:
+        db_path: The database to copy and read.
+        query: SQL to execute against the copy.
+        params: Bound parameters for `query`.
+        label: Human-readable source name used when a permission denial has to
+            be reported (for example "Safari history").
+
+    Returns:
+        The fetched rows, or an empty list when the database is missing or
+        unreadable. A permission denial is reported at WARNING with the remedy;
+        every other failure is logged at DEBUG.
     """
     if not db_path.exists():
         return []
@@ -600,6 +662,11 @@ def _safe_copy_and_query_sqlite(
             return cursor.fetchall()
         finally:
             conn.close()
+    except PermissionError as e:
+        logger.warning(
+            "%s", _permission_denied_message(label or "browser database", db_path, e)
+        )
+        return []
     except (OSError, sqlite3.Error) as e:
         logger.debug("SQLite query failed for %s: %s", db_path, e)
         return []
@@ -621,6 +688,161 @@ def _categorize_app(app_name: str) -> str:
     return "Other"
 
 
+def _collect_plist_emails(node: Any, under_account_key: bool = False) -> List[str]:
+    """Collect the user's own addresses from a decoded mail property list.
+
+    Only values reached through an account-identity key are read. A mail plist
+    also holds correspondents (previous recipients, signatures), and those are
+    other people's addresses — harvesting the whole tree would put them in the
+    user's review list. Nesting varies across macOS releases, so the walk is
+    recursive, but it only descends into account-bearing keys.
+
+    Args:
+        node: A decoded plist value (dict, list, or scalar).
+        under_account_key: True when `node` was reached through a key in
+            ``_PLIST_ACCOUNT_KEYS``; only then are strings harvested.
+
+    Returns:
+        Every address found, in traversal order. Duplicates are not removed —
+        the caller deduplicates.
+    """
+    found: List[str] = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            is_account_key = isinstance(key, str) and key.lower() in _PLIST_ACCOUNT_KEYS
+            found.extend(_collect_plist_emails(value, is_account_key))
+    elif isinstance(node, (list, tuple)):
+        for value in node:
+            found.extend(_collect_plist_emails(value, under_account_key))
+    elif isinstance(node, str) and under_account_key:
+        found.extend(match.group(0) for match in _EMAIL_PATTERN.finditer(node))
+    return found
+
+
+# ============================================================================
+# Platform support
+# ============================================================================
+
+# Discovery sources that only have a scanner for some platforms. A source that
+# is absent from this map is platform-neutral and runs everywhere.
+#
+# This map is the GATE, not documentation: `scan_all` and the Agent UI skip a
+# source without calling it when the running platform is missing here. Adding a
+# platform branch to a scanner without adding it here leaves that branch
+# unreachable, behind a log line insisting no scanner exists. Update both.
+_PLATFORM_SUPPORT: Dict[str, Tuple[str, ...]] = {
+    "installed_apps": ("win32", "darwin", "linux"),
+    "browser_bookmarks": ("win32", "darwin", "linux"),
+    "browser_history": ("win32", "darwin", "linux"),
+    "email_accounts": ("win32", "darwin", "linux"),
+    "windows_userassist": ("win32",),
+    "macos_app_usage": ("darwin",),
+    "recent_file_types": ("win32", "darwin", "linux"),
+}
+
+
+def _platform_key() -> str:
+    """Return the running platform as a ``_PLATFORM_SUPPORT`` key.
+
+    Normalizes every Linux variant ``sys.platform`` can report ("linux",
+    "linux2") to "linux". Other values ("win32", "darwin", "freebsd13") pass
+    through unchanged.
+
+    Returns:
+        The normalized platform key for the running interpreter.
+    """
+    import sys
+
+    if sys.platform.startswith("linux"):
+        return "linux"
+    return sys.platform
+
+
+def unsupported_reason(source: str) -> Optional[str]:
+    """Return why `source` cannot run on this platform, or None if it can.
+
+    Sources absent from ``_PLATFORM_SUPPORT`` are platform-neutral and always
+    return None.
+
+    Args:
+        source: A discovery source name as used by :meth:`SystemDiscovery.scan_all`
+            (for example "browser_history").
+
+    Returns:
+        A one-line, end-user-readable reason when the source has no scanner for
+        the running platform, otherwise None. This string is shown in the Agent
+        UI, so it states what happened, not what a contributor should do about
+        it — :func:`_log_unsupported` adds that hint for the log.
+    """
+    supported = _PLATFORM_SUPPORT.get(source)
+    if supported is None:
+        return None
+    platform = _platform_key()
+    if platform in supported:
+        return None
+    return (
+        f"no scanner for '{source}' on {platform} "
+        f"(supported: {', '.join(supported)}) — nothing was scanned."
+    )
+
+
+def _log_unsupported(source: str) -> List[Dict]:
+    """Log that `source` has no branch for the running platform, return [].
+
+    The single place an unsupported platform is reported, so a source is never
+    silently empty. The log line adds the contributor hint that the user-facing
+    reason deliberately omits.
+
+    Args:
+        source: A discovery source name.
+
+    Returns:
+        An empty list, so callers can ``return _log_unsupported(...)``.
+    """
+    reason = unsupported_reason(source)
+    if reason:
+        logger.info(
+            "%s Add a branch in src/gaia/agents/base/discovery.py and register "
+            "the platform in _PLATFORM_SUPPORT, or open an issue at "
+            "https://github.com/amd/gaia/issues.",
+            reason,
+        )
+    else:
+        # Reached only when a scanner fell through to "no branch" for a platform
+        # _PLATFORM_SUPPORT claims it handles. Warn rather than return a quiet
+        # [], or the drift this helper exists to surface becomes invisible.
+        logger.warning(
+            "'%s' found no platform branch on %s, but _PLATFORM_SUPPORT lists "
+            "that platform as supported — the map and the scanner branches have "
+            "drifted. Fix one of them in src/gaia/agents/base/discovery.py.",
+            source,
+            _platform_key(),
+        )
+    return []
+
+
+def _permission_denied_message(label: str, path: Path, error: OSError) -> str:
+    """Build an actionable message for a permission-denied read.
+
+    Args:
+        label: Human-readable name of what failed to load ("Safari history").
+        path: The file the scan could not read.
+        error: The raised :class:`PermissionError`.
+
+    Returns:
+        A message naming what failed, what to do about it, and where.
+    """
+    remedy = (
+        "Grant Full Disk Access to the terminal or app running GAIA in "
+        "System Settings → Privacy & Security → Full Disk Access, then re-run "
+        "discovery."
+        if _platform_key() == "darwin"
+        else f"Check the file permissions on {path}, or run discovery as the "
+        f"user that owns that profile."
+    )
+    return f"Cannot read {label} at {path}: {error}. {remedy}"
+
+
 # ============================================================================
 # SystemDiscovery
 # ============================================================================
@@ -637,6 +859,125 @@ class SystemDiscovery:
 
     def __init__(self):
         self._home = Path.home()
+
+    # ------------------------------------------------------------------
+    # Platform path resolvers — shared by the browser and email scanners
+    # ------------------------------------------------------------------
+
+    def _chromium_profile_dirs(self) -> List[Tuple[str, Path]]:
+        """Locate Chromium-family browser profiles for the running platform.
+
+        Covers Chrome and Edge on all three platforms, plus the ``chromium``
+        distro package on Linux. Within each user-data root both the default
+        profile and every additional ``Profile N`` directory are returned, so a
+        user with more than one browser profile is not scanned half-blind.
+
+        Returns:
+            List of ``(browser_label, profile_dir)`` tuples for profile
+            directories that exist. The label names the browser and profile,
+            e.g. ``("Chrome (Profile 1)", Path(...))``.
+        """
+        platform = _platform_key()
+        if platform == "win32":
+            local = self._home / "AppData" / "Local"
+            roots = [
+                ("Chrome", local / "Google" / "Chrome" / "User Data"),
+                ("Edge", local / "Microsoft" / "Edge" / "User Data"),
+            ]
+        elif platform == "darwin":
+            app_support = self._home / "Library" / "Application Support"
+            roots = [
+                ("Chrome", app_support / "Google" / "Chrome"),
+                ("Edge", app_support / "Microsoft Edge"),
+            ]
+        elif platform == "linux":
+            config = self._home / ".config"
+            roots = [
+                ("Chrome", config / "google-chrome"),
+                ("Edge", config / "microsoft-edge"),
+                ("Chromium", config / "chromium"),
+            ]
+        else:
+            return []
+
+        profiles: List[Tuple[str, Path]] = []
+        for browser, root in roots:
+            if not root.is_dir():
+                continue
+            candidates = [root / "Default"] + sorted(root.glob("Profile *"))
+            try:
+                for profile_dir in candidates:
+                    if profile_dir.is_dir():
+                        profiles.append(
+                            (f"{browser} ({profile_dir.name})", profile_dir)
+                        )
+            except PermissionError as e:
+                logger.warning(
+                    "%s", _permission_denied_message(f"{browser} profiles", root, e)
+                )
+        return profiles
+
+    def _firefox_profile_roots(self) -> List[Path]:
+        """Locate the directories that hold Firefox profiles on this platform.
+
+        Includes the Snap and Flatpak sandbox locations on Linux, which is where
+        the distro-packaged Firefox keeps its profiles.
+
+        Returns:
+            List of existing directories whose subdirectories are Firefox
+            profiles.
+        """
+        platform = _platform_key()
+        if platform == "win32":
+            roots = [
+                self._home / "AppData" / "Roaming" / "Mozilla" / "Firefox" / "Profiles"
+            ]
+        elif platform == "darwin":
+            roots = [
+                self._home / "Library" / "Application Support" / "Firefox" / "Profiles"
+            ]
+        elif platform == "linux":
+            roots = [
+                self._home / ".mozilla" / "firefox",
+                self._home / "snap" / "firefox" / "common" / ".mozilla" / "firefox",
+                self._home
+                / ".var"
+                / "app"
+                / "org.mozilla.firefox"
+                / ".mozilla"
+                / "firefox",
+            ]
+        else:
+            return []
+        return [root for root in roots if root.is_dir()]
+
+    def _thunderbird_profile_roots(self) -> List[Path]:
+        """Locate the directories that hold Thunderbird profiles on this platform.
+
+        Includes the Snap and Flatpak sandbox locations on Linux.
+
+        Returns:
+            List of existing directories whose subdirectories are Thunderbird
+            profiles.
+        """
+        platform = _platform_key()
+        if platform == "win32":
+            roots = [self._home / "AppData" / "Roaming" / "Thunderbird" / "Profiles"]
+        elif platform == "darwin":
+            roots = [self._home / "Library" / "Thunderbird" / "Profiles"]
+        elif platform == "linux":
+            roots = [
+                self._home / ".thunderbird",
+                self._home / "snap" / "thunderbird" / "common" / ".thunderbird",
+                self._home
+                / ".var"
+                / "app"
+                / "org.mozilla.Thunderbird"
+                / ".thunderbird",
+            ]
+        else:
+            return []
+        return [root for root in roots if root.is_dir()]
 
     # ------------------------------------------------------------------
     # File System Scan
@@ -871,10 +1212,31 @@ class SystemDiscovery:
         return ""
 
     # ------------------------------------------------------------------
-    # Installed Apps Scan (Windows Registry + Start Menu)
+    # Installed Apps Scan (per-platform)
     # ------------------------------------------------------------------
 
     def scan_installed_apps(self) -> List[Dict]:
+        """Inventory the applications installed on this machine.
+
+        - **Windows**: registry Uninstall keys + Start Menu shortcuts.
+        - **macOS**: ``.app`` bundles in ``/Applications`` and ``~/Applications``.
+        - **Linux**: ``.desktop`` entries, including the Flatpak and Snap export
+          directories.
+
+        Returns:
+            List of discovered fact dicts with app name and category. Empty on a
+            platform with no branch — reported, never silent.
+        """
+        platform = _platform_key()
+        if platform == "win32":
+            return self._scan_windows_installed_apps()
+        if platform == "darwin":
+            return self._scan_macos_installed_apps()
+        if platform == "linux":
+            return self._scan_linux_installed_apps()
+        return _log_unsupported("installed_apps")
+
+    def _scan_windows_installed_apps(self) -> List[Dict]:
         """Read Windows registry Uninstall keys + Start Menu shortcuts.
 
         Scans:
@@ -1054,48 +1416,162 @@ class SystemDiscovery:
             except (PermissionError, OSError):
                 pass
 
+    def _append_app_fact(
+        self, app_name: str, seen_apps: set, results: List[Dict]
+    ) -> None:
+        """Append a deduplicated "installed app" fact for `app_name`.
+
+        Args:
+            app_name: Display name of the application.
+            seen_apps: Lowercased names already recorded; mutated in place.
+            results: Fact list to append to; mutated in place.
+        """
+        norm_name = app_name.strip().lower()
+        if not norm_name or norm_name in seen_apps:
+            return
+        slug = re.sub(r"[^a-z0-9]+", "_", norm_name).strip("_")
+        if not slug:
+            return  # A name with no alphanumerics would yield a bare "app:"
+        seen_apps.add(norm_name)
+        category = _categorize_app(app_name)
+        entity = f"app:{slug}"
+        results.append(
+            _make_fact(
+                content=f"Installed app: {app_name} [{category}]",
+                context="unclassified",
+                entity=entity,
+            )
+        )
+
+    def _scan_macos_installed_apps(self) -> List[Dict]:
+        """Scan macOS ``.app`` bundles in ``/Applications`` and ``~/Applications``.
+
+        ``/System/Applications`` is deliberately excluded: the ~40 Apple stock
+        apps present on every Mac would swamp the user's review list without
+        saying anything about them.
+
+        Returns:
+            List of discovered fact dicts, one per unique application bundle.
+        """
+        results: List[Dict] = []
+        seen_apps: set = set()
+
+        for app_dir in (*_MACOS_APP_DIRS, self._home / "Applications"):
+            if not app_dir.is_dir():
+                continue
+            try:
+                with os.scandir(str(app_dir)) as entries:
+                    for entry in entries:
+                        if not entry.name.endswith(".app") or not entry.is_dir():
+                            continue
+                        self._append_app_fact(entry.name[:-4], seen_apps, results)
+            except PermissionError as e:
+                logger.warning(
+                    "%s", _permission_denied_message("installed apps", app_dir, e)
+                )
+            except OSError as e:
+                logger.debug("Application scan failed for %s: %s", app_dir, e)
+
+        return results
+
+    def _scan_linux_installed_apps(self) -> List[Dict]:
+        """Scan Linux ``.desktop`` entries for installed GUI applications.
+
+        Covers the system, user, Flatpak, and Snap application directories —
+        Flatpak and Snap both export a ``.desktop`` file per GUI app, so no
+        package-manager subprocess is needed. Entries hidden from menus
+        (``NoDisplay``, ``Hidden``) and non-application types are skipped.
+
+        Returns:
+            List of discovered fact dicts, one per unique application.
+        """
+        results: List[Dict] = []
+        seen_apps: set = set()
+
+        local_share = self._home / ".local" / "share"
+        desktop_dirs = [
+            *_LINUX_DESKTOP_DIRS,
+            local_share / "applications",
+            local_share / "flatpak" / "exports" / "share" / "applications",
+        ]
+
+        for desktop_dir in desktop_dirs:
+            if not desktop_dir.is_dir():
+                continue
+            try:
+                with os.scandir(str(desktop_dir)) as scan:
+                    entries = sorted(scan, key=lambda e: e.name)
+            except PermissionError as e:
+                logger.warning(
+                    "%s", _permission_denied_message("installed apps", desktop_dir, e)
+                )
+                continue
+            except OSError as e:
+                logger.debug("Desktop entry scan failed for %s: %s", desktop_dir, e)
+                continue
+
+            for entry in entries:
+                if not entry.name.endswith(".desktop"):
+                    continue
+                app_name = self._parse_desktop_entry_name(Path(entry.path))
+                if app_name:
+                    self._append_app_fact(app_name, seen_apps, results)
+
+        return results
+
+    def _parse_desktop_entry_name(self, path: Path) -> str:
+        """Read the display name out of a freedesktop ``.desktop`` file.
+
+        Args:
+            path: The ``.desktop`` file to parse.
+
+        Returns:
+            The ``Name`` value, or "" when the entry is hidden, is not an
+            application, or cannot be parsed.
+        """
+        # interpolation=None is mandatory: Exec= lines contain %f / %U, which
+        # the default interpolator raises on.
+        parser = configparser.ConfigParser(interpolation=None, strict=False)
+        try:
+            parser.read_string(path.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, configparser.Error) as e:
+            logger.debug("Failed to parse desktop entry %s: %s", path, e)
+            return ""
+
+        if not parser.has_section("Desktop Entry"):
+            return ""
+        section = parser["Desktop Entry"]
+        if section.get("Type", "Application") != "Application":
+            return ""
+        for hidden_key in ("NoDisplay", "Hidden"):
+            if section.get(hidden_key, "false").strip().lower() == "true":
+                return ""
+        return section.get("Name", "").strip()
+
     # ------------------------------------------------------------------
     # Browser Bookmarks Scan
     # ------------------------------------------------------------------
 
     def scan_browser_bookmarks(self) -> List[Dict]:
-        """Read Chrome/Edge bookmark JSON and Firefox SQLite bookmarks.
+        """Read Chromium, Firefox, and (on macOS) Safari bookmarks.
 
-        Groups bookmarks by domain. Flags banking/finance as sensitive.
+        Groups bookmarks by domain. Flags banking/finance as sensitive. Every
+        profile of every supported browser is read, not just the default one.
 
         Returns:
             List of discovered fact dicts with bookmark domains and categories.
+            Empty on a platform with no branch — reported, never silent.
         """
+        if unsupported_reason("browser_bookmarks"):
+            return _log_unsupported("browser_bookmarks")
+        platform = _platform_key()
+
         results: List[Dict] = []
         domain_urls: Dict[str, int] = {}
 
-        # Chrome and Edge use identical JSON format
-        chromium_paths = [
-            (
-                "Chrome",
-                self._home
-                / "AppData"
-                / "Local"
-                / "Google"
-                / "Chrome"
-                / "User Data"
-                / "Default"
-                / "Bookmarks",
-            ),
-            (
-                "Edge",
-                self._home
-                / "AppData"
-                / "Local"
-                / "Microsoft"
-                / "Edge"
-                / "User Data"
-                / "Default"
-                / "Bookmarks",
-            ),
-        ]
-
-        for browser_name, bookmark_path in chromium_paths:
+        # Chrome, Edge, and Chromium all use the same bookmark JSON format
+        for browser_name, profile_dir in self._chromium_profile_dirs():
+            bookmark_path = profile_dir / "Bookmarks"
             if not bookmark_path.exists():
                 continue
             try:
@@ -1112,6 +1588,9 @@ class SystemDiscovery:
             self._extract_firefox_bookmarks(domain_urls)
         except Exception as e:
             logger.debug("Failed to read Firefox bookmarks: %s", e)
+
+        if platform == "darwin":
+            self._extract_safari_bookmarks(domain_urls)
 
         # Convert domain counts to facts
         for domain, count in sorted(
@@ -1167,19 +1646,27 @@ class SystemDiscovery:
                 self._walk_chromium_bookmark_node(child, domain_urls)
 
     def _extract_firefox_bookmarks(self, domain_urls: Dict[str, int]) -> None:
-        """Extract bookmarks from Firefox places.sqlite."""
-        firefox_root = (
-            self._home / "AppData" / "Roaming" / "Mozilla" / "Firefox" / "Profiles"
-        )
-        if not firefox_root.exists():
-            return
+        """Extract bookmarks from every Firefox profile's places.sqlite.
 
-        # Find profile directories
-        try:
-            for entry in os.scandir(str(firefox_root)):
-                if not entry.is_dir():
-                    continue
-                places_db = Path(entry.path) / "places.sqlite"
+        Args:
+            domain_urls: Domain -> bookmark-count map; mutated in place.
+        """
+        for firefox_root in self._firefox_profile_roots():
+            try:
+                with os.scandir(str(firefox_root)) as entries:
+                    profile_dirs = [Path(e.path) for e in entries if e.is_dir()]
+            except PermissionError as e:
+                logger.warning(
+                    "%s",
+                    _permission_denied_message("Firefox profiles", firefox_root, e),
+                )
+                continue
+            except OSError as e:
+                logger.debug("Cannot list Firefox profiles in %s: %s", firefox_root, e)
+                continue
+
+            for profile_dir in profile_dirs:
+                places_db = profile_dir / "places.sqlite"
                 if not places_db.exists():
                     continue
 
@@ -1191,30 +1678,84 @@ class SystemDiscovery:
                     JOIN moz_places mp ON mb.fk = mp.id
                     WHERE mp.url LIKE 'http%'
                     """,
+                    label="Firefox bookmarks",
                 )
                 for _title, url in rows:
                     domain = _extract_domain(url)
                     if domain:
                         domain_urls[domain] = domain_urls.get(domain, 0) + 1
-        except (PermissionError, OSError):
-            pass
+
+    def _extract_safari_bookmarks(self, domain_urls: Dict[str, int]) -> None:
+        """Extract Safari bookmarks from ``~/Library/Safari/Bookmarks.plist``.
+
+        ``~/Library/Safari`` is protected by macOS TCC; without Full Disk Access
+        the read is denied, which is reported with the remedy rather than
+        swallowed.
+
+        Args:
+            domain_urls: Domain -> bookmark-count map; mutated in place.
+        """
+        plist_path = self._home / "Library" / "Safari" / "Bookmarks.plist"
+        if not plist_path.exists():
+            return
+        try:
+            with open(plist_path, "rb") as f:
+                data = plistlib.load(f)
+        except PermissionError as e:
+            logger.warning(
+                "%s", _permission_denied_message("Safari bookmarks", plist_path, e)
+            )
+            return
+        except (OSError, ValueError, plistlib.InvalidFileException) as e:
+            logger.debug("Failed to read Safari bookmarks at %s: %s", plist_path, e)
+            return
+
+        self._walk_safari_bookmark_node(data, domain_urls)
+
+    def _walk_safari_bookmark_node(
+        self, node: Any, domain_urls: Dict[str, int]
+    ) -> None:
+        """Walk a Safari bookmark plist node, counting bookmarked domains.
+
+        Args:
+            node: A decoded plist node (dict or list) from Bookmarks.plist.
+            domain_urls: Domain -> bookmark-count map; mutated in place.
+        """
+        if isinstance(node, list):
+            for child in node:
+                self._walk_safari_bookmark_node(child, domain_urls)
+            return
+        if not isinstance(node, dict):
+            return
+        url = node.get("URLString", "")
+        if isinstance(url, str) and url:
+            domain = _extract_domain(url)
+            if domain:
+                domain_urls[domain] = domain_urls.get(domain, 0) + 1
+        self._walk_safari_bookmark_node(node.get("Children", []), domain_urls)
 
     # ------------------------------------------------------------------
     # Browser History Scan
     # ------------------------------------------------------------------
 
     def scan_browser_history(self, days: int = 30) -> List[Dict]:
-        """Read browser history (Chrome/Edge/Firefox). Returns top domains only.
+        """Read browser history (Chromium/Firefox, plus Safari on macOS).
 
-        Copies DB to temp file first to avoid browser lock issues.
+        Returns top domains only. Copies each DB to a temp file first to avoid
+        browser lock issues. Every profile is read, not just the default one.
         ALL results are flagged sensitive=True.
 
         Args:
             days: Number of days of history to scan. Default 30.
 
         Returns:
-            List of discovered fact dicts. All marked sensitive.
+            List of discovered fact dicts. All marked sensitive. Empty on a
+            platform with no branch — reported, never silent.
         """
+        if unsupported_reason("browser_history"):
+            return _log_unsupported("browser_history")
+        platform = _platform_key()
+
         domain_counts: Dict[str, int] = {}
 
         # Chrome epoch: Jan 1, 1601 (microseconds)
@@ -1226,36 +1767,11 @@ class SystemDiscovery:
         # Chrome timestamp = (Unix timestamp + 11644473600) * 1000000
         chrome_cutoff = int((cutoff_unix + 11644473600) * 1_000_000)
 
-        # Chrome and Edge use identical History SQLite format
-        chromium_paths = [
-            (
-                "Chrome",
-                self._home
-                / "AppData"
-                / "Local"
-                / "Google"
-                / "Chrome"
-                / "User Data"
-                / "Default"
-                / "History",
-            ),
-            (
-                "Edge",
-                self._home
-                / "AppData"
-                / "Local"
-                / "Microsoft"
-                / "Edge"
-                / "User Data"
-                / "Default"
-                / "History",
-            ),
-        ]
-
-        for browser_name, history_path in chromium_paths:
+        # Chrome, Edge, and Chromium all use the same History SQLite format
+        for browser_name, profile_dir in self._chromium_profile_dirs():
             try:
                 rows = _safe_copy_and_query_sqlite(
-                    history_path,
+                    profile_dir / "History",
                     """
                     SELECT url, visit_count
                     FROM urls
@@ -1264,6 +1780,7 @@ class SystemDiscovery:
                     LIMIT 500
                     """,
                     (chrome_cutoff,),
+                    label=f"{browser_name} history",
                 )
                 for url, visit_count in rows:
                     domain = _extract_domain(url)
@@ -1280,6 +1797,9 @@ class SystemDiscovery:
             self._extract_firefox_history(domain_counts, firefox_cutoff)
         except Exception as e:
             logger.debug("Failed to read Firefox history: %s", e)
+
+        if platform == "darwin":
+            self._extract_safari_history(domain_counts, cutoff_unix)
 
         # Convert to facts — top domains only, ALL sensitive
         results: List[Dict] = []
@@ -1299,18 +1819,28 @@ class SystemDiscovery:
     def _extract_firefox_history(
         self, domain_counts: Dict[str, int], cutoff_timestamp: int
     ) -> None:
-        """Extract history from Firefox places.sqlite."""
-        firefox_root = (
-            self._home / "AppData" / "Roaming" / "Mozilla" / "Firefox" / "Profiles"
-        )
-        if not firefox_root.exists():
-            return
+        """Extract history from every Firefox profile's places.sqlite.
 
-        try:
-            for entry in os.scandir(str(firefox_root)):
-                if not entry.is_dir():
-                    continue
-                places_db = Path(entry.path) / "places.sqlite"
+        Args:
+            domain_counts: Domain -> visit-count map; mutated in place.
+            cutoff_timestamp: Oldest visit to include, in Unix microseconds.
+        """
+        for firefox_root in self._firefox_profile_roots():
+            try:
+                with os.scandir(str(firefox_root)) as entries:
+                    profile_dirs = [Path(e.path) for e in entries if e.is_dir()]
+            except PermissionError as e:
+                logger.warning(
+                    "%s",
+                    _permission_denied_message("Firefox profiles", firefox_root, e),
+                )
+                continue
+            except OSError as e:
+                logger.debug("Cannot list Firefox profiles in %s: %s", firefox_root, e)
+                continue
+
+            for profile_dir in profile_dirs:
+                places_db = profile_dir / "places.sqlite"
                 if not places_db.exists():
                     continue
 
@@ -1325,6 +1855,7 @@ class SystemDiscovery:
                     LIMIT 500
                     """,
                     (cutoff_timestamp,),
+                    label="Firefox history",
                 )
                 for url, visit_count in rows:
                     domain = _extract_domain(url)
@@ -1332,42 +1863,111 @@ class SystemDiscovery:
                         domain_counts[domain] = domain_counts.get(domain, 0) + (
                             visit_count or 0
                         )
-        except (PermissionError, OSError):
-            pass
+
+    def _extract_safari_history(
+        self, domain_counts: Dict[str, int], cutoff_unix: float
+    ) -> None:
+        """Extract Safari history from ``~/Library/Safari/History.db``.
+
+        Safari stores visit times as Mac absolute time (seconds since
+        2001-01-01), not the Chrome or Firefox epoch.
+
+        Args:
+            domain_counts: Domain -> visit-count map; mutated in place.
+            cutoff_unix: Oldest visit to include, as a Unix timestamp.
+        """
+        history_db = self._home / "Library" / "Safari" / "History.db"
+        # Mac absolute time epoch: 2001-01-01 == Unix 978307200
+        mac_cutoff = cutoff_unix - 978307200
+
+        rows = _safe_copy_and_query_sqlite(
+            history_db,
+            """
+            SELECT hi.url, hi.visit_count
+            FROM history_items hi
+            JOIN history_visits hv ON hv.history_item = hi.id
+            WHERE hv.visit_time > ?
+            GROUP BY hi.id
+            ORDER BY hi.visit_count DESC
+            LIMIT 500
+            """,
+            (mac_cutoff,),
+            label="Safari history",
+        )
+        for url, visit_count in rows:
+            domain = _extract_domain(url)
+            if domain:
+                domain_counts[domain] = domain_counts.get(domain, 0) + (
+                    visit_count or 0
+                )
 
     # ------------------------------------------------------------------
     # Email Accounts Scan
     # ------------------------------------------------------------------
 
     def scan_email_accounts(self) -> List[Dict]:
-        """Discover email accounts from Credential Manager, Thunderbird, Outlook.
+        """Discover configured email accounts from this platform's mail clients.
 
-        Reads addresses only — never email content.
+        Reads addresses only — never email content, and never a stored password.
+
+        - **Windows**: Credential Manager, Thunderbird, Outlook registry.
+        - **macOS**: Keychain attributes for known mail hosts, Thunderbird,
+          Apple Mail.
+        - **Linux**: Thunderbird, Evolution. There is no credential-store branch:
+          ``secret-tool`` can only look up exact attribute pairs, it cannot
+          enumerate the keyring.
+
         ALL results are flagged sensitive=True.
 
         Returns:
             List of discovered fact dicts with email addresses. All sensitive.
+            Empty on a platform with no branch — reported, never silent.
         """
+        if unsupported_reason("email_accounts"):
+            return _log_unsupported("email_accounts")
+        platform = _platform_key()
+
         results: List[Dict] = []
         seen_emails: set = set()
 
-        # 1. Windows Credential Manager (via cmdkey)
-        try:
-            self._scan_credential_manager(seen_emails, results)
-        except Exception as e:
-            logger.debug("Credential Manager scan failed: %s", e)
+        # 1. Platform credential store
+        if platform == "win32":
+            try:
+                self._scan_credential_manager(seen_emails, results)
+            except Exception as e:
+                logger.debug("Credential Manager scan failed: %s", e)
+        elif platform == "darwin":
+            try:
+                self._scan_macos_keychain(seen_emails, results)
+            except Exception as e:
+                # A broken scan and an empty one both look like "no accounts"
+                # to the user, so say which one happened.
+                logger.warning("Keychain scan failed, no accounts read from it: %s", e)
 
-        # 2. Thunderbird profiles (prefs.js)
+        # 2. Thunderbird profiles (prefs.js) — all platforms
         try:
             self._scan_thunderbird(seen_emails, results)
         except Exception as e:
             logger.debug("Thunderbird scan failed: %s", e)
 
-        # 3. Outlook registry
-        try:
-            self._scan_outlook_registry(seen_emails, results)
-        except Exception as e:
-            logger.debug("Outlook registry scan failed: %s", e)
+        # 3. Platform identity store
+        if platform == "win32":
+            try:
+                self._scan_outlook_registry(seen_emails, results)
+            except Exception as e:
+                logger.debug("Outlook registry scan failed: %s", e)
+        elif platform == "darwin":
+            try:
+                self._scan_apple_mail(seen_emails, results)
+            except Exception as e:
+                logger.warning(
+                    "Apple Mail scan failed, no accounts read from it: %s", e
+                )
+        elif platform == "linux":
+            try:
+                self._scan_evolution(seen_emails, results)
+            except Exception as e:
+                logger.warning("Evolution scan failed, no accounts read from it: %s", e)
 
         return results
 
@@ -1412,49 +2012,281 @@ class SystemDiscovery:
                 )
             )
 
-    def _scan_thunderbird(self, seen_emails: set, results: List[Dict]) -> None:
-        """Scan Thunderbird prefs.js for email account addresses."""
-        thunderbird_root = (
-            self._home / "AppData" / "Roaming" / "Thunderbird" / "Profiles"
-        )
-        if not thunderbird_root.exists():
-            return
+    def _append_email_fact(
+        self,
+        email: str,
+        seen_emails: set,
+        results: List[Dict],
+        source_label: str = "",
+    ) -> None:
+        """Append a deduplicated, sensitive "email account" fact.
 
+        Args:
+            email: The discovered address.
+            seen_emails: Addresses already recorded; mutated in place.
+            results: Fact list to append to; mutated in place.
+            source_label: Mail client the address came from, shown in the fact
+                ("Thunderbird", "Apple Mail"). Omitted when empty.
+        """
+        email = email.strip().lower()
+        if not email or email in seen_emails:
+            return
+        seen_emails.add(email)
+        domain = email.split("@")[1] if "@" in email else "unknown"
+        provider = domain.split(".")[0]
+        content = f"Email account: {email}"
+        if source_label:
+            content += f" ({source_label})"
+        results.append(
+            _make_fact(
+                content=content,
+                context="unclassified",
+                entity=f"service:{provider}",
+                sensitive=True,
+            )
+        )
+
+    def _scan_macos_keychain(self, seen_emails: set, results: List[Dict]) -> None:
+        """Read macOS Keychain *attributes* for a fixed list of mail hosts.
+
+        Runs ``security find-internet-password -s <host>``, which prints an
+        item's attributes only. The ``-g`` flag — the one that returns the
+        stored secret and raises an authorization prompt — is never passed, so
+        no password is ever read and the user is never interrupted.
+
+        `security` returns only the FIRST match per host, so a user with two
+        accounts on the same provider surfaces one address here; the other is
+        picked up from their mail client's own config if it is configured there.
+
+        Args:
+            seen_emails: Addresses already recorded; mutated in place.
+            results: Fact list to append to; mutated in place.
+        """
+        import subprocess
+
+        for host in _MACOS_KEYCHAIN_MAIL_HOSTS:
+            argv = ["security", "find-internet-password", "-s", host]
+            try:
+                proc = subprocess.run(
+                    argv,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                )
+            except FileNotFoundError as e:
+                logger.warning(
+                    "Cannot read mail accounts from the macOS Keychain: the "
+                    "'security' command is missing (%s). It ships with macOS at "
+                    "/usr/bin/security — check that /usr/bin is on PATH.",
+                    e,
+                )
+                return
+            except (subprocess.SubprocessError, OSError) as e:
+                # One slow or wedged host must not hide the other providers.
+                logger.warning("Keychain lookup for %s failed to run: %s", host, e)
+                continue
+
+            if proc.returncode == _SECURITY_ITEM_NOT_FOUND:
+                logger.debug("No keychain entry for mail host %s", host)
+                continue
+            if proc.returncode != 0:
+                logger.debug(
+                    "Keychain lookup for %s exited %s: %s",
+                    host,
+                    proc.returncode,
+                    proc.stderr.strip(),
+                )
+                continue
+            if not proc.stdout.strip():
+                logger.warning(
+                    "Keychain lookup for %s succeeded but printed no attributes; "
+                    "the 'security find-internet-password' output format may have "
+                    "changed. Mail accounts from the Keychain were skipped — run "
+                    "`%s` by hand to compare.",
+                    host,
+                    " ".join(argv),
+                )
+                continue
+
+            for match in _EMAIL_PATTERN.finditer(proc.stdout):
+                self._append_email_fact(match.group(0), seen_emails, results)
+
+    def _scan_thunderbird(self, seen_emails: set, results: List[Dict]) -> None:
+        """Scan every Thunderbird profile's prefs.js for account addresses.
+
+        Args:
+            seen_emails: Addresses already recorded; mutated in place.
+            results: Fact list to append to; mutated in place.
+        """
         email_pref_pattern = re.compile(
             r'user_pref\("mail\.identity\.id\d+\.useremail"\s*,\s*"([^"]+)"\)'
         )
 
-        try:
-            for entry in os.scandir(str(thunderbird_root)):
-                if not entry.is_dir():
-                    continue
-                prefs_path = Path(entry.path) / "prefs.js"
+        for thunderbird_root in self._thunderbird_profile_roots():
+            try:
+                with os.scandir(str(thunderbird_root)) as entries:
+                    profile_dirs = [Path(e.path) for e in entries if e.is_dir()]
+            except PermissionError as e:
+                logger.warning(
+                    "%s",
+                    _permission_denied_message(
+                        "Thunderbird profiles", thunderbird_root, e
+                    ),
+                )
+                continue
+            except OSError as e:
+                logger.debug(
+                    "Cannot list Thunderbird profiles in %s: %s", thunderbird_root, e
+                )
+                continue
+
+            for profile_dir in profile_dirs:
+                prefs_path = profile_dir / "prefs.js"
                 if not prefs_path.exists():
                     continue
-
                 try:
                     content = prefs_path.read_text(encoding="utf-8", errors="replace")
-                    for match in email_pref_pattern.finditer(content):
-                        email = match.group(1).lower().strip()
-                        if email in seen_emails:
-                            continue
-                        seen_emails.add(email)
+                except PermissionError as e:
+                    logger.warning(
+                        "%s",
+                        _permission_denied_message(
+                            "Thunderbird preferences", prefs_path, e
+                        ),
+                    )
+                    continue
+                except (OSError, UnicodeDecodeError) as e:
+                    logger.debug("Failed to read %s: %s", prefs_path, e)
+                    continue
 
-                        domain = email.split("@")[1] if "@" in email else "unknown"
-                        provider = domain.split(".")[0]
+                for match in email_pref_pattern.finditer(content):
+                    self._append_email_fact(
+                        match.group(1), seen_emails, results, "Thunderbird"
+                    )
 
-                        results.append(
-                            _make_fact(
-                                content=f"Email account: {email} (Thunderbird)",
-                                context="unclassified",
-                                entity=f"service:{provider}",
-                                sensitive=True,
-                            )
-                        )
-                except (OSError, UnicodeDecodeError):
-                    pass
-        except (PermissionError, OSError):
-            pass
+    def _scan_apple_mail(self, seen_emails: set, results: List[Dict]) -> None:
+        """Scan Apple Mail's account plists for configured addresses.
+
+        Reads ``~/Library/Mail/V*/MailData/Accounts.plist`` plus the Mail
+        preferences plist in both its pre-Catalina and containerized locations.
+        ``~/Library/Mail`` is protected by macOS TCC, so a denial is reported
+        with the remedy.
+
+        Args:
+            seen_emails: Addresses already recorded; mutated in place.
+            results: Fact list to append to; mutated in place.
+        """
+        # Enumerate with scandir, not Path.glob: glob SWALLOWS PermissionError
+        # and yields nothing, which is exactly the silent-empty result this
+        # scanner exists to avoid on a Mac without Full Disk Access.
+        plist_paths: List[Path] = []
+        mail_dir = self._home / "Library" / "Mail"
+        if mail_dir.is_dir():
+            try:
+                with os.scandir(str(mail_dir)) as entries:
+                    version_dirs = [
+                        Path(e.path)
+                        for e in entries
+                        if e.is_dir() and e.name.startswith("V")
+                    ]
+            except PermissionError as e:
+                logger.warning(
+                    "%s", _permission_denied_message("Apple Mail accounts", mail_dir, e)
+                )
+                version_dirs = []
+            except OSError as e:
+                logger.debug("Cannot list Apple Mail data in %s: %s", mail_dir, e)
+                version_dirs = []
+
+            for version_dir in sorted(version_dirs):
+                accounts_plist = version_dir / "MailData" / "Accounts.plist"
+                if accounts_plist.exists():
+                    plist_paths.append(accounts_plist)
+
+        # Mail has been containerized since Catalina; the legacy location is
+        # kept for older systems.
+        prefs_candidates = (
+            self._home / "Library" / "Preferences" / "com.apple.mail.plist",
+            self._home
+            / "Library"
+            / "Containers"
+            / "com.apple.mail"
+            / "Data"
+            / "Library"
+            / "Preferences"
+            / "com.apple.mail.plist",
+        )
+        plist_paths.extend(path for path in prefs_candidates if path.exists())
+
+        for plist_path in plist_paths:
+            try:
+                with open(plist_path, "rb") as f:
+                    data = plistlib.load(f)
+            except PermissionError as e:
+                logger.warning(
+                    "%s",
+                    _permission_denied_message("Apple Mail accounts", plist_path, e),
+                )
+                continue
+            except (OSError, ValueError, plistlib.InvalidFileException) as e:
+                logger.debug("Failed to read Apple Mail plist %s: %s", plist_path, e)
+                continue
+
+            for email in _collect_plist_emails(data):
+                self._append_email_fact(email, seen_emails, results, "Apple Mail")
+
+    def _scan_evolution(self, seen_emails: set, results: List[Dict]) -> None:
+        """Scan Evolution account sources for configured addresses.
+
+        Evolution stores one INI file per account under
+        ``~/.config/evolution/sources/``; the address lives in
+        ``[Mail Identity] -> Address``.
+
+        Args:
+            seen_emails: Addresses already recorded; mutated in place.
+            results: Fact list to append to; mutated in place.
+        """
+        sources_dir = self._home / ".config" / "evolution" / "sources"
+        if not sources_dir.is_dir():
+            return
+
+        # scandir, not Path.glob — glob swallows PermissionError and would make
+        # an unreadable sources dir look like "no accounts configured".
+        try:
+            with os.scandir(str(sources_dir)) as entries:
+                source_paths = sorted(
+                    Path(e.path) for e in entries if e.name.endswith(".source")
+                )
+        except PermissionError as e:
+            logger.warning(
+                "%s", _permission_denied_message("Evolution accounts", sources_dir, e)
+            )
+            return
+        except OSError as e:
+            logger.debug("Cannot list Evolution sources in %s: %s", sources_dir, e)
+            return
+
+        for source_path in source_paths:
+            parser = configparser.ConfigParser(interpolation=None, strict=False)
+            try:
+                parser.read_string(
+                    source_path.read_text(encoding="utf-8", errors="replace")
+                )
+            except PermissionError as e:
+                logger.warning(
+                    "%s",
+                    _permission_denied_message("Evolution accounts", source_path, e),
+                )
+                continue
+            except (OSError, configparser.Error) as e:
+                logger.debug("Failed to parse Evolution source %s: %s", source_path, e)
+                continue
+
+            if not parser.has_section("Mail Identity"):
+                continue
+            address = parser["Mail Identity"].get("Address", "").strip()
+            if address:
+                self._append_email_fact(address, seen_emails, results, "Evolution")
 
     def _scan_outlook_registry(self, seen_emails: set, results: List[Dict]) -> None:
         """Scan Outlook registry keys for email account addresses."""
@@ -2917,6 +3749,8 @@ class SystemDiscovery:
         Returns:
             Dict mapping source name -> list of discovered fact dicts.
             Example: {"file_system": [...], "git_repos": [...], ...}
+            A source with no scanner for the running platform is logged by name
+            and mapped to an empty list, never silently omitted.
         """
         all_sources = [
             "file_system",
@@ -2965,6 +3799,9 @@ class SystemDiscovery:
         results: Dict[str, List[Dict]] = {}
 
         for source_name in sources:
+            if unsupported_reason(source_name):
+                results[source_name] = _log_unsupported(source_name)
+                continue
             scanner = scan_map.get(source_name)
             if scanner is None:
                 continue

@@ -33,6 +33,7 @@ Endpoints covered:
   DELETE /api/memory/all
 """
 
+import contextlib
 import sqlite3
 from unittest.mock import MagicMock, patch
 
@@ -1421,3 +1422,83 @@ class TestClearAllMemory:
         assert data["knowledge"] == 0
         assert data["tool_history"] == 0
         assert data["conversations"] == 0
+
+
+class TestStreamDiscoveryPlatformReporting:
+    """GET /api/memory/stream-discovery names sources it cannot run (#1956).
+
+    Before this, a Windows-only source on macOS streamed "Nothing found" — the
+    UI could not tell "you have none" from "GAIA cannot look here".
+    """
+
+    def _stream(self, client, tmp_path, platform, extra_patches=()):
+        """Run the discovery stream against an empty fake home on `platform`.
+
+        Hermetic on every host: the home is a temp dir, the system application
+        directories are emptied, and winreg is None so the win32 case cannot
+        reach a real registry when the suite runs on Windows.
+        """
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(patch("sys.platform", platform))
+            stack.enter_context(patch("pathlib.Path.home", return_value=tmp_path))
+            stack.enter_context(patch("gaia.agents.base.discovery._MACOS_APP_DIRS", ()))
+            stack.enter_context(
+                patch("gaia.agents.base.discovery._LINUX_DESKTOP_DIRS", ())
+            )
+            stack.enter_context(patch("gaia.agents.base.discovery.winreg", None))
+            for extra in extra_patches:
+                stack.enter_context(extra)
+            return client.get("/api/memory/stream-discovery")
+
+    def test_unsupported_source_is_reported_by_name(self, client, tmp_path):
+        """On darwin, windows_userassist streams an explicit unsupported log."""
+        resp = self._stream(client, tmp_path, "darwin")
+        body = resp.text
+
+        assert resp.status_code == 200
+        skipped = [
+            line
+            for line in body.splitlines()
+            if "windows_userassist" in line and "no scanner" in line
+        ]
+        assert skipped, (
+            "windows_userassist must be reported as unsupported on darwin, "
+            f"not silently empty. Body was:\n{body}"
+        )
+        assert '"type": "log"' in skipped[0]
+        assert "darwin" in skipped[0]
+        assert '"type": "done"' in body
+
+    def test_supported_source_is_not_reported_as_unsupported(self, client, tmp_path):
+        """macos_app_usage has a darwin branch, so it must still be scanned."""
+        mock_macos = patch(
+            "gaia.agents.base.discovery.SystemDiscovery.scan_macos_app_usage",
+            return_value=[],
+        )
+        resp = self._stream(client, tmp_path, "darwin", extra_patches=[mock_macos])
+        body = resp.text
+
+        skipped = [
+            line
+            for line in body.splitlines()
+            if "macos_app_usage" in line and "no scanner" in line
+        ]
+        assert not skipped, f"macos_app_usage must run on darwin. Body:\n{body}"
+        # Guard against a vacuous pass: the source must actually have been run.
+        assert "App usage frequency (macOS)" in body
+        assert '"type": "done"' in body
+
+    def test_macos_app_usage_is_reported_as_unsupported_on_windows(
+        self, client, tmp_path
+    ):
+        """The mirror case: the macOS-only source is named when off darwin."""
+        resp = self._stream(client, tmp_path, "win32")
+        body = resp.text
+
+        skipped = [
+            line
+            for line in body.splitlines()
+            if "macos_app_usage" in line and "no scanner" in line
+        ]
+        assert skipped, f"macos_app_usage must be named on win32. Body:\n{body}"
+        assert "win32" in skipped[0]
