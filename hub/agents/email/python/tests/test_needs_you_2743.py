@@ -30,8 +30,8 @@ pytest.importorskip("gaia_agent_email")
 from gaia_agent_email.config import DEFAULT_INBOX_SCAN_MESSAGES  # noqa: E402
 from gaia_agent_email.contract import NeedsYouItem  # noqa: E402
 from gaia_agent_email.tools.read_tools import (  # noqa: E402
-    FILTER_TEST_FYI,
-    FILTER_TEST_PROMOTIONAL,
+    FILTER_TEST_NO_DEADLINE_SIGNAL,
+    FILTER_TEST_NO_DIRECT_QUESTION,
     NEEDS_YOU_CAP,
     _build_needs_you_view,
     merge_pre_scan_backends,
@@ -292,7 +292,7 @@ class TestBulkFilterTests:
         out = pre_scan_inbox_impl(gmail, max_messages=10)
         assert out["bulk"]["count"] > 0
         assert out["bulk"]["filter_tests"], "filter_tests must be non-empty when count > 0"
-        assert FILTER_TEST_PROMOTIONAL in out["bulk"]["filter_tests"]
+        assert FILTER_TEST_NO_DIRECT_QUESTION in out["bulk"]["filter_tests"]
 
     def test_bulk_count_zero_and_no_filter_tests_when_nothing_filtered(self):
         gmail = FakeGmailBackend(user_email="me@example.com")
@@ -305,12 +305,12 @@ class TestBulkFilterTests:
         assert out["bulk"]["count"] == 0
         assert out["bulk"]["filter_tests"] == []
 
-    def test_updates_label_maps_to_fyi_filter_test(self):
+    def test_updates_label_maps_to_no_deadline_signal_filter_test(self):
         gmail = FakeGmailBackend(user_email="me@example.com")
         gmail.add_message(_msg("update-1", label_ids=["INBOX", "CATEGORY_UPDATES"]))
         out = pre_scan_inbox_impl(gmail, max_messages=10, include_informational=True)
         assert out["bulk"]["count"] > 0
-        assert FILTER_TEST_FYI in out["bulk"]["filter_tests"]
+        assert FILTER_TEST_NO_DEADLINE_SIGNAL in out["bulk"]["filter_tests"]
 
 
 class TestMergeAcrossBackendsRenumbers:

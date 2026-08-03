@@ -67,8 +67,10 @@ def _needs_review_item(r: Mapping[str, Any], provider: Optional[str]) -> Dict[st
         "thread_id": r.get("thread_id"),
         "sender": r.get("from", ""),
         "subject": r.get("subject", ""),
-        "why": r.get("rationale")
-        or "the heuristic was not confident about this message's category",
+        # #2744 (this module's half): a plain fact the user can read
+        # unassisted, never a description of the classifier's own
+        # confidence state.
+        "why": r.get("rationale") or "Not sure how to categorize this one",
     }
     if provider:
         item["mailbox"] = provider

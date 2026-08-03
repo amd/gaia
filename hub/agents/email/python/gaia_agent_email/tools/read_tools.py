@@ -950,19 +950,15 @@ def _apply_session_preferences(
         return out
     if sender_addr and sender_addr in priority_senders:
         out["preference_applied"] = "priority_sender"
-        out["rationale"] = (
-            f"priority sender (session preference): {sender_addr} -- "
-            "raises salience only, category unchanged (content "
-            f"classified it {decision.get('category')}: "
-            f"{decision.get('rationale', '')})"
-        )
+        # #2744 (this module's half): a fact about the message and the
+        # sender, never the classifier's own bookkeeping language.
+        out["rationale"] = f"From a priority sender · {decision.get('rationale', '')}"
     elif sender_addr and sender_addr in low_priority_senders:
         out["category"] = CATEGORY_PROMOTIONAL
         out["confident"] = True
         out["preference_applied"] = "low_priority_sender"
         out["rationale"] = (
-            f"low-priority sender (session preference): {sender_addr} "
-            f"[heuristic said: {decision.get('rationale', '')}]"
+            f"From a low-priority sender · {decision.get('rationale', '')}"
         )
     return out
 
@@ -1285,11 +1281,12 @@ def triage_inbox_impl(
                 "is_spam": heuristic.is_spam,
                 "is_phishing": heuristic.is_phishing,
                 "confident": heuristic.confident and not force_llm,
-                "rationale": (
-                    f"forced LLM bypass (was: {heuristic.reason})"
-                    if force_llm and heuristic.confident
-                    else heuristic.reason
-                ),
+                # #2744 (this module's half): force_llm re-runs the LLM
+                # regardless of heuristic confidence, but that's internal
+                # pipeline state the user has no reason to know about —
+                # the heuristic's own reason is still an accurate fact
+                # about the message either way.
+                "rationale": heuristic.reason,
                 "source": "heuristic",
                 # Epoch-millis string (Gmail-native; #2584 — used by pre-scan
                 # to order the needs_review bucket newest-first). Not part of
@@ -1334,10 +1331,12 @@ def triage_inbox_impl(
                     decision["category"] = slm["category"]
                     decision["confident"] = True
                     decision["source"] = "slm"
-                    decision["rationale"] = (
-                        f"SLM classified as {slm['category']} "
-                        f"(heuristic said: {heuristic.reason})"
-                    )
+                    # #2744 (this module's half): the heuristic's own
+                    # reason describes why IT was unconfident, not why the
+                    # SLM chose this category — restating it here would
+                    # read as contradicting the confident verdict, so it
+                    # is dropped rather than reworded.
+                    decision["rationale"] = f"SLM classified as {slm['category']}"
                     if slm.get("confidence") is not None:
                         decision["slm_confidence"] = slm["confidence"]
 
@@ -1467,12 +1466,18 @@ NEEDS_YOU_CAP = 5
 # Filter-test ids for BulkSummary.filter_tests (#2743) — ids, never prose
 # (see contract.py's NeedsYouItem/BulkSummary docstrings): a renderer maps
 # each id to a sentence, so a description can't silently go stale the
-# moment the routing below changes. Named after the actual routing branch
-# in ``pre_scan_inbox_impl`` that put a message into the filtered remainder.
-FILTER_TEST_PROMOTIONAL = "category_promotional"
-FILTER_TEST_FYI = "category_fyi"
-FILTER_TEST_PERSONAL = "category_personal"
-FILTER_TEST_ARCHIVE_PREFERENCE = "session_archive_preference"
+# moment the routing below changes.
+#
+# Named after the QUESTION asked of the message, not the category it
+# landed in (checkpoint review, #2743 redirect): "category_promotional"
+# just relabels the bare count with an unchallengeable tag; "no
+# direct question" is falsifiable — it invites "what about a receipt
+# over $500?", which is the user checking the agent's work, the entire
+# point of naming the test instead of the bucket.
+FILTER_TEST_NO_DIRECT_QUESTION = "no_direct_question"
+FILTER_TEST_NO_DEADLINE_SIGNAL = "no_deadline_signal"
+FILTER_TEST_NO_MEETING_PROPOSAL = "no_meeting_proposal"
+FILTER_TEST_MATCHED_ARCHIVE_PREFERENCE = "matched_your_archive_preference"
 
 # Plain INBOX — read AND unread mail (#2638). Previously ["INBOX", "UNREAD"],
 # on the rationale that narrowing to unread-only made the listing query's
@@ -1971,7 +1976,7 @@ def pre_scan_inbox_impl(
                     )
                 else:
                     suggested_archives.append({**base, "reason": why})
-                    filter_test_ids.add(FILTER_TEST_PROMOTIONAL)
+                    filter_test_ids.add(FILTER_TEST_NO_DIRECT_QUESTION)
             else:
                 # FYI and PERSONAL share the keep / no-action bucket when
                 # confident; unconfident goes to needs_review instead (the
@@ -1986,9 +1991,9 @@ def pre_scan_inbox_impl(
                 else:
                     informational.append({**base, "why": why})
                     filter_test_ids.add(
-                        FILTER_TEST_FYI
+                        FILTER_TEST_NO_DEADLINE_SIGNAL
                         if category == CATEGORY_FYI
-                        else FILTER_TEST_PERSONAL
+                        else FILTER_TEST_NO_MEETING_PROPOSAL
                     )
 
         needs_review_ranked.sort(key=lambda pair: pair[0])
@@ -2002,7 +2007,7 @@ def pre_scan_inbox_impl(
         # silently archived by a stale category preference.
         if category_defaults.get(CATEGORY_FYI) == "archive":
             if informational:
-                filter_test_ids.add(FILTER_TEST_ARCHIVE_PREFERENCE)
+                filter_test_ids.add(FILTER_TEST_MATCHED_ARCHIVE_PREFERENCE)
             for item in informational:
                 suggested_archives.append(
                     {
