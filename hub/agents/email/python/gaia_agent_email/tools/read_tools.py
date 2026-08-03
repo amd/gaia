@@ -2830,6 +2830,12 @@ class ReadToolsMixin:
                     calendar_backend=getattr(agent, "_calendar", None),
                     debug=debug_flag,
                 )
+                # #2745 — this is the ONE place the agent's "current card"
+                # is updated (never pre_scan_inbox_impl directly, so a REST
+                # /prescan call or the scheduled briefing job never feed
+                # it): resolve_needs_you_reference resolves a positional
+                # reference ("reply to 1") against whatever is stored here.
+                agent._last_needs_you_card = envelope.get("needs_you", [])
                 return _envelope_ok(envelope)
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))
