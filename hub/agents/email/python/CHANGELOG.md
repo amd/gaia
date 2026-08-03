@@ -33,6 +33,36 @@ contract version is tracked separately as
 
 ### Added
 
+- **`pre_scan_inbox` now produces one triage worklist instead of two
+  disagreeing summary boxes (schema 2.11, #2743).** Triaging the inbox used
+  to draw a card from `pre_scan_inbox` and a separate, shallower attention
+  card from the TUI's own on-open scan — one scan run twice at different
+  depths, so the shallower box could confidently report "nothing needs you"
+  while the deeper one listed a message needing review. `EmailPreScanResult`
+  gains `needs_you` (`List[NeedsYouItem]`, capped at 5, ordered by kind then
+  oldest-first) and `bulk` (`Optional[BulkSummary]`): a deterministic VIEW
+  built ON TOP OF the already-classified `urgent`/`actionable`/`needs_review`
+  buckets plus the waiting-on-you detector and persisted action items —
+  never re-derived from raw scan results, so nothing those buckets already
+  caught can go missing from it. `bulk.filter_tests` carries opaque ids (never
+  prose) a renderer maps to a sentence, so "47 filtered" always names the
+  test that filtered it. For the agent-loop `pre_scan_inbox` tool call only
+  (the one surface with a live LLM to block on — the REST `/prescan` path
+  and the scheduled briefing job stay heuristic-only by design), each
+  surfaced item's `detail` (up to two lines) is filled with the real
+  substance: the question actually asked, the meeting time actually proposed
+  plus a COMPUTED calendar-conflict check (never a narrated verdict the tool
+  didn't compute — the #2571 precedent), or the deadline actually quoted.
+  Extracted `detail`/`due_hint` text is routed through and re-wrapped in the
+  same untrusted-input delimiters that cover a raw message body, since it
+  re-enters the calling agent's own tool-result context while that agent
+  holds archive/send/delete authority. Nothing existing was removed,
+  renamed, or relaxed from required to optional.
+- **The inbox-scan default is now owned in one place (#2743, closing the loop
+  #2643 started).** `config.DEFAULT_INBOX_SCAN_MESSAGES` (50) is now the
+  single source every scan-default call site imports instead of restating a
+  literal — including `detect_waiting_on_you`'s own `max_inbox`, which
+  previously carried its own, coincidentally-matching default.
 - **`scopes.py`/`outlook_scopes.py` gained `REQUIRED_SCOPES` (mail only) —
   the request/enforce split (#2730).** `ALL_SCOPES` (mail + calendar) is what
   every connect path requests at consent; `REQUIRED_SCOPES` is the narrower

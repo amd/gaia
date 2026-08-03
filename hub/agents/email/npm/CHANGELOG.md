@@ -6,6 +6,20 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## Unreleased
 
+- **One inbox triage card instead of two that disagreed.** Asking the agent
+  to triage your inbox used to draw two summary boxes from two separate scans
+  at different depths — one might say "nothing needs you" while the other,
+  five lines below, listed a message needing review. The card is now one
+  worklist (`needs_you`, schema 2.11) built from a single scan: up to five
+  things that genuinely need you, each tagged with what to do (reply, decide,
+  check, or a carried-over action item), how old it is, and — for those five
+  — a couple of lines of real substance instead of a bare category label: the
+  question actually asked, the meeting time actually proposed and whether
+  your calendar is free at that time, or the deadline actually quoted.
+  Everything filtered out is counted alongside the test that filtered it
+  (`bulk`), so a claim like "47 filtered" is something you can judge rather
+  than take on faith. `NeedsYouItem` / `BulkSummary` are new on
+  `EmailPreScanResult`; nothing existing was removed or renamed (#2743).
 - **Reconnecting your mailbox with no flags — the exact command GAIA's own
   error message told you to run — could silently wipe your permissions
   instead of fixing them.** A bare `gaia connectors connect google` (or the

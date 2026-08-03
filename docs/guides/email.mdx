@@ -179,6 +179,15 @@ Each row carries inline action buttons:
 
 If you haven't connected Google yet, the agent surfaces a one-click **Connect Google** button inline in the chat — no need to navigate to Settings → Connections manually.
 
+<Note>
+This is the **Agent UI** rendering of the pre-scan envelope. The terminal
+client (`tui/`) renders the same `email_pre_scan` data differently: one
+`needs_you` worklist (up to 5 rows, each tagged REPLY/DECIDE/CHECK/DO) plus a
+`bulk` line naming the test that filtered the rest, instead of the three
+sections above — see [`tui/README.md`](https://github.com/amd/gaia/blob/main/tui/README.md)
+for that surface. Both clients read the same contract; only the layout differs.
+</Note>
+
 ### Classification preferences (persist across restarts)
 
 Tell the agent how you want classification to behave:
@@ -518,7 +527,7 @@ isolated, and dogfoods the exact binary shipped to integrators.
 `GAIA_EMAIL_AGENT_MODE` only selects which *process* answers (`user` default /
 `dev`); there is no in-process fallback. Two surfaces run through it:
 
-- **The `/v1/email/*` REST surface** — the full schema-2.3 contract (init
+- **The `/v1/email/*` REST surface** — the full REST contract (schema 2.11; init
   readiness probe + provisioning, triage,
   batch triage, search, inbox pre-scan, scheduled daily briefing, draft/send +
   confirm — attachments included, archive/unarchive, quarantine/unquarantine,
@@ -549,7 +558,7 @@ from the one already running is a loud conflict (stop it first), never a silent
 restart.
 
 **Chat tool surface (in-app email agent):** the sidecar-backed chat agent exposes
-the tools the schema-2.3 REST contract serves today — inbox pre-scan, search,
+the tools the REST contract (schema 2.11) serves today — inbox pre-scan, search,
 calendar view, and archive + undo. Tools that have no REST route yet (labels,
 stars, mark-read, move, trash/delete, summarize, profile, preferences, forward,
 send, scheduled send / snooze) are not exposed in the chat agent until their
