@@ -1761,6 +1761,11 @@ def _run_prescan(backend, *, max_messages: int) -> dict:
     no LLM) classifier, so a pre-scan stays a cheap, deterministic sweep whose
     latency does not depend on model residency. ``POST /v1/email/triage`` is the
     REST surface where the classifiers apply.
+
+    ``action_db=resolve_action_db()`` (#2743 redirect) — the same lazily-built,
+    process-wide task-store handle ``get_attention_view`` already passes to
+    ``build_attention_view_impl`` — so a REST-driven pre-scan's ``needs_you``
+    folds in open action items the same way the attention view does.
     """
     from gaia_agent_email.tools.read_tools import (
         merge_pre_scan_backends,
@@ -1768,9 +1773,13 @@ def _run_prescan(backend, *, max_messages: int) -> dict:
     )
 
     if not isinstance(backend, _MultiMailboxPrescanBackend):
-        return pre_scan_inbox_impl(backend, max_messages=max_messages)
+        return pre_scan_inbox_impl(
+            backend, max_messages=max_messages, action_db=resolve_action_db()
+        )
 
-    merged = merge_pre_scan_backends(backend.backends, max_messages=max_messages)
+    merged = merge_pre_scan_backends(
+        backend.backends, max_messages=max_messages, action_db=resolve_action_db()
+    )
     # The frozen pre-scan contract's PreScanItem (extra="forbid") has no
     # per-item ``mailbox`` tag — that belongs to the agent-loop card's richer
     # shape. Drop it at this boundary so the consolidated envelope validates;

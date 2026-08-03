@@ -1051,6 +1051,9 @@ def test_briefing_conforms_to_spec(client, committed_spec, tmp_path, monkeypatch
     from gaia_agent_email.briefing import run_briefing_job
 
     class _FakeBackend:
+        def get_user_email(self) -> str:
+            return "me@example.com"
+
         def list_messages(self, **_):
             return {
                 "messages": [{"id": "m1", "threadId": "t-m1"}],
@@ -1063,6 +1066,7 @@ def test_briefing_conforms_to_spec(client, committed_spec, tmp_path, monkeypatch
                 "threadId": f"t-{message_id}",
                 "labelIds": ["INBOX", "CATEGORY_PROMOTIONS"],
                 "snippet": "",
+                "internalDate": "1700000000000",
                 "payload": {
                     "headers": [
                         {"name": "Subject", "value": "50% off this weekend!"},
@@ -1072,6 +1076,9 @@ def test_briefing_conforms_to_spec(client, committed_spec, tmp_path, monkeypatch
                     "body": {"data": ""},
                 },
             }
+
+        def get_thread(self, thread_id: str):
+            return {"id": thread_id, "messages": [self.get_message("m1")]}
 
     run_briefing_job(_FakeBackend(), max_messages=5)
 

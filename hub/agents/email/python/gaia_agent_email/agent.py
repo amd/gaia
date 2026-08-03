@@ -1475,6 +1475,12 @@ class EmailTriageAgent(
 
         ``include_informational`` (#2633) is forwarded to
         ``merge_pre_scan_backends`` — see that function's docstring.
+
+        ``action_db=self`` (#2743 redirect): the agent mixes in
+        ``DatabaseMixin`` and already IS the task-store handle everywhere
+        else in this package (``briefing_tools.list_tasks`` /
+        ``extract_action_items``), so open action items reach ``needs_you``
+        the same way they reach those tools.
         """
         from gaia_agent_email.tools.read_tools import merge_pre_scan_backends
 
@@ -1489,6 +1495,7 @@ class EmailTriageAgent(
             remember_mailbox=self._remember_message_mailbox,
             slm_classifier=self._slm_triage_classifier,
             slm_phishing_classifier=self._slm_phishing_classifier,
+            action_db=self,
         )
 
     # -- Full autonomy: observe -> decide -> act (#1115 / #557) -------------

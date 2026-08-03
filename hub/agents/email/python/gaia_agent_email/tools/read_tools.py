@@ -1601,16 +1601,103 @@ def needs_review_decision(r: Mapping[str, Any]) -> bool:
     return not r.get("confident", True)
 
 
-# kind priority for needs_you ordering (#2743): waiting-on-you/needs-response
-# first, then meeting proposals, then needs-review, then carried-over action
-# items — matches the published ``AttentionItemKind`` values so a renderer
-# never has to special-case a string it doesn't recognize.
+# kind priority for needs_you ordering (#2743 redirect): a category-confirmed
+# URGENT message sits above every other signal; the waiting-on-you detector
+# (a thread genuinely awaiting reply, sometimes for days) sits above a
+# proposed meeting or an ordinary actionable ask; needs_review (the heuristic
+# wasn't confident) and action_item (a task the user already triaged once,
+# carried over) trail everything else. Matches the published
+# ``AttentionItemKind`` values so a renderer never has to special-case a
+# string it doesn't recognize.
 _NEEDS_YOU_KIND_ORDER = {
-    "waiting_on_you": 0,
-    "meeting_request": 1,
-    "needs_review": 2,
-    "action_item": 3,
+    "urgent": 0,
+    "waiting_on_you": 1,
+    "meeting_request": 2,
+    "needs_response": 3,
+    "needs_review": 4,
+    "action_item": 5,
 }
+
+# One day in epoch milliseconds — synthesizes an approximate ``internal_date``
+# for a needs_you candidate whose source only gives an age in days rather
+# than a millisecond timestamp (waiting-on-you detections, #2743 redirect).
+_NEEDS_YOU_DAY_MS = 24 * 60 * 60 * 1000
+
+
+def _needs_you_waiting_on_you_candidate(
+    w: Mapping[str, Any], *, now_ms: int
+) -> Dict[str, Any]:
+    """One ``detect_waiting_on_you_impl`` row -> a needs_you candidate dict.
+
+    Mirrors ``attention_tools._waiting_on_you_item``'s field shape (#2743
+    redirect: reusing that call shape without calling
+    ``build_attention_view_impl`` itself, which would reintroduce the second
+    aggregation pass this design exists to eliminate). Only ``age_days`` is
+    available (not a millisecond timestamp), so ``internal_date`` is
+    synthesized from it — accurate to the day, which is all the source data
+    supports.
+    """
+    age_days = w.get("age_days") or 0
+    return {
+        "kind": "waiting_on_you",
+        "message_id": w.get("message_id"),
+        "thread_id": w.get("thread_id"),
+        "sender": w.get("sender", ""),
+        "subject": w.get("subject", ""),
+        "internal_date": now_ms - int(age_days) * _NEEDS_YOU_DAY_MS,
+        "why": f"waiting {age_days}d on your reply",
+    }
+
+
+def _needs_you_action_item_candidate(task: Mapping[str, Any]) -> Dict[str, Any]:
+    """One persisted ``task_store`` row -> a needs_you candidate dict (#2743
+    redirect).
+
+    Mirrors ``attention_tools._action_item``'s field shape. ``message_id``
+    can be ``None`` for a task carried from a prior triage with no
+    recoverable source message (``NeedsYouItem.message_id`` documents this
+    explicitly) — never dropped or defaulted to a placeholder id.
+    """
+    created_at = task.get("created_at")
+    return {
+        "kind": "action_item",
+        "message_id": task.get("message_id"),
+        "thread_id": None,
+        "sender": "",
+        "subject": task.get("description", ""),
+        "internal_date": int(created_at * 1000) if created_at else None,
+        "why": "open action item from a previous triage",
+        "due_hint": task.get("due_hint"),
+    }
+
+
+def _finalize_needs_you_item(
+    candidate: Mapping[str, Any], *, ref: int, now_ms: int
+) -> Dict[str, Any]:
+    """Turn one ordered candidate dict into the final ``NeedsYouItem`` shape.
+
+    ``age_seconds`` is computed here, uniformly, from the working-only
+    ``internal_date`` field every candidate carries by this point (never
+    part of the public contract, see ``_drop_internal_date`` below) — the
+    ONE place this computation happens, so a merge-level candidate (added
+    after a per-backend view is already built, see
+    ``merge_pre_scan_backends``) gets the identical treatment.
+    """
+    internal_date = _parse_epoch_millis(candidate.get("internal_date"))
+    age_seconds = max(0, (now_ms - internal_date) // 1000) if internal_date else None
+    return {
+        "ref": ref,
+        "kind": candidate["kind"],
+        "message_id": candidate.get("message_id"),
+        "thread_id": candidate.get("thread_id"),
+        "sender": candidate.get("sender", ""),
+        "subject": candidate.get("subject", ""),
+        "age_seconds": age_seconds,
+        "why": candidate.get("why") or candidate.get("reason") or "",
+        "detail": [],
+        "due_hint": candidate.get("due_hint"),
+        "mailbox": candidate.get("mailbox"),
+    }
 
 
 def _build_needs_you_view(
@@ -1618,27 +1705,73 @@ def _build_needs_you_view(
     urgent: List[Dict[str, Any]],
     actionable: List[Dict[str, Any]],
     needs_review: List[Dict[str, Any]],
+    waiting_on_you: Optional[List[Dict[str, Any]]] = None,
+    action_items: Optional[List[Dict[str, Any]]] = None,
     cap: int = NEEDS_YOU_CAP,
 ) -> Dict[str, Any]:
     """Build the ``needs_you`` worklist as a VIEW over already-classified
-    buckets — never a second, independent classification pass (#2743
-    Adversarial Reflection #1: urgent mail must never vanish because this
-    view re-derived from raw scan results and missed it).
+    buckets PLUS the waiting-on-you detector and persisted action items —
+    never a second, independent classification pass (#2743 Adversarial
+    Reflection #1: urgent mail must never vanish because this view
+    re-derived from raw scan results and missed it).
 
-    Every ``urgent``/``actionable`` item is tagged ``waiting_on_you`` unless
-    its heuristic already flagged ``is_meeting_request``, in which case it's
-    tagged ``meeting_request`` instead; every ``needs_review`` item is tagged
-    ``needs_review``. Ordered by kind (see ``_NEEDS_YOU_KIND_ORDER``), then
-    oldest-first within a kind (mirrors ``_needs_review_sort_key``), then
-    capped at ``cap`` — ``needs_you_total`` carries the true pre-cap count so
-    a renderer can say "N of M" honestly rather than silently truncating.
+    Every ``urgent`` item is tagged ``urgent`` and every ``actionable`` item
+    ``needs_response``, unless the heuristic already flagged
+    ``is_meeting_request``, in which case it's tagged ``meeting_request``
+    instead; every ``needs_review`` item is tagged ``needs_review``. These
+    three are category classifications — never the detector's own
+    ``waiting_on_you`` value (#2743 redirect: the initial cut mislabeled
+    them that way, which collided with the detector's real meaning the
+    moment its output was wired in below).
+
+    ``waiting_on_you`` (raw ``detect_waiting_on_you_impl`` rows) and
+    ``action_items`` (raw ``task_store.list_tasks`` rows) carry NO category
+    bucket of their own, so each is appended only when its ``message_id``
+    isn't already present above — a message the detector also flags, or a
+    task tied to a message already surfaced by category, must never
+    double-count as two rows.
+
+    Ordered by kind (see ``_NEEDS_YOU_KIND_ORDER``), then oldest-first
+    within a kind (mirrors ``_needs_review_sort_key``), then capped at
+    ``cap`` — ``needs_you_total`` carries the true pre-cap count so a
+    renderer can say "N of M" honestly rather than silently truncating.
     """
+    now_ms = int(time.time() * 1000)
     candidates: List[Dict[str, Any]] = []
-    for item in (*urgent, *actionable):
-        kind = "meeting_request" if item.get("is_meeting_request") else "waiting_on_you"
+    seen_message_ids: set = set()
+
+    def _remember(mid: Optional[str]) -> None:
+        if mid:
+            seen_message_ids.add(mid)
+
+    for item in urgent:
+        kind = "meeting_request" if item.get("is_meeting_request") else "urgent"
         candidates.append({**item, "kind": kind})
+        _remember(item.get("message_id"))
+    for item in actionable:
+        kind = (
+            "meeting_request" if item.get("is_meeting_request") else "needs_response"
+        )
+        candidates.append({**item, "kind": kind})
+        _remember(item.get("message_id"))
     for item in needs_review:
         candidates.append({**item, "kind": "needs_review"})
+        _remember(item.get("message_id"))
+
+    for w in waiting_on_you or []:
+        candidate = _needs_you_waiting_on_you_candidate(w, now_ms=now_ms)
+        mid = candidate.get("message_id")
+        if mid and mid in seen_message_ids:
+            continue
+        candidates.append(candidate)
+        _remember(mid)
+    for task in action_items or []:
+        candidate = _needs_you_action_item_candidate(task)
+        mid = candidate.get("message_id")
+        if mid and mid in seen_message_ids:
+            continue
+        candidates.append(candidate)
+        _remember(mid)
 
     candidates.sort(
         key=lambda c: (
@@ -1648,26 +1781,10 @@ def _build_needs_you_view(
     )
 
     total = len(candidates)
-    now_ms = int(time.time() * 1000)
-    needs_you: List[Dict[str, Any]] = []
-    for ref, c in enumerate(candidates[: max(0, cap)], start=1):
-        internal_date = _parse_epoch_millis(c.get("internal_date"))
-        age_seconds = max(0, (now_ms - internal_date) // 1000) if internal_date else None
-        needs_you.append(
-            {
-                "ref": ref,
-                "kind": c["kind"],
-                "message_id": c.get("message_id"),
-                "thread_id": c.get("thread_id"),
-                "sender": c.get("sender", ""),
-                "subject": c.get("subject", ""),
-                "age_seconds": age_seconds,
-                "why": c.get("why") or c.get("reason") or "",
-                "detail": [],
-                "due_hint": c.get("due_hint"),
-                "mailbox": c.get("mailbox"),
-            }
-        )
+    needs_you = [
+        _finalize_needs_you_item(c, ref=ref, now_ms=now_ms)
+        for ref, c in enumerate(candidates[: max(0, cap)], start=1)
+    ]
     return {"needs_you": needs_you, "needs_you_total": total}
 
 
@@ -1709,6 +1826,7 @@ def pre_scan_inbox_impl(
     slm_classifier: Optional[Callable[..., Optional[Mapping[str, Any]]]] = None,
     slm_phishing_classifier: Optional[Callable[..., Optional[bool]]] = None,
     include_informational: bool = False,
+    action_db: Any = None,
     debug: bool = False,
 ) -> Dict[str, Any]:
     """Pre-scan the inbox for the chat surface.
@@ -1757,6 +1875,15 @@ def pre_scan_inbox_impl(
     generation. Returning the field with a stable shape lets the frontend
     schema lock in now and lets the backend fill it later without a
     breaking change.
+
+    ``needs_you`` (#2743 redirect) also runs a waiting-on-you sub-scan of
+    this SAME mailbox at this SAME depth (``max_messages``) — never the
+    ``waiting_on_you_tools`` module's own, independently-set default — so a
+    REPLY row is trustworthy to the same scan depth the coverage line
+    claims. ``action_db``, when given, is an optional ``DatabaseMixin``
+    handle (see ``gaia_agent_email.task_store``) whose open tasks are folded
+    in too; omit it and the action_item signal is simply absent — this
+    function never fails because the task store wasn't wired in.
     """
     prefs = session_preferences or {}
     category_defaults = prefs.get("category_defaults") or {}
@@ -1889,12 +2016,38 @@ def pre_scan_inbox_impl(
                 )
             informational = []
 
+        # #2743 redirect: waiting-on-you detections and persisted action
+        # items carry no category bucket of their own — reuses
+        # ``build_attention_view_impl``'s call shape (never calls it, which
+        # would reintroduce the second aggregation pass this design exists
+        # to eliminate). Local import: read_tools sits below
+        # waiting_on_you_tools in this package's own import graph (the
+        # latter imports FROM read_tools), so a module-level import here
+        # would be circular.
+        from gaia_agent_email.tools.waiting_on_you_tools import (
+            detect_waiting_on_you_impl,
+        )
+
+        waiting_on_you = detect_waiting_on_you_impl(
+            gmail, max_inbox=max_messages, debug=debug
+        )["waiting_on_you"]
+        action_items: List[Dict[str, Any]] = []
+        if action_db is not None:
+            from gaia_agent_email import task_store
+
+            action_items = task_store.list_tasks(action_db, status="open")
+
         # #2743: needs_you is a VIEW over the just-built urgent/actionable/
-        # needs_review — built from the TRUE (pre-cap) lists so a message
-        # dropped by an unrelated per-section cap can never silently miss
-        # this view. Computed BEFORE stripping ``internal_date`` below.
+        # needs_review buckets plus the two signals above — built from the
+        # TRUE (pre-cap) lists so a message dropped by an unrelated
+        # per-section cap can never silently miss this view. Computed
+        # BEFORE stripping ``internal_date`` below.
         needs_you_view = _build_needs_you_view(
-            urgent=urgent, actionable=actionable, needs_review=needs_review
+            urgent=urgent,
+            actionable=actionable,
+            needs_review=needs_review,
+            waiting_on_you=waiting_on_you,
+            action_items=action_items,
         )
         # bulk is the filtered informational/promotional remainder, computed
         # AFTER the archive-preference promotion above so it reflects what
@@ -1975,6 +2128,7 @@ def merge_pre_scan_backends(
     remember_mailbox: Optional[Callable[[Optional[str], str], None]] = None,
     slm_classifier: Optional[Callable[..., Optional[Mapping[str, Any]]]] = None,
     slm_phishing_classifier: Optional[Callable[..., Optional[bool]]] = None,
+    action_db: Any = None,
 ) -> Dict[str, Any]:
     """Pre-scan every connected mailbox, tag each item, merge under budget.
 
@@ -2001,6 +2155,12 @@ def merge_pre_scan_backends(
     list is tagged with ``mailbox`` the same way the other four sections are.
     ``slm_classifier`` / ``slm_phishing_classifier`` are forwarded the same
     way when the agent has the SLM classifiers loaded.
+
+    ``action_db`` (#2743 redirect) is deliberately NOT forwarded to the
+    per-backend ``pre_scan_inbox_impl`` calls below — persisted tasks aren't
+    mailbox-scoped, so passing it to every backend would fold the SAME open
+    tasks into the merge N times. It is queried exactly once, after the
+    loop, mirroring ``build_attention_view_impl``'s own post-loop union.
     """
     prefs = session_preferences
     provider_backends = list(backends.items())
@@ -2099,6 +2259,31 @@ def merge_pre_scan_backends(
             total_inbox_unknown = True
         else:
             total_inbox += int(backend_total_inbox)
+
+    # Tasks aren't mailbox-scoped (#2743 redirect) — queried once here,
+    # never per-backend above, mirroring build_attention_view_impl's own
+    # post-loop union. Still deduped against every candidate already
+    # collected: a task tied to a message some backend already surfaced
+    # under its category kind must not double-count as a second row.
+    if action_db is not None:
+        from gaia_agent_email import task_store
+
+        now_ms = int(time.time() * 1000)
+        seen_message_ids = {
+            c.get("message_id") for c in needs_you_candidates if c.get("message_id")
+        }
+        for task in task_store.list_tasks(action_db, status="open"):
+            candidate = _needs_you_action_item_candidate(task)
+            mid = candidate.get("message_id")
+            if mid and mid in seen_message_ids:
+                continue
+            needs_you_candidates.append(
+                _finalize_needs_you_item(candidate, ref=0, now_ms=now_ms)
+            )
+            if mid:
+                seen_message_ids.add(mid)
+            needs_you_total += 1
+
     result = {
         "kind": "email_pre_scan",
         "urgent": urgent[: max(0, PRE_SCAN_URGENT_CAP)],

@@ -44,13 +44,20 @@ def _isolate_home(tmp_path, monkeypatch):
 
 
 def _gmail_message(
-    msg_id: str, *, subject: str, sender: str, label_ids: list[str], snippet: str = ""
+    msg_id: str,
+    *,
+    subject: str,
+    sender: str,
+    label_ids: list[str],
+    snippet: str = "",
+    internal_date: str = "1700000000000",
 ) -> dict:
     return {
         "id": msg_id,
         "threadId": f"t-{msg_id}",
         "labelIds": label_ids,
         "snippet": snippet,
+        "internalDate": internal_date,
         "payload": {
             "headers": [
                 {"name": "Subject", "value": subject},
@@ -63,11 +70,18 @@ def _gmail_message(
 
 
 class _FakeBackend:
-    """In-memory backend exposing the read calls pre_scan_inbox_impl uses."""
+    """In-memory backend exposing the read calls pre_scan_inbox_impl uses —
+    including the waiting-on-you sub-scan it runs internally (#2743
+    redirect): ``get_user_email`` and ``get_thread``, plus every message
+    carrying a real ``internalDate`` (``_timestamp_ms`` fails loudly on a
+    missing one)."""
 
     def __init__(self, messages: list[dict]):
         self._messages = {m["id"]: m for m in messages}
         self.list_calls = 0
+
+    def get_user_email(self) -> str:
+        return "me@example.com"
 
     def list_messages(self, *, label_ids=None, max_results=25, **_):  # noqa: ANN001
         self.list_calls += 1
@@ -81,6 +95,14 @@ class _FakeBackend:
 
     def get_message(self, message_id: str) -> dict:
         return self._messages[message_id]
+
+    def get_thread(self, thread_id: str) -> dict:
+        return {
+            "id": thread_id,
+            "messages": [
+                m for m in self._messages.values() if m["threadId"] == thread_id
+            ],
+        }
 
 
 def _fake_backend() -> _FakeBackend:

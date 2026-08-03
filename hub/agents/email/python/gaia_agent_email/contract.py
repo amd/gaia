@@ -124,14 +124,18 @@ CATEGORY_PERSONAL = "PERSONAL"
 # 2.11 is additive over 2.10 (#2743): EmailPreScanResult gains ``needs_you``
 # (List[NeedsYouItem]), ``needs_you_total`` (int), and ``bulk``
 # (Optional[BulkSummary]) — a single worklist view built ON TOP OF the
-# already-classified urgent/actionable/needs_review buckets (never
-# re-derived from raw scan results), so the pre-scan card can tell the user
-# what to do instead of what was classified. ``NeedsYouItem.kind`` reuses
-# the published ``AttentionItemKind`` enum rather than a new one.
-# ``BulkSummary.filter_tests`` carries opaque ids (never prose) that a
-# renderer maps to a sentence, so a filter description can't silently go
-# stale when the underlying heuristic changes. No existing field changed,
-# so 2.10 consumers keep working (additive MINOR).
+# already-classified urgent/actionable/needs_review buckets PLUS the
+# waiting-on-you detector and persisted action items (neither of which has
+# a category bucket of its own, so both were invisible until this view
+# folded them in), never re-derived from raw scan results, so the pre-scan
+# card can tell the user what to do instead of what was classified.
+# ``NeedsYouItem.kind`` reuses the published ``AttentionItemKind`` enum
+# (extended with ``URGENT``/``NEEDS_RESPONSE`` so a category bucket is never
+# mislabeled as the detector's own ``WAITING_ON_YOU`` signal) rather than a
+# new one. ``BulkSummary.filter_tests`` carries opaque ids (never prose)
+# that a renderer maps to a sentence, so a filter description can't
+# silently go stale when the underlying heuristic changes. No existing
+# field changed, so 2.10 consumers keep working (additive MINOR).
 SCHEMA_VERSION = "2.11"
 
 # Maximum number of items in a single batch request. Protects the single-tenant
@@ -1393,23 +1397,35 @@ class AttentionItemKind(str, Enum):
     ``NeedsYouItem.kind`` — which reuses this enum rather than a parallel
     verb enum — resolves eagerly instead of as a class-body-time forward
     reference; see the ATTENTION VIEW section's comment for why that matters.
+
+    ``URGENT`` / ``NEEDS_RESPONSE`` were added after the initial #2743 cut:
+    ``needs_you`` originally tagged every category-classified item
+    ``WAITING_ON_YOU``, which collided with that value's real, published
+    meaning (the waiting-on-you *detector* found a thread awaiting reply) the
+    moment the detector's own output was wired into the same view. ``kind``
+    is pure provenance — which signal put this row here — never a verb; the
+    REPLY/DECIDE/CHECK label a renderer shows is a render-time lookup.
     """
 
     MEETING_REQUEST = "meeting_request"
     WAITING_ON_YOU = "waiting_on_you"
     NEEDS_REVIEW = "needs_review"
     ACTION_ITEM = "action_item"
+    URGENT = "urgent"
+    NEEDS_RESPONSE = "needs_response"
 
 
 class NeedsYouItem(_Strict):
     """One thing a human must act on (#2743) — a VIEW over the already-
-    classified urgent/actionable/needs_review buckets, never re-derived from
-    raw scan results (see the module's 2.11 changelog entry above).
+    classified urgent/actionable/needs_review buckets PLUS the waiting-on-you
+    detector and persisted action items, never re-derived from raw scan
+    results (see the module's 2.11 changelog entry above).
 
     ``kind`` reuses the published :class:`AttentionItemKind` rather than a
     parallel verb enum — the renderer maps ``kind`` to a verb label
     (REPLY/DECIDE/CHECK) at render time; the wire only carries the source
-    signal.
+    signal, so a category-classified item is never mislabeled with the
+    detector's own ``waiting_on_you`` value.
     """
 
     ref: int = Field(

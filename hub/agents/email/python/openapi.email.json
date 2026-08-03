@@ -242,12 +242,14 @@
         "type": "object"
       },
       "AttentionItemKind": {
-        "description": "Why one attention-view item is here — the source signal it came from.\n\nDefined here (ahead of the ATTENTION VIEW section below, #2743) so\n``NeedsYouItem.kind`` — which reuses this enum rather than a parallel\nverb enum — resolves eagerly instead of as a class-body-time forward\nreference; see the ATTENTION VIEW section's comment for why that matters.",
+        "description": "Why one attention-view item is here — the source signal it came from.\n\nDefined here (ahead of the ATTENTION VIEW section below, #2743) so\n``NeedsYouItem.kind`` — which reuses this enum rather than a parallel\nverb enum — resolves eagerly instead of as a class-body-time forward\nreference; see the ATTENTION VIEW section's comment for why that matters.\n\n``URGENT`` / ``NEEDS_RESPONSE`` were added after the initial #2743 cut:\n``needs_you`` originally tagged every category-classified item\n``WAITING_ON_YOU``, which collided with that value's real, published\nmeaning (the waiting-on-you *detector* found a thread awaiting reply) the\nmoment the detector's own output was wired into the same view. ``kind``\nis pure provenance — which signal put this row here — never a verb; the\nREPLY/DECIDE/CHECK label a renderer shows is a render-time lookup.",
         "enum": [
           "meeting_request",
           "waiting_on_you",
           "needs_review",
-          "action_item"
+          "action_item",
+          "urgent",
+          "needs_response"
         ],
         "title": "AttentionItemKind",
         "type": "string"
@@ -2623,7 +2625,7 @@
       },
       "NeedsYouItem": {
         "additionalProperties": false,
-        "description": "One thing a human must act on (#2743) — a VIEW over the already-\nclassified urgent/actionable/needs_review buckets, never re-derived from\nraw scan results (see the module's 2.11 changelog entry above).\n\n``kind`` reuses the published :class:`AttentionItemKind` rather than a\nparallel verb enum — the renderer maps ``kind`` to a verb label\n(REPLY/DECIDE/CHECK) at render time; the wire only carries the source\nsignal.",
+        "description": "One thing a human must act on (#2743) — a VIEW over the already-\nclassified urgent/actionable/needs_review buckets PLUS the waiting-on-you\ndetector and persisted action items, never re-derived from raw scan\nresults (see the module's 2.11 changelog entry above).\n\n``kind`` reuses the published :class:`AttentionItemKind` rather than a\nparallel verb enum — the renderer maps ``kind`` to a verb label\n(REPLY/DECIDE/CHECK) at render time; the wire only carries the source\nsignal, so a category-classified item is never mislabeled with the\ndetector's own ``waiting_on_you`` value.",
         "properties": {
           "age_seconds": {
             "anyOf": [
