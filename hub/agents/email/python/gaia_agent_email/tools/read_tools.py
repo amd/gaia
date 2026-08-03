@@ -951,8 +951,13 @@ def _apply_session_preferences(
     if sender_addr and sender_addr in priority_senders:
         out["preference_applied"] = "priority_sender"
         # #2744 (this module's half): a fact about the message and the
-        # sender, never the classifier's own bookkeeping language.
-        out["rationale"] = f"From a priority sender · {decision.get('rationale', '')}"
+        # sender, never the classifier's own bookkeeping language. #2632
+        # still requires the rule stated explicitly -- "category unchanged"
+        # -- so a priority match is never misread as itself an urgency
+        # claim the category doesn't back.
+        out["rationale"] = (
+            f"From a priority sender · category unchanged · {decision.get('rationale', '')}"
+        )
     elif sender_addr and sender_addr in low_priority_senders:
         out["category"] = CATEGORY_PROMOTIONAL
         out["confident"] = True

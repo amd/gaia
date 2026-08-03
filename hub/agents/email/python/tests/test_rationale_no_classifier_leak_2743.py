@@ -219,7 +219,12 @@ class TestEveryEmittedRationaleIsClean:
         prefs = {"priority_senders": {"boss@example.com"}, "low_priority_senders": set()}
         out = _apply_session_preferences(decision, prefs)
         assert not _reason_violations(out["rationale"]), out["rationale"]
-        assert out["rationale"] == "From a priority sender · Looks like an automated update"
+        # #2632 requires the rule stated explicitly ("category unchanged"),
+        # not merely the absence of an urgency claim.
+        assert (
+            out["rationale"]
+            == "From a priority sender · category unchanged · Looks like an automated update"
+        )
 
     def test_low_priority_sender_rationale_is_clean(self):
         decision = {
