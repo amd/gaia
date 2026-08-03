@@ -15,8 +15,10 @@ func TestPreScanPopulated(t *testing.T) {
 
 	assertWidth(t, out, width80)
 	assertContains(t, out,
-		// Title carries the top-level `scanned` field.
-		"Inbox · 15 scanned",
+		// Title just names the card -- the scan count is the footer's job
+		// alone (#2743 checkpoint review, no duplicated coverage statement).
+		"┌─ Inbox ",
+		"15 inbox messages scanned",
 		// Section is one worklist, not four buckets (#2743).
 		"NEEDS YOU",
 		// Verb labels, mapped from kind -- REPLY covers urgent/waiting_on_you/needs_response.
@@ -30,7 +32,9 @@ func TestPreScanPopulated(t *testing.T) {
 		"waiting on your sign-off",
 		// Rows are numbered by the SERVER's own ref, never recomputed.
 		" 1  ", " 2  ", " 3  ", " 5  ",
-		"4 filtered", "promotional",
+		// The bulk line states the test applied, not the category (#2743
+		// checkpoint review) -- falsifiable, never a bare label.
+		"4 filtered", "none of them asked you a question",
 		"Using your priority senders: Sarah Chen, Priya N.",
 	)
 }
@@ -41,13 +45,37 @@ func TestPreScanEmptyState(t *testing.T) {
 
 	assertWidth(t, out, width80)
 	assertContains(t, out,
-		"Nothing needs you.",
+		// emptyPreScan sets no total_inbox -- coverage is unproven, so the
+		// verdict itself is scoped to what was actually scanned (#2743
+		// checkpoint review), never the unqualified global claim.
+		"Nothing in the 19 most recent needs a reply.",
 		"19 inbox messages scanned",
 		"19 filtered",
-		"FYI",
+		"none of them named a deadline",
 	)
 	// No worklist header for a genuinely empty scan.
 	assertNotContains(t, out, "NEEDS YOU")
+	assertNotContains(t, out, "Nothing needs you.")
+}
+
+// When the scan genuinely covered the whole inbox (total_inbox == scanned),
+// the unqualified "Nothing needs you." is correct and welcome -- that's the
+// one case it's actually true (#2743 checkpoint review).
+func TestPreScanEmptyStateUnqualifiedWhenCoverageIsComplete(t *testing.T) {
+	var envelope map[string]any
+	if err := json.Unmarshal([]byte(emptyPreScan), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	envelope["total_inbox"] = 19 // matches "scanned": 19 -- fully covered
+	data, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out := Render("email_pre_scan", data, width80)
+	t.Logf("\n%s", plain(out))
+	assertContains(t, out, "Nothing needs you.")
+	assertNotContains(t, out, "Nothing in the 19 most recent needs a reply.")
 }
 
 func TestPreScanCapsHitShowsNofM(t *testing.T) {
@@ -106,10 +134,31 @@ func TestPreScanMissingNeedsYouTotalFallsBackToListLength(t *testing.T) {
 	out := Render("email_pre_scan", data, width80)
 	assertWidth(t, out, width80)
 	// A missing needs_you_total decodes as its zero value (0), which is not
-	// greater than the 5 shown -- so the header falls back to a bare count
-	// rather than claiming a hidden tail that was never reported.
-	assertNotContains(t, out, " of ")
+	// greater than the 5 shown -- so the "NEEDS YOU" section header falls
+	// back to a bare count rather than claiming a hidden tail that was
+	// never reported. Checked against the header specifically, not a bare
+	// " of " substring -- the bulk line's own falsifiable phrasing ("none
+	// OF them asked...") legitimately contains that substring too.
+	if headers := sectionHeaderCounts(t, plain(out), "NEEDS YOU"); headers != "5" {
+		t.Errorf("NEEDS YOU header = %q, want a bare \"5\" with no hidden tail", headers)
+	}
 	assertContains(t, out, "NEEDS YOU", "Sarah Chen")
+}
+
+// sectionHeaderCounts reads the count text off a section header line (the
+// "N" or "N of M" that box.sectionHeader right-aligns), stripped of the
+// border/indent noise around it.
+func sectionHeaderCounts(t *testing.T, rendered, label string) string {
+	t.Helper()
+	for _, line := range strings.Split(rendered, "\n") {
+		body := strings.TrimSpace(strings.Trim(line, "│"))
+		if !strings.HasPrefix(body, label) {
+			continue
+		}
+		return strings.TrimSpace(strings.TrimPrefix(body, label))
+	}
+	t.Fatalf("no %q section header found in:\n%s", label, rendered)
+	return ""
 }
 
 func TestPreScanInvalidPayload(t *testing.T) {
@@ -158,6 +207,10 @@ func TestPreScanDegradesAtNarrowWidth(t *testing.T) {
 // scoped to this one file.
 // ---------------------------------------------------------------------------
 
+// why text below matches what the Python backend actually emits for its
+// unconfident/no-heuristic-match fallback post-#2744 (triage_heuristics.py)
+// and its #2743-redirect sibling fix in read_tools.py/attention_tools.py --
+// a plain observable fact, never the classifier's own internal trace.
 const needsReviewPopulatedPreScan = `{
   "kind": "email_pre_scan",
   "urgent": [], "actionable": [], "informational_count": 2,
@@ -167,7 +220,7 @@ const needsReviewPopulatedPreScan = `{
     {"ref":1,"kind":"needs_response","message_id":"a1","thread_id":"ta1","sender":"boss@example.com",
      "subject":"Q3 numbers","why":"direct question"},
     {"ref":2,"kind":"needs_review","message_id":"nr1","thread_id":"tnr1","sender":"colleague@example.com",
-     "subject":"Any chance to meet this Thursday at 9am?","why":"heuristic unconfident (no match)"}
+     "subject":"Any chance to meet this Thursday at 9am?","why":"No clear signal from the sender or subject"}
   ],
   "needs_you_total": 2,
   "bulk": {"count": 0, "filter_tests": []},
@@ -184,7 +237,7 @@ const needsReviewOnlyPreScan = `{
   "scanned": 1,
   "needs_you": [
     {"ref":1,"kind":"needs_review","message_id":"nr1","thread_id":"tnr1","sender":"colleague@example.com",
-     "subject":"Any chance to meet this Thursday at 9am?","why":"heuristic unconfident"}
+     "subject":"Any chance to meet this Thursday at 9am?","why":"No clear signal from the sender or subject"}
   ],
   "needs_you_total": 1,
   "bulk": {"count": 0, "filter_tests": []},
@@ -196,7 +249,7 @@ func TestPreScanNeedsReviewRendersWithCheckVerb(t *testing.T) {
 	t.Logf("\n%s", plain(out))
 
 	assertWidth(t, out, width80)
-	assertContains(t, out, "Inbox · 4 scanned")
+	assertContains(t, out, "4 inbox messages scanned")
 	// A needs_review row renders under the CHECK verb, with its own
 	// sender/subject/why -- distinct provenance from a category bucket.
 	// The subject is truncated at this width by the sender/subject column
@@ -205,7 +258,7 @@ func TestPreScanNeedsReviewRendersWithCheckVerb(t *testing.T) {
 		"CHECK",
 		"colleague@example.com",
 		"Any chance to meet this",
-		"heuristic unconfident (no match)",
+		"No clear signal from the sender or subject",
 	)
 }
 
@@ -293,12 +346,44 @@ func TestVerbForKind(t *testing.T) {
 	}
 }
 
-func TestFilterTestLabelDegradesVisiblyWhenUnmapped(t *testing.T) {
-	if got := filterTestLabel("category_fyi"); got != "FYI" {
-		t.Errorf("filterTestLabel(category_fyi) = %q, want FYI", got)
+func TestBulkLineStatesTheTestNotTheCategory(t *testing.T) {
+	// #2743 checkpoint review: the bulk line must be falsifiable -- what
+	// QUESTION was asked of the filtered mail, never a category label
+	// wearing the count (that was the original "27 filtered (promotional,
+	// FYI)" complaint this issue exists to fix).
+	p := emailPreScan{Bulk: &bulkSummary{
+		Count:       27,
+		FilterTests: []string{"no_direct_question", "no_deadline_signal"},
+	}}
+	got := p.bulkLine()
+	want := "27 filtered — none of them asked you a question or named a deadline."
+	if got != want {
+		t.Errorf("bulkLine() = %q, want %q", got, want)
 	}
+}
+
+func TestBulkLineArchivePreferenceIsAPositiveClause(t *testing.T) {
+	p := emailPreScan{Bulk: &bulkSummary{
+		Count:       5,
+		FilterTests: []string{"matched_your_archive_preference"},
+	}}
+	got := p.bulkLine()
+	if !strings.Contains(got, "matched your archive preference") {
+		t.Errorf("bulkLine() = %q, want it to name the archive-preference match", got)
+	}
+	if strings.Contains(got, "none of them") {
+		t.Errorf("bulkLine() = %q, a positive match must not join the negated-tests clause", got)
+	}
+}
+
+func TestBulkLineUnmappedFilterTestDegradesVisibly(t *testing.T) {
 	// An id this client predates must still show something, not vanish.
-	if got := filterTestLabel("some_future_filter_test"); got != "some_future_filter_test" {
-		t.Errorf("filterTestLabel(unmapped) = %q, want the raw id back", got)
+	p := emailPreScan{Bulk: &bulkSummary{
+		Count:       3,
+		FilterTests: []string{"some_future_filter_test"},
+	}}
+	got := p.bulkLine()
+	if !strings.Contains(got, "some_future_filter_test") {
+		t.Errorf("bulkLine() = %q, want the raw unmapped id shown, not dropped", got)
 	}
 }

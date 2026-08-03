@@ -22,7 +22,7 @@ const prescanPayload = `{
      "subject":"Prod incident follow-up","why":"asked for a reply by Friday"}
   ],
   "needs_you_total": 1,
-  "bulk": {"count": 7, "filter_tests": ["category_fyi"]}
+  "bulk": {"count": 7, "filter_tests": ["no_deadline_signal"]}
 }`
 
 // newTestChat returns a model sized to an 80x24 terminal with a turn in flight.
@@ -66,7 +66,7 @@ func TestToolResultWithRenderDrawsACard(t *testing.T) {
 
 	rendered := ansi.Strip(m.renderMessage(card, nil))
 	t.Logf("\n%s", rendered)
-	for _, want := range []string{"Inbox · 9 scanned", "NEEDS YOU", "REPLY", "Sarah Chen", "asked for a reply by Friday"} {
+	for _, want := range []string{"Inbox", "9 inbox messages scanned", "NEEDS YOU", "REPLY", "Sarah Chen", "asked for a reply by Friday"} {
 		if !strings.Contains(rendered, want) {
 			t.Errorf("card render missing %q:\n%s", want, rendered)
 		}

@@ -38,7 +38,7 @@ const populatedPreScan = `{
      "subject":"Re: contract redlines","why":"waiting on your sign-off"}
   ],
   "needs_you_total": 5,
-  "bulk": {"count": 4, "filter_tests": ["category_promotional"]},
+  "bulk": {"count": 4, "filter_tests": ["no_direct_question"]},
   "preferences_applied": {
     "priority_senders": ["Sarah Chen", "Priya N."],
     "low_priority_senders": [],
@@ -62,7 +62,7 @@ const capsHitPreScan = `{
     {"ref":5,"kind":"urgent","message_id":"u5","sender":"e@x.com","subject":"five","why":"r5"}
   ],
   "needs_you_total": 40,
-  "bulk": {"count": 1, "filter_tests": ["category_promotional"]},
+  "bulk": {"count": 1, "filter_tests": ["no_direct_question"]},
   "preferences_applied": null
 }`
 
@@ -74,7 +74,7 @@ const emptyPreScan = `{
   "scanned": 19,
   "needs_you": [],
   "needs_you_total": 0,
-  "bulk": {"count": 19, "filter_tests": ["category_fyi"]},
+  "bulk": {"count": 19, "filter_tests": ["no_deadline_signal"]},
   "preferences_applied": {"priority_senders": [], "low_priority_senders": [], "category_defaults": {}}
 }`
 

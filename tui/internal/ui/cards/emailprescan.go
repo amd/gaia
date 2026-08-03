@@ -35,17 +35,6 @@ type needsYouItem struct {
 	Mailbox    string   `json:"mailbox"`
 }
 
-// combinedWhy folds the due hint into the reason line, mirroring the old
-// per-bucket renderer's `reason` handling: a due date is part of why the
-// row needs attention, not a separate fact to hunt for.
-func (it needsYouItem) combinedWhy() string {
-	why := it.Why
-	if it.DueHint != "" {
-		why = strings.TrimSuffix(why, ".") + " — due " + it.DueHint
-	}
-	return why
-}
-
 type bulkSummary struct {
 	Count       int      `json:"count"`
 	FilterTests []string `json:"filter_tests"`
@@ -305,26 +294,28 @@ func verbForKind(kind string) string {
 	}
 }
 
-// filterTestLabels maps BulkSummary.filter_tests' opaque ids (contract.py:
+// negatedFilterTestClauses maps a BulkSummary.filter_tests id (contract.py:
 // "ids, never prose... an unmapped id degrades visibly rather than
-// rendering a stale claim") to the sentence fragment a user reads. Kept in
-// sync with hub/agents/email/python/gaia_agent_email/tools/read_tools.py's
+// rendering a stale claim") to the verb clause a renderer joins under
+// "none of them ..." (#2743 checkpoint review). Named after the QUESTION
+// asked of the message, never the category it landed in: "27 filtered
+// (promotional, FYI)" just relabels a bare count with an unchallengeable
+// tag, which is the original complaint this whole issue exists to fix.
+// "none of them asked you a question or named a deadline" is falsifiable
+// — it invites "what about a receipt over $500?", which is the user
+// checking the agent's work. Kept in sync with
+// hub/agents/email/python/gaia_agent_email/tools/read_tools.py's
 // FILTER_TEST_* constants.
-var filterTestLabels = map[string]string{
-	"category_promotional":       "promotional",
-	"category_fyi":               "FYI",
-	"category_personal":          "personal, low-signal",
-	"session_archive_preference": "your archive preference",
+var negatedFilterTestClauses = map[string]string{
+	"no_direct_question":  "asked you a question",
+	"no_deadline_signal":  "named a deadline",
+	"no_meeting_proposal": "proposed a meeting",
 }
 
-// filterTestLabel returns the mapped sentence fragment, or the raw id
-// itself when unmapped -- visible degradation, never a silently dropped id.
-func filterTestLabel(id string) string {
-	if s, ok := filterTestLabels[id]; ok {
-		return s
-	}
-	return id
-}
+// archivePreferenceFilterTest is a POSITIVE match (a session preference was
+// applied), not an absence -- it gets its own clause rather than joining
+// the "none of them ..." list of negated tests.
+const archivePreferenceFilterTest = "matched_your_archive_preference"
 
 // formatItemAge renders a needs_you item's age_seconds the way a person
 // reads it: seconds/minutes/hours while fresh, days once it's been sitting
@@ -354,13 +345,26 @@ const needsYouVerbPrefixWidth = 6
 // line (not a separate age row) so the row+why cost stays the stable "2
 // rows for a plain item" baseline the fit budget assumes before any
 // `detail` substance is added.
-func (it needsYouItem) needsYouWhyLine() string {
+//
+// A meeting_request's `why` is always the same boilerplate ("looks like
+// it's proposing a meeting or a time to talk") -- once at least one detail
+// line survives the fit budget with the actual proposed time, repeating
+// the boilerplate costs a line in a height-bounded card to say nothing the
+// DECIDE verb and the detail line don't already say more specifically
+// (#2743 checkpoint review), so it is suppressed in that one case. Every
+// other kind's `why` is genuinely per-item information and always shows.
+func (it needsYouItem) needsYouWhyLine(keepDetail int) string {
 	var parts []string
 	if it.AgeSeconds != nil {
 		parts = append(parts, formatItemAge(*it.AgeSeconds)+" ago")
 	}
-	if why := it.combinedWhy(); strings.TrimSpace(why) != "" {
-		parts = append(parts, why)
+	if !(it.Kind == "meeting_request" && keepDetail > 0) {
+		if why := strings.TrimSpace(it.Why); why != "" {
+			parts = append(parts, why)
+		}
+	}
+	if it.DueHint != "" {
+		parts = append(parts, "due "+it.DueHint)
 	}
 	return strings.Join(parts, " · ")
 }
@@ -381,7 +385,7 @@ func (p emailPreScan) needsYouRow(b *box, it needsYouItem, showMailbox bool, kee
 	verb := padTo(verbForKind(it.Kind), needsYouVerbPrefixWidth)
 	b.rowWithPrefix(it.Ref, verb, sender, it.Subject)
 
-	if line := it.needsYouWhyLine(); strings.TrimSpace(line) != "" {
+	if line := it.needsYouWhyLine(keepDetail); strings.TrimSpace(line) != "" {
 		b.addWrapped(rationaleIndent, line)
 	}
 	for i, d := range it.Detail {
@@ -402,7 +406,7 @@ func (p emailPreScan) needsYouRow(b *box, it needsYouItem, showMailbox bool, kee
 // row can now carry up to two additional substance lines.
 func (p emailPreScan) needsYouRowCost(b *box, it needsYouItem, keepDetail int) int {
 	cost := 1
-	if line := it.needsYouWhyLine(); strings.TrimSpace(line) != "" {
+	if line := it.needsYouWhyLine(keepDetail); strings.TrimSpace(line) != "" {
 		cost += len(wrap(line, b.inner()-visualLen(rationaleIndent)))
 	}
 	for i, d := range it.Detail {
@@ -512,24 +516,40 @@ func (p emailPreScan) needsYouCountLabel(show int) string {
 	return itoa(show)
 }
 
-// bulkLine states the filtered remainder AND what filtered it (#2743) —
-// BulkSummary.filter_tests carries opaque ids a renderer maps to a
-// sentence, so a bare unauditable count never stands alone. An unmapped id
-// degrades visibly (filterTestLabel returns the raw id) rather than
-// silently disappearing.
+// bulkLine states the filtered remainder AND what QUESTION was asked of it
+// (#2743 checkpoint review) — BulkSummary.filter_tests carries opaque ids
+// a renderer joins into one falsifiable sentence, so a bare unauditable
+// count never stands alone and a category label never poses as the test
+// that produced it. An unmapped id is shown by its raw id (visible
+// degradation) rather than silently disappearing.
 func (p emailPreScan) bulkLine() string {
 	if p.Bulk == nil || p.Bulk.Count == 0 {
 		return ""
 	}
-	line := itoa(p.Bulk.Count) + " filtered"
-	if len(p.Bulk.FilterTests) > 0 {
-		labels := make([]string, len(p.Bulk.FilterTests))
-		for i, id := range p.Bulk.FilterTests {
-			labels[i] = filterTestLabel(id)
+	var negated []string
+	var other []string
+	for _, id := range p.Bulk.FilterTests {
+		if id == archivePreferenceFilterTest {
+			other = append(other, "matched your archive preference")
+			continue
 		}
-		line += " (" + strings.Join(labels, ", ") + ")"
+		if clause, ok := negatedFilterTestClauses[id]; ok {
+			negated = append(negated, clause)
+			continue
+		}
+		other = append(other, id)
 	}
-	return line + ", not listed."
+	var clauses []string
+	if len(negated) > 0 {
+		clauses = append(clauses, "none of them "+strings.Join(negated, " or "))
+	}
+	clauses = append(clauses, other...)
+
+	line := itoa(p.Bulk.Count) + " filtered"
+	if len(clauses) > 0 {
+		line += " — " + strings.Join(clauses, "; ")
+	}
+	return line + "."
 }
 
 // coverageLine is the scoped fact half of "coverage as fact-plus-invitation"
@@ -561,12 +581,31 @@ func (p emailPreScan) footerLines() []string {
 	return out
 }
 
-// renderEmpty is the SCOPED zero state (#2743 Increment 2 step 7): "nothing
-// needs you" may only appear alongside what was actually covered — never
-// an unscoped claim standing alone. Mirrors the honesty rule #2584/#2582
-// already established one layer over (the attention view's own renderEmpty).
+// emptyVerdictLine is the SCOPED zero-state verdict itself (#2743
+// checkpoint review) — not just the coverage line that follows it. "Nothing
+// needs you." is an unscoped GLOBAL claim from what may be a partial scan,
+// the exact shape this issue exists to kill, so it is qualified on its own
+// face whenever the scan did not cover the whole inbox. When it genuinely
+// did (total_inbox == scanned, or unknown), the unqualified form is correct
+// and welcome — that's the one case it's true.
+func (p emailPreScan) emptyVerdictLine() string {
+	// Positive proof of full coverage is the ONLY case for the unqualified
+	// claim -- an unknown total_inbox (Outlook cannot report one) proves
+	// nothing about whether more mail exists, so it gets the scoped form
+	// too, not the stronger claim by default.
+	if p.TotalInbox != nil && *p.TotalInbox <= p.Scanned {
+		return "Nothing needs you."
+	}
+	return "Nothing in the " + itoa(p.Scanned) + " most recent needs a reply."
+}
+
+// renderEmpty is the SCOPED zero state (#2743 Increment 2 step 7): the
+// verdict itself is scoped (emptyVerdictLine), and it may only appear
+// alongside what was actually covered — never standing alone. Mirrors the
+// honesty rule #2584/#2582 already established one layer over (the
+// attention view's own renderEmpty).
 func (p emailPreScan) renderEmpty(b *box) {
-	b.addWrapped("  ", "Nothing needs you.")
+	b.addWrapped("  ", p.emptyVerdictLine())
 	b.addWrapped("  ", p.coverageLine()+".")
 	if line := p.bulkLine(); line != "" {
 		b.addWrapped("  ", line)
@@ -576,8 +615,11 @@ func (p emailPreScan) renderEmpty(b *box) {
 	}
 }
 
+// title just names the card — the scan count is the footer's job
+// (coverageLine), which also carries the denominator and the invitation to
+// look further; stating it twice is redundant (#2743 checkpoint review).
 func (p emailPreScan) title() string {
-	return "Inbox · " + itoa(p.Scanned) + " scanned"
+	return "Inbox"
 }
 
 // multiMailbox reports whether needs_you rows came from more than one

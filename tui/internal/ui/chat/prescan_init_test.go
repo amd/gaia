@@ -487,7 +487,7 @@ func TestPreScanCardCacheInvalidatesOnDataChangeNotOnlyOnResize(t *testing.T) {
 	// Render at a fixed width to populate cardCache.
 	const w = 76
 	rendered1 := m.messages[0].renderCard(w)
-	if !strings.Contains(rendered1, "1 scanned") {
+	if !strings.Contains(rendered1, "1 inbox messages scanned") {
 		t.Fatalf("first render missing the first payload's scan count:\n%s", rendered1)
 	}
 
@@ -498,7 +498,7 @@ func TestPreScanCardCacheInvalidatesOnDataChangeNotOnlyOnResize(t *testing.T) {
 	// SAME width as before -- if cardCache only invalidated on a width
 	// change, this would still return rendered1's stale content.
 	rendered2 := m.messages[0].renderCard(w)
-	if strings.Contains(rendered2, "1 scanned") || !strings.Contains(rendered2, "9 scanned") {
+	if strings.Contains(rendered2, "1 inbox messages scanned") || !strings.Contains(rendered2, "9 inbox messages scanned") {
 		t.Errorf("render at the same width served stale cached content after an in-place data update:\n%s", rendered2)
 	}
 }
