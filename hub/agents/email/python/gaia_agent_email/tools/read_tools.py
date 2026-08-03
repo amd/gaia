@@ -2881,12 +2881,17 @@ class ReadToolsMixin:
                 )
                 # Phase 2 (#1603): pre-scan every connected mailbox, tag each
                 # section item with its source mailbox, split the budget, merge.
-                return _envelope_ok(
-                    agent._pre_scan_all_backends(
-                        max_messages=max_messages,
-                        include_informational=bool(include_informational),
-                    )
+                envelope = agent._pre_scan_all_backends(
+                    max_messages=max_messages,
+                    include_informational=bool(include_informational),
                 )
+                # #2745 — this is the ONE place the agent's "current card"
+                # is updated (never pre_scan_inbox_impl directly, so a REST
+                # /prescan call or the scheduled briefing job never feed
+                # it): resolve_needs_you_reference resolves a positional
+                # reference ("reply to 1") against whatever is stored here.
+                agent._last_needs_you_card = envelope.get("needs_you", [])
+                return _envelope_ok(envelope)
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))
             except Exception as exc:
