@@ -236,6 +236,37 @@ class TestNeedsYouOrdering:
             "oldest-first within the same kind"
         )
 
+    def test_kind_order_groups_by_verb_not_interleaved(self):
+        """#2743 redirect (checkpoint review): ordering must group by the
+        VERB increment 2's renderer maps a kind to — REPLY (urgent,
+        waiting_on_you, needs_response) together, then DECIDE
+        (meeting_request), then CHECK (needs_review), then action_item last
+        — never interleaved. A DECIDE row wedged between two REPLY rows
+        reads as arbitrary ordering to a user.
+        """
+        view = _build_needs_you_view(
+            urgent=[{"message_id": "u1", "why": "urgent"}],
+            actionable=[
+                {"message_id": "a1", "why": "actionable"},
+                {"message_id": "a2", "why": "meeting", "is_meeting_request": True},
+            ],
+            needs_review=[{"message_id": "r1", "why": "review"}],
+            waiting_on_you=[
+                {"message_id": "w1", "sender": "x@example.com", "age_days": 1}
+            ],
+            action_items=[{"message_id": None, "description": "task"}],
+            cap=10,
+        )
+        kinds = [item["kind"] for item in view["needs_you"]]
+        assert kinds == [
+            "urgent",
+            "waiting_on_you",
+            "needs_response",
+            "meeting_request",
+            "needs_review",
+            "action_item",
+        ], f"expected the verb-grouped order, got {kinds}"
+
 
 class TestNeedsYouCap:
     def test_capped_at_five_with_honest_total(self):

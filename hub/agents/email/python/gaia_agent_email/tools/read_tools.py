@@ -1601,19 +1601,22 @@ def needs_review_decision(r: Mapping[str, Any]) -> bool:
     return not r.get("confident", True)
 
 
-# kind priority for needs_you ordering (#2743 redirect): a category-confirmed
-# URGENT message sits above every other signal; the waiting-on-you detector
-# (a thread genuinely awaiting reply, sometimes for days) sits above a
-# proposed meeting or an ordinary actionable ask; needs_review (the heuristic
-# wasn't confident) and action_item (a task the user already triaged once,
-# carried over) trail everything else. Matches the published
+# kind priority for needs_you ordering (#2743 redirect, tuned again after
+# checkpoint review): grouped by the VERB increment 2's renderer maps a kind
+# to, not interleaved — a DECIDE row wedged between two REPLY rows would
+# read as arbitrary ordering to a user. REPLY (urgent, waiting_on_you,
+# needs_response, in that internal priority) comes first, then DECIDE
+# (meeting_request), then CHECK (needs_review), then action_item last (a
+# task the user already triaged once, carried over). Within REPLY, a
+# category-confirmed URGENT still outranks a detector-only signal, which in
+# turn outranks an ordinary actionable ask. Matches the published
 # ``AttentionItemKind`` values so a renderer never has to special-case a
 # string it doesn't recognize.
 _NEEDS_YOU_KIND_ORDER = {
     "urgent": 0,
     "waiting_on_you": 1,
-    "meeting_request": 2,
-    "needs_response": 3,
+    "needs_response": 2,
+    "meeting_request": 3,
     "needs_review": 4,
     "action_item": 5,
 }
