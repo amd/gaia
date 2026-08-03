@@ -345,7 +345,7 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.err = msg.err
 		m.messages = append(m.messages, Message{
 			Role:    RoleError,
-			Content: msg.err.Error(),
+			Content: sanitizeErrorText(msg.err.Error()),
 		})
 		m.drainPendingAttention()
 		m.activity = nil
@@ -370,7 +370,7 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case questionFailedMsg:
 		m.messages = append(m.messages, Message{
 			Role:    RoleError,
-			Content: msg.err.Error(),
+			Content: sanitizeErrorText(msg.err.Error()),
 		})
 		m.updateViewport()
 		return m, nil
@@ -403,7 +403,7 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.messages = append(m.messages, Message{
 				Role:    RoleError,
-				Content: fmt.Sprintf("could not deliver the %s decision for '%s': %v", word, msg.Action, msg.err),
+				Content: sanitizeErrorText(fmt.Sprintf("could not deliver the %s decision for '%s': %v", word, msg.Action, msg.err)),
 			})
 		} else {
 			m.messages = append(m.messages, Message{
@@ -740,7 +740,7 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 	case event.AgentErrorEvent:
 		m.messages = append(m.messages, Message{
 			Role:    RoleError,
-			Content: e.Content,
+			Content: sanitizeErrorText(e.Content),
 		})
 		m.streaming = false
 		m.activity = nil
@@ -750,7 +750,7 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 	case event.ErrorEvent:
 		m.messages = append(m.messages, Message{
 			Role:    RoleError,
-			Content: e.Content,
+			Content: sanitizeErrorText(e.Content),
 		})
 		m.streaming = false
 		m.activity = nil
