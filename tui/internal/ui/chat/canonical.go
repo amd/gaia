@@ -166,7 +166,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 	case event.CanonicalErrorEvent:
 		m.flushBuffer()
 		m.resolveConfirmationOnTurnEnd()
-		m.messages = append(m.messages, Message{Role: RoleError, Content: e.Detail})
+		m.messages = append(m.messages, Message{Role: RoleError, Content: sanitizeErrorText(e.Detail)})
 		m.drainPendingPreScan()
 		m.streaming = false
 		m.activity = nil
