@@ -381,21 +381,24 @@ class ShellToolsMixin:
                         "hint": "Use read-only find predicates only: -name, -type, -path, -print, -ls.",
                     }
         # Special handling for sort - -o/--output writes to a file. Cover every
-        # spelling: -o FILE, -oFILE, -o=FILE, --output FILE, --output=FILE, and
-        # bundled short clusters (-ro). 'o' is the only sort short-flag letter,
-        # so any pure short cluster containing it is the output flag.
+        # spelling: -o FILE, -oFILE, -o=FILE, bundled short clusters (-ro), and
+        # every GNU long-option abbreviation of --output (--o, --out, --output=).
+        # 'o' is the only sort short-flag letter, so any pure short cluster
+        # containing it is the output flag.
         elif cmd_base == "sort":
             for part in cmd_parts[1:]:
                 part_lower = part.lower()
-                is_output = part_lower == "--output" or part_lower.startswith(
-                    "--output="
-                )
-                if not is_output and part_lower.startswith("-") and part_lower != "-":
-                    if not part_lower.startswith("--"):
-                        body = part_lower[1:].split("=", 1)[0]
-                        # -o / -oFILE (attached) or a short cluster like -ro
-                        if body.startswith("o") or (body.isalpha() and "o" in body):
-                            is_output = True
+                flag = part_lower.split("=", 1)[0]
+                is_output = False
+                if flag.startswith("--"):
+                    # --output and any unambiguous abbreviation (--o, --out, ...).
+                    if len(flag) > 2 and "--output".startswith(flag):
+                        is_output = True
+                elif part_lower.startswith("-") and part_lower != "-":
+                    body = flag[1:]
+                    # -o / -oFILE (attached) or a short cluster like -ro
+                    if body.startswith("o") or (body.isalpha() and "o" in body):
+                        is_output = True
                 if is_output:
                     return {
                         "status": "error",

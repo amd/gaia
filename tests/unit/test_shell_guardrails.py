@@ -224,6 +224,11 @@ class TestSortOutputGuard:
         # Bundled short cluster -ro == -r -o.
         assert validate("sort -ro /tmp/canary /etc/hostname") is not None
 
+    def test_sort_output_abbreviation_blocked(self):
+        # GNU sort accepts unambiguous long-option abbreviations of --output.
+        assert validate("sort --out=/tmp/canary /etc/hostname") is not None
+        assert validate("sort --o /tmp/canary /etc/hostname") is not None
+
     def test_sort_plain_allowed(self):
         assert validate("sort file.txt") is None
 
