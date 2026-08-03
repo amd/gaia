@@ -2737,18 +2737,28 @@ class ReadToolsMixin:
             """Pre-scan the inbox into a typed envelope for the chat
             triage card.
 
-            Reshapes the per-message triage decisions into four sections
-            (urgent, actionable, needs review, suggested archives), an
-            informational count, and an empty drafts placeholder. The
-            result has ``kind: "email_pre_scan"`` so the chat surface
+            The result has ``kind: "email_pre_scan"`` so the chat surface
             renders the structured card component instead of plain text.
-            ``needs_review`` holds messages the heuristic was NOT
-            confident about — a placeholder guess, not a real
-            classification — so they are surfaced for you to look at
-            rather than silently filed as informational or archived.
-            Covers read AND unread INBOX mail (#2638) — a message you
-            already opened but never answered is exactly the bucket this
-            view exists to surface.
+            The card's ONE worklist is ``needs_you`` (#2743) — up to
+            ``NEEDS_YOU_CAP`` (5) things that genuinely need you, each
+            tagged with a verb (REPLY/DECIDE/CHECK/DO), why it surfaced,
+            and — for the surfaced items only — a couple of lines of real
+            substance (the question actually asked, the meeting time
+            actually proposed and whether the calendar is free, the
+            deadline actually quoted). It is a deterministic VIEW over the
+            legacy ``urgent``/``actionable``/``needs_review`` buckets (still
+            present below, unchanged, for callers that read them directly)
+            plus the waiting-on-you detector and any open action items from
+            a prior triage — never a second classification pass, so nothing
+            those buckets caught can go missing from it.
+            ``needs_you_total`` carries the true pre-cap count. Everything
+            NOT in ``needs_you`` — informational and low-signal mail — is
+            summarized in ``bulk``: a count PLUS ``filter_tests``, the ids
+            of the tests that actually filtered it, so a claim like "47
+            filtered" is auditable rather than a bare number to take on
+            faith. Covers read AND unread INBOX mail (#2638) — a message
+            you already opened but never answered is exactly the bucket
+            this view exists to surface.
 
             ``informational_count`` alone is a bare number — it is NOT
             proof every one of those messages is truly low-priority
@@ -2769,9 +2779,10 @@ class ReadToolsMixin:
             ``total_unread`` is also present as a secondary "how many of
             these are still unread" figure. ALWAYS mention scan coverage
             in your framing sentence when scanned is less than
-            total_inbox — e.g. "50 of 812 in the inbox scanned (250
-            unread) — 3 actionable, 2 need review." — never phrase a
-            partial scan as if it covered the whole inbox. When
+            total_inbox — e.g. "3 need you (2 replies, 1 meeting), 47
+            filtered, 50 of 812 in the inbox scanned." — never phrase a
+            partial scan as if it covered the whole inbox, and never state
+            a global verdict ("nothing needs you") from a partial one. When
             ``degraded`` is true or ``mailbox_errors`` is non-empty, say
             which mailbox couldn't be scanned.
 
@@ -2781,7 +2792,7 @@ class ReadToolsMixin:
             envelope wastes the output budget on long message/thread IDs
             and truncates the prose summary before the user can read it.
             After this tool returns, write ONE short framing sentence
-            (e.g. "Here's your inbox pre-scan — 3 actionable, 1 urgent,
+            (e.g. "Here's your inbox pre-scan — 3 need you, 47 filtered,
             50 of 812 in the inbox scanned.") and stop. The card is
             already visible to the user.
 
@@ -2798,12 +2809,28 @@ class ReadToolsMixin:
                 )
                 # Phase 2 (#1603): pre-scan every connected mailbox, tag each
                 # section item with its source mailbox, split the budget, merge.
-                return _envelope_ok(
-                    agent._pre_scan_all_backends(
-                        max_messages=max_messages,
-                        include_informational=bool(include_informational),
-                    )
+                envelope = agent._pre_scan_all_backends(
+                    max_messages=max_messages,
+                    include_informational=bool(include_informational),
                 )
+                # #2743 Increment 3: fill needs_you[].detail (already capped
+                # at NEEDS_YOU_CAP) for the ONE call site that has a live
+                # ``chat`` and is expected to block on it -- this agent-loop
+                # tool call. The REST /prescan path and the scheduled
+                # briefing job deliberately stay heuristic-only/LLM-free (see
+                # their own docstrings), so this never runs there.
+                from gaia_agent_email.tools.needs_you_detail import (
+                    fill_needs_you_detail,
+                )
+
+                fill_needs_you_detail(
+                    envelope.get("needs_you", []),
+                    resolve_backend=agent._backend_for_message,
+                    chat=getattr(agent, "chat", None),
+                    calendar_backend=getattr(agent, "_calendar", None),
+                    debug=debug_flag,
+                )
+                return _envelope_ok(envelope)
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))
             except Exception as exc:
