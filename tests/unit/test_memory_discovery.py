@@ -20,6 +20,7 @@ import logging
 import os
 import plistlib
 import sqlite3
+import tempfile
 import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -53,6 +54,9 @@ def isolated_disc(tmp_path):
     /Applications, browser profiles, registry, or mail configuration — including
     when the suite is run ON Windows, where the win32 parametrizations would
     otherwise hit the live registry and Start Menu.
+
+    XDG_DATA_HOME/XDG_DATA_DIRS are redirected into tmp_path as well: the Linux
+    app scanner resolves its search path from them, and CI runners set both.
     """
     disc = SystemDiscovery()
     disc._home = tmp_path
@@ -60,7 +64,14 @@ def isolated_disc(tmp_path):
         patch("gaia.agents.base.discovery._MACOS_APP_DIRS", ()),
         patch("gaia.agents.base.discovery._LINUX_DESKTOP_DIRS", ()),
         patch("gaia.agents.base.discovery.winreg", None),
-        patch.dict(os.environ, {"PROGRAMDATA": str(tmp_path)}),
+        patch.dict(
+            os.environ,
+            {
+                "PROGRAMDATA": str(tmp_path),
+                "XDG_DATA_HOME": str(tmp_path / ".local" / "share"),
+                "XDG_DATA_DIRS": str(tmp_path / "xdg-data-dirs"),
+            },
+        ),
     ):
         yield disc
 
@@ -1015,6 +1026,9 @@ class TestUnsupportedPlatform:
             "scan_browser_bookmarks",
             "scan_browser_history",
             "scan_email_accounts",
+            "scan_recent_file_types",
+            "scan_windows_userassist",
+            "scan_macos_app_usage",
         ],
     )
     def test_scanner_logs_the_skip_and_returns_empty(
@@ -1358,3 +1372,273 @@ class TestPermissionDenials:
         warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
         assert len(warnings) == 1
         assert "Full Disk Access" in warnings[0].getMessage()
+
+
+# ---------------------------------------------------------------------------
+# Credential Manager call contract — the call must be VALID, not merely made
+# ---------------------------------------------------------------------------
+
+
+class TestCredentialManagerContractShape:
+    """`cmdkey` is invoked as an argv list, with a timeout, and never via shell.
+
+    Regression guard: ``subprocess.CREATE_NO_WINDOW`` does not exist off
+    Windows, so referencing it unconditionally raised AttributeError under a
+    patched ``sys.platform`` — swallowed by the caller, which made every
+    "no errors on a cold Windows home" assertion vacuous.
+    """
+
+    def _run_cmdkey(self, disc, stdout=""):
+        with (
+            patch("sys.platform", "win32"),
+            patch("subprocess.check_output", return_value=stdout) as mock_out,
+        ):
+            results = []
+            disc._scan_credential_manager(set(), results)
+        return mock_out, results
+
+    def test_argv_shape_is_exact(self, isolated_disc):
+        mock_out, _ = self._run_cmdkey(isolated_disc)
+
+        assert mock_out.call_count == 1
+        argv = mock_out.call_args.args[0]
+        assert isinstance(argv, list), "argv must be a list, never a shell string"
+        assert argv == ["cmdkey", "/list"]
+
+    def test_timeout_is_set_and_shell_is_never_used(self, isolated_disc):
+        mock_out, _ = self._run_cmdkey(isolated_disc)
+        kwargs = mock_out.call_args.kwargs
+        assert kwargs.get("timeout") == 10
+        assert not kwargs.get("shell", False)
+
+    def test_no_window_flag_only_on_real_windows(self, isolated_disc):
+        """CREATE_NO_WINDOW is a Windows-only constant; passing it off-Windows raises."""
+        mock_out, _ = self._run_cmdkey(isolated_disc)
+        kwargs = mock_out.call_args.kwargs
+        assert ("creationflags" in kwargs) is (os.name == "nt")
+
+    def test_address_in_output_becomes_a_sensitive_fact(self, isolated_disc):
+        mock_out, results = self._run_cmdkey(
+            isolated_disc,
+            stdout="Target: MicrosoftOffice16_Data:live.com:alex@outlook.com\n",
+        )
+        assert results, "an address in the cmdkey dump must become a fact"
+        assert results[0]["content"] == "Email account: alex@outlook.com"
+        assert results[0]["sensitive"] is True
+
+    def test_missing_binary_is_reported_not_swallowed(self, isolated_disc, caplog):
+        """A broken scan and an empty one both look like "no accounts"."""
+        caplog.set_level(logging.INFO, logger=DISCOVERY_LOGGER)
+        with (
+            patch("sys.platform", "win32"),
+            patch("subprocess.check_output", side_effect=FileNotFoundError("cmdkey")),
+        ):
+            results = []
+            isolated_disc._scan_credential_manager(set(), results)
+
+        assert results == []
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert warnings, "a failed Credential Manager scan must not be silent"
+        assert "Credential Manager" in warnings[0].getMessage()
+
+    @pytest.mark.parametrize(
+        "scanner,label",
+        [
+            ("_scan_credential_manager", "Credential Manager"),
+            ("_scan_outlook_registry", "Outlook registry"),
+        ],
+    )
+    def test_windows_email_failures_warn_like_the_other_platforms(
+        self, isolated_disc, caplog, scanner, label
+    ):
+        """Windows failures were DEBUG while macOS/Linux warned — same blind spot."""
+        caplog.set_level(logging.INFO, logger=DISCOVERY_LOGGER)
+        with (
+            patch("sys.platform", "win32"),
+            patch.object(
+                isolated_disc, scanner, side_effect=RuntimeError("scan exploded")
+            ),
+        ):
+            results = isolated_disc.scan_email_accounts()
+
+        assert results == []
+        messages = [
+            r.getMessage() for r in caplog.records if r.levelno == logging.WARNING
+        ]
+        assert any(label in m for m in messages), f"{label} failure was not reported"
+
+
+# ---------------------------------------------------------------------------
+# Cold-state coverage gaps the platform branches introduced
+# ---------------------------------------------------------------------------
+
+
+class TestChromiumProfileDiscovery:
+    """Profile enumeration must survive an unreadable root, and cover Snap/Flatpak."""
+
+    def test_snap_and_flatpak_chromium_roots(self, isolated_disc, tmp_path):
+        """Ubuntu ships Chromium as a snap by default — it never writes ~/.config."""
+        _write_chromium_bookmarks(
+            tmp_path / "snap" / "chromium" / "common" / "chromium" / "Default",
+            ["https://kernel.org/doc"],
+        )
+        _write_chromium_bookmarks(
+            tmp_path
+            / ".var"
+            / "app"
+            / "com.google.Chrome"
+            / "config"
+            / "google-chrome"
+            / "Default",
+            ["https://gitlab.com/explore"],
+        )
+
+        with patch("sys.platform", "linux"):
+            results = isolated_disc.scan_browser_bookmarks()
+
+        domains = {r["content"].split()[2] for r in results}
+        assert {"kernel.org", "gitlab.com"} <= domains
+
+    @requires_chmod_denial
+    def test_unreadable_profile_root_warns_and_continues(
+        self, isolated_disc, tmp_path, caplog
+    ):
+        """Path.glob swallows PermissionError and yields [] — scandir must not.
+
+        The denied browser must be reported AND the readable one must still be
+        scanned, rather than the whole scanner aborting on the first EACCES.
+        """
+        caplog.set_level(logging.INFO, logger=DISCOVERY_LOGGER)
+        denied = tmp_path / ".config" / "google-chrome"
+        _write_chromium_bookmarks(denied / "Default", ["https://github.com/amd/gaia"])
+        _write_chromium_bookmarks(
+            tmp_path / ".config" / "chromium" / "Default",
+            ["https://stackoverflow.com/questions/1"],
+        )
+        os.chmod(denied, 0o000)
+
+        try:
+            with patch("sys.platform", "linux"):
+                results = isolated_disc.scan_browser_bookmarks()
+        finally:
+            os.chmod(denied, 0o755)
+
+        domains = {r["content"].split()[2] for r in results}
+        assert "stackoverflow.com" in domains, "one denial aborted the whole scan"
+
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert warnings, "an unreadable profile root must not be silent"
+        assert "Chrome profiles" in warnings[0].getMessage()
+
+    def test_missing_root_is_quiet(self, isolated_disc, caplog):
+        """A browser that simply is not installed is not a warning."""
+        caplog.set_level(logging.INFO, logger=DISCOVERY_LOGGER)
+        with patch("sys.platform", "linux"):
+            assert isolated_disc.scan_browser_bookmarks() == []
+        assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+class TestXdgDesktopDirs:
+    """A custom-prefix install (Nix, Guix) puts .desktop files nowhere else."""
+
+    def test_xdg_data_dirs_is_honored(self, isolated_disc, tmp_path):
+        prefix = tmp_path / "nix" / "profile" / "share" / "applications"
+        prefix.mkdir(parents=True)
+        (prefix / "inkscape.desktop").write_text(
+            "[Desktop Entry]\nType=Application\nName=Inkscape\nExec=inkscape %f\n",
+            encoding="utf-8",
+        )
+
+        with (
+            patch("sys.platform", "linux"),
+            patch.dict(
+                os.environ,
+                {"XDG_DATA_DIRS": str(tmp_path / "nix" / "profile" / "share")},
+            ),
+        ):
+            results = isolated_disc.scan_installed_apps()
+
+        assert any("Inkscape" in r["content"] for r in results)
+
+    def test_xdg_data_home_is_honored(self, isolated_disc, tmp_path):
+        data_home = tmp_path / "custom-data-home"
+        apps = data_home / "applications"
+        apps.mkdir(parents=True)
+        (apps / "krita.desktop").write_text(
+            "[Desktop Entry]\nType=Application\nName=Krita\n", encoding="utf-8"
+        )
+
+        with (
+            patch("sys.platform", "linux"),
+            patch.dict(os.environ, {"XDG_DATA_HOME": str(data_home)}),
+        ):
+            results = isolated_disc.scan_installed_apps()
+
+        assert any("Krita" in r["content"] for r in results)
+
+    @requires_chmod_denial
+    def test_unreadable_desktop_entry_warns(self, isolated_disc, tmp_path, caplog):
+        caplog.set_level(logging.INFO, logger=DISCOVERY_LOGGER)
+        apps = tmp_path / ".local" / "share" / "applications"
+        apps.mkdir(parents=True)
+        entry = apps / "secret.desktop"
+        entry.write_text(
+            "[Desktop Entry]\nType=Application\nName=Secret App\n", encoding="utf-8"
+        )
+        os.chmod(entry, 0o000)
+
+        try:
+            with patch("sys.platform", "linux"):
+                results = isolated_disc.scan_installed_apps()
+        finally:
+            os.chmod(entry, 0o644)
+
+        assert results == []
+        warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+        assert warnings, "an unreadable .desktop silently dropped an app"
+
+
+class TestSqliteWalSidecar:
+    """Browsers run their history DBs in WAL mode; the -wal holds recent visits."""
+
+    def test_rows_only_in_the_wal_are_read(self, isolated_disc, tmp_path):
+        profile = tmp_path / ".mozilla" / "firefox" / "abc.default"
+        _write_places_sqlite(profile, "https://old.example.com/page")
+
+        # The writer stays open across the scan: that is what makes the -wal
+        # uncheckpointed, and it is the state a running browser's DB is in.
+        # Closing it first would checkpoint the row into the main file and the
+        # assertion below would pass even without copying the sidecar.
+        conn = sqlite3.connect(str(profile / "places.sqlite"))
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA wal_autocheckpoint=0")
+            conn.execute(
+                "INSERT INTO moz_places VALUES (2, ?, ?, ?)",
+                ("https://fresh.example.com/page", 9, int(time.time() * 1_000_000)),
+            )
+            conn.commit()
+
+            wal = profile / "places.sqlite-wal"
+            assert (
+                wal.exists() and wal.stat().st_size > 0
+            ), "test needs a non-empty -wal to be meaningful"
+
+            with patch("sys.platform", "linux"):
+                results = isolated_disc.scan_browser_history()
+        finally:
+            conn.close()
+
+        domains = {r["content"].split()[2] for r in results}
+        assert "fresh.example.com" in domains, "the -wal sidecar was not copied"
+
+    def test_temp_copies_are_cleaned_up(self, isolated_disc, tmp_path):
+        profile = tmp_path / ".mozilla" / "firefox" / "abc.default"
+        _write_places_sqlite(profile, "https://example.com/page")
+        before = set(Path(tempfile.gettempdir()).glob("*.db*"))
+
+        with patch("sys.platform", "linux"):
+            isolated_disc.scan_browser_history()
+
+        leaked = set(Path(tempfile.gettempdir()).glob("*.db*")) - before
+        assert not leaked, f"temp database copies were left behind: {leaked}"

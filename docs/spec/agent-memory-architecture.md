@@ -1506,11 +1506,12 @@ class SystemDiscovery:
 
     def scan_installed_apps(self) -> List[Dict]
         """Windows registry/shortcuts, macOS .app bundles, or Linux .desktop
-        entries. Returns app inventory."""
+        entries across XDG_DATA_DIRS/XDG_DATA_HOME. Returns app inventory."""
 
     def scan_browser_bookmarks(self) -> List[Dict]
-        """Read Chromium/Firefox bookmark files (every profile) plus Safari on
-        macOS. Returns categorized sites."""
+        """Read Chromium/Firefox bookmark files (every profile, including Snap
+        and Flatpak installs on Linux) plus Safari on macOS. Returns
+        categorized sites."""
 
     def scan_browser_history(self, days: int = 30) -> List[Dict]
         """Read browser history DBs (every profile). Returns top domains.
@@ -1523,8 +1524,10 @@ class SystemDiscovery:
 
 def unsupported_reason(source: str) -> Optional[str]
     """Why `source` has no scanner on this platform, or None if it has one.
-    scan_all() and the Agent UI consult this before dispatching, so an
-    unsupported source is reported by name instead of returning empty."""
+    scan_all(), the Agent UI discovery and inference streams, and
+    `gaia memory bootstrap` consult this before dispatching; a scanner called
+    directly applies the same gate itself. An unsupported source is always
+    reported by name instead of returning empty."""
 ```
 
 Each method returns dicts like:

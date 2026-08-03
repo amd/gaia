@@ -1502,3 +1502,129 @@ class TestStreamDiscoveryPlatformReporting:
         ]
         assert skipped, f"macos_app_usage must be named on win32. Body:\n{body}"
         assert "win32" in skipped[0]
+
+
+class TestStreamInferencePlatformReporting:
+    """GET /api/memory/stream-inference gates direct scanner calls too (#1956).
+
+    ``stream_discovery`` consults ``unsupported_reason`` before each scan, but
+    ``stream_inference`` called the scanners directly behind ``except
+    Exception: pass`` — so on macOS it streamed "Collecting app usage
+    frequency..." and then nothing at all.
+    """
+
+    def _stream(self, client, tmp_path, platform, extra_patches=()):
+        """Run the inference stream against an empty fake home on `platform`.
+
+        The cold home yields no sections, so the endpoint returns before any
+        LLM call — no model or network is involved.
+        """
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(patch("sys.platform", platform))
+            stack.enter_context(patch("pathlib.Path.home", return_value=tmp_path))
+            stack.enter_context(patch("gaia.agents.base.discovery._MACOS_APP_DIRS", ()))
+            stack.enter_context(
+                patch("gaia.agents.base.discovery._LINUX_DESKTOP_DIRS", ())
+            )
+            stack.enter_context(patch("gaia.agents.base.discovery.winreg", None))
+            for extra in extra_patches:
+                stack.enter_context(extra)
+            return client.get("/api/memory/stream-inference")
+
+    @pytest.mark.parametrize(
+        "platform,source",
+        [
+            ("darwin", "windows_userassist"),
+            ("linux", "windows_userassist"),
+            ("win32", "macos_app_usage"),
+        ],
+    )
+    def test_unsupported_source_is_reported_by_name(
+        self, client, tmp_path, platform, source
+    ):
+        resp = self._stream(client, tmp_path, platform)
+        body = resp.text
+
+        assert resp.status_code == 200
+        skipped = [
+            line
+            for line in body.splitlines()
+            if source in line and "no scanner" in line
+        ]
+        assert skipped, (
+            f"{source} must be named as unsupported on {platform}, not silently "
+            f"skipped. Body was:\n{body}"
+        )
+        assert '"type": "log"' in skipped[0]
+        assert platform in skipped[0]
+
+    def test_supported_source_is_not_reported_as_unsupported(self, client, tmp_path):
+        mock_macos = patch(
+            "gaia.agents.base.discovery.SystemDiscovery.scan_macos_app_usage",
+            return_value=[],
+        )
+        resp = self._stream(client, tmp_path, "darwin", extra_patches=[mock_macos])
+        body = resp.text
+
+        skipped = [
+            line
+            for line in body.splitlines()
+            if "macos_app_usage" in line and "no scanner" in line
+        ]
+        assert not skipped, f"macos_app_usage must run on darwin. Body:\n{body}"
+
+    def test_scanner_failure_is_reported_with_a_correlation_id(self, client, tmp_path):
+        """A crashing scanner was swallowed whole by `except Exception: pass`."""
+        boom = patch(
+            "gaia.agents.base.discovery.SystemDiscovery.scan_installed_apps",
+            side_effect=RuntimeError("scan exploded"),
+        )
+        resp = self._stream(client, tmp_path, "darwin", extra_patches=[boom])
+        body = resp.text
+
+        failed = [
+            line
+            for line in body.splitlines()
+            if "installed_apps" in line and "unavailable" in line
+        ]
+        assert failed, f"a crashing scanner must be reported. Body:\n{body}"
+        assert "id=" in failed[0], "the log correlation id must reach the client"
+        assert "scan exploded" not in body, "exception detail must stay server-side"
+
+
+class TestCollectSignalGate:
+    """`gaia memory bootstrap --infer` applies the same gate as the UI stream."""
+
+    def test_unsupported_source_is_named_and_returns_empty(self, capsys):
+        from gaia.cli import _collect_signal
+
+        def _must_not_run():
+            raise AssertionError("scanner ran on a platform with no branch")
+
+        with patch("sys.platform", "darwin"):
+            result = _collect_signal("windows_userassist", _must_not_run)
+
+        assert result == []
+        out = capsys.readouterr().out
+        assert "windows_userassist" in out and "darwin" in out
+
+    def test_supported_source_runs(self):
+        from gaia.cli import _collect_signal
+
+        with patch("sys.platform", "darwin"):
+            result = _collect_signal("installed_apps", lambda: [{"content": "app"}])
+
+        assert result == [{"content": "app"}]
+
+    def test_scanner_failure_is_reported_not_swallowed(self, capsys):
+        from gaia.cli import _collect_signal
+
+        def _boom():
+            raise RuntimeError("scan exploded")
+
+        with patch("sys.platform", "darwin"):
+            result = _collect_signal("installed_apps", _boom)
+
+        assert result == []
+        out = capsys.readouterr().out
+        assert "installed_apps" in out and "scan exploded" in out

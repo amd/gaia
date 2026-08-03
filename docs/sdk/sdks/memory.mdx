@@ -798,19 +798,21 @@ for source_name, items in results.items():
 |--------|--------------|-----------------|
 | `scan_file_system(paths)` | Folder names + file extensions in project directories | Project names, languages used |
 | `scan_git_repos(paths)` | `.git/config` files -- remotes, branch names | Repo names, languages, remote URLs |
-| `scan_installed_apps()` | Windows registry + Start Menu; macOS `.app` bundles; Linux `.desktop` entries (incl. Flatpak/Snap) | App inventory |
-| `scan_browser_bookmarks()` | Chrome/Edge/Chromium/Firefox bookmark files, every profile; Safari on macOS | Categorized sites and interests |
+| `scan_installed_apps()` | Windows registry + Start Menu; macOS `.app` bundles; Linux `.desktop` entries across `XDG_DATA_DIRS`/`XDG_DATA_HOME` (incl. Flatpak/Snap) | App inventory |
+| `scan_browser_bookmarks()` | Chrome/Edge/Chromium/Firefox bookmark files, every profile (incl. Snap and Flatpak installs on Linux); Safari on macOS | Categorized sites and interests |
 | `scan_browser_history(days)` | Browser history DBs, every profile (URLs only, no page content); Safari on macOS | Top domains (all flagged sensitive) |
 | `scan_email_accounts()` | Windows credential store; macOS Keychain attributes + Apple Mail; Thunderbird everywhere; Evolution on Linux -- addresses only, never passwords | Email addresses (all flagged sensitive) |
 
 <Note>
 Discovery never reports an unsupported OS as "nothing found". Every source run
-through `scan_all()` or the Agent UI's discovery stream is checked against
-`unsupported_reason(source)` first; when a source has no branch for the running
-platform it is named in a log line (and an SSE `log` event) and mapped to `[]`
-without being called, so "GAIA cannot look here" is never mistaken for "you have
-none". Call `unsupported_reason(source)` yourself if you invoke a scanner
-directly instead of through `scan_all()`.
+through `scan_all()`, the Agent UI's discovery and inference streams, or
+`gaia memory bootstrap` is checked against `unsupported_reason(source)` first;
+when a source has no branch for the running platform it is named in a log line
+(and an SSE `log` event) and mapped to `[]` without being called, so "GAIA
+cannot look here" is never mistaken for "you have none". A scanner called
+directly applies the same gate itself and returns `[]` after logging — but call
+`unsupported_reason(source)` yourself when you need the reason as a string to
+show a user.
 </Note>
 
 Each method returns dicts like:

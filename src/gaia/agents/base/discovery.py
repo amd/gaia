@@ -347,7 +347,8 @@ _SECURITY_ITEM_NOT_FOUND = 44
 _MACOS_APP_DIRS: Tuple[Path, ...] = (Path("/Applications"),)
 
 # System-wide freedesktop entry directories, including the Flatpak and Snap
-# export dirs — that is how those two surface their GUI apps.
+# export dirs — that is how those two surface their GUI apps. Also the spec
+# default when XDG_DATA_DIRS is unset; see _linux_desktop_dirs.
 _LINUX_DESKTOP_DIRS: Tuple[Path, ...] = (
     Path("/usr/share/applications"),
     Path("/usr/local/share/applications"),
@@ -635,7 +636,10 @@ def _safe_copy_and_query_sqlite(
 ) -> List[tuple]:
     """Copy a SQLite DB to temp dir and query it (avoids lock issues).
 
-    Browsers hold locks on their databases; copying first is required.
+    Browsers hold locks on their databases; copying first is required. The
+    ``-wal``/``-shm`` sidecars are copied too — Safari's History.db and
+    Firefox's places.sqlite run in WAL mode, so the most recent visits (exactly
+    what a 30-day scan wants) live in the -wal until the next checkpoint.
 
     Args:
         db_path: The database to copy and read.
@@ -652,10 +656,15 @@ def _safe_copy_and_query_sqlite(
     if not db_path.exists():
         return []
     tmp_path = None
+    sidecar_suffixes = ("-wal", "-shm")
     try:
         tmp_fd, tmp_path = tempfile.mkstemp(suffix=".db")
         os.close(tmp_fd)
         shutil.copy2(str(db_path), tmp_path)
+        for suffix in sidecar_suffixes:
+            sidecar = db_path.with_name(db_path.name + suffix)
+            if sidecar.exists():
+                shutil.copy2(str(sidecar), tmp_path + suffix)
         conn = sqlite3.connect(tmp_path)
         try:
             cursor = conn.execute(query, params)
@@ -672,10 +681,13 @@ def _safe_copy_and_query_sqlite(
         return []
     finally:
         if tmp_path:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
+            for path in (tmp_path, *(tmp_path + s for s in sidecar_suffixes)):
+                try:
+                    os.unlink(path)
+                except FileNotFoundError:
+                    pass
+                except OSError as e:
+                    logger.debug("Could not remove temp database copy %s: %s", path, e)
 
 
 def _categorize_app(app_name: str) -> str:
@@ -821,6 +833,40 @@ def _log_unsupported(source: str) -> List[Dict]:
     return []
 
 
+def _linux_desktop_dirs(home: Path) -> List[Path]:
+    """Resolve the freedesktop application directories for this session.
+
+    Honors ``XDG_DATA_HOME`` and ``XDG_DATA_DIRS``. On Nix, Guix, or any
+    custom-prefix install the applications live nowhere else, so hardcoding
+    /usr/share returns [] on a machine full of apps.
+
+    Args:
+        home: The user's home directory.
+
+    Returns:
+        Application directories in search order, deduplicated. Directories that
+        do not exist are included; the caller skips them.
+    """
+    data_home = Path(os.environ.get("XDG_DATA_HOME") or home / ".local" / "share")
+    # The XDG spec fixes the separator as ":" regardless of platform.
+    data_dirs = [
+        Path(p) for p in (os.environ.get("XDG_DATA_DIRS") or "").split(":") if p.strip()
+    ]
+
+    candidates: List[Path] = [data_home / "applications"]
+    candidates.extend(d / "applications" for d in data_dirs)
+    candidates.append(data_home / "flatpak" / "exports" / "share" / "applications")
+    candidates.extend(_LINUX_DESKTOP_DIRS)
+
+    seen = set()
+    ordered: List[Path] = []
+    for path in candidates:
+        if str(path) not in seen:
+            seen.add(str(path))
+            ordered.append(path)
+    return ordered
+
+
 def _permission_denied_message(label: str, path: Path, error: OSError) -> str:
     """Build an actionable message for a permission-denied read.
 
@@ -868,9 +914,10 @@ class SystemDiscovery:
         """Locate Chromium-family browser profiles for the running platform.
 
         Covers Chrome and Edge on all three platforms, plus the ``chromium``
-        distro package on Linux. Within each user-data root both the default
-        profile and every additional ``Profile N`` directory are returned, so a
-        user with more than one browser profile is not scanned half-blind.
+        distro package and the Snap and Flatpak sandbox locations on Linux.
+        Within each user-data root both the default profile and every additional
+        ``Profile N`` directory are returned, so a user with more than one
+        browser profile is not scanned half-blind.
 
         Returns:
             List of ``(browser_label, profile_dir)`` tuples for profile
@@ -892,29 +939,54 @@ class SystemDiscovery:
             ]
         elif platform == "linux":
             config = self._home / ".config"
+            snap = self._home / "snap"
+            flatpak = self._home / ".var" / "app"
             roots = [
                 ("Chrome", config / "google-chrome"),
                 ("Edge", config / "microsoft-edge"),
                 ("Chromium", config / "chromium"),
+                # Ubuntu ships Chromium as a snap by default, and Flatpak
+                # installs redirect $HOME — neither writes to ~/.config.
+                ("Chromium (Snap)", snap / "chromium" / "common" / "chromium"),
+                (
+                    "Chromium (Flatpak)",
+                    flatpak / "org.chromium.Chromium" / "config" / "chromium",
+                ),
+                (
+                    "Chrome (Flatpak)",
+                    flatpak / "com.google.Chrome" / "config" / "google-chrome",
+                ),
+                (
+                    "Edge (Flatpak)",
+                    flatpak / "com.microsoft.Edge" / "config" / "microsoft-edge",
+                ),
             ]
         else:
             return []
 
         profiles: List[Tuple[str, Path]] = []
         for browser, root in roots:
-            if not root.is_dir():
-                continue
-            candidates = [root / "Default"] + sorted(root.glob("Profile *"))
+            # scandir, not Path.glob: glob swallows PermissionError and yields
+            # nothing, which is the silent-empty result this scanner avoids.
             try:
-                for profile_dir in candidates:
-                    if profile_dir.is_dir():
-                        profiles.append(
-                            (f"{browser} ({profile_dir.name})", profile_dir)
-                        )
+                with os.scandir(str(root)) as entries:
+                    names = sorted(
+                        e.name
+                        for e in entries
+                        if e.is_dir()
+                        and (e.name == "Default" or e.name.startswith("Profile "))
+                    )
+            except (FileNotFoundError, NotADirectoryError):
+                continue
             except PermissionError as e:
                 logger.warning(
                     "%s", _permission_denied_message(f"{browser} profiles", root, e)
                 )
+                continue
+            except OSError as e:
+                logger.debug("Cannot list %s profiles in %s: %s", browser, root, e)
+                continue
+            profiles.extend((f"{browser} ({name})", root / name) for name in names)
         return profiles
 
     def _firefox_profile_roots(self) -> List[Path]:
@@ -1477,10 +1549,10 @@ class SystemDiscovery:
     def _scan_linux_installed_apps(self) -> List[Dict]:
         """Scan Linux ``.desktop`` entries for installed GUI applications.
 
-        Covers the system, user, Flatpak, and Snap application directories —
-        Flatpak and Snap both export a ``.desktop`` file per GUI app, so no
-        package-manager subprocess is needed. Entries hidden from menus
-        (``NoDisplay``, ``Hidden``) and non-application types are skipped.
+        Covers every directory on ``XDG_DATA_DIRS``/``XDG_DATA_HOME`` plus the
+        Flatpak and Snap export dirs — both export a ``.desktop`` file per GUI
+        app, so no package-manager subprocess is needed. Entries hidden from
+        menus (``NoDisplay``, ``Hidden``) and non-application types are skipped.
 
         Returns:
             List of discovered fact dicts, one per unique application.
@@ -1488,19 +1560,12 @@ class SystemDiscovery:
         results: List[Dict] = []
         seen_apps: set = set()
 
-        local_share = self._home / ".local" / "share"
-        desktop_dirs = [
-            *_LINUX_DESKTOP_DIRS,
-            local_share / "applications",
-            local_share / "flatpak" / "exports" / "share" / "applications",
-        ]
-
-        for desktop_dir in desktop_dirs:
-            if not desktop_dir.is_dir():
-                continue
+        for desktop_dir in _linux_desktop_dirs(self._home):
             try:
                 with os.scandir(str(desktop_dir)) as scan:
                     entries = sorted(scan, key=lambda e: e.name)
+            except (FileNotFoundError, NotADirectoryError):
+                continue
             except PermissionError as e:
                 logger.warning(
                     "%s", _permission_denied_message("installed apps", desktop_dir, e)
@@ -1534,6 +1599,11 @@ class SystemDiscovery:
         parser = configparser.ConfigParser(interpolation=None, strict=False)
         try:
             parser.read_string(path.read_text(encoding="utf-8", errors="replace"))
+        except PermissionError as e:
+            logger.warning(
+                "%s", _permission_denied_message("an installed app", path, e)
+            )
+            return ""
         except (OSError, configparser.Error) as e:
             logger.debug("Failed to parse desktop entry %s: %s", path, e)
             return ""
@@ -1935,27 +2005,31 @@ class SystemDiscovery:
             try:
                 self._scan_credential_manager(seen_emails, results)
             except Exception as e:
-                logger.debug("Credential Manager scan failed: %s", e)
+                # A broken scan and an empty one both look like "no accounts"
+                # to the user, so say which one happened.
+                logger.warning(
+                    "Credential Manager scan failed, no accounts read from it: %s", e
+                )
         elif platform == "darwin":
             try:
                 self._scan_macos_keychain(seen_emails, results)
             except Exception as e:
-                # A broken scan and an empty one both look like "no accounts"
-                # to the user, so say which one happened.
                 logger.warning("Keychain scan failed, no accounts read from it: %s", e)
 
         # 2. Thunderbird profiles (prefs.js) — all platforms
         try:
             self._scan_thunderbird(seen_emails, results)
         except Exception as e:
-            logger.debug("Thunderbird scan failed: %s", e)
+            logger.warning("Thunderbird scan failed, no accounts read from it: %s", e)
 
         # 3. Platform identity store
         if platform == "win32":
             try:
                 self._scan_outlook_registry(seen_emails, results)
             except Exception as e:
-                logger.debug("Outlook registry scan failed: %s", e)
+                logger.warning(
+                    "Outlook registry scan failed, no accounts read from it: %s", e
+                )
         elif platform == "darwin":
             try:
                 self._scan_apple_mail(seen_emails, results)
@@ -1979,14 +2053,22 @@ class SystemDiscovery:
         if sys.platform != "win32":
             return
 
+        # CREATE_NO_WINDOW is defined only on Windows builds of subprocess.
+        kwargs: Dict[str, Any] = {}
+        if os.name == "nt":
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+
         try:
             output = subprocess.check_output(
                 ["cmdkey", "/list"],
                 text=True,
                 timeout=10,
-                creationflags=subprocess.CREATE_NO_WINDOW,
+                **kwargs,
             )
-        except (subprocess.SubprocessError, FileNotFoundError, OSError):
+        except (subprocess.SubprocessError, FileNotFoundError, OSError) as e:
+            logger.warning(
+                "Credential Manager scan failed, no accounts read from it: %s", e
+            )
             return
 
         # Look for email-related targets and extract user fields
@@ -3106,8 +3188,15 @@ class SystemDiscovery:
 
         Returns:
             List of profile fact dicts for frequently launched applications.
+            Empty on a platform with no branch — reported, never silent.
         """
-        if os.name != "nt" or winreg is None:
+        if unsupported_reason("windows_userassist"):
+            return _log_unsupported("windows_userassist")
+        if winreg is None:
+            logger.warning(
+                "UserAssist scan skipped: the winreg module is unavailable on this "
+                "interpreter, so no app-launch frequency was read."
+            )
             return []
 
         import codecs
@@ -3299,17 +3388,17 @@ class SystemDiscovery:
         - **Linux**: parses ``~/.local/share/recently-used.xbel``.
 
         Returns:
-            List of profile fact dicts for file-type usage patterns.
+            List of profile fact dicts for file-type usage patterns. Empty on a
+            platform with no branch — reported, never silent.
         """
-        import sys
-
-        if sys.platform == "win32":
+        platform = _platform_key()
+        if platform == "win32":
             return self._scan_windows_recent_files()
-        elif sys.platform == "darwin":
+        if platform == "darwin":
             return self._scan_macos_recent_files()
-        elif sys.platform.startswith("linux"):
+        if platform == "linux":
             return self._scan_linux_recent_files()
-        return []
+        return _log_unsupported("recent_file_types")
 
     def _scan_windows_recent_files(self) -> List[Dict]:
         """Read Windows Recent folder to detect recently opened file type patterns.
@@ -3661,12 +3750,11 @@ class SystemDiscovery:
         applications are installed and actively used.
 
         Returns:
-            List of profile fact dicts for detected macOS applications.
+            List of profile fact dicts for detected macOS applications. Empty on
+            a platform with no branch — reported, never silent.
         """
-        import sys
-
-        if sys.platform != "darwin":
-            return []
+        if unsupported_reason("macos_app_usage"):
+            return _log_unsupported("macos_app_usage")
 
         # Known app data dir names -> friendly app names
         APP_SUPPORT_MAP = {
