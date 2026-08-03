@@ -43,7 +43,9 @@ class TestListUnsubscribeSupplementarySignal:
         )
         assert r.confident is True
         assert r.category == CATEGORY_PROMOTIONAL
-        assert "list-unsubscribe" in r.reason.lower()
+        # #2744: a fact about the message (it reads like a newsletter),
+        # never the RFC 2369 header name that triggered it.
+        assert "newsletter" in r.reason.lower()
 
     def test_no_list_unsubscribe_no_other_signal_still_escalates(self):
         """Sanity: the flag is what makes the difference, not an unrelated change."""
@@ -130,7 +132,7 @@ class TestListUnsubscribeCommitmentVeto:
             has_list_unsubscribe=True,
         )
         assert r.confident is False
-        assert "deadline/commitment signal" in r.reason
+        assert "mentions a deadline" in r.reason
 
     def test_list_unsubscribe_without_commitment_signal_is_confident(self):
         r = classify_category_heuristic(
@@ -190,7 +192,11 @@ class TestListUnsubscribeCategoryFallbackNeverWins:
         )
         assert r.confident is True
         assert r.category == CATEGORY_PROMOTIONAL
-        assert "promotional keyword" in r.reason
+        # #2744: rule 6's reason text (a fact: this looks promotional) must
+        # win over rule 8.5's ("looks like a newsletter") -- proves
+        # precedence without asserting the retired internal keyword-match
+        # wording.
+        assert r.reason == "Looks like a promotional email"
 
     def test_automated_sender_fallback_still_takes_priority(self):
         """Rule 7 (automated sender) fires before the header check -- the
@@ -205,4 +211,6 @@ class TestListUnsubscribeCategoryFallbackNeverWins:
         )
         assert r.confident is True
         assert r.category == CATEGORY_FYI
-        assert "automated-sender keyword" in r.reason
+        # #2744: rule 7's reason (a fact: sent by an automated address)
+        # must win over rule 8.5's ("looks like a newsletter").
+        assert r.reason == "Automated or no-reply sender"
