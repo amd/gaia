@@ -55,7 +55,7 @@ from typing import Any, Dict, Iterator, List, Literal, NoReturn, Optional, Tuple
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, StreamingResponse
 from gaia_agent_email import caller_auth
-from gaia_agent_email.config import EmailAgentConfig
+from gaia_agent_email.config import DEFAULT_INBOX_SCAN_MESSAGES, EmailAgentConfig
 from gaia_agent_email.context_budget import estimate_tokens, thread_budget_tokens
 from gaia_agent_email.contract import (
     ActionItem,
@@ -2423,7 +2423,7 @@ def _get_or_refresh_attention_view(
     responses={**_CONNECTOR_ERROR_RESPONSES},
 )
 async def get_attention_view(
-    max_messages: int = 100,
+    max_messages: int = DEFAULT_INBOX_SCAN_MESSAGES,
     backends: Dict[str, Any] = Depends(get_attention_backends),
 ) -> EmailAttentionResponse:
     """The read-only "what needs you" attention view (#2582).

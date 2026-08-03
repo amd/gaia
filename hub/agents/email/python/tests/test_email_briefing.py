@@ -139,6 +139,10 @@ def test_briefing_job_produces_email_pre_scan_envelope():
         "total_unread",
         "total_inbox",
         "degraded",
+        # #2743: the one-card worklist view + its filtered remainder.
+        "needs_you",
+        "needs_you_total",
+        "bulk",
     }
     assert any(i["message_id"] == "m1" for i in briefing["suggested_archives"])
     assert record["generated_at"]  # stamped for the pull surface

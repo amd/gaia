@@ -20,6 +20,7 @@ from __future__ import annotations
 import inspect
 import json
 import re
+import time
 from datetime import date
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
@@ -28,7 +29,10 @@ from gaia_agent_email.body_normalize import (
     strip_quoted_trail,
     strip_reply_chain_and_signature,
 )
-from gaia_agent_email.config import default_inbox_scan_ceiling
+from gaia_agent_email.config import (
+    DEFAULT_INBOX_SCAN_MESSAGES,
+    default_inbox_scan_ceiling,
+)
 from gaia_agent_email.context_budget import (
     active_profile_ctx_size,
     envelope_budget_tokens,
@@ -1106,7 +1110,7 @@ def _fetch_messages(
 def triage_inbox_impl(
     gmail,
     *,
-    max_messages: int = 25,
+    max_messages: int = DEFAULT_INBOX_SCAN_MESSAGES,
     label_ids: Optional[List[str]] = None,
     session_preferences: Optional[Mapping[str, Any]] = None,
     force_llm: bool = False,
@@ -1456,6 +1460,20 @@ PRE_SCAN_ARCHIVE_CAP = 10
 # reaches the caller via ``totals["needs_review"]``.
 PRE_SCAN_NEEDS_REVIEW_CAP = 5
 
+# #2743 — the "one card" worklist. Capped small on purpose: a triage card
+# listing 30 rows is a report, not a worklist a person can act on today.
+NEEDS_YOU_CAP = 5
+
+# Filter-test ids for BulkSummary.filter_tests (#2743) — ids, never prose
+# (see contract.py's NeedsYouItem/BulkSummary docstrings): a renderer maps
+# each id to a sentence, so a description can't silently go stale the
+# moment the routing below changes. Named after the actual routing branch
+# in ``pre_scan_inbox_impl`` that put a message into the filtered remainder.
+FILTER_TEST_PROMOTIONAL = "category_promotional"
+FILTER_TEST_FYI = "category_fyi"
+FILTER_TEST_PERSONAL = "category_personal"
+FILTER_TEST_ARCHIVE_PREFERENCE = "session_archive_preference"
+
 # Plain INBOX — read AND unread mail (#2638). Previously ["INBOX", "UNREAD"],
 # on the rationale that narrowing to unread-only made the listing query's
 # resultSizeEstimate mean "how many unread" instead of "how big is the
@@ -1583,10 +1601,105 @@ def needs_review_decision(r: Mapping[str, Any]) -> bool:
     return not r.get("confident", True)
 
 
+# kind priority for needs_you ordering (#2743): waiting-on-you/needs-response
+# first, then meeting proposals, then needs-review, then carried-over action
+# items — matches the published ``AttentionItemKind`` values so a renderer
+# never has to special-case a string it doesn't recognize.
+_NEEDS_YOU_KIND_ORDER = {
+    "waiting_on_you": 0,
+    "meeting_request": 1,
+    "needs_review": 2,
+    "action_item": 3,
+}
+
+
+def _build_needs_you_view(
+    *,
+    urgent: List[Dict[str, Any]],
+    actionable: List[Dict[str, Any]],
+    needs_review: List[Dict[str, Any]],
+    cap: int = NEEDS_YOU_CAP,
+) -> Dict[str, Any]:
+    """Build the ``needs_you`` worklist as a VIEW over already-classified
+    buckets — never a second, independent classification pass (#2743
+    Adversarial Reflection #1: urgent mail must never vanish because this
+    view re-derived from raw scan results and missed it).
+
+    Every ``urgent``/``actionable`` item is tagged ``waiting_on_you`` unless
+    its heuristic already flagged ``is_meeting_request``, in which case it's
+    tagged ``meeting_request`` instead; every ``needs_review`` item is tagged
+    ``needs_review``. Ordered by kind (see ``_NEEDS_YOU_KIND_ORDER``), then
+    oldest-first within a kind (mirrors ``_needs_review_sort_key``), then
+    capped at ``cap`` — ``needs_you_total`` carries the true pre-cap count so
+    a renderer can say "N of M" honestly rather than silently truncating.
+    """
+    candidates: List[Dict[str, Any]] = []
+    for item in (*urgent, *actionable):
+        kind = "meeting_request" if item.get("is_meeting_request") else "waiting_on_you"
+        candidates.append({**item, "kind": kind})
+    for item in needs_review:
+        candidates.append({**item, "kind": "needs_review"})
+
+    candidates.sort(
+        key=lambda c: (
+            _NEEDS_YOU_KIND_ORDER.get(c["kind"], 99),
+            _parse_epoch_millis(c.get("internal_date")),
+        )
+    )
+
+    total = len(candidates)
+    now_ms = int(time.time() * 1000)
+    needs_you: List[Dict[str, Any]] = []
+    for ref, c in enumerate(candidates[: max(0, cap)], start=1):
+        internal_date = _parse_epoch_millis(c.get("internal_date"))
+        age_seconds = max(0, (now_ms - internal_date) // 1000) if internal_date else None
+        needs_you.append(
+            {
+                "ref": ref,
+                "kind": c["kind"],
+                "message_id": c.get("message_id"),
+                "thread_id": c.get("thread_id"),
+                "sender": c.get("sender", ""),
+                "subject": c.get("subject", ""),
+                "age_seconds": age_seconds,
+                "why": c.get("why") or c.get("reason") or "",
+                "detail": [],
+                "due_hint": c.get("due_hint"),
+                "mailbox": c.get("mailbox"),
+            }
+        )
+    return {"needs_you": needs_you, "needs_you_total": total}
+
+
+def _merge_needs_you_candidates(
+    candidates: List[Dict[str, Any]], *, cap: int = NEEDS_YOU_CAP
+) -> List[Dict[str, Any]]:
+    """Re-order, re-cap, and re-number ``ref`` across every backend's own
+    ``needs_you`` list (#2743 Increment 1 step 5: "re-assign ref after the
+    merge so numbering is contiguous across mailboxes").
+
+    Each backend already ordered and capped its own candidates via
+    :func:`_build_needs_you_view`; this only re-sorts the union by the same
+    kind-then-age policy and reassigns 1-based, contiguous ``ref`` — it never
+    re-derives ``kind``/``why`` from anything.
+    """
+    ordered = sorted(
+        candidates,
+        key=lambda c: (
+            _NEEDS_YOU_KIND_ORDER.get(c.get("kind"), 99),
+            -(c.get("age_seconds") or 0),
+        ),
+    )
+    merged: List[Dict[str, Any]] = []
+    for ref, c in enumerate(ordered[: max(0, cap)], start=1):
+        merged.append({**c, "ref": ref})
+    return merged
+
+
 def pre_scan_inbox_impl(
     gmail,
     *,
-    max_messages: int = 25,
+    max_messages: int = DEFAULT_INBOX_SCAN_MESSAGES,
     urgent_cap: int = PRE_SCAN_URGENT_CAP,
     actionable_cap: int = PRE_SCAN_ACTIONABLE_CAP,
     archive_cap: int = PRE_SCAN_ARCHIVE_CAP,
@@ -1668,6 +1781,10 @@ def pre_scan_inbox_impl(
         informational: List[Dict[str, Any]] = []
         suggested_archives: List[Dict[str, Any]] = []
         needs_review_ranked: List[tuple] = []
+        # Ids of the filter tests actually applied this run (#2743) — feeds
+        # ``bulk.filter_tests``. A set, not a list: the same routing branch
+        # firing on 50 messages names its test once, not 50 times.
+        filter_test_ids: set = set()
 
         for r in triage["results"]:
             base = {
@@ -1676,6 +1793,10 @@ def pre_scan_inbox_impl(
                 "sender": r.get("from", ""),
                 "subject": r.get("subject", ""),
                 "is_meeting_request": bool(r.get("is_meeting_request", False)),
+                # Epoch-millis string, carried through so #2743's needs_you
+                # view can order oldest-first and compute age_seconds —
+                # never part of the public PreScanItem shape.
+                "internal_date": r.get("internal_date"),
             }
             why = r.get("rationale", "")
             category = r.get("category", CATEGORY_FYI)
@@ -1720,6 +1841,7 @@ def pre_scan_inbox_impl(
                     )
                 else:
                     suggested_archives.append({**base, "reason": why})
+                    filter_test_ids.add(FILTER_TEST_PROMOTIONAL)
             else:
                 # FYI and PERSONAL share the keep / no-action bucket when
                 # confident; unconfident goes to needs_review instead (the
@@ -1733,6 +1855,11 @@ def pre_scan_inbox_impl(
                     )
                 else:
                     informational.append({**base, "why": why})
+                    filter_test_ids.add(
+                        FILTER_TEST_FYI
+                        if category == CATEGORY_FYI
+                        else FILTER_TEST_PERSONAL
+                    )
 
         needs_review_ranked.sort(key=lambda pair: pair[0])
         needs_review = [item for _, item in needs_review_ranked]
@@ -1744,6 +1871,8 @@ def pre_scan_inbox_impl(
         # applies to ``needs_review`` — an unconfident guess must not be
         # silently archived by a stale category preference.
         if category_defaults.get(CATEGORY_FYI) == "archive":
+            if informational:
+                filter_test_ids.add(FILTER_TEST_ARCHIVE_PREFERENCE)
             for item in informational:
                 suggested_archives.append(
                     {
@@ -1760,20 +1889,42 @@ def pre_scan_inbox_impl(
                 )
             informational = []
 
+        # #2743: needs_you is a VIEW over the just-built urgent/actionable/
+        # needs_review — built from the TRUE (pre-cap) lists so a message
+        # dropped by an unrelated per-section cap can never silently miss
+        # this view. Computed BEFORE stripping ``internal_date`` below.
+        needs_you_view = _build_needs_you_view(
+            urgent=urgent, actionable=actionable, needs_review=needs_review
+        )
+        # bulk is the filtered informational/promotional remainder, computed
+        # AFTER the archive-preference promotion above so it reflects what
+        # actually ended up filtered, not an intermediate state.
+        bulk_count = len(informational) + len(suggested_archives)
+        bulk_view = {"count": bulk_count, "filter_tests": sorted(filter_test_ids)}
+
+        def _drop_internal_date(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+            # ``internal_date`` is a needs_you-only working field (#2743) —
+            # never part of the public PreScanItem shape (extra="forbid").
+            return [{k: v for k, v in item.items() if k != "internal_date"} for item in items]
+
         scanned = len(triage["results"])
         inbox_counts = _fetch_inbox_counts(gmail)
         out = {
             "kind": "email_pre_scan",
-            "urgent": urgent[: max(0, urgent_cap)],
-            "actionable": actionable[: max(0, actionable_cap)],
+            "urgent": _drop_internal_date(urgent[: max(0, urgent_cap)]),
+            "actionable": _drop_internal_date(actionable[: max(0, actionable_cap)]),
             "informational_count": len(informational),
             # #2633: empty unless the caller opted in — the full list was
             # already computed above, so honoring the flag costs nothing
             # beyond what this call already did.
-            "informational": informational if include_informational else [],
-            "suggested_archives": suggested_archives[: max(0, archive_cap)],
+            "informational": (
+                _drop_internal_date(informational) if include_informational else []
+            ),
+            "suggested_archives": _drop_internal_date(
+                suggested_archives[: max(0, archive_cap)]
+            ),
             "suggested_drafts": [],
-            "needs_review": needs_review[: max(0, needs_review_cap)],
+            "needs_review": _drop_internal_date(needs_review[: max(0, needs_review_cap)]),
             "preferences_applied": {
                 "priority_senders": sorted(prefs.get("priority_senders") or []),
                 "low_priority_senders": sorted(prefs.get("low_priority_senders") or []),
@@ -1798,6 +1949,9 @@ def pre_scan_inbox_impl(
             # silent partial result), so this layer never degrades on its
             # own — only merge_pre_scan_backends' multi-mailbox fan-out can.
             "degraded": False,
+            "needs_you": needs_you_view["needs_you"],
+            "needs_you_total": needs_you_view["needs_you_total"],
+            "bulk": bulk_view,
         }
         st["result_summary"] = {
             "urgent": out["totals"]["urgent"],
@@ -1813,7 +1967,7 @@ def pre_scan_inbox_impl(
 def merge_pre_scan_backends(
     backends: "Mapping[str, Any]",
     *,
-    max_messages: int = 25,
+    max_messages: int = DEFAULT_INBOX_SCAN_MESSAGES,
     session_preferences: Optional[Mapping[str, Any]] = None,
     force_llm: bool = False,
     include_informational: bool = False,
@@ -1864,6 +2018,12 @@ def merge_pre_scan_backends(
     total_inbox_unknown = False
     merged_prefs_applied: Dict[str, Any] = {}
     mailbox_errors: List[Dict[str, Any]] = []
+    # #2743: each backend already built its own needs_you/bulk view; merge
+    # (never re-derive) across every connected mailbox.
+    needs_you_candidates: List[Dict[str, Any]] = []
+    needs_you_total = 0
+    bulk_count = 0
+    bulk_filter_test_ids: set = set()
     for index, (provider, backend) in enumerate(provider_backends):
         if scanned >= max_messages:
             break
@@ -1914,6 +2074,13 @@ def merge_pre_scan_backends(
                     remember_mailbox(item.get("message_id"), provider)
                     remember_mailbox(item.get("thread_id"), provider)
                 dest.append(item)
+        for item in out.get("needs_you", []):
+            item["mailbox"] = provider
+            needs_you_candidates.append(item)
+        needs_you_total += int(out.get("needs_you_total", 0))
+        backend_bulk = out.get("bulk") or {}
+        bulk_count += int(backend_bulk.get("count", 0))
+        bulk_filter_test_ids.update(backend_bulk.get("filter_tests") or [])
         informational_count += int(out.get("informational_count", 0))
         backend_total_unread = out.get("total_unread")
         if backend_total_unread is None:
@@ -1953,6 +2120,9 @@ def merge_pre_scan_backends(
         "total_unread": None if total_unread_unknown else total_unread,
         "total_inbox": None if total_inbox_unknown else total_inbox,
         "degraded": bool(mailbox_errors),
+        "needs_you": _merge_needs_you_candidates(needs_you_candidates),
+        "needs_you_total": needs_you_total,
+        "bulk": {"count": bulk_count, "filter_tests": sorted(bulk_filter_test_ids)},
     }
     if mailbox_errors and len(mailbox_errors) == len(backends):
         # Every connected mailbox failed — surface it loudly rather than
@@ -2292,7 +2462,7 @@ class ReadToolsMixin:
         # a real triage isn't abandoned mid-run (#2114). pre_scan_inbox stays
         # the fast alternative for "what's urgent right now" asks.
         @tool(timeout=600.0)
-        def triage_inbox(max_messages: int = 50) -> str:
+        def triage_inbox(max_messages: int = DEFAULT_INBOX_SCAN_MESSAGES) -> str:
             """Raw per-message classifier. NOT the tool for "triage my inbox".
 
             When the user asks to triage, review, or check their inbox, call
@@ -2321,7 +2491,9 @@ class ReadToolsMixin:
             ``results``) as the complete view when results are condensed.
             """
             try:
-                max_messages = max(1, min(int(max_messages or 50), scan_ceiling))
+                max_messages = max(
+                    1, min(int(max_messages or DEFAULT_INBOX_SCAN_MESSAGES), scan_ceiling)
+                )
 
                 # Phase 2 (#1603): scan every connected mailbox, tag each item
                 # with its source mailbox, split the budget across mailboxes,
@@ -2366,7 +2538,8 @@ class ReadToolsMixin:
 
         @tool
         def pre_scan_inbox(
-            max_messages: int = 50, include_informational: bool = False
+            max_messages: int = DEFAULT_INBOX_SCAN_MESSAGES,
+            include_informational: bool = False,
         ) -> str:
             """Pre-scan the inbox into a typed envelope for the chat
             triage card.
@@ -2427,7 +2600,9 @@ class ReadToolsMixin:
                     (default False — see above).
             """
             try:
-                max_messages = max(1, min(int(max_messages or 50), scan_ceiling))
+                max_messages = max(
+                    1, min(int(max_messages or DEFAULT_INBOX_SCAN_MESSAGES), scan_ceiling)
+                )
                 # Phase 2 (#1603): pre-scan every connected mailbox, tag each
                 # section item with its source mailbox, split the budget, merge.
                 return _envelope_ok(

@@ -5,7 +5,7 @@
 > **Component:** Email request/response contract (issue #1262)
 > **Module:** `gaia_agent_email.contract`
 > **Validation:** pydantic v2
-> **Schema version:** `2.10`
+> **Schema version:** `2.11`
 
 ---
 
@@ -31,7 +31,7 @@ stable shape.
 - **Fail loudly.** Every model forbids unknown fields (`extra="forbid"`). An
   off-contract payload raises a `ValidationError` naming the offending field,
   never a silently coerced result.
-- **Versioned.** `SCHEMA_VERSION` (`"2.10"`) is pinned in the module and echoed in
+- **Versioned.** `SCHEMA_VERSION` (`"2.11"`) is pinned in the module and echoed in
   every request and response so a consumer can detect a breaking change.
 
 ### Version history
@@ -56,6 +56,7 @@ the npm package accepts any higher MINOR), so the one breaking change below —
 | `2.8` | Additive (#2582): new read-only attention-view surface — `GET /v1/email/attention` merges inbound waiting-on-you items (#2581), meeting proposals found during the scan (#2583), unreviewed messages (#2584), and open action items (#2110/#2525) into one "what needs you" read-model, computed on open and cached. No existing shape changed, so `2.7` consumers keep working. |
 | `2.9` | Additive (#2638/#2643): `EmailPreScanResult` gains `total_inbox` (exact whole-INBOX message count, nullable). Pre-scan now scans read + unread INBOX mail, not unread-only (#2638) — `total_unread` alone stopped being an honest scan-coverage denominator once read mail counts too, so `total_inbox` is the new one. No existing field changed, so `2.8` consumers keep working. |
 | `2.10` | Additive (#2716): `AttentionCoverage` gains `message_errors` (list of `{message_id, error}`, nullable) and `degraded` can now be `true` for a message-level gap, not only a mailbox-level one. A Gmail rate-limit that survives retry now drops the one affected message instead of failing the whole attention scan — every other message in the same mailbox is still present in `items`. No existing field changed, so `2.9` consumers keep working. |
+| `2.11` | Additive (#2743): `EmailPreScanResult` gains `needs_you` (list of `NeedsYouItem`), `needs_you_total` (int), and `bulk` (`BulkSummary`, nullable) — a single worklist view built on top of the already-classified urgent/actionable/needs_review buckets, never a second independent classification pass. `NeedsYouItem.kind` reuses the published `AttentionItemKind` enum. No existing field changed, so `2.10` consumers keep working. |
 
 ---
 
@@ -261,7 +262,7 @@ single-use send-confirmation token.
 
 ```json
 {
-  "schema_version": "2.10",
+  "schema_version": "2.11",
   "payload": {
     "kind": "single",
     "principal": { "name": "Alice Example", "email": "alice@example.com" },
@@ -283,7 +284,7 @@ single-use send-confirmation token.
 
 ```json
 {
-  "schema_version": "2.10",
+  "schema_version": "2.11",
   "request_kind": "single",
   "result": {
     "category": "NEEDS_RESPONSE",
@@ -310,7 +311,7 @@ single-use send-confirmation token.
 
 ```json
 {
-  "schema_version": "2.10",
+  "schema_version": "2.11",
   "payload": {
     "kind": "thread",
     "principal": { "name": "Alice Example", "email": "alice@example.com" },
@@ -343,7 +344,7 @@ single-use send-confirmation token.
 
 ```json
 {
-  "schema_version": "2.10",
+  "schema_version": "2.11",
   "request_kind": "thread",
   "result": {
     "category": "NEEDS_RESPONSE",
@@ -403,7 +404,7 @@ The MCP surface mirrors this with a `triage_email_batch` tool (the single
 
 ```json
 {
-  "schema_version": "2.10",
+  "schema_version": "2.11",
   "items": [
     {
       "kind": "single",
@@ -433,7 +434,7 @@ The MCP surface mirrors this with a `triage_email_batch` tool (the single
 
 ```json
 {
-  "schema_version": "2.10",
+  "schema_version": "2.11",
   "results": [
     {
       "index": 0,

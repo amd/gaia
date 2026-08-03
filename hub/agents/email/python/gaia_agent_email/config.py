@@ -89,6 +89,15 @@ def default_undo_window_seconds() -> int:
     return value
 
 
+# The single owner of "how many messages does a scan look at by default"
+# (#2643 measured/pinned this at 50; #2743 collapsed every call site that
+# used to restate its own literal — 25, 50, or 100 — into this one constant,
+# closing the bug class where two scans of different depth produced two
+# disagreeing summaries of the same inbox). Distinct from the ceiling below:
+# this is what a caller gets when it asks for the default; the ceiling is
+# the most it can ask for even when it explicitly requests more.
+DEFAULT_INBOX_SCAN_MESSAGES = 50
+
 # Per-call ceiling for inbox-scanning tools (triage / pre-scan). Bounds an
 # interactive call so the LLM can't trigger a thousand-message scan. The eval
 # benchmark raises it to cover a whole labelled corpus deterministically.

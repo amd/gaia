@@ -1129,6 +1129,10 @@ def test_prescan_returns_card_envelope_shape(prescan_client):
         "total_inbox",
         "degraded",
         "mailbox_errors",
+        # #2743: the one-card worklist view + its filtered remainder.
+        "needs_you",
+        "needs_you_total",
+        "bulk",
     }
     for section in ("urgent", "actionable", "suggested_archives"):
         assert isinstance(result[section], list)

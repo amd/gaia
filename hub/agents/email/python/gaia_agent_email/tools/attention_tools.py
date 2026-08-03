@@ -30,13 +30,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Mapping, Optional
 
+from gaia_agent_email.config import DEFAULT_INBOX_SCAN_MESSAGES
 from gaia_agent_email.tools.read_tools import (
     _fetch_total_unread,
     needs_review_decision,
     triage_inbox_impl,
-)
-from gaia_agent_email.tools.waiting_on_you_tools import (
-    DEFAULT_MAX_INBOX_SCAN as _WAITING_ON_YOU_DEFAULT_MAX_INBOX,
 )
 from gaia_agent_email.tools.waiting_on_you_tools import (
     detect_waiting_on_you_impl,
@@ -49,11 +47,12 @@ from gaia.logger import get_logger
 log = get_logger(__name__)
 
 # How many INBOX messages to scan for meeting proposals / needs-review per
-# mailbox. Larger than the pre-scan default (25) because this view's whole
-# point is to catch what a smaller scan would miss — but still bounded, per
-# #2581's MAX_INBOX_SCAN_CAP precedent, so a caller can't request an
-# unbounded mailbox sweep.
-DEFAULT_ATTENTION_SCAN_MESSAGES = 100
+# mailbox. Unified with the pre-scan/triage default (#2743) — two scans of
+# different depth over the same inbox is exactly the bug class that let two
+# summary boxes disagree about the same mailbox. Still bounded by
+# MAX_ATTENTION_SCAN_MESSAGES (#2581's MAX_INBOX_SCAN_CAP precedent) so a
+# caller can't request an unbounded mailbox sweep.
+DEFAULT_ATTENTION_SCAN_MESSAGES = DEFAULT_INBOX_SCAN_MESSAGES
 MAX_ATTENTION_SCAN_MESSAGES = 200
 
 
@@ -166,7 +165,11 @@ def _scan_one_backend(
 
     dropped_message_ids: List[str] = list(triage.get("dropped_ids") or [])
 
-    waiting_budget = waiting_on_you_max_inbox or _WAITING_ON_YOU_DEFAULT_MAX_INBOX
+    # Wired to the shared constant (#2743), not ``waiting_on_you_tools``'
+    # own default — that value happened to already equal 50, and coincidental
+    # agreement between two independently-set defaults is exactly the bug
+    # class this issue exists to remove.
+    waiting_budget = waiting_on_you_max_inbox or DEFAULT_INBOX_SCAN_MESSAGES
     try:
         waiting = detect_waiting_on_you_impl(
             backend, max_inbox=waiting_budget, debug=debug
