@@ -11,32 +11,44 @@ import (
 // The SSE payload is a SUPERSET of the REST contract: merge_pre_scan_backends
 // tags each item with `mailbox` and may add a top-level `mailbox_errors`, so
 // both are decoded here even though the REST models do not carry them.
+//
+// #2743 replaced the four-bucket rendering (urgent/actionable/needs_review/
+// suggested_archives) with the ONE `needs_you` worklist view: a deterministic
+// VIEW the server already built over those buckets plus the waiting-on-you
+// detector and persisted action items, capped at 5 and pre-ordered by kind
+// then oldest-first. This client renders exactly that ONE list, never
+// recomputing an order or a `ref` of its own -- the server's `ref` is
+// displayed verbatim (stable within this one render only; a rescan
+// re-orders and renumbers by design).
 
-type preScanItem struct {
-	MessageID        string `json:"message_id"`
-	ThreadID         string `json:"thread_id"`
-	Sender           string `json:"sender"`
-	Subject          string `json:"subject"`
-	Why              string `json:"why"`
-	Reason           string `json:"reason"`
-	Mailbox          string `json:"mailbox"`
-	IsMeetingRequest bool   `json:"is_meeting_request"`
+type needsYouItem struct {
+	Ref        int      `json:"ref"`
+	Kind       string   `json:"kind"`
+	MessageID  string   `json:"message_id"`
+	ThreadID   string   `json:"thread_id"`
+	Sender     string   `json:"sender"`
+	Subject    string   `json:"subject"`
+	AgeSeconds *int     `json:"age_seconds"`
+	Why        string   `json:"why"`
+	Detail     []string `json:"detail"`
+	DueHint    string   `json:"due_hint"`
+	Mailbox    string   `json:"mailbox"`
 }
 
-// rationale is the row's justification. Archive rows carry `reason`, urgent and
-// actionable rows carry `why`; the card reads reason ?? why. A row without one
-// is a claim, with one it is an argument the user can check — which is what
-// makes a local 4B model's triage worth trusting.
-func (it preScanItem) rationale() string {
-	return firstNonEmpty(it.Reason, it.Why)
+// combinedWhy folds the due hint into the reason line, mirroring the old
+// per-bucket renderer's `reason` handling: a due date is part of why the
+// row needs attention, not a separate fact to hunt for.
+func (it needsYouItem) combinedWhy() string {
+	why := it.Why
+	if it.DueHint != "" {
+		why = strings.TrimSuffix(why, ".") + " — due " + it.DueHint
+	}
+	return why
 }
 
-type preScanTotals struct {
-	Urgent            int `json:"urgent"`
-	Actionable        int `json:"actionable"`
-	Informational     int `json:"informational"`
-	SuggestedArchives int `json:"suggested_archives"`
-	NeedsReview       int `json:"needs_review"`
+type bulkSummary struct {
+	Count       int      `json:"count"`
+	FilterTests []string `json:"filter_tests"`
 }
 
 type preScanPreferences struct {
@@ -52,18 +64,15 @@ type mailboxError struct {
 
 type emailPreScan struct {
 	Kind               string              `json:"kind"`
-	Urgent             []preScanItem       `json:"urgent"`
-	Actionable         []preScanItem       `json:"actionable"`
-	InformationalCount int                 `json:"informational_count"`
-	SuggestedArchives  []preScanItem       `json:"suggested_archives"`
-	SuggestedDrafts    []json.RawMessage   `json:"suggested_drafts"`
-	NeedsReview        []preScanItem       `json:"needs_review"`
-	PreferencesApplied *preScanPreferences `json:"preferences_applied"`
-	Totals             *preScanTotals      `json:"totals"`
-	MailboxErrors      []mailboxError      `json:"mailbox_errors"`
 	Scanned            int                 `json:"scanned"`
 	TotalUnread        *int                `json:"total_unread"`
+	TotalInbox         *int                `json:"total_inbox"`
 	Degraded           bool                `json:"degraded"`
+	MailboxErrors      []mailboxError      `json:"mailbox_errors"`
+	PreferencesApplied *preScanPreferences `json:"preferences_applied"`
+	NeedsYou           []needsYouItem      `json:"needs_you"`
+	NeedsYouTotal      int                 `json:"needs_you_total"`
+	Bulk               *bulkSummary        `json:"bulk"`
 }
 
 // maxCardRows bounds the card's interior. 22 interior rows plus two borders is
@@ -87,6 +96,9 @@ const maxBannerRows = 4
 //
 // Costing wrapped rationale lines rather than assuming one apiece is the whole
 // point — a two-line reason on every row silently doubles a section's height.
+// #2743: the caller (needsYouItemRows) is what changed to cost a multi-line
+// `detail` allowance on top of the row+why cost -- this function's own shape
+// is unchanged, generic over however many rows each item is reported to cost.
 func sectionCost(itemRows []int, show, total int) int {
 	if show == 0 {
 		return 0
@@ -111,6 +123,10 @@ func sectionCost(itemRows []int, show, total int) int {
 //
 // The returned cost can exceed budget once every section is at one row; the
 // caller reclaims the difference rather than hiding a bucket.
+//
+// #2743: needs_you is rendered as a single section, so this is called with
+// one-element slices — the trim-the-largest-section logic degrades to
+// "drop items from the end, one at a time" exactly as needed, unchanged.
 func fitSections(itemRows [][]int, totals []int, budget int) ([]int, int) {
 	show := make([]int, len(itemRows))
 	for i := range itemRows {
@@ -157,8 +173,7 @@ func isPreScanEnvelope(data json.RawMessage) bool {
 		return false
 	}
 	for _, field := range []string{
-		"kind", "urgent", "actionable", "informational_count",
-		"suggested_archives", "suggested_drafts", "totals", "needs_review",
+		"kind", "needs_you", "needs_you_total", "bulk", "scanned",
 	} {
 		if _, ok := probe[field]; ok {
 			return true
@@ -167,7 +182,8 @@ func isPreScanEnvelope(data json.RawMessage) bool {
 	return false
 }
 
-// renderEmailPreScan draws the inbox pre-scan card.
+// renderEmailPreScan draws the inbox pre-scan card: the needs_you worklist,
+// the bulk/coverage footer, and any mailbox-error banner.
 //
 // seen is the set of message_ids a card rendered earlier in the same turn
 // already showed (nil for a standalone render with no dedup). An item whose
@@ -189,82 +205,39 @@ func renderEmailPreScan(data json.RawMessage, width int, seen map[string]bool) (
 		return renderInvalid("email_pre_scan", "payload carries no pre-scan fields", data, width), nil
 	}
 
-	hadItems := !p.isEmpty()
-	var ids, moreIDs []string
-	byMessageID := func(it preScanItem) string { return it.MessageID }
-	p.Urgent, ids = dedupByMessageID(p.Urgent, byMessageID, seen)
-	p.Actionable, moreIDs = dedupByMessageID(p.Actionable, byMessageID, seen)
-	ids = append(ids, moreIDs...)
-	p.NeedsReview, moreIDs = dedupByMessageID(p.NeedsReview, byMessageID, seen)
-	ids = append(ids, moreIDs...)
-	p.SuggestedArchives, moreIDs = dedupByMessageID(p.SuggestedArchives, byMessageID, seen)
-	ids = append(ids, moreIDs...)
-	if hadItems && p.isEmpty() {
+	hadItems := len(p.NeedsYou) > 0
+	var ids []string
+	p.NeedsYou, ids = dedupByMessageID(p.NeedsYou, func(it needsYouItem) string { return it.MessageID }, seen)
+	if hadItems && len(p.NeedsYou) == 0 {
 		// Every item was already shown by an earlier card this turn -- this
 		// card would add nothing, so it does not render at all.
 		return "", nil
 	}
 
-	totals := p.totalsOrDerived()
-	b := newBox(p.title(totals), width)
-
-	showMailbox := p.multiMailbox()
+	b := newBox(p.title(), width)
 	p.renderMailboxErrors(b)
 
-	if p.isEmpty() {
-		p.renderEmpty(b, totals)
+	if len(p.NeedsYou) == 0 {
+		p.renderEmpty(b)
 		return b.render(), ids
 	}
 
-	itemRows := [][]int{
-		p.itemRows(b, p.Urgent, showMailbox, true),
-		p.itemRows(b, p.Actionable, showMailbox, true),
-		p.itemRows(b, p.NeedsReview, showMailbox, true),
-		p.itemRows(b, p.SuggestedArchives, showMailbox, false),
-	}
-	sectionTotals := []int{
-		totals.Urgent, totals.Actionable, totals.NeedsReview, totals.SuggestedArchives,
-	}
+	showMailbox := p.multiMailbox()
+	footer := p.footerLines()
 	budget := maxCardRows - len(b.lines)
+	show, keepDetail, shownFooter := p.fitNeedsYou(b, showMailbox, footer, budget)
 
-	// Once every bucket is down to its last row there is nothing left to trim in
-	// the sections, so the footer gives up its lines instead — losing the
-	// preferences note beats hiding a whole bucket of mail.
-	footer := p.footerLines(totals)
-	full := len(footer)
-	var shown []int
-	for {
-		// Every other truncation on this card leaves a visible marker, so a
-		// dropped footer line gets one too — and it is budgeted here rather than
-		// appended afterwards, or it would push the card back over the bound.
-		candidate := footer
-		if len(candidate) < full {
-			candidate = append(append([]string(nil), candidate...),
-				"+"+itoa(full-len(candidate))+" more line(s) not shown")
-		}
-		rows := footerRows(b, candidate)
-		s, cost := fitSections(itemRows, sectionTotals, budget-rows)
-		shown = s
-		if cost+rows <= budget || len(footer) == 0 {
-			footer = candidate
-			break
-		}
-		footer = footer[:len(footer)-1]
+	b.sectionHeader("NEEDS YOU", p.needsYouCountLabel(show))
+	for i := 0; i < show; i++ {
+		p.needsYouRow(b, p.NeedsYou[i], showMailbox, keepDetail[i])
+	}
+	if extra := p.NeedsYouTotal - show; extra > 0 {
+		b.add(rationaleIndent + "+" + itoa(extra) + " more")
 	}
 
-	n := 0
-	// Urgent, actionable, and needs-review rows always carry their rationale
-	// — that is what turns a row from a claim into an argument. Archive rows
-	// do not: their reason is nearly always the category the section header
-	// already names.
-	n = p.section(b, "URGENT", p.Urgent, shown[0], totals.Urgent, n, showMailbox, true)
-	n = p.section(b, "NEEDS A REPLY", p.Actionable, shown[1], totals.Actionable, n, showMailbox, true)
-	n = p.section(b, "NEEDS REVIEW", p.NeedsReview, shown[2], totals.NeedsReview, n, showMailbox, true)
-	_ = p.section(b, "SUGGESTED ARCHIVE", p.SuggestedArchives, shown[3], totals.SuggestedArchives, n, showMailbox, false)
-
-	if len(footer) > 0 {
+	if len(shownFooter) > 0 {
 		b.blank()
-		for _, line := range footer {
+		for _, line := range shownFooter {
 			b.addWrapped("  ", line)
 		}
 	}
@@ -311,22 +284,143 @@ func renderMailboxErrorBanner(b *box, errs []mailboxError) {
 	b.blank()
 }
 
-// itemRows is how many interior rows each item will actually render to: its own
-// row, plus the lines its rationale wraps to when the section shows rationales.
-func (p emailPreScan) itemRows(b *box, items []preScanItem, showMailbox, withRationale bool) []int {
-	out := make([]int, len(items))
-	for i, it := range items {
-		out[i] = 1
-		if !withRationale {
+// verbForKind maps a needs_you item's provenance (kind, pure provenance —
+// see contract.py's AttentionItemKind) to the render-time verb a user acts
+// on (#2743 Increment 2 step 6 / contract.py's own NeedsYouItem docstring:
+// "the renderer maps kind to a verb label at render time; the wire only
+// carries the source signal"). An unrecognized kind (a future server
+// addition this client predates) still gets a verb, never a blank one.
+func verbForKind(kind string) string {
+	switch kind {
+	case "urgent", "waiting_on_you", "needs_response":
+		return "REPLY"
+	case "meeting_request":
+		return "DECIDE"
+	case "needs_review":
+		return "CHECK"
+	case "action_item":
+		return "DO"
+	default:
+		return "REVIEW"
+	}
+}
+
+// filterTestLabels maps BulkSummary.filter_tests' opaque ids (contract.py:
+// "ids, never prose... an unmapped id degrades visibly rather than
+// rendering a stale claim") to the sentence fragment a user reads. Kept in
+// sync with hub/agents/email/python/gaia_agent_email/tools/read_tools.py's
+// FILTER_TEST_* constants.
+var filterTestLabels = map[string]string{
+	"category_promotional":       "promotional",
+	"category_fyi":               "FYI",
+	"category_personal":          "personal, low-signal",
+	"session_archive_preference": "your archive preference",
+}
+
+// filterTestLabel returns the mapped sentence fragment, or the raw id
+// itself when unmapped -- visible degradation, never a silently dropped id.
+func filterTestLabel(id string) string {
+	if s, ok := filterTestLabels[id]; ok {
+		return s
+	}
+	return id
+}
+
+// formatItemAge renders a needs_you item's age_seconds the way a person
+// reads it: seconds/minutes/hours while fresh, days once it's been sitting
+// a while -- the waiting-on-you detector's own signature case.
+func formatItemAge(seconds int) string {
+	if seconds < 60 {
+		return itoa(seconds) + "s"
+	}
+	minutes := seconds / 60
+	if minutes < 60 {
+		return itoa(minutes) + "m"
+	}
+	hours := minutes / 60
+	if hours < 24 {
+		return itoa(hours) + "h"
+	}
+	days := hours / 24
+	return itoa(days) + "d"
+}
+
+// needsYouVerbPrefixWidth is the fixed column every verb label is padded
+// to (the longest, DECIDE/REVIEW, is 6) so a row's sender column starts at
+// the same offset regardless of which verb precedes it.
+const needsYouVerbPrefixWidth = 6
+
+// needsYouWhyLine is the row's why/age/due-hint line, combined into ONE
+// line (not a separate age row) so the row+why cost stays the stable "2
+// rows for a plain item" baseline the fit budget assumes before any
+// `detail` substance is added.
+func (it needsYouItem) needsYouWhyLine() string {
+	var parts []string
+	if it.AgeSeconds != nil {
+		parts = append(parts, formatItemAge(*it.AgeSeconds)+" ago")
+	}
+	if why := it.combinedWhy(); strings.TrimSpace(why) != "" {
+		parts = append(parts, why)
+	}
+	return strings.Join(parts, " · ")
+}
+
+// needsYouRow draws one row: the server's own ref (never recomputed here),
+// a fixed-width verb prefix, the sender/subject columns, then the age/why/
+// due-hint line and up to keepDetail of the item's own `detail` lines
+// (#2743 Increment 3 substance — empty until that lands, but rendered here
+// so the card is ready for it).
+func (p emailPreScan) needsYouRow(b *box, it needsYouItem, showMailbox bool, keepDetail int) {
+	sender := displaySender(it.Sender)
+	if it.Kind == "action_item" && strings.TrimSpace(it.Sender) == "" {
+		sender = "(action item)"
+	}
+	if showMailbox && it.Mailbox != "" {
+		sender = mailboxLabel(it.Mailbox) + " · " + sender
+	}
+	verb := padTo(verbForKind(it.Kind), needsYouVerbPrefixWidth)
+	b.rowWithPrefix(it.Ref, verb, sender, it.Subject)
+
+	if line := it.needsYouWhyLine(); strings.TrimSpace(line) != "" {
+		b.addWrapped(rationaleIndent, line)
+	}
+	for i, d := range it.Detail {
+		if i >= keepDetail {
+			break
+		}
+		if strings.TrimSpace(d) != "" {
+			b.addWrapped(rationaleIndent, d)
+		}
+	}
+}
+
+// needsYouRowCost is how many interior rows the item at keepDetail's
+// allowance will actually render to: its own row, its age/why/due-hint
+// line (when non-empty), plus each KEPT detail line wrapped to width. This
+// is the "cost a multi-line detail" half of the #2743 checkpoint review —
+// the original per-bucket renderer assumed one wrapped rationale string; a
+// row can now carry up to two additional substance lines.
+func (p emailPreScan) needsYouRowCost(b *box, it needsYouItem, keepDetail int) int {
+	cost := 1
+	if line := it.needsYouWhyLine(); strings.TrimSpace(line) != "" {
+		cost += len(wrap(line, b.inner()-visualLen(rationaleIndent)))
+	}
+	for i, d := range it.Detail {
+		if i >= keepDetail {
+			break
+		}
+		if strings.TrimSpace(d) == "" {
 			continue
 		}
-		detail := it.rationale()
-		if showMailbox && it.Mailbox != "" {
-			detail = mailboxLabel(it.Mailbox) + " · " + detail
-		}
-		if strings.TrimSpace(detail) != "" {
-			out[i] += len(wrap(detail, b.inner()-visualLen(rationaleIndent)))
-		}
+		cost += len(wrap(d, b.inner()-visualLen(rationaleIndent)))
+	}
+	return cost
+}
+
+func (p emailPreScan) needsYouItemRows(b *box, keepDetail []int) []int {
+	out := make([]int, len(p.NeedsYou))
+	for i, it := range p.NeedsYou {
+		out[i] = p.needsYouRowCost(b, it, keepDetail[i])
 	}
 	return out
 }
@@ -345,113 +439,155 @@ func footerRows(b *box, footer []string) int {
 	return rows
 }
 
-func (p emailPreScan) footerLines(t preScanTotals) []string {
+// dropOneDetailLine removes the LAST detail line of the LOWEST-priority
+// item that still has one (scanning from the end of NeedsYou — the list is
+// already ordered high-to-low), returning false once nothing is left to
+// drop anywhere.
+func dropOneDetailLine(keepDetail []int) bool {
+	for i := len(keepDetail) - 1; i >= 0; i-- {
+		if keepDetail[i] > 0 {
+			keepDetail[i]--
+			return true
+		}
+	}
+	return false
+}
+
+// fitNeedsYou decides, under budget, how many needs_you items to show, how
+// many of each shown item's own `detail` lines to keep, and how much of the
+// footer survives — in this trim order (#2743 checkpoint review, INVERTED
+// from the original per-bucket design where the footer was trimmed first):
+//
+//  1. every item's own detail lines go first, keeping every item's row and
+//     why/due-hint line intact — that's what turns a row into an argument;
+//  2. whole items drop from the end via the shared fitSections trimmer
+//     (needs_you is already ordered high-to-low, so the lowest-priority
+//     item goes first);
+//  3. the footer — the coverage fact and the bulk filter sentence — is cut
+//     only as the very last resort.
+func (p emailPreScan) fitNeedsYou(b *box, showMailbox bool, footer []string, budget int) (show int, keepDetail []int, shownFooter []string) {
+	_ = showMailbox // sender/mailbox tagging does not affect row COUNT, only its content
+	n := len(p.NeedsYou)
+	keepDetail = make([]int, n)
+	for i, it := range p.NeedsYou {
+		keepDetail[i] = len(it.Detail)
+	}
+	shownFooter = footer
+
+	fits := func() bool {
+		rows := footerRows(b, shownFooter)
+		cost := sectionCost(p.needsYouItemRows(b, keepDetail), n, p.NeedsYouTotal)
+		return cost+rows <= budget
+	}
+
+	// 1) Detail lines first.
+	for !fits() {
+		if !dropOneDetailLine(keepDetail) {
+			break
+		}
+	}
+	if fits() {
+		return n, keepDetail, shownFooter
+	}
+
+	// 2) Whole items, via the shared generic trimmer (one section).
+	rows := footerRows(b, shownFooter)
+	shownCounts, cost := fitSections([][]int{p.needsYouItemRows(b, keepDetail)}, []int{p.NeedsYouTotal}, budget-rows)
+	show = shownCounts[0]
+	if cost+rows <= budget {
+		return show, keepDetail, shownFooter
+	}
+
+	// 3) The footer is the last thing cut.
+	for len(shownFooter) > 0 && cost+footerRows(b, shownFooter) > budget {
+		shownFooter = shownFooter[:len(shownFooter)-1]
+	}
+	return show, keepDetail, shownFooter
+}
+
+func (p emailPreScan) needsYouCountLabel(show int) string {
+	if p.NeedsYouTotal > show {
+		return itoa(show) + " of " + itoa(p.NeedsYouTotal)
+	}
+	return itoa(show)
+}
+
+// bulkLine states the filtered remainder AND what filtered it (#2743) —
+// BulkSummary.filter_tests carries opaque ids a renderer maps to a
+// sentence, so a bare unauditable count never stands alone. An unmapped id
+// degrades visibly (filterTestLabel returns the raw id) rather than
+// silently disappearing.
+func (p emailPreScan) bulkLine() string {
+	if p.Bulk == nil || p.Bulk.Count == 0 {
+		return ""
+	}
+	line := itoa(p.Bulk.Count) + " filtered"
+	if len(p.Bulk.FilterTests) > 0 {
+		labels := make([]string, len(p.Bulk.FilterTests))
+		for i, id := range p.Bulk.FilterTests {
+			labels[i] = filterTestLabel(id)
+		}
+		line += " (" + strings.Join(labels, ", ") + ")"
+	}
+	return line + ", not listed."
+}
+
+// coverageLine is the scoped fact half of "coverage as fact-plus-invitation"
+// (#2743 Increment 2 step 6): what this pre-scan actually looked at, so
+// neither the empty state nor a populated card can be mistaken for
+// whole-mailbox coverage. When the inbox holds more than was scanned, the
+// invitation half tells the user they can ask for a deeper look rather than
+// silently capping the view with no way to know more exists.
+func (p emailPreScan) coverageLine() string {
+	line := itoa(p.Scanned) + " inbox messages scanned"
+	switch {
+	case p.TotalInbox != nil && *p.TotalInbox > p.Scanned:
+		line += " of " + itoa(*p.TotalInbox) + " in the inbox — ask me to look further back for more"
+	case p.TotalUnread != nil:
+		line += " · " + itoa(*p.TotalUnread) + " unread"
+	}
+	return line
+}
+
+func (p emailPreScan) footerLines() []string {
 	var out []string
-	if t.Informational > 0 {
-		out = append(out, itoa(t.Informational)+" informational, not listed.")
+	if line := p.bulkLine(); line != "" {
+		out = append(out, line)
 	}
 	if line := p.preferencesLine(); line != "" {
 		out = append(out, line)
 	}
+	out = append(out, p.coverageLine()+".")
 	return out
 }
 
-// section draws one bucket and returns the running row number.
-//
-// show is how many rows fit; total is the PRE-CAP count from `totals`. The
-// header therefore reads "3 of 7" whenever anything is hidden — whether the
-// agent capped it or the row budget did. A bare count would imply the list is
-// everything, which is the exact failure `totals` exists to prevent.
-func (p emailPreScan) section(b *box, label string, items []preScanItem, show, total, start int, showMailbox, withRationale bool) int {
-	if len(items) == 0 || show <= 0 {
-		return start
-	}
-	if show > len(items) {
-		show = len(items)
-	}
-	if start > 0 {
-		b.blank()
-	}
-	count := itoa(show)
-	if total > show {
-		count = itoa(show) + " of " + itoa(total)
-	}
-	b.sectionHeader(label, count)
-
-	n := start
-	for _, it := range items[:show] {
-		n++
-		b.row(n, displaySender(it.Sender), it.Subject)
-		if !withRationale {
-			continue
-		}
-		detail := it.rationale()
-		if showMailbox && it.Mailbox != "" {
-			detail = mailboxLabel(it.Mailbox) + " · " + detail
-		}
-		if strings.TrimSpace(detail) != "" {
-			b.addWrapped(rationaleIndent, detail)
-		}
-	}
-	if extra := total - show; extra > 0 {
-		b.add(rationaleIndent + "+" + itoa(extra) + " more")
-	}
-	return n
-}
-
-func (p emailPreScan) renderEmpty(b *box, t preScanTotals) {
+// renderEmpty is the SCOPED zero state (#2743 Increment 2 step 7): "nothing
+// needs you" may only appear alongside what was actually covered — never
+// an unscoped claim standing alone. Mirrors the honesty rule #2584/#2582
+// already established one layer over (the attention view's own renderEmpty).
+func (p emailPreScan) renderEmpty(b *box) {
 	b.addWrapped("  ", "Nothing needs you.")
-	b.addWrapped("  ", itoa(p.scanned(t))+" messages scanned · 0 urgent · 0 waiting on a reply")
-	if t.Informational > 0 {
-		b.addWrapped("  ", itoa(t.Informational)+" informational, not listed.")
+	b.addWrapped("  ", p.coverageLine()+".")
+	if line := p.bulkLine(); line != "" {
+		b.addWrapped("  ", line)
 	}
 	if line := p.preferencesLine(); line != "" {
 		b.addWrapped("  ", line)
 	}
 }
 
-func (p emailPreScan) isEmpty() bool {
-	return len(p.Urgent) == 0 && len(p.Actionable) == 0 &&
-		len(p.SuggestedArchives) == 0 && len(p.NeedsReview) == 0
+func (p emailPreScan) title() string {
+	return "Inbox · " + itoa(p.Scanned) + " scanned"
 }
 
-// totalsOrDerived falls back to the visible list lengths when the agent omitted
-// `totals`. Derived totals equal the capped counts, so "N of M" simply does not
-// appear — better than inventing a number.
-func (p emailPreScan) totalsOrDerived() preScanTotals {
-	if p.Totals != nil {
-		return *p.Totals
-	}
-	return preScanTotals{
-		Urgent:            len(p.Urgent),
-		Actionable:        len(p.Actionable),
-		Informational:     p.InformationalCount,
-		SuggestedArchives: len(p.SuggestedArchives),
-		NeedsReview:       len(p.NeedsReview),
-	}
-}
-
-// scanned is the coverage numerator this card can derive from the totals it
-// was actually given — every bucket, including needs_review (#2584: a
-// needs-review-heavy pre-scan must not undercount how much was looked at).
-func (p emailPreScan) scanned(t preScanTotals) int {
-	return t.Urgent + t.Actionable + t.Informational + t.SuggestedArchives + t.NeedsReview
-}
-
-func (p emailPreScan) title(t preScanTotals) string {
-	return "Inbox · " + itoa(p.scanned(t)) + " scanned"
-}
-
-// multiMailbox reports whether rows came from more than one account, which is
-// the only case where tagging each row with its mailbox is information rather
-// than noise.
+// multiMailbox reports whether needs_you rows came from more than one
+// account, which is the only case where tagging each row with its mailbox
+// is information rather than noise.
 func (p emailPreScan) multiMailbox() bool {
 	seen := map[string]bool{}
-	for _, group := range [][]preScanItem{p.Urgent, p.Actionable, p.SuggestedArchives, p.NeedsReview} {
-		for _, it := range group {
-			if it.Mailbox != "" {
-				seen[it.Mailbox] = true
-			}
+	for _, it := range p.NeedsYou {
+		if it.Mailbox != "" {
+			seen[it.Mailbox] = true
 		}
 	}
 	return len(seen) > 1

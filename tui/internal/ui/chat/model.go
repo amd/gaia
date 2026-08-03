@@ -3,6 +3,7 @@ package chat
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -34,12 +35,19 @@ type doneMsg struct{ ch <-chan interface{} }
 type sendQueryMsg struct{ query string }
 type channelReadyMsg struct{ ch <-chan interface{} }
 
-// attentionFetchedMsg / attentionFetchFailedMsg deliver the result of the
-// on-open "what needs you" fetch (#2582) — a side-channel read, never a
-// chat turn, so it carries no query/answer pair and never touches the
-// host-owned transcript Send() pushes as `context`.
-type attentionFetchedMsg struct{ data json.RawMessage }
-type attentionFetchFailedMsg struct{ err error }
+// preScanFetchedMsg / preScanFetchFailedMsg / preScanDegradedMsg deliver the
+// result of the on-open inbox pre-scan fetch (#2743, replacing the #2582
+// attention fetch) — a side-channel read, never a chat turn, so it carries
+// no query/answer pair and never touches the host-owned transcript Send()
+// pushes as `context`.
+type preScanFetchedMsg struct{ data json.RawMessage }
+type preScanFetchFailedMsg struct{ err error }
+
+// preScanDegradedMsg is delivered when the peer's contract predates
+// needs_you (client.ErrPreScanContractTooOld) — rendered as an honest
+// status note, never as the confident (and wrong) empty-needs_you card a
+// naive decode of an old sidecar's response would produce.
+type preScanDegradedMsg struct{ notice string }
 
 // ReturnToHubMsg signals the root model to switch back to the hub view.
 type ReturnToHubMsg struct{ AgentID string }
@@ -144,8 +152,16 @@ type ChatModel struct {
 	firstEvent   bool      // whether we've received the first event this turn
 	ttft         time.Duration
 
-	// pendingAttention buffers a fetch resolved mid-turn until that turn ends, so it never lands between a question and its reply.
-	pendingAttention json.RawMessage
+	// pendingPreScan buffers a fetch resolved mid-turn until that turn ends, so it never lands between a question and its reply.
+	pendingPreScan json.RawMessage
+	// preScanRenderedThisTurn is true once the CURRENT turn's own typed
+	// tool_result has drawn the pre-scan card (#2743 checkpoint review).
+	// drainPendingPreScan checks it before draining the buffered on-open
+	// snapshot: without this, a "triage my inbox" turn that itself
+	// produces a fresh card would have that fresh data immediately
+	// clobbered by the shallower snapshot the on-open fetch buffered
+	// before the turn started.
+	preScanRenderedThisTurn bool
 }
 
 func NewChatModel(c client.AgentClient, agentName string, initialQuery string, debug bool) ChatModel {
@@ -193,11 +209,17 @@ func NewChatModelForCatalogAgent(c client.AgentClient, agentID, agentName string
 	return m
 }
 
-// attentionAgentID is the one agent this on-open fetch applies to today.
+// preScanAgentID is the one agent this on-open fetch applies to today.
 // Scoped by id rather than by capability alone so a future agent that
-// happens to reuse the AttentionFetcher interface for something unrelated
+// happens to reuse the PreScanFetcher interface for something unrelated
 // doesn't unexpectedly get this fetch too.
-const attentionAgentID = "email"
+const preScanAgentID = "email"
+
+// preScanCardIdentity marks the singular inbox pre-scan card (#2743) so
+// both entry points that can produce one — the on-open fetch below and a
+// typed turn's own tool_result (canonical.go) — update the SAME message in
+// place instead of each appending its own. See Message.Identity.
+const preScanCardIdentity = "email_prescan"
 
 func (m ChatModel) Init() tea.Cmd {
 	cmds := []tea.Cmd{
@@ -208,70 +230,112 @@ func (m ChatModel) Init() tea.Cmd {
 		cmds = append(cmds, func() tea.Msg {
 			return sendQueryMsg{query: m.initialQuery}
 		})
-	} else if m.agentID == attentionAgentID {
-		// Rendered with no user prompt, on open, per #2582 — but only when
-		// there's no initial query already about to run a turn, so the
-		// attention view never races the answer to what the user just asked.
-		cmds = append(cmds, m.fetchAttention())
-	} else if m.debug && m.attentionGateMismatch() {
-		// A client that could serve the attention view but an agentID that
+	} else if m.agentID == preScanAgentID {
+		// Rendered with no user prompt, on open (#2743, replacing the #2582
+		// attention fetch) — but only when there's no initial query already
+		// about to run a turn, so the pre-scan card never races the answer
+		// to what the user just asked.
+		cmds = append(cmds, m.fetchPreScan())
+	} else if m.debug && m.preScanGateMismatch() {
+		// A client that could serve the pre-scan view but an agentID that
 		// doesn't match must not fail with no signal at all.
 		fmt.Fprintf(os.Stderr,
-			"[DEBUG] attention fetch skipped: agentID %q has an AttentionFetcher client but does not match %q\n",
-			m.agentID, attentionAgentID)
+			"[DEBUG] pre-scan fetch skipped: agentID %q has a PreScanFetcher client but does not match %q\n",
+			m.agentID, preScanAgentID)
 	}
 	return tea.Batch(cmds...)
 }
 
-// attentionGateMismatch reports whether m.client could serve the attention
+// preScanGateMismatch reports whether m.client could serve the pre-scan
 // view even though m.agentID didn't earn the fetch.
-func (m ChatModel) attentionGateMismatch() bool {
-	if m.agentID == attentionAgentID {
+func (m ChatModel) preScanGateMismatch() bool {
+	if m.agentID == preScanAgentID {
 		return false
 	}
-	_, hasFetcher := m.client.(client.AttentionFetcher)
+	_, hasFetcher := m.client.(client.PreScanFetcher)
 	return hasFetcher
 }
 
-// fetchAttention builds the Cmd that fetches the email agent's read-only
-// attention view (#2582). A transport that doesn't implement
-// client.AttentionFetcher (subprocess mode has no HTTP relay to ask) is
-// skipped silently — this is a best-effort side-channel read, never a
-// requirement for the chat surface to function.
-func (m ChatModel) fetchAttention() tea.Cmd {
-	fetcher, ok := m.client.(client.AttentionFetcher)
+// fetchPreScan builds the Cmd that fetches the email agent's inbox pre-scan
+// (#2743). A transport that doesn't implement client.PreScanFetcher
+// (subprocess mode has no HTTP relay to ask) is skipped silently — this is
+// a best-effort side-channel read, never a requirement for the chat
+// surface to function. A peer whose contract predates needs_you degrades
+// to an honest notice rather than the confident empty card an unguarded
+// decode would produce.
+func (m ChatModel) fetchPreScan() tea.Cmd {
+	fetcher, ok := m.client.(client.PreScanFetcher)
 	if !ok {
 		return nil
 	}
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
-		data, err := fetcher.FetchAttention(ctx)
+		data, err := fetcher.FetchPreScan(ctx)
 		if err != nil {
-			return attentionFetchFailedMsg{err: err}
+			var tooOld *client.ErrPreScanContractTooOld
+			if errors.As(err, &tooOld) {
+				return preScanDegradedMsg{notice: tooOld.Error()}
+			}
+			return preScanFetchFailedMsg{err: err}
 		}
-		return attentionFetchedMsg{data: data}
+		return preScanFetchedMsg{data: data}
 	}
 }
 
-// appendAttentionCard appends the attention card. Cross-card duplicate items
-// are resolved at render time (see Message.renderCard), not here.
-func (m *ChatModel) appendAttentionCard(data json.RawMessage) {
+// upsertCard appends a RoleCard message, or — when identity is non-empty and
+// a message already carries it — replaces that message's payload in place
+// (#2743). Looked up by identity across the CURRENT m.messages slice on
+// every call, never a tracked index: `/clear` sets m.messages to nil
+// (see the "/clear" case below), so a stale index would panic or silently
+// overwrite an unrelated message. The render cache is cleared so an
+// in-place update is never served the stale layout (Message.cardCache is
+// otherwise keyed on width alone).
+func (m *ChatModel) upsertCard(identity, toolName, render string, data json.RawMessage) {
+	if identity != "" {
+		for i := range m.messages {
+			if m.messages[i].Role == RoleCard && m.messages[i].Identity == identity {
+				m.messages[i].ToolName = toolName
+				m.messages[i].Render = render
+				m.messages[i].Data = data
+				m.messages[i].cardCache = ""
+				m.messages[i].cardCacheWidth = 0
+				return
+			}
+		}
+	}
 	m.messages = append(m.messages, Message{
-		Role:   RoleCard,
-		Render: "email_attention",
-		Data:   data,
+		Role:     RoleCard,
+		Identity: identity,
+		ToolName: toolName,
+		Render:   render,
+		Data:     data,
 	})
 }
 
-// drainPendingAttention appends a buffered attention card now that its turn has ended, whichever way it ended.
-func (m *ChatModel) drainPendingAttention() {
-	if m.pendingAttention == nil {
+// upsertPreScanCard draws or updates-in-place the one pre-scan card for
+// this session (#2743). Cross-card duplicate items against OTHER card
+// types are resolved at render time (see Message.renderCardDeduped), not
+// here.
+func (m *ChatModel) upsertPreScanCard(data json.RawMessage) {
+	m.upsertCard(preScanCardIdentity, "pre_scan_inbox", "email_pre_scan", data)
+}
+
+// drainPendingPreScan appends the buffered on-open pre-scan card now that
+// its turn has ended, whichever way it ended — UNLESS the turn's own typed
+// tool_result already drew a fresher card this same turn (#2743 checkpoint
+// review): draining the buffered snapshot over it would clobber the
+// fresher data with a shallower one.
+func (m *ChatModel) drainPendingPreScan() {
+	if m.pendingPreScan == nil {
 		return
 	}
-	data := m.pendingAttention
-	m.pendingAttention = nil
-	m.appendAttentionCard(data)
+	data := m.pendingPreScan
+	m.pendingPreScan = nil
+	if m.preScanRenderedThisTurn {
+		return
+	}
+	m.upsertPreScanCard(data)
 }
 
 func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -294,24 +358,35 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.events = msg.ch
 		return m, waitForEvent(m.events)
 
-	case attentionFetchedMsg:
+	case preScanFetchedMsg:
 		if m.streaming {
 			// Buffer -- appending now would land the card between this turn's question and its reply.
-			m.pendingAttention = msg.data
+			m.pendingPreScan = msg.data
 			return m, nil
 		}
-		m.appendAttentionCard(msg.data)
+		m.upsertPreScanCard(msg.data)
 		m.updateViewport()
 		return m, nil
 
-	case attentionFetchFailedMsg:
-		// Best-effort side-channel read (#2582) — a failure (no mailbox
+	case preScanFetchFailedMsg:
+		// Best-effort side-channel read (#2743) — a failure (no mailbox
 		// connected, daemon unreachable, a transient connector error) is
 		// worth telling the user about, but it must never block or clutter
 		// the surface like a turn-ending error would.
 		m.messages = append(m.messages, Message{
 			Role:    RoleStatus,
-			Content: fmt.Sprintf("[!] attention view unavailable: %v", msg.err),
+			Content: fmt.Sprintf("[!] inbox pre-scan unavailable: %v", msg.err),
+		})
+		m.updateViewport()
+		return m, nil
+
+	case preScanDegradedMsg:
+		// The peer's contract predates needs_you — an honest notice, never
+		// the confident (and wrong) empty card an unguarded decode would
+		// have produced (#2743).
+		m.messages = append(m.messages, Message{
+			Role:    RoleStatus,
+			Content: "[!] " + msg.notice,
 		})
 		m.updateViewport()
 		return m, nil
@@ -347,7 +422,7 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			Role:    RoleError,
 			Content: msg.err.Error(),
 		})
-		m.drainPendingAttention()
+		m.drainPendingPreScan()
 		m.activity = nil
 		m.updateViewport()
 		return m, nil
@@ -469,7 +544,7 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				Role:    RoleStatus,
 				Content: "cancelled",
 			})
-			m.drainPendingAttention()
+			m.drainPendingPreScan()
 			m.updateViewport()
 			return m, nil
 		}
@@ -488,7 +563,7 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				Role:    RoleStatus,
 				Content: "cancelled",
 			})
-			m.drainPendingAttention()
+			m.drainPendingPreScan()
 			m.updateViewport()
 			return m, nil
 		}
@@ -571,6 +646,8 @@ func (m ChatModel) sendQuery(query string) (tea.Model, tea.Cmd) {
 	m.queryStart = time.Now()
 	m.firstEvent = false
 	m.ttft = 0
+	// A new turn starts having drawn no card yet -- see drainPendingPreScan.
+	m.preScanRenderedThisTurn = false
 	m.updateViewport()
 
 	ctx, cancel := context.WithCancel(context.Background())
