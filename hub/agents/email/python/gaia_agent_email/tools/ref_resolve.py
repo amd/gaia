@@ -57,8 +57,12 @@ def resolve_needs_you_ref(
     ``card`` is the ``needs_you`` list from the most recent ``pre_scan_inbox``
     tool call this session — a list of plain dicts shaped like
     ``NeedsYouItem`` (``ref``, ``kind``, ``message_id``, ``thread_id``,
-    ``sender``, ``subject``, ``mailbox``, ...). ``None`` or an empty list
-    means no card has been shown yet this session.
+    ``sender``, ``subject``, ``mailbox``, ...). ``None`` means no scan has
+    happened yet this session; an empty list ``[]`` means a scan DID run but
+    found nothing for ``needs_you`` — these are different facts and get
+    different refusal messages (a rescan that renumbers down to zero rows
+    must not be reported as "no card yet", which the user just disproved by
+    triaging).
 
     Returns a dict: ``{"ref", "message_id", "thread_id", "sender",
     "subject", "kind", "mailbox"}``.
@@ -66,7 +70,8 @@ def resolve_needs_you_ref(
     Raises :class:`RefResolutionError` — never returns a partial or guessed
     match — when:
 
-    - ``card`` is falsy (no scan has happened yet this session);
+    - ``card`` is ``None`` (no scan has happened yet this session) or ``[]``
+      (a scan ran but ``needs_you`` was empty) — distinct messages for each;
     - ``ref`` does not parse to a positive integer;
     - no item on ``card`` has that ``ref`` (out of range for THIS card —
       a rescan may have renumbered since the number was shown);
@@ -74,10 +79,16 @@ def resolve_needs_you_ref(
       with no recoverable source message, per ``NeedsYouItem.message_id``'s
       own contract).
     """
-    if not card:
+    if card is None:
         raise RefResolutionError(
             "No triage card in this conversation yet — run a pre-scan "
             '("triage my inbox") first, then refer to a row number from it.'
+        )
+    if not card:
+        raise RefResolutionError(
+            "Your last triage found nothing needing a reply, so there are "
+            "no rows to refer to. Run a new pre-scan if you think that's "
+            "changed."
         )
 
     try:

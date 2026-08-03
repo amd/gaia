@@ -198,6 +198,46 @@ class TestRefusalNeverGuesses:
         with pytest.raises(RefResolutionError):
             resolve_needs_you_ref([], "1")
 
+    def test_never_scanned_message_says_run_a_pre_scan(self):
+        """``card=None`` means no scan has happened yet THIS session -- the
+        refusal must say so, not claim a scan came back empty (that would be
+        a fact this state doesn't know)."""
+        with pytest.raises(RefResolutionError, match=r"(?i)no triage card"):
+            resolve_needs_you_ref(None, "1")
+
+    def test_scanned_but_empty_message_says_nothing_needed_a_reply(self):
+        """``card=[]`` means a scan DID run and found nothing -- telling the
+        user to "run a pre-scan first" here is wrong: they just did, and
+        being told to redo what they already did is precisely the kind of
+        misdescribed refusal this feature exists to avoid."""
+        with pytest.raises(RefResolutionError, match=r"(?i)found nothing"):
+            resolve_needs_you_ref([], "1")
+
+    def test_never_scanned_and_scanned_empty_produce_different_messages(self):
+        """The two states must never collapse into the same wording again."""
+        never_scanned = None
+        scanned_empty: list = []
+
+        with pytest.raises(RefResolutionError) as never_scanned_exc:
+            resolve_needs_you_ref(never_scanned, "1")
+        with pytest.raises(RefResolutionError) as scanned_empty_exc:
+            resolve_needs_you_ref(scanned_empty, "1")
+
+        assert str(never_scanned_exc.value) != str(scanned_empty_exc.value)
+
+    def test_a_card_that_had_rows_then_an_empty_rescan_is_scanned_not_never(
+        self,
+    ):
+        """A card that previously had rows and was superseded by a rescan
+        that found nothing must read as "scanned, empty" -- never regress to
+        "no card yet", which would misdescribe a session that has, in fact,
+        scanned twice."""
+        resolve_needs_you_ref(THREE_ROW_CARD, "1")  # had rows a moment ago
+
+        rescanned_to_empty: list = []  # the SAME session, after a rescan
+        with pytest.raises(RefResolutionError, match=r"(?i)found nothing"):
+            resolve_needs_you_ref(rescanned_to_empty, "1")
+
     def test_non_numeric_ref_raises(self):
         with pytest.raises(RefResolutionError):
             resolve_needs_you_ref(THREE_ROW_CARD, "abc")
@@ -319,6 +359,21 @@ class TestResolveToolRegistration:
             "a refusal must carry an actionable error string, never a bare "
             "False with no explanation"
         )
+        assert "no triage card" in envelope["error"].lower()
+
+    def test_tool_refuses_distinctly_when_a_scan_ran_but_found_nothing(self):
+        """A card of ``[]`` (a scan ran, ``needs_you`` was empty) must not
+        read like ``None`` (no scan yet this session) at the tool boundary
+        either -- the user who just triaged should not be told to triage
+        again."""
+        host = _RefHost()
+        host._last_needs_you_card = []
+        resolve_tool = _registered_resolve_tool(host)
+
+        envelope = json.loads(resolve_tool(ref=1))
+        assert envelope["ok"] is False
+        assert "found nothing" in envelope["error"].lower()
+        assert "no triage card" not in envelope["error"].lower()
 
 
 # ---------------------------------------------------------------------------
