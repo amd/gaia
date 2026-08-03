@@ -1695,9 +1695,23 @@ def _finalize_needs_you_item(
     ONE place this computation happens, so a merge-level candidate (added
     after a per-backend view is already built, see
     ``merge_pre_scan_backends``) gets the identical treatment.
+
+    ``due_hint`` (action items only) is wrapped in the same untrusted-input
+    delimiters that cover a raw body read before it leaves this function
+    (#2743): it is regex-extracted verbatim from a message body
+    (``extract_action_items_from_body``, ``api_routes.py``) and persisted,
+    so by the time it reaches a needs_you row it is attacker-influenced
+    text re-entering the calling agent's own tool-result context — the
+    same threat model as a raw body read, independent of whether anything
+    else in this view is LLM-derived. ``normalize_email_body`` runs first
+    to scrub any forged delimiter tokens the source sentence might itself
+    contain, exactly as ``_format_message_for_llm`` does for a body.
     """
     internal_date = _parse_epoch_millis(candidate.get("internal_date"))
     age_seconds = max(0, (now_ms - internal_date) // 1000) if internal_date else None
+    due_hint = candidate.get("due_hint")
+    if due_hint:
+        due_hint = wrap_untrusted_body(normalize_email_body(due_hint))
     return {
         "ref": ref,
         "kind": candidate["kind"],
@@ -1707,8 +1721,14 @@ def _finalize_needs_you_item(
         "subject": candidate.get("subject", ""),
         "age_seconds": age_seconds,
         "why": candidate.get("why") or candidate.get("reason") or "",
+        # Always empty for now (#2743) -- the contract reserves this field
+        # for a per-item LLM extraction pass that shipped and was then
+        # withdrawn from this issue before merge; see commit 25738509 for
+        # the working implementation (extraction, injection-defense
+        # wrapping, and the bounded-fill design a follow-up issue will
+        # reuse) and NeedsYouItem's own docstring in contract.py.
         "detail": [],
-        "due_hint": candidate.get("due_hint"),
+        "due_hint": due_hint,
         "mailbox": candidate.get("mailbox"),
     }
 
@@ -2746,16 +2766,19 @@ class ReadToolsMixin:
             renders the structured card component instead of plain text.
             The card's ONE worklist is ``needs_you`` (#2743) — up to
             ``NEEDS_YOU_CAP`` (5) things that genuinely need you, each
-            tagged with a verb (REPLY/DECIDE/CHECK/DO), why it surfaced,
-            and — for the surfaced items only — a couple of lines of real
-            substance (the question actually asked, the meeting time
-            actually proposed and whether the calendar is free, the
-            deadline actually quoted). It is a deterministic VIEW over the
-            legacy ``urgent``/``actionable``/``needs_review`` buckets (still
-            present below, unchanged, for callers that read them directly)
-            plus the waiting-on-you detector and any open action items from
-            a prior triage — never a second classification pass, so nothing
-            those buckets caught can go missing from it.
+            tagged with a verb (REPLY/DECIDE/CHECK/DO) and why it surfaced.
+            ``detail`` is reserved on the wire for a couple of lines of real
+            substance per surfaced item (the question actually asked, the
+            meeting time actually proposed, the deadline actually quoted)
+            but is ALWAYS EMPTY today — the extraction pass that would fill
+            it shipped and was withdrawn before this reached main; do not
+            tell the user it carries anything. It is a deterministic VIEW
+            over the legacy ``urgent``/``actionable``/``needs_review``
+            buckets (still present below, unchanged, for callers that read
+            them directly) plus the waiting-on-you detector and any open
+            action items from a prior triage — never a second
+            classification pass, so nothing those buckets caught can go
+            missing from it.
             ``needs_you_total`` carries the true pre-cap count. Everything
             NOT in ``needs_you`` — informational and low-signal mail — is
             summarized in ``bulk``: a count PLUS ``filter_tests``, the ids
@@ -2814,28 +2837,12 @@ class ReadToolsMixin:
                 )
                 # Phase 2 (#1603): pre-scan every connected mailbox, tag each
                 # section item with its source mailbox, split the budget, merge.
-                envelope = agent._pre_scan_all_backends(
-                    max_messages=max_messages,
-                    include_informational=bool(include_informational),
+                return _envelope_ok(
+                    agent._pre_scan_all_backends(
+                        max_messages=max_messages,
+                        include_informational=bool(include_informational),
+                    )
                 )
-                # #2743 Increment 3: fill needs_you[].detail (already capped
-                # at NEEDS_YOU_CAP) for the ONE call site that has a live
-                # ``chat`` and is expected to block on it -- this agent-loop
-                # tool call. The REST /prescan path and the scheduled
-                # briefing job deliberately stay heuristic-only/LLM-free (see
-                # their own docstrings), so this never runs there.
-                from gaia_agent_email.tools.needs_you_detail import (
-                    fill_needs_you_detail,
-                )
-
-                fill_needs_you_detail(
-                    envelope.get("needs_you", []),
-                    resolve_backend=agent._backend_for_message,
-                    chat=getattr(agent, "chat", None),
-                    calendar_backend=getattr(agent, "_calendar", None),
-                    debug=debug_flag,
-                )
-                return _envelope_ok(envelope)
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))
             except Exception as exc:

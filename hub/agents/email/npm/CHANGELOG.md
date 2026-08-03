@@ -12,14 +12,17 @@ behind any entry — API shapes, endpoints, and version semantics — see
   five lines below, listed a message needing review. The card is now one
   worklist (`needs_you`, schema 2.11) built from a single scan: up to five
   things that genuinely need you, each tagged with what to do (reply, decide,
-  check, or a carried-over action item), how old it is, and — for those five
-  — a couple of lines of real substance instead of a bare category label: the
-  question actually asked, the meeting time actually proposed and whether
-  your calendar is free at that time, or the deadline actually quoted.
-  Everything filtered out is counted alongside the test that filtered it
-  (`bulk`), so a claim like "47 filtered" is something you can judge rather
-  than take on faith. `NeedsYouItem` / `BulkSummary` are new on
-  `EmailPreScanResult`; nothing existing was removed or renamed (#2743).
+  check, or a carried-over action item) and how old it is. Everything
+  filtered out is counted alongside the test that filtered it (`bulk`), so a
+  claim like "47 filtered" is something you can judge rather than take on
+  faith. `NeedsYouItem` / `BulkSummary` are new on `EmailPreScanResult`;
+  nothing existing was removed or renamed (#2743). `NeedsYouItem.detail` is
+  also new — reserved for a couple of lines of real substance per row (the
+  question actually asked, the meeting time actually proposed, the deadline
+  actually quoted) — but ships **always empty** in this release: the
+  per-item extraction pass that would fill it was implemented and then
+  withdrawn before merge so it could ship on a firm timing budget rather
+  than risk a slow scan; a follow-up will populate it.
 - **Reconnecting your mailbox with no flags — the exact command GAIA's own
   error message told you to run — could silently wipe your permissions
   instead of fixing them.** A bare `gaia connectors connect google` (or the
