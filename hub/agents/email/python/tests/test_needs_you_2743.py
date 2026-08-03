@@ -36,6 +36,7 @@ from gaia_agent_email.tools.read_tools import (  # noqa: E402
     _build_needs_you_view,
     merge_pre_scan_backends,
     pre_scan_inbox_impl,
+    wrap_untrusted_body,
 )
 from gaia_agent_email.tools.triage_heuristics import (  # noqa: E402
     CATEGORY_FYI,
@@ -480,7 +481,11 @@ class TestActionItemWiring:
         assert item["message_id"] is None
         assert item["kind"] == "action_item"
         assert item["subject"] == "Follow up on the renewal"
-        assert item["due_hint"] == "next week"
+        # due_hint is regex-extracted verbatim from a message body and
+        # re-enters the calling agent's own tool-result context, so it is
+        # wrapped in the same untrusted-input delimiters as a raw body
+        # read (#2743) -- independent of the (withdrawn) LLM detail pass.
+        assert item["due_hint"] == wrap_untrusted_body("next week")
 
 
 class TestContractAdditivity:

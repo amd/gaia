@@ -46,18 +46,25 @@ contract version is tracked separately as
   never re-derived from raw scan results, so nothing those buckets already
   caught can go missing from it. `bulk.filter_tests` carries opaque ids (never
   prose) a renderer maps to a sentence, so "47 filtered" always names the
-  test that filtered it. For the agent-loop `pre_scan_inbox` tool call only
-  (the one surface with a live LLM to block on — the REST `/prescan` path
-  and the scheduled briefing job stay heuristic-only by design), each
-  surfaced item's `detail` (up to two lines) is filled with the real
-  substance: the question actually asked, the meeting time actually proposed
-  plus a COMPUTED calendar-conflict check (never a narrated verdict the tool
-  didn't compute — the #2571 precedent), or the deadline actually quoted.
-  Extracted `detail`/`due_hint` text is routed through and re-wrapped in the
-  same untrusted-input delimiters that cover a raw message body, since it
-  re-enters the calling agent's own tool-result context while that agent
-  holds archive/send/delete authority. Nothing existing was removed,
-  renamed, or relaxed from required to optional.
+  test that filtered it. `NeedsYouItem.due_hint` (action items only) is
+  wrapped in the same untrusted-input delimiters that cover a raw message
+  body — it is regex-extracted verbatim from a message body and re-enters
+  the calling agent's own tool-result context while that agent holds
+  archive/send/delete authority. Nothing existing was removed, renamed, or
+  relaxed from required to optional.
+  `NeedsYouItem.detail` also ships on the wire, reserved for a couple of
+  lines of real substance per surfaced item (the question actually asked,
+  the meeting time actually proposed plus a COMPUTED calendar-conflict
+  check — never a narrated verdict the tool didn't compute, the #2571
+  precedent — or the deadline actually quoted), but is **always empty in
+  this release**: the LLM extraction pass that would fill it, scoped to the
+  agent-loop `pre_scan_inbox` tool call only, was implemented (commit
+  `25738509`) and then withdrawn before merge so this change could ship on
+  a firm timing budget rather than risk `pre_scan_inbox` timing out — up to
+  five extractions at several seconds each is real latency `pre_scan_inbox`
+  was never budgeted for. A follow-up will populate it, bounded to a
+  deadline so a slow extraction degrades to partial detail rather than a
+  stalled card.
 - **The inbox-scan default is now owned in one place (#2743, closing the loop
   #2643 started).** `config.DEFAULT_INBOX_SCAN_MESSAGES` (50) is now the
   single source every scan-default call site imports instead of restating a

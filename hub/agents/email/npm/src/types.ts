@@ -466,15 +466,23 @@ export interface NeedsYouItem {
   /** Plain-language reason this item needs attention. */
   why: string;
   /**
-   * Up to two lines of real substance (the question actually asked, the
-   * meeting time actually proposed, the deadline actually quoted) — empty
-   * until the extraction pass fills it (#2743 Increment 3). Each entry is
-   * wrapped in the same untrusted-input delimiters that cover a raw message
-   * body when it re-enters the agent's own tool-result context; a rendering
-   * surface strips that wrapper before display.
+   * Reserved for up to two lines of real substance (the question actually
+   * asked, the meeting time actually proposed, the deadline actually
+   * quoted). ALWAYS EMPTY today on every surface — the per-item extraction
+   * pass that would fill it shipped and was withdrawn from #2743 before
+   * merge; a follow-up issue will populate it. When it does, each entry
+   * will be wrapped in the same untrusted-input delimiters `due_hint`
+   * already uses below (see that field) — a rendering surface strips the
+   * wrapper before display.
    */
   detail: string[];
-  /** Free-text due hint (action items only); null otherwise. */
+  /**
+   * Free-text due hint (action items only); null otherwise. Wrapped in the
+   * same untrusted-input delimiters that cover a raw message body when
+   * present — it is regex-extracted verbatim from a message body and
+   * re-enters the calling agent's own tool-result context. A rendering
+   * surface strips the wrapper before display.
+   */
   due_hint?: string | null;
   /** Provider name ('google' / 'microsoft') this item came from; set only when more than one mailbox is connected. */
   mailbox?: string | null;

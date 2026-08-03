@@ -1461,9 +1461,15 @@ class NeedsYouItem(_Strict):
         default_factory=list,
         max_length=2,
         description=(
-            "Up to two lines of real substance (the question actually "
-            "asked, the meeting time actually proposed, the deadline "
-            "actually quoted) — empty until #2743 Increment 3 fills it."
+            "Reserved for up to two lines of real substance (the question "
+            "actually asked, the meeting time actually proposed, the "
+            "deadline actually quoted). ALWAYS EMPTY today — the per-item "
+            "LLM extraction pass that would fill it was implemented and "
+            "then withdrawn from #2743 before merge (see commit "
+            "25738509 for the working extraction + injection-defense "
+            "wrapping a follow-up issue will build on). The field ships "
+            "now, empty, so populating it later is additive rather than a "
+            "second contract bump."
         ),
     )
     due_hint: Optional[str] = Field(
