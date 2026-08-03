@@ -411,3 +411,50 @@ func TestBulkLineUnmappedFilterTestDegradesVisibly(t *testing.T) {
 		t.Errorf("bulkLine() = %q, want the raw unmapped id shown, not dropped", got)
 	}
 }
+
+// #2743 Increment 3: extracted detail/due_hint text is wrapped in the same
+// untrusted-input delimiters that cover a raw message body, since it
+// re-enters the AGENT's own tool-result context. A human reading the card
+// is not at risk the way an LLM context is, so the wrapper must never
+// appear on screen.
+
+func TestStripUntrustedWrapperRemovesTheDelimiters(t *testing.T) {
+	wrapped := untrustedBodyOpen + "\nCan you confirm the rollback completed?\n" + untrustedBodyClose
+	got := stripUntrustedWrapper(wrapped)
+	want := "Can you confirm the rollback completed?"
+	if got != want {
+		t.Errorf("stripUntrustedWrapper(%q) = %q, want %q", wrapped, got, want)
+	}
+}
+
+func TestStripUntrustedWrapperPassesThroughUnwrappedText(t *testing.T) {
+	// A pre-2.11 producer, or any field this defense doesn't cover, never
+	// carries the wrapper -- it must render unchanged, not get mangled by
+	// a strip that assumes the markers are always present.
+	plain := "waiting 3d on your reply"
+	if got := stripUntrustedWrapper(plain); got != plain {
+		t.Errorf("stripUntrustedWrapper(%q) = %q, want unchanged", plain, got)
+	}
+}
+
+func TestPreScanDetailWrapperNeverReachesTheRenderedCard(t *testing.T) {
+	payload := `{
+	  "kind": "email_pre_scan",
+	  "urgent": [], "actionable": [], "informational_count": 0,
+	  "suggested_archives": [], "suggested_drafts": [], "needs_review": [],
+	  "scanned": 1,
+	  "needs_you": [
+	    {"ref":1,"kind":"urgent","message_id":"m1","sender":"a@x.com","subject":"s",
+	     "why":"r1","detail":["` + untrustedBodyOpen + `\nCan you confirm the rollback completed?\n` + untrustedBodyClose + `"],
+	     "due_hint":"` + untrustedBodyOpen + `\nFriday EOD\n` + untrustedBodyClose + `"}
+	  ],
+	  "needs_you_total": 1,
+	  "bulk": {"count": 0, "filter_tests": []},
+	  "preferences_applied": null
+	}`
+	out := Render("email_pre_scan", raw(t, payload), width80)
+	t.Logf("\n%s", plain(out))
+
+	assertContains(t, out, "Can you confirm the rollback completed?", "due Friday EOD")
+	assertNotContains(t, out, untrustedBodyOpen, untrustedBodyClose)
+}

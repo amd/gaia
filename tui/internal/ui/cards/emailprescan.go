@@ -154,6 +154,32 @@ func fitSections(itemRows [][]int, totals []int, budget int) ([]int, int) {
 	return show, cost()
 }
 
+// The untrusted-input delimiter pair the Python side wraps extracted
+// needs_you[].detail/due_hint text in before it re-enters the AGENT's own
+// tool-result context (#2743 Increment 3, gaia_agent_email/tools/
+// read_tools.py's wrap_untrusted_body). A human reading this card is not at
+// risk of being "steered" by embedded text the way an LLM context is, so
+// the wrapper is stripped here rather than shown -- it exists for the
+// agent's benefit, not the viewer's.
+const (
+	untrustedBodyOpen  = "<<<UNTRUSTED_EMAIL_BODY_START>>>"
+	untrustedBodyClose = "<<<UNTRUSTED_EMAIL_BODY_END>>>"
+)
+
+// stripUntrustedWrapper removes the untrusted-input delimiter pair if
+// present, trimming the surrounding whitespace the wrapper's own newlines
+// leave behind. Text that never carried the wrapper (a pre-2.11 producer,
+// or any field this defense doesn't cover) passes through unchanged.
+func stripUntrustedWrapper(s string) string {
+	trimmed := strings.TrimSpace(s)
+	if !strings.HasPrefix(trimmed, untrustedBodyOpen) || !strings.HasSuffix(trimmed, untrustedBodyClose) {
+		return s
+	}
+	inner := strings.TrimPrefix(trimmed, untrustedBodyOpen)
+	inner = strings.TrimSuffix(inner, untrustedBodyClose)
+	return strings.TrimSpace(inner)
+}
+
 // isPreScanEnvelope reports whether the payload actually claims to be a
 // pre-scan, rather than merely failing to contradict one.
 func isPreScanEnvelope(data json.RawMessage) bool {
@@ -192,6 +218,16 @@ func renderEmailPreScan(data json.RawMessage, width int, seen map[string]bool) (
 	// inbox is clear. Require the envelope to actually be one.
 	if !isPreScanEnvelope(data) {
 		return renderInvalid("email_pre_scan", "payload carries no pre-scan fields", data, width), nil
+	}
+
+	// #2743 Increment 3: strip the untrusted-body wrapper BEFORE anything
+	// else reads Detail/DueHint, so both the cost estimate (fitNeedsYou)
+	// and the actual render see the same, already-human-readable text.
+	for i := range p.NeedsYou {
+		p.NeedsYou[i].DueHint = stripUntrustedWrapper(p.NeedsYou[i].DueHint)
+		for j, d := range p.NeedsYou[i].Detail {
+			p.NeedsYou[i].Detail[j] = stripUntrustedWrapper(d)
+		}
 	}
 
 	hadItems := len(p.NeedsYou) > 0
