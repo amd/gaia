@@ -78,6 +78,30 @@ func TestPreScanEmptyStateUnqualifiedWhenCoverageIsComplete(t *testing.T) {
 	assertNotContains(t, out, "Nothing in the 19 most recent needs a reply.")
 }
 
+// The coverage line names "inbox messages scanned" ONCE, not twice, and
+// keeps the invitation to look further back on the same clause (#2743
+// checkpoint review) -- this is the line carrying the issue's central
+// honesty claim, so it must read cleanly.
+func TestCoverageLineNamesInboxOnceWhenMoreExists(t *testing.T) {
+	var envelope map[string]any
+	if err := json.Unmarshal([]byte(populatedPreScan), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	envelope["total_inbox"] = 210 // more than "scanned": 15
+	data, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	out := Render("email_pre_scan", data, width80)
+	t.Logf("\n%s", plain(out))
+	got := plain(out)
+	assertContains(t, out, "15 of 210 inbox messages scanned — ask me to look further back")
+	if n := strings.Count(got, "inbox messages scanned"); n != 1 {
+		t.Errorf(`"inbox messages scanned" appears %d times, want exactly 1:\n%s`, n, got)
+	}
+}
+
 func TestPreScanCapsHitShowsNofM(t *testing.T) {
 	out := Render("email_pre_scan", raw(t, capsHitPreScan), width80)
 	t.Logf("\n%s", plain(out))

@@ -559,14 +559,18 @@ func (p emailPreScan) bulkLine() string {
 // invitation half tells the user they can ask for a deeper look rather than
 // silently capping the view with no way to know more exists.
 func (p emailPreScan) coverageLine() string {
-	line := itoa(p.Scanned) + " inbox messages scanned"
 	switch {
 	case p.TotalInbox != nil && *p.TotalInbox > p.Scanned:
-		line += " of " + itoa(*p.TotalInbox) + " in the inbox — ask me to look further back for more"
+		// "inbox" named once, not twice, and the invitation stays on one
+		// clause (#2743 checkpoint review: the earlier phrasing repeated
+		// "inbox messages scanned" and wrapped awkwardly on this, the line
+		// carrying the issue's central honesty claim).
+		return itoa(p.Scanned) + " of " + itoa(*p.TotalInbox) + " inbox messages scanned — ask me to look further back"
 	case p.TotalUnread != nil:
-		line += " · " + itoa(*p.TotalUnread) + " unread"
+		return itoa(p.Scanned) + " inbox messages scanned · " + itoa(*p.TotalUnread) + " unread"
+	default:
+		return itoa(p.Scanned) + " inbox messages scanned"
 	}
-	return line
 }
 
 func (p emailPreScan) footerLines() []string {
