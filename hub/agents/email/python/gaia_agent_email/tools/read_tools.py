@@ -874,11 +874,19 @@ def search_messages_impl(
             max_results=max_results,
             budget_tokens=budget_tokens,
         )
-        summary: Dict[str, Any] = {"count": len(out)}
+        # Real cursor only -- never len(stubs) == max_results (see
+        # _list_all_stubs's scan_truncated docstring above for why that
+        # heuristic is wrong the moment a mailbox's true size matches the ask).
+        truncated = bool(listing.get("nextPageToken"))
+        summary: Dict[str, Any] = {"count": len(out), "truncated": truncated}
         if retried_query is not None:
             summary["operator_retry"] = retried_query
         st["result_summary"] = summary
-        return {"messages": out, "operator_retry": retried_query}
+        return {
+            "messages": out,
+            "operator_retry": retried_query,
+            "truncated": truncated,
+        }
 
 
 def list_labels_impl(gmail, *, debug: bool = False) -> List[Dict[str, Any]]:
@@ -2221,6 +2229,24 @@ class ReadToolsMixin:
             every requested hit, the tool returns an actionable error instead of
             silently returning fewer hits than asked for — retry with a smaller
             ``max_results``.
+
+            Returns:
+                JSON envelope with ``{"messages": [...]}`` plus ``count`` (the
+                exact length of ``messages`` — state this number verbatim in
+                your reply rather than counting the list yourself) and
+                ``truncated`` (true when more matches exist beyond
+                ``max_results`` — say "at least N", never present N as the
+                total). REPORT EVERY ENTRY in ``messages`` individually — do
+                not summarize, merge, or quietly drop entries from a long
+                list. If ``operator_retry`` is present, the literal query you
+                passed found nothing and this is the broadened operator query
+                that was retried instead — say the search was broadened
+                before stating the count, since it may include hits (e.g. a
+                subject match) beyond what the user's literal phrase meant.
+                If ``mailbox_errors`` is present, ``count`` and ``truncated``
+                cover only the mailboxes that succeeded — say the count is
+                partial, not the complete total across every connected
+                mailbox.
             """
             try:
                 max_results = max(1, min(int(max_results or 25), 100))
@@ -2230,6 +2256,13 @@ class ReadToolsMixin:
                 per_backend = max(1, max_results // len(backends))
                 merged: List[Dict[str, Any]] = []
                 mailbox_errors: List[Dict[str, Any]] = []
+                # Computed here, not forwarded from search_messages_impl alone
+                # (#2756) -- this closure builds a fresh envelope dict and
+                # previously kept only "messages" off each backend's result,
+                # which is why operator_retry never reached the model despite
+                # being computed since inception.
+                truncated = False
+                operator_retry_query: Optional[str] = None
                 for provider, backend in backends.items():
                     if len(merged) >= max_results:
                         break
@@ -2252,6 +2285,9 @@ class ReadToolsMixin:
                             msg,
                         )
                         continue
+                    truncated = truncated or bool(result.get("truncated"))
+                    if result.get("operator_retry"):
+                        operator_retry_query = result["operator_retry"]
                     for msg in result.get("messages", []):
                         msg["mailbox"] = provider
                         agent._remember_message_mailbox(msg.get("id"), provider)
@@ -2266,7 +2302,15 @@ class ReadToolsMixin:
                             f"{e['mailbox']}: {e['error']}" for e in mailbox_errors
                         )
                     )
-                out: Dict[str, Any] = {"messages": merged[:max_results]}
+                messages = merged[:max_results]
+                out: Dict[str, Any] = {
+                    "messages": messages,
+                    # Exact, precomputed -- state this number verbatim rather
+                    # than counting the list yourself (#2756).
+                    "count": len(messages),
+                    "truncated": truncated,
+                    "operator_retry": operator_retry_query,
+                }
                 if mailbox_errors:
                     out["mailbox_errors"] = mailbox_errors
                 return _envelope_ok(out)
