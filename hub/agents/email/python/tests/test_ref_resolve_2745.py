@@ -341,13 +341,6 @@ def _make_agent(tmp_path, gmail: FakeGmailBackend):
     ):
         mock_sdk.return_value = MagicMock()
         agent = EmailTriageAgent(config=cfg)
-    # A MagicMock ``chat`` is truthy, so pre_scan_inbox's needs_you[].detail
-    # LLM extraction (#2743) would try to call it for real and crash on the
-    # mock's return value. Force the same heuristic-only/LLM-free mode the
-    # REST /prescan path and the scheduled briefing job already use
-    # (``fill_needs_you_detail``'s own ``if not chat`` skip) -- this test is
-    # about pre_scan_inbox's card-storage wiring, not detail extraction.
-    agent.chat = None
     return agent
 
 
