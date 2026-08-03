@@ -9,6 +9,20 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **`search_messages` stated a wrong, unstable count for a result set it
+  received intact (#2756).** Asked "how many messages from X in the last two
+  weeks", the agent ran the right query, got every matching row back, then
+  reported a number that was both wrong and different on every run (measured:
+  12 real messages stated as 6, then 4). The registered `search_messages`
+  tool's merge layer now precomputes an exact `count` for the model to state
+  verbatim, the same remedy `check_followups` already shipped for the
+  identical failure (#2622). `truncated` is derived only from Gmail's real
+  pagination cursor, never from `len(messages) == max_results` — a sender
+  with exactly `max_results` matches and no further pages reports
+  `truncated: false`, not a coincidentally-correct guess. `operator_retry`
+  (computed by `search_messages_impl` since inception but silently dropped
+  by the wrapper) now reaches the model too, so a broadened retry query is
+  disclosed rather than presented as the user's literal search.
 - **A reconnect with no explicit `--scopes` could silently overwrite a working
   mail+calendar connection with identity-only sign-in scopes (#2730).**
   `list(scopes) or list(provider.default_scopes)` at four `gaia.connectors`
