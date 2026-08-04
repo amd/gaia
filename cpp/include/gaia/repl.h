@@ -23,6 +23,11 @@ class SessionStore;
 /// (everything after the command name, trimmed) and the Agent reference.
 using SlashCommandCallback = std::function<void(const std::string& args, Agent& agent)>;
 
+/// Sink for text produced by built-in slash commands. Defaults to std::cout;
+/// the TUI redirects it into the transcript so nothing is written over the
+/// fullscreen screen.
+using ReplOutputSink = std::function<void(const std::string& text)>;
+
 /// Reusable interactive REPL runner for any GAIA agent.
 ///
 /// Provides a two-thread architecture:
@@ -96,6 +101,18 @@ public:
     /// Get the number of registered commands.
     size_t commandCount() const { return commands_.size(); }
 
+    /// Redirect built-in slash-command output. Pass nullptr to restore std::cout.
+    void setOutputSink(ReplOutputSink sink);
+
+    /// Print a line of command output. Goes to the TUI transcript when the TUI
+    /// owns the screen, std::cout otherwise. Agent-registered slash commands
+    /// should use this instead of writing to std::cout themselves.
+    void emit(const std::string& text);
+
+    /// Whether run() will take the fullscreen TUI path (FTXUI compiled in,
+    /// TUI not disabled, and stdin/stdout are a terminal).
+    bool willUseTui() const;
+
 private:
     Agent& agent_;
     std::string prompt_;
@@ -133,8 +150,16 @@ private:
     bool useTui_ = true;
     bool tuiOverride_ = false;
 
-    /// Configure the agent's output handler based on TUI availability.
+    ReplOutputSink outputSink_;
+
+    /// Install the non-TUI output handler (CleanConsole).
     void configureOutputHandler();
+
+    /// Run the fullscreen TUI loop. Only called when willUseTui() is true.
+    void runTui();
+
+    /// Plain line-oriented loop used when the TUI is unavailable or disabled.
+    void runPlain();
 };
 
 } // namespace gaia
