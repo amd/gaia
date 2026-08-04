@@ -13,6 +13,25 @@
 # label-driven skip like #2755, or a future variant — into a visible red
 # check, because it doesn't care why a dependency didn't report, only that
 # it didn't.
+#
+# This job deliberately has NO job-level `if:` skipping it for draft PRs,
+# unlike every job it audits. A gate that skips itself in sympathy with the
+# jobs it's auditing reproduces this issue's exact bug inside the mechanism
+# meant to catch it: on a draft PR without `ready_for_ci` — this repo's
+# default PR state — the audited suites skip AND the gate would skip too,
+# so nothing runs, nothing is red, and the checks page still reads green
+# with no coverage behind it. Instead this job always runs and reports one
+# of three states via a self-posted check-run (see post_check_run() in the
+# script): `neutral` while the PR is legitimately not asking for CI yet,
+# `success` once the relevant suites verifiably passed, or `failure` if any
+# didn't. `neutral` is visibly distinct from both and does not block a
+# merge on its own, matching GitHub's own semantics for a neutral required
+# check — so this is legible, not noise, and not a lie.
+#
+# The job's OWN native check-run (below, named "(runner)") only reflects
+# whether the script executed without crashing — the meaningful signal for
+# branch protection to require is the self-posted "Required Checks Gate"
+# check-run the script creates via the API.
 
 name: Required Checks Gate
 
@@ -24,7 +43,7 @@ on:
 
 permissions:
   contents: read
-  checks: read
+  checks: write
   pull-requests: read
 
 concurrency:
@@ -33,17 +52,8 @@ concurrency:
 
 jobs:
   gate:
-    name: Required Checks Gate
+    name: Required Checks Gate (runner)
     runs-on: ubuntu-latest
-    # Same condition every gated job in this repo already uses (#2755) — kept
-    # identical on purpose. Mirroring it here, rather than the gate deciding
-    # per-check whether a draft PR is "exempt", means this check shows the
-    # same honest "skipped" state everything else shows while a PR awaits
-    # `ready_for_ci`, instead of fabricating a pass for work nothing has run
-    # yet. Listening to the `labeled` event above (unlike the jobs being
-    # audited) is what lets adding `ready_for_ci` alone re-run this gate —
-    # the exact re-trigger #2755 says the audited jobs are missing.
-    if: github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
     timeout-minutes: 65
     steps:
       - uses: actions/checkout@v7
@@ -69,11 +79,13 @@ jobs:
       # build_tui.yml keeps its own branches:[main] filter for now — PR #2696
       # already widens that workflow, so excluding it here avoids this gate
       # red-flagging a gap that PR is already closing.
-      - name: Wait for and verify required checks
+      - name: Determine gate state and verify required checks
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_DRAFT: ${{ github.event.pull_request.draft }}
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
         run: |
           python .github/scripts/check_required_status.py \
             --workflows-dir .github/workflows \
@@ -82,5 +94,7 @@ jobs:
             --changed-files changed_files.txt \
             --repo "$REPO" \
             --sha "$HEAD_SHA" \
+            --draft "$PR_DRAFT" \
+            --labels "$PR_LABELS" \
             --timeout-seconds 3600 \
             --poll-seconds 30

@@ -197,6 +197,16 @@ def load_requirements(workflows_dir: str, exclude: Iterable[str]) -> list[Requir
     return reqs
 
 
+def is_gated_off(is_draft: bool, labels: set[str]) -> bool:
+    """True when the audited suites legitimately have not run yet, by the
+    same convention every one of them already uses:
+    `github.event.pull_request.draft == false || contains(...'ready_for_ci')`.
+    This gate mirrors that condition in Python (not a job-level `if:`) so it
+    can decide it fresh on every invocation instead of skipping itself.
+    """
+    return is_draft and "ready_for_ci" not in labels
+
+
 def _matches_any(changed_file: str, patterns: list[str]) -> bool:
     return any(fnmatch.fnmatch(changed_file, pat) for pat in patterns)
 
@@ -259,6 +269,43 @@ def fetch_changed_files(path: str) -> list[str]:
         return [line.strip() for line in f if line.strip()]
 
 
+CUSTOM_CHECK_NAME = "Required Checks Gate"
+
+
+def post_check_run(repo: str, sha: str, conclusion: str, title: str, summary: str) -> None:
+    """Create a check-run via the Checks API directly, independent of this
+    job's own native pass/fail check-run.
+
+    Why a second, API-created check-run instead of just letting the job's
+    exit code decide: GitHub Actions can only ever conclude a job as
+    success/failure/cancelled/skipped — there's no exit code for "neutral".
+    But "this PR's required suites legitimately have not run yet because
+    it's a draft" is neither a pass (nothing has been verified) nor a
+    failure (nothing is wrong) — see the redirect on #2767 that led to this:
+    a gate that skips itself in sympathy with the jobs it's auditing
+    reproduces the exact silent-green bug it exists to catch. `neutral` is
+    the one Checks API conclusion built for exactly this: visible, distinct
+    from both green and red, and does not block a merge on its own (mirrors
+    GitHub's own branch-protection semantics for a neutral required check).
+    """
+    payload = {
+        "name": CUSTOM_CHECK_NAME,
+        "head_sha": sha,
+        "status": "completed",
+        "conclusion": conclusion,
+        "output": {"title": title, "summary": summary},
+    }
+    proc = subprocess.run(
+        ["gh", "api", f"repos/{repo}/check-runs", "--input", "-"],
+        input=json.dumps(payload),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(f"gh api check-runs create failed (exit {proc.returncode}): {proc.stderr.strip()}")
+
+
 def fetch_check_runs(repo: str, sha: str) -> list[CheckRun]:
     proc = subprocess.run(
         [
@@ -312,7 +359,32 @@ def main() -> int:
     parser.add_argument("--sha", required=True)
     parser.add_argument("--timeout-seconds", type=int, default=3600)
     parser.add_argument("--poll-seconds", type=int, default=30)
+    parser.add_argument("--draft", choices=["true", "false"], required=True)
+    parser.add_argument("--labels", default="", help="comma-separated PR label names")
     args = parser.parse_args()
+
+    is_draft = args.draft == "true"
+    labels = {label.strip() for label in args.labels.split(",") if label.strip()}
+
+    if is_gated_off(is_draft, labels):
+        # Deliberately NOT skipped via a job-level `if:` — see the module
+        # docstring on post_check_run for why a job that skips itself here
+        # would reproduce #2767's own bug. This branch always actually
+        # executes and always actually decides, every time it's triggered
+        # (including on a bare `labeled` event with no new commit) — so it
+        # can never get stuck showing a stale state the way the audited
+        # jobs can.
+        title = "Required suites have not run yet"
+        summary = (
+            "This PR is a draft without the `ready_for_ci` label, so the "
+            "suites this gate audits have not run (by the same convention "
+            "every audited workflow uses). Nothing has been verified — this "
+            "is not a pass. Mark the PR ready for review, or add the "
+            "`ready_for_ci` label, to require and verify them."
+        )
+        print(f"GATED OFF: {summary}")
+        post_check_run(args.repo, args.sha, "neutral", title, summary)
+        return 0
 
     requirements = load_requirements(args.workflows_dir, args.exclude)
     reserved_names = _collect_reserved_static_names(args.workflows_dir)
@@ -330,6 +402,7 @@ def main() -> int:
         print(format_report(result, elapsed))
 
         if result.is_terminal_failure:
+            details = "; ".join(f"{req.name_prefix} ({reason})" for req, reason in result.failed)
             for req, reason in result.failed:
                 print(
                     f"::error::Required check '{req.name_prefix}' (from "
@@ -337,16 +410,39 @@ def main() -> int:
                     f"failure mode issue #2767 exists to catch — a check that "
                     f"should have run for this diff did not report success."
                 )
+            post_check_run(
+                args.repo,
+                args.sha,
+                "failure",
+                "Required suites did not pass",
+                f"One or more required, path-relevant checks did not pass: {details}",
+            )
             return 1
         if result.is_fully_ok:
             print("All path-relevant required checks reported and passed.")
+            names = ", ".join(r.name_prefix for r in result.ok) or "(none required for this diff)"
+            post_check_run(
+                args.repo,
+                args.sha,
+                "success",
+                "All required suites passed",
+                f"Required and path-relevant for this diff: {names}",
+            )
             return 0
         if elapsed >= args.timeout_seconds:
+            details = ", ".join(r.name_prefix for r in result.unresolved)
             for req in result.unresolved:
                 print(
                     f"::error::Required check '{req.name_prefix}' (from "
                     f"{req.source_file}) never reported after {args.timeout_seconds}s."
                 )
+            post_check_run(
+                args.repo,
+                args.sha,
+                "failure",
+                "Required suites never reported",
+                f"Timed out after {args.timeout_seconds}s waiting on: {details}",
+            )
             return 1
         time.sleep(args.poll_seconds)
 

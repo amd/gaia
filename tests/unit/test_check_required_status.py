@@ -166,6 +166,31 @@ jobs:
 
 
 # ---------------------------------------------------------------------------
+# is_gated_off() — the third state (#2767 checkpoint-2 redirect)
+#
+# The gate must NOT skip itself via a job-level `if:` that mirrors the
+# audited jobs' own draft-gate, because that reproduces this issue's exact
+# bug inside the mechanism meant to catch it: nothing runs, nothing is red,
+# the checks page reads green. is_gated_off() is what main() consults
+# INSTEAD of a job-level skip, so the gate always executes and always
+# freshly decides whether to report neutral or do the real check.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "is_draft,labels,expected",
+    [
+        (True, set(), True),  # fresh draft, no label -> suites legitimately silent
+        (True, {"ready_for_ci"}, False),  # draft but opted in -> must be enforced
+        (False, set(), False),  # ready for review -> must be enforced
+        (False, {"ready_for_ci"}, False),
+    ],
+)
+def test_is_gated_off(is_draft, labels, expected):
+    assert crs.is_gated_off(is_draft, labels) is expected
+
+
+# ---------------------------------------------------------------------------
 # is_path_relevant()
 # ---------------------------------------------------------------------------
 
