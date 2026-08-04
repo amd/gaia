@@ -55,10 +55,14 @@ from typing import Any, Dict, List, Optional
 # Mirrors ``gaia.ui.sse_handler.SSEOutputHandler._RENDER_TOOL_TO_LANG`` — the
 # tool→card-key map that tells the host which typed ``tool_result.render`` card to
 # draw (spec §4.2, replacing the #1000 fence-injection hack). Duplicated (not
-# imported) to keep this module free of the ``gaia.ui`` import chain; the email
-# agent's only render tool today is the inbox pre-scan.
+# imported) to keep this module free of the ``gaia.ui`` import chain; a test
+# (``test_render_tool_to_lang_maps_stay_in_sync``) pins the two dicts equal so
+# this duplication can't silently drift.
 _RENDER_TOOL_TO_LANG: Dict[str, str] = {
     "pre_scan_inbox": "email_pre_scan",
+    # #2765: a generic ``table`` card (no new client code) so the thread
+    # view renders straight from tool data instead of model prose.
+    "get_thread": "table",
 }
 
 # HTTP-style status codes for the canonical ``error`` event's ``status`` field.

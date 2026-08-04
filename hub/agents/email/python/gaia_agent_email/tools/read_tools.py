@@ -368,6 +368,42 @@ def get_thread_impl(gmail, *, thread_id: str, debug: bool = False) -> Dict[str, 
         return {"thread_id": thread_id, "messages": out}
 
 
+def _thread_table_card(thread_result: Dict[str, Any]) -> Dict[str, Any]:
+    """Project ``get_thread_impl``'s output into a ``table`` render card (#2765).
+
+    #2765: a real 8-message thread came back from the agent with a
+    duplicated message, another message replaced by a repeat of an earlier
+    one, a misattributed sender, and a timestamp (``11:40 AM +0000``) that
+    existed nowhere in the mailbox or the tool's own trace -- i.e. the raw
+    ``get_thread_impl`` payload (already ordered/numbered/labeled per
+    #2531) was correct, and the fabrication happened in the model's own
+    free-composed prose reply, upstream of any formatting layer.
+
+    A docstring instruction alone cannot fix that -- the payload was
+    already complete and correct and the model invented anyway. So this
+    hands the chat surface a card it renders DIRECTLY from tool data
+    (``kind: "table"``, the pre-existing generic render primitive --
+    ``docs/spec/agent-ui-query-sse-contract.md`` Sec 4.3 -- no new client
+    code) instead of from the model's prose. Every cell is copied verbatim
+    from the SAME ``from``/``date``/``index`` fields the model itself
+    reads (no reformatting, no timezone conversion), so what renders on
+    screen cannot diverge from what the tool actually returned, regardless
+    of anything the model goes on to say.
+    """
+    messages = thread_result.get("messages", [])
+    subject = (messages[0].get("subject") if messages else "") or "Thread"
+    count = len(messages)
+    title = f"{subject} — {count} message{'s' if count != 1 else ''}"
+    return {
+        "kind": "table",
+        "title": title,
+        "columns": ["#", "From", "Date"],
+        "rows": [
+            [m.get("index"), m.get("from", ""), m.get("date", "")] for m in messages
+        ],
+    }
+
+
 def _thread_message_sort_key(msg: Dict[str, Any]) -> int:
     """Chronological sort key for a raw thread message.
 
@@ -2614,6 +2650,9 @@ class ReadToolsMixin:
         def get_thread(thread_id: str, mailbox: str = "") -> str:
             """Fetch every message in a thread (conversation view).
 
+            Use this to catch the user up on, recap, or answer a question
+            about one email conversation.
+
             Messages are returned sorted chronologically (oldest first) and
             each carries ``index``/``of_total`` (its 1-based position in the
             thread) — use these, not the raw list order, when listing or
@@ -2622,12 +2661,24 @@ class ReadToolsMixin:
             ``...[truncated]`` marker; messages are never dropped.
             ``mailbox`` (optional) routes when multiple mailboxes are
             connected.
+
+            The chat surface renders a table card straight from this result
+            (``kind: "table"``) showing every message's real sender and
+            timestamp, in order — do NOT re-list, re-serialize, or
+            paraphrase that list into your reply; it is already visible to
+            the user (#2765). Answer what the user actually asked — what
+            was decided, what's still open, where the conversation landed —
+            by reading each message's body, not by reciting the thread.
+            Any sender or timestamp you DO mention in your own prose must
+            be copied VERBATIM from that message's ``from``/``date``
+            field — never estimate, convert, average, or reconstruct one
+            from memory; if you are not quoting one of those fields
+            directly, do not state a sender or a time at all.
             """
             try:
                 backend = agent._backend_for_message(thread_id, mailbox or None)
-                return _envelope_ok(
-                    get_thread_impl(backend, thread_id=thread_id, debug=debug_flag)
-                )
+                result = get_thread_impl(backend, thread_id=thread_id, debug=debug_flag)
+                return _envelope_ok({**result, **_thread_table_card(result)})
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))
             except Exception as exc:
