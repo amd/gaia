@@ -119,6 +119,14 @@ if(NOT yaml-cpp_FOUND)
     FetchContent_MakeAvailable(yaml-cpp)
     set(CMAKE_POLICY_VERSION_MINIMUM ${_GAIA_SAVE_POLICY_MIN})
     set(BUILD_SHARED_LIBS ${_GAIA_SAVE_BSL_YAML})
+
+    # yaml-cpp 0.8.0 predates the libstdc++ 13 header cleanup: its
+    # emitterutils.cpp uses uint16_t without including <cstdint>, so it fails to
+    # compile on GCC 13+ (the STX runner ships GCC 15). Upstream fixed this after
+    # the tag; force the include rather than drift off the pinned 0.8.0.
+    if(TARGET yaml-cpp AND NOT MSVC)
+        target_compile_options(yaml-cpp PRIVATE -include cstdint)
+    endif()
 endif()
 
 # FTXUI — reactive TUI framework (optional, gated behind GAIA_BUILD_TUI)
