@@ -224,6 +224,8 @@ def main() -> None:
             debug=False,
             operator_retry=False,
             budget_tokens=None,  # production default: active_profile_ctx_size()
+            include_bodies=True,  # this script measures the full-body shrink
+            # contract specifically; include_bodies now defaults to False (#2763)
         )
         messages = result["messages"]
         serialized = json.dumps({"messages": messages}, default=str)
@@ -247,6 +249,8 @@ def main() -> None:
             debug=False,
             operator_retry=False,
             budget_tokens=None,
+            include_bodies=True,  # same reasoning as above -- this dump is for
+            # the full-body real-tokenizer cross-check, not the metadata path
         )
         tool_result_json = json.dumps(
             {
