@@ -103,8 +103,8 @@ def _on_block(doc: dict) -> dict | None:
 def _iter_workflow_jobs(workflows_dir: str):
     """Yield (fname, doc, job_id, job, name_tmpl, is_templated) for every job
     in every *.yml/*.yaml file in workflows_dir, regardless of trigger type.
-    Shared between load_requirements() and _collect_reserved_static_names()
-    so both see exactly the same parse.
+    Shared between load_requirements() and _collect_all_name_matchers() so
+    both see exactly the same parse.
     """
     for path in sorted(glob.glob(os.path.join(workflows_dir, "*.yml"))) + sorted(
         glob.glob(os.path.join(workflows_dir, "*.yaml"))
@@ -127,24 +127,59 @@ def _iter_workflow_jobs(workflows_dir: str):
             yield fname, doc, job_id, job, name_tmpl, "${{" in name_tmpl
 
 
-def _collect_reserved_static_names(workflows_dir: str) -> dict[str, str]:
-    """Map every fully-static (non-templated) job name, across every
-    workflow file with no exclusions, to its source file.
+@dataclass(frozen=True)
+class _NameMatcher:
+    pattern: str
+    exact: bool
+    source_file: str
+    job_id: str
 
-    This is what makes prefix matching for matrix-templated jobs safe: a job
-    named "Test ${{ matrix.package }}" derives the candidate prefix "Test",
-    which would otherwise startswith()-match unrelated static check-runs
-    like "Test Chat Agent" — or even a same-named job in an intentionally
-    excluded workflow (build_tui.yml has its own static "Test" job). Every
-    workflow is scanned here regardless of `exclude` or trigger type,
-    because a real check-run can carry any of these names whether or not
-    its source workflow is itself a requirement.
+
+def _collect_all_name_matchers(workflows_dir: str) -> list[_NameMatcher]:
+    """Every job in every workflow file, as a name matcher — static names
+    exact, matrix-templated names as their prefix — regardless of
+    `exclude` or trigger type.
+
+    Live evidence on #2767 (PR #2775, throwaway) is what proved a bare
+    prefix guard against static names wasn't enough: test_hub_agents.yml's
+    "Test ${{ matrix.package }}" collapses to the prefix "Test", which
+    startswith()-matched not just an unrelated static "Test Chat Agent" but
+    ALSO other matrix-templated jobs' rendered names, e.g. "Test Apps Build
+    (jira)" (from test_electron.yml's own, more specific, "Test Apps Build
+    (" prefix) and "Test MCPAgent (ubuntu-latest)". The verdict came out
+    right that time (both were legitimately failing), but the *reason*
+    attributed those failures to the wrong job. `_most_specific_owner`
+    below is the general fix: every check-run name belongs to whichever
+    matcher matches it most specifically — an exact match beats any prefix,
+    and among prefixes the longest (most specific) one wins.
     """
-    reserved: dict[str, str] = {}
-    for fname, _doc, _job_id, _job, name_tmpl, is_templated in _iter_workflow_jobs(workflows_dir):
-        if not is_templated and name_tmpl:
-            reserved[name_tmpl] = fname
-    return reserved
+    matchers = []
+    for fname, _doc, job_id, _job, name_tmpl, is_templated in _iter_workflow_jobs(workflows_dir):
+        if not name_tmpl:
+            continue
+        prefix = name_tmpl.split("${{", 1)[0].rstrip() if is_templated else name_tmpl
+        if not prefix:
+            continue
+        matchers.append(_NameMatcher(pattern=prefix, exact=not is_templated, source_file=fname, job_id=job_id))
+    return matchers
+
+
+def _most_specific_owner(name: str, matchers: list[_NameMatcher]) -> tuple[str, str] | None:
+    best: _NameMatcher | None = None
+    for m in matchers:
+        matched = name == m.pattern if m.exact else name.startswith(m.pattern)
+        if not matched:
+            continue
+        if best is None:
+            best = m
+            continue
+        # An exact match always outranks a prefix match; among prefixes,
+        # the longer (more specific) one wins.
+        best_specificity = len(best.pattern) + (1000 if best.exact else 0)
+        cand_specificity = len(m.pattern) + (1000 if m.exact else 0)
+        if cand_specificity > best_specificity:
+            best = m
+    return (best.source_file, best.job_id) if best else None
 
 
 def load_requirements(workflows_dir: str, exclude: Iterable[str]) -> list[Requirement]:
@@ -224,9 +259,9 @@ def evaluate(
     requirements: list[Requirement],
     changed_files: list[str],
     check_runs: list[CheckRun],
-    reserved_names: dict[str, str] | None = None,
+    all_matchers: list[_NameMatcher] | None = None,
 ) -> EvalResult:
-    reserved_names = reserved_names or {}
+    all_matchers = all_matchers or []
     result = EvalResult()
     for req in requirements:
         if not is_path_relevant(req, changed_files):
@@ -234,13 +269,14 @@ def evaluate(
         if req.exact:
             matches = [cr for cr in check_runs if cr.name == req.name_prefix]
         else:
-            # Exclude candidates that are some OTHER job's exact static
-            # name — see _collect_reserved_static_names for why this is
-            # necessary, not just defensive.
+            # Only accept a candidate if THIS job is its most specific owner
+            # — see _most_specific_owner for why a plain startswith() isn't
+            # enough once other prefix-mode jobs exist too.
             matches = [
                 cr
                 for cr in check_runs
-                if cr.name.startswith(req.name_prefix) and reserved_names.get(cr.name, req.source_file) == req.source_file
+                if cr.name.startswith(req.name_prefix)
+                and _most_specific_owner(cr.name, all_matchers) in (None, (req.source_file, req.job_id))
             ]
         if not matches:
             result.missing.append(req)
@@ -387,7 +423,7 @@ def main() -> int:
         return 0
 
     requirements = load_requirements(args.workflows_dir, args.exclude)
-    reserved_names = _collect_reserved_static_names(args.workflows_dir)
+    all_matchers = _collect_all_name_matchers(args.workflows_dir)
     changed_files = fetch_changed_files(args.changed_files)
 
     print(f"Derived {len(requirements)} job requirements from {args.workflows_dir} "
@@ -398,7 +434,7 @@ def main() -> int:
     while True:
         elapsed = int(time.monotonic() - start)
         check_runs = fetch_check_runs(args.repo, args.sha)
-        result = evaluate(requirements, changed_files, check_runs, reserved_names)
+        result = evaluate(requirements, changed_files, check_runs, all_matchers)
         print(format_report(result, elapsed))
 
         if result.is_terminal_failure:

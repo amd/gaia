@@ -362,19 +362,26 @@ def test_evaluate_static_name_requires_exact_match_not_prefix():
 
 
 # ---------------------------------------------------------------------------
-# reserved-name safety net for matrix-templated prefixes
+# most-specific-owner safety net for matrix-templated prefixes
 #
-# This reproduces the actual collision found while building the gate:
+# This reproduces two real collisions — one found while writing this
+# script, one found LIVE on the throwaway evidence PR (#2775) for #2767.
 # test_hub_agents.yml's job is named "Test ${{ matrix.package }}", which
-# collapses to the prefix "Test". Without the reserved-names guard, that
-# prefix would startswith()-match "Test Chat Agent" (an unrelated job from
-# test_chat_agent.yml) AND the bare "Test" job that build_tui.yml's own
-# workflow happens to declare — silently marking both requirements
-# satisfied by check-runs that have nothing to do with them.
+# collapses to the prefix "Test". A plain startswith() would match:
+#  (a) an unrelated STATIC name from another job ("Test Chat Agent", or the
+#      bare "Test" job build_tui.yml happens to declare), and
+#  (b) an unrelated OTHER PREFIX-MODE job's rendered name, e.g.
+#      "Test Apps Build (jira)" (test_electron.yml's own, more specific,
+#      "Test Apps Build (" prefix) — this one only showed up against the
+#      real repo's full file set, which is exactly why load_requirements()
+#      is exercised against real multi-file fixtures here rather than only
+#      single-job ones.
+# _most_specific_owner() is the general fix for both: every check-run name
+# belongs to whichever matcher matches it most specifically.
 # ---------------------------------------------------------------------------
 
 
-def test_collect_reserved_static_names_spans_every_file_ignoring_exclude(tmp_path):
+def test_collect_all_name_matchers_spans_every_file_ignoring_exclude(tmp_path):
     wf_dir = write_workflow(
         tmp_path,
         "test_chat_agent.yml",
@@ -404,16 +411,17 @@ jobs:
       - run: echo hi
 """,
     )
-    reserved = crs._collect_reserved_static_names(str(wf_dir))
+    matchers = crs._collect_all_name_matchers(str(wf_dir))
     # Present even though build_tui.yml would normally be excluded from
     # requirements — a real check-run can still carry that exact name.
-    assert reserved == {
-        "Test Chat Agent": "test_chat_agent.yml",
-        "Test": "build_tui.yml",
+    as_tuples = {(m.pattern, m.exact, m.source_file) for m in matchers}
+    assert as_tuples == {
+        ("Test Chat Agent", True, "test_chat_agent.yml"),
+        ("Test", True, "build_tui.yml"),
     }
 
 
-def test_evaluate_prefix_match_excludes_names_reserved_by_other_jobs(tmp_path):
+def test_evaluate_prefix_match_defers_to_more_specific_static_name(tmp_path):
     wf_dir = write_workflow(
         tmp_path,
         "test_hub_agents.yml",
@@ -462,7 +470,7 @@ jobs:
     )
     reqs = crs.load_requirements(str(wf_dir), exclude=["build_tui.yml"])
     hub_req = next(r for r in reqs if r.source_file == "test_hub_agents.yml")
-    reserved = crs._collect_reserved_static_names(str(wf_dir))
+    matchers = crs._collect_all_name_matchers(str(wf_dir))
 
     # Only "Test Chat Agent" and bare "Test" exist — neither is a real
     # rendering of "Test ${{ matrix.package }}", so without the guard the
@@ -472,7 +480,7 @@ jobs:
         crs.CheckRun(name="Test", status="completed", conclusion="success"),
     ]
     result = crs.evaluate(
-        [hub_req], changed_files=["hub/x.py"], check_runs=runs, reserved_names=reserved
+        [hub_req], changed_files=["hub/x.py"], check_runs=runs, all_matchers=matchers
     )
     assert not result.is_fully_ok
     assert result.missing == [hub_req]
@@ -486,6 +494,63 @@ jobs:
         [hub_req],
         changed_files=["hub/x.py"],
         check_runs=runs_real,
-        reserved_names=reserved,
+        all_matchers=matchers,
     )
     assert result_real.is_fully_ok
+
+
+def test_evaluate_prefix_match_defers_to_more_specific_other_prefix(tmp_path):
+    # The variant found LIVE on PR #2775: two DIFFERENT matrix-templated
+    # jobs, neither one static, where one job's rendered name happens to
+    # extend the other's prefix.
+    wf_dir = write_workflow(
+        tmp_path,
+        "test_hub_agents.yml",
+        """
+on:
+  pull_request:
+jobs:
+  test-hub-package:
+    name: "Test ${{ matrix.package }}"
+    strategy:
+      matrix:
+        package: [blender]
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo hi
+""",
+    )
+    write_workflow(
+        tmp_path,
+        "test_electron.yml",
+        """
+on:
+  pull_request:
+jobs:
+  test-apps-build:
+    name: "Test Apps Build (${{ matrix.app.name }})"
+    strategy:
+      matrix:
+        app: [{name: jira}, {name: example}]
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo hi
+""",
+    )
+    reqs = crs.load_requirements(str(wf_dir), exclude=[])
+    hub_req = next(r for r in reqs if r.source_file == "test_hub_agents.yml")
+    matchers = crs._collect_all_name_matchers(str(wf_dir))
+
+    # "Test Apps Build (jira)" starts with both "Test" and "Test Apps
+    # Build (" — the longer, more specific prefix must win, so this must
+    # NOT satisfy test_hub_agents.yml's "Test" requirement.
+    runs = [
+        crs.CheckRun(
+            name="Test Apps Build (jira)", status="completed", conclusion="success"
+        )
+    ]
+    result = crs.evaluate(
+        [hub_req], changed_files=["hub/x.py"], check_runs=runs, all_matchers=matchers
+    )
+    assert not result.is_fully_ok
+    assert result.missing == [hub_req]
