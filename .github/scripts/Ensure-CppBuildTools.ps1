@@ -39,12 +39,22 @@ $ProgressPreference = 'SilentlyContinue'
 $toolsRoot = Get-CppToolsRoot
 Write-Host "C++ tools root: $toolsRoot"
 
+# Resolved once: Join-Path throws on a null root, and this script must not die
+# looking for Visual Studio on a machine that has none.
+$vswhere = $null
+if (-not [string]::IsNullOrWhiteSpace(${env:ProgramFiles(x86)})) {
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+    if (-not (Test-Path -LiteralPath $vswhere)) { $vswhere = $null }
+}
+
 # ---------------------------------------------------------------------------
 # CMake: PATH -> previous download -> Visual Studio -> fresh download
 # ---------------------------------------------------------------------------
 $cmakeBin = $null
 
-$onPath = Get-Command cmake -ErrorAction SilentlyContinue
+# Select-Object -First 1: two cmake entries on PATH would otherwise make .Source
+# an array and $candidate an unusable joined string.
+$onPath = Get-Command cmake -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
 if ($onPath) {
     $candidate = Split-Path -Parent $onPath.Source
     Write-Host "Checking CMake already on PATH: $candidate"
@@ -67,21 +77,18 @@ if (-not $cmakeBin) {
     }
 }
 
-if (-not $cmakeBin -and (Test-IsWindowsHost)) {
-    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-    if (Test-Path -LiteralPath $vswhere) {
-        $vsCmake = & $vswhere -latest `
-            -requires Microsoft.VisualStudio.Component.VC.CMake.Project `
-            -find "Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin" 2>$null
-        if ($vsCmake) {
-            $vsCmake = @($vsCmake)[0]
-            Write-Host "Checking VS-bundled CMake: $vsCmake"
-            if (Test-CMakeInstallation -BinDir $vsCmake) {
-                Write-Host "[OK] Using VS-bundled CMake"
-                $cmakeBin = $vsCmake
-            } else {
-                Write-Host "::warning::VS-bundled CMake at $vsCmake is incomplete -- ignoring it"
-            }
+if (-not $cmakeBin -and $vswhere) {
+    $vsCmake = & $vswhere -latest `
+        -requires Microsoft.VisualStudio.Component.VC.CMake.Project `
+        -find "Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin" 2>$null
+    if ($vsCmake) {
+        $vsCmake = @($vsCmake)[0]
+        Write-Host "Checking VS-bundled CMake: $vsCmake"
+        if (Test-CMakeInstallation -BinDir $vsCmake) {
+            Write-Host "[OK] Using VS-bundled CMake"
+            $cmakeBin = $vsCmake
+        } else {
+            Write-Host "::warning::VS-bundled CMake at $vsCmake is incomplete -- ignoring it"
         }
     }
 }
@@ -97,19 +104,16 @@ Add-PathEntry -Directory $cmakeBin
 # ---------------------------------------------------------------------------
 $hasCompiler = $false
 
-if (Test-IsWindowsHost) {
-    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-    if (Test-Path -LiteralPath $vswhere) {
-        $vsPath = & $vswhere -latest -property installationPath 2>$null
-        if ($vsPath) {
-            Write-Host "[OK] MSVC found at $(@($vsPath)[0])"
-            $hasCompiler = $true
-        }
+if ($vswhere) {
+    $vsPath = & $vswhere -latest -property installationPath 2>$null
+    if ($vsPath) {
+        Write-Host "[OK] MSVC found at $(@($vsPath)[0])"
+        $hasCompiler = $true
     }
 }
 
 if (-not $hasCompiler) {
-    $gxx = Get-Command g++ -ErrorAction SilentlyContinue
+    $gxx = Get-Command g++ -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($gxx) {
         Write-Host "[OK] g++ found on PATH at $($gxx.Source)"
         $hasCompiler = $true
@@ -128,6 +132,10 @@ if (-not $hasCompiler) {
         Add-PathEntry -Directory (Install-W64Devkit -Version $W64DevkitVersion -ToolsRoot $toolsRoot)
         $hasCompiler = $true
     }
+}
+
+if (-not $hasCompiler) {
+    throw "No C++ compiler is available: MSVC, g++ on PATH, and w64devkit all failed."
 }
 
 Write-Host "Build tools ready"
