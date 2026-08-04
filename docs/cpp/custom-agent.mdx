@@ -337,6 +337,10 @@ static gaia::AgentConfig makeConfig() {
     // Output suppression (see Step 6)
     cfg.silentMode  = false;  // set true to suppress all console output
 
+    // Tool-calling protocol
+    cfg.nativeToolCalls = gaia::NativeToolCalls::Auto;   // per-model (default)
+    cfg.responseMode    = gaia::ResponseMode::Planning;  // prompt-JSON reply shape
+
     return cfg;
 }
 ```
@@ -348,6 +352,11 @@ static gaia::AgentConfig makeConfig() {
 | `debug = true` | During development to trace every LLM call and tool result |
 | `showPrompts = true` | To inspect the exact system prompt sent to the model |
 | `silentMode = true` | For library/service use where you only want the JSON result |
+| `nativeToolCalls = Always` | Your server's model supports OpenAI `tools` but this build's model table doesn't list it |
+| `nativeToolCalls = Never` | Pin a tool-calling model to the prompt-JSON path |
+| `responseMode = Conversational` | Chat-shaped agents that should answer in prose, not a JSON envelope |
+
+See [Tool Calling Protocols](/cpp/api-reference#tool-calling-protocols) for what each protocol sends on the wire.
 
 ---
 

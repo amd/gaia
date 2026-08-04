@@ -149,6 +149,13 @@ Message SessionStore::messageFromJson(const json& j) {
     if (j.contains("tool_call_id") && j["tool_call_id"].is_string()) {
         m.toolCallId = j["tool_call_id"].get<std::string>();
     }
+    // Native tool_calls must round-trip, or a resumed session replays role=tool
+    // messages whose originating assistant turn has lost its tool_calls array.
+    if (j.contains("tool_calls") && j["tool_calls"].is_array()) {
+        for (const auto& entry : j["tool_calls"]) {
+            m.toolCalls.push_back(ToolCall::fromJson(entry));
+        }
+    }
 
     return m;
 }

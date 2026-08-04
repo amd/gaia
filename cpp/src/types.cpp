@@ -3,6 +3,8 @@
 
 #include "gaia/types.h"
 
+#include "gaia/model_registry.h"
+
 #include <cstring>
 #include <fstream>
 #include <stdexcept>
@@ -81,6 +83,79 @@ ContentPart ContentPart::makeImageUrl(std::string url) {
     return p;
 }
 
+// ---- ToolCall ----
+
+json ToolCall::parsedArgs() const {
+    const auto firstNonWs = arguments.find_first_not_of(" \t\n\r");
+    if (firstNonWs == std::string::npos) {
+        return json::object(); // zero-argument function
+    }
+    json parsed;
+    try {
+        parsed = json::parse(arguments);
+    } catch (const json::parse_error& e) {
+        throw std::runtime_error(
+            "Model returned tool call '" + name + "' (id " + id +
+            ") with arguments that are not valid JSON: " + e.what() +
+            "\n  Raw arguments: " + arguments.substr(0, 400) +
+            "\n  Retry the query, or set AgentConfig::nativeToolCalls = "
+            "NativeToolCalls::Never to use the prompt-JSON path with this model.");
+    }
+    if (!parsed.is_object()) {
+        throw std::runtime_error(
+            "Model returned tool call '" + name + "' (id " + id +
+            ") whose arguments decoded to a JSON " + std::string(parsed.type_name()) +
+            ", not an object.\n  Raw arguments: " + arguments.substr(0, 400));
+    }
+    return parsed;
+}
+
+json ToolCall::toJson() const {
+    return json{{"id", id},
+                {"type", "function"},
+                {"function", {{"name", name}, {"arguments", arguments}}}};
+}
+
+ToolCall ToolCall::fromJson(const json& j) {
+    if (!j.is_object()) {
+        throw std::runtime_error(
+            "Malformed tool_calls entry: expected a JSON object, got " +
+            std::string(j.type_name()) + ".");
+    }
+    ToolCall tc;
+    if (j.contains("id") && j["id"].is_string()) {
+        tc.id = j["id"].get<std::string>();
+    }
+    if (tc.id.empty()) {
+        throw std::runtime_error(
+            "Malformed tool_calls entry: missing a non-empty string 'id'. Without "
+            "it the role=tool reply cannot be correlated back to the call.\n"
+            "  Entry: " + j.dump().substr(0, 400));
+    }
+    if (!j.contains("function") || !j["function"].is_object()) {
+        throw std::runtime_error(
+            "Malformed tool_calls entry (id " + tc.id +
+            "): missing the 'function' object.\n  Entry: " + j.dump().substr(0, 400));
+    }
+    const auto& fn = j["function"];
+    if (fn.contains("name") && fn["name"].is_string()) {
+        tc.name = fn["name"].get<std::string>();
+    }
+    if (tc.name.empty()) {
+        throw std::runtime_error(
+            "Malformed tool_calls entry (id " + tc.id +
+            "): 'function.name' is missing or empty, so there is no tool to "
+            "execute.\n  Entry: " + j.dump().substr(0, 400));
+    }
+    if (fn.contains("arguments") && fn["arguments"].is_string()) {
+        tc.arguments = fn["arguments"].get<std::string>();
+    } else if (fn.contains("arguments") && fn["arguments"].is_object()) {
+        // Some OpenAI-compatible servers send arguments pre-decoded.
+        tc.arguments = fn["arguments"].dump();
+    }
+    return tc;
+}
+
 // ---- Message ----
 
 json Message::toJson() const {
@@ -92,11 +167,23 @@ json Message::toJson() const {
             arr.push_back(p.toJson());
         }
         j["content"] = arr;
+    } else if (role == MessageRole::ASSISTANT && !toolCalls.empty() && content.empty()) {
+        // OpenAI assistant turns carrying only tool_calls send content as null.
+        j["content"] = nullptr;
     } else {
         j["content"] = content;
     }
     if (name.has_value()) j["name"] = name.value();
     if (toolCallId.has_value()) j["tool_call_id"] = toolCallId.value();
+    // tool_calls belong to assistant turns only — emitting them on a tool or
+    // user message produces a body OpenAI-compatible servers reject.
+    if (role == MessageRole::ASSISTANT && !toolCalls.empty()) {
+        json arr = json::array();
+        for (const auto& tc : toolCalls) {
+            arr.push_back(tc.toJson());
+        }
+        j["tool_calls"] = arr;
+    }
     return j;
 }
 
@@ -120,6 +207,32 @@ Message Message::fromUser(const std::string& text, const std::vector<Image>& ima
     return m;
 }
 
+// ---- Response / tool-call protocol selection ----
+
+ResponseMode responseModeFromString(const std::string& s) {
+    if (s == "planning")       return ResponseMode::Planning;
+    if (s == "conversational") return ResponseMode::Conversational;
+    throw std::invalid_argument(
+        "responseMode must be \"planning\" or \"conversational\", got \"" + s + "\"");
+}
+
+NativeToolCalls nativeToolCallsFromString(const std::string& s) {
+    if (s == "auto")   return NativeToolCalls::Auto;
+    if (s == "always") return NativeToolCalls::Always;
+    if (s == "never")  return NativeToolCalls::Never;
+    throw std::invalid_argument(
+        "nativeToolCalls must be \"auto\", \"always\" or \"never\", got \"" + s + "\"");
+}
+
+bool AgentConfig::useNativeToolCalls() const {
+    switch (nativeToolCalls) {
+        case NativeToolCalls::Always: return true;
+        case NativeToolCalls::Never:  return false;
+        case NativeToolCalls::Auto:   return isToolCallingModel(modelId);
+    }
+    return false;
+}
+
 void AgentConfig::validate() const {
     if (baseUrl.empty())
         throw std::invalid_argument("baseUrl must not be empty");
@@ -139,6 +252,13 @@ void AgentConfig::validate() const {
         throw std::invalid_argument("maxHistoryMessages must be >= 0 (0 = unlimited)");
     if (temperature < 0.0 || temperature > 2.0)
         throw std::invalid_argument("temperature must be in [0.0, 2.0]");
+    // "none" is deliberately rejected: it would declare tools, forbid their use,
+    // AND suppress the prompt-JSON template, leaving the agent no way to call
+    // anything. Set nativeToolCalls = "never" to turn native tool calling off.
+    if (toolChoice != "auto" && toolChoice != "required")
+        throw std::invalid_argument(
+            "toolChoice must be \"auto\" or \"required\", got \"" + toolChoice +
+            "\" (to disable native tool calling set nativeToolCalls = \"never\")");
 }
 
 AgentConfig AgentConfig::fromJson(const json& j) {
@@ -157,6 +277,14 @@ AgentConfig AgentConfig::fromJson(const json& j) {
     c.silentMode            = j.value("silentMode",            c.silentMode);
     c.structuredEvents      = j.value("structuredEvents",      c.structuredEvents);
     c.temperature           = j.value("temperature",           c.temperature);
+    c.toolChoice            = j.value("toolChoice",            c.toolChoice);
+    if (j.contains("responseMode")) {
+        c.responseMode = responseModeFromString(j.at("responseMode").get<std::string>());
+    }
+    if (j.contains("nativeToolCalls")) {
+        c.nativeToolCalls =
+            nativeToolCallsFromString(j.at("nativeToolCalls").get<std::string>());
+    }
     c.validate();
     return c;
 }
@@ -191,7 +319,10 @@ json AgentConfig::toJson() const {
         {"streaming",             streaming},
         {"silentMode",            silentMode},
         {"structuredEvents",      structuredEvents},
-        {"temperature",           temperature}
+        {"temperature",           temperature},
+        {"responseMode",          responseModeToString(responseMode)},
+        {"nativeToolCalls",       nativeToolCallsToString(nativeToolCalls)},
+        {"toolChoice",            toolChoice}
     };
 }
 
