@@ -383,8 +383,9 @@ class ShellToolsMixin:
         # Special handling for sort - -o/--output writes to a file. Cover every
         # spelling: -o FILE, -oFILE, -o=FILE, bundled short clusters (-ro), and
         # every GNU long-option abbreviation of --output (--o, --out, --output=).
-        # 'o' is the only sort short-flag letter, so any pure short cluster
-        # containing it is the output flag.
+        # Any short cluster containing 'o' is treated as -o; this over-blocks a
+        # few exotic clusters (e.g. -to, separator 'o'), which is acceptable for
+        # a read-only security guard.
         elif cmd_base == "sort":
             for part in cmd_parts[1:]:
                 part_lower = part.lower()
