@@ -195,3 +195,20 @@ class TestSearchParityWithInAgentTool:
             for m in _rest_search(client, query="invoice", max_results=1)["messages"]
         ]
         assert rest_ids == tool_ids
+
+
+# ---------------------------------------------------------------------------
+# 3. An unparseable duration is an actionable 400, never a bare 500 (#2830)
+#
+# _search_inbox calls normalize_gmail_date_operators with no try/except of
+# its own, and the route's except ladder only covered connector errors -- a
+# ValueError from the new duration validator would otherwise fall through as
+# a content-free 500, the opposite of the "loud and actionable" design.
+# ---------------------------------------------------------------------------
+
+
+class TestSearchInvalidDurationIsA400:
+    def test_unparseable_duration_returns_400_not_500(self, client):
+        resp = client.post("/v1/email/search", json={"query": "newer_than:1.5d"})
+        assert resp.status_code == 400
+        assert "1.5d" in resp.json()["detail"]

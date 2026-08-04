@@ -2210,6 +2210,10 @@ async def search_inbox(
             max_results=request.max_results,
             page_token=request.page_token,
         )
+    except ValueError as e:
+        # An unparseable date/duration operator value (normalize_gmail_date_
+        # operators) -- an actionable 400, never a bare 500 (#2830).
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except (AuthRequiredError, ScopeMismatchError, ConnectionRevokedError) as e:
         raise HTTPException(status_code=403, detail=str(e)) from e
     except ConfigurationError as e:

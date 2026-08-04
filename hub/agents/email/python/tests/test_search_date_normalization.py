@@ -17,19 +17,25 @@ Covered:
 - the common formats the model produces parse: ``July 1``, ``July 1 2026``,
   ``July 1, 2026``, ``1 July 2026``, ``2026-07-01``, ``7/1/2026``,
   ``2026/7/1`` (zero-padded)
-- non-date operators (``newer_than:7d``) and epoch values pass through
-  untouched
+- non-date operators and epoch values pass through untouched
 - an unparseable or invalid date raises ``ValueError`` loudly BEFORE any
   backend call — never a silent zero-result
+- ``newer_than:``/``older_than:`` duration values are validated too (#2830):
+  the unsupported ``w`` (weeks) unit — silently zeroed by Gmail with no
+  error — is converted to days; ``h``/``d``/``m``/``y`` pass through
+  byte-identical; anything else raises loudly
 
 All tests are hermetic: FakeGmailBackend only, no Lemonade, no network.
 """
 
 from __future__ import annotations
 
+import json
 import sys
+import time
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -42,12 +48,13 @@ if str(_REPO_ROOT) not in sys.path:
 pytest.importorskip("gaia_agent_email")
 
 from gaia_agent_email.tools.read_tools import (  # noqa: E402
+    ReadToolsMixin,
     normalize_gmail_date_operators,
     search_messages_impl,
 )
 
+from gaia.agents.base.tools import _TOOL_REGISTRY  # noqa: E402
 from tests.fixtures.email.fake_gmail import FakeGmailBackend  # noqa: E402
-
 
 # ---------------------------------------------------------------------------
 # End-to-end through search_messages_impl: outgoing query is normalized
@@ -56,9 +63,7 @@ from tests.fixtures.email.fake_gmail import FakeGmailBackend  # noqa: E402
 
 def test_impl_normalizes_mixed_format_dates_in_outgoing_query():
     gmail = FakeGmailBackend(user_email="user@example.com")
-    search_messages_impl(
-        gmail, query="invoice after:July 1, 2026 before:2026-07-08"
-    )
+    search_messages_impl(gmail, query="invoice after:July 1, 2026 before:2026-07-08")
     listed = [c for c in gmail.transport.calls if c[0] == "list_messages"]
     assert len(listed) == 1
     assert listed[0][1]["query"] == "invoice after:2026/07/01 before:2026/07/08"
@@ -105,6 +110,9 @@ def test_normalizes_common_model_formats(query, expected):
 @pytest.mark.parametrize(
     "query",
     [
+        # newer_than:/older_than: ARE now parsed (#2830) -- these two stay
+        # unchanged because they're already-valid duration values, not
+        # because the operator is skipped.
         "newer_than:7d",
         "older_than:2m",
         "from:boss@example.com is:unread",
@@ -118,10 +126,7 @@ def test_non_date_operators_and_epoch_pass_through_untouched(query):
 
 def test_yearless_date_defaults_to_current_year():
     year = date.today().year
-    assert (
-        normalize_gmail_date_operators("after:July 1")
-        == f"after:{year}/07/01"
-    )
+    assert normalize_gmail_date_operators("after:July 1") == f"after:{year}/07/01"
 
 
 # ---------------------------------------------------------------------------
@@ -141,3 +146,148 @@ def test_yearless_date_defaults_to_current_year():
 def test_unparseable_date_raises_actionable_error(query):
     with pytest.raises(ValueError, match=r"YYYY/MM/DD"):
         normalize_gmail_date_operators(query)
+
+
+# ---------------------------------------------------------------------------
+# Duration-operator validation: newer_than: / older_than: (#2830)
+#
+# Gmail silently returns zero results for a duration value it doesn't
+# understand -- no error, indistinguishable from an empty mailbox. `w`
+# (weeks) is the one unit a model reaches for that Gmail does not implement;
+# converting it to days is the actual fix for the reported "0 messages" bug.
+# Accept-list measured directly against live Gmail, not read from a doc
+# (Gmail's own docs omit `h` entirely).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        ('from:"The Neuron" newer_than:2w', 'from:"The Neuron" newer_than:14d'),
+        ("older_than:3w", "older_than:21d"),
+        ("newer_than:1w", "newer_than:7d"),
+        # Quoted value: still converted, not silently bypassed by the quotes.
+        ('newer_than:"2w"', "newer_than:14d"),
+    ],
+)
+def test_converts_unsupported_week_unit_to_days(query, expected):
+    assert normalize_gmail_date_operators(query) == expected
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "newer_than:12h",  # h (hours) -- Gmail accepts it; not in its own docs
+        "newer_than:14D",  # case is left as-is -- not renormalized to lowercase
+        "newer_than:336h",
+        "newer_than:1m",
+        "newer_than:1y",
+        "older_than:1y",
+    ],
+)
+def test_duration_values_already_valid_pass_through_byte_identical(query):
+    assert normalize_gmail_date_operators(query) == query
+
+
+def test_impl_finds_message_via_converted_week_unit():
+    """End-to-end proof the conversion has real search effect, not just a
+    string rewrite: the fake backend does NOT accept 'w' natively (#2830),
+    so this only passes because normalize_gmail_date_operators converts the
+    query to 'd' before the backend ever sees it."""
+    gmail = FakeGmailBackend(user_email="user@example.com")
+    now_ms = int(time.time() * 1000)
+    gmail.add_message(
+        {
+            "id": "m1",
+            "threadId": "m1",
+            "labelIds": ["INBOX"],
+            "snippet": "hi",
+            "internalDate": str(now_ms),
+            "payload": {
+                "mimeType": "text/plain",
+                "filename": "",
+                "headers": [
+                    {"name": "From", "value": "news@x.com"},
+                    {"name": "Subject", "value": "Fresh"},
+                    {"name": "To", "value": "user@example.com"},
+                    {"name": "Date", "value": "Mon, 1 Jan 2026 00:00:00 +0000"},
+                ],
+                "body": {"data": "", "size": 0},
+            },
+            "sizeEstimate": 0,
+        }
+    )
+    result = search_messages_impl(gmail, query="from:news@x.com newer_than:2w")
+    assert [m["id"] for m in result["messages"]] == ["m1"]
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "newer_than:14",  # missing unit
+        "newer_than:1.5d",  # non-integer count
+        "newer_than:abc",  # not a number at all
+        "newer_than:1.5w",  # non-integer count -- even for the convertible unit
+        "newer_than:-3d",  # negative count
+        "newer_than:2weeks",  # multi-letter unit -- only bare 'w' converts
+        "older_than:2x",  # unrecognized single-letter unit
+    ],
+)
+def test_unparseable_duration_raises_actionable_error(query):
+    with pytest.raises(ValueError, match=r"h/d/m/y"):
+        normalize_gmail_date_operators(query)
+
+
+def test_duration_12h_does_not_raise():
+    """`h` must NOT be rejected -- it's a working Gmail query (measured: 1
+    result), even though Gmail's own docs omit it."""
+    assert normalize_gmail_date_operators("newer_than:12h") == "newer_than:12h"
+
+
+def test_duration_error_names_offending_value():
+    with pytest.raises(ValueError) as exc:
+        normalize_gmail_date_operators("newer_than:1.5d")
+    assert repr("1.5d") in str(exc.value)
+
+
+def test_impl_rejects_unparseable_duration_before_any_backend_call():
+    gmail = FakeGmailBackend(user_email="user@example.com")
+    with pytest.raises(ValueError, match=r"h/d/m/y"):
+        search_messages_impl(gmail, query="newer_than:1.5d")
+    assert gmail.transport.calls == []
+
+
+# ---------------------------------------------------------------------------
+# AC 3d: the ValueError reaches the model as a structured tool error, not a
+# traceback -- the registered @tool wrapper's broad "except Exception" was
+# already there for ConnectorsError; this pins that it also catches the new
+# duration ValueError rather than letting it kill the turn.
+# ---------------------------------------------------------------------------
+
+
+class _Host(ReadToolsMixin):
+    """Minimal stand-in for EmailTriageAgent's tool-hosting surface (mirrors
+    test_search_messages_metadata_only_2763.py's fixture)."""
+
+    def __init__(self, backend: FakeGmailBackend):
+        self._gmail = backend
+        self._backends = {"google": backend}
+        self._message_mailbox: dict = {}
+        self.config = SimpleNamespace(debug=False)
+
+    def _remember_message_mailbox(self, message_id, provider):
+        if message_id:
+            self._message_mailbox[message_id] = provider
+
+
+def test_registered_search_messages_returns_structured_error_for_bad_duration():
+    gmail = FakeGmailBackend(user_email="user@example.com")
+    host = _Host(gmail)
+    _TOOL_REGISTRY.clear()
+    host._register_read_tools()
+    search_messages = _TOOL_REGISTRY["search_messages"]["function"]
+
+    payload = json.loads(search_messages(query="newer_than:1.5d", max_results=25))
+
+    assert payload["ok"] is False
+    assert "1.5d" in payload["error"]

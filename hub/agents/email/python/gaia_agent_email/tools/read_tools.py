@@ -39,6 +39,7 @@ from gaia_agent_email.context_budget import (
     estimate_tokens_json,
 )
 from gaia_agent_email.gmail_backend import decode_message_body
+from gaia_agent_email.gmail_query import _DURATION_OP_RE, _parse_gmail_duration_value
 from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 
 # Re-exported so the pre-scan tests can monkeypatch ``read_tools.make_llm_classifier``
@@ -806,13 +807,17 @@ _RELATIVE_DAY_WINDOWS = {"today": "1d", "yesterday": "2d"}
 
 
 def normalize_gmail_date_operators(query: str) -> str:
-    """Rewrite date-operator values in ``query`` to Gmail's ``YYYY/MM/DD``.
+    """Rewrite date-operator values in ``query`` to Gmail's ``YYYY/MM/DD``,
+    and duration-operator (``newer_than:``/``older_than:``) values to a unit
+    Gmail accepts.
 
     Relative recency words (``after:today`` / ``newer:yesterday``) are rewritten
     to the timezone-robust ``newer_than:`` window so a present same-day message
     is reliably matched. Raises ``ValueError`` on an otherwise-unparseable value
     — a loud error beats passing it through as free text and returning a false
-    zero-result.
+    zero-result. The two operator families never overlap (``_DATE_OP_RE``
+    excludes the ``_than`` forms), so applying both substitutions in sequence
+    is safe.
     """
 
     def _sub(m: "re.Match[str]") -> str:
@@ -822,7 +827,12 @@ def normalize_gmail_date_operators(query: str) -> str:
             return f"newer_than:{_RELATIVE_DAY_WINDOWS[bare]}"
         return f"{op}:{_parse_gmail_date_value(m.group('val'), op=op)}"
 
-    return _DATE_OP_RE.sub(_sub, query)
+    def _duration_sub(m: "re.Match[str]") -> str:
+        op = m.group("op")
+        return f"{op}:{_parse_gmail_duration_value(m.group('val'), op=op)}"
+
+    query = _DATE_OP_RE.sub(_sub, query)
+    return _DURATION_OP_RE.sub(_duration_sub, query)
 
 
 # Gmail search operators (a leading ``token:`` in the query). If a query
