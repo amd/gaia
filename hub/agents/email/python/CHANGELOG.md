@@ -9,6 +9,18 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **A low-priority-sender match no longer forces a message to PROMOTIONAL
+  (#2666).** The mirror of #2632's priority-sender fix, for the direction
+  that fix explicitly left alone: `_apply_session_preferences` used to
+  override the heuristic/LLM/SLM's category outright the moment a sender
+  matched the muted list, so a genuinely urgent message from a muted sender
+  got buried as promotional — "I don't care about most of this sender's
+  mail" is not "this specific message is never urgent." The preference now
+  only tags `preference_applied` and updates the reason line for
+  salience/ordering; category is always decided by content, in both
+  directions. The `set_low_priority_sender` tool docstring (read by the
+  model) and the `pre_scan_inbox` docstring's "derived from the low-priority
+  bucket" claim are corrected to match.
 - **`search_messages` stated a wrong, unstable count for a result set it
   received intact (#2756).** Asked "how many messages from X in the last two
   weeks", the agent ran the right query, got every matching row back, then
