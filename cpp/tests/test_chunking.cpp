@@ -435,6 +435,15 @@ TEST_F(ChunkingTest, ChunkBoundariesMatchPythonRagSdk) {
         const auto expectedChunks = testCase["chunks"].get<std::vector<std::string>>();
 
         const std::string text = extractFile((fixtures / file).string()).text;
+
+        // Fail with the real reason rather than a chunk diff when the checkout
+        // rewrote line endings (see the -text rule in .gitattributes).
+        const std::string raw = readFile(fixtures / file);
+        const bool onDiskHasCrlf = raw.find("\r\n") != std::string::npos;
+        ASSERT_EQ(onDiskHasCrlf, testCase["file_has_crlf"].get<bool>())
+            << file << " on disk no longer has the line endings its expected chunks were "
+                       "generated from -- the checkout translated them";
+
         const auto actual = splitTextIntoChunks(text, config);
 
         const std::string label = file + " (size=" + std::to_string(config.chunkSize) +

@@ -16,6 +16,13 @@ The documents cover the branches that decide chunk boundaries:
 | `parity_unicode.md` | Non-ASCII capitals, non-breaking space, CRLF |
 | `parity_three_sections.txt` / `parity_four_sections.txt` | The `sections <= 3` branch, from either side |
 
+Each case records `file_has_crlf`, the line endings its chunks were generated
+from. The C++ test compares it against the bytes on disk so a checkout that
+translated them fails with that reason instead of an unreadable chunk diff.
+`.gitattributes` marks this directory `-text` to stop the translation happening
+in the first place — chunk boundaries are a byte-exact contract, and
+`parity_unicode.md` carries CRLF on purpose.
+
 ## Regenerating
 
 Only needed when a fixture changes or the Python splitter changes. Run against
@@ -40,8 +47,10 @@ def chunk(text, size, overlap):
 # For each {"file", "chunk_size", "chunk_overlap"} case in parity_expected.json.
 # read_bytes().decode() — NOT read_text(), whose newline translation would hide
 # a CR that the C++ extractor (binary read) keeps.
-#   text = Path(case["file"]).read_bytes().decode("utf-8").strip()
-#   case["chunks"] = chunk(text, case["chunk_size"], case["chunk_overlap"])
+#   raw = Path(case["file"]).read_bytes()
+#   case["file_has_crlf"] = b"\r\n" in raw
+#   case["chunks"] = chunk(raw.decode("utf-8").strip(),
+#                          case["chunk_size"], case["chunk_overlap"])
 ```
 
 A regenerated file that changes existing chunks means the Python algorithm moved;
