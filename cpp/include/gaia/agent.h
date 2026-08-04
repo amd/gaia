@@ -23,6 +23,7 @@
 #include "json_utils.h"
 #include "lemonade_client.h"
 #include "mcp_client.h"
+#include "mcp_registry.h"
 #include "security.h"
 #include "tool_registry.h"
 #include "types.h"
@@ -78,6 +79,26 @@ public:
     /// @param config Config with "command" and optional "args"
     /// @return true if connection succeeded
     bool connectMcpServer(const std::string& name, const json& config);
+
+    /// Connect to an MCP server named by its configured id, resolving the
+    /// launch config through MCPRegistry (`$GAIA_CONFIG_DIR`, else `~/.gaia`).
+    /// This is what backs a skill declaring `mcp:connect:<id>`.
+    ///
+    /// Resolution failures throw rather than returning false: an id that
+    /// cannot be resolved means the caller asked for capability that is not
+    /// there, and silently continuing produces an agent that has quietly lost
+    /// its tools. Connection failures keep the connectMcpServer() contract and
+    /// return false after printing the error.
+    ///
+    /// @param id Server id as it appears under "mcpServers" in the config file
+    /// @return true if connection succeeded
+    /// @throws MCPRegistryError if the id is unknown, no config file exists,
+    ///         the config is malformed, or the entry is not launchable.
+    bool connectMcpServerById(const std::string& id);
+
+    /// connectMcpServerById() against an explicit registry (tests, embedders
+    /// that keep their MCP config somewhere other than the config directory).
+    bool connectMcpServerById(const std::string& id, const MCPRegistry& registry);
 
     /// Disconnect from an MCP server.
     void disconnectMcpServer(const std::string& name);
