@@ -662,11 +662,11 @@ class TestFindFabricatedAttendeeClaim:
         convo = [
             _events_tool_entry(
                 "list_calendar_events",
-                [_event(organizer="tomasz.iniewicz@gmail.com")],
+                [_event(organizer="owner@example.com")],
             )
         ]
         text = (
-            "The organizer of this event is tomasz.iniewicz@gmail.com — "
+            "The organizer of this event is owner@example.com — "
             "you created it yourself."
         )
         assert find_fabricated_attendee_claim(text, convo) is None
