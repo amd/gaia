@@ -168,10 +168,10 @@ The following slash commands are planned but not yet available.
 
 | Tool | Policy | Description |
 |---|---|---|
-| `file_read` | ALLOW | Read file contents with optional line range |
-| `file_write` | CONFIRM | Write/create files (creates parent dirs) |
-| `file_edit` | CONFIRM | Surgical string replacement in files |
-| `file_search` | ALLOW | Search files by glob pattern and content |
+| `file_read` | ALLOW | Read file contents with optional line range; returns a `content_hash` that anchors later edits |
+| `file_write` | CONFIRM | Write/create files (creates parent dirs); rejected if the file changed since it was read |
+| `file_edit` | CONFIRM | Surgical string replacement; rejected on a stale read or a non-matching `old_string` — never a silent no-op |
+| `file_search` | ALLOW | Search files by glob pattern and content, honouring `.gitignore` |
 | `git_status` | ALLOW | Working tree status (porcelain) |
 | `git_diff` | ALLOW | Show working-tree or staged changes |
 | `git_log` | ALLOW | Recent commit history |
@@ -181,8 +181,38 @@ The following slash commands are planned but not yet available.
 
 | Tool | Policy | Description |
 |---|---|---|
-| `bash_execute` | CONFIRM | Run bash commands with timeout and output capture |
+| `bash_execute` | CONFIRM | Run bash commands with timeout and output capture, in a persistent shell (`cd` and exported variables carry over) |
 | `env_inspect` | ALLOW | Shell version, PATH, installed tools |
+
+### Guarantees the toolbelt provides
+
+Three properties are enforced by the tools themselves, because no prompt or
+`SKILL.md` can supply them:
+
+**An edit can never be applied to a file that moved underneath it.** `file_read`
+records the SHA-256 of the file it read. If `file_write` or `file_edit` later
+finds different bytes on disk — a formatter ran, a build step regenerated the
+file, another agent touched it — the change is refused with both hashes and the
+size delta named, and nothing is written. The recovery is always the same:
+re-read the file, then reissue the change.
+
+**A non-matching `old_string` is an error, not a success.** `file_edit` reports
+that nothing was replaced and the file is unchanged. When the text differs only
+in indentation, tabs, or line endings, the error says so, which is the mistake
+worth naming out of the ones a model actually makes.
+
+**`file_search` respects `.gitignore`.** Vendored dependencies and build output
+never reach the model's context. Skipped entries are counted in
+`ignored_skipped`, so a thin result set is explained rather than mysterious.
+The pattern syntax is real globbing: `*`, `?`, `[a-z]`, and `**` for
+directories. A pattern containing `/` matches the path relative to the search
+root; otherwise it matches the file name.
+
+**`bash_execute` runs in a persistent shell.** `cd build` and `export CC=clang`
+stay in effect for later commands, and the current directory comes back as
+`cwd`. The session applies both inside the child shell rather than by changing
+the agent process, so concurrent sessions cannot corrupt each other. Its
+`CONFIRM` policy and 32 KB output cap are unchanged.
 
 <Warning>
 The following tools are planned but not yet available in this release.
