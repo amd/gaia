@@ -24,7 +24,8 @@ never a silent 0.0.
 
 **Why this rule exists (real GAIA cases):**
 - An AI triage on the `find -exec` ticket asserted **"CVSS 6.9 Medium"** for the vector
-  `AV:L/AC:L/AT:N/PR:L/UI:N/VC:H/VI:H/VA:N` — which actually computes to **8.4 High**.
+  `CVSS:4.0/AV:L/AC:L/AT:N/PR:L/UI:N/VC:H/VI:H/VA:N/SC:N/SI:N/SA:N` — which actually
+  computes to **8.4 High**.
 - The security-audit workflow's prior anchor: a triage guessed **7.3** for a vector that
   scores **8.7**.
 
@@ -103,8 +104,10 @@ Then move the JIRA ticket **Opened → Assessed**.
 
 | Vector | `util/cvss4.py` says | Note |
 |---|---|---|
-| `AV:L/AC:L/AT:N/PR:L/UI:N/VC:H/VI:H/VA:N` | **8.4 High** | the AI's vector — it *claimed* 6.9 |
-| `AV:L/AC:L/AT:N/PR:L/UI:A/VC:L/VI:H/VA:H` | **5.3 Medium** | corrected: UI:A (approval gate), VC:L (reads already possible), VA:H (`-delete`) |
+| `CVSS:4.0/AV:L/AC:L/AT:N/PR:L/UI:N/VC:H/VI:H/VA:N/SC:N/SI:N/SA:N` | **8.4 High** | the AI's vector — it *claimed* 6.9 |
+| `CVSS:4.0/AV:L/AC:L/AT:N/PR:L/UI:A/VC:L/VI:H/VA:H/SC:N/SI:N/SA:N` | **5.3 Medium** | corrected: UI:A (approval gate), VC:L (reads already possible), VA:H (`-delete`) |
+
+Both rows are complete vectors — paste either straight into `util/cvss4.py`.
 
 Outcome: valid weakness, **No CVE** (confirmation gate is the real boundary), fixed as
 hardening in PR #2740. The corrected vector — computed, not guessed — lands a full band below
