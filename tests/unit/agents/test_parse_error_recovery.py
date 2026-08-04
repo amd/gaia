@@ -19,7 +19,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from gaia.agents.base.agent import Agent
+from gaia.agents.base.agent import _CONTEXT_STILL_OVERFLOWING_MESSAGE, Agent
 
 
 class _DummyAgent(Agent):
@@ -195,10 +195,10 @@ class TestProcessQueryRecoversOnContextOverflow:
 
     def test_flm_context_overflow_after_retry_gives_friendly_fallback(self, agent):
         """#2513 work item 3: once the FastFlowLM 400 is reachable, an
-        exhausted retry must render the SAME "I had to trim the
-        conversation" message the llama.cpp path already has -- not the
-        generic "Sorry, I ran into an unexpected problem" wrapper, and not
-        a leaked "Max length reached!" backend string.
+        exhausted retry must render the SAME actionable overflow message
+        the llama.cpp path already has (``_CONTEXT_STILL_OVERFLOWING_MESSAGE``,
+        #2763) -- not the generic "Sorry, I ran into an unexpected problem"
+        wrapper, and not a leaked "Max length reached!" backend string.
         """
         agent.streaming = False
         agent._is_loaded_ctx_too_small = lambda: False
@@ -221,7 +221,7 @@ class TestProcessQueryRecoversOnContextOverflow:
         # ``process_query`` returns ``{"status": ..., "result": <final_answer>, ...}``
         text = result["result"] if isinstance(result, dict) else str(result)
         assert text, "expected the friendly trim-exhausted fallback text"
-        assert "I had to trim the conversation" in text
+        assert text == _CONTEXT_STILL_OVERFLOWING_MESSAGE
         assert "Max length reached" not in text
         assert "Sorry, I ran into" not in text
 

@@ -172,6 +172,38 @@ def _format_message_for_llm(
     }
 
 
+def _format_message_metadata_for_llm(msg: Dict[str, Any]) -> Dict[str, Any]:
+    """Reduce a metadata-format Gmail message (no body) to fields the LLM
+    can act on for a counting/listing question (#2763).
+
+    Companion to ``_format_message_for_llm``: that one decodes and wraps a
+    body, which costs up to ``DEFAULT_BODY_LIMIT_CHARS`` per message and is
+    the entire payload cost for a question like "how many emails from X"
+    that never reads message content. This formatter never touches
+    ``payload.body``/``payload.parts`` — a ``format="metadata"`` fetch
+    doesn't populate them (see ``GmailBackend.get_message``'s docstring),
+    so there is nothing to decode. No per-message or envelope budget check
+    is needed here: at the tool's 100-message ceiling, a metadata row (a
+    handful of headers + a ~200-char snippet) stays orders of magnitude
+    below any device profile's context budget.
+    """
+    payload = msg.get("payload") or {}
+    headers = {
+        (h.get("name") or "").lower(): h.get("value", "")
+        for h in payload.get("headers", [])
+    }
+    return {
+        "id": msg.get("id"),
+        "thread_id": msg.get("threadId"),
+        "subject": headers.get("subject", ""),
+        "from": headers.get("from", ""),
+        "to": headers.get("to", ""),
+        "date": headers.get("date", ""),
+        "label_ids": list(msg.get("labelIds", [])),
+        "snippet": msg.get("snippet", ""),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Pure tool implementations (testable without the agent class)
 # ---------------------------------------------------------------------------
@@ -850,11 +882,22 @@ def search_messages_impl(
     debug: bool = False,
     operator_retry: bool = True,
     budget_tokens: Optional[int] = None,
+    include_bodies: bool = True,
 ) -> Dict[str, Any]:
+    """``include_bodies=False`` (#2763) fetches metadata-only (no body decode,
+    no per-message/envelope budget check needed -- see
+    ``_format_message_metadata_for_llm``) for a counting/listing question
+    that never reads message content. Default ``True`` is unchanged: full
+    bodies via ``_format_messages_within_budget``.
+    """
     query = normalize_gmail_date_operators(query)
     with log_tool_call(
         "search_messages",
-        {"query": query, "max_results": max_results},
+        {
+            "query": query,
+            "max_results": max_results,
+            "include_bodies": include_bodies,
+        },
         debug=debug,
     ) as st:
         listing = gmail.list_messages(query=query, max_results=max_results)
@@ -871,13 +914,29 @@ def search_messages_impl(
                     query=retried_query, max_results=max_results
                 )
                 stubs = listing.get("messages", [])
-        full_msgs = [gmail.get_message(stub["id"]) for stub in stubs]
-        out = _format_messages_within_budget(
-            full_msgs,
-            tool_name="search_messages",
-            max_results=max_results,
-            budget_tokens=budget_tokens,
-        )
+        if include_bodies:
+            full_msgs = [gmail.get_message(stub["id"]) for stub in stubs]
+            out = _format_messages_within_budget(
+                full_msgs,
+                tool_name="search_messages",
+                max_results=max_results,
+                budget_tokens=budget_tokens,
+            )
+        else:
+            # Metadata-only: fetch in as few round-trips as the backend
+            # supports (batch when available), then re-walk ``stubs`` to
+            # preserve the backend's own ordering -- _fetch_messages returns
+            # an id-keyed dict, not a list (mirrors triage_inbox_impl's
+            # phase-1 pattern, read_tools.py:~1264).
+            stub_ids = [stub["id"] for stub in stubs]
+            metadata_by_id, _dropped_ids = _fetch_messages(
+                gmail, stub_ids, format="metadata"
+            )
+            out = [
+                _format_message_metadata_for_llm(metadata_by_id[sid])
+                for sid in stub_ids
+                if sid in metadata_by_id
+            ]
         # Real cursor only -- never len(stubs) == max_results (see
         # _list_all_stubs's scan_truncated docstring above for why that
         # heuristic is wrong the moment a mailbox's true size matches the ask).
@@ -1790,9 +1849,7 @@ def _build_needs_you_view(
         candidates.append({**item, "kind": kind})
         _remember(item.get("message_id"))
     for item in actionable:
-        kind = (
-            "meeting_request" if item.get("is_meeting_request") else "needs_response"
-        )
+        kind = "meeting_request" if item.get("is_meeting_request") else "needs_response"
         candidates.append({**item, "kind": kind})
         _remember(item.get("message_id"))
     for item in needs_review:
@@ -2099,7 +2156,10 @@ def pre_scan_inbox_impl(
         def _drop_internal_date(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             # ``internal_date`` is a needs_you-only working field (#2743) —
             # never part of the public PreScanItem shape (extra="forbid").
-            return [{k: v for k, v in item.items() if k != "internal_date"} for item in items]
+            return [
+                {k: v for k, v in item.items() if k != "internal_date"}
+                for item in items
+            ]
 
         scanned = len(triage["results"])
         inbox_counts = _fetch_inbox_counts(gmail)
@@ -2118,7 +2178,9 @@ def pre_scan_inbox_impl(
                 suggested_archives[: max(0, archive_cap)]
             ),
             "suggested_drafts": [],
-            "needs_review": _drop_internal_date(needs_review[: max(0, needs_review_cap)]),
+            "needs_review": _drop_internal_date(
+                needs_review[: max(0, needs_review_cap)]
+            ),
             "preferences_applied": {
                 "priority_senders": sorted(prefs.get("priority_senders") or []),
                 "low_priority_senders": sorted(prefs.get("low_priority_senders") or []),
@@ -2582,7 +2644,9 @@ class ReadToolsMixin:
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
-        def search_messages(query: str, max_results: int = 25) -> str:
+        def search_messages(
+            query: str, max_results: int = 25, include_bodies: bool = True
+        ) -> str:
             """Search across ALL connected mailboxes.
 
             When multiple mailboxes are connected, searches both with a shared
@@ -2610,13 +2674,24 @@ class ReadToolsMixin:
             query automatically, but forming the operator query yourself is
             more reliable.
 
-            A large ``max_results`` may shrink every hit's body TOGETHER (never
-            independently, never dropping a hit) so the whole result stays
-            within the model's context window — shrunk messages report
-            ``body_truncated: true``. If even the smallest usable body can't fit
-            every requested hit, the tool returns an actionable error instead of
-            silently returning fewer hits than asked for — retry with a smaller
-            ``max_results``.
+            Set ``include_bodies=False`` for a question that only needs COUNTS
+            or a LIST of matches, never message content — "how many emails from
+            X", "list the emails from Y this week", "do I have anything from
+            Z". Metadata-only mode returns id/subject/from/to/date/label_ids/
+            snippet for every hit with NO body text, at a small fraction of the
+            cost of a full search, so a large or long-bodied result set never
+            risks the model's context window. Keep the default ``True`` only
+            when the question needs what a message actually SAYS — summarizing,
+            quoting, or answering about body content.
+
+            When ``include_bodies=True`` (the default), a large ``max_results``
+            may shrink every hit's body TOGETHER (never independently, never
+            dropping a hit) so the whole result stays within the model's
+            context window — shrunk messages report ``body_truncated: true``.
+            If even the smallest usable body can't fit every requested hit,
+            the tool returns an actionable error instead of silently returning
+            fewer hits than asked for — retry with a smaller ``max_results``
+            or ``include_bodies=False``.
 
             Returns:
                 JSON envelope with ``{"messages": [...]}`` plus ``count`` (the
@@ -2626,7 +2701,11 @@ class ReadToolsMixin:
                 ``max_results`` — say "at least N", never present N as the
                 total). REPORT EVERY ENTRY in ``messages`` individually — do
                 not summarize, merge, or quietly drop entries from a long
-                list. If ``operator_retry`` is present, the literal query you
+                list. With ``include_bodies=False`` each entry has no ``body``
+                field at all — never claim to quote or summarize content from
+                a metadata-only result; re-call with ``include_bodies=True``
+                (narrowing the query first) if content is actually needed.
+                If ``operator_retry`` is present, the literal query you
                 passed found nothing and this is the broadened operator query
                 that was retried instead — say the search was broadened
                 before stating the count, since it may include hits (e.g. a
@@ -2663,6 +2742,7 @@ class ReadToolsMixin:
                             query=query,
                             max_results=per_backend,
                             debug=debug_flag,
+                            include_bodies=include_bodies,
                         )
                     except ConnectorsError as exc:
                         msg = format_connector_error(exc)
@@ -2754,7 +2834,8 @@ class ReadToolsMixin:
             """
             try:
                 max_messages = max(
-                    1, min(int(max_messages or DEFAULT_INBOX_SCAN_MESSAGES), scan_ceiling)
+                    1,
+                    min(int(max_messages or DEFAULT_INBOX_SCAN_MESSAGES), scan_ceiling),
                 )
 
                 # Phase 2 (#1603): scan every connected mailbox, tag each item
@@ -2877,7 +2958,8 @@ class ReadToolsMixin:
             """
             try:
                 max_messages = max(
-                    1, min(int(max_messages or DEFAULT_INBOX_SCAN_MESSAGES), scan_ceiling)
+                    1,
+                    min(int(max_messages or DEFAULT_INBOX_SCAN_MESSAGES), scan_ceiling),
                 )
                 # Phase 2 (#1603): pre-scan every connected mailbox, tag each
                 # section item with its source mailbox, split the budget, merge.
