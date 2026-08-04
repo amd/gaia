@@ -887,3 +887,48 @@ def test_format_exclusions_breaks_down_by_kind():
     assert "excluded 3" in msg
     assert "needs-gated: 2" in msg
     assert "continue-on-error: 1" in msg
+
+
+# ---------------------------------------------------------------------------
+# post_check_run() / write_step_summary() — the fork-PR fix. GITHUB_TOKEN is
+# silently downgraded to read-only for `pull_request` (not
+# `pull_request_target`) on a fork PR, confirmed live against a real fork
+# PR in this repo (#2753's "Dependency Review" job logged read-only
+# permissions despite declaring pull-requests: write). post_check_run()
+# must degrade to a logged warning, never raise — a required check that can
+# only post via a permission forks don't have would block every fork PR.
+# ---------------------------------------------------------------------------
+
+
+def test_post_check_run_returns_false_not_raise_on_403(mocker):
+    # Simulates exactly the fork-PR case: gh api fails because GITHUB_TOKEN
+    # is read-only, and the caller (main()) must be able to fall through to
+    # its own exit code instead of the whole script crashing.
+    mock_run = mocker.patch("check_required_status.subprocess.run")
+    mock_run.return_value = mocker.Mock(
+        returncode=1, stderr="HTTP 403: Resource not accessible by integration"
+    )
+    ok = crs.post_check_run("amd/gaia", "abc123", "success", "title", "summary")
+    assert ok is False
+
+
+def test_post_check_run_returns_true_on_success(mocker):
+    mock_run = mocker.patch("check_required_status.subprocess.run")
+    mock_run.return_value = mocker.Mock(returncode=0, stderr="")
+    ok = crs.post_check_run("amd/gaia", "abc123", "success", "title", "summary")
+    assert ok is True
+
+
+def test_write_step_summary_noop_without_env_var(mocker, monkeypatch):
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    # Must not raise, must not try to open a nonexistent path.
+    crs.write_step_summary("title", "body")
+
+
+def test_write_step_summary_writes_when_env_var_set(tmp_path, monkeypatch):
+    summary_path = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary_path))
+    crs.write_step_summary("All required suites passed", "Required: Test Email Agent.")
+    content = summary_path.read_text()
+    assert "All required suites passed" in content
+    assert "Required: Test Email Agent." in content

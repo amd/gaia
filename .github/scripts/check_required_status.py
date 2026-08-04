@@ -458,24 +458,28 @@ def fetch_changed_files(path: str) -> list[str]:
         return [line.strip() for line in f if line.strip()]
 
 
-CUSTOM_CHECK_NAME = "Required Checks Gate"
+CUSTOM_CHECK_NAME = "Required Checks Gate (detail)"
 
 
-def post_check_run(repo: str, sha: str, conclusion: str, title: str, summary: str) -> None:
-    """Create a check-run via the Checks API directly, independent of this
-    job's own native pass/fail check-run.
+def post_check_run(repo: str, sha: str, conclusion: str, title: str, summary: str) -> bool:
+    """Best-effort: create a check-run via the Checks API directly, richer
+    than this job's own native pass/fail conclusion (GitHub Actions can
+    only ever conclude a job as success/failure/cancelled/skipped — there's
+    no exit code for "neutral", which is what a legitimately-not-yet-required
+    draft PR needs to express without lying either direction).
 
-    Why a second, API-created check-run instead of just letting the job's
-    exit code decide: GitHub Actions can only ever conclude a job as
-    success/failure/cancelled/skipped — there's no exit code for "neutral".
-    But "this PR's required suites legitimately have not run yet because
-    it's a draft" is neither a pass (nothing has been verified) nor a
-    failure (nothing is wrong) — see the redirect on #2767 that led to this:
-    a gate that skips itself in sympathy with the jobs it's auditing
-    reproduces the exact silent-green bug it exists to catch. `neutral` is
-    the one Checks API conclusion built for exactly this: visible, distinct
-    from both green and red, and does not block a merge on its own (mirrors
-    GitHub's own branch-protection semantics for a neutral required check).
+    Deliberately NEVER the binding signal — see main()'s docstring on why.
+    Returns False (never raises) on failure so a caller can log it and
+    fall through to the native job status, which is what branch protection
+    should actually require. On a fork PR this call is expected to fail:
+    GitHub silently downgrades GITHUB_TOKEN to read-only for `pull_request`
+    (not `pull_request_target`) regardless of what `permissions:` the
+    workflow declares — confirmed live, not assumed: a real fork PR's
+    "Dependency Review" job (repo PR #2753, plain `pull_request` trigger,
+    `permissions: pull-requests: write` declared) logged
+    "GITHUB_TOKEN Permissions: Contents: read, Metadata: read,
+    PullRequests: read" — write silently dropped to read. `checks: write`
+    is downgraded the identical way, so this call 403s on every fork PR.
     """
     payload = {
         "name": CUSTOM_CHECK_NAME,
@@ -492,7 +496,15 @@ def post_check_run(repo: str, sha: str, conclusion: str, title: str, summary: st
         check=False,
     )
     if proc.returncode != 0:
-        raise RuntimeError(f"gh api check-runs create failed (exit {proc.returncode}): {proc.stderr.strip()}")
+        print(
+            f"::warning::Could not post the richer '{CUSTOM_CHECK_NAME}' status "
+            f"(exit {proc.returncode}): {proc.stderr.strip()}. Expected on fork "
+            f"PRs — GITHUB_TOKEN is read-only there regardless of the workflow's "
+            f"declared permissions. The native 'Required Checks Gate' job status "
+            f"is unaffected and is the one branch protection should require."
+        )
+        return False
+    return True
 
 
 def fetch_check_runs(repo: str, sha: str) -> list[CheckRun]:
@@ -551,6 +563,20 @@ def format_exclusions(num_enforced: int, exclusions: list[Exclusion]) -> str:
     )
 
 
+def write_step_summary(title: str, body: str) -> None:
+    """Write to this job's own Actions step summary — visible directly in
+    the workflow run's UI, needs zero permissions (unlike post_check_run),
+    and works identically on same-repo and fork PRs. This is what keeps
+    the neutral/success/failure nuance available on a fork PR even though
+    the richer, API-posted check-run can't be created there.
+    """
+    path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not path:
+        return
+    with open(path, "a") as f:
+        f.write(f"## {title}\n\n{body}\n")
+
+
 def format_report(result: EvalResult, elapsed: int) -> str:
     lines = []
     if result.ok:
@@ -568,6 +594,27 @@ def format_report(result: EvalResult, elapsed: int) -> str:
 
 
 def main() -> int:
+    """Exit code is the ONLY binding signal — the thing branch protection
+    should require is this job's own native status ("Required Checks
+    Gate"), never the richer, API-posted "Required Checks Gate (detail)"
+    check-run. That split exists because of a fork-PR gap found on this
+    issue's own PR: GITHUB_TOKEN is silently downgraded to read-only for
+    `pull_request` (not `pull_request_target`) on a fork PR regardless of
+    the workflow's declared `permissions:` — confirmed live against a real
+    fork PR (see post_check_run's docstring). A required check that can
+    only ever post via a permission forks don't have would block every
+    fork contribution to this repo, which defeats requiring it at all.
+
+    So the native exit code — always available, no special permissions,
+    identical on same-repo and fork PRs — carries the real signal in every
+    case. The three richer states (neutral/success/failure) collapse to a
+    plain pass/fail here: neutral and success both exit 0, only a genuine
+    failure or timeout exits 1. The nuance isn't dropped, just moved to a
+    channel that needs no permissions either: write_step_summary() puts it
+    in this job's own Actions summary, and post_check_run() still attempts
+    the richer, distinctly-colored check-run wherever the token allows it
+    (same-repo PRs) — best-effort, logged on failure, never fatal.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workflows-dir", required=True)
     parser.add_argument("--exclude", action="append", default=[])
@@ -612,7 +659,14 @@ def main() -> int:
             + exclusion_note
         )
         print(f"GATED OFF: {summary}")
+        write_step_summary(title, summary)
         post_check_run(args.repo, args.sha, "neutral", title, summary)
+        # Exits 0 (not 1): a draft PR without ready_for_ci genuinely cannot
+        # be merged regardless of check status (GitHub blocks merging any
+        # draft PR at the platform level), so there is nothing to protect
+        # by failing here — and reflexive red on every draft is exactly the
+        # noise option already rejected. The "nothing has been verified"
+        # distinction lives in the summary text above, not the exit code.
         return 0
 
     all_matchers = _collect_all_name_matchers(args.workflows_dir)
@@ -654,6 +708,7 @@ def main() -> int:
                     f"failure mode issue #2767 exists to catch — a check that "
                     f"should have run for this diff did not report success."
                 )
+            write_step_summary("Required suites did not pass", details + exclusion_note)
             post_check_run(
                 args.repo,
                 args.sha,
@@ -665,13 +720,9 @@ def main() -> int:
         if result.is_fully_ok:
             print("All path-relevant required checks reported and passed.")
             names = ", ".join(r.name_prefix for r in result.ok) or "(none required for this diff)"
-            post_check_run(
-                args.repo,
-                args.sha,
-                "success",
-                "All required suites passed",
-                f"Required and path-relevant for this diff: {names}." + exclusion_note,
-            )
+            summary = f"Required and path-relevant for this diff: {names}." + exclusion_note
+            write_step_summary("All required suites passed", summary)
+            post_check_run(args.repo, args.sha, "success", "All required suites passed", summary)
             return 0
         if elapsed >= args.timeout_seconds:
             details = ", ".join(r.name_prefix for r in result.unresolved)
@@ -680,13 +731,9 @@ def main() -> int:
                     f"::error::Required check '{req.name_prefix}' (from "
                     f"{req.source_file}) never reported after {args.timeout_seconds}s."
                 )
-            post_check_run(
-                args.repo,
-                args.sha,
-                "failure",
-                "Required suites never reported",
-                f"Timed out after {args.timeout_seconds}s waiting on: {details}." + exclusion_note,
-            )
+            summary = f"Timed out after {args.timeout_seconds}s waiting on: {details}." + exclusion_note
+            write_step_summary("Required suites never reported", summary)
+            post_check_run(args.repo, args.sha, "failure", "Required suites never reported", summary)
             return 1
         time.sleep(args.poll_seconds)
 

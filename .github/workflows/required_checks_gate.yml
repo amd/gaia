@@ -20,18 +20,24 @@
 # meant to catch it: on a draft PR without `ready_for_ci` — this repo's
 # default PR state — the audited suites skip AND the gate would skip too,
 # so nothing runs, nothing is red, and the checks page still reads green
-# with no coverage behind it. Instead this job always runs and reports one
-# of three states via a self-posted check-run (see post_check_run() in the
-# script): `neutral` while the PR is legitimately not asking for CI yet,
-# `success` once the relevant suites verifiably passed, or `failure` if any
-# didn't. `neutral` is visibly distinct from both and does not block a
-# merge on its own, matching GitHub's own semantics for a neutral required
-# check — so this is legible, not noise, and not a lie.
+# with no coverage behind it. Instead this job always runs and always
+# decides — see main()'s own docstring in the script for exactly how the
+# neutral/success/failure states map onto this job's exit code.
 #
-# The job's OWN native check-run (below, named "(runner)") only reflects
-# whether the script executed without crashing — the meaningful signal for
-# branch protection to require is the self-posted "Required Checks Gate"
-# check-run the script creates via the API.
+# THE REQUIRED CHECK IS THIS JOB'S OWN NATIVE STATUS — "Required Checks
+# Gate" — not the richer "Required Checks Gate (detail)" check-run the
+# script also attempts to post. That split is deliberate: GITHUB_TOKEN is
+# silently downgraded to read-only for `pull_request` (not
+# `pull_request_target`) on a fork PR, regardless of the `permissions:`
+# declared below — confirmed live against a real fork PR in this repo
+# (#2753's "Dependency Review" job logged "GITHUB_TOKEN Permissions:
+# Contents: read, Metadata: read, PullRequests: read" despite declaring
+# `pull-requests: write`). A required check that can only post via a
+# permission forks don't have would block every fork contribution to this
+# repo — the `checks: write` below only ever works on same-repo PRs. This
+# job's own exit code needs no such permission and is identical either way,
+# so it — not the API-posted check-run — is what should be added to branch
+# protection / the merge queue's required-checks list.
 
 name: Required Checks Gate
 
@@ -41,6 +47,9 @@ on:
     # Deliberately no `branches:` filter: that filter is the exact bug this
     # workflow exists to catch, so applying it here would just move the gap.
 
+# `checks: write` only takes effect on same-repo PRs (see the header above)
+# — it lets the job attempt the richer, distinctly-colored "(detail)"
+# check-run there, best-effort, never required for the binding signal.
 permissions:
   contents: read
   checks: write
@@ -49,21 +58,20 @@ permissions:
 concurrency:
   group: required-checks-gate-${{ github.event.pull_request.number }}
   # NOT cancel-in-progress. Unlike the audited workflows, cancelling this
-  # one is not free: a run that gets killed before it reaches main()'s
-  # post_check_run() calls never posts a check-run for the SHA it was
-  # evaluating at all. If that cancelled run happened to be the LAST
-  # triggering event for that SHA (nothing left to supersede it and try
-  # again), the "Required Checks Gate" check silently never appears for
-  # that commit — a fourth way to fail open, inside the fix for the other
-  # three. Queuing instead of cancelling costs some run time when events
-  # arrive in a burst (e.g. this repo's auto-labeler firing right after
-  # open) but guarantees every triggering event eventually gets a real,
-  # posted verdict.
+  # one is not free: a run that gets killed before it finishes never
+  # produces a final exit code for the SHA it was evaluating at all. If
+  # that cancelled run happened to be the LAST triggering event for that
+  # SHA (nothing left to supersede it and try again), the required check
+  # silently never resolves for that commit — a fourth way to fail open,
+  # inside the fix for the other three. Queuing instead of cancelling costs
+  # some run time when events arrive in a burst (e.g. this repo's
+  # auto-labeler firing right after open) but guarantees every triggering
+  # event eventually gets a real, posted verdict.
   cancel-in-progress: false
 
 jobs:
   gate:
-    name: Required Checks Gate (runner)
+    name: Required Checks Gate
     runs-on: ubuntu-latest
     timeout-minutes: 65
     steps:
