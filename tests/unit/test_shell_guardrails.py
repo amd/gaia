@@ -188,6 +188,10 @@ class TestFindActionGuards:
     def test_find_fls_blocked(self):
         assert validate("find . -fls /tmp/canary") is not None
 
+    def test_find_fprint0_blocked(self):
+        # -fprint0 writes null-separated results to FILE, same as -fprint.
+        assert validate("find . -fprint0 /tmp/canary") is not None
+
     def test_find_exec_uppercase_blocked(self):
         # Token is lowercased before matching, so case tricks don't help.
         assert validate("find /tmp -EXEC touch {} +") is not None
@@ -219,6 +223,10 @@ class TestSortOutputGuard:
     def test_sort_output_attached_blocked(self):
         # -oFILE attached form must not slip past.
         assert validate("sort -o/tmp/canary /etc/hostname") is not None
+
+    def test_sort_output_bundled_attached_blocked(self):
+        # -ro/tmp/x == -r -o /tmp/x: cluster + attached value in one token.
+        assert validate("sort -ro/tmp/canary /etc/hostname") is not None
 
     def test_sort_output_bundled_blocked(self):
         # Bundled short cluster -ro == -r -o.

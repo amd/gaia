@@ -102,6 +102,7 @@ DANGEROUS_FIND_ACTIONS = {
     "-okdir",
     "-delete",
     "-fprint",
+    "-fprint0",
     "-fprintf",
     "-fls",
 }
@@ -396,9 +397,10 @@ class ShellToolsMixin:
                     if len(flag) > 2 and "--output".startswith(flag):
                         is_output = True
                 elif part_lower.startswith("-") and part_lower != "-":
-                    body = flag[1:]
-                    # -o / -oFILE (attached) or a short cluster like -ro
-                    if body.startswith("o") or (body.isalpha() and "o" in body):
+                    # The leading run of letters is the short-flag cluster;
+                    # anything after it is an attached value (-oFILE, -ro/tmp/x).
+                    cluster = re.match(r"[a-z]*", flag[1:]).group(0)
+                    if "o" in cluster:
                         is_output = True
                 if is_output:
                     return {
