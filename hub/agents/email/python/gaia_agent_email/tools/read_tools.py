@@ -882,13 +882,23 @@ def search_messages_impl(
     debug: bool = False,
     operator_retry: bool = True,
     budget_tokens: Optional[int] = None,
-    include_bodies: bool = True,
+    include_bodies: bool = False,
 ) -> Dict[str, Any]:
-    """``include_bodies=False`` (#2763) fetches metadata-only (no body decode,
-    no per-message/envelope budget check needed -- see
-    ``_format_message_metadata_for_llm``) for a counting/listing question
-    that never reads message content. Default ``True`` is unchanged: full
-    bodies via ``_format_messages_within_budget``.
+    """``include_bodies`` defaults to ``False`` (#2763): metadata-only (no
+    body decode, no per-message/envelope budget check needed -- see
+    ``_format_message_metadata_for_llm``). Live-hardware evidence showed a
+    docstring-only opt-IN (default ``True``, model sets ``False`` for a
+    counting question) is not reliable enough: a 4B-class local model did
+    not choose it on the very probe this issue is about, reproducing the
+    original overflow byte-for-byte (measured ``n_prompt_tokens`` within 1%
+    of the pre-fix run). Defaulting to the cheap, safe path and requiring an
+    explicit ``include_bodies=True`` opt-in for the expensive one means the
+    fix does not depend on the model reliably choosing a new parameter on
+    the failure path that actually destroys the conversation -- the
+    asymmetry matters: a content question that forgets to opt in gets a
+    recoverable "no body available" rather than a context-ending overflow.
+    Full bodies via ``_format_messages_within_budget`` are still available
+    with ``include_bodies=True``.
     """
     query = normalize_gmail_date_operators(query)
     with log_tool_call(
@@ -2645,7 +2655,7 @@ class ReadToolsMixin:
 
         @tool
         def search_messages(
-            query: str, max_results: int = 25, include_bodies: bool = True
+            query: str, max_results: int = 25, include_bodies: bool = False
         ) -> str:
             """Search across ALL connected mailboxes.
 
@@ -2674,24 +2684,25 @@ class ReadToolsMixin:
             query automatically, but forming the operator query yourself is
             more reliable.
 
-            Set ``include_bodies=False`` for a question that only needs COUNTS
-            or a LIST of matches, never message content — "how many emails from
-            X", "list the emails from Y this week", "do I have anything from
-            Z". Metadata-only mode returns id/subject/from/to/date/label_ids/
-            snippet for every hit with NO body text, at a small fraction of the
-            cost of a full search, so a large or long-bodied result set never
-            risks the model's context window. Keep the default ``True`` only
-            when the question needs what a message actually SAYS — summarizing,
-            quoting, or answering about body content.
+            By DEFAULT this returns METADATA ONLY — id/subject/from/to/date/
+            label_ids/snippet, no body text — which is all a counting or
+            listing question needs ("how many emails from X", "list the
+            emails from Y this week", "do I have anything from Z"), at a
+            small fraction of the cost of a full search, so a large or
+            long-bodied result set never risks the model's context window.
+            Set ``include_bodies=True`` ONLY when the question needs what a
+            message actually SAYS — summarizing, quoting, or answering about
+            body content — since fetching bodies costs far more context and
+            can force the tool to shrink or refuse a large request.
 
-            When ``include_bodies=True`` (the default), a large ``max_results``
-            may shrink every hit's body TOGETHER (never independently, never
-            dropping a hit) so the whole result stays within the model's
-            context window — shrunk messages report ``body_truncated: true``.
-            If even the smallest usable body can't fit every requested hit,
-            the tool returns an actionable error instead of silently returning
-            fewer hits than asked for — retry with a smaller ``max_results``
-            or ``include_bodies=False``.
+            When ``include_bodies=True``, a large ``max_results`` may shrink
+            every hit's body TOGETHER (never independently, never dropping a
+            hit) so the whole result stays within the model's context window
+            — shrunk messages report ``body_truncated: true``. If even the
+            smallest usable body can't fit every requested hit, the tool
+            returns an actionable error instead of silently returning fewer
+            hits than asked for — retry with a smaller ``max_results`` or
+            drop back to the metadata-only default.
 
             Returns:
                 JSON envelope with ``{"messages": [...]}`` plus ``count`` (the

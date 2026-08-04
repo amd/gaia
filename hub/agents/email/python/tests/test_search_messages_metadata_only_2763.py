@@ -348,21 +348,32 @@ class TestMetadataOnlyEnvelopeAgainstComputedBudget:
 
 
 # ---------------------------------------------------------------------------
-# include_bodies=True (the default) is unchanged -- regression guard
+# include_bodies defaults to False -- live-hardware evidence (see the commit
+# that made this the default) showed a docstring-only opt-in with
+# include_bodies=True as the default was not reliable: a 4B-class local
+# model did not choose include_bodies=False on the exact failing probe this
+# issue is about, reproducing the original overflow. Defaulting to the
+# cheap, safe path removes the dependency on the model choosing a new
+# parameter correctly on the failure-prone case.
 # ---------------------------------------------------------------------------
 
 
-class TestIncludeBodiesTrueDefaultUnchanged:
-    def test_omitting_include_bodies_matches_explicit_true(self):
+class TestIncludeBodiesDefaultsToFalse:
+    def test_omitting_include_bodies_matches_explicit_false(self):
         gmail, msgs = _build_long_body_sender_inbox(n=5, raw_body_chars=500)
         host = _Host(gmail)
         search_messages = _registered_search_messages(host)
 
         default_result = search_messages(query="from:every", max_results=25)
-        explicit_true_result = search_messages(
-            query="from:every", max_results=25, include_bodies=True
+        explicit_false_result = search_messages(
+            query="from:every", max_results=25, include_bodies=False
         )
-        assert default_result == explicit_true_result
+        assert default_result == explicit_false_result
+
+        data = json.loads(default_result)["data"]
+        assert len(data["messages"]) == 5
+        for m in data["messages"]:
+            assert "body" not in m
 
     def test_small_inbox_full_body_still_carries_body_field(self):
         gmail, msgs = _build_long_body_sender_inbox(n=3, raw_body_chars=500)
