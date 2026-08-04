@@ -108,7 +108,15 @@ public:
 /// cwd and environment changes from that one command are not captured; the
 /// session keeps its previous state instead of guessing.
 ///
-/// Two properties of the generated script are worth knowing:
+/// Windows without a POSIX shell: commands run as a cmd.exe batch script,
+/// because keeping `cd` and `set` requires running in the same interpreter and
+/// cmd only offers that to a script. `%VAR%` expansion is identical to a
+/// prompt, but a `for` loop variable is written `%%i` rather than `%i`, and
+/// `%1`-`%9` are the (empty) script arguments rather than literal text. When a
+/// bash is present — Git Bash, MSYS, WSL, which `BashTools::detectShell()`
+/// prefers — none of this applies and commands run as ordinary shell script.
+///
+/// Two further properties of the generated script are worth knowing:
 ///   - stdin is `/dev/null`. An interactive command (`git commit` opening an
 ///     editor, `sudo`, `npm login`) returns immediately instead of sitting
 ///     until the timeout, because a tool call has no way to answer it.

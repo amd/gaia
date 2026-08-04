@@ -37,8 +37,9 @@ ToolInfo BashTools::bashExecute() {
         "The command runs in the detected shell (bash preferred, sh fallback). "
         "The shell is persistent: a 'cd' or an exported variable stays in "
         "effect for later commands, and the current directory is returned as "
-        "cwd. Output is truncated at 32 KB. Use timeout_ms to control the "
-        "deadline.";
+        "cwd. On Windows without a POSIX shell, commands run as a cmd.exe "
+        "script, so write a for-loop variable as %%i rather than %i. Output is "
+        "truncated at 32 KB. Use timeout_ms to control the deadline.";
     info.parameters = {
         {"command", ToolParamType::STRING, /*required=*/true,
          "The shell command to execute"},

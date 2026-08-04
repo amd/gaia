@@ -211,8 +211,19 @@ root; otherwise it matches the file name.
 **`bash_execute` runs in a persistent shell.** `cd build` and `export CC=clang`
 stay in effect for later commands, and the current directory comes back as
 `cwd`. The session applies both inside the child shell rather than by changing
-the agent process, so concurrent sessions cannot corrupt each other. Its
-`CONFIRM` policy and 32 KB output cap are unchanged.
+the agent process, so concurrent sessions cannot corrupt each other. stdin is
+`/dev/null`, so a command that waits for input returns instead of burning the
+timeout, and on POSIX a timeout kills the whole process group rather than
+orphaning the build it spawned. Its `CONFIRM` policy and 32 KB output cap are
+unchanged.
+
+<Note>
+  On Windows the agent uses bash when one is present (Git Bash, MSYS, WSL). With
+  no POSIX shell it falls back to a `cmd.exe` script — keeping `cd` and `set`
+  requires running in one interpreter, and cmd offers that only to a script.
+  `%VAR%` expansion is unaffected, but a `for` loop variable is written `%%i`
+  rather than `%i` there.
+</Note>
 
 <Warning>
 The following tools are planned but not yet available in this release.

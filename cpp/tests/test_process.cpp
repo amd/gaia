@@ -181,10 +181,16 @@ namespace fs = std::filesystem;
 namespace {
 
 #ifdef _WIN32
+// The session runs commands as a batch script, not as a prompt command line,
+// so a for-loop variable is written %%i here where ProcessRunner's
+// LARGE_OUTPUT (handed straight to `cmd /c`) writes %i. See ShellSession's
+// header: %VAR% expansion is identical, %%-loop variables and %1 are not.
+const char* SESSION_LARGE_OUTPUT = "for /L %%i in (1,1,5000) do @echo line_%%i";
 const char* PRINT_CWD   = "cd";
 const char* SET_VAR     = "set GAIA_SESSION_VAR=persisted_9876";
 const char* PRINT_VAR   = "echo %GAIA_SESSION_VAR%";
 #else
+const char* SESSION_LARGE_OUTPUT = LARGE_OUTPUT;
 const char* PRINT_CWD   = "pwd";
 const char* SET_VAR     = "export GAIA_SESSION_VAR=persisted_9876";
 const char* PRINT_VAR   = "echo $GAIA_SESSION_VAR";
@@ -329,9 +335,27 @@ TEST_F(ShellSessionTest, ExitCodeStderrAndOutputCapAreUnchanged) {
     EXPECT_NE(errored.stderr_output.find("error_msg"), std::string::npos);
 
     const size_t capBytes = 256;
-    auto capped = session.run(LARGE_OUTPUT, 30000, capBytes);
+    auto capped = session.run(SESSION_LARGE_OUTPUT, 30000, capBytes);
     EXPECT_LE(capped.stdout_output.size(), capBytes);
     EXPECT_FALSE(capped.stdout_output.empty());
+}
+
+TEST_F(ShellSessionTest, VariableReferencesInACommandStillExpand) {
+    // The session's own variables must be usable by the command that follows.
+    // This is the expansion syntax that behaves identically on both platforms
+    // and is by far the common case.
+    ShellSession session;
+    session.setEnv("GAIA_EXPAND_ME", "expanded_value_77");
+
+#ifdef _WIN32
+    auto result = session.run("echo %GAIA_EXPAND_ME%", 10000);
+#else
+    auto result = session.run("echo $GAIA_EXPAND_ME", 10000);
+#endif
+
+    EXPECT_EQ(result.exitCode, 0);
+    EXPECT_NE(result.stdout_output.find("expanded_value_77"), std::string::npos)
+        << "stdout: " << result.stdout_output;
 }
 
 TEST_F(ShellSessionTest, TimeoutStillKillsTheCommand) {
