@@ -47,6 +47,7 @@ from gaia.llm.lemonade_client import (
 if TYPE_CHECKING:
     from gaia.agents.base.goal_store import Goal, Proposal
     from gaia.connectors.providers.base import ConnectorRequirement
+    from gaia.skills import Skill, SkillManager
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -308,6 +309,11 @@ class Agent(abc.ABC):
     # both render paths and the ``_openai_tools`` property.
     _active_tool_filter: Optional[List[str]] = None
 
+    # Skills (#888): lazily built manager + the skills loaded into this agent.
+    # Instance-level once set, so one agent's skills never leak into a sibling.
+    _skill_manager: Optional[Any] = None
+    _loaded_skills: Optional[Dict[str, Any]] = None
+
     # Define state constants
     STATE_PLANNING = "PLANNING"
     STATE_EXECUTING_PLAN = "EXECUTING_PLAN"
@@ -330,6 +336,12 @@ class Agent(abc.ABC):
 
     # Registry reads this to include dynamic MCP consumers in the Settings "Active for" panel.
     CONSUMES_MCP_SERVERS: ClassVar[bool] = False
+
+    # Agent-bundled skill directories (issue #888) — the highest-precedence
+    # discovery root. A packaged agent points this at its own ``skills/`` folder
+    # so the skills it ships always win over a same-named user or Claude Code
+    # copy. Empty = the agent bundles no skills.
+    SKILL_DIRS: ClassVar[List[str]] = []
 
     # Agent-specific tools that must be gated behind explicit user confirmation
     # (#1440). Subclasses override this to declare their own destructive/external
@@ -892,6 +904,162 @@ Do NOT wrap conversational replies in JSON.
         # Recompose the full system prompt via _compose_system_prompt() so that
         # mixin prompts, tool descriptions, and response format are all included.
         self._system_prompt_cache = self._compose_system_prompt()
+
+    # ------------------------------------------------------------------
+    # Skills (issue #888) — SKILL.md capabilities loaded at runtime
+    # ------------------------------------------------------------------
+
+    @property
+    def skill_manager(self) -> "SkillManager":
+        """This agent's :class:`~gaia.skills.manager.SkillManager`.
+
+        Built lazily over the v1 discovery roots, with the agent's own
+        ``SKILL_DIRS`` as the highest-precedence root.
+        """
+        if getattr(self, "_skill_manager", None) is None:
+            from gaia.skills import SkillManager
+
+            self._skill_manager = SkillManager(agent_skill_dirs=self.SKILL_DIRS)
+        return self._skill_manager
+
+    @property
+    def loaded_skills(self) -> Dict[str, "Skill"]:
+        """``{name: Skill}`` for every skill loaded into this agent."""
+        if getattr(self, "_loaded_skills", None) is None:
+            self._loaded_skills = {}
+        return self._loaded_skills
+
+    def load_skill(
+        self, name: str, *, manager: Optional["SkillManager"] = None
+    ) -> "Skill":
+        """Load a skill by name and scope it into this agent.
+
+        Resolves ``name`` across the discovery roots (agent-bundled →
+        ``~/.gaia/skills`` → read-only ``.claude/skills``), validates the
+        manifest, registers any tools the skill provides under the
+        ``<skill-name>/<tool>`` namespace, and injects its Markdown body into
+        the system prompt.
+
+        Args:
+            name: The skill's ``name`` (== its directory name).
+            manager: Optional :class:`~gaia.skills.manager.SkillManager` to
+                resolve against; defaults to :attr:`skill_manager`.
+
+        Returns:
+            The loaded :class:`~gaia.skills.format.Skill`.
+
+        Raises:
+            SkillNotFoundError: no discovery root contains that skill.
+            SkillValidationError: the manifest is invalid or contradicts
+                ``tools.py``. Nothing is registered.
+            SkillPermissionError: the skill declares a local-capability
+                permission (``filesystem``/``shell``/``database``/``desktop``/
+                ``env``), which this phase refuses rather than loading
+                unenforced.
+
+        Example:
+            class WebAgent(Agent):
+                def _register_tools(self):
+                    self.load_skill("web-research")
+        """
+        from gaia.skills import connector_requirements, refuse_unbridged_permissions
+        from gaia.skills.loader import register_skill_tools, unregister_skill_tools
+
+        resolver = manager if manager is not None else self.skill_manager
+
+        if name in self.loaded_skills:
+            logger.debug("Skill '%s' is already loaded for this agent", name)
+            return self.loaded_skills[name]
+
+        skill = resolver.load(name)
+
+        # Permission gate BEFORE any registration: a refused skill must not
+        # leave tools or prompt fragments behind.
+        permissions = skill.parsed_permissions()
+        refuse_unbridged_permissions(permissions, skill_name=skill.name)
+        requirements = connector_requirements(permissions, skill_name=skill.name)
+
+        registered = register_skill_tools(skill)
+        try:
+            if registered and self._instance_tools is not None:
+                self._instance_tools.update(registered)
+
+            if requirements:
+                # Shadow the ClassVar per instance — never mutate it, or one
+                # agent's skill would leak requirements into every sibling.
+                existing = list(self.REQUIRED_CONNECTORS)
+                for requirement in requirements:
+                    if requirement not in existing:
+                        existing.append(requirement)
+                self.REQUIRED_CONNECTORS = existing
+
+            self.loaded_skills[name] = skill
+            self.rebuild_system_prompt()
+        except Exception:
+            unregister_skill_tools(skill.name)
+            self.loaded_skills.pop(name, None)
+            raise
+
+        # tools_required names registry tools the skill CONSUMES. A name that is
+        # valid but not active in this agent is scoping, not a defect — log it so
+        # a skill that quietly can't run its recipe is diagnosable.
+        inactive = [
+            t for t in skill.gaia.tools_required if t not in self._tools_registry
+        ]
+        if inactive:
+            logger.info(
+                "Skill '%s' expects tool(s) %s, which this agent does not have "
+                "registered — its instructions may not be fully executable here.",
+                skill.name,
+                ", ".join(inactive),
+            )
+
+        logger.info(
+            "Loaded skill '%s' (tier=%s, root=%s, %d tool(s), %d connector "
+            "requirement(s))",
+            skill.name,
+            skill.security_tier,
+            skill.root,
+            len(registered),
+            len(requirements),
+        )
+        return skill
+
+    def unload_skill(self, name: str) -> bool:
+        """Remove a loaded skill's tools and body. Returns True if it was loaded."""
+        from gaia.skills.loader import unregister_skill_tools
+
+        if name not in self.loaded_skills:
+            return False
+
+        removed = unregister_skill_tools(name)
+        if self._instance_tools is not None:
+            for key in removed:
+                self._instance_tools.pop(key, None)
+        self.loaded_skills.pop(name, None)
+        self.rebuild_system_prompt()
+        logger.info("Unloaded skill '%s'", name)
+        return True
+
+    def get_skills_system_prompt(self) -> str:
+        """Render the loaded skills' bodies as a system-prompt fragment.
+
+        Auto-discovered by ``_get_mixin_prompts()``, so a skill's instructions
+        reach the model as soon as it is loaded. Returns "" when no skill is
+        loaded, keeping every existing agent's prompt byte-identical.
+        """
+        skills = getattr(self, "_loaded_skills", None)
+        if not skills:
+            return ""
+
+        sections = []
+        for skill in skills.values():
+            if not skill.body:
+                continue
+            sections.append(f"--- SKILL: {skill.name} ---\n{skill.body}")
+        if not sections:
+            return ""
+        return "==== LOADED SKILLS ====\n" + "\n\n".join(sections)
 
     def list_tools(self, verbose: bool = True) -> None:
         """
@@ -2339,8 +2507,13 @@ Do NOT wrap conversational replies in JSON.
         """
         truncated_result = tool_result
         if isinstance(tool_result, (dict, list)):
-            # Use custom encoder to handle bytes and other non-serializable types
-            result_str = json.dumps(tool_result, default=self._json_serialize_fallback)
+            # Use custom encoder to handle bytes and other non-serializable types.
+            # ensure_ascii=False: this text reaches the model as prose, not a
+            # wire format re-parsed on the other end -- escaping would hand it
+            # literal \uXXXX sequences instead of the actual characters.
+            result_str = json.dumps(
+                tool_result, default=self._json_serialize_fallback, ensure_ascii=False
+            )
             threshold, target = truncation_budget(self.device)
             if len(result_str) > threshold:
                 # Truncate large results to prevent overwhelming the LLM. The
@@ -2563,7 +2736,7 @@ Do NOT wrap conversational replies in JSON.
 
         if not isinstance(text_content, str):
             text_content = json.dumps(
-                tool_output, default=self._json_serialize_fallback
+                tool_output, default=self._json_serialize_fallback, ensure_ascii=False
             )
 
         msg = {
@@ -2612,6 +2785,7 @@ Do NOT wrap conversational replies in JSON.
                         "arguments": json.dumps(
                             tc["tool_args"],
                             default=self._json_serialize_fallback,
+                            ensure_ascii=False,
                         ),
                     },
                 }
@@ -2681,7 +2855,9 @@ Do NOT wrap conversational replies in JSON.
         if isinstance(content, dict) and (
             "test_results" in content or "run_tests" in content
         ):
-            return json.dumps(content, default=self._json_serialize_fallback)
+            return json.dumps(
+                content, default=self._json_serialize_fallback, ensure_ascii=False
+            )
 
         if not isinstance(content, (dict, list)):
             content_str = str(content)
@@ -2689,7 +2865,12 @@ Do NOT wrap conversational replies in JSON.
                 return content_str
             return self._truncate_fallback_text(content_str, max_chars, as_json)
 
-        compact_str = json.dumps(content, default=self._json_serialize_fallback)
+        # ensure_ascii=False throughout this method: every returned string
+        # here is prose the model reads directly, not a wire format the
+        # caller re-parses -- escaping would hand it literal \uXXXX text.
+        compact_str = json.dumps(
+            content, default=self._json_serialize_fallback, ensure_ascii=False
+        )
         if len(compact_str) <= max_chars:
             return compact_str
 
@@ -2715,7 +2896,10 @@ Do NOT wrap conversational replies in JSON.
                             )
 
             result_str = json.dumps(
-                truncated, indent=2, default=self._json_serialize_fallback
+                truncated,
+                indent=2,
+                default=self._json_serialize_fallback,
+                ensure_ascii=False,
             )
             # Use larger limit for chunked responses since chunks are the actual data
             if len(result_str) <= max_chars * 3:  # Allow up to 60KB for chunked data
@@ -2723,7 +2907,10 @@ Do NOT wrap conversational replies in JSON.
             # If still too large, keep first 3 chunks only
             truncated["chunks"] = truncated["chunks"][:3]
             return json.dumps(
-                truncated, indent=2, default=self._json_serialize_fallback
+                truncated,
+                indent=2,
+                default=self._json_serialize_fallback,
+                ensure_ascii=False,
             )
 
         # Dict/list content (Jira "issues", email "messages"/"awaiting_reply",
@@ -2749,6 +2936,7 @@ Do NOT wrap conversational replies in JSON.
                 json.dumps(
                     {"truncated": True, "original_chars": len(text), "content": ""},
                     default=self._json_serialize_fallback,
+                    ensure_ascii=False,
                 )
             )
             budget = max(0, max_chars - envelope_overhead)
@@ -2759,6 +2947,7 @@ Do NOT wrap conversational replies in JSON.
                     "content": text[:budget],
                 },
                 default=self._json_serialize_fallback,
+                ensure_ascii=False,
             )
 
         half = max_chars // 2 - 20
@@ -2816,7 +3005,9 @@ Do NOT wrap conversational replies in JSON.
                         for key, items in lists.items()
                         if len(items) < totals[key]
                     }
-            return json.dumps(payload, default=self._json_serialize_fallback)
+            return json.dumps(
+                payload, default=self._json_serialize_fallback, ensure_ascii=False
+            )
 
         result = render()
         while len(result) > max_chars:
@@ -3265,7 +3456,9 @@ Do NOT wrap conversational replies in JSON.
                                 "total_steps": self.total_plan_steps,
                             }
                             plan_context_raw = json.dumps(
-                                plan_context, default=self._json_serialize_fallback
+                                plan_context,
+                                default=self._json_serialize_fallback,
+                                ensure_ascii=False,
                             )
                             if len(plan_context_raw) > 20000:
                                 # Prose call site: spliced into an f-string
@@ -3865,7 +4058,7 @@ Do NOT wrap conversational replies in JSON.
                 if deferred_tool:
                     plan_prompt += (
                         f"You initially wanted to use the {deferred_tool} tool with these arguments:\n"
-                        f"{json.dumps(deferred_args, indent=2, default=self._json_serialize_fallback)}\n\n"
+                        f"{json.dumps(deferred_args, indent=2, default=self._json_serialize_fallback, ensure_ascii=False)}\n\n"
                         "However, you MUST first create a plan. Please create a plan that includes this tool usage as a step.\n\n"
                     )
 

@@ -64,11 +64,14 @@ func TestLadderPicksTheRightSubject(t *testing.T) {
 			wantIn:  "gave up relaying",
 		},
 		{
-			name: "a wrong-contract daemon is never fixed by starting another",
+			// Neither starting another daemon nor restarting this one changes the
+			// version: it comes from the installed core.
+			name: "a wrong-contract daemon is fixed by upgrading the core",
 			diagnose: func() Diagnosis {
-				return l.Error("attach", &daemon.VersionError{Have: "1.0", Reason: "predates the relay"})
+				return l.Error("attach", &daemon.VersionError{
+					Have: "1.0", Want: "1.1", Reason: "predates the relay"})
 			},
-			wantCmd: "gaia daemon restart",
+			wantCmd: "pip install --upgrade amd-gaia",
 			wantIn:  "v1.0",
 		},
 		{

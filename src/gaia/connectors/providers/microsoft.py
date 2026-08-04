@@ -7,15 +7,34 @@ Foundation for the Outlook mailbox (#1275) and calendar (#1276) agents:
 unlocks MS Graph (mail, calendar, OneDrive, Teams, SharePoint) for any agent
 through the same generic ``oauth_pkce`` handler that already drives Google.
 
-NO module-level side effects: instantiating the provider reads
-``GAIA_MICROSOFT_CLIENT_ID`` and computes ``client_id_hash``. Importing this
-module registers nothing — registration is lazy on first ``get("microsoft")``
-(see ``providers/__init__.py``), matching ``GoogleOAuthProvider``.
+NO module-level side effects: instantiating the provider reads stored/env
+credentials and computes ``client_id_hash``. Importing this module registers
+nothing — registration is lazy on first ``get(<connector_id>)`` (see
+``providers/__init__.py``), matching ``GoogleOAuthProvider``.
 
-Tenant defaults to ``common`` — accepts BOTH personal Microsoft accounts
-(Outlook.com / Hotmail / Live) AND work/school (Entra ID) accounts. Override
-with ``GAIA_MICROSOFT_TENANT`` to pin a single Entra tenant id (or
-``organizations`` / ``consumers``) for orgs that want to restrict sign-in.
+One CLASS, two connectors (#2628): ``microsoft`` (Personal, ``consumers``
+authority) and ``microsoft_work`` (Work or School, ``organizations``
+authority, optionally narrowed to a single Directory/tenant id) both
+instantiate THIS class, dispatched via ``ConnectorSpec.oauth_impl`` in
+``providers/__init__.py`` — never via a hard-coded id check here. Each
+instance's identity (``provider_id``) drives EVERY per-connector concern:
+which keyring slot it reads/writes (``store.peek_provider_credentials``),
+which env vars are its fallback (``GAIA_{PROVIDER_ID}_CLIENT_ID`` /
+``_CLIENT_SECRET``), which guided walkthrough it renders on a missing
+client, and which OAuth authority it authenticates against. Two instances
+with different ``provider_id``s never share state — that separation is the
+entire point of the split (plan amendment A1: sharing it would silently
+clobber one connector's credentials with the other's).
+
+Tenant resolution (D6, plan amendment A16) is a three-tier chain owned
+entirely by ``__init__``, exactly mirroring how ``client_id``/``client_secret``
+already separate their tiers:
+  1. Explicit ``tenant=`` kwarg (tests / library callers).
+  2. Stored provider-credentials blob's ``tenant`` key — the optional
+     Directory (tenant) ID a user pastes into ``microsoft_work``'s setup
+     form (#2616).
+  3. ``default_tenant=`` kwarg — the connector spec's own default
+     (``ConnectorSpec.oauth_tenant``), passed by ``providers.get()``.
 
 Public-client PKCE: per the Microsoft identity platform docs, public clients
 (native/desktop, single-page apps) MUST NOT send a ``client_secret`` when
@@ -32,27 +51,32 @@ id_token (returned only when ``openid`` is requested). Both scopes are in
 
 from __future__ import annotations
 
+import logging
 import os
 import zlib
 from typing import Iterable, Sequence
 from urllib.parse import urlencode
 
 from gaia.connectors.errors import OAuthClientNotConfiguredError
-from gaia.connectors.setup_routes import MS_PERSONAL, render_console_steps
+from gaia.connectors.setup_routes import get_route, render_console_steps
 
-# Default login tenant. ``common`` accepts personal AND work/school accounts.
-# Overridable via GAIA_MICROSOFT_TENANT (a single-tenant Entra id, or
-# ``organizations`` / ``consumers``). Resolved per-instance so an env change
-# takes effect on the next provider instantiation without a module reload.
-_DEFAULT_TENANT = "common"
+logger = logging.getLogger(__name__)
 
+# Safety-net fallback for the rare direct construction that supplies neither
+# an explicit tenant, a stored override, NOR a default_tenant (every catalog
+# spec sets ``oauth_tenant`` per D2, so the real ``providers.get()`` path
+# never hits this). Kept only so an undocumented direct instantiation still
+# builds valid URLs instead of a bare "None" segment.
+_FALLBACK_TENANT = "common"
 
-def _resolve_tenant() -> str:
-    """Return the Microsoft login tenant segment for the endpoint URLs."""
-    return (
-        os.environ.get("GAIA_MICROSOFT_TENANT") or _DEFAULT_TENANT
-    ).strip() or _DEFAULT_TENANT
-
+# Display labels for known connector ids — used only in the not-configured
+# error's copy. Falls back to a title-cased id for anything unlisted (e.g. a
+# future fourth Microsoft audience, or a test's throwaway spec) so adding a
+# connector never requires an edit here (AC3: no providers/*.py change).
+_PROVIDER_LABELS: dict[str, str] = {
+    "microsoft": "Microsoft Personal",
+    "microsoft_work": "Microsoft Work or School",
+}
 
 # Plain-language descriptions for the AgentUI consent dialog, mirroring the
 # Google provider's SCOPE_DESCRIPTIONS. The router/CLI render these strings;
@@ -76,17 +100,16 @@ SCOPE_DESCRIPTIONS: dict[str, str] = {
 
 class MicrosoftOAuthProvider:
     """
-    Concrete provider for the Microsoft identity platform (``common``
-    tenant by default — personal + work/school). Implements the
-    ``OAuthProvider`` Protocol structurally — no inheritance, matching
-    ``GoogleOAuthProvider``.
+    Concrete provider for the Microsoft identity platform. One instance per
+    connector id (``microsoft`` / ``microsoft_work``) — see the module
+    docstring for why ``provider_id`` drives every per-connector concern.
+    Implements the ``OAuthProvider`` Protocol structurally — no inheritance,
+    matching ``GoogleOAuthProvider``.
 
-    Reads ``GAIA_MICROSOFT_CLIENT_ID`` at instantiation time, NOT at import
-    time. ``client_id_hash`` is a non-cryptographic CRC32 fingerprint used
-    only for log correlation / the ``store.load_connection`` tripwire compare.
+    ``client_id_hash`` is a non-cryptographic CRC32 fingerprint used only for
+    log correlation / the ``store.load_connection`` tripwire compare.
     """
 
-    provider_id: str = "microsoft"
     # offline_access => refresh token; openid => id_token (account email).
     # The shared flow depends on both; keep them in the default set so a bare
     # connect (no explicit scopes) still works end-to-end.
@@ -115,12 +138,93 @@ class MicrosoftOAuthProvider:
         client_id: str | None = None,
         client_secret: str | None = None,
         tenant: str | None = None,
+        provider_id: str = "microsoft",
+        default_tenant: str | None = None,
     ):
-        # Login tenant resolved per-instance (GAIA_MICROSOFT_TENANT honored).
-        # ``common`` accepts personal AND work/school accounts. The endpoint
-        # URLs are instance attributes (not class constants) so an env change
-        # is picked up on the next instantiation without a module reload.
-        self.tenant: str = tenant or _resolve_tenant()
+        # D4: provider_id is an INSTANCE attribute (was a class constant) so
+        # the two connectors' provider objects never share identity. Every
+        # credential lookup, env-var name, and error message below is keyed
+        # off this, not a literal "microsoft".
+        self.provider_id: str = provider_id
+        env_prefix = f"GAIA_{self.provider_id.upper()}"
+
+        # One keyring read serves all three credential tiers (client_id,
+        # client_secret, tenant) — mirrors the existing client_id/secret
+        # resolution order (A16): explicit kwarg > stored > default.
+        if client_id is None or client_secret is None or tenant is None:
+            # Lazy import to avoid a connectors -> providers -> store cycle at
+            # module load time.
+            from gaia.connectors.store import peek_provider_credentials
+
+            stored = peek_provider_credentials(self.provider_id) or {}
+        else:
+            stored = {}
+
+        resolved_id = (
+            client_id
+            if client_id is not None
+            else stored.get("client_id")
+            or os.environ.get(f"{env_prefix}_CLIENT_ID", "")
+        )
+        if not resolved_id:
+            route = get_route(self.provider_id)
+            if route is not None:
+                console_steps = render_console_steps(route)
+            else:
+                # D10: no authored walkthrough for this connector (e.g.
+                # microsoft_work) — generic-but-actionable guidance rather
+                # than showing the OTHER connector's console steps.
+                console_steps = (
+                    "  1. Register an app at https://portal.azure.com -> "
+                    "Microsoft Entra ID -> App registrations\n"
+                    "  2. Set the supported account type / tenant to match "
+                    f"this connector's audience ({self.provider_id})\n"
+                    "  3. Add a http://localhost redirect URI under "
+                    "Authentication -> Mobile & desktop applications\n"
+                    "  4. Copy the Application (client) ID"
+                )
+            raise OAuthClientNotConfiguredError(
+                self.provider_id,
+                provider_label=_PROVIDER_LABELS.get(
+                    self.provider_id, self.provider_id.replace("_", " ").title()
+                ),
+                console_steps=console_steps,
+                example=(
+                    "  For the email agent, copy-paste (bash) after creating "
+                    "the client above:\n"
+                    f"    gaia connectors configure {self.provider_id} "
+                    "--client-id <ID>\n"
+                    '    SCOPES="https://graph.microsoft.com/Mail.ReadWrite '
+                    "https://graph.microsoft.com/Mail.Send "
+                    'https://graph.microsoft.com/Calendars.ReadWrite"\n'
+                    f"    gaia connectors connect {self.provider_id} "
+                    "--scopes $SCOPES --grant-agent installed:email"
+                ),
+                docs="https://amd-gaia.ai/docs/connectors/microsoft",
+            )
+        self.client_id: str = resolved_id
+        # CRC32 fingerprint for log correlation / tripwire comparison only.
+        # Non-cryptographic by design — not used for security.
+        self.client_id_hash: str = format(zlib.crc32(resolved_id.encode()), "08x")
+        # Public PKCE clients send NO secret. Empty string => omitted from the
+        # token/refresh bodies. A non-empty value is the confidential-app
+        # opt-in (operator set GAIA_{PREFIX}_CLIENT_SECRET / saved one).
+        self.client_secret: str = (
+            client_secret
+            if client_secret is not None
+            else stored.get("client_secret")
+            or os.environ.get(f"{env_prefix}_CLIENT_SECRET", "")
+        )
+
+        # D6/A16: three-tier tenant chain — explicit kwarg > stored override
+        # (microsoft_work's optional "Directory (tenant) ID") > this
+        # connector's spec default.
+        resolved_tenant = (
+            tenant
+            if tenant is not None
+            else stored.get("tenant") or default_tenant or _FALLBACK_TENANT
+        )
+        self.tenant: str = resolved_tenant
         self.auth_url: str = (
             f"https://login.microsoftonline.com/{self.tenant}/oauth2/v2.0/authorize"
         )
@@ -134,62 +238,6 @@ class MicrosoftOAuthProvider:
         # authorization_params()).
         self.device_code_url: str = (
             f"https://login.microsoftonline.com/{self.tenant}/oauth2/v2.0/devicecode"
-        )
-        # Resolution order matches GoogleOAuthProvider (user-friendliness
-        # first):
-        #   1. Explicit kwargs (tests / library callers).
-        #   2. Keyring credentials saved via the AgentUI setup form.
-        #   3. Env vars (GAIA_MICROSOFT_CLIENT_ID / _SECRET) for CI / scripted
-        #      setups. Never required for new users.
-        if client_id is None or client_secret is None:
-            # Lazy import to avoid a connectors -> providers -> store cycle at
-            # module load time.
-            from gaia.connectors.store import peek_provider_credentials
-
-            stored = peek_provider_credentials("microsoft") or {}
-        else:
-            stored = {}
-
-        resolved_id = (
-            client_id
-            if client_id is not None
-            else stored.get("client_id")
-            or os.environ.get("GAIA_MICROSOFT_CLIENT_ID", "")
-        )
-        if not resolved_id:
-            raise OAuthClientNotConfiguredError(
-                "microsoft",
-                provider_label="Microsoft",
-                # Derived from setup_routes.MS_PERSONAL — the SAME steps drive
-                # the interactive guided walkthrough (#2590). Five hand-copies
-                # of this walkthrough have drifted apart in production before
-                # (#2116: a missing enable-APIs step produced a 403 on first
-                # use); rendering from one source is how that stops recurring.
-                console_steps=render_console_steps(MS_PERSONAL),
-                example=(
-                    "  For the email agent, copy-paste (bash) after creating the "
-                    "client above:\n"
-                    "    gaia connectors configure microsoft --client-id <ID>\n"
-                    '    SCOPES="https://graph.microsoft.com/Mail.ReadWrite '
-                    "https://graph.microsoft.com/Mail.Send "
-                    'https://graph.microsoft.com/Calendars.ReadWrite"\n'
-                    "    gaia connectors connect microsoft --scopes $SCOPES "
-                    "--grant-agent installed:email"
-                ),
-                docs="https://amd-gaia.ai/docs/connectors/microsoft",
-            )
-        self.client_id: str = resolved_id
-        # CRC32 fingerprint for log correlation / tripwire comparison only.
-        # Non-cryptographic by design — not used for security.
-        self.client_id_hash: str = format(zlib.crc32(resolved_id.encode()), "08x")
-        # Public PKCE clients send NO secret. Empty string => omitted from the
-        # token/refresh bodies. A non-empty value is the confidential-app
-        # opt-in (operator set GAIA_MICROSOFT_CLIENT_SECRET / saved one).
-        self.client_secret: str = (
-            client_secret
-            if client_secret is not None
-            else stored.get("client_secret")
-            or os.environ.get("GAIA_MICROSOFT_CLIENT_SECRET", "")
         )
 
     def authorization_params(self) -> dict:

@@ -38,6 +38,22 @@ def _make_spec(
     )
 
 
+class TestProvidersRequiringClientSecretConstant:
+    """#1638: the "which providers require a secret" rule must live in one
+    place (an allowlist, not a denylist) so a new provider defaults to
+    "not required" — the correct default for a public PKCE client."""
+
+    def test_google_is_in_the_allowlist(self):
+        from gaia.connectors.oauth_pkce import PROVIDERS_REQUIRING_CLIENT_SECRET
+
+        assert "google" in PROVIDERS_REQUIRING_CLIENT_SECRET
+
+    def test_microsoft_is_not_in_the_allowlist(self):
+        from gaia.connectors.oauth_pkce import PROVIDERS_REQUIRING_CLIENT_SECRET
+
+        assert "microsoft" not in PROVIDERS_REQUIRING_CLIENT_SECRET
+
+
 class TestConnectTimeSecretValidation:
     @pytest.mark.asyncio
     async def test_configure_raises_when_no_secret_and_provider_requires_it(

@@ -53,12 +53,33 @@ func TestTheTranscriptCarriesWhatTheCardShowed(t *testing.T) {
 	}
 }
 
-// No card, no noise: an ordinary turn must not gain a "[shown to the user]"
-// section it has nothing to put in.
+// No card, no noise: an ordinary turn must not gain a ui-context section it
+// has nothing to put in.
 func TestAnOrdinaryTurnIsRecordedUnchanged(t *testing.T) {
 	s := &SSEClient{}
 	s.appendTurn("thanks", "You're welcome!", nil)
 	if got := s.Transcript()[1].Content; got != "You're welcome!" {
 		t.Errorf("a card-less turn was rewritten: %q", got)
+	}
+}
+
+// The stored marker must read as metadata, never as a heading a model could
+// mistake for its own prior words and echo back verbatim. Specifically: the
+// old bare "[shown to the user]" string must be gone, and whatever replaces
+// it still needs to carry the row content a follow-up resolves against.
+func TestCardMarkerCannotBeMistakenForContent(t *testing.T) {
+	s := &SSEClient{}
+	s.appendTurn("triage my inbox", "Here's your inbox pre-scan.",
+		[]string{"- [suggested_archives] DMW Martial Arts — SUMMER HOLIDAY SALE (id abc123)"})
+
+	got := s.Transcript()[1].Content
+	if strings.Contains(got, "[shown to the user]") {
+		t.Errorf("the old bare marker must not appear verbatim:\n%s", got)
+	}
+	if !strings.Contains(got, uiContextMarker) {
+		t.Errorf("expected the renamed ui-context marker in:\n%s", got)
+	}
+	if !strings.Contains(got, "abc123") {
+		t.Errorf("the marker rename must not drop the row content:\n%s", got)
 	}
 }

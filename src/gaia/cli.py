@@ -2111,8 +2111,8 @@ def build_parser():
     s_add_what.add_argument("--prompt", help="One-shot prompt to run on each fire")
     s_add_what.add_argument(
         "--skill",
-        help="Skill to run — not supported yet (blocked on #888); "
-        "rejected at add time. Use --prompt instead.",
+        help="Skill to run — the scheduler is not wired to the skills runtime "
+        "yet; rejected at add time. Use --prompt instead.",
     )
     s_add.add_argument(
         "--sink",
@@ -3184,6 +3184,12 @@ Examples:
 
     connectors_cli.add_subparser(subparsers)
 
+    # Skills runtime (issue #888) — SKILL.md discovery, scaffolding, and
+    # import/export. The subparser tree lives in gaia.skills.cli.
+    from gaia.skills import cli as skills_cli
+
+    skills_cli.add_subparser(subparsers)
+
     # Persistent CLI config (~/.gaia/config.json) — e.g. a default model so
     # users don't have to pass --model on every chat/llm/prompt (issue #98).
     config_parser = subparsers.add_parser(
@@ -3324,17 +3330,18 @@ def _handle_schedule(args):
     store = TomlScheduleStore()
 
     if action == "add":
-        # --skill schedules would register fine but raise on every fire
-        # (skill-format resolution is blocked on #888) — reject up front.
+        # --skill schedules would register fine but raise on every fire: the
+        # skills runtime exists, the scheduler just doesn't invoke it yet.
         if getattr(args, "skill", None):
             print(
-                f"❌ Cannot add schedule {args.name!r}: --skill is not supported yet "
-                "(skill-format resolution is blocked on #888), so a skill-backed "
-                "schedule would never produce output.\n"
+                f"❌ Cannot add schedule {args.name!r}: --skill is not supported yet. "
+                "The skills runtime ships (see 'gaia skill list'), but the scheduler "
+                "is not wired to it, so a skill-backed schedule would never produce "
+                "output.\n"
                 "Use --prompt instead, e.g.:\n"
                 f'  gaia schedule add --name {args.name} --cron "{args.cron}" '
                 '--prompt "<text>"\n'
-                "Track progress: https://github.com/amd/gaia/issues/888",
+                "Track progress: https://github.com/amd/gaia/issues/1019",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -4841,6 +4848,13 @@ Let me know your answer!
         rc = connectors_cli.handle(args)
         sys.exit(rc)
 
+    # Handle Skills command (issue #888)
+    if args.action == "skill":
+        from gaia.skills import cli as skills_cli  # pylint: disable=reimported
+
+        rc = skills_cli.handle(args)
+        sys.exit(rc)
+
     # Handle Diagnostics command
     if args.action == "diagnostics":
         handle_diagnostics_command(args)
@@ -5425,10 +5439,14 @@ def _print_autonomy_run(body: dict) -> None:
     proposals = len(body.get("proposals") or [])
     skipped = int(body.get("skipped") or 0)
     already_proposed = int(body.get("already_proposed") or 0)
+    errors = len(body.get("errors") or [])
+    stopped = body.get("stopped")
     print(
         f"executed={executed} proposals={proposals} "
-        f"skipped={skipped} already_proposed={already_proposed}"
+        f"skipped={skipped} already_proposed={already_proposed} errors={errors}"
     )
+    if stopped:
+        print(f"stopped early: {stopped}")
 
 
 def handle_email_autonomy_command(args) -> None:
@@ -5519,6 +5537,13 @@ def handle_email_autonomy_command(args) -> None:
     except DaemonError as e:
         # Sidecar unreachable, autonomy off and refusing /run (#2528), or any
         # other relay failure — surfaced loudly, never a silent empty result.
+        # #2617: this does print the same text twice (log.error to stdout,
+        # then the stderr print below) -- kept deliberately. log.error is the
+        # durable record `gaia diagnostics` bundles from ~/.gaia/gaia.log;
+        # dropping it would make a reported failure invisible to a bug
+        # report. The stderr print matches the ❌ convention every other
+        # `except DaemonError` handler in this file uses. The duplicate line
+        # is cosmetic; a missing log record is not.
         log.error("email autonomy %s failed: %s", action, e)
         print(f"❌ {e}", file=sys.stderr)
         sys.exit(1)

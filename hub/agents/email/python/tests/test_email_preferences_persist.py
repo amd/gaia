@@ -490,8 +490,11 @@ class TestMemoryDisabledFallback:
             )
             # [Reflection C1] Prove the restored rule is APPLIED during triage,
             # not merely present in the dict — this is what T22 actually checks.
+            # (#2632: a priority-sender match tags preference_applied for
+            # salience but never overrides category — content decides
+            # severity, so "applied" is proven via the tag, not a forced
+            # category flip.)
             from gaia_agent_email.tools.read_tools import _apply_session_preferences
-            from gaia_agent_email.tools.triage_heuristics import CATEGORY_URGENT
 
             decision = {
                 "from": "TechCrunch <newsletters@techcrunch.com>",
@@ -499,9 +502,9 @@ class TestMemoryDisabledFallback:
                 "confident": True,
             }
             out = _apply_session_preferences(decision, agent_b._session_preferences)
-            assert out["category"] == CATEGORY_URGENT, (
-                "restored priority-sender rule must re-classify the sender's "
-                f"mail as urgent on re-triage; got: {out}"
+            assert out["category"] == "FYI", (
+                "a priority-sender match must not change category — content "
+                f"still decides severity; got: {out}"
             )
             assert out["preference_applied"] == "priority_sender"
         finally:

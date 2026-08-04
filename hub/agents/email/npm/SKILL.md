@@ -100,7 +100,7 @@ The interface:
 | `triage(req)` | Local LLM only | Classify / summarize / extract action items + phishing signals on the message you pass. No mailbox read. Action items also persist to the sidecar's local task list (keyed by `message_id`, de-duplicated on re-triage) — the response shape is unchanged. |
 | `triageBatch(req)` | Local LLM only | Same as `triage` for an `items` array (1–100). Parallel `results` array; per-item failures isolate (200 can carry errored items — inspect `results[].error`). |
 | `search(req)` | A connected mailbox | Read-only inbox search by `query`/`labels`; returns message metadata (id, subject, sender, snippet, labels), no body. No token. No mailbox → 503, two+ → 400. |
-| `prescan(req?)` | A connected mailbox | Read-only inbox pre-scan → triage-card envelope (`kind: "email_pre_scan"`: urgent / actionable / suggested-archive rows + an informational count). No mailbox connected → 503; 2+ → 400. Heuristic-only, no Lemonade call. |
+| `prescan(req?)` | A connected mailbox | Read-only inbox pre-scan → triage-card envelope (`kind: "email_pre_scan"`), whose `needs_you` (schema 2.11) is the ONE worklist the card renders — up to 5 things that need you, plus `bulk` for the filtered remainder. No mailbox connected → 503; 2+ → 400. Heuristic-only, no Lemonade call. `NeedsYouItem.detail` is reserved on the wire but always empty today on every surface — see [`CHANGELOG.md`](./CHANGELOG.md). |
 | `draft(req)` | Nothing external | Returns a single-use confirmation token. Optional `attachments` (schema 2.2): `{ filename, mime_type, content_base64 }` each, ≤ 25 MB decoded. |
 | `send(req)` | Draft token + a connected mailbox | Gate fires first: no/invalid `draft` token → 403; valid token but no mailbox connected on the host → 503. Attachments must exactly match the confirmed draft's (the token binds their content digests). |
 | `confirmAction(req)` | Nothing external | Mints a single-use token for `"archive"`/`"quarantine"`, bound to the `(action, message_id)`. |
@@ -231,6 +231,15 @@ returning an error telling them to run a CLI command. Two cases are worth knowin
 the connected-but-not-granted case needs no browser at all (a local permission write),
 and connecting Google still requires the user to supply their own OAuth client ID and
 secret, so expect a `sensitive: true` question on that path.
+
+**Mail-required, calendar-optional (#2730).** Every setup/reconnect path — this
+self-repair flow included — requests the full mail + calendar scope union at
+consent time, but only the mail scopes gate whether the flow reports success. A
+user who declines calendar still ends up with a working mailbox; calendar
+tools raise their own actionable error, naming the exact scope, the first time
+one is actually called. Do not "fix" a self-repair flow that requests only
+mail scopes — that narrower request is the bug this issue removed, not a
+simplification to reintroduce.
 
 ## Stateful agent surface (`/v1/email/agent/*`, 0.4.0)
 

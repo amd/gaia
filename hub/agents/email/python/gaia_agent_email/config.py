@@ -89,6 +89,15 @@ def default_undo_window_seconds() -> int:
     return value
 
 
+# The single owner of "how many messages does a scan look at by default"
+# (#2643 measured/pinned this at 50; #2743 collapsed every call site that
+# used to restate its own literal — 25, 50, or 100 — into this one constant,
+# closing the bug class where two scans of different depth produced two
+# disagreeing summaries of the same inbox). Distinct from the ceiling below:
+# this is what a caller gets when it asks for the default; the ceiling is
+# the most it can ask for even when it explicitly requests more.
+DEFAULT_INBOX_SCAN_MESSAGES = 50
+
 # Per-call ceiling for inbox-scanning tools (triage / pre-scan). Bounds an
 # interactive call so the LLM can't trigger a thousand-message scan. The eval
 # benchmark raises it to cover a whole labelled corpus deterministically.
@@ -120,6 +129,33 @@ def default_inbox_scan_ceiling() -> int:
             "default."
         )
     return value
+
+
+# The SLM layer is experimental and off by default (see ``use_slm`` below).
+# ``GAIA_EMAIL_USE_SLM`` is how it gets turned on without editing source —
+# matching GAIA_EMAIL_BRIEFING_ENABLED / GAIA_EMAIL_AUTONOMY_ENABLED.
+_USE_SLM_ENV = "GAIA_EMAIL_USE_SLM"
+_TRUE_VALUES = frozenset({"1", "true", "yes"})
+_FALSE_VALUES = frozenset({"0", "false", "no", ""})
+
+
+def default_use_slm() -> bool:
+    """Resolve ``use_slm`` from ``GAIA_EMAIL_USE_SLM``, else False.
+
+    An unparseable value raises ``ConfigurationError`` rather than guessing —
+    an operator who typed ``GAIA_EMAIL_USE_SLM=ture`` should be told, not
+    silently given the default.
+    """
+    raw = os.environ.get(_USE_SLM_ENV, "").strip().lower()
+    if raw in _TRUE_VALUES:
+        return True
+    if raw in _FALSE_VALUES:
+        return False
+    raise ConfigurationError(
+        f"{_USE_SLM_ENV}={os.environ.get(_USE_SLM_ENV)!r} is not a valid "
+        "boolean. Use 'true'/'1'/'yes' to enable the experimental SLM "
+        "classifiers, or unset it (they are off by default)."
+    )
 
 
 @dataclass
@@ -182,6 +218,20 @@ class EmailAgentConfig:
     - ``scheduler_poll_seconds`` / ``start_scheduler``: the one-shot scheduler
       for scheduled send + snooze (#1609). ``start_scheduler=False`` skips the
       polling thread — tests drive ``fire_due_jobs()`` deterministically.
+    - ``use_slm``: enable the SLM classifiers (phishing detection + triage
+      category). **Experimental — defaults to False.** Set True (or
+      ``GAIA_EMAIL_USE_SLM=true``) to run the classifiers; otherwise the
+      heuristic + LLM flow handles both. Local Lemonade only (AC3).
+    - ``slm_triage_model`` / ``slm_triage_checkpoint``: Lemonade model id and
+      checkpoint (``org/repo:file.gguf``) for the triage-category SLM. Labels
+      are the five triage categories. Both must be set together or the task is
+      skipped (fail safe).
+    - ``slm_phishing_model`` / ``slm_phishing_checkpoint``: Lemonade model id
+      and checkpoint for the phishing SLM (labels ``"True"`` / ``"False"``).
+      When available, runs first as the sole phishing decision; on miss the
+      agent falls back to ``detect_phishing``.
+    - ``force_llm``: when True, every message is routed to the LLM classifier
+      (benchmarking) — also skips the SLM triage step.
     - ``ctx_size``: exact context-window pin for THIS agent's LLM client
       (#1892). When set, the agent wires it as the LemonadeClient's
       instance-scoped ``ctx_size_override`` so every model load happens at
@@ -215,6 +265,15 @@ class EmailAgentConfig:
     outlook_backend: Optional[Any] = None
     calendar_backend: Optional[Any] = None
     force_llm: bool = False
+    use_slm: bool = field(default_factory=default_use_slm)
+    slm_triage_model: Optional[str] = "specific-ai-triage"
+    slm_triage_checkpoint: Optional[str] = (
+        "specific-AI/email-agent-triage:bert-base-only.gguf"
+    )
+    slm_phishing_model: Optional[str] = "specific-ai-phishing-detection"
+    slm_phishing_checkpoint: Optional[str] = (
+        "specific-AI/email-agent-phishing-detection:bert-base-only.gguf"
+    )
     # One-shot scheduler (#1609): scheduled send + snooze. ``start_scheduler``
     # controls the built-in polling thread; tests set it False and drive
     # ``EmailJobScheduler.fire_due_jobs()`` deterministically instead.
@@ -273,6 +332,20 @@ class EmailAgentConfig:
                 f"EmailAgentConfig.followup_window_days must be a positive "
                 f"integer number of days, got {self.followup_window_days!r}."
             )
+        if self.use_slm:
+            # Both model and checkpoint required per task; both-empty = skip.
+            for task, model, checkpoint in (
+                ("triage", self.slm_triage_model, self.slm_triage_checkpoint),
+                ("phishing", self.slm_phishing_model, self.slm_phishing_checkpoint),
+            ):
+                if bool(model) != bool(checkpoint):
+                    raise ConfigurationError(
+                        f"EmailAgentConfig SLM {task} task is half-configured: "
+                        f"slm_{task}_model={model!r} and "
+                        f"slm_{task}_checkpoint={checkpoint!r}. Set BOTH (the "
+                        "Lemonade model id and its 'org/repo:file.gguf' "
+                        "checkpoint) or leave both unset to skip the task."
+                    )
         if self.ctx_size is not None and (
             not isinstance(self.ctx_size, int) or self.ctx_size <= 0
         ):

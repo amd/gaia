@@ -28,15 +28,24 @@ class ConnectorRequirement:
     ``"google"``). Frozen + hashable so it can live in sets and serve as a
     dict key. ``scopes`` is normalized to a tuple in ``__post_init__`` so two
     requirements built from different list instances compare equal.
+
+    ``required_scopes`` (#2730 D5) is the subset actually ENFORCED at token-
+    mint time — ``scopes`` stays what is REQUESTED at consent. Left unset (or
+    passed empty), it defaults to ``scopes``, so every existing construction
+    site keeps today's all-required semantics unchanged.
     """
 
     connector_id: str
     scopes: Sequence[str]
     reason: str = field(default="")
+    required_scopes: Sequence[str] = field(default_factory=tuple)
 
     def __post_init__(self):
         # Frozen dataclass — bypass setattr via object.__setattr__.
         object.__setattr__(self, "scopes", tuple(self.scopes))
+        object.__setattr__(
+            self, "required_scopes", tuple(self.required_scopes) or self.scopes
+        )
 
 
 @runtime_checkable

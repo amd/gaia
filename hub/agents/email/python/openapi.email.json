@@ -98,7 +98,7 @@
         "properties": {
           "degraded": {
             "default": false,
-            "description": "True when at least one connected mailbox could not be scanned.",
+            "description": "True when at least one connected mailbox could not be scanned (see mailbox_errors), OR at least one individual message could not be fetched after Gmail rate-limited it past its retry budget (see message_errors, #2716) — either way, the surviving results are still shown, but coverage is partial.",
             "title": "Degraded",
             "type": "boolean"
           },
@@ -116,6 +116,21 @@
             ],
             "description": "Connected mailboxes that failed during this scan, if any.",
             "title": "Mailbox Errors"
+          },
+          "message_errors": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/MessageError"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Individual messages that could not be fetched during this scan, if any (#2716) — e.g. a Gmail rate-limit that survived retry. Every other message in the same mailbox is still included in ``items``; this is a per-message gap, not a mailbox failure.",
+            "title": "Message Errors"
           },
           "scan_truncated": {
             "default": false,
@@ -227,12 +242,14 @@
         "type": "object"
       },
       "AttentionItemKind": {
-        "description": "Why one attention-view item is here — the source signal it came from.",
+        "description": "Why one attention-view item is here — the source signal it came from.\n\nDefined here (ahead of the ATTENTION VIEW section below, #2743) so\n``NeedsYouItem.kind`` — which reuses this enum rather than a parallel\nverb enum — resolves eagerly instead of as a class-body-time forward\nreference; see the ATTENTION VIEW section's comment for why that matters.\n\n``URGENT`` / ``NEEDS_RESPONSE`` were added after the initial #2743 cut:\n``needs_you`` originally tagged every category-classified item\n``WAITING_ON_YOU``, which collided with that value's real, published\nmeaning (the waiting-on-you *detector* found a thread awaiting reply) the\nmoment the detector's own output was wired into the same view. ``kind``\nis pure provenance — which signal put this row here — never a verb; the\nREPLY/DECIDE/CHECK label a renderer shows is a render-time lookup.",
         "enum": [
           "meeting_request",
           "waiting_on_you",
           "needs_review",
-          "action_item"
+          "action_item",
+          "urgent",
+          "needs_response"
         ],
         "title": "AttentionItemKind",
         "type": "string"
@@ -332,7 +349,7 @@
             "type": "array"
           },
           "schema_version": {
-            "default": "2.8",
+            "default": "2.11",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -357,7 +374,7 @@
             "type": "array"
           },
           "schema_version": {
-            "default": "2.8",
+            "default": "2.11",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -367,6 +384,28 @@
           "results"
         ],
         "title": "BatchTriageResponse",
+        "type": "object"
+      },
+      "BulkSummary": {
+        "additionalProperties": false,
+        "description": "The filtered remainder (#2743) — a count PLUS the test(s) that\nfiltered it, so the user can judge whether the filter was right, never\njust a bare unauditable number.",
+        "properties": {
+          "count": {
+            "default": 0,
+            "description": "Messages filtered into the low-signal remainder.",
+            "title": "Count",
+            "type": "integer"
+          },
+          "filter_tests": {
+            "description": "Ids (never prose) of the filter tests actually applied this run — a renderer maps each id to a sentence. An unmapped id degrades visibly rather than rendering a stale claim.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Filter Tests",
+            "type": "array"
+          }
+        },
+        "title": "BulkSummary",
         "type": "object"
       },
       "CalendarCreateEventRequest": {
@@ -434,7 +473,7 @@
             "title": "Provider"
           },
           "schema_version": {
-            "default": "2.8",
+            "default": "2.11",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -621,7 +660,7 @@
             "title": "Location"
           },
           "schema_version": {
-            "default": "2.8",
+            "default": "2.11",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -661,7 +700,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.8",
+            "default": "2.11",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -692,7 +731,7 @@
             "type": "array"
           },
           "schema_version": {
-            "default": "2.8",
+            "default": "2.11",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -728,7 +767,7 @@
             "title": "Provider"
           },
           "schema_version": {
-            "default": "2.8",
+            "default": "2.11",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -768,7 +807,7 @@
             "type": "boolean"
           },
           "schema_version": {
-            "default": "2.8",
+            "default": "2.11",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -919,7 +958,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.8",
+            "default": "2.11",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1032,7 +1071,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.8",
+            "default": "2.11",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1062,7 +1101,7 @@
             "description": "The attention-view envelope."
           },
           "schema_version": {
-            "default": "2.8",
+            "default": "2.11",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1137,7 +1176,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.8",
+            "default": "2.11",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1329,7 +1368,7 @@
         "description": "Request envelope for an inbox pre-scan (#1778). Read-only.",
         "properties": {
           "max_messages": {
-            "default": 25,
+            "default": 50,
             "description": "How many recent inbox messages to scan. Bounded so a caller can't request an unbounded mailbox sweep.",
             "maximum": 100.0,
             "minimum": 1.0,
@@ -1337,7 +1376,7 @@
             "type": "integer"
           },
           "schema_version": {
-            "default": "2.8",
+            "default": "2.11",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -1355,7 +1394,7 @@
             "description": "The pre-scan envelope."
           },
           "schema_version": {
-            "default": "2.8",
+            "default": "2.11",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1379,15 +1418,34 @@
             "title": "Actionable",
             "type": "array"
           },
+          "bulk": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BulkSummary"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "(#2743) The filtered informational/promotional remainder — a count plus the filter test(s) that produced it."
+          },
           "degraded": {
             "default": false,
             "description": "True when at least one connected mailbox could not be scanned (see mailbox_errors) — the surviving mailboxes' results are still shown, but coverage is partial (#2584).",
             "title": "Degraded",
             "type": "boolean"
           },
+          "informational": {
+            "description": "The informational (FYI/PERSONAL) messages this count represents (#2633) — empty unless the caller passed ``include_informational=True``, so a bare count is never the only way to audit what was filtered.",
+            "items": {
+              "$ref": "#/components/schemas/PreScanItem"
+            },
+            "title": "Informational",
+            "type": "array"
+          },
           "informational_count": {
             "default": 0,
-            "description": "Count of informational (FYI/PERSONAL) messages — not listed.",
+            "description": "Count of informational (FYI/PERSONAL) messages. Empty by default in ``informational`` below (#2633) — request ``include_informational=True`` on the call to get the full list instead of just this count.",
             "title": "Informational Count",
             "type": "integer"
           },
@@ -1421,6 +1479,20 @@
             "title": "Needs Review",
             "type": "array"
           },
+          "needs_you": {
+            "description": "(#2743) The worklist view: a deterministic VIEW over urgent/actionable/needs_review — never a second, independent classification pass — capped at 5, ordered by kind then oldest-first. ``ref`` is stable within this render only.",
+            "items": {
+              "$ref": "#/components/schemas/NeedsYouItem"
+            },
+            "title": "Needs You",
+            "type": "array"
+          },
+          "needs_you_total": {
+            "default": 0,
+            "description": "(#2743) The true count of needs_you candidates before the 5-item cap — lets the renderer say '5 of N' honestly.",
+            "title": "Needs You Total",
+            "type": "integer"
+          },
           "preferences_applied": {
             "anyOf": [
               {
@@ -1452,6 +1524,18 @@
             "title": "Suggested Drafts",
             "type": "array"
           },
+          "total_inbox": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Exact total INBOX message count (read + unread) in the scanned mailbox(es) — the honest denominator for scan coverage (#2638), now that pre-scan covers all of INBOX, not just unread mail. Gmail reports this via labels().get's messagesTotal — an exact integer, sourced from the SAME call as total_unread (no extra round-trip). Outlook has no equivalent honest source and reports null — never a fabricated page-size number.",
+            "title": "Total Inbox"
+          },
           "total_unread": {
             "anyOf": [
               {
@@ -1461,7 +1545,7 @@
                 "type": "null"
               }
             ],
-            "description": "Exact total UNREAD message count in the scanned mailbox(es), the denominator for scan coverage (#2584). Gmail reports this via labels().get's messagesUnread — an exact integer, not list_messages's resultSizeEstimate (measured 2.6x off on a real mailbox). Outlook has no equivalent honest source and reports null — never a fabricated page-size number.",
+            "description": "Exact total UNREAD message count in the scanned mailbox(es) — a secondary coverage figure (#2584), NOT the scan-coverage denominator since #2638 (pre-scan now covers read mail too; see total_inbox for that). Gmail reports this via labels().get's messagesUnread — an exact integer, not list_messages's resultSizeEstimate (measured 2.6x off on a real mailbox). Outlook has no equivalent honest source and reports null — never a fabricated page-size number.",
             "title": "Total Unread"
           },
           "totals": {
@@ -1567,7 +1651,7 @@
             "type": "boolean"
           },
           "schema_version": {
-            "default": "2.8",
+            "default": "2.11",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1639,7 +1723,7 @@
             "title": "Query"
           },
           "schema_version": {
-            "default": "2.8",
+            "default": "2.11",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -1690,7 +1774,7 @@
             "title": "Query"
           },
           "schema_version": {
-            "default": "2.8",
+            "default": "2.11",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1911,7 +1995,7 @@
             "title": "Payload"
           },
           "schema_version": {
-            "default": "2.8",
+            "default": "2.11",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -1941,7 +2025,7 @@
             "description": "The structured analysis."
           },
           "schema_version": {
-            "default": "2.8",
+            "default": "2.11",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -2107,7 +2191,7 @@
             "type": "integer"
           },
           "schema_version": {
-            "default": "2.8",
+            "default": "2.11",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -2175,7 +2259,7 @@
             "type": "boolean"
           },
           "schema_version": {
-            "default": "2.8",
+            "default": "2.11",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -2315,7 +2399,7 @@
             "type": "array"
           },
           "schema_version": {
-            "default": "2.8",
+            "default": "2.11",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -2517,6 +2601,137 @@
         "title": "MailboxError",
         "type": "object"
       },
+      "MessageError": {
+        "additionalProperties": false,
+        "description": "One message that could not be fetched during a scan (#2716).\n\nDistinct from ``MailboxError``: a rate-limited message is NOT a mailbox\nfailure — every other message in that mailbox's scan is still present\nin the result. Not reusable as ``MailboxError`` since that model has no\n``message_id`` field.",
+        "properties": {
+          "error": {
+            "description": "Actionable error message for the failure.",
+            "title": "Error",
+            "type": "string"
+          },
+          "message_id": {
+            "description": "Provider message id that failed.",
+            "title": "Message Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message_id",
+          "error"
+        ],
+        "title": "MessageError",
+        "type": "object"
+      },
+      "NeedsYouItem": {
+        "additionalProperties": false,
+        "description": "One thing a human must act on (#2743) — a VIEW over the already-\nclassified urgent/actionable/needs_review buckets PLUS the waiting-on-you\ndetector and persisted action items, never re-derived from raw scan\nresults (see the module's 2.11 changelog entry above).\n\n``kind`` reuses the published :class:`AttentionItemKind` rather than a\nparallel verb enum — the renderer maps ``kind`` to a verb label\n(REPLY/DECIDE/CHECK) at render time; the wire only carries the source\nsignal, so a category-classified item is never mislabeled with the\ndetector's own ``waiting_on_you`` value.",
+        "properties": {
+          "age_seconds": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Seconds since the message was received, when known.",
+            "title": "Age Seconds"
+          },
+          "detail": {
+            "description": "Reserved for up to two lines of real substance (the question actually asked, the meeting time actually proposed, the deadline actually quoted). ALWAYS EMPTY today — the per-item LLM extraction pass that would fill it was implemented and then withdrawn from #2743 before merge (see commit 25738509 for the working extraction + injection-defense wrapping a follow-up issue will build on). The field ships now, empty, so populating it later is additive rather than a second contract bump.",
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 2,
+            "title": "Detail",
+            "type": "array"
+          },
+          "due_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Free-text due hint (action items only); null otherwise.",
+            "title": "Due Hint"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/AttentionItemKind",
+            "description": "Which signal surfaced this item."
+          },
+          "mailbox": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Provider name ('google' / 'microsoft') this item came from. Set only when more than one mailbox is connected.",
+            "title": "Mailbox"
+          },
+          "message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Provider message id (opaque). None only for an action item carried from a prior triage with no recoverable source message.",
+            "title": "Message Id"
+          },
+          "ref": {
+            "description": "1-based row number, stable within ONE card render only — a rescan re-orders and renumbers by design (older mail found by a deeper scan sorts to the front).",
+            "minimum": 1.0,
+            "title": "Ref",
+            "type": "integer"
+          },
+          "sender": {
+            "default": "",
+            "description": "Raw 'From' header of the source message.",
+            "title": "Sender",
+            "type": "string"
+          },
+          "subject": {
+            "default": "",
+            "description": "Subject line of the source message.",
+            "title": "Subject",
+            "type": "string"
+          },
+          "thread_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Provider thread id, when known.",
+            "title": "Thread Id"
+          },
+          "why": {
+            "description": "Plain-language reason this item needs attention.",
+            "title": "Why",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ref",
+          "kind",
+          "why"
+        ],
+        "title": "NeedsYouItem",
+        "type": "object"
+      },
       "OutgoingAttachment": {
         "additionalProperties": false,
         "description": "One attachment to include on a draft/send (schema 2.2, #1542).\n\nContent travels inline as standard (RFC 4648) base64. Validation is\nfail-loud: a non-decodable payload, a malformed MIME type, or a decoded\nsize over ``MAX_ATTACHMENT_BYTES`` is a ``ValidationError`` — never\nsilently truncated or dropped.",
@@ -2636,7 +2851,7 @@
             "type": "array"
           },
           "priority_senders": {
-            "description": "Senders always treated as urgent.",
+            "description": "Senders surfaced/ordered ahead of others (#2632); does not change category — content still decides urgency.",
             "items": {
               "type": "string"
             },
@@ -3122,7 +3337,7 @@
   "info": {
     "description": "REST surface for the GAIA Email Triage agent (/v1/email/*). Cross-implementation contract for the npm client and native builds.",
     "title": "GAIA Email Agent API",
-    "version": "2.8"
+    "version": "2.11"
   },
   "openapi": "3.1.0",
   "paths": {
@@ -3309,7 +3524,7 @@
             "name": "max_messages",
             "required": false,
             "schema": {
-              "default": 100,
+              "default": 50,
               "title": "Max Messages",
               "type": "integer"
             }

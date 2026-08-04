@@ -25,6 +25,20 @@ import pytest
 from gaia.daemon.sidecars import install as install_svc
 
 DAEMON_SIDECARS = Path(install_svc.__file__).parent
+# src/gaia/daemon/sidecars/ -> parents[0] = src/gaia/daemon
+DAEMON_ROOT = DAEMON_SIDECARS.parents[0]
+CONNECTORS_ERRORS = DAEMON_ROOT.parent / "connectors" / "errors.py"
+# src/gaia/daemon/sidecars/install.py -> parents[3] = repo root
+_REPO_ROOT = DAEMON_SIDECARS.parents[3]
+FORWARDED_CREDENTIALS = (
+    _REPO_ROOT
+    / "hub"
+    / "agents"
+    / "email"
+    / "python"
+    / "gaia_agent_email"
+    / "forwarded_credentials.py"
+)
 
 # Any `gaia ...` invocation embedded in a user-facing string in this package.
 _GAIA_CMD = re.compile(r"`gaia ([^`]+)`")
@@ -34,8 +48,54 @@ _GAIA_CMD = re.compile(r"`gaia ([^`]+)`")
 # (`… "\n            f"…`) inside the scraped span; stitch it back together.
 _SOURCE_JOIN = re.compile(r'"\s*\n\s*f?"')
 
-# `<id>`, `{agent_id}`, `{self.spec.agent_id}` — a stand-in for a real agent id.
-_PLACEHOLDER = re.compile(r"[<{][^>}]*[>}]")
+# `<id>`, `{agent_id}`, `{self.spec.agent_id}`, `"<q>"` — a stand-in for a
+# real argument. Optional surrounding quote allowed (docstring examples like
+# `gaia email "<q>"` quote the placeholder the way a real invocation would).
+_PLACEHOLDER = re.compile(r"[\"']?[<{][^>}]*[>}][\"']?")
+
+# The literal placeholder tokens a remedy must never leave unfilled (#2730
+# AC-9a) — `--scopes <scope> ...` or `--scopes <scopes>` printed instead of
+# the real, space-separated scope list.
+_SCOPE_PLACEHOLDER = re.compile(r"<scopes?>")
+
+
+def _remedy_source_roots() -> "list[Path]":
+    """Every file/directory a user-facing `gaia connectors ...` scope remedy
+    can live in (#2730 AC-9a). Recursive over ``src/gaia/daemon/**`` — the
+    original non-recursive ``DAEMON_SIDECARS.glob('*.py')`` reached neither
+    ``forward.py`` (one directory up) nor ``connectors/errors.py`` (a
+    different package) nor the hub wheel's own remedy strings.
+
+    Used ONLY by the scope-placeholder scan below, not by
+    ``_emitted_gaia_commands`` — a plain ``<scope>``/``<scopes>`` substring
+    check is immune to false positives, but recursing the whole daemon
+    package for BACKTICK-WRAPPED ``gaia ...`` commands sweeps in unrelated
+    architecture-documentation prose (e.g. a docstring mentioning a future
+    ``gaia api`` subcommand) that was never meant to be validated as a
+    literal, parseable invocation — that is a materially different, wider
+    claim than AC-9a makes.
+
+    NOT covered, deliberately: ``hub/agents/email/python/gaia_agent_email/**``
+    (e.g. ``onboarding_tools.py``, which does emit remedies). Two of its
+    module docstrings (``onboarding_tools.py``, ``question.py``) deliberately
+    quote the OLD placeholder-shaped UX as the bad behaviour they replaced —
+    scanning that directory would need AST-level "is this a docstring vs. a
+    live f-string" discrimination to avoid flagging its own history, which is
+    machinery disproportionate to the risk here: every remedy in that package
+    now derives its scopes from ``gaia_agent_email/scopes.py`` /
+    ``outlook_scopes.py`` (the single source of truth, #2730 D2) rather than
+    a hand-written literal, so the class of bug this scan exists to catch is
+    already structurally harder to reintroduce there. A chosen boundary, not
+    a missed one."""
+    return [DAEMON_ROOT, CONNECTORS_ERRORS, FORWARDED_CREDENTIALS]
+
+
+def _iter_remedy_source_files():
+    for root in _remedy_source_roots():
+        if root.is_file():
+            yield root
+        else:
+            yield from sorted(root.rglob("*.py"))
 
 
 def _emitted_gaia_commands() -> "set[str]":
@@ -76,6 +136,23 @@ def test_every_gaia_command_named_in_an_error_actually_parses():
         _parse(argv)
         checked += 1
     assert checked >= 6, f"only {checked} remedies checked — scraper drifted"
+
+
+def test_no_scope_placeholder_survives_in_any_remedy_source():
+    """#2730 AC-9a: no `--scopes <scope> ...` / `--scopes <scopes>` may
+    survive in any of the widened remedy-string roots (recursive
+    ``src/gaia/daemon/**``, ``src/gaia/connectors/errors.py``, and the hub
+    wheel's ``forwarded_credentials.py``). A source-text scan, not a
+    backtick-gated one: ``forward.py``'s NotGrantedError message has no
+    backticks, so ``_emitted_gaia_commands`` structurally cannot reach it —
+    this test must catch it a different way."""
+    hits = []
+    for path in _iter_remedy_source_files():
+        text = path.read_text(encoding="utf-8")
+        for match in _SCOPE_PLACEHOLDER.finditer(text):
+            line_no = text.count("\n", 0, match.start()) + 1
+            hits.append(f"{path.relative_to(_REPO_ROOT)}:{line_no}: {match.group(0)!r}")
+    assert not hits, "unfilled scope placeholder(s) found:\n" + "\n".join(hits)
 
 
 def test_gaia_kill_cannot_target_an_agent_sidecar():

@@ -6,6 +6,37 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## Unreleased
 
+- **One inbox triage card instead of two that disagreed.** Asking the agent
+  to triage your inbox used to draw two summary boxes from two separate scans
+  at different depths — one might say "nothing needs you" while the other,
+  five lines below, listed a message needing review. The card is now one
+  worklist (`needs_you`, schema 2.11) built from a single scan: up to five
+  things that genuinely need you, each tagged with what to do (reply, decide,
+  check, or a carried-over action item) and how old it is. Everything
+  filtered out is counted alongside the test that filtered it (`bulk`), so a
+  claim like "47 filtered" is something you can judge rather than take on
+  faith. `NeedsYouItem` / `BulkSummary` are new on `EmailPreScanResult`;
+  nothing existing was removed or renamed (#2743). `NeedsYouItem.detail` is
+  also new — reserved for a couple of lines of real substance per row (the
+  question actually asked, the meeting time actually proposed, the deadline
+  actually quoted) — but ships **always empty** in this release: the
+  per-item extraction pass that would fill it was implemented and then
+  withdrawn before merge so it could ship on a firm timing budget rather
+  than risk a slow scan; a follow-up will populate it.
+- **Reconnecting your mailbox with no flags — the exact command GAIA's own
+  error message told you to run — could silently wipe your permissions
+  instead of fixing them.** A bare `gaia connectors connect google` (or the
+  same reconnect from a first-time self-repair conversation) used to fall
+  back to identity-only sign-in scopes whenever it wasn't told exactly what
+  to ask for, overwriting a working mail-plus-calendar connection with
+  nothing usable. That path now fails with a clear, copy-pasteable command
+  instead of guessing, and every surface — the CLI, the Agent UI, this
+  package's own connector setup, and the in-chat self-repair flow — now asks
+  for the same scopes so none of them can quietly narrow what another one
+  granted. Separately, calendar access is now clearly **optional**: a mailbox
+  missing only calendar permission still triages, drafts, and sends normally,
+  and calendar tools name the exact scope to add instead of taking the whole
+  mailbox down with them (#2730).
 - **The agent can now tell you which inbound mail is waiting on your reply —
   not just which of your own messages went unanswered.** Previously the agent
   could only flag sent mail nobody replied to; a colleague's "did you get a
@@ -34,6 +65,16 @@ behind any entry — API shapes, endpoints, and version semantics — see
   still uses your exact wording when you hand it over yourself. Sending is
   unchanged — every draft still needs your confirmation before it goes out
   (#2524).
+- **Opt-in preview: small on-device models can now decide phishing flags and
+  triage categories instead of keyword rules.** Turn it on with
+  `GAIA_EMAIL_USE_SLM=true` on the sidecar (or `use_slm=True` in config).
+  A compact classifier — running on the same local Lemonade server as the chat
+  model, so nothing leaves the machine — makes the phishing call, and a second
+  one labels the triage category, taking that decision away from the bigger LLM
+  (which is still consulted for the spam verdict when the rules can't settle it).
+  It is experimental, so it stays off unless you turn it on. If the
+  models are unavailable for any reason, triage falls back to exactly the
+  previous behavior. No API shape changed.
 - **A trashed email is recoverable any time it's still in Trash — not just for
   a few seconds after you delete it.** The only way back used to be a short
   undo window right after trashing; miss it, and the agent told you the
@@ -81,7 +122,6 @@ behind any entry — API shapes, endpoints, and version semantics — see
   resumes. An unanswered question ends the run with an error rather than hanging.
   Approvals (`needs_confirmation`) are unchanged: still terminal, still
   deny-by-default (#2469).
-
 - **Work/school Outlook (Microsoft 365 / Entra ID) mailboxes now work, not just
   personal Outlook.com.** The Microsoft connector previously signed in only
   against the `consumers` tenant, so a corporate Microsoft 365 account was

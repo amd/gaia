@@ -52,6 +52,7 @@ from gaia.connectors.errors import (
 )
 from gaia.connectors.events import emit
 from gaia.connectors.pkce import compute_code_challenge, generate_code_verifier
+from gaia.connectors.prior_state import resolve_or_reject_empty_scopes
 from gaia.connectors.providers import get as get_provider
 from gaia.connectors.store import save_connection
 
@@ -218,7 +219,9 @@ async def start_authorization(
             await _teardown_flow(stale_id)
 
     provider = get_provider(provider_id)
-    scopes_list = list(scopes) or list(provider.default_scopes)
+    scopes_list = resolve_or_reject_empty_scopes(
+        provider_id, scopes, provider.default_scopes
+    )
 
     code_verifier = generate_code_verifier()
     challenge = compute_code_challenge(code_verifier)
@@ -445,6 +448,28 @@ async def _commit_grants(flow: _PendingFlow) -> None:
         )
 
 
+def _resolve_granted_scopes(
+    payload: Dict[str, Any], requested: "list[str]"
+) -> "list[str]":
+    """The scopes a token-exchange response actually granted (#2730 D6).
+
+    Per RFC 6749 §5.1 the token endpoint returns ``scope`` only when the
+    granted set differs from what was requested; its absence means "as
+    requested." Google's granular-consent screen lets a user untick Calendar
+    while approving Gmail, so trusting the request unconditionally (what this
+    code did before) records a connection that lies about carrying scopes the
+    user declined — every downstream coverage check then passes against a
+    fabricated record instead of catching the shortfall here, loudly, with an
+    actionable message.
+    """
+    raw = payload.get("scope") or ""
+    returned = raw.split()
+    if not returned:
+        return list(requested)
+    requested_set = set(requested)
+    return [s for s in returned if s in requested_set]
+
+
 async def _exchange_code_for_tokens(flow: _PendingFlow, code: str) -> Dict[str, Any]:
     """Run the token-exchange step and persist the connection."""
     provider = get_provider(flow.provider_id)
@@ -485,13 +510,18 @@ async def _exchange_code_for_tokens(flow: _PendingFlow, code: str) -> Dict[str, 
     account_email = await _resolve_account_email(
         provider, payload.get("id_token", ""), payload.get("access_token", "")
     )
+    granted_scopes = _resolve_granted_scopes(payload, flow.scopes)
 
     save_connection(
         provider=flow.provider_id,
         account_email=account_email or "default",
         refresh_token=refresh_token,
-        scopes=flow.scopes,
+        scopes=granted_scopes,
         client_id_hash=provider.client_id_hash,
+        # D8: record the minting authority — None for providers with no
+        # concept of a tenant (e.g. Google), which save_connection omits
+        # from the blob entirely (A7-style contract).
+        tenant=getattr(provider, "tenant", None),
     )
 
     # No separate state-cache write needed — the keyring blob written
@@ -514,7 +544,7 @@ async def _exchange_code_for_tokens(flow: _PendingFlow, code: str) -> Dict[str, 
     state_dict = {
         "provider": flow.provider_id,
         "account_email": account_email or "default",
-        "scopes": flow.scopes,
+        "scopes": granted_scopes,
         "connected_at": _time.time(),
     }
     # Emit both the new framework event-name (matches the SSE router
@@ -564,33 +594,42 @@ async def start_device_flow(provider_id: str, scopes: Iterable[str]) -> Dict[str
             "Use start_authorization (browser loopback) instead. See "
             "docs/security/connections.mdx."
         )
-    scopes_list = list(scopes) or list(provider.default_scopes)
+    scopes_list = resolve_or_reject_empty_scopes(
+        provider_id, scopes, provider.default_scopes
+    )
     body = provider.device_code_request_body(scopes_list)
 
     async with httpx.AsyncClient(timeout=15.0) as client:
         resp = await client.post(device_code_url, data=body)
     if resp.status_code != 200:
-        # AADSTS9002346: the app registration is scoped to personal Microsoft
-        # accounts only, so the ``common`` endpoint (the default since v0.23.0)
-        # rejects it. Name the exact migration step instead of making the user
-        # decode the raw AADSTS error — a personal-account-only app must use the
-        # ``consumers`` tenant.
+        # AADSTS9002346 (D11, #2628): the app registration is scoped to
+        # personal Microsoft accounts only, so a non-consumers authority
+        # rejects it — under the split, that means it was registered for
+        # "microsoft" (consumers) but connected via "microsoft_work"
+        # (organizations, or a pinned Directory tenant id). Name the
+        # connector to use instead, never an env var.
         if "AADSTS9002346" in resp.text:
+            other = "microsoft" if provider_id != "microsoft" else "microsoft_work"
             raise ConnectorsError(
                 f"Device-code request for {provider_id} was rejected: this app "
                 "registration is configured for personal Microsoft accounts only "
-                "(Outlook.com / Hotmail / Live), but GAIA now defaults to the "
-                "'common' tenant. Set GAIA_MICROSOFT_TENANT=consumers and connect "
-                "again, e.g.:\n"
-                "  GAIA_MICROSOFT_TENANT=consumers gaia connectors connect "
-                f"{provider_id} --device\n"
+                "(Outlook.com / Hotmail / Live). Reconnect using the "
+                f"{other!r} connector instead, e.g.:\n"
+                f"  gaia connectors connect {other} --device\n"
                 "See docs/connectors/microsoft."
             )
+        # D9: the client-id env var name is CONNECTOR-SPECIFIC
+        # (GAIA_MICROSOFT_CLIENT_ID for "microsoft",
+        # GAIA_MICROSOFT_WORK_CLIENT_ID for "microsoft_work") — never
+        # hard-coded to the personal one. Tenant is no longer an env var at
+        # all (D6); the only tenant knob left is microsoft_work's optional
+        # Directory (tenant) ID setup field.
+        client_id_env = f"GAIA_{provider_id.upper()}_CLIENT_ID"
         raise ConnectorsError(
             f"Device-code request for {provider_id} failed with status "
-            f"{resp.status_code}: {resp.text[:300]}. Check the client id / "
-            "tenant (GAIA_MICROSOFT_CLIENT_ID / GAIA_MICROSOFT_TENANT). See "
-            "docs/security/connections.mdx."
+            f"{resp.status_code}: {resp.text[:300]}. Check the client id "
+            f"({client_id_env}), or the Directory (tenant) ID setup field if "
+            f"you set one. See docs/connectors/microsoft.mdx."
         )
     d = resp.json()
     logger.info(
@@ -632,7 +671,9 @@ async def poll_device_flow(
     import time as _time
 
     provider = get_provider(provider_id)
-    scopes_list = list(scopes) or list(provider.default_scopes)
+    scopes_list = resolve_or_reject_empty_scopes(
+        provider_id, scopes, provider.default_scopes
+    )
     body = provider.device_token_request_body(device_code)
     poll_interval = max(int(interval), 1)
     deadline = _time.monotonic() + max(int(expires_in), poll_interval)
@@ -692,13 +733,15 @@ async def poll_device_flow(
     account_email = await _resolve_account_email(
         provider, payload.get("id_token", ""), payload.get("access_token", "")
     )
+    granted_scopes = _resolve_granted_scopes(payload, scopes_list)
 
     save_connection(
         provider=provider_id,
         account_email=account_email,
         refresh_token=refresh_token,
-        scopes=scopes_list,
+        scopes=granted_scopes,
         client_id_hash=provider.client_id_hash,
+        tenant=getattr(provider, "tenant", None),
     )
 
     if grant_agents:
@@ -730,12 +773,12 @@ async def poll_device_flow(
         "device-flow: connected provider=%s account=%s scopes=%d",
         provider_id,
         account_email,
-        len(scopes_list),
+        len(granted_scopes),
     )
     return {
         "provider": provider_id,
         "account_email": account_email,
-        "scopes": scopes_list,
+        "scopes": granted_scopes,
         "connected_at": _time.time(),
     }
 

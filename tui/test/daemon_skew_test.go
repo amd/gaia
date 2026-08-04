@@ -31,10 +31,14 @@ func TestAMissingDaemonRouteIsNotBlamedOnTheAgentHub(t *testing.T) {
 	if !strings.Contains(text, "older than this GAIA") {
 		t.Errorf("the error does not diagnose version skew:\n%s", text)
 	}
-	// The remedy, and it must be a command that exists (`gaia daemon restart`
-	// is a real subcommand — src/gaia/cli.py).
-	if !strings.Contains(text, "gaia daemon restart") {
+	// The remedy has to be able to fix the cause. The missing route comes from
+	// the installed core, so a restart relaunches the same one — a core this old
+	// may not even have a `daemon` subcommand to restart with.
+	if !strings.Contains(text, "pip install --upgrade amd-gaia") {
 		t.Errorf("the error gives no way to fix it:\n%s", text)
+	}
+	if !strings.Contains(text, "brings the same one back") {
+		t.Errorf("the error does not say a restart cannot fix this:\n%s", text)
 	}
 	// Where to look next.
 	if !strings.Contains(text, "daemon log") {

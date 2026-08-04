@@ -860,6 +860,45 @@ def test_prescan_without_mailbox_returns_503(client, in_memory_keyring):
     assert resp.status_code == 503
 
 
+def test_prescan_conforms_to_spec(client, committed_spec):
+    """POST /prescan returns a body conforming to EmailPreScanResponse (#2743).
+
+    Every other endpoint here has a conforms-to-spec test; prescan did not —
+    so the 2.11 ``needs_you``/``needs_you_total``/``bulk`` fields were never
+    validated against a live 200 response. Backend injected via
+    ``app.dependency_overrides[get_prescan_backend]``, same seam
+    ``test_prescan_without_mailbox_returns_503`` documents.
+    """
+    from gaia_agent_email.api_routes import get_prescan_backend
+
+    from tests.fixtures.email.fake_gmail import FakeGmailBackend
+
+    gmail = FakeGmailBackend(user_email="me@example.com")
+    gmail.add_message(_attention_backend_message())
+    client.app.dependency_overrides[get_prescan_backend] = lambda: gmail
+    try:
+        resp = client.post("/v1/email/prescan", json={"max_messages": 10})
+    finally:
+        client.app.dependency_overrides.pop(get_prescan_backend, None)
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    schema_name = _schema_name_from_response(
+        committed_spec, "post", "/v1/email/prescan"
+    )
+    assert schema_name == "EmailPreScanResponse"
+    for key in _required_keys(committed_spec, schema_name):
+        assert key in body, f"required key {key!r} missing from /prescan response"
+    _assert_body_conforms(committed_spec, schema_name, body)
+
+    assert body["schema_version"] == API_VERSION
+    result = body["result"]
+    assert result["kind"] == "email_pre_scan"
+    assert isinstance(result["needs_you"], list)
+    assert isinstance(result["needs_you_total"], int)
+    assert result["bulk"] is None or isinstance(result["bulk"], dict)
+
+
 # ---------------------------------------------------------------------------
 # Attention view (schema 2.8, #2582) — the merged "what needs you" read-model.
 # ---------------------------------------------------------------------------
@@ -939,6 +978,48 @@ def test_attention_conforms_to_spec(client, committed_spec):
     assert result["cache_age_seconds"] == 0.0
 
 
+def test_attention_message_rate_limit_degrades_not_500s(client, committed_spec):
+    """AC-4b (#2716) -- a message rate-limited past its retry budget must
+    render as a 200 with coverage.degraded/message_errors, not a 500.
+
+    ``AttentionCoverage`` sets ``extra="forbid"`` and
+    ``EmailAttentionResult.model_validate(out)`` runs OUTSIDE the route's
+    ``except ConnectorsError`` block (api_routes.py) -- an undeclared
+    ``message_errors`` key would raise an uncaught ``ValidationError`` here,
+    the same failure class this issue exists to remove, one layer up.
+    """
+    from gaia_agent_email.api_routes import (
+        get_attention_backends,
+        reset_attention_cache,
+    )
+
+    from tests.fixtures.email.fake_gmail import FakeGmailBackend
+
+    reset_attention_cache()
+    gmail = FakeGmailBackend(
+        user_email="me@example.com", rate_limit_subrequest_ceiling=0
+    )
+    gmail.add_message(_attention_backend_message())
+    client.app.dependency_overrides[get_attention_backends] = lambda: {"google": gmail}
+    try:
+        resp = client.get("/v1/email/attention")
+    finally:
+        client.app.dependency_overrides.pop(get_attention_backends, None)
+        reset_attention_cache()
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    schema_name = _schema_name_from_response(
+        committed_spec, "get", "/v1/email/attention"
+    )
+    _assert_body_conforms(committed_spec, schema_name, body)
+    coverage = body["result"]["coverage"]
+    assert coverage["degraded"] is True
+    assert coverage["message_errors"]
+    assert coverage["message_errors"][0]["message_id"] == "a1"
+    assert coverage.get("mailbox_errors") in (None, [])
+
+
 def test_attention_without_mailbox_returns_503(client, in_memory_keyring):
     """GET /attention with no mailbox connected fails loud with the
     documented 503, mirroring /prescan — same real-resolver, no-override
@@ -970,6 +1051,9 @@ def test_briefing_conforms_to_spec(client, committed_spec, tmp_path, monkeypatch
     from gaia_agent_email.briefing import run_briefing_job
 
     class _FakeBackend:
+        def get_user_email(self) -> str:
+            return "me@example.com"
+
         def list_messages(self, **_):
             return {
                 "messages": [{"id": "m1", "threadId": "t-m1"}],
@@ -982,6 +1066,7 @@ def test_briefing_conforms_to_spec(client, committed_spec, tmp_path, monkeypatch
                 "threadId": f"t-{message_id}",
                 "labelIds": ["INBOX", "CATEGORY_PROMOTIONS"],
                 "snippet": "",
+                "internalDate": "1700000000000",
                 "payload": {
                     "headers": [
                         {"name": "Subject", "value": "50% off this weekend!"},
@@ -991,6 +1076,9 @@ def test_briefing_conforms_to_spec(client, committed_spec, tmp_path, monkeypatch
                     "body": {"data": ""},
                 },
             }
+
+        def get_thread(self, thread_id: str):
+            return {"id": thread_id, "messages": [self.get_message("m1")]}
 
     run_briefing_job(_FakeBackend(), max_messages=5)
 

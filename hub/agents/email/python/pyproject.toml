@@ -28,7 +28,14 @@ requires-python = ">=3.10"
 # contains setup_routes once it is cut; until then the real protection is
 # the publish-time gate in .github/workflows/release_agent_email.yml, which
 # refuses to publish a build whose resolved core lacks the module.
-dependencies = ["amd-gaia[api]>=0.22.0"]
+#
+# specific-ai-tools is pinned exactly, not floored: it supplies the SLM
+# classifier the agent loads model weights through, so the version that ships
+# is the version the SLM path was validated against.
+dependencies = [
+    "amd-gaia[api]>=0.22.0",
+    "specific-ai-tools==0.1.1",
+]
 
 # Console script for the REST sidecar — the fast dev-iteration entry point.
 # `gaia-agent-email serve --reload` runs the same app the frozen binary serves,

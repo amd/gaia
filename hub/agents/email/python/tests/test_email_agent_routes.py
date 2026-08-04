@@ -32,6 +32,12 @@ from fastapi import FastAPI  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from gaia_agent_email import agent_routes  # noqa: E402
 
+from gaia.connectors.errors import (  # noqa: E402
+    ConnectionRevokedError,
+    ConnectorsError,
+    ScopeMismatchError,
+)
+
 # ---------------------------------------------------------------------------
 # Fake agent (drives the real SSEOutputHandler)
 # ---------------------------------------------------------------------------
@@ -125,6 +131,22 @@ class _FakeAgent:
             raise RuntimeError("undo window has expired")
         if action_id == "raise-value":
             raise ValueError("bad action_id")
+        if action_id == "raise-connectors":
+            raise ConnectorsError(
+                "no forwarded 'microsoft' credential is available to the "
+                "email sidecar. The connection may not be granted to this "
+                "agent, or it was revoked/withdrawn. Connect and grant it "
+                "in one command — no Agent UI required: `gaia connectors "
+                "connect microsoft --scopes <scopes> --grant-agent "
+                "installed:email`, or use Settings -> Connections in the "
+                "Agent UI."
+            )
+        if action_id == "raise-revoked":
+            raise ConnectionRevokedError("microsoft")
+        if action_id == "raise-scope-mismatch":
+            raise ScopeMismatchError(
+                required=["mail.read"], granted=[], provider="microsoft"
+            )
         return {
             "action_id": action_id,
             "action_type": "archive",
@@ -527,6 +549,166 @@ class TestAutonomyRoutes:
             json={"session_id": "s1", "action_id": "raise-value"},
         )
         assert r.status_code == 400
+
+    def test_run_cycle_500_with_connectors_error_detail(self, client):
+        """#2617: a bare ``ConnectorsError`` escaping ``run_autonomy_cycle``
+        must not become a textless HTTP 500 — the route must catch it and
+        re-raise as an ``HTTPException`` carrying the actionable connectors
+        message (the base ``ConnectorsError`` maps to 500 per the table in
+        ``src/gaia/ui/routers/connectors.py``, but with a real body).
+
+        Uses a second TestClient with ``raise_server_exceptions=False``:
+        with the default client, an exception unhandled by the route
+        propagates as a raw Python exception through TestClient rather than
+        becoming an HTTP response at all, which would defeat a status-code
+        assertion entirely.
+        """
+
+        class _ConnectorsErrorAgent(_FakeAgent):
+            def run_autonomy_cycle(self, context=None):
+                raise ConnectorsError(
+                    "no forwarded 'microsoft' credential is available to "
+                    "the email sidecar. The connection may not be granted "
+                    "to this agent, or it was revoked/withdrawn. Connect "
+                    "and grant it in one command — no Agent UI required: "
+                    "`gaia connectors connect microsoft --scopes <scopes> "
+                    "--grant-agent installed:email`, or use Settings -> "
+                    "Connections in the Agent UI."
+                )
+
+        client.built["next"] = _ConnectorsErrorAgent()
+        self._mk(client)
+        client.post(
+            "/v1/email/agent/autonomy",
+            json={"session_id": "s1", "level": "earn_trust"},
+        )
+        insecure = TestClient(client.app_ref, raise_server_exceptions=False)
+        r = insecure.post("/v1/email/agent/autonomy/run", json={"session_id": "s1"})
+        assert r.status_code == 500
+        detail = r.json()["detail"]
+        assert "gaia connectors connect" in detail
+        assert "microsoft" in detail
+
+    def test_undo_500_with_connectors_error_detail(self, client):
+        """Same #2617 contract as the /run test above, for /undo."""
+        self._mk(client)
+        insecure = TestClient(client.app_ref, raise_server_exceptions=False)
+        r = insecure.post(
+            "/v1/email/agent/autonomy/undo",
+            json={"session_id": "s1", "action_id": "raise-connectors"},
+        )
+        assert r.status_code == 500
+        detail = r.json()["detail"]
+        assert "gaia connectors connect" in detail
+        assert "microsoft" in detail
+
+    def test_run_cycle_401_on_connection_revoked_error(self, client):
+        """#2617: ``ConnectionRevokedError`` is a ``ConnectorsError`` SIBLING
+        of ``AuthRequiredError`` (errors.py:159), not a subclass — it must
+        still map to 401 per the canonical table, not fall through to 500.
+        A revoked mailbox grant is the headline scenario for this issue."""
+
+        class _RevokedAgent(_FakeAgent):
+            def run_autonomy_cycle(self, context=None):
+                raise ConnectionRevokedError("microsoft")
+
+        client.built["next"] = _RevokedAgent()
+        self._mk(client)
+        client.post(
+            "/v1/email/agent/autonomy",
+            json={"session_id": "s1", "level": "earn_trust"},
+        )
+        insecure = TestClient(client.app_ref, raise_server_exceptions=False)
+        r = insecure.post("/v1/email/agent/autonomy/run", json={"session_id": "s1"})
+        assert r.status_code == 401
+        assert "gaia connectors connect" in r.json()["detail"]
+
+    def test_run_cycle_403_on_scope_mismatch_error(self, client):
+        """Same sibling-not-subclass gap as above, for ``ScopeMismatchError``
+        (errors.py:175) — must map to 403, not fall through to 500."""
+
+        class _ScopeMismatchAgent(_FakeAgent):
+            def run_autonomy_cycle(self, context=None):
+                raise ScopeMismatchError(
+                    required=["mail.read"],
+                    granted=[],
+                    provider="microsoft",
+                )
+
+        client.built["next"] = _ScopeMismatchAgent()
+        self._mk(client)
+        client.post(
+            "/v1/email/agent/autonomy",
+            json={"session_id": "s1", "level": "earn_trust"},
+        )
+        insecure = TestClient(client.app_ref, raise_server_exceptions=False)
+        r = insecure.post("/v1/email/agent/autonomy/run", json={"session_id": "s1"})
+        assert r.status_code == 403
+        assert "mail.read" in r.json()["detail"]
+
+    def test_undo_401_on_connection_revoked_error(self, client):
+        """Same #2617 sibling-mapping contract as the /run test, for /undo."""
+        self._mk(client)
+        insecure = TestClient(client.app_ref, raise_server_exceptions=False)
+        r = insecure.post(
+            "/v1/email/agent/autonomy/undo",
+            json={"session_id": "s1", "action_id": "raise-revoked"},
+        )
+        assert r.status_code == 401
+
+    def test_undo_403_on_scope_mismatch_error(self, client):
+        """Same #2617 sibling-mapping contract as the /run test, for /undo."""
+        self._mk(client)
+        insecure = TestClient(client.app_ref, raise_server_exceptions=False)
+        r = insecure.post(
+            "/v1/email/agent/autonomy/undo",
+            json={"session_id": "s1", "action_id": "raise-scope-mismatch"},
+        )
+        assert r.status_code == 403
+
+    def test_run_cycle_503_on_agent_local_configuration_error_cold_start(
+        self, client, monkeypatch
+    ):
+        """#2617 follow-up: ``gaia_agent_email.config.ConfigurationError`` is a
+        SEPARATE class from ``gaia.connectors.errors.ConfigurationError`` --
+        a bare ``ValueError`` subclass sharing nothing in its MRO with
+        ``ConnectorsError``. ``EmailAgentConfig.resolve_mail_backends()``
+        raises it for real in the actual cold-start state (no mailbox
+        connected yet), and it escaped the route's ``except ConnectorsError``
+        as a textless 500 -- byte-identical to the bug #2617 exists to fix.
+
+        Drives the REAL ``resolve_mail_backends()`` (no injected exception):
+        every other test in this class injects a hand-raised
+        ``ConnectorsError``/sibling from a fake agent, which is exactly why
+        this shipped -- an injected-exception test can't catch a wrong
+        exception CLASS. The null keyring backend (reset via
+        ``keyring.core._keyring_backend = None`` so the new env var actually
+        takes effect) makes "no mailbox connected" the real, hermetic state
+        instead of depending on this machine's OS credential store.
+        """
+        import keyring
+        from gaia_agent_email.config import EmailAgentConfig
+
+        monkeypatch.setenv("PYTHON_KEYRING_BACKEND", "null")
+        monkeypatch.setattr(keyring.core, "_keyring_backend", None, raising=False)
+
+        class _ColdStartAgent(_FakeAgent):
+            def run_autonomy_cycle(self, context=None):
+                # No mocking: no mailbox connected under the null keyring
+                # backend, so this raises the real agent-local
+                # ConfigurationError, not a stand-in.
+                return EmailAgentConfig().resolve_mail_backends()
+
+        client.built["next"] = _ColdStartAgent()
+        self._mk(client)
+        client.post(
+            "/v1/email/agent/autonomy",
+            json={"session_id": "s1", "level": "earn_trust"},
+        )
+        insecure = TestClient(client.app_ref, raise_server_exceptions=False)
+        r = insecure.post("/v1/email/agent/autonomy/run", json={"session_id": "s1"})
+        assert r.status_code == 503
+        assert "No mailbox connected" in r.json()["detail"]
 
     def test_run_cycle_returns_200_with_partial_report_on_per_message_error(
         self, client

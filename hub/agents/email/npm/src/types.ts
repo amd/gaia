@@ -39,10 +39,19 @@
  * docs/spec/agent-ui-query-sse-contract.md) + POST /v1/email/query/{run_id}/cancel.
  * Mirrored from `query_routes.py` (QueryRequest / QueryCancelResponse) and the
  * frozen #2057 event vocabulary.
+ * Schema 2.11 (additive over 2.4 — this file's own history skipped 2.5-2.10,
+ * see contract.py for the full per-version log, #2743): EmailPreScanResult
+ * gains `needs_you` (NeedsYouItem[]), `needs_you_total` (number), and `bulk`
+ * (BulkSummary | null) — a single worklist view built on top of the
+ * already-classified urgent/actionable/needs_review buckets plus the
+ * waiting-on-you detector and persisted action items, never re-derived from
+ * raw scan results. `NeedsYouItem.kind` reuses `AttentionItemKind` (extended
+ * with "urgent" / "needs_response") rather than a new enum. No existing
+ * field changed, so 2.4 consumers keep working (additive).
  */
 
 /** Frozen contract version echoed by the server's `/version` endpoint. */
-export const SCHEMA_VERSION = "2.4" as const;
+export const SCHEMA_VERSION = "2.11" as const;
 
 /**
  * The five-bucket triage taxonomy (schema 2.0 — contract.py: EmailCategory).
@@ -371,7 +380,7 @@ export interface MailboxError {
 export interface EmailPreScanRequest {
   /** Contract version. Defaults to SCHEMA_VERSION; mismatch fails loudly. */
   schema_version?: string;
-  /** How many recent inbox messages to scan (1–100). Default 25. */
+  /** How many recent inbox messages to scan (1–100). Default 50. */
   max_messages?: number;
 }
 
@@ -402,15 +411,94 @@ export interface EmailPreScanResult {
   /** How many messages this pre-scan actually classified (#2584). */
   scanned: number;
   /**
-   * Estimated total unread messages in the scanned mailbox(es) (#2584).
-   * Gmail reports a real estimate; Outlook cannot and reports null — never
-   * a fabricated number.
+   * Exact total unread message count in the scanned mailbox(es) (#2584) — a
+   * secondary figure, NOT the scan-coverage denominator since #2638 (see
+   * total_inbox for that). Gmail reports an exact count; Outlook cannot and
+   * reports null — never a fabricated number.
    */
   total_unread?: number | null;
+  /**
+   * Exact total INBOX message count, read + unread (#2638) — the honest
+   * scan-coverage denominator now that pre-scan covers all of INBOX, not
+   * unread-only. Gmail reports an exact count, sourced from the same call as
+   * total_unread; Outlook cannot and reports null — never a fabricated number.
+   */
+  total_inbox?: number | null;
   /** True when at least one connected mailbox could not be scanned (#2584). */
   degraded: boolean;
   /** Connected mailboxes that failed during this pre-scan, if any (#2584). */
   mailbox_errors?: MailboxError[] | null;
+  /**
+   * The ONE worklist a triage card renders (schema 2.11, #2743): up to 5
+   * things that genuinely need the user, ordered by kind then oldest-first.
+   * A deterministic VIEW over `urgent`/`actionable`/`needs_review` above
+   * plus the waiting-on-you detector and persisted action items — never a
+   * second, independent classification pass.
+   */
+  needs_you: NeedsYouItem[];
+  /** True pre-cap count behind `needs_you` (schema 2.11) — "N of M", never a silent truncation. */
+  needs_you_total: number;
+  /** The filtered remainder: a count PLUS the test(s) that filtered it (schema 2.11). */
+  bulk?: BulkSummary | null;
+}
+
+/**
+ * One thing a human must act on (schema 2.11, contract.py: NeedsYouItem,
+ * #2743) — a VIEW over the already-classified urgent/actionable/needs_review
+ * buckets plus the waiting-on-you detector and persisted action items, never
+ * re-derived from raw scan results.
+ */
+export interface NeedsYouItem {
+  /** 1-based row number, stable within ONE card render only — a rescan re-orders and renumbers by design. */
+  ref: number;
+  /** Which signal surfaced this item. Reuses AttentionItemKind rather than a parallel verb enum. */
+  kind: AttentionItemKind;
+  /** Provider message id (opaque); null only for an action item carried from a prior triage. */
+  message_id?: string | null;
+  /** Provider thread id, when known. */
+  thread_id?: string | null;
+  /** Raw "From" header of the source message. */
+  sender: string;
+  /** Subject line of the source message. */
+  subject: string;
+  /** Seconds since the message was received, when known. */
+  age_seconds?: number | null;
+  /** Plain-language reason this item needs attention. */
+  why: string;
+  /**
+   * Reserved for up to two lines of real substance (the question actually
+   * asked, the meeting time actually proposed, the deadline actually
+   * quoted). ALWAYS EMPTY today on every surface — the per-item extraction
+   * pass that would fill it shipped and was withdrawn from #2743 before
+   * merge; a follow-up issue will populate it. When it does, each entry
+   * will be wrapped in the same untrusted-input delimiters `due_hint`
+   * already uses below (see that field) — a rendering surface strips the
+   * wrapper before display.
+   */
+  detail: string[];
+  /**
+   * Free-text due hint (action items only); null otherwise. Wrapped in the
+   * same untrusted-input delimiters that cover a raw message body when
+   * present — it is regex-extracted verbatim from a message body and
+   * re-enters the calling agent's own tool-result context. A rendering
+   * surface strips the wrapper before display.
+   */
+  due_hint?: string | null;
+  /** Provider name ('google' / 'microsoft') this item came from; set only when more than one mailbox is connected. */
+  mailbox?: string | null;
+}
+
+/**
+ * The filtered remainder of a pre-scan (schema 2.11, contract.py:
+ * BulkSummary, #2743) — a count PLUS the test(s) that filtered it, so the
+ * user can judge whether the filter was right, never just a bare
+ * unauditable number.
+ */
+export interface BulkSummary {
+  /** Messages filtered into the low-signal remainder. */
+  count: number;
+  /** Opaque ids of the filter tests actually applied this run — never prose; a renderer maps each id to a sentence. */
+  filter_tests: string[];
 }
 
 /** Top-level pre-scan response envelope (contract.py: EmailPreScanResponse). */
@@ -445,12 +533,20 @@ export interface EmailBriefingResponse {
 // classified informational message would otherwise be invisible.
 // ---------------------------------------------------------------------------
 
-/** Which signal surfaced an AttentionItem (contract.py: AttentionItemKind). */
+/**
+ * Which signal surfaced an AttentionItem / NeedsYouItem (contract.py:
+ * AttentionItemKind). "urgent" / "needs_response" (schema 2.11, #2743) tag a
+ * needs_you row sourced from the category-classified urgent/actionable
+ * buckets, as distinct from "waiting_on_you" — the detector's OWN signal —
+ * so a category item is never mislabeled with the detector's meaning.
+ */
 export type AttentionItemKind =
   | "meeting_request"
   | "waiting_on_you"
   | "needs_review"
-  | "action_item";
+  | "action_item"
+  | "urgent"
+  | "needs_response";
 
 /** One item the attention view surfaces (contract.py: AttentionItem). Passive
  * data only — never an action affordance; the view never acts on a message. */
@@ -473,6 +569,15 @@ export interface AttentionItem {
   mailbox?: string | null;
 }
 
+/** One message that could not be fetched during a scan (contract.py: MessageError, #2716). Distinct
+ * from MailboxError -- every OTHER message in the same mailbox's scan is still present in `items`. */
+export interface MessageError {
+  /** Provider message id that failed. */
+  message_id: string;
+  /** Actionable error message for the failure. */
+  error: string;
+}
+
 /** How much of the mailbox the attention view actually covered (contract.py: AttentionCoverage). */
 export interface AttentionCoverage {
   /** Messages actually scanned across every mailbox. */
@@ -481,10 +586,14 @@ export interface AttentionCoverage {
   total_unread?: number | null;
   /** True when the scan hit its message ceiling in any connected mailbox. */
   scan_truncated: boolean;
-  /** True when at least one connected mailbox could not be scanned. */
+  /** True when at least one connected mailbox could not be scanned, OR at least one individual
+   * message could not be fetched after a rate-limit survived retry (#2716). */
   degraded: boolean;
   /** Connected mailboxes that failed during this scan, if any. */
   mailbox_errors?: MailboxError[] | null;
+  /** Individual messages that could not be fetched during this scan, if any (#2716) — e.g. a Gmail
+   * rate-limit that survived retry. A per-message gap, not a mailbox failure. */
+  message_errors?: MessageError[] | null;
 }
 
 /**

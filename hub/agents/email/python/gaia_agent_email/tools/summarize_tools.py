@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from gaia_agent_email.body_normalize import scrub_delimiter_tokens
+from gaia_agent_email.body_normalize import normalize_email_body
 from gaia_agent_email.gmail_backend import decode_message_body
 from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 from gaia_agent_email.tools.read_tools import wrap_untrusted_body
@@ -110,7 +110,7 @@ def _build_user_prompt(
         "Summarize this email.\n\n"
         f"Subject: {subject}\n"
         f"From: {sender}\n"
-        f"Body:\n{wrap_untrusted_body(scrub_delimiter_tokens((body or '').strip()))}\n"
+        f"Body:\n{wrap_untrusted_body(normalize_email_body((body or '').strip()))}\n"
     )
 
 

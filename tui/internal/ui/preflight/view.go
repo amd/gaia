@@ -123,7 +123,7 @@ func (m Model) footer(w int) string {
 	keys = append(keys, [2]string{"d", "details"})
 	if !m.Busy() && !m.rep.Ready() &&
 		(!m.rep.Blocked() || m.rep.OfferableDespiteFailure()) {
-		keys = append(keys, [2]string{"enter", "start anyway"})
+		keys = append(keys, [2]string{"enter", "continue"})
 	}
 	keys = append(keys, [2]string{"esc", "back"})
 
