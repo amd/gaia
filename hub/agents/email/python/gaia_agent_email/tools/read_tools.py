@@ -933,8 +933,13 @@ def _apply_session_preferences(
     message is never urgent": a newsletter from a priority sender stays
     exactly as low-signal as its content says, and a genuinely urgent
     message from a muted sender stays exactly as urgent as its content
-    says. Both branches only tag ``preference_applied`` so a caller can
-    still surface/order the message accordingly.
+    says. Both branches only tag ``preference_applied`` — today that tag
+    has no reader anywhere in this codebase (#2777); it does not reorder
+    or highlight anything in the rendered triage card. ``low_priority_senders``
+    separately has a real effect outside this function, in the autonomy
+    loop: ``TrustPolicy._explicitly_preferred`` (``trust.py``) reads the
+    raw set directly to auto-archive without confirmation. ``priority_senders``
+    has no reader anywhere outside this function.
 
     Safety override: a phishing-flagged message bypasses BOTH priority
     and low-priority sender preferences. A user can't safely promote a
@@ -969,11 +974,11 @@ def _apply_session_preferences(
         )
     elif sender_addr and sender_addr in low_priority_senders:
         out["preference_applied"] = "low_priority_sender"
-        # #2666: a mute is a salience/ordering signal, not a content
-        # verdict -- category stays whatever content decided, so a
-        # genuinely urgent message from a muted sender still surfaces at
-        # the severity its content supports. Same rule, stated explicitly,
-        # as the priority-sender branch above.
+        # #2666: category stays whatever content decided, so a genuinely
+        # urgent message from a muted sender no longer becomes an
+        # autonomy archive candidate (agent.py's _autonomy_candidate keys
+        # off category) just because the sender is muted. Same rule,
+        # stated explicitly, as the priority-sender branch above.
         out["rationale"] = (
             f"From a low-priority sender · category unchanged · {decision.get('rationale', '')}"
         )
@@ -1883,8 +1888,10 @@ def pre_scan_inbox_impl(
     defaults, and a needs-review bucket for messages the heuristic was not
     confident about (#2584). A low-priority-sender match does not by
     itself route a message into suggested_archives (#2666) — only content
-    does; the preference raises salience/ordering instead. The caller is
-    expected to set ``kind`` in the rendered output to ``email_pre_scan``
+    does. The ``preference_applied`` tag it carries instead has no reader
+    in this envelope today (#2777); it does not reorder or highlight
+    anything rendered here. The caller is expected to set ``kind`` in the
+    rendered output to ``email_pre_scan``
     so the chat surface can detect and render the structured card
     component.
 

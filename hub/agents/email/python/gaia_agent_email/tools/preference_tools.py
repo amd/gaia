@@ -372,9 +372,10 @@ class PreferenceToolsMixin:
 
             Senders flagged here are tagged ``preference_applied:
             "priority_sender"`` in ``triage_inbox`` / ``pre_scan_inbox``
-            output so they can be surfaced or ordered ahead of other mail —
-            but the category (urgent, needs_response, ...) is still decided
-            entirely by the message content; this tool never overrides it.
+            output — that tag has no reader today (#2777), so it does not
+            currently reorder or highlight the sender's mail. The category
+            (urgent, needs_response, ...) is still decided entirely by the
+            message content; this tool never overrides it.
             "I care about this sender" is not "their mail is urgent" — a
             newsletter from a priority sender still classifies as whatever
             its content says. Useful for calling out high-signal senders
