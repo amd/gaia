@@ -207,6 +207,100 @@ Two consequences worth stating plainly:
   runtimes would break the cross-runtime contract P5.2 exists to protect. If we want scoping, it
   gets its own explicit field in both runtimes. Out of scope here.
 
+### 9. Benchmark against Pi — and know which gaps skills cannot close.
+
+[Pi](https://pi.dev/) (Mario Zechner, MIT) is the closest existing thing to what we are building, and
+it is an **existence proof for this architecture**: four core tools (`read`, `write`, `edit`,
+`bash`), a system prompt under 1,000 tokens, and everything else supplied by skills. Its stated
+rationale is ours — if you need ripgrep, run `rg` via bash; frontier models already know what a
+coding agent is, so specialized tools cost prompt tokens without adding capability. Pi deliberately
+ships no MCP, no sub-agents, no built-in todos.
+
+The capability bar is not Pi but **oh-my-pi (`omp`)**, its 31-tool maximalist fork. The gap between
+them is exactly the gap a skills-driven agent has to reason about, and it splits cleanly:
+
+**What skills genuinely cover** — workflow, judgment, procedure. "How to approach a refactor," "the
+review checklist," "run the build this way." Pi's success is evidence this is the right substrate,
+and it is most of what makes an agent feel competent.
+
+**What skills cannot cover, because these are properties of the tool implementation and not of any
+instruction the model reads:**
+
+1. **Edit reliability.** No `SKILL.md` can make a string-replace succeed against a file that changed
+   since it was read, or stop a silent no-op. Our `FileIOTools::fileEdit` is a naive
+   `old_string`/`new_string` replace with **no staleness check at all** — an edit against a stale
+   read silently corrupts. Independent benchmarking is genuinely split on which *edit format* is
+   best (replace beat hashline on Python; hashline led on Rust; model choice mattered more than
+   format), so we should not cargo-cult a format — but *rejection on divergence* is not a format
+   question and every serious harness has it.
+2. **Structural correctness.** "Update all call sites" is a graph operation. An LSP rename fires
+   `workspace/willRenameFiles` and fixes re-exports and aliased imports before files move; regex
+   cannot. For C++ specifically this is the highest-value integration available, because C++ has the
+   worst signal-to-noise ratio of any mainstream language for grep-based navigation.
+3. **Ground truth about the code.** Compiler diagnostics and debugger state beat model inference.
+4. **Token economics.** A skill that must be *read* to be applied costs context every turn; a tool
+   encodes the behavior for free. Pi's answer is progressive disclosure — skills load on demand
+   precisely so they do not exhaust the prompt cache.
+
+Three consequences, and they are the difference between "generic" and "generic but codes well":
+
+- **Harden the compiled-in toolbelt before blaming the skill** (P6.1). Stale-write rejection,
+  ignore-aware search, and a persistent shell are prerequisites, not polish. Today
+  `FileIOTools::fileSearch`'s glob matcher supports only `*` and `?` with no `.gitignore`
+  awareness, and `ProcessRunner::run` is one-shot — it loses cwd and env between calls, which is
+  materially worse for a build/test loop.
+- **Progressive disclosure is required, not optional** (P6.4). Level-1 metadata listing is what
+  makes "paste a skill and it gets used when appropriate" work without every skill body sitting in
+  the prompt forever.
+- **LSP/clangd is deliberately deferred** to a follow-on milestone. It is the single biggest
+  remaining gap for C++ work and it is too large to bundle here; the toolbelt in P6.1 is designed so
+  a `lsp` tool slots in beside it rather than requiring a rewrite.
+
+Two cheap patterns worth copying from `omp` outright: **schema-validated sub-agent returns** (a
+typed JSON object the parent reads directly, never prose it has to parse) and **P0–P3 + confidence +
+ship/no-ship** as the review output shape.
+
+### 10. The TUI has to be built, not extended.
+
+`TuiConsole` is not a TUI. It is a headless FTXUI *element builder* — a passive `OutputHandler`
+that accumulates a `vector<ChatEntry>` and can convert it to `ftxui::Element`s on demand. Nothing
+in `cpp/` ever constructs a `ftxui::ScreenInteractive`, calls `Loop()`, or reads a keystroke through
+FTXUI: `grep -rn "ScreenInteractive" cpp/` returns **zero hits**, and `getChatElements()` /
+`getStatusBar()` have **no callers**.
+
+The practical consequence is worse than "incomplete." In `gaia-bash`'s default interactive mode
+`ReplRunner` installs a `TuiConsole`, so all agent output goes into `entries_` and is **never
+displayed** — the default mode is effectively a silent REPL, and the only things on screen are
+`ReplRunner`'s own `std::cout` banner and prompt. Meanwhile `docs/cpp/bash-agent.mdx` documents
+scrollable history with syntax highlighting, a token-count status bar, multi-line input with
+history, and a tool-approval modal. **None of those exist.** P7.4 corrects that doc.
+
+Three landmines any TUI work must clear, all of which exist today and all of which will fight a
+fullscreen screen:
+
+- `makeStdinConfirmCallback()` does raw `cerr`/`cin` I/O and is **auto-installed** in
+  `Agent`'s constructor. It will corrupt an FTXUI screen and deadlock against its input thread.
+  Every non-interactive mode currently sidesteps it by installing an auto-allow lambda — the TUI
+  must install a *modal-backed* callback instead.
+- `ReplRunner` installs a `SIGINT` handler; FTXUI installs its own terminal and signal handling.
+- All five built-in slash commands print via raw `std::cout` and would scribble over the screen.
+
+What *is* reusable is real: `src/tui_markdown.cpp` (`renderMarkdown()`) is a self-contained,
+dependency-free markdown→FTXUI renderer and the best asset here; the slash-command framework in
+`ReplRunner` is clean and tested with `/run` and `/env` as working precedents; and the confirmation
+*contract* (`ToolConfirmCallback`, `ToolConfirmResult`, `AllowedToolsStore`, fail-closed
+enforcement) needs only a modal-backed callback swapped in.
+
+**Testability is a first-class requirement, not an afterthought.** The Go terminal hub's loopback
+control API (`tui/internal/control/`) is the design to copy, and it is unusually good: HTTP on
+`127.0.0.1` only, bearer token, `/screen` `/keys` `/text` `/wait` `/frames` `/resize`, structured
+self-describing state so drivers never screen-scrape, and a `MarkMsg` settle protocol that
+guarantees "every key before this mark has been handled **and drawn**." A `/wait` timeout returns
+**HTTP 408 carrying the screen it actually saw**, which is what makes a failed wait debuggable.
+Two refusals worth copying verbatim: injection endpoints return `503` when the loop is not running
+(because silently discarding an injected key and answering `200` is a lie), and port **4001 is
+reserved and rejected**.
+
 ---
 
 ## Forward dependencies on in-flight Python PRs
@@ -413,6 +507,76 @@ ships against the 6 skills on `main` and widens to 32 automatically when PR #269
 documents only the deprecated `GAIA_CPP_*` names), `docs/cpp/overview.mdx`,
 `docs/cpp/api-reference.mdx`, `docs/cpp/custom-agent.mdx`, and add `docs/cpp/skills.mdx`. Also
 correct `docs/plans/cpp-webui-integration.md`, whose capability matrix asserts `rag: ❌`.
+
+### Phase 6 — Coding competence and skill ergonomics (2 issues)
+
+**P6.1 — Harden the coding toolbelt**
+The gaps decision 9 identifies that no `SKILL.md` can close.
+- **Stale-write rejection on `file_edit` and `file_write`**: anchor to a content hash captured at
+  read time; an edit against a file that changed since is **rejected with the divergence named**,
+  never silently applied and never a silent no-op.
+- **Ignore-aware search**: replace `FileIOTools`' `*`/`?`-only glob matcher with real pattern
+  matching that honors `.gitignore`. Shelling out to `grep -r` in a large repo returns
+  `node_modules`/`build` noise that poisons context.
+- **Persistent shell**: a session-scoped shell preserving cwd and environment across calls, so a
+  build/test loop is not restarted from scratch every invocation. Keep the existing `CONFIRM`
+  policy and output cap.
+Designed so an `lsp` tool slots in beside these later without a rewrite.
+
+**P6.2 — Paste-to-install skills and progressive disclosure**
+Two halves of "paste a skill and the agent uses it when appropriate," mirroring Python's #2670.
+- **Paste to install**: pasting `SKILL.md` content into the prompt is detected (frontmatter fence +
+  a `name`/`description` pair), validated through the P3.1 parser, and written to
+  `~/.gaia/skills/<name>/SKILL.md` — the shared user root, so a skill pasted into the C++ agent is
+  visible to the Python runtime and vice versa. Refusals (bad frontmatter, refused permissions,
+  declared `tools`) are shown with the reason **before** anything is written. Overwriting an
+  existing skill requires confirmation.
+- **Progressive disclosure (level 1)**: today skill selection is explicit — a loaded skill's full
+  body sits in the prompt for the whole session, and an *unloaded* skill is invisible to the model.
+  "Use it when appropriate" requires the model to know the skill exists. Emit a compact
+  `name: description` listing of every discovered-but-unloaded skill, plus a `load_skill` tool the
+  model can call. This is the level-1 disclosure both specs describe and neither runtime has
+  implemented; it is also what keeps a large skill library from exhausting the prompt cache.
+  **Coordinate the prompt-block format with Python** — P5.2's byte-equality gate covers the loaded
+  block, and this adds a second block that must not drift.
+
+### Phase 7 — TUI (3 issues) and validation
+
+**P7.1 — Interactive TUI: event loop, streaming render, modals**
+Per decision 10, this is net-new. Owns `ftxui::ScreenInteractive`, a component tree, an input
+component with history, a scrollable transcript, and redraw-on-token posted from the agent thread.
+Must clear all three landmines: install a **modal-backed** `ToolConfirmCallback` replacing the
+auto-installed stdin one, reconcile `SIGINT` with FTXUI's own handling, and route the five built-in
+slash commands through the screen instead of `std::cout`. Reuses `renderMarkdown()`. `TuiConsole`
+needs redesign before reuse — it has no change notification and rebuilds and re-parses all 2000
+entries on every `getChatElements()` call.
+
+**P7.2 — TUI skill and MCP management screens**
+The management surface. Skills: list across all three roots showing loaded / available / shadowed /
+**refused-with-reason**, load and unload interactively, inspect a body, switch skill set, and paste
+to install (P6.2). MCP: list servers from the P4.3 registry, connect and disconnect, show which
+tools each contributes and which loaded skill required it. Model the hub screen in
+`tui/internal/ui/hub/model.go` — tabs + list + modal overlays. Honor the Go TUI's design rules:
+80×24 target, no colour-only signals (`[ok] [!] [ ] [..]` text markers), `esc` leaves the innermost
+thing, and a failure always names the remedy key.
+
+**P7.3 — TUI loopback control API**
+Copy `tui/internal/control/` in C++: HTTP on `127.0.0.1` only, bearer token from a `0600`
+discovery file, `/status` `/screen` `/keys` `/text` `/wait` `/frames` `/resize`. Structured
+self-describing state so drivers never screen-scrape; a settle protocol guaranteeing injected keys
+are handled *and drawn* before the response returns; `503` when the loop is not running; a `/wait`
+timeout returning **408 with the screen it saw**; port 4001 reserved and rejected. This is what
+makes every TUI assertion in P7.4 real rather than a screenshot someone eyeballed.
+
+**P7.4 — `gaia-bash` supersession gate**
+The proof that a skill-programmed generic agent replaces a hardcoded one. A `coding` skill set that
+reproduces `gaia-bash`'s behavior on top of `gaia-agent`'s compiled-in toolbelt (`gaia-bash`
+registers exactly `FileIOTools` + `GitTools` + `bash_execute` + `env_inspect`), and a **head-to-head
+gate**: the same scenario suite run against both binaries, with `gaia-agent` required to match or
+beat `gaia-bash` before supersession is declared. Reuse `cpp/agents/bash/eval/bash_eval_adapter.py`
+and its committed scenarios so the comparison is against a real baseline, not a new one written to
+pass. Only once that gate is green: mark `gaia-bash` deprecated, point its docs at `gaia-agent`, and
+correct `docs/cpp/bash-agent.mdx`, which currently documents four TUI features that do not exist.
 
 ---
 
