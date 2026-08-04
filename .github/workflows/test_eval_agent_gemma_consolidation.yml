@@ -85,6 +85,12 @@
 # survive a GitHub Actions step boundary (see the single-session note in
 # test_agent_behavior_e2e.yml).
 #
+# The third prerequisite is the Claude Code CLI, which is easy to miss because
+# ANTHROPIC_API_KEY looks like the whole story: `gaia eval agent` DRIVES each
+# scenario by shelling out to `claude -p` with an MCP config, and its preflight
+# refuses to start without it on PATH. Installed below via npm, as
+# docs/guides/eval-ci.mdx prescribes.
+#
 # FORKS. There is no `pull_request` trigger, so a fork PR never runs this in the
 # base repo (and the fork has no self-hosted runner). ANTHROPIC_API_KEY — the
 # eval judge — is therefore always available for the branches that do trigger it;
@@ -210,6 +216,25 @@ jobs:
           # the LOCAL editable hub package or every scenario dies at session
           # creation. Core gaia stays editable so eval fixtures resolve in-repo.
           install-package: '-e .[dev,eval,ui,api] -e hub/agents/chat/python'
+
+      # `gaia eval agent` does not merely call the Anthropic API - it shells out
+      # to `claude -p` with an MCP config to DRIVE each scenario (runner.py:937),
+      # and its own preflight hard-fails with "'claude' CLI not found on PATH"
+      # before running anything. ANTHROPIC_API_KEY is necessary but not
+      # sufficient; the CLI has to be installed too. Same prerequisite the
+      # eval-CI recipe documents (docs/guides/eval-ci.mdx).
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Install Claude Code CLI (the eval's scenario driver)
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          if ($LASTEXITCODE -ne 0) { throw "Claude Code CLI install failed" }
+          # Fail here, not after the backend has booted.
+          claude --version
+          if ($LASTEXITCODE -ne 0) { throw "claude installed but not runnable on PATH" }
 
       - name: Install Lemonade Server
         uses: ./.github/actions/install-lemonade
