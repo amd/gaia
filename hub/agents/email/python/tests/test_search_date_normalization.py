@@ -221,6 +221,37 @@ def test_impl_finds_message_via_converted_week_unit():
     assert [m["id"] for m in result["messages"]] == ["m1"]
 
 
+def test_fixture_query_matches_rejects_week_unit_explicitly():
+    """Pins FakeGmailBackend's own behavior for the unsupported 'w' unit,
+    not just that normalize_gmail_date_operators converts it away --
+    _query_matches falls through an unrecognized duration to its free-text
+    branch (a fall-through, not an explicit exclusion rule), so a future
+    refactor of that fallback could silently re-accept 'w' without any
+    other test noticing. This is exactly how #2830 survived."""
+    from tests.fixtures.email.fake_gmail import _query_matches
+
+    now_ms = int(time.time() * 1000)
+    msg = {
+        "id": "m1",
+        "internalDate": str(now_ms),
+        "labelIds": ["INBOX"],
+        "snippet": "hi",
+        "payload": {"headers": [{"name": "Subject", "value": "hi"}]},
+    }
+    assert _query_matches("newer_than:2w", msg) is False
+
+
+def test_duration_space_after_colon_is_a_known_unvalidated_gap():
+    """Known, accepted limitation: a space between the operator colon and
+    the value means _DURATION_OP_RE doesn't match at all (mirrors
+    _DATE_OP_RE's identical-shaped gap for after:/before:), so the value
+    passes through to Gmail completely unvalidated. Deliberately not widened
+    with \\s* -- that would diverge from the date-operator precedent and
+    turn a never-observed query shape into a hard error."""
+    query = "newer_than: 2w"
+    assert normalize_gmail_date_operators(query) == query
+
+
 @pytest.mark.parametrize(
     "query",
     [
