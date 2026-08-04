@@ -148,6 +148,7 @@ add_library(gaia_core
     src/session.cpp
     src/repl.cpp
     src/json_event_handler.cpp
+    src/chunking.cpp
 )
 
 # TUI sources (conditional on FTXUI availability)
@@ -318,6 +319,7 @@ if(GAIA_BUILD_TESTS)
         tests/test_session.cpp
         tests/test_repl.cpp
         tests/test_json_event_handler.cpp
+        tests/test_chunking.cpp
     )
 
     target_link_libraries(tests_mock PRIVATE
