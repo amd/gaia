@@ -21,6 +21,22 @@ contract version is tracked separately as
   directions. The `set_low_priority_sender` tool docstring (read by the
   model) and the `pre_scan_inbox` docstring's "derived from the low-priority
   bucket" claim are corrected to match.
+- **A meeting proposal in a confidently-classified message vanished from the
+  view the TUI renders on open (#2580).** `is_meeting_request` was wired into
+  the scan by #2589, but the `needs_you` worklist (#2743, which replaced the
+  #2582 `/attention` fetch as the TUI's on-open source) only kept the flag for
+  messages already routed into `urgent`/`actionable` by category, and dropped
+  it entirely for anything reaching `needs_review`. A message the category
+  heuristic confidently calls FYI/PERSONAL — e.g. Gmail's own
+  `CATEGORY_PERSONAL` label on a colleague's message — kept
+  `is_meeting_request=True` from the scan but was silently counted only under
+  `informational_count`, reproducing the original grounding incident
+  ("Any chance to meet this Thursday at 9am?" reported under "0 actionable
+  items") on current `main`. `is_meeting_request` now vetoes the
+  informational/suggested-archives routing the same way an unconfident guess
+  already does, and a meeting-flagged item keeps its `meeting_request` kind
+  through `needs_review` instead of being downgraded to a generic
+  "needs review" row.
 - **`search_messages` stated a wrong, unstable count for a result set it
   received intact (#2756).** Asked "how many messages from X in the last two
   weeks", the agent ran the right query, got every matching row back, then

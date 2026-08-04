@@ -1805,7 +1805,12 @@ def _build_needs_you_view(
         candidates.append({**item, "kind": kind})
         _remember(item.get("message_id"))
     for item in needs_review:
-        candidates.append({**item, "kind": "needs_review"})
+        # #2580: a meeting-flagged item must keep that kind even when it
+        # reaches needs_you via needs_review, same as the urgent/actionable
+        # loops above — otherwise the TUI renders a generic "check this"
+        # instead of naming the proposed time.
+        kind = "meeting_request" if item.get("is_meeting_request") else "needs_review"
+        candidates.append({**item, "kind": kind})
         _remember(item.get("message_id"))
 
     for w in waiting_on_you or []:
@@ -2017,7 +2022,13 @@ def pre_scan_inbox_impl(
             elif category == CATEGORY_NEEDS_RESPONSE:
                 actionable.append({**base, "why": why})
             elif category == CATEGORY_PROMOTIONAL:
-                if needs_review_decision(r):
+                # is_meeting_request is an additional veto (#2580) — a
+                # genuine time proposal must not be silently archived just
+                # because the category heuristic is confident about
+                # PROMOTIONAL. Mirrors attention_tools._scan_one_backend,
+                # which already checks is_meeting_request independent of
+                # category.
+                if needs_review_decision(r) or base["is_meeting_request"]:
                     needs_review_ranked.append(
                         (_needs_review_sort_key(r), {**base, "why": why})
                     )
@@ -2031,7 +2042,11 @@ def pre_scan_inbox_impl(
                 # to the terminal FYI-placeholder fallback). Routed through
                 # needs_review_decision (shared with the attention-view
                 # aggregator, #2582) rather than a local confidence check.
-                if needs_review_decision(r):
+                # is_meeting_request is an additional veto (#2580) — a
+                # confident FYI/PERSONAL message can still be a real ask,
+                # and letting it through would make FILTER_TEST_NO_MEETING_
+                # PROPOSAL below a false claim about the message it tags.
+                if needs_review_decision(r) or base["is_meeting_request"]:
                     needs_review_ranked.append(
                         (_needs_review_sort_key(r), {**base, "why": why})
                     )
