@@ -69,7 +69,7 @@ The first run will automatically download and cache `windows-mcp` via `uvx windo
 
 ## Building
 
-All dependencies (nlohmann/json, cpp-httplib, Google Test) are fetched automatically by CMake at configure time — no manual installs required.
+All dependencies (nlohmann/json, cpp-httplib, yaml-cpp, Google Test) are fetched automatically by CMake at configure time — no manual installs required.
 
 ### Windows (Visual Studio / MSVC)
 
@@ -410,6 +410,7 @@ All fetched automatically by CMake — no manual installation needed.
 |---------|---------|---------|---------|
 | [nlohmann/json](https://github.com/nlohmann/json) | 3.11.3 | MIT | JSON parsing |
 | [cpp-httplib](https://github.com/yhirose/cpp-httplib) | 0.15.3 | MIT | HTTP client (LLM API calls) |
+| [yaml-cpp](https://github.com/jbeder/yaml-cpp) | 0.8.0 | MIT | `SKILL.md` frontmatter parsing |
 | [Google Test](https://github.com/google/googletest) | 1.14.0 | BSD-3 | Unit testing |
 
 ---
