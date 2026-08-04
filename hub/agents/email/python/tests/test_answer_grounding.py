@@ -634,6 +634,44 @@ class TestFindFabricatedAttendeeClaim:
         assert find_fabricated_attendee_claim("", convo) is None
         assert find_fabricated_attendee_claim(None, convo) is None
 
+    @pytest.mark.parametrize(
+        "phrase",
+        [
+            "No attendees are listed for this event.",
+            "There are no attendees for this meeting.",
+            "I do not see any attendees listed.",
+            "There aren't any attendees on this one.",
+        ],
+    )
+    def test_a_correct_denial_is_not_flagged(self, phrase):
+        # #2580's independent capture: the model reads the real, populated
+        # `organizer` field correctly and only misreports what it MEANS
+        # ("organizer" != "sent you an invite" -- guard 6's job). Honestly
+        # reporting the real, EMPTY `attendees` list must never be treated
+        # like inventing a name -- "no attendees" is the desired answer.
+        convo = [_events_tool_entry("list_calendar_events", [_event()])]
+        assert find_fabricated_attendee_claim(phrase, convo) is None
+
+    def test_correctly_reporting_the_real_organizer_is_never_flagged(self):
+        # The organizer field IS populated and legitimate (unlike
+        # attendees) -- correctly describing it must trip neither this
+        # guard nor the invite-claim guard (#2580's independent finding:
+        # the model reads organizer=self correctly and only
+        # misinterprets it as "sent an invite", which is guard 6's job,
+        # not evidence this guard should fire on organizer mentions at all).
+        convo = [
+            _events_tool_entry(
+                "list_calendar_events",
+                [_event(organizer="tomasz.iniewicz@gmail.com")],
+            )
+        ]
+        text = (
+            "The organizer of this event is tomasz.iniewicz@gmail.com — "
+            "you created it yourself."
+        )
+        assert find_fabricated_attendee_claim(text, convo) is None
+        assert find_ungrounded_invite_claim(text, convo) is None
+
 
 # ---------------------------------------------------------------------------
 # ground_final_answer — the orchestration a real turn goes through

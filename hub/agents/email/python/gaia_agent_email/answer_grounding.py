@@ -496,14 +496,15 @@ _INVITE_CLAIM_RE = re.compile(
 )
 
 # A negation or hedging modal anywhere in the same clause turns a completed-
-# action claim into something else -- a (correct) denial ("no invite has
-# been sent") or a hypothetical ("an invite would be sent") -- neither of
-# which asserts what "an invite has been sent" asserts. Deliberately broad
-# (checked over the whole clause, not a fixed window) since a denial can
-# front-load its negation far from "invite".
-_INVITE_NEGATION_RE = re.compile(
+# action / positive claim into something else -- a (correct) denial ("no
+# invite has been sent", "no attendees are listed") or a hypothetical ("an
+# invite would be sent") -- neither of which asserts what the bare claim
+# asserts. Shared with guard 7 below (same concept, not invite-specific).
+# Deliberately broad (checked over the whole clause, not a fixed window)
+# since a denial can front-load its negation far from the claimed word.
+_CLAUSE_NEGATION_RE = re.compile(
     r"\b(?:no|not|n't|never|none|nobody|isn't|wasn't|hasn't|haven't|didn't"
-    r"|doesn't|would|will|might|could|should)\b",
+    r"|doesn't|don't|aren't|would|will|might|could|should)\b",
     re.IGNORECASE,
 )
 
@@ -547,7 +548,7 @@ def find_ungrounded_invite_claim(
     if not match:
         return None
     clause = _clause_around(final_answer, match.start(), match.end())
-    if _INVITE_NEGATION_RE.search(clause):
+    if _CLAUSE_NEGATION_RE.search(clause):
         return None
     if "create_event_from_email" in tools_called_this_turn(conversation):
         return None
@@ -621,11 +622,19 @@ def find_fabricated_attendee_claim(
     """Return a reason when ``final_answer`` names attendees/invitees for a
     calendar event this turn's own tool result shows has none; ``None``
     when neither calendar tool ran, at least one listed event actually
-    carries attendees, or the answer makes no attendee-shaped claim.
+    carries attendees, the answer makes no attendee-shaped claim, or the
+    claim is itself a (correct) denial -- "no attendees are listed" must not
+    be treated like "the attendees are Jane and John" (#2766: an agent
+    honestly reporting the real, empty attendee list is the desired
+    behavior, not a fabrication to correct).
     """
     if not final_answer:
         return None
-    if not _ATTENDEE_CLAIM_RE.search(final_answer):
+    match = _ATTENDEE_CLAIM_RE.search(final_answer)
+    if not match:
+        return None
+    clause = _clause_around(final_answer, match.start(), match.end())
+    if _CLAUSE_NEGATION_RE.search(clause):
         return None
     has_attendees = _any_listed_event_has_attendees(conversation)
     if has_attendees is None or has_attendees:
