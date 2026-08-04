@@ -25,6 +25,18 @@ contract version is tracked separately as
   could have confirmed one, and an attendee named for an event the tool
   result shows has none; both leave a correctly-reported organizer and an
   honest "no attendees" alone.
+- **A low-priority-sender match no longer forces a message to PROMOTIONAL
+  (#2666).** The mirror of #2632's priority-sender fix, for the direction
+  that fix explicitly left alone: `_apply_session_preferences` used to
+  override the heuristic/LLM/SLM's category outright the moment a sender
+  matched the muted list, so a genuinely urgent message from a muted sender
+  got buried as promotional — "I don't care about most of this sender's
+  mail" is not "this specific message is never urgent." The preference now
+  only tags `preference_applied` and updates the reason line for
+  salience/ordering; category is always decided by content, in both
+  directions. The `set_low_priority_sender` tool docstring (read by the
+  model) and the `pre_scan_inbox` docstring's "derived from the low-priority
+  bucket" claim are corrected to match.
 - **A meeting proposal in a confidently-classified message vanished from the
   view the TUI renders on open (#2580).** `is_meeting_request` was wired into
   the scan by #2589, but the `needs_you` worklist (#2743, which replaced the

@@ -925,15 +925,21 @@ def _apply_session_preferences(
 
     Mutates a copy of ``decision`` and returns it.
 
-    Resolution rule (#2632): a priority-sender match never overrides
-    ``category`` — content (the heuristic or the LLM) decides severity,
-    a sender preference only raises salience. "I care about this sender"
-    is not "this message is urgent": a newsletter from a priority sender
-    stays exactly as low-signal as its content says, tagged with
-    ``preference_applied`` so a caller can still surface/order it earlier.
-    The low-priority-sender branch is unchanged — it still commits
-    PROMOTIONAL, since that is an explicit user request to downrank a
-    sender rather than an inferred one.
+    Resolution rule (#2632, #2666): neither a priority- nor a
+    low-priority-sender match ever overrides ``category`` — content (the
+    heuristic or the LLM) decides severity in both directions.
+    "I care about this sender" is not "this message is urgent", and
+    "I don't care about most of this sender's mail" is not "this specific
+    message is never urgent": a newsletter from a priority sender stays
+    exactly as low-signal as its content says, and a genuinely urgent
+    message from a muted sender stays exactly as urgent as its content
+    says. Both branches only tag ``preference_applied`` — today that tag
+    has no reader anywhere in this codebase (#2777); it does not reorder
+    or highlight anything in the rendered triage card. ``low_priority_senders``
+    separately has a real effect outside this function, in the autonomy
+    loop: ``TrustPolicy._explicitly_preferred`` (``trust.py``) reads the
+    raw set directly to auto-archive without confirmation. ``priority_senders``
+    has no reader anywhere outside this function.
 
     Safety override: a phishing-flagged message bypasses BOTH priority
     and low-priority sender preferences. A user can't safely promote a
@@ -967,11 +973,14 @@ def _apply_session_preferences(
             f"From a priority sender · category unchanged · {decision.get('rationale', '')}"
         )
     elif sender_addr and sender_addr in low_priority_senders:
-        out["category"] = CATEGORY_PROMOTIONAL
-        out["confident"] = True
         out["preference_applied"] = "low_priority_sender"
+        # #2666: category stays whatever content decided, so a genuinely
+        # urgent message from a muted sender no longer becomes an
+        # autonomy archive candidate (agent.py's _autonomy_candidate keys
+        # off category) just because the sender is muted. Same rule,
+        # stated explicitly, as the priority-sender branch above.
         out["rationale"] = (
-            f"From a low-priority sender · {decision.get('rationale', '')}"
+            f"From a low-priority sender · category unchanged · {decision.get('rationale', '')}"
         )
     return out
 
@@ -1879,12 +1888,17 @@ def pre_scan_inbox_impl(
 
     Reshapes ``triage_inbox_impl`` output into a typed envelope optimized
     for a daily-driver triage card: top-N urgent, top-N actionable,
-    informational count, suggested archives derived from the low-priority
-    bucket and (when configured) from category defaults, and a needs-review
-    bucket for messages the heuristic was not confident about (#2584). The
-    caller is expected to set ``kind`` in the rendered output to
-    ``email_pre_scan`` so the chat surface can detect and render the
-    structured card component.
+    informational count, suggested archives derived from a confident
+    PROMOTIONAL classification and (when configured) from category
+    defaults, and a needs-review bucket for messages the heuristic was not
+    confident about (#2584). A low-priority-sender match does not by
+    itself route a message into suggested_archives (#2666) — only content
+    does. The ``preference_applied`` tag it carries instead has no reader
+    in this envelope today (#2777); it does not reorder or highlight
+    anything rendered here. The caller is expected to set ``kind`` in the
+    rendered output to ``email_pre_scan``
+    so the chat surface can detect and render the structured card
+    component.
 
     ``session_preferences`` flow through to ``triage_inbox_impl`` so
     sender overrides shape the underlying classification, and category
