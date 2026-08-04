@@ -65,12 +65,13 @@ jobs:
       - run: echo hi
 """,
     )
-    reqs = crs.load_requirements(str(wf_dir), exclude=[])
+    reqs, exclusions = crs.load_requirements(str(wf_dir), exclude=[])
     assert len(reqs) == 1
     assert reqs[0].name_prefix == "Run Code Quality Checks"
     assert reqs[0].exact is True  # static name -> exact match, not prefix
     assert reqs[0].paths == ["src/**", "hub/**"]
     assert reqs[0].source_file == "lint.yml"
+    assert exclusions == []
 
 
 def test_load_requirements_collapses_matrix_expression_to_prefix(tmp_path):
@@ -92,7 +93,7 @@ jobs:
       - run: echo hi
 """,
     )
-    reqs = crs.load_requirements(str(wf_dir), exclude=[])
+    reqs, _exclusions = crs.load_requirements(str(wf_dir), exclude=[])
     assert reqs[0].name_prefix == "Unit Tests (py"
     assert reqs[0].exact is False  # matrix-templated -> prefix match
 
@@ -113,13 +114,17 @@ jobs:
       - run: echo hi
 """,
     )
-    assert crs.load_requirements(str(wf_dir), exclude=[]) == []
+    reqs, exclusions = crs.load_requirements(str(wf_dir), exclude=[])
+    assert reqs == []
+    assert exclusions == []
 
 
-def test_load_requirements_excludes_continue_on_error_jobs(tmp_path):
+def test_load_requirements_excludes_continue_on_error_jobs_but_reports_them(tmp_path):
     # The macOS smoke job in the real test_unit.yml is explicitly
     # continue-on-error — its own author already declared it non-blocking,
-    # so the gate must not turn it into a hard requirement.
+    # so the gate must not turn it into a hard requirement. But per the
+    # #2767 redirect, a silent exclusion is its own fail-open hole — it
+    # must show up in `exclusions`, not just vanish from `reqs`.
     wf_dir = write_workflow(
         tmp_path,
         "test_unit.yml",
@@ -141,9 +146,107 @@ jobs:
       - run: echo hi
 """,
     )
-    reqs = crs.load_requirements(str(wf_dir), exclude=[])
-    names = [r.name_prefix for r in reqs]
-    assert names == ["Unit Tests"]
+    reqs, exclusions = crs.load_requirements(str(wf_dir), exclude=[])
+    assert [r.name_prefix for r in reqs] == ["Unit Tests"]
+    assert len(exclusions) == 1
+    assert exclusions[0].name_prefix == "Unit Tests (macOS smoke)"
+    assert "continue-on-error" in exclusions[0].reason
+
+
+def test_load_requirements_excludes_needs_gated_jobs_but_reports_them(tmp_path):
+    # build-electron-apps.yml's real build-apps job: gated on ANOTHER job's
+    # runtime output (needs.discover-apps.outputs.has_apps), with its
+    # matrix ALSO dynamically generated via fromJson(needs...). Not
+    # statically verifiable at all — excluded, but named, not silent.
+    wf_dir = write_workflow(
+        tmp_path,
+        "build-electron-apps.yml",
+        """
+on:
+  pull_request:
+jobs:
+  discover-apps:
+    name: discover-apps
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo hi
+  build-apps:
+    needs: discover-apps
+    if: needs.discover-apps.outputs.has_apps == 'true'
+    name: "build-apps (${{ matrix.os }})"
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - run: echo hi
+""",
+    )
+    reqs, exclusions = crs.load_requirements(str(wf_dir), exclude=[])
+    assert [r.name_prefix for r in reqs] == ["discover-apps"]
+    assert len(exclusions) == 1
+    assert exclusions[0].name_prefix == "build-apps ("
+    assert "needs." in exclusions[0].reason
+
+
+def test_load_requirements_treats_static_name_with_matrix_as_prefix_mode(tmp_path):
+    # test_electron.yml's real dependency-audit job: name: "Audit
+    # Dependencies", no "${{ }}" anywhere, but a multi-leg matrix. GitHub
+    # still appends "(leg, values)" to every real rendered check-run, so
+    # this must be exact=False like an explicitly templated name — keying
+    # only on "${{" in the name (what the first version of this function
+    # did) missed it and let a real gate failure through to #2783.
+    wf_dir = write_workflow(
+        tmp_path,
+        "test_electron.yml",
+        """
+on:
+  pull_request:
+jobs:
+  dependency-audit:
+    name: Audit Dependencies
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        package:
+          - name: electron-framework
+          - name: jira-app
+    steps:
+      - run: echo hi
+""",
+    )
+    reqs, exclusions = crs.load_requirements(str(wf_dir), exclude=[])
+    assert len(reqs) == 1
+    assert reqs[0].name_prefix == "Audit Dependencies"
+    assert reqs[0].exact is False
+    assert exclusions == []
+
+
+def test_load_requirements_excludes_tag_ref_gated_jobs_but_reports_them(tmp_path):
+    # build_agents.yml's real "Consolidate release bundle" job: gated on
+    # `startsWith(github.ref, 'refs/tags/v')`. Unlike needs.*, this one IS
+    # statically decidable — github.ref on a pull_request event is never a
+    # tag ref — so it can be confidently excluded, not just hedged on.
+    wf_dir = write_workflow(
+        tmp_path,
+        "build_agents.yml",
+        """
+on:
+  pull_request:
+jobs:
+  release-bundle:
+    name: Consolidate release bundle
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - run: echo hi
+""",
+    )
+    reqs, exclusions = crs.load_requirements(str(wf_dir), exclude=[])
+    assert reqs == []
+    assert len(exclusions) == 1
+    assert exclusions[0].name_prefix == "Consolidate release bundle"
+    assert "refs/tags/" in exclusions[0].reason
 
 
 def test_load_requirements_honors_exclude_list(tmp_path):
@@ -162,7 +265,9 @@ jobs:
       - run: echo hi
 """,
     )
-    assert crs.load_requirements(str(wf_dir), exclude=["build_tui.yml"]) == []
+    reqs, exclusions = crs.load_requirements(str(wf_dir), exclude=["build_tui.yml"])
+    assert reqs == []
+    assert exclusions == []
 
 
 # ---------------------------------------------------------------------------
@@ -468,7 +573,7 @@ jobs:
       - run: echo hi
 """,
     )
-    reqs = crs.load_requirements(str(wf_dir), exclude=["build_tui.yml"])
+    reqs, _exclusions = crs.load_requirements(str(wf_dir), exclude=["build_tui.yml"])
     hub_req = next(r for r in reqs if r.source_file == "test_hub_agents.yml")
     matchers = crs._collect_all_name_matchers(str(wf_dir))
 
@@ -537,7 +642,7 @@ jobs:
       - run: echo hi
 """,
     )
-    reqs = crs.load_requirements(str(wf_dir), exclude=[])
+    reqs, _exclusions = crs.load_requirements(str(wf_dir), exclude=[])
     hub_req = next(r for r in reqs if r.source_file == "test_hub_agents.yml")
     matchers = crs._collect_all_name_matchers(str(wf_dir))
 
@@ -554,3 +659,231 @@ jobs:
     )
     assert not result.is_fully_ok
     assert result.missing == [hub_req]
+
+
+# ---------------------------------------------------------------------------
+# recency — GitHub never deletes a check-run; every triggering event adds
+# new rows alongside old ones. This is what caught the gate failing on its
+# own PR (#2783): a matrix job's `if:` was false BEFORE its strategy
+# expanded (still draft), so GitHub posted exactly ONE check-run with the
+# raw, un-rendered "${{ }}" template as its name and conclusion=skipped.
+# Prefix matching genuinely matches that literal string (it does start with
+# the derived prefix) — the bug was giving that stale row unconditional
+# priority over the real, later, expanded-and-passing rows sitting right
+# next to it in the same API response.
+# ---------------------------------------------------------------------------
+
+
+def test_evaluate_stale_unexpanded_matrix_skip_is_superseded_by_real_pass():
+    reqs = [_req("Test Apps Build (", exact=False)]
+    runs = [
+        # First event (opened, still draft): job skipped before its matrix
+        # ever expanded -> one row, literal template, never deleted.
+        crs.CheckRun(
+            name="Test Apps Build (${{ matrix.app.name }})",
+            status="completed",
+            conclusion="skipped",
+            started_at="2026-08-04T02:33:12Z",
+        ),
+        # Later event (reopened, after ready_for_ci): job actually ran,
+        # matrix expanded for real, each leg gets its own row.
+        crs.CheckRun(
+            name="Test Apps Build (jira)",
+            status="completed",
+            conclusion="success",
+            started_at="2026-08-04T02:38:08Z",
+        ),
+        crs.CheckRun(
+            name="Test Apps Build (example)",
+            status="completed",
+            conclusion="success",
+            started_at="2026-08-04T02:38:08Z",
+        ),
+    ]
+    result = crs.evaluate(reqs, changed_files=["x"], check_runs=runs)
+    assert (
+        result.is_fully_ok
+    ), f"stale skip should not mask the real pass: {result.failed}"
+
+
+def test_evaluate_one_real_failed_leg_still_fails_even_with_stale_skip_present():
+    # The stale unexpanded row must not distract from a REAL current
+    # failure either — recency-filtering discards the noise, not the
+    # signal.
+    reqs = [_req("Unit Tests (py", exact=False)]
+    runs = [
+        crs.CheckRun(
+            name="Unit Tests (py${{ matrix.python-version }})",
+            status="completed",
+            conclusion="skipped",
+            started_at="2026-08-04T02:33:06Z",
+        ),
+        crs.CheckRun(
+            name="Unit Tests (py3.10)",
+            status="completed",
+            conclusion="success",
+            started_at="2026-08-04T02:38:00Z",
+        ),
+        crs.CheckRun(
+            name="Unit Tests (py3.11)",
+            status="completed",
+            conclusion="failure",
+            started_at="2026-08-04T02:38:00Z",
+        ),
+    ]
+    result = crs.evaluate(reqs, changed_files=["x"], check_runs=runs)
+    assert result.is_terminal_failure
+
+
+def test_evaluate_latest_entry_still_skipped_reports_transiently_but_correctly_red():
+    # The other real shape: the real re-run hasn't posted yet at all, so
+    # the only entry that exists IS the stale-looking skip. That must
+    # still fail — there's nothing newer to prefer it over, and failing
+    # closed here (rather than guessing it'll pass eventually) is the
+    # designed behavior, not a bug. The poll loop in main() is what turns
+    # this into "keep waiting" instead of an immediate hard stop.
+    reqs = [_req("Test", exact=False)]
+    runs = [
+        crs.CheckRun(
+            name="Test ${{ matrix.package }}",
+            status="completed",
+            conclusion="skipped",
+            started_at="2026-08-04T02:33:06Z",
+        ),
+    ]
+    result = crs.evaluate(reqs, changed_files=["x"], check_runs=runs)
+    assert result.is_terminal_failure
+
+
+def test_evaluate_repeated_exact_name_keeps_only_newest():
+    # discover-apps re-ran 3 times across opened/labeled/reopened on the
+    # same SHA in real life; only the newest of the three is authoritative.
+    reqs = [_req("discover-apps")]
+    runs = [
+        crs.CheckRun(
+            name="discover-apps",
+            status="completed",
+            conclusion="skipped",
+            started_at="2026-08-04T02:33:06Z",
+        ),
+        crs.CheckRun(
+            name="discover-apps",
+            status="completed",
+            conclusion="success",
+            started_at="2026-08-04T02:34:29Z",
+        ),
+        crs.CheckRun(
+            name="discover-apps",
+            status="completed",
+            conclusion="success",
+            started_at="2026-08-04T02:37:28Z",
+        ),
+    ]
+    result = crs.evaluate(reqs, changed_files=["x"], check_runs=runs)
+    assert result.is_fully_ok
+
+
+def test_evaluate_re_skip_after_real_pass_is_reported_as_current():
+    # The inverse of the masking bug: if a job goes back to draft AFTER a
+    # real pass (label removed, say), a fresh skip newer than the old pass
+    # must NOT be silently ignored just because "a pass exists somewhere".
+    reqs = [_req("Test Apps Build (", exact=False)]
+    runs = [
+        crs.CheckRun(
+            name="Test Apps Build (jira)",
+            status="completed",
+            conclusion="success",
+            started_at="2026-08-04T02:34:00Z",
+        ),
+        crs.CheckRun(
+            name="Test Apps Build (${{ matrix.app.name }})",
+            status="completed",
+            conclusion="skipped",
+            started_at="2026-08-04T02:40:00Z",
+        ),
+    ]
+    result = crs.evaluate(reqs, changed_files=["x"], check_runs=runs)
+    assert result.is_terminal_failure
+
+
+def test_evaluate_static_name_with_matrix_pre_expansion_artifact_is_superseded():
+    # The bug that reached #2783 despite the "${{ }}" fix above: a static
+    # `name:` ("Audit Dependencies") with NO template expression, but a
+    # multi-leg strategy.matrix anyway. GitHub disambiguates real legs by
+    # appending "(leg, values)" to every rendered check-run, but a job
+    # skipped before its matrix expands posts the bare, un-suffixed name —
+    # identical to the requirement's own prefix, with no "${{" anywhere to
+    # catch it. Confirmed live: exact-matching "Audit Dependencies" never
+    # matched the real "Audit Dependencies (jira-app, ...)" runs at all
+    # until load_requirements() also treated "has a matrix" (not just "name
+    # contains ${{") as reason to use prefix matching.
+    reqs = [_req("Audit Dependencies", exact=False)]
+    runs = [
+        # Pre-expansion artifact: bare name, no suffix, from the first
+        # (still-draft) event.
+        crs.CheckRun(
+            name="Audit Dependencies",
+            status="completed",
+            conclusion="skipped",
+            started_at="2026-08-04T02:33:16Z",
+        ),
+        # Real legs, expanded, from the later (reopened) event.
+        crs.CheckRun(
+            name="Audit Dependencies (jira-app, src/gaia/apps/jira/webui)",
+            status="completed",
+            conclusion="success",
+            started_at="2026-08-04T02:38:07Z",
+        ),
+        crs.CheckRun(
+            name="Audit Dependencies (example-app, src/gaia/apps/example/webui)",
+            status="completed",
+            conclusion="success",
+            started_at="2026-08-04T02:38:07Z",
+        ),
+    ]
+    result = crs.evaluate(reqs, changed_files=["x"], check_runs=runs)
+    assert (
+        result.is_fully_ok
+    ), f"bare pre-expansion artifact should not mask the real, suffixed pass: {result.failed}"
+
+
+def test_evaluate_static_name_with_matrix_only_artifact_present_stays_failed():
+    # Same shape, but the real run genuinely hasn't posted yet — must fail
+    # closed, not silently pass just because the bare name "looks like" a
+    # normal exact-match requirement would expect.
+    reqs = [_req("Audit Dependencies", exact=False)]
+    runs = [
+        crs.CheckRun(
+            name="Audit Dependencies",
+            status="completed",
+            conclusion="skipped",
+            started_at="2026-08-04T02:33:16Z",
+        ),
+    ]
+    result = crs.evaluate(reqs, changed_files=["x"], check_runs=runs)
+    assert result.is_terminal_failure
+
+
+# ---------------------------------------------------------------------------
+# format_exclusions() — the excluded set must stay auditable at a glance as
+# more exclusion classes get added, not just a list a reader can skim past.
+# ---------------------------------------------------------------------------
+
+
+def test_format_exclusions_empty_states_the_ratio():
+    msg = crs.format_exclusions(60, [])
+    assert "60/60" in msg
+    assert "none excluded" in msg
+
+
+def test_format_exclusions_breaks_down_by_kind():
+    exclusions = [
+        crs.Exclusion("a", "f1.yml", "j1", "reason a", kind="needs-gated"),
+        crs.Exclusion("b", "f2.yml", "j2", "reason b", kind="needs-gated"),
+        crs.Exclusion("c", "f3.yml", "j3", "reason c", kind="continue-on-error"),
+    ]
+    msg = crs.format_exclusions(57, exclusions)
+    assert "57/60" in msg
+    assert "excluded 3" in msg
+    assert "needs-gated: 2" in msg
+    assert "continue-on-error: 1" in msg

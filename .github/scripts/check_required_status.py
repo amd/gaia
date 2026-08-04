@@ -64,6 +64,23 @@ class CheckRun:
     name: str
     status: str
     conclusion: str | None
+    # ISO 8601 — GitHub's Checks API never deletes or overwrites a prior
+    # check-run when a job re-runs; every triggering event adds a new row.
+    # `started_at` is what lets evaluate() tell a stale result from the
+    # current one instead of treating the whole history as live.
+    started_at: str = ""
+
+
+@dataclass
+class Exclusion:
+    name_prefix: str
+    source_file: str
+    job_id: str
+    reason: str
+    # Short, stable category for the summary counts in format_exclusions —
+    # kept separate from `reason` (the free-text detail) so the count
+    # breakdown doesn't depend on parsing that string.
+    kind: str
 
 
 @dataclass
@@ -124,7 +141,18 @@ def _iter_workflow_jobs(workflows_dir: str):
             if not isinstance(job, dict):
                 continue
             name_tmpl = job.get("name") or job_id
-            yield fname, doc, job_id, job, name_tmpl, "${{" in name_tmpl
+            # A job needs prefix (not exact) matching whenever its RENDERED
+            # check-run name can vary — either its own `name:` has a
+            # `${{ }}` expression, OR it has a matrix strategy at all. The
+            # second case is easy to miss: a static `name:` with a matrix
+            # ("Audit Dependencies" + strategy.matrix.package) still gets
+            # GitHub's own auto-appended "(leg, values)" disambiguator on
+            # every rendered check-run — confirmed live on #2767's own PR
+            # (#2783), where exact-matching "Audit Dependencies" against
+            # "Audit Dependencies (example-app, ...)" never matched at all.
+            has_matrix = bool(job.get("strategy", {}).get("matrix")) if isinstance(job.get("strategy"), dict) else False
+            is_templated = "${{" in name_tmpl or has_matrix
+            yield fname, doc, job_id, job, name_tmpl, is_templated
 
 
 @dataclass(frozen=True)
@@ -182,14 +210,28 @@ def _most_specific_owner(name: str, matchers: list[_NameMatcher]) -> tuple[str, 
     return (best.source_file, best.job_id) if best else None
 
 
-def load_requirements(workflows_dir: str, exclude: Iterable[str]) -> list[Requirement]:
+def load_requirements(
+    workflows_dir: str, exclude: Iterable[str]
+) -> tuple[list[Requirement], list[Exclusion]]:
     """Parse every workflow with a `pull_request:` trigger into a flat list
-    of per-job requirements. A job is excluded (not required) when the
-    workflow itself has none to give: `continue-on-error: true` on that job
-    means its own author has already declared it non-blocking.
+    of per-job requirements, plus the jobs deliberately left OUT and why.
+
+    Two things make a job impossible to verify statically, and both get
+    excluded — but reported, not silently dropped (see Exclusion): a
+    silent exclusion is a fail-open hole inside the gate built to close
+    fail-open holes, e.g. a future job wrapped in `needs.*` dropping out of
+    the required set with nobody told.
+
+    - `continue-on-error: true` — the job's own author already declared it
+      non-blocking.
+    - an `if:` that references `needs.` — gated on another job's runtime
+      output (e.g. a dynamically discovered matrix via
+      `fromJson(needs.x.outputs.y)`), which cannot be evaluated from YAML
+      alone without executing the DAG.
     """
     exclude_set = set(exclude)
     reqs: list[Requirement] = []
+    exclusions: list[Exclusion] = []
     for fname, doc, job_id, job, name_tmpl, is_templated in _iter_workflow_jobs(workflows_dir):
         if fname in exclude_set:
             continue
@@ -209,8 +251,6 @@ def load_requirements(workflows_dir: str, exclude: Iterable[str]) -> list[Requir
             paths = pr.get("paths")
             paths_ignore = pr.get("paths-ignore")
 
-        if job.get("continue-on-error") is True:
-            continue
         # Matrix-templated names ("Foo (${{ matrix.x }})") can't be
         # statically expanded without evaluating GH Actions expressions;
         # match by the static prefix before the first expression instead.
@@ -219,6 +259,49 @@ def load_requirements(workflows_dir: str, exclude: Iterable[str]) -> list[Requir
         prefix = name_tmpl.split("${{", 1)[0].rstrip() if is_templated else name_tmpl
         if not prefix:
             continue
+
+        if job.get("continue-on-error") is True:
+            exclusions.append(
+                Exclusion(
+                    prefix,
+                    fname,
+                    job_id,
+                    "continue-on-error: true (job's own author declared it non-blocking)",
+                    kind="continue-on-error",
+                )
+            )
+            continue
+        job_if = job.get("if")
+        if isinstance(job_if, str) and "needs." in job_if:
+            exclusions.append(
+                Exclusion(
+                    prefix,
+                    fname,
+                    job_id,
+                    f"if: references needs.* ({job_if.strip()!r}) — depends on another job's runtime output, not statically verifiable",
+                    kind="needs-gated",
+                )
+            )
+            continue
+        # Unlike needs.*, this one IS statically decidable: github.ref on a
+        # pull_request event is always the PR's merge ref, never a tag ref,
+        # so a job gated on refs/tags/ can never run in PR context at all —
+        # confirmed live on #2767's own PR (build_agents.yml's "Consolidate
+        # release bundle", `if: startsWith(github.ref, 'refs/tags/v')`,
+        # sitting at conclusion=skipped on every PR run forever). Excluding
+        # it is correcting a real derivation gap, not hedging on the unknown.
+        if isinstance(job_if, str) and "refs/tags/" in job_if:
+            exclusions.append(
+                Exclusion(
+                    prefix,
+                    fname,
+                    job_id,
+                    f"if: gated on a tag ref ({job_if.strip()!r}) — can never run on a pull_request event",
+                    kind="ref-conditional",
+                )
+            )
+            continue
+
         reqs.append(
             Requirement(
                 name_prefix=prefix,
@@ -229,7 +312,7 @@ def load_requirements(workflows_dir: str, exclude: Iterable[str]) -> list[Requir
                 job_id=job_id,
             )
         )
-    return reqs
+    return reqs, exclusions
 
 
 def is_gated_off(is_draft: bool, labels: set[str]) -> bool:
@@ -253,6 +336,75 @@ def is_path_relevant(req: Requirement, changed_files: list[str]) -> bool:
         return any(_matches_any(cf, req.paths) for cf in changed_files)
     # paths-ignore only: relevant iff at least one changed file is NOT ignored.
     return any(not _matches_any(cf, req.paths_ignore) for cf in changed_files)
+
+
+def _is_pre_expansion_artifact(name: str, req: Requirement) -> bool:
+    """True when `name` is what a matrix job's check-run looks like BEFORE
+    its strategy ever expanded (job `if:` was false, e.g. still draft) —
+    confirmed live on #2767's own PRs, in two different shapes:
+
+    1. The job's own `name:` contains `${{ }}` — GitHub posts the raw,
+       un-rendered template string, e.g.
+       "Test Apps Build (${{ matrix.app.name }})".
+    2. The job's `name:` is fully static but it has a `strategy.matrix`
+       anyway — GitHub normally disambiguates each real leg by appending
+       "(leg, values)" (e.g. "Audit Dependencies (jira-app, ...)"), but a
+       job skipped before expansion posts the bare, un-suffixed name with
+       nothing appended: "Audit Dependencies", identical to the derived
+       prefix itself. A REAL run of a multi-leg matrix job can never
+       produce that bare, un-suffixed name — GitHub always appends
+       something once legs actually exist — so `name == req.name_prefix`
+       is exact and decidable, not a heuristic, for this shape.
+
+    Only meaningful for prefix-mode (non-exact) requirements; exact-mode
+    requirements have no matrix-expansion ambiguity to begin with.
+    """
+    if "${{" in name:
+        return True
+    return not req.exact and name == req.name_prefix
+
+
+def _current_matches(matches: list[CheckRun], req: Requirement) -> list[CheckRun]:
+    """Reduce a requirement's raw check-run matches to the ones that
+    represent its CURRENT state, not its full history.
+
+    GitHub never deletes or overwrites a check-run — every triggering event
+    (opened, then later labeled, then later reopened, ...) adds new rows
+    alongside the old ones. Two things fall out of that:
+
+    1. The same exact name can appear more than once (e.g. "discover-apps"
+       re-run after a draft PR is reopened). Keep only the newest per name.
+    2. A matrix job whose `if:` was false BEFORE its strategy expanded posts
+       exactly ONE check-run in its pre-expansion form (see
+       _is_pre_expansion_artifact) — confirmed live on #2767's own
+       throwaway and real PRs. That row is meaningless once the SAME job
+       has actually run for real anywhere in this SHA's history (producing
+       real, expanded rows) — so once at least one non-artifact row exists,
+       discard any artifact row OLDER than the newest non-artifact one. An
+       artifact row NEWER than every non-artifact row is kept: that's a
+       genuine re-skip (e.g. the PR went back to draft after a real pass),
+       and the gate should report that as current, not paper over it.
+
+    Deliberately not a fixed time-window ("group everything within N
+    seconds"): the observed gap between a stale skip and its real re-run
+    ranged from about a minute to several minutes on real PRs in this repo,
+    so no fixed window reliably separates "same event" from "different
+    event." Comparing by exact name + the decidable artifact rule above
+    needs no tuned constant and is exact rather than approximate.
+    """
+    latest_by_name: dict[str, CheckRun] = {}
+    for cr in matches:
+        cur = latest_by_name.get(cr.name)
+        if cur is None or cr.started_at > cur.started_at:
+            latest_by_name[cr.name] = cr
+    deduped = list(latest_by_name.values())
+
+    non_artifact = [cr for cr in deduped if not _is_pre_expansion_artifact(cr.name, req)]
+    artifact = [cr for cr in deduped if _is_pre_expansion_artifact(cr.name, req)]
+    if non_artifact:
+        newest_real_ts = max(cr.started_at for cr in non_artifact)
+        artifact = [cr for cr in artifact if cr.started_at > newest_real_ts]
+    return non_artifact + artifact
 
 
 def evaluate(
@@ -281,6 +433,7 @@ def evaluate(
         if not matches:
             result.missing.append(req)
             continue
+        matches = _current_matches(matches, req)
         not_completed = [cr for cr in matches if cr.status != "completed"]
         bad = [cr for cr in matches if cr.status == "completed" and cr.conclusion in TERMINAL_BAD_CONCLUSIONS]
         good = [cr for cr in matches if cr.status == "completed" and cr.conclusion in PASSING_CONCLUSIONS]
@@ -350,7 +503,7 @@ def fetch_check_runs(repo: str, sha: str) -> list[CheckRun]:
             f"repos/{repo}/commits/{sha}/check-runs",
             "--paginate",
             "-q",
-            ".check_runs[] | {name, status, conclusion}",
+            ".check_runs[] | {name, status, conclusion, started_at}",
         ],
         capture_output=True,
         text=True,
@@ -366,8 +519,36 @@ def fetch_check_runs(repo: str, sha: str) -> list[CheckRun]:
         if not line:
             continue
         obj = json.loads(line)
-        runs.append(CheckRun(name=obj["name"], status=obj["status"], conclusion=obj.get("conclusion")))
+        runs.append(
+            CheckRun(
+                name=obj["name"],
+                status=obj["status"],
+                conclusion=obj.get("conclusion"),
+                started_at=obj.get("started_at") or "",
+            )
+        )
     return runs
+
+
+def format_exclusions(num_enforced: int, exclusions: list[Exclusion]) -> str:
+    """Scope summary for every posted check-run, not just the exclusion
+    list itself — with three exclusion classes now, a bare list is easy to
+    skim past as a workflow evolves and the excluded set quietly grows.
+    Stating it as a ratio keeps the gate's own coverage auditable at a
+    glance: "enforced N, excluded M (kind: count, ...)".
+    """
+    total = num_enforced + len(exclusions)
+    if not exclusions:
+        return f" Enforced {num_enforced}/{total} requirement(s); none excluded."
+    by_kind: dict[str, int] = {}
+    for e in exclusions:
+        by_kind[e.kind] = by_kind.get(e.kind, 0) + 1
+    breakdown = ", ".join(f"{kind}: {count}" for kind, count in sorted(by_kind.items()))
+    items = "; ".join(f"{e.name_prefix} (from {e.source_file}): {e.reason}" for e in exclusions)
+    return (
+        f" Enforced {num_enforced}/{total} requirement(s); excluded {len(exclusions)} "
+        f"as not statically verifiable ({breakdown}): {items}."
+    )
 
 
 def format_report(result: EvalResult, elapsed: int) -> str:
@@ -402,6 +583,13 @@ def main() -> int:
     is_draft = args.draft == "true"
     labels = {label.strip() for label in args.labels.split(",") if label.strip()}
 
+    requirements, exclusions = load_requirements(args.workflows_dir, args.exclude)
+    exclusion_note = format_exclusions(len(requirements), exclusions)
+    print(exclusion_note.strip())
+    if exclusions:
+        for e in exclusions:
+            print(f"  - {e.name_prefix} (from {e.source_file}, {e.kind}): {e.reason}")
+
     if is_gated_off(is_draft, labels):
         # Deliberately NOT skipped via a job-level `if:` — see the module
         # docstring on post_check_run for why a job that skips itself here
@@ -415,14 +603,18 @@ def main() -> int:
             "This PR is a draft without the `ready_for_ci` label, so the "
             "suites this gate audits have not run (by the same convention "
             "every audited workflow uses). Nothing has been verified — this "
-            "is not a pass. Mark the PR ready for review, or add the "
-            "`ready_for_ci` label, to require and verify them."
+            "is not a pass. Two ways to require and verify them: mark the PR "
+            "ready for review, OR add the `ready_for_ci` label AND THEN close "
+            "and reopen the PR. The label alone is not enough — the audited "
+            "suites only listen for opened/synchronize/reopened/ready_for_review "
+            "events, not `labeled`, so adding the label by itself does not "
+            "re-trigger them (only this gate re-triggers on `labeled`)."
+            + exclusion_note
         )
         print(f"GATED OFF: {summary}")
         post_check_run(args.repo, args.sha, "neutral", title, summary)
         return 0
 
-    requirements = load_requirements(args.workflows_dir, args.exclude)
     all_matchers = _collect_all_name_matchers(args.workflows_dir)
     changed_files = fetch_changed_files(args.changed_files)
 
@@ -438,7 +630,23 @@ def main() -> int:
         print(format_report(result, elapsed))
 
         if result.is_terminal_failure:
-            details = "; ".join(f"{req.name_prefix} ({reason})" for req, reason in result.failed)
+            # "did not run" (stuck at skipped — needs a re-trigger) and "ran
+            # and failed" (a real failure/timeout/cancellation) are different
+            # states and need different advice, not one blanket message.
+            not_run = [(req, reason) for req, reason in result.failed if "=skipped" in reason]
+            really_failed = [(req, reason) for req, reason in result.failed if "=skipped" not in reason]
+            parts = []
+            if not_run:
+                names = "; ".join(f"{req.name_prefix} ({reason})" for req, reason in not_run)
+                parts.append(
+                    "Did not run (stuck at 'skipped', not re-evaluated for the current "
+                    f"state — add `ready_for_ci` AND close/reopen the PR to re-trigger "
+                    f"them, the label alone will not): {names}"
+                )
+            if really_failed:
+                names = "; ".join(f"{req.name_prefix} ({reason})" for req, reason in really_failed)
+                parts.append(f"Ran and did not pass: {names}")
+            details = " ".join(parts)
             for req, reason in result.failed:
                 print(
                     f"::error::Required check '{req.name_prefix}' (from "
@@ -451,7 +659,7 @@ def main() -> int:
                 args.sha,
                 "failure",
                 "Required suites did not pass",
-                f"One or more required, path-relevant checks did not pass: {details}",
+                details + exclusion_note,
             )
             return 1
         if result.is_fully_ok:
@@ -462,7 +670,7 @@ def main() -> int:
                 args.sha,
                 "success",
                 "All required suites passed",
-                f"Required and path-relevant for this diff: {names}",
+                f"Required and path-relevant for this diff: {names}." + exclusion_note,
             )
             return 0
         if elapsed >= args.timeout_seconds:
@@ -477,7 +685,7 @@ def main() -> int:
                 args.sha,
                 "failure",
                 "Required suites never reported",
-                f"Timed out after {args.timeout_seconds}s waiting on: {details}",
+                f"Timed out after {args.timeout_seconds}s waiting on: {details}." + exclusion_note,
             )
             return 1
         time.sleep(args.poll_seconds)
