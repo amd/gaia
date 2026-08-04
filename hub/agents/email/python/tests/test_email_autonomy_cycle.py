@@ -295,6 +295,78 @@ def test_urgent_message_never_auto_actioned_even_at_full(tmp_path):
     assert "INBOX" in agent._gmail.get_message("u1").get("labelIds", [])
 
 
+def test_muted_sender_urgent_message_never_becomes_autonomy_candidate(tmp_path):
+    """End-to-end regression for #2666's real severity claim.
+
+    Before #2666, ``_apply_session_preferences`` force-set every muted
+    sender's message to ``CATEGORY_PROMOTIONAL`` regardless of content —
+    which made ``_autonomy_candidate`` (agent.py) nominate it for archive,
+    and ``TrustPolicy._explicitly_preferred`` (trust.py) auto-execute that
+    archive unconditionally at ``earn_trust``+ the moment the sender
+    matched ``low_priority_senders`` — no ledger, no trust history, no
+    confirmation. A genuine emergency from a muted sender could be
+    silently archived with no human involved.
+
+    This pins the property one level below the unit tests on
+    ``_apply_session_preferences`` alone: the muted sender's urgent
+    message (IMPORTANT label, heuristically NEEDS_RESPONSE/unconfident —
+    the heuristic itself never emits URGENT, see #2771) must never even
+    reach ``_autonomy_candidate``'s archive branch, so
+    ``TrustPolicy.decide`` is never consulted for it at all. Uses
+    ``LEVEL_EARN_TRUST`` with a cold ledger specifically because that is
+    the exact level/path ``_explicitly_preferred`` operates on — at
+    ``LEVEL_FULL`` every reversible action auto-executes regardless of
+    preference, which would not distinguish this fix from the general
+    "urgent mail is never a candidate" property already covered above.
+    """
+    sender = "boss@company.com"
+    agent = _build_agent(
+        tmp_path,
+        [_urgent_message("u1", sender)],
+        level=LEVEL_EARN_TRUST,
+        autonomy_trust_min_samples=3,
+    )
+    agent._session_preferences["low_priority_senders"].add(sender)
+
+    report = agent._run_email_autonomy_cycle()
+
+    assert report["executed"] == []
+    assert report["proposals"] == []
+    assert report["skipped"] == 1
+    assert report["decisions"] == []  # never reached TrustPolicy.decide at all
+    # Still in the inbox, untouched.
+    assert "INBOX" in agent._gmail.get_message("u1").get("labelIds", [])
+
+
+def test_muted_sender_genuinely_promotional_message_still_auto_archives(tmp_path):
+    """The flip side of the test above: muting must keep working for mail
+    that IS genuinely promotional by content — #2666 removes the forced
+    override, not the legitimate explicit-preference fast path.
+    ``TrustPolicy._explicitly_preferred`` reads ``low_priority_senders``
+    directly (never the inert ``preference_applied`` tag, see #2777), so
+    this is unaffected by #2666 and must still auto-archive on a cold
+    ledger at ``earn_trust``.
+    """
+    sender = "deals@shop.com"
+    agent = _build_agent(
+        tmp_path,
+        [_promo_message("m1", sender)],
+        level=LEVEL_EARN_TRUST,
+        autonomy_trust_min_samples=3,
+    )
+    agent._session_preferences["low_priority_senders"].add(sender)
+
+    report = agent._run_email_autonomy_cycle()
+
+    assert len(report["executed"]) == 1
+    entry = report["executed"][0]
+    assert entry["action"] == "archive"
+    assert entry["message_id"] == "m1"
+    assert report["proposals"] == []
+    assert report["decisions"][0]["reason"] == "you set an explicit preference for this"
+    assert "INBOX" not in agent._gmail.get_message("m1").get("labelIds", [])
+
+
 def test_mixed_inbox_splits_correctly(tmp_path):
     agent = _build_agent(
         tmp_path,
