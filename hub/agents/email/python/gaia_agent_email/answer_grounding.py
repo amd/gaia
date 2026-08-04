@@ -495,12 +495,15 @@ _INVITE_CLAIM_RE = re.compile(
     re.IGNORECASE,
 )
 
-# A negation anywhere in the same clause turns a claim into a (correct)
-# denial -- "no invite has been sent" must not be treated like "an invite
-# has been sent". Deliberately broad (checked over the whole clause, not a
-# fixed window) since a denial can front-load its negation far from "invite".
+# A negation or hedging modal anywhere in the same clause turns a completed-
+# action claim into something else -- a (correct) denial ("no invite has
+# been sent") or a hypothetical ("an invite would be sent") -- neither of
+# which asserts what "an invite has been sent" asserts. Deliberately broad
+# (checked over the whole clause, not a fixed window) since a denial can
+# front-load its negation far from "invite".
 _INVITE_NEGATION_RE = re.compile(
-    r"\b(?:no|not|n't|never|none|isn't|wasn't|hasn't|haven't|didn't|doesn't)\b",
+    r"\b(?:no|not|n't|never|none|nobody|isn't|wasn't|hasn't|haven't|didn't"
+    r"|doesn't|would|will|might|could|should)\b",
     re.IGNORECASE,
 )
 

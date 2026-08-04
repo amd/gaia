@@ -535,6 +535,10 @@ class TestFindUngroundedInviteClaim:
             "Would you like me to send an invite for this?",
             "Alice proposed meeting Thursday at 2pm.",
             "Here are your three upcoming meetings.",
+            "The vendor said an invite would be sent soon.",
+            "Nobody has sent you an invite yet.",
+            "Three people proposed times to meet, but no invite has actually "
+            "been sent.",
         ],
     )
     def test_no_false_positive(self, phrase):
