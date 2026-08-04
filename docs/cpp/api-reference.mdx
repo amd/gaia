@@ -371,6 +371,143 @@ public:
 
 ---
 
+## Structured persistence (`gaia::Database`)
+
+`<gaia/database.h>` is a RAII wrapper over SQLite for anything an agent needs to
+persist as structured data rather than loose JSON files. SQLite is **vendored**
+into `gaia_core` ([`cpp/third_party/sqlite/`](https://github.com/amd/gaia/tree/main/cpp/third_party/sqlite))
+and compiled with `SQLITE_ENABLE_FTS5`, so full-text search is always available
+and every platform build behaves identically. You do **not** need `sqlite3.h` on
+your include path or a SQLite package on your system.
+
+### Connection
+
+```cpp
+#include <gaia/database.h>
+
+gaia::Database db("agent.db");          // WAL + 5 s busy_timeout + foreign keys
+auto mem = gaia::Database::inMemory();  // private in-memory database
+```
+
+`Database::Options` controls what is applied at open:
+
+| Option | Default | Meaning |
+|--------|---------|---------|
+| `walMode` | `true` | WAL journaling — readers don't block the writer. Ignored for in-memory. |
+| `busyTimeoutMs` | `5000` | How long a writer waits on a locked database before failing. |
+| `foreignKeys` | `true` | Enforce `FOREIGN KEY` constraints. |
+| `readOnly` | `false` | Open read-only; the file must exist. |
+| `createIfMissing` | `true` | Create the file and any missing parent directories. |
+
+Connections are opened in SQLite's serialized mode, so one `Database` can be
+shared across threads without external locking.
+
+### Statements
+
+Bind indices are 1-based; column indices are 0-based.
+
+```cpp
+auto stmt = db.prepare("SELECT id, body FROM notes WHERE score > ?");
+stmt.bindDouble(1, 0.5);
+while (stmt.step()) {
+    std::int64_t id  = stmt.columnInt64(0);
+    std::string body = stmt.columnText(1);
+}
+
+// Or bind everything positionally and run in one call:
+db.run("INSERT INTO notes (body, embedding) VALUES (?, ?)", "hello", blobBytes);
+```
+
+Typed accessors cover every storage class — `columnInt64`, `columnInt`,
+`columnBool`, `columnDouble`, `columnText`, `columnBlob` — plus `isNull()` and
+`columnType()` to tell a stored empty string apart from `NULL`.
+
+### Transactions
+
+`Transaction` is a scope guard: it rolls back unless you commit.
+
+```cpp
+{
+    gaia::Transaction txn(db);
+    db.run("INSERT INTO notes (body) VALUES (?)", "a");
+    db.run("INSERT INTO notes (body) VALUES (?)", "b");
+    txn.commit();          // omit this (or throw) and both inserts are discarded
+}
+```
+
+Constructing a `Transaction` while one is already open produces a **savepoint**
+instead of a second `BEGIN`, so nesting works.
+
+### Schema migrations
+
+Migrations mirror the Python `MemoryStore` approach — ordered steps, each
+advancing a stored version, chaining a database at any older version forward.
+The version lives in `PRAGMA user_version`, so no table is imposed on your
+schema; a fresh database reports `0`.
+
+```cpp
+std::vector<gaia::Migration> steps;
+
+steps.push_back(gaia::Migration::fromSql(
+    1, "initial schema",
+    "CREATE TABLE knowledge (id TEXT PRIMARY KEY, content TEXT NOT NULL);"));
+
+gaia::Migration v2;
+v2.version     = 2;
+v2.description = "add embedding column";
+v2.apply       = [](gaia::Database& d) {
+    d.addColumnIfMissing("knowledge", "embedding BLOB");
+};
+steps.push_back(std::move(v2));
+
+db.migrate(steps);   // runs only what's newer than the stored version
+```
+
+Each step runs inside a transaction that also stamps the new version, so a step
+that throws rolls back completely and the stored version does not advance —
+re-running `migrate()` retries that same step. `addColumnIfMissing()` is the
+idempotent `ALTER TABLE … ADD COLUMN`, which is what makes a step that died
+half-way safely re-runnable.
+
+`migrate()` **refuses to run against a database newer than the last step it
+knows about** rather than operating on a schema it doesn't understand.
+
+### Full-text search (FTS5)
+
+```cpp
+db.execute("CREATE VIRTUAL TABLE docs USING fts5(title, body)");
+db.run("INSERT INTO docs VALUES (?, ?)", "Ryzen AI", "NPU-accelerated inference");
+
+auto hits = db.prepare("SELECT title, bm25(docs) FROM docs WHERE docs MATCH ? ORDER BY rank");
+hits.bindText(1, "npu AND inference");
+while (hits.step()) { /* … */ }
+```
+
+`Database::hasFts5()` reports availability so you can assert it up front instead
+of discovering it from a failed query.
+
+### Errors
+
+Every failure raises `gaia::DatabaseError` — nothing is swallowed and no
+operation degrades to a placeholder value. The message carries the SQLite text
+plus the context needed to act on it:
+
+```
+cannot prepare statement: no such table: notes [code=1 SQL logic error]
+  database: /home/u/.gaia/agent.db
+  statement: SELECT * FROM notes
+```
+
+`code()`, `dbPath()`, and `sql()` expose the same fields programmatically.
+
+<Note>
+Double-quoted string literals are rejected (`SQLITE_DQS=0`): `WHERE name = "alice"`
+is an error, not a silently-matching string constant. Use single quotes for
+literals, or a bind parameter.
+</Note>
+
+---
+
 ## Vision Language Models (VLM)
 
 The C++ SDK supports vision-language models (VLMs) via the OpenAI-compatible
