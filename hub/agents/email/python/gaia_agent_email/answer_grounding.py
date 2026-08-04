@@ -476,6 +476,178 @@ def _attention_card_correction(cached: Dict[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Guard 6 — an invite claimed as sent/received/confirmed (#2766)
+# ---------------------------------------------------------------------------
+#
+# No tool in this package can currently confirm that a genuine calendar
+# invite was sent or received — detect_meeting_request is a text heuristic
+# for PROPOSALS, never a confirmation, and list_calendar_events /
+# detect_calendar_conflicts return real events but an event existing is not
+# evidence anyone emailed an invite for it (see calendar_tools' docstrings).
+# A completion-framed invite claim is therefore always ungrounded today,
+# with one exception: create_event_from_email's own mutation legitimately
+# sends calendar invites to its attendees, so a turn that actually called it
+# licenses the claim (mirrors guard 1's "grounded when a tool ran" shape).
+
+_INVITE_CLAIM_RE = re.compile(
+    r"\binvite[sd]?\b[^.!?]{0,40}\b(?:sent|received|confirmed)\b"
+    r"|\b(?:sent|received)\b[^.!?]{0,40}\binvite[sd]?\b",
+    re.IGNORECASE,
+)
+
+# A negation anywhere in the same clause turns a claim into a (correct)
+# denial -- "no invite has been sent" must not be treated like "an invite
+# has been sent". Deliberately broad (checked over the whole clause, not a
+# fixed window) since a denial can front-load its negation far from "invite".
+_INVITE_NEGATION_RE = re.compile(
+    r"\b(?:no|not|n't|never|none|isn't|wasn't|hasn't|haven't|didn't|doesn't)\b",
+    re.IGNORECASE,
+)
+
+
+def _clause_around(text: str, start: int, end: int) -> str:
+    """The sentence-ish span of ``text`` containing ``[start, end)`` —
+    bounded by the nearest ``.``/``!``/``?`` on either side (or the string's
+    own edges). Shared by guards that need "same clause" context without
+    crossing into an unrelated sentence.
+    """
+    clause_start = (
+        max(
+            text.rfind(".", 0, start),
+            text.rfind("!", 0, start),
+            text.rfind("?", 0, start),
+        )
+        + 1
+    )
+    ends = [
+        idx
+        for idx in (text.find(".", end), text.find("!", end), text.find("?", end))
+        if idx != -1
+    ]
+    clause_end = min(ends) if ends else len(text)
+    return text[clause_start:clause_end]
+
+
+def find_ungrounded_invite_claim(
+    final_answer: Optional[str], conversation: Optional[List[Dict[str, Any]]]
+) -> Optional[str]:
+    """Return a reason when ``final_answer`` claims a calendar invite was
+    sent, received, or confirmed; ``None`` when the claim is grounded,
+    negated, or absent.
+
+    Proposals are not invites (#2766): "X proposed Thursday at 2pm" is fine,
+    "X sent you an invite" is not, unless this turn actually created one.
+    """
+    if not final_answer:
+        return None
+    match = _INVITE_CLAIM_RE.search(final_answer)
+    if not match:
+        return None
+    clause = _clause_around(final_answer, match.start(), match.end())
+    if _INVITE_NEGATION_RE.search(clause):
+        return None
+    if "create_event_from_email" in tools_called_this_turn(conversation):
+        return None
+    return f"claims an invite was sent/received/confirmed: {match.group(0)!r}"
+
+
+_INVITE_GROUNDING_CORRECTION = (
+    "\n\nNote: I don't have a way to confirm a calendar invite was actually "
+    "sent or received — what's described above may be a proposal, not a "
+    "confirmed invite."
+)
+
+
+def append_invite_grounding_correction(response_text: str) -> str:
+    """Append a correction notice to a response with an ungrounded invite
+    claim. Never edits the original text — see ``find_ungrounded_invite_claim``
+    for why this is an append, not a replace."""
+    return (response_text or "") + _INVITE_GROUNDING_CORRECTION
+
+
+# ---------------------------------------------------------------------------
+# Guard 7 — an attendee/invitee named for a calendar event this turn's own
+# tool result shows has none (#2766)
+# ---------------------------------------------------------------------------
+#
+# list_calendar_events / detect_calendar_conflicts now report each event's
+# real ``attendees`` (calendar_tools._extract_attendees) — [] when the
+# calendar has no one beyond the organizer, which #2766's live probes show
+# is true of every real event in the reference corpus. This guard is
+# deliberately narrow: it does not try to catch every way a name could leak
+# into prose (arbitrary proper-noun detection is not reliable), only the
+# bounded, checkable case where the model uses attendee/invitee vocabulary
+# for an event this turn's own tool result already proved carries none.
+
+_ATTENDEE_CLAIM_RE = re.compile(r"\battendee[s]?\b|\binvitee[s]?\b", re.IGNORECASE)
+
+
+def _any_listed_event_has_attendees(
+    conversation: Optional[List[Dict[str, Any]]],
+) -> Optional[bool]:
+    """Across every ``list_calendar_events`` / ``detect_calendar_conflicts``
+    result this turn: ``True`` if any listed event carries a non-empty
+    ``attendees``, ``False`` if every one is empty, ``None`` if neither tool
+    ran (nothing to reconcile against).
+    """
+    saw_any_tool = False
+    for entry in _tool_entries(conversation):
+        if entry.get("name") not in (
+            "list_calendar_events",
+            "detect_calendar_conflicts",
+        ):
+            continue
+        payload = _parse_tool_payload(entry.get("content"))
+        if not isinstance(payload, dict):
+            continue
+        events = payload.get("events")
+        if events is None:
+            events = payload.get("conflicts")
+        if not isinstance(events, list):
+            continue
+        saw_any_tool = True
+        for ev in events:
+            if isinstance(ev, dict) and ev.get("attendees"):
+                return True
+    return False if saw_any_tool else None
+
+
+def find_fabricated_attendee_claim(
+    final_answer: Optional[str], conversation: Optional[List[Dict[str, Any]]]
+) -> Optional[str]:
+    """Return a reason when ``final_answer`` names attendees/invitees for a
+    calendar event this turn's own tool result shows has none; ``None``
+    when neither calendar tool ran, at least one listed event actually
+    carries attendees, or the answer makes no attendee-shaped claim.
+    """
+    if not final_answer:
+        return None
+    if not _ATTENDEE_CLAIM_RE.search(final_answer):
+        return None
+    has_attendees = _any_listed_event_has_attendees(conversation)
+    if has_attendees is None or has_attendees:
+        return None
+    return (
+        "names an attendee/invitee for a calendar event whose own "
+        "attendees list is empty"
+    )
+
+
+_ATTENDEE_GROUNDING_CORRECTION = (
+    "\n\nNote: the calendar event(s) above don't list any attendees — I "
+    "can't confirm who, if anyone, is attending."
+)
+
+
+def append_attendee_grounding_correction(response_text: str) -> str:
+    """Append a correction notice to a response with a fabricated attendee
+    claim. Never edits the original text — see
+    ``find_fabricated_attendee_claim`` for why this is an append, not a
+    replace."""
+    return (response_text or "") + _ATTENDEE_GROUNDING_CORRECTION
+
+
+# ---------------------------------------------------------------------------
 # Orchestration — the single call site EmailTriageAgent.process_query uses
 # ---------------------------------------------------------------------------
 
@@ -491,14 +663,15 @@ def ground_final_answer(result: Dict[str, Any]) -> Dict[str, Any]:
     from. A replaced answer is not re-scanned by the other check: each
     fallback is already, by construction, clean of the pattern it replaces.
 
-    The calendar-conflict (#2571) and attention-card (#2636) checks run
-    last and, unlike the two above, APPEND a correction instead of
-    replacing the answer — in both cases the rest of the answer stays
-    useful and only a specific clause is unverified/contradicted. They
-    never run against text a prior contradiction check has already
-    replaced (those checks already ``return``), but they are independent
-    of each other and MUST both be allowed to fire on the same turn,
-    appending in sequence — neither may short-circuit the other.
+    The calendar-conflict (#2571), attention-card (#2636), invite-claim, and
+    fabricated-attendee (#2766) checks run last and, unlike the two above,
+    APPEND a correction instead of replacing the answer — in every case the
+    rest of the answer stays useful and only a specific clause is
+    unverified/contradicted. They never run against text a prior
+    contradiction check has already replaced (those checks already
+    ``return``), but all four are independent of each other and MUST all be
+    allowed to fire on the same turn, appending in sequence — none may
+    short-circuit another.
     """
     final_answer = result.get("result")
     if not isinstance(final_answer, str) or not final_answer:
@@ -561,16 +734,36 @@ def ground_final_answer(result: Dict[str, Any]) -> Dict[str, Any]:
                 final_answer.rstrip() + "\n\n" + _attention_card_correction(cached)
             )
 
+    invite_reason = find_ungrounded_invite_claim(final_answer, conversation)
+    if invite_reason:
+        logger.warning(
+            "email agent: appended ungrounded invite-claim correction — %s",
+            invite_reason,
+        )
+        final_answer = append_invite_grounding_correction(final_answer)
+
+    attendee_reason = find_fabricated_attendee_claim(final_answer, conversation)
+    if attendee_reason:
+        logger.warning(
+            "email agent: appended fabricated-attendee correction — %s",
+            attendee_reason,
+        )
+        final_answer = append_attendee_grounding_correction(final_answer)
+
     result["result"] = final_answer
     return result
 
 
 __all__ = [
     "UNGROUNDED_SUCCESS_FALLBACK",
+    "append_attendee_grounding_correction",
+    "append_invite_grounding_correction",
     "decode_stray_unicode_escapes",
     "find_attention_card_contradiction",
+    "find_fabricated_attendee_claim",
     "find_scaffolding_leak",
     "find_ungrounded_calendar_conflict_claim",
+    "find_ungrounded_invite_claim",
     "find_ungrounded_success_claim",
     "find_unlicensed_cross_mailbox_claim",
     "find_unqualified_negative_claim",

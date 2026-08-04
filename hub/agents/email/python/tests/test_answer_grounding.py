@@ -50,8 +50,10 @@ from gaia_agent_email.answer_grounding import (  # noqa: E402
     UNGROUNDED_SUCCESS_FALLBACK,
     decode_stray_unicode_escapes,
     find_attention_card_contradiction,
+    find_fabricated_attendee_claim,
     find_scaffolding_leak,
     find_ungrounded_calendar_conflict_claim,
+    find_ungrounded_invite_claim,
     find_ungrounded_success_claim,
     find_unlicensed_cross_mailbox_claim,
     find_unqualified_negative_claim,
@@ -95,6 +97,32 @@ def _list_events_tool_entry(event_count: int) -> dict:
         "name": "list_calendar_events",
         "content": json.dumps({"ok": True, "data": {"events": events}}),
     }
+
+
+def _events_tool_entry(tool_name: str, events: list, *, key: str = "events") -> dict:
+    """A ``role: tool`` entry for ``list_calendar_events`` or
+    ``detect_calendar_conflicts`` carrying explicit event dicts (so a test
+    can control ``attendees`` directly) — same plain-JSON-string content
+    shape ``_list_events_tool_entry`` and ``_listed_event_count_from_
+    conversation`` read, generalized past a bare count.
+    """
+    return {
+        "role": "tool",
+        "name": tool_name,
+        "content": json.dumps({"ok": True, "data": {key: events}}),
+    }
+
+
+def _event(*, attendees=None, **overrides) -> dict:
+    base = {
+        "id": "evt1",
+        "summary": "Design review",
+        "start": "2026-08-06T09:00:00-04:00",
+        "end": "2026-08-06T10:00:00-04:00",
+        "attendees": attendees if attendees is not None else [],
+    }
+    base.update(overrides)
+    return base
 
 
 def _detect_conflicts_tool_entry() -> dict:
@@ -476,6 +504,134 @@ class TestFindUngroundedCalendarConflictClaim:
 
 
 # ---------------------------------------------------------------------------
+# find_ungrounded_invite_claim (#2766) — "proposals are not invites". No
+# tool here can currently confirm a genuine received/sent invite, so a
+# completion-framed invite claim is always ungrounded except when this turn
+# actually called create_event_from_email.
+# ---------------------------------------------------------------------------
+
+
+class TestFindUngroundedInviteClaim:
+    @pytest.mark.parametrize(
+        "phrase",
+        [
+            "An invite has been confirmed as sent.",
+            "Yes, Tomasz sent you invites for three meetings.",
+            "You have received a calendar invite from the vendor.",
+            "The invite was sent yesterday.",
+            "I can confirm the invite has been sent to your inbox.",
+        ],
+    )
+    def test_detects_invite_claim_with_no_grounding_tool(self, phrase):
+        reason = find_ungrounded_invite_claim(phrase, [])
+        assert reason is not None
+
+    @pytest.mark.parametrize(
+        "phrase",
+        [
+            "No invite has been sent — this is just a proposal.",
+            "None of them were flagged as formal calendar invites.",
+            "These aren't formal calendar invites, just requests to chat.",
+            "Would you like me to send an invite for this?",
+            "Alice proposed meeting Thursday at 2pm.",
+            "Here are your three upcoming meetings.",
+        ],
+    )
+    def test_no_false_positive(self, phrase):
+        assert find_ungrounded_invite_claim(phrase, []) is None
+
+    def test_grounded_when_create_event_from_email_ran_this_turn(self):
+        convo = [_tool_entry("create_event_from_email", {"event_id": "e1"})]
+        text = "I've created the event and sent an invite to the attendee."
+        assert find_ungrounded_invite_claim(text, convo) is None
+
+    def test_unrelated_tool_call_does_not_ground_the_claim(self):
+        convo = [_list_events_tool_entry(2)]
+        text = "An invite has been confirmed as sent."
+        assert find_ungrounded_invite_claim(text, convo) is not None
+
+    def test_negation_far_from_the_word_invite_still_suppresses(self):
+        text = "It's not true that an invite was sent for this one."
+        assert find_ungrounded_invite_claim(text, []) is None
+
+    def test_negation_in_a_different_sentence_does_not_suppress(self):
+        # The negation belongs to an earlier, unrelated sentence -- it must
+        # not launder a real claim in the next one.
+        text = "No urgent items today. An invite has been confirmed as sent."
+        assert find_ungrounded_invite_claim(text, []) is not None
+
+    def test_empty_or_missing_answer_never_flagged(self):
+        assert find_ungrounded_invite_claim("", []) is None
+        assert find_ungrounded_invite_claim(None, []) is None
+
+
+# ---------------------------------------------------------------------------
+# find_fabricated_attendee_claim (#2766) — "any attendee name is a
+# fabrication" when the calendar tool's own result carries none.
+# ---------------------------------------------------------------------------
+
+
+class TestFindFabricatedAttendeeClaim:
+    def test_flags_attendee_language_when_every_listed_event_is_empty(self):
+        convo = [_events_tool_entry("list_calendar_events", [_event()])]
+        text = "The attendees for this meeting are Jane Doe and John Smith."
+        reason = find_fabricated_attendee_claim(text, convo)
+        assert reason is not None
+
+    def test_flags_invitee_language_too(self):
+        convo = [_events_tool_entry("list_calendar_events", [_event()])]
+        text = "The invitees include Jane Doe."
+        assert find_fabricated_attendee_claim(text, convo) is not None
+
+    def test_not_flagged_when_a_listed_event_actually_has_attendees(self):
+        convo = [
+            _events_tool_entry(
+                "list_calendar_events",
+                [_event(attendees=[{"email": "jane@example.com"}])],
+            )
+        ]
+        text = "The attendees for this meeting are jane@example.com."
+        assert find_fabricated_attendee_claim(text, convo) is None
+
+    def test_not_flagged_when_neither_calendar_tool_ran(self):
+        text = "The attendees for this meeting are Jane Doe."
+        assert find_fabricated_attendee_claim(text, []) is None
+
+    def test_not_flagged_with_no_attendee_shaped_claim(self):
+        convo = [_events_tool_entry("list_calendar_events", [_event()])]
+        text = "You have one meeting: Design review at 9am."
+        assert find_fabricated_attendee_claim(text, convo) is None
+
+    def test_checks_detect_calendar_conflicts_results_too(self):
+        convo = [
+            _events_tool_entry("detect_calendar_conflicts", [_event()], key="conflicts")
+        ]
+        text = "The attendees include Jane Doe."
+        assert find_fabricated_attendee_claim(text, convo) is not None
+
+    def test_any_event_with_attendees_across_multiple_clears_it(self):
+        # Two events this turn; only one carries attendees -- the model may
+        # be describing THAT one, so this guard (which doesn't try to match
+        # a specific name to a specific event) stays silent.
+        convo = [
+            _events_tool_entry(
+                "list_calendar_events",
+                [
+                    _event(id="evt1"),
+                    _event(id="evt2", attendees=[{"email": "jane@example.com"}]),
+                ],
+            )
+        ]
+        text = "The attendees are jane@example.com."
+        assert find_fabricated_attendee_claim(text, convo) is None
+
+    def test_empty_or_missing_answer_never_flagged(self):
+        convo = [_events_tool_entry("list_calendar_events", [_event()])]
+        assert find_fabricated_attendee_claim("", convo) is None
+        assert find_fabricated_attendee_claim(None, convo) is None
+
+
+# ---------------------------------------------------------------------------
 # ground_final_answer — the orchestration a real turn goes through
 # ---------------------------------------------------------------------------
 
@@ -673,12 +829,79 @@ class TestGroundFinalAnswerCalendarConflict:
 
 
 # ---------------------------------------------------------------------------
-# THE composition test — the fold's single most important guarantee. Both
-# the calendar-conflict (#2571) and attention-card (#2636) checks are
-# APPEND-only and independent of each other; an early ``return`` between
-# them (a bug the reference integration actually hit once) would silently
-# suppress whichever check runs second. Both must be able to fire, in
-# sequence, on the very same turn.
+# ground_final_answer wiring for the invite-claim and fabricated-attendee
+# guards (#2766) — same append-only shape as the calendar-conflict guard
+# above, exercised through the single orchestration entry point.
+# ---------------------------------------------------------------------------
+
+
+class TestGroundFinalAnswerInviteAndAttendee:
+    def test_appends_invite_correction_without_destroying_original_text(self):
+        text = "An invite has been confirmed as sent for the ObjectWin meeting."
+        result = {"result": text, "conversation": []}
+        out = ground_final_answer(result)
+        assert text in out["result"]
+        assert "confirm" in out["result"].lower()
+        assert out["result"] != text
+
+    def test_invite_claim_grounded_by_create_event_from_email_is_untouched(self):
+        text = "I've created the event and sent an invite to the attendee."
+        result = {
+            "result": text,
+            "conversation": [
+                _tool_entry("create_event_from_email", {"event_id": "e1"})
+            ],
+        }
+        out = ground_final_answer(result)
+        assert out["result"] == text
+
+    def test_appends_attendee_correction_without_destroying_original_text(self):
+        text = "The attendees for this meeting are Jane Doe and John Smith."
+        result = {
+            "result": text,
+            "conversation": [_events_tool_entry("list_calendar_events", [_event()])],
+        }
+        out = ground_final_answer(result)
+        assert text in out["result"]
+        assert "don't list any attendees" in out["result"]
+        assert out["result"] != text
+
+    def test_attendee_claim_grounded_by_real_attendees_is_untouched(self):
+        text = "The attendees for this meeting are jane@example.com."
+        result = {
+            "result": text,
+            "conversation": [
+                _events_tool_entry(
+                    "list_calendar_events",
+                    [_event(attendees=[{"email": "jane@example.com"}])],
+                )
+            ],
+        }
+        out = ground_final_answer(result)
+        assert out["result"] == text
+
+    def test_both_corrections_compose_on_one_turn(self):
+        text = (
+            "An invite has been confirmed as sent. The attendees are Jane "
+            "Doe and John Smith."
+        )
+        result = {
+            "result": text,
+            "conversation": [_events_tool_entry("list_calendar_events", [_event()])],
+        }
+        out = ground_final_answer(result)
+        assert text in out["result"]
+        assert "confirm" in out["result"].lower()
+        assert "don't list any attendees" in out["result"]
+
+
+# ---------------------------------------------------------------------------
+# THE composition test — the fold's single most important guarantee. All
+# four APPEND-only checks (calendar-conflict #2571, attention-card #2636,
+# invite-claim and fabricated-attendee #2766) are independent of each other;
+# an early ``return`` between any two (a bug the reference integration
+# actually hit once) would silently suppress whichever check runs later.
+# All four must be able to fire, in sequence, on the very same turn.
 # ---------------------------------------------------------------------------
 
 
@@ -704,6 +927,31 @@ class TestGroundFinalAnswerComposition:
         # the other.
         assert "attention card" in out["result"].lower()
         assert "7" in out["result"]
+
+    def test_all_four_append_guards_fire_on_one_turn(self):
+        _store_attention_view(items=[_attention_item("action_item")], scanned=7)
+        text = (
+            "Here are your events: Budget sync, Design review. These two "
+            "events are back-to-back and do not conflict. No action items "
+            "right now. An invite has been confirmed as sent, and the "
+            "attendees are Jane Doe and John Smith."
+        )
+        result = {
+            "result": text,
+            "conversation": [
+                _events_tool_entry(
+                    "list_calendar_events",
+                    [_event(id="evt1"), _event(id="evt2")],
+                )
+            ],
+        }
+        out = ground_final_answer(result)
+
+        assert text in out["result"]
+        assert "detect_calendar_conflicts" in out["result"]
+        assert "attention card" in out["result"].lower()
+        assert "confirm" in out["result"].lower()
+        assert "don't list any attendees" in out["result"]
 
 
 # ---------------------------------------------------------------------------
