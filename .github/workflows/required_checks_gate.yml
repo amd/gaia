@@ -48,7 +48,18 @@ permissions:
 
 concurrency:
   group: required-checks-gate-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
+  # NOT cancel-in-progress. Unlike the audited workflows, cancelling this
+  # one is not free: a run that gets killed before it reaches main()'s
+  # post_check_run() calls never posts a check-run for the SHA it was
+  # evaluating at all. If that cancelled run happened to be the LAST
+  # triggering event for that SHA (nothing left to supersede it and try
+  # again), the "Required Checks Gate" check silently never appears for
+  # that commit — a fourth way to fail open, inside the fix for the other
+  # three. Queuing instead of cancelling costs some run time when events
+  # arrive in a burst (e.g. this repo's auto-labeler firing right after
+  # open) but guarantees every triggering event eventually gets a real,
+  # posted verdict.
+  cancel-in-progress: false
 
 jobs:
   gate:
