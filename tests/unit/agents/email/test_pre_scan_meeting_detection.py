@@ -33,6 +33,9 @@ if str(_REPO_ROOT) not in sys.path:
 
 pytest.importorskip("gaia_agent_email")  # noqa: E402
 from gaia_agent_email.tools import read_tools  # noqa: E402
+from gaia_agent_email.tools.attention_tools import (  # noqa: E402
+    build_attention_view_impl,
+)
 from gaia_agent_email.tools.read_tools import (  # noqa: E402
     pre_scan_inbox_impl,
     triage_inbox_impl,
@@ -247,6 +250,105 @@ class TestPreScanCarriesMeetingFlag:
             + out["needs_review"]
         )
         assert any(i.get("is_meeting_request") is True for i in all_items)
+
+
+class TestGroundingIncidentSurfacesAsNeedingReply:
+    """End-to-end regression for the #2580 epic's grounding incident.
+
+    On 2026-07-28, on ``main``, a colleague's message combining a direct
+    question with an informal meeting-time proposal — "Did you have a
+    chance to look through the code and get a pull request? Any chance to
+    meet this Thursday at 9am?" — was classified confidently FYI and
+    reported under "0 actionable items" (12 scanned, 12 by heuristic, 0
+    escalated to the LLM). #2589 wired ``detect_meeting_request_heuristic``
+    into the scan; #2743 built the ``needs_you`` worklist the TUI actually
+    renders on open (replacing the #2582 ``/attention`` fetch — see
+    ``tui/internal/ui/chat/model.go``'s ``preScanFetchedMsg`` comment).
+
+    That left a gap: ``_build_needs_you_view`` only relabels an item
+    already routed into ``urgent``/``actionable`` by CATEGORY, and its
+    ``needs_review`` loop dropped ``is_meeting_request`` entirely. A
+    message the category heuristic confidently calls FYI/PERSONAL (e.g.
+    Gmail's own ``CATEGORY_PERSONAL`` label — the plausible real shape of
+    the incident message) kept ``is_meeting_request=True`` from the scan
+    but was silently invisible in the view the TUI reads on open — the
+    incident, reproduced verbatim on current ``main``.
+    """
+
+    INCIDENT_TEXT = (
+        "Did you have a chance to look through the code and get a pull "
+        "request? Any chance to meet this Thursday at 9am?"
+    )
+
+    def _gmail_with_incident_message(self, *, label_ids: List[str]) -> FakeGmailBackend:
+        gmail = FakeGmailBackend()
+        gmail.add_message(
+            _msg(
+                "incident_msg",
+                subject="Quick check-in",
+                sender="colleague@example.com",
+                label_ids=label_ids,
+                snippet=self.INCIDENT_TEXT,
+            )
+        )
+        return gmail
+
+    def test_incident_message_is_not_silently_informational(self):
+        # Gmail's own Personal-tab label makes the category heuristic
+        # commit confident=True unconditionally (triage_heuristics.py rule
+        # 5) — isolating whether is_meeting_request alone can save the
+        # message from the bare-count bucket.
+        gmail = self._gmail_with_incident_message(
+            label_ids=["INBOX", "CATEGORY_PERSONAL"]
+        )
+        out = pre_scan_inbox_impl(gmail, max_messages=50)
+        assert out["informational_count"] == 0, (
+            "the incident message must not be silently counted as "
+            f"informational with no other trace: {out}"
+        )
+
+    def test_incident_message_surfaces_in_needs_you(self):
+        gmail = self._gmail_with_incident_message(
+            label_ids=["INBOX", "CATEGORY_PERSONAL"]
+        )
+        out = pre_scan_inbox_impl(gmail, max_messages=50)
+        # The #2580 acceptance criterion, directly: it must surface as
+        # needing a reply, not disappear under "0 actionable items".
+        assert (
+            out["needs_you_total"] >= 1
+        ), f"expected the incident message to surface in needs_you: {out}"
+        matches = [i for i in out["needs_you"] if i.get("message_id") == "incident_msg"]
+        assert matches, f"incident_msg not present in needs_you: {out['needs_you']}"
+        assert matches[0]["kind"] == "meeting_request", (
+            "expected kind='meeting_request' so the TUI can name the "
+            f"proposed time, got {matches[0]!r}"
+        )
+
+    def test_meeting_flag_survives_needs_review_routing(self):
+        # No category-label signal at all -> unconfident FYI -> needs_review
+        # by the pre-existing #2584/#2743 path. The meeting flag must not
+        # be discarded there either (needs_review previously always tagged
+        # kind="needs_review", regardless of is_meeting_request).
+        gmail = self._gmail_with_incident_message(label_ids=["INBOX"])
+        out = pre_scan_inbox_impl(gmail, max_messages=50)
+        matches = [i for i in out["needs_you"] if i.get("message_id") == "incident_msg"]
+        assert matches, f"incident_msg not present in needs_you: {out['needs_you']}"
+        assert (
+            matches[0]["kind"] == "meeting_request"
+        ), f"needs_review routing must not discard the meeting flag: {matches[0]!r}"
+
+    def test_incident_message_via_attention_view(self):
+        # The originally-shipped #2582 mechanism — still reachable via
+        # GET /v1/email/attention even though the TUI no longer calls it on
+        # open (#2743) — must keep catching this. Regression guard so a
+        # future change to attention_tools.py can't quietly reopen it.
+        gmail = self._gmail_with_incident_message(
+            label_ids=["INBOX", "CATEGORY_PERSONAL"]
+        )
+        out = build_attention_view_impl({"google": gmail}, max_messages=50)
+        matches = [i for i in out["items"] if i.get("message_id") == "incident_msg"]
+        assert matches, f"incident_msg missing from attention view: {out['items']}"
+        assert matches[0]["kind"] == "meeting_request"
 
 
 if __name__ == "__main__":
