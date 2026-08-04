@@ -369,6 +369,61 @@ public:
 };
 ```
 
+### HttpClient
+
+Blocking HTTP/HTTPS client for tools that need to call a web service. The
+transport (cpp-httplib) is a private dependency compiled into `gaia_core`, so
+including `gaia/http_client.h` does not pull a 10k-line header into your build.
+
+```cpp
+#include <gaia/http_client.h>
+
+struct HttpResponse {
+    int status; std::string body; HttpHeaders headers;
+    bool ok() const;                                  // 2xx
+    std::string header(const std::string& name,       // case-insensitive
+                       const std::string& fallback = "") const;
+};
+
+class HttpClient {
+public:
+    explicit HttpClient(const HttpClientConfig& config = {});  // baseUrl, timeouts,
+    explicit HttpClient(const std::string& baseUrl);           // defaultHeaders, TLS
+
+    HttpResponse get(const std::string& path, const HttpHeaders& headers = {},
+                     int timeoutSec = 0, int connectTimeoutSec = 0);
+    HttpResponse post(const std::string& path, const std::string& body,
+                      const HttpHeaders& headers = {}, int timeoutSec = 0,
+                      int connectTimeoutSec = 0);
+    HttpResponse postStreaming(const std::string& path, const std::string& body,
+                               HttpChunkCallback onChunk,
+                               const HttpHeaders& headers = {}, int timeoutSec = 0,
+                               int connectTimeoutSec = 0);
+};
+```
+
+Every failure — connection refused, timeout, TLS unavailable, or a non-2xx
+status — throws `HttpError` (a `std::runtime_error`) naming the URL and the
+failure mode; the client never returns an empty response instead. `HttpError`
+also exposes `status()` and `body()` for programmatic handling.
+
+```cpp
+gaia::HttpClient http({"https://api.example.com"});
+try {
+    auto res = http.get("/v1/models", {{"Authorization", "Bearer " + token}});
+    process(res.body);
+} catch (const gaia::HttpError& e) {
+    std::cerr << e.what() << std::endl;   // "GET https://… returned HTTP 401: …"
+}
+```
+
+For streaming responses (SSE), `postStreaming` hands each chunk to your
+callback; returning `false` ends the stream normally — that is how
+`LemonadeClient` stops on the `[DONE]` sentinel. Request `path` may also be an
+absolute URL, in which case the configured base URL is ignored. HTTPS requires
+an OpenSSL-enabled build (see [HTTPS Support](#https-support)); an `https://`
+URL on an HTTP-only build raises rather than downgrading.
+
 ---
 
 ## Vision Language Models (VLM)
