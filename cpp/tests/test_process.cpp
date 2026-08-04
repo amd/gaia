@@ -165,8 +165,16 @@ TEST(ProcessRunnerTest, NoTimeoutMode) {
 // ShellSession — state that survives between commands
 // ---------------------------------------------------------------------------
 
+#include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <map>
+#include <thread>
+
+#ifndef _WIN32
+#include <csignal>
+#include <sys/types.h>
+#endif
 
 namespace fs = std::filesystem;
 
@@ -435,13 +443,34 @@ TEST_F(ShellSessionTest, TimeoutKillsTheWholeProcessTree) {
 #ifndef _WIN32
     // A build or test command spawns children; killing only the shell leaves
     // them running, which is exactly the case a persistent shell is for.
+    //
+    // The grandchild reports its own pid and is then checked with kill(pid, 0).
+    // A `pgrep -f <pattern>` probe cannot be used: the shell running the probe
+    // has the pattern in its own argv and matches itself, which is both
+    // platform-dependent and a false pass waiting to happen.
     ShellSession session;
-    auto result = session.run("sleep 971 & wait", 1000);
+    auto result = session.run("sleep 971 & echo PID=$!; wait", 1000);
     ASSERT_TRUE(result.timedOut);
 
-    auto probe = ProcessRunner::run("pgrep -f 'sleep 971' | wc -l", 10000);
-    EXPECT_NE(probe.stdout_output.find('0'), std::string::npos)
-        << "orphaned child survived: " << probe.stdout_output;
+    const size_t marker = result.stdout_output.find("PID=");
+    ASSERT_NE(marker, std::string::npos)
+        << "stdout: " << result.stdout_output;
+    const pid_t child =
+        static_cast<pid_t>(std::atoi(result.stdout_output.c_str() + marker + 4));
+    ASSERT_GT(child, 0);
+
+    // Poll briefly: the pid lingers as a zombie until its new parent reaps it.
+    // A survivor would still be sleeping 971 seconds, so a short bound
+    // separates the two cases cleanly.
+    bool alive = true;
+    for (int attempt = 0; attempt < 40 && alive; ++attempt) {
+        if (kill(child, 0) != 0) {
+            alive = false;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    EXPECT_FALSE(alive) << "orphaned child " << child << " survived the timeout";
 #else
     GTEST_SKIP() << "Windows needs a Job Object for tree kill (not implemented)";
 #endif
