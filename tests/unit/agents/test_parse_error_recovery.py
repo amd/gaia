@@ -327,6 +327,34 @@ class TestProcessQueryRecoversOnContextOverflowStreaming:
         text = result["result"] if isinstance(result, dict) else str(result)
         assert text, "expected the retried streamed answer to reach the user"
         assert "Max length reached" not in text
+
+    def test_context_overflow_streaming_after_retry_gives_actionable_fallback(
+        self, agent
+    ):
+        """#2763: the streaming path's exhausted-retry fallback must be the
+        SAME actionable ``_CONTEXT_STILL_OVERFLOWING_MESSAGE`` the
+        non-streaming path renders (``test_flm_context_overflow_after_retry_
+        gives_friendly_fallback`` above) -- not a leaked exception string.
+        Previously untested: only the streaming SUCCESS-after-retry case
+        (the test above) had coverage; the streaming STILL-overflowing case
+        did not.
+        """
+        agent.streaming = True
+        agent._is_loaded_ctx_too_small = lambda: False
+        call_count = {"n": 0}
+
+        def _send_stream(*_, **__):
+            call_count["n"] += 1
+            raise RuntimeError("exceeds the available context size")
+
+        agent.chat.send_messages_stream = MagicMock(side_effect=_send_stream)
+
+        result = agent.process_query("anything", max_steps=5)
+
+        assert call_count["n"] == 2  # initial attempt + one trim-and-retry
+        text = result["result"] if isinstance(result, dict) else str(result)
+        assert text == _CONTEXT_STILL_OVERFLOWING_MESSAGE
+        assert "exceeds the available context size" not in text
         assert "Sorry, I ran into" not in text
 
 
