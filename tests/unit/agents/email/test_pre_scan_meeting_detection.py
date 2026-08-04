@@ -307,6 +307,29 @@ class TestGroundingIncidentSurfacesAsNeedingReply:
             f"informational with no other trace: {out}"
         )
 
+    def test_incident_message_needs_no_llm_classifier(self):
+        # pre_scan_inbox_impl has no ``classifier`` parameter and never
+        # passes one to triage_inbox_impl (read_tools.py:1164-1165's own
+        # docstring: "pre_scan_inbox_impl never wires a classifier") — so
+        # CATEGORY_URGENT/NEEDS_RESPONSE are structurally unreachable here
+        # regardless of config, matching the real incident's own log line
+        # ("12 decided by heuristic, 0 escalated to the LLM"). This fix
+        # must clear the incident on that exact heuristic-only condition,
+        # not merely when something upstream supplies a classifier —
+        # detect_meeting_request_heuristic needs no LLM call to fire.
+        gmail = self._gmail_with_incident_message(
+            label_ids=["INBOX", "CATEGORY_PERSONAL"]
+        )
+        triage = triage_inbox_impl(gmail, max_messages=50)
+        by_id = {r["id"]: r for r in triage["results"]}
+        assert by_id["incident_msg"]["source"] == "heuristic", (
+            "expected the incident message resolved with zero LLM "
+            f"escalation, got {by_id['incident_msg']!r}"
+        )
+        out = pre_scan_inbox_impl(gmail, max_messages=50)
+        matches = [i for i in out["needs_you"] if i.get("message_id") == "incident_msg"]
+        assert matches and matches[0]["kind"] == "meeting_request"
+
     def test_incident_message_surfaces_in_needs_you(self):
         gmail = self._gmail_with_incident_message(
             label_ids=["INBOX", "CATEGORY_PERSONAL"]
