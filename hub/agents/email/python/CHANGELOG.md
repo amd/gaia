@@ -9,6 +9,19 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **`get_thread` invented messages, senders, and timestamps that were never
+  in the mailbox (#2765).** Asked to catch up on a conversation, the agent
+  could hand back a duplicated message, another replaced by a repeat of an
+  earlier one, a misattributed sender, and a timestamp that existed nowhere
+  in the thread — even though `get_thread`'s own payload was already
+  ordered, numbered, and carried each message's real `from`/`date` (#2531).
+  The fabrication happened in the model's own free-composed prose, on top
+  of a correct payload, so no docstring instruction alone could fix it. The
+  registered `get_thread` tool now also returns a `kind: "table"` render
+  card — the Agent UI's pre-existing generic primitive, no new client code
+  — built directly from the same per-message fields the model reads, so
+  the chat surface draws every sender and timestamp straight from the
+  mailbox instead of from the model's reconstruction of it.
 - **`search_messages` stated a wrong, unstable count for a result set it
   received intact (#2756).** Asked "how many messages from X in the last two
   weeks", the agent ran the right query, got every matching row back, then
