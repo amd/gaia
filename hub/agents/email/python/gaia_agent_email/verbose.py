@@ -43,6 +43,10 @@ _REDACT_PATTERNS = [
     re.compile(r"\b\d{6,8}\b"),  # MFA codes
     re.compile(r"https?://\S{30,}"),  # password reset URLs
     re.compile(r"(?=[A-Za-z0-9_\-]{40,})(?=[A-Za-z0-9_\-]*\d)[A-Za-z0-9_\-]{40,}"),
+    # Email addresses -- mirrors agent.py's _AUTONOMY_ERROR_EMAIL_RE
+    # (#2625/C5); not imported from there since agent.py's tools/* mixins
+    # import this module, which would be circular (#2830).
+    re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"),
 ]
 
 
