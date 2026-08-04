@@ -17,7 +17,6 @@ on:
       - 'setup.py'
       - '.github/workflows/test_connectors_demo.yml'
   pull_request:
-    branches: [ main ]
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'hub/agents/connectors-demo/python/**'

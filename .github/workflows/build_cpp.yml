@@ -19,7 +19,6 @@ on:
       - '.github/workflows/build_cpp.yml'
       - '.github/workflows/benchmark_cpp.yml'
   pull_request:
-    branches: [ main ]
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'src/gaia/version.py'

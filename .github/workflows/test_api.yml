@@ -22,7 +22,6 @@ on:
       - 'setup.py'
       - '.github/workflows/test_api.yml'
   pull_request:
-    branches: ["main"]
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'src/gaia/version.py'

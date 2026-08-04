@@ -29,7 +29,6 @@ on:
       - 'tests/unit/test_sidecar_harness.py'
       - '.github/workflows/test_distributed_seams.yml'
   pull_request:
-    branches: [ main ]
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'src/gaia/daemon/**'

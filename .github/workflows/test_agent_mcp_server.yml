@@ -18,7 +18,6 @@ on:
       - 'setup.py'
       - '.github/workflows/test_agent_mcp_server.yml'
   pull_request:
-    branches: [ main ]
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'src/gaia/version.py'

@@ -30,7 +30,6 @@ on:
       - 'cpp/agents/email/**'
       - '.github/workflows/build_cpp_email.yml'
   pull_request:
-    branches: [ main ]
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'cpp/agents/email/**'

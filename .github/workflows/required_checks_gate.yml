@@ -1,0 +1,86 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# Required aggregating gate (#2767). Cross-workflow `needs:` doesn't exist in
+# GitHub Actions, so this can't depend on the other workflows directly — it
+# observes the Checks API for the PR's head SHA instead, comparing what
+# actually reported against what .github/scripts/check_required_status.py
+# derives from every other workflow's own `pull_request:` path filters. That
+# derivation (not a hand-maintained list here) is what keeps this correct as
+# workflows are added — see the script's own docstring for the reasoning.
+#
+# This is the mechanism that turns a silent skip — wrong base branch, a
+# label-driven skip like #2755, or a future variant — into a visible red
+# check, because it doesn't care why a dependency didn't report, only that
+# it didn't.
+
+name: Required Checks Gate
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+    # Deliberately no `branches:` filter: that filter is the exact bug this
+    # workflow exists to catch, so applying it here would just move the gap.
+
+permissions:
+  contents: read
+  checks: read
+  pull-requests: read
+
+concurrency:
+  group: required-checks-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: Required Checks Gate
+    runs-on: ubuntu-latest
+    # Same condition every gated job in this repo already uses (#2755) — kept
+    # identical on purpose. Mirroring it here, rather than the gate deciding
+    # per-check whether a draft PR is "exempt", means this check shows the
+    # same honest "skipped" state everything else shows while a PR awaits
+    # `ready_for_ci`, instead of fabricating a pass for work nothing has run
+    # yet. Listening to the `labeled` event above (unlike the jobs being
+    # audited) is what lets adding `ready_for_ci` alone re-run this gate —
+    # the exact re-trigger #2755 says the audited jobs are missing.
+    if: github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: List changed files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          gh api "repos/$REPO/pulls/$PR_NUMBER/files" --paginate -q '.[].filename' > changed_files.txt
+          echo "$(wc -l < changed_files.txt) changed file(s):"
+          cat changed_files.txt
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install PyYAML
+        run: pip install --disable-pip-version-check pyyaml
+
+      # build_tui.yml keeps its own branches:[main] filter for now — PR #2696
+      # already widens that workflow, so excluding it here avoids this gate
+      # red-flagging a gap that PR is already closing.
+      - name: Wait for and verify required checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python .github/scripts/check_required_status.py \
+            --workflows-dir .github/workflows \
+            --exclude required_checks_gate.yml \
+            --exclude build_tui.yml \
+            --changed-files changed_files.txt \
+            --repo "$REPO" \
+            --sha "$HEAD_SHA" \
+            --timeout-seconds 3600 \
+            --poll-seconds 30

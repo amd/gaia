@@ -24,7 +24,6 @@ on:
       - '.github/dependabot.yml'
       - '.github/workflows/lint.yml'
   pull_request:
-    branches: [ main ]
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'src/**'
