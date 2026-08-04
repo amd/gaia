@@ -25,7 +25,9 @@ handle worse than the native `tools` / `tool_calls` protocol they were trained o
 
 After this milestone a C++ binary can index a repository, answer questions over it, load a
 `SKILL.md` written for the Python runtime without modification, and talk to HTTP MCP servers.
-The reference deliverable is `gaia-code`, a native coding agent.
+The reference deliverable is `gaia-agent`: one native binary whose capability is compiled in and
+whose behavior comes from `SKILL.md`, so an OEM ships one signed artifact and retargets it by
+shipping skills rather than rebuilding.
 
 The email triage agent is deliberately **not** in scope — its dependency chain (OAuth PKCE,
 OS keychain, grants ledger, Gmail + Microsoft Graph backends, FTS5 hybrid memory) is ~13k LOC
@@ -77,7 +79,7 @@ resolver or wires it, so the divergence stops being silent.
 
 ## Architecture decisions
 
-These are settled here so that sixteen parallel implementation PRs do not each decide them
+These are settled here so that seventeen parallel implementation PRs do not each decide them
 differently.
 
 ### 1. No FAISS. A hand-rolled flat index.
@@ -165,6 +167,46 @@ response-format template; others get the JSON envelope. C++ adopts the same swit
 model list. The existing prompt-JSON path is not deleted — it remains the fallback, and every
 current C++ agent keeps working unchanged.
 
+### 8. The reference agent is generic and skill-programmable, not a hardcoded coding agent.
+
+The milestone's deliverable is **`gaia-agent`**: one native binary whose *capability* is compiled
+in and whose *behavior* comes from `SKILL.md`. "A coding agent" becomes a bundled skill set on top
+of it rather than a second binary. This proves the skills runtime far more convincingly than a
+hardcoded agent does, and it is the thing an OEM actually wants to ship — one signed binary they
+can retarget without a rebuild.
+
+Programmability has exactly two channels, and the boundary between them is the design:
+
+**Instructions — the skill body.** Injected into the system prompt via the byte-exact contract in
+decision 6. This is what makes the agent good at a domain.
+
+**Capability — MCP servers the skill declares.** A skill carrying `mcp:connect:<id>` causes the
+agent to launch that server on load and register its tools for the skill's lifetime. This is real
+new capability with no in-process code loading, no interpreter embedded in the binary, and no
+sandbox required — the server is a separate process the OS already isolates. It reuses
+`Agent::connectMcpServer()`, which exists and already calls `rebuildSystemPrompt()`.
+
+What is **not** a channel: a skill shipping `tools.py` (refused — a C++ process cannot import a
+Python module) and a skill shipping `scripts/` it wants executed as tools. The latter is the
+tempting one, and it is refused because executing skill-supplied scripts *is* the
+`shell:execute` capability that decision 5 refuses at every tier until the #1019/#2672 sandbox
+exists. A generic agent that runs arbitrary code from any `SKILL.md` on disk is a malware
+delivery mechanism, not a feature.
+
+Two consequences worth stating plainly:
+
+- **`mcp:connect:<id>` needs something to resolve `<id>` against, and C++ has nothing.**
+  `MCPClient::fromConfig(name, json)` accepts a config object but there is no config-*file*
+  loader anywhere in `cpp/`. This is a missing prerequisite, not a detail — it gets its own issue
+  (P4.3). It reads the same `mcpServers` map shape Python already uses, so a server configured
+  once is reachable from both runtimes.
+- **`tools_required` stays advisory**, exactly as in Python — names checked against the registry
+  and warned about when absent. It is tempting to make it *gate* the toolbelt down per skill (the
+  registry already has `setEnabled`/`enabledTools`, and a narrower toolbelt sharpens the prompt).
+  That is a genuine improvement, but overloading one field with different semantics in the two
+  runtimes would break the cross-runtime contract P5.2 exists to protect. If we want scoping, it
+  gets its own explicit field in both runtimes. Out of scope here.
+
 ---
 
 ## Forward dependencies on in-flight Python PRs
@@ -186,7 +228,7 @@ Everything else in Phase 3 is independent of these and can proceed immediately.
 
 ## Phases and issues
 
-Sixteen issues in five phases. Phases are dependency-ordered; issues within a phase are
+Seventeen issues in five phases. Phases are dependency-ordered; issues within a phase are
 independent and land in parallel.
 
 ### Phase 1 — Foundations (5 issues)
@@ -305,7 +347,7 @@ raises naming the valid sets rather than falling back. On `Agent`: `skillSets()`
 agent's `gaia-agent.yaml`. Switching sets unloads only what the previous set added.
 *Depends on P3.1–P3.3.*
 
-### Phase 4 — MCP completeness (2 issues)
+### Phase 4 — MCP completeness (3 issues)
 
 **P4.1 — HTTP / streamable-HTTP MCP transport**
 New `HttpTransport : MCPTransport` on top of `gaia::HttpClient`, mirroring
@@ -322,14 +364,42 @@ as a response. Unwrap MCP `content[]` / `isError` into text rather than returnin
 the naive command-string concatenation in `StdioTransport` with proper argv handling so
 arguments containing quotes or shell metacharacters are safe.
 
+**P4.3 — MCP server registry: resolve server ids from config**
+The prerequisite decision 8 names. New `cpp/include/gaia/mcp_registry.h` reading the standard
+`mcpServers` map (`{command, args, env}` per id) from `~/.gaia/mcp.json`, honoring
+`GAIA_CONFIG_DIR`, with the same shape Python already uses so one configuration serves both
+runtimes. `resolve(id) -> optional<json>`, `listServers()`, plus `Agent::connectMcpServerById(id)`
+layered on the existing `connectMcpServer(name, config)`. An unresolvable id is an **error naming
+the id and the config path searched** — never a silent skip. *Unblocks P3.2's `mcp:connect:<id>`
+scope resolution and P5.1.*
+
 ### Phase 5 — Reference agent and validation (2 issues)
 
-**P5.1 — `gaia-code`: native C++ coding agent**
-New `cpp/agents/code/` following the `cpp/agents/bash/` structure. Composes `FileIOTools`,
-`GitTools`, the P2.3 `CodeIndexTools`, and a `bash_execute` under `CONFIRM` policy. Ships a
-`gaia-agent.yaml` declaring bundled skills so P3.4 has a real consumer, and packages via the
-existing `cpp/packaging/package_agents.py` path. Modes matching `gaia-bash`: TUI/REPL,
-`--print`, `--serve`, `--mcp`.
+**P5.1 — `gaia-agent`: generic skill-programmable native agent**
+The milestone deliverable, per decision 8. New `cpp/agents/generic/` following the
+`cpp/agents/bash/` structure.
+
+- **Fixed toolbelt, compiled in**: `FileIOTools`, `GitTools`, `CodeIndexTools` (P2.3), `RagTools`
+  (P2.2), and `shell_execute` under `CONFIRM` policy.
+- **Behavior from skills**: discovers skills across the three roots (P3.3), loads the active
+  skill set (P3.4), injects bodies via the byte-exact prompt contract.
+- **Capability from MCP**: a loaded skill declaring `mcp:connect:<id>` resolves through the P4.3
+  registry, connects, and registers that server's tools. On unload, disconnect **only when no
+  other loaded skill still needs that server** — refcount by id, because two skills sharing a
+  server is the normal case and tearing it down under a live skill is a silent capability loss.
+- **CLI**: modes matching `gaia-bash` (TUI/REPL default, `--print`/`--query`, `--serve --port`,
+  `--mcp`, `--resume`, `--list-sessions`), plus `--skill-set <name>`, `--skill <name>` for ad-hoc
+  loading, and `--list-skills` showing what was discovered per root, what is loaded, what is
+  shadowed, and what was **refused and why** — the refusal reasons are the ones users will hit.
+- Ships bundled skill sets (`coding`, `research`) as the real consumer P3.4 needs, and packages
+  via `cpp/packaging/package_agents.py`.
+
+**Naming note:** `gaia-agent` parallels `gaia-bash`. It is a distinct binary from the `gaia agent
+{export|import}` CLI subcommand; if that proves confusing in review, `gaia-native` is the
+fallback. Settle it in the issue, not at package time.
+
+**Supersedes** the previously planned hardcoded `gaia-code` binary. A coding agent is now the
+`coding` skill set on this binary — one artifact to build, sign, package, and eval.
 
 **P5.2 — Cross-runtime conformance suite and docs**
 The gate that makes "parity" a measured claim rather than an assertion. A conformance test that
@@ -337,7 +407,7 @@ runs the same `SKILL.md` corpus through both the Python and C++ parsers and asse
 accept/refuse verdicts and identical prompt bytes. The corpus is **discovered from the fixtures
 directory, not hardcoded** — a required check must never name a path that does not exist — so it
 ships against the 6 skills on `main` and widens to 32 automatically when PR #2693 lands
-`tests/fixtures/openclaw_skills/`. A `gaia eval agent` adapter for `gaia-code`
+`tests/fixtures/openclaw_skills/`. A `gaia eval agent` adapter for `gaia-agent` running its bundled `coding` skill set
 (pattern: `cpp/agents/bash/eval/bash_eval_adapter.py`) with a committed baseline. Docs: update
 `cpp/README.md` (whose feature matrix currently lists RAG as Python-only and whose env-var table
 documents only the deprecated `GAIA_CPP_*` names), `docs/cpp/overview.mdx`,
