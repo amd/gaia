@@ -1,5 +1,6 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
+# Throwaway evidence probe for #2767 — deleted with the evidence branch.
 """
 Generic Agent class for building domain-specific agents.
 """

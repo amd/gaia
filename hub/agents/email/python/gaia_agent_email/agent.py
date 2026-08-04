@@ -2072,3 +2072,8 @@ class EmailTriageAgent(
 
 
 __all__ = ["EmailTriageAgent", "EmailAgentConfig", "AGENT_NAMESPACED_ID"]
+
+# Throwaway evidence probe for #2767 — proves the widened pull_request
+# trigger actually fires the email suites on a non-main-based PR. This
+# comment (and the PR/branches carrying it) is deleted immediately after
+# capture; it has no effect on runtime behavior.
