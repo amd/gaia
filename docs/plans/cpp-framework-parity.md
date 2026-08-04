@@ -82,9 +82,12 @@ differently.
 
 ### 1. No FAISS. A hand-rolled flat index.
 
-The Python SDK uses FAISS in exactly three places, and in every one it uses `IndexFlatL2` or
-`IndexFlatIP` — which are *brute-force exhaustive scans*, not approximate indexes. There is no
-IVF, no HNSW, no PQ anywhere in the codebase. Reproducing that in C++ is a few hundred lines of
+Every place the Python SDK uses FAISS — RAG (`src/gaia/rag/sdk.py`), agent memory
+(`agents/base/memory.py`), procedural memory (`agents/base/procedural_memory.py`), the code index
+(`code_index/sdk.py`), and the memory UI router (`ui/routers/memory.py`) — constructs
+`IndexFlatL2` or `IndexFlatIP`, which are *brute-force exhaustive scans*, not approximate
+indexes. `grep -rn "IndexIVF\|IndexHNSW\|IndexPQ\|index_factory" src/gaia/` returns nothing:
+there is no ANN structure anywhere in the codebase. Reproducing that in C++ is a few hundred lines of
 straightforward numeric code with identical results and zero new dependencies, versus a heavy
 BLAS-linked dependency that complicates every platform build.
 
@@ -150,10 +153,10 @@ Emitted from `Agent::composeSystemPrompt()` **before** the `==== AVAILABLE TOOLS
 mirror Python's mixin-prompts-first ordering. It returns `""` when nothing is loaded, so every
 existing C++ agent's system prompt stays byte-identical and no eval baseline moves.
 
-`tests/fixtures/skills/` (6 skills) and `tests/fixtures/openclaw_skills/` (26 real skills) are
-an existing conformance corpus. The C++ parser is tested against the same fixtures, and
-`workers/agent-hub/src/skill-manifest.ts` is a working non-Python port of the same validator —
-use it as the template, including its error wording and CRLF/BOM handling.
+`tests/fixtures/skills/` (6 skills: `bare-standard`, `incident-review`, `local-capability`,
+`tool-mismatch`, `triage-support-ticket`, `web-search`) is on `main` today and is the conformance
+corpus the C++ parser must pass. Two richer resources are **not yet on `main`** — see
+[Forward dependencies](#forward-dependencies-on-in-flight-python-prs) below.
 
 ### 7. Native tool calling is opt-in per model, prompt-JSON stays.
 
@@ -161,6 +164,23 @@ Python gates on `is_tool_calling_model(model_id)`: tool-calling models get OpenA
 response-format template; others get the JSON envelope. C++ adopts the same switch and the same
 model list. The existing prompt-JSON path is not deleted — it remains the fallback, and every
 current C++ agent keeps working unchanged.
+
+---
+
+## Forward dependencies on in-flight Python PRs
+
+Three artifacts this plan builds on are **real but not yet merged**. They live in open PRs, so an
+implementer grepping `main` for them will come up empty. Each is a sequencing constraint, not a
+missing piece of research.
+
+| Artifact | Lands in | Needed by | If it has not merged |
+|---|---|---|---|
+| `src/gaia/skills/sets.py` — `SkillRef`, `SkillSets`, `SkillSetResolution`, `SkillSetError` | **PR #2695** (`feat(email,skills): bundled skills + account-keyed skill-set selection`) | **P3.4** skill sets | P3.4 blocks. It is a port of that module, and porting a moving target produces two divergent implementations. Do not start P3.4 until #2695 merges. |
+| `workers/agent-hub/src/skill-manifest.ts` — a TypeScript reimplementation of the frontmatter validator | **PR #2668** (`feat(hub,skills): publish and serve skills as a first-class hub catalog lane`) | **P3.1** parser (as a template, not a dependency) | P3.1 proceeds regardless — it ports from `src/gaia/skills/format.py`, which *is* on `main`. #2668 is a convenience: a second-language port of the same validator, including its error wording and BOM/CRLF handling, is the closest prior art for a third. Use it if available. |
+| `tests/fixtures/openclaw_skills/` — 26 real ClawHub skills, commit-pinned with `PROVENANCE.md` | **PR #2693** (`feat(skills): gaia skill migrate`) | **P3.1** tests, **P5.2** CI gate | Both proceed against the 6-skill `tests/fixtures/skills/` corpus that is on `main`. When #2693 merges, extend the conformance gate to the full 32. P5.2 must not make a nonexistent path a required check. |
+
+**Consequence for wave scheduling:** P3.4 is gated on an external PR, not just on P3.1–P3.3.
+Everything else in Phase 3 is independent of these and can proceed immediately.
 
 ---
 
@@ -251,8 +271,8 @@ level-1 disclosure), `validateSkill`, `toMarkdown`. Constants ported **verbatim*
 `src/gaia/skills/format.py`: name pattern `^[a-z0-9]+(-[a-z0-9]+)*$`, name ≤64, description
 ≤1024, SemVer 2.0.0, `0.0.0` reserved, tier enum defaulting to `experimental`, name must equal
 directory name, `compatibility`/`allowed-tools`/`disallowed-tools` parsed and deliberately
-ignored. BOM and CRLF tolerant. Tested against `tests/fixtures/skills/` and all 26 skills in
-`tests/fixtures/openclaw_skills/`.
+ignored. BOM and CRLF tolerant. Tested against the 6-skill `tests/fixtures/skills/` corpus on
+`main`; extend to `tests/fixtures/openclaw_skills/` (26 more) once PR #2693 merges.
 
 **P3.2 — Skill permissions**
 New `cpp/include/gaia/skill_permissions.h`. `<domain>:<level>[:scope]` parser (split on `:`, max
@@ -275,7 +295,9 @@ checked against `ToolRegistry::hasTool` and warned about; a skill declaring
 `metadata.gaia.tools` is refused.
 
 **P3.4 — Skill sets and `gaia-agent.yaml` wiring**
-Port `src/gaia/skills/sets.py`: `SkillRef`, `SkillSets`, `SkillSetResolution`, and the
+**Gated on PR #2695**, which introduces `src/gaia/skills/sets.py` — it is not on `main` yet, and
+porting a module still in review produces two divergent implementations. Do not start until it
+merges. Port `SkillRef`, `SkillSets`, `SkillSetResolution`, and the
 resolution order explicit → selector hook → default, where an undeclared set name **always**
 raises naming the valid sets rather than falling back. On `Agent`: `skillSets()`,
 `selectSkillSet()` virtual hook, `resolveSkillSet()`, `loadSkillSet()`, `activeSkillSet()`, and a
@@ -312,7 +334,10 @@ existing `cpp/packaging/package_agents.py` path. Modes matching `gaia-bash`: TUI
 **P5.2 — Cross-runtime conformance suite and docs**
 The gate that makes "parity" a measured claim rather than an assertion. A conformance test that
 runs the same `SKILL.md` corpus through both the Python and C++ parsers and asserts identical
-accept/refuse verdicts and identical prompt bytes. A `gaia eval agent` adapter for `gaia-code`
+accept/refuse verdicts and identical prompt bytes. The corpus is **discovered from the fixtures
+directory, not hardcoded** — a required check must never name a path that does not exist — so it
+ships against the 6 skills on `main` and widens to 32 automatically when PR #2693 lands
+`tests/fixtures/openclaw_skills/`. A `gaia eval agent` adapter for `gaia-code`
 (pattern: `cpp/agents/bash/eval/bash_eval_adapter.py`) with a committed baseline. Docs: update
 `cpp/README.md` (whose feature matrix currently lists RAG as Python-only and whose env-var table
 documents only the deprecated `GAIA_CPP_*` names), `docs/cpp/overview.mdx`,
