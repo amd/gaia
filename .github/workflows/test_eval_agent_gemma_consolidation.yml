@@ -145,27 +145,32 @@ jobs:
     # upload too — so an overrun costs an hour of runner time AND the evidence.
     # 150 buys real headroom; drop it once a few runs establish the true wall time.
     timeout-minutes: 150
+    defaults:
+      run:
+        # The lemonade-eval pool is WINDOWS (real Ryzen AI hardware + Lemonade),
+        # where the default shell is PowerShell — but every step below is bash
+        # (`set -euo pipefail`, `trap`, `&`, `curl … > /dev/null`). Without this
+        # the first step dies on `source: not recognized` and the job has never
+        # once gone green. Git Bash ships on the runner, so pin it explicitly.
+        shell: bash
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Set up Python
-        uses: actions/setup-python@v7
+      # Cross-platform venv (uv) — the same action the other Windows evals on
+      # this pool use. It appends the venv's bin dir (Scripts\ on Windows, bin/
+      # on POSIX) to GITHUB_PATH, so the hand-rolled `source .venv/bin/activate`
+      # this replaces — a POSIX-only path — cannot strand the job again.
+      #
+      # [dev] + [eval] for the eval harness and the Anthropic judge deps;
+      # [ui] for fastapi/uvicorn + the RAG deps gaia.ui.server imports at boot
+      # ([dev] alone fails at import), [api] for the connectors layer.
+      - name: Set up Python + dependencies in isolated venv
+        uses: ./.github/actions/setup-venv
         with:
+          venv-name: '.venv-agent-eval'
           python-version: '3.10'
-          cache: 'pip'
-
-      - name: Install dependencies in isolated venv
-        run: |
-          python -m venv .venv-agent-eval
-          source .venv-agent-eval/bin/activate
-          python -m pip install --upgrade pip
-          # [dev] + [eval] for the eval harness and the Anthropic judge deps;
-          # [ui] for fastapi/uvicorn + the RAG deps gaia.ui.server imports at boot
-          # ([dev] alone fails at import), [api] for the connectors layer.
-          pip install -e ".[dev,eval,ui,api]"
-          # Make the venv bin available to subsequent workflow steps.
-          echo "$PWD/.venv-agent-eval/bin" >> "$GITHUB_PATH"
+          install-package: '-e .[dev,eval,ui,api]'
 
       - name: Preflight — judge key, baselines, Lemonade
         env:
