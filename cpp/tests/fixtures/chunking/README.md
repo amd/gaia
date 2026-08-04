@@ -14,6 +14,7 @@ The documents cover the branches that decide chunk boundaries:
 | `parity_prose.txt` | Paragraph fallback, sentence splitting, abbreviations |
 | `parity_mixed.txt` | Title-line heuristic, the 100-character line limit |
 | `parity_unicode.md` | Non-ASCII capitals, non-breaking space, CRLF |
+| `parity_three_sections.txt` / `parity_four_sections.txt` | The `sections <= 3` branch, from either side |
 
 ## Regenerating
 
@@ -36,8 +37,10 @@ def chunk(text, size, overlap):
     stub._get_last_n_tokens = lambda t, n: RAGSDK._get_last_n_tokens(stub, t, n)
     return RAGSDK._split_text_into_chunks(stub, text)
 
-# For each {"file", "chunk_size", "chunk_overlap"} case in parity_expected.json:
-#   text = Path(case["file"]).read_text(encoding="utf-8").strip()
+# For each {"file", "chunk_size", "chunk_overlap"} case in parity_expected.json.
+# read_bytes().decode() — NOT read_text(), whose newline translation would hide
+# a CR that the C++ extractor (binary read) keeps.
+#   text = Path(case["file"]).read_bytes().decode("utf-8").strip()
 #   case["chunks"] = chunk(text, case["chunk_size"], case["chunk_overlap"])
 ```
 

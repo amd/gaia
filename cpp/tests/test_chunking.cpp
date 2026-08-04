@@ -35,6 +35,21 @@ std::vector<std::string> words(const std::string& s) {
     return out;
 }
 
+/// A fresh extension per call: registerExtractor() writes to a process-global
+/// registry with no removal hook, so reusing one breaks --gtest_repeat.
+std::string uniqueExtension() {
+    static int counter = 0;
+    return ".fakedoc" + std::to_string(++counter);
+}
+
+std::string toUpper(const std::string& s) {
+    std::string out = s;
+    std::transform(out.begin(), out.end(), out.begin(), [](char c) {
+        return (c >= 'a' && c <= 'z') ? static_cast<char>(c - 'a' + 'A') : c;
+    });
+    return out;
+}
+
 std::string readFile(const fs::path& p) {
     std::ifstream in(p, std::ios::binary);
     EXPECT_TRUE(in.good()) << "missing fixture: " << p.string();
@@ -82,6 +97,17 @@ TEST_F(ChunkingTest, SingleChunkWhenTextFitsInBudget) {
     const auto chunks = splitTextIntoChunks(text, {500, 100});
     ASSERT_EQ(chunks.size(), 1u);
     EXPECT_EQ(chunks[0], text);
+}
+
+TEST_F(ChunkingTest, BlankRunsNeverProduceEmptyChunks) {
+    const auto chunks = splitTextIntoChunks(
+        "First idea.\n\n\n\n   \n\t\n\nSecond idea after a lot of blank space.\n\n\n",
+        {8, 2});
+    ASSERT_FALSE(chunks.empty());
+    for (const auto& chunk : chunks) {
+        EXPECT_FALSE(chunk.empty());
+        EXPECT_NE(chunk, " ");
+    }
 }
 
 TEST_F(ChunkingTest, RejectsUnusableConfiguration) {
@@ -342,19 +368,38 @@ TEST_F(ChunkingTest, RegisteredExtractorHandlesOutOfScopeFormats) {
                  std::invalid_argument);
     EXPECT_THROW(registerExtractor(".pdf", nullptr), std::invalid_argument);
 
-    EXPECT_FALSE(isSupportedExtension(".fakedoc"));
-    registerExtractor(".FakeDoc", [](const std::string& path) {
+    // The registry is process-global with no unregister hook, so each run needs
+    // its own extension or a repeated/shuffled run would see the previous one.
+    const std::string ext = uniqueExtension();
+    EXPECT_FALSE(isSupportedExtension(ext));
+    registerExtractor("." + toUpper(ext.substr(1)), [](const std::string& path) {
         return "extracted from " + fs::path(path).filename().string();
     });
-    EXPECT_TRUE(isSupportedExtension(".fakedoc"));
+    EXPECT_TRUE(isSupportedExtension(ext)) << "extension match must be case-insensitive";
 
-    const auto extracted = extractFile(writeFile("thing.fakedoc", "ignored"));
-    EXPECT_EQ(extracted.text, "extracted from thing.fakedoc");
+    const std::string name = "thing" + ext;
+    const auto extracted = extractFile(writeFile(name, "ignored"));
+    EXPECT_EQ(extracted.text, "extracted from " + name);
 
     const auto all = supportedExtensions();
-    EXPECT_NE(std::find(all.begin(), all.end(), ".fakedoc"), all.end());
+    EXPECT_NE(std::find(all.begin(), all.end(), ext), all.end());
     EXPECT_NE(std::find(all.begin(), all.end(), ".md"), all.end());
     EXPECT_EQ(std::find(all.begin(), all.end(), ".pdf"), all.end());
+}
+
+TEST_F(ChunkingTest, RegisteredExtractorFailurePropagates) {
+    const std::string ext = uniqueExtension();
+    registerExtractor(ext, [](const std::string&) -> std::string {
+        throw std::runtime_error("backend unavailable");
+    });
+
+    const std::string path = writeFile("thing" + ext, "ignored");
+    try {
+        extractFile(path);
+        FAIL() << "extractor failure was swallowed";
+    } catch (const std::runtime_error& e) {
+        EXPECT_STREQ(e.what(), "backend unavailable");
+    }
 }
 
 TEST_F(ChunkingTest, ChunkFileExtractsAndSplits) {

@@ -53,7 +53,7 @@ struct GAIA_API ExtractedText {
 ///      than the budget is split on sentence boundaries first.
 ///   4. Carry `chunkOverlap` tokens of the previous chunk into the next one.
 ///
-/// Two deliberate divergences from Python:
+/// Deliberate divergences from Python:
 ///   - LLM-assisted chunking (RAGConfig.use_llm_chunking) is not ported; the C++
 ///     runtime always takes the heuristic path, which is what Python falls back
 ///     to when no LLM is reachable.
@@ -61,6 +61,12 @@ struct GAIA_API ExtractedText {
 ///     from its PDF/PPTX extractors, which are out of scope here (see
 ///     extractFile), so text that carries them verbatim is the one input where
 ///     the two runtimes chunk differently.
+///   - An unusable config throws instead of degrading: Python accepts
+///     chunkOverlap >= chunkSize and produces chunks that never advance.
+///   - The uppercase table is pinned to one Unicode release (see
+///     src/unicode_upper_ranges.inc). A newer CPython adds a handful of cased
+///     code points in rare scripts; until the table is regenerated, a heading
+///     starting with one of those cuts sections differently.
 ///
 /// Character counts are Unicode code points, matching Python's len(str);
 /// whitespace and uppercase tests match str.isspace() and str.isupper(). The
