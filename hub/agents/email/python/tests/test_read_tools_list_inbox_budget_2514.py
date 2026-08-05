@@ -363,6 +363,8 @@ class TestSearchMessagesSharesTheEnvelopeBudgetContract:
             max_results=n,
             budget_tokens=npu_budget,
             operator_retry=False,
+            include_bodies=True,  # this test exercises the full-body shrink
+            # contract specifically; include_bodies now defaults to False (#2763)
         )
 
         assert len(result["messages"]) == n
@@ -391,6 +393,9 @@ class TestSearchMessagesSharesTheEnvelopeBudgetContract:
                 max_results=n,
                 budget_tokens=tiny_budget,
                 operator_retry=False,
+                include_bodies=True,  # exercises the full-body fail-loud path;
+                # include_bodies now defaults to False (#2763), which has no
+                # budget check to raise (metadata rows never need shrinking)
             )
         message = str(exc_info.value)
         assert str(tiny_budget) in message

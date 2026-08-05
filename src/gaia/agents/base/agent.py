@@ -182,6 +182,21 @@ class HardwareRequirement:
 _SD_CAPABILITY_TOOLS: Tuple[str, ...] = ("generate_image",)
 
 
+# Final answer when a turn still overflows the model's context window after
+# the one-shot shrink-and-retry (#2763) -- shared across every agent, so it
+# names the constraint generically (no tool- or domain-specific vocabulary)
+# rather than assuming a search/date-range shape. The prior copy ("re-ask in
+# a fresh chat with just the essentials") never said WHAT was too big or HOW
+# to shrink it, so every occurrence read identically regardless of cause --
+# this repo's fail-loud rule requires naming the constraint and a next step.
+_CONTEXT_STILL_OVERFLOWING_MESSAGE = (
+    "This request needs more than fits in the model's context window, even "
+    "after trimming older results. Try narrowing it — fewer results, a "
+    "shorter date range, or a more specific query — or start a fresh "
+    "conversation and ask again."
+)
+
+
 # Tools that mutate external state (mark read, archive, star, …). A small
 # model that loses track of sequential state may re-issue an identical
 # mutation (same tool + same id). Unlike query dedup we key on the *args*,
@@ -3751,12 +3766,11 @@ Do NOT wrap conversational replies in JSON.
                             }
                         )
                         if is_ctx_overflow:
-                            final_answer = (
-                                "I had to trim the conversation to fit my "
-                                "memory but I'm still not making progress. "
-                                "Could you re-ask in a fresh chat with just "
-                                "the essentials?"
-                            )
+                            # Name the actual constraint and a next step
+                            # (#2763) -- "re-ask with just the essentials" told
+                            # the user nothing about WHAT was too big or HOW to
+                            # shrink it, so every retry looked identical.
+                            final_answer = _CONTEXT_STILL_OVERFLOWING_MESSAGE
                         else:
                             final_answer = (
                                 f"Sorry, I ran into a problem while processing your request. "
@@ -3900,12 +3914,11 @@ Do NOT wrap conversational replies in JSON.
                             }
                         )
                         if is_ctx_overflow:
-                            final_answer = (
-                                "I had to trim the conversation to fit my "
-                                "memory but I'm still not making progress. "
-                                "Could you re-ask in a fresh chat with just "
-                                "the essentials?"
-                            )
+                            # Name the actual constraint and a next step
+                            # (#2763) -- "re-ask with just the essentials" told
+                            # the user nothing about WHAT was too big or HOW to
+                            # shrink it, so every retry looked identical.
+                            final_answer = _CONTEXT_STILL_OVERFLOWING_MESSAGE
                         else:
                             # If we have a typed Lemonade error in the
                             # cause-chain (e.g. ``LemonadeUpstreamTimeoutError``
