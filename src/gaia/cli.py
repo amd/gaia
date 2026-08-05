@@ -2748,7 +2748,12 @@ Examples:
     )
     # Note: --base-url is inherited from parent_parser
     mcp_start_parser.add_argument(
-        "--auth-token", help="Optional authentication token for secure connections"
+        "--auth-token",
+        help=(
+            "Require 'Authorization: Bearer <token>' on every request except "
+            "/health. Defaults to $GAIA_MCP_AUTH_TOKEN. Without it the bridge "
+            "is unauthenticated."
+        ),
     )
     mcp_start_parser.add_argument(
         "--no-streaming", action="store_true", help="Disable streaming responses"
@@ -2783,6 +2788,10 @@ Examples:
     mcp_status_parser.add_argument(
         "--port", type=int, default=8765, help="Port to check (default: 8765)"
     )
+    mcp_status_parser.add_argument(
+        "--auth-token",
+        help="Bearer token if the bridge requires one (default: $GAIA_MCP_AUTH_TOKEN)",
+    )
 
     # MCP stop command
     _ = mcp_subparsers.add_parser("stop", help="Stop background MCP bridge server")
@@ -2802,6 +2811,10 @@ Examples:
     )
     mcp_test_parser.add_argument(
         "--tool", default="gaia.chat", help="Tool to test (default: gaia.chat)"
+    )
+    mcp_test_parser.add_argument(
+        "--auth-token",
+        help="Bearer token if the bridge requires one (default: $GAIA_MCP_AUTH_TOKEN)",
     )
 
     # MCP agent command
@@ -2824,6 +2837,10 @@ Examples:
     )
     mcp_agent_parser.add_argument(
         "--context", help="Optional additional context about the request"
+    )
+    mcp_agent_parser.add_argument(
+        "--auth-token",
+        help="Bearer token if the bridge requires one (default: $GAIA_MCP_AUTH_TOKEN)",
     )
 
     # MCP Docker command (per-agent MCP server)
@@ -8137,6 +8154,18 @@ def handle_mcp_command(args):
         print(f"❌ Unknown MCP action: {args.mcp_action}")
 
 
+# Kept in sync with gaia.mcp.mcp_bridge.AUTH_TOKEN_ENV_VAR by
+# tests/unit/test_mcp_bridge_auth.py — duplicated here so the client-side
+# `mcp status` / `mcp test` paths don't have to import the heavy bridge module.
+MCP_AUTH_TOKEN_ENV = "GAIA_MCP_AUTH_TOKEN"
+
+
+def _mcp_auth_headers(args):
+    """Bearer headers for reaching a token-protected MCP bridge, else {}."""
+    token = getattr(args, "auth_token", None) or os.environ.get(MCP_AUTH_TOKEN_ENV)
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
 def handle_mcp_start(args):
     """Start the MCP bridge server (HTTP-native implementation)."""
     log = get_logger(__name__)
@@ -8203,8 +8232,6 @@ def handle_mcp_start(args):
             # Add optional arguments if provided
             if args.base_url:
                 cmd_args.extend(["--base-url", args.base_url])
-            if args.auth_token:
-                cmd_args.extend(["--auth-token", args.auth_token])
             if args.no_streaming:
                 cmd_args.append("--no-streaming")
             if getattr(args, "verbose", False):
@@ -8212,9 +8239,20 @@ def handle_mcp_start(args):
             if getattr(args, "no_lemonade_check", False):
                 cmd_args.append("--no-lemonade-check")
 
+            # Hand the token over the environment, not argv — argv is world
+            # readable via `ps` on Linux/macOS.
+            child_env = os.environ.copy()
+            bg_token = args.auth_token or os.environ.get(MCP_AUTH_TOKEN_ENV) or None
+            if bg_token:
+                child_env[MCP_AUTH_TOKEN_ENV] = bg_token
+
             print("🚀 Starting GAIA MCP Bridge in background")
             print(f"📍 Host: {args.host}:{args.port}")
             print(f"📄 Log file: {log_file_path}")
+            if bg_token:
+                print("🔒 Authentication enabled (Bearer token required)")
+            else:
+                print("🔓 Authentication disabled - pass --auth-token to require one")
 
             # Write initial banner BEFORE starting subprocess (prevents truncation issues)
             import datetime
@@ -8244,6 +8282,7 @@ def handle_mcp_start(args):
                         stderr=subprocess.STDOUT,
                         creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
                         cwd=os.getcwd(),
+                        env=child_env,
                         text=True,
                     )
                 else:
@@ -8255,6 +8294,7 @@ def handle_mcp_start(args):
                         stderr=subprocess.STDOUT,
                         start_new_session=True,
                         cwd=os.getcwd(),
+                        env=child_env,
                         text=True,
                     )
             except Exception:
@@ -8284,8 +8324,11 @@ def handle_mcp_start(args):
         log.info("Starting GAIA MCP Bridge on %s:%s", args.host, args.port)
         print(f"🚀 Starting GAIA MCP Bridge on {args.host}:{args.port}")
 
-        if args.auth_token:
-            print("🔒 Authentication enabled")
+        auth_token = args.auth_token or os.environ.get(MCP_AUTH_TOKEN_ENV) or None
+        if auth_token:
+            print("🔒 Authentication enabled (Bearer token required; /health public)")
+        else:
+            print("🔓 Authentication disabled - pass --auth-token to require one")
 
         print(f"🔗 GAIA LLM server: {args.base_url}")
         print(f"📡 Streaming: {'disabled' if args.no_streaming else 'enabled'}")
@@ -8297,7 +8340,11 @@ def handle_mcp_start(args):
         # Start HTTP-native MCP bridge
         verbose = getattr(args, "verbose", False)
         start_mcp_http(
-            host=args.host, port=args.port, base_url=args.base_url, verbose=verbose
+            host=args.host,
+            port=args.port,
+            base_url=args.base_url,
+            verbose=verbose,
+            auth_token=auth_token,
         )
 
     except KeyboardInterrupt:
@@ -8396,8 +8443,12 @@ def handle_mcp_status(args):
 
                 # First try the new /status endpoint
                 status_url = f"http://{args.host}:{args.port}/status"
+                auth_headers = _mcp_auth_headers(args)
                 try:
-                    with urllib.request.urlopen(status_url, timeout=3) as response:
+                    status_req = urllib.request.Request(
+                        status_url, headers=auth_headers
+                    )
+                    with urllib.request.urlopen(status_req, timeout=3) as response:
                         data = json.loads(response.read().decode())
 
                         if data.get("status") == "healthy":
@@ -8440,6 +8491,13 @@ def handle_mcp_status(args):
                         else:
                             print("⚠️  Server is running but may not be healthy")
                 except urllib.error.HTTPError as e:
+                    if e.code in (401, 403):
+                        print("🔒 MCP server requires authentication")
+                        print(
+                            "   Pass --auth-token <token> or set "
+                            f"{MCP_AUTH_TOKEN_ENV} to inspect it"
+                        )
+                        return
                     if e.code == 404:
                         # Fall back to /health for older versions
                         health_url = f"http://{args.host}:{args.port}/health"
@@ -8514,7 +8572,12 @@ def handle_mcp_test(args):
             url = f"http://{args.host}:{args.port}/"
             data = json.dumps(rpc_request).encode("utf-8")
             req = urllib.request.Request(
-                url, data=data, headers={"Content-Type": "application/json"}
+                url,
+                data=data,
+                headers={
+                    "Content-Type": "application/json",
+                    **_mcp_auth_headers(args),
+                },
             )
 
             with urllib.request.urlopen(req, timeout=30) as response:
@@ -8543,7 +8606,14 @@ def handle_mcp_test(args):
                     print("❌ Unexpected response format")
 
         except urllib.error.HTTPError as e:
-            print(f"❌ HTTP Error: {e.code} {e.reason}")
+            if e.code in (401, 403):
+                print(f"🔒 MCP server rejected the request ({e.code})")
+                print(
+                    "   The bridge was started with --auth-token. Pass the same "
+                    f"token via --auth-token, or set {MCP_AUTH_TOKEN_ENV}."
+                )
+            else:
+                print(f"❌ HTTP Error: {e.code} {e.reason}")
         except urllib.error.URLError as e:
             print(f"❌ Connection error: {e.reason}")
         except json.JSONDecodeError as e:
@@ -8603,7 +8673,12 @@ def handle_mcp_agent(args):
             url = f"http://{args.host}:{args.port}/"
             data = json.dumps(rpc_request).encode("utf-8")
             req = urllib.request.Request(
-                url, data=data, headers={"Content-Type": "application/json"}
+                url,
+                data=data,
+                headers={
+                    "Content-Type": "application/json",
+                    **_mcp_auth_headers(args),
+                },
             )
 
             print("🔄 Agent is analyzing request and orchestrating tools...")
@@ -8661,7 +8736,14 @@ def handle_mcp_agent(args):
                     print("❌ Unexpected response format")
 
         except urllib.error.HTTPError as e:
-            print(f"❌ HTTP Error: {e.code} {e.reason}")
+            if e.code in (401, 403):
+                print(f"🔒 MCP server rejected the request ({e.code})")
+                print(
+                    "   The bridge was started with --auth-token. Pass the same "
+                    f"token via --auth-token, or set {MCP_AUTH_TOKEN_ENV}."
+                )
+            else:
+                print(f"❌ HTTP Error: {e.code} {e.reason}")
         except urllib.error.URLError as e:
             print(f"❌ Connection error: {e.reason}")
         except json.JSONDecodeError as e:
