@@ -65,6 +65,19 @@ behind any entry — API shapes, endpoints, and version semantics — see
   still uses your exact wording when you hand it over yourself. Sending is
   unchanged — every draft still needs your confirmation before it goes out
   (#2524).
+- **The agent now works differently for a personal mailbox than for a work one.**
+  It used to bring exactly the same instincts to both: the same triage advice for
+  a mailbox full of newsletters and flight confirmations as for one full of
+  meeting invites and things people are waiting on you for. It now ships six
+  built-in skills and turns on one set of them per run — `personal` (inbox triage,
+  newsletter digests, trip itineraries) or `work` (inbox triage, meeting
+  scheduling, action items, escalation). For an Outlook mailbox it picks the set
+  itself from the kind of Microsoft account you connected. Gmail doesn't say which
+  kind it is, so a Gmail mailbox gets `personal` unless you pin one — start the
+  sidecar with `extraArgs: ["--skill-set", "work"]` or
+  `env: { GAIA_EMAIL_SKILL_SET: "work" }`. This changes how the agent approaches
+  your mail, not what it can do: same endpoints, same tools, same permissions, no
+  schema bump (#2466).
 - **Opt-in preview: small on-device models can now decide phishing flags and
   triage categories instead of keyword rules.** Turn it on with
   `GAIA_EMAIL_USE_SLM=true` on the sidecar (or `use_slm=True` in config).

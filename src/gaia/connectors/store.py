@@ -315,6 +315,7 @@ def save_connection(
     client_id_hash: str,
     connected_at: Optional[float] = None,
     tenant: Optional[str] = None,
+    account_type: Optional[str] = None,
 ) -> None:
     """
     Atomically persist a connection record to the keyring.
@@ -340,6 +341,15 @@ def save_connection(
     ``save_provider_credentials``'s A7 contract) so a legacy blob with no
     recorded tenant is distinguishable from one that recorded a value —
     ``load_connection`` treats the two very differently.
+
+    ``account_type`` records what KIND of account signed in when the provider
+    can tell (Microsoft derives ``personal`` / ``work`` from the id_token ``tid``
+    claim, #2466). Distinct from ``tenant``, which records the authority the app
+    signed in *against*: the ``common`` authority admits both kinds, so the two
+    answer different questions. Omitted from the blob when ``None`` — an absent
+    key means "unknown", which readers must handle explicitly rather than
+    assuming a kind. Callers that re-save an existing connection (e.g.
+    refresh-token rotation) MUST pass both values through or they are lost.
     """
     verify_keyring_backend()
 
@@ -352,6 +362,8 @@ def save_connection(
     }
     if tenant is not None:
         blob["tenant"] = tenant
+    if account_type:
+        blob["account_type"] = account_type
     payload = json.dumps(blob, sort_keys=True)
     # v1 single-account per provider (per A10): the keyring KEY is always
     # built with DEFAULT_ACCOUNT; ``account_email`` lives in the metadata

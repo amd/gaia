@@ -44,7 +44,10 @@ def _estimate_envelope_tokens(envelope: Dict[str, Any]) -> int:
 
 
 def condense_triage_result(
-    result: Dict[str, Any], *, budget_tokens: int | None = None
+    result: Dict[str, Any],
+    *,
+    budget_tokens: int | None = None,
+    extra_fixed_tokens: int = 0,
 ) -> Dict[str, Any]:
     """Bound the bulk-triage result envelope to the agent-loop ctx budget.
 
@@ -57,9 +60,13 @@ def condense_triage_result(
     preserved verbatim because it already carries the complete id-to-category
     map compactly, so no verdict is truly lost — only its verbose per-message
     fields (subject / from / rationale).
+
+    ``extra_fixed_tokens`` shrinks the budget by prompt text this launch carries
+    beyond the modelled fixed cost — the loaded skill bodies (#2466). Ignored
+    when ``budget_tokens`` is given explicitly, which is the tests' seam.
     """
     if budget_tokens is None:
-        budget_tokens = envelope_budget_tokens()
+        budget_tokens = envelope_budget_tokens(extra_fixed_tokens=extra_fixed_tokens)
 
     if _estimate_envelope_tokens(result) <= budget_tokens:
         return result

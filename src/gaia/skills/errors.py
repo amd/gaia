@@ -30,6 +30,14 @@ class SkillNotFoundError(SkillError):
     """No skill of that name exists in any discovery root."""
 
 
+class SkillSetError(SkillError):
+    """A skill set was requested that the agent does not declare.
+
+    Never downgraded to the default set — selecting the wrong capability bundle
+    silently is worse than not launching.
+    """
+
+
 class SkillPermissionError(SkillError):
     """The skill declares a permission this phase cannot honor.
 
