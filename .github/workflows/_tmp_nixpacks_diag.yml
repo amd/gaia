@@ -1,0 +1,72 @@
+# TEMPORARY diagnostic workflow — delete before merging.
+# Reproduces the Railway/Nixpacks website build on a GitHub runner so the real
+# npm error (truncated out of the `railway up --ci` stream) is visible.
+
+name: TMP Nixpacks diag
+
+on:
+  push:
+    branches:
+      - 'kalin/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  nixpacks-build:
+    name: Faithful nixpacks build of website/
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install nixpacks
+        run: |
+          set -euo pipefail
+          curl -sSL https://nixpacks.com/install.sh | bash
+          nixpacks --version
+
+      - name: Show the nixpacks plan
+        working-directory: website
+        run: nixpacks plan .
+
+      - name: Build (this is what Railway runs)
+        working-directory: website
+        env:
+          HUB_CATALOG_URL: https://hub.amd-gaia.ai
+        run: |
+          set -o pipefail
+          nixpacks build . --name gaia-website-diag \
+            --env HUB_CATALOG_URL=https://hub.amd-gaia.ai \
+            2>&1 | tail -400
+
+  npm-matrix:
+    name: npm ci — node ${{ matrix.node }} / npm ${{ matrix.npm }}
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - node: '22.14.0'   # what nixpacks uses now (engines.node 22.x)
+            npm: '9.9.4'
+          - node: '18.20.8'   # what the last green deploy used
+            npm: '9.9.4'
+          - node: '22.14.0'   # is it npm 9 specifically?
+            npm: '10.9.4'
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Reproduce the nixpacks install phase
+        run: |
+          docker run --rm -v "$PWD/website:/app" -w /app \
+            -e NPM_CONFIG_PRODUCTION=true \
+            node:${{ matrix.node }}-bookworm-slim \
+            bash -c '
+              set -x
+              npm i -g npm@${{ matrix.npm }} >/dev/null 2>&1
+              node -v; npm -v
+              rm -rf node_modules
+              npm ci
+              echo "EXIT=$?"
+            '
