@@ -608,6 +608,7 @@ def test_non_lemonade_provider_is_400(app_client, monkeypatch):
     monkeypatch.setattr(query_routes, "build_query_agent", lambda **k: fake)
     resp = app_client.post("/v1/email/query", json=_req(provider="claude"))
     assert resp.status_code == 400
+    assert "local inference only" in resp.json()["detail"]
 
 
 # ---------------------------------------------------------------------------
