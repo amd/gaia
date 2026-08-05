@@ -166,7 +166,7 @@ We welcome contributions! See our [Contributing Guide](CONTRIBUTING.md) for deta
 - **Discord**: [Join our community](https://discord.com/channels/1392562559122407535/1402013282495102997)
 - **Issues**: [GitHub Issues](https://github.com/amd/gaia/issues)
 
-[VG] Second change after successful authentication.
+[VG] Third change after successful authentication.
 
 ---
 
