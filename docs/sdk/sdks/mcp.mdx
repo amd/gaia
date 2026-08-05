@@ -341,7 +341,7 @@ if "error" in result:
 | Method | Description |
 |--------|-------------|
 | `from_config(name, config)` | Create client from config dict |
-| `from_command(name, command)` | Create client (legacy, shell string) |
+| `from_command(name, command)` | Create client from a command line (legacy; tokenized, never shell-interpreted) |
 | `connect()` | Connect to server. Returns `bool`. |
 | `disconnect()` | Disconnect |
 | `list_tools()` | List available tools (cached). Returns `list[MCPTool]`. |
