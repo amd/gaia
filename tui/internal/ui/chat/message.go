@@ -39,11 +39,14 @@ type Message struct {
 	// Identity marks a RoleCard message as the ONE singular card of its
 	// kind per turn-sequence (#2743) -- today only the email pre-scan card,
 	// which can arrive from two independent sources (a typed turn's
-	// tool_result, or the on-open pre-scan fetch) that must update the SAME
-	// message in place rather than each appending its own. Empty for every
-	// other card, which always appends. Looked up by identity, not by a
-	// tracked index: `/clear` sets ChatModel.messages to nil (model.go), so
-	// a stale index would panic or silently overwrite an unrelated message.
+	// tool_result, or the on-open pre-scan fetch) that must replace the
+	// SAME logical card rather than each appending its own. A refresh moves
+	// the card to the tail of the transcript rather than updating it where
+	// it was first drawn (#2829) -- see ChatModel.upsertCard. Empty for
+	// every other card, which always appends. Looked up by identity, not by
+	// a tracked index: `/clear` sets ChatModel.messages to nil (model.go),
+	// so a stale index would panic or silently overwrite an unrelated
+	// message.
 	Identity string
 
 	// cardCache memoizes the drawn card. updateViewport re-renders every message
