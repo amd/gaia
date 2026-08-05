@@ -388,6 +388,42 @@ Before adding an MCP server:
 3. **Limit scope** — When connecting filesystem servers, restrict to specific directories rather than `/`
 4. **Audit environment variables** — Never pass secrets (API keys, tokens) to servers you haven't reviewed
 
+### Tool Confirmation
+
+Connecting a server is not the same as approving every call it can make. GAIA
+asks you to confirm each MCP tool call before it runs, because the *caller* may
+be untrusted even when the server is: a prompt injection hidden in a document,
+email, or web page you asked GAIA to read can make the model emit a tool call
+you never intended. The confirmation prompt is the backstop against that.
+
+The gate fails closed. An MCP tool skips confirmation **only** when its server
+proves the tool is read-only:
+
+| Server declares | Tool name | Confirmation |
+| --- | --- | --- |
+| `annotations.readOnlyHint: true` | no mutating verb (`search`, `get_time`) | Skipped |
+| `annotations.readOnlyHint: true` | mutating verb (`delete_file`) | **Required** |
+| `readOnlyHint: false`, or no annotations at all | anything | **Required** |
+
+Servers that ship no [MCP tool annotations](https://modelcontextprotocol.io/specification/server/tools#tool-annotations)
+get no benefit of the doubt — every one of their tools prompts.
+
+<Warning>
+The name check catches servers that annotate *incorrectly* — a `readOnlyHint:
+true` on a tool named `delete_file` is ignored. It is **not** a defence against
+a malicious server, which would simply give its write tool an innocuous name.
+Vetting the server (above) remains the only control for that; the confirmation
+gate protects you from the untrusted *content* your agent reads, not from a
+server you chose to install.
+</Warning>
+
+<Note>
+Confirmation prompts appear in the Agent UI, where **Always allow** stops the
+prompting for a specific tool. The CLI has no interactive prompt and proceeds
+automatically — prefer the Agent UI when running agents over untrusted content
+with write-capable MCP servers connected.
+</Note>
+
 ## Complete Examples
 
 Working examples are available in the GAIA repository:
