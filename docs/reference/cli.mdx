@@ -2074,7 +2074,7 @@ Manage agent memory: run day-zero onboarding and view memory statistics.
 Author and manage agent skills. A skill is a directory whose only required file is `SKILL.md`; GAIA implements the [Agent Skills](https://agentskills.io) open standard, so a Claude Code skill loads unchanged.
 
 ```bash
-gaia skill {list,info,create,import,export} [OPTIONS]
+gaia skill {list,info,create,import,export,migrate} [OPTIONS]
 ```
 
 Skills are discovered from three roots, highest precedence first:
@@ -2094,6 +2094,7 @@ Skills are discovered from three roots, highest precedence first:
 | `create <name>` | Scaffold a new skill directory |
 | `import <source>` | Copy a skill folder, `.zip`, or URL into `~/.gaia/skills/` |
 | `export <name>` | Export a skill to a `.zip` bundle |
+| `migrate <source>` | Convert an OpenClaw or Hermes skill to GAIA format |
 
 <Tabs>
   <Tab title="list">
@@ -2167,6 +2168,29 @@ Skills are discovered from three roots, highest precedence first:
 
     Bundles the whole skill directory. Import it elsewhere with `gaia skill import <file>.zip`.
   </Tab>
+
+  <Tab title="migrate">
+    ```bash
+    gaia skill migrate <source> [--from openclaw|hermes|auto] [OPTIONS]
+    ```
+
+    | Option | Description |
+    |--------|-------------|
+    | `--from` | Source format: `openclaw` \| `hermes` \| `auto` (default — detect from `metadata.<vendor>`) |
+    | `--out` | Write migrated skills here instead of installing into `~/.gaia/skills/` |
+    | `--name` | Migrate under this name (single-skill sources only) |
+    | `--force` | Replace an existing skill of the same name |
+    | `--dry-run` | Report what would be migrated without writing anything |
+    | `--json` | Emit the migration report as JSON |
+
+    `<source>` is one skill directory, its `SKILL.md`, or a directory **of** skill directories — so a whole ClawHub checkout migrates in one command.
+
+    The foreign `metadata.<vendor>` namespace becomes a `metadata.gaia` block. Fields GAIA models fully are consumed; anything partially or un-modeled stays under `metadata.<vendor>` and is listed in the report, so nothing is dropped silently. **Every migrated skill lands at the `experimental` tier**, whatever the source claimed — the same trust reset `import` applies.
+
+    <Warning>
+    **A source needing a local capability is refused, not downgraded.** `requires.bins` maps to `shell:execute:<bin>` and `requires.config` to `filesystem:read:<path>`; both need the deferred permission sandbox ([#1019](https://github.com/amd/gaia/issues/1019)), so the skill is reported unmigratable with the reason rather than quietly stripped of the permission. Other skills in the same batch still migrate — exit code is `4` when any were refused.
+    </Warning>
+  </Tab>
 </Tabs>
 
 **Examples:**
@@ -2193,6 +2217,12 @@ gaia skill import ~/.claude/skills/my-skill    # take ownership, resets to exper
 gaia skill export web-research --output ./web-research.zip
 gaia skill import ./web-research.zip --name web-research-copy
 ```
+
+```bash Bring an OpenClaw skill over
+gaia skill migrate ./my-openclaw-skill --from openclaw
+gaia skill migrate ~/clawhub-skills --dry-run     # whole collection, no writes
+gaia skill migrate ~/clawhub-skills --json | jq '.skills[] | select(.migrated == false)'
+```
 </CodeGroup>
 
 **Exit codes:** `0` success · `2` missing/unknown subcommand · `3` skill not found · `4` invalid skill (bad manifest, name collision without `--force`, or a discovery root containing a malformed skill).
@@ -2214,7 +2244,7 @@ class WebAgent(Agent):
 </Warning>
 
 <Note>
-`gaia skill install`, `remove`, `search`, `publish`, and `migrate` are **not implemented** and do not parse — they need the skill registry and land with the marketplace ([#2467](https://github.com/amd/gaia/issues/2467)). Use `import` / `export` for local distribution.
+`gaia skill install`, `remove`, `search`, and `publish` are **not implemented** and do not parse — they need the skill registry and land with the marketplace ([#2467](https://github.com/amd/gaia/issues/2467)). Use `import` / `export` for local distribution, and `migrate` to bring an OpenClaw or Hermes skill over.
 </Note>
 
 [→ Agent Skills Spec](/spec/agent-skills) · [→ Skill Format Reference](/plans/skill-format)

@@ -49,6 +49,8 @@ from gaia.skills.format import (
     parse_skill,
     parse_skill_file,
     parse_skill_metadata,
+    reset_security_tier,
+    split_frontmatter,
     validate_skill,
 )
 from gaia.skills.loader import register_skill_tools, unregister_skill_tools
@@ -61,6 +63,20 @@ from gaia.skills.manager import (
     get_default_manager,
     reset_default_manager,
     user_skills_dir,
+)
+from gaia.skills.migrate import (
+    HERMES_NAMESPACES,
+    OPENCLAW_NAMESPACES,
+    VENDOR_HERMES,
+    VENDOR_OPENCLAW,
+    VENDORS,
+    MigrationOutcome,
+    detect_vendor,
+    find_source_skills,
+    format_report,
+    install_migrated,
+    migrate_skill_dir,
+    migrate_text,
 )
 from gaia.skills.permissions import (
     CONNECTOR_BRIDGED_DOMAINS,
@@ -80,6 +96,8 @@ __all__ = [
     "parse_skill",
     "parse_skill_file",
     "parse_skill_metadata",
+    "split_frontmatter",
+    "reset_security_tier",
     "validate_skill",
     "SKILL_FILENAME",
     "SKILL_TOOLS_FILENAME",
@@ -96,6 +114,19 @@ __all__ = [
     "get_default_manager",
     "reset_default_manager",
     "user_skills_dir",
+    # Migration (OpenClaw / Hermes → GAIA)
+    "MigrationOutcome",
+    "detect_vendor",
+    "migrate_text",
+    "migrate_skill_dir",
+    "find_source_skills",
+    "install_migrated",
+    "format_report",
+    "VENDORS",
+    "VENDOR_OPENCLAW",
+    "VENDOR_HERMES",
+    "OPENCLAW_NAMESPACES",
+    "HERMES_NAMESPACES",
     # Tools
     "register_skill_tools",
     "unregister_skill_tools",
