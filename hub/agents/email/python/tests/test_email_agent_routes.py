@@ -863,6 +863,26 @@ class TestSessionReaper:
         assert reg.get("s1") is None
         assert session.agent.closed is True
 
+    def test_reaped_session_lock_is_claimed_so_a_racing_caller_fails_safe(
+        self, monkeypatch
+    ):
+        """TOCTOU pin (#2829 checkpoint 2): get_or_create hands back a
+        session reference and releases the registry lock BEFORE the caller
+        acquires run_lock. If reap() only checked `.locked()` instead of
+        claiming it, a racing caller already holding this exact reference
+        could still acquire run_lock and run against the now-closed agent.
+        The lock must be permanently unavailable once reaped."""
+        reg = self._registry(monkeypatch, idle_ttl_seconds=10)
+        clock = [1000.0]
+        monkeypatch.setattr(agent_routes.time, "monotonic", lambda: clock[0])
+
+        session = reg.get_or_create("s1")  # the racing caller's reference
+        clock[0] += 11
+        reg.reap()
+
+        assert session.agent.closed is True
+        assert session.run_lock.acquire(blocking=False) is False
+
     def test_session_within_ttl_survives_a_reap_sweep(self, monkeypatch):
         reg = self._registry(monkeypatch, idle_ttl_seconds=100)
         clock = [1000.0]
@@ -918,6 +938,21 @@ class TestSessionReaper:
         assert s1.agent.closed is True
         assert reg.get("s2") is not None
         assert reg.get("s3") is not None
+
+    def test_lru_evicted_session_lock_is_claimed_so_a_racing_caller_fails_safe(
+        self, monkeypatch
+    ):
+        """Same TOCTOU pin as the idle-reap case, for the LRU-cap path."""
+        reg = self._registry(monkeypatch, idle_ttl_seconds=10_000, max_sessions=1)
+        clock = [1000.0]
+        monkeypatch.setattr(agent_routes.time, "monotonic", lambda: clock[0])
+
+        s1 = reg.get_or_create("s1")  # the racing caller's reference
+        clock[0] += 1
+        reg.get_or_create("s2")  # over cap -> evicts s1
+
+        assert s1.agent.closed is True
+        assert s1.run_lock.acquire(blocking=False) is False
 
     def test_lru_cap_raises_an_actionable_error_when_everything_is_locked(
         self, monkeypatch

@@ -162,7 +162,7 @@ class _SessionRegistry:
                 self._last_used[session_id] = time.monotonic()
                 return existing
             if len(self._sessions) >= self._max_sessions:
-                evicted = self._pop_lru_unlocked_locked()
+                evicted = self._claim_lru_locked()
                 if evicted is None:
                     raise RuntimeError(
                         f"cannot start a new email session: {self._max_sessions} "
@@ -187,25 +187,37 @@ class _SessionRegistry:
             self._last_used[session_id] = time.monotonic()
             return session
 
-    def _pop_lru_unlocked_locked(self) -> Optional[_AgentSession]:
-        """Pop the least-recently-used session whose ``run_lock`` is free.
+    def _claim_lru_locked(self) -> Optional[_AgentSession]:
+        """Pop the least-recently-used session whose ``run_lock`` this call
+        successfully CLAIMS (acquires and never releases).
 
-        Caller holds ``self._lock``. Returns ``None`` when every session is
-        currently mid-turn — there is nothing safe to evict, so the caller
+        Caller holds ``self._lock``. Checking ``.locked()`` and popping
+        separately is a TOCTOU race: ``get_or_create`` hands out a session
+        reference and releases ``self._lock`` *before* the caller acquires
+        ``run_lock``, so a session can look unlocked at the instant this scans
+        it and only get its lock taken a moment later by the turn that is
+        about to run on it — evicting (and closing the DB of) a session an
+        in-flight caller is about to use. Acquiring here closes that window:
+        either this call wins the lock (the session was genuinely idle, and
+        it is now permanently claimed — dead — so nothing else can acquire
+        it), or it was already taken by a real turn and is skipped, exactly
+        like ``reap()`` below. Returns ``None`` when every session is
+        currently claimed/mid-turn — nothing is safe to evict, so the caller
         must refuse the new session rather than silently exceed the cap.
         """
-        candidates = [
-            sid for sid, s in self._sessions.items() if not s.run_lock.locked()
-        ]
-        if not candidates:
-            return None
-        oldest = min(candidates, key=lambda sid: self._last_used.get(sid, 0.0))
-        session = self._sessions.pop(oldest)
-        self._last_used.pop(oldest, None)
-        return session
+        by_age = sorted(self._sessions, key=lambda sid: self._last_used.get(sid, 0.0))
+        for sid in by_age:
+            if self._sessions[sid].run_lock.acquire(blocking=False):
+                session = self._sessions.pop(sid)
+                self._last_used.pop(sid, None)
+                return session
+        return None
 
     def reap(self) -> List[str]:
-        """Evict idle-expired sessions. Never one whose ``run_lock`` is held.
+        """Evict idle-expired sessions, CLAIMING each one's ``run_lock`` (see
+        ``_claim_lru_locked``) rather than merely checking it — the same
+        TOCTOU a plain ``.locked()`` check would leave open applies here: a
+        session that looks idle can be about to start a real turn.
 
         Teardown runs OUTSIDE the lock (mirrors ``delete()``) — ``close_db()``
         can block on I/O and must not stall every other session's
@@ -218,10 +230,12 @@ class _SessionRegistry:
                 sid
                 for sid, last in self._last_used.items()
                 if now - last > self._idle_ttl_seconds
-                and not self._sessions[sid].run_lock.locked()
             ]
             for sid in expired_ids:
-                session = self._sessions.pop(sid)
+                session = self._sessions[sid]
+                if not session.run_lock.acquire(blocking=False):
+                    continue  # a real turn is starting/running — never evict
+                self._sessions.pop(sid)
                 self._last_used.pop(sid, None)
                 evicted.append(session)
         for session in evicted:

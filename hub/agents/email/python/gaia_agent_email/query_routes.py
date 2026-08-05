@@ -594,69 +594,78 @@ async def query(request: QueryRequest) -> StreamingResponse:
                 detail=f"Failed to start the email agent for this query: {exc}",
             ) from exc
 
+    # Between acquiring session.run_lock (above) and the worker thread taking
+    # ownership of it, ANY failure in this block must release the lock and
+    # deregister the run — otherwise the session is wedged at 409 forever
+    # (mirrors agent_routes.py:651-701, which covers this exact span with one
+    # guard rather than patching each call site). run_registered tracks
+    # whether ``registry.add`` actually succeeded, so a run_id COLLISION
+    # (a real, unrelated in-flight run) is reported as its own 409 without
+    # deregistering that other run.
+    run_registered = False
     try:
         handler = SSEOutputHandler()
+        run = _QueryRun(request.run_id, agent, handler)
+        try:
+            registry.add(run)
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=f"run_id {request.run_id!r} is already in flight.",
+            ) from exc
+        run_registered = True
+
+        # Push the transcript slice as the agent's conversation history (spec
+        # §2.4). REPLACES, never appends — the session-scoped agent already
+        # had whatever an earlier turn left in its OWN state (memory,
+        # connectors); only conversation_history is refreshed from what the
+        # host pushes, so a later change can't silently double-count turns.
+        agent.conversation_history = [
+            {"role": item.role, "content": item.content} for item in request.context
+        ]
+        agent.console = handler
+        # Read by ``question.ask``: a caller that cannot answer must be
+        # refused at the point of asking, not parked until it times out.
+        agent.can_answer_questions = bool(request.can_answer_questions)
+        # The base agent loop observes this at each step boundary
+        # (agent.py) — the cancel endpoint sets it so tool execution stops
+        # between steps.
+        agent._cancel_event = run.cancel_event
+
+        max_steps = request.max_steps
+        user_query = request.query
+
+        def _run_agent() -> None:
+            try:
+                if max_steps is not None:
+                    run.result = agent.process_query(user_query, max_steps=max_steps)
+                else:
+                    run.result = agent.process_query(user_query)
+            except Exception as exc:  # surface loudly as a terminal error event
+                logger.exception("email /query run failed for run_id=%s", run.run_id)
+                # Lemonade-down is the most common failure; emit actionable
+                # copy (never the raw urllib3/requests repr) while leaving
+                # genuinely unexpected errors verbatim (#2139).
+                handler._emit(
+                    {"type": "agent_error", "content": _terminal_error_detail(exc)}
+                )
+            finally:
+                handler.signal_done()
+                if session is not None:
+                    session.run_lock.release()
+
+        thread = threading.Thread(target=_run_agent, daemon=True)
+        thread.start()
     except Exception as exc:
-        # Setup failed before the worker thread could take ownership of
-        # run_lock — release it so the session isn't permanently wedged at
-        # 409 (mirrors agent_routes.py:694-701).
         if session is not None:
             session.run_lock.release()
+        if run_registered:
+            registry.remove(request.run_id)
+        if isinstance(exc, HTTPException):
+            raise
         raise HTTPException(
             status_code=500, detail=f"Failed to start the query run: {exc}"
         ) from exc
-
-    run = _QueryRun(request.run_id, agent, handler)
-    try:
-        registry.add(run)
-    except KeyError as exc:
-        if session is not None:
-            session.run_lock.release()
-        raise HTTPException(
-            status_code=409,
-            detail=f"run_id {request.run_id!r} is already in flight.",
-        ) from exc
-
-    # Push the transcript slice as the agent's conversation history (spec
-    # §2.4). REPLACES, never appends — the session-scoped agent already had
-    # whatever an earlier turn left in its OWN state (memory, connectors);
-    # only conversation_history is refreshed from what the host pushes, so a
-    # later change can't silently double-count turns.
-    agent.conversation_history = [
-        {"role": item.role, "content": item.content} for item in request.context
-    ]
-    agent.console = handler
-    # Read by ``question.ask``: a caller that cannot answer must be refused at
-    # the point of asking, not parked until the question times out.
-    agent.can_answer_questions = bool(request.can_answer_questions)
-    # The base agent loop observes this at each step boundary (agent.py) — the
-    # cancel endpoint sets it so tool execution stops between steps.
-    agent._cancel_event = run.cancel_event
-
-    max_steps = request.max_steps
-    user_query = request.query
-
-    def _run_agent() -> None:
-        try:
-            if max_steps is not None:
-                run.result = agent.process_query(user_query, max_steps=max_steps)
-            else:
-                run.result = agent.process_query(user_query)
-        except Exception as exc:  # surface loudly as a terminal error event
-            logger.exception("email /query run failed for run_id=%s", run.run_id)
-            # Lemonade-down is the most common failure; emit actionable copy
-            # (never the raw urllib3/requests repr) while leaving genuinely
-            # unexpected errors verbatim — see _terminal_error_detail (#2139).
-            handler._emit(
-                {"type": "agent_error", "content": _terminal_error_detail(exc)}
-            )
-        finally:
-            handler.signal_done()
-            if session is not None:
-                session.run_lock.release()
-
-    thread = threading.Thread(target=_run_agent, daemon=True)
-    thread.start()
 
     async def _stream():
         translator = CanonicalTranslator(request.run_id)

@@ -747,6 +747,61 @@ def test_setup_failure_after_lock_acquired_releases_the_lock(
     assert not session.run_lock.locked()
 
 
+def test_thread_start_failure_releases_the_lock_and_deregisters_the_run(
+    app_client, session_registry, monkeypatch
+):
+    """The realistic trigger for the lock-release guard: thread.start() can
+    raise under thread exhaustion, and the finally that releases run_lock
+    lives INSIDE _run_agent -- which never runs if start() itself raises. A
+    spot-fix on only SSEOutputHandler()/registry.add() would miss this and
+    wedge the session at 409 forever, with no recovery path (/clear ->
+    DELETE is deliberately out of scope for #2829)."""
+    run_id = str(uuid.uuid4())
+
+    # Scoped to the route's OWN worker thread only -- TestClient/anyio start
+    # their own background threads to drive the request, and those must keep
+    # working or the test can't even make the call.
+    real_thread_cls = threading.Thread
+
+    class _FailingThread(real_thread_cls):
+        def start(self):
+            if getattr(self._target, "__name__", "") == "_run_agent":
+                raise RuntimeError("can't start new thread")
+            super().start()
+
+    monkeypatch.setattr(query_routes.threading, "Thread", _FailingThread)
+    resp = app_client.post(
+        "/v1/email/query", json=_req(session_id="s1", run_id=run_id)
+    )
+    assert resp.status_code == 500
+
+    registry, _built = session_registry
+    session = registry.get("s1")
+    assert session is not None
+    assert not session.run_lock.locked()
+    # Deregistered too, or a retry with the SAME run_id hits a spurious 409.
+    assert query_routes.registry.get(run_id) is None
+
+
+def test_run_id_collision_does_not_deregister_the_other_run(
+    app_client, session_registry
+):
+    """A run_id collision is a DIFFERENT, unrelated in-flight run -- the
+    failure path must report its own 409 without deregistering that run."""
+    run_id = str(uuid.uuid4())
+    other_handler = object()
+    other_run = query_routes._QueryRun(run_id, agent=object(), handler=other_handler)
+    query_routes.registry.add(other_run)
+    try:
+        resp = app_client.post(
+            "/v1/email/query", json=_req(session_id="s1", run_id=run_id)
+        )
+        assert resp.status_code == 409
+        assert query_routes.registry.get(run_id) is other_run
+    finally:
+        query_routes.registry.remove(run_id)
+
+
 def test_context_replaces_conversation_history_not_appends(
     app_client, session_registry
 ):
