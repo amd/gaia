@@ -117,8 +117,13 @@ jobs:
 
           exit /b %dacl_exit%
 
+      # Pin the version: the default `release` resolves through gyan.dev, so that
+      # host 503ing fails the job outright (2026-08-05, "Cannot get latest release").
+      # An explicit version resolves from the GyanD/codexffmpeg GitHub releases API.
       - uses: FedericoCarboni/setup-ffmpeg@v3
         id: setup-ffmpeg
+        with:
+          ffmpeg-version: '8.1.2'
 
       - name: Start Lemonade Server and Run Tests
         timeout-minutes: 20
