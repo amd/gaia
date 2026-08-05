@@ -1189,6 +1189,7 @@ MCP tools are converted from JSON Schema format to GAIA's tool registry format:
 # GAIA tool format (in _TOOL_REGISTRY)
 {
     "name": "mcp_filesystem_read_file",
+    "display_name": "read_file (filesystem)",
     "description": "[MCP:filesystem] Read file contents",
     "parameters": {
         "path": {
@@ -1204,8 +1205,8 @@ MCP tools are converted from JSON Schema format to GAIA's tool registry format:
     },
     "function": <wrapper_callable>,
     "atomic": True,
-    "_mcp_server": "filesystem",
-    "_mcp_tool_name": "read_file"
+    "requires_confirmation": True,
+    "_mcp_server": "filesystem"
 }
 ```
 
