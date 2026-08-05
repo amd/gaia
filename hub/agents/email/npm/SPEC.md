@@ -2,7 +2,7 @@
 
 Detailed reference for `@amd-gaia/agent-email`. For a quick start, see
 [`README.md`](./README.md); for an AI-assisted integration walkthrough, see
-[`SKILL.md`](./SKILL.md). This client pins `SCHEMA_VERSION` **2.11**, matching
+[`SKILL.md`](./SKILL.md). This client pins `SCHEMA_VERSION` **2.12**, matching
 the sidecar's current contract — every schema bump since 2.4 has been additive
 (see `contract.py`'s own per-version changelog for the full log), so nothing
 here is a breaking upgrade for an existing integration.
@@ -836,10 +836,12 @@ Every schema since 2.4 has been additive over the one before it (see
 each): OAuth-forward `/v1/connections` (2.5, #2154), mid-run `needs_input` +
 `/query/{run_id}/respond` (2.6, #2469), the read-only attention view (2.8,
 #2582), `EmailPreScanResult.total_inbox` (2.9, #2638/#2643),
-`AttentionCoverage.message_errors` (2.10, #2716), and — current,
-`SCHEMA_VERSION = "2.11"` — the pre-scan `needs_you` worklist view
-(`NeedsYouItem[]`) plus the filtered-remainder `BulkSummary` (#2743, see
-below).
+`AttentionCoverage.message_errors` (2.10, #2716), the pre-scan `needs_you`
+worklist view (`NeedsYouItem[]`) plus the filtered-remainder `BulkSummary`
+(2.11, #2743, see below), and — current, `SCHEMA_VERSION = "2.12"` —
+`EmailQueryRequest.session_id`: an optional conversation id that resolves the
+same agent across turns sharing it, instead of a throwaway per-call agent
+(#2829).
 
 They are hand-written (vs. generated from `/openapi.json`) because the contract is
 small and version-gated, keeping the published package free of a typegen build
