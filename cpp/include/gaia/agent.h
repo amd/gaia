@@ -74,6 +74,12 @@ public:
     /// Connect to an MCP server and register its tools.
     /// Mirrors Python MCPClientMixin.connect_mcp_server().
     ///
+    /// Each discovered tool is registered with ToolPolicy::CONFIRM unless the
+    /// server proves it read-only — see mcpToolRequiresConfirmation() in
+    /// mcp_client.h. A silentMode agent has no confirm callback, so gated MCP
+    /// tools are denied (fail-closed) until one is installed via
+    /// setToolConfirmCallback() or the tool is pre-approved in AllowedToolsStore.
+    ///
     /// @param name Friendly name for the server
     /// @param config Config with "command" and optional "args"
     /// @return true if connection succeeded
@@ -92,8 +98,12 @@ public:
     /// Delegates to ToolRegistry::setConfirmCallback().
     void setToolConfirmCallback(ToolConfirmCallback cb);
 
-    /// Set the default policy for all tools (local and MCP) registered without an explicit policy.
-    /// Delegates to ToolRegistry::setDefaultPolicy().
+    /// Set the default policy for local tools registered without an explicit policy.
+    /// Delegates to ToolRegistry::setDefaultPolicy(). Affects only tools
+    /// registered afterwards.
+    /// For MCP tools discovered by a later connectMcpServer() call this can only
+    /// raise the classifier's verdict (ALLOW < CONFIRM < DENY) — a gated MCP
+    /// tool is never lowered back to ALLOW.
     void setDefaultPolicy(ToolPolicy policy);
 
     /// Get the output handler.

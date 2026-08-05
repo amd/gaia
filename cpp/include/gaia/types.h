@@ -222,7 +222,16 @@ using StreamCallback = std::function<void(const std::string& token)>;
 
 // ---- Security Types ----
 
+// Declared in order of increasing severity — stricterPolicy() relies on it.
 enum class ToolPolicy { ALLOW, CONFIRM, DENY };
+
+/// Return the stricter of two policies. Used where a gate must never be
+/// weakened by a laxer default (e.g. MCP tool registration).
+constexpr ToolPolicy stricterPolicy(ToolPolicy a, ToolPolicy b) {
+    static_assert(ToolPolicy::ALLOW < ToolPolicy::CONFIRM && ToolPolicy::CONFIRM < ToolPolicy::DENY,
+                  "ToolPolicy must stay ordered by severity");
+    return a < b ? b : a;
+}
 
 enum class ToolConfirmResult { ALLOW_ONCE, ALWAYS_ALLOW, DENY };
 

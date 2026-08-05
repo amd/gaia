@@ -15,6 +15,7 @@ The GAIA C++ framework executes tool calls requested by the LLM. Without guardra
 | LLM requests a sensitive tool it should never call | `ToolPolicy::DENY` |
 | LLM passes malformed or dangerous arguments | `validateArgs` callback |
 | LLM calls a high-risk tool without user awareness | `ToolPolicy::CONFIRM` callback |
+| Injected content triggers a destructive **MCP** tool | [Automatic MCP confirmation gate](#mcp-tools-are-confirm-gated-by-default) |
 | Path traversal via `..` in file arguments | `gaia::validatePath()` |
 | Shell injection via user-controlled argument strings | `gaia::isSafeShellArg()` |
 
@@ -35,7 +36,9 @@ enum class ToolPolicy {
 ```
 
 <Warning>
-  The default policy is `ToolPolicy::ALLOW` — all tools (local and MCP) execute without prompting unless you explicitly set `CONFIRM`, change the default with `setDefaultPolicy()`, or mark individual tools `DENY`. New agents should be explicit about policy on every tool with side effects.
+  The default policy for **locally registered** tools is `ToolPolicy::ALLOW` — they execute without prompting unless you explicitly set `CONFIRM`, change the default with `setDefaultPolicy()`, or mark individual tools `DENY`. New agents should be explicit about policy on every tool with side effects.
+
+  **MCP tools are the exception:** they are `CONFIRM`-gated automatically unless the server proves them read-only. See [MCP tools are CONFIRM-gated by default](#mcp-tools-are-confirm-gated-by-default).
 </Warning>
 
 ### Example: require confirmation before a side-effecting tool
@@ -55,9 +58,39 @@ agent.toolRegistry().registerTool(std::move(info));
 
 See [Confirmation Callbacks](#confirmation-callbacks) below for details on the prompt flow.
 
+### MCP tools are CONFIRM-gated by default
+
+A tool discovered from an MCP server is named by that server, so it can never be matched against a static list of known-dangerous names. `connectMcpServer()` therefore classifies every discovered tool and registers it with `ToolPolicy::CONFIRM` **unless the server proves it read-only**. A tool is exempt only when both hold:
+
+1. the tool's `annotations.readOnlyHint` is the JSON boolean `true` — a missing `annotations` object, a non-object value, `false`, or the *string* `"true"` all count as unproven; and
+2. the tool name contains no state-changing verb token (`delete`, `write`, `push`, `execute`, `start`, `interact`, …), matched across `snake_case`, `kebab-case` and `camelCase` (including `WRITEFile`).
+
+So a server that advertises `delete_file` with `readOnlyHint: true` still gets gated — the name overrides the claim.
+
+```cpp
+// No opt-in required — this is the behaviour after connectMcpServer() returns.
+agent.connectMcpServer("fs", {{"command", "npx"}, {"args", {"-y", "some-fs-server"}}});
+
+// Given what the server reported for each tool:
+//   read_file   {"readOnlyHint": true}   -> mcp_fs_read_file    ALLOW
+//   write_file  {"readOnlyHint": true}   -> mcp_fs_write_file   CONFIRM  (mutating verb)
+//   list_dir    (no annotations)         -> mcp_fs_list_dir     CONFIRM  (unproven)
+```
+
+<Warning>
+  Because `CONFIRM` is fail-closed, an agent with `silentMode = true` (no confirm callback) **cannot execute any gated MCP tool**. For headless automation that legitimately needs them, install an explicit callback with `setToolConfirmCallback()` — an intentional opt-in, visible in your code — or pre-approve specific tools through the [always-allow store](#persistent-permissions).
+</Warning>
+
+The classifier's verdict is a floor. `setDefaultPolicy(ToolPolicy::CONFIRM)` or `DENY` can still raise a proven-read-only MCP tool to a stricter policy; nothing lowers a gated tool back to `ALLOW`.
+
+**What the exemption does not cover.** `readOnlyHint` is the server's own claim, and the verb check is the only counterweight — it knows a fixed vocabulary, so it protects against a careless server, not a hostile one. Two consequences worth knowing:
+
+- A read-only tool can still be an exfiltration channel. A gated-out `web_search` or `fetch_url` reads your context and puts it in a query string; the classifier does not consult `openWorldHint`.
+- For a server you have not vetted, call `setDefaultPolicy(ToolPolicy::CONFIRM)` before `connectMcpServer()` so nothing from it is exempt.
+
 ### Changing the Default Policy
 
-The framework default is `ToolPolicy::ALLOW`. For a high-security agent — for example, one that connects to external MCP servers — you can change the blanket default:
+The framework default is `ToolPolicy::ALLOW`. For a high-security agent — one where every side-effecting local tool should prompt — you can change the blanket default:
 
 ```cpp
 // All local and MCP tools inherit CONFIRM unless explicitly overridden.
@@ -70,11 +103,13 @@ status_info.policy   = gaia::ToolPolicy::ALLOW;
 status_info.callback = [](const gaia::json&) -> gaia::json { return {{"status", "ok"}}; };
 agent.toolRegistry().registerTool(std::move(status_info));
 
-// MCP tools also inherit the blanket default:
+// Raises even proven-read-only MCP tools to CONFIRM:
 agent.connectMcpServer("untrusted", {{"command", "npx"}, {"args", {"-y", "server"}}});
 ```
 
 Call `setDefaultPolicy()` before registering tools or calling `connectMcpServer()`. Tools registered afterwards inherit the new default; tools already registered are unaffected.
+
+For MCP tools the default is applied as a *raise*, never a lower: a tool the classifier gated at `CONFIRM` stays gated even under the framework default of `ALLOW`.
 
 Use `ToolPolicy::DENY` for tools the LLM should never invoke — for example, internal-only tools registered for programmatic use but not accessible to the model.
 
@@ -191,12 +226,23 @@ When the LLM calls `flush_dns`, the user sees:
 
 Agents constructed with `config.silentMode = true` (e.g., unit tests, background automation) receive **no confirm callback**. Any tool with `CONFIRM` policy is denied automatically (fail-closed). There is no user to ask in a headless context, so blocking is the safe default.
 
+This includes MCP tools, which are [gated automatically](#mcp-tools-are-confirm-gated-by-default) — a headless agent that calls `connectMcpServer()` will be denied every discovered tool the server did not prove read-only.
+
 If your headless agent needs to approve specific tools automatically, pre-populate `AllowedToolsStore` before the agent starts:
 
 ```cpp
 auto store = std::make_shared<gaia::AllowedToolsStore>();
-store->addAlwaysAllowed("read_config");   // pre-approved for this agent
+store->addAlwaysAllowed("read_config");            // pre-approved for this agent
+store->addAlwaysAllowed("mcp_windows_Shell");      // MCP names are prefixed
 agent.toolRegistry().setAllowedToolsStore(store);
+```
+
+Alternatively, install an auto-approving callback — an explicit, greppable opt-in rather than a silent default:
+
+```cpp
+agent.setToolConfirmCallback([](const std::string&, const gaia::json&) {
+    return gaia::ToolConfirmResult::ALLOW_ONCE;
+});
 ```
 
 ### Custom UI agents
@@ -270,7 +316,7 @@ The `security_demo` example in `cpp/examples/security_demo.cpp` provides an inte
 
 ## Recommendations
 
-1. **Call `setDefaultPolicy(ToolPolicy::CONFIRM)`** in production agents that connect to external MCP servers or want stricter blanket defaults.
+1. **Call `setDefaultPolicy(ToolPolicy::CONFIRM)`** in production agents that want stricter blanket defaults for their *local* tools. MCP tools are already gated automatically.
 2. **Use `validateArgs` for every tool that touches the file system or executes shell commands.**
 3. **Combine `validatePath` + `isSafeShellArg`** for tools that build shell command strings from LLM-supplied arguments.
 4. **Use `DENY` for tools the LLM should never invoke** — for example, internal-only tools registered for programmatic use but not accessible to the model.
