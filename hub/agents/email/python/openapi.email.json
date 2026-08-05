@@ -349,7 +349,7 @@
             "type": "array"
           },
           "schema_version": {
-            "default": "2.11",
+            "default": "2.12",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -374,7 +374,7 @@
             "type": "array"
           },
           "schema_version": {
-            "default": "2.11",
+            "default": "2.12",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -473,7 +473,7 @@
             "title": "Provider"
           },
           "schema_version": {
-            "default": "2.11",
+            "default": "2.12",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -660,7 +660,7 @@
             "title": "Location"
           },
           "schema_version": {
-            "default": "2.11",
+            "default": "2.12",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -700,7 +700,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.11",
+            "default": "2.12",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -731,7 +731,7 @@
             "type": "array"
           },
           "schema_version": {
-            "default": "2.11",
+            "default": "2.12",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -767,7 +767,7 @@
             "title": "Provider"
           },
           "schema_version": {
-            "default": "2.11",
+            "default": "2.12",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -807,7 +807,7 @@
             "type": "boolean"
           },
           "schema_version": {
-            "default": "2.11",
+            "default": "2.12",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -958,7 +958,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.11",
+            "default": "2.12",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1071,7 +1071,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.11",
+            "default": "2.12",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1101,7 +1101,7 @@
             "description": "The attention-view envelope."
           },
           "schema_version": {
-            "default": "2.11",
+            "default": "2.12",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1176,7 +1176,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.11",
+            "default": "2.12",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1376,7 +1376,7 @@
             "type": "integer"
           },
           "schema_version": {
-            "default": "2.11",
+            "default": "2.12",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -1394,7 +1394,7 @@
             "description": "The pre-scan envelope."
           },
           "schema_version": {
-            "default": "2.11",
+            "default": "2.12",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1651,7 +1651,7 @@
             "type": "boolean"
           },
           "schema_version": {
-            "default": "2.11",
+            "default": "2.12",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1723,7 +1723,7 @@
             "title": "Query"
           },
           "schema_version": {
-            "default": "2.11",
+            "default": "2.12",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -1774,7 +1774,7 @@
             "title": "Query"
           },
           "schema_version": {
-            "default": "2.11",
+            "default": "2.12",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1995,7 +1995,7 @@
             "title": "Payload"
           },
           "schema_version": {
-            "default": "2.11",
+            "default": "2.12",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -2025,7 +2025,7 @@
             "description": "The structured analysis."
           },
           "schema_version": {
-            "default": "2.11",
+            "default": "2.12",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -2191,7 +2191,7 @@
             "type": "integer"
           },
           "schema_version": {
-            "default": "2.11",
+            "default": "2.12",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -2259,7 +2259,7 @@
             "type": "boolean"
           },
           "schema_version": {
-            "default": "2.11",
+            "default": "2.12",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -2399,7 +2399,7 @@
             "type": "array"
           },
           "schema_version": {
-            "default": "2.11",
+            "default": "2.12",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -3015,6 +3015,19 @@
             "description": "Host-minted streaming-run handle (UUIDv4). Cancellation (POST /v1/email/query/{run_id}/cancel) keys off it, so the run is cancellable from the instant the request is sent.",
             "title": "Run Id",
             "type": "string"
+          },
+          "session_id": {
+            "anyOf": [
+              {
+                "pattern": "^[A-Za-z0-9_-]{1,128}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Opaque conversation id, minted by the host once per conversation (#2829). Omitted -> a fresh throwaway agent per call, exactly like before. Present -> the run resolves the SAME agent used by every other turn on this id (via the session-scoped registry), so a reference to something an earlier turn surfaced can resolve. Constrained to the charset a dict key / URL path segment / log line tolerates.",
+            "title": "Session Id"
           }
         },
         "required": [
@@ -3337,7 +3350,7 @@
   "info": {
     "description": "REST surface for the GAIA Email Triage agent (/v1/email/*). Cross-implementation contract for the npm client and native builds.",
     "title": "GAIA Email Agent API",
-    "version": "2.11"
+    "version": "2.12"
   },
   "openapi": "3.1.0",
   "paths": {

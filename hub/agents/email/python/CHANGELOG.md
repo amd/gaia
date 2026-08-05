@@ -7,6 +7,19 @@ contract version is tracked separately as
 
 ## [Unreleased]
 
+### Added
+
+- **A follow-up like "reply to number 1" can now resolve (#2829).** `POST
+  /v1/email/query` accepts an optional `session_id`: send the same id on
+  every turn of a conversation and the run resolves the SAME agent each
+  time instead of a throwaway one per call, so a reference to something an
+  earlier turn surfaced has something to resolve against. Omit it and
+  nothing changes — this is additive (schema 2.12). Two turns can never run
+  on the same session at once (a second call while one is in flight is
+  rejected, `409`); a session id the sidecar has never seen arriving with
+  prior conversation history (e.g. the sidecar restarted mid-conversation)
+  gets a one-time notice instead of silently starting over.
+
 ### Fixed
 
 - **Asked about upcoming meetings or calendar invites, the agent could invent

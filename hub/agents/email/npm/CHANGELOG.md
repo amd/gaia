@@ -6,6 +6,13 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## Unreleased
 
+- **`query()` can now carry a conversation forward.** `EmailQueryRequest`
+  gains an optional `session_id`: set it once and reuse it on every turn of
+  a conversation (e.g. `crypto.randomUUID()`), and the sidecar resolves the
+  SAME agent each time instead of a throwaway one per call — so a
+  follow-up referring to something an earlier turn surfaced has something
+  to resolve against. Leave it unset and nothing changes (#2829, schema
+  2.12).
 - **One inbox triage card instead of two that disagreed.** Asking the agent
   to triage your inbox used to draw two summary boxes from two separate scans
   at different depths — one might say "nothing needs you" while the other,

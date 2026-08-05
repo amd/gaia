@@ -209,13 +209,26 @@ func (f *fakeRelay) handle(w http.ResponseWriter, r *http.Request) {
 
 		if f.strictBody {
 			// The accepted field set is the one THIS peer's contract declares —
-			// 2.6 knows can_answer_questions, older versions do not. Modelling
-			// only one of the two would make the fake agree with the client by
-			// construction, which is how the 422 shipped in the first place.
+			// 2.6 knows can_answer_questions, 2.12 adds session_id, older
+			// versions know neither. Modelling only the newest shape would
+			// make the fake agree with the client by construction, which is
+			// how the 422 shipped in the first place (#2496).
 			dec := json.NewDecoder(strings.NewReader(string(raw)))
 			dec.DisallowUnknownFields()
 			var derr error
-			if contractAtLeast(f.contractVersion, 2, 6) {
+			switch {
+			case contractAtLeast(f.contractVersion, 2, 12):
+				var strict struct {
+					Query              string `json:"query"`
+					RunID              string `json:"run_id"`
+					Context            []Turn `json:"context"`
+					Model              string `json:"model"`
+					MaxSteps           int    `json:"max_steps"`
+					CanAnswerQuestions *bool  `json:"can_answer_questions"`
+					SessionID          string `json:"session_id"`
+				}
+				derr = dec.Decode(&strict)
+			case contractAtLeast(f.contractVersion, 2, 6):
 				var strict struct {
 					Query              string `json:"query"`
 					RunID              string `json:"run_id"`
@@ -225,7 +238,7 @@ func (f *fakeRelay) handle(w http.ResponseWriter, r *http.Request) {
 					CanAnswerQuestions *bool  `json:"can_answer_questions"`
 				}
 				derr = dec.Decode(&strict)
-			} else {
+			default:
 				var strict struct {
 					Query    string `json:"query"`
 					RunID    string `json:"run_id"`

@@ -258,11 +258,20 @@ def run_query(
     context: Optional[List[Dict[str, str]]] = None,
     model: Optional[str] = None,
     max_steps: Optional[int] = None,
+    session_id: Optional[str] = None,
     renderer: Optional[ConsoleRenderer] = None,
     verbose: bool = False,
 ) -> QueryOutcome:
     """Ensure the daemon + *agent_id* sidecar, stream ``POST /v1/<agent>/query``
     through the relay, and render the canonical SSE events.
+
+    ``session_id``, when given, resolves the SAME agent across calls sharing
+    it (#2829, contract 2.12) instead of a throwaway per-call agent — so a
+    caller that keeps reusing one id (e.g. an interactive REPL) gets a
+    conversation, not amnesia between turns. Omitted -> today's behaviour
+    exactly, matching ``model``/``max_steps``: left out of the payload dict
+    entirely rather than sent as ``null``, so an older sidecar's strict
+    request model never sees an unknown field.
 
     The CLI presents ONLY the daemon client token; it never learns the sidecar's
     port or bearer. Returns a :class:`QueryOutcome` whose ``exit_code`` is 0 on a
@@ -287,6 +296,8 @@ def run_query(
         payload["model"] = model
     if max_steps is not None:
         payload["max_steps"] = max_steps
+    if session_id:
+        payload["session_id"] = session_id
 
     url = f"{inst.base_url}/v1/{agent_id}/query"
     headers = {
