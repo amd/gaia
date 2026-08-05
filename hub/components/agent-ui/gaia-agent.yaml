@@ -6,7 +6,7 @@
 # release. The publish workflow reads this file and asserts the two agree.
 id: agent-ui
 name: GAIA Agent UI
-version: 0.22.0
+version: 0.23.0
 description: "Desktop app for chatting with GAIA agents, with documents and RAG"
 author: AMD
 license: MIT
