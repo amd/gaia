@@ -181,7 +181,7 @@ def test_ensure_agent_rejects_prehistoric_daemon(monkeypatch):
 
 def _stub_ensure(monkeypatch, base_url="http://127.0.0.1:9999"):
     """Stub client.ensure_agent so run_query never touches a real daemon."""
-    from gaia.daemon import agent_query, client
+    from gaia.daemon import agent_query
     from gaia.daemon.instance import DaemonInstance
 
     inst = DaemonInstance(
