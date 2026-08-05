@@ -229,6 +229,19 @@ class QueryRequest(_Strict):
             "the user should do on this surface."
         ),
     )
+    session_id: Optional[str] = Field(
+        default=None,
+        pattern=r"^[A-Za-z0-9_-]{1,128}$",
+        description=(
+            "Opaque conversation id, minted by the host once per conversation "
+            "(#2829). Omitted -> a fresh throwaway agent per call, exactly like "
+            "before. Present -> the run resolves the SAME agent used by every "
+            "other turn on this id (via the session-scoped registry), so a "
+            "reference to something an earlier turn surfaced can resolve. "
+            "Constrained to the charset a dict key / URL path segment / log "
+            "line tolerates."
+        ),
+    )
 
     @field_validator("run_id")
     @classmethod

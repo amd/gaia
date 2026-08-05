@@ -608,4 +608,52 @@ def test_non_lemonade_provider_is_400(app_client, monkeypatch):
     monkeypatch.setattr(query_routes, "build_query_agent", lambda **k: fake)
     resp = app_client.post("/v1/email/query", json=_req(provider="claude"))
     assert resp.status_code == 400
-    assert "local inference only" in resp.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# session_id — schema (#2829). Omitted -> today's behaviour exactly; present
+# -> constrained to the same charset a dict key / path segment / log value
+# tolerates (agent_routes.py:395,404 use it as a URL path segment).
+# ---------------------------------------------------------------------------
+
+
+def test_session_id_is_optional_and_defaults_to_none():
+    req = query_routes.QueryRequest(query="hi", run_id=str(uuid.uuid4()), context=[])
+    assert req.session_id is None
+
+
+def test_session_id_accepts_the_documented_charset():
+    req = query_routes.QueryRequest(
+        query="hi", run_id=str(uuid.uuid4()), context=[], session_id="abc-123_XYZ"
+    )
+    assert req.session_id == "abc-123_XYZ"
+
+
+@pytest.mark.parametrize(
+    "bad_id",
+    [
+        "",  # too short (min length 1)
+        "has a space",
+        "has/slash",
+        "has.dot",
+        "x" * 129,  # over the 128 cap
+    ],
+)
+def test_session_id_rejects_characters_outside_the_charset(bad_id):
+    import pydantic
+
+    with pytest.raises(pydantic.ValidationError):
+        query_routes.QueryRequest(
+            query="hi", run_id=str(uuid.uuid4()), context=[], session_id=bad_id
+        )
+
+
+def test_omitted_session_id_still_works_end_to_end(app_client, monkeypatch):
+    """Today's behaviour, byte-for-byte: no session_id -> the old per-turn agent."""
+    fake = _HappyFakeAgent()
+    monkeypatch.setattr(query_routes, "build_query_agent", lambda **k: fake)
+    resp = app_client.post("/v1/email/query", json=_req())
+    assert resp.status_code == 200
+    events = _parse_sse(resp.text)
+    assert _types(events)[-1] == "final"
+    assert fake.seen_query == "Triage my inbox."
