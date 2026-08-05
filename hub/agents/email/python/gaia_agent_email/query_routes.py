@@ -544,25 +544,84 @@ async def query(request: QueryRequest) -> StreamingResponse:
     if request.model:
         config_kwargs["model_id"] = request.model
 
+    # session_id resolves through the SAME session-scoped registry the
+    # stateful /v1/email/agent/* surface uses (#2829), so the agent — and
+    # anything an earlier turn set on it — persists across turns on this id.
+    # Omitted -> today's behaviour exactly: a throwaway per-turn agent.
+    session: Optional[Any] = None
+    continuity_lost = False
+    if request.session_id is not None:
+        from gaia_agent_email import agent_routes
+
+        # A session_id the registry has never seen, arriving WITH prior
+        # context, means the sidecar restarted mid-conversation (the
+        # registry is in-memory) — surfaced below, never a silent cold
+        # start. A brand-new conversation (empty context) is not continuity
+        # loss: no session was ever expected to exist yet.
+        continuity_lost = (
+            agent_routes.registry.get(request.session_id) is None
+            and len(request.context) > 0
+        )
+        try:
+            session = await asyncio.to_thread(
+                agent_routes.registry.get_or_create,
+                request.session_id,
+                **config_kwargs,
+            )
+        except Exception as exc:  # construction/capacity failure → fail loud
+            raise HTTPException(
+                status_code=502,
+                detail=f"Failed to start the email agent for this query: {exc}",
+            ) from exc
+        # One turn at a time per session (mandatory — mirrors
+        # agent_routes.py:645-649): without this, agent.console /
+        # agent._cancel_event / agent._current_query are overwritten under a
+        # running worker thread, silently misrouting one caller's stream
+        # into another's. Reachable via the ordinary Esc-then-retype path,
+        # since cancellation is cooperative.
+        if not session.run_lock.acquire(blocking=False):
+            raise HTTPException(
+                status_code=409,
+                detail="A turn is already in progress for this session.",
+            )
+        agent = session.agent
+    else:
+        try:
+            agent = await asyncio.to_thread(build_query_agent, **config_kwargs)
+        except Exception as exc:  # construction failure → fail loud, before the stream
+            raise HTTPException(
+                status_code=502,
+                detail=f"Failed to start the email agent for this query: {exc}",
+            ) from exc
+
     try:
-        agent = await asyncio.to_thread(build_query_agent, **config_kwargs)
-    except Exception as exc:  # construction failure → fail loud, before the stream
+        handler = SSEOutputHandler()
+    except Exception as exc:
+        # Setup failed before the worker thread could take ownership of
+        # run_lock — release it so the session isn't permanently wedged at
+        # 409 (mirrors agent_routes.py:694-701).
+        if session is not None:
+            session.run_lock.release()
         raise HTTPException(
-            status_code=502,
-            detail=f"Failed to start the email agent for this query: {exc}",
+            status_code=500, detail=f"Failed to start the query run: {exc}"
         ) from exc
 
-    handler = SSEOutputHandler()
     run = _QueryRun(request.run_id, agent, handler)
     try:
         registry.add(run)
     except KeyError as exc:
+        if session is not None:
+            session.run_lock.release()
         raise HTTPException(
             status_code=409,
             detail=f"run_id {request.run_id!r} is already in flight.",
         ) from exc
 
-    # Push the transcript slice as the agent's conversation history (spec §2.4).
+    # Push the transcript slice as the agent's conversation history (spec
+    # §2.4). REPLACES, never appends — the session-scoped agent already had
+    # whatever an earlier turn left in its OWN state (memory, connectors);
+    # only conversation_history is refreshed from what the host pushes, so a
+    # later change can't silently double-count turns.
     agent.conversation_history = [
         {"role": item.role, "content": item.content} for item in request.context
     ]
@@ -593,6 +652,8 @@ async def query(request: QueryRequest) -> StreamingResponse:
             )
         finally:
             handler.signal_done()
+            if session is not None:
+                session.run_lock.release()
 
     thread = threading.Thread(target=_run_agent, daemon=True)
     thread.start()
@@ -602,6 +663,19 @@ async def query(request: QueryRequest) -> StreamingResponse:
         terminated = False
         last_write = time.monotonic()
         try:
+            if continuity_lost:
+                yield _sse(
+                    {
+                        "type": "status",
+                        "message": (
+                            "conversation continuity was lost — the agent "
+                            "restarted and does not remember earlier turns in "
+                            "this session. Continuing with the pushed "
+                            "context only."
+                        ),
+                    }
+                )
+                last_write = time.monotonic()
             while True:
                 try:
                     event = handler.event_queue.get_nowait()

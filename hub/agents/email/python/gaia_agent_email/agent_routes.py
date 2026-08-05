@@ -45,6 +45,7 @@ import asyncio
 import json
 import queue
 import threading
+import time
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException
@@ -117,26 +118,60 @@ class _AgentSession:
         return self.run_lock.locked()
 
 
+#: Idle-only, generous by design (#2829): a session_id now roots an agent for
+#: the life of a conversation, not one call — the reaper exists to bound that,
+#: never to time out a conversation that is still being used.
+_DEFAULT_IDLE_TTL_SECONDS = 4 * 60 * 60  # 4 hours
+
+#: Each retained EmailTriageAgent holds a WAL sqlite connection, a second
+#: memory-store DB + embedder, and connector backends — generous, but not
+#: unbounded, for a single-tenant sidecar.
+_DEFAULT_MAX_SESSIONS = 100
+
+
 class _SessionRegistry:
     """Process-local map of session_id → :class:`_AgentSession`.
 
     In-process and single-tenant by design (the sidecar hosts one user's agent).
-    Agents are built lazily on first use and torn down on eviction.
+    Agents are built lazily on first use and torn down on eviction, idle
+    timeout, or the LRU cap — never while the session's ``run_lock`` is held.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        idle_ttl_seconds: float = _DEFAULT_IDLE_TTL_SECONDS,
+        max_sessions: int = _DEFAULT_MAX_SESSIONS,
+    ) -> None:
         self._sessions: Dict[str, _AgentSession] = {}
+        self._last_used: Dict[str, float] = {}
         self._lock = threading.Lock()
+        self._idle_ttl_seconds = idle_ttl_seconds
+        self._max_sessions = max_sessions
 
     def get(self, session_id: str) -> Optional[_AgentSession]:
         with self._lock:
             return self._sessions.get(session_id)
 
     def get_or_create(self, session_id: str, **config_kwargs: Any) -> _AgentSession:
+        self.reap()
+        evicted: Optional[_AgentSession] = None
         with self._lock:
             existing = self._sessions.get(session_id)
             if existing is not None:
+                self._last_used[session_id] = time.monotonic()
                 return existing
+            if len(self._sessions) >= self._max_sessions:
+                evicted = self._pop_lru_unlocked_locked()
+                if evicted is None:
+                    raise RuntimeError(
+                        f"cannot start a new email session: {self._max_sessions} "
+                        "sessions are already active and none are idle enough "
+                        "to evict. Close an idle terminal/window, or wait for "
+                        "one to finish its current turn, and retry."
+                    )
+        if evicted is not None:
+            _close_agent(evicted.agent)
         # Build outside the lock — construction is slow (memory init, backends)
         # and must not block other sessions. A racing creator for the SAME id is
         # resolved below by discarding the loser's agent.
@@ -145,14 +180,58 @@ class _SessionRegistry:
             existing = self._sessions.get(session_id)
             if existing is not None:
                 _close_agent(agent)
+                self._last_used[session_id] = time.monotonic()
                 return existing
             session = _AgentSession(session_id, agent)
             self._sessions[session_id] = session
+            self._last_used[session_id] = time.monotonic()
             return session
+
+    def _pop_lru_unlocked_locked(self) -> Optional[_AgentSession]:
+        """Pop the least-recently-used session whose ``run_lock`` is free.
+
+        Caller holds ``self._lock``. Returns ``None`` when every session is
+        currently mid-turn — there is nothing safe to evict, so the caller
+        must refuse the new session rather than silently exceed the cap.
+        """
+        candidates = [
+            sid for sid, s in self._sessions.items() if not s.run_lock.locked()
+        ]
+        if not candidates:
+            return None
+        oldest = min(candidates, key=lambda sid: self._last_used.get(sid, 0.0))
+        session = self._sessions.pop(oldest)
+        self._last_used.pop(oldest, None)
+        return session
+
+    def reap(self) -> List[str]:
+        """Evict idle-expired sessions. Never one whose ``run_lock`` is held.
+
+        Teardown runs OUTSIDE the lock (mirrors ``delete()``) — ``close_db()``
+        can block on I/O and must not stall every other session's
+        ``get_or_create`` while it runs.
+        """
+        now = time.monotonic()
+        evicted: List[_AgentSession] = []
+        with self._lock:
+            expired_ids = [
+                sid
+                for sid, last in self._last_used.items()
+                if now - last > self._idle_ttl_seconds
+                and not self._sessions[sid].run_lock.locked()
+            ]
+            for sid in expired_ids:
+                session = self._sessions.pop(sid)
+                self._last_used.pop(sid, None)
+                evicted.append(session)
+        for session in evicted:
+            _close_agent(session.agent)
+        return [s.session_id for s in evicted]
 
     def delete(self, session_id: str) -> bool:
         with self._lock:
             session = self._sessions.pop(session_id, None)
+            self._last_used.pop(session_id, None)
         if session is None:
             return False
         _close_agent(session.agent)
