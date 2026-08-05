@@ -81,12 +81,12 @@ jobs:
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
-          echo "===== version ====="; railway --version || true
-          echo "===== up --help ====="; railway up --help || true
-          echo "===== logs --help ====="; railway logs --help || true
-          echo "===== status ====="; railway status || true
-          echo "===== BUILD LOGS ====="; railway logs --build --service website || true
-          echo "===== DEPLOY LOGS ====="; railway logs --service website || true
+          echo "===== deployment list ====="
+          railway deployment list --service website --json || railway deployment list --service website || true
+          echo "===== LATEST BUILD LOGS ====="
+          railway logs --latest --build --service website -n 400 || true
+          echo "===== LATEST DEPLOY LOGS ====="
+          railway logs --latest --deployment --service website -n 400 || true
 
       - name: Propagate deploy failure
         if: steps.deploy.outcome == 'failure'
