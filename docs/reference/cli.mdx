@@ -2074,7 +2074,7 @@ Manage agent memory: run day-zero onboarding and view memory statistics.
 Author and manage agent skills. A skill is a directory whose only required file is `SKILL.md`; GAIA implements the [Agent Skills](https://agentskills.io) open standard, so a Claude Code skill loads unchanged.
 
 ```bash
-gaia skill {list,info,create,import,export} [OPTIONS]
+gaia skill {list,info,create,import,export,audit} [OPTIONS]
 ```
 
 Skills are discovered from three roots, highest precedence first:
@@ -2166,6 +2166,30 @@ Skills are discovered from three roots, highest precedence first:
     | `--output` | Destination `.zip` (default: `./<name>.zip`) |
 
     Bundles the whole skill directory. Import it elsewhere with `gaia skill import <file>.zip`.
+  </Tab>
+
+  <Tab title="audit">
+    ```bash
+    gaia skill audit <dir> [OPTIONS]
+    ```
+
+    | Option | Description |
+    |--------|-------------|
+    | `--json` | Emit the machine-readable report on stdout — the payload the hub publish path attaches as its `audit` part |
+    | `--output FILE` | Also write the JSON report to `FILE` |
+    | `--sarif FILE` | Write SARIF 2.1.0 for upload to GitHub code scanning |
+    | `--path-prefix DIR` | Repo-relative prefix for SARIF paths (default: the audited path) |
+    | `--tier TIER` | Audit against `experimental`/`community`/`verified` instead of the tier the skill declares |
+    | `--fail-on SEVERITY` | Exit non-zero when any finding reaches this severity, even if the tier would allow it |
+    | `--show-snippets` | Include the offending source text (withheld by default) |
+
+    Runs the pre-publish security audit ([#2468](https://github.com/amd/gaia/issues/2468)) over a skill's code *and* its instruction body, printing an `ALLOW` / `REVIEW` / `BLOCK` verdict with `file:line` findings and the fix for each. This is the same engine the **Skill Audit** PR check runs, so a clean local audit is the whole requirement for a skill-submission PR: `BLOCK` fails the check, `REVIEW` holds it for maintainer sign-off, `ALLOW` passes. Skills are contributed by pull request — there is no self-serve publish.
+
+    **Exit codes:** `0` allow · `5` review · `6` block · `4` the skill could not be parsed. `REVIEW` and `BLOCK` are distinct so CI can hold a skill without reporting it as rejected.
+
+    Use `--tier community` to check a claim *before* making it — a skill cannot be stamped a tier whose gate it did not clear, so this is the difference between finding out locally and finding out as a publish rejection.
+
+    Nothing is imported, executed, or fetched, so auditing an untrusted skill is itself safe.
   </Tab>
 </Tabs>
 

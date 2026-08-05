@@ -257,9 +257,11 @@ tests/unit/eval/test_mcp_tool_reliability_scenarios.py
 
 # Internal skill-marketplace installs (slai-marketplace). AMD-internal skills
 # copied into per-tool dirs; never ship them to the public repo. The repo's own
-# committed skills under .claude/skills/* stay tracked — only the
-# marketplace-installed m365-* skill dir is ignored.
-/skills/
+# committed skills under .claude/skills/* stay tracked, and the curated
+# skills/community/ contribution lane is tracked too — only marketplace-installed
+# skill dirs (e.g. m365-*) are ignored.
+/skills/*
+!/skills/community/
 /.cline/
 /.codex/
 /.cursor/

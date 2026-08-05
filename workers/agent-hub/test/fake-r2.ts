@@ -7,6 +7,9 @@
  * handlers run under plain Vitest without Miniflare or a real bucket.
  */
 
+import { manifestDigest } from "../src/audit";
+import { parseSkillManifest } from "../src/skill-manifest";
+
 interface StoredObject {
   key: string;
   bytes: Uint8Array;
@@ -187,6 +190,141 @@ export function publishRequest(opts: {
     headers,
     body: form,
   });
+}
+
+/** Build a POST /publish/skill multipart request (#2467). */
+export function skillPublishRequest(opts: {
+  token?: string;
+  skillMarkdown: string;
+  artifact: Uint8Array | string;
+  filename: string;
+  contentType?: string;
+  changelog?: string;
+  /** The security-audit report JSON (#2468); omit to publish un-audited. */
+  audit?: string;
+  /** Omit the artifact part entirely (to exercise the missing-part guard). */
+  omitArtifact?: boolean;
+}): Request {
+  const form = new FormData();
+  form.set("skill", opts.skillMarkdown);
+  if (opts.changelog !== undefined) form.set("changelog", opts.changelog);
+  if (opts.audit !== undefined) form.set("audit", opts.audit);
+  if (!opts.omitArtifact) {
+    const bytes =
+      typeof opts.artifact === "string" ? new TextEncoder().encode(opts.artifact) : opts.artifact;
+    form.set(
+      "artifact",
+      new Blob([bytes], { type: opts.contentType ?? "application/zip" }),
+      opts.filename
+    );
+  }
+  const headers = new Headers();
+  if (opts.token) headers.set("authorization", `Bearer ${opts.token}`);
+  return new Request("https://hub.amd-gaia.ai/publish/skill", {
+    method: "POST",
+    headers,
+    body: form,
+  });
+}
+
+/**
+ * A valid sample SKILL.md for tests: the Agent Skills base plus the
+ * `metadata.gaia` namespace. Pass `frontMatter` to replace the whole front
+ * matter block (for malformed-manifest cases), or override individual fields.
+ */
+export function sampleSkill(
+  overrides: {
+    name?: string;
+    version?: string;
+    description?: string;
+    security_tier?: string;
+    /** Replace the entire front matter (raw YAML text). */
+    frontMatter?: string;
+    /** Drop the `version:` line entirely. */
+    omitVersion?: boolean;
+    /** Emit no `metadata.gaia` block at all (instruction-only skill). */
+    omitGaia?: boolean;
+    body?: string;
+  } = {}
+): string {
+  const body = overrides.body ?? "# Web Research\n\nSearch the web, then summarise.\n";
+  if (overrides.frontMatter !== undefined) {
+    return `---\n${overrides.frontMatter}\n---\n\n${body}`;
+  }
+  const lines = [
+    `name: ${overrides.name ?? "web-research"}`,
+    `description: ${overrides.description ?? '"Search the web for current information"'}`,
+    "license: MIT",
+  ];
+  if (!overrides.omitVersion) lines.push(`version: ${overrides.version ?? "0.1.0"}`);
+  if (!overrides.omitGaia) {
+    lines.push(
+      "metadata:",
+      "  gaia:",
+      `    security_tier: ${overrides.security_tier ?? "experimental"}`,
+      "    permissions:",
+      "      - network:read:*.brave.com",
+      "    requirements:",
+      '      model: ">=7B"',
+      '      python: ">=3.10"',
+      "      dependencies: [requests>=2.31]",
+      "      env_vars: [BRAVE_API_KEY]",
+      "      hardware: { npu: optional }",
+      "    tools:",
+      "      - name: search_web",
+      "        description: Search the web for current information",
+      "    tools_required: [query_documents]"
+    );
+  }
+  return `---\n${lines.join("\n")}\n---\n\n${body}`;
+}
+
+/**
+ * A cleared, correctly-BOUND audit report (#2468) for tests that publish a
+ * gated tier.
+ *
+ * It derives `skill`, `version`, and `manifest_digest` from the SKILL.md being
+ * published, because a gated tier now requires the report to name exactly what
+ * it audited. Overrides exist so a test can break one binding at a time.
+ *
+ * Note this helper can mint a report claiming any `clearedTiers` it likes —
+ * which is precisely the forgery the gate cannot prevent (see the "What this
+ * gate is NOT" section in `src/audit.ts`). These tests exercise the Worker's
+ * enforcement, not the engine's honesty.
+ */
+export async function allowAudit(
+  skillMarkdown: string,
+  overrides: {
+    findings?: number;
+    verdict?: string;
+    skill?: string;
+    version?: string;
+    tier?: string;
+    clearedTiers?: string[];
+    manifestDigest?: string;
+    /** Field names to delete, for the missing-binding cases. */
+    omit?: string[];
+  } = {}
+): Promise<string> {
+  const { manifest } = parseSkillManifest(skillMarkdown);
+  const findings = overrides.findings ?? 0;
+  const report: Record<string, unknown> = {
+    verdict: overrides.verdict ?? "ALLOW",
+    engine: "gaia-skill-audit/0.1.0",
+    audited_at: "2026-07-29T00:00:00.000Z",
+    findings: Array.from({ length: findings }, (_, i) => ({ id: `f${i}` })),
+    skill: overrides.skill ?? manifest.name,
+    version: overrides.version ?? manifest.version,
+    security_tier: overrides.tier ?? manifest.security_tier,
+    cleared_tiers: overrides.clearedTiers ?? [
+      overrides.tier ?? manifest.security_tier,
+    ],
+    content_digest: `sha256:${"00".repeat(32)}`,
+    manifest_digest:
+      overrides.manifestDigest ?? (await manifestDigest(skillMarkdown)),
+  };
+  for (const field of overrides.omit ?? []) delete report[field];
+  return JSON.stringify(report);
 }
 
 /** A valid sample gaia-agent.yaml for tests. */
