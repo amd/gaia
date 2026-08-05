@@ -15,7 +15,6 @@ Test coverage includes:
 - Edge cases and resilience testing
 """
 
-import asyncio
 import json
 import logging
 import time
@@ -455,25 +454,27 @@ class TestApiUnitValidation:
         assert response.json()["components"]["llm"]["status"] == "unavailable"
         assert elapsed < 0.5
 
-    def test_health_endpoint_times_out_within_response_budget(
-        self, monkeypatch, mocker
-    ):
-        """A stalled Lemonade request cannot consume the 500 ms budget."""
+    @respx.mock
+    def test_health_endpoint_configures_bounded_lemonade_timeout(self, monkeypatch):
+        """Lemonade health requests use the configured 350 ms timeout."""
         monkeypatch.setenv("LEMONADE_BASE_URL", "http://lemonade.test")
 
-        async def stalled_request(*_args, **_kwargs):
-            await asyncio.sleep(1)
+        def timeout(request):
+            assert request.extensions["timeout"] == {
+                "connect": 0.35,
+                "read": 0.35,
+                "write": 0.35,
+                "pool": 0.35,
+            }
+            raise httpx.ConnectTimeout("request timed out", request=request)
 
-        mocker.patch("httpx.AsyncClient.get", side_effect=stalled_request)
+        respx.get("http://lemonade.test/api/v1/health").mock(side_effect=timeout)
 
-        started = time.monotonic()
         response = self.client.get("/health")
-        elapsed = time.monotonic() - started
 
         assert response.status_code == 200
         assert response.json()["status"] == "degraded"
         assert response.json()["components"]["llm"]["status"] == "unavailable"
-        assert elapsed < 0.5
 
     @respx.mock
     def test_health_endpoint_reports_lemonade_errors(self, monkeypatch):

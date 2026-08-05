@@ -58,7 +58,7 @@ The top-level `status` is `ok` only when Lemonade has an LLM loaded, and
 `not_configured` until the document API is enabled.
 
 GAIA reads loaded-model state from Lemonade's `/api/v1/health` endpoint with a
-350 ms deadline. The `/api/v1/models` catalog is not used for readiness because
+350 ms timeout. The `/api/v1/models` catalog is not used for readiness because
 downloaded models are not necessarily loaded.
 
 **Example:**

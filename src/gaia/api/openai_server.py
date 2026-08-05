@@ -680,16 +680,15 @@ async def _lemonade_health():
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
     try:
-        async with asyncio.timeout(_LEMONADE_HEALTH_TIMEOUT_SECONDS):
-            async with httpx.AsyncClient(
-                timeout=_LEMONADE_HEALTH_TIMEOUT_SECONDS
-            ) as client:
-                response = await client.get(f"{base_url}/health", headers=headers)
+        async with httpx.AsyncClient(
+            timeout=_LEMONADE_HEALTH_TIMEOUT_SECONDS
+        ) as client:
+            response = await client.get(f"{base_url}/health", headers=headers)
         response.raise_for_status()
     except httpx.HTTPStatusError:
         component["status"] = "error"
         return component
-    except (httpx.RequestError, TimeoutError):
+    except httpx.RequestError:
         return component
 
     try:
