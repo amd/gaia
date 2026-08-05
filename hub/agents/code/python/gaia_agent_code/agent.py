@@ -20,7 +20,6 @@ from typing import Any, Callable, Dict, Optional
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.api_agent import ApiAgent
 from gaia.agents.base.console import AgentConsole, SilentConsole
-from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
 from gaia.security import PathValidator
 
@@ -395,27 +394,21 @@ class CodeAgent(
                 logger.info(f"Restored working directory to: {original_cwd}")
 
     def _create_tool_executor(self) -> Callable[[str, Dict[str, Any]], Any]:
-        """Create a tool executor function that uses registered tools.
+        """Create the tool executor handed to the orchestrator.
+
+        Delegates to ``Agent._execute_tool`` so orchestrated tool calls go
+        through the same path as the agent loop's: the user-confirmation
+        guardrail, name resolution, bounded execution, and error formatting.
+        Calling the registry directly here would skip the confirmation gate
+        entirely.
 
         Returns:
             Function that executes tools by name
         """
 
         def execute_tool(tool_name: str, tool_args: Dict[str, Any]) -> Any:
-            """Execute a registered tool."""
-            if tool_name not in _TOOL_REGISTRY:
-                resolved = self._resolve_tool_name(tool_name)
-                if resolved:
-                    tool_name = resolved
-                else:
-                    return {"success": False, "error": f"Unknown tool: {tool_name}"}
-
-            tool_func = _TOOL_REGISTRY[tool_name]["function"]
-            try:
-                return tool_func(**tool_args)
-            except Exception as e:  # pylint: disable=broad-exception-caught
-                logger.exception(f"Tool execution failed: {tool_name}")
-                return {"success": False, "error": str(e)}
+            """Execute a registered tool through the gated base-agent path."""
+            return self._execute_tool(tool_name, tool_args)
 
         return execute_tool
 
