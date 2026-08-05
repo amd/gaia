@@ -19,6 +19,7 @@ import subprocess
 import threading
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -29,6 +30,7 @@ from typing import (
     Literal,
     Optional,
     Tuple,
+    Union,
 )
 
 from gaia.agents.base.console import AgentConsole, SilentConsole
@@ -52,6 +54,19 @@ if TYPE_CHECKING:
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def _skill_validation_error(message: str) -> Exception:
+    """Build a ``SkillValidationError`` without importing skills at module load.
+
+    ``gaia.skills`` is imported lazily throughout this module so an agent that
+    composes no skills never pays for it; the error type has to follow the same
+    rule or the lazy import is defeated by the raise site.
+    """
+    from gaia.skills.errors import SkillValidationError
+
+    return SkillValidationError(message)
+
 
 # Content truncation thresholds
 CHUNK_TRUNCATION_THRESHOLD = 5000
@@ -358,6 +373,17 @@ class Agent(abc.ABC):
     # copy. Empty = the agent bundles no skills.
     SKILL_DIRS: ClassVar[List[str]] = []
 
+    # Path to the ``gaia-agent.yaml`` whose ``skills:`` block this agent composes
+    # (#2467 scope D). ``None`` auto-detects the manifest beside the agent's own
+    # module — which is why a custom harness needs no code change to consume an
+    # installed hub skill. Relative paths resolve against the agent's module dir.
+    SKILL_MANIFEST: ClassVar[Optional[str]] = None
+
+    # Set False to skip the automatic ``load_declared_skills()`` in ``__init__``.
+    # For an agent that must decide its skill set at run time (e.g. from user
+    # input) and calls ``load_skill`` itself.
+    AUTOLOAD_DECLARED_SKILLS: ClassVar[bool] = True
+
     # Agent-specific tools that must be gated behind explicit user confirmation
     # (#1440). Subclasses override this to declare their own destructive/external
     # tools (e.g. email send, calendar RSVP). It is UNIONED with the generic
@@ -571,6 +597,14 @@ Do NOT wrap conversational replies in JSON.
         # Register tools for this agent (may call rebuild_system_prompt via MCP loading;
         # _response_format_template must be set above before this call).
         self._register_tools()
+
+        # Declarative skills (#2467 scope D): compose whatever this agent's
+        # gaia-agent.yaml declares. After _register_tools so a skill's tools land
+        # on top of the agent's own, and before the system prompt is first
+        # composed so the skill bodies are in it. A no-op for an agent with no
+        # manifest or no `skills:` block, which is every agent today.
+        if self.AUTOLOAD_DECLARED_SKILLS:
+            self.load_declared_skills()
 
         # Note: system_prompt is now a lazy @property that composes on first access.
         # Tool descriptions and response format are added in _compose_system_prompt().
@@ -1039,6 +1073,124 @@ Do NOT wrap conversational replies in JSON.
             len(requirements),
         )
         return skill
+
+    def load_declared_skills(
+        self,
+        manifest_path: Optional[Union[str, Path]] = None,
+        *,
+        manager: Optional["SkillManager"] = None,
+    ) -> Dict[str, "Skill"]:
+        """Load every skill this agent's ``gaia-agent.yaml`` declares (#2467).
+
+        Runs automatically at the end of ``__init__``, so an agent composes hub
+        skills by *declaring* them rather than by calling :meth:`load_skill` —
+        and a custom harness under ``~/.gaia/agents/<id>/`` gets the identical
+        path by dropping a ``gaia-agent.yaml`` beside its ``agent.py``. No
+        per-agent code change, bundled or not.
+
+        Args:
+            manifest_path: Explicit manifest. Defaults to :attr:`SKILL_MANIFEST`,
+                then to the manifest found beside this agent's own module.
+            manager: Resolve against this manager instead of :attr:`skill_manager`.
+
+        Returns:
+            ``{name: Skill}`` for the skills loaded by this call (empty when the
+            agent declares none, which is the common case).
+
+        Raises:
+            SkillNotFoundError: a **required** declared skill is not installed.
+            SkillValidationError: a required skill is installed at a version the
+                pin excludes, or the manifest's ``skills:`` block is malformed.
+        """
+        # Locate the manifest with plain path checks first. This runs in every
+        # Agent.__init__, and importing gaia.skills would pull in the connector
+        # base module for the overwhelming majority of agents that declare no
+        # skills at all — so the import waits until there is a manifest to read.
+        path = self._resolve_skill_manifest(manifest_path)
+        if path is None:
+            return {}
+
+        from gaia.skills.consume import load_manifest_requirements, resolve_requirements
+
+        requirements = load_manifest_requirements(path)
+        if not requirements:
+            return {}
+
+        resolver = manager if manager is not None else self.skill_manager
+        resolved = resolve_requirements(requirements, manager=resolver)
+        for name, reason in resolved.skipped.items():
+            logger.info(
+                "Agent %s: optional skill '%s' not loaded — %s",
+                type(self).__name__,
+                name,
+                reason,
+            )
+
+        loaded: Dict[str, "Skill"] = {}
+        for skill in resolved.order:
+            loaded[skill.name] = self.load_skill(skill.name, manager=resolver)
+        if loaded:
+            logger.info(
+                "Agent %s loaded %d declared skill(s) from %s: %s",
+                type(self).__name__,
+                len(loaded),
+                path,
+                ", ".join(sorted(loaded)),
+            )
+        return loaded
+
+    #: Manifest filename searched for beside an agent's module. Duplicated from
+    #: ``gaia.skills.consume.AGENT_MANIFEST_FILENAME`` so the hot path in
+    #: ``__init__`` can look for it without importing the skills package; the two
+    #: are asserted equal by ``tests/unit/test_skills_consume.py``.
+    _SKILL_MANIFEST_FILENAME: ClassVar[str] = "gaia-agent.yaml"
+
+    def _resolve_skill_manifest(
+        self, explicit: Optional[Union[str, Path]] = None
+    ) -> Optional[Path]:
+        """Locate the manifest whose ``skills:`` block applies to this agent.
+
+        Searches the agent module's own directory then its parent — the two
+        layouts GAIA ships (a hub package keeps the manifest one level above the
+        Python package; a custom agent keeps it beside ``agent.py``). It stops
+        there deliberately: walking further up would eventually claim an unrelated
+        manifest from a site-packages sibling or the repo root.
+        """
+        if explicit is not None:
+            path = Path(explicit)
+            if not path.is_file():
+                raise _skill_validation_error(
+                    f"Agent {type(self).__name__} points at a skills manifest that "
+                    f"does not exist: {path}. Fix SKILL_MANIFEST (or the path passed "
+                    "to load_declared_skills), or unset it to auto-detect."
+                )
+            return path
+
+        if self.SKILL_MANIFEST:
+            path = Path(self.SKILL_MANIFEST)
+            if not path.is_absolute():
+                module_file = inspect.getfile(type(self))
+                path = (Path(module_file).resolve().parent / path).resolve()
+            if not path.is_file():
+                raise _skill_validation_error(
+                    f"Agent {type(self).__name__} sets SKILL_MANIFEST="
+                    f"{self.SKILL_MANIFEST!r}, which resolves to {path} — no such "
+                    "file. Point it at the agent's gaia-agent.yaml, or unset it to "
+                    "auto-detect."
+                )
+            return path
+
+        try:
+            module_file = inspect.getfile(type(self))
+        except TypeError:
+            # A class defined in a REPL/exec has no source file to search from.
+            return None
+        module_dir = Path(module_file).resolve().parent
+        for candidate in (module_dir, module_dir.parent):
+            manifest = candidate / self._SKILL_MANIFEST_FILENAME
+            if manifest.is_file():
+                return manifest
+        return None
 
     def unload_skill(self, name: str) -> bool:
         """Remove a loaded skill's tools and body. Returns True if it was loaded."""

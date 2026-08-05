@@ -222,6 +222,12 @@ class AgentManifest:
     required_connections: List[str] = field(default_factory=list)
     interfaces: Interfaces = field(default_factory=Interfaces)
 
+    # Skills this agent composes (#2467 scope D). Each entry names an installed
+    # skill and the SemVer range it must satisfy; ``required: false`` marks an
+    # optional enhancement. Validated here so a typo is a publish-time error, and
+    # resolved at agent construction by ``Agent.load_declared_skills()``.
+    skills: List[Dict[str, Any]] = field(default_factory=list)
+
     # Provenance — set by :func:`parse`; not part of the YAML.
     source_path: Optional[Path] = None
 
@@ -342,6 +348,7 @@ class AgentManifest:
                 data.get("required_connections"), "required_connections", where
             ),
             interfaces=interfaces,
+            skills=_parse_skills(data.get("skills"), where),
             source_path=src,
         )
 
@@ -569,6 +576,32 @@ def _parse_requirements(raw: Any, where: str) -> Requirements:
             data.get("gpu_vram_gb"), "requirements.gpu_vram_gb", where
         ),
     )
+
+
+def _parse_skills(raw: Any, where: str) -> List[Dict[str, Any]]:
+    """Validate and normalize the ``skills:`` block (#2467 scope D).
+
+    Delegates the grammar to :func:`gaia.skills.consume.parse_requirements` so the
+    manifest and the runtime agree by construction — a second parser here would
+    eventually accept something the loader rejects. The normalized dicts are
+    stored (not the dataclasses) so ``AgentManifest`` stays a plain, serializable
+    value with no dependency on the skills package.
+    """
+    if raw is None:
+        return []
+
+    from gaia.skills.consume import parse_requirements
+    from gaia.skills.errors import SkillValidationError
+
+    try:
+        requirements = parse_requirements(raw, where=f"gaia-agent.yaml{where}")
+    except SkillValidationError as exc:
+        raise ManifestError(str(exc)) from exc
+
+    return [
+        {"name": r.name, "version": r.version, "required": r.required}
+        for r in requirements
+    ]
 
 
 def _parse_interfaces(raw: Any, where: str) -> Interfaces:
