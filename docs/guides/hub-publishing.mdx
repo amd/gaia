@@ -150,6 +150,7 @@ never write by hand, like `versions`). A real example is the
 id: my-agent                 # the short name used in URLs (/hub/my-agent); lowercase + hyphens
 name: My Agent               # the display name shown to people
 type: agent                  # agent | app | component — omit it and it defaults to agent
+                             # (skills are their own lane and publish from SKILL.md — see below)
 version: 0.1.0               # the release number (see "Versioning" — once published it can't change)
 description: "One-line summary shown on the hub card"
 author: your-name-or-org     # YOUR identity — shown on the hub; must match your token's scope (Step 6)
@@ -388,6 +389,35 @@ goes one step further and ships a **frozen native binary** plus an npm package
 (`@amd-gaia/agent-email`) so JavaScript apps can run it with no Python installed.
 That packaging is currently hand-built per agent; reusable tooling to make any agent
 an npm sidecar is on the roadmap.
+
+## Publishing a skill instead of an agent
+
+A **skill** is a reusable capability any agent composes, not a package that runs
+on its own — so it is a separate hub lane with a separate publish contract
+([#2467](https://github.com/amd/gaia/issues/2467)). This whole guide is about
+agents; if what you have is a `SKILL.md` folder, the differences are:
+
+| | Agent package | Skill |
+|---|---|---|
+| Manifest | `gaia-agent.yaml` | the YAML front matter of `SKILL.md` ([Skill Format](/plans/skill-format)) |
+| Publish route | `POST /publish` | `POST /publish/skill` |
+| Installs with | `gaia agent install <id>` | `gaia skill install <name>` (into `~/.gaia/skills/`) |
+| Storage | `agents/<id>/…` | `skills/<name>/…` |
+
+Everything else carries over: the same token and publisher scope, the same
+SemVer + immutability rules, the same `security_tier` vocabulary, and the same
+`index.json` (a skill is a `type: "skill"` entry). Two skill-only rules:
+
+- **A version is required, and `0.0.0` is rejected** — that value is the
+  format's "unversioned" sentinel, so it can never become an immutable release.
+- **`community` and `verified` need a cleared security audit.** The publish call
+  refuses those tiers unless a passing audit report rides along
+  ([#2468](https://github.com/amd/gaia/issues/2468)); an `experimental` skill may
+  publish without one and is recorded as `unaudited` rather than stamped as
+  passing.
+
+Skill names share one namespace with agent ids, so a name already taken by a
+published agent is rejected (and vice versa).
 
 ## How your agent shows up on the website
 
