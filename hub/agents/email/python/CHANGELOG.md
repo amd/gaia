@@ -19,6 +19,29 @@ contract version is tracked separately as
   rejected, `409`); a session id the sidecar has never seen arriving with
   prior conversation history (e.g. the sidecar restarted mid-conversation)
   gets a one-time notice instead of silently starting over.
+### Changed
+
+- **Agent Skills ship disabled for this agent, pending eval evidence (#2695
+  follow-up).** The `skill_sets:` and `default_skill_set: personal` blocks in
+  `gaia-agent.yaml` are commented out, so `parse_manifest(...).skill_sets` is
+  empty, `load_skill_set()` early-returns, and the agent launches with
+  `loaded_skills == {}` / `active_skill_set is None`. Skills were turned on by
+  default with no eval run behind them, and an active `personal` set cost ~1,334
+  prompt tokens — shrinking the bulk-triage result envelope from 6144 to 4810
+  (the `work` set, to 4070). `envelope_budget_tokens()` is back to **6144**
+  (16384 − 9216 − 1024), byte-identical to pre-skills. Nothing was deleted: the six
+  `gaia_agent_email/skills/<name>/SKILL.md` bodies still ship in the wheel and
+  the frozen binary, and `SKILL_DIRS`, `select_skill_set()`,
+  `ACCOUNT_TYPE_SKILL_SETS`, `GAIA_EMAIL_SKILL_SET`, `--skill-set`, and the
+  `skill_prompt_tokens` accounting are all intact but inert. With no sets
+  declared, a pinned set is a startup error rather than a silent no-op —
+  `--skill-set personal` exits with "…requested skill set 'personal', but this
+  agent declares no skill sets — Agent Skills are switched off in this build.
+  Drop the option, or uncomment the 'skill_sets:' and 'default_skill_set:'
+  blocks in gaia-agent.yaml." Re-enabling is uncommenting those two blocks
+  **together**; a non-empty `skill_sets:` with no `default_skill_set:` is a
+  validation error. `tools_count` (65), the REST/MCP contract, the connector
+  surface, and `SCHEMA_VERSION` are unaffected.
 
 ### Fixed
 
@@ -533,6 +556,9 @@ contract version is tracked separately as
   still inviolable at every level — broadening the candidate map cannot make a floor tool
   auto-executable.
 - **Bundled Agent Skills, and the active set keyed to the mailbox kind (#2466).**
+  **Ships disabled** — the manifest blocks are commented out, so none of the
+  behaviour below is active; see *Changed* above. The rest of this entry
+  describes what the machinery does once they are uncommented.
   The agent brought identical instincts to every mailbox — the same triage
   judgement for one full of newsletters and booking confirmations as for one full
   of meeting invites and outstanding commitments. It now bundles six
