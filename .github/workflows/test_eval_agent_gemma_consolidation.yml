@@ -192,13 +192,47 @@ jobs:
         # 5.1-specific — and this file's first run died because nothing declared
         # a shell at all and the steps were bash.
         shell: powershell
-    # NOT 90 like its siblings, deliberately. Summing elapsed_s across the three
-    # committed baselines is already ~55 min of pure scenario time (22.4 + 18.4 +
-    # 14.4), before install, backend boot and judge latency, on hardware that is
-    # not the baseline's. A timeout CANCELS the job, which can lose the artifact
-    # upload too — so an overrun costs an hour of runner time AND the evidence.
-    # 150 buys real headroom; drop it once a few runs establish the true wall time.
-    timeout-minutes: 150
+    # BUDGET DERIVATION — measured on this runner, not guessed.
+    #
+    # The first clean run (30869194618) was CANCELLED by a hand-picked
+    # `timeout-minutes: 150` after 148 min, having finished exactly ONE of three
+    # categories. It produced the only real numbers this pool has:
+    #
+    #   setup (checkout -> preflight, inclusive)                    0:01:18
+    #   rag_quality        8 scenarios                            2:04:07  measured
+    #   context_retention  1 of 4 scenarios before the cancel      0:23:06  partial
+    #   tool_selection     never reached                                 —
+    #
+    # rag_quality alone ran 124 min against a 22.4-min committed baseline — 5.5x,
+    # because that baseline was captured on different hardware over a remote
+    # Lemonade (see meta.json). The old 150 was sized off the ~55-min baseline sum
+    # and never had a chance. Per-category CEILINGS from the measured rates:
+    #
+    #   rag_quality        measured 124                                 -> 150
+    #   context_retention  4 x the 23.1-min scenario measured above = 92 -> 110
+    #   tool_selection     4 scenarios, same shape as context_retention  -> 110
+    #   eval step ceiling  150+110+110 = 370                            -> 400
+    #   setup (the Lemonade start step already carries its own 15-min cap) -> 20
+    #   collect + integrity + compare + upload                          -> 15
+    #   job: 400+20+15 = 435                                            -> 450
+    #
+    # These are CEILINGS, not expectations — expected wall clock is ~5h. Sizing
+    # generously is close to free here: the pool is self-hosted (no per-minute
+    # billing, and the 6h job cap is a GitHub-HOSTED limit; self-hosted is 5 days),
+    # and the shared `lemonade-eval` concurrency group already serialises the pool,
+    # so a high ceiling cannot let this job trample another eval. The asymmetry is
+    # what matters: too low costs hours of runner time AND the evidence, too high
+    # costs nothing. email_scorecard_refresh.yml sits at 840 on this same pool for
+    # exactly this reason (#2094: a hand-typed 90 against a measured 2h workload
+    # burned 100 consecutive dispatches without one completing).
+    #
+    # The eval step carries its OWN timeout-minutes below so an overrun fails at a
+    # NAMED step instead of a silent job-level `cancelled` — a job-level timeout
+    # skips the `!cancelled()` collect/integrity/compare steps, which is precisely
+    # how run 30869194618 threw away the 124 min of rag_quality data it had already
+    # produced. Re-tighten both once a few complete runs establish the true wall
+    # time; the per-category [TIMING] lines in the eval step exist to supply it.
+    timeout-minutes: 450
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -312,6 +346,12 @@ jobs:
           Write-Host "Model under test present: $modelUnderTest"
 
       - name: Run the three eval categories serially
+        # Own timeout so an overrun fails HERE, by name, with the collect /
+        # integrity / compare / upload steps still running on the partial results.
+        # A job-level timeout instead CANCELS, which skips every `!cancelled()`
+        # step and discards the categories that did finish. See the budget
+        # derivation on the job above. Same convention as email_scorecard_refresh.yml.
+        timeout-minutes: 400
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
@@ -382,6 +422,29 @@ jobs:
             }
             Write-Host "Backend healthy."
 
+            # Per-category wall clock. The job timeout was guessed once and cost a
+            # 148-min run (30869194618) that produced one category out of three;
+            # these lines are what replaces the guess with a measurement. Each is
+            # written the moment its category ends - appended to the step summary,
+            # not buffered to the end - so a run that overruns or crashes still
+            # leaves behind the timings of whatever DID finish.
+            #
+            # Not `Out-File -Encoding utf8`: on Windows PowerShell 5.1 that
+            # prepends a BOM, and a BOM ahead of the leading `##` stops GitHub
+            # rendering it as a heading. AppendAllText with UTF8Encoding($false)
+            # has an empty preamble, so no BOM on create or append.
+            $summaryEnc = New-Object System.Text.UTF8Encoding($false)
+            function Add-Summary($line) {
+              if ($env:GITHUB_STEP_SUMMARY) {
+                [System.IO.File]::AppendAllText($env:GITHUB_STEP_SUMMARY, "$line`r`n", $summaryEnc)
+              }
+            }
+            $swTotal = [Diagnostics.Stopwatch]::StartNew()
+            Add-Summary "## Eval wall clock (sjlab-stx-halo-18)"
+            Add-Summary ""
+            Add-Summary "| category | minutes |"
+            Add-Summary "| --- | ---: |"
+
             # Serial by construction: a plain foreach in one session, never
             # backgrounded. Two concurrent `gaia eval agent` runs race-evict each
             # other's model out of the single Lemonade slot (CLAUDE.md).
@@ -398,6 +461,7 @@ jobs:
               Write-Host "=================================================================="
               Write-Host "  gaia eval agent --category $category"
               Write-Host "=================================================================="
+              $swCat = [Diagnostics.Stopwatch]::StartNew()
               # Reset first: a command that fails to LAUNCH leaves $LASTEXITCODE
               # at its previous value, so an unset/stale 0 would read as success.
               $global:LASTEXITCODE = 0
@@ -407,14 +471,29 @@ jobs:
               gaia eval agent --category $category --backend "$env:BACKEND_URL" --model "$env:EVAL_MODEL" 2>&1 |
                 ForEach-Object { Write-Host "$_"; "$_" } |
                 Out-File -FilePath "eval-out\$category.log" -Encoding utf8
-              if ($LASTEXITCODE -ne 0) {
+              # Capture BEFORE anything else can clobber it. .NET calls and
+              # Write-Host leave $LASTEXITCODE alone, but reading it first keeps
+              # that from being a thing a later edit has to remember.
+              $code = $LASTEXITCODE
+              $swCat.Stop()
+
+              $mins = [math]::Round($swCat.Elapsed.TotalMinutes, 1)
+              Write-Host "[TIMING] ${category}: $mins min (running total $([math]::Round($swTotal.Elapsed.TotalMinutes, 1)) min of the 400-min step budget)"
+              Add-Summary "| ``$category`` | $mins |"
+
+              if ($code -ne 0) {
                 # Never `exit $LASTEXITCODE` - on a launch failure it can be $null,
                 # which PowerShell turns into exit 0 and the step passes GREEN
                 # having measured nothing.
-                Write-Host "::error::gaia eval agent --category $category crashed with exit $LASTEXITCODE (a harness failure, not a regression verdict)."
+                Write-Host "::error::gaia eval agent --category $category crashed with exit $code (a harness failure, not a regression verdict)."
                 exit 1
               }
             }
+
+            $swTotal.Stop()
+            $totalMins = [math]::Round($swTotal.Elapsed.TotalMinutes, 1)
+            Write-Host "[TIMING] all three categories: $totalMins min"
+            Add-Summary "| **total** | **$totalMins** |"
           }
           finally {
             if ($backend -and -not $backend.HasExited) {
@@ -424,8 +503,11 @@ jobs:
           }
 
       - name: Collect scorecards from the printed run directories
-        # Not always(): on a timeout or concurrency cancel this would pile
-        # misleading "missing scorecard" errors on top of the cancellation.
+        # Not always(): on a concurrency cancel or a job-level timeout this would
+        # pile misleading "missing scorecard" errors on top of the cancellation.
+        # An eval STEP timeout is deliberately not in that bucket - it fails
+        # rather than cancels, so this runs and names exactly which categories
+        # went unmeasured, which is the diagnostic you want.
         if: ${{ !cancelled() }}
         run: |
           $ErrorActionPreference = "Stop"
