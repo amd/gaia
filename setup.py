@@ -218,7 +218,7 @@ setup(
             # Capped below 2.0: mcp 2.0.0 (released 2026-07-28) breaks
             # MCPClient.connect() — the custom-agent harness went red with no
             # code change. Lift the cap in a change that ports the client.
-            "mcp>=1.1.0,<2.0",
+            "mcp>=1.1.0,<3.0",
             "starlette",
             "uvicorn",
         ],

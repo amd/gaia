@@ -23,7 +23,7 @@ icon: mail
 # tests/test_capability_matrix.py (AST-derived, reconciled against
 # __init__.py) and tests/test_email_agent.py (live registry, #1232);
 # a mismatch fails CI.
-tools_count: 64
+tools_count: 65
 
 language: python
 # NOTE (#2590): stays at 0.22.0, not the setup_routes floor — see the
@@ -52,3 +52,30 @@ interfaces:
   pipe: true
   api_server: true
   mcp_server: true
+
+# Agent Skills (#2466). Bundled instruction-only skills live in
+# gaia_agent_email/skills/<name>/SKILL.md and are loaded from there — that folder
+# is this agent's highest-precedence discovery root (SKILL_DIRS).
+#
+# Exactly ONE set is active per launch. EmailTriageAgent.select_skill_set() maps
+# the connected mailbox's account type onto a set (personal Microsoft account →
+# personal, work/school → work); `--skill-set` and GAIA_EMAIL_SKILL_SET override
+# it, and default_skill_set applies when the kind cannot be determined — which is
+# every Gmail-only mailbox, since Gmail has no equivalent of the Microsoft
+# id_token `tid` claim.
+#
+# `inbox-triage` appears in both sets deliberately: sets overlap, they do not
+# partition. Anything that should load for every set belongs in a top-level
+# `skills:` list instead.
+skill_sets:
+  personal:
+    - inbox-triage
+    - newsletter-digest
+    - travel-itinerary
+  work:
+    - inbox-triage
+    - meeting-scheduling
+    - action-item-extraction
+    - escalation-routing
+
+default_skill_set: personal

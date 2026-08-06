@@ -25,6 +25,10 @@ Design notes / gotchas baked in (see README.md for the why):
   (``classify_email_llm`` / ``summarize_email_llm`` etc.); collect the whole
   ``gaia_agent_email`` package so the triage path is present in the freeze.
 - ``gaia.connectors`` discovers providers dynamically; collect it explicitly.
+- The bundled Agent Skills (``gaia_agent_email/skills/*/SKILL.md``) and
+  ``gaia-agent.yaml`` are DATA, invisible to the import analyzer -> ``--add-data``.
+  Without them the frozen sidecar starts with no skills and no declared skill
+  sets (#2466).
 - We deliberately do NOT ``--collect-submodules gaia`` (the whole core package
   pulls every agent + RAG + torch and explodes the binary). Static analysis from
   the email router pulls only the reachable core modules.
@@ -39,6 +43,7 @@ Design notes / gotchas baked in (see README.md for the why):
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 import sys
 import time
@@ -52,6 +57,17 @@ REPO_ROOT = HERE.parents[4]
 # Editable installs are invisible to PyInstaller's static analyzer, so point it
 # at the source roots directly: the email package and the core ``src`` tree.
 PATHEX = [REPO_ROOT / "hub" / "agents" / "email" / "python", REPO_ROOT / "src"]
+
+# Data the import analyzer cannot see (#2466). Each entry is
+# ``(source path, destination directory inside the bundle)``; the destination
+# mirrors where ``gaia_agent_email.agent`` looks for it at runtime.
+PKG_ROOT = REPO_ROOT / "hub" / "agents" / "email" / "python"
+ADD_DATA = [
+    (PKG_ROOT / "gaia_agent_email" / "skills", "gaia_agent_email/skills"),
+    # Staged INSIDE the package: at runtime the frozen agent has no package-root
+    # directory above itself, so the source-checkout location does not exist.
+    (PKG_ROOT / "gaia-agent.yaml", "gaia_agent_email"),
+]
 
 # Heavy ML stack reached only via the lazily-imported triage import graph. Real
 # triage uses Lemonade over HTTP (no in-process torch), so these are excluded to
@@ -134,6 +150,14 @@ def build(onefile: bool = False, clean: bool = True) -> Path:
         "--collect-submodules",
         "pydantic",
     ]
+    for source, dest in ADD_DATA:
+        if not source.exists():
+            raise SystemExit(
+                f"freeze: required bundle data is missing: {source}. The frozen "
+                "sidecar would start with no bundled skills / no declared skill "
+                "sets. Restore the file or update ADD_DATA."
+            )
+        args += ["--add-data", f"{source}{os.pathsep}{dest}"]
     for mod in EXCLUDES:
         args += ["--exclude-module", mod]
     if onefile:

@@ -41,6 +41,26 @@ const (
 	questionsContractMinor = 6
 )
 
+// preScanContract is the contract version that introduced the needs_you
+// worklist (#2743, schema 2.11). A peer below it omits needs_you/bulk from
+// its /prescan response entirely -- decoded as a zero-value empty slice,
+// which reads as a confident "nothing needs you" indistinguishable from a
+// genuinely clear inbox. FetchPreScan gates on this before trusting the
+// field at all.
+const (
+	preScanContractMajor = 2
+	preScanContractMinor = 11
+)
+
+// sessionContract is the contract version that let /query resolve a
+// conversation's agent by session_id instead of building a throwaway one per
+// call (#2829, schema 2.12). A peer below it 422s the field, exactly like
+// can_answer_questions below 2.6 -- so it is omitted entirely.
+const (
+	sessionContractMajor = 2
+	sessionContractMinor = 12
+)
+
 // versionProbeTimeout bounds the negotiation round-trip. Short: it is a local
 // daemon relay, and the probe must never be the reason a turn feels slow. On
 // failure the client assumes the peer is old, which is the answer that keeps
@@ -53,6 +73,8 @@ type peerContract struct {
 	version string
 	// canAnswerQuestions is true only when the peer is provably >= 2.6.
 	canAnswerQuestions bool
+	// supportsSession is true only when the peer is provably >= 2.12.
+	supportsSession bool
 }
 
 // negotiate resolves the peer's contract once per client and caches it.
@@ -125,9 +147,14 @@ func (s *SSEClient) probeContract(ctx context.Context, inst *daemon.Instance) pe
 	}
 
 	supports := contractAtLeast(payload.APIVersion, questionsContractMajor, questionsContractMinor)
-	s.opts.Logf("sse: '%s' speaks contract %s (mid-run questions: %t)",
-		s.agentID, payload.APIVersion, supports)
-	return peerContract{version: payload.APIVersion, canAnswerQuestions: supports}
+	supportsSession := contractAtLeast(payload.APIVersion, sessionContractMajor, sessionContractMinor)
+	s.opts.Logf("sse: '%s' speaks contract %s (mid-run questions: %t, session: %t)",
+		s.agentID, payload.APIVersion, supports, supportsSession)
+	return peerContract{
+		version:            payload.APIVersion,
+		canAnswerQuestions: supports,
+		supportsSession:    supportsSession,
+	}
 }
 
 // contractAtLeast reports whether a "MAJOR.MINOR" version is >= the floor.
@@ -168,6 +195,23 @@ func noticeForMissingCapability(agentID, version string) string {
 			"in-conversation mailbox setup needs %d.%d or newer. "+
 			"Update it with `%s` then `%s`.",
 		agentID, have, questionsContractMajor, questionsContractMinor,
+		updateCommand("uninstall", agentID), updateCommand("install", agentID))
+}
+
+// noticeForMissingPreScan is what the user is told when the installed email
+// sidecar predates the needs_you worklist (#2743). Mirrors
+// noticeForMissingCapability's shape: name what's missing, name the floor,
+// name the fix -- never a silent degrade to an empty-looking card.
+func noticeForMissingPreScan(agentID, version string) string {
+	have := "an older contract"
+	if version != "" {
+		have = "contract " + version
+	}
+	return fmt.Sprintf(
+		"the installed '%s' agent speaks %s, so it cannot build the one-card "+
+			"inbox worklist yet — that needs %d.%d or newer. "+
+			"Update it with `%s` then `%s`.",
+		agentID, have, preScanContractMajor, preScanContractMinor,
 		updateCommand("uninstall", agentID), updateCommand("install", agentID))
 }
 

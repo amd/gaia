@@ -316,10 +316,17 @@ def _phishing_flagged(pre_scan: Dict[str, Any]) -> set:
 
 
 def _routing(pre_scan: Dict[str, Any]) -> Dict[str, str]:
+    """Which PRIMARY classification bucket each message landed in.
+
+    Excludes ``needs_you`` (#2743): it is a deterministic VIEW that copies
+    items already in urgent/actionable/needs_review, not a fresh bucket — if
+    it were included here, a message present in both would report whichever
+    section iterates last, which is the view, not the real classification.
+    """
     return {
         item["message_id"]: name
         for name, section in pre_scan.items()
-        if isinstance(section, list)
+        if name != "needs_you" and isinstance(section, list)
         for item in section
         if isinstance(item, dict) and item.get("message_id")
     }
