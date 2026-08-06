@@ -230,12 +230,10 @@ func (m ChatModel) Init() tea.Cmd {
 		cmds = append(cmds, func() tea.Msg {
 			return sendQueryMsg{query: m.initialQuery}
 		})
-	} else if m.agentID == preScanAgentID {
-		// Rendered with no user prompt, on open (#2743, replacing the #2582
-		// attention fetch) — but only when there's no initial query already
-		// about to run a turn, so the pre-scan card never races the answer
-		// to what the user just asked.
-		cmds = append(cmds, m.fetchPreScan())
+		// The on-open pre-scan card (#2743) is gone: it spent a Gmail scan
+		// before the user asked for anything, and showed a shallower version
+		// of what "triage my inbox" answers properly a moment later. The
+		// card still renders when a turn's own pre_scan_inbox result arrives.
 	} else if m.debug && m.preScanGateMismatch() {
 		// A client that could serve the pre-scan view but an agentID that
 		// doesn't match must not fail with no signal at all.
@@ -283,25 +281,24 @@ func (m ChatModel) fetchPreScan() tea.Cmd {
 	}
 }
 
-// upsertCard draws a RoleCard message at the TAIL of the transcript, first
-// removing any earlier message with the same identity (#2743, moved #2829)
-// so there is still only ever one. Moving rather than updating in place
-// matters because the earliest draw is usually the on-open pre-scan fetch,
-// which sits above every user message -- an in-place update would keep
-// refreshing that card up there even when a later turn explicitly asked for
-// one, leaving the user's own question answered by prose only with the
-// card nowhere near it. Looked up by identity across the CURRENT m.messages
-// slice on every call, never a tracked index: `/clear` sets m.messages to
-// nil (see the "/clear" case below), so a stale index would panic or
-// silently overwrite an unrelated message. Building a fresh Message (rather
-// than mutating the old one) also means the render cache — otherwise keyed
-// on width alone — is never served the old message's stale layout.
+// upsertCard appends a RoleCard message, or — when identity is non-empty and
+// a message already carries it — replaces that message's payload in place
+// (#2743). Looked up by identity across the CURRENT m.messages slice on
+// every call, never a tracked index: `/clear` sets m.messages to nil
+// (see the "/clear" case below), so a stale index would panic or silently
+// overwrite an unrelated message. The render cache is cleared so an
+// in-place update is never served the stale layout (Message.cardCache is
+// otherwise keyed on width alone).
 func (m *ChatModel) upsertCard(identity, toolName, render string, data json.RawMessage) {
 	if identity != "" {
 		for i := range m.messages {
 			if m.messages[i].Role == RoleCard && m.messages[i].Identity == identity {
-				m.messages = append(m.messages[:i], m.messages[i+1:]...)
-				break
+				m.messages[i].ToolName = toolName
+				m.messages[i].Render = render
+				m.messages[i].Data = data
+				m.messages[i].cardCache = ""
+				m.messages[i].cardCacheWidth = 0
+				return
 			}
 		}
 	}

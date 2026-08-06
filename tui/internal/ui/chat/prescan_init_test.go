@@ -62,7 +62,10 @@ func findBatchedMsg(cmd tea.Cmd, isWanted func(tea.Msg) bool) tea.Msg {
 	return nil
 }
 
-func TestFetchPreScanOnOpenForEmailAgentWithNoInitialQuery(t *testing.T) {
+func TestNoPreScanFetchOnOpenForEmailAgent(t *testing.T) {
+	// Opening the agent must cost nothing: the on-open pre-scan spent a Gmail
+	// scan before the user had asked for anything, and showed a shallower
+	// version of what "triage my inbox" answers a moment later.
 	c := &fakePreScanClient{data: json.RawMessage(samplePreScanJSON)}
 	m := newPreScanTestModel(t, c, "email", "")
 
@@ -71,12 +74,11 @@ func TestFetchPreScanOnOpenForEmailAgentWithNoInitialQuery(t *testing.T) {
 		_, ok := msg.(preScanFetchedMsg)
 		return ok
 	})
-	if found == nil {
-		t.Fatal("Init() did not dispatch a pre-scan fetch for the email agent with no initial query")
+	if found != nil {
+		t.Fatal("Init() dispatched a pre-scan fetch on open; the email agent must open with an empty transcript")
 	}
-	fetched := found.(preScanFetchedMsg)
-	if string(fetched.data) != samplePreScanJSON {
-		t.Errorf("fetched data = %s, want %s", fetched.data, samplePreScanJSON)
+	if c.fetchCalls != 0 {
+		t.Errorf("pre-scan fetch was called %d times on open; want 0", c.fetchCalls)
 	}
 }
 
@@ -98,7 +100,7 @@ func TestFetchPreScanSkippedWhenInitialQueryPresent(t *testing.T) {
 // drives the real constructor RunAgent calls, with a display name that
 // differs in case from the id, the way the catalog's real "email"/"Email"
 // entry does.
-func TestFetchPreScanOnOpenViaDirectCLIConstructionUsesCatalogID(t *testing.T) {
+func TestNoPreScanFetchViaDirectCLIConstruction(t *testing.T) {
 	c := &fakePreScanClient{data: json.RawMessage(samplePreScanJSON)}
 	m := NewChatModelForCatalogAgent(c, "email", "Email", false)
 	m.width, m.height = 100, 30
@@ -108,8 +110,8 @@ func TestFetchPreScanOnOpenViaDirectCLIConstructionUsesCatalogID(t *testing.T) {
 		_, ok := msg.(preScanFetchedMsg)
 		return ok
 	})
-	if found == nil {
-		t.Fatal("Init() did not dispatch a pre-scan fetch through the direct-CLI construction path (RunAgent)")
+	if found != nil {
+		t.Fatal("the direct-CLI construction path (RunAgent) still fetches a pre-scan on open")
 	}
 }
 
@@ -500,149 +502,5 @@ func TestPreScanCardCacheInvalidatesOnDataChangeNotOnlyOnResize(t *testing.T) {
 	rendered2 := m.messages[0].renderCard(w)
 	if strings.Contains(rendered2, "1 inbox messages scanned") || !strings.Contains(rendered2, "9 inbox messages scanned") {
 		t.Errorf("render at the same width served stale cached content after an in-place data update:\n%s", rendered2)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// #2829 -- regression fix for #2757. Anchoring "the one card" to wherever it
-// was FIRST drawn was correct for the two-cards-that-disagreed bug #2757
-// fixed, but the on-open fetch draws first, at launch -- so a later
-// user-initiated "triage my inbox" kept refreshing that card above the
-// question, leaving the question itself answered by prose only. #2485
-// (before #2757) drew a card directly under the turn that produced it; that
-// placement is restored here for a refresh, while #2757's one-card property
-// (never two) is kept.
-// ---------------------------------------------------------------------------
-
-func TestUserTriggeredPreScanRefreshMovesTheCardBelowTheQuestion(t *testing.T) {
-	m, _ := newTestModel(t)
-
-	// The on-open card, drawn before any user message exists.
-	updated, _ := m.Update(preScanFetchedMsg{data: json.RawMessage(samplePreScanJSON)})
-	m = updated.(ChatModel)
-	if len(m.messages) != 1 || m.messages[0].Role != RoleCard {
-		t.Fatalf("test setup: want the on-open card as the only message, got %+v", m.messages)
-	}
-
-	// The user explicitly asks for a triage; the turn's OWN tool_result
-	// carries a fresh email_pre_scan card.
-	updated2, _ := m.Update(sendQueryMsg{query: "triage my inbox"})
-	m = updated2.(ChatModel)
-
-	freshData := json.RawMessage(`{"kind":"email_pre_scan","urgent":[],"actionable":[],"informational_count":0,"suggested_archives":[],"suggested_drafts":[],"needs_review":[],"scanned":32,"needs_you":[],"needs_you_total":6,"bulk":{"count":0,"filter_tests":[]}}`)
-	m = feed(t, m,
-		event.CanonicalToolResultEvent{
-			Type: "tool_result", Tool: "pre_scan_inbox",
-			Render: "email_pre_scan", Data: freshData,
-		},
-		event.CanonicalFinalEvent{Type: "final", Answer: "there are 6 items requiring your attention"},
-	)
-
-	userIdx, cardIdx, cardCount := -1, -1, 0
-	for i, msg := range m.messages {
-		if msg.Role == RoleUser && userIdx == -1 {
-			userIdx = i
-		}
-		if msg.Role == RoleCard && msg.Render == "email_pre_scan" {
-			cardIdx = i
-			cardCount++
-		}
-	}
-	if cardCount != 1 {
-		t.Fatalf("got %d pre-scan cards, want exactly 1 (#2757's property, kept): %+v", cardCount, m.messages)
-	}
-	if userIdx == -1 {
-		t.Fatalf("test setup: no user message found: %+v", m.messages)
-	}
-	if cardIdx < userIdx {
-		t.Errorf("card at index %d sits BEFORE the question at index %d that asked for it: %+v", cardIdx, userIdx, m.messages)
-	}
-	if string(m.messages[cardIdx].Data) != string(freshData) {
-		t.Errorf("card data = %s, want the turn's own fresh data %s", m.messages[cardIdx].Data, freshData)
-	}
-	if m.messages[cardIdx].cardCache != "" {
-		t.Error("the moved card kept a stale render cache instead of starting fresh")
-	}
-}
-
-// A second refresh must move the (already-moved) card again, to under the
-// SECOND question -- not leave it wherever the first refresh put it.
-func TestSecondUserTriggeredPreScanRefreshMovesAgain(t *testing.T) {
-	m, _ := newTestModel(t)
-
-	updated, _ := m.Update(preScanFetchedMsg{data: json.RawMessage(samplePreScanJSON)})
-	m = updated.(ChatModel)
-
-	firstData := json.RawMessage(`{"kind":"email_pre_scan","urgent":[],"actionable":[],"informational_count":0,"suggested_archives":[],"suggested_drafts":[],"needs_review":[],"scanned":10,"needs_you":[],"needs_you_total":1,"bulk":{"count":0,"filter_tests":[]}}`)
-	updated2, _ := m.Update(sendQueryMsg{query: "triage my inbox"})
-	m = updated2.(ChatModel)
-	m = feed(t, m,
-		event.CanonicalToolResultEvent{Type: "tool_result", Tool: "pre_scan_inbox", Render: "email_pre_scan", Data: firstData},
-		event.CanonicalFinalEvent{Type: "final", Answer: "1 item"},
-	)
-
-	secondData := json.RawMessage(`{"kind":"email_pre_scan","urgent":[],"actionable":[],"informational_count":0,"suggested_archives":[],"suggested_drafts":[],"needs_review":[],"scanned":20,"needs_you":[],"needs_you_total":2,"bulk":{"count":0,"filter_tests":[]}}`)
-	updated3, _ := m.Update(sendQueryMsg{query: "triage my inbox again"})
-	m = updated3.(ChatModel)
-	secondQuestionIdx := len(m.messages) - 1
-	m = feed(t, m,
-		event.CanonicalToolResultEvent{Type: "tool_result", Tool: "pre_scan_inbox", Render: "email_pre_scan", Data: secondData},
-		event.CanonicalFinalEvent{Type: "final", Answer: "2 items"},
-	)
-
-	cardIdx, cardCount := -1, 0
-	for i, msg := range m.messages {
-		if msg.Role == RoleCard && msg.Render == "email_pre_scan" {
-			cardIdx = i
-			cardCount++
-		}
-	}
-	if cardCount != 1 {
-		t.Fatalf("got %d pre-scan cards, want exactly 1: %+v", cardCount, m.messages)
-	}
-	if cardIdx < secondQuestionIdx {
-		t.Errorf("card at index %d sits before the SECOND question at index %d -- it stayed where the first refresh left it: %+v", cardIdx, secondQuestionIdx, m.messages)
-	}
-	if string(m.messages[cardIdx].Data) != string(secondData) {
-		t.Errorf("card data = %s, want the second turn's data %s", m.messages[cardIdx].Data, secondData)
-	}
-}
-
-// /clear drops the whole transcript, including any pre-scan card wherever it
-// was; the next pre-scan (on-open or user-triggered) must still yield
-// exactly one card, not zero and not two.
-func TestClearThenFreshPreScanYieldsExactlyOneCard(t *testing.T) {
-	m, _ := newTestModel(t)
-
-	updated, _ := m.Update(preScanFetchedMsg{data: json.RawMessage(samplePreScanJSON)})
-	m = updated.(ChatModel)
-	updated2, _ := m.Update(sendQueryMsg{query: "triage my inbox"})
-	m = updated2.(ChatModel)
-	m = feed(t, m,
-		event.CanonicalToolResultEvent{
-			Type: "tool_result", Tool: "pre_scan_inbox",
-			Render: "email_pre_scan",
-			Data:   json.RawMessage(`{"kind":"email_pre_scan","urgent":[],"actionable":[],"informational_count":0,"suggested_archives":[],"suggested_drafts":[],"needs_review":[],"scanned":5,"needs_you":[],"needs_you_total":1,"bulk":{"count":0,"filter_tests":[]}}`),
-		},
-		event.CanonicalFinalEvent{Type: "final", Answer: "1 item"},
-	)
-	if !hasPreScanCard(m) {
-		t.Fatal("test setup: expected a pre-scan card before /clear")
-	}
-
-	// Mirrors model.go's "/clear" key handling.
-	m.messages = nil
-
-	updated3, _ := m.Update(preScanFetchedMsg{data: json.RawMessage(samplePreScanJSON)})
-	m = updated3.(ChatModel)
-
-	cardCount := 0
-	for _, msg := range m.messages {
-		if msg.Role == RoleCard && msg.Render == "email_pre_scan" {
-			cardCount++
-		}
-	}
-	if cardCount != 1 {
-		t.Fatalf("got %d pre-scan cards after /clear + a fresh scan, want exactly 1: %+v", cardCount, m.messages)
 	}
 }
