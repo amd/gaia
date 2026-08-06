@@ -5242,10 +5242,12 @@ def handle_api_command(args):
 
             # Now import the app (agent_registry will see the env vars)
             from gaia.api.openai_server import app
+            from gaia.api.sse_handler import warn_if_unconfirmed_tools_allowed
 
             print("🚀 Starting GAIA OpenAI-compatible API server...")
             print(f"   Host: {args.host}")
             print(f"   Port: {args.port}")
+            warn_if_unconfirmed_tools_allowed()
 
             # Show debug features if enabled
             if (

@@ -23,6 +23,30 @@ on the OpenAI-compatible API surface. Default off — see
 ``SSEOutputHandler.confirm_tool_execution``."""
 
 
+def warn_if_unconfirmed_tools_allowed() -> bool:
+    """Print the bypass banner to the terminal when the escape hatch is on.
+
+    Returns True when the banner was printed. Every path that boots the API
+    server must call this: the bypass is invisible once the server is up, so
+    the only moment the operator can notice it is while they are still looking
+    at the terminal. Lives here beside the env constant so a new entry point
+    cannot silently ship without the warning.
+    """
+    if os.environ.get(ALLOW_UNCONFIRMED_TOOLS_ENV) != "1":
+        return False
+    print(
+        f"\n⚠️  {ALLOW_UNCONFIRMED_TOOLS_ENV}=1 — high-risk tools (shell "
+        "commands, file writes) will run with NO user approval.\n"
+        "   Anything this agent reads can trigger them. Trusted, "
+        "single-user, localhost only.\n"
+    )
+    logger.warning(
+        "%s=1: tool-approval bypass active on this API server",
+        ALLOW_UNCONFIRMED_TOOLS_ENV,
+    )
+    return True
+
+
 class SSEOutputHandler(OutputHandler):
     """
     Output handler for Server-Sent Events (SSE) streaming to API clients.

@@ -363,3 +363,60 @@ class TestHttpSurface:
         content = response.json()["choices"][0]["message"]["content"]
         assert "Refused to run 'write_file'" in content
         assert canary == []
+
+
+class TestBypassBannerReachesTheOperator:
+    """The bypass is invisible once the server is up, so the terminal banner is
+    the only place an operator can notice it. It previously lived inside
+    ``app.start_server``, which ``gaia api start`` never calls — the warning was
+    unreachable on the path operators actually use. These tests pin the banner
+    to the real entry points, not to the helper.
+    """
+
+    def test_banner_prints_when_bypass_enabled(self, monkeypatch, capsys):
+        from gaia.api.sse_handler import (
+            ALLOW_UNCONFIRMED_TOOLS_ENV,
+            warn_if_unconfirmed_tools_allowed,
+        )
+
+        monkeypatch.setenv(ALLOW_UNCONFIRMED_TOOLS_ENV, "1")
+        assert warn_if_unconfirmed_tools_allowed() is True
+        out = capsys.readouterr().out
+        assert ALLOW_UNCONFIRMED_TOOLS_ENV in out
+        assert "NO user approval" in out
+
+    @pytest.mark.parametrize("value", [None, "0", "false", "true", "yes"])
+    def test_banner_silent_unless_value_is_exactly_one(
+        self, monkeypatch, capsys, value
+    ):
+        """A security control must not be switchable by a truthy accident."""
+        from gaia.api.sse_handler import (
+            ALLOW_UNCONFIRMED_TOOLS_ENV,
+            warn_if_unconfirmed_tools_allowed,
+        )
+
+        if value is None:
+            monkeypatch.delenv(ALLOW_UNCONFIRMED_TOOLS_ENV, raising=False)
+        else:
+            monkeypatch.setenv(ALLOW_UNCONFIRMED_TOOLS_ENV, value)
+        assert warn_if_unconfirmed_tools_allowed() is False
+        assert capsys.readouterr().out == ""
+
+    def test_gaia_api_start_calls_the_banner(self):
+        """``gaia api start`` inlines its own startup rather than calling
+        ``app.start_server``. Assert the CLI path itself invokes the warning —
+        a helper nothing calls is exactly the bug this guards."""
+        import inspect
+
+        from gaia import cli
+
+        source = inspect.getsource(cli.handle_api_command)
+        assert "warn_if_unconfirmed_tools_allowed()" in source
+
+    def test_start_server_calls_the_banner(self):
+        import inspect
+
+        from gaia.api import app
+
+        source = inspect.getsource(app.start_server)
+        assert "warn_if_unconfirmed_tools_allowed()" in source
