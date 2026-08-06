@@ -35,6 +35,7 @@ from __future__ import annotations
 import os
 import re
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Dict, List, Optional
 
@@ -230,6 +231,30 @@ def _detect_targeted_mailboxes(query: str) -> set:
 # ---------------------------------------------------------------------------
 # System prompt
 # ---------------------------------------------------------------------------
+
+def _today_guidance() -> str:
+    """Tell the model what day it is, so it can resolve a relative range.
+
+    The calendar tools take RFC 3339 bounds and reject anything else, but the
+    prompt never said what "today" was — so "what's on my calendar this week?"
+    sent ``"this Monday"`` and came back asking the user for exact dates, on
+    the most natural question there is.
+
+    Computed per call, never cached: a session now outlives a single turn
+    (#2829), so a date captured at construction would go stale mid-conversation
+    and quietly answer about the wrong week.
+    """
+    now = datetime.now().astimezone()
+    return (
+        f"TODAY: {now:%Y-%m-%d} ({now:%A}), local time {now:%H:%M} "
+        f"{now.tzname()} (UTC offset {now:%z}).\n"
+        "The calendar tools accept RFC 3339 timestamps ONLY. Resolve every "
+        'relative range — "today", "this week", "next Tuesday" — against the '
+        "date above yourself and pass explicit bounds. Never send a relative "
+        "phrase as a timestamp, and never ask the user for dates you can "
+        "compute from it."
+    )
+
 
 # I1 — system-prompt hardening. Tell the LLM explicitly that email body
 # content is UNTRUSTED INPUT and must never be treated as instructions.
@@ -1008,10 +1033,11 @@ class EmailTriageAgent(
         # Voice/style-matched drafting (#1607): once a profile has been
         # built from Sent mail, every turn's prompt carries the style
         # guidance so draft bodies come out in the user's own voice.
+        prompt = _SYSTEM_PROMPT + "\n" + _today_guidance()
         profile = action_store.fetch_voice_profile(self)
         if profile is None:
-            return _SYSTEM_PROMPT
-        return _SYSTEM_PROMPT + "\n" + render_style_guidance(profile)
+            return prompt
+        return prompt + "\n" + render_style_guidance(profile)
 
     # -- Skill-set selection (#2466) ---------------------------------------
 
