@@ -18,6 +18,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from gaia.api.sse_handler import ALLOW_UNCONFIRMED_TOOLS_ENV
+
 logger = logging.getLogger(__name__)
 
 
@@ -48,6 +50,20 @@ def start_server(
         >>> start_server("localhost", 8080, debug=True, show_prompts=True)
         ✅ GAIA API server started with debug mode enabled
     """
+    # The tool-approval bypass is invisible once the server is up — say so
+    # while the operator is still looking at the terminal.
+    if os.environ.get(ALLOW_UNCONFIRMED_TOOLS_ENV) == "1":
+        print(
+            f"\n⚠️  {ALLOW_UNCONFIRMED_TOOLS_ENV}=1 — high-risk tools (shell "
+            "commands, file writes) will run with NO user approval.\n"
+            "   Anything this agent reads can trigger them. Trusted, "
+            "single-user, localhost only.\n"
+        )
+        logger.warning(
+            "%s=1: tool-approval bypass active on this API server",
+            ALLOW_UNCONFIRMED_TOOLS_ENV,
+        )
+
     # Set environment variables for agent configuration
     # These will be read by agent_registry.py when agents are instantiated
     if debug:

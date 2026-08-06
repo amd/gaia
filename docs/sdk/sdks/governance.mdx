@@ -104,9 +104,19 @@ agent = MyAgent(
 
 An explicit `governance_reviewer` takes precedence. If none is configured,
 governance delegates to `console.confirm_tool_execution` only when the console
-advertises `blocking_confirmation = True`; Agent UI's `SSEOutputHandler` does
-this and emits the existing `permission_request` modal. GAIA's default console is
-not consulted because its confirmation method auto-approves.
+advertises `blocking_confirmation = True`; Agent UI's `SSEOutputHandler`
+([`gaia.ui.sse_handler`](https://github.com/amd/gaia/blob/main/src/gaia/ui/sse_handler.py))
+does this and emits the existing `permission_request` modal. GAIA's default
+console is not consulted because its confirmation method auto-approves.
+
+<Note>
+Two different classes share the name `SSEOutputHandler`. The Agent UI one above
+blocks on a real user decision. The API one
+([`gaia.api.sse_handler`](https://github.com/amd/gaia/blob/main/src/gaia/api/sse_handler.py))
+deliberately keeps `blocking_confirmation = False` and denies outright — the
+OpenAI-compatible surface has no approval channel, so a `REVIEW` decision fails
+closed there. See [API Server](/sdk/infrastructure/api-server).
+</Note>
 
 When a policy returns `BLOCK`, the governed tool body is not executed and the
 adapter writes a BLOCK receipt. If the active console supports

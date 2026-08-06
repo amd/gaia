@@ -109,6 +109,10 @@ The GAIA API Server provides an OpenAI-compatible REST API for exposing GAIA age
    - CORS configuration
    - Input validation
    - Error sanitization
+   - Confirmation-gated tools (shell, file writes, MCP writes) are refused —
+     the API has no approval channel. See
+     [SDK → API Server](/sdk/infrastructure/api-server) for the
+     `GAIA_API_ALLOW_UNCONFIRMED_TOOLS` opt-out.
 
 ---
 

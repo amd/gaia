@@ -20,6 +20,10 @@ export LEMONADE_API_KEY=""
 # any other value (including "true") leaves the feature OFF.
 export GAIA_API_DEBUG="1"      # debug logging + console output
 export GAIA_API_STREAMING="1"  # stream LLM responses over the API
+# Runs approval-gated tools (shell commands, file writes) with NO user
+# confirmation. Trusted single-user localhost only — see
+# /sdk/infrastructure/api-server.
+export GAIA_API_ALLOW_UNCONFIRMED_TOOLS="1"
 
 # API Keys (for cloud providers)
 export ANTHROPIC_API_KEY="sk-ant-..."

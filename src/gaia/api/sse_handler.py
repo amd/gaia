@@ -7,11 +7,20 @@ Converts agent output into Server-Sent Events format for API clients.
 """
 
 import json
+import logging
+import os
 import time
 from collections import deque
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from gaia.agents.base.console import OutputHandler
+
+logger = logging.getLogger(__name__)
+
+ALLOW_UNCONFIRMED_TOOLS_ENV = "GAIA_API_ALLOW_UNCONFIRMED_TOOLS"
+"""Opt-in escape hatch: set to ``1`` to auto-approve confirmation-gated tools
+on the OpenAI-compatible API surface. Default off — see
+``SSEOutputHandler.confirm_tool_execution``."""
 
 
 class SSEOutputHandler(OutputHandler):
@@ -27,19 +36,46 @@ class SSEOutputHandler(OutputHandler):
     Args:
         debug_mode: If True, include verbose event details. If False, only stream
                    clean, user-friendly status updates.
+        allow_unconfirmed_tools: Opt-in escape hatch that auto-approves
+                   confirmation-gated tools. ``None`` (default) reads
+                   ``GAIA_API_ALLOW_UNCONFIRMED_TOOLS``.
     """
 
-    def __init__(self, debug_mode: bool = False):
+    blocking_confirmation: bool = False
+    """This handler never waits for a user decision — it denies outright."""
+
+    def __init__(
+        self,
+        debug_mode: bool = False,
+        allow_unconfirmed_tools: Optional[bool] = None,
+    ):
         """Initialize the SSE output handler.
 
         Args:
             debug_mode: Enable verbose event streaming for debugging
+            allow_unconfirmed_tools: Override the env-var escape hatch
         """
         self.queue = deque()
         self.streaming_buffer = ""  # Maintain compatibility
         self.debug_mode = debug_mode
         self.current_step = 0
         self.total_steps = 0
+        # Both forms demand a literal True / "1" — a security control must not
+        # be switchable by a truthy accident like the string "0" or "false".
+        self.allow_unconfirmed_tools = (
+            os.environ.get(ALLOW_UNCONFIRMED_TOOLS_ENV) == "1"
+            if allow_unconfirmed_tools is None
+            else allow_unconfirmed_tools is True
+        )
+        if self.allow_unconfirmed_tools:
+            logger.warning(
+                "%s is enabled: this server will execute high-risk tools "
+                "(shell commands, file writes) with NO user approval. That "
+                "disables GAIA's prompt-injection backstop on a network-exposed "
+                "surface. Only use it for trusted, single-user, localhost "
+                "deployments.",
+                ALLOW_UNCONFIRMED_TOOLS_ENV,
+            )
 
     def _add_event(self, event_type: str, data: Dict[str, Any]):
         """
@@ -86,6 +122,7 @@ class SSEOutputHandler(OutputHandler):
             "checklist_reasoning",  # Checklist reasoning (debug info)
             "message",  # Generic messages from print() calls
             "agent_selected",  # Agent routing selection notification
+            "tool_confirm_denied",  # Gated tool refused — caller must see why
         }
         return event_type in streamable_events
 
@@ -265,6 +302,52 @@ class SSEOutputHandler(OutputHandler):
         """Print checklist reasoning/planning."""
         self._add_event("checklist_reasoning", {"reasoning": reasoning})
 
+    # === Tool Confirmation (fail closed) ===
+
+    def confirm_tool_execution(self, tool_name: str, tool_args: Dict[str, Any]) -> bool:
+        """Deny confirmation-gated tools — the API has no approval channel.
+
+        The OpenAI-compatible API is a network-exposed, one-shot request/response
+        surface with nowhere to ask the caller "allow this?". Inheriting the base
+        auto-approve made the confirmation gate a no-op here, so any prompt
+        injection the agent ingested could drive a shell command or file write
+        (CWE-862). Fail closed instead, and emit an event so the caller sees why.
+        """
+        if self.allow_unconfirmed_tools:
+            message = (
+                f"Auto-approved '{tool_name}' without user review because "
+                f"{ALLOW_UNCONFIRMED_TOOLS_ENV}=1. GAIA's prompt-injection "
+                "backstop is disabled on this server."
+            )
+            logger.warning("%s (args: %s)", message, sorted(tool_args or {}))
+            self._add_event("warning", {"message": message})
+            return True
+
+        message = (
+            f"Refused to run '{tool_name}': it requires explicit user approval, "
+            "and the OpenAI-compatible API has no channel to ask for it. Run "
+            "this request through the Agent UI (`gaia chat --ui`), which shows "
+            "a permission prompt. For a trusted single-user localhost server "
+            f"you can opt out by setting {ALLOW_UNCONFIRMED_TOOLS_ENV}=1 before "
+            "`gaia api start` — that disables the approval requirement for "
+            "every high-risk tool, so do not do it on a shared or exposed host."
+        )
+        self._add_event(
+            "tool_confirm_denied",
+            {
+                "tool": tool_name,
+                "reason": "no_approval_channel",
+                "message": message,
+            },
+        )
+        logger.warning(
+            "Denied confirmation-gated tool '%s': no approval channel on the "
+            "API surface (set %s=1 to opt out)",
+            tool_name,
+            ALLOW_UNCONFIRMED_TOOLS_ENV,
+        )
+        return False
+
     def get_events(self) -> List[Dict[str, Any]]:
         """
         Get all queued events and clear the queue.
@@ -342,6 +425,10 @@ class SSEOutputHandler(OutputHandler):
         elif event_type == "warning":
             message = data.get("message", "")
             return f"Warning: {message}\n"
+
+        elif event_type == "tool_confirm_denied":
+            message = data.get("message", "")
+            return f"Permission denied: {message}\n"
 
         elif event_type == "success":
             message = data.get("message", "")

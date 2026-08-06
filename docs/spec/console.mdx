@@ -333,18 +333,46 @@ class SSEOutputHandler(OutputHandler):
     that can be consumed by the API server.
     """
 
-    def __init__(self, debug_mode: bool = False):
+    # Denies outright rather than waiting for a user decision.
+    blocking_confirmation: bool = False
+
+    def __init__(
+        self,
+        debug_mode: bool = False,
+        allow_unconfirmed_tools: Optional[bool] = None,
+    ):
         """
         Initialize the SSE output handler.
 
         Args:
             debug_mode: Enable verbose event streaming for debugging
+            allow_unconfirmed_tools: Opt-in escape hatch that auto-approves
+                confirmation-gated tools. None (default) reads
+                GAIA_API_ALLOW_UNCONFIRMED_TOOLS.
         """
         self.queue = deque()
         self.streaming_buffer = ""
         self.debug_mode = debug_mode
         self.current_step = 0
         self.total_steps = 0
+        self.allow_unconfirmed_tools = (
+            os.environ.get("GAIA_API_ALLOW_UNCONFIRMED_TOOLS") == "1"
+            if allow_unconfirmed_tools is None
+            else allow_unconfirmed_tools is True
+        )
+
+    def confirm_tool_execution(self, tool_name, tool_args) -> bool:
+        """Deny confirmation-gated tools — the API has no approval channel.
+
+        Emits a ``tool_confirm_denied`` event naming the tool, why it was
+        refused, and to use the Agent UI instead. Returns True only under the
+        opt-in escape hatch; see /sdk/infrastructure/api-server.
+        """
+        if self.allow_unconfirmed_tools:
+            self._add_event("warning", {"message": "Auto-approved without review"})
+            return True
+        self._add_event("tool_confirm_denied", {"tool": tool_name, "message": "..."})
+        return False
 
     def _add_event(self, event_type: str, data: Dict[str, Any]):
         """Add an event to the output queue."""
