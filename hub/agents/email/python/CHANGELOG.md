@@ -61,6 +61,13 @@ contract version is tracked separately as
   could have confirmed one, and an attendee named for an event the tool
   result shows has none; both leave a correctly-reported organizer and an
   honest "no attendees" alone.
+- **A pinned `GAIA_EMAIL_SKILL_SET` leaked across tests, failing suites that
+  never mention skills.** The variable was set process-wide by the skill-set
+  tests and never cleared, so every later agent construction requested a set
+  that no longer exists once skills ship disabled — surfacing as unrelated
+  trash/restore, undo, and zero-connector failures rather than as a skills
+  problem. The fixture now scopes and restores it, so the fail-loud
+  `SkillSetError` fires only where a set is genuinely requested.
 - **`get_thread` invented messages, senders, and timestamps that were never
   in the mailbox (#2765).** Asked to catch up on a conversation, the agent
   could hand back a duplicated message, another replaced by a repeat of an
