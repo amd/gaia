@@ -233,14 +233,16 @@ gaia/                           # repo root
     │   ├── tool_registry.h     # Tool registration and execution
     │   ├── mcp_client.h        # MCP JSON-RPC client (stdio transport)
     │   ├── json_utils.h        # JSON extraction with multi-strategy fallback
-    │   ├── lemonade_client.h   # HTTP client for the Lemonade inference server
+    │   ├── http_client.h       # General HTTP/HTTPS client (GET/POST/streaming)
+    │   ├── lemonade_client.h   # Lemonade inference server client (built on HttpClient)
     │   ├── sse_parser.h        # SSE parser for streaming chat completions
     │   ├── console.h           # TerminalConsole / SilentConsole output handlers
     │   └── clean_console.h     # CleanConsole — polished TUI with colors and word-wrap
     ├── src/
     │   ├── agent.cpp           # Agent loop state machine
     │   ├── tool_registry.cpp
-    │   ├── lemonade_client.cpp # HTTP client (blocking + SSE streaming)
+    │   ├── http_client.cpp     # HTTP transport (cpp-httplib behind a pimpl)
+    │   ├── lemonade_client.cpp # Lemonade client (blocking + SSE streaming)
     │   ├── sse_parser.cpp      # SSE token stream parser
     │   ├── mcp_client.cpp      # Cross-platform subprocess + pipes (Win32 / POSIX)
     │   ├── json_utils.cpp
@@ -253,6 +255,7 @@ gaia/                           # repo root
     │   ├── test_agent.cpp
     │   ├── test_tool_registry.cpp
     │   ├── test_json_utils.cpp
+    │   ├── test_http_client.cpp
     │   ├── test_lemonade_client.cpp
     │   ├── test_sse_parser.cpp
     │   ├── test_mcp_client.cpp
