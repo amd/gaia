@@ -23,7 +23,7 @@ from __future__ import annotations
 import json
 import re
 import time
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from gaia_agent_email.attention_cache import ATTENTION_CACHE_TTL_SECONDS
 from gaia_agent_email.attention_cache import peek as _peek_attention_cache
@@ -296,6 +296,176 @@ def strip_scaffolding_leaks(text: str) -> str:
     cleaned = _RAW_MESSAGE_ID_RE.sub("", cleaned)
     cleaned = decode_stray_unicode_escapes(cleaned)
     return cleaned.strip()
+
+
+# A numbered triage item at the start of a line -- the shape the list is
+# supposed to have, and the signal that this answer IS a triage list.
+# Tolerates the shapes a model reaches for around the number — a bullet, bold
+# markers, or both ("- **9.** …"). Missing one of them makes the rebuild below
+# think the reply has no list and append a second copy of it.
+_NUMBERED_ITEM_LINE_RE = re.compile(
+    r"^[ \t]*(?:[-*+•·][ \t]*)?\*{0,2}\d{1,3}\.\*{0,2}[ \t]", re.MULTILINE
+)
+
+# A numbered item that ran on mid-line instead of starting its own, e.g.
+# "...scheduling meetings: 4. Tomasz ... 5. Tomasz ...".
+_INLINE_NUMBERED_ITEM_RE = re.compile(r"(?<=\S)[ \t]+(?=\d{1,3}\.[ \t]+\S)")
+
+# Any bare address on an item line, however the model punctuated around it.
+# The sender is already named beside it, so a bare address renders twice --
+# once as text, once as the mailto: link the markdown renderer expands. An
+# explicit mailto: link goes too, for the same reason.
+_ITEM_LINE_EMAIL_RE = re.compile(
+    r"[ \t]*\[?<?(?:mailto:)?[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}>?\]?"
+    r"(?:\((?:mailto:)?[^)]*\))?"
+)
+
+
+def normalize_triage_list(text: str) -> str:
+    """Give a numbered triage list the shape the skill asks for and the model
+    keeps missing: one item per line, no duplicated sender address.
+
+    Formatting a list the tool already computed is not a judgement call, so it
+    is enforced here rather than requested in the prompt — three consecutive
+    live runs showed the instruction alone does not hold. Applies only to an
+    answer that already contains a numbered item at the start of a line, so
+    ordinary prose that happens to say "in 5. Then" is untouched.
+    """
+    if not text or not _NUMBERED_ITEM_LINE_RE.search(text):
+        return text
+    out = _INLINE_NUMBERED_ITEM_RE.sub("\n", text)
+    out = "\n".join(
+        _ITEM_LINE_EMAIL_RE.sub("", line) if _NUMBERED_ITEM_LINE_RE.match(line) else line
+        for line in out.split("\n")
+    )
+    return out
+
+
+# needs_you ``kind`` → the section it belongs under, in the order refs are
+# assigned (_NEEDS_YOU_KIND_ORDER, read_tools.py), so the numbers ascend down
+# the page without the renderer sorting anything.
+_TRIAGE_SECTIONS: List[Tuple[str, Tuple[str, ...]]] = [
+    ("Waiting on your reply", ("urgent", "waiting_on_you")),
+    ("Needs a response", ("needs_response",)),
+    ("Meetings to decide", ("meeting_request",)),
+    ("Needs a manual look", ("needs_review", "action_item")),
+]
+
+
+# ``needs_you.sender`` carries a display name, an address, or both. Only the
+# name is worth a row -- an address renders twice once the markdown renderer
+# turns it into a mailto: link.
+_SENDER_EMAIL_RE = re.compile(r"\s*<?([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})>?")
+
+
+def _sender_label(sender: Any) -> str:
+    text = str(sender or "").strip()
+    if not text:
+        return "unknown sender"
+    match = _SENDER_EMAIL_RE.search(text)
+    if match is None:
+        return text
+    name = _SENDER_EMAIL_RE.sub(" ", text).strip(" <>|,-–—")
+    # Address-only sender: keep it (the reader still needs to know who) but as
+    # code, so the renderer cannot autolink it into a duplicate.
+    return name or f"`{match.group(1)}`"
+
+
+def _age_phrase(age_seconds: Any) -> str:
+    if not isinstance(age_seconds, (int, float)) or age_seconds < 0:
+        return ""
+    days = int(age_seconds // 86400)
+    if days >= 1:
+        return f"{days}d ago"
+    hours = int(age_seconds // 3600)
+    return f"{hours}h ago" if hours >= 1 else "just now"
+
+
+def render_needs_you_list(envelope: Dict[str, Any]) -> str:
+    """Build the numbered triage list straight from ``needs_you``.
+
+    The list is entirely determined by the tool's own output — every field is
+    already computed, and the refs are already in display order — so composing
+    it is not a judgement the model should be making. Five consecutive live
+    runs had it drop items, renumber them, merge sections, or answer with
+    totals alone; none of those are possible here.
+    """
+    items = envelope.get("needs_you") or []
+    if not items:
+        return ""
+    by_kind: Dict[str, List[Dict[str, Any]]] = {}
+    for item in items:
+        by_kind.setdefault(str(item.get("kind") or ""), []).append(item)
+
+    blocks: List[str] = []
+    for heading, kinds in _TRIAGE_SECTIONS:
+        rows = [row for kind in kinds for row in by_kind.get(kind, [])]
+        if not rows:
+            continue
+        rows.sort(key=lambda r: r.get("ref") or 0)
+        lines = [f"### {heading}", ""]
+        for row in rows:
+            who = _sender_label(row.get("sender"))
+            what = str(row.get("subject") or "").strip() or "(no subject)"
+            # ``why`` is the classifier's own reason for the row, not chat-model
+            # embellishment, so it survives the rewrite.
+            notes = [
+                n
+                for n in (_age_phrase(row.get("age_seconds")), str(row.get("why") or "").strip())
+                if n
+            ]
+            suffix = f" ({' · '.join(notes)})" if notes else ""
+            lines.append(f"{row.get('ref')}. {who} — {what}{suffix}")
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
+
+
+def _lead_paragraph(text: str) -> str:
+    """The answer's opening prose — the one part still worth asking a model for.
+
+    Skips headings and any block that has already turned into a list, so a
+    reply that opens straight into items contributes no lead at all rather
+    than half a list.
+    """
+    for block in (text or "").split("\n\n"):
+        candidate = block.strip()
+        if not candidate or candidate.startswith("#"):
+            continue
+        if _NUMBERED_ITEM_LINE_RE.search(candidate):
+            break
+        return candidate
+    return ""
+
+
+def rewrite_triage_answer(
+    final_answer: str, conversation: Optional[List[Dict[str, Any]]]
+) -> str:
+    """Replace a triage reply's list with one built from the scan itself.
+
+    The categories are still model judgement — a heuristic, then the
+    ``specific-ai-triage`` SLM, then an LLM fallback, all inside
+    ``pre_scan_inbox``. What is NOT a judgement is transcribing the result,
+    and asking the chat model to do it produced invented numbering, dropped
+    items, merged sections, and once no list at all. So the chat model keeps
+    the opening sentence and this renders the rest.
+
+    Deliberately keyed on tool PRESENCE, not on parsing the user's question:
+    any turn that calls ``pre_scan_inbox`` gets the authoritative list, even
+    for a narrower ask ("how many urgent emails do I have?"). A hand-
+    summarized partial view is exactly the failure mode this function
+    replaces, and ``pre_scan_inbox`` only ever runs when the model judged
+    the question worth a scan in the first place — so a rewrite here is
+    never wrong, only sometimes more complete than the question strictly
+    asked for.
+    """
+    prescan = last_tool_payload(conversation, "pre_scan_inbox")
+    if not prescan:
+        return final_answer
+    rendered = render_needs_you_list(prescan)
+    if not rendered:
+        return final_answer
+    lead = _lead_paragraph(final_answer) or _honest_prescan_summary(prescan)
+    return f"{lead}\n\n{rendered}"
 
 
 def _honest_prescan_summary(envelope: Dict[str, Any]) -> str:
@@ -693,6 +863,13 @@ def ground_final_answer(result: Dict[str, Any]) -> Dict[str, Any]:
 
     if find_scaffolding_leak(final_answer):
         final_answer = strip_scaffolding_leaks(final_answer)
+
+    final_answer = normalize_triage_list(final_answer)
+
+    # The list is tool output, not prose. Rendering it here rather than asking
+    # the model to retype it is what makes one list, correctly numbered, every
+    # time — see rewrite_triage_answer.
+    final_answer = rewrite_triage_answer(final_answer, conversation)
 
     success_claim = find_ungrounded_success_claim(final_answer, conversation)
     if success_claim:

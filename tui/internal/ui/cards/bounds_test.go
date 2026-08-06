@@ -112,8 +112,8 @@ func TestPreScanHeightIsBoundedAtNarrowWidths(t *testing.T) {
 		if len(lines) > maxCardLines*2 {
 			t.Errorf("width %d produced %d lines, want at most %d", w, len(lines), maxCardLines*2)
 		}
-		if !strings.Contains(plain(out), "NEEDS YOU") {
-			t.Errorf("width %d dropped the NEEDS YOU section", w)
+		if !strings.Contains(plain(out), "NEEDS A REPLY") {
+			t.Errorf("width %d dropped the NEEDS A REPLY section", w)
 		}
 	}
 }
