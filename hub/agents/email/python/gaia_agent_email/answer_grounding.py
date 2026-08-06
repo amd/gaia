@@ -311,12 +311,10 @@ _NUMBERED_ITEM_LINE_RE = re.compile(
 # "...scheduling meetings: 4. Tomasz ... 5. Tomasz ...".
 _INLINE_NUMBERED_ITEM_RE = re.compile(r"(?<=\S)[ \t]+(?=\d{1,3}\.[ \t]+\S)")
 
-# A bare address on an item line. The sender is already named beside it, so
-# this renders as the address twice -- once as text, once as a mailto: link
-# the markdown renderer expands.
 # Any bare address on an item line, however the model punctuated around it.
-# An explicit mailto: link goes too — the markdown renderer expands a bare
-# address into one anyway, which is the duplication being removed.
+# The sender is already named beside it, so a bare address renders twice --
+# once as text, once as the mailto: link the markdown renderer expands. An
+# explicit mailto: link goes too, for the same reason.
 _ITEM_LINE_EMAIL_RE = re.compile(
     r"[ \t]*\[?<?(?:mailto:)?[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}>?\]?"
     r"(?:\((?:mailto:)?[^)]*\))?"
@@ -450,6 +448,15 @@ def rewrite_triage_answer(
     and asking the chat model to do it produced invented numbering, dropped
     items, merged sections, and once no list at all. So the chat model keeps
     the opening sentence and this renders the rest.
+
+    Deliberately keyed on tool PRESENCE, not on parsing the user's question:
+    any turn that calls ``pre_scan_inbox`` gets the authoritative list, even
+    for a narrower ask ("how many urgent emails do I have?"). A hand-
+    summarized partial view is exactly the failure mode this function
+    replaces, and ``pre_scan_inbox`` only ever runs when the model judged
+    the question worth a scan in the first place — so a rewrite here is
+    never wrong, only sometimes more complete than the question strictly
+    asked for.
     """
     prescan = last_tool_payload(conversation, "pre_scan_inbox")
     if not prescan:

@@ -29,6 +29,7 @@ two cannot drift apart silently.
 from __future__ import annotations
 
 import json
+import re
 import sys
 import time
 from pathlib import Path
@@ -58,6 +59,9 @@ from gaia_agent_email.answer_grounding import (  # noqa: E402
     find_unlicensed_cross_mailbox_claim,
     find_unqualified_negative_claim,
     ground_final_answer,
+    normalize_triage_list,
+    render_needs_you_list,
+    rewrite_triage_answer,
     strip_scaffolding_leaks,
     tools_called_this_turn,
 )
@@ -433,6 +437,150 @@ class TestStripScaffoldingLeaks:
     def test_leaves_clean_text_unchanged_apart_from_whitespace_trim(self):
         clean = "Two newsletters look safe to archive."
         assert strip_scaffolding_leaks(clean) == clean
+
+
+# ---------------------------------------------------------------------------
+# render_needs_you_list / rewrite_triage_answer — the triage list is rendered
+# from the scan's own needs_you view, never retyped by the model (#2789
+# follow-up: three consecutive live runs invented numbering, dropped items,
+# or merged sections when the model was asked to write the list itself).
+# ---------------------------------------------------------------------------
+
+
+def _needs_you_row(ref: int, kind: str, **overrides) -> dict:
+    base = {
+        "ref": ref,
+        "kind": kind,
+        "message_id": f"m{ref}",
+        "thread_id": f"t{ref}",
+        "sender": "Someone <someone@example.com>",
+        "subject": f"subject {ref}",
+        "age_seconds": 3600,
+        "why": "",
+        "detail": [],
+        "due_hint": None,
+        "mailbox": None,
+    }
+    base.update(overrides)
+    return base
+
+
+class TestRenderNeedsYouList:
+    def test_empty_needs_you_renders_nothing(self):
+        assert render_needs_you_list(_prescan_envelope(needs_you=[])) == ""
+        assert render_needs_you_list({}) == ""
+
+    def test_sections_appear_in_display_order_with_ascending_refs(self):
+        envelope = _prescan_envelope(
+            needs_you=[
+                _needs_you_row(1, "waiting_on_you"),
+                _needs_you_row(2, "needs_response"),
+                _needs_you_row(3, "meeting_request"),
+                _needs_you_row(4, "needs_review"),
+            ]
+        )
+        rendered = render_needs_you_list(envelope)
+        # Every section header appears, in _TRIAGE_SECTIONS order.
+        for heading in (
+            "Waiting on your reply",
+            "Needs a response",
+            "Meetings to decide",
+            "Needs a manual look",
+        ):
+            assert heading in rendered
+        assert rendered.index("Waiting on your reply") < rendered.index("Needs a response")
+        assert rendered.index("Needs a response") < rendered.index("Meetings to decide")
+        assert rendered.index("Meetings to decide") < rendered.index("Needs a manual look")
+        # Refs ascend in the order they appear on the page, unbroken.
+        seen_refs = [int(tok) for tok in re.findall(r"^(\d+)\.", rendered, re.MULTILINE)]
+        assert seen_refs == [1, 2, 3, 4]
+
+    def test_urgent_and_waiting_on_you_share_one_reply_section(self):
+        # Both kinds render as REPLY (verbForKind, tui/cards/emailprescan.go) —
+        # a separate heading per kind would split one verb into two sections.
+        envelope = _prescan_envelope(
+            needs_you=[
+                _needs_you_row(1, "urgent"),
+                _needs_you_row(2, "waiting_on_you"),
+            ]
+        )
+        rendered = render_needs_you_list(envelope)
+        assert rendered.count("Waiting on your reply") == 1
+
+    def test_each_item_carries_its_classifier_reason(self):
+        envelope = _prescan_envelope(
+            needs_you=[
+                _needs_you_row(1, "needs_response", why="flagged as phishing"),
+            ]
+        )
+        assert "flagged as phishing" in render_needs_you_list(envelope)
+
+    def test_sender_address_is_dropped_when_a_display_name_exists(self):
+        envelope = _prescan_envelope(
+            needs_you=[
+                _needs_you_row(1, "waiting_on_you", sender="Jane Doe <jane@example.com>")
+            ]
+        )
+        rendered = render_needs_you_list(envelope)
+        assert "Jane Doe" in rendered
+        assert "jane@example.com" not in rendered
+
+    def test_address_only_sender_is_kept_but_not_autolinkable(self):
+        envelope = _prescan_envelope(
+            needs_you=[_needs_you_row(1, "waiting_on_you", sender="jane@example.com")]
+        )
+        rendered = render_needs_you_list(envelope)
+        assert "`jane@example.com`" in rendered
+
+
+class TestRewriteTriageAnswer:
+    def test_no_pre_scan_tool_call_leaves_the_answer_untouched(self):
+        text = "You have no new mail today."
+        assert rewrite_triage_answer(text, conversation=[]) == text
+
+    def test_pre_scan_with_no_needs_you_items_leaves_the_answer_untouched(self):
+        conversation = [_tool_entry("pre_scan_inbox", _prescan_envelope(needs_you=[]))]
+        text = "Your inbox is clear."
+        assert rewrite_triage_answer(text, conversation) == text
+
+    def test_the_models_own_list_is_discarded_in_favor_of_the_rendered_one(self):
+        envelope = _prescan_envelope(
+            needs_you=[_needs_you_row(1, "waiting_on_you", subject="Re: Q3 roadmap")]
+        )
+        conversation = [_tool_entry("pre_scan_inbox", envelope)]
+        model_answer = (
+            "Here's your inbox — 1 item needs attention.\n\n"
+            "### Stuff\n- **9.** a row the model invented\n- **3.** a duplicate"
+        )
+        out = rewrite_triage_answer(model_answer, conversation)
+        assert "the model invented" not in out
+        assert "1." in out and "Re: Q3 roadmap" in out
+        # The opening sentence survives; only the list is replaced.
+        assert out.startswith("Here's your inbox — 1 item needs attention.")
+
+
+class TestNormalizeTriageList:
+    def test_ordinary_prose_is_untouched(self):
+        prose = "We looked at 5. Then we stopped."
+        assert normalize_triage_list(prose) == prose
+
+    def test_run_on_items_are_split_onto_their_own_line(self):
+        # normalize_triage_list only activates once the text already contains
+        # a line-start numbered item (the signal that this IS a triage list);
+        # item 3 provides that, item 4/5 are the run-on fragment being fixed.
+        text = (
+            "3. Carol: Q3 roadmap\n"
+            "These emails propose scheduling: 4.  Alice: 30 minutes? 5.  Bob: Design review"
+        )
+        out = normalize_triage_list(text)
+        assert "\n4." in out
+        assert "\n5." in out
+
+    def test_duplicated_address_is_stripped_from_a_numbered_line(self):
+        text = "1. Tomasz Testingiewicz tomasz.t@outlook.com - Re: Partnership intro"
+        out = normalize_triage_list(text)
+        assert "tomasz.t@outlook.com" not in out
+        assert "Tomasz Testingiewicz" in out
 
 
 class TestDecodeStrayUnicodeEscapes:
@@ -1077,6 +1225,50 @@ class TestProcessQueryWiring:
             ):
                 out = agent.process_query("pre-scan my inbox")
             assert out["result"] == text
+        finally:
+            agent.close_db()
+
+    def test_finalize_answer_grounds_the_text_the_loop_will_emit(self, tmp_path):
+        # #2789: grounding used to run only on process_query's return value,
+        # which the SSE/TUI stream never re-reads. finalize_answer is the
+        # hook the agent LOOP calls before it emits anything, so this must
+        # ground on its own, with no process_query involved at all.
+        agent = _build_agent(tmp_path)
+        try:
+            conversation = [{"role": "user", "content": "archive it"}]
+            out = agent.finalize_answer("The message has been archived.", conversation)
+            assert out == UNGROUNDED_SUCCESS_FALLBACK
+            assert agent._grounded_answer == UNGROUNDED_SUCCESS_FALLBACK
+        finally:
+            agent.close_db()
+
+    def test_process_query_does_not_re_ground_what_finalize_answer_already_did(
+        self, tmp_path
+    ):
+        # An append-style guard (attention-card) makes a double-fire visible: if
+        # process_query's fallback re-ran ground_final_answer on text
+        # finalize_answer already corrected, the correction would appear twice.
+        _store_attention_view(items=[_attention_item("action_item")], scanned=7)
+        agent = _build_agent(tmp_path)
+        try:
+            conversation = [{"role": "user", "content": "anything need my attention?"}]
+            grounded_by_loop = agent.finalize_answer(
+                "No urgent or actionable items found.", conversation
+            )
+            assert grounded_by_loop.count("attention card") == 1
+
+            canned = {
+                "status": "success",
+                "result": grounded_by_loop,
+                "conversation": conversation,
+                "steps_taken": 1,
+            }
+            with patch(
+                "gaia.agents.base.agent.Agent.process_query", return_value=canned
+            ):
+                out = agent.process_query("anything need my attention?")
+            assert out["result"] == grounded_by_loop
+            assert out["result"].count("attention card") == 1
         finally:
             agent.close_db()
 

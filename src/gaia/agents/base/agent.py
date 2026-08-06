@@ -3325,7 +3325,7 @@ Do NOT wrap conversational replies in JSON.
         cancelled = getattr(self.console, "cancelled", None)
         return cancelled is not None and cancelled.is_set()
 
-    def finalize_answer(self, answer: str, conversation: Any) -> str:
+    def finalize_answer(self, answer: str, _conversation: Any) -> str:
         """Last chance to correct the final answer, BEFORE it is emitted.
 
         Runs ahead of ``console.print_final_answer``, so a subclass's

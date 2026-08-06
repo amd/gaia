@@ -107,9 +107,9 @@ func TestPreScanCapsHitShowsNofM(t *testing.T) {
 	t.Logf("\n%s", plain(out))
 
 	assertWidth(t, out, width80)
-	// needs_you is capped at 5 server-side while needs_you_total (40)
-	// reports the true pre-cap count -- the header must read "5 of 40"
-	// rather than a bare count that implies the list is everything.
+	// The fixture ships fewer needs_you rows (5) than needs_you_total (40)
+	// reports -- the header must read "5 of 40" rather than a bare count
+	// that implies the list is everything.
 	assertContains(t, out, "NEEDS A REPLY", "5 of 40")
 }
 
