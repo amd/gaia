@@ -9,7 +9,7 @@ import os
 import threading
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, field_validator
@@ -1164,6 +1164,33 @@ def _sse(event: dict) -> str:
     return f"data: {json.dumps(event)}\n\n"
 
 
+def _scan_or_reason(source_key: str, scanner) -> Tuple[List[Dict], Optional[str]]:
+    """Run `scanner`, unless this platform has no branch for `source_key`.
+
+    Callers that invoke a scanner directly bypass the ``scan_all`` platform
+    gate, so a source with no branch here would stream nothing and read as
+    "you have none" rather than "GAIA cannot look here".
+
+    Args:
+        source_key: A discovery source name as used by ``scan_all``.
+        scanner: Zero-argument callable returning the scanner's fact dicts.
+
+    Returns:
+        ``(items, message)``. `message` is a user-facing line to stream when the
+        source cannot run or failed, and is None when the scan succeeded.
+    """
+    from gaia.agents.base.discovery import unsupported_reason
+
+    reason = unsupported_reason(source_key)
+    if reason:
+        return [], f"  {reason}"
+    try:
+        return scanner(), None
+    except Exception as e:
+        cid = _log_server_error(f"inference scanner '{source_key}' failed", e)
+        return [], f"  {source_key} unavailable — see server logs (id={cid})"
+
+
 @router.get("/api/memory/stream-discovery")
 def stream_discovery():
     """Stream system discovery findings as SSE.
@@ -1178,7 +1205,10 @@ def stream_discovery():
 
     def _generate():
         try:
-            from gaia.agents.base.discovery import SystemDiscovery
+            from gaia.agents.base.discovery import (
+                SystemDiscovery,
+                unsupported_reason,
+            )
 
             discovery = SystemDiscovery()
 
@@ -1204,12 +1234,16 @@ def stream_discovery():
             for source_key in _DISCOVERY_SOURCES:
                 label = _DISCOVERY_SOURCE_LABELS.get(source_key, source_key)
                 yield _sse({"type": "log", "message": f"Scanning {label}..."})
+                reason = unsupported_reason(source_key)
+                if reason:
+                    yield _sse({"type": "log", "message": f"  {label}: {reason}"})
+                    continue
                 scanner = scan_map.get(source_key)
                 if scanner is None:
                     yield _sse(
                         {
                             "type": "log",
-                            "message": f"  {label}: not available on this platform",
+                            "message": f"  {label}: no scanner is registered for this source",
                         }
                     )
                     continue
@@ -1285,35 +1319,31 @@ def stream_inference(include_browser: bool = Query(False)):
 
             if include_browser:
                 yield _sse({"type": "log", "message": "Reading browser history..."})
-                try:
-                    browser_results = discovery.scan_browser_history(days=30)
-                    if browser_results:
-                        lines = [f"  {r['content']}" for r in browser_results[:40]]
-                        sections.append(
-                            "BROWSER HISTORY (top domains, last 30 days):\n"
-                            + "\n".join(lines)
-                        )
-                        yield _sse(
-                            {
-                                "type": "log",
-                                "message": f"  Collected {len(browser_results)} domains",
-                            }
-                        )
-                except Exception as e:
-                    cid = _log_server_error("browser history scan failed", e)
+                browser_results, msg = _scan_or_reason(
+                    "browser_history", lambda: discovery.scan_browser_history(days=30)
+                )
+                if msg:
+                    yield _sse({"type": "log", "message": msg})
+                elif browser_results:
+                    lines = [f"  {r['content']}" for r in browser_results[:40]]
+                    sections.append(
+                        "BROWSER HISTORY (top domains, last 30 days):\n"
+                        + "\n".join(lines)
+                    )
                     yield _sse(
                         {
                             "type": "log",
-                            "message": (
-                                "  Browser history unavailable — "
-                                f"see server logs (id={cid})"
-                            ),
+                            "message": f"  Collected {len(browser_results)} domains",
                         }
                     )
 
             yield _sse({"type": "log", "message": "Collecting installed apps..."})
-            try:
-                app_results = discovery.scan_installed_apps()
+            app_results, msg = _scan_or_reason(
+                "installed_apps", discovery.scan_installed_apps
+            )
+            if msg:
+                yield _sse({"type": "log", "message": msg})
+            else:
                 apps = [
                     r["content"][len("Installed app: ") :].strip()
                     for r in app_results
@@ -1322,95 +1352,90 @@ def stream_inference(include_browser: bool = Query(False)):
                 if apps:
                     sections.append("INSTALLED APPS:\n  " + ", ".join(apps))
                     yield _sse({"type": "log", "message": f"  Found {len(apps)} apps"})
-            except Exception:
-                pass
-
-            yield _sse({"type": "log", "message": "Collecting app usage frequency..."})
-            try:
-                ua_scanner = getattr(discovery, "scan_windows_userassist", None)
-                if ua_scanner:
-                    ua_results = ua_scanner()
-                    if ua_results:
-                        lines = [f"  {r['content']}" for r in ua_results[:20]]
-                        sections.append(
-                            "FREQUENTLY LAUNCHED APPS:\n" + "\n".join(lines)
-                        )
-                        yield _sse(
-                            {
-                                "type": "log",
-                                "message": f"  Found {len(ua_results)} usage signals",
-                            }
-                        )
-            except Exception:
-                pass
 
             yield _sse({"type": "log", "message": "Scanning recent file types..."})
-            try:
-                ft_scanner = getattr(discovery, "scan_recent_file_types", None)
-                if ft_scanner:
-                    ft_results = ft_scanner()
-                    if ft_results:
-                        lines = [f"  {r['content']}" for r in ft_results]
-                        sections.append("RECENT FILE TYPES:\n" + "\n".join(lines))
-            except Exception:
-                pass
+            ft_results, msg = _scan_or_reason(
+                "recent_file_types", discovery.scan_recent_file_types
+            )
+            if msg:
+                yield _sse({"type": "log", "message": msg})
+            elif ft_results:
+                lines = [f"  {r['content']}" for r in ft_results]
+                sections.append("RECENT FILE TYPES:\n" + "\n".join(lines))
 
             yield _sse({"type": "log", "message": "Scanning gaming & media..."})
-            try:
-                gm_results = discovery.scan_gaming_and_media()
-                if gm_results:
-                    lines = [f"  {r['content']}" for r in gm_results]
-                    sections.append("GAMING AND MEDIA:\n" + "\n".join(lines))
-            except Exception:
-                pass
+            gm_results, msg = _scan_or_reason(
+                "gaming_and_media", discovery.scan_gaming_and_media
+            )
+            if msg:
+                yield _sse({"type": "log", "message": msg})
+            elif gm_results:
+                lines = [f"  {r['content']}" for r in gm_results]
+                sections.append("GAMING AND MEDIA:\n" + "\n".join(lines))
 
             yield _sse({"type": "log", "message": "Scanning personal files..."})
-            try:
-                pf_results = discovery.scan_personal_files()
-                if pf_results:
-                    lines = [f"  {r['content']}" for r in pf_results]
-                    sections.append("PERSONAL FILES:\n" + "\n".join(lines))
-                    yield _sse(
-                        {
-                            "type": "log",
-                            "message": f"  Found {len(pf_results)} personal file insights",
-                        }
-                    )
-            except Exception:
-                pass
+            pf_results, msg = _scan_or_reason(
+                "personal_files", discovery.scan_personal_files
+            )
+            if msg:
+                yield _sse({"type": "log", "message": msg})
+            elif pf_results:
+                lines = [f"  {r['content']}" for r in pf_results]
+                sections.append("PERSONAL FILES:\n" + "\n".join(lines))
+                yield _sse(
+                    {
+                        "type": "log",
+                        "message": f"  Found {len(pf_results)} personal file insights",
+                    }
+                )
 
-            yield _sse({"type": "log", "message": "Scanning app usage..."})
-            try:
-                ua_results = discovery.scan_windows_userassist()
-                ma_results = discovery.scan_macos_app_usage()
-                combined = ua_results + ma_results
-                if combined:
-                    lines = [f"  {r['content']}" for r in combined[:20]]
-                    sections.append("FREQUENTLY USED APPS:\n" + "\n".join(lines))
-            except Exception:
-                pass
+            yield _sse({"type": "log", "message": "Scanning app usage frequency..."})
+            combined = []
+            for source_key, scanner in (
+                ("windows_userassist", discovery.scan_windows_userassist),
+                ("macos_app_usage", discovery.scan_macos_app_usage),
+            ):
+                items, msg = _scan_or_reason(source_key, scanner)
+                if msg:
+                    yield _sse({"type": "log", "message": msg})
+                else:
+                    combined.extend(items)
+            if combined:
+                lines = [f"  {r['content']}" for r in combined[:20]]
+                sections.append("FREQUENTLY USED APPS:\n" + "\n".join(lines))
+                yield _sse(
+                    {
+                        "type": "log",
+                        "message": f"  Found {len(combined)} usage signals",
+                    }
+                )
 
             yield _sse(
                 {"type": "log", "message": "Collecting git identity & projects..."}
             )
-            try:
-                git_results = discovery.scan_git_identity()
+            git_results, msg = _scan_or_reason(
+                "git_identity", discovery.scan_git_identity
+            )
+            if msg:
+                yield _sse({"type": "log", "message": msg})
+            else:
                 non_sensitive = [r for r in git_results if not r.get("sensitive")]
                 if non_sensitive:
                     lines = [f"  {r['content']}" for r in non_sensitive]
                     sections.append("GIT IDENTITY:\n" + "\n".join(lines))
-            except Exception:
-                pass
-            try:
-                manifest_results = discovery.scan_project_manifests()
+
+            manifest_results, msg = _scan_or_reason(
+                "project_manifests", discovery.scan_project_manifests
+            )
+            if msg:
+                yield _sse({"type": "log", "message": msg})
+            else:
                 non_sensitive = [r for r in manifest_results if not r.get("sensitive")][
                     :10
                 ]
                 if non_sensitive:
                     lines = [f"  {r['content']}" for r in non_sensitive]
                     sections.append("PROJECT MANIFESTS (sample):\n" + "\n".join(lines))
-            except Exception:
-                pass
 
             if not sections:
                 yield _sse(

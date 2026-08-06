@@ -48,10 +48,15 @@
  * raw scan results. `NeedsYouItem.kind` reuses `AttentionItemKind` (extended
  * with "urgent" / "needs_response") rather than a new enum. No existing
  * field changed, so 2.4 consumers keep working (additive).
+ * Schema 2.12 (additive over 2.11, #2829): `EmailQueryRequest` gains an
+ * optional `session_id` — when the host sends it, the run resolves the SAME
+ * agent every other turn on that id used, instead of a throwaway per-call
+ * agent, so a reference to something an earlier turn surfaced can resolve.
+ * Omitted -> unchanged behaviour. No existing field changed (additive).
  */
 
 /** Frozen contract version echoed by the server's `/version` endpoint. */
-export const SCHEMA_VERSION = "2.11" as const;
+export const SCHEMA_VERSION = "2.12" as const;
 
 /**
  * The five-bucket triage taxonomy (schema 2.0 — contract.py: EmailCategory).
@@ -928,6 +933,16 @@ export interface EmailQueryRequest {
    * which then get an immediate actionable refusal instead.
    */
   can_answer_questions?: boolean;
+  /**
+   * Opaque conversation id (schema 2.12, #2829). Omitted -> a throwaway
+   * per-call agent, exactly like before. Present -> the run resolves the
+   * SAME agent every other turn on this id used, so a reference to
+   * something an earlier turn surfaced can resolve. Mint one per
+   * conversation and reuse it (e.g. `crypto.randomUUID()`) — the sidecar
+   * keys a real, stateful agent off it, so the caller controls
+   * conversation boundaries, not the server.
+   */
+  session_id?: string;
 }
 
 /** Progress narration (also carries folded step/thinking/plan lines). */

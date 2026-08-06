@@ -37,6 +37,7 @@ from gaia_agent_email.context_budget import (
     active_profile_ctx_size,
     envelope_budget_tokens,
     estimate_tokens_json,
+    skill_prompt_tokens,
 )
 from gaia_agent_email.gmail_backend import decode_message_body
 from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
@@ -1586,9 +1587,11 @@ PRE_SCAN_ARCHIVE_CAP = 10
 # reaches the caller via ``totals["needs_review"]``.
 PRE_SCAN_NEEDS_REVIEW_CAP = 5
 
-# #2743 — the "one card" worklist. Capped small on purpose: a triage card
-# listing 30 rows is a report, not a worklist a person can act on today.
-NEEDS_YOU_CAP = 5
+# #2743 — the "one card" worklist. Still capped well below the inbox: a
+# worklist of 30 rows is a report nobody acts on. Raised from 5 so the
+# needs-a-look bucket carries a ``ref`` too — an item the user can see but
+# not name is one they cannot ask the agent to act on.
+NEEDS_YOU_CAP = 10
 
 # Filter-test ids for BulkSummary.filter_tests (#2743) — ids, never prose
 # (see contract.py's NeedsYouItem/BulkSummary docstrings): a renderer maps
@@ -2962,7 +2965,13 @@ class ReadToolsMixin:
                     log.debug("triage: host signature unreadable (%s)", exc)
 
                 return _envelope_ok(
-                    condense_triage_result(agent._triage_all_backends(**kwargs))
+                    condense_triage_result(
+                        agent._triage_all_backends(**kwargs),
+                        # Loaded skill bodies are prompt text the agent re-reads
+                        # on the post-tool turn (#2466) — give the envelope back
+                        # what they cost, or the turn overflows the window.
+                        extra_fixed_tokens=skill_prompt_tokens(agent),
+                    )
                 )
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))

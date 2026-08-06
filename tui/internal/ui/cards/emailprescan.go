@@ -249,11 +249,25 @@ func renderEmailPreScan(data json.RawMessage, width int, seen map[string]bool) (
 
 	showMailbox := p.multiMailbox()
 	footer := p.footerLines()
-	budget := maxCardRows - len(b.lines)
+	// Reserve the header + separator row each extra section costs beyond the
+	// single header the flat render used, so grouping can never push the card
+	// past maxCardRows.
+	budget := maxCardRows - len(b.lines) - (countVerbGroups(p.NeedsYou)-1)*2
 	show, keepDetail, shownFooter := p.fitNeedsYou(b, showMailbox, footer, budget)
 
-	b.sectionHeader("NEEDS YOU", p.needsYouCountLabel(show))
+	prevVerb := ""
 	for i := 0; i < show; i++ {
+		if verb := verbForKind(p.NeedsYou[i].Kind); verb != prevVerb {
+			if prevVerb != "" {
+				b.blank()
+			}
+			count := ""
+			if prevVerb == "" {
+				count = p.needsYouCountLabel(show)
+			}
+			b.sectionHeader(sectionLabelForVerb(verb), count)
+			prevVerb = verb
+		}
 		p.needsYouRow(b, p.NeedsYou[i], showMailbox, keepDetail[i])
 	}
 	if extra := p.NeedsYouTotal - show; extra > 0 {
@@ -315,6 +329,40 @@ func renderMailboxErrorBanner(b *box, errs []mailboxError) {
 // "the renderer maps kind to a verb label at render time; the wire only
 // carries the source signal"). An unrecognized kind (a future server
 // addition this client predates) still gets a verb, never a blank one.
+// sectionLabelForVerb names the group a verb heads. The wire carries only
+// provenance (kind); both the verb and this heading are render-time lookups,
+// so a future server kind still lands under a heading rather than none.
+func sectionLabelForVerb(verb string) string {
+	switch verb {
+	case "REPLY":
+		return "NEEDS A REPLY"
+	case "DECIDE":
+		return "NEEDS A DECISION"
+	case "CHECK":
+		return "WORTH A LOOK"
+	case "DO":
+		return "YOUR TASKS"
+	default:
+		return "NEEDS YOU"
+	}
+}
+
+// countVerbGroups counts the runs of same-verb items. Items arrive already
+// ordered by kind (_NEEDS_YOU_KIND_ORDER, read_tools.py), so verbs are
+// contiguous and a run count equals the number of section headers the render
+// will emit -- counting runs rather than distinct verbs keeps that true even
+// if a future ordering interleaves them.
+func countVerbGroups(items []needsYouItem) int {
+	groups, prev := 0, ""
+	for _, it := range items {
+		if v := verbForKind(it.Kind); v != prev {
+			groups++
+			prev = v
+		}
+	}
+	return groups
+}
+
 func verbForKind(kind string) string {
 	switch kind {
 	case "urgent", "waiting_on_you", "needs_response":
