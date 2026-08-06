@@ -133,6 +133,38 @@ exact scope to add, only when you actually try to use one.
 Want to try it without writing code? Run `npx @amd-gaia/agent-email playground`
 for a local page to test triage, drafting, and a live send.
 
+## Personal mailbox vs work mailbox
+
+The agent behaves differently depending on the kind of mailbox it's connected to.
+It ships six built-in **skills** — short playbooks it loads into its own thinking —
+and turns on one **set** of them per run:
+
+- **Personal** (the default): inbox triage, newsletter digests, and building a trip
+  itinerary out of scattered booking confirmations.
+- **Work**: inbox triage, meeting scheduling, pulling action items out of threads,
+  and deciding what needs escalating.
+
+It picks the set automatically for an Outlook mailbox — a personal Microsoft
+account gets the personal set, a work or school account gets the work set. Two
+mailboxes need you to say which you want: Gmail, which doesn't expose the kind at
+all, and a work or school Microsoft account, whose connector the agent doesn't
+offer yet ([#2629](https://github.com/amd/gaia/issues/2629)). Both fall back to
+the personal set until you pin one.
+
+To pin it yourself, start the sidecar with the set you want:
+
+```ts
+const sidecar = await startSidecar({
+  binaryPath,
+  port: 8131,
+  extraArgs: ["--skill-set", "work"], // or env: { GAIA_EMAIL_SKILL_SET: "work" }
+});
+```
+
+This changes how the agent *approaches* your mail, not what it's allowed to do —
+the tools, permissions, and API are identical either way. Full detail in
+[`SPEC.md`](https://github.com/amd/gaia/blob/agent-pkg-email-v0.5.0/hub/agents/email/npm/SPEC.md).
+
 ## How it works
 
 Three pieces, all on your own machine — no cloud, no separate GAIA install:

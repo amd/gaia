@@ -65,7 +65,8 @@ net-new agent instrumentation.
   ],
   "model": "Gemma-4-E4B-it-GGUF",
   "provider": "lemonade",
-  "max_steps": 20
+  "max_steps": 20,
+  "session_id": "3c1b9e2a-...-uuidv4"
 }
 ```
 
@@ -80,6 +81,7 @@ net-new agent instrumentation.
 | `provider` | string | no | LLM provider override (`lemonade` / `claude` / `openai`). Omitted ⇒ sidecar default. |
 | `max_steps` | integer ≥ 1 | no | Agent-loop step ceiling. Omitted ⇒ the sidecar's configured default. |
 | `can_answer_questions` | boolean | no | Whether **this caller** can render a `needs_input` event and POST the answer (§5.1). **Send only to a peer at contract ≥ 2.6** — an older sidecar 422s the unknown field (see §7). Defaults to **false** — the safe answer. A caller that cannot answer would otherwise park the run until the question times out, which is indistinguishable from a hang. When false, a step that would ask instead fails immediately with what the user should do on that surface. |
+| `session_id` | string, `^[A-Za-z0-9_-]{1,128}$` | no | Opaque conversation id, host-minted once per conversation and reused across turns (#2829). **Send only to a peer at contract ≥ 2.12** — an older sidecar 422s the unknown field (see §7). Omitted ⇒ today's stateless behaviour: a throwaway agent per call. Present ⇒ the run resolves the SAME agent every other turn on this id used, so a reference to something an earlier turn surfaced (e.g. "reply to number 1") can resolve. See §2.4. |
 
 ```jsonc
 // JSON Schema (draft 2020-12) — request body
@@ -106,7 +108,8 @@ net-new agent instrumentation.
     "model":     { "type": "string" },
     "provider":  { "type": "string" },
     "max_steps": { "type": "integer", "minimum": 1 },
-    "can_answer_questions": { "type": "boolean", "default": false }
+    "can_answer_questions": { "type": "boolean", "default": false },
+    "session_id": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,128}$" }
   }
 }
 ```
@@ -126,6 +129,18 @@ The host owns the transcript (§0.9) and passes the relevant slice as `context`.
 The sidecar stays **stateless** and never reads other sessions back over the
 `/host/v1/*` callback (§0.11 scoping forbids it anyway). A pushed slice and a
 pulled one therefore can't disagree.
+
+**Unless `session_id` is sent (#2829, schema 2.12).** Then the run resolves a
+real, persistent agent keyed on that id instead of a throwaway one, so
+whatever the agent itself accumulates outside `conversation_history` (e.g. a
+just-surfaced reference an in-process tool cached) survives to the next turn.
+`context` is still pushed and still REPLACES the agent's
+`conversation_history` every turn — it is never read back from the sidecar —
+so the two mechanisms complement rather than duplicate each other: `context`
+is the host-owned transcript, the session is the agent's own working state.
+A `session_id` the sidecar has never seen (e.g. it restarted mid-conversation
+— the session registry is in-memory) is surfaced as a one-time `status`
+event, never a silent cold start.
 
 ---
 

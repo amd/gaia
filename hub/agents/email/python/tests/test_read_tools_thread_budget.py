@@ -69,6 +69,7 @@ from gaia_agent_email.tools.read_tools import (  # noqa: E402
     UNTRUSTED_BODY_OPEN,
     ReadToolsMixin,
     _format_message_for_llm,
+    _thread_table_card,
     get_thread_impl,
     wrap_untrusted_body,
 )
@@ -311,6 +312,13 @@ class TestWireLevelByteIdentity:
         must equal ``_envelope_ok({...})`` byte-for-byte — not just
         structurally-equal-after-parsing. Pins AC3's "byte-identical" claim
         at the actual wire, not just dict equality.
+
+        The expected envelope now also carries the #2765 table-card fields
+        (``kind``/``title``/``columns``/``rows``), computed via the SAME
+        ``_thread_table_card`` helper production code uses — so this stays
+        a real regression pin on "the budget-shrink path doesn't corrupt
+        message content OR the card projected from it", not a hand-typed
+        guess that happens to match today's output.
         """
         from gaia_agent_email.tools.envelope import _envelope_ok
 
@@ -321,11 +329,12 @@ class TestWireLevelByteIdentity:
         get_thread = _registered_get_thread(host)
 
         actual = get_thread(thread_id="t1")
+        expected_result = {
+            "thread_id": "t1",
+            "messages": _expected_thread_output(msgs),
+        }
         expected = _envelope_ok(
-            {
-                "thread_id": "t1",
-                "messages": _expected_thread_output(msgs),
-            }
+            {**expected_result, **_thread_table_card(expected_result)}
         )
         assert actual == expected
 

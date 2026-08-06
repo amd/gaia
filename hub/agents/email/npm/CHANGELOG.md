@@ -6,6 +6,30 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## Unreleased
 
+- **`query()` can now carry a conversation forward.** `EmailQueryRequest`
+  gains an optional `session_id`: set it once and reuse it on every turn of
+  a conversation (e.g. `crypto.randomUUID()`), and the sidecar resolves the
+  SAME agent each time instead of a throwaway one per call — so a
+  follow-up referring to something an earlier turn surfaced has something
+  to resolve against. Leave it unset and nothing changes (#2829, schema
+  2.12).
+- **One inbox triage card instead of two that disagreed.** Asking the agent
+  to triage your inbox used to draw two summary boxes from two separate scans
+  at different depths — one might say "nothing needs you" while the other,
+  five lines below, listed a message needing review. The card is now one
+  worklist (`needs_you`, schema 2.11) built from a single scan: up to five
+  things that genuinely need you, each tagged with what to do (reply, decide,
+  check, or a carried-over action item) and how old it is. Everything
+  filtered out is counted alongside the test that filtered it (`bulk`), so a
+  claim like "47 filtered" is something you can judge rather than take on
+  faith. `NeedsYouItem` / `BulkSummary` are new on `EmailPreScanResult`;
+  nothing existing was removed or renamed (#2743). `NeedsYouItem.detail` is
+  also new — reserved for a couple of lines of real substance per row (the
+  question actually asked, the meeting time actually proposed, the deadline
+  actually quoted) — but ships **always empty** in this release: the
+  per-item extraction pass that would fill it was implemented and then
+  withdrawn before merge so it could ship on a firm timing budget rather
+  than risk a slow scan; a follow-up will populate it.
 - **Reconnecting your mailbox with no flags — the exact command GAIA's own
   error message told you to run — could silently wipe your permissions
   instead of fixing them.** A bare `gaia connectors connect google` (or the
@@ -48,6 +72,19 @@ behind any entry — API shapes, endpoints, and version semantics — see
   still uses your exact wording when you hand it over yourself. Sending is
   unchanged — every draft still needs your confirmation before it goes out
   (#2524).
+- **The agent now works differently for a personal mailbox than for a work one.**
+  It used to bring exactly the same instincts to both: the same triage advice for
+  a mailbox full of newsletters and flight confirmations as for one full of
+  meeting invites and things people are waiting on you for. It now ships six
+  built-in skills and turns on one set of them per run — `personal` (inbox triage,
+  newsletter digests, trip itineraries) or `work` (inbox triage, meeting
+  scheduling, action items, escalation). For an Outlook mailbox it picks the set
+  itself from the kind of Microsoft account you connected. Gmail doesn't say which
+  kind it is, so a Gmail mailbox gets `personal` unless you pin one — start the
+  sidecar with `extraArgs: ["--skill-set", "work"]` or
+  `env: { GAIA_EMAIL_SKILL_SET: "work" }`. This changes how the agent approaches
+  your mail, not what it can do: same endpoints, same tools, same permissions, no
+  schema bump (#2466).
 - **Opt-in preview: small on-device models can now decide phishing flags and
   triage categories instead of keyword rules.** Turn it on with
   `GAIA_EMAIL_USE_SLM=true` on the sidecar (or `use_slm=True` in config).

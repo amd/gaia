@@ -23,19 +23,24 @@ func preScanFixture(t *testing.T, mutate func(m map[string]any)) json.RawMessage
 	return out
 }
 
-func item(i int, key string) map[string]any {
+// needsYouTestItem builds one needs_you-shaped fixture row. why is always
+// long enough to wrap across more than one line at width80, so the height
+// bound is actually exercised.
+func needsYouTestItem(i int, kind string) map[string]any {
 	return map[string]any{
+		"ref":        i + 1,
+		"kind":       kind,
 		"message_id": "id" + itoa(i),
 		"sender":     "A Person With A Long Display Name " + itoa(i) + " <person" + itoa(i) + "@example.com>",
 		"subject":    "A subject line long enough to need truncating at eighty columns " + itoa(i),
-		key:          "a rationale that is itself long enough to wrap across more than one line " + itoa(i),
+		"why":        "a rationale that is itself long enough to wrap across more than one line " + itoa(i),
 	}
 }
 
-func items(n int, key string) []map[string]any {
+func needsYouTestItems(n int, kind string) []map[string]any {
 	out := make([]map[string]any, n)
 	for i := range out {
-		out[i] = item(i, key)
+		out[i] = needsYouTestItem(i, kind)
 	}
 	return out
 }
@@ -44,11 +49,9 @@ func items(n int, key string) []map[string]any {
 // an unbounded card off a 24-row screen.
 func TestPreScanHeightIsBounded(t *testing.T) {
 	cases := map[string]func(m map[string]any){
-		"agent caps in every bucket": func(m map[string]any) {
-			m["urgent"] = items(5, "why")
-			m["actionable"] = items(5, "why")
-			m["suggested_archives"] = items(10, "reason")
-			m["totals"] = map[string]any{"urgent": 40, "actionable": 60, "informational": 12, "suggested_archives": 90}
+		"needs_you at the server cap, large total": func(m map[string]any) {
+			m["needs_you"] = needsYouTestItems(5, "urgent")
+			m["needs_you_total"] = 200
 		},
 		"long wrapping preferences footer": func(m map[string]any) {
 			m["preferences_applied"] = map[string]any{
@@ -66,10 +69,8 @@ func TestPreScanHeightIsBounded(t *testing.T) {
 			}
 		},
 		"everything at once": func(m map[string]any) {
-			m["urgent"] = items(5, "why")
-			m["actionable"] = items(5, "why")
-			m["suggested_archives"] = items(10, "reason")
-			m["totals"] = map[string]any{"urgent": 40, "actionable": 60, "informational": 12, "suggested_archives": 90}
+			m["needs_you"] = needsYouTestItems(5, "urgent")
+			m["needs_you_total"] = 200
 			m["preferences_applied"] = map[string]any{
 				"priority_senders":     []string{"Sarah Chen", "Priya Nadkarni", "Marcus Webb", "Dana Whitfield"},
 				"low_priority_senders": []string{},
@@ -97,10 +98,8 @@ func TestPreScanHeightIsBounded(t *testing.T) {
 // The bound must hold at narrow widths too, where everything wraps harder.
 func TestPreScanHeightIsBoundedAtNarrowWidths(t *testing.T) {
 	data := preScanFixture(t, func(m map[string]any) {
-		m["urgent"] = items(5, "why")
-		m["actionable"] = items(5, "why")
-		m["suggested_archives"] = items(10, "reason")
-		m["totals"] = map[string]any{"urgent": 40, "actionable": 60, "informational": 12, "suggested_archives": 90}
+		m["needs_you"] = needsYouTestItems(5, "urgent")
+		m["needs_you_total"] = 200
 	})
 
 	for _, w := range []int{24, 32, 40, 60, 76, 100, 160} {
@@ -113,8 +112,8 @@ func TestPreScanHeightIsBoundedAtNarrowWidths(t *testing.T) {
 		if len(lines) > maxCardLines*2 {
 			t.Errorf("width %d produced %d lines, want at most %d", w, len(lines), maxCardLines*2)
 		}
-		if !strings.Contains(plain(out), "URGENT") {
-			t.Errorf("width %d dropped the URGENT section", w)
+		if !strings.Contains(plain(out), "NEEDS A REPLY") {
+			t.Errorf("width %d dropped the NEEDS A REPLY section", w)
 		}
 	}
 }
@@ -185,15 +184,15 @@ func TestItoa(t *testing.T) {
 // Wide runes must not shear a border: a CJK subject is two columns per glyph.
 func TestWideRunesDoNotShearTheFrame(t *testing.T) {
 	data := preScanFixture(t, func(m map[string]any) {
-		m["urgent"] = []map[string]any{{
+		m["needs_you"] = []map[string]any{{
+			"ref":        1,
+			"kind":       "urgent",
 			"message_id": "m1",
 			"sender":     "田中太郎 <tanaka@example.jp>",
 			"subject":    "四半期レビューの締め切りが近づいています",
 			"why":        "返信が必要です — 金曜日までに",
 		}}
-		m["totals"] = map[string]any{"urgent": 1, "actionable": 0, "informational": 0, "suggested_archives": 0}
-		m["actionable"] = []any{}
-		m["suggested_archives"] = []any{}
+		m["needs_you_total"] = 1
 	})
 
 	for _, w := range []int{24, 40, 76} {

@@ -118,9 +118,27 @@ class TestOutlookPreScanTotalUnread:
         }
 
         def handler(request: httpx.Request) -> httpx.Response:
+            # #2743 redirect: pre_scan_inbox_impl now also runs a
+            # waiting-on-you sub-scan of this SAME backend, which needs
+            # get_user_email (/me), a SENT-folder listing (the opt-out
+            # scan), and a conversation fetch (get_thread) beyond the
+            # original inbox-listing + get_message surface this fixture
+            # covered.
             path = request.url.path
+            if path.endswith("/me"):
+                return _ok(
+                    {"mail": "me@example.com", "userPrincipalName": "me@example.com"}
+                )
             if path.endswith("/me/mailFolders/inbox/messages"):
                 return _ok({"value": [{"id": "m1", "conversationId": "c1"}]})
+            if path.endswith("/me/mailFolders/sentitems/messages"):
+                # No SENT-folder data in this fixture -- the opt-out scan
+                # simply finds no suppressed senders.
+                return _ok({"value": []})
+            if path.endswith("/me/messages"):
+                # get_thread's conversation fetch -- this fixture has one
+                # message in one thread.
+                return _ok({"value": [msgs["m1"]]})
             mid = path.rsplit("/", 1)[-1]
             return _ok(msgs[mid])
 
