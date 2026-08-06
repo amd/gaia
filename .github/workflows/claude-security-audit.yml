@@ -14,6 +14,13 @@
 #      tools can't do, over an explicit worklist so nothing is sampled away.
 #      Every '# noqa: S*' / '# nosec' is RE-VERIFIED from scratch, never trusted.
 #
+# A later miss (the shell find -exec whitelist bypass, CWE-184) sharpened the
+# lenses further: both sink-taint and suppression-review looked straight at the
+# guarded subprocess call and passed it because a guard EXISTED — neither asked
+# whether the command allowlist was SOUND (can an allowed command act as a gadget
+# for a forbidden action?). The lens prompts now demand that allowlist-soundness
+# check explicitly.
+#
 # PRIVACY: findings never go to a public issue. Both layers upload SARIF to the
 # repo's private Security > Code scanning tab; Claude's full detail also goes to
 # the (access-controlled) run log. High-severity findings ping @kovtcharov-amd.
@@ -145,6 +152,13 @@ jobs:
               extraction, deserialization, subprocess/shell, eval). A sink is only a finding if
               untrusted data can reach it. The hub tar-slip (CWE-22) is the archetype: a hub
               archive's member paths reached `tarfile.extractall` with no per-member check.
+              When a subprocess/shell sink is "guarded" by a command ALLOWLIST, do NOT stop at
+              "a guard exists" — audit the allowlist's SOUNDNESS: can any allowed command perform
+              the very actions the policy forbids? Whitelisted commands are routinely gadgets
+              (GTFOBins-style) that spawn others or write/delete via a flag — `find -exec`/`-delete`/
+              `-fprintf`, `sort -o`, `uniq IN OUT`, `xargs`, `awk 'BEGIN{system()}'`, `git -c
+              core.pager=`, `tar --to-command`. A "read-only" allowlist that admits any such gadget
+              is incomplete (CWE-184) and IS a finding, even though every input is "validated".
             - **authz**: access-control gaps — a sandbox/allowlist/trust gate that one code path
               enforces and a sibling path skips. The read_file bypass (CWE-284) is the archetype:
               `write_file` called the PathValidator but `read_file` did not. Look for ASYMMETRIC
@@ -153,7 +167,12 @@ jobs:
             - **suppression-review**: for EACH `# noqa: S<n>` / `# nosec` in the worklist, RE-DERIVE
               whether the finding it silences is truly safe. TREAT THE COMMENT AS AN UNPROVEN CLAIM,
               NOT A DECISION — "hub artifacts are trusted" is exactly the assumption that shipped the
-              tar-slip. If the suppressed risk is real, report it.
+              tar-slip. If the suppressed risk is real, report it. A justification of the form
+              "command whitelist-validated above" claims the allowlist is SOUND, not merely present:
+              verify no allowed command can perform the forbidden action, and check whether the
+              comment reasons about the wrong axis (the `find -exec` bypass, CWE-184, hid behind
+              `# nosec B602 - Windows-only; command whitelist-validated above` — but the bypass is
+              platform-independent and has nothing to do with the shell=True the comment defends).
 
             ## Published hub agents (`hub/agents/**`) run on integrators' machines — hold to the
             strictest reading and bump any real finding up one severity.
