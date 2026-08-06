@@ -14,6 +14,10 @@ on:
     # 07:11 UTC on the 1st of each month (off the :00 mark to avoid the fleet-wide spike).
     - cron: "11 7 1 * *"
   workflow_dispatch:
+    inputs:
+      model:
+        description: "Model to exercise. Use this to prove a NEW model resolves on the pinned action BEFORE rolling it out to the other jobs."
+        default: "claude-opus-5"
 
 permissions:
   contents: read
@@ -27,9 +31,18 @@ jobs:
       - name: Authenticate and run a trivial prompt
         id: claude
         # NO continue-on-error: an auth failure MUST fail the job so the notify step
-        # fires. Same OAuth-preferred / API-key-fallback wiring as claude.yml. Haiku +
-        # 1 turn keeps the monthly subscription-quota cost negligible.
-        uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b  # v1.0.183
+        # fires. Same OAuth-preferred / API-key-fallback wiring as claude.yml. One turn
+        # keeps the monthly subscription-quota cost negligible.
+        #
+        # The model is a dispatch input so this doubles as the MODEL-RESOLUTION canary.
+        # The pinned action bundles the Claude Code CLI that resolves model names, so a
+        # model newer than that build is unresolvable — and the failure surfaces as a
+        # broken job rather than a clear error. Before pointing the other workflows at a
+        # new model, dispatch this with `-f model=<new-id>` and confirm it goes green.
+        # It now defaults to the same model the real jobs use (claude-opus-5) so the
+        # scheduled run exercises the actual path, not a cheaper proxy that could stay
+        # green while every real job fails to resolve its model.
+        uses: anthropics/claude-code-action@86180fa9e4d311eed10c9cc49854c53dab5d517a  # v1.0.184
         with:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
@@ -38,11 +51,15 @@ jobs:
             Reply with exactly the word: ok
           claude_args: |
             --max-turns 1
-            --model claude-haiku-4-5-20251001
+            --model ${{ github.event.inputs.model || 'claude-opus-5' }}
             --allowedTools Read
 
+      # Only the SCHEDULED canary files an issue. A manual dispatch is a probe — usually
+      # someone checking whether a new model resolves on the pinned action — and a failed
+      # probe is an expected answer, not an incident. Filing "your token expired" for it
+      # would be both noisy and wrong; read the job log instead.
       - name: Open issue on auth failure
-        if: failure()
+        if: failure() && github.event_name == 'schedule'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

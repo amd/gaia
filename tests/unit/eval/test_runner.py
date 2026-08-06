@@ -608,11 +608,15 @@ class TestCompareScorecards:
 
 class TestAgentEvalRunnerInit:
     def test_defaults(self):
-        from gaia.eval.runner import AgentEvalRunner
+        from gaia.eval.runner import DEFAULT_MODEL, AgentEvalRunner
 
         runner = AgentEvalRunner()
         assert runner.backend_url == "http://localhost:4200"
-        assert runner.model == "claude-sonnet-4-6"
+        # Assert against the constant, not a literal: this used to hardcode the
+        # judge model id and broke on every model bump. What matters here is that
+        # the runner picks up the module default, not which model that happens
+        # to be. The judge id itself is asserted once, in test_config.py.
+        assert runner.model == DEFAULT_MODEL
         assert runner.budget == "2.00"
         assert runner.timeout == 900
 

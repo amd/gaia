@@ -221,7 +221,7 @@ _KNOWN_PERSONAS = frozenset(
     }
 )
 
-DEFAULT_MODEL = "claude-sonnet-4-6"
+DEFAULT_MODEL = "claude-opus-5"
 DEFAULT_BACKEND = "http://localhost:4200"
 DEFAULT_BUDGET = "2.00"
 DEFAULT_TIMEOUT = 900  # seconds per scenario (base)
