@@ -59,7 +59,11 @@ from typing import Any, Dict, List, Optional
 # (``test_render_tool_to_lang_maps_stay_in_sync``) pins the two dicts equal so
 # this duplication can't silently drift.
 _RENDER_TOOL_TO_LANG: Dict[str, str] = {
-    "pre_scan_inbox": "email_pre_scan",
+    # ``pre_scan_inbox`` deliberately draws NO card: it landed mid-turn as a
+    # partial list while the model was still writing the full triage answer,
+    # so the user read two overlapping views of one inbox and could not tell
+    # which to act on. The triage reply is the single view; refs still resolve
+    # from tool data (``resolve_needs_you_reference``), not from a render.
     # #2765: a generic ``table`` card (no new client code) so the thread
     # view renders straight from tool data instead of model prose.
     "get_thread": "table",
