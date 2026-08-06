@@ -73,8 +73,8 @@ renamed the asset; verified against `v11.5.0`:
 
 | Constructed / actual | Result |
 | --- | --- |
-| `lemonade-server_11.5.0_amd64.deb` (ours) | 404 |
-| `lemonade-server_11.5.0-debian13_amd64.deb` | 200 |
+| `lemonade-server_11.5.2_amd64.deb` (ours) | 404 |
+| `lemonade-server_11.5.2-debian13_amd64.deb` | 200 |
 | `Lemonade-11.5.0-Darwin.pkg` | 200 |
 
 - Correct the Linux name; add arm64 Linux (upstream publishes it, we ignore it).
