@@ -146,6 +146,7 @@ add_library(gaia_core
     src/file_tools.cpp
     src/git_tools.cpp
     src/session.cpp
+    src/vector_index.cpp
     src/repl.cpp
     src/json_event_handler.cpp
 )
@@ -316,6 +317,7 @@ if(GAIA_BUILD_TESTS)
         tests/test_file_tools.cpp
         tests/test_git_tools.cpp
         tests/test_session.cpp
+        tests/test_vector_index.cpp
         tests/test_repl.cpp
         tests/test_json_event_handler.cpp
     )
