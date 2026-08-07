@@ -1517,12 +1517,51 @@ gaia mcp test --query "Hello from GAIA MCP!"
 |--------|---------|-------------|
 | `--host` | `localhost` | Bind address |
 | `--port` | `8765` | Port for the MCP bridge |
-| `--auth-token` | _none_ | If set, require `Authorization: Bearer <token>` on every request |
+| `--auth-token` | `$GAIA_MCP_AUTH_TOKEN` | Require `Authorization: Bearer <token>` on every request except `/health` |
 | `--no-streaming` | off | Disable SSE streaming; reply synchronously |
 | `--background` | off | Detach; use `gaia mcp stop` to terminate |
 | `--log-file` | stdout | Write logs to this path (useful with `--background`) |
 | `--verbose` | off | Verbose logging |
 | `--ctx-size` | `32768` | Context window hint passed to Lemonade for loaded models |
+
+##### Authentication
+
+The bridge is **unauthenticated by default**. Anything that can reach the port
+can enumerate and invoke its tools, which is why `--host` defaults to
+`localhost`. Pass `--auth-token` before exposing it anywhere else:
+
+```bash
+export GAIA_MCP_AUTH_TOKEN=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+gaia mcp start --host 0.0.0.0 --port 8765
+```
+
+Prefer the environment variable over `--auth-token <token>`: on Linux and macOS
+command-line arguments are visible to any local user via `ps`.
+
+Clients then send the token on every call:
+
+```bash
+curl -H "Authorization: Bearer $GAIA_MCP_AUTH_TOKEN" http://localhost:8765/status
+```
+
+| Request | Response |
+|---------|----------|
+| Valid `Bearer` token | Normal response |
+| Missing or malformed `Authorization` header | `401` |
+| Well-formed header, wrong token | `403` |
+
+`GET /health` stays public so container and orchestrator liveness probes keep
+working; it reports only liveness plus agent/tool **counts**. Every other
+endpoint — `/status`, `/tools`, `/chat`, `/llm`, `/jira`, `/summarize`, and the
+JSON-RPC endpoint — requires the token. `gaia mcp status`, `gaia mcp test`, and
+`gaia mcp agent` accept `--auth-token` (also defaulting to
+`$GAIA_MCP_AUTH_TOKEN`) so they can reach a protected bridge.
+
+<Warning>
+The bridge speaks plain HTTP. A bearer token stops anonymous callers but does
+not encrypt traffic — put it behind a TLS-terminating reverse proxy, or keep it
+on loopback, before sending a token across an untrusted network.
+</Warning>
 
 #### `gaia mcp test` options
 
@@ -1530,6 +1569,7 @@ gaia mcp test --query "Hello from GAIA MCP!"
 |--------|---------|-------------|
 | `--query` | _required_ | Text to send to the server |
 | `--tool` | `gaia.chat` | Which MCP tool to invoke when testing |
+| `--auth-token` | `$GAIA_MCP_AUTH_TOKEN` | Bearer token, if the bridge requires one |
 
 #### `gaia mcp agent`
 
