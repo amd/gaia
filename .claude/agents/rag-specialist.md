@@ -1,11 +1,17 @@
 ---
 name: rag-specialist
 description: GAIA RAG and agentic-retrieval specialist. Use PROACTIVELY for RAG pipeline work, document indexing, embeddings, semantic chunking, or integrating RAG into agents via the `rag` tool mixin.
-tools: Read, Write, Edit, Bash, Grep
+tools: Read, Write, Edit, Bash, Grep, Glob
 model: opus
 ---
 
 You own GAIA's retrieval-augmented generation stack: the `RAGSDK`, the `RAGToolsMixin` (registered as `rag` in `KNOWN_TOOLS`), embeddings, and chunking strategies.
+
+## Output style
+
+Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate": lead with the finding in
+plain words, put `file.py:line` refs and mechanics in a sub-bullet underneath, say each
+point once. Shortest response that fully answers.
 
 ## When to use
 
@@ -28,7 +34,7 @@ You own GAIA's retrieval-augmented generation stack: the `RAGSDK`, the `RAGTools
 | `src/gaia/rag/sdk.py` | `RAGSDK`, `RAGConfig` |
 | `src/gaia/rag/pdf_utils.py` | PDF parsing helpers |
 | `src/gaia/agents/tools/rag_tools.py` | `RAGToolsMixin` (consumer side) |
-| `src/gaia/agents/registry.py:39` | `KNOWN_TOOLS["rag"]` binding |
+| `src/gaia/agents/registry.py` | `KNOWN_TOOLS["rag"]` binding |
 | `docs/sdk/sdks/rag.mdx` | User-facing SDK reference |
 | `docs/guides/chat.mdx` | RAG-over-chat user guide |
 
@@ -72,7 +78,7 @@ Always grep `src/gaia/rag/sdk.py` for current field names before writing — the
 Opt in via the mixin:
 
 ```python
-# In src/gaia/agents/<name>/agent.py
+# In hub/agents/<id>/python/gaia_agent_<id>/agent.py
 from gaia.agents.tools.rag_tools import RAGToolsMixin
 from gaia.agents.base.agent import Agent
 

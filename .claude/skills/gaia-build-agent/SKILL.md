@@ -37,9 +37,12 @@ the publish skill).
    Then mirror an existing package (e.g. `analyst`, `browser`) for structure.
 
 2. **Write the `Agent` subclass.** Inherit from `Agent` (or a closer base like the
-   chat/docqa agents). Set the model with `model_id` — omit it only if the
-   `Qwen3.5-35B-A3B-GGUF` base default is right; chat-style agents use
-   `Gemma-4-E4B-it-GGUF` (`DEFAULT_MODEL_NAME`). Keep the constructor thin.
+   chat/docqa agents). **Leave `model_id` unset** — that inherits the base default,
+   `Gemma-4-E4B-it-GGUF` (`DEFAULT_MODEL_NAME`), which is right for nearly every agent.
+   Every agent sharing one model is what keeps a single model resident, so switching
+   agents never triggers an eviction + cold reload. Only set `model_id` when the agent
+   genuinely needs a different model (e.g. the summarizer's `Qwen3-4B-Instruct-2507-GGUF`),
+   and say why. Keep the constructor thin.
 
 3. **Register tools with `@tool`.** Each `@tool` method is a capability the LLM can
    call; its **docstring is the schema the model sees**, so write it for the model

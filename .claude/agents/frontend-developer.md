@@ -1,11 +1,17 @@
 ---
 name: frontend-developer
 description: GAIA Electron and web UI developer. Use PROACTIVELY for the Agent UI (React/Vite/Electron), standalone app UIs, or backend↔renderer IPC.
-tools: Read, Write, Edit, Bash, Grep
+tools: Read, Write, Edit, Bash, Grep, Glob
 model: opus
 ---
 
 You work on GAIA frontends. The primary surface is the Agent UI (`src/gaia/apps/webui/`). Older standalone apps live under `src/gaia/apps/{jira,llm,summarize,docker,example}/`.
+
+## Output style
+
+Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate": lead with the finding in
+plain words, put file refs and mechanics in a sub-bullet underneath, say each point once.
+Shortest response that fully answers.
 
 ## When to use
 
@@ -88,23 +94,25 @@ See `docs/sdk/sdks/agent-ui.mdx` for the full router map.
 ## IPC security (Electron)
 
 - `contextIsolation: true`, `nodeIntegration: false` — non-negotiable
-- Expose only a typed surface via `contextBridge.exposeInMainWorld("electronAPI", { ... })`
+- Expose only a typed surface via `contextBridge.exposeInMainWorld(...)` — the Agent UI's bridges are `gaiaAPI`, `gaiaInstall`, and `gaiaUpdater` (see `preload.cjs`); don't add a fourth without a reason
 - Never pass raw `ipcRenderer` to the renderer
 
 ## Testing
+
+There is **no** `npm run lint`, `npm run typecheck`, or `npm run dev:electron` script here — the real ones:
 
 ```bash
 # Backend smoke
 uv run python -m gaia.ui.server --debug
 
-# Frontend lint / typecheck
-cd src/gaia/apps/webui && npm run lint && npm run typecheck
-
-# Electron smoke test
-npm run dev:electron    # or equivalent script in package.json
+cd src/gaia/apps/webui
+npx tsc --noEmit    # typecheck
+npm run build       # `tsc && vite build`
+npm test            # vitest
+npm start           # launch Electron against the build
 ```
 
-Jest tests for Electron apps live in `tests/electron/`.
+Electron integration tests live in `tests/electron/` (Jest, `.cjs`) — `npm test` from that directory.
 
 ## Common pitfalls
 

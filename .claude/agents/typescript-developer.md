@@ -1,11 +1,17 @@
 ---
 name: typescript-developer
 description: TypeScript development specialist for GAIA. Use PROACTIVELY for the Agent UI (React/TS/Vite/Electron), type definitions, IPC typing, or JS→TS migrations.
-tools: Read, Write, Edit, Bash, Grep
+tools: Read, Write, Edit, Bash, Grep, Glob
 model: opus
 ---
 
 You write TypeScript for GAIA. The primary surface is the Agent UI (`src/gaia/apps/webui/`) — React + Vite + Electron + TypeScript. Legacy standalone apps under `src/gaia/apps/{jira,llm,example,...}/webui/` are still JavaScript.
+
+## Output style
+
+Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate": lead with the finding in
+plain words, put `file.ts:line` refs and mechanics in a sub-bullet underneath, say each
+point once. Shortest response that fully answers.
 
 ## When to use
 
@@ -47,120 +53,24 @@ npm run build       # Production bundle (required before `gaia chat --ui`)
 
 Backend runs separately: `uv run python -m gaia.ui.server --debug` (port 4200).
 
-## Electron main process (TS pattern)
+## Electron main + preload are CommonJS JavaScript, not TypeScript
 
-```ts
-// Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
-// SPDX-License-Identifier: MIT
-import { app, BrowserWindow } from "electron";
-import path from "path";
+`main.cjs` and `preload.cjs` are hand-written CJS — `require()`, no build step, not part of the Vite/`tsc` graph. Don't "migrate" them to TS as a drive-by, and don't write `import`/`export` syntax into them. TypeScript's job on the Electron side is **typing the bridge surface the renderer sees**, which lives in the renderer's `.d.ts`.
 
-let mainWindow: BrowserWindow | null = null;
+## Typing the preload bridge for the renderer
 
-function createWindow(): void {
-  mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
-    webPreferences: {
-      preload: path.join(__dirname, "preload.js"),
-      nodeIntegration: false,
-      contextIsolation: true,
-    },
-  });
-  mainWindow.loadFile(path.join(__dirname, "..", "public", "index.html"));
-  mainWindow.on("closed", () => { mainWindow = null; });
-}
+The bridge is `window.gaiaAPI`, typed by `GaiaElectronAPI` in `src/gaia/apps/webui/src/types/agent.ts` — namespaced (`agent`, `tray`, `notification`, `system`), and **optional** (`gaiaAPI?`) because the same renderer runs in a plain browser. Add new methods to that interface; don't invent a second `window.electronAPI`.
 
-app.whenReady().then(() => {
-  createWindow();
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
-  });
-});
+Two things this buys you nothing on, so handle them by hand:
 
-app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") app.quit();
-});
-```
+- **The interface is a claim, not a check** — nothing verifies it against `preload.cjs`. Read the preload before adding a method, or the renderer compiles clean and hits `undefined` at runtime.
+- **`gaiaAPI` is optional** — guard every call (`window.gaiaAPI?.agent.start(id)`); in browser mode it isn't there.
 
-## Typed preload bridge
+`preload.cjs` also exposes `gaiaInstall` and `gaiaUpdater` on the same pattern.
 
-```ts
-// preload.ts
-import { contextBridge, ipcRenderer, IpcRendererEvent } from "electron";
+## `tsconfig.json`
 
-export interface SystemStatus {
-  gaiaPython: "running" | "stopped";
-  mcpBridge: "running" | "stopped";
-}
-
-export interface ElectronAPI {
-  getSystemStatus(): Promise<SystemStatus>;
-  onStatusUpdate(cb: (e: IpcRendererEvent, s: SystemStatus) => void): void;
-  removeAllListeners(channel: string): void;
-}
-
-const api: ElectronAPI = {
-  getSystemStatus: () => ipcRenderer.invoke("get-system-status"),
-  onStatusUpdate: (cb) => ipcRenderer.on("status-update", cb),
-  removeAllListeners: (c) => ipcRenderer.removeAllListeners(c),
-};
-
-contextBridge.exposeInMainWorld("electronAPI", api);
-
-declare global {
-  interface Window { electronAPI: ElectronAPI; }
-}
-```
-
-## React component pattern
-
-```tsx
-import React, { useState, useEffect } from "react";
-
-interface Props {
-  agentName: string;
-  onMessage?: (m: string) => void;
-}
-
-export const ChatView: React.FC<Props> = ({ agentName, onMessage }) => {
-  const [messages, setMessages] = useState<string[]>([]);
-
-  useEffect(() => {
-    const handler = (_e: unknown, res: { text: string }) => {
-      setMessages((prev) => [...prev, res.text]);
-      onMessage?.(res.text);
-    };
-    window.electronAPI.onStatusUpdate(handler as never);
-    return () => window.electronAPI.removeAllListeners("status-update");
-  }, [onMessage]);
-
-  return (
-    <ul>{messages.map((m, i) => <li key={i}>{m}</li>)}</ul>
-  );
-};
-```
-
-## `tsconfig.json` baseline
-
-```json
-{
-  "compilerOptions": {
-    "target": "ES2020",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "lib": ["ES2020", "DOM"],
-    "jsx": "react-jsx",
-    "strict": true,
-    "noUncheckedIndexedAccess": true,
-    "esModuleInterop": true,
-    "resolveJsonModule": true,
-    "skipLibCheck": true,
-    "types": ["vite/client", "node"]
-  },
-  "include": ["src/**/*"]
-}
-```
+Read the real one at `src/gaia/apps/webui/tsconfig.json` before changing compiler options — never write a baseline from memory. It's a Vite-style config (`noEmit`, `isolatedModules`, `allowImportingTsExtensions`, `moduleResolution: "bundler"`); those flags change how Vite builds, not just how `tsc` checks.
 
 ## SSE consumption
 
@@ -174,19 +84,23 @@ es.onerror = () => es.close();
 
 ## Testing
 
+There is **no** `npm run lint` or `npm run typecheck` script in `src/gaia/apps/webui/package.json` — don't tell anyone to run them.
+
 ```bash
 cd src/gaia/apps/webui
-npm run lint
-npm run typecheck        # or `tsc --noEmit`
+npx tsc --noEmit    # typecheck only
+npm run build       # `tsc && vite build` — typechecks as a side effect
+npm test            # vitest (unit)
 ```
 
-Electron integration tests live in `tests/electron/` (Jest).
+Electron integration tests are separate: `tests/electron/` (Jest, `.cjs`) — run `npm test` from that directory.
 
 ## Common pitfalls
 
 - **`any` everywhere** — defeats the point; prefer `unknown` and narrow
 - **`nodeIntegration: true`** — security hole; use `contextBridge`
-- **Missing `window.electronAPI` type** — augment `Window` as shown above
-- **Mismatched main↔renderer channel names** — centralize channel constants in a shared `channels.ts`
+- **Calling `window.gaiaAPI` unguarded** — it's optional; browser mode has no preload
+- **Adding to `GaiaElectronAPI` without adding to `preload.cjs`** — typechecks, then `undefined` at runtime
+- **Mismatched channel names between `main.cjs` and `preload.cjs`** — there's no shared constants file; grep both sides
 - **Silent fetch failures** (per CLAUDE.md) — surface errors with actionable messages in the UI
 - **Forgot `npm run build` before `gaia chat --ui`** — blank window

@@ -50,8 +50,8 @@ PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring \
 PYTHONPATH="$(pwd)" \
   <venv>/bin/gaia eval benchmark \
     --model Gemma-4-E4B-it-GGUF \
-    --mbox-path tests/fixtures/email/synthetic_inbox.mbox \
-    --ground-truth tests/fixtures/email/ground_truth.json \
+    --mbox-path tests/fixtures/email/_stub_inbox.mbox \
+    --ground-truth tests/fixtures/email/<task>_ground_truth.json \
     --limit 220 --output-dir <persistent-dir>
 
 PYTHONPATH="$(pwd)" \
@@ -59,6 +59,18 @@ PYTHONPATH="$(pwd)" \
     --benchmark-dir <persistent-dir> --limit 220
 # → writes hub/agents/email/npm/SCORECARD.md in place
 ```
+
+⚠️ **Run evals SERIALLY — never two at once** (CLAUDE.md). A scorecard refresh loop is the
+most likely thing to violate this: chain runs with `&&`, never background them with `&`.
+Concurrent runs race-evict each other's models on the single-tenant Lemonade backend and
+produce garbage (`ctx_size` errors, spurious `INFRA_ERROR`) that looks like a real
+regression. Before each run: `ps aux | grep "gaia eval" | grep -v grep | wc -l` must be 0.
+
+**Pass both fixture flags explicitly.** `ls tests/fixtures/email/` and pick the real files
+— ground truth is **task-specific** (`action_items_`, `briefing_`, `drafting_`,
+`followups_`, `longthread_`), and the CLI's `--ground-truth` default points at a
+`ground_truth.json` that does not exist. Omit the flag and the run prints one `[WARN]` and
+scores nothing, which reads as a successful eval right up until the scorecard is empty.
 
 **Headless gotchas (see memory `project-email-benchmark-headless-gotchas`):**
 - `PYTHON_KEYRING_BACKEND=keyring.backends.null.Keyring` — the email agent's calendar-connector resolution blocks forever on the macOS Keychain (and can stall on Linux SecretService) in non-interactive contexts. Without this it hangs at 0% CPU during agent construction.
