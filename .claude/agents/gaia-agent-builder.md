@@ -112,16 +112,18 @@ The registry discovers packaged agents by scanning the `gaia.agent` entry-point 
 - [ ] Integration tests use `require_lemonade` (auto-skips when server offline)
 
 ### 6. Docs (required)
-- [ ] `docs/guides/<agent>.mdx` if user-facing
-- [ ] `docs/spec/<agent>.mdx` if it adds a new public API surface
+- [ ] `hub/agents/<id>/python/README.md` — the integrator-facing doc; it's what the hub and PyPI render
+- [ ] `docs/guides/<agent>.mdx` if user-facing, `docs/spec/<agent>.mdx` if it adds a public API surface
 - [ ] Register the page in `docs/docs.json` or it 404s
 - [ ] Add a row to `CLAUDE.md` "Agent Implementations"
 - [ ] `python util/check_doc_versions.py` still passes
 
+**A behavior change must update every doc that describes it.** If the package also ships `SPEC.md` / `SKILL.md` / `CHANGELOG.md`, grep the old claim across all of them — shipping a package whose docs contradict each other is a release blocker, not a cleanup.
+
 ### 7. Lint
-- [ ] `python util/lint.py --agents`
 - [ ] `python util/lint.py --all --fix`
-- [ ] `python -m pytest tests/test_<agent>.py -xvs`
+- [ ] `python util/lint.py --agents` — only scans `src/gaia/agents/*/agent.py`, so it will **not** catch convention breaks in your hub package; check §1 by hand
+- [ ] `python -m pytest hub/agents/<id>/python/tests/ -xvs`
 
 ## Base class & mixin cheat sheet
 

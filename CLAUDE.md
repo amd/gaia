@@ -14,51 +14,47 @@ GAIA (Generative AI Is Awesome) is AMD's open-source framework for running gener
 
 ## How You Communicate
 
-**This is the canonical output-style rule for this repo.** It applies to *every*
-response and every artifact: local chat, PR reviews, issue replies, PR bodies, commit
-bodies, subagent reports, and workflow-generated comments. Other files (`REVIEW.md`,
-`.claude/agents/*`, `.github/workflows/claude*.yml`) must **link here, not restate it**
-— a second copy is a second thing to drift.
+**Canonical output-style rule — Claude's one voice.** If a developer reads it, this
+governs it: chat, PR reviews, PR bodies, issue replies, issues Claude files itself,
+commit bodies, release notes, subagent reports, workflow comments. No surface gets its
+own dialect.
 
-### Plain language first, detail underneath
+Every other file (`REVIEW.md`, `.claude/**`, `.github/workflows/claude*.yml`) **links
+here, never restates** — a second copy is a second thing to drift. `REVIEW.md` differs
+in scope, not voice: it owns review severity, the nit cap, and length caps.
 
-Lead with the answer in plain words. Put the technical backing *below* it, never in
-front of it.
+### The rule
 
-1. **Open with the finding** — one or two sentences a non-author understands without
-   reading the diff. What's true, what broke, or what you did. No preamble, no
-   labelled `In plain English:` opener, no restating the question.
-2. **Layer the detail beneath it** — as an indented sub-bullet, a short trailing
-   clause, or (on GitHub, where it runs more than a couple of lines) a collapsed
-   `<details>` block. Never inline it into the opening sentence.
-3. **Stop when the reader can act.** If one line suffices, send one line.
+1. **Open with the finding.** One or two sentences a non-author gets without reading the
+   diff. No preamble, no `In plain English:` label, no restating the question.
+2. **Layer detail underneath** — a sub-bullet, a trailing clause, or on GitHub a
+   collapsed `<details>` block. Never in front of the finding.
+3. **Stop when the reader can act.** One line is a complete answer.
 
-**Write for the human reading it, not an engineer auditing the code.** Cite
-`file.py:line`, symbols, module paths, or flags **only when the reader needs them to
-act** — never to show your work. Cut import paths, class names, and subparser/flag
-mechanics that don't change what the reader does next.
+**Cite `file.py:line` and symbols only when the reader needs them to act** — never to
+show your work.
 
-**Don't repeat yourself.** Say each point once, in the place it belongs. Don't restate
-the plain-language summary in the technical section, don't mirror summary bullets into
-the test plan, and don't re-explain a rule you already linked.
+**Every sentence must earn its place.** Cut anything the reader already knows or doesn't
+need: restating what you just did, re-explaining a rule you linked, narrating the
+implementation, listing every file when three matter, hedging, and summaries of
+summaries. Say each point exactly once, in one place. Prefer few important bullets over
+many complete ones — a reader who skims should still get the point that mattered.
 
 ### The shape
 
-❌ **Technical-first (don't):**
+❌ **Technical-first:**
 > The `_ensure_model_loaded()` call in `chat_completion()` at `lemonade_client.py:1842`
 > was absent from the non-streaming branch, so when `RAGSDK._load_embedder` evicted the
-> resident model, Lemonade auto-loaded Gemma at its default 32K ctx, bypassing
-> `MODELS[...].min_ctx_size`.
+> resident model, Lemonade auto-loaded Gemma at its default 32K ctx.
 
-✅ **Plain-language-first (do):**
-> Document Q&A was silently capping out at 32K context, so long PDFs got truncated
-> answers. The chat model was being evicted by the embedder warm-up and reloaded at the
-> wrong size.
+✅ **Plain-language-first:**
+> Document Q&A silently capped out at 32K context, so long PDFs got truncated answers.
 >
-> - Root cause: the non-streaming path skipped the reload check (`lemonade_client.py:1842`).
+> - The embedder warm-up evicted the chat model, and the non-streaming path skipped the
+>   reload check (`lemonade_client.py:1842`).
 
-Same information. The second one tells the reader what happened before it tells them
-where. **When in doubt: shorter, plainer, and lead with the outcome.**
+Same information; the second says what happened before it says where. **When in doubt:
+shorter, plainer, outcome first.**
 
 ## Version Control Guidelines
 
@@ -84,6 +80,10 @@ If *any* of those is uncertain, **do not commit** — surface the uncertainty to
 **Still prohibited without explicit user instruction:** pushing to remote, force-pushing anywhere, amending existing commits, touching release/publishing branches, committing anything that looks like a secret. When in doubt, ask — the cost of a 10-second confirmation is trivial; the cost of an unwanted commit can be hours of cleanup.
 
 ### IMPORTANT: PR Descriptions — Tight and Value-Focused
+
+A PR description is developer-facing output, so [How You Communicate](#how-you-communicate)
+governs it like everything else: plain language first, technical detail underneath, each
+point made once. This section adds only the PR-specific *shape*.
 
 **Keep PR descriptions short. Lead with *why* and *impact*, not *what*.** Reviewers skim; long walls of text get ignored. A PR description is a sales pitch for the change, not a changelog.
 
