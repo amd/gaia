@@ -47,6 +47,17 @@ jobs:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          # REQUIRED for the scheduled run to work at all. On a `schedule` event the
+          # actor is whoever/whatever last touched the workflow — here that resolved to
+          # `github-merge-queue`, and the action's actor gate rejected it outright:
+          #   "Workflow initiated by non-human actor: github-merge-queue ...
+          #    Add bot to allowed_bots list or use '*' to allow all bots."
+          # So every scheduled canary since then failed on the GATE, never reaching auth
+          # — the token was fine and the canary was reporting nothing. See run 30690604648
+          # (2026-08-01). This is safe here where it would not be on the fork-facing jobs:
+          # the prompt is a fixed literal in this file, there is no untrusted input, no
+          # checkout, and --allowedTools is Read only.
+          allowed_bots: "*"
           prompt: |
             Reply with exactly the word: ok
           claude_args: |
@@ -77,11 +88,17 @@ jobs:
 
           cc @kovtcharov-amd"
 
+          # EVERY gh call here needs an explicit --repo. This job does NOT check out the
+          # repo, so gh has no git remote to infer from: `gh issue create` without --repo
+          # died with "fatal: not a git repository" and the alert was never filed. The
+          # canary failed, its own notification failed, and nobody was told — the exact
+          # silent-safety-net shape this canary exists to prevent (run 30690604648).
           # Reuse an existing open canary issue instead of filing a new one each month.
           EXISTING=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
             --search 'in:title Claude CI auth canary failed' --json number --jq '.[0].number // empty')
           if [ -n "$EXISTING" ]; then
-            gh issue comment "$EXISTING" --body "$BODY"
+            gh issue comment "$EXISTING" --repo "$GITHUB_REPOSITORY" --body "$BODY"
           else
-            gh issue create --title "$TITLE" --body "$BODY" --assignee kovtcharov-amd --label bug --label devops
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body "$BODY" \
+              --assignee kovtcharov-amd --label bug --label devops
           fi
