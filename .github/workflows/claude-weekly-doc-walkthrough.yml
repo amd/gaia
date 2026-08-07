@@ -649,14 +649,22 @@ jobs:
             🟡 (low) findings get NO child issue -- list them in the parent only. For each
             NEW, verified 🔴/🟠 finding, write the body to a temp file, then
             `gh issue create --repo ${{ github.repository }} --label weekly-audit --title "<title>" --body-file <file>`
-            WITHOUT the `bug` label. Body format:
+            WITHOUT the `bug` label. Body format — follow CLAUDE.md → "How You Communicate":
+            a human triages this, so the title and opening line say what broke and who it
+            hurts in plain words, and the location/evidence rows go in a collapsed
+            `<details>` underneath. Say each point once. The blank line after `</summary>`
+            is REQUIRED or GitHub renders the block as literal text.
             ```
-            <one-paragraph why-this-matters: what's wrong + the concrete impact>
+            <one-paragraph why-this-matters: what's wrong + the concrete impact, in plain words>
 
-            **Where:** `path` · `symbol`
+            <details>
+            <summary>🔍 Evidence and location</summary>
+
+            **Where:** `path:line` · `symbol`
             **Evidence:** <the finding's `evidence` -- the concrete transcript/doc excerpt>
             **Severity:** 🔴 high / 🟠 medium
             **Auto-fixable:** yes — apply `bug` to let auto-fix open the PR  |  no — needs a human
+            </details>
 
             Not acting on this? Close it with the `audit-wontfix` label and the audit will
             never re-file it. Applying `bug` instead hands it to the existing auto-fix job.

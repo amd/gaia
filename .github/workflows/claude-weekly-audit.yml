@@ -494,14 +494,23 @@ jobs:
             child WITHOUT any auto-fix trigger label (do NOT add `bug`). Write the body to a temp
             file first, then
             `gh issue create --repo ${{ github.repository }} --label weekly-audit --title "<title>" --body-file <file>`.
-            Body format (the audit-key marker is REQUIRED and drives next week's dedup):
+            Body format — follow CLAUDE.md → "How You Communicate": a human triages this, so
+            the title and opening line say what broke and who it hurts in plain words, and the
+            `path:line` / evidence / severity rows go in a collapsed `<details>` underneath.
+            Say each point once. The blank line after `</summary>` is REQUIRED or GitHub renders
+            the block as literal text. The audit-key marker is REQUIRED and drives the next
+            run's dedup:
             ```
-            <one-paragraph why-this-matters: what's wrong + the concrete impact>
+            <one-paragraph why-this-matters: what's wrong + the concrete impact, in plain words>
 
-            **Where:** `path` · `symbol`
+            <details>
+            <summary>🔍 Evidence and location</summary>
+
+            **Where:** `path:line` · `symbol`
             **Evidence:** <the finding's `evidence` — the concrete proof a reviewer can check>
             **Dimension:** <the finding's own dimension>   **Severity:** 🔴 high / 🟠 medium
             **Auto-fixable:** yes — apply `bug` to let auto-fix open the PR  |  no — needs a human
+            </details>
 
             Not acting on this? Close it with the `audit-wontfix` label and the audit will never
             re-file it. Applying `bug` instead hands it to the existing auto-fix job.
@@ -520,7 +529,7 @@ jobs:
             section, order 🔴 → 🟠 → 🟡 and prefix each line with its severity emoji. 🔴/🟠 lines
             link their child issue (`· #<n>`); 🟡 lines have no child (they live only here). Example:
             ```
-            Proactive weekly audit (${{ needs.preflight.outputs.mode }} mode). Promote a finding
+            Proactive nightly audit (${{ needs.preflight.outputs.mode }} mode). Promote a finding
             to a PR by applying the `bug` label to its child issue. Severity: 🔴 high · 🟠 medium · 🟡 low.
 
             ## Correctness (2)
@@ -552,6 +561,8 @@ jobs:
             - Never close a parent triage issue — only a human maintainer closes one, after its
               findings are addressed.
             - Lead with the finding; keep each line to one sentence (CLAUDE.md issue style).
+            - Never collapse a security concern or a @kovtcharov-amd tag inside `<details>` —
+              those stay visible in the summary.
           claude_args: |
             --max-turns 32
             --model ${{ env.AUDIT_MODEL }}

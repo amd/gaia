@@ -39,8 +39,13 @@
 # consistent grep. To bump every model: grep this file for `--model` (7 hits), plus
 # AUDIT_MODEL / WALKTHROUGH_*_MODEL in the audit + walkthrough workflows, the canary's
 # own default, and the pinned CLI model in claude-run.yml's evidence stage.
-# NOT ours to bump: EVAL_MODEL in test_eval_agent_gemma_consolidation.yml — the committed
-# eval baselines are calibrated against that judge model, so changing it invalidates them.
+# EVAL_MODEL in test_eval_agent_gemma_consolidation.yml is in that list but is NOT a
+# like-for-like bump: it is the JUDGE that scores eval runs, so moving it changes what a
+# score means and the committed baselines (scored by Sonnet 4.6) stop being comparable.
+# It moved to Opus 5 here without regenerated baselines, so `--compare` now warns on the
+# judge mismatch instead of silently reading the shift as a regression — see
+# `compare_scorecards` in src/gaia/eval/runner.py. Regenerate with `--save-baseline` on
+# hardware and the warning goes away.
 #
 # Authentication: all 7 jobs prefer a subscription OAuth token over a billed API key.
 # Set the `CLAUDE_CODE_OAUTH_TOKEN` repo secret (generate locally with `claude setup-token`,
