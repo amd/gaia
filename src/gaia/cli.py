@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.install_hints import agent_not_installed_message
+from gaia.eval.config import DEFAULT_CLAUDE_MODEL
 from gaia.llm import create_client
 from gaia.llm.lemonade_client import (
     DEFAULT_HOST,
@@ -2494,8 +2495,8 @@ Examples:
     )
     agent_eval_parser.add_argument(
         "--model",
-        default="claude-sonnet-4-6",
-        help="Eval model (default: claude-sonnet-4-6)",
+        default=DEFAULT_CLAUDE_MODEL,
+        help=f"Judge model that scores the run (default: {DEFAULT_CLAUDE_MODEL})",
     )
     agent_eval_parser.add_argument(
         "--budget",
