@@ -102,13 +102,13 @@ on:
       - 'src/gaia/agents/registry.py'
       - 'src/gaia/llm/lemonade_client.py'
       - 'src/gaia/llm/factory.py'
-      - 'hub/agents/python/**'
+      - 'hub/agents/*/python/**'
       - 'tests/fixtures/eval_baselines/**'
       - '.github/workflows/test_eval_agent_gemma_consolidation.yml'
       # In-core agents that carry their own model_id, plus the prompt/tool
       # surfaces CLAUDE.md lists as eval-requiring — a tool docstring edit
       # changes the JSON tool schema and is exactly what tool_selection scores.
-      # (ChatAgent is not listed: it now lives under hub/agents/python/chat/,
+      # (ChatAgent is not listed: it now lives under hub/agents/chat/python/,
       # already covered above.)
       - 'src/gaia/agents/builder/**'
       - 'src/gaia/agents/tools/**'

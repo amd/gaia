@@ -75,6 +75,14 @@ problem is present AND not already handled elsewhere before reporting. The synth
 **intra-run cross-dimension dedup** (a stubbed command flagged by both `docs` and
 `correctness` is ONE issue, not two — keep the most severe, note the other lens).
 
+## Findings are written for a human, not an auditor
+
+Every filed issue follows [CLAUDE.md → How You
+Communicate](../../../CLAUDE.md#how-you-communicate): the title and opening line say what
+broke and who it hurts, in plain words; the `path:line` evidence goes underneath in a
+sub-bullet or a `<details>` block. A finding that opens with a symbol name is one a
+triager skips.
+
 ## Dedup + suppression — the single biggest usability risk
 
 Each finding carries `dedup_key = <dimension>:<repo-relative-path>:<symbol-or-section>`.
