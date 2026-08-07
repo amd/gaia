@@ -305,17 +305,37 @@ func (f *fakeRelay) lastQuery() queryRequest {
 
 func (f *fakeRelay) client(t *testing.T) *SSEClient {
 	t.Helper()
+	// consume() fires cancelRun in a detached goroutine that outlives the turn,
+	// and it logs on a best-effort cancel failure. Routing that straight to
+	// t.Logf races the test's teardown once the goroutine survives the test
+	// (-race catches it). Gate logging on the test still being live: the mutex
+	// makes an in-flight log and the cleanup barrier mutually exclusive, so no
+	// t.Logf call overlaps teardown.
+	var logMu sync.Mutex
+	live := true
+	t.Cleanup(func() {
+		logMu.Lock()
+		live = false
+		logMu.Unlock()
+	})
+	safeLogf := func(format string, args ...any) {
+		logMu.Lock()
+		defer logMu.Unlock()
+		if live {
+			t.Logf(format, args...)
+		}
+	}
 	dc := daemon.New(daemon.Options{
 		ProbeTimeout:  2 * time.Second,
 		EnsureTimeout: 5 * time.Second,
 		StartCommand: func(context.Context) (*exec.Cmd, error) {
 			return nil, fmt.Errorf("the test daemon must already be attachable")
 		},
-		Logf: func(format string, args ...any) { t.Logf(format, args...) },
+		Logf: safeLogf,
 	})
 	return NewSSEClient("email", dc, SSEOptions{
 		ReadTimeout: 5 * time.Second,
-		Logf:        func(format string, args ...any) { t.Logf(format, args...) },
+		Logf:        safeLogf,
 	})
 }
 
