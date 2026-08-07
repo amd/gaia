@@ -496,7 +496,7 @@ jobs:
             `gh issue create --repo ${{ github.repository }} --label weekly-audit --title "<title>" --body-file <file>`.
             Body format — follow CLAUDE.md → "How You Communicate": a human triages this, so
             the title and opening line say what broke and who it hurts in plain words, and the
-            `path:line` / evidence / severity rows go in a collapsed `<details>` underneath.
+            location / evidence / severity rows go in a collapsed `<details>` underneath.
             Say each point once. The blank line after `</summary>` is REQUIRED or GitHub renders
             the block as literal text. The audit-key marker is REQUIRED and drives the next
             run's dedup:
@@ -506,7 +506,7 @@ jobs:
             <details>
             <summary>🔍 Evidence and location</summary>
 
-            **Where:** `path:line` · `symbol`
+            **Where:** `path` · `symbol`   (the finding carries no line number — do not invent one)
             **Evidence:** <the finding's `evidence` — the concrete proof a reviewer can check>
             **Dimension:** <the finding's own dimension>   **Severity:** 🔴 high / 🟠 medium
             **Auto-fixable:** yes — apply `bug` to let auto-fix open the PR  |  no — needs a human
