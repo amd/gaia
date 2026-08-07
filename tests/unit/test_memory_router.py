@@ -34,6 +34,7 @@ Endpoints covered:
 """
 
 import contextlib
+import importlib.util
 import sqlite3
 from unittest.mock import MagicMock, patch
 
@@ -874,6 +875,11 @@ class TestReconcileEndpoint:
 
     def test_reconcile_returns_503_when_no_agent_and_faiss_missing(self, client):
         """POST /api/memory/reconcile returns 503 when no agent and faiss unavailable."""
+        # Inverse of the sibling test's importorskip: this asserts the
+        # faiss-missing branch, unreachable once the [rag] extra is installed.
+        if importlib.util.find_spec("faiss") is not None:
+            pytest.skip("faiss installed — the 503 branch is unreachable")
+
         resp = client.post("/api/memory/reconcile")
         assert resp.status_code == 503
         assert "faiss" in resp.json()["detail"].lower()
