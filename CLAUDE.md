@@ -799,4 +799,5 @@ someone adds a skill. If a skill exists, Claude already sees its description.
 
 **Adding one?** It must be a directory with a `SKILL.md` inside
 (`.claude/skills/<name>/SKILL.md`). A bare `.md` at the skills root is silently ignored —
-it never loads and the `Skill` tool can't invoke it.
+it never loads and the `Skill` tool can't invoke it. (`gaia-presentation-assets/` has no
+`SKILL.md` on purpose — it is a shared asset directory for the two presentation skills.)

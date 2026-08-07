@@ -56,6 +56,22 @@ Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate".
 - Async functions are actually awaited (no fire-and-forget without a reason)
 - Paths built with `pathlib.Path`, not string concatenation
 
+## Security sinks and performance
+
+`REVIEW.md` deliberately carries no sink list, and the one in `claude.yml` is only loaded
+by the CI reviewer. You run locally (via `/finalize`), so it lives here too:
+
+- SQL built by concatenation or f-string instead of parameterized
+- Command injection — shell strings from user input; `src/gaia/agents/tools/shell_tools.py` has the sandboxed pattern
+- XSS in generated HTML (`src/gaia/ui/`, `src/gaia/apps/webui/`)
+- Path traversal — user-supplied paths not confined to a root
+- Unsafe deserialization — `pickle`, `yaml.load` without `SafeLoader`, `eval`
+- Secrets reaching logs or error strings
+- Resource leaks — temp files, handles, connections without a context manager
+
+Performance worth flagging: N+1 queries, sync I/O on an async path, and new `setup.py`
+dependencies where stdlib or an already-pinned package would do.
+
 ## Severity, nit budget, and length caps
 
 Owned by [`REVIEW.md`](../../REVIEW.md) — the single source of truth. Read it and follow it exactly: the 🔴/🟡/🟢 tiers, correctness-first ordering, the 5-nit cap, per-finding length limits, and the skip rules. Don't invent a parallel scheme here.

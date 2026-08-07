@@ -88,7 +88,8 @@ correcting them abstractly.
 - Troubleshooting: [`docs/sdk/troubleshooting.mdx`](../../../docs/sdk/troubleshooting.mdx) · FAQ: [`docs/reference/faq.mdx`](../../../docs/reference/faq.mdx)
 - Contributing: [`CONTRIBUTING.md`](../../../CONTRIBUTING.md) · Dev setup: [`docs/reference/dev.mdx`](../../../docs/reference/dev.mdx)
 
-For bugs, also check `tests/` — a related test often reveals the issue or needs updating.
+For bugs, also check `tests/` — a related test often reveals the issue or needs updating —
+and weigh security implications against [`docs/sdk/security.mdx`](../../../docs/sdk/security.mdx).
 
 ## Examples
 

@@ -235,7 +235,7 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
    ```
 
    Finally, record what the **previous** release shipped in `RELEASED_DAEMON_API`
-   in [util/check_component_core_api.py](util/check_component_core_api.py) — the
+   in [util/check_component_core_api.py](../../../util/check_component_core_api.py) — the
    guard resolves an already-published version from that table, and a missing row
    makes it fall back to trusting this tree, which is the drift it exists to catch.
 
