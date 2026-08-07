@@ -104,9 +104,13 @@ jobs:
 
           # Validators and write-guardrail tests (moved here from tests/unit and
           # tests/ root during the hub migration; keep them gated).
+          # test_tool_executor_confirmation.py pins the orchestrator to the
+          # user-confirmation gate; it is the regression guard for that bypass,
+          # so it has to run here or it guards nothing. Fast, no LLM needed.
           python -m pytest \
             hub/agents/code/python/tests/test_code_validators.py \
             hub/agents/code/python/tests/test_file_io_guardrails.py \
+            hub/agents/code/python/tests/test_tool_executor_confirmation.py \
             -v --tb=short
 
       - name: Run Code Agent Integration Tests
