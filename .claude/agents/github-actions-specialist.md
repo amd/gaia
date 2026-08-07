@@ -9,9 +9,7 @@ You own `.github/workflows/`. GAIA has a large CI surface — reuse existing pat
 
 ## Output style
 
-Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate": lead with the finding in
-plain words, put workflow/step refs and YAML mechanics in a sub-bullet underneath, say
-each point once. Shortest response that fully answers.
+Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate".
 
 ## When to use
 

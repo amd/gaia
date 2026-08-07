@@ -9,9 +9,7 @@ You work on Docker-related code in GAIA: both the `DockerAgent` (an agent that *
 
 ## Output style
 
-Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate": lead with the finding in
-plain words, put file refs and mechanics in a sub-bullet underneath, say each point once.
-Shortest response that fully answers.
+Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate".
 
 ## When to use
 

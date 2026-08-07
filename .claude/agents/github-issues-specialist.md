@@ -9,9 +9,7 @@ You structure GitHub work so AI coding agents can execute it reliably. Think of 
 
 ## Output style
 
-Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate": lead with the finding in
-plain words, put `file.py:line` refs and mechanics in a sub-bullet underneath, say each
-point once. Shortest response that fully answers.
+Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate".
 
 ## When to use
 

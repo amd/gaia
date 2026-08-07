@@ -95,3 +95,7 @@ Once it runs and is documented (README/SPEC/SKILL per the doc-sync rule), ship i
 - [`src/gaia/agents/base/`](../../../src/gaia/agents/base/) — `Agent`, `MCPAgent`, `ApiAgent`, `@tool`, console, errors.
 - [`src/gaia/agents/registry.py`](../../../src/gaia/agents/registry.py) — agent registry + `KNOWN_TOOLS`.
 - The `gaia-agent-builder` agent (`.claude/agents/`) — a specialist for this work.
+
+## Output style
+
+Follow [CLAUDE.md](../../../CLAUDE.md) → "How You Communicate".

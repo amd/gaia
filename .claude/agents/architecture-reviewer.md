@@ -9,9 +9,7 @@ You review GAIA code through an architectural lens. Focus on how the change sits
 
 ## Output style
 
-Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate": lead with the finding in
-plain words, put `file.py:line` refs and mechanics in a sub-bullet underneath, say each
-point once. Shortest response that fully answers.
+Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate".
 
 ## When to use
 
@@ -34,7 +32,7 @@ point once. Shortest response that fully answers.
 2. `src/gaia/llm/`, `src/gaia/sd/`, `src/gaia/vlm/`, `src/gaia/audio/`, `src/gaia/rag/` — service SDKs
 3. `src/gaia/agents/base/` — `Agent`, `MCPAgent`, `ApiAgent`, `@tool`, `AgentConsole`
 4. `src/gaia/agents/tools/` — reusable mixins registered in `KNOWN_TOOLS`
-5. `hub/agents/<id>/python/gaia_agent_<id>/agent.py` — every concrete agent, discovered via the `gaia.agent` entry point. `src/gaia/agents/` keeps only `base/`, `tools/`, `builder/`, `code_index/`, `registry.py`
+5. `hub/agents/<id>/python/gaia_agent_<id>/agent.py` — every concrete agent, discovered via the `gaia.agent` entry point. `src/gaia/agents/` keeps the framework only — no concrete agents
 6. `src/gaia/cli.py`, `src/gaia/api/`, `src/gaia/ui/` — user-facing surfaces
 
 **Rule:** dependencies must point downward in this stack. `base/` never imports from a concrete agent. A mixin never imports the CLI.

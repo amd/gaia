@@ -111,3 +111,7 @@ Run and capture: the generated `SCORECARD.md`; the gate **passing** on it (exit 
 
 - **Patch** release → `carry_forward(prev_scorecard_path, new_version)` reads the version from the front matter of the current `SCORECARD.md` (not from the filename) and copies results verbatim, sets `inherited_from`; do NOT re-run the eval.
 - **Minor/major** release → re-run the eval (Phase 3); `carry_forward` refuses a non-patch bump with a "re-run" error.
+
+## Output style
+
+Follow [CLAUDE.md](../../../CLAUDE.md) → "How You Communicate".

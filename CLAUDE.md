@@ -34,24 +34,42 @@ in scope, not voice: it owns review severity, the nit cap, and length caps.
 **Cite `file.py:line` and symbols only when the reader needs them to act** — never to
 show your work.
 
-**Every sentence must earn its place.** Cut anything the reader already knows or doesn't
-need: restating what you just did, re-explaining a rule you linked, narrating the
-implementation, listing every file when three matter, hedging, and summaries of
-summaries. Say each point exactly once, in one place. Prefer few important bullets over
-many complete ones — a reader who skims should still get the point that mattered.
+**Every sentence must earn its place.** Cut what the reader already knows: restating
+what you just did, narrating the implementation, listing every file when three matter,
+summaries of summaries. Say each point exactly once. Prefer few important bullets over
+many complete ones.
+
+### On GitHub
+
+Part 1 is visible: the finding in plain words, and the next step. No `file.py:line`,
+symbol names, or ```suggestion blocks. Part 2 is everything mechanical, wrapped exactly
+like this — the blank line after `</summary>` is required or GitHub renders the contents
+as raw text:
+
+```
+<details>
+<summary>🔍 Technical details</summary>
+
+...refs, suggestions, reasoning...
+</details>
+```
+
+Omit part 2 when there's nothing mechanical to say. Never restate part 1 inside it. Two
+things are never collapsed: a 🔒 security finding with the @kovtcharov-amd tag, and a
+PR's Test plan.
 
 ### The shape
 
 ❌ **Technical-first:**
-> The `_ensure_model_loaded()` call in `chat_completion()` at `lemonade_client.py:1842`
-> was absent from the non-streaming branch, so when `RAGSDK._load_embedder` evicted the
-> resident model, Lemonade auto-loaded Gemma at its default 32K ctx.
+> The `_ensure_model_loaded()` call in `chat_completion()` was absent from the
+> non-streaming branch, so when `RAGSDK._load_embedder` evicted the resident model,
+> Lemonade auto-loaded Gemma at its default 32K ctx.
 
 ✅ **Plain-language-first:**
 > Document Q&A silently capped out at 32K context, so long PDFs got truncated answers.
 >
 > - The embedder warm-up evicted the chat model, and the non-streaming path skipped the
->   reload check (`lemonade_client.py:1842`).
+>   reload check (`_ensure_model_loaded` in `lemonade_client.py`).
 
 Same information; the second says what happened before it says where. **When in doubt:
 shorter, plainer, outcome first.**

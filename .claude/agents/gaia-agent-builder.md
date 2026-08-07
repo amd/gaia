@@ -7,13 +7,11 @@ model: opus
 
 You create new GAIA agents. Every agent is a Python class inheriting from `Agent` (or one of its `*Agent` subclasses); YAML manifests were removed in v0.17.5 (#912).
 
-**Where agents live now:** `src/gaia/agents/` holds only the framework — `base/`, `tools/`, `builder/`, `code_index/`, `registry.py`. Every concrete agent ships as a standalone hub wheel under `hub/agents/<id>/python/gaia_agent_<id>/` (note the order: id first, runtime second) and registers itself through an entry point. Do not add a new agent package under `src/gaia/agents/`.
+**Where agents live now:** `src/gaia/agents/` holds the framework only — no concrete agents. Every concrete agent ships as a standalone hub wheel under `hub/agents/<id>/python/gaia_agent_<id>/` (note the order: id first, runtime second) and registers itself through an entry point. Do not add a new agent package under `src/gaia/agents/`.
 
 ## Output style
 
-Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate": lead with the finding in
-plain words, put `file.py:line` refs and mechanics in a sub-bullet underneath, say each
-point once. Shortest response that fully answers.
+Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate".
 
 ## When to use
 
@@ -150,7 +148,7 @@ That's the full `KNOWN_TOOLS` set — re-read `registry.py` rather than trusting
 
 ## Default models (verified)
 
-- Leave `model_id` unset and your agent inherits `Gemma-4-E4B-it-GGUF` (`DEFAULT_MODEL_NAME`) — that's what every agent uses, so switching agents never evicts and cold-reloads the resident model
+- Leave `model_id` unset and your agent inherits `Gemma-4-E4B-it-GGUF` (`DEFAULT_MODEL_NAME`) — that's what nearly every agent uses, so switching agents never evicts and cold-reloads the resident model (Summarizer is the deliberate exception)
 - Vision: same default (`Qwen3-VL-4B-Instruct-GGUF` also supported)
 - Summarization: `Qwen3-4B-Instruct-2507-GGUF`
 

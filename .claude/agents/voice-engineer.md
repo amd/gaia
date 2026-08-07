@@ -9,9 +9,7 @@ You own GAIA's voice stack: ASR (Whisper), TTS (Kokoro), the Talk SDK, and real-
 
 ## Output style
 
-Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate": lead with the finding in
-plain words, put `file.py:line` refs and mechanics in a sub-bullet underneath, say each
-point once. Shortest response that fully answers.
+Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate".
 
 ## When to use
 
