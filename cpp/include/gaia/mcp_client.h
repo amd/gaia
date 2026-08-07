@@ -27,6 +27,31 @@ namespace gaia {
 
 using json = nlohmann::json;
 
+/// Decide whether an MCP tool must be gated behind user confirmation.
+///
+/// Fails closed: a tool is exempt ONLY when the server proves it read-only.
+/// All of these must hold:
+///   1. the tool has a name;
+///   2. `annotations["readOnlyHint"]` is the JSON boolean `true` (a string
+///      "true", a missing key, or a non-object `annotations` does not count); and
+///   3. the tool name contains no state-changing verb.
+///
+/// Everything else — no annotations, `readOnlyHint: false`, a non-boolean
+/// value, or a read-only claim contradicted by a name like `delete_file` —
+/// requires confirmation. MCP tool names are chosen by the server, so they can
+/// never be matched against a static allowlist; this classifier is what stands
+/// between an injected `mcp_*_delete_file` call and execution.
+///
+/// Note that condition 2 trusts the server's own claim; condition 3 is the
+/// counterweight, and it only knows the verbs listed in mcp_client.cpp. Treat
+/// the exemption as protection against a careless server, not a hostile one.
+///
+/// Name matching is case-insensitive and ASCII-only. It splits snake_case,
+/// kebab-case, camelCase and screaming-camel (`WRITEFile`) names and matches
+/// verbs both as whole words and — for verbs of 4+ characters — as prefixes,
+/// so `WRITEfile`, `write2file` and `deletes` are all caught.
+GAIA_API bool mcpToolRequiresConfirmation(const std::string& toolName, const json& annotations);
+
 /// Represents an MCP tool with its JSON Schema.
 /// Mirrors Python MCPTool dataclass.
 struct GAIA_API MCPToolSchema {
@@ -34,8 +59,18 @@ struct GAIA_API MCPToolSchema {
     std::string description;
     json inputSchema; // JSON Schema for tool parameters
 
+    /// MCP tool annotations (`annotations` in the tools/list response).
+    /// Always an object: a missing or non-object value is stored as `{}`, which
+    /// classifies as "requires confirmation" — never as trusted.
+    json annotations = json::object();
+
+    /// Whether this tool must be gated behind user confirmation.
+    /// Convenience wrapper over mcpToolRequiresConfirmation().
+    bool requiresConfirmation() const;
+
     /// Convert to GAIA ToolInfo format.
     /// Mirrors Python MCPTool.to_gaia_format().
+    /// Stamps `policy = CONFIRM` unless requiresConfirmation() is false.
     ToolInfo toToolInfo(const std::string& serverName) const;
 };
 

@@ -193,6 +193,10 @@ public:
 
 All tools from `weather_data` are automatically prefixed as `mcp_weather_data_<tool_name>` and injected into the LLM system prompt alongside your native tools.
 
+<Warning>
+MCP tools are registered with `ToolPolicy::CONFIRM` unless the server proves them read-only (`annotations.readOnlyHint == true` and no state-changing verb in the name), so the user is asked before each call. A `silentMode` agent has no confirmation callback and will be denied every gated tool — see [MCP tools are CONFIRM-gated by default](/cpp/security#mcp-tools-are-confirm-gated-by-default).
+</Warning>
+
 ### Connecting a Local Script
 
 ```cpp
