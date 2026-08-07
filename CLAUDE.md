@@ -636,8 +636,10 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 - `gaia docker` - Docker management
 
 **Servers & infrastructure:**
+- `gaia daemon` - The headless daemon (one machine-wide custody process; supervises sidecar agents)
 - `gaia api` - OpenAI-compatible API server
 - `gaia mcp {start|stop|status|test|agent|docker|serve|list|tools|test-client}` - MCP bridge (add/remove moved to the connectors framework, #977)
+- `gaia schedule {add|list|show|remove|pause|resume|run|daemon}` - Run a skill or prompt on a cron schedule
 - `gaia telegram {start|stop|status}` - Telegram messaging adapter
 - `gaia connectors` - Manage connectors (Google/GitHub OAuth, MCP servers) and per-agent grants
 - `gaia cache {status|clear}` - Cache management
@@ -645,6 +647,10 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 **Setup & utilities:**
 - `gaia init` - Setup Lemonade Server and download models
 - `gaia install` - Install helper (e.g. Lemonade on first run)
+- `gaia uninstall` - Tiered cleanup of `~/.gaia` and caches
+- `gaia config {get|set}` - Persistent config in `~/.gaia/config.json`
+- `gaia hub` - Browse, install, and uninstall agents from the Agent Hub
+- `gaia skill` - Author and manage agent skills (`SKILL.md` capabilities)
 - `gaia download` - Download a model
 - `gaia kill` - Kill stray GAIA / Lemonade processes
 - `gaia test` - Smoke tests
