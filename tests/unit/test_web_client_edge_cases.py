@@ -14,6 +14,7 @@ Covers the following untested scenarios:
 6. close: session cleanup verification
 7. search_duckduckgo: bs4 not available raises ImportError
 8. _request: encoding fixup (ISO-8859-1 apparent_encoding detection)
+9. search_youcom: request construction and response parsing
 
 All tests run without LLM or external services.
 """
@@ -876,6 +877,74 @@ class TestSanitizeFilename:
     def test_reserved_name_case_insensitive(self):
         """Lower-case reserved names are also prefixed (Windows is CI)."""
         assert WebClient._sanitize_filename("con").startswith("_")
+
+
+class TestSearchYouCom:
+    """Test You.com search request construction and parsing."""
+
+    def setup_method(self):
+        self.client = WebClient()
+
+    def teardown_method(self):
+        self.client.close()
+
+    def test_keyless_request_uses_agents_search_without_content_type(self):
+        """Keyless You.com search uses the free endpoint and no Content-Type header."""
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = {
+            "results": {
+                "web": [
+                    {
+                        "title": "One",
+                        "url": "https://example.com/one",
+                        "description": "First result",
+                    }
+                ]
+            }
+        }
+
+        with patch.object(self.client._session, "get", return_value=mock_response) as get:
+            results = self.client.search_youcom("test query", num_results=3)
+
+        assert results == [
+            {
+                "title": "One",
+                "url": "https://example.com/one",
+                "snippet": "First result",
+            }
+        ]
+
+        assert get.call_args.args[0] == "https://ydc-index.io/v1/agents/search"
+        assert get.call_args.kwargs["params"] == {
+            "query": "test query",
+            "count": 3,
+            "safesearch": "moderate",
+        }
+        assert "Content-Type" not in get.call_args.kwargs["headers"]
+        assert get.call_args.kwargs["headers"]["User-Agent"] == (
+            "youdotcom-integration/amd-gaia"
+        )
+
+    def test_authenticated_request_uses_api_key_header(self):
+        """Authenticated You.com search sends the API key and keeps the GET clean."""
+        mock_response = MagicMock()
+        mock_response.raise_for_status = MagicMock()
+        mock_response.json.return_value = {"results": {"web": []}}
+
+        with patch.object(self.client._session, "get", return_value=mock_response) as get:
+            results = self.client.search_youcom(
+                "test query", num_results=999, api_key="ydc-test-key"
+            )
+
+        assert results == []
+        assert get.call_args.args[0] == "https://ydc-index.io/v1/search"
+        assert get.call_args.kwargs["params"]["count"] == 20
+        assert get.call_args.kwargs["headers"]["X-API-Key"] == "ydc-test-key"
+        assert "Content-Type" not in get.call_args.kwargs["headers"]
+        assert get.call_args.kwargs["headers"]["User-Agent"] == (
+            "youdotcom-integration/amd-gaia"
+        )
 
 
 if __name__ == "__main__":

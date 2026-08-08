@@ -191,31 +191,52 @@ class BrowserToolsMixin:
         ) -> str:
             """Search the web and return results with titles, URLs, and snippets.
 
-            Uses DuckDuckGo to find relevant web pages. Returns titles, URLs, and
-            brief descriptions. Use fetch_page to read the full content of any result.
+            Uses the configured search provider (DuckDuckGo or You.com) to find
+            relevant web pages. Returns titles, URLs, and brief descriptions.
+            Use fetch_page to read the full content of any result.
 
             Args:
                 query: Search query string
-                num_results: Number of results to return (default: 5, max: 10)
+                num_results: Number of results to return (default: 5, max: 10 for DuckDuckGo, max: 20 for You.com)
             """
             if not _ensure_web_client():
                 return "Error: Browser tools not initialized. Web search is disabled."
 
-            # Clamp num_results
-            num_results = max(1, min(num_results, 10))
+            # Get search provider configuration from the mixin.
+            search_provider = getattr(mixin, "_web_search_provider", "duckduckgo")
+            youcom_api_key = getattr(mixin, "_youcom_api_key", None)
+            
+            # Validate search provider
+            valid_providers = ["duckduckgo", "youcom"]
+            if search_provider not in valid_providers:
+                return f"Error: Unknown search provider '{search_provider}'. Valid options: {', '.join(valid_providers)}"
+
+            # Clamp num_results based on provider limits
+            if search_provider == "youcom":
+                num_results = max(1, min(num_results, 20))
+            else:
+                num_results = max(1, min(num_results, 10))
 
             try:
-                results = mixin._web_client.search_duckduckgo(
-                    query, num_results=num_results
-                )
+                if search_provider == "youcom":
+                    # Try You.com search
+                    results = mixin._web_client.search_youcom(
+                        query, num_results=num_results, api_key=youcom_api_key
+                    )
+                else:
+                    # Default to DuckDuckGo search
+                    results = mixin._web_client.search_duckduckgo(
+                        query, num_results=num_results
+                    )
             except ImportError as e:
                 return f"Error: {e}"
             except ValueError as e:
                 return f"Error: {e}"
             except Exception as e:
-                logger.error(f"Error searching web: {e}")
+                logger.error(f"Error searching web with {search_provider}: {e}")
+                provider_name = "You.com" if search_provider == "youcom" else "DuckDuckGo"
                 return (
-                    f"Error performing web search: {e}\n"
+                    f"Error performing {provider_name} search: {e}\n"
                     "Try using fetch_page with a direct URL instead."
                 )
 

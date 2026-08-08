@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: MIT
 """Browser-focused GAIA agent."""
 
+import os
 from dataclasses import dataclass, field
 from typing import List, Optional
 
@@ -32,6 +33,8 @@ class BrowserAgentConfig:
     browser_timeout: int = 30
     browser_max_download_size: int = 100 * 1024 * 1024
     browser_rate_limit: float = 1.0
+    web_search_provider: str = "duckduckgo"  # Options: "duckduckgo", "youcom"
+    youcom_api_key: Optional[str] = field(default_factory=lambda: os.getenv('YDC_API_KEY'))  # Auto-detect from env
 
 
 class BrowserAgent(Agent, BrowserToolsMixin, MCPClientMixin):
@@ -41,6 +44,11 @@ class BrowserAgent(Agent, BrowserToolsMixin, MCPClientMixin):
         if config is None:
             config = BrowserAgentConfig()
         self.config = config
+        
+        # Store search configuration for BrowserToolsMixin
+        self._web_search_provider = config.web_search_provider
+        self._youcom_api_key = config.youcom_api_key
+        
         self.path_validator = PathValidator(
             config.allowed_paths,
             on_prompt_start=lambda: self.console.pause_progress(),  # pylint: disable=unnecessary-lambda

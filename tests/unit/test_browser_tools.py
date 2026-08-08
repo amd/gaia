@@ -870,6 +870,38 @@ class TestBrowserToolsMixinHappyPaths:
         assert result.count(full_url) == 1
         assert "fetch_page" in result  # Should suggest fetching
 
+    def test_search_web_routes_to_youcom_without_fallback(self):
+        """search_web uses You.com when configured and keeps DuckDuckGo idle."""
+        self.agent._web_search_provider = "youcom"
+        self.agent._youcom_api_key = "ydc-test-key"
+        self.agent._web_client.search_youcom.return_value = [
+            {
+                "title": "You.com Result",
+                "url": "https://example.com",
+                "snippet": "Result snippet",
+            }
+        ]
+
+        result = self.registered_tools["search_web"]("test query", num_results=25)
+
+        self.agent._web_client.search_youcom.assert_called_once_with(
+            "test query", num_results=20, api_key="ydc-test-key"
+        )
+        self.agent._web_client.search_duckduckgo.assert_not_called()
+        assert "You.com Result" in result
+
+    def test_search_web_reports_youcom_error_without_fallback(self):
+        """You.com failures surface directly instead of silently retrying elsewhere."""
+        self.agent._web_search_provider = "youcom"
+        self.agent._youcom_api_key = "ydc-test-key"
+        self.agent._web_client.search_youcom.side_effect = Exception("boom")
+
+        result = self.registered_tools["search_web"]("test query")
+
+        self.agent._web_client.search_duckduckgo.assert_not_called()
+        assert "You.com search" in result
+        assert "DuckDuckGo" not in result
+
     def test_search_web_network_error(self):
         """search_web handles network errors gracefully."""
         self.agent._web_client.search_duckduckgo.side_effect = Exception(
