@@ -27,16 +27,39 @@ External Client → FastAPI Server → GAIA Agents → Lemonade LLM Backend
 ### Health Check
 
 <Card title="GET /health" icon="heart-pulse">
-  Check server health status
+  Check API, Lemonade LLM, and RAG component status
 </Card>
 
 **Response:**
 ```json
 {
   "status": "ok",
-  "service": "gaia-api"
+  "service": "gaia-api",
+  "components": {
+    "api": {
+      "status": "ready"
+    },
+    "llm": {
+      "status": "ready",
+      "backend": "lemonade",
+      "model": "Gemma-4-E4B-it-GGUF",
+      "url": "http://localhost:13305/api/v1"
+    },
+    "rag": {
+      "status": "not_configured"
+    }
+  }
 }
 ```
+
+The endpoint returns HTTP 200 while the GAIA API process is serving requests.
+The top-level `status` is `ok` only when Lemonade has an LLM loaded, and
+`degraded` when the LLM component is `unavailable` or `error`. RAG reports
+`not_configured` until the document API is enabled.
+
+GAIA reads loaded-model state from Lemonade's `/api/v1/health` endpoint with a
+350 ms deadline. The `/api/v1/models` catalog is not used for readiness because
+downloaded models are not necessarily loaded.
 
 **Example:**
 ```bash
