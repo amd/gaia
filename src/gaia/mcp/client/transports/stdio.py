@@ -4,6 +4,7 @@
 
 import json
 import os
+import shlex
 import shutil
 import signal
 import subprocess
@@ -16,6 +17,65 @@ from .base import MCPTransport
 
 logger = get_logger(__name__)
 
+# Operator characters shlex isolates into their own token when unquoted. A
+# token made only of these was shell syntax; quoted uses stay inside a larger
+# token and are inert under shell=False, so they are left alone.
+_SHELL_OPERATOR_CHARS = frozenset(";|&<>()")
+
+_FIX_HINT = (
+    'Split the program from its arguments instead: {"command": "npx", '
+    '"args": ["-y", "@scope/server"]}. See docs/spec/mcp-client.mdx.'
+)
+
+
+def _split_command_string(command: str) -> List[str]:
+    """Split a single-string server command into an argv list.
+
+    Args:
+        command: Full command line, e.g. ``"npx -y @scope/server"``.
+
+    Returns:
+        List[str]: argv tokens, program first, with ``~`` and environment
+        variables expanded the way the shell used to expand them.
+
+    Raises:
+        ValueError: If the string is blank, unparseable, or carries shell
+            syntax that would no longer be interpreted.
+    """
+    # Windows: double the backslashes so POSIX quoting rules apply without
+    # eating path separators. Matches what CommandLineToArgvW would produce.
+    raw = command.replace("\\", "\\\\") if os.name == "nt" else command
+
+    lexer = shlex.shlex(raw, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    try:
+        tokens = list(lexer)
+    except ValueError as exc:
+        raise ValueError(
+            f"MCP server command could not be parsed ({exc}): {command!r}. "
+            f"Check for unbalanced quotes. {_FIX_HINT}"
+        ) from exc
+
+    if not tokens:
+        raise ValueError(
+            f"MCP server command is empty: {command!r}. Set 'command' to the "
+            f'program to run, e.g. "npx". {_FIX_HINT}'
+        )
+
+    for token in tokens:
+        # Backticks never form their own token, so check them per-token.
+        if set(token) <= _SHELL_OPERATOR_CHARS or "`" in token:
+            raise ValueError(
+                f"MCP server command contains shell syntax ({token!r}): "
+                f"{command!r}. GAIA launches MCP servers without a shell, so this "
+                f"would be passed through as literal text rather than interpreted. "
+                f"{_FIX_HINT}"
+            )
+
+    # The shell used to expand these; do it here so existing configs using
+    # ~ or $VAR/%VAR% keep resolving instead of reaching the child literally.
+    return [os.path.expandvars(os.path.expanduser(token)) for token in tokens]
+
 
 class StdioTransport(MCPTransport):
     """Stdio-based transport using subprocess for MCP servers.
@@ -23,9 +83,12 @@ class StdioTransport(MCPTransport):
     This transport launches MCP servers as subprocesses and communicates
     via stdin/stdout using JSON-RPC messages.
 
-    Supports two modes:
-    1. Legacy: command string with shell=True (e.g., "npx -y server")
-    2. Modern: command + args list with shell=False (more secure, matches Anthropic format)
+    Servers are always launched with ``shell=False``. Two input shapes are
+    accepted:
+
+    1. Legacy: a single command string (e.g. ``"npx -y server"``), tokenized
+       here into an argv list rather than handed to a shell.
+    2. Modern: ``command`` plus an ``args`` list (matches the Anthropic format).
 
     Args:
         command: Base command to start the MCP server (e.g., "npx" or "python")
@@ -51,28 +114,47 @@ class StdioTransport(MCPTransport):
         self._process: Optional[subprocess.Popen] = None
         self._request_id = 0
 
+    def _build_argv(self) -> List[str]:
+        """Resolve this transport's command into an argv list for ``shell=False``.
+
+        Returns:
+            List[str]: Program path (resolved via PATH when possible) plus args.
+
+        Raises:
+            ValueError: If a single-string command cannot be tokenized safely.
+        """
+        if self.args:
+            program, extra = self.command, list(self.args)
+        else:
+            tokens = _split_command_string(self.command)
+            program, extra = tokens[0], tokens[1:]
+
+        # Resolve via PATH (handles Windows .cmd/.bat extensions). Keep this —
+        # Popen needs the .cmd suffix to launch npx-style shims with shell=False.
+        resolved = shutil.which(program)
+        return [resolved or program] + extra
+
     def connect(self) -> bool:
         """Launch the MCP server subprocess.
 
         Returns:
             bool: True if process started successfully
+
+        Raises:
+            ValueError: If the configured command cannot be tokenized safely.
+            RuntimeError: If the process dies immediately after launch.
         """
         if self._process is not None:
             logger.warning("Transport already connected")
             return True
 
-        try:
-            # Determine if we use shell mode (legacy) or args mode (modern)
-            use_shell = not self.args  # Use shell if no args provided
-            if use_shell:
-                cmd = self.command
-            else:
-                # Resolve command via PATH (handles Windows .cmd/.bat extensions)
-                resolved = shutil.which(self.command)
-                cmd = [resolved or self.command] + self.args
+        # Built outside the try so a bad command surfaces as an actionable
+        # ValueError instead of a bare "failed to start" False.
+        argv = self._build_argv()
 
+        try:
             if self.debug:
-                logger.debug(f"Starting MCP server with command: {cmd}")
+                logger.debug(f"Starting MCP server with command: {argv}")
 
             # Merge environment if provided
             merged_env = None
@@ -80,13 +162,9 @@ class StdioTransport(MCPTransport):
                 merged_env = os.environ.copy()
                 merged_env.update(self.env)
 
-            # Legacy from_command() path passes a full shell command string
-            # (documented contract) and needs shell parsing; modern from_config()
-            # passes an args list and runs shell=False. Command is caller-supplied
-            # SDK config, not external/untrusted input.
             self._process = subprocess.Popen(
-                cmd,
-                shell=use_shell,  # nosec B602 - legacy shell-string API, trusted SDK config
+                argv,
+                shell=False,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
