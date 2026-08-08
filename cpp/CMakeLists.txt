@@ -132,6 +132,7 @@ endif()
 # ---------------------------------------------------------------------------
 add_library(gaia_core
     src/types.cpp
+    src/model_registry.cpp
     src/image.cpp
     src/tool_registry.cpp
     src/console.cpp
@@ -311,6 +312,7 @@ if(GAIA_BUILD_TESTS)
         tests/test_lemonade_client.cpp
         tests/test_clean_console.cpp
         tests/test_tool_integration.cpp
+        tests/test_native_tool_calls.cpp
         tests/test_decision.cpp
         tests/test_security.cpp
         tests/test_sse_parser.cpp
@@ -371,6 +373,7 @@ if(GAIA_BUILD_INTEGRATION_TESTS)
         tests/integration/test_integration_wifi.cpp
         tests/integration/test_integration_health.cpp
         tests/integration/test_integration_vlm.cpp
+        tests/integration/test_integration_tool_calls.cpp
     )
 
     target_link_libraries(tests_integration PRIVATE
