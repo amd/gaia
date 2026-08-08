@@ -205,6 +205,11 @@ class BrowserToolsMixin:
             # Get search provider configuration from the mixin.
             search_provider = getattr(mixin, "_web_search_provider", "duckduckgo")
             youcom_api_key = getattr(mixin, "_youcom_api_key", None)
+            
+            # Validate search provider
+            valid_providers = ["duckduckgo", "youcom"]
+            if search_provider not in valid_providers:
+                return f"Error: Unknown search provider '{search_provider}'. Valid options: {', '.join(valid_providers)}"
 
             # Clamp num_results based on provider limits
             if search_provider == "youcom":
