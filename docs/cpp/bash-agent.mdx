@@ -16,7 +16,7 @@ icon: "terminal"
 
 `gaia-bash` is a domain-specialized coding agent for bash/shell scripting. It provides:
 
-- **Interactive TUI** — Claude Code-style terminal interface with markdown rendering, streaming, and split-pane layout
+- **Interactive TUI** — fullscreen terminal interface with markdown rendering, streaming tokens, and a tool-approval modal
 - **Bash expertise** — system prompt tuned for POSIX compliance, `shellcheck` integration, BATS test generation
 - **10 built-in tools** — file I/O, git inspection, shell execution, and environment introspection (more planned: linting, testing, clipboard)
 - **REST API server** — OpenAI-compatible endpoint for external tool integration
@@ -70,14 +70,30 @@ icon: "terminal"
 
 The default mode. Launches a fullscreen terminal UI with:
 
-- **Chat history** — scrollable, markdown-rendered responses with syntax highlighting
-- **Status bar** — current model, token count, step counter
-- **Input area** — multi-line input with history (up/down arrows)
-- **Tool approval** — modal dialog for destructive operations
+- **Chat history** — scrollable transcript, markdown-rendered, updated as tokens stream in
+- **Status bar** — state marker (`[ok]` / `[..]` / `[!]`), model, step counter, token count
+- **Input line** — single-line input with history (up/down arrows)
+- **Tool approval** — modal for any `CONFIRM`-policy tool: `y` allow once, `a` always allow
+  (persisted to the allowed-tools file), `n` or `esc` deny
 
 ```bash
 ./build/gaia-bash
 ```
+
+| Key | Action |
+|-----|--------|
+| `enter` | Send the current line |
+| `up` / `down` | Recall input history |
+| `pgup` / `pgdn` | Scroll the transcript (`pgdn` back to the newest entry) |
+| `esc` | Cancel the running turn, otherwise clear the input |
+| `ctrl-c` | Cancel the running turn; press again to quit |
+
+Cancellation is observed between agent steps, so a model call already in flight
+finishes before the turn stops — the status bar says `cancel requested` rather than
+claiming the request was aborted.
+
+The TUI needs a terminal on both stdin and stdout. When either is redirected —
+piping, CI, `--print` — the agent falls back to `CleanConsole` automatically.
 
 ### Single Query
 
@@ -450,6 +466,7 @@ Claude Code> Use gaia-bash to check my deploy.sh for POSIX compliance
 | `--mcp` | Start as MCP stdio server |
 | `--print` | Pipe-friendly output (no TUI) |
 | `--no-tui` | Force CleanConsole even on interactive terminal |
+| `--tui` | Force the interactive TUI (terminals like MSYS/mintty report stdin as a pipe) |
 | `--query <text>` | Run a single query and exit (same as a positional query argument) |
 | `--resume <id>` | Resume a saved session |
 | `--list-sessions` | List saved sessions and exit |
