@@ -135,8 +135,9 @@ On Linux the flag is required for **every** `uv pip install`, with or without
 extras — `accelerate` is an unconditional base dependency, so PyTorch is always
 resolved. The `[tool.uv.sources]` block in `pyproject.toml` does not help here:
 it applies only to uv's project interface (`uv sync`, `uv lock`, `uv add`), never
-to `uv pip install`. Omit the flag and you get `torch==2.13.0+cu130` plus ~15
-`nvidia-*` packages — a 4.7 GB venv instead of 1.5 GB.
+to `uv pip install`. Omit the flag and PyTorch resolves from PyPI as a CUDA
+build, pulling ~18 `nvidia-*` / `cuda-*` packages — a 4.7 GB venv instead of
+1.5 GB.
 </Note>
 
 **Available extras** (see `setup.py` for the full list):
