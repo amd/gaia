@@ -2072,11 +2072,24 @@ class InitCommand:
             "Chat agent not installed yet -- run: "
             f"{source_install_command('gaia-agent-chat')}"
         )
+        # Scoped like run()'s has_hub_agent_check (agent == "chat" covers
+        # both chat and npu): gating on chat_agent_available alone would mark
+        # sd/vlm/minimal permanently "incomplete", since the chat wheel isn't
+        # something those profiles ever install (#2882).
+        setup_incomplete = (
+            INIT_PROFILES[self.profile].get("agent") == "chat"
+            and not chat_agent_available
+        )
+        headline = (
+            "GAIA initialization incomplete - see below"
+            if setup_incomplete
+            else "GAIA initialization complete!"
+        )
         if RICH_AVAILABLE and self.console:
             self.console.print()
             self.console.print(
                 Panel(
-                    "[bold green]GAIA initialization complete![/bold green]",
+                    f"[bold green]{headline}[/bold green]",
                     border_style="green",
                     padding=(0, 2),
                 )
@@ -2158,7 +2171,7 @@ class InitCommand:
         else:
             self._print("")
             self._print("=" * 60)
-            self._print("  GAIA initialization complete!")
+            self._print(f"  {headline}")
             self._print("=" * 60)
             self._print("")
             self._print("  Quick start commands:")
