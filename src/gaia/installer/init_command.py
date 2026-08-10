@@ -508,9 +508,8 @@ class InitCommand:
         Returns:
             Exit code (0 for success, non-zero for failure)
         """
-        # Refuse rather than silently declining every prompt: with nobody to
-        # answer them, EOFError-driven defaults used to report success on a
-        # setup that never downloaded a model (issue #2882).
+        # No one to answer prompts non-interactively -- refuse instead of
+        # silently declining every one and claiming a setup that never ran.
         if not self.yes and not stdin_is_tty():
             print(
                 f"Error: refusing to run 'gaia init --profile {self.profile}' "
@@ -1891,7 +1890,7 @@ class InitCommand:
                 self.console.print()
                 self._print_warning("Verification interrupted")
                 # Ctrl-C means stop, not "skip the rest and declare success" --
-                # propagate to run()'s own KeyboardInterrupt handler (#2882).
+                # propagate to run()'s own KeyboardInterrupt handler.
                 raise
 
             # Summary
@@ -2073,9 +2072,8 @@ class InitCommand:
             f"{source_install_command('gaia-agent-chat')}"
         )
         # Scoped like run()'s has_hub_agent_check (agent == "chat" covers
-        # both chat and npu): gating on chat_agent_available alone would mark
-        # sd/vlm/minimal permanently "incomplete", since the chat wheel isn't
-        # something those profiles ever install (#2882).
+        # chat + npu) -- gating on chat_agent_available alone would mark
+        # sd/vlm/minimal permanently "incomplete"; they never install it.
         setup_incomplete = (
             INIT_PROFILES[self.profile].get("agent") == "chat"
             and not chat_agent_available
