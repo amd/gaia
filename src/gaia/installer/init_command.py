@@ -347,7 +347,7 @@ class InitCommand:
             if not response:
                 return default
             return response in ("y", "yes")
-        except (EOFError, KeyboardInterrupt):
+        except EOFError:
             self._print("")
             return False
 
@@ -1341,7 +1341,7 @@ class InitCommand:
                     "   [bold]Press Enter when server is started...[/bold]", end=""
                 )
                 input()
-            except (EOFError, KeyboardInterrupt):
+            except EOFError:
                 self.console.print()
                 self._print_error("Initialization cancelled")
                 return False
@@ -1839,7 +1839,6 @@ class InitCommand:
 
             models_passed = 0
             models_failed = []
-            interrupted = False
 
             try:
                 for model_id in model_ids:
@@ -1891,16 +1890,14 @@ class InitCommand:
             except KeyboardInterrupt:
                 self.console.print()
                 self._print_warning("Verification interrupted")
-                interrupted = True
+                # Ctrl-C means stop, not "skip the rest and declare success" --
+                # propagate to run()'s own KeyboardInterrupt handler (#2882).
+                raise
 
             # Summary
             total = len(model_ids)
             self.console.print()
-            if interrupted:
-                self._print_success(
-                    f"Verified {models_passed} model(s) before interruption"
-                )
-            elif models_failed:
+            if models_failed:
                 self._print_warning(f"Models verified: {models_passed}/{total} passed")
                 self.console.print()
                 self.console.print(
