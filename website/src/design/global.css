@@ -91,8 +91,10 @@
 
   /* ----------------------------------------------------------------- cards */
 
+  /* Property list is explicit, not `all`: `all` sweeps up outline-color, which
+     fades the focus ring in over the transition instead of showing it at once. */
   .g-card {
-    @apply rounded-g-card border border-g-border bg-g-surface transition-all duration-[350ms] ease-g-out;
+    @apply rounded-g-card border border-g-border bg-g-surface transition-[background-color,border-color,box-shadow,transform] duration-[350ms] ease-g-out;
   }
   /* Interactive card: lifts and warms on hover. Applied to <a>/<button> cards. */
   .g-card-hover {
@@ -111,7 +113,7 @@
   /* --------------------------------------------------------------- buttons */
 
   .g-btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-g-btn px-5 py-2.5 text-[14px] font-semibold transition-all duration-[250ms] ease-g-out;
+    @apply inline-flex items-center justify-center gap-2 rounded-g-btn px-5 py-2.5 text-[14px] font-semibold transition-[background-color,border-color,color,box-shadow,transform] duration-[250ms] ease-g-out;
   }
   .g-btn-primary {
     @apply bg-g-gold text-g-on-gold hover:-translate-y-0.5 hover:bg-g-gold2 hover:shadow-g-btn;
@@ -122,7 +124,7 @@
 
   /* Text CTA whose arrow gap opens on hover. */
   .g-cta-link {
-    @apply inline-flex items-center gap-1.5 text-[13px] font-medium text-g-gold-text transition-all duration-[250ms] ease-g-out hover:gap-2.5 hover:text-g-gold2;
+    @apply inline-flex items-center gap-1.5 text-[13px] font-medium text-g-gold-text transition-[gap,color] duration-[250ms] ease-g-out hover:gap-2.5 hover:text-g-gold2;
   }
 
   /* -------------------------------------------------------- pills & badges */
@@ -177,13 +179,13 @@
   .g-code-panel .tok-str { color: #9bd07a; }
   .g-code-panel .tok-fn { color: #f4c46b; }
   .g-code-panel .tok-num { color: #79b8ff; }
-  .g-code-panel .tok-com { color: #5f5f66; }
+  .g-code-panel .tok-com { color: rgb(var(--g-code-faint)); }
 
   /* Terminal log severity colors — the email agent's real triage taxonomy. */
   .g-code-panel .log-urgent { color: #e0824a; }
   .g-code-panel .log-needs { color: #e7a33c; }
   .g-code-panel .log-fyi { color: #79b8ff; }
-  .g-code-panel .log-dim { color: #5f5f66; }
+  .g-code-panel .log-dim { color: rgb(var(--g-code-faint)); }
   .g-code-panel .log-ok { color: #9bd07a; }
 }
 

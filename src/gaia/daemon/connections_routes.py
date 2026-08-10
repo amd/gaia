@@ -13,7 +13,7 @@ Loud, typed errors map to distinct statuses:
 - unknown agent → 404
 - provider not granted to the agent → 403 (the grant model is the source of
   truth; the daemon refuses to forward an ungranted connector)
-- sidecar not running → 503
+- sidecar not running, or alive but no longer answering → 503
 - sidecar rejected/dropped the forward → 502
 """
 
@@ -27,7 +27,11 @@ from starlette.concurrency import run_in_threadpool
 
 from gaia.daemon.constants import API_PREFIX
 from gaia.daemon.forward import ForwardDeliveryError, NotGrantedError
-from gaia.daemon.sidecars.errors import SidecarNotRunningError, UnknownAgentError
+from gaia.daemon.sidecars.errors import (
+    SidecarNotRunningError,
+    SidecarUnresponsiveError,
+    UnknownAgentError,
+)
 
 
 def build_connections_router(token: str, registry, forwarder):
@@ -37,17 +41,19 @@ def build_connections_router(token: str, registry, forwarder):
     require_token = build_require_token(token)
     router = APIRouter(dependencies=[Depends(require_token)])
 
-    def _connection(agent_id: str):
+    async def _connection(agent_id: str):
         try:
-            return registry.connection(agent_id)
+            # Off-loop: connection() probes the sidecar's /health, and a blocking
+            # probe here would wedge the daemon exactly like the sidecar it checks.
+            return await run_in_threadpool(registry.connection, agent_id)
         except UnknownAgentError as e:
             raise HTTPException(status_code=404, detail=str(e)) from e
-        except SidecarNotRunningError as e:
+        except (SidecarNotRunningError, SidecarUnresponsiveError) as e:
             raise HTTPException(status_code=503, detail=str(e)) from e
 
     @router.post(f"{API_PREFIX}/agents/{{agent_id}}/connections/forward")
     async def forward_all(agent_id: str) -> dict:
-        base_url, bearer = _connection(agent_id)
+        base_url, bearer = await _connection(agent_id)
         try:
             return await run_in_threadpool(
                 forwarder.forward_all, agent_id, base_url=base_url, bearer=bearer
@@ -59,7 +65,7 @@ def build_connections_router(token: str, registry, forwarder):
 
     @router.post(f"{API_PREFIX}/agents/{{agent_id}}/connections/{{provider}}/forward")
     async def forward_provider(agent_id: str, provider: str) -> dict:
-        base_url, bearer = _connection(agent_id)
+        base_url, bearer = await _connection(agent_id)
         try:
             return await run_in_threadpool(
                 forwarder.forward_provider,
@@ -77,7 +83,7 @@ def build_connections_router(token: str, registry, forwarder):
 
     @router.delete(f"{API_PREFIX}/agents/{{agent_id}}/connections/{{provider}}")
     async def withdraw(agent_id: str, provider: str) -> dict:
-        base_url, bearer = _connection(agent_id)
+        base_url, bearer = await _connection(agent_id)
         try:
             return await run_in_threadpool(
                 forwarder.withdraw,

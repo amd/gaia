@@ -15,9 +15,11 @@ import (
 
 	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/daemon"
+	"github.com/amd/gaia/tui/internal/ui/chat"
 	"github.com/amd/gaia/tui/internal/ui/hub"
 	"github.com/amd/gaia/tui/internal/ui/preflight"
 	"github.com/amd/gaia/tui/internal/ui/root"
+	"github.com/amd/gaia/tui/internal/ui/status"
 )
 
 // These tests cover the seam between the hub and the readiness gate: that a
@@ -41,6 +43,11 @@ type gateTransport struct {
 	initByAgent map[string]initAnswer
 	// connectors is the answer to GET /v1/<agent>/connectors.
 	connectors map[string]any
+	// healthStatus and healthBody are the answer to the sidecar row's liveness
+	// probe, GET /v1/<agent>/health. The daemon's listing only proves a PROCESS
+	// exists, so the gate asks the agent itself before probing anything below it.
+	healthStatus int
+	healthBody   map[string]any
 	// searchStatus and searchBody are the answer to the mailbox row's credential
 	// probe, POST /v1/<agent>/search. A connector list that says "connected and
 	// granted" is not evidence the mailbox works, so the gate reads it — and this
@@ -50,6 +57,7 @@ type gateTransport struct {
 
 	starts   int
 	ensures  int
+	healths  int
 	searches int
 }
 
@@ -82,6 +90,8 @@ func readyGateTransport() *gateTransport {
 					}},
 			},
 		},
+		healthStatus: http.StatusOK,
+		healthBody:   map[string]any{"status": "ok"},
 		searchStatus: http.StatusOK,
 		// EmailSearchResponse: `count` is required there, so a body without it is
 		// not the shape the sidecar serializes.
@@ -127,6 +137,9 @@ func (g *gateTransport) Do(_ context.Context, _, path string, _ []byte) (preflig
 			}
 		}
 		return jsonResponse(http.StatusOK, map[string]any{"agents": agents})
+	case strings.HasSuffix(path, "/health"):
+		g.healths++
+		return jsonResponse(g.healthStatus, g.healthBody)
 	case strings.HasSuffix(path, "/init"):
 		if answer, ok := g.initByAgent[agentFromPath(path)]; ok {
 			return jsonResponse(answer.status, answer.body)
@@ -191,6 +204,21 @@ func (g *gateTransport) mailboxMissing() *gateTransport {
 	return g
 }
 
+// sidecarWedged is the state the daemon's agent listing cannot see: the process
+// is alive, registered and "running", and its event loop is parked, so it
+// answers nothing. The daemon's pre-relay probe reports it on the next relayed
+// call. VERBATIM from sidecars/manager.check_responsive.
+func (g *gateTransport) sidecarWedged() *gateTransport {
+	g.healthStatus = http.StatusServiceUnavailable
+	g.healthBody = map[string]any{
+		"detail": "email sidecar (pid 41999) is alive but did not answer " +
+			"http://127.0.0.1:51234/health within 2.0s (ReadTimeout: ). It passed its " +
+			"startup health check, so it has stopped serving since — typically a blocked " +
+			"event loop or a hung dependency.",
+	}
+	return g
+}
+
 // mailboxCredentialsRejected is the state the connector list cannot see: linked,
 // granted, and the first read refused. The gate must stop here.
 func (g *gateTransport) mailboxCredentialsRejected() *gateTransport {
@@ -198,6 +226,25 @@ func (g *gateTransport) mailboxCredentialsRejected() *gateTransport {
 	g.searchBody = map[string]any{
 		"detail": "no forwarded 'google' credential is available to the email sidecar. " +
 			"The connection may not be granted to this agent, or it was revoked/withdrawn.",
+	}
+	return g
+}
+
+// ctxShortfall leaves every generic row green except the model, loaded with a
+// window under the profile's target — the reported bug: an agent that works
+// for ordinary turns and fails a document-sized request. 25037 mirrors the
+// value check_test.go's initCtxShortfall fixture already relies on being
+// below profileCtxTarget() in the test environment.
+func (g *gateTransport) ctxShortfall() *gateTransport {
+	g.initBody = map[string]any{
+		"ready": true,
+		"lemonade": map[string]any{
+			"reachable": true, "base_url": "http://localhost:8000/api/v1",
+			"version": "8.2.0", "min_version": "8.1.0", "compatible": true,
+		},
+		"model": map[string]any{
+			"id": "Gemma-4-E4B-it-GGUF", "present": true, "ctx_size": 25037,
+		},
 	}
 	return g
 }
@@ -438,12 +485,45 @@ func TestAMailboxWhoseCredentialsAreRejectedNeverGreenLightsALaunch(t *testing.T
 	// Never automatic — but the user may choose it. The agent repairs this state
 	// inside the conversation, so refusing the choice would hide the fix behind
 	// the gate that found the problem.
-	if !strings.Contains(screen, "start anyway") {
+	if !strings.Contains(screen, "continue") {
 		t.Errorf("the gate hid the launch that reaches the in-conversation fix:\n%s", d.screen())
 	}
 	d.send(keyEnter())
 	if got := d.view(); got != "chat" {
 		t.Fatalf("enter over a repairable mailbox = %q, want chat\n%s", got, d.screen())
+	}
+}
+
+// An agent that is "running" and answers nothing must be named as such. The gate
+// used to show `[ok] Email agent 0.5.0 · running` and then blame the mailbox for
+// the timeout that followed — sending the user to the one part that was fine.
+func TestAnAgentThatAnswersNothingIsNamedOnItsOwnRow(t *testing.T) {
+	d := newRootDriver(t, readyGateTransport().sidecarWedged(), 80, 24)
+	d.launchEmail()
+
+	if got := d.view(); got != "preflight" {
+		t.Fatalf("a wedged agent landed on %q, want preflight\n%s", got, d.screen())
+	}
+	screen := d.flat()
+	for _, want := range []string{
+		"Email agent", "not answering",
+		"run: gaia daemon stop-agent email && gaia daemon start-agent email",
+		"~/.gaia/agents/email/logs/",
+	} {
+		if !strings.Contains(screen, want) {
+			t.Errorf("the gate does not show %q:\n%s", want, d.screen())
+		}
+	}
+	// The rows below it were never asked, so none of them may be blamed.
+	if strings.Contains(screen, "cannot be checked") {
+		t.Errorf("a row below the wedged agent reported a failure of its own:\n%s", d.screen())
+	}
+	if g := d.transport(); g.searches != 0 {
+		t.Errorf("the gate read the mailbox through an agent that answers nothing: %d reads", g.searches)
+	}
+	// And it never claims the agent is fine.
+	if strings.Contains(screen, "0.5.0 · running (pid") {
+		t.Errorf("the agent row still reads as healthy:\n%s", d.screen())
 	}
 }
 
@@ -901,4 +981,210 @@ func TestEveryGateStateFitsEightyByTwentyFour(t *testing.T) {
 			}
 		})
 	}
+}
+
+// --- the halt flag ------------------------------------------------------------
+//
+// A DispositionHalt row makes the readiness screen hold itself and explain
+// why — that is entirely increment 3's doing, already covered in
+// internal/ui/preflight. What lives here is the flag RootModel derives from
+// it: a state signal for automation (ControlSnapshot's Overlay), nothing
+// drawn, nothing intercepted. TestACtxShortfallHaltsTheRealGate drives the
+// real Check() pipeline for the row this issue exists to fix; the rest
+// inject a synthetic status.Outcome directly.
+
+// The reported bug, through the real gate end to end: a ctx-shortfall report
+// halts (Overlay reports it without blinding the view, and the screen names
+// the window that will fail), and the SAME single enter that the screen has
+// always offered is what both proceeds and clears the flag — there is no
+// separate dismiss to press first.
+func TestACtxShortfallHaltsTheRealGate(t *testing.T) {
+	d := newRootDriver(t, readyGateTransport().ctxShortfall(), 100, 30)
+	d.launchEmail()
+
+	if !d.m.Halted() {
+		t.Fatalf("a ctx-shortfall report did not halt:\n%s", d.screen())
+	}
+	snap := d.m.ControlSnapshot()
+	if snap.Overlay != "halt" {
+		t.Errorf("Overlay = %q, want %q", snap.Overlay, "halt")
+	}
+	if snap.View != "preflight" {
+		t.Errorf("View = %q, want %q — a halt must not blind the automation's view", snap.View, "preflight")
+	}
+	if !strings.Contains(d.flat(), "25037") {
+		t.Errorf("the screen does not show the window that will fail:\n%s", d.screen())
+	}
+
+	// One enter — the screen's own "continue" choice — both proceeds AND
+	// clears the flag. There is no separate prompt in front of it.
+	d.send(keyEnter())
+	if got := d.view(); got != "chat" {
+		t.Fatalf("enter on the holding gate = %q, want chat", got)
+	}
+	if d.m.Halted() {
+		t.Error("Halted() stayed true after the screen proceeded")
+	}
+	if d.m.ControlSnapshot().Overlay == "halt" {
+		t.Error("Overlay still reports halt after proceeding")
+	}
+}
+
+// ctrl+c quits on the FIRST press while halted — RootModel does not
+// intercept it, so this is really proving the preflight screen's own
+// ctrl+c handling (unrelated to this issue) still works while HasHalt()
+// holds it open.
+func TestCtrlCQuitsOnFirstPressWhileHalted(t *testing.T) {
+	d := newRootDriver(t, readyGateTransport().ctxShortfall(), 100, 30)
+	d.launchEmail()
+	if !d.m.Halted() {
+		t.Fatal("test setup: want the gate halted")
+	}
+
+	cmd := d.sendNoPump(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if cmd == nil {
+		t.Fatal("ctrl+c while halted produced no command")
+	}
+	if _, ok := cmd().(tea.QuitMsg); !ok {
+		t.Fatalf("ctrl+c while halted produced %T, want tea.QuitMsg", cmd())
+	}
+}
+
+// Re-checking a still-holding gate (r) never needed a fix here: the screen
+// was never blocked from receiving r in the first place, so hitting it
+// leaves the flag exactly as it was — still Halted(), still the same row.
+func TestReCheckOnAHoldingGateStaysHalted(t *testing.T) {
+	d := newRootDriver(t, readyGateTransport().ctxShortfall(), 100, 30)
+	d.launchEmail()
+	if !d.m.Halted() {
+		t.Fatal("test setup: want the gate halted")
+	}
+
+	d.send(key("r"))
+	if !d.m.Halted() {
+		t.Error("re-checking a row that is still genuinely bad cleared the halt")
+	}
+	if got := d.view(); got != "preflight" {
+		t.Fatalf("view after re-check = %q, want preflight", got)
+	}
+}
+
+// Proceeding past a halt suppresses that StepID for the rest of the
+// session: the screen still pauses on every launch (that pause is the
+// feature, not something suppression touches), but automation's "a NEW,
+// unhandled halt" signal does not fire twice for a row the user already
+// chose to proceed past once — without this, a permanently-unknown row
+// (this is exactly one) would report a fresh halt on every single relaunch,
+// reintroducing the confirm-fatigue the whole Notify/Halt split exists to
+// avoid.
+func TestProceedingPastAHaltSuppressesTheFlagForTheRestOfTheSession(t *testing.T) {
+	d := newRootDriver(t, readyGateTransport().ctxShortfall(), 100, 30)
+	d.launchEmail()
+	if !d.m.Halted() {
+		t.Fatal("test setup: want the gate halted")
+	}
+
+	d.send(keyEnter())
+	if got := d.view(); got != "chat" {
+		t.Fatalf("enter on the holding gate = %q, want chat", got)
+	}
+	if d.m.Halted() {
+		t.Error("Halted() stayed true after the screen proceeded")
+	}
+
+	d.send(chat.ReturnToHubMsg{AgentID: "email"})
+	d.launchEmail()
+
+	// The screen itself still pauses every launch on the same row —
+	// unrelated to suppression, and not something this issue changes.
+	if got := d.view(); got != "preflight" {
+		t.Fatalf("relaunch view = %q, want preflight — the screen still pauses on the same row", got)
+	}
+	// But the flag does not fire again for a row already accepted this
+	// session.
+	if d.m.Halted() {
+		t.Error("the same row set Halted() again after the user already proceeded past it this session")
+	}
+}
+
+// A resize (or any non-key message) must still reach the gate while
+// Halted() — RootModel never gates message routing on the flag, only
+// ControlSnapshot reads it. Proven by the rendered width actually
+// narrowing, which only happens if the message reached the preflight
+// model's own Update.
+func TestNonKeyMessagesPassThroughWhileHalted(t *testing.T) {
+	d := newRootDriver(t, readyGateTransport().ctxShortfall(), 100, 30)
+	d.launchEmail()
+	if !d.m.Halted() {
+		t.Fatal("test setup: want the gate halted")
+	}
+
+	d.send(tea.WindowSizeMsg{Width: 40, Height: 20})
+	for i, line := range strings.Split(d.screen(), "\n") {
+		if w := ansi.StringWidth(line); w > 40 {
+			t.Fatalf("line %d is %d columns wide after a 40-column resize while halted — "+
+				"the resize did not reach the screen:\n%s", i, w, d.screen())
+		}
+	}
+}
+
+// A spinner.TickMsg specifically must reach a gate that is still Busy() —
+// the acceptance criterion's literal case. sendNoPump keeps the gate's
+// Init() from running so it is still phaseChecking when the halt lands,
+// which only a synthetic Outcome can arrange (the real pipeline cannot halt
+// before its own report exists).
+func TestASpinnerTickReachesABusyGateWhileHalted(t *testing.T) {
+	d := newRootDriver(t, readyGateTransport(), 100, 30)
+	agent := d.cat.Get("email")
+	if agent == nil {
+		t.Fatal("test setup: the email agent is missing from the catalog")
+	}
+	d.sendNoPump(hub.LaunchAgentMsg{Agent: *agent})
+	if d.view() != "preflight" {
+		t.Fatalf("test setup: want preflight, got %q", d.view())
+	}
+
+	d.send(status.Outcome{
+		StepID: "synthetic", Label: "Synthetic",
+		Level: status.LevelUnknown, Disposition: status.DispositionHalt, Summary: "test",
+	})
+	if !d.m.Halted() {
+		t.Fatal("test setup: the synthetic Outcome did not halt")
+	}
+
+	if cmd := d.sendNoPump(spinner.TickMsg{}); cmd == nil {
+		t.Fatal("a spinner tick produced no command while halted — it did not reach the checking gate")
+	}
+}
+
+// The flag sets the same way from either screen it can be raised from — it
+// is not wired to one view.
+func TestCrossScreenHaltingWorksFromHubAndFromPreflight(t *testing.T) {
+	t.Run("hub", func(t *testing.T) {
+		d := newRootDriver(t, readyGateTransport(), 100, 30)
+		if d.view() != "hub" {
+			t.Fatalf("test setup: want hub, got %q", d.view())
+		}
+		d.send(status.Outcome{StepID: "hub-synthetic", Label: "Synthetic",
+			Level: status.LevelFailed, Disposition: status.DispositionHalt, Summary: "test"})
+		if !d.m.Halted() {
+			t.Error("a synthetic halting Outcome while in the hub did not halt")
+		}
+	})
+	t.Run("preflight", func(t *testing.T) {
+		// ManualProceed keeps an all-green gate parked on the preflight
+		// screen instead of auto-proceeding to chat during the synchronous
+		// pump — this sub-test is about the SCREEN, not the report.
+		opts := preflight.Options{ReadyHold: time.Millisecond, ManualProceed: true}
+		d := newRootDriverOpts(t, readyGateTransport(), 100, 30, opts)
+		d.launchEmail()
+		if d.view() != "preflight" {
+			t.Fatalf("test setup: want preflight, got %q", d.view())
+		}
+		d.send(status.Outcome{StepID: "preflight-synthetic", Label: "Synthetic",
+			Level: status.LevelFailed, Disposition: status.DispositionHalt, Summary: "test"})
+		if !d.m.Halted() {
+			t.Error("a synthetic halting Outcome while in preflight did not halt")
+		}
+	})
 }

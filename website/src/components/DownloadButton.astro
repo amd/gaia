@@ -4,11 +4,12 @@
 
 // OS-detecting download CTA for the GAIA Agent UI (the Electron desktop app).
 // It names the Agent UI explicitly because it is no longer the only front
-// door — the terminal hub installs via TerminalHubCta.astro.
+// door — the terminal hub installs via the one-line installer.
 // Progressive enhancement: with no JS it links to the GitHub releases page
-// (always works). JS detects the OS to set the label, then best-effort fetches
-// the latest release to deep-link the right installer + show the version.
-// Falls back gracefully at every step.
+// (always works). JS resolves the platform we actually ship an installer for
+// (see scripts/download-target.ts — macOS is Apple Silicon only), then
+// best-effort fetches the latest release to deep-link that installer + show the
+// version. Anything unresolved keeps the releases page.
 
 interface Props {
   variant?: 'primary' | 'secondary';
@@ -36,46 +37,43 @@ const sizeCls = size === 'lg' ? 'px-6 py-3 text-[14px]' : 'px-3.5 py-1.5 text-[1
 </a>
 
 <script>
+  import {
+    resolveDownloadTarget,
+    TARGET_ASSETS,
+    TARGET_LABELS,
+  } from '../scripts/download-target';
+
   (() => {
     const els = document.querySelectorAll<HTMLAnchorElement>('[data-download-cta]');
     if (!els.length) return;
 
-    const detectOS = (): 'windows' | 'macos' | 'linux' | null => {
-      const ua = navigator.userAgent;
-      if (/Windows/i.test(ua)) return 'windows';
-      if (/Mac/i.test(ua) && !/iPhone|iPad|iPod/i.test(ua)) return 'macos';
-      if (/Linux/i.test(ua) && !/Android/i.test(ua)) return 'linux';
-      return null;
-    };
+    const setText = (selector: string, text: string) =>
+      els.forEach((el) => {
+        const node = el.querySelector(selector);
+        if (node) node.textContent = text;
+      });
 
-    const os = detectOS();
-    const osLabel = { windows: 'Windows', macos: 'macOS', linux: 'Linux' } as const;
-    els.forEach((el) => {
-      const label = el.querySelector('[data-dl-label]');
-      if (os && label) label.textContent = `Agent UI for ${osLabel[os]}`;
+    // Kept independent: a stalled architecture probe must not withhold the
+    // version, and a failed release fetch must not withhold the label. Either
+    // one resolving to null just leaves the releases-page href in place.
+    const targetPromise = resolveDownloadTarget(navigator).catch(() => null);
+    const releasePromise = fetch('https://api.github.com/repos/amd/gaia/releases/latest')
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null);
+
+    targetPromise.then((target) => {
+      if (target) setText('[data-dl-label]', `Agent UI for ${TARGET_LABELS[target]}`);
     });
 
-    // Best-effort: latest version + the installer asset matching this OS.
-    fetch('https://api.github.com/repos/amd/gaia/releases/latest')
-      .then((r) => (r.ok ? r.json() : null))
-      .then((rel) => {
-        if (!rel) return;
-        const ver: string = rel.tag_name;
-        const assets: { name: string; browser_download_url: string }[] = rel.assets || [];
-        const pick = (re: RegExp) => assets.find((a) => re.test(a.name))?.browser_download_url;
-        const url =
-          os === 'windows' ? pick(/x64-setup\.exe$/)
-          : os === 'macos' ? pick(/arm64\.dmg$/)
-          : os === 'linux' ? pick(/\.AppImage$/)
-          : undefined;
-        els.forEach((el) => {
-          if (url) el.href = url;
-          const v = el.querySelector('[data-dl-version]');
-          if (v && ver) v.textContent = ver;
-        });
-      })
-      .catch(() => {
-        /* keep the releases-page fallback */
-      });
+    releasePromise.then((rel) => {
+      if (rel?.tag_name) setText('[data-dl-version]', rel.tag_name);
+    });
+
+    Promise.all([targetPromise, releasePromise]).then(([target, rel]) => {
+      if (!target || !rel) return;
+      const assets: { name: string; browser_download_url: string }[] = rel.assets || [];
+      const url = assets.find((a) => TARGET_ASSETS[target].test(a.name))?.browser_download_url;
+      if (url) els.forEach((el) => (el.href = url));
+    });
   })();
 </script>

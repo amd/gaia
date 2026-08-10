@@ -193,12 +193,14 @@ def test_tool_result_carries_tool_and_data():
     ]
 
 
-def test_tool_result_render_key_for_pre_scan():
+def test_pre_scan_draws_no_card():
+    """The triage reply is the single inbox view: a pre-scan card landing
+    mid-turn showed a partial list beside the answer still being written."""
     t = _tr()
     t.translate({"type": "tool_start", "tool": "pre_scan_inbox"})
     t.translate({"type": "tool_args", "tool": "pre_scan_inbox", "args": {}})
     out = t.translate({"type": "tool_result", "title": "Result", "summary": "scan"})
-    assert out[0]["render"] == "email_pre_scan"
+    assert "render" not in out[0]
 
 
 def test_tool_end_after_result_is_dropped():

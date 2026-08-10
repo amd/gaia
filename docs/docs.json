@@ -69,6 +69,7 @@
               "quickstart",
               "guides/install",
               "guides/agent-ui",
+              "guides/terminal-hub",
               "guides/memory",
               {
                 "group": "User Guides",
@@ -120,6 +121,7 @@
                     "group": "Build & Extend",
                     "pages": [
                       "guides/custom-agent",
+                      "guides/composing-skills",
                       "guides/hub-publishing"
                     ]
                   },
@@ -466,6 +468,7 @@
               "spec/agent-skills",
               "plans/skill-format",
               "plans/skill-synthesis",
+              "plans/adaptive-skills",
               "plans/oem-bundling"
             ]
           },

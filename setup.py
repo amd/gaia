@@ -103,6 +103,7 @@ setup(
         "gaia.connectors",
         "gaia.connectors.catalog",
         "gaia.connectors.providers",
+        "gaia.skills",
     ],
     package_data={
         "gaia.eval": [

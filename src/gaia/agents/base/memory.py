@@ -483,9 +483,10 @@ class MemoryMixin(ProceduralMemoryMixin):
         # the composed system prompt.  Empty string = no recall = the system
         # prompt stays byte-identical to a build without procedural memory.
         self._recalled_skill_prompt = ""
-        # The matched Skill objects from the same per-turn recall (#1451): the
-        # tool loader reads their tools_required via _recalled_skill_tools as the
-        # SKILL signal.  Empty list = no recall = no SKILL signal this turn.
+        # The matched DistilledProcedure objects from the same per-turn recall
+        # (#1451): the tool loader reads their tools_required via
+        # _recalled_skill_tools as the SKILL signal.  Empty list = no recall =
+        # no SKILL signal this turn.
         self._recalled_skills = []
 
         # Step 2: Validate Lemonade embedding service connectivity.

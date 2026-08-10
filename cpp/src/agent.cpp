@@ -469,6 +469,17 @@ bool Agent::connectMcpServer(const std::string& name, const json& config) {
     }
 }
 
+bool Agent::connectMcpServerById(const std::string& id) {
+    MCPRegistry registry;
+    return connectMcpServerById(id, registry);
+}
+
+bool Agent::connectMcpServerById(const std::string& id, const MCPRegistry& registry) {
+    // require() throws MCPRegistryError naming the id, the paths searched, and
+    // the ids that are available — deliberately not swallowed here.
+    return connectMcpServer(id, registry.require(id));
+}
+
 json Agent::callMcpTool(const std::string& serverName, const std::string& toolName, const json& args) {
     auto it = mcpClients_.find(serverName);
     if (it == mcpClients_.end()) {

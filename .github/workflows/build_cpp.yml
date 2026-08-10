@@ -15,6 +15,7 @@ on:
     paths:
       - 'src/gaia/version.py'
       - '.github/actions/install-lemonade/**'
+      - '.github/scripts/**'
       - 'cpp/**'
       - '.github/workflows/build_cpp.yml'
       - '.github/workflows/benchmark_cpp.yml'
@@ -24,6 +25,7 @@ on:
     paths:
       - 'src/gaia/version.py'
       - '.github/actions/install-lemonade/**'
+      - '.github/scripts/**'
       - 'cpp/**'
       - '.github/workflows/build_cpp.yml'
       - '.github/workflows/benchmark_cpp.yml'
@@ -39,6 +41,39 @@ permissions:
   contents: read
 
 jobs:
+  # Guards the toolchain-setup logic used by the STX job below. It cannot run on
+  # the self-hosted runner (that is the thing it protects), so the cache-validity
+  # decision is unit tested here with fake install trees.
+  toolchain-script-tests:
+    name: C++ toolchain script tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      # Ensure-CppBuildTools.ps1 only ever executes on the self-hosted runner, so
+      # a syntax error there would otherwise be found there. Parsing is free.
+      - name: Parse-check toolchain scripts
+        shell: pwsh
+        run: |
+          $failed = $false
+          foreach ($file in Get-ChildItem .github/scripts -Recurse -Filter *.ps1) {
+              $errors = $null
+              [System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref]$null, [ref]$errors) | Out-Null
+              if ($errors) {
+                  $failed = $true
+                  $errors | ForEach-Object { Write-Host "$($file.Name):$($_.Extent.StartLineNumber): $($_.Message)" }
+              }
+          }
+          if ($failed) { throw "PowerShell parse errors under .github/scripts" }
+          Write-Host "All .github/scripts/*.ps1 parsed cleanly"
+
+      - name: Run CppBuildTools unit tests
+        shell: pwsh
+        run: |
+          ./.github/scripts/tests/CppBuildTools.Tests.ps1
+          if ($LASTEXITCODE -ne 0) { throw "CppBuildTools unit tests failed" }
+
   build-and-test:
     name: C++ (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -183,71 +218,16 @@ jobs:
       - name: Install Lemonade Server
         uses: ./.github/actions/install-lemonade
 
+      # Every candidate CMake is functionally probed before it is trusted -- a
+      # cached install with bin/cmake.exe but no share/cmake-*/Modules passes a
+      # Test-Path check and then fails configure with "Could not find CMAKE_ROOT"
+      # (issue #2817). Tools live in the runner tool cache, not TEMP, which
+      # Windows sweeps. See .github/scripts/CppBuildTools.ps1.
       - name: Ensure C++ build tools are available
         shell: powershell
         run: |
-          $ErrorActionPreference = "Stop"
-          $ProgressPreference = 'SilentlyContinue'
-          $cmakeVer = "3.31.4"
-          $mgwVer   = "2.5.0"
-
-          # --- CMake ---
-          # Check PATH, then previously downloaded location, then VS, then download
-          $cmakeCached = "$env:TEMP\cmake\cmake-${cmakeVer}-windows-x86_64\bin"
-          if (Get-Command cmake -ErrorAction SilentlyContinue) {
-              Write-Host "CMake found in PATH"
-          } elseif (Test-Path "$cmakeCached\cmake.exe") {
-              Write-Host "CMake found at cached location"
-              echo "$cmakeCached" >> $env:GITHUB_PATH
-          } else {
-              $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-              if (Test-Path $vswhere) {
-                  $vsCmake = & $vswhere -latest `
-                      -requires Microsoft.VisualStudio.Component.VC.CMake.Project `
-                      -find "Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin" 2>$null
-                  if ($vsCmake -and (Test-Path "$vsCmake\cmake.exe")) {
-                      Write-Host "Using VS-bundled CMake"
-                      echo "$vsCmake" >> $env:GITHUB_PATH
-                  }
-              }
-          }
-          if (-not (Get-Command cmake -ErrorAction SilentlyContinue) -and
-              -not (Test-Path "$cmakeCached\cmake.exe")) {
-              $url = "https://github.com/Kitware/CMake/releases/download/v${cmakeVer}/cmake-${cmakeVer}-windows-x86_64.zip"
-              Write-Host "Downloading CMake v${cmakeVer}..."
-              Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\cmake.zip" -UseBasicParsing
-              Expand-Archive "$env:TEMP\cmake.zip" "$env:TEMP\cmake" -Force
-              Remove-Item "$env:TEMP\cmake.zip"
-              echo "$cmakeCached" >> $env:GITHUB_PATH
-          }
-
-          # --- C++ compiler ---
-          # Check for MSVC, then g++ in PATH, then cached w64devkit, then download
-          $hasMSVC = $false
-          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
-          if (Test-Path $vswhere) {
-              $vsPath = & $vswhere -latest -property installationPath 2>$null
-              if ($vsPath) { $hasMSVC = $true; Write-Host "MSVC found" }
-          }
-          $mgwCached = "$env:TEMP\w64devkit\bin"
-          if (-not $hasMSVC) {
-              if (Get-Command g++ -ErrorAction SilentlyContinue) {
-                  Write-Host "g++ found in PATH"
-              } elseif (Test-Path "$mgwCached\g++.exe") {
-                  Write-Host "w64devkit found at cached location"
-                  echo "$mgwCached" >> $env:GITHUB_PATH
-              } else {
-                  $url = "https://github.com/skeeto/w64devkit/releases/download/v${mgwVer}/w64devkit-x64-${mgwVer}.7z.exe"
-                  Write-Host "Downloading w64devkit (MinGW-w64) v${mgwVer}..."
-                  Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\w64devkit.exe" -UseBasicParsing
-                  Write-Host "Extracting w64devkit..."
-                  & "$env:TEMP\w64devkit.exe" -o"$env:TEMP" -y | Out-Null
-                  Remove-Item "$env:TEMP\w64devkit.exe"
-                  echo "$mgwCached" >> $env:GITHUB_PATH
-              }
-          }
-
-          Write-Host "Build tools ready"
+          powershell -ExecutionPolicy Bypass -File .github\scripts\Ensure-CppBuildTools.ps1 -CMakeVersion 3.31.4 -W64DevkitVersion 2.5.0
+          if ($LASTEXITCODE -ne 0) { throw "C++ build tools setup failed" }
 
       - name: Restore FetchContent cache
         uses: actions/cache@v6
@@ -403,7 +383,7 @@ jobs:
   cpp-build-summary:
     name: C++ Build Summary
     runs-on: ubuntu-latest
-    needs: [build-and-test, install-test, shared-lib-test, integration-test, benchmark]
+    needs: [toolchain-script-tests, build-and-test, install-test, shared-lib-test, integration-test, benchmark]
     if: >-
       ${{ always() && !cancelled() &&
           needs.build-and-test.result != 'cancelled' }}
@@ -411,12 +391,20 @@ jobs:
       - name: Check build results
         run: |
           echo "=== C++ Build & Test Summary ==="
+          echo "Toolchain Scripts: ${{ needs.toolchain-script-tests.result }}"
           echo "Build & Test:      ${{ needs.build-and-test.result }}"
           echo "Install Test:      ${{ needs.install-test.result }}"
           echo "Shared Lib Test:   ${{ needs.shared-lib-test.result }}"
           echo "Integration Tests: ${{ needs.integration-test.result }}"
           echo "Benchmarks:        ${{ needs.benchmark.result }}"
           echo ""
+
+          # Checked before the draft-skip exit: the toolchain script tests gate the
+          # STX setup logic and run on every event, draft or not.
+          if [[ "${{ needs.toolchain-script-tests.result }}" != "success" ]]; then
+            echo "C++ toolchain script tests failed"
+            exit 1
+          fi
 
           if [[ "${{ needs.build-and-test.result }}" == "skipped" ]]; then
             echo "All C++ jobs skipped (draft PR - add 'ready_for_ci' label to run)"
@@ -429,7 +417,9 @@ jobs:
           [[ "${{ needs.shared-lib-test.result }}" != "success" ]] && FAILED=1
           # Integration test runs on self-hosted STX hardware; treat
           # 'skipped' and 'failure' as non-blocking (warn only) since the
-          # runner may lack tools like cmake in PATH.
+          # runner can be offline, busy, or missing hardware prerequisites.
+          # Toolchain setup itself is no longer a warn-only case -- it either
+          # provides a validated CMake or fails the job loudly (issue #2817).
           if [[ "${{ needs.integration-test.result }}" == "failure" ]]; then
             echo "::warning::Integration tests failed (STX runner infrastructure issue)"
           fi

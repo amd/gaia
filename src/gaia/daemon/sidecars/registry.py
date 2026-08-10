@@ -277,9 +277,14 @@ class SidecarRegistry:
 
         The relay's single server-side token source (#2150): the sidecar bearer
         never has to travel through a client to reach proxied calls. Raises
-        :class:`UnknownAgentError` (unregistered id) or
-        :class:`SidecarNotRunningError` (registered but not running) so the
+        :class:`UnknownAgentError` (unregistered id),
+        :class:`SidecarNotRunningError` (registered but not running) or
+        :class:`SidecarUnresponsiveError` (alive but no longer serving) so the
         HTTP layer can map them to distinct loud 404/503 responses.
+
+        The responsiveness probe runs here because this is the one place every
+        relayed request passes through, and a process-alive check cannot tell a
+        serving sidecar from a wedged one.
         """
         self._spec(agent_id)
         with self._lock:
@@ -291,6 +296,7 @@ class SidecarRegistry:
                 f"Start it first (`gaia daemon start-agent {agent_id}` or "
                 f"POST /daemon/v1/agents/{agent_id}/ensure), then retry."
             )
+        manager.check_responsive()
         return manager.base_url, manager.auth_token
 
     def authenticate_callback(self, credential: str) -> Optional[str]:

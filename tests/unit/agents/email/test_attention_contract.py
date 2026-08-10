@@ -40,12 +40,17 @@ from gaia_agent_email.contract import (  # noqa: E402
     EmailAttentionResponse,
     EmailAttentionResult,
     MailboxError,
+    MessageError,
 )
 
 
 class TestSchemaVersionBump:
-    def test_schema_version_is_2_8(self):
-        assert SCHEMA_VERSION == "2.8"
+    def test_schema_version_is_2_12(self):
+        # Bumped again by #2829 (POST /v1/email/query gains optional
+        # session_id) since this file's #2582 attention-view bump to 2.8 --
+        # additive like every bump before it, so this is a routine
+        # version-pin update, not a contract regression.
+        assert SCHEMA_VERSION == "2.12"
 
 
 class TestAttentionItemKind:
@@ -116,9 +121,26 @@ class TestAttentionCoverage:
         assert cov.mailbox_errors[0].mailbox == "microsoft"
         assert cov.scan_truncated is True
 
+    def test_accepts_message_errors(self):
+        cov = AttentionCoverage(
+            scanned=10,
+            degraded=True,
+            message_errors=[
+                MessageError(message_id="m1", error="rate-limited, try again")
+            ],
+        )
+        assert cov.message_errors[0].message_id == "m1"
+        assert cov.mailbox_errors is None
+
     def test_forbids_unknown_fields(self):
         with pytest.raises(ValidationError):
             AttentionCoverage(bogus=True)
+
+
+class TestMessageError:
+    def test_forbids_unknown_fields(self):
+        with pytest.raises(ValidationError):
+            MessageError(message_id="m1", error="x", bogus=True)
 
 
 class TestEmailAttentionResult:

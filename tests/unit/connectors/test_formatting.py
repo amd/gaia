@@ -17,6 +17,7 @@ from gaia.connectors.errors import (
     ConfigurationError,
     ConnectionRevokedError,
     ConnectorsError,
+    RateLimitedError,
 )
 from gaia.connectors.formatting import format_connector_error
 
@@ -110,6 +111,19 @@ def test_format_connector_error_email_agent_microsoft_falls_through():
     # The Google migration string must not leak onto a Microsoft failure.
     assert "Google" not in msg
     assert "gmail.modify" not in msg
+
+
+def test_format_connector_error_rate_limited_is_actionable_not_generic():
+    """#2720 AC-4 -- a rate-limit that survived retry must name the cause
+    (rate-limited, per-user concurrency) AND the remedy (try again), never
+    collapse to the bare 'CONNECTOR_ERROR: All connected mailboxes failed'
+    a caller aggregating several mailbox failures would otherwise produce."""
+    err = RateLimitedError("google", message_ids=["m1", "m2"])
+    msg = format_connector_error(err)
+    assert "CONNECTOR_ERROR" in msg
+    assert "google" in msg
+    assert any(t in msg.lower() for t in ("retry", "try again"))
+    assert msg != "CONNECTOR_ERROR: All connected mailboxes failed"
 
 
 def test_format_connector_error_unknown_agent_falls_back_to_generic():

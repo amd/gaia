@@ -368,13 +368,19 @@ class PreferenceToolsMixin:
 
         @tool
         def set_priority_sender(email: str) -> str:
-            """Mark a sender as always urgent.
+            """Mark a sender as high-priority (#2632: never forces urgency).
 
-            Senders flagged here bypass the triage heuristic entirely —
-            ``triage_inbox`` and ``pre_scan_inbox`` will classify their
-            messages as ``urgent`` regardless of subject keywords or
-            Gmail labels. Useful for high-signal senders the heuristic
-            can't recognize on its own (e.g. ``boss@company.com``).
+            Senders flagged here are tagged ``preference_applied:
+            "priority_sender"`` in ``triage_inbox`` / ``pre_scan_inbox``
+            output — that tag has no reader today (#2777), so it does not
+            currently reorder or highlight the sender's mail. The category
+            (urgent, needs_response, ...) is still decided entirely by the
+            message content; this tool never overrides it.
+            "I care about this sender" is not "their mail is urgent" — a
+            newsletter from a priority sender still classifies as whatever
+            its content says. Useful for calling out high-signal senders
+            the heuristic can't recognize on its own (e.g.
+            ``boss@company.com``).
 
             On a normally-provisioned install this rule is saved to the
             agent's local state database and is honored in future sessions.
@@ -418,7 +424,7 @@ class PreferenceToolsMixin:
 
         @tool
         def remove_priority_sender(email: str) -> str:
-            """Remove a sender from the priority (always-urgent) list.
+            """Remove a sender from the priority-sender list.
 
             Reverses ``set_priority_sender`` for one address. Only touches
             ``priority_senders`` — never ``low_priority_senders``, even if
@@ -482,11 +488,17 @@ class PreferenceToolsMixin:
 
         @tool
         def set_low_priority_sender(email: str) -> str:
-            """Mark a sender as always low-priority.
+            """Mark a sender as low-priority (#2666: never forces PROMOTIONAL).
 
-            Senders flagged here are classified as ``low priority`` and
-            surfaced in ``pre_scan_inbox``'s ``suggested_archives``
-            section. Useful for newsletters or bot accounts the
+            Senders flagged here are tagged ``preference_applied:
+            "low_priority_sender"`` in ``triage_inbox`` / ``pre_scan_inbox``
+            output so they can be de-prioritized behind other mail — but
+            the category (urgent, needs_response, ...) is still decided
+            entirely by the message content; this tool never overrides it.
+            "I don't care about most of this sender's mail" is not "none
+            of their mail is ever urgent" — a genuinely urgent message
+            from a low-priority sender still classifies as whatever its
+            content says. Useful for newsletters or bot accounts the
             heuristic can't recognize on its own.
 
             On a normally-provisioned install this rule is saved to the

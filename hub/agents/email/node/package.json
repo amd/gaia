@@ -1,0 +1,31 @@
+{
+  "name": "@amd-gaia/node-agent-email",
+  "version": "2.2.0",
+  "description": "Email triage agent SDK — rule-based heuristics + LLM pipeline for classifying, summarising, and extracting actions from emails and threads.",
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "core/",
+    "utils/"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "openai": "^4.0.0"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/amd/gaia",
+    "directory": "hub/agents/email/node"
+  },
+  "keywords": [
+    "email",
+    "triage",
+    "llm",
+    "openai-compatible",
+    "gaia",
+    "amd"
+  ]
+}

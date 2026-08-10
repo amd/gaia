@@ -47,6 +47,7 @@ from gaia.llm.lemonade_client import (
 if TYPE_CHECKING:
     from gaia.agents.base.goal_store import Goal, Proposal
     from gaia.connectors.providers.base import ConnectorRequirement
+    from gaia.skills import Skill, SkillManager, SkillSetResolution, SkillSets
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -181,6 +182,21 @@ class HardwareRequirement:
 _SD_CAPABILITY_TOOLS: Tuple[str, ...] = ("generate_image",)
 
 
+# Final answer when a turn still overflows the model's context window after
+# the one-shot shrink-and-retry (#2763) -- shared across every agent, so it
+# names the constraint generically (no tool- or domain-specific vocabulary)
+# rather than assuming a search/date-range shape. The prior copy ("re-ask in
+# a fresh chat with just the essentials") never said WHAT was too big or HOW
+# to shrink it, so every occurrence read identically regardless of cause --
+# this repo's fail-loud rule requires naming the constraint and a next step.
+_CONTEXT_STILL_OVERFLOWING_MESSAGE = (
+    "This request needs more than fits in the model's context window, even "
+    "after trimming older results. Try narrowing it — fewer results, a "
+    "shorter date range, or a more specific query — or start a fresh "
+    "conversation and ask again."
+)
+
+
 # Tools that mutate external state (mark read, archive, star, …). A small
 # model that loses track of sequential state may re-issue an identical
 # mutation (same tool + same id). Unlike query dedup we key on the *args*,
@@ -308,6 +324,20 @@ class Agent(abc.ABC):
     # both render paths and the ``_openai_tools`` property.
     _active_tool_filter: Optional[List[str]] = None
 
+    # Skills (#888): lazily built manager + the skills loaded into this agent.
+    # Instance-level once set, so one agent's skills never leak into a sibling.
+    _skill_manager: Optional[Any] = None
+    _loaded_skills: Optional[Dict[str, Any]] = None
+
+    # Skill sets (#2466): the parsed manifest declarations, the explicit
+    # ``--skill-set`` request, and the set that actually resolved.
+    _skill_sets: Optional[Any] = None
+    _requested_skill_set: Optional[str] = None
+    _active_skill_set: Optional[str] = None
+    # Names the last ``load_skill_set`` loaded, so switching sets unloads only
+    # what a set brought in — never a skill the agent loaded itself.
+    _skill_set_loaded: Optional[List[str]] = None
+
     # Define state constants
     STATE_PLANNING = "PLANNING"
     STATE_EXECUTING_PLAN = "EXECUTING_PLAN"
@@ -330,6 +360,18 @@ class Agent(abc.ABC):
 
     # Registry reads this to include dynamic MCP consumers in the Settings "Active for" panel.
     CONSUMES_MCP_SERVERS: ClassVar[bool] = False
+
+    # Agent-bundled skill directories (issue #888) — the highest-precedence
+    # discovery root. A packaged agent points this at its own ``skills/`` folder
+    # so the skills it ships always win over a same-named user or Claude Code
+    # copy. Empty = the agent bundles no skills.
+    SKILL_DIRS: ClassVar[List[str]] = []
+
+    # Path to this agent's ``gaia-agent.yaml`` (issue #2466). When set, the base
+    # ``__init__`` reads its ``skills:`` / ``skill_sets:`` blocks and loads the
+    # resolved set at startup. ``None`` = no declarative skills; the agent may
+    # still call ``load_skill`` directly.
+    SKILL_MANIFEST: ClassVar[Optional[str]] = None
 
     # Agent-specific tools that must be gated behind explicit user confirmation
     # (#1440). Subclasses override this to declare their own destructive/external
@@ -420,6 +462,7 @@ Do NOT wrap conversational replies in JSON.
         min_context_size: int = 32768,
         skip_lemonade: bool = False,
         device: Optional[str] = None,
+        skill_set: Optional[str] = None,
     ):
         """
         Initialize the Agent with LLM client.
@@ -446,6 +489,12 @@ Do NOT wrap conversational replies in JSON.
             min_context_size: Minimum context size required for this agent (default: 32768).
             skip_lemonade: If True, skip Lemonade server initialization (default: False).
                           Use this when connecting to a different OpenAI-compatible backend.
+            skill_set: Explicit skill set to activate (the generic
+                          ``--skill-set`` override, #2466). Highest precedence —
+                          beats the agent's ``select_skill_set()`` hook and the
+                          manifest's ``default_skill_set``. An undeclared name
+                          fails loudly, naming the valid sets. Only meaningful
+                          when ``SKILL_MANIFEST`` declares ``skill_sets:``.
             device: Runtime device selector ('cpu', 'gpu', 'npu') chosen by the
                           user (Agent UI dropdown / CLI --device). Validated against
                           detected hardware at startup via LemonadeManager.ensure_ready;
@@ -454,6 +503,9 @@ Do NOT wrap conversational replies in JSON.
         Note: Uses local LLM server by default unless use_claude or use_chatgpt is True.
         """
         self.device = device
+        # Stored before _register_tools so an agent's selector hook and the
+        # post-registration skill-set load both see the explicit request.
+        self._requested_skill_set = skill_set
         self.error_history = []  # Store error history for learning
         self.conversation_history = (
             []
@@ -544,6 +596,11 @@ Do NOT wrap conversational replies in JSON.
         # Register tools for this agent (may call rebuild_system_prompt via MCP loading;
         # _response_format_template must be set above before this call).
         self._register_tools()
+
+        # Declarative skills (#2466). After _register_tools so a skill's tools
+        # land on top of the agent's own registry (and survive a subclass's
+        # ``_snapshot_tools()``), and so a skill body can reference them.
+        self.load_skill_set()
 
         # Note: system_prompt is now a lazy @property that composes on first access.
         # Tool descriptions and response format are added in _compose_system_prompt().
@@ -892,6 +949,320 @@ Do NOT wrap conversational replies in JSON.
         # Recompose the full system prompt via _compose_system_prompt() so that
         # mixin prompts, tool descriptions, and response format are all included.
         self._system_prompt_cache = self._compose_system_prompt()
+
+    # ------------------------------------------------------------------
+    # Skills (issue #888) — SKILL.md capabilities loaded at runtime
+    # ------------------------------------------------------------------
+
+    @property
+    def skill_manager(self) -> "SkillManager":
+        """This agent's :class:`~gaia.skills.manager.SkillManager`.
+
+        Built lazily over the v1 discovery roots, with the agent's own
+        ``SKILL_DIRS`` as the highest-precedence root.
+        """
+        if getattr(self, "_skill_manager", None) is None:
+            from gaia.skills import SkillManager
+
+            self._skill_manager = SkillManager(agent_skill_dirs=self.SKILL_DIRS)
+        return self._skill_manager
+
+    @property
+    def loaded_skills(self) -> Dict[str, "Skill"]:
+        """``{name: Skill}`` for every skill loaded into this agent."""
+        if getattr(self, "_loaded_skills", None) is None:
+            self._loaded_skills = {}
+        return self._loaded_skills
+
+    def load_skill(
+        self, name: str, *, manager: Optional["SkillManager"] = None
+    ) -> "Skill":
+        """Load a skill by name and scope it into this agent.
+
+        Resolves ``name`` across the discovery roots (agent-bundled →
+        ``~/.gaia/skills`` → read-only ``.claude/skills``), validates the
+        manifest, registers any tools the skill provides under the
+        ``<skill-name>/<tool>`` namespace, and injects its Markdown body into
+        the system prompt.
+
+        Args:
+            name: The skill's ``name`` (== its directory name).
+            manager: Optional :class:`~gaia.skills.manager.SkillManager` to
+                resolve against; defaults to :attr:`skill_manager`.
+
+        Returns:
+            The loaded :class:`~gaia.skills.format.Skill`.
+
+        Raises:
+            SkillNotFoundError: no discovery root contains that skill.
+            SkillValidationError: the manifest is invalid or contradicts
+                ``tools.py``. Nothing is registered.
+            SkillPermissionError: the skill declares a local-capability
+                permission (``filesystem``/``shell``/``database``/``desktop``/
+                ``env``), which this phase refuses rather than loading
+                unenforced.
+
+        Example:
+            class WebAgent(Agent):
+                def _register_tools(self):
+                    self.load_skill("web-research")
+        """
+        from gaia.skills import connector_requirements, refuse_unbridged_permissions
+        from gaia.skills.loader import register_skill_tools, unregister_skill_tools
+
+        resolver = manager if manager is not None else self.skill_manager
+
+        if name in self.loaded_skills:
+            logger.debug("Skill '%s' is already loaded for this agent", name)
+            return self.loaded_skills[name]
+
+        skill = resolver.load(name)
+
+        # Permission gate BEFORE any registration: a refused skill must not
+        # leave tools or prompt fragments behind.
+        permissions = skill.parsed_permissions()
+        refuse_unbridged_permissions(permissions, skill_name=skill.name)
+        requirements = connector_requirements(permissions, skill_name=skill.name)
+
+        registered = register_skill_tools(skill)
+        try:
+            if registered and self._instance_tools is not None:
+                self._instance_tools.update(registered)
+
+            if requirements:
+                # Shadow the ClassVar per instance — never mutate it, or one
+                # agent's skill would leak requirements into every sibling.
+                existing = list(self.REQUIRED_CONNECTORS)
+                for requirement in requirements:
+                    if requirement not in existing:
+                        existing.append(requirement)
+                self.REQUIRED_CONNECTORS = existing
+
+            self.loaded_skills[name] = skill
+            self.rebuild_system_prompt()
+        except Exception:
+            unregister_skill_tools(skill.name)
+            self.loaded_skills.pop(name, None)
+            raise
+
+        # tools_required names registry tools the skill CONSUMES. A name that is
+        # valid but not active in this agent is scoping, not a defect — log it so
+        # a skill that quietly can't run its recipe is diagnosable.
+        inactive = [
+            t for t in skill.gaia.tools_required if t not in self._tools_registry
+        ]
+        if inactive:
+            logger.info(
+                "Skill '%s' expects tool(s) %s, which this agent does not have "
+                "registered — its instructions may not be fully executable here.",
+                skill.name,
+                ", ".join(inactive),
+            )
+
+        logger.info(
+            "Loaded skill '%s' (tier=%s, root=%s, %d tool(s), %d connector "
+            "requirement(s))",
+            skill.name,
+            skill.security_tier,
+            skill.root,
+            len(registered),
+            len(requirements),
+        )
+        return skill
+
+    def unload_skill(self, name: str) -> bool:
+        """Remove a loaded skill's tools and body. Returns True if it was loaded."""
+        from gaia.skills.loader import unregister_skill_tools
+
+        if name not in self.loaded_skills:
+            return False
+
+        removed = unregister_skill_tools(name)
+        if self._instance_tools is not None:
+            for key in removed:
+                self._instance_tools.pop(key, None)
+        self.loaded_skills.pop(name, None)
+        self.rebuild_system_prompt()
+        logger.info("Unloaded skill '%s'", name)
+        return True
+
+    # ------------------------------------------------------------------
+    # Skill sets (issue #2466) — declarative, per-launch skill bundles
+    # ------------------------------------------------------------------
+
+    @property
+    def skill_sets(self) -> "SkillSets":
+        """This agent's parsed ``skills:`` / ``skill_sets:`` declarations.
+
+        Read once from :attr:`SKILL_MANIFEST` and cached. Falsy (and empty) when
+        the agent declares no manifest — so nothing changes for an agent that
+        does not use skills.
+
+        Raises:
+            ManifestError: ``SKILL_MANIFEST`` is set but missing or malformed.
+                A packaged agent whose own manifest cannot be read is broken,
+                not degraded.
+        """
+        if getattr(self, "_skill_sets", None) is None:
+            from gaia.skills.sets import SkillSets
+
+            manifest_path = self.SKILL_MANIFEST
+            if not manifest_path:
+                self._skill_sets = SkillSets()
+            else:
+                from gaia.hub.manifest import parse as parse_manifest
+
+                self._skill_sets = parse_manifest(manifest_path).skill_sets
+        return self._skill_sets
+
+    @property
+    def active_skill_set(self) -> Optional[str]:
+        """The skill set this agent resolved at startup, or ``None``."""
+        return getattr(self, "_active_skill_set", None)
+
+    def select_skill_set(self) -> Optional[str]:
+        """Selector hook: which skill set fits this launch's runtime state?
+
+        The framework calls this when no explicit ``skill_set`` was passed.
+        Override it to key the active set off something the agent already knows
+        — a connected account's type, a workspace mode, a device profile.
+        Returning ``None`` means "no opinion", which defers to the manifest's
+        ``default_skill_set``. Returning a name this agent does not declare
+        fails loudly rather than falling back.
+        """
+        return None
+
+    def resolve_skill_set(
+        self, requested: Optional[str] = None
+    ) -> "SkillSetResolution":
+        """Resolve the active set: *requested* → :meth:`select_skill_set` → default.
+
+        Args:
+            requested: Explicit override. Defaults to the ``skill_set`` argument
+                passed to ``__init__``.
+
+        Raises:
+            SkillSetError: the resolved name is not a declared set.
+        """
+        declarations = self.skill_sets
+        explicit = requested if requested is not None else self._requested_skill_set
+        # Only consult the hook when nothing explicit was asked for — an
+        # explicit request must never be second-guessed by agent state.
+        selected = None if (explicit or "").strip() else self.select_skill_set()
+        return declarations.resolve(requested=explicit, selected=selected)
+
+    def load_skill_set(self, requested: Optional[str] = None) -> Dict[str, "Skill"]:
+        """Resolve and load this agent's declared skills. Returns what loaded.
+
+        A no-op returning ``{}`` when the agent declares no skills. Otherwise it
+        loads the always-on ``skills:`` list plus the resolved set, in
+        declaration order. A skill declared ``required: false`` that is missing
+        from every discovery root is logged and skipped; every other failure
+        propagates, because an agent launched with the wrong capabilities is
+        worse than one that refuses to launch.
+
+        Called automatically at the end of ``Agent.__init__``. Call it again with
+        a different name to switch sets mid-session; the previous set's skills are
+        unloaded once the new set has loaded, so the two never overlap.
+
+        **All-or-nothing.** A failure part-way through leaves the agent exactly as
+        it was — the previous set still loaded, ``active_skill_set`` still
+        accurate. A half-switched agent reporting one set while carrying another's
+        skills is worse than a raised error.
+
+        Note the switch is not sticky: a later bare ``load_skill_set()`` re-runs
+        the full resolution and returns to whatever that yields (the explicit
+        ``skill_set`` passed to ``__init__``, else the hook, else the default).
+        Pass the name again to stay on it.
+        """
+        from gaia.skills.errors import SkillNotFoundError
+
+        declarations = self.skill_sets
+        explicit = requested if requested is not None else self._requested_skill_set
+        if not declarations:
+            if (explicit or "").strip():
+                # Never drop an explicit request on the floor — resolve() raises
+                # with the actionable "this agent declares no skill_sets" message.
+                declarations.resolve(requested=explicit)
+            return {}
+
+        resolution = self.resolve_skill_set(requested)
+        wanted = {ref.name for ref in resolution.skills}
+        previously_loaded = list(self._skill_set_loaded or [])
+
+        # Load the new set BEFORE dropping the old one, and track what this call
+        # actually brought in, so a failure can be undone completely.
+        loaded: Dict[str, "Skill"] = {}
+        newly_loaded: List[str] = []
+        try:
+            for ref in resolution.skills:
+                already_present = ref.name in self.loaded_skills
+                try:
+                    loaded[ref.name] = self.load_skill(ref.name)
+                except SkillNotFoundError:
+                    if ref.required:
+                        raise
+                    logger.warning(
+                        "Optional skill '%s' (skill set '%s') was not found in "
+                        "any discovery root — continuing without it.",
+                        ref.name,
+                        resolution.name,
+                    )
+                    continue
+                if not already_present:
+                    newly_loaded.append(ref.name)
+        except Exception:
+            # Roll back to the pre-call state: drop only what this call added,
+            # and leave _active_skill_set / _skill_set_loaded untouched so the
+            # agent keeps reporting the set it is actually carrying.
+            for name in newly_loaded:
+                self.unload_skill(name)
+            logger.error(
+                "Skill set '%s' failed to load; the agent is unchanged and skill "
+                "set '%s' remains active.",
+                resolution.name,
+                self._active_skill_set or "(none)",
+            )
+            raise
+
+        # The new set is fully loaded — now retire the previous one's leftovers.
+        # Scoped to set-loaded names, so a skill the agent loaded itself via
+        # ``load_skill`` is never a set's to unload.
+        for stale in [n for n in previously_loaded if n not in wanted]:
+            self.unload_skill(stale)
+
+        self._active_skill_set = resolution.name
+        self._skill_set_loaded = list(loaded)
+        logger.info(
+            "Skill set '%s' active (chosen by: %s) — loaded %d of %d declared "
+            "skill(s): %s",
+            resolution.name or "(none)",
+            resolution.source,
+            len(loaded),
+            len(resolution.skills),
+            ", ".join(loaded) or "(none)",
+        )
+        return loaded
+
+    def get_skills_system_prompt(self) -> str:
+        """Render the loaded skills' bodies as a system-prompt fragment.
+
+        Auto-discovered by ``_get_mixin_prompts()``, so a skill's instructions
+        reach the model as soon as it is loaded. Returns "" when no skill is
+        loaded, keeping every existing agent's prompt byte-identical.
+        """
+        skills = getattr(self, "_loaded_skills", None)
+        if not skills:
+            return ""
+
+        sections = []
+        for skill in skills.values():
+            if not skill.body:
+                continue
+            sections.append(f"--- SKILL: {skill.name} ---\n{skill.body}")
+        if not sections:
+            return ""
+        return "==== LOADED SKILLS ====\n" + "\n\n".join(sections)
 
     def list_tools(self, verbose: bool = True) -> None:
         """
@@ -2339,8 +2710,13 @@ Do NOT wrap conversational replies in JSON.
         """
         truncated_result = tool_result
         if isinstance(tool_result, (dict, list)):
-            # Use custom encoder to handle bytes and other non-serializable types
-            result_str = json.dumps(tool_result, default=self._json_serialize_fallback)
+            # Use custom encoder to handle bytes and other non-serializable types.
+            # ensure_ascii=False: this text reaches the model as prose, not a
+            # wire format re-parsed on the other end -- escaping would hand it
+            # literal \uXXXX sequences instead of the actual characters.
+            result_str = json.dumps(
+                tool_result, default=self._json_serialize_fallback, ensure_ascii=False
+            )
             threshold, target = truncation_budget(self.device)
             if len(result_str) > threshold:
                 # Truncate large results to prevent overwhelming the LLM. The
@@ -2563,7 +2939,7 @@ Do NOT wrap conversational replies in JSON.
 
         if not isinstance(text_content, str):
             text_content = json.dumps(
-                tool_output, default=self._json_serialize_fallback
+                tool_output, default=self._json_serialize_fallback, ensure_ascii=False
             )
 
         msg = {
@@ -2612,6 +2988,7 @@ Do NOT wrap conversational replies in JSON.
                         "arguments": json.dumps(
                             tc["tool_args"],
                             default=self._json_serialize_fallback,
+                            ensure_ascii=False,
                         ),
                     },
                 }
@@ -2681,7 +3058,9 @@ Do NOT wrap conversational replies in JSON.
         if isinstance(content, dict) and (
             "test_results" in content or "run_tests" in content
         ):
-            return json.dumps(content, default=self._json_serialize_fallback)
+            return json.dumps(
+                content, default=self._json_serialize_fallback, ensure_ascii=False
+            )
 
         if not isinstance(content, (dict, list)):
             content_str = str(content)
@@ -2689,7 +3068,12 @@ Do NOT wrap conversational replies in JSON.
                 return content_str
             return self._truncate_fallback_text(content_str, max_chars, as_json)
 
-        compact_str = json.dumps(content, default=self._json_serialize_fallback)
+        # ensure_ascii=False throughout this method: every returned string
+        # here is prose the model reads directly, not a wire format the
+        # caller re-parses -- escaping would hand it literal \uXXXX text.
+        compact_str = json.dumps(
+            content, default=self._json_serialize_fallback, ensure_ascii=False
+        )
         if len(compact_str) <= max_chars:
             return compact_str
 
@@ -2715,7 +3099,10 @@ Do NOT wrap conversational replies in JSON.
                             )
 
             result_str = json.dumps(
-                truncated, indent=2, default=self._json_serialize_fallback
+                truncated,
+                indent=2,
+                default=self._json_serialize_fallback,
+                ensure_ascii=False,
             )
             # Use larger limit for chunked responses since chunks are the actual data
             if len(result_str) <= max_chars * 3:  # Allow up to 60KB for chunked data
@@ -2723,7 +3110,10 @@ Do NOT wrap conversational replies in JSON.
             # If still too large, keep first 3 chunks only
             truncated["chunks"] = truncated["chunks"][:3]
             return json.dumps(
-                truncated, indent=2, default=self._json_serialize_fallback
+                truncated,
+                indent=2,
+                default=self._json_serialize_fallback,
+                ensure_ascii=False,
             )
 
         # Dict/list content (Jira "issues", email "messages"/"awaiting_reply",
@@ -2749,6 +3139,7 @@ Do NOT wrap conversational replies in JSON.
                 json.dumps(
                     {"truncated": True, "original_chars": len(text), "content": ""},
                     default=self._json_serialize_fallback,
+                    ensure_ascii=False,
                 )
             )
             budget = max(0, max_chars - envelope_overhead)
@@ -2759,6 +3150,7 @@ Do NOT wrap conversational replies in JSON.
                     "content": text[:budget],
                 },
                 default=self._json_serialize_fallback,
+                ensure_ascii=False,
             )
 
         half = max_chars // 2 - 20
@@ -2816,7 +3208,9 @@ Do NOT wrap conversational replies in JSON.
                         for key, items in lists.items()
                         if len(items) < totals[key]
                     }
-            return json.dumps(payload, default=self._json_serialize_fallback)
+            return json.dumps(
+                payload, default=self._json_serialize_fallback, ensure_ascii=False
+            )
 
         result = render()
         while len(result) > max_chars:
@@ -2930,6 +3324,18 @@ Do NOT wrap conversational replies in JSON.
         """
         cancelled = getattr(self.console, "cancelled", None)
         return cancelled is not None and cancelled.is_set()
+
+    def finalize_answer(self, answer: str, _conversation: Any) -> str:
+        """Last chance to correct the final answer, BEFORE it is emitted.
+
+        Runs ahead of ``console.print_final_answer``, so a subclass's
+        correction reaches every consumer — the SSE ``answer`` event the TUI
+        renders, the CLI console, and ``process_query``'s return value — rather
+        than only the callers that re-read the return dict (#2789).
+
+        Identity by default; override to post-process.
+        """
+        return answer
 
     def process_query(
         self,
@@ -3265,7 +3671,9 @@ Do NOT wrap conversational replies in JSON.
                                 "total_steps": self.total_plan_steps,
                             }
                             plan_context_raw = json.dumps(
-                                plan_context, default=self._json_serialize_fallback
+                                plan_context,
+                                default=self._json_serialize_fallback,
+                                ensure_ascii=False,
                             )
                             if len(plan_context_raw) > 20000:
                                 # Prose call site: spliced into an f-string
@@ -3558,12 +3966,11 @@ Do NOT wrap conversational replies in JSON.
                             }
                         )
                         if is_ctx_overflow:
-                            final_answer = (
-                                "I had to trim the conversation to fit my "
-                                "memory but I'm still not making progress. "
-                                "Could you re-ask in a fresh chat with just "
-                                "the essentials?"
-                            )
+                            # Name the actual constraint and a next step
+                            # (#2763) -- "re-ask with just the essentials" told
+                            # the user nothing about WHAT was too big or HOW to
+                            # shrink it, so every retry looked identical.
+                            final_answer = _CONTEXT_STILL_OVERFLOWING_MESSAGE
                         else:
                             final_answer = (
                                 f"Sorry, I ran into a problem while processing your request. "
@@ -3707,12 +4114,11 @@ Do NOT wrap conversational replies in JSON.
                             }
                         )
                         if is_ctx_overflow:
-                            final_answer = (
-                                "I had to trim the conversation to fit my "
-                                "memory but I'm still not making progress. "
-                                "Could you re-ask in a fresh chat with just "
-                                "the essentials?"
-                            )
+                            # Name the actual constraint and a next step
+                            # (#2763) -- "re-ask with just the essentials" told
+                            # the user nothing about WHAT was too big or HOW to
+                            # shrink it, so every retry looked identical.
+                            final_answer = _CONTEXT_STILL_OVERFLOWING_MESSAGE
                         else:
                             # If we have a typed Lemonade error in the
                             # cause-chain (e.g. ``LemonadeUpstreamTimeoutError``
@@ -3865,7 +4271,7 @@ Do NOT wrap conversational replies in JSON.
                 if deferred_tool:
                     plan_prompt += (
                         f"You initially wanted to use the {deferred_tool} tool with these arguments:\n"
-                        f"{json.dumps(deferred_args, indent=2, default=self._json_serialize_fallback)}\n\n"
+                        f"{json.dumps(deferred_args, indent=2, default=self._json_serialize_fallback, ensure_ascii=False)}\n\n"
                         "However, you MUST first create a plan. Please create a plan that includes this tool usage as a step.\n\n"
                     )
 
@@ -4892,7 +5298,7 @@ Do NOT wrap conversational replies in JSON.
                             "start GAIA with the `--sd` flag to enable it."
                         )
 
-                final_answer = answer_candidate
+                final_answer = self.finalize_answer(answer_candidate, conversation)
                 self.execution_state = self.STATE_COMPLETION
                 self.console.print_final_answer(final_answer, streaming=self.streaming)
                 break

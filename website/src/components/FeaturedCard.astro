@@ -59,7 +59,7 @@ if (agent.min_gaia_version) meta.push({ key: 'Min GAIA', value: agent.min_gaia_v
         <!-- Static chip, not a copy button — the whole card is a link and nested
              interactive elements are invalid HTML. -->
         <span class="g-cmd max-w-full break-all">
-          <span class="text-g-gold-text">$</span>{installCmd}
+          <span class="text-g-gold" aria-hidden="true">$</span>{installCmd}
         </span>
         <span class="g-cta-link font-semibold">View agent →</span>
       </div>

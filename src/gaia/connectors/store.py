@@ -314,6 +314,8 @@ def save_connection(
     scopes: List[str],
     client_id_hash: str,
     connected_at: Optional[float] = None,
+    tenant: Optional[str] = None,
+    account_type: Optional[str] = None,
 ) -> None:
     """
     Atomically persist a connection record to the keyring.
@@ -332,16 +334,36 @@ def save_connection(
     keyring slots per email) is a v2 follow-up; the username-key shape
     ``"<provider>:<account_email>"`` is forward-compatible for that
     migration.
+
+    ``tenant`` (D8, #2628): the OAuth authority that minted this
+    connection's refresh token, e.g. ``"organizations"`` or a specific
+    Directory (tenant) ID. Omitted from the blob when ``None`` (mirrors
+    ``save_provider_credentials``'s A7 contract) so a legacy blob with no
+    recorded tenant is distinguishable from one that recorded a value —
+    ``load_connection`` treats the two very differently.
+
+    ``account_type`` records what KIND of account signed in when the provider
+    can tell (Microsoft derives ``personal`` / ``work`` from the id_token ``tid``
+    claim, #2466). Distinct from ``tenant``, which records the authority the app
+    signed in *against*: the ``common`` authority admits both kinds, so the two
+    answer different questions. Omitted from the blob when ``None`` — an absent
+    key means "unknown", which readers must handle explicitly rather than
+    assuming a kind. Callers that re-save an existing connection (e.g.
+    refresh-token rotation) MUST pass both values through or they are lost.
     """
     verify_keyring_backend()
 
-    blob = {
+    blob: dict = {
         "account_email": account_email,
         "refresh_token": refresh_token,
         "scopes": list(scopes),
         "connected_at": connected_at if connected_at is not None else time.time(),
         "client_id_hash": client_id_hash,
     }
+    if tenant is not None:
+        blob["tenant"] = tenant
+    if account_type:
+        blob["account_type"] = account_type
     payload = json.dumps(blob, sort_keys=True)
     # v1 single-account per provider (per A10): the keyring KEY is always
     # built with DEFAULT_ACCOUNT; ``account_email`` lives in the metadata
@@ -356,6 +378,7 @@ def load_connection(
     provider: str,
     *,
     current_client_id_hash: str,
+    current_tenant: Optional[str] = None,
     account_email: str = DEFAULT_ACCOUNT,
 ) -> Optional[dict]:
     """
@@ -365,6 +388,16 @@ def load_connection(
     against ``current_client_id_hash``; on mismatch the entry is cleared
     and ``None`` is returned. The caller (``tokens.get_access_token``)
     then raises ``AuthRequiredError(REAUTH_REQUIRED)``.
+
+    ``current_tenant`` (D8/A6/A18, #2628): a second, independent tripwire
+    mirroring the hash check above. When the caller passes the tenant the
+    connector currently resolves to AND the stored blob recorded a tenant
+    (i.e. NOT a legacy pre-#2628 blob) AND the two disagree, that is a
+    genuine positive signal — clear the entry and raise
+    ``AuthRequiredError(TENANT_MISMATCH)`` naming both values. A legacy
+    blob with no recorded tenant, or a caller that passes
+    ``current_tenant=None`` (the default), skips this check entirely —
+    "we don't know" is not the same as "we know they disagree".
     """
     verify_keyring_backend()
     username = _connection_username(provider, account_email)
@@ -395,6 +428,28 @@ def load_connection(
         delete_connection(provider, account_email=account_email)
         raise AuthRequiredError(
             AuthRequiredError.Reason.REAUTH_REQUIRED, provider=provider
+        )
+
+    stored_tenant = blob.get("tenant")
+    if (
+        current_tenant is not None
+        and stored_tenant is not None
+        and stored_tenant != current_tenant
+    ):
+        delete_connection(provider, account_email=account_email)
+        raise AuthRequiredError(
+            AuthRequiredError.Reason.TENANT_MISMATCH,
+            provider=provider,
+            message=(
+                f"The stored {provider!r} connection was authenticated "
+                f"against tenant {stored_tenant!r}, but this connector "
+                f"currently resolves to tenant {current_tenant!r}. This "
+                "usually means the account is a different type than "
+                "expected, or a Directory (tenant) ID setup field changed "
+                "after connecting. Reconnect via the correct connector, or "
+                f"run `gaia connectors connect {provider}` again once the "
+                "tenant configuration is fixed."
+            ),
         )
 
     return blob  # type: ignore[no-any-return]
@@ -452,7 +507,11 @@ def delete_connection(provider: str, *, account_email: str = DEFAULT_ACCOUNT) ->
 
 
 def save_provider_credentials(
-    provider: str, *, client_id: str, client_secret: str = ""
+    provider: str,
+    *,
+    client_id: str,
+    client_secret: str = "",
+    tenant: Optional[str] = None,
 ) -> None:
     """Persist the *application's* OAuth client credentials for *provider*.
 
@@ -460,15 +519,23 @@ def save_provider_credentials(
     blob in the keyring, distinct from any connection blob. Lets users
     self-onboard via the AgentUI without ever touching env vars; the
     blob is encrypted at rest by the OS credential store.
+
+    ``tenant`` (plan amendment D5/A7, #2628): the optional single-tenant
+    override a ``microsoft_work``-style connector's setup form collects
+    (its ``ConfigField(key="tenant_id")``). Omitted from the blob entirely
+    when ``None`` — a test locks the exact two-key shape of an existing
+    Google blob, so this must never add a ``tenant`` key unless the caller
+    actually passed one.
     """
     verify_keyring_backend()
     if not client_id:
         raise ConnectorsError(
             f"save_provider_credentials({provider!r}): client_id is empty"
         )
-    payload = json.dumps(
-        {"client_id": client_id, "client_secret": client_secret}, sort_keys=True
-    )
+    blob: dict = {"client_id": client_id, "client_secret": client_secret}
+    if tenant is not None:
+        blob["tenant"] = tenant
+    payload = json.dumps(blob, sort_keys=True)
     username = _provider_credentials_username(provider)
     _kr_set(username, payload)
 
