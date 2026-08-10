@@ -24,13 +24,13 @@ try {
     Write-Host "  Node.js: $nodeVersion" -ForegroundColor Green
 } catch {
     Write-Host "  ERROR: Node.js is not installed." -ForegroundColor Red
-    Write-Host "  Install Node.js 18+ from https://nodejs.org"
+    Write-Host "  Install Node.js 20.19+ from https://nodejs.org"
     exit 1
 }
 
 $nodeMajor = [int]($nodeVersion -replace 'v','').Split('.')[0]
-if ($nodeMajor -lt 18) {
-    Write-Host "  ERROR: Node.js 18+ is required. Current version: $nodeVersion" -ForegroundColor Red
+if ($nodeMajor -lt 20) {
+    Write-Host "  ERROR: Node.js 20.19+ is required. Current version: $nodeVersion" -ForegroundColor Red
     exit 1
 }
 

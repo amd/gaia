@@ -120,7 +120,7 @@ function copyDirRecursive(src, dest) {
     fs.cpSync(src, dest, { recursive: true, errorOnExist: false, force: true, dereference: true });
     return;
   }
-  // Fallback path (shouldn't normally hit on Electron 40 / Node 20).
+  // Fallback path (shouldn't normally hit on Electron 43 / Node 24).
   fs.mkdirSync(dest, { recursive: true });
   for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
     const s = path.join(src, entry.name);

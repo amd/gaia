@@ -23,15 +23,15 @@ echo "Checking prerequisites..."
 # Check Node.js
 if ! command -v node &> /dev/null; then
     echo "  ERROR: Node.js is not installed."
-    echo "  Install Node.js 18+ from https://nodejs.org"
+    echo "  Install Node.js 20.19+ from https://nodejs.org"
     exit 1
 fi
 
 NODE_VERSION=$(node -v | sed 's/v//' | cut -d. -f1)
 echo "  Node.js: $(node -v)"
 
-if [ "$NODE_VERSION" -lt 18 ]; then
-    echo "  ERROR: Node.js 18+ is required. Current version: $(node -v)"
+if [ "$NODE_VERSION" -lt 20 ]; then
+    echo "  ERROR: Node.js 20.19+ is required. Current version: $(node -v)"
     exit 1
 fi
 
