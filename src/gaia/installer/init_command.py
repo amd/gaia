@@ -39,6 +39,7 @@ from gaia.llm.lemonade_launcher import (
     describe_start_hint,
     resolve_lemonade,
 )
+from gaia.ui.build import WebuiBuildStatus
 from gaia.version import LEMONADE_VERSION
 
 log = logging.getLogger(__name__)
@@ -190,6 +191,7 @@ class InitCommand:
         yes: bool = False,
         verbose: bool = False,
         remote: bool = False,
+        skip_webui_build: bool = False,
         progress_callback: Optional[Callable[[InitProgress], None]] = None,
     ):
         """
@@ -204,11 +206,15 @@ class InitCommand:
             yes: Skip confirmation prompts
             verbose: Enable verbose output
             remote: Lemonade is on a remote machine (skip local start, still check version)
+            skip_webui_build: Skip the Agent UI frontend build step entirely
+                (same-day escape hatch if the Node preflight ever false-positives;
+                same effect as setting GAIA_SKIP_WEBUI_BUILD)
             progress_callback: Optional callback for progress updates
         """
         self.profile = profile.lower()
         self.skip_models = skip_models
         self.skip_lemonade = skip_lemonade
+        self.skip_webui_build = skip_webui_build
         self.force_reinstall = force_reinstall
         self.force_models = force_models
         self.yes = yes
@@ -521,6 +527,7 @@ class InitCommand:
 
         _webui_src = Path(__file__).resolve().parent.parent / "apps" / "webui" / "src"
         _is_dev_install = _webui_src.is_dir()
+        _runs_webui_build = _is_dev_install and not self.skip_webui_build
 
         has_device_check = bool(profile_config.get("required_device"))
         has_backend_install = bool(profile_config.get("backend"))
@@ -534,7 +541,7 @@ class InitCommand:
             total_steps += 1
         if has_hub_agent_check:
             total_steps += 1
-        if _is_dev_install:
+        if _runs_webui_build:
             total_steps += 1
 
         try:
@@ -634,21 +641,29 @@ class InitCommand:
                 )
                 self._ensure_hub_agent_installed()
 
-            # Build Agent UI frontend (dev/source installs only)
-            if _is_dev_install:
+            # Build Agent UI frontend (dev/source installs only). No
+            # try/except here: ensure_webui_built() never raises for an
+            # expected toolchain/version/build failure -- it reports those
+            # via webui_build_result.status, checked below.
+            webui_build_result = None
+            if _runs_webui_build:
                 step_num += 1
                 self._print("")
                 self._print_step(step_num, total_steps, "Building Agent UI frontend...")
-                try:
-                    from gaia.ui.build import ensure_webui_built
+                from gaia.ui.build import ensure_webui_built
 
-                    built = ensure_webui_built(
-                        log_fn=self._print, warn_fn=self._print_warning
-                    )
-                    if built:
-                        self._print_success("Agent UI frontend ready")
-                except Exception as e:
-                    self._print_warning(f"Frontend build skipped: {e}")
+                webui_build_result = ensure_webui_built(
+                    log_fn=self._print, warn_fn=self._print_warning
+                )
+                # Suppress the success line when OK carries a message (the
+                # stale-but-usable-dist outcome) -- printing "ready" right
+                # under a build-failure warning is the muted version of the
+                # bug this issue exists to fix.
+                if (
+                    webui_build_result.status == WebuiBuildStatus.OK
+                    and not webui_build_result.message
+                ):
+                    self._print_success("Agent UI frontend ready")
 
             # Final step: Verify setup
             step_num += 1
@@ -675,6 +690,19 @@ class InitCommand:
                 config.save()
             except Exception as e:
                 log.warning(f"Failed to save config: {e}")
+
+            # A hard Agent UI build failure means the profile's UI isn't
+            # usable -- don't report plain success for it. verify_setup and
+            # config persistence above already ran unconditionally, since
+            # neither depends on the frontend build. The build step above
+            # already printed the actionable message via warn_fn; don't
+            # repeat the full paragraph, just name the outcome.
+            if webui_build_result is not None and webui_build_result.status in (
+                WebuiBuildStatus.NODE_TOO_OLD,
+                WebuiBuildStatus.BUILD_FAILED,
+            ):
+                self._print_error("Agent UI frontend build failed -- see above.")
+                return 1
 
             # Success!
             self._print_completion()
@@ -2223,6 +2251,7 @@ def run_init(
     yes: bool = False,
     verbose: bool = False,
     remote: bool = False,
+    skip_webui_build: bool = False,
 ) -> int:
     """
     Entry point for `gaia init` command.
@@ -2236,6 +2265,7 @@ def run_init(
         yes: Skip confirmation prompts
         verbose: Enable verbose output
         remote: Lemonade is on a remote machine (skip local start, still check version)
+        skip_webui_build: Skip the Agent UI frontend build step entirely
 
     Returns:
         Exit code (0 for success, non-zero for failure)
@@ -2250,6 +2280,7 @@ def run_init(
             yes=yes,
             verbose=verbose,
             remote=remote,
+            skip_webui_build=skip_webui_build,
         )
         return cmd.run()
     except ValueError as e:

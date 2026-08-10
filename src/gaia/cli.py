@@ -948,10 +948,16 @@ def run_cli(action, **kwargs):
 
 
 def _ensure_webui_built(log=None):
-    """Rebuild the Agent UI frontend if source files are newer than dist."""
+    """Rebuild the Agent UI frontend if source files are newer than dist.
+
+    Never raises -- a hard build failure (too-old Node, build error) is a
+    degraded launch, not a crash: ensure_webui_built() already reports the
+    failure through warn_fn; the caller still starts the server, which
+    serves its own "no frontend build" fallback page.
+    """
     from gaia.ui.build import ensure_webui_built
 
-    ensure_webui_built(
+    return ensure_webui_built(
         log_fn=log.info if log else print,
         warn_fn=log.warning if log else print,
     )
@@ -3259,6 +3265,11 @@ Examples:
         help="Skip Lemonade installation check (for CI with pre-installed Lemonade)",
     )
     init_parser.add_argument(
+        "--skip-webui-build",
+        action="store_true",
+        help="Skip building the Agent UI frontend (same effect as GAIA_SKIP_WEBUI_BUILD)",
+    )
+    init_parser.add_argument(
         "--force-reinstall",
         action="store_true",
         help="Force reinstall even if compatible version exists",
@@ -4924,6 +4935,7 @@ Let me know your answer!
             yes=args.yes,
             verbose=getattr(args, "verbose", False),
             remote=getattr(args, "remote", False),
+            skip_webui_build=getattr(args, "skip_webui_build", False),
         )
         sys.exit(exit_code)
 
