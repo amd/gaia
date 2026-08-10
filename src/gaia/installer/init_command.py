@@ -33,6 +33,7 @@ except ImportError:
 
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.install_hints import source_install_command
+from gaia.installer._stdin import stdin_is_tty
 from gaia.installer.lemonade_installer import LemonadeInfo, LemonadeInstaller
 from gaia.llm.lemonade_launcher import (
     build_start_command,
@@ -507,6 +508,23 @@ class InitCommand:
         Returns:
             Exit code (0 for success, non-zero for failure)
         """
+        # Refuse rather than silently declining every prompt: with nobody to
+        # answer them, EOFError-driven defaults used to report success on a
+        # setup that never downloaded a model (issue #2882).
+        if not self.yes and not stdin_is_tty():
+            print(
+                f"Error: refusing to run 'gaia init --profile {self.profile}' "
+                "non-interactively without --yes.\n"
+                "Pass --yes to auto-confirm setup prompts (add --skip-models "
+                "to also skip downloading models).\n"
+                "Note: --yes also authorizes an unattended Lemonade upgrade, "
+                "which uninstalls the current Lemonade install before "
+                "reinstalling, if the detected version is below this "
+                "profile's minimum.",
+                file=sys.stderr,
+            )
+            return 1
+
         self._print_header()
 
         profile_config = INIT_PROFILES[self.profile]
