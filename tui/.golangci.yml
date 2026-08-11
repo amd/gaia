@@ -1,0 +1,42 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# Lint config for the Go TUI (tui/).
+#
+# The enabled set is deliberately small and was chosen empirically: every linter
+# here reports ZERO findings on the tree as of this commit, so it lands green and
+# only ever fires on new code. A linter that arrives with a backlog of
+# pre-existing violations gets muted within a week, which buys nothing.
+#
+# Each of these catches a class of real BUG, not a style preference — that is the
+# bar for being on this list. `go vet` alone (the previous `make lint`) catches
+# none of the other seven.
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - govet         # what `make lint` already ran; kept so this is a superset
+    - ineffassign   # value assigned and never used — usually a dropped result
+    - nilerr        # `return nil` on a path where err != nil — silent failure
+    - durationcheck # multiplying two Durations; silently off by 10^9
+    - makezero      # make([]T, n) then append — leaves n zero values in front
+    - asasalint     # []any passed to a variadic ...any — nests instead of spreads
+    - bidichk       # bidirectional-Unicode "Trojan Source" smuggling
+    - misspell      # this TUI's strings are remedy text users read and retype
+
+  # DEFERRED, with the count measured at 2.12.2 on this tree. These are not
+  # judged worthless — they are held back because they land red, and the Go tree
+  # is under concurrent edit. Enable one at a time, in its own PR that also
+  # clears the backlog:
+  #
+  #   errcheck    33  mostly `defer x.Close()`; needs an exclusion list first
+  #   staticcheck 10  7 style (QF/ST); 3 real: SA1019 deprecated viewport API x2,
+  #                   SA4006 a value assigned and never read in a test
+  #   unused       6  real dead code (see tui/internal/ui/hub/styles.go)
+  #   noctx        8  HTTP requests built without a context
+  #   errorlint    4  %v on errors instead of %w
+  #   bodyclose    3  all three in daemon_test.go, none in production code
+
+# No `exclusions:` block and no formatters: v2 applies neither by default, and
+# nothing here needs silencing. Add an exclusion only with a stated reason.
