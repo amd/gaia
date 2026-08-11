@@ -30,8 +30,8 @@
 # printed, the scorecards are uploaded as an artifact, and a regression surfaces
 # as a `::warning::` annotation. Make it blocking either by dispatching with
 # `enforce: true`, or — since workflow_dispatch is only offered for workflows
-# already on the default branch — by putting `[eval-enforce]` in the commit
-# message, which works on a branch before this file has merged.
+# already on the default branch — by putting `[eval-enforce]` in the PR TITLE,
+# which works on a branch before this file has merged.
 #
 # This mirrors how intentional regressions are handled elsewhere: the
 # `--allow-regression` flag in src/gaia/eval/scorecard_gate.py prints a
@@ -73,11 +73,26 @@
 # test_agent_behavior_e2e.yml). Both are preflight-checked and fail loudly with
 # an actionable message rather than degrading into a misleading skip.
 #
-# FORKS. There is no `pull_request` trigger, so a fork PR never runs this in the
-# base repo (and the fork has no lemonade-eval runner). ANTHROPIC_API_KEY — the
-# eval judge — is therefore always available for the branches that do trigger it;
-# if it is missing the preflight fails with instructions instead of running a
-# judge-less eval that would produce a meaningless scorecard.
+# WHAT TRIGGERS IT. A `pull_request` path filter, so the gate fires on the PR's
+# own base..head diff and only when that diff touches an LLM-affecting path. It
+# used to be a `push` filter, which matches the files in the PUSH — so merging
+# main into a branch replayed all of main's churn through the filter and fired
+# this multi-hour gate on PRs containing no Python at all (#2807 and #2809 are
+# C++-only and both wore its red X). Scoping is the only thing that changed: the
+# path list is untouched, and a PR that does touch one still runs and still
+# fails loudly.
+#
+# Two consequences of leaving `push` behind, both intended. A branch with no PR
+# no longer triggers the gate — use `workflow_dispatch --ref <branch>`. And the
+# checkout is now `refs/pull/N/merge`, so the eval measures main+PR rather than
+# the branch head, which is the thing about to land.
+#
+# FORKS AND DRAFTS. Both are skipped by the job-level `if` below, not silently.
+# A fork PR could not pass anyway — ANTHROPIC_API_KEY, the eval judge, is not
+# exposed to fork PRs — and must not put unreviewed code on the lab pool. For
+# the PRs that do run the key is present; if it ever is not, the preflight fails
+# with instructions instead of running a judge-less eval that would produce a
+# meaningless scorecard.
 
 name: Agent Eval — Gemma-4-E4B consolidation
 
@@ -93,9 +108,25 @@ on:
         description: 'Judge model for the eval harness'
         required: false
         default: 'claude-sonnet-4-6'
-  push:
-    branches-ignore:
-      - main
+  # `pull_request`, NOT `push`. A `push` path filter matches the files in the
+  # PUSH, so merging main into a branch replays all of main's churn through the
+  # filter — which is how #2807 and #2809, both pure C++ PRs with no Python in
+  # their diff at all, ended up wearing a red X from an LLM-quality gate and
+  # burning hours of the scarcest runner pool. `pull_request` filters on the
+  # PR's own base..head diff, so the gate fires only when the PR itself edits a
+  # path below. `branches: [main]` and the `types:` list follow
+  # test_email_agent_eval.yml; `ready_for_review` is what runs the gate on a PR
+  # that was opened as a draft (see the draft clause in the job `if:`).
+  #
+  # THE PATH LIST BELOW IS UNCHANGED ON PURPOSE. `hub/agents/python/**` is a
+  # real bug — the layout is `hub/agents/<id>/python/`, so it matches nothing
+  # and a ChatAgent prompt edit never triggers this gate. It is fixed in #2773,
+  # not here, because widening it newly qualifies 18 hub packages against a
+  # single-slot pool and that load question deserves its own review. This
+  # change is mechanism only: it makes the filter mean what it already says.
+  pull_request:
+    branches: [ main ]
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       # The consolidation itself.
       - 'src/gaia/agents/base/agent.py'
@@ -126,10 +157,16 @@ permissions:
 env:
   BASELINE_DIR: tests/fixtures/eval_baselines/gemma-4-e4b-d71cd914
   BACKEND_URL: http://127.0.0.1:4200
-  # A dispatch input always wins. On a plain push, `[eval-enforce]` in the commit
-  # message opts in — workflow_dispatch is not offered until this file is on the
-  # default branch, so without this there is no way to enforce pre-merge.
-  ENFORCE: ${{ github.event.inputs.enforce || (contains(github.event.head_commit.message, '[eval-enforce]') && 'true') || 'false' }}
+  # A dispatch input always wins. Otherwise `[eval-enforce]` in the PR TITLE opts
+  # in — workflow_dispatch is not offered until this file is on the default
+  # branch, so without this there is no way to enforce pre-merge. Reads the PR
+  # title, not `head_commit.message`: that context exists only on `push`, so it
+  # is permanently null now that this triggers on `pull_request`.
+  #
+  # `edited` is deliberately NOT in the `types:` above — a title tweak must not
+  # be able to launch a multi-hour run on the shared slot. So retitling alone
+  # does not re-run the gate: add the tag, then push (or close/reopen).
+  ENFORCE: ${{ github.event.inputs.enforce || (contains(github.event.pull_request.title, '[eval-enforce]') && 'true') || 'false' }}
   EVAL_MODEL: ${{ github.event.inputs.eval_model || 'claude-sonnet-4-6' }}
   # Loopback services — bypass any runner proxy so curl/httpx reach them.
   NO_PROXY: 'localhost,127.0.0.1'
@@ -137,6 +174,22 @@ env:
 jobs:
   agent-eval:
     name: rag_quality + context_retention + tool_selection vs Gemma baselines
+    # Fork PRs and drafts never reach the lab pool. A fork PR would schedule
+    # untrusted code onto a self-hosted runner and could not pass anyway
+    # (ANTHROPIC_API_KEY is not exposed to fork PRs, so the judge preflight
+    # fails); a draft would spend a multi-hour single-slot run on work still in
+    # progress. A job-level `if` resolves before a runner is assigned, so a
+    # skipped job never reaches the pool at all. `ready_for_ci` is the repo-wide
+    # escape hatch for a draft that does want CI. Mirrors the guard in
+    # test_email_agent_eval.yml.
+    #
+    # Kept flat-indented on purpose: a YAML folded scalar preserves newlines on
+    # more-indented lines, and an `if:` expression must fold to a single line.
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.event.pull_request.draft == false ||
+      contains(github.event.pull_request.labels.*.name, 'ready_for_ci')))
     runs-on: [self-hosted, lemonade-eval]
     # NOT 90 like its siblings, deliberately. Summing elapsed_s across the three
     # committed baselines is already ~55 min of pure scenario time (22.4 + 18.4 +
