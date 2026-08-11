@@ -175,6 +175,8 @@ def default_account_type() -> Optional[str]:
             "from the connected mailbox."
         )
     return raw
+
+
 # The SLM layer is experimental and off by default (see ``use_slm`` below).
 # ``GAIA_EMAIL_USE_SLM`` is how it gets turned on without editing source —
 # matching GAIA_EMAIL_BRIEFING_ENABLED / GAIA_EMAIL_AUTONOMY_ENABLED.
@@ -240,10 +242,11 @@ class EmailAgentConfig:
       ``tmp_path``-derived path so concurrent live + eval runs don't
       race on the same SQLite file.
     - ``mail_provider``: a FILTER over the connected mailboxes (#1603 Phase 2).
-      ``None`` (the default) means "every connected mailbox" — a both-connected
-      user triages Gmail and Outlook together. ``"google"`` / ``"microsoft"``
-      restricts to that one provider (and only when it is connected). The
-      plural ``resolve_mail_backends`` reads the connected set; the singular
+      ``None`` (the default) means "every connected mailbox" — a user with
+      several connected mailboxes triages all of them together.
+      ``"google"`` / ``"microsoft"`` / ``"microsoft_work"`` restricts to that
+      one provider (and only when it is connected). The plural
+      ``resolve_mail_backends`` reads the connected set; the singular
       ``resolve_mail_backend`` stays connector-agnostic (``None`` → Gmail) for
       the eval seam. Case-insensitive.
     - ``calendar_provider``: which calendar provider the agent operates on —

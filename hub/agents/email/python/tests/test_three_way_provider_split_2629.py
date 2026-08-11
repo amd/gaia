@@ -51,10 +51,10 @@ if str(_REPO_ROOT) not in sys.path:
 
 pytest.importorskip("gaia_agent_email")
 
-from gaia_agent_email import mailbox_state as ms  # noqa: E402
+from gaia_agent_email import forwarded_credentials  # noqa: E402
 from gaia_agent_email import outlook_backend  # noqa: E402
 from gaia_agent_email import outlook_calendar_backend  # noqa: E402
-from gaia_agent_email import forwarded_credentials  # noqa: E402
+from gaia_agent_email import mailbox_state as ms  # noqa: E402
 from gaia_agent_email.outlook_scopes import (  # noqa: E402
     OUTLOOK_ALL_SCOPES,
     OUTLOOK_MAIL_SCOPES,
@@ -63,7 +63,6 @@ from gaia_agent_email.tools.read_tools import merge_pre_scan_backends  # noqa: E
 from gaia_agent_email.tools.triage_heuristics import CATEGORY_URGENT  # noqa: E402
 
 from gaia.connectors.errors import ConnectorsError  # noqa: E402
-
 from tests.fixtures.email.fake_gmail import FakeGmailBackend  # noqa: E402
 
 
@@ -134,7 +133,9 @@ def test_outlook_mail_token_resolver_forwards_connector_id_for_microsoft_work(
         calls.append(connector_id)
         return {"access_token": f"tok-{connector_id}"}
 
-    monkeypatch.setattr(outlook_backend, "get_credential_sync", fake_get_credential_sync)
+    monkeypatch.setattr(
+        outlook_backend, "get_credential_sync", fake_get_credential_sync
+    )
     monkeypatch.setattr(forwarded_credentials, "is_forwarding_enabled", lambda: False)
 
     token = outlook_backend._get_outlook_token("microsoft_work")
@@ -150,7 +151,9 @@ def test_outlook_mail_token_resolver_still_builds_personal_by_default(monkeypatc
         calls.append(connector_id)
         return {"access_token": f"tok-{connector_id}"}
 
-    monkeypatch.setattr(outlook_backend, "get_credential_sync", fake_get_credential_sync)
+    monkeypatch.setattr(
+        outlook_backend, "get_credential_sync", fake_get_credential_sync
+    )
     monkeypatch.setattr(forwarded_credentials, "is_forwarding_enabled", lambda: False)
 
     token = outlook_backend._get_outlook_token("microsoft")

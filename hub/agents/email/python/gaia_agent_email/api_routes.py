@@ -57,7 +57,6 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, StreamingResponse
 from gaia_agent_email import caller_auth
 from gaia_agent_email.config import DEFAULT_INBOX_SCAN_MESSAGES, EmailAgentConfig
-from gaia_agent_email.mailbox_state import PROVIDERS, backend_family
 from gaia_agent_email.context_budget import estimate_tokens, thread_budget_tokens
 from gaia_agent_email.contract import (
     ActionItem,
@@ -107,6 +106,7 @@ from gaia_agent_email.contract import (
     UnarchivedMessage,
     UnarchiveFailure,
 )
+from gaia_agent_email.mailbox_state import PROVIDERS, backend_family
 from gaia_agent_email.outlook_backend import AttachmentTooLargeError
 from gaia_agent_email.tools.llm_triage import LLMTriageError
 from gaia_agent_email.tools.summarize_tools import EmailSummarizeError
@@ -1569,7 +1569,7 @@ def _build_calendar_backend(provider: str):
         status_code=503,
         detail=(
             f"Connected provider '{provider}' has no calendar backend. "
-            "Expected 'google' or 'microsoft'."
+            f"Expected one of: {', '.join(PROVIDERS)}."
         ),
     )
 
@@ -1714,7 +1714,7 @@ def _build_prescan_live_backend(provider: str):
         status_code=503,
         detail=(
             f"Connected mailbox provider '{provider}' has no read backend. "
-            "Expected 'google' or 'microsoft'."
+            f"Expected one of: {', '.join(PROVIDERS)}."
         ),
     )
 
@@ -1953,7 +1953,7 @@ class EmailDraftRequest(_Strict):
     provider: Optional[str] = Field(
         default=None,
         description=(
-            "Optional provider binding ('google' or 'microsoft'). When set, "
+            "Optional provider binding ('google', 'microsoft', or 'microsoft_work'). When set, "
             "the confirmation token is bound to this provider so the send "
             "routes to the correct mailbox even when multiple are connected."
         ),
@@ -2002,7 +2002,7 @@ class EmailSendRequest(_Strict):
     provider: Optional[str] = Field(
         default=None,
         description=(
-            "Optional provider ('google' or 'microsoft'), used ONLY as the "
+            "Optional provider ('google', 'microsoft', or 'microsoft_work'), used ONLY as the "
             "fallback when the confirmation token carries no provider binding. "
             "A token's bound provider always wins; with two mailboxes connected "
             "and neither a binding nor this field set, the send is rejected as "

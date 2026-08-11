@@ -15,10 +15,9 @@ leaves the device (derived features only are stored).
 
 from __future__ import annotations
 
-
-from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 from gaia_agent_email import action_store
 from gaia_agent_email.gmail_backend import decode_message_body
+from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 from gaia_agent_email.verbose import log_tool_call
 from gaia_agent_email.voice_profile import analyze_sent_bodies
 

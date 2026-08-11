@@ -143,7 +143,13 @@ CATEGORY_PERSONAL = "PERSONAL"
 # per-turn agent, so a reference to something an earlier turn surfaced can
 # resolve. Omitted -> byte-for-byte the old per-turn behaviour. No existing
 # field changed, so 2.11 consumers keep working (additive MINOR).
-SCHEMA_VERSION = "2.12"
+# 2.13 is additive over 2.12 (#2629): a third mailbox provider value,
+# ``microsoft_work`` (work Microsoft 365 / Entra, distinct from the personal
+# ``microsoft`` Outlook.com connector), is now valid wherever a provider
+# string is accepted or returned. No existing field or value changed, so
+# 2.12 consumers keep working (additive MINOR) — they simply never see the
+# new value until a work mailbox is connected.
+SCHEMA_VERSION = "2.13"
 
 # Maximum number of items in a single batch request. Protects the single-tenant
 # local model slot from runaway batches. Enforced via Pydantic max_length.
@@ -845,7 +851,7 @@ class EmailActionConfirmRequest(_Strict):
     provider: Optional[str] = Field(
         default=None,
         description=(
-            "Optional provider binding ('google' / 'microsoft'). When set, the "
+            "Optional provider binding ('google' / 'microsoft' / 'microsoft_work'). When set, the "
             "minted token is bound to this mailbox so the action routes correctly "
             "even when more than one mailbox is connected."
         ),
@@ -884,7 +890,7 @@ class EmailArchiveRequest(_Strict):
     provider: Optional[str] = Field(
         default=None,
         description=(
-            "Optional provider ('google' / 'microsoft'), used only when the token "
+            "Optional provider ('google' / 'microsoft' / 'microsoft_work'), used only when the token "
             "carries no binding. A token's bound provider always wins; with two "
             "mailboxes connected and neither set, the call is rejected (400)."
         ),
@@ -929,7 +935,7 @@ class EmailUnarchiveRequest(_Strict):
     provider: Optional[str] = Field(
         default=None,
         description=(
-            "Optional provider ('google' / 'microsoft'). Omit to route by the "
+            "Optional provider ('google' / 'microsoft' / 'microsoft_work'). Omit to route by the "
             "mailbox recorded at archive time (the default and correct choice)."
         ),
     )
@@ -993,7 +999,7 @@ class EmailQuarantineRequest(_Strict):
     provider: Optional[str] = Field(
         default=None,
         description=(
-            "Optional provider ('google' / 'microsoft'), used only when the token "
+            "Optional provider ('google' / 'microsoft' / 'microsoft_work'), used only when the token "
             "carries no binding (see EmailArchiveRequest.provider)."
         ),
     )
@@ -1034,7 +1040,7 @@ class EmailUnquarantineRequest(_Strict):
     )
     provider: Optional[str] = Field(
         default=None,
-        description="Optional provider ('google' / 'microsoft'); omit to route by "
+        description="Optional provider ('google' / 'microsoft' / 'microsoft_work'); omit to route by "
         "the mailbox recorded at quarantine time.",
     )
 
@@ -1168,7 +1174,7 @@ class CalendarCreateEventRequest(_Strict):
     provider: Optional[str] = Field(
         default=None,
         description=(
-            "Optional provider binding ('google' or 'microsoft'). When set on "
+            "Optional provider binding ('google', 'microsoft', or 'microsoft_work'). When set on "
             "preview, the confirmation token binds to this provider so the create "
             "routes to the right calendar even with multiple accounts connected."
         ),
@@ -1255,7 +1261,7 @@ class CalendarRespondRequest(_Strict):
     )
     provider: Optional[str] = Field(
         default=None,
-        description="Optional provider binding ('google' or 'microsoft').",
+        description="Optional provider binding ('google', 'microsoft', or 'microsoft_work').",
     )
 
     @field_validator("attendee_email")
@@ -1379,7 +1385,8 @@ class MailboxError(_Strict):
     """
 
     mailbox: str = Field(
-        ..., description="Provider name of the failed mailbox ('google' / 'microsoft')."
+        ...,
+        description="Provider name of the failed mailbox ('google' / 'microsoft' / 'microsoft_work').",
     )
     error: str = Field(..., description="Actionable error message for the failure.")
 
@@ -1444,9 +1451,7 @@ class NeedsYouItem(_Strict):
             "a deeper scan sorts to the front)."
         ),
     )
-    kind: AttentionItemKind = Field(
-        ..., description="Which signal surfaced this item."
-    )
+    kind: AttentionItemKind = Field(..., description="Which signal surfaced this item.")
     message_id: Optional[str] = Field(
         default=None,
         description=(
@@ -1457,13 +1462,17 @@ class NeedsYouItem(_Strict):
     thread_id: Optional[str] = Field(
         default=None, description="Provider thread id, when known."
     )
-    sender: str = Field(default="", description="Raw 'From' header of the source message.")
+    sender: str = Field(
+        default="", description="Raw 'From' header of the source message."
+    )
     subject: str = Field(default="", description="Subject line of the source message.")
     age_seconds: Optional[int] = Field(
         default=None,
         description="Seconds since the message was received, when known.",
     )
-    why: str = Field(..., description="Plain-language reason this item needs attention.")
+    why: str = Field(
+        ..., description="Plain-language reason this item needs attention."
+    )
     detail: List[str] = Field(
         default_factory=list,
         max_length=2,
@@ -1480,12 +1489,13 @@ class NeedsYouItem(_Strict):
         ),
     )
     due_hint: Optional[str] = Field(
-        default=None, description="Free-text due hint (action items only); null otherwise."
+        default=None,
+        description="Free-text due hint (action items only); null otherwise.",
     )
     mailbox: Optional[str] = Field(
         default=None,
         description=(
-            "Provider name ('google' / 'microsoft') this item came from. "
+            "Provider name ('google' / 'microsoft' / 'microsoft_work') this item came from. "
             "Set only when more than one mailbox is connected."
         ),
     )
@@ -1507,7 +1517,9 @@ class BulkSummary(_Strict):
     just a bare unauditable number.
     """
 
-    count: int = Field(default=0, description="Messages filtered into the low-signal remainder.")
+    count: int = Field(
+        default=0, description="Messages filtered into the low-signal remainder."
+    )
     filter_tests: List[str] = Field(
         default_factory=list,
         description=(
@@ -1745,7 +1757,7 @@ class AttentionItem(_Strict):
     mailbox: Optional[str] = Field(
         default=None,
         description=(
-            "Provider name ('google' / 'microsoft') this item came from. Set "
+            "Provider name ('google' / 'microsoft' / 'microsoft_work') this item came from. Set "
             "only when more than one mailbox is connected — with a single "
             "mailbox, tagging every row is noise, not information."
         ),

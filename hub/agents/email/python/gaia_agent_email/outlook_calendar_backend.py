@@ -67,7 +67,6 @@ from typing import (
 )
 
 import httpx
-
 from gaia_agent_email.outlook_scopes import OUTLOOK_CALENDAR_SCOPES
 from gaia_agent_email.scopes import AGENT_NAMESPACED_ID
 

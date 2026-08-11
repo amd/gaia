@@ -328,10 +328,11 @@ def _run_microsoft_setup(agent: Any) -> Dict[str, Any]:
     two that could disagree. A mailbox that already has a client configured
     (e.g. a reconnect) skips straight to sign-in — never re-walked.
     """
+    from gaia_agent_email.tools import setup_walkthrough as sw
+
     from gaia.connectors._loop import run_sync
     from gaia.connectors.handler import configure
     from gaia.connectors.setup_routes import get_route
-    from gaia_agent_email.tools import setup_walkthrough as sw
 
     gap = _oauth_client_gap("microsoft")
     if gap is not None:
@@ -410,7 +411,9 @@ def _confirm_repair(agent: Any, state: Dict[str, Any]) -> bool:
         go = Option(
             _YES,
             f"Reconnect {label}",
-            _go_blurb(provider, "Opens your browser to sign in again. Your mail is untouched."),
+            _go_blurb(
+                provider, "Opens your browser to sign in again. Your mail is untouched."
+            ),
         )
     elif kind == ms.STATE_MISSING_SCOPES:
         missing = _scope_labels(state["provider"], state.get("missing_scopes") or [])
@@ -431,7 +434,10 @@ def _confirm_repair(agent: Any, state: Dict[str, Any]) -> bool:
         go = Option(
             _YES,
             f"Connect {label}",
-            _go_blurb(provider, "Opens your browser to sign in. Nothing is sent anywhere else."),
+            _go_blurb(
+                provider,
+                "Opens your browser to sign in. Nothing is sent anywhere else.",
+            ),
         )
 
     answer = ask(
