@@ -334,6 +334,16 @@ class TestStdioTransport:
 
         assert mock_popen.call_args[0][0] == expected
 
+    @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")
+    def test_stdio_transport_rejects_backtick_even_when_quoted(self, mock_popen):
+        """Backticks are refused everywhere — tokenizing loses their quote state."""
+        transport = StdioTransport('srv --arg "a`b"')
+
+        with pytest.raises(ValueError, match="shell syntax"):
+            transport.connect()
+
+        mock_popen.assert_not_called()
+
     @patch("gaia.mcp.client.transports.stdio.shutil.which", return_value=None)
     @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")
     def test_stdio_transport_keeps_quoted_value_with_spaces(self, mock_popen, _):
@@ -350,10 +360,11 @@ class TestStdioTransport:
             r"--root=C:\Program Files\data",
         ]
 
+    @patch("gaia.mcp.client.transports.stdio.os.name", "nt")
     @patch("gaia.mcp.client.transports.stdio.shutil.which", return_value=None)
     @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")
-    def test_stdio_transport_preserves_backslash_paths(self, mock_popen, _):
-        """Windows path separators survive tokenizing."""
+    def test_stdio_transport_preserves_backslash_paths_on_windows(self, mock_popen, _):
+        """On Windows a backslash is a path separator, not an escape."""
         mock_process = Mock()
         mock_process.poll.return_value = None
         mock_popen.return_value = mock_process
@@ -362,6 +373,20 @@ class TestStdioTransport:
         transport.connect()
 
         assert mock_popen.call_args[0][0] == ["python", r"C:\tools\srv.py"]
+
+    @patch("gaia.mcp.client.transports.stdio.os.name", "posix")
+    @patch("gaia.mcp.client.transports.stdio.shutil.which", return_value=None)
+    @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")
+    def test_stdio_transport_honours_backslash_escapes_on_posix(self, mock_popen, _):
+        """On POSIX a backslash escapes the next character, as the shell did."""
+        mock_process = Mock()
+        mock_process.poll.return_value = None
+        mock_popen.return_value = mock_process
+
+        transport = StdioTransport(r"srv /opt/my\ server/run.py")
+        transport.connect()
+
+        assert mock_popen.call_args[0][0] == ["srv", "/opt/my server/run.py"]
 
     @patch("gaia.mcp.client.transports.stdio.shutil.which", side_effect=lambda cmd: cmd)
     @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")

@@ -1000,10 +1000,13 @@ def connect(self) -> bool:
     Raises:
         ValueError: If a single-string command is blank, has unbalanced
             quotes, or carries unquoted shell syntax (";", "|", "&&", ">",
-            "`", "$(", ...). Such syntax is rejected rather than passed
-            through as literal argv text — split the program from its
-            arguments using `args` instead. The same characters *inside a
-            quoted argument* are ordinary text and are accepted.
+            "$(", ...). Such syntax is rejected rather than passed through
+            as literal argv text — split the program from its arguments
+            using `args` instead. The same characters *inside a quoted
+            argument* are ordinary text and are accepted. A backtick is the
+            exception: it is rejected wherever it appears, because it never
+            forms a token of its own and quoting state cannot be recovered
+            after tokenizing. Pass such a value via `args`.
 
     Note:
         Returns True without starting new process if already connected.
@@ -1393,7 +1396,7 @@ gaia mcp test-client <name>
 gaia mcp remove <name>
 ```
 
-The CLI accepts a full command line for convenience and converts it to the config format internally. The command is tokenized, not run through a shell, so unquoted shell syntax (`;`, `|`, `&&`, `>`, backticks) is rejected rather than interpreted.
+The CLI accepts a full command line for convenience and converts it to the config format internally. The command is tokenized, not run through a shell, so unquoted shell syntax (`;`, `|`, `&&`, `>`) — and a backtick anywhere in the string — is rejected rather than interpreted. Use the config format's `args` list for values that must contain those characters.
 
 See [CLI Reference](/reference/cli#mcp-client) for complete documentation.
 

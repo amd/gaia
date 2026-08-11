@@ -63,7 +63,8 @@ def _split_command_string(command: str) -> List[str]:
         )
 
     for token in tokens:
-        # Backticks never form their own token, so check them per-token.
+        # A backtick never forms its own token, so quoting state is already
+        # lost here — reject it anywhere in the string rather than guess.
         if set(token) <= _SHELL_OPERATOR_CHARS or "`" in token:
             raise ValueError(
                 f"MCP server command contains shell syntax ({token!r}): "
