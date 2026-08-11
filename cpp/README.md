@@ -129,6 +129,8 @@ The agent will:
 
 Type `quit`, `exit`, or `q` to stop.
 
+> The Windows MCP tools (`mcp_windows_Shell`, `mcp_windows_Shortcut`, …) run PowerShell and drive the desktop, so the agent asks for confirmation before each call. Choose **[2] Always allow** at the prompt to approve a tool for good — the decision persists in `~/.gaia/security/allowed_tools.json`.
+
 > If the Windows MCP server fails to connect, verify that `uvx` is on your PATH and that `uvx windows-mcp` runs without errors in a separate terminal.
 
 ### Wi-Fi Troubleshooter (Registered-Tool Demo)
@@ -402,6 +404,8 @@ agent.connectMcpServer("my_server", {
 ```
 
 All tools exposed by the MCP server are automatically registered under the naming convention `mcp_<server_name>_<tool_name>`.
+
+Each discovered tool is registered with `ToolPolicy::CONFIRM` — the user is asked before it runs — **unless the server proves it read-only** (`annotations.readOnlyHint == true` *and* no state-changing verb in the tool name). MCP tool names are chosen by the server, so a static allowlist can never gate them; this classifier is what stops injected content from driving an `mcp_*_delete_file` call. A headless agent (`silentMode = true`) has no confirmation callback and is therefore denied every gated MCP tool; see the [Security Guide](../docs/cpp/security.mdx) for how to opt in deliberately.
 
 ---
 

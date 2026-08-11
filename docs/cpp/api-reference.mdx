@@ -282,6 +282,8 @@ public:
     json processQuery(const std::vector<Message>& messages, int maxSteps = 0);
 
     // MCP server management
+    // Discovered tools are registered with ToolPolicy::CONFIRM unless the
+    // server proves them read-only — see /cpp/security.
     bool connectMcpServer(const std::string& name, const json& config);
     bool connectMcpServerById(const std::string& id);  // resolves via MCPRegistry
     void disconnectMcpServer(const std::string& name);
