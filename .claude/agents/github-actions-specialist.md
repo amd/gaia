@@ -7,6 +7,10 @@ model: opus
 
 You own `.github/workflows/`. GAIA has a large CI surface — reuse existing patterns rather than inventing new ones.
 
+## Output style
+
+Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate".
+
 ## When to use
 
 - Adding a new workflow (e.g. test for a new component)
