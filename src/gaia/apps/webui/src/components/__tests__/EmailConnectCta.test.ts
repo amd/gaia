@@ -104,6 +104,15 @@ describe('isAuthRequiredMessage', () => {
             isAuthRequiredMessage('Visit Settings → Connections → Microsoft to fix this.')
         ).toBe(true);
     });
+
+    // Work Microsoft 365 detection (#2629) — format_connector_error embeds the
+    // literal connector id "microsoft_work", which the generic "microsoft"
+    // substring check already matches.
+    it('returns true for NOT_CONNECTED: microsoft_work prefix', () => {
+        expect(
+            isAuthRequiredMessage('NOT_CONNECTED: microsoft_work is not currently connected.')
+        ).toBe(true);
+    });
 });
 
 describe('detectProvider', () => {
@@ -123,16 +132,39 @@ describe('detectProvider', () => {
         expect(detectProvider('Please reconnect Outlook to continue.')).toBe('microsoft');
     });
 
-    it('returns both when both providers are mentioned', () => {
-        expect(detectProvider('Google and Microsoft accounts need reconnecting.')).toBe('both');
+    it('returns all when both google and microsoft are mentioned', () => {
+        expect(detectProvider('Google and Microsoft accounts need reconnecting.')).toBe('all');
     });
 
-    it('returns both for empty string', () => {
-        expect(detectProvider('')).toBe('both');
+    it('returns all for empty string', () => {
+        expect(detectProvider('')).toBe('all');
     });
 
-    it('returns both for an ambiguous message without provider names', () => {
-        expect(detectProvider('AGENT_NOT_GRANTED: this agent is not granted.')).toBe('both');
+    it('returns all for an ambiguous message without provider names', () => {
+        expect(detectProvider('AGENT_NOT_GRANTED: this agent is not granted.')).toBe('all');
+    });
+
+    // Work Microsoft 365 detection (#2629)
+    it('returns microsoft_work when the literal connector id is mentioned', () => {
+        expect(
+            detectProvider('NOT_CONNECTED: microsoft_work is not currently connected.')
+        ).toBe('microsoft_work');
+    });
+
+    it('returns microsoft_work when "microsoft 365" is mentioned, not personal microsoft', () => {
+        expect(
+            detectProvider('Your Microsoft 365 account needs to be reconnected.')
+        ).toBe('microsoft_work');
+    });
+
+    it('returns microsoft_work for office365 wording', () => {
+        expect(detectProvider('Please reconnect your office365 mailbox.')).toBe('microsoft_work');
+    });
+
+    it('does not classify a personal Outlook message as work', () => {
+        expect(detectProvider('NOT_CONNECTED: microsoft is not currently connected.')).toBe(
+            'microsoft',
+        );
     });
 });
 
