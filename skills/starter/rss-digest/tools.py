@@ -19,9 +19,40 @@ from gaia.agents.base.tools import tool
 _ATOM_NS = "{http://www.w3.org/2005/Atom}"
 
 _DOCTYPE_RE = re.compile(rb"<!DOCTYPE", re.IGNORECASE)
-# The root element is the first tag opening with a letter; `<?xml`, `<!--`, and
-# `<!DOCTYPE` all sort before it. Everything earlier is the prolog.
-_ROOT_START_RE = re.compile(rb"<[A-Za-z]")
+
+
+def _root_start(payload: bytes) -> int:
+    """Index of the root element's ``<``, or ``len(payload)`` if there is none.
+
+    Comments and processing instructions may legally precede the root and may
+    themselves contain a ``<letter`` run, so they are skipped rather than
+    searched — otherwise the prolog boundary lands inside one and a DOCTYPE
+    after it escapes the scan. Unterminated markup returns the end of the
+    payload, so the whole thing is treated as prolog and a DTD is still caught.
+    """
+    i = 0
+    end = len(payload)
+    while i < end:
+        lt = payload.find(b"<", i)
+        if lt == -1:
+            return end
+        if payload.startswith(b"<!--", lt):
+            close = payload.find(b"-->", lt + 4)
+            if close == -1:
+                return end
+            i = close + 3
+        elif payload.startswith(b"<?", lt):
+            close = payload.find(b"?>", lt + 2)
+            if close == -1:
+                return end
+            i = close + 2
+        elif payload[lt + 1 : lt + 2].isalpha():
+            return lt
+        else:
+            # `<!DOCTYPE`, `<!ENTITY`, `<![CDATA[`, … — markup that is still
+            # prolog. Step past the `<` so the DOCTYPE stays inside it.
+            i = lt + 1
+    return end
 
 
 def _text(element: Any, *names: str) -> str:
@@ -105,8 +136,7 @@ def parse_feed(payload: bytes, *, source: str, max_entries: int) -> dict:
     # Entity expansion is a DoS vector and stdlib ElementTree performs it. A
     # real RSS/Atom feed never needs a DTD, so refuse one outright. Only the
     # prolog is scanned: "<!DOCTYPE" inside an entry's embedded HTML is content.
-    root_start = _ROOT_START_RE.search(payload)
-    prolog = payload[: root_start.start()] if root_start else payload
+    prolog = payload[: _root_start(payload)]
     if _DOCTYPE_RE.search(prolog):
         return {
             "error": f"{source} declares a DTD (<!DOCTYPE>). Feeds do not need one "
