@@ -45,7 +45,11 @@ def main() -> int:
         "--llamacpp-args",
         default=None,
         dest="llamacpp_args",
-        help="llama.cpp args to pass at load time (e.g. '--ubatch-size 2048')",
+        help=(
+            "llama.cpp args to pass at load time (e.g. '--ubatch-size 2048'). "
+            "A single dash-led flag with no space is consumed by argparse as an "
+            "option, so write those as --llamacpp-args=--flash-attn."
+        ),
     )
     parser.add_argument(
         "--pull-only",

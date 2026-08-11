@@ -1835,7 +1835,7 @@ gaia eval agent [OPTIONS]
 | `--category` | string | all | Run all scenarios in a category |
 | `--backend` | string | `http://localhost:4200` | Agent UI backend URL |
 | `--agent-type` | string | backend default | Agent registration ID to target (e.g. `gaia-lite`); scenarios run against this agent |
-| `--model` | string | `claude-sonnet-4-6` | Judge/simulator model |
+| `--model` | string | `claude-opus-5` | Driver **and** judge — it runs each scenario as well as scoring it, so it must match the baseline you compare against |
 | `--iterations` | integer | `1` | Run each scenario N times for reliability measurement |
 | `--keep-sessions` | flag | false | Don't delete Agent UI sessions after eval — leave them for manual inspection |
 | `--device` | `cpu`\|`gpu`\|`npu` | – | Inference device hint for the run |

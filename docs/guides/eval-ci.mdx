@@ -98,8 +98,9 @@ python tests/ci_lemonade_check.py --model user.embeddinggemma-300m-GGUF \
 ```
 
   `--register-embedding` re-registers before pulling, which repairs a stale
-  registration left by an earlier job; `--llamacpp-args` reproduces the exact load
-  `gaia.rag.sdk` performs, so a probe that passes means RAG's load will too.
+  registration left by an earlier job; `--llamacpp-args` exercises the same load
+  call `gaia.rag.sdk` makes, so the probe fails on flags RAG would have failed on
+  rather than passing a weaker load.
 </Warning>
 
 ---
@@ -230,7 +231,7 @@ When a scenario exceeds its budget, it receives the `BUDGET_EXCEEDED` status and
 | Architecture audit | $0.00 | < 1min |
 
 <Note>
-  Costs depend on the judge model. The default `claude-sonnet-4-6` is cost-effective. Using `claude-opus-4.1` as the judge increases costs ~5x but may improve scoring accuracy for edge cases.
+  Costs depend on `--model`, which drives each scenario as well as judging it. The default is `claude-opus-5`; a Sonnet tier is roughly 5x cheaper and usually enough. Whichever you pick has to match the model your baseline was captured with — changing it changes the tool sequences and the wall clock, so the comparison stops measuring the agent and starts measuring the driver.
 </Note>
 
 ### Cost-Optimized CI Strategy

@@ -399,6 +399,10 @@ jobs:
           #     which is the difference between a green preflight and a green run.
           #   the client's load retry absorbs the known transient AMD-Vulkan
           #     "llama-server failed to start" fault instead of tripping on it.
+          #
+          # Continue, not Stop: under Stop the helper's first stderr line becomes
+          # a terminating NativeCommandError and the step dies before the
+          # ::error:: below. Same reasoning as the eval step's own note.
           $ErrorActionPreference = "Continue"
           $global:LASTEXITCODE = 0
           $embedOut = & python tests/ci_lemonade_check.py `
@@ -411,32 +415,38 @@ jobs:
           $embedCode = $LASTEXITCODE
           $ErrorActionPreference = "Stop"
           $embedOut | ForEach-Object { Write-Host "$_" }
-          # Require the success line, not just exit 0: a command that fails to
-          # LAUNCH leaves $LASTEXITCODE at the reset 0 and would read as a pass.
-          if ($embedCode -ne 0 -or -not ($embedOut -match '\[ci\] OK')) {
-            # The reason llama-server refused to start is in Lemonade's own log,
-            # not in anything the probe can see. Print it here so the fix does
-            # not require an RDP session onto the box. The server runs as the
-            # SYSTEM scheduled task (ensure-lemonade-running.ps1), so its log
-            # lands in the SYSTEM profile's ~/.cache/lemonade/logs.
+          # Assert the EMBEDDINGS line, not the helper's terminal `[ci] OK` - that
+          # one prints whether or not --embeddings was passed, so a dropped flag
+          # would take this preflight green having verified nothing. `dim=` only
+          # prints after a real vector came back. Exit 0 alone is not enough
+          # either: a command that fails to LAUNCH leaves $LASTEXITCODE at the
+          # reset 0 and would read as a pass.
+          if ($embedCode -ne 0 -or -not ($embedOut -match '\[ci\] embeddings OK \(dim=')) {
+            # Why llama-server refused to start is in Lemonade's own log, which
+            # the probe cannot see. Print it so the fix does not need an RDP
+            # session onto the box. The server runs as the SYSTEM scheduled task
+            # (ensure-lemonade-running.ps1), so the log is in the SYSTEM
+            # profile's ~/.cache/lemonade - server.log per lemonade_client.py,
+            # but glob both that dir and a logs/ subdir since the layout has
+            # moved before.
             Write-Host "=== Lemonade server log (tail) ==="
-            $logDirs = @(
-              "$env:SystemRoot\System32\config\systemprofile\.cache\lemonade\logs",
-              "$env:USERPROFILE\.cache\lemonade\logs"
+            $logGlobs = @(
+              "$env:SystemRoot\System32\config\systemprofile\.cache\lemonade\*.log",
+              "$env:SystemRoot\System32\config\systemprofile\.cache\lemonade\logs\*.log",
+              "$env:USERPROFILE\.cache\lemonade\*.log",
+              "$env:USERPROFILE\.cache\lemonade\logs\*.log"
             )
             $logged = $false
-            foreach ($dir in $logDirs) {
-              if (-not (Test-Path $dir)) { continue }
-              Get-ChildItem $dir -Filter *.log -ErrorAction SilentlyContinue |
-                Sort-Object LastWriteTime -Descending | Select-Object -First 1 |
-                ForEach-Object {
-                  Write-Host "--- $($_.FullName) ---"
-                  Get-Content $_.FullName -Tail 120 -ErrorAction SilentlyContinue
-                  $logged = $true
-                }
-            }
-            if (-not $logged) { Write-Host "(no Lemonade log found under: $($logDirs -join ', '))" }
-            Write-Host "::error::The RAG embedder $embeddingModel cannot serve embeddings on this runner (probe exit $embedCode; its output and the Lemonade log are above). rag_quality and context_retention would score ~2/10 as non-answers against a ~9/10 baseline and look like a model regression. The probe already re-registered and re-pulled the model, so a load that still fails is the RUNNER, not the registration: read the llama-server error in the log above, then on sjlab-stx-halo-18 run ``powershell -File installer\scripts\ensure-lemonade-running.ps1 -ForceRestart`` and re-run this probe by hand (``python tests/ci_lemonade_check.py --model $embeddingModel --checkpoint $embeddingCheckpoint --recipe $embeddingRecipe --register-embedding --embeddings --llamacpp-args '--ubatch-size 2048'``). Do NOT re-run the eval until it passes - it costs 3.5h and measures nothing."
+            Get-ChildItem $logGlobs -ErrorAction SilentlyContinue |
+              Sort-Object LastWriteTime -Descending | Select-Object -First 1 |
+              ForEach-Object {
+                Write-Host "--- $($_.FullName) ---"
+                Get-Content $_.FullName -Tail 120 -ErrorAction SilentlyContinue
+                $logged = $true
+              }
+            $logHint = if ($logged) { "the llama-server error is in the Lemonade log tail above" } else { "no Lemonade log was found on this runner (looked in: $($logGlobs -join ', ')) - read llama-server's failure from the Lemonade console instead" }
+            if (-not $logged) { Write-Host "(none found)" }
+            Write-Host "::error::The RAG embedder $embeddingModel cannot serve embeddings on this runner (probe exit $embedCode; its output is above). rag_quality and context_retention would score ~2/10 as non-answers against a ~9/10 baseline and look like a model regression. The probe already re-registered and re-pulled the model, so a load that still fails is the RUNNER, not the registration: $logHint, then on sjlab-stx-halo-18 run ``powershell -File installer\scripts\ensure-lemonade-running.ps1 -ForceRestart`` and re-run this probe by hand (``python tests/ci_lemonade_check.py --model $embeddingModel --checkpoint $embeddingCheckpoint --recipe $embeddingRecipe --register-embedding --embeddings --llamacpp-args '--ubatch-size 2048'``). Do NOT re-run the eval until it passes - it costs 3.5h and measures nothing."
             exit 1
           }
 
