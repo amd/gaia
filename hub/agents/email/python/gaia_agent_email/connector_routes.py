@@ -133,14 +133,9 @@ def _all_scopes_for_provider(provider: str) -> tuple:
     (#2730 D3). Every connect path requests this same union so none of them
     can silently narrow a connection that already has calendar; only the
     daemon's forward-out mint narrows to what it actually enforces."""
-    if provider == "google":
-        from gaia_agent_email.scopes import ALL_SCOPES
+    from gaia_agent_email.mailbox_state import requested_scopes
 
-        return ALL_SCOPES
-    # microsoft
-    from gaia_agent_email.outlook_scopes import OUTLOOK_ALL_SCOPES
-
-    return OUTLOOK_ALL_SCOPES
+    return tuple(requested_scopes(provider))
 
 
 def _build_scope_union(provider: str) -> List[str]:

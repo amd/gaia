@@ -152,6 +152,18 @@ _EMAIL_REQUIRED_CONNECTIONS = (
             "https://graph.microsoft.com/Mail.Send",  # from gaia_agent_email/outlook_scopes.py
         ),
     ),
+    ConnectorRequirement(
+        connector_id="microsoft_work",
+        scopes=(
+            "https://graph.microsoft.com/Mail.ReadWrite",  # from gaia_agent_email/outlook_scopes.py
+            "https://graph.microsoft.com/Mail.Send",  # from gaia_agent_email/outlook_scopes.py
+            "https://graph.microsoft.com/Calendars.ReadWrite",  # from gaia_agent_email/outlook_scopes.py
+        ),
+        required_scopes=(
+            "https://graph.microsoft.com/Mail.ReadWrite",  # from gaia_agent_email/outlook_scopes.py
+            "https://graph.microsoft.com/Mail.Send",  # from gaia_agent_email/outlook_scopes.py
+        ),
+    ),
 )
 
 
@@ -313,7 +325,7 @@ def builtin_specs() -> "dict[str, AgentSidecarSpec]":
             cache_dir_name="email",
             dev_src_dir=_default_email_src_dir(),
             grant_agent_id=_EMAIL_GRANT_AGENT_ID,
-            forward_providers=("google", "microsoft"),
+            forward_providers=("google", "microsoft", "microsoft_work"),
             forwarded_mode_env_var=_EMAIL_FORWARDED_MODE_ENV_VAR,
             required_connections=_EMAIL_REQUIRED_CONNECTIONS,
         ),
