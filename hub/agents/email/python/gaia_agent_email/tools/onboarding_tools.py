@@ -224,22 +224,26 @@ def _walkthrough_stuck_exc() -> type:
 def connect_scopes(provider: str, agent_scopes: List[str]) -> List[str]:
     """The provider's catalog scopes plus the ones this agent needs, deduped.
 
-    Mirrors what ``gaia connectors connect`` requests, so a mailbox connected
-    through the agent is not weaker than the same mailbox connected from a
-    shell — the divergence that left accounts showing as "default".
-    """
-    defaults: List[str] = []
-    try:
-        from gaia.connectors.providers import get as get_provider
+    Mirrors what ``connector_routes._build_scope_union`` (the sidecar's own
+    connect route) and the TUI's ``connectScopes`` request, so a mailbox
+    connected through the agent is not weaker than the same mailbox
+    connected from any other surface — the divergence that left accounts
+    showing as "default".
 
-        defaults = list(getattr(get_provider(provider), "default_scopes", ()) or ())
-    except Exception as exc:  # noqa: BLE001 — mail scopes alone still connect
-        log.warning(
-            "onboarding: no catalog default_scopes for %s (%s); connecting with "
-            "the agent's scopes only — the account email may be unavailable",
-            provider,
-            exc,
-        )
+    Reads the CATALOG spec's ``default_scopes`` (``gaia.connectors.registry
+    .REGISTRY``), not the credentialed ``OAuthProvider`` instance
+    (``gaia.connectors.providers.get``): the catalog entry is static and
+    resolvable before any OAuth client is configured, which is exactly the
+    state self-repair runs in on a first-time connect — this call and the
+    one that collects+saves the client credentials happen in the same
+    ``configure()`` round-trip (#2730). Using the credentialed provider here
+    was the actual bug the previous ``except Exception`` was silently
+    papering over on every first connect.
+    """
+    import gaia.connectors.catalog  # noqa: F401 — populates the registry
+    from gaia.connectors.registry import REGISTRY
+
+    defaults = list(REGISTRY.get(provider).default_scopes or ())
     merged = list(defaults)
     for scope in agent_scopes:
         if scope not in merged:
@@ -256,18 +260,16 @@ def _run_oauth(agent: Any, provider: str) -> Dict[str, Any]:
     label = ms.provider_label(provider)
     scopes = ms.required_scopes(provider)
 
-    config: Dict[str, Any] = {
-        # Authorize the provider's own identity scopes alongside the mail ones.
-        # Without them the token cannot name the account, so every surface shows
-        # the mailbox as "default" instead of the address the user just signed
-        # in with. The grant below stays narrow — identity is for the
-        # connection, not for the agent.
-        "scopes": connect_scopes(provider, scopes),
-        # Committing the grant inside the same flow is what stops the
-        # connected-but-unusable dead end this whole feature exists to remove.
-        "grant_agents": {ms.AGENT_ID: scopes},
-    }
-    config.update(_collect_oauth_client(agent, provider))
+    # Collect the OAuth client FIRST (#2730): connect_scopes() now fails
+    # loudly when the provider isn't configured yet (no more silent
+    # "connect with mail scopes only" degrade), so it must not run before
+    # the client-collection step that makes the provider resolvable.
+    config: Dict[str, Any] = dict(_collect_oauth_client(agent, provider))
+    config["scopes"] = connect_scopes(provider, ms.requested_scopes(provider))
+    # Committing the grant inside the same flow is what stops the
+    # connected-but-unusable dead end this whole feature exists to remove.
+    # required_scopes() stays the usability gate, not the request above.
+    config["grant_agents"] = {ms.AGENT_ID: scopes}
 
     started = run_sync(configure(provider, config))
     auth_url = started.get("authorization_url") or ""

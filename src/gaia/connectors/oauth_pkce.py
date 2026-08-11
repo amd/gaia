@@ -200,11 +200,16 @@ class OAuthPkceHandler:
                 )
             return {"status": "saved", "connector_id": spec.id}
 
-        scopes = config.get("scopes") or list(spec.default_scopes)
-
         if "flow_id" in config and "code" in config:
-            # Caller has already handled the browser step.
+            # Caller has already handled the browser step. No scopes to
+            # resolve here — the flow already started with its own.
             return await complete_authorization(config["flow_id"])
+
+        from gaia.connectors.prior_state import resolve_or_reject_empty_scopes
+
+        scopes = resolve_or_reject_empty_scopes(
+            provider_id, config.get("scopes") or [], spec.default_scopes
+        )
 
         # Validate that a client_secret is available before starting the
         # flow.  Google requires it even for Desktop PKCE clients (#1592

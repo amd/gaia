@@ -50,9 +50,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Must match website/package.json `engines.node` — Railway's Nixpacks builder
+      # reads that field to pick the production Node, so CI and prod build alike.
       - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
           cache-dependency-path: website/package-lock.json
 
@@ -73,3 +75,24 @@ jobs:
 
       - name: Build (astro build from the live catalog)
         run: npx astro build
+
+      # Production's start command was previously never exercised by CI, so a
+      # missing `serve` dependency or a broken command only surfaced on Railway.
+      # Nixpacks puts node_modules/.bin on PATH; Actions does not, so add it here
+      # and run the same bare `serve dist` command website/railway.json uses.
+      - name: Production start command serves the built site
+        env:
+          PORT: 4173
+        run: |
+          set -euo pipefail
+          export PATH="$PWD/node_modules/.bin:$PATH"
+          serve dist -l "${PORT:-3000}" &
+          for _ in $(seq 1 30); do
+            curl -sf -o /dev/null "http://localhost:${PORT}/" && break
+            sleep 1
+          done
+          for route in / /hub /hub/email; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${PORT}${route}")
+            echo "${route} -> ${code}"
+            [ "${code}" = 200 ] || { echo "::error::${route} returned ${code} from the production start command"; exit 1; }
+          done

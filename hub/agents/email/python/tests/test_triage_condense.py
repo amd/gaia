@@ -107,6 +107,49 @@ class TestEnvelopeBudget:
         assert 0 < budget < CONTEXT_TARGET_TOKENS
 
 
+class TestSkillBodyAllowance:
+    """Loaded Agent Skills are prompt text the post-tool turn re-reads (#2466).
+
+    Before this accounting existed, the personal set's ~700 tokens of skill body
+    pushed a limit-12 triage request to 16,602 tokens against a 16,384 window and
+    the run 400'd with ``context_length_exceeded``. Every token a skill adds to
+    the prompt has to come out of the envelope, or the turn overflows.
+    """
+
+    def test_extra_fixed_tokens_shrink_the_envelope_one_for_one(self):
+        assert envelope_budget_tokens(extra_fixed_tokens=700) == envelope_budget_tokens() - 700
+
+    def test_zero_extra_is_byte_identical_to_the_pre_skills_budget(self):
+        assert envelope_budget_tokens(extra_fixed_tokens=0) == 6144
+        assert envelope_budget_tokens() == 6144
+
+    def test_a_negative_value_never_widens_the_envelope(self):
+        assert envelope_budget_tokens(extra_fixed_tokens=-5000) == 6144
+
+    def test_condense_honours_the_skill_allowance(self):
+        result = _make_result(20)
+        tight = condense_triage_result(result, extra_fixed_tokens=4000)
+        loose = condense_triage_result(result, extra_fixed_tokens=0)
+        assert _estimate_envelope_tokens(tight) <= envelope_budget_tokens(extra_fixed_tokens=4000)
+        assert len(tight.get("results", [])) <= len(loose.get("results", []))
+
+    def test_skill_prompt_tokens_measures_the_rendered_fragment(self):
+        from gaia_agent_email.context_budget import skill_prompt_tokens
+
+        class _NoSkills:
+            def get_skills_system_prompt(self):
+                return ""
+
+        class _WithSkills:
+            def get_skills_system_prompt(self):
+                return "==== LOADED SKILLS ====\n" + ("word " * 400)
+
+        assert skill_prompt_tokens(_NoSkills()) == 0
+        assert skill_prompt_tokens(_WithSkills()) > 300
+        # An agent predating the skills runtime has no renderer at all.
+        assert skill_prompt_tokens(object()) == 0
+
+
 class TestJsonCalibrationPin:
     """Pins the #2087 CI failure: at limit 60 the post-tool turn 400'd at
     19,815 tokens vs 16,384 because the prose estimator (chars//4) said the

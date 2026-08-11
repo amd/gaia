@@ -9,6 +9,161 @@ contract version is tracked separately as
 
 ### Added
 
+- **A follow-up like "reply to number 1" can now resolve (#2829).** `POST
+  /v1/email/query` accepts an optional `session_id`: send the same id on
+  every turn of a conversation and the run resolves the SAME agent each
+  time instead of a throwaway one per call, so a reference to something an
+  earlier turn surfaced has something to resolve against. Omit it and
+  nothing changes — this is additive (schema 2.12). Two turns can never run
+  on the same session at once (a second call while one is in flight is
+  rejected, `409`); a session id the sidecar has never seen arriving with
+  prior conversation history (e.g. the sidecar restarted mid-conversation)
+  gets a one-time notice instead of silently starting over.
+
+### Fixed
+
+- **Asked about upcoming meetings or calendar invites, the agent could invent
+  attendee names and invite confirmations that exist nowhere in the mailbox
+  or the tool trace (#2766).** A calendar event's real `organizer` was
+  sometimes narrated as "sent you an invite" — a real field, misread — and a
+  question like "did anyone send me a meeting invite?" could draw a
+  confident "yes" with no mutation, message, or attachment behind it.
+  `list_calendar_events` and `detect_calendar_conflicts` now surface each
+  event's real `attendees` (Google omits the key entirely once an event has
+  no one beyond the organizer; that's now normalized to `[]` instead of
+  being discarded) so there is real data to ground an attendee claim
+  against. Two new deterministic checks — the same "tool computes, model
+  reports" pattern the calendar-conflict and attention-card checks already
+  use — catch an invite claimed as sent/received when nothing this turn
+  could have confirmed one, and an attendee named for an event the tool
+  result shows has none; both leave a correctly-reported organizer and an
+  honest "no attendees" alone.
+- **`get_thread` invented messages, senders, and timestamps that were never
+  in the mailbox (#2765).** Asked to catch up on a conversation, the agent
+  could hand back a duplicated message, another replaced by a repeat of an
+  earlier one, a misattributed sender, and a timestamp that existed nowhere
+  in the thread — even though `get_thread`'s own payload was already
+  ordered, numbered, and carried each message's real `from`/`date` (#2531).
+  The fabrication happened in the model's own free-composed prose, on top
+  of a correct payload, so no docstring instruction alone could fix it. The
+  registered `get_thread` tool now also returns a `kind: "table"` render
+  card — the Agent UI's pre-existing generic primitive, no new client code
+  — built directly from the same per-message fields the model reads, so
+  the chat surface draws every sender and timestamp straight from the
+  mailbox instead of from the model's reconstruction of it.
+- **A low-priority-sender match no longer forces a message to PROMOTIONAL
+  (#2666).** The mirror of #2632's priority-sender fix, for the direction
+  that fix explicitly left alone: `_apply_session_preferences` used to
+  override the heuristic/LLM/SLM's category outright the moment a sender
+  matched the muted list, so a genuinely urgent message from a muted sender
+  got buried as promotional — "I don't care about most of this sender's
+  mail" is not "this specific message is never urgent." The preference now
+  only tags `preference_applied` and updates the reason line for
+  salience/ordering; category is always decided by content, in both
+  directions. The `set_low_priority_sender` tool docstring (read by the
+  model) and the `pre_scan_inbox` docstring's "derived from the low-priority
+  bucket" claim are corrected to match.
+- **A meeting proposal in a confidently-classified message vanished from the
+  view the TUI renders on open (#2580).** `is_meeting_request` was wired into
+  the scan by #2589, but the `needs_you` worklist (#2743, which replaced the
+  #2582 `/attention` fetch as the TUI's on-open source) only kept the flag for
+  messages already routed into `urgent`/`actionable` by category, and dropped
+  it entirely for anything reaching `needs_review`. A message the category
+  heuristic confidently calls FYI/PERSONAL — e.g. Gmail's own
+  `CATEGORY_PERSONAL` label on a colleague's message — kept
+  `is_meeting_request=True` from the scan but was silently counted only under
+  `informational_count`, reproducing the original grounding incident
+  ("Any chance to meet this Thursday at 9am?" reported under "0 actionable
+  items") on current `main`. `is_meeting_request` now vetoes the
+  informational/suggested-archives routing the same way an unconfident guess
+  already does, and a meeting-flagged item keeps its `meeting_request` kind
+  through `needs_review` instead of being downgraded to a generic
+  "needs review" row.
+- **`search_messages` stated a wrong, unstable count for a result set it
+  received intact (#2756).** Asked "how many messages from X in the last two
+  weeks", the agent ran the right query, got every matching row back, then
+  reported a number that was both wrong and different on every run (measured:
+  12 real messages stated as 6, then 4). The registered `search_messages`
+  tool's merge layer now precomputes an exact `count` for the model to state
+  verbatim, the same remedy `check_followups` already shipped for the
+  identical failure (#2622). `truncated` is derived only from Gmail's real
+  pagination cursor, never from `len(messages) == max_results` — a sender
+  with exactly `max_results` matches and no further pages reports
+  `truncated: false`, not a coincidentally-correct guess. `operator_retry`
+  (computed by `search_messages_impl` since inception but silently dropped
+  by the wrapper) now reaches the model too, so a broadened retry query is
+  disclosed rather than presented as the user's literal search.
+- **A reconnect with no explicit `--scopes` could silently overwrite a working
+  mail+calendar connection with identity-only sign-in scopes (#2730).**
+  `list(scopes) or list(provider.default_scopes)` at four `gaia.connectors`
+  entry points meant an empty scope request against a provider that already
+  had a connection or an agent grant silently fell back to
+  `openid`/`email`/`profile` — including via the exact command GAIA's own
+  error text told a user to run. That fallback is now rejected with an
+  actionable error whenever prior state exists; a genuine first-time connect
+  is unaffected. `connect_scopes()`'s own silent `except Exception` (reading
+  the credentialed `OAuthProvider`'s `default_scopes`, unreachable before an
+  OAuth client is configured — exactly the state a first-time self-repair
+  runs in) now reads the catalog spec's `default_scopes` instead, which needs
+  no credentials and removes the failure case rather than papering over it.
+- **The daemon's forward-out mint was all-or-nothing: a connection missing
+  even one optional (calendar) scope lost mail too (#2730).**
+  `ConnectionForwarder.forward_provider` now mints against each agent's
+  declared REQUIRED subset only (`scopes.py::REQUIRED_SCOPES` — mail only;
+  calendar is requested at consent but never gates the mint), and reports the
+  sidecar the intersection of the connection's real stored scopes with the
+  ledger grant, never the ledger's raw claim (a shared connection widened by
+  a different agent can no longer over-grant this one).
+
+### Added
+
+- **`pre_scan_inbox` now produces one triage worklist instead of two
+  disagreeing summary boxes (schema 2.11, #2743).** Triaging the inbox used
+  to draw a card from `pre_scan_inbox` and a separate, shallower attention
+  card from the TUI's own on-open scan — one scan run twice at different
+  depths, so the shallower box could confidently report "nothing needs you"
+  while the deeper one listed a message needing review. `EmailPreScanResult`
+  gains `needs_you` (`List[NeedsYouItem]`, capped at 5, ordered by kind then
+  oldest-first) and `bulk` (`Optional[BulkSummary]`): a deterministic VIEW
+  built ON TOP OF the already-classified `urgent`/`actionable`/`needs_review`
+  buckets plus the waiting-on-you detector and persisted action items —
+  never re-derived from raw scan results, so nothing those buckets already
+  caught can go missing from it. `bulk.filter_tests` carries opaque ids (never
+  prose) a renderer maps to a sentence, so "47 filtered" always names the
+  test that filtered it. `NeedsYouItem.due_hint` (action items only) is
+  wrapped in the same untrusted-input delimiters that cover a raw message
+  body — it is regex-extracted verbatim from a message body and re-enters
+  the calling agent's own tool-result context while that agent holds
+  archive/send/delete authority. Nothing existing was removed, renamed, or
+  relaxed from required to optional.
+  `NeedsYouItem.detail` also ships on the wire, reserved for a couple of
+  lines of real substance per surfaced item (the question actually asked,
+  the meeting time actually proposed plus a COMPUTED calendar-conflict
+  check — never a narrated verdict the tool didn't compute, the #2571
+  precedent — or the deadline actually quoted), but is **always empty in
+  this release**: the LLM extraction pass that would fill it, scoped to the
+  agent-loop `pre_scan_inbox` tool call only, was implemented (commit
+  `25738509`) and then withdrawn before merge so this change could ship on
+  a firm timing budget rather than risk `pre_scan_inbox` timing out — up to
+  five extractions at several seconds each is real latency `pre_scan_inbox`
+  was never budgeted for. A follow-up will populate it, bounded to a
+  deadline so a slow extraction degrades to partial detail rather than a
+  stalled card.
+- **The inbox-scan default is now owned in one place (#2743, closing the loop
+  #2643 started).** `config.DEFAULT_INBOX_SCAN_MESSAGES` (50) is now the
+  single source every scan-default call site imports instead of restating a
+  literal — including `detect_waiting_on_you`'s own `max_inbox`, which
+  previously carried its own, coincidentally-matching default.
+- **`scopes.py`/`outlook_scopes.py` gained `REQUIRED_SCOPES` (mail only) —
+  the request/enforce split (#2730).** `ALL_SCOPES` (mail + calendar) is what
+  every connect path requests at consent; `REQUIRED_SCOPES` is the narrower
+  subset the daemon's forward-out mint enforces. `mailbox_state.py` gained
+  `requested_scopes()` alongside the existing `required_scopes()` gate, so
+  the in-chat self-repair flow requests the same full union every other
+  surface does instead of narrowing an existing connection on autonomous
+  repair. A checked-in fixture
+  (`tests/fixtures/connectors/email_scopes.json`) now guards both the Python
+  and the TUI's Go scope lists against drifting apart.
 - **Inbox scans go metadata-first, cutting per-message cost so the default scan size can
   rise from 25 to 50 (#2643).** Every scanned message used to cost one full-body fetch
   regardless of whether the heuristic ever read the body — `pre_scan_inbox` and the
@@ -377,6 +532,46 @@ contract version is tracked separately as
   `EmailTriageAgent`'s existing methods now delegate to. The confirm floor is unchanged and
   still inviolable at every level — broadening the candidate map cannot make a floor tool
   auto-executable.
+- **Bundled Agent Skills, and the active set keyed to the mailbox kind (#2466).**
+  The agent brought identical instincts to every mailbox — the same triage
+  judgement for one full of newsletters and booking confirmations as for one full
+  of meeting invites and outstanding commitments. It now bundles six
+  instruction-only skills under `gaia_agent_email/skills/<name>/SKILL.md` —
+  `inbox-triage`, `newsletter-digest`, `travel-itinerary`, `meeting-scheduling`,
+  `action-item-extraction`, `escalation-routing` — and `gaia-agent.yaml` groups
+  them into two sets: `personal` (triage + newsletters + travel) and `work`
+  (triage + meetings + action items + escalation), with `inbox-triage` in both
+  because sets overlap rather than partition. Exactly one set is active per
+  launch. `EmailTriageAgent.select_skill_set()` maps the connected mailbox's
+  account type onto a set — the kind GAIA now derives from the Microsoft
+  `id_token` `tid` claim at connect time — and `--skill-set` /
+  `GAIA_EMAIL_SKILL_SET` (`EmailAgentConfig.skill_set`) override it outright,
+  while `GAIA_EMAIL_ACCOUNT_TYPE` (`EmailAgentConfig.account_type`) pins the kind
+  instead. A Gmail-only mailbox has no equivalent claim, so its kind is genuinely
+  unknown and the manifest's `default_skill_set: personal` applies — which does
+  mean a *work Gmail* mailbox lands on the personal set, by declared default and
+  with a log line, not by anything inferring the kind from the mailbox; pin
+  `GAIA_EMAIL_ACCOUNT_TYPE=work` for that case. An undeclared set name raises
+  naming the valid sets rather than falling back. The skills declare
+  no `tools:` and no `permissions:`, so `tools_count` stays 59 and the REST/MCP
+  contract, connector surface, and `SCHEMA_VERSION` are all unchanged; relocating
+  the agent's tool implementations into skills is separate work (#2672).
+- **On-device SLM classifiers for phishing and triage category (experimental,
+  `use_slm=False` by default).** Two compact embedding classifiers
+  (`specific-ai-tools`, served by the same local Lemonade server as the chat
+  model) can run ahead of the LLM. Phishing is decided by the SLM alone when it
+  answers — the keyword/domain heuristic is not consulted for that message —
+  and the triage SLM decides the category whenever the heuristic is not
+  confident. The LLM classify call is skipped only when the heuristic already
+  settled `is_spam`; otherwise it still runs for the spam verdict and its
+  category answer is discarded. Every SLM path fails safe: an unreachable
+  server, a failed model pull, a prediction error, or a label outside the
+  taxonomy falls back to the existing heuristic + LLM flow, so the previous
+  behavior is the floor, not the risk. Enable with `use_slm=True` or
+  `GAIA_EMAIL_USE_SLM=true` — the `slm_triage_*` / `slm_phishing_*` model +
+  checkpoint pairs on `EmailAgentConfig` ship preconfigured. A half-configured
+  pair fails `validate()` loudly, and an unparseable `GAIA_EMAIL_USE_SLM` raises
+  instead of silently defaulting to off.
 
 - **Agent-led mailbox onboarding — the agent sets up its own access, in the
   conversation (#2469).** Hitting the agent without a usable mailbox used to

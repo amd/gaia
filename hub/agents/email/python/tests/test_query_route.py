@@ -609,3 +609,267 @@ def test_non_lemonade_provider_is_400(app_client, monkeypatch):
     resp = app_client.post("/v1/email/query", json=_req(provider="claude"))
     assert resp.status_code == 400
     assert "local inference only" in resp.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# session_id — schema (#2829). Omitted -> today's behaviour exactly; present
+# -> constrained to the same charset a dict key / path segment / log value
+# tolerates (agent_routes.py:395,404 use it as a URL path segment).
+# ---------------------------------------------------------------------------
+
+
+def test_session_id_is_optional_and_defaults_to_none():
+    req = query_routes.QueryRequest(query="hi", run_id=str(uuid.uuid4()), context=[])
+    assert req.session_id is None
+
+
+def test_session_id_accepts_the_documented_charset():
+    req = query_routes.QueryRequest(
+        query="hi", run_id=str(uuid.uuid4()), context=[], session_id="abc-123_XYZ"
+    )
+    assert req.session_id == "abc-123_XYZ"
+
+
+@pytest.mark.parametrize(
+    "bad_id",
+    [
+        "",  # too short (min length 1)
+        "has a space",
+        "has/slash",
+        "has.dot",
+        "x" * 129,  # over the 128 cap
+    ],
+)
+def test_session_id_rejects_characters_outside_the_charset(bad_id):
+    import pydantic
+
+    with pytest.raises(pydantic.ValidationError):
+        query_routes.QueryRequest(
+            query="hi", run_id=str(uuid.uuid4()), context=[], session_id=bad_id
+        )
+
+
+def test_omitted_session_id_still_works_end_to_end(app_client, monkeypatch):
+    """Today's behaviour, byte-for-byte: no session_id -> the old per-turn agent."""
+    fake = _HappyFakeAgent()
+    monkeypatch.setattr(query_routes, "build_query_agent", lambda **k: fake)
+    resp = app_client.post("/v1/email/query", json=_req())
+    assert resp.status_code == 200
+    events = _parse_sse(resp.text)
+    assert _types(events)[-1] == "final"
+    assert fake.seen_query == "Triage my inbox."
+
+
+# ---------------------------------------------------------------------------
+# session_id — resolution, concurrency, continuity (#2829, layer 2)
+#
+# A session_id resolves through agent_routes.registry, the SAME session
+# store the stateful /v1/email/agent/* surface uses -- so tests patch
+# agent_routes.build_session_agent (not query_routes.build_query_agent) and
+# swap agent_routes.registry for a fresh _SessionRegistry() per test, or
+# sessions leak across test files (test_email_agent_routes.py:162-168).
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def session_registry(monkeypatch):
+    from gaia_agent_email import agent_routes
+
+    fresh = agent_routes._SessionRegistry()
+    monkeypatch.setattr(agent_routes, "registry", fresh, raising=True)
+
+    built: list = []
+
+    def _factory(**kwargs):
+        agent = _HappyFakeAgent()
+        built.append(agent)
+        return agent
+
+    monkeypatch.setattr(agent_routes, "build_session_agent", _factory, raising=True)
+    return fresh, built
+
+
+def test_same_session_id_reuses_the_same_agent(app_client, session_registry):
+    registry, built = session_registry
+    resp1 = app_client.post("/v1/email/query", json=_req(session_id="s1"))
+    assert resp1.status_code == 200
+    assert _types(_parse_sse(resp1.text))[-1] == "final"
+
+    resp2 = app_client.post(
+        "/v1/email/query", json=_req(session_id="s1", query="second turn")
+    )
+    assert resp2.status_code == 200
+
+    assert len(built) == 1
+    assert registry.get("s1").agent is built[0]
+
+
+def test_different_session_ids_get_different_agents(app_client, session_registry):
+    registry, built = session_registry
+    app_client.post("/v1/email/query", json=_req(session_id="s1"))
+    app_client.post("/v1/email/query", json=_req(session_id="s2"))
+    assert len(built) == 2
+    assert registry.get("s1").agent is not registry.get("s2").agent
+
+
+def test_concurrent_calls_same_session_get_409(app_client, session_registry):
+    registry, _built = session_registry
+    session = registry.get_or_create("s1")
+    session.run_lock.acquire()
+    try:
+        resp = app_client.post("/v1/email/query", json=_req(session_id="s1"))
+        assert resp.status_code == 409
+        assert (
+            resp.json()["detail"] == "A turn is already in progress for this session."
+        )
+    finally:
+        session.run_lock.release()
+
+
+def test_setup_failure_after_lock_acquired_releases_the_lock(
+    app_client, session_registry, monkeypatch
+):
+    """Between acquiring run_lock and the worker thread owning it, any setup
+    failure must release it -- otherwise the session is wedged at 409 forever
+    (mirrors agent_routes.py:694-701)."""
+    import gaia.ui.sse_handler as sse_mod
+
+    registry, _built = session_registry
+
+    def _boom():
+        raise RuntimeError("cannot build handler")
+
+    monkeypatch.setattr(sse_mod, "SSEOutputHandler", _boom)
+    resp = app_client.post("/v1/email/query", json=_req(session_id="s1"))
+    assert resp.status_code >= 500
+    session = registry.get("s1")
+    assert session is not None
+    assert not session.run_lock.locked()
+
+
+def test_thread_start_failure_releases_the_lock_and_deregisters_the_run(
+    app_client, session_registry, monkeypatch
+):
+    """The realistic trigger for the lock-release guard: thread.start() can
+    raise under thread exhaustion, and the finally that releases run_lock
+    lives INSIDE _run_agent -- which never runs if start() itself raises. A
+    spot-fix on only SSEOutputHandler()/registry.add() would miss this and
+    wedge the session at 409 forever, with no recovery path (/clear ->
+    DELETE is deliberately out of scope for #2829)."""
+    run_id = str(uuid.uuid4())
+
+    # Scoped to the route's OWN worker thread only -- TestClient/anyio start
+    # their own background threads to drive the request, and those must keep
+    # working or the test can't even make the call.
+    real_thread_cls = threading.Thread
+
+    class _FailingThread(real_thread_cls):
+        def start(self):
+            if getattr(self._target, "__name__", "") == "_run_agent":
+                raise RuntimeError("can't start new thread")
+            super().start()
+
+    monkeypatch.setattr(query_routes.threading, "Thread", _FailingThread)
+    resp = app_client.post(
+        "/v1/email/query", json=_req(session_id="s1", run_id=run_id)
+    )
+    assert resp.status_code == 500
+
+    registry, _built = session_registry
+    session = registry.get("s1")
+    assert session is not None
+    assert not session.run_lock.locked()
+    # Deregistered too, or a retry with the SAME run_id hits a spurious 409.
+    assert query_routes.registry.get(run_id) is None
+
+
+def test_run_id_collision_does_not_deregister_the_other_run(
+    app_client, session_registry
+):
+    """A run_id collision is a DIFFERENT, unrelated in-flight run -- the
+    failure path must report its own 409 without deregistering that run."""
+    run_id = str(uuid.uuid4())
+    other_handler = object()
+    other_run = query_routes._QueryRun(run_id, agent=object(), handler=other_handler)
+    query_routes.registry.add(other_run)
+    try:
+        resp = app_client.post(
+            "/v1/email/query", json=_req(session_id="s1", run_id=run_id)
+        )
+        assert resp.status_code == 409
+        assert query_routes.registry.get(run_id) is other_run
+    finally:
+        query_routes.registry.remove(run_id)
+
+
+def test_context_replaces_conversation_history_not_appends(
+    app_client, session_registry
+):
+    """Regression pin (#2829): agent.conversation_history is REPLACED by the
+    pushed context every turn, never appended to -- a later change that
+    accidentally appends would silently double-count history."""
+    registry, _built = session_registry
+    app_client.post("/v1/email/query", json=_req(session_id="s1", context=[]))
+    agent = registry.get("s1").agent
+    assert agent.seen_history == []
+
+    ctx = [
+        {"role": "user", "content": "turn one"},
+        {"role": "assistant", "content": "reply one"},
+    ]
+    app_client.post(
+        "/v1/email/query",
+        json=_req(session_id="s1", context=ctx, query="turn two"),
+    )
+    assert len(agent.conversation_history) == len(ctx)
+    assert agent.seen_history == ctx
+
+
+def test_unknown_session_with_prior_context_gets_continuity_notice(
+    app_client, session_registry
+):
+    """A session_id the registry has never seen, arriving WITH prior context,
+    means the sidecar restarted mid-conversation (the registry is in-memory).
+    That must be surfaced, never a silent cold start."""
+    resp = app_client.post(
+        "/v1/email/query",
+        json=_req(
+            session_id="s-restarted",
+            context=[
+                {"role": "user", "content": "earlier"},
+                {"role": "assistant", "content": "earlier reply"},
+            ],
+        ),
+    )
+    assert resp.status_code == 200
+    events = _parse_sse(resp.text)
+    statuses = [e.get("message", "") for e in events if e["type"] == "status"]
+    assert any("continuity" in s.lower() for s in statuses), statuses
+
+
+def test_brand_new_session_with_empty_context_gets_no_notice(
+    app_client, session_registry
+):
+    """First turn of a genuinely new conversation is NOT a continuity loss --
+    no session was ever expected to exist yet."""
+    resp = app_client.post(
+        "/v1/email/query", json=_req(session_id="s-new", context=[])
+    )
+    assert resp.status_code == 200
+    events = _parse_sse(resp.text)
+    statuses = [e.get("message", "") for e in events if e["type"] == "status"]
+    assert not any("continuity" in s.lower() for s in statuses), statuses
+
+
+def test_session_construction_failure_is_502(app_client, monkeypatch):
+    from gaia_agent_email import agent_routes
+
+    fresh = agent_routes._SessionRegistry()
+    monkeypatch.setattr(agent_routes, "registry", fresh, raising=True)
+
+    def _boom(**kwargs):
+        raise RuntimeError("cannot start agent")
+
+    monkeypatch.setattr(agent_routes, "build_session_agent", _boom, raising=True)
+    resp = app_client.post("/v1/email/query", json=_req(session_id="s1"))
+    assert resp.status_code == 502

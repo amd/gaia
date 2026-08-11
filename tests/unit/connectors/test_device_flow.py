@@ -233,6 +233,30 @@ class TestPollDeviceFlow:
         # just the loopback path.
         assert blob["tenant"] == "consumers"
 
+    def test_narrower_returned_scope_is_what_gets_persisted(self, monkeypatch):
+        """D6/AC-10 (#2730), device-flow path: the connection must record
+        what the token endpoint actually returned, not the full request."""
+        other_scope = "https://graph.microsoft.com/Calendars.ReadWrite"
+        payload = self._success_payload()
+        payload["scope"] = MAIL_READ  # the calendar scope was declined
+        _install_responses(monkeypatch, [_FakeResp(200, payload)])
+
+        result = asyncio.run(
+            flow_mod.poll_device_flow(
+                "microsoft",
+                "DEV",
+                scopes=[MAIL_READ, other_scope],
+                interval=1,
+                expires_in=900,
+            )
+        )
+        assert result["scopes"] == [MAIL_READ]
+
+        from gaia.connectors.store import peek_connection
+
+        blob = peek_connection("microsoft")
+        assert blob["scopes"] == [MAIL_READ]
+
     def test_grant_agents_committed_on_success(self, monkeypatch):
         _install_responses(monkeypatch, [_FakeResp(200, self._success_payload())])
         asyncio.run(

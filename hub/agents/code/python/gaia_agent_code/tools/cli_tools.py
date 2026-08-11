@@ -233,6 +233,10 @@ class CLIToolsMixin:
 
         @tool(
             name="run_cli_command",
+            # Callers pass their own `timeout` (the orchestrator uses 1200s for
+            # npm/npx installs). This outer bound only backstops a hung call —
+            # it must stay above the largest inner budget or long installs die.
+            timeout=1800,
             description="Execute any CLI command (npm, python, docker, gh, etc.) with optional background execution for servers. "
             "Automatically detects startup errors and manages process lifecycle.",
             parameters={

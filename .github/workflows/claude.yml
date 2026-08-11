@@ -133,6 +133,10 @@ jobs:
       # Run the gaia-testing skill to produce real-world evidence before the review.
       # Gated inside claude-run.yml to same-repo PRs touching a testable surface — never fork code.
       generate_evidence: true
+      # Claude writes the review here; claude-run.yml posts it. A review is mandatory, so an
+      # empty/absent file fails the job rather than passing silently.
+      comment_file: /tmp/review.md
+      require_comment: true
       prompt: |
             Your review POLICY — correctness-first severity, the nit cap, skip rules, and
             length caps — lives in the review rubric. Read it from `/tmp/review-rubric.md`
@@ -140,8 +144,14 @@ jobs:
             empty, fall back to the inline policy in this prompt and note at the top of your
             review that the rubric was unavailable. Do NOT add a `custom_instructions:` input —
             it was removed from the action API and is ignored.
-            Then post one review comment in the TWO-part format defined under "Output format — TWO parts" below: a visible human summary on top (verdict + headline issues in plain words), with the per-severity issues, `file:line`, and ```suggestion blocks tucked into the collapsed `<details>` block.
-            Post the review via: `gh pr comment ${{ github.event.pull_request.number }} --body-file /tmp/review.md` (write body to /tmp/review.md first).
+            Then write one review comment in the TWO-part format defined under "Output format — TWO parts" below: a visible human summary on top (verdict + headline issues in plain words), with the per-severity issues, `file:line`, and ```suggestion blocks tucked into the collapsed `<details>` block.
+
+            HOW YOUR REVIEW SHIPS — write it to `/tmp/review.md`. That file IS the review: a
+            workflow step posts it after you exit. Do NOT run `gh pr comment` (or any other
+            `gh` posting command) yourself — that would double-post. Writing `/tmp/review.md`
+            is the ONE required output of this job; finishing without it fails the run, so
+            write it even when the PR is clean (a clean PR gets an Approve comment, not silence)
+            and write it BEFORE you run low on turns.
 
             ### Real-world evidence — a REQUIRED section, and your verdict must depend on it
             ALWAYS include a `### Real-world evidence` heading in the VISIBLE part of your comment (after
@@ -399,6 +409,10 @@ jobs:
     with:
       # Re-review fork-PR pushes too; same trade-off as pr-review (see file header).
       allowed_non_write_users: "*"
+      # Claude writes the re-review here; claude-run.yml posts it. require_comment stays false —
+      # REVIEW.md makes silence the correct default for a re-review, so no file means no comment.
+      comment_file: /tmp/rereview.md
+      require_comment: false
       prompt: |
         You are doing a LIGHTWEIGHT re-review of a push to an already-reviewed GAIA pull
         request — NOT a full review. The first pr-review already covered this PR in depth.
@@ -433,8 +447,10 @@ jobs:
         the PR. This is intentionally STRICTER than the full review's nit cap: a re-review
         posts ZERO nits (the rubric's nit budget is the ceiling for the first review only).
 
-        If you do comment, write it to /tmp/rereview.md first, then:
-          `gh pr comment ${{ github.event.pull_request.number }} --body-file /tmp/rereview.md`
+        If — and ONLY if — you have something worth flagging, write it to `/tmp/rereview.md`.
+        A workflow step posts that file after you exit; do NOT run `gh pr comment` yourself
+        (that would double-post). If you have nothing to flag, write NO file and exit — that
+        is the expected outcome for most pushes.
 
         ## Output format — TWO parts (mandatory)
         Structure the comment in two parts:

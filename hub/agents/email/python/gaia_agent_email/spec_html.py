@@ -75,6 +75,7 @@ from gaia_agent_email.contract import (
     EmailUnarchiveResponse,
     EmailUnquarantineRequest,
     EmailUnquarantineResponse,
+    NeedsYouItem,
     OutgoingAttachment,
     PreScanItem,
     SingleEmailInput,
@@ -468,7 +469,11 @@ def render_endpoint_spec_html() -> str:
             "/ ``degraded`` / ``mailbox_errors`` report how much of the mailbox "
             "this pre-scan actually covered — ``total_inbox`` (exact whole-"
             "INBOX count) is the coverage denominator since #2638, "
-            "``total_unread`` a secondary figure. Read-only: nothing is "
+            "``total_unread`` a secondary figure. ``needs_you`` (#2743) is a "
+            "deterministic worklist VIEW over urgent/actionable/needs_review — "
+            "capped at 5, ``needs_you_total`` carries the true count; ``bulk`` "
+            "is the filtered informational/promotional remainder plus the "
+            "filter test(s) that produced it. Read-only: nothing is "
             "archived, marked, or sent. Classification reuses the agent's "
             "pre_scan_inbox path. Fails loudly when no mailbox is connected "
             "(503) or 2+ are (400)."
@@ -478,6 +483,7 @@ def render_endpoint_spec_html() -> str:
             ("EmailPreScanResponse", EmailPreScanResponse),
             ("EmailPreScanResult", EmailPreScanResult),
             ("PreScanItem", PreScanItem),
+            ("NeedsYouItem", NeedsYouItem),
         ],
     )
 

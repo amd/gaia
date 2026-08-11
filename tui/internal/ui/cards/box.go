@@ -139,12 +139,29 @@ func (b *box) top() string {
 // The sender column is sized off the available width so an 80-column terminal
 // still shows a usable amount of both.
 func (b *box) row(index int, sender, subject string) {
+	b.rowWithPrefix(index, "", sender, subject)
+}
+
+// rowWithPrefix is like row, but reserves a FIXED-width prefix (e.g. a
+// kind→verb label, #2743) ahead of the sender column. The prefix's own
+// width comes out of the row's available space BEFORE the sender/subject
+// split is computed, so a verb label never eats into the sender's own
+// truncation budget the way concatenating it into the sender string would
+// — a fixed prefix keeps every row's sender column the same width
+// regardless of which verb (or none) precedes it. Empty prefix behaves
+// exactly like row.
+func (b *box) rowWithPrefix(index int, prefix, sender, subject string) {
 	// Clean before measuring, not just before printing: a tab in a subject line
 	// has no width here but does on screen, which would misalign the columns.
+	prefix = clean(prefix)
 	sender, subject = clean(sender), clean(subject)
-	avail := b.inner() - 5 // " NN  "
+	lead := "" // separates the prefix from the sender column when present
+	if prefix != "" {
+		lead = " "
+	}
+	avail := b.inner() - 5 - visualLen(prefix) - visualLen(lead) // " NN  " + prefix + lead
 	if avail < 4 {
-		b.addWrapped("  ", sender+" — "+subject)
+		b.addWrapped("  ", strings.TrimSpace(prefix+" "+sender+" — "+subject))
 		return
 	}
 	senderW := avail * 2 / 5
@@ -159,7 +176,7 @@ func (b *box) row(index int, sender, subject string) {
 	}
 	subjectW := avail - senderW - 1
 	num := padLeft(itoa(index), 2)
-	b.add(" " + num + "  " +
+	b.add(" " + num + "  " + prefix + lead +
 		padTo(truncTo(sender, senderW), senderW) + " " +
 		truncTo(subject, subjectW))
 }

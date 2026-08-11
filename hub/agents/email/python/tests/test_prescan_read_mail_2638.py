@@ -235,6 +235,9 @@ class TestTotalInboxField:
         must report None, never a fabricated number."""
 
         class _NoGetLabelBackend:
+            def get_user_email(self) -> str:
+                return "me@example.com"
+
             def list_messages(self, *, query=None, label_ids=None, max_results=25, page_token=None):
                 return {"messages": [], "nextPageToken": None, "resultSizeEstimate": 0}
 
