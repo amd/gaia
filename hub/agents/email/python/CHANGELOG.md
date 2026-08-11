@@ -9,6 +9,15 @@ contract version is tracked separately as
 
 ### Added
 
+- **Work Microsoft 365 mailboxes (#2629, schema 2.13).** A third mailbox
+  provider, `microsoft_work` (work/school Entra ID, distinct from the personal
+  `microsoft` Outlook.com connector), is now recognized wherever a provider
+  string is accepted or returned — `REQUIRED_CONNECTORS`, the Graph token
+  resolvers, onboarding, and mailbox selection all read it. Fixed alongside it:
+  the daemon's OAuth token-forward path now forwards the work-mailbox
+  connector's token to the agent, not just the personal one. `SCHEMA_VERSION`
+  bumped `2.12` -> `2.13` (additive; existing `microsoft`/`google` consumers are
+  unaffected).
 - **A follow-up like "reply to number 1" can now resolve (#2829).** `POST
   /v1/email/query` accepts an optional `session_id`: send the same id on
   every turn of a conversation and the run resolves the SAME agent each

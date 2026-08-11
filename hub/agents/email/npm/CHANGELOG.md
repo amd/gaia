@@ -6,6 +6,11 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## Unreleased
 
+- **Work Microsoft 365 mailboxes are now supported alongside Gmail and personal
+  Outlook.** A work/school Microsoft account (Entra ID) can now be connected and
+  triaged the same way as Gmail or a personal Outlook.com mailbox — connecting,
+  onboarding copy, and mailbox selection all recognize the new `microsoft_work`
+  connector (#2629, schema 2.13).
 - **`query()` can now carry a conversation forward.** `EmailQueryRequest`
   gains an optional `session_id`: set it once and reuse it on every turn of
   a conversation (e.g. `crypto.randomUUID()`), and the sidecar resolves the

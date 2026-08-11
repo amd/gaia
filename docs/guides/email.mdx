@@ -201,7 +201,7 @@ Preferences are snapshotted to the agent's on-device MemoryStore on every change
 
 ### Behavioral learning (auto-promotion)
 
-Senders you reply to quickly are automatically promoted to priority on the next triage run — no explicit command needed. The agent measures how long it took you to reply to each sender (using the original message's receipt timestamp as the anchor) and promotes senders whose median reply latency falls below the threshold. Promotion is applied on-demand during triage, not on a background thread, and persists across agent restarts. Works across both connected mailboxes (Gmail and Outlook).
+Senders you reply to quickly are automatically promoted to priority on the next triage run — no explicit command needed. The agent measures how long it took you to reply to each sender (using the original message's receipt timestamp as the anchor) and promotes senders whose median reply latency falls below the threshold. Promotion is applied on-demand during triage, not on a background thread, and persists across agent restarts. Works across every connected mailbox (Gmail, personal Outlook, and work Microsoft 365).
 
 ### Turning memory on or off
 
@@ -461,18 +461,11 @@ The set is chosen in this order:
 1. **Explicit** — `gaia-agent-email serve --skill-set work`, or
    `GAIA_EMAIL_SKILL_SET=work`. An undeclared name fails at startup naming the
    valid sets; it never falls back.
-2. **Mailbox account type** — a personal Microsoft account activates `personal`,
-   a work/school account activates `work`. The kind is derived from the id_token
-   `tid` claim when the mailbox is connected and stored with the connection, so
-   nothing is re-derived per run. Pin it with `GAIA_EMAIL_ACCOUNT_TYPE=work`.
-
-   <Note>
-   Microsoft is now two connectors — `microsoft` (personal) and `microsoft_work`
-   — and the email agent only declares `microsoft` so far
-   ([#2629](https://github.com/amd/gaia/issues/2629) tracks wiring the work one).
-   Until that lands, the automatic `work` path is not reachable through this
-   agent: pin the set with `GAIA_EMAIL_ACCOUNT_TYPE=work` or `--skill-set work`.
-   </Note>
+2. **Mailbox account type** — a personal Microsoft account (`microsoft`)
+   activates `personal`, a work/school account (`microsoft_work`) activates
+   `work`. The kind is derived from the id_token `tid` claim when the mailbox
+   is connected and stored with the connection, so nothing is re-derived per
+   run. Pin it with `GAIA_EMAIL_ACCOUNT_TYPE=work`.
 3. **`default_skill_set`** (`personal`) — applies when the kind is unknown.
 
 **Gmail resolves to the default.** Google has no equivalent of the Microsoft
