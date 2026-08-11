@@ -42,6 +42,12 @@ def _make_agent_with_tools(tool_names):
             "description": "stub",
             "parameters": {},
             "function": lambda **kwargs: {"status": "success"},
+            # These tests exercise name resolution, not the confirmation gate.
+            # ``mcp_``-prefixed entries fail closed when they carry no verdict,
+            # so stub them the way ``MCPTool.to_gaia_format`` stamps a tool the
+            # server proved read-only; otherwise the call is denied before
+            # resolution is ever reached.
+            "requires_confirmation": False,
         }
         for name in tool_names
     }

@@ -164,6 +164,9 @@ class ItemExecutionResult:
     error: Optional[str] = None
     error_recoverable: bool = True
     output: Dict[str, Any] = field(default_factory=dict)
+    # The user declined the tool at the confirmation prompt. Terminal by
+    # definition — retrying would just re-prompt for the same denied call.
+    denied: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary representation."""
@@ -175,6 +178,7 @@ class ItemExecutionResult:
             "files": self.files,
             "warnings": self.warnings,
             "error": self.error,
+            "denied": self.denied,
         }
 
 
@@ -222,6 +226,11 @@ class ChecklistExecutionResult:
     def items_failed(self) -> int:
         """Count of failed items."""
         return sum(1 for r in self.item_results if not r.success)
+
+    @property
+    def denied(self) -> bool:
+        """True if any item was blocked by the user-confirmation guardrail."""
+        return any(r.denied for r in self.item_results)
 
     @property
     def summary(self) -> str:
@@ -398,12 +407,25 @@ class ChecklistExecutor:
                     )
                 )
 
-            # Collect files
+            # Collect files and warnings before any early exit below, so a
+            # stopped run still reports what the completed items produced.
             result.total_files.extend(item_result.files)
+            result.warnings.extend(item_result.warnings)
 
             # Handle errors
             if not item_result.success:
                 result.errors.append(item_result.error or "Unknown error")
+
+                # A denied tool ends the checklist regardless of stop_on_error:
+                # later items assume the denied step's side effects exist, and
+                # continuing would just queue up more prompts for the same work.
+                if item_result.denied:
+                    logger.error(
+                        "Stopping checklist: %s was denied by the user",
+                        item.template,
+                    )
+                    result.success = False
+                    break
 
                 if stop_on_error and not item_result.error_recoverable:
                     logger.error(
@@ -412,9 +434,6 @@ class ChecklistExecutor:
                     )
                     result.success = False
                     break
-
-            # Collect warnings
-            result.warnings.extend(item_result.warnings)
 
             # Handle step-through
             if step_through:
@@ -1353,6 +1372,19 @@ export default function Home() {
                         self.error_handler.reset_retry_count(item.template)
                     return result
 
+                # User denied the tool at the confirmation prompt. Terminal —
+                # retrying would re-prompt for the identical call.
+                if result.denied:
+                    logger.error(
+                        "User denied tool execution for %s: %s",
+                        item.template,
+                        result.error,
+                    )
+                    self.console.print_error(
+                        f"Step '{item.description}' was cancelled: {result.error}"
+                    )
+                    return result
+
                 # No error handler - return failure immediately
                 if not self.error_handler:
                     logger.warning(
@@ -1700,7 +1732,21 @@ if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
             )
 
         if isinstance(raw_result, dict):
-            success = raw_result.get("success", True)
+            # Tools report failure either as success=False or as the base
+            # agent's status field ("denied" from the confirmation gate,
+            # "error" from _execute_tool). Absent both, treat as success —
+            # many tools return a bare payload dict on the happy path.
+            status = raw_result.get("status")
+            denied = status == "denied"
+            success = raw_result.get("success", status not in ("denied", "error"))
+            error = raw_result.get("error") or raw_result.get("error_brief")
+            if denied:
+                error = error or f"Tool for '{item.template}' was denied by the user."
+            elif not success and error:
+                # _execute_tool's error text is addressed to the model and omits
+                # the tool name; the replanning prompt needs to know which
+                # checklist item produced it.
+                error = f"[{item.template}] {error}"
             return ItemExecutionResult(
                 template=item.template,
                 params=item.params,
@@ -1708,9 +1754,14 @@ if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
                 success=success,
                 files=raw_result.get("files", []),
                 warnings=raw_result.get("warnings", []),
-                error=raw_result.get("error"),
-                error_recoverable=raw_result.get("retryable", True),
+                error=error,
+                # A denial is a user decision, not a transient fault: never
+                # retry it and never let stop_on_error skip past it.
+                error_recoverable=(
+                    False if denied else raw_result.get("retryable", True)
+                ),
                 output=raw_result,
+                denied=denied,
             )
 
         # Unknown result type - treat as success if truthy

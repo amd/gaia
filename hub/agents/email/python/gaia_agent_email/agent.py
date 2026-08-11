@@ -394,6 +394,16 @@ doesn't clearly name one row (e.g. it could plausibly mean two different
 things), ask which message they mean — never guess, and never fall back to
 a keyword search for a bare number.
 
+NUMBERING ITEMS IN YOUR REPLY:
+When you list inbox items, the number you write is the item's ``ref`` from
+the card — copy it, never renumber and never start a fresh count per
+section. Say "2.", not "Row 2". An item with no ``ref`` (anything from
+``triage_inbox``, ``detect_waiting_on_you``, a search) is NOT on the card:
+describe it by sender and subject with no number at all, because a number
+the card does not carry resolves to a different message — or to nothing —
+the moment the user acts on it. Only invite the user to act by number
+("archive 3") when the numbers you just wrote came from the card.
+
 BRIEFING & TASKS:
 - For a daily briefing / morning brief / "summarize my inbox for today",
   call ``get_briefing`` — NOT ``pre_scan_inbox``. The briefing is the
@@ -895,6 +905,9 @@ class EmailTriageAgent(
         self._load_persisted_preferences()
 
         self.response_mode = "conversational"
+        # The text finalize_answer already grounded, so process_query's
+        # fallback never grounds the same answer a second time.
+        self._grounded_answer: Optional[str] = None
         super().__init__(
             base_url=effective_base_url,
             model_id=effective_model_id,
@@ -1171,13 +1184,28 @@ class EmailTriageAgent(
         # consumers never see raw TeX in the final answer (#2115).
         if isinstance(result, dict) and isinstance(result.get("result"), str):
             result["result"] = _normalize_plain_text_answer(result["result"])
-        if isinstance(result, dict):
-            # Single deterministic post-check hook: success-claim / negative-
-            # claim / cross-mailbox / scaffolding-leak / calendar-conflict
-            # (#2571) / attention-card (#2636) guards all live in
-            # answer_grounding.py.
+        if isinstance(result, dict) and result.get("result") != self._grounded_answer:
+            # Normally finalize_answer already grounded this text before the
+            # loop emitted it. This covers the branches that never reach that
+            # call — the loop setting an actionable answer on an internal error
+            # and returning it directly — without grounding the same text twice
+            # (the append-style guards would repeat their correction).
             result = ground_final_answer(result)
         return result
+
+    def finalize_answer(self, answer: str, conversation: Any) -> str:
+        """Ground the answer BEFORE the loop emits it (#2789).
+
+        Grounding used to run on ``process_query``'s return value, which the
+        REST/TUI stream never re-reads — so every correction fired, logged, and
+        reached nobody on the surface users actually drive.
+        """
+        grounded = ground_final_answer(
+            {"result": answer, "conversation": conversation, "status": "success"}
+        )
+        corrected = grounded.get("result")
+        self._grounded_answer = corrected if isinstance(corrected, str) else answer
+        return self._grounded_answer
 
     def _mailbox_target_guard(self, user_input: str) -> Optional[Dict[str, Any]]:
         """Reject a request that targets a mailbox the SESSION has ruled out (#2164).

@@ -7,8 +7,37 @@ contract version is tracked separately as
 
 ## [Unreleased]
 
+### Added
+
+- **A follow-up like "reply to number 1" can now resolve (#2829).** `POST
+  /v1/email/query` accepts an optional `session_id`: send the same id on
+  every turn of a conversation and the run resolves the SAME agent each
+  time instead of a throwaway one per call, so a reference to something an
+  earlier turn surfaced has something to resolve against. Omit it and
+  nothing changes — this is additive (schema 2.12). Two turns can never run
+  on the same session at once (a second call while one is in flight is
+  rejected, `409`); a session id the sidecar has never seen arriving with
+  prior conversation history (e.g. the sidecar restarted mid-conversation)
+  gets a one-time notice instead of silently starting over.
+
 ### Fixed
 
+- **Asked about upcoming meetings or calendar invites, the agent could invent
+  attendee names and invite confirmations that exist nowhere in the mailbox
+  or the tool trace (#2766).** A calendar event's real `organizer` was
+  sometimes narrated as "sent you an invite" — a real field, misread — and a
+  question like "did anyone send me a meeting invite?" could draw a
+  confident "yes" with no mutation, message, or attachment behind it.
+  `list_calendar_events` and `detect_calendar_conflicts` now surface each
+  event's real `attendees` (Google omits the key entirely once an event has
+  no one beyond the organizer; that's now normalized to `[]` instead of
+  being discarded) so there is real data to ground an attendee claim
+  against. Two new deterministic checks — the same "tool computes, model
+  reports" pattern the calendar-conflict and attention-card checks already
+  use — catch an invite claimed as sent/received when nothing this turn
+  could have confirmed one, and an attendee named for an event the tool
+  result shows has none; both leave a correctly-reported organizer and an
+  honest "no attendees" alone.
 - **`get_thread` invented messages, senders, and timestamps that were never
   in the mailbox (#2765).** Asked to catch up on a conversation, the agent
   could hand back a duplicated message, another replaced by a repeat of an

@@ -1587,9 +1587,11 @@ PRE_SCAN_ARCHIVE_CAP = 10
 # reaches the caller via ``totals["needs_review"]``.
 PRE_SCAN_NEEDS_REVIEW_CAP = 5
 
-# #2743 — the "one card" worklist. Capped small on purpose: a triage card
-# listing 30 rows is a report, not a worklist a person can act on today.
-NEEDS_YOU_CAP = 5
+# #2743 — the "one card" worklist. Still capped well below the inbox: a
+# worklist of 30 rows is a report nobody acts on. Raised from 5 so the
+# needs-a-look bucket carries a ``ref`` too — an item the user can see but
+# not name is one they cannot ask the agent to act on.
+NEEDS_YOU_CAP = 10
 
 # Filter-test ids for BulkSummary.filter_tests (#2743) — ids, never prose
 # (see contract.py's NeedsYouItem/BulkSummary docstrings): a renderer maps

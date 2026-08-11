@@ -117,7 +117,7 @@ on:
       eval_model:
         description: 'Judge model for the eval harness'
         required: false
-        default: 'claude-sonnet-4-6'
+        default: 'claude-opus-5'
   push:
     branches-ignore:
       - main
@@ -127,17 +127,14 @@ on:
       - 'src/gaia/agents/registry.py'
       - 'src/gaia/llm/lemonade_client.py'
       - 'src/gaia/llm/factory.py'
-      # The hub layout is hub/agents/<id>/python/, NOT hub/agents/python/<id>/.
-      # The old glob matched nothing, so a ChatAgent prompt edit — the single
-      # largest input to these three categories — never triggered this job.
       - 'hub/agents/*/python/**'
       - 'tests/fixtures/eval_baselines/**'
       - '.github/workflows/test_eval_agent_gemma_consolidation.yml'
       # In-core agents that carry their own model_id, plus the prompt/tool
       # surfaces CLAUDE.md lists as eval-requiring — a tool docstring edit
       # changes the JSON tool schema and is exactly what tool_selection scores.
-      # (ChatAgent is not listed separately: it lives under
-      # hub/agents/chat/python/, covered by the hub glob above.)
+      # (ChatAgent is not listed: it now lives under hub/agents/chat/python/,
+      # already covered above.)
       - 'src/gaia/agents/builder/**'
       - 'src/gaia/agents/tools/**'
       - 'src/gaia/chat/**'
@@ -158,7 +155,7 @@ env:
   # message opts in — workflow_dispatch is not offered until this file is on the
   # default branch, so without this there is no way to enforce pre-merge.
   ENFORCE: ${{ github.event.inputs.enforce || (contains(github.event.head_commit.message, '[eval-enforce]') && 'true') || 'false' }}
-  EVAL_MODEL: ${{ github.event.inputs.eval_model || 'claude-sonnet-4-6' }}
+  EVAL_MODEL: ${{ github.event.inputs.eval_model || 'claude-opus-5' }}
   # Loopback services — bypass any runner proxy. This covers the PYTHON side
   # (httpx/requests in the eval, the agents and the backend); PowerShell's
   # Invoke-RestMethod ignores NO_PROXY and uses the system proxy instead.

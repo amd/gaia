@@ -7,6 +7,10 @@ model: opus
 
 You own `.github/workflows/`. GAIA has a large CI surface — reuse existing patterns rather than inventing new ones.
 
+## Output style
+
+Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate".
+
 ## When to use
 
 - Adding a new workflow (e.g. test for a new component)
@@ -29,7 +33,7 @@ You own `.github/workflows/`. GAIA has a large CI surface — reuse existing pat
 | `test_gaia_cli.yml` | Top-level test orchestrator |
 | `lint.yml` | Formatting, imports, security scans |
 | `claude.yml` | Claude auto-review + issue/PR handler (reactive) |
-| `claude-weekly-audit.yml` | Proactive weekly audit — scheduled fan-out (security/correctness/docs/tests/features) → one `weekly-audit` triage issue; findings promote to PRs via the `bug`→`auto-fix` path. Reuses the `claude.yml` auth + `claude-auth-canary.yml` canary. See the `weekly-audit-patterns` skill before editing (dedup-key + private-security invariants). |
+| `claude-weekly-audit.yml` | Proactive **nightly** audit (10:37 UTC ≈ 3am Pacific; deep sweep on Sundays) — scheduled fan-out (correctness/docs/tests/features; security has its own nightly workflow) → one `weekly-audit` triage issue; findings promote to PRs via the `bug`→`auto-fix` path. Reuses the `claude.yml` auth + `claude-auth-canary.yml` canary. See the `weekly-audit-patterns` skill before editing (dedup-key + private-security invariants). |
 
 ### Platform & integration
 | File | Scope |

@@ -829,3 +829,159 @@ class TestWorkerDiesWithoutTerminalEvent:
 
         session = agent_routes.registry.get("s1")
         assert session is not None and not session.is_running()
+
+
+# ---------------------------------------------------------------------------
+# Idle-TTL reaper + LRU cap (#2829)
+#
+# session_id turned a per-turn local variable (refcount-freed) into a
+# permanent root reference in _sessions — each retained EmailTriageAgent
+# holds a WAL sqlite connection, a memory-store DB + embedder, and connector
+# backends. These operate on standalone _SessionRegistry() instances (no
+# HTTP, no shared module-global) so the clock can be controlled deterministically.
+# ---------------------------------------------------------------------------
+
+
+class TestSessionReaper:
+    def _registry(self, monkeypatch, **kwargs):
+        reg = agent_routes._SessionRegistry(**kwargs)
+        monkeypatch.setattr(
+            agent_routes, "build_session_agent", lambda **k: _FakeAgent(), raising=True
+        )
+        return reg
+
+    def test_idle_session_past_ttl_is_reaped(self, monkeypatch):
+        reg = self._registry(monkeypatch, idle_ttl_seconds=10)
+        clock = [1000.0]
+        monkeypatch.setattr(agent_routes.time, "monotonic", lambda: clock[0])
+
+        session = reg.get_or_create("s1")
+        clock[0] += 11
+        evicted = reg.reap()
+
+        assert evicted == ["s1"]
+        assert reg.get("s1") is None
+        assert session.agent.closed is True
+
+    def test_reaped_session_lock_is_claimed_so_a_racing_caller_fails_safe(
+        self, monkeypatch
+    ):
+        """TOCTOU pin (#2829 checkpoint 2): get_or_create hands back a
+        session reference and releases the registry lock BEFORE the caller
+        acquires run_lock. If reap() only checked `.locked()` instead of
+        claiming it, a racing caller already holding this exact reference
+        could still acquire run_lock and run against the now-closed agent.
+        The lock must be permanently unavailable once reaped."""
+        reg = self._registry(monkeypatch, idle_ttl_seconds=10)
+        clock = [1000.0]
+        monkeypatch.setattr(agent_routes.time, "monotonic", lambda: clock[0])
+
+        session = reg.get_or_create("s1")  # the racing caller's reference
+        clock[0] += 11
+        reg.reap()
+
+        assert session.agent.closed is True
+        assert session.run_lock.acquire(blocking=False) is False
+
+    def test_session_within_ttl_survives_a_reap_sweep(self, monkeypatch):
+        reg = self._registry(monkeypatch, idle_ttl_seconds=100)
+        clock = [1000.0]
+        monkeypatch.setattr(agent_routes.time, "monotonic", lambda: clock[0])
+
+        session = reg.get_or_create("s1")
+        clock[0] += 10
+        reg.reap()
+
+        assert reg.get("s1") is session
+
+    def test_locked_session_is_never_reaped_even_past_ttl(self, monkeypatch):
+        reg = self._registry(monkeypatch, idle_ttl_seconds=5)
+        clock = [1000.0]
+        monkeypatch.setattr(agent_routes.time, "monotonic", lambda: clock[0])
+
+        session = reg.get_or_create("s1")
+        session.run_lock.acquire()
+        try:
+            clock[0] += 1000
+            reg.reap()
+            assert reg.get("s1") is session
+        finally:
+            session.run_lock.release()
+
+    def test_get_or_create_touches_last_used_so_active_sessions_never_expire(
+        self, monkeypatch
+    ):
+        reg = self._registry(monkeypatch, idle_ttl_seconds=10)
+        clock = [1000.0]
+        monkeypatch.setattr(agent_routes.time, "monotonic", lambda: clock[0])
+
+        session = reg.get_or_create("s1")
+        for _ in range(3):
+            clock[0] += 9  # always under the TTL between touches
+            reg.get_or_create("s1")  # a "turn" — touches last_used
+        reg.reap()
+
+        assert reg.get("s1") is session
+
+    def test_lru_cap_evicts_the_oldest_unlocked_session(self, monkeypatch):
+        reg = self._registry(monkeypatch, idle_ttl_seconds=10_000, max_sessions=2)
+        clock = [1000.0]
+        monkeypatch.setattr(agent_routes.time, "monotonic", lambda: clock[0])
+
+        s1 = reg.get_or_create("s1")
+        clock[0] += 1
+        reg.get_or_create("s2")
+        clock[0] += 1
+        reg.get_or_create("s3")  # over cap -> evicts s1, the oldest unlocked
+
+        assert reg.get("s1") is None
+        assert s1.agent.closed is True
+        assert reg.get("s2") is not None
+        assert reg.get("s3") is not None
+
+    def test_lru_evicted_session_lock_is_claimed_so_a_racing_caller_fails_safe(
+        self, monkeypatch
+    ):
+        """Same TOCTOU pin as the idle-reap case, for the LRU-cap path."""
+        reg = self._registry(monkeypatch, idle_ttl_seconds=10_000, max_sessions=1)
+        clock = [1000.0]
+        monkeypatch.setattr(agent_routes.time, "monotonic", lambda: clock[0])
+
+        s1 = reg.get_or_create("s1")  # the racing caller's reference
+        clock[0] += 1
+        reg.get_or_create("s2")  # over cap -> evicts s1
+
+        assert s1.agent.closed is True
+        assert s1.run_lock.acquire(blocking=False) is False
+
+    def test_lru_cap_raises_an_actionable_error_when_everything_is_locked(
+        self, monkeypatch
+    ):
+        reg = self._registry(monkeypatch, idle_ttl_seconds=10_000, max_sessions=1)
+        monkeypatch.setattr(agent_routes.time, "monotonic", lambda: 1000.0)
+
+        s1 = reg.get_or_create("s1")
+        s1.run_lock.acquire()
+        try:
+            with pytest.raises(RuntimeError, match="session"):
+                reg.get_or_create("s2")
+        finally:
+            s1.run_lock.release()
+        # Refused, not silently created past the cap.
+        assert reg.get("s2") is None
+
+    def test_delete_clears_last_used_so_a_reused_id_is_not_reaped_prematurely(
+        self, monkeypatch
+    ):
+        reg = self._registry(monkeypatch, idle_ttl_seconds=10)
+        clock = [1000.0]
+        monkeypatch.setattr(agent_routes.time, "monotonic", lambda: clock[0])
+
+        reg.get_or_create("s1")
+        reg.delete("s1")
+        clock[0] += 1
+        session = reg.get_or_create("s1")  # a brand new session under the same id
+        clock[0] += 5  # well under the TTL from the NEW session's creation
+        reg.reap()
+
+        assert reg.get("s1") is session

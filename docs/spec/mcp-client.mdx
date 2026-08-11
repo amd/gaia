@@ -1057,27 +1057,53 @@ class MCPTool:
         name (str): Tool name from MCP server (e.g., "read_file")
         description (str): Tool description
         input_schema (Dict[str, Any]): MCP inputSchema (JSON Schema format)
+        annotations (Dict[str, Any]): MCP tool annotations (readOnlyHint,
+            destructiveHint, …). Server-supplied and therefore advisory —
+            consumed by the confirmation classifier below.
     """
 
     name: str
     description: str
     input_schema: Dict[str, Any]
+    annotations: Dict[str, Any] = field(default_factory=dict)
 ```
+
+#### mcp_tool_requires_confirmation
+
+```python
+def mcp_tool_requires_confirmation(name: str, annotations: Dict[str, Any]) -> bool:
+    """Whether an MCP tool must be user-confirmed before GAIA executes it.
+
+    Fails closed. Exempt only when the server proves the tool is read-only:
+    ``annotations.readOnlyHint`` is exactly ``True`` AND the tool name carries
+    no state-changing verb token. No annotations, a non-boolean hint, or a
+    read-only claim contradicted by a name like ``delete_file`` all require
+    confirmation.
+    """
+```
+
+MCP tool names are chosen by the connected server, so they can never appear in
+GAIA's static `TOOLS_REQUIRING_CONFIRMATION` set. The classification therefore
+travels with the registry entry as `requires_confirmation`, which
+`Agent._tool_requires_confirmation` reads at execution time.
 
 #### to_gaia_format
 
 ```python
-def to_gaia_format(self, server_name: str) -> Dict[str, Any]:
+def to_gaia_format(self, prefix: str, raw_server_name: Optional[str] = None) -> Dict[str, Any]:
     """Convert MCP tool schema to GAIA _TOOL_REGISTRY format.
 
     Conversion details:
-    - Name: "mcp_{server_name}_{tool_name}"
-    - Description: "[MCP:{server_name}] {description}"
+    - Name: "mcp_{prefix}_{tool_name}"
+    - Description: "[MCP:{prefix}] {description}"
     - Parameters: Converted from JSON Schema to GAIA format
-    - Metadata: _mcp_server, _mcp_tool_name added
+    - Metadata: _mcp_server, requires_confirmation added
 
     Args:
-        server_name (str): Name of the MCP server providing this tool
+        prefix (str): Sanitised server-name prefix (from MCPClient.prefix),
+            used for the registry name and the description tag
+        raw_server_name (Optional[str]): Original mcp_servers.json key, stored
+            in _mcp_server for routing. Defaults to prefix.
 
     Returns:
         Dict[str, Any]: GAIA tool registry entry (without function field)
@@ -1089,11 +1115,12 @@ def to_gaia_format(self, server_name: str) -> Dict[str, Any]:
         GAIA format:
             {
                 "name": "mcp_filesystem_read_file",
+                "display_name": "read_file (filesystem)",
                 "description": "[MCP:filesystem] Read file",
                 "parameters": {...},
                 "atomic": True,
-                "_mcp_server": "filesystem",
-                "_mcp_tool_name": "read_file"
+                "requires_confirmation": True,
+                "_mcp_server": "filesystem"
             }
     """
 ```
@@ -1162,6 +1189,7 @@ MCP tools are converted from JSON Schema format to GAIA's tool registry format:
 # GAIA tool format (in _TOOL_REGISTRY)
 {
     "name": "mcp_filesystem_read_file",
+    "display_name": "read_file (filesystem)",
     "description": "[MCP:filesystem] Read file contents",
     "parameters": {
         "path": {
@@ -1177,8 +1205,8 @@ MCP tools are converted from JSON Schema format to GAIA's tool registry format:
     },
     "function": <wrapper_callable>,
     "atomic": True,
-    "_mcp_server": "filesystem",
-    "_mcp_tool_name": "read_file"
+    "requires_confirmation": True,
+    "_mcp_server": "filesystem"
 }
 ```
 

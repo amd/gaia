@@ -32,7 +32,7 @@ catalog of the python set and the example agents (`hello-world`, `word-count`,
 
 ## Step 2 — Identify which agent the developer wants
 
-Pin down a single `<runtime>/<name>` before integrating:
+Pin down a single `<name>/<runtime>` before integrating:
 
 - If the developer named an agent ("the email agent", "analyst"), match it against the
   listing. Three names can diverge — watch for it: the friendly name, the **directory**
@@ -99,10 +99,10 @@ auto-discovered as a child skill; you must Read it explicitly.
 **Branch A — the agent ships its own `SKILL.md`:**
 
 ```bash
-ls hub/agents/<runtime>/<name>/SKILL.md
+ls hub/agents/<name>/<runtime>/SKILL.md
 ```
 
-If present, **Read `hub/agents/<runtime>/<name>/SKILL.md` and carry out its
+If present, **Read `hub/agents/<name>/<runtime>/SKILL.md` and carry out its
 instructions as the integration steps.** That file is itself a skill addressed to
 you, the assistant — it is the authoritative, agent-specific recipe, not something to
 merely mention to the developer. Follow its steps directly, and follow any deeper
@@ -129,11 +129,17 @@ Synthesize these into concrete steps shaped per Step 3 (install → register/con
 invoke for python; install → start sidecar → call client → shut down for npm). Most
 python agents are currently in this branch.
 
+## Writing it up
+
+Follow [CLAUDE.md → How You Communicate](../../../CLAUDE.md#how-you-communicate): open with
+what the agent does for the developer and the one command that installs it, then layer the
+config and contract detail underneath. Don't recite the files you read — hand over steps.
+
 ## Checklist
 
 - [ ] Listed `hub/agents/` live — did not trust any hardcoded agent list.
-- [ ] Pinned a single `<runtime>/<name>` and confirmed the runtime with the developer.
+- [ ] Pinned a single `<name>/<runtime>` and confirmed the runtime with the developer.
 - [ ] Set expectations with the correct shape (npm sidecar vs. python framework plugin).
-- [ ] Checked for `hub/agents/<runtime>/<name>/SKILL.md`; if present, **Read and
+- [ ] Checked for `hub/agents/<name>/<runtime>/SKILL.md`; if present, **Read and
       executed it** (and any file it references); if absent, read README → manifest →
       source and synthesized the steps.

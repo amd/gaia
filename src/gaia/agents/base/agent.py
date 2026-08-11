@@ -151,6 +151,10 @@ class ToolExecutionTimeout(Exception):
 # Adding a tool name here (or to a subclass's ``CONFIRMATION_REQUIRED_TOOLS``)
 # causes _execute_tool() to call console.confirm_tool_execution() and block
 # until the user responds.
+#
+# This set only covers tools whose names GAIA controls. Tools registered at
+# runtime under a third-party name (MCP) carry a ``requires_confirmation`` flag
+# on their registry entry instead — see ``Agent._tool_requires_confirmation``.
 TOOLS_REQUIRING_CONFIRMATION = {
     "run_shell_command",
     "run_cli_command",
@@ -2393,9 +2397,13 @@ Do NOT wrap conversational replies in JSON.
         """The full set of tool names gated behind explicit user confirmation
         for this agent (#1440): the generic dangerous base set
         (``TOOLS_REQUIRING_CONFIRMATION``) unioned with the agent's own
-        ``CONFIRMATION_REQUIRED_TOOLS``. ``_execute_tool`` consults this so
-        subclasses declare only their agent-specific tools without re-listing
-        the shared shell/file-mutation ones.
+        ``CONFIRMATION_REQUIRED_TOOLS``. Subclasses declare only their
+        agent-specific tools without re-listing the shared shell/file-mutation
+        ones.
+
+        This is the *static* half of the gate; ``_tool_requires_confirmation``
+        combines it with the per-entry flag that covers runtime-registered
+        (MCP) tools, and is what ``_execute_tool`` actually calls.
         """
         return frozenset(TOOLS_REQUIRING_CONFIRMATION) | frozenset(
             cls.CONFIRMATION_REQUIRED_TOOLS
@@ -2414,6 +2422,30 @@ Do NOT wrap conversational replies in JSON.
             if reason:
                 return str(reason)
         return f"Tool '{tool_name}' was denied by the user."
+
+    def _tool_requires_confirmation(self, tool_name: str) -> bool:
+        """Whether ``tool_name`` must be user-confirmed before it executes.
+
+        Unions two independent sources so tools registered at runtime are
+        covered as well as ones named at import time:
+
+        * ``confirmation_required_tools()`` — the static name set, for native
+          tools whose names GAIA controls.
+        * ``requires_confirmation`` on the registry entry — for dynamically
+          registered tools (MCP) whose names are chosen by a third party and so
+          can never be enumerated in a static set.
+
+        ``mcp_``-prefixed tools fail closed: an entry that carries no explicit
+        flag is treated as requiring confirmation, so a registration path that
+        forgets to classify its tools cannot silently leave the gate open.
+        """
+        if tool_name in self.confirmation_required_tools():
+            return True
+        entry = self._tools_registry.get(tool_name) or {}
+        flag = entry.get("requires_confirmation")
+        if flag is not None:
+            return bool(flag)
+        return tool_name.startswith("mcp_")
 
     def _execute_tool(self, tool_name: str, tool_args: Dict[str, Any]) -> Any:
         """
@@ -2488,7 +2520,7 @@ Do NOT wrap conversational replies in JSON.
         # Consoles that cannot reach a human deny rather than answer for them
         # (#2210): AgentConsole prompts on a TTY, SSEOutputHandler blocks on the
         # frontend modal, everything else denies with an actionable message.
-        if tool_name in self.confirmation_required_tools():
+        if self._tool_requires_confirmation(tool_name):
             if not self.console.confirm_tool_execution(tool_name, tool_args):
                 return {
                     "status": "denied",
@@ -3324,6 +3356,18 @@ Do NOT wrap conversational replies in JSON.
         """
         cancelled = getattr(self.console, "cancelled", None)
         return cancelled is not None and cancelled.is_set()
+
+    def finalize_answer(self, answer: str, _conversation: Any) -> str:
+        """Last chance to correct the final answer, BEFORE it is emitted.
+
+        Runs ahead of ``console.print_final_answer``, so a subclass's
+        correction reaches every consumer — the SSE ``answer`` event the TUI
+        renders, the CLI console, and ``process_query``'s return value — rather
+        than only the callers that re-read the return dict (#2789).
+
+        Identity by default; override to post-process.
+        """
+        return answer
 
     def process_query(
         self,
@@ -5286,7 +5330,7 @@ Do NOT wrap conversational replies in JSON.
                             "start GAIA with the `--sd` flag to enable it."
                         )
 
-                final_answer = answer_candidate
+                final_answer = self.finalize_answer(answer_candidate, conversation)
                 self.execution_state = self.STATE_COMPLETION
                 self.console.print_final_answer(final_answer, streaming=self.streaming)
                 break

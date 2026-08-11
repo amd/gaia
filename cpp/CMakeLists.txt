@@ -140,10 +140,12 @@ add_library(gaia_core
     src/lemonade_client.cpp
     src/agent.cpp
     src/mcp_client.cpp
+    src/mcp_registry.cpp
     src/security.cpp
     src/sse_parser.cpp
     src/process.cpp
     src/file_tools.cpp
+    src/ignore.cpp
     src/git_tools.cpp
     src/session.cpp
     src/repl.cpp
@@ -305,6 +307,7 @@ if(GAIA_BUILD_TESTS)
         tests/test_agent.cpp
         tests/test_agent_vlm.cpp
         tests/test_mcp_client.cpp
+        tests/test_mcp_registry.cpp
         tests/test_console.cpp
         tests/test_lemonade_client.cpp
         tests/test_clean_console.cpp
@@ -314,6 +317,7 @@ if(GAIA_BUILD_TESTS)
         tests/test_sse_parser.cpp
         tests/test_process.cpp
         tests/test_file_tools.cpp
+        tests/test_ignore.cpp
         tests/test_git_tools.cpp
         tests/test_session.cpp
         tests/test_repl.cpp
