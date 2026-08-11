@@ -694,6 +694,28 @@ def test_cli_migrate_reports_a_collision_without_hiding_the_batch(run_cli, tmp_p
     assert (tmp_path / "gaia-home" / "skills" / "pdf-extract").is_dir()
 
 
+def test_cli_migrate_auto_detect_miss_does_not_abort_the_batch(run_cli, tmp_path):
+    """A real collection mixes plain Agent-Skills docs in; one must not abort it."""
+    sources = tmp_path / "src"
+    write_source(
+        sources,
+        "plain",
+        "---\nname: plain\ndescription: A plain standard skill.\n---\n\n# Plain\n",
+    )
+    write_source(sources, "release-notes", OPENCLAW_INSTRUCTION_ONLY)
+
+    # Default --from auto, which is what the docs' whole-collection example uses.
+    rc, out, _ = run_cli(str(sources))
+
+    assert rc == 4
+    # The undetectable one is a per-skill blocker, named in the report...
+    assert "plain" in out
+    assert "nothing to migrate" in out
+    # ...and the rest of the collection still migrated.
+    assert "1/2" in out
+    assert (tmp_path / "gaia-home" / "skills" / "release-notes").is_dir()
+
+
 def test_cli_migrate_out_directory(run_cli, tmp_path):
     source = write_source(tmp_path / "src", "release-notes", OPENCLAW_INSTRUCTION_ONLY)
     out_dir = tmp_path / "elsewhere"

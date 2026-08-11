@@ -33,6 +33,7 @@ from gaia.skills.format import (
 from gaia.skills.manager import SkillManager
 from gaia.skills.migrate import (
     VENDORS,
+    MigrationOutcome,
     find_source_skills,
     format_report,
     install_migrated,
@@ -429,10 +430,20 @@ def _handle_migrate(args: argparse.Namespace) -> int:
         return EXIT_USAGE
 
     destination = Path(args.out).expanduser() if args.out else _manager().user_root
-    outcomes = [
-        migrate_skill_dir(source, vendor=args.vendor, name=args.name)
-        for source in sources
-    ]
+    outcomes: list[MigrationOutcome] = []
+    for source in sources:
+        try:
+            outcomes.append(
+                migrate_skill_dir(source, vendor=args.vendor, name=args.name)
+            )
+        except SkillValidationError as exc:
+            # One undetectable skill must not hide the report for the rest of a
+            # collection — the same treatment no-frontmatter sources already get.
+            outcomes.append(
+                MigrationOutcome(
+                    source=Path(source), vendor="unknown", blockers=[str(exc)]
+                )
+            )
 
     installed: dict[str, str] = {}
     install_errors: dict[str, str] = {}
