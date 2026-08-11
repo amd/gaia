@@ -915,7 +915,7 @@ class TestSearchYouCom:
             }
         ]
 
-        assert get.call_args.args[0] == "https://ydc-index.io/v1/agents/search"
+        assert get.call_args.args[0] == "https://api.you.com/v1/agents/search"
         assert get.call_args.kwargs["params"] == {
             "query": "test query",
             "count": 3,
@@ -938,7 +938,7 @@ class TestSearchYouCom:
             )
 
         assert results == []
-        assert get.call_args.args[0] == "https://ydc-index.io/v1/search"
+        assert get.call_args.args[0] == "https://api.you.com/v1/search"
         assert get.call_args.kwargs["params"]["count"] == 20
         assert get.call_args.kwargs["headers"]["X-API-Key"] == "ydc-test-key"
         assert "Content-Type" not in get.call_args.kwargs["headers"]
