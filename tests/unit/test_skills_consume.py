@@ -398,6 +398,8 @@ def custom_agent_harness(tmp_path, monkeypatch):
         spec.loader.exec_module(module)
         return module.MyHarnessAgent
 
+    #: Where the harness lives, so a test can plant skills the agent *bundles*.
+    load.agent_dir = agent_dir
     return load
 
 
@@ -466,6 +468,91 @@ def test_a_non_bundled_agent_fails_loudly_when_a_required_skill_is_missing(
             """))
     with pytest.raises(SkillNotFoundError, match="gaia skill install never-installed"):
         agent_class(silent_mode=True)
+
+
+def test_a_missing_required_skill_names_every_root_it_searched(tmp_path):
+    """A "not installed" error has to say where GAIA looked to be actionable."""
+    user_root = tmp_path / "home" / "skills"
+    manager = isolated_manager(tmp_path, user_skills_root=user_root)
+
+    with pytest.raises(SkillNotFoundError) as excinfo:
+        resolve_requirements([SkillRequirement(name="web-research")], manager=manager)
+    message = str(excinfo.value)
+    for root in manager.roots:
+        assert str(root.path) in message
+
+
+def test_an_agent_bundled_skill_resolves_without_a_skill_dirs_declaration(
+    tmp_path, monkeypatch
+):
+    """#2692: a package's skills must be findable by every class in that package.
+
+    ``EmailTriageMCPAgent`` sits beside ``EmailTriageAgent`` in one hub package,
+    so it auto-detects the same ``gaia-agent.yaml`` — but it declares no
+    ``SKILL_DIRS`` of its own. Resolving strictly against ``manager.discover()``
+    then reported every skill the package *ships* as "not installed" and killed
+    construction. Discovery has to follow the manifest.
+    """
+    _stub_llm(monkeypatch)
+    monkeypatch.setenv("GAIA_CONFIG_DIR", str(tmp_path / "home"))
+
+    # The hub layout: manifest one level above the Python package, the bundled
+    # skills inside it. `_install` writes a skill exactly as it ships.
+    package = tmp_path / "hub-agent" / "python" / "my_pkg"
+    package.mkdir(parents=True)
+    _install(package / "skills", "inbox-triage", version="1.0.0")
+    (package.parent / "gaia-agent.yaml").write_text(
+        textwrap.dedent("""\
+            id: my-pkg
+            name: My Packaged Agent
+            version: 0.1.0
+            language: python
+
+            skill_sets:
+              personal:
+                - inbox-triage
+
+            default_skill_set: personal
+            """),
+        "utf-8",
+    )
+    (package / "agent.py").write_text(
+        textwrap.dedent('''\
+            """A second entry point in a package that bundles its own skills."""
+
+            from gaia.agents.base.agent import Agent
+
+
+            class BundledSkillsAgent(Agent):
+                """Inherits the package manifest; declares no SKILL_DIRS."""
+
+                def _register_tools(self):
+                    pass
+            '''),
+        "utf-8",
+    )
+
+    import importlib.util
+    import sys
+
+    spec = importlib.util.spec_from_file_location(
+        "bundled_skills_harness", package / "agent.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, "bundled_skills_harness", module)
+    spec.loader.exec_module(module)
+    agent_class = module.BundledSkillsAgent
+    # The whole point: the class names no skill directory anywhere.
+    assert agent_class.SKILL_DIRS == []
+
+    agent = agent_class(silent_mode=True)
+    try:
+        assert agent.active_skill_set == "personal"
+        assert sorted(agent.loaded_skills) == ["inbox-triage"]
+        # Resolved from the package's own folder, at the highest precedence.
+        assert agent.loaded_skills["inbox-triage"].root == "agent-bundled"
+    finally:
+        agent.unload_skill("inbox-triage")
 
 
 def test_an_agent_with_no_manifest_loads_no_skills(

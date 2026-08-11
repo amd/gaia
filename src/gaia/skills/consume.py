@@ -129,8 +129,12 @@ def resolve_requirements(
                 f"(declared in {requirement.origin or 'the agent manifest'})"
             )
             if requirement.required:
+                searched = (
+                    ", ".join(str(root.path) for root in manager.roots)
+                    or "(no discovery roots)"
+                )
                 raise SkillNotFoundError(
-                    f"Required {reason}. Install it with "
+                    f"Required {reason}. Searched: {searched}. Install it with "
                     f"'gaia skill install {requirement}', or drop the entry from "
                     f"the manifest. Run 'gaia skill list' to see what is installed."
                 )

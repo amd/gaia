@@ -134,7 +134,9 @@ _HERE = Path(__file__).resolve().parent
 
 class MyReviewAgent(Agent):
     # Highest-precedence discovery root: the skills you bundle always win over a
-    # same-named user or Claude Code copy.
+    # same-named user or Claude Code copy. Both lines below are optional — a
+    # skills/ folder and a gaia-agent.yaml beside this module are found without
+    # them; name them explicitly only when they live somewhere else.
     SKILL_DIRS: ClassVar[List[str]] = [str(_HERE / "skills")]
     # Opt in to the declarative blocks.
     SKILL_MANIFEST: ClassVar[Optional[str]] = str(_HERE / "gaia-agent.yaml")

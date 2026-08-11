@@ -985,13 +985,57 @@ Do NOT wrap conversational replies in JSON.
         """This agent's :class:`~gaia.skills.manager.SkillManager`.
 
         Built lazily over the v1 discovery roots, with the agent's own
-        ``SKILL_DIRS`` as the highest-precedence root.
+        ``SKILL_DIRS`` — plus the ``skills/`` folder its package ships, see
+        :meth:`_bundled_skill_dirs` — as the highest-precedence roots.
         """
         if getattr(self, "_skill_manager", None) is None:
             from gaia.skills import SkillManager
 
-            self._skill_manager = SkillManager(agent_skill_dirs=self.SKILL_DIRS)
+            self._skill_manager = SkillManager(
+                agent_skill_dirs=[*self.SKILL_DIRS, *self._bundled_skill_dirs()]
+            )
         return self._skill_manager
+
+    #: Folder name an agent package ships its own skills in.
+    _BUNDLED_SKILLS_DIRNAME: ClassVar[str] = "skills"
+
+    def _bundled_skill_dirs(self) -> List[str]:
+        """The ``skills/`` folders this agent ships, found the way its manifest is.
+
+        Declaration and discovery have to come from the same place. The manifest
+        is auto-detected beside the agent's module, so the skills that manifest
+        declares are auto-detected beside it too — otherwise a class that
+        inherits its package's ``gaia-agent.yaml`` without repeating the
+        package's ``SKILL_DIRS`` (a second entry point in the same package, e.g.
+        an MCP wrapper) declares skills GAIA then refuses to find.
+
+        Explicit ``SKILL_DIRS`` still take precedence; this only adds roots.
+        Skills that genuinely are not on disk stay missing, and still raise.
+        """
+        candidates: List[Path] = []
+        try:
+            module_dir = Path(inspect.getfile(type(self))).resolve().parent
+        except TypeError:
+            # A class defined in a REPL/exec has no source file to search from.
+            module_dir = None
+        if module_dir is not None:
+            candidates.append(module_dir / self._BUNDLED_SKILLS_DIRNAME)
+        manifest = self._resolve_skill_manifest()
+        if manifest is not None:
+            candidates.append(manifest.parent / self._BUNDLED_SKILLS_DIRNAME)
+
+        # Compare resolved paths so a folder already named by SKILL_DIRS is not
+        # registered a second time under a different spelling — two roots over
+        # one directory would report every skill in it as shadowing itself.
+        seen = {Path(d).resolve() for d in self.SKILL_DIRS}
+        found: List[str] = []
+        for candidate in candidates:
+            resolved = candidate.resolve()
+            if resolved in seen or not resolved.is_dir():
+                continue
+            seen.add(resolved)
+            found.append(str(candidate))
+        return found
 
     @property
     def loaded_skills(self) -> Dict[str, "Skill"]:

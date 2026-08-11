@@ -206,7 +206,7 @@ a skill of the same `name` found earlier.
 
 | Precedence | Location | Root label | Scope |
 |:----------:|----------|------------|-------|
-| 1 | Agent-bundled `skills/<name>/` | `agent-bundled` | Shipped inside an agent package; read-only. Declared by the agent's `SKILL_DIRS`. |
+| 1 | Agent-bundled `skills/<name>/` | `agent-bundled` | Shipped inside an agent package; read-only. Auto-detected beside the agent's module and beside its `gaia-agent.yaml`, plus any path the agent lists in `SKILL_DIRS`. |
 | 2 | `~/.gaia/skills/<name>/` | `user` | This user, all projects. The **writable** root — where `gaia skill create` and `gaia skill import` install. Honors `GAIA_CONFIG_DIR`. |
 | 3 | `./.claude/skills/` then `~/.claude/skills/` | `claude-import` | **Read-only import** for Claude Code compatibility. |
 
@@ -579,8 +579,10 @@ interfaces:
 ```
 
 Set `SKILL_MANIFEST` to the manifest's path to opt in, or leave it unset and the
-agent auto-detects a `gaia-agent.yaml` beside its module; `SKILL_DIRS` still
-points at any bundled `skills/` folder. An agent that sets neither is unaffected.
+agent auto-detects a `gaia-agent.yaml` beside its module. A `skills/` folder in
+either of those two places is auto-detected the same way, so the skills a package
+ships resolve for every class in it — `SKILL_DIRS` is only needed for a bundled
+folder somewhere else. An agent that sets neither is unaffected.
 
 The block resolves the way `dependencies:` resolves agent-to-agent links:
 topological order (a skill providing a tool another declares in `tools_required`
