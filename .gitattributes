@@ -2,6 +2,10 @@
 cpp/tests/fixtures/*.png binary
 cpp/tests/fixtures/*.jpg binary
 
+# content_digest hashes these fixture bytes raw (#2468), so an autocrlf checkout
+# would change the hash and fail the vectors on Windows only.
+tests/fixtures/skill_audit_digest/** -text
+
 # Every email-agent PR appends an [Unreleased] bullet to this changelog;
 # without a union merge, sibling PRs merged close together conflict on the
 # same insertion point.
