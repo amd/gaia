@@ -318,6 +318,53 @@ class Orchestrator:
             previous_execution_errors = checklist_result.errors.copy()
             previous_validation_logs = checklist_result.validation_logs.copy()
 
+            # A required tool was blocked at the confirmation gate. Planning
+            # another checklist would re-prompt for the same work, so stop.
+            # Quote the underlying reason — a denial can be the user declining,
+            # a prompt timeout, or a governance policy, and only the first has
+            # something for the user to approve.
+            if checklist_result.denied:
+                reason = (
+                    checklist_result.errors[-1]
+                    if checklist_result.errors
+                    else "a required tool was denied."
+                )
+                denial_message = (
+                    f"Execution stopped: {reason} Nothing further was run — "
+                    "re-run once that tool is permitted, or rephrase the "
+                    "request so it is not needed."
+                )
+                logger.error(denial_message)
+                if self.console:
+                    self.console.print_error(denial_message)
+                combined_errors.append(denial_message)
+                iteration_outputs.append(
+                    {
+                        "iteration": iteration,
+                        "checklist": checklist.to_dict(),
+                        "execution": {
+                            "summary": checklist_result.summary,
+                            "success": False,
+                            "files": checklist_result.total_files,
+                            "errors": checklist_result.errors,
+                            "warnings": checklist_result.warnings,
+                            "item_results": [
+                                r.to_dict() for r in checklist_result.item_results
+                            ],
+                            "validation_logs": [
+                                log.to_dict()
+                                for log in checklist_result.validation_logs
+                            ],
+                        },
+                        "assessment": CheckpointAssessment(
+                            status="denied",
+                            reasoning=denial_message,
+                            issues=[denial_message],
+                        ).to_dict(),
+                    }
+                )
+                break
+
             logger.info("Assessing application state after iteration %d", iteration)
             if self.console:
                 self.console.print_info(

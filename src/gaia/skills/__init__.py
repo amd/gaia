@@ -33,6 +33,7 @@ from gaia.skills.errors import (
     SkillError,
     SkillNotFoundError,
     SkillPermissionError,
+    SkillSetError,
     SkillValidationError,
 )
 from gaia.skills.format import (
@@ -86,6 +87,15 @@ from gaia.skills.permissions import (
     parse_permissions,
     refuse_unbridged_permissions,
 )
+from gaia.skills.sets import (
+    DEFAULT_SET_KEY,
+    SKILL_SETS_KEY,
+    SKILLS_KEY,
+    SkillRef,
+    SkillSetResolution,
+    SkillSets,
+    parse_skill_sets,
+)
 
 __all__ = [
     # Format
@@ -127,6 +137,14 @@ __all__ = [
     "VENDOR_HERMES",
     "OPENCLAW_NAMESPACES",
     "HERMES_NAMESPACES",
+    # Skill sets (issue #2466)
+    "SkillRef",
+    "SkillSets",
+    "SkillSetResolution",
+    "parse_skill_sets",
+    "SKILLS_KEY",
+    "SKILL_SETS_KEY",
+    "DEFAULT_SET_KEY",
     # Tools
     "register_skill_tools",
     "unregister_skill_tools",
@@ -142,4 +160,5 @@ __all__ = [
     "SkillValidationError",
     "SkillNotFoundError",
     "SkillPermissionError",
+    "SkillSetError",
 ]

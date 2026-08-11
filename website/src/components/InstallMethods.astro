@@ -15,12 +15,17 @@ interface Props {
 
 const { agent } = Astro.props;
 const methods = installMethods(agent);
+
+// The tablist is only rendered for 2+ methods, so the panel roles have to be
+// gated on the same condition — a lone role="tabpanel" with an
+// aria-labelledby pointing at a tab that was never rendered is a broken widget.
+const hasTabs = methods.length > 1;
 ---
 
 <div data-install-methods>
   {/* The switcher only makes sense with 2+ methods. A single-method agent (e.g.
       an npm-only sidecar) just shows its command — no lone, inert tab button. */}
-  {methods.length > 1 && (
+  {hasTabs && (
     <div
       role="tablist"
       aria-label={`How to install ${agent.name}`}
@@ -45,9 +50,9 @@ const methods = installMethods(agent);
 
   {methods.map((m, i) => (
     <div
-      role="tabpanel"
+      role={hasTabs ? 'tabpanel' : undefined}
       id={`im-panel-${m.key}`}
-      aria-labelledby={`im-tab-${m.key}`}
+      aria-labelledby={hasTabs ? `im-tab-${m.key}` : undefined}
       data-im-panel={m.key}
       hidden={i !== 0}
     >
@@ -55,7 +60,9 @@ const methods = installMethods(agent);
           the controls inside them key off g-code-text rather than the page palette. */}
       <div class="g-cmd gap-2.5 px-4 py-3.5 text-[13px]">
         <span class="select-none text-g-gold" aria-hidden="true">$</span>
-        <code class="min-w-0 flex-1 overflow-x-auto whitespace-pre bg-transparent p-0">{m.command}</code>
+        {/* Focusable: it scrolls horizontally at narrow widths, and a scroll
+            region no keyboard user can reach hides the tail of the command. */}
+        <code tabindex="0" class="min-w-0 flex-1 overflow-x-auto whitespace-pre bg-transparent p-0">{m.command}</code>
         <button
           type="button"
           data-im-copy={m.command}
@@ -68,6 +75,13 @@ const methods = installMethods(agent);
       {m.note && <p class="mt-2 text-[12.5px] text-g-faint">{m.note}</p>}
     </div>
   ))}
+
+  {/* One status node for the whole switcher, outside the panels: the copy
+      button keeps a stable name (it has to say WHICH command it copies), so the
+      outcome is announced here — and a live region inside a `hidden` panel is
+      not in the a11y tree until its tab is selected, which makes the first
+      announcement after a tab switch unreliable. */}
+  <p class="im-copy-status sr-only" role="status"></p>
 </div>
 
 <script>
@@ -98,6 +112,16 @@ const methods = installMethods(agent);
       });
     });
 
+    // One status node shared by every method's copy button. Clear then re-assert
+    // next frame: copying twice writes the same string, and an unchanged live
+    // region is not reliably re-announced — so the second copy would be silent.
+    const status = root.querySelector('.im-copy-status');
+    const announce = (msg: string) => {
+      if (!status) return;
+      status.textContent = '';
+      if (msg) requestAnimationFrame(() => { status.textContent = msg; });
+    };
+
     root.querySelectorAll<HTMLButtonElement>('.im-copy').forEach((btn) => {
       let revert: number | undefined;
       btn.addEventListener('click', async () => {
@@ -117,14 +141,22 @@ const methods = installMethods(agent);
             sel?.removeAllRanges();
             sel?.addRange(range);
           }
+          announce('Copying was blocked. The command is selected — press Control or Command + C to copy it.');
           clearTimeout(revert);
-          revert = window.setTimeout(() => { if (label) label.textContent = 'copy'; }, 2600);
+          revert = window.setTimeout(() => {
+            if (label) label.textContent = 'copy';
+            announce('');
+          }, 2600);
           return;
         }
+        announce('Install command copied to the clipboard.');
         if (!label) return;
         label.textContent = 'copied';
         clearTimeout(revert);
-        revert = window.setTimeout(() => (label.textContent = 'copy'), 1600);
+        revert = window.setTimeout(() => {
+          label.textContent = 'copy';
+          announce('');
+        }, 1600);
       });
     });
   });

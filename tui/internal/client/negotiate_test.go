@@ -279,3 +279,137 @@ func TestRemedyIsScopedForAnyAgent(t *testing.T) {
 		}
 	}
 }
+
+// ---------------------------------------------------------------------------
+// session_id negotiation (#2829, contract 2.12) — same shape as
+// can_answer_questions above: a published sidecar is routinely older than the
+// TUI talking to it, and its strict request model 422s an unknown field.
+// ---------------------------------------------------------------------------
+
+// A peer below 2.12 must never see session_id, even though it is the whole
+// point of the change: sending it to an old strict peer 422s every query.
+func TestOldPeerGetsNoSessionID(t *testing.T) {
+	f := newFakeRelay(t)
+	f.contractVersion = "2.11" // the version this exact change bumps past
+	f.strictBody = true
+	f.stream = func(w http.ResponseWriter, flush func(), _ queryRequest) {
+		frame(w, `{"type":"final","answer":"hi"}`)
+		flush()
+	}
+
+	c := f.client(t)
+	ch, err := c.Send(context.Background(), "say hi")
+	if err != nil {
+		t.Fatalf("Send against a pre-2.12 strict peer failed: %v", err)
+	}
+	if !hasFinal(collect(t, ch)) {
+		t.Error("the turn did not complete")
+	}
+	if raw := f.lastRawBody(); strings.Contains(raw, "session_id") {
+		t.Errorf("session_id was sent to a peer that rejects it: %s", raw)
+	}
+}
+
+// A peer at 2.12 gets a real session_id, and the SAME one across turns —
+// that persistence is the entire point: it is what lets the sidecar resolve
+// the same agent for a follow-up like "reply to number 1".
+func TestNewPeerGetsAStableSessionIDAcrossTurns(t *testing.T) {
+	f := newFakeRelay(t)
+	f.contractVersion = "2.12"
+	f.strictBody = true
+	f.stream = func(w http.ResponseWriter, flush func(), _ queryRequest) {
+		frame(w, `{"type":"final","answer":"hi"}`)
+		flush()
+	}
+
+	c := f.client(t)
+	for i := 0; i < 3; i++ {
+		ch, err := c.Send(context.Background(), "hi")
+		if err != nil {
+			t.Fatalf("Send #%d: %v", i, err)
+		}
+		collect(t, ch)
+	}
+
+	if len(f.queries) != 3 {
+		t.Fatalf("got %d queries, want 3", len(f.queries))
+	}
+	first := f.queries[0].SessionID
+	if first == "" {
+		t.Fatalf("session_id was omitted for a 2.12 peer: %s", f.rawBodies[0])
+	}
+	for i, q := range f.queries {
+		if q.SessionID != first {
+			t.Errorf("turn %d session_id = %q, want %q (same conversation)", i, q.SessionID, first)
+		}
+	}
+}
+
+// /clear starts a new conversation locally (no network call — ResetTranscript
+// has no error return and is called outside a tea.Cmd) — the NEXT session_id
+// must differ, or a cleared TUI transcript would still resolve the old,
+// pre-clear agent server-side.
+func TestClearMintsANewSessionIDLocally(t *testing.T) {
+	f := newFakeRelay(t)
+	f.contractVersion = "2.12"
+	f.strictBody = true
+	f.stream = func(w http.ResponseWriter, flush func(), _ queryRequest) {
+		frame(w, `{"type":"final","answer":"hi"}`)
+		flush()
+	}
+
+	c := f.client(t)
+	for i := 0; i < 2; i++ {
+		ch, err := c.Send(context.Background(), "hi")
+		if err != nil {
+			t.Fatalf("Send #%d: %v", i, err)
+		}
+		collect(t, ch)
+	}
+	firstTwo := f.queries[0].SessionID
+	if f.queries[1].SessionID != firstTwo {
+		t.Fatalf("the first two turns did not share a session_id")
+	}
+
+	c.ResetTranscript()
+
+	ch, err := c.Send(context.Background(), "hi")
+	if err != nil {
+		t.Fatalf("Send after /clear: %v", err)
+	}
+	collect(t, ch)
+	if len(f.queries) != 3 {
+		t.Fatalf("got %d queries, want 3", len(f.queries))
+	}
+	third := f.queries[2].SessionID
+	if third == "" {
+		t.Fatal("session_id was omitted on the post-clear turn")
+	}
+	if third == firstTwo {
+		t.Errorf("session_id did not change after /clear: still %q", third)
+	}
+}
+
+// A sidecar with no /version route at all (older than #2496) must still
+// work, and never receive session_id (unknown version -> assume old).
+func TestMissingVersionRouteGetsNoSessionID(t *testing.T) {
+	f := newFakeRelay(t)
+	f.contractVersion = "" // route 404s
+	f.strictBody = true
+	f.stream = func(w http.ResponseWriter, flush func(), _ queryRequest) {
+		frame(w, `{"type":"final","answer":"hi"}`)
+		flush()
+	}
+
+	c := f.client(t)
+	ch, err := c.Send(context.Background(), "say hi")
+	if err != nil {
+		t.Fatalf("Send with no /version route failed: %v", err)
+	}
+	if !hasFinal(collect(t, ch)) {
+		t.Error("the turn did not complete")
+	}
+	if raw := f.lastRawBody(); strings.Contains(raw, "session_id") {
+		t.Errorf("session_id was sent with no version negotiated: %s", raw)
+	}
+}

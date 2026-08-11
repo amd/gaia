@@ -14,8 +14,15 @@
 #   bundled fixture fallback (website/src/data/catalog.ts), so the build FAILS
 #   LOUDLY if this is unset. Set it on the website service in Railway → Variables.
 #
-# The service is built by Railway from website/railway.json (NIXPACKS:
-# `npm install && npm run build`, served by `serve dist`).
+# The service is built by Railway from website/railway.json, served by `serve
+# dist` from website/dependencies. Nixpacks runs `npm ci` itself as its install
+# phase (auto-detected from package-lock.json), so buildCommand is only
+# `npm run build` — do NOT re-add an install there: Nixpacks mounts a BuildKit
+# cache at /app/node_modules/.cache for the build phase, and `npm ci` wipes
+# node_modules, which fails with EBUSY on that mountpoint.
+#
+# Nixpacks picks the build Node from website/package.json `engines.node`; keep it
+# and website-ci.yml's node-version in step, or CI and production diverge.
 #
 # This workflow is also dispatched by release_agent_email.yml after a successful
 # agent publish, so a newly published agent shows up without a website commit.
@@ -66,7 +73,24 @@ jobs:
           fi
 
       - name: Deploy
+        id: deploy
+        continue-on-error: true
         working-directory: website
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: railway up --service website --ci
+
+      # `railway up --ci` cuts its build-log stream off mid-build, so a failed
+      # deploy otherwise ends at a bare "Deploy failed" with no error anywhere in
+      # this log. Pull the real Nixpacks log for the deployment that just failed.
+      - name: Surface the Railway build log on failure
+        if: steps.deploy.outcome == 'failure'
+        working-directory: website
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          echo "----- Railway build log (latest deployment) -----"
+          railway logs --latest --build --service website -n 300 || true
+          echo "------------------------------------------------"
+          echo "::error::Railway deploy failed — see the Nixpacks build log above."
+          exit 1

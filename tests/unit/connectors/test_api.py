@@ -150,6 +150,12 @@ class TestScopeCoverage:
             )
         assert exc.value.reason is AuthRequiredError.Reason.CONNECTION_MISSING_SCOPES
         assert "gmail.send" in exc.value.missing_scopes
+        # #2730 D0/AC-9a: the remedy command must be the connection's real
+        # current scopes UNIONED with what's missing — never just the
+        # missing subset (--scopes replaces rather than adds) and never a
+        # <scope> placeholder.
+        assert set(exc.value.full_scopes) == {"gmail.readonly", "gmail.send"}
+        assert "<scope" not in str(exc.value)
 
 
 class TestPublicSurface:

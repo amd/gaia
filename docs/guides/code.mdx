@@ -359,6 +359,16 @@ The `--trace` flag saves a complete trace with detailed information:
   </Accordion>
 </AccordionGroup>
 
+### Tools that ask before running
+
+Shell and file-mutating tools — `run_cli_command`, `write_file`, `edit_file` and the
+rest of GAIA's confirmation set — prompt for approval before they execute. In the
+Agent UI that's a permission dialog; on the CLI they run straight through.
+
+Declining cancels the step and stops the run: the agent reports which tool was
+refused rather than re-planning and asking again. Approve it on a re-run, or reword
+the request so it doesn't need that tool.
+
 ## External Information Lookup
 
 The agent can optionally use web search (Perplexity) when `PERPLEXITY_API_KEY` is set in `.env` to unblock documentation or best-practice questions.

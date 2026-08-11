@@ -5,7 +5,7 @@
 > **Component:** Email request/response contract (issue #1262)
 > **Module:** `gaia_agent_email.contract`
 > **Validation:** pydantic v2
-> **Schema version:** `2.10`
+> **Schema version:** `2.12`
 
 ---
 
@@ -31,7 +31,7 @@ stable shape.
 - **Fail loudly.** Every model forbids unknown fields (`extra="forbid"`). An
   off-contract payload raises a `ValidationError` naming the offending field,
   never a silently coerced result.
-- **Versioned.** `SCHEMA_VERSION` (`"2.10"`) is pinned in the module and echoed in
+- **Versioned.** `SCHEMA_VERSION` (`"2.12"`) is pinned in the module and echoed in
   every request and response so a consumer can detect a breaking change.
 
 ### Version history
@@ -56,6 +56,8 @@ the npm package accepts any higher MINOR), so the one breaking change below —
 | `2.8` | Additive (#2582): new read-only attention-view surface — `GET /v1/email/attention` merges inbound waiting-on-you items (#2581), meeting proposals found during the scan (#2583), unreviewed messages (#2584), and open action items (#2110/#2525) into one "what needs you" read-model, computed on open and cached. No existing shape changed, so `2.7` consumers keep working. |
 | `2.9` | Additive (#2638/#2643): `EmailPreScanResult` gains `total_inbox` (exact whole-INBOX message count, nullable). Pre-scan now scans read + unread INBOX mail, not unread-only (#2638) — `total_unread` alone stopped being an honest scan-coverage denominator once read mail counts too, so `total_inbox` is the new one. No existing field changed, so `2.8` consumers keep working. |
 | `2.10` | Additive (#2716): `AttentionCoverage` gains `message_errors` (list of `{message_id, error}`, nullable) and `degraded` can now be `true` for a message-level gap, not only a mailbox-level one. A Gmail rate-limit that survives retry now drops the one affected message instead of failing the whole attention scan — every other message in the same mailbox is still present in `items`. No existing field changed, so `2.9` consumers keep working. |
+| `2.11` | Additive (#2743): `EmailPreScanResult` gains `needs_you` (list of `NeedsYouItem`), `needs_you_total` (int), and `bulk` (`BulkSummary`, nullable) — a single worklist view built on top of the already-classified urgent/actionable/needs_review buckets, never a second independent classification pass. `NeedsYouItem.kind` reuses the published `AttentionItemKind` enum. No existing field changed, so `2.10` consumers keep working. |
+| `2.12` | Additive (#2829): `POST /v1/email/query` gains an optional `session_id`. When the host sends it, the run resolves the SAME agent every other turn on that id used, instead of a throwaway per-turn agent — so a reference to something an earlier turn surfaced (e.g. "reply to number 1") can resolve. Omitted -> byte-for-byte the old per-turn behaviour. No existing field changed, so `2.11` consumers keep working. |
 
 ---
 
@@ -89,7 +91,7 @@ test asserts byte-for-byte equality, so drift in either place fails CI.
 
 | Field | Type | Notes |
 |---|---|---|
-| `schema_version` | string | Contract version. Defaults to `"2.10"`. |
+| `schema_version` | string | Contract version. Defaults to `"2.12"`. |
 | `payload` | `SingleEmailInput` \| `ThreadInput` | Discriminated on `kind`. |
 | `context` | `TriageContext` \| null | Optional; biases categorization/summary. |
 
@@ -261,7 +263,7 @@ single-use send-confirmation token.
 
 ```json
 {
-  "schema_version": "2.10",
+  "schema_version": "2.12",
   "payload": {
     "kind": "single",
     "principal": { "name": "Alice Example", "email": "alice@example.com" },
@@ -283,7 +285,7 @@ single-use send-confirmation token.
 
 ```json
 {
-  "schema_version": "2.10",
+  "schema_version": "2.12",
   "request_kind": "single",
   "result": {
     "category": "NEEDS_RESPONSE",
@@ -310,7 +312,7 @@ single-use send-confirmation token.
 
 ```json
 {
-  "schema_version": "2.10",
+  "schema_version": "2.12",
   "payload": {
     "kind": "thread",
     "principal": { "name": "Alice Example", "email": "alice@example.com" },
@@ -343,7 +345,7 @@ single-use send-confirmation token.
 
 ```json
 {
-  "schema_version": "2.10",
+  "schema_version": "2.12",
   "request_kind": "thread",
   "result": {
     "category": "NEEDS_RESPONSE",
@@ -370,7 +372,7 @@ triages up to `MAX_BATCH_SIZE` (**100**) emails or threads in one request: an
 
 | Field | Type | Notes |
 |---|---|---|
-| `schema_version` | string | Contract version. Defaults to `"2.10"`. |
+| `schema_version` | string | Contract version. Defaults to `"2.12"`. |
 | `items` | `(SingleEmailInput \| ThreadInput)[]` | 1–100 inputs, discriminated on `kind` — the same item shapes the single endpoint's `payload` accepts. Over 100 → `422`. |
 | `context` | `TriageContext` \| null | Optional; applied to **all** items. |
 
@@ -403,7 +405,7 @@ The MCP surface mirrors this with a `triage_email_batch` tool (the single
 
 ```json
 {
-  "schema_version": "2.10",
+  "schema_version": "2.12",
   "items": [
     {
       "kind": "single",
@@ -433,7 +435,7 @@ The MCP surface mirrors this with a `triage_email_batch` tool (the single
 
 ```json
 {
-  "schema_version": "2.10",
+  "schema_version": "2.12",
   "results": [
     {
       "index": 0,
@@ -627,9 +629,10 @@ response = parse_response(raw_response_dict)  # -> EmailTriageResponse
 ## Stability contract
 
 - **Versioned additively.** Additive, backward-compatible changes (new optional
-  fields, new endpoints) keep older consumers working; `SCHEMA_VERSION` bumps only
-  on a breaking change (renamed/removed field, new required field, taxonomy
-  change) so consumers detect it. See the [version history](#version-history).
+  fields, new endpoints) keep older consumers working; `SCHEMA_VERSION` bumps the
+  MINOR on **every** change, additive or breaking (see [Version history](#version-history)
+  above), so a consumer that gates on the MINOR always sees a bump, not only
+  when something breaks.
 - **Categories never drift.** The five-bucket taxonomy is mirrored from the
   agent's `triage_heuristics.ALL_CATEGORIES`; a unit test asserts byte-for-byte
   equality, so a taxonomy change in either place fails CI.

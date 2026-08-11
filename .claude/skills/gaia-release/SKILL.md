@@ -222,6 +222,22 @@ These map to [CLAUDE.md](CLAUDE.md). Re-read them whenever this skill runs.
    grep -H '^version:' hub/components/*/gaia-agent.yaml   # both must read <version>
    ```
 
+   Then bump the terminal hub's **`min_gaia_version`** to `<version>` too. It needs
+   daemon host API v1.1, which no release before this one ships — so the release it
+   publishes alongside *is* its minimum, and `release_components.yml` refuses to
+   publish it under an older core. Leave `agent-ui`'s alone: it talks to
+   `gaia.ui.server`, not the daemon control plane.
+   ```bash
+   sed -i '' "s/^min_gaia_version: .*/min_gaia_version: \"<version>\"/" \
+     hub/components/terminal-hub/gaia-agent.yaml     # GNU sed: drop the ''
+   python util/check_component_core_api.py --release-version <version>
+   ```
+
+   Finally, record what the **previous** release shipped in `RELEASED_DAEMON_API`
+   in [util/check_component_core_api.py](util/check_component_core_api.py) — the
+   guard resolves an already-published version from that table, and a missing row
+   makes it fall back to trusting this tree, which is the drift it exists to catch.
+
 7. **Confirm `__version__` is correct.**
    ```bash
    grep -E '^__version__' src/gaia/version.py

@@ -34,5 +34,14 @@ const code = lines
   ]}
 >
   <div class="mono border-b border-g-border px-3.5 py-2.5 text-[11.5px] text-g-code-faint">{title}</div>
-  <pre class="mono m-0 overflow-x-auto px-[18px] py-4 text-[12.5px] leading-[1.75] text-g-code-text" set:html={code} />
+  {/* Focusable because it scrolls horizontally. role="group" rather than
+      "region" so N panels on a page don't become N landmarks; group still
+      carries the name a focusable scroll container needs. */}
+  <pre
+    tabindex="0"
+    role="group"
+    aria-label={title}
+    class="mono m-0 overflow-x-auto px-[18px] py-4 text-[12.5px] leading-[1.75] text-g-code-text"
+    set:html={code}
+  />
 </div>

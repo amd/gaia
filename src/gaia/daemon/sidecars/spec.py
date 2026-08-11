@@ -121,9 +121,11 @@ _EMAIL_FORWARDED_MODE_ENV_VAR = "GAIA_EMAIL_FORWARDED_CREDENTIALS"
 # Connector scopes the email sidecar needs (#2408). Transcribed as literals —
 # not imported — so core never depends on the hub wheel (server.py:621-629).
 # MUST equal gaia_agent_email/scopes.py's ALL_SCOPES (GMAIL_SCOPES +
-# CALENDAR_SCOPES) and outlook_scopes.py's OUTLOOK_MAIL_SCOPES +
-# OUTLOOK_CALENDAR_SCOPES. Guarded against drift by
-# tests/unit/connectors/test_email_scope_drift.py.
+# CALENDAR_SCOPES) / REQUIRED_SCOPES (GMAIL_SCOPES) and outlook_scopes.py's
+# OUTLOOK_ALL_SCOPES / OUTLOOK_REQUIRED_SCOPES. Guarded against drift by
+# tests/unit/connectors/test_email_scope_drift.py. ``scopes`` is what the
+# daemon REQUESTS at consent; ``required_scopes`` (#2730 D5) is the narrower
+# subset the forward-out mint ENFORCES — calendar is requested but optional.
 _EMAIL_REQUIRED_CONNECTIONS = (
     ConnectorRequirement(
         connector_id="google",
@@ -133,6 +135,10 @@ _EMAIL_REQUIRED_CONNECTIONS = (
             "https://www.googleapis.com/auth/calendar.events",  # from gaia_agent_email/scopes.py
             "https://www.googleapis.com/auth/calendar.readonly",  # from gaia_agent_email/scopes.py
         ),
+        required_scopes=(
+            "https://www.googleapis.com/auth/gmail.modify",  # from gaia_agent_email/scopes.py
+            "https://www.googleapis.com/auth/gmail.send",  # from gaia_agent_email/scopes.py
+        ),
     ),
     ConnectorRequirement(
         connector_id="microsoft",
@@ -140,6 +146,10 @@ _EMAIL_REQUIRED_CONNECTIONS = (
             "https://graph.microsoft.com/Mail.ReadWrite",  # from gaia_agent_email/outlook_scopes.py
             "https://graph.microsoft.com/Mail.Send",  # from gaia_agent_email/outlook_scopes.py
             "https://graph.microsoft.com/Calendars.ReadWrite",  # from gaia_agent_email/outlook_scopes.py
+        ),
+        required_scopes=(
+            "https://graph.microsoft.com/Mail.ReadWrite",  # from gaia_agent_email/outlook_scopes.py
+            "https://graph.microsoft.com/Mail.Send",  # from gaia_agent_email/outlook_scopes.py
         ),
     ),
 )

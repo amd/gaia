@@ -151,6 +151,9 @@ class TestToolRegistry:
         "list_labels",
         "triage_inbox",
         "pre_scan_inbox",
+        # Positional card-reference resolver (#2745) — "reply to 1" -> the
+        # message the most recent pre_scan_inbox card actually showed.
+        "resolve_needs_you_reference",
         "profile_inbox",
         # Connection state (#2401)
         "list_connected_mailboxes",

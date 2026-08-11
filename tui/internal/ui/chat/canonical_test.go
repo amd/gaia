@@ -2,6 +2,7 @@ package chat
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -204,6 +205,47 @@ func TestCanonicalErrorEndsTurnAndKeepsPartialText(t *testing.T) {
 	}
 	if !sawError {
 		t.Errorf("the actionable detail must be surfaced verbatim: %+v", m.messages)
+	}
+}
+
+func TestRoleErrorProducersSanitizeControlBytesPreserveNewlines(t *testing.T) {
+	malicious := "first\tvalue\r\nsecond\x1b]52;c;Y2xpcGJvYXJk\x07third\x1b[31mred\x1b[0m\x7f"
+	tests := []struct {
+		name  string
+		event interface{}
+	}{
+		{"canonical error", event.CanonicalErrorEvent{Type: "error", Detail: malicious}},
+		{"legacy agent error", event.AgentErrorEvent{Type: "agent_error", Content: malicious}},
+		{"legacy error", event.ErrorEvent{Type: "error", Content: malicious}},
+		{"transport error", errMsg{err: errors.New(malicious)}},
+		{"question delivery error", questionFailedMsg{err: errors.New(malicious)}},
+		{"confirmation delivery error", confirmActionResultMsg{Action: "send_draft", err: errors.New(malicious)}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m, _ := newTestModel(t)
+			switch tt.event.(type) {
+			case errMsg, questionFailedMsg, confirmActionResultMsg:
+				updated, _ := m.Update(tt.event)
+				m = updated.(ChatModel)
+			default:
+				updated, _ := m.handleEvent(tt.event)
+				m = updated.(ChatModel)
+			}
+			last := m.messages[len(m.messages)-1]
+			if last.Role != RoleError {
+				t.Fatalf("unexpected role %v", last.Role)
+			}
+			for _, control := range []rune{'\x1b', '\x07', '\r', '\t', '\x7f'} {
+				if strings.ContainsRune(last.Content, control) {
+					t.Errorf("control byte %U reached Message.Content: %q", control, last.Content)
+				}
+			}
+			if !strings.Contains(last.Content, "first value\nsecond") {
+				t.Errorf("message text or newline lost during sanitization: %q", last.Content)
+			}
+		})
 	}
 }
 
