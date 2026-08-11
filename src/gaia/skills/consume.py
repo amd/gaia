@@ -1,44 +1,18 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """
-Declarative skill consumption — the ``skills:`` block of ``gaia-agent.yaml``.
+Version resolution for declared skills — the half ``gaia.skills.sets`` defers.
 
-Scope D of #2467: an agent *declares* the skills it composes instead of calling
-``load_skill`` from Python, and an installed hub skill is referenced by
-``name@version`` exactly the way agent-to-agent ``dependencies:`` are resolved —
-highest version satisfying the pin, deterministic order, fail loud on conflict::
-
-    skills:
-      - name: web-research
-        version: ">=1.0.0"
-        required: true
-      - name: incident-review
-        version: ">=0.1.0"
-        required: false      # optional enhancement; the agent runs without it
-
-**Why this is not per-agent code.** :meth:`gaia.agents.base.Agent.load_declared_skills`
-runs for every ``Agent`` subclass, bundled or not, and finds the manifest beside
-the agent's own module. A custom harness under ``~/.gaia/agents/<id>/`` therefore
-gets the same consumption path as a hub package by shipping a ``gaia-agent.yaml``
-next to its ``agent.py`` — no subclass hook, no registration call.
+``gaia.skills.sets`` is the single parser for the declaration grammar
+(``skills:``, ``skill_sets:``, ``default_skill_set:``), producing ``SkillRef``
+objects that record a version range without acting on it. This module acts on it:
+:func:`requirements_from_refs` adapts those refs into :class:`SkillRequirement`\\ s
+and :func:`resolve_requirements` matches each range against what is installed
+locally, orders by dependency, and splits required from optional.
 
 **Ordering.** Declaration order is preserved, then a skill that another skill's
 ``tools_required`` depends on is loaded first. A cycle raises instead of picking a
 winner: a "topological order" that silently breaks ties is not an order.
-
-**Overlap with #2466 — read before editing either.** That issue owns the
-*declaration grammar*: ``skills:``, ``skill_sets:``, and ``default_skill_set:``,
-parsed into ``SkillSets`` / ``SkillRef`` by ``gaia.skills.sets``. Its ``SkillRef``
-records a ``version`` but explicitly does not act on it — *"no constraint solving
-happens until the marketplace phase (#2467) can install versioned skills."* This
-module owns exactly that missing half: matching a declared range against what is
-installed, ordering by dependency, and splitting required from optional.
-
-The two were built concurrently and both parse ``skills:``. When they land
-together, **``sets.py`` should own the parsing** and this module's parsing should
-go, keeping :func:`resolve_requirements` reachable via
-:func:`requirements_from_refs` — which is duck-typed so neither module imports the
-other. Do not grow a third grammar in the meantime.
 """
 
 from __future__ import annotations
@@ -48,11 +22,7 @@ from pathlib import Path
 from typing import Any, Iterable, Optional, Sequence
 
 from gaia.logger import get_logger
-from gaia.skills.errors import (
-    DOCS_URL,
-    SkillNotFoundError,
-    SkillValidationError,
-)
+from gaia.skills.errors import SkillNotFoundError, SkillValidationError
 from gaia.skills.format import Skill
 from gaia.skills.manager import SkillManager
 from gaia.skills.versions import matches
@@ -61,9 +31,6 @@ log = get_logger(__name__)
 
 #: Manifest filename an agent package ships (the hub's agent manifest).
 AGENT_MANIFEST_FILENAME = "gaia-agent.yaml"
-
-#: The manifest key this module reads.
-SKILLS_KEY = "skills"
 
 
 @dataclass(frozen=True)
@@ -89,140 +56,6 @@ class SkillRequirement:
             # a match would let any local edit shadow a pinned hub install.
             return False
         return matches(skill.version, self.version)
-
-
-def parse_requirements(
-    raw: Any, *, where: str, origin: str = AGENT_MANIFEST_FILENAME
-) -> list[SkillRequirement]:
-    """Parse a manifest ``skills:`` block into requirements.
-
-    Accepts the mapping form from the spec and the shorthand string form
-    (``- web-research`` / ``- web-research@^1.0``), which is what a hand-typed
-    manifest tends to contain.
-
-    Raises:
-        SkillValidationError: for any malformed entry. A skills block GAIA cannot
-            read is an error — skipping it would silently drop capability the
-            agent's author declared.
-    """
-    if raw is None:
-        return []
-    if not isinstance(raw, list):
-        raise SkillValidationError(
-            f"{where}: '{SKILLS_KEY}' must be a list of skill entries, got "
-            f"{type(raw).__name__}. Each entry is either 'name' / 'name@range' or a "
-            "mapping with 'name', optional 'version', and optional 'required'. "
-            f"See {DOCS_URL}"
-        )
-
-    requirements: list[SkillRequirement] = []
-    seen: dict[str, SkillRequirement] = {}
-    for index, entry in enumerate(raw):
-        requirement = _parse_entry(entry, where=where, index=index, origin=origin)
-        previous = seen.get(requirement.name)
-        if previous is not None:
-            if previous.version != requirement.version:
-                raise SkillValidationError(
-                    f"{where}: '{SKILLS_KEY}' declares skill "
-                    f"'{requirement.name}' twice with conflicting version ranges "
-                    f"({previous.version!r} and {requirement.version!r}). Pick one "
-                    "range — GAIA will not guess which pin you meant."
-                )
-            log.debug(
-                "%s: skill '%s' declared twice with the same range; keeping one",
-                where,
-                requirement.name,
-            )
-            continue
-        seen[requirement.name] = requirement
-        requirements.append(requirement)
-    return requirements
-
-
-def _parse_entry(
-    entry: Any, *, where: str, index: int, origin: str
-) -> SkillRequirement:
-    location = f"{where}: {SKILLS_KEY}[{index}]"
-
-    if isinstance(entry, str):
-        text = entry.strip()
-        if not text:
-            raise SkillValidationError(
-                f"{location} is an empty string. Name the skill, e.g. "
-                "'web-research' or 'web-research@^1.0'."
-            )
-        name, _, version = text.partition("@")
-        return SkillRequirement(
-            name=name.strip(), version=(version.strip() or "*"), origin=origin
-        )
-
-    if not isinstance(entry, dict):
-        raise SkillValidationError(
-            f"{location} must be a string ('name' / 'name@range') or a mapping with "
-            f"a 'name' key, got {type(entry).__name__}."
-        )
-
-    name = entry.get("name")
-    if not isinstance(name, str) or not name.strip():
-        raise SkillValidationError(
-            f"{location} is missing a non-empty 'name'. Every skill entry names the "
-            "skill it composes."
-        )
-
-    version = entry.get("version", "*")
-    if version is None:
-        version = "*"
-    if not isinstance(version, str):
-        raise SkillValidationError(
-            f"{location}: 'version' must be a SemVer range string such as "
-            f"'>=1.0.0' or '^1.2', got {type(version).__name__}."
-        )
-
-    required = entry.get("required", True)
-    if not isinstance(required, bool):
-        raise SkillValidationError(
-            f"{location}: 'required' must be true or false, got "
-            f"{type(required).__name__}."
-        )
-
-    return SkillRequirement(
-        name=name.strip(),
-        version=version.strip() or "*",
-        required=required,
-        origin=origin,
-    )
-
-
-def load_manifest_requirements(
-    manifest_path: Path, *, origin: Optional[str] = None
-) -> list[SkillRequirement]:
-    """Read the ``skills:`` block out of a ``gaia-agent.yaml``.
-
-    A manifest with no ``skills:`` key yields ``[]`` — declaring none is the
-    normal case, not a problem.
-    """
-    import yaml
-
-    path = Path(manifest_path)
-    try:
-        data = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError) as exc:
-        raise SkillValidationError(
-            f"Could not read the agent manifest at {path}: {exc}. Fix the YAML — an "
-            "unreadable manifest may be hiding a 'skills:' block, so GAIA will not "
-            "assume the agent declares none."
-        ) from exc
-
-    if data is None:
-        return []
-    if not isinstance(data, dict):
-        raise SkillValidationError(
-            f"{path} must contain a YAML mapping at its top level, got "
-            f"{type(data).__name__}."
-        )
-    return parse_requirements(
-        data.get(SKILLS_KEY), where=str(path), origin=origin or str(path)
-    )
 
 
 def find_agent_manifest(module_file: Path) -> Optional[Path]:
@@ -386,42 +219,17 @@ def _topological(order: Sequence[str], chosen: dict[str, Skill]) -> list[str]:
     return resolved
 
 
-def resolve_manifest(manifest_path: Path, *, manager: SkillManager) -> ResolvedSkills:
-    """Read a ``gaia-agent.yaml``'s ``skills:`` block and resolve it."""
-    return resolve_requirements(
-        load_manifest_requirements(manifest_path), manager=manager
-    )
-
-
-def requirements_from_names(
-    names: Iterable[str], *, origin: str = ""
-) -> list[SkillRequirement]:
-    """Build requirements from ``name`` / ``name@range`` strings.
-
-    The entry point for callers holding a flat list rather than a manifest block.
-    """
-    return [
-        _parse_entry(name, where=origin or "<names>", index=i, origin=origin)
-        for i, name in enumerate(names)
-    ]
-
-
 def requirements_from_refs(
     refs: Iterable[Any], *, origin: str = ""
 ) -> list[SkillRequirement]:
     """Adapt any ``name``/``version``/``required`` objects into requirements.
 
-    The seam for #2466's ``skill_sets:``. That issue owns the declaration grammar
-    — ``skills:``, ``skill_sets:``, ``default_skill_set:`` — and its ``SkillRef``
-    states outright that ``version`` is *"a declaration surface only … no
-    constraint solving happens until the marketplace phase (#2467) can install
-    versioned skills."* This function is that missing half: hand it the refs a set
-    resolved to and pass the result to :func:`resolve_requirements` to get version
-    matching, dependency ordering, and the required/optional split.
+    The seam ``gaia.skills.sets`` uses: hand it the refs a skill set resolved to
+    and pass the result to :func:`resolve_requirements` for version matching,
+    dependency ordering, and the required/optional split.
 
     Duck-typed on purpose (``.name`` / ``.version`` / ``.required``) so neither
-    module has to import the other, and so whichever lands second is a wire-up
-    rather than a rewrite.
+    module has to import the other.
     """
     requirements: list[SkillRequirement] = []
     for ref in refs:

@@ -34,11 +34,7 @@ from gaia.skills.consume import (
     ResolvedSkills,
     SkillRequirement,
     find_agent_manifest,
-    load_manifest_requirements,
-    parse_requirements,
-    requirements_from_names,
     requirements_from_refs,
-    resolve_manifest,
     resolve_requirements,
 )
 from gaia.skills.errors import (
@@ -161,12 +157,8 @@ __all__ = [
     "SkillRequirement",
     "ResolvedSkills",
     "AGENT_MANIFEST_FILENAME",
-    "parse_requirements",
-    "load_manifest_requirements",
     "find_agent_manifest",
     "resolve_requirements",
-    "resolve_manifest",
-    "requirements_from_names",
     "requirements_from_refs",
     # Errors
     "SkillError",

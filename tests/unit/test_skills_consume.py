@@ -20,81 +20,11 @@ import pytest
 from gaia.skills.consume import (
     SkillRequirement,
     find_agent_manifest,
-    load_manifest_requirements,
-    parse_requirements,
     resolve_requirements,
 )
 from gaia.skills.errors import SkillNotFoundError, SkillValidationError
 from gaia.skills.sets import SkillRef
 from tests.unit.skills_helpers import isolated_manager, write_skill_dir
-
-# ---------------------------------------------------------------------------
-# Declaration grammar
-# ---------------------------------------------------------------------------
-
-
-def test_parses_the_mapping_form_from_the_spec():
-    requirements = parse_requirements(
-        [
-            {"name": "web-research", "version": ">=1.0.0", "required": True},
-            {"name": "incident-review", "version": ">=0.1.0", "required": False},
-        ],
-        where="gaia-agent.yaml",
-    )
-    assert [(r.name, r.version, r.required) for r in requirements] == [
-        ("web-research", ">=1.0.0", True),
-        ("incident-review", ">=0.1.0", False),
-    ]
-
-
-def test_parses_the_shorthand_string_form():
-    requirements = parse_requirements(
-        ["web-research", "incident-review@^0.1"], where="gaia-agent.yaml"
-    )
-    assert [(r.name, r.version) for r in requirements] == [
-        ("web-research", "*"),
-        ("incident-review", "^0.1"),
-    ]
-
-
-def test_missing_block_is_no_skills():
-    assert parse_requirements(None, where="gaia-agent.yaml") == []
-
-
-@pytest.mark.parametrize(
-    "block,pattern",
-    [
-        ("not-a-list", "must be a list"),
-        ([{"version": ">=1.0.0"}], "missing a non-empty 'name'"),
-        ([{"name": "x", "version": 1.0}], "must be a SemVer range string"),
-        ([{"name": "x", "required": "yes"}], "must be true or false"),
-        ([""], "empty string"),
-        ([42], "must be a string"),
-    ],
-)
-def test_malformed_declarations_raise(block, pattern):
-    """A skills block GAIA cannot read is an error, never silently dropped."""
-    with pytest.raises(SkillValidationError, match=pattern):
-        parse_requirements(block, where="gaia-agent.yaml")
-
-
-def test_duplicate_name_with_conflicting_ranges_fails_loud():
-    with pytest.raises(SkillValidationError, match="conflicting version ranges"):
-        parse_requirements(
-            [
-                {"name": "web-research", "version": "^1.0"},
-                {"name": "web-research", "version": "^2.0"},
-            ],
-            where="gaia-agent.yaml",
-        )
-
-
-def test_duplicate_name_with_the_same_range_is_collapsed():
-    requirements = parse_requirements(
-        ["web-research@^1.0", "web-research@^1.0"], where="gaia-agent.yaml"
-    )
-    assert [r.name for r in requirements] == ["web-research"]
-
 
 # ---------------------------------------------------------------------------
 # Manifest discovery
@@ -142,39 +72,6 @@ def test_search_does_not_walk_beyond_the_parent(tmp_path):
     module = deep / "agent.py"
     module.write_text("# agent\n", "utf-8")
     assert find_agent_manifest(module) is None
-
-
-def test_unreadable_manifest_raises_rather_than_assuming_no_skills(tmp_path):
-    manifest = tmp_path / "gaia-agent.yaml"
-    manifest.write_text("id: demo\nskills: [\n", "utf-8")
-    with pytest.raises(SkillValidationError, match="Could not read the agent manifest"):
-        load_manifest_requirements(manifest)
-
-
-def test_reads_the_skills_block_out_of_a_real_manifest(tmp_path):
-    manifest = tmp_path / "gaia-agent.yaml"
-    manifest.write_text(
-        textwrap.dedent("""\
-            id: web
-            name: Web Research
-            version: 0.1.0
-            language: python
-
-            skills:
-              - name: web-research
-                version: ">=1.0.0"
-                required: true
-              - name: incident-review
-                version: ">=0.1.0"
-                required: false
-            """),
-        "utf-8",
-    )
-    requirements = load_manifest_requirements(manifest)
-    assert [(r.name, r.required) for r in requirements] == [
-        ("web-research", True),
-        ("incident-review", False),
-    ]
 
 
 def test_agent_manifest_parser_validates_the_skills_block(tmp_path):
@@ -587,22 +484,34 @@ def test_manifest_lookup_does_not_reach_the_skills_parser_without_a_manifest(
 ):
     """The autoload hook runs in every Agent.__init__, so it must stay cheap.
 
-    Importing ``gaia.skills.consume`` drags in the connector base module. An agent
+    Importing the skills package drags in the connector base module. An agent
     with no manifest — which is every agent today — must not pay for it, so the
     path check happens before the import.
     """
-    import gaia.skills.consume as consume_module
+    import gaia.skills.sets as sets_module
 
     _stub_llm(monkeypatch)
     monkeypatch.setenv("GAIA_CONFIG_DIR", str(tmp_path / "home"))
 
     def explode(*_args, **_kwargs):
         raise AssertionError(
-            "load_manifest_requirements was reached for an agent with no manifest"
+            "the skills parser was reached for an agent with no manifest"
         )
 
-    monkeypatch.setattr(consume_module, "load_manifest_requirements", explode)
+    monkeypatch.setattr(sets_module, "parse_skill_sets", explode)
     assert custom_agent_harness(None)(silent_mode=True).loaded_skills == {}
+
+
+def test_an_unreadable_manifest_raises_rather_than_assuming_no_skills(
+    tmp_path, monkeypatch, custom_agent_harness
+):
+    """An agent whose own manifest cannot be read is broken, not skill-free."""
+    _stub_llm(monkeypatch)
+    monkeypatch.setenv("GAIA_CONFIG_DIR", str(tmp_path / "home"))
+
+    agent_class = custom_agent_harness("id: demo\nskills: [\n")
+    with pytest.raises(SkillValidationError, match="Could not read the agent manifest"):
+        agent_class(silent_mode=True)
 
 
 def test_an_agent_whose_manifest_declares_no_skills_loads_none(
