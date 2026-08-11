@@ -372,9 +372,10 @@ class PreferenceToolsMixin:
 
             Senders flagged here are tagged ``preference_applied:
             "priority_sender"`` in ``triage_inbox`` / ``pre_scan_inbox``
-            output so they can be surfaced or ordered ahead of other mail —
-            but the category (urgent, needs_response, ...) is still decided
-            entirely by the message content; this tool never overrides it.
+            output — that tag has no reader today (#2777), so it does not
+            currently reorder or highlight the sender's mail. The category
+            (urgent, needs_response, ...) is still decided entirely by the
+            message content; this tool never overrides it.
             "I care about this sender" is not "their mail is urgent" — a
             newsletter from a priority sender still classifies as whatever
             its content says. Useful for calling out high-signal senders
@@ -487,11 +488,17 @@ class PreferenceToolsMixin:
 
         @tool
         def set_low_priority_sender(email: str) -> str:
-            """Mark a sender as always low-priority.
+            """Mark a sender as low-priority (#2666: never forces PROMOTIONAL).
 
-            Senders flagged here are classified as ``low priority`` and
-            surfaced in ``pre_scan_inbox``'s ``suggested_archives``
-            section. Useful for newsletters or bot accounts the
+            Senders flagged here are tagged ``preference_applied:
+            "low_priority_sender"`` in ``triage_inbox`` / ``pre_scan_inbox``
+            output so they can be de-prioritized behind other mail — but
+            the category (urgent, needs_response, ...) is still decided
+            entirely by the message content; this tool never overrides it.
+            "I don't care about most of this sender's mail" is not "none
+            of their mail is ever urgent" — a genuinely urgent message
+            from a low-priority sender still classifies as whatever its
+            content says. Useful for newsletters or bot accounts the
             heuristic can't recognize on its own.
 
             On a normally-provisioned install this rule is saved to the

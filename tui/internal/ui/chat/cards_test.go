@@ -66,7 +66,7 @@ func TestToolResultWithRenderDrawsACard(t *testing.T) {
 
 	rendered := ansi.Strip(m.renderMessage(card, nil))
 	t.Logf("\n%s", rendered)
-	for _, want := range []string{"Inbox", "9 inbox messages scanned", "NEEDS YOU", "REPLY", "Sarah Chen", "asked for a reply by Friday"} {
+	for _, want := range []string{"Inbox", "9 inbox messages scanned", "NEEDS A REPLY", "REPLY", "Sarah Chen", "asked for a reply by Friday"} {
 		if !strings.Contains(rendered, want) {
 			t.Errorf("card render missing %q:\n%s", want, rendered)
 		}
@@ -129,7 +129,7 @@ func TestCardRendersInlineAboveTheLiveRegion(t *testing.T) {
 	m.updateViewport()
 
 	view := ansi.Strip(m.viewport.View())
-	cardAt := strings.Index(view, "NEEDS YOU")
+	cardAt := strings.Index(view, "NEEDS A REPLY")
 	liveAt := strings.Index(view, "archive_messages")
 	if cardAt < 0 || liveAt < 0 {
 		t.Fatalf("expected both the card and the live region in the viewport:\n%s", view)

@@ -100,16 +100,20 @@ jobs:
           done
           exit "${fail}"
 
-      # A manifest may not name a core release that cannot serve the host API its own
-      # binary needs. R2 paths are immutable, so this has to block before publish
-      # rather than be discovered by users. See
-      # tests/unit/test_component_host_api_contract.py.
-      - name: Assert each component's min_gaia_version can serve the host API
+      # A manifest can agree with the tag and STILL be a lie: the terminal hub
+      # needs daemon host API v1.1, which released 0.22.0 does not serve.
+      # --verify-released re-reads what each release shipped from its published
+      # wheel, because this tree is ahead of all of them.
+      - name: Assert each component's declared minimum core can serve it
         shell: bash
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
         run: |
           set -euo pipefail
-          python -m pip install --quiet pyyaml pytest
-          python -m pytest tests/unit/test_component_host_api_contract.py -q
+          python -m pip install --quiet pyyaml
+          python util/check_component_core_api.py \
+            --verify-released \
+            --release-version "${VERSION}"
 
   # ── terminal-hub: build the 6 targets and publish them ──────────────────────
   terminal-hub:
@@ -120,7 +124,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@v7
         with:
           go-version-file: tui/go.mod
           cache-dependency-path: tui/go.sum

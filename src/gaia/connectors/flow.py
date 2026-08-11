@@ -110,12 +110,32 @@ class _PendingFlow:
 _pending: dict[str, _PendingFlow] = {}
 
 
+def _decode_id_token_claims(id_token: str) -> Dict[str, Any]:
+    """
+    Base64url-decode an id_token's payload segment and return its claims.
+
+    Best-effort and unvalidated — the signature is not checked, so callers may
+    only use the result for display labels and local classification, never for
+    authorization. Returns ``{}`` for a malformed or absent token.
+    """
+    try:
+        _, payload_b64, _ = id_token.split(".")
+    except (AttributeError, ValueError):
+        return {}
+    # base64url, no padding — pad up to a multiple of 4.
+    padded = payload_b64 + "=" * (-len(payload_b64) % 4)
+    try:
+        claims = json.loads(base64.urlsafe_b64decode(padded).decode("ascii"))
+    except (ValueError, UnicodeDecodeError):
+        return {}
+    return claims if isinstance(claims, dict) else {}
+
+
 def _decode_email_from_id_token(id_token: str) -> Optional[str]:
     """
     Extract the user's email from an id_token payload.
 
-    Best-effort — base64url-decode the middle segment, parse JSON, check
-    claims in priority order:
+    Checks claims in priority order:
       1. ``email`` — present in Google id_tokens and most OIDC providers.
       2. ``preferred_username`` — Microsoft identity platform (personal
          Outlook.com accounts and Azure AD work/school accounts).
@@ -124,20 +144,38 @@ def _decode_email_from_id_token(id_token: str) -> Optional[str]:
     Production validation is deferred to the userinfo endpoint; this is a
     quick path for display on the OAuth success page.
     """
-    try:
-        _, payload_b64, _ = id_token.split(".")
-    except ValueError:
-        return None
-    # base64url, no padding — pad up to a multiple of 4.
-    padded = payload_b64 + "=" * (-len(payload_b64) % 4)
-    try:
-        payload = json.loads(base64.urlsafe_b64decode(padded).decode("ascii"))
-    except (ValueError, UnicodeDecodeError):
-        return None
-    email = (
-        payload.get("email") or payload.get("preferred_username") or payload.get("upn")
-    )
+    claims = _decode_id_token_claims(id_token)
+    email = claims.get("email") or claims.get("preferred_username") or claims.get("upn")
     return email if isinstance(email, str) else None
+
+
+def _resolve_account_type(provider, id_token: str) -> Optional[str]:
+    """Classify the signed-in account from the id_token, if the provider can.
+
+    Duck-typed on ``provider.classify_account_type(claims)`` (Microsoft derives
+    ``personal`` vs ``work`` from the ``tid`` claim, #2466). Returns ``None`` when
+    the provider has no notion of account type or the token carries no usable
+    claim — an unknown kind is recorded as unknown, never guessed. Never raises:
+    the account kind is metadata, and failing to derive it must not fail a
+    connect that otherwise succeeded.
+    """
+    classify = getattr(provider, "classify_account_type", None)
+    if not callable(classify):
+        return None
+    claims = _decode_id_token_claims(id_token or "")
+    if not claims:
+        return None
+    try:
+        account_type = classify(claims)
+    except Exception as e:  # noqa: BLE001 — metadata only, must not fail connect
+        logger.warning(
+            "flow: account-type classification for %s failed (%s); recording "
+            "it as unknown",
+            getattr(provider, "provider_id", "?"),
+            e,
+        )
+        return None
+    return account_type if isinstance(account_type, str) and account_type else None
 
 
 async def _resolve_account_email(provider, id_token: str, access_token: str) -> str:
@@ -510,6 +548,7 @@ async def _exchange_code_for_tokens(flow: _PendingFlow, code: str) -> Dict[str, 
     account_email = await _resolve_account_email(
         provider, payload.get("id_token", ""), payload.get("access_token", "")
     )
+    account_type = _resolve_account_type(provider, payload.get("id_token", ""))
     granted_scopes = _resolve_granted_scopes(payload, flow.scopes)
 
     save_connection(
@@ -522,6 +561,7 @@ async def _exchange_code_for_tokens(flow: _PendingFlow, code: str) -> Dict[str, 
         # concept of a tenant (e.g. Google), which save_connection omits
         # from the blob entirely (A7-style contract).
         tenant=getattr(provider, "tenant", None),
+        account_type=account_type,
     )
 
     # No separate state-cache write needed — the keyring blob written
@@ -733,6 +773,7 @@ async def poll_device_flow(
     account_email = await _resolve_account_email(
         provider, payload.get("id_token", ""), payload.get("access_token", "")
     )
+    account_type = _resolve_account_type(provider, payload.get("id_token", ""))
     granted_scopes = _resolve_granted_scopes(payload, scopes_list)
 
     save_connection(
@@ -742,6 +783,7 @@ async def poll_device_flow(
         scopes=granted_scopes,
         client_id_hash=provider.client_id_hash,
         tenant=getattr(provider, "tenant", None),
+        account_type=account_type,
     )
 
     if grant_agents:
