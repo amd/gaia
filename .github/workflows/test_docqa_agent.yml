@@ -14,7 +14,7 @@ on:
       - 'hub/agents/docqa/python/**'
       - 'src/gaia/agents/base/**'
       - 'src/gaia/agents/tools/**'
-      - 'src/gaia/agents/chat/tools/**'
+      - 'src/gaia/rag/**'
       - 'setup.py'
       - '.github/workflows/test_docqa_agent.yml'
   pull_request:
@@ -24,7 +24,7 @@ on:
       - 'hub/agents/docqa/python/**'
       - 'src/gaia/agents/base/**'
       - 'src/gaia/agents/tools/**'
-      - 'src/gaia/agents/chat/tools/**'
+      - 'src/gaia/rag/**'
       - 'setup.py'
       - '.github/workflows/test_docqa_agent.yml'
   merge_group:

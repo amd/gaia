@@ -4,6 +4,7 @@
 #include "gaia/agent.h"
 #include "gaia/security.h"
 
+#include <algorithm>
 #include <iostream>
 #include <regex>
 #include <sstream>
@@ -437,8 +438,10 @@ bool Agent::connectMcpServer(const std::string& name, const json& config) {
         for (const auto& mcpTool : mcpTools) {
             ToolInfo toolInfo = mcpTool.toToolInfo(name);
 
-            // Bake the current default policy into the ToolInfo at registration time.
-            toolInfo.policy = tools_.defaultPolicy();
+            // toToolInfo() already stamped CONFIRM unless the server proved the
+            // tool read-only. That verdict is a floor: a stricter registry
+            // default may raise it, but nothing may lower it back to ALLOW.
+            toolInfo.policy = stricterPolicy(toolInfo.policy, tools_.defaultPolicy());
 
             // Capture server name and tool name; use callMcpTool for auto-reconnect
             std::string serverName = name;
@@ -449,8 +452,11 @@ bool Agent::connectMcpServer(const std::string& name, const json& config) {
 
             try {
                 tools_.registerTool(std::move(toolInfo));
-            } catch (const std::runtime_error&) {
-                // Tool already registered, skip
+            } catch (const std::runtime_error& e) {
+                // Name collision — the already-registered tool keeps its own
+                // policy, so say which one was dropped rather than swallowing it.
+                console_->printError("MCP tool '" + mcpTool.name + "' from server '" + name +
+                                     "' was not registered: " + e.what());
             }
         }
 

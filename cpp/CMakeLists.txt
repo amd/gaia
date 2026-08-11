@@ -145,6 +145,7 @@ add_library(gaia_core
     src/sse_parser.cpp
     src/process.cpp
     src/file_tools.cpp
+    src/ignore.cpp
     src/git_tools.cpp
     src/session.cpp
     src/repl.cpp
@@ -316,6 +317,7 @@ if(GAIA_BUILD_TESTS)
         tests/test_sse_parser.cpp
         tests/test_process.cpp
         tests/test_file_tools.cpp
+        tests/test_ignore.cpp
         tests/test_git_tools.cpp
         tests/test_session.cpp
         tests/test_repl.cpp

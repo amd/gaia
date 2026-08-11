@@ -107,7 +107,7 @@ on:
       eval_model:
         description: 'Judge model for the eval harness'
         required: false
-        default: 'claude-sonnet-4-6'
+        default: 'claude-opus-5'
   # `pull_request`, NOT `push`. A `push` path filter matches the files in the
   # PUSH, so merging main into a branch replays all of main's churn through the
   # filter — which is how #2807 and #2809, both pure C++ PRs with no Python in
@@ -118,12 +118,10 @@ on:
   # test_email_agent_eval.yml; `ready_for_review` is what runs the gate on a PR
   # that was opened as a draft (see the draft clause in the job `if:`).
   #
-  # THE PATH LIST BELOW IS UNCHANGED ON PURPOSE. `hub/agents/python/**` is a
-  # real bug — the layout is `hub/agents/<id>/python/`, so it matches nothing
-  # and a ChatAgent prompt edit never triggers this gate. It is fixed in #2773,
-  # not here, because widening it newly qualifies 18 hub packages against a
-  # single-slot pool and that load question deserves its own review. This
-  # change is mechanism only: it makes the filter mean what it already says.
+  # THE PATH LIST BELOW IS UNCHANGED ON PURPOSE. This change is mechanism only:
+  # it makes the filter mean what it already says. Note the list now includes
+  # `hub/agents/*/python/**`, so 18 hub packages newly qualify for a
+  # single-slot pool — scoping to the PR diff is what keeps that affordable.
   pull_request:
     branches: [ main ]
     types: [opened, synchronize, reopened, ready_for_review]
@@ -133,13 +131,13 @@ on:
       - 'src/gaia/agents/registry.py'
       - 'src/gaia/llm/lemonade_client.py'
       - 'src/gaia/llm/factory.py'
-      - 'hub/agents/python/**'
+      - 'hub/agents/*/python/**'
       - 'tests/fixtures/eval_baselines/**'
       - '.github/workflows/test_eval_agent_gemma_consolidation.yml'
       # In-core agents that carry their own model_id, plus the prompt/tool
       # surfaces CLAUDE.md lists as eval-requiring — a tool docstring edit
       # changes the JSON tool schema and is exactly what tool_selection scores.
-      # (ChatAgent is not listed: it now lives under hub/agents/python/chat/,
+      # (ChatAgent is not listed: it now lives under hub/agents/chat/python/,
       # already covered above.)
       - 'src/gaia/agents/builder/**'
       - 'src/gaia/agents/tools/**'
@@ -167,7 +165,7 @@ env:
   # be able to launch a multi-hour run on the shared slot. So retitling alone
   # does not re-run the gate: add the tag, then push (or close/reopen).
   ENFORCE: ${{ github.event.inputs.enforce || (contains(github.event.pull_request.title, '[eval-enforce]') && 'true') || 'false' }}
-  EVAL_MODEL: ${{ github.event.inputs.eval_model || 'claude-sonnet-4-6' }}
+  EVAL_MODEL: ${{ github.event.inputs.eval_model || 'claude-opus-5' }}
   # Loopback services — bypass any runner proxy so curl/httpx reach them.
   NO_PROXY: 'localhost,127.0.0.1'
 
