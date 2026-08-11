@@ -798,6 +798,20 @@ TEST(ResponseModeTest, InvalidEnumStringsAreRejected) {
                  std::invalid_argument);
 }
 
+// "none" is the one rejected value a user is likely to try, since OpenAI
+// accepts it. The error must point at the supported escape hatch instead.
+TEST(ResponseModeTest, ToolChoiceNoneIsRejectedAndPointsAtNever) {
+    try {
+        AgentConfig::fromJson(json{{"toolChoice", "none"}});
+        FAIL() << "expected toolChoice \"none\" to be rejected";
+    } catch (const std::invalid_argument& e) {
+        EXPECT_NE(std::string(e.what()).find("nativeToolCalls"),
+                  std::string::npos)
+            << "error should name the supported way to disable tool calling: "
+            << e.what();
+    }
+}
+
 // ---------------------------------------------------------------------------
 // History: native tool exchanges survive intact, orphans are dropped
 // ---------------------------------------------------------------------------

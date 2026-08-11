@@ -395,7 +395,8 @@ struct AgentConfig {
     NativeToolCalls nativeToolCalls = NativeToolCalls::Auto;
 
     /// Value sent as ``tool_choice`` when native tool calling is active.
-    /// "auto" lets the model decide; "required" forces a call; "none" disables.
+    /// "auto" lets the model decide; "required" forces a call. To disable
+    /// native tool calling entirely, set nativeToolCalls = NativeToolCalls::Never.
     std::string toolChoice = "auto";
 
     /// Resolve the Auto policy against ``modelId``.

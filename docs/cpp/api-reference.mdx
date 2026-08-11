@@ -70,7 +70,7 @@ cfg.nativeToolCalls = gaia::NativeToolCalls::Auto;    // default — decide per 
 cfg.nativeToolCalls = gaia::NativeToolCalls::Always;  // force native
 cfg.nativeToolCalls = gaia::NativeToolCalls::Never;   // force prompt-JSON
 
-cfg.toolChoice = "auto";  // or "required" / "none"
+cfg.toolChoice = "auto";  // or "required"
 ```
 
 `Auto` consults `gaia::isToolCallingModel(modelId)`, a mirror of the `MODELS`
