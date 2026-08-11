@@ -1,14 +1,21 @@
 ---
 name: "weekly-audit-patterns"
-description: "The non-obvious invariants of the proactive weekly Claude audit workflow (.github/workflows/claude-weekly-audit.yml): the stable dedup-key scheme that keeps it from re-filing findings every week, the four audit dimensions (security has its own workflow, claude-security-audit.yml) and which one owns the Fail-Loudly check, and the `bug`-label → auto-fix promotion path. Read before editing that workflow, changing how findings are filed/deduped, or adding an audit dimension."
+description: "The non-obvious invariants of the proactive nightly Claude audit workflow (.github/workflows/claude-weekly-audit.yml): the day-of-week mode selector, the stable dedup-key scheme that keeps it from re-filing findings every run, the four audit dimensions (security has its own nightly workflow, claude-security-audit.yml) and which one owns the Fail-Loudly check, and the `bug`-label → auto-fix promotion path. Read before editing that workflow, changing its cadence, changing how findings are filed/deduped, or adding an audit dimension."
 ---
 
-# Weekly Audit Patterns
+# Nightly Audit Patterns
 
 `.github/workflows/claude-weekly-audit.yml` is the repo's one **proactive** Claude
 lens — a scheduled deep review (not triggered by a PR) that fans out one read-only
 Claude job per dimension and files a ranked triage issue. Everything else in
 `claude.yml` is reactive. These are the invariants a future editor will otherwise break.
+
+> **Naming:** this ran weekly until it moved to a nightly cron (10:37 UTC ≈ 3am Pacific,
+> deep on Sundays). Three identifiers deliberately kept the `weekly` name so the change
+> did not orphan existing state or break references: the **filename**, the
+> **`weekly-audit` issue label** (it is the dedup key — renaming it would re-file every
+> open finding), and this **skill's `name`** (referenced from `CLAUDE.md`). Issue titles
+> and the workflow display name did change, to `Nightly audit — …`.
 
 ## The four dimensions are mutually exclusive
 
@@ -66,14 +73,30 @@ Each finding carries an `auto_fixable` boolean; the child body says whether appl
 will let auto-fix land it (locatable/small) or whether it needs a human (a test suite, a
 refactor) — so maintainers don't promote something auto-fix can't handle.
 
-## Precision gate — a false finding erodes the whole audit
+## Findings are filtered in SYNTHESIS, never in the lenses
 
-Recall is cheap; trust is not. Each finding must carry `evidence` (a concrete quote or
-`path:line` the dimension actually read), and the dimension prompt requires verifying the
-problem is present AND not already handled elsewhere before reporting. The synthesis
-**drops any 🔴/🟠 finding whose evidence doesn't substantiate its title**, and does an
-**intra-run cross-dimension dedup** (a stubbed command flagged by both `docs` and
-`correctness` is ONE issue, not two — keep the most severe, note the other lens).
+**The lenses report everything they can ground in something they read — including
+findings they are unsure about. Synthesis is the only filter.** This split is deliberate
+and load-bearing on Claude Opus 5: a lens prompt that says "be conservative", "precision
+beats recall", or "skip anything you aren't confident is real" gets followed *literally*
+— the model investigates just as hard and then silently reports less. Both this workflow
+and `claude-security-audit.yml` previously said exactly that. Do not put it back. (The
+security audit's own origin story is a recall failure: its predecessor missed the hub
+tar-slip, CWE-22, by sampling and trusting a suppression comment.)
+
+What each side owns:
+- **Lens**: grounding only. Open the cited file, confirm the problem is present, confirm
+  it isn't already handled, and fill `evidence` with what you actually read. **No
+  evidence, no finding** — the one hard filter upstream. Express doubt through
+  `severity` (file it 🟡 and say so in `why`), never by dropping the item.
+- **Synthesis**: the real gate. Drops any finding at any severity whose evidence doesn't
+  substantiate its title, re-reads the cited `path`/`symbol` for every 🔴/🟠 before
+  filing, demotes over-stated findings rather than deleting them, collapses an
+  implausible flood on one area into a single finding, and does an **intra-run
+  cross-dimension dedup** (a stubbed command flagged by both `docs` and `correctness` is
+  ONE issue, not two — keep the most severe, note the other lens).
+
+If the tracker gets noisy, tighten synthesis. Do not re-muzzle the lenses.
 
 ## Findings are written for a human, not an auditor
 
@@ -87,7 +110,7 @@ triager skips.
 
 Each finding carries `dedup_key = <dimension>:<repo-relative-path>:<symbol-or-section>`.
 **The symbol is a function/class name or doc heading — NEVER a line number** (line numbers
-move, so a line-based key re-files the same finding every week and the issue is unusable by
+move, so a line-based key re-files the same finding every run and the issue is unusable by
 week 3). The key is embedded in each child body as `<!-- audit-key: KEY -->`. Synthesis
 skips a finding whose key is in EITHER set:
 - **already-filed** — keys on any *open* `weekly-audit` issue (avoid duplicates).
@@ -98,7 +121,7 @@ skips a finding whose key is in EITHER set:
 
 ## Parent triage issues accumulate — the workflow NEVER closes one
 
-Each run files a NEW parent (`Weekly audit — <mode> — <run_id>`) and **cross-links the
+Each run files a NEW parent (`Nightly audit — <mode> — <run_id>`; synthesis also matches the legacy `Weekly audit — ` prefix so the chain survives the rename) and **cross-links the
 most recently created open parent** with a comment ("Follow-up audit run filed as #N —
 stays OPEN until its findings are addressed") — it does **not** close it. An earlier
 version auto-closed the previous parent as "superseded," which silently hid an epic's
@@ -107,7 +130,7 @@ went dark). Only a **human maintainer** may close a parent, and only after its f
 are addressed. Child issues stay open regardless (they're the actionable units) — that
 was already true and is unchanged.
 
-Since parents are never auto-closed, there can be several open `Weekly audit —` issues at
+Since parents are never auto-closed, there can be several open `Nightly audit —` (and legacy `Weekly audit —`) issues at
 once; synthesis always cross-links the highest-numbered (most recent) one, never assumes
 there's "at most one." The tradeoff is deliberate: parents pile up until a maintainer
 closes them, trading tracker tidiness for guaranteeing unaddressed findings stay visible.
@@ -133,17 +156,31 @@ route promotions through `bug` unless you deliberately widen the auto-fix `if`.
 
 ## Cost & safety invariants
 
-- **Model** is `AUDIT_MODEL` (top-level env, `claude-opus-4-8` — ~half the token burn of
-  Fable for comparable static-review quality). One place to change it; swap to
-  `claude-fable-5` for maximum depth at ~2x cost. A measured Fable deep run was ~$45 of
-  API-equivalent subscription usage; Opus roughly halves that.
+- **Model** is `AUDIT_MODEL` (top-level env, `claude-opus-5` — ~half the token burn of
+  Fable for comparable static-review quality, and the same $5/$25 as the Opus 4.8 it
+  replaced). One place to change it; swap to `claude-fable-5` for maximum depth at ~2x
+  cost. A measured Fable deep run was ~$45 of API-equivalent subscription usage; Opus
+  roughly halves that.
+  ⚠️ **Model support is gated by the pinned `claude-code-action` version** — the action
+  bundles the CLI that resolves model names, so a model newer than the pin is
+  unresolvable and fails as a broken job rather than a clear error. Bump the SHA in the
+  same change and prove it first with
+  `gh workflow run claude-auth-canary.yml -f model=<new-id>`.
 - **Serialized dimensions**: the matrix runs `max-parallel: 1` so the run is a steady
   drip, not a 4-job burst — this keeps it under the Max subscription's rolling (5-hour)
   rate limit. If you re-parallelize, expect a token spike that can trip that limit.
-- **Skip-if-empty**: normal mode exits in `preflight` before any Claude call on a
-  no-change week. Deep mode never skips.
-- **Modes**: `normal` = last N days' diff; `deep` = whole codebase, auto-selected on the
-  first Monday of the month (day-of-month ≤ 7, since cron only fires Mondays).
+- **Skip-if-empty**: normal mode exits in `preflight` before any Claude call on a night
+  with no commits. Deep mode never skips. This matters more now the cadence is nightly.
+- **Cadence**: **nightly** at 10:37 UTC (≈3am Pacific). The sibling
+  `claude-security-audit.yml` also runs nightly, deliberately ~1.4h earlier at 09:13 UTC
+  so the two proactive Claude runs never stack on the shared subscription pool.
+- **Modes**: `normal` = last N days' diff (`window_days`, default **1**); `deep` = whole
+  codebase, auto-selected on **Sundays**.
+  ⚠️ The selector keys off **ISO day-of-week** (`date -u +%u`, 7 = Sunday), NOT
+  day-of-month. It previously read `day-of-month ≤ 7` and was only correct because the
+  cron fired on Mondays alone. Under the nightly cron that test matches the 1st–7th of
+  every month — **seven consecutive whole-codebase deep sweeps** instead of one. Do not
+  "simplify" it back to a day-of-month check.
 - **Read-only**: dimension + synthesis jobs run `--allowedTools Read,Grep,Glob,Bash` —
   no Edit/Write, never install or run repo code (same rule as `claude.yml` review jobs).
 - **Concurrency group** `claude-weekly-audit` (not cancel-in-progress) so two scheduled

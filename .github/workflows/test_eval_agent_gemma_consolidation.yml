@@ -92,7 +92,7 @@ on:
       eval_model:
         description: 'Judge model for the eval harness'
         required: false
-        default: 'claude-sonnet-4-6'
+        default: 'claude-opus-5'
   push:
     branches-ignore:
       - main
@@ -130,7 +130,7 @@ env:
   # message opts in — workflow_dispatch is not offered until this file is on the
   # default branch, so without this there is no way to enforce pre-merge.
   ENFORCE: ${{ github.event.inputs.enforce || (contains(github.event.head_commit.message, '[eval-enforce]') && 'true') || 'false' }}
-  EVAL_MODEL: ${{ github.event.inputs.eval_model || 'claude-sonnet-4-6' }}
+  EVAL_MODEL: ${{ github.event.inputs.eval_model || 'claude-opus-5' }}
   # Loopback services — bypass any runner proxy so curl/httpx reach them.
   NO_PROXY: 'localhost,127.0.0.1'
 
