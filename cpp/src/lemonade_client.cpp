@@ -605,7 +605,8 @@ std::string LemonadeClient::chatCompletionsStreaming(const json& requestBody,
     // Only a completed stream yields complete argument strings. A connection
     // dropped mid-tool_call can leave arguments that still parse (a balanced
     // brace lands by luck) but mean something else entirely — executing that
-    // is worse than failing.
+    // is worse than failing. Deliberately fires for the tool-less overload
+    // too: a truncated stream is a failed request whoever asked for it.
     if (parser.hasToolCalls() && !parser.done()) {
         throw std::runtime_error(
             "Stream ended before [DONE] while assembling tool_calls — the "
