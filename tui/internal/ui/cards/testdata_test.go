@@ -46,9 +46,10 @@ const populatedPreScan = `{
   }
 }`
 
-// capsHitPreScan: needs_you is at its server-side cap of 5 while
-// needs_you_total reports the real pre-cap count, so the header must read
-// "5 of 40".
+// capsHitPreScan: needs_you carries fewer rows (5) than needs_you_total (40)
+// reports as the real pre-cap count -- NEEDS_YOU_CAP is 10 server-side, so
+// this fixture demonstrates the header reading "N of M" honestly whenever
+// N < M, without needing to hit the cap exactly.
 const capsHitPreScan = `{
   "kind": "email_pre_scan",
   "urgent": [], "actionable": [], "informational_count": 4,

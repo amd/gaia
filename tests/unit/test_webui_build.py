@@ -294,6 +294,7 @@ class TestInitCommandWebuiBuild(unittest.TestCase):
             cmd._lemonade_base_url = None
             cmd.installer = mock_installer
             cmd.console = MagicMock()
+            cmd.yes = True
             cmd.run()
 
         return mock_ensure_built

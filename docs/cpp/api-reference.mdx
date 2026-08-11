@@ -283,6 +283,7 @@ public:
 
     // MCP server management
     bool connectMcpServer(const std::string& name, const json& config);
+    bool connectMcpServerById(const std::string& id);  // resolves via MCPRegistry
     void disconnectMcpServer(const std::string& name);
     void disconnectAllMcp();
 
@@ -368,6 +369,81 @@ public:
     json callTool(const std::string& toolName, const json& arguments);
 };
 ```
+
+### MCPRegistry
+
+Turns a configured server **id** into a launchable config, so an agent can connect
+to `github` without hardcoding how `github` is started.
+
+```cpp
+class MCPRegistry {
+public:
+    MCPRegistry();                                          // default search paths
+    explicit MCPRegistry(std::vector<std::string> paths);   // explicit files
+
+    static std::string configDir();                         // $GAIA_CONFIG_DIR, else ~/.gaia
+    static std::vector<std::string> defaultSearchPaths();
+
+    std::optional<json> resolve(const std::string& id) const;  // nullopt if absent
+    json require(const std::string& id) const;                 // throws if unresolvable
+    bool isDisabled(const std::string& id) const;
+    std::vector<std::string> listServers() const;
+    std::string configPath() const;
+    bool configExists() const;
+    void reload();
+};
+```
+
+It reads the same file and the same shape as the Python runtime, so a server configured
+once is reachable from both. Ids are whatever the file uses; `gaia connectors` keys
+entries by their catalog id (`mcp-github`, `mcp-tavily`, `mcp-memory`, `mcp-git`):
+
+```json
+{
+  "mcpServers": {
+    "mcp-memory": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"],
+      "env": {},
+      "disabled": false
+    }
+  }
+}
+```
+
+```cpp
+gaia::Agent agent;
+agent.connectMcpServerById("mcp-memory");   // throws MCPRegistryError if unconfigured
+```
+
+Search paths, lowest precedence first, under `$GAIA_CONFIG_DIR` (default `~/.gaia`):
+`mcp.json`, then `mcp_servers.json` — the file `gaia connectors` maintains and the
+Python runtime reads, which wins on conflicting ids. Unknown top-level keys are ignored,
+and `servers` is accepted as an alias for `mcpServers`.
+
+Everything that cannot produce a launchable config throws `MCPRegistryError` naming the
+id, the paths searched, and the ids that *are* available: a missing file, malformed JSON,
+an unknown id, an entry marked `"disabled": true`, or a non-stdio `type`. An agent
+silently losing its MCP tools is worse than one that refuses to start.
+
+<Warning>
+**Servers with secrets are Python-only today.** `gaia connectors configure <id>` stores
+secret env values in the OS keyring and writes a `$keyring` reference into the config.
+The C++ runtime has no keychain support, so those entries (`mcp-github`, `mcp-tavily`)
+throw rather than launching the server with the reference string as the credential.
+Servers whose env values are literal — or empty — work from both runtimes.
+</Warning>
+
+Two behaviours to know about, both of which split the runtimes if you rely on them:
+
+- The Python MCP path always reads `~/.gaia/mcp_servers.json` and does **not** honor
+  `GAIA_CONFIG_DIR`. Pointing it elsewhere makes the C++ registry read a file Python won't.
+- Python does not read `mcp.json` from the config directory, so an id that lives only
+  there is invisible to it. Put anything both runtimes need in `mcp_servers.json`.
+
+Unlike the Python runtime, the C++ registry does **not** read an `mcp_servers.json` from
+the current working directory: this config names commands to spawn, and a native binary
+that trusts whichever directory it was started from is an attack surface.
 
 ### HttpClient
 

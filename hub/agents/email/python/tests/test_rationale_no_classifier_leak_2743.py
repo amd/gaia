@@ -238,8 +238,11 @@ class TestEveryEmittedRationaleIsClean:
         }
         out = _apply_session_preferences(decision, prefs)
         assert not _reason_violations(out["rationale"]), out["rationale"]
+        # #2666 requires the rule stated explicitly ("category unchanged"),
+        # mirroring the priority-sender assertion above.
         assert (
-            out["rationale"] == "From a low-priority sender · Looks like an automated update"
+            out["rationale"]
+            == "From a low-priority sender · category unchanged · Looks like an automated update"
         )
 
     def test_force_llm_bypass_never_wraps_the_rationale(self):

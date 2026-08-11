@@ -3,7 +3,7 @@
 #
 # Weekly eval sweep (#1964). Runs the email eval suite (triage + drafting +
 # action-item) once a week on the self-hosted Lemonade runner and OPENS A GITHUB
-# ISSUE if any eval fails, so a regression that the nightly report-mode run only
+# ISSUE if the eval does not pass, so a regression that the report-mode run only
 # logs is escalated into the tracker once a week instead of scrolling past.
 #
 # This calls the SAME reusable workflow the nightly and the release gates use
@@ -12,10 +12,10 @@
 # eval serial on the single Lemonade slot — this caller MUST NOT also claim it
 # (see the concurrency block below).
 #
-# "Failure" here is a real signal, never a silent skip: the action-item eval
-# REQUIRES the Claude judge (no fuzzy fallback), so a missing/broken judge, a
-# Lemonade/infra error, or an enforced (enforce:true) gate breach all fail the
-# job — which is exactly what files the issue.
+# A non-pass here is always a real signal, never a silent skip: the action-item
+# eval REQUIRES the Claude judge (no fuzzy fallback), so a missing/broken judge, a
+# Lemonade/infra error, or an enforced (enforce:true) gate breach all fail the job.
+# A CANCELLED callee counts too — see the `if:` on the notify job.
 
 name: Weekly Eval
 
@@ -49,11 +49,19 @@ jobs:
     secrets: inherit
 
   open-issue-on-failure:
-    name: Open an issue if the weekly eval failed
+    name: Open an issue if the weekly eval did not pass
     needs: email-eval
     # always() so this runs even though the needed job failed; then gate on the
-    # failure result so it only fires on a real failure.
-    if: ${{ always() && needs.email-eval.result == 'failure' }}
+    # result being anything other than a clean pass.
+    #
+    # `!= 'success'` rather than `== 'failure'`: the callee's job now shares the
+    # `lemonade-eval` group with PR-triggered runs (test_email_agent_eval.yml
+    # gained a `pull_request` trigger), and that group holds one running plus one
+    # pending run — a newly-queued run cancels the pending one. An evicted weekly
+    # eval reports 'cancelled', not 'failure', so the old condition filed nothing
+    # and the week's eval vanished with zero signal. A week with no eval is a week
+    # with no evidence; say so out loud.
+    if: ${{ always() && needs.email-eval.result != 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -62,26 +70,36 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: File (or update) the eval-failure issue
+      - name: File (or update) the rolling eval-failure issue
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           EVENT_NAME: ${{ github.event_name }}
+          EVAL_RESULT: ${{ needs.email-eval.result }}
         run: |
           set -euo pipefail
+          # STABLE DEDUP KEY — do not reword. The rolling-issue lookup below
+          # searches on this exact title; changing it orphans the open issue and
+          # files a duplicate. The body, not the title, says what actually happened.
           TITLE="Weekly eval failure: email eval suite"
           # Idempotent label so --label never errors (create-or-update).
           gh label create eval-failure --color B60205 \
             --description "Automated weekly eval failure" --force
           BODY="$(cat <<EOF
-          The weekly email eval suite (\`test_email_agent_eval.yml\`, called by \`weekly_eval.yml\`) failed.
+          The weekly email eval suite (\`test_email_agent_eval.yml\`, called by \`weekly_eval.yml\`) did not pass.
 
           - Run: ${RUN_URL}
           - Trigger: ${EVENT_NAME}
+          - Result: \`${EVAL_RESULT}\`
 
-          The email eval REQUIRES the Claude equivalence judge (there is no fuzzy fallback), so a failure here is one of:
-          a Lemonade / infra error, the Claude judge being unavailable or broken, or an enforced (\`enforce: true\`) gate breach.
-          Open the run log above to see which stage failed (triage / drafting / action-item) and why.
+          If the result is \`failure\`: the email eval REQUIRES the Claude equivalence judge (there is no fuzzy fallback),
+          so it is one of a Lemonade / infra error, the Claude judge being unavailable or broken, or an enforced
+          (\`enforce: true\`) gate breach. Open the run log above to see which stage failed (triage / drafting /
+          action-item) and why.
+
+          If the result is \`cancelled\`: the run was most likely evicted from the shared \`lemonade-eval\` concurrency
+          slot — it holds one running plus one pending run, and a newly-queued run cancels the pending one (PR-triggered
+          email evals now queue there too). No eval ran this week; re-dispatch \`weekly_eval.yml\` when the slot is free.
           EOF
           )"
           # One rolling issue: comment on the open one if it exists, else open it.

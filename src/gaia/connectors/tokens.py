@@ -185,6 +185,9 @@ async def get_or_refresh(
                 client_id_hash=provider.client_id_hash,
                 connected_at=stored.get("connected_at"),
                 tenant=stored.get("tenant") or getattr(provider, "tenant", None),
+                # Carry the derived account kind across rotation — it comes from
+                # the connect-time id_token, which a refresh does not re-issue.
+                account_type=stored.get("account_type"),
             )
 
         entry.access_token = new_access
