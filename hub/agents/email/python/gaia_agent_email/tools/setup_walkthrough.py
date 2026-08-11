@@ -71,7 +71,9 @@ def run_device_oauth(agent: Any, provider: str) -> Dict[str, Any]:
 
     label = ms.provider_label(provider)
     scopes = ms.required_scopes(provider)
-    scopes_to_request = connect_scopes(provider, scopes)
+    # Request the FULL union (#2730 D3) — see onboarding_tools._run_oauth for
+    # why this must not narrow to required_scopes() alone.
+    scopes_to_request = connect_scopes(provider, ms.requested_scopes(provider))
 
     started = run_sync(start_device_flow(provider, scopes_to_request))
     user_code = started.get("user_code", "")

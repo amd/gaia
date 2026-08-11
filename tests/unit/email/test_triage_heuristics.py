@@ -22,11 +22,15 @@ Critical behaviour pinned by this suite:
 
 from __future__ import annotations
 
+import ast
+import inspect
+
 # EmailTriageAgent ships as the standalone gaia-agent-email wheel (#1102);
 # skip when a framework-only env lacks it.
 import pytest  # noqa: E402
 
 pytest.importorskip("gaia_agent_email")  # noqa: E402
+from gaia_agent_email.tools import triage_heuristics as triage_heuristics_module
 from gaia_agent_email.tools.triage_heuristics import (
     ALL_CATEGORIES,
     CATEGORY_FYI,
@@ -64,7 +68,9 @@ class TestSystemLabelIDs:
         assert result.category == CATEGORY_PROMOTIONAL
         assert result.is_spam is False
         assert result.confident is True
-        assert "CATEGORY_PROMOTIONS" in result.reason
+        # #2744: the reason is a fact about the message, never the raw
+        # Gmail label constant that triggered it.
+        assert result.reason == "Looks like a promotional email"
 
     def test_social_label_marks_low_priority(self):
         result = classify_category_heuristic(
@@ -83,7 +89,8 @@ class TestSystemLabelIDs:
         )
         assert result.category == CATEGORY_FYI
         assert result.confident is True
-        assert "CATEGORY_UPDATES" in result.reason
+        # #2744: a fact about the message, never the raw label constant.
+        assert result.reason == "Looks like an automated update"
 
     def test_human_label_name_does_NOT_match(self):
         """
@@ -97,9 +104,11 @@ class TestSystemLabelIDs:
             sender="news@example.com",
             label_ids=["Promotions", "INBOX"],  # human name — should NOT fire
         )
-        # "Your weekly newsletter" matches the "newsletter" keyword in the
-        # promo-keyword fallback, so the result IS low_priority — but the
-        # ``reason`` should reflect the keyword path, not the label path.
+        # "newsletter" was deliberately dropped from the promo-keyword
+        # fallback (#1266) to avoid killing internal company newsletters,
+        # so this falls all the way through to the no-match escalation --
+        # never the CATEGORY_PROMOTIONS branch either way.
+        assert result.confident is False
         assert "CATEGORY_PROMOTIONS" not in result.reason
 
     def test_user_defined_label_does_not_match_heuristic(self):
@@ -366,7 +375,9 @@ class TestEscalation:
             label_ids=[LABEL_INBOX],
         )
         assert result.confident is False
-        assert "no heuristic match" in result.reason
+        # #2744: describes the absence of a signal, never the classifier's
+        # own escalation step.
+        assert result.reason == "No clear signal from the sender or subject"
 
     def test_important_or_starred_escalate_with_actionable_hint(self):
         result = classify_category_heuristic(
@@ -689,3 +700,309 @@ class TestDefaultActionFor:
     def test_unknown_category_suggests_none(self):
         # Graceful fallback — unknown input yields "none", not an exception.
         assert default_action_for("BOGUS_CATEGORY") == "none"
+
+
+# ---------------------------------------------------------------------------
+# User-facing rationale must never leak classifier internals (#2744)
+#
+# ``HeuristicResult.reason`` used to be documented as a verbose-mode
+# logging detail only, but it is rendered verbatim as the attention card's
+# "why" line (``pre_scan_inbox_impl`` -> ``rationale`` -> the attention
+# envelope's ``why`` field). A raw Gmail label constant (``CATEGORY_``), an
+# internal control-flow term ("escalating", "LLM", "heuristic"), or a
+# ``--`` code-style separator reads as classifier internals to a user, not
+# a fact about their message.
+# ---------------------------------------------------------------------------
+
+_BANNED_SUBSTRINGS = ("category_", "escalating", "llm", "heuristic")
+_BANNED_SEPARATOR = " -- "
+
+
+def _reason_violations(text: str) -> list:
+    """Return which banned tokens (if any) appear in a rendered reason."""
+    lowered = text.lower()
+    hits = [token for token in _BANNED_SUBSTRINGS if token in lowered]
+    if _BANNED_SEPARATOR in text:
+        hits.append(repr(_BANNED_SEPARATOR))
+    return hits
+
+
+def _reason_literals_from_source() -> list:
+    """Statically collect every ``reason=`` string literal passed to a
+    ``HeuristicResult(...)`` call in the module source.
+
+    A *static* scan -- not just exercising the branches a test author
+    thought to drive at runtime -- so a new branch added later is caught
+    by this guard the moment its literal lands, even before any test
+    happens to exercise it (#2744's own ask: "a guard that catches a
+    future regression, not just a fix for today's strings").
+    """
+    source = inspect.getsource(triage_heuristics_module)
+    tree = ast.parse(source)
+    literals: list = []
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
+            continue
+        if node.func.id != "HeuristicResult":
+            continue
+        for kw in node.keywords:
+            if kw.arg != "reason":
+                continue
+            value = kw.value
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                literals.append(value.value)
+            elif isinstance(value, ast.JoinedStr):
+                # f-string: the interpolated {...} parts are opaque at
+                # parse time, but any literal text around them still is
+                # -- and still must be checked.
+                literals.extend(
+                    piece.value
+                    for piece in value.values
+                    if isinstance(piece, ast.Constant) and isinstance(piece.value, str)
+                )
+            # Anything else (e.g. a helper-function call, for a reason
+            # that must vary at runtime) isn't scannable statically -- it
+            # is covered by its own exhaustive runtime test instead (see
+            # TestEveryEmittedReasonIsClean below).
+    return literals
+
+
+class TestReasonLiteralsNeverLeakClassifierInternals:
+    """Static guard (#2744): every ``reason=`` string literal already in
+    the source must read as a fact about the message, not a step the
+    classifier took. Fails the moment a new branch's literal reuses a
+    banned token, even before any test happens to exercise that branch."""
+
+    def test_scan_finds_the_known_reason_literals(self):
+        """Sanity check on the scan itself, so a change to
+        ``classify_category_heuristic`` that stops using ``HeuristicResult(
+        reason=...)`` (breaking the scan) fails loudly here instead of
+        silently disabling the guard below."""
+        literals = _reason_literals_from_source()
+        assert len(literals) >= 13, (
+            "expected the AST scan to find every reason= literal in "
+            f"triage_heuristics.py -- got {literals!r}; either a branch "
+            "was removed or the scan itself broke"
+        )
+
+    def test_no_banned_tokens_in_source_literals(self):
+        literals = _reason_literals_from_source()
+        offenders = {text: _reason_violations(text) for text in literals}
+        offenders = {text: hits for text, hits in offenders.items() if hits}
+        assert (
+            not offenders
+        ), f"classifier internals leaked into reason text: {offenders}"
+
+
+class TestEveryEmittedReasonIsClean:
+    """Behavioral guard (#2744): drive ``classify_category_heuristic``
+    through every branch -- including the one dynamic reason (the
+    IMPORTANT/STARRED escalation, built from a helper rather than a
+    literal, so the static scan above can't see it) -- and check what it
+    actually emits at runtime, not just what the source text says."""
+
+    @staticmethod
+    def _all_reasons() -> list:
+        reasons = []
+
+        # CATEGORY_PROMOTIONS -- confident, and commitment-veto (#2113).
+        reasons.append(
+            classify_category_heuristic(
+                subject="50% off",
+                sender="deals@shop.example",
+                label_ids=[LABEL_CATEGORY_PROMOTIONS],
+            ).reason
+        )
+        reasons.append(
+            classify_category_heuristic(
+                subject="Membership renewal",
+                sender="news@club.example",
+                label_ids=[LABEL_CATEGORY_PROMOTIONS],
+                body=(
+                    "Attendance is required. Failure to attend will "
+                    "result in suspension."
+                ),
+            ).reason
+        )
+
+        # CATEGORY_SOCIAL -- confident, and commitment-veto.
+        reasons.append(
+            classify_category_heuristic(
+                subject="Alice liked your post",
+                sender="notify@social.example",
+                label_ids=[LABEL_CATEGORY_SOCIAL],
+            ).reason
+        )
+        reasons.append(
+            classify_category_heuristic(
+                subject="Group event",
+                sender="notify@social.example",
+                label_ids=[LABEL_CATEGORY_SOCIAL],
+                body="RSVP by Friday or your reserved spot will be cancelled.",
+            ).reason
+        )
+
+        # CATEGORY_UPDATES -- confident, and commitment-veto. This is
+        # #2744's own live example (Gmail CATEGORY_UPDATES + a deadline
+        # in the body).
+        reasons.append(
+            classify_category_heuristic(
+                subject="Your shipment has been delivered",
+                sender="orders@store.example",
+                label_ids=[LABEL_CATEGORY_UPDATES],
+            ).reason
+        )
+        reasons.append(
+            classify_category_heuristic(
+                subject="Your monthly spending summary",
+                sender="alerts@bank.example",
+                label_ids=[LABEL_CATEGORY_UPDATES],
+                body="Heads up: you have exceeded your budget for this month.",
+            ).reason
+        )
+
+        # CATEGORY_PERSONAL -- confident (no commitment veto on this branch).
+        reasons.append(
+            classify_category_heuristic(
+                subject="Hi",
+                sender="mom@family.example",
+                label_ids=[LABEL_CATEGORY_PERSONAL],
+            ).reason
+        )
+
+        # Subject-keyword promo fallback (no category label at all).
+        reasons.append(
+            classify_category_heuristic(
+                subject="50% off — limited time",
+                sender="deals@shop.example",
+                label_ids=[LABEL_INBOX],
+            ).reason
+        )
+
+        # Automated-sender fallback: plain, and urgent-subject escalation
+        # (#1266).
+        reasons.append(
+            classify_category_heuristic(
+                subject="Build #4219 passed — all tests green",
+                sender="noreply@ci.example.com",
+                label_ids=[LABEL_INBOX],
+            ).reason
+        )
+        reasons.append(
+            classify_category_heuristic(
+                subject="[SEV1] API latency above SLA",
+                sender="alerts@acme-corp.example.com",
+                label_ids=[LABEL_INBOX],
+            ).reason
+        )
+
+        # IMPORTANT / STARRED -- all three matched-label combinations (the
+        # one reason that's built dynamically, not from a literal).
+        reasons.append(
+            classify_category_heuristic(
+                subject="Re: budget review",
+                sender="ceo@company.example",
+                label_ids=[LABEL_INBOX, LABEL_IMPORTANT],
+            ).reason
+        )
+        reasons.append(
+            classify_category_heuristic(
+                subject="Recipe",
+                sender="x@example.com",
+                label_ids=[LABEL_STARRED],
+            ).reason
+        )
+        reasons.append(
+            classify_category_heuristic(
+                subject="Recipe",
+                sender="x@example.com",
+                label_ids=[LABEL_IMPORTANT, LABEL_STARRED],
+            ).reason
+        )
+
+        # List-Unsubscribe (#2643) -- confident, and commitment-veto.
+        reasons.append(
+            classify_category_heuristic(
+                subject="This week at Northbay Supply",
+                sender="news@northbay-supply.example",
+                label_ids=[LABEL_INBOX],
+                body="Check out what's new this week.",
+                has_list_unsubscribe=True,
+            ).reason
+        )
+        reasons.append(
+            classify_category_heuristic(
+                subject="NOTUS Weekly",
+                sender="news@notus.example",
+                label_ids=[LABEL_INBOX],
+                body=(
+                    "Your community pass renewal is due. Confirm by "
+                    "Friday or your membership will be suspended."
+                ),
+                has_list_unsubscribe=True,
+            ).reason
+        )
+
+        # No heuristic match at all -- final fallback.
+        reasons.append(
+            classify_category_heuristic(
+                subject="Re: meeting at 3pm",
+                sender="alice@company.example",
+                label_ids=[LABEL_INBOX],
+            ).reason
+        )
+
+        return reasons
+
+    def test_covers_every_known_branch(self):
+        """Sanity check on the harness itself: 16 calls above, one per
+        distinct reason value (14 call sites, 3 of which are the dynamic
+        IMPORTANT/STARRED combinations sharing one call site) -> 16
+        collected, all non-empty."""
+        reasons = self._all_reasons()
+        assert len(reasons) == 16
+        assert all(reasons), f"a branch returned an empty reason: {reasons!r}"
+
+    def test_no_banned_tokens_in_any_emitted_reason(self):
+        reasons = self._all_reasons()
+        offenders = {text: _reason_violations(text) for text in reasons}
+        offenders = {text: hits for text, hits in offenders.items() if hits}
+        assert (
+            not offenders
+        ), f"classifier internals leaked into reason text: {offenders}"
+
+    def test_updates_commitment_veto_matches_2744_example(self):
+        """#2744's own live example: Gmail CATEGORY_UPDATES + a deadline
+        in the body must read as a fact about the message, not the
+        classifier's internal trace."""
+        result = classify_category_heuristic(
+            subject="Your monthly spending summary",
+            sender="alerts@bank.example",
+            label_ids=[LABEL_CATEGORY_UPDATES],
+            body="Heads up: you have exceeded your budget for this month.",
+        )
+        assert result.confident is False
+        assert "mentions a deadline" in result.reason
+        assert not _reason_violations(result.reason)
+
+    def test_important_starred_reasons_are_distinct_and_readable(self):
+        """The one dynamically-built reason still names an observable
+        fact (what was flagged), never a step the classifier took."""
+        important_only = classify_category_heuristic(
+            subject="Re: budget review",
+            sender="ceo@company.example",
+            label_ids=[LABEL_INBOX, LABEL_IMPORTANT],
+        ).reason
+        starred_only = classify_category_heuristic(
+            subject="Recipe",
+            sender="x@example.com",
+            label_ids=[LABEL_STARRED],
+        ).reason
+        both = classify_category_heuristic(
+            subject="Recipe",
+            sender="x@example.com",
+            label_ids=[LABEL_IMPORTANT, LABEL_STARRED],
+        ).reason
+        assert len({important_only, starred_only, both}) == 3
+        for text in (important_only, starred_only, both):
+            assert not _reason_violations(text)

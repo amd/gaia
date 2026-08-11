@@ -25,6 +25,7 @@ from gaia.skills.consume import (
     resolve_requirements,
 )
 from gaia.skills.errors import SkillNotFoundError, SkillValidationError
+from gaia.skills.sets import SkillRef
 from tests.unit.skills_helpers import isolated_manager, write_skill_dir
 
 # ---------------------------------------------------------------------------
@@ -194,14 +195,14 @@ def test_agent_manifest_parser_validates_the_skills_block(tmp_path):
     good.write_text(
         base + 'skills:\n  - name: web-research\n    version: ">=1.0.0"\n', "utf-8"
     )
-    assert parse(good).skills == [
-        {"name": "web-research", "version": ">=1.0.0", "required": True}
-    ]
+    assert parse(good).skill_sets.always == (
+        SkillRef(name="web-research", version=">=1.0.0", required=True),
+    )
 
     bad = tmp_path / "bad" / "gaia-agent.yaml"
     bad.parent.mkdir()
     bad.write_text(base + "skills:\n  - version: '>=1.0.0'\n", "utf-8")
-    with pytest.raises(ManifestError, match="missing a non-empty 'name'"):
+    with pytest.raises(ManifestError, match="missing a skill name"):
         parse(bad)
 
 
@@ -221,7 +222,7 @@ def test_agent_manifest_without_skills_block_is_unchanged(tmp_path):
             """),
         "utf-8",
     )
-    assert parse(manifest).skills == []
+    assert not parse(manifest).skill_sets
 
 
 # ---------------------------------------------------------------------------

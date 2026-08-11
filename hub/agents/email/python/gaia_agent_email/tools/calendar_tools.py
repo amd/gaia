@@ -626,6 +626,29 @@ def _event_window(event: Mapping[str, Any]) -> Optional[Tuple[datetime, datetime
         return None
 
 
+def _extract_attendees(event: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    """The event's real ``attendees``, or ``[]`` when the Calendar API omits
+    the key (#2766 — every event with no one beyond the organizer omits
+    ``attendees`` entirely; ``event.get("attendees")`` is then ``None``).
+
+    Returns exactly what the backend reports — never synthesizes an entry.
+    ``response_status`` mirrors Google's own vocabulary (``needsAction`` /
+    ``declined`` / ``tentative`` / ``accepted``) unchanged, so a caller can
+    tell "invited but hasn't answered" from "confirmed" without guessing.
+    An empty return is the grounding fact this tool exists to state: no
+    attendee tool result means no attendee claim is licensed, full stop.
+    """
+    attendees = event.get("attendees") or []
+    return [
+        {
+            "email": a.get("email"),
+            "response_status": a.get("responseStatus"),
+        }
+        for a in attendees
+        if isinstance(a, Mapping) and a.get("email")
+    ]
+
+
 def intervals_overlap(a_start: Any, a_end: Any, b_start: Any, b_end: Any) -> bool:
     """Half-open ``[start, end)`` overlap test.
 
@@ -691,6 +714,7 @@ def detect_calendar_conflicts_impl(
                         "summary": ev.get("summary", ""),
                         "start": start_obj.get("dateTime") or start_obj.get("date"),
                         "end": end_obj.get("dateTime") or end_obj.get("date"),
+                        "attendees": _extract_attendees(ev),
                     }
                 )
         st["result_summary"] = {"conflict_count": len(conflicts)}
@@ -917,6 +941,10 @@ def list_calendar_events_impl(
                     "location": e.get("location"),
                     "organizer": organizer,
                     "missing_organizer": organizer is None,
+                    # Real attendees only, [] when the calendar has none
+                    # beyond the organizer (#2766) — never inferred from the
+                    # organizer or anywhere else.
+                    "attendees": _extract_attendees(e),
                 }
             )
         st["result_summary"] = {"count": len(events)}
@@ -1092,7 +1120,15 @@ class CalendarToolsMixin:
             lists events — it does NOT determine whether they conflict. For
             any question about conflicts, overlaps, or double-booking, call
             ``detect_calendar_conflicts`` instead of judging the listed
-            times yourself."""
+            times yourself.
+
+            Each event's ``attendees`` is exactly what the calendar carries —
+            often ``[]``. Never state who is attending, invited, or coming
+            unless a name/email actually appears in that event's own
+            ``attendees`` list; an empty list means say so, not guess. The
+            ``organizer`` is who created the event, not evidence that anyone
+            was sent or received an invite — never describe the organizer as
+            having "sent an invite"."""
             try:
                 return _envelope_ok(
                     list_calendar_events_impl(
@@ -1202,6 +1238,12 @@ class CalendarToolsMixin:
             heuristic; ambiguous bodies ("let's sync sometime") are escalated
             to the LLM for a judgement. If the LLM is needed but fails, this
             surfaces the error rather than guessing "not a meeting".
+
+            This tool detects a PROPOSAL, never a confirmed invite. Never say
+            an invite was "sent" or "received" from this signal alone — say
+            the sender proposed a time, and state only the sender/subject/
+            time you actually read in the message, never a name or time this
+            tool did not return.
             """
             try:
                 # Built at call time so ``agent.chat`` is initialized.
@@ -1241,10 +1283,12 @@ class CalendarToolsMixin:
             bounding the proposed meeting. Returns an envelope whose
             ``data`` has ``has_conflict`` (bool) and ``conflicts`` (the
             overlapping events, each with ``id``/``summary``/``start``/
-            ``end``). Overlap is half-open: a meeting ending exactly when
-            another begins does NOT conflict. If the calendar can't be
-            read, this surfaces the error rather than reporting a
-            reassuring "no conflicts".
+            ``end``/``attendees``). Overlap is half-open: a meeting ending
+            exactly when another begins does NOT conflict. If the calendar
+            can't be read, this surfaces the error rather than reporting a
+            reassuring "no conflicts". Never state an attendee for a
+            conflicting event unless that event's own ``attendees`` list
+            actually names them.
             """
             try:
                 return _envelope_ok(

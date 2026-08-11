@@ -127,29 +127,32 @@ async def list_email_connectors() -> Dict[str, Any]:
     return await asyncio.to_thread(_read_connector_status)
 
 
-def _mail_scopes_for_provider(provider: str) -> tuple:
-    """Return the mail-send scopes for ``provider`` (no calendar scopes)."""
+def _all_scopes_for_provider(provider: str) -> tuple:
+    """Return the FULL requested scope set for ``provider`` — mail + calendar
+    (#2730 D3). Every connect path requests this same union so none of them
+    can silently narrow a connection that already has calendar; only the
+    daemon's forward-out mint narrows to what it actually enforces."""
     if provider == "google":
-        from gaia_agent_email.scopes import GMAIL_SCOPES
+        from gaia_agent_email.scopes import ALL_SCOPES
 
-        return GMAIL_SCOPES
+        return ALL_SCOPES
     # microsoft
-    from gaia_agent_email.outlook_scopes import OUTLOOK_MAIL_SCOPES
+    from gaia_agent_email.outlook_scopes import OUTLOOK_ALL_SCOPES
 
-    return OUTLOOK_MAIL_SCOPES
+    return OUTLOOK_ALL_SCOPES
 
 
 def _build_scope_union(provider: str) -> List[str]:
-    """Return default_scopes ∪ mail_scopes for ``provider``, order-preserving, no dups."""
+    """Return default_scopes ∪ ALL_SCOPES for ``provider``, order-preserving, no dups."""
     import gaia.connectors.catalog  # noqa: F401 — populates registry
     from gaia.connectors.registry import REGISTRY
 
     # _require_supported already validated provider, so REGISTRY.get won't KeyError.
     spec = REGISTRY.get(provider)
     base = list(spec.default_scopes)
-    mail = list(_mail_scopes_for_provider(provider))
+    agent_scopes = list(_all_scopes_for_provider(provider))
     seen: set = set(base)
-    for s in mail:
+    for s in agent_scopes:
         if s not in seen:
             base.append(s)
             seen.add(s)
@@ -166,8 +169,9 @@ async def configure_email_connector(
     browser and stands up its own loopback callback; call ``/complete`` next.
 
     When the caller omits ``scopes``, the framework receives
-    ``default_scopes ∪ mail_scopes`` so the resulting grant includes send
-    permission — not just identity scopes. Explicit scopes are honored unchanged.
+    ``default_scopes ∪ ALL_SCOPES`` (mail + calendar) so the resulting
+    connection is never narrower than what the Agent UI would have granted
+    for the same account (#2730 D3). Explicit scopes are honored unchanged.
     """
     _require_supported(provider)
     from gaia.connectors.handler import configure
@@ -176,7 +180,10 @@ async def configure_email_connector(
         "client_id": body.client_id,
         "client_secret": body.client_secret,
     }
-    if body.scopes is not None:
+    # ``not body.scopes`` (not ``is not None``) so an explicit empty list
+    # takes the union path too, instead of slipping through to configure()'s
+    # own empty-scopes handling as a bare "[]" (#2730 site 13).
+    if body.scopes:
         config["scopes"] = body.scopes
     else:
         config["scopes"] = _build_scope_union(provider)

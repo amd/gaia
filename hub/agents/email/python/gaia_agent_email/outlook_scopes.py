@@ -45,10 +45,19 @@ OUTLOOK_MAIL_SCOPES: tuple[str, ...] = (
 # Google side splits GMAIL_SCOPES from CALENDAR_SCOPES.
 OUTLOOK_CALENDAR_SCOPES: tuple[str, ...] = (SCOPE_CALENDARS_READWRITE,)
 
+# Request vs. enforce (#2730 D1), mirroring scopes.py's Google-side split.
+# OUTLOOK_ALL_SCOPES is what every connect path REQUESTS at consent;
+# OUTLOOK_REQUIRED_SCOPES (mail only) is what the daemon's forward-out mint
+# ENFORCES — a user who declines calendar still gets a working mailbox.
+OUTLOOK_ALL_SCOPES: tuple[str, ...] = OUTLOOK_MAIL_SCOPES + OUTLOOK_CALENDAR_SCOPES
+OUTLOOK_REQUIRED_SCOPES: tuple[str, ...] = OUTLOOK_MAIL_SCOPES
+
 
 __all__ = [
+    "OUTLOOK_ALL_SCOPES",
     "OUTLOOK_CALENDAR_SCOPES",
     "OUTLOOK_MAIL_SCOPES",
+    "OUTLOOK_REQUIRED_SCOPES",
     "SCOPE_CALENDARS_READWRITE",
     "SCOPE_MAIL_READWRITE",
     "SCOPE_MAIL_SEND",

@@ -54,7 +54,9 @@ const renderLine = (segments: Segment[]) => {
     .join('');
 };
 
-const transcript = `${LINES.map(renderLine).join('<br>')}<span class="tok-key">▊</span>`;
+// The cursor is aria-hidden: now that the transcript is exposed to assistive
+// tech, a block glyph read as "▊" is noise. Kept in sync with paint() below.
+const transcript = `${LINES.map(renderLine).join('<br>')}<span class="tok-key" aria-hidden="true">▊</span>`;
 ---
 
 <div
@@ -71,11 +73,16 @@ const transcript = `${LINES.map(renderLine).join('<br>')}<span class="tok-key">�
     <span class="mono ml-auto rounded-g-badge border border-g-gold-dim px-1.5 py-0.5 text-[10px] uppercase tracking-[0.08em] text-g-gold">local</span>
   </div>
 
+  {/* The box scrolls (the transcript is taller than 268px, much taller when it
+      wraps on a phone), so it must be focusable to be keyboard-scrollable — and
+      it must not be role="img", which would hide the transcript, including the
+      "no email content left the device" payoff, from assistive tech. */}
   <div
     data-terminal
     data-lines={JSON.stringify(LINES)}
-    role="img"
-    aria-label="Illustrative terminal session: the email agent triages an inbox on-device."
+    tabindex="0"
+    role="region"
+    aria-label="Illustrative terminal session — a scripted email-triage demo, not captured output."
     class="mono h-[268px] overflow-y-auto px-[18px] pb-[22px] pt-[18px] text-[13px] leading-[1.85] text-g-code-text"
     set:html={transcript}
   />
@@ -99,6 +106,11 @@ const transcript = `${LINES.map(renderLine).join('<br>')}<span class="tok-key">�
     const lines: Segment[][] = JSON.parse(el.dataset.lines || '[]');
     if (!lines.length) return;
 
+    // The server-rendered transcript, complete. Restored the moment the region
+    // takes focus so a keyboard or screen-reader user reads the whole session
+    // instead of whatever prefix the loop happens to be on.
+    const fullHtml = el.innerHTML;
+
     let lineIdx = 0;
     let segIdx = 0;
     let charIdx = 0;
@@ -112,7 +124,7 @@ const transcript = `${LINES.map(renderLine).join('<br>')}<span class="tok-key">�
     };
 
     const paint = () => {
-      el.innerHTML = `${built}<span class="tok-key">▊</span>`;
+      el.innerHTML = `${built}<span class="tok-key" aria-hidden="true">▊</span>`;
       el.scrollTop = el.scrollHeight;
     };
 
@@ -164,6 +176,14 @@ const transcript = `${LINES.map(renderLine).join('<br>')}<span class="tok-key">�
     built = '';
     paint();
     timer = window.setTimeout(tick, 600);
+
+    el.addEventListener('focus', () => {
+      // Keyboard visits only — a stray mouse click must not kill the demo.
+      if (!el.matches(':focus-visible')) return;
+      clearTimeout(timer);
+      el.innerHTML = fullHtml;
+      el.scrollTop = 0;
+    });
 
     window.addEventListener('pagehide', () => clearTimeout(timer));
   });

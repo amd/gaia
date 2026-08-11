@@ -82,12 +82,16 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		// results in prose precisely because the client is expected to draw
 		// this — ignore `render` and the turn produces one vague sentence.
 		m.markToolDone(e)
-		m.messages = append(m.messages, Message{
-			Role:     RoleCard,
-			ToolName: e.Tool,
-			Render:   e.Render,
-			Data:     e.Data,
-		})
+		identity := ""
+		if e.Render == "email_pre_scan" {
+			// The one card this session can produce from TWO independent
+			// sources (this typed tool_result, or the on-open pre-scan
+			// fetch) — update it in place rather than letting each source
+			// append its own (#2743).
+			identity = preScanCardIdentity
+			m.preScanRenderedThisTurn = true
+		}
+		m.upsertCard(identity, e.Tool, e.Render, e.Data)
 
 	case event.CanonicalNeedsInputEvent:
 		// The run is parked waiting for this answer, on the stream we are still
@@ -141,7 +145,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			ToolsUsed: usage.ToolsUsed,
 		})
 		// Drain here, not on doneMsg: streaming flips false in THIS handler, and doneMsg fires later, after a second query could already be in flight.
-		m.drainPendingAttention()
+		m.drainPendingPreScan()
 		m.streaming = false
 		m.activity = nil
 		// The turn is over, so any question it was waiting on is dead. Leaving
@@ -162,8 +166,8 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 	case event.CanonicalErrorEvent:
 		m.flushBuffer()
 		m.resolveConfirmationOnTurnEnd()
-		m.messages = append(m.messages, Message{Role: RoleError, Content: e.Detail})
-		m.drainPendingAttention()
+		m.messages = append(m.messages, Message{Role: RoleError, Content: sanitizeErrorText(e.Detail)})
+		m.drainPendingPreScan()
 		m.streaming = false
 		m.activity = nil
 		m.question = nil

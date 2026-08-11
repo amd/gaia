@@ -74,7 +74,9 @@ def test_promotions_with_commitment_escalates():
         ),
     )
     assert r.confident is False  # escalated to LLM, not confidently archived
-    assert "deadline/commitment signal" in r.reason
+    # #2744: the reason is a fact about the message (it mentions a
+    # deadline), never the classifier's internal control-flow term.
+    assert "mentions a deadline" in r.reason
 
 
 def test_ordinary_promo_still_confident_archive():
@@ -96,7 +98,7 @@ def test_updates_budget_alert_escalates():
         body="Heads up: you have exceeded your budget for this month.",
     )
     assert r.confident is False
-    assert "deadline/commitment signal" in r.reason
+    assert "mentions a deadline" in r.reason
 
 
 def test_ordinary_update_still_confident_fyi():

@@ -1,0 +1,39 @@
+{
+  "mcpServers": {
+    "mcp-github": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-github"
+      ],
+      "env": {
+        "GITHUB_TOKEN": {
+          "$keyring": "gaia.connections:mcp-github:GITHUB_TOKEN"
+        }
+      },
+      "disabled": false
+    },
+    "mcp-memory": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-memory"
+      ],
+      "env": {},
+      "disabled": false
+    },
+    "gaia-bridge": {
+      "command": "python",
+      "args": [
+        "-m",
+        "gaia.mcp.mcp_bridge"
+      ],
+      "env": {
+        "LEMONADE_BASE_URL": "http://localhost:13305/api/v1",
+        "GAIA_MCP_HOST": "localhost",
+        "GAIA_MCP_PORT": "8765"
+      },
+      "description": "GAIA MCP Server for exposing AI agents to third-party applications"
+    }
+  }
+}

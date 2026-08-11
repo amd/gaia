@@ -10,17 +10,19 @@ icon: "puzzle-piece"
 **Shipped:** the `gaia.skills` runtime — `SKILL.md` parser + validator, the three
 discovery roots with auditable precedence, progressive disclosure,
 `<skill>/<tool>` tool registration, `Agent.load_skill` / `unload_skill`, and
-`gaia skill list|info|create|import|export`.
+`gaia skill list|info|create|import|export`. Plus the declarative
+`skills:` / `skill_sets:` manifest blocks and per-launch
+[skill-set selection](#skill-sets) ([#2466](https://github.com/amd/gaia/issues/2466)),
+whose reference consumer is the email agent.
 
 Also shipped ([#2467](https://github.com/amd/gaia/issues/2467)): the marketplace
 verbs `search`/`install`/`remove`/`publish`, bundle signing + install-time tier
-ceilings, `skill-lock.json`, and the declarative `skills:` block in
-`gaia-agent.yaml`.
+ceilings, `skill-lock.json`, and the local resolver that turns a declared
+`skills:` / `skill_sets:` block into loaded skills at construction.
 
 **Still proposed:** the local-capability permission **sandbox**
-([#1019](https://github.com/amd/gaia/issues/1019)), the `/api/skills` router and
-Agent UI Skills panel, and `skill_sets:`
-([#2466](https://github.com/amd/gaia/issues/2466)).
+([#1019](https://github.com/amd/gaia/issues/1019)), plus the `/api/skills` router
+and Agent UI Skills panel.
 
 This spec defines the **architecture and integration model** for skills. The
 on-disk `SKILL.md` schema (full field reference, permission grammar, tier
@@ -257,11 +259,12 @@ agent reads or executes them — not at trigger time.
 
 A skill is never globally active. It is scoped to an agent two ways:
 
-- **Declared** — the agent calls `load_skill` (typically in `_register_tools`),
-  and points `SKILL_DIRS` at any `skills/` folder it bundles. Or it declares a
-  `skills:` block in [`gaia-agent.yaml`](#agent-hub-integration), which every
-  `Agent` subclass resolves at construction — so a custom harness consumes an
-  installed hub skill with no code change.
+- **Declared** — either imperatively, by calling `load_skill` (typically in
+  `_register_tools`), or declaratively, via the `skills:` / `skill_sets:` blocks
+  in [`gaia-agent.yaml`](#skill-sets), which every `Agent` subclass resolves at
+  construction — so a custom harness consumes an installed hub skill with no code
+  change. Either way the agent points `SKILL_DIRS` at any `skills/` folder it
+  bundles.
 - **Granted** — a skill carrying connector-bridged permissions contributes
   `ConnectorRequirement`s to the agent, reusing the per-agent grant model from the
   connectors framework. An agent only ever sees skills explicitly in scope (least
@@ -327,6 +330,122 @@ Agent UI panel and is not yet available. This matches Claude Code's dual-invocat
 standard's `allowed-tools`/`disallowed-tools` keys are parsed but **not** used as
 a permission mechanism (see [Skill Format](/plans/skill-format#adopted-base-agent-skills-standard)) —
 GAIA's permissions come from `metadata.gaia`.
+
+## Skill sets
+
+One agent, more than one job. The same email assistant should behave differently
+against a personal mailbox than against a work one; the same code agent should
+carry different conventions in different repositories. Hardcoding `load_skill`
+calls forces the author to pick one behaviour, or to ship two agents.
+
+A **skill set** is a *named, mutually-exclusive bundle of skills, exactly one of
+which is active per launch*. It is declared in `gaia-agent.yaml`, layered on top
+of an always-on `skills:` list:
+
+```yaml
+# Always-on — loaded for every launch, whichever set is active.
+skills:
+  - mailbox-hygiene
+
+# Named bundles. Exactly ONE is active per launch.
+skill_sets:
+  personal: [inbox-triage, newsletter-digest, travel-itinerary]
+  work: [inbox-triage, meeting-scheduling, action-item-extraction]
+
+default_skill_set: personal
+```
+
+The field grammar (reference shapes, `version`, `required`, set-name rules, and
+every fail-loud parse error) is specified in
+[Skill Format](/plans/skill-format#manifest-side-grammar-skills-skill_sets-default_skill_set).
+This section owns *selection*.
+
+**Sets overlap; they are not a partition.** `inbox-triage` above belongs to both
+sets — a shared capability stays available in every context it applies to. Only
+the always-on list is exclusive: a set may not re-declare a skill that is already
+always on.
+
+### Selection order
+
+<Steps>
+<Step title="Explicit — the generic override">
+The `skill_set=` argument to `Agent.__init__`, surfaced by an agent's entry point
+as `--skill-set <name>`. Highest precedence, and **never second-guessed** — an
+explicit request is not re-examined against agent state.
+</Step>
+<Step title="The agent's selector hook">
+`Agent.select_skill_set() -> str | None`. Override it to key the active set off
+something the agent already knows — a connected account's type, a workspace mode,
+a device profile. Returning `None` means "no opinion" and defers to the default.
+Consulted only when nothing explicit was passed.
+</Step>
+<Step title="`default_skill_set`">
+The manifest's declared default. Required whenever `skill_sets` is non-empty, so
+a launch that selects nothing still resolves a set **explicitly** rather than
+running with an arbitrary one.
+</Step>
+</Steps>
+
+`resolve_skill_set()` returns which set won *and which rule chose it*
+(`explicit` / `selector` / `default` / `none`), so "why is this set active?" is
+answerable from a log line rather than by reading code.
+
+<Warning>
+**An undeclared set name never falls back.** Whether it came from `--skill-set`
+or from a selector hook, a name the agent does not declare raises
+`SkillSetError` naming the valid sets. Launching with the wrong capability
+bundle is worse than not launching — a work mailbox quietly handed the personal
+set is precisely the silent-wrong-answer this indirection exists to prevent
+(GAIA's [no-silent-fallbacks](https://github.com/amd/gaia/blob/main/CLAUDE.md)
+rule).
+
+The same applies to a *missing* signal. If a selector cannot determine the
+context, it must return `None` — which resolves the declared default explicitly —
+rather than guess a set.
+</Warning>
+
+### Loading
+
+`load_skill_set()` runs at the end of `Agent.__init__` and loads the always-on
+list plus the resolved set, in declaration order, each through the same
+`load_skill` path (and therefore the same permission gate). A skill declared
+`required: false` that no discovery root provides is logged and skipped; every
+other failure propagates.
+
+Calling it again with a different name **switches** sets: skills the previous
+resolution loaded and the new one does not declare are unloaded first, so a stale
+set never bleeds into the prompt. `active_skill_set` is the current answer, or
+`None` for an agent that declares no sets — which is every agent that has not
+adopted the blocks, whose behaviour is unchanged.
+
+<Note>
+**A skill body costs context.** Loading a set injects each skill's Markdown body
+into the system prompt, which is prompt budget the agent's own tool results no
+longer have. An agent with a tight context envelope must account for the loaded
+set's cost, not assume it is free — the email agent's bulk-triage path subtracts
+it from its result-envelope budget for exactly this reason. Budget the set, and
+keep bodies short.
+</Note>
+
+### Reference consumer: the email agent
+
+The email agent ([`hub/agents/email/`](https://github.com/amd/gaia/tree/main/hub/agents/email))
+is the shipped worked example. It bundles six instruction-only skills and declares
+two sets — `personal` (triage, newsletter digests, travel itineraries) and `work`
+(triage, meeting scheduling, action-item extraction, escalation routing) — with
+`inbox-triage` deliberately in both.
+
+Its selector maps the connected mailbox's account type onto a set: a personal
+Microsoft account gets `personal`, a work/school account gets `work`. The kind is
+derived at connect time from the id_token `tid` claim (personal accounts always
+carry the well-known consumers tenant; work/school accounts carry the
+organization's Entra tenant id) and recorded on the connection, so no agent
+re-derives it. A Gmail mailbox has no equivalent claim, so its kind is genuinely
+unknown and the selector returns `None` — the manifest's `default_skill_set`
+applies, explicitly.
+
+For a step-by-step author walkthrough see
+[Composing skills and skill sets](/guides/composing-skills).
 
 ## Permission & security model
 
@@ -435,10 +554,9 @@ agent packages from the [Agent Hub Restructure](/spec/agent-hub-restructure).
 agents that use them. Major = breaking tool-signature or permission change;
 minor = additive; patch = fixes. Agent manifests pin ranges.
 
-**The `gaia-agent.yaml` link.** An agent declares the skills it composes. This
-extends the manifest from the restructure spec with a `skills:` block, which
-`Agent.load_declared_skills()` resolves for every subclass at construction
-([#2467](https://github.com/amd/gaia/issues/2467)):
+**The `gaia-agent.yaml` link.** An agent declares the skills it composes in its
+manifest, and the base `Agent` resolves and loads them at construction via
+`load_declared_skills()` — see [Skill sets](#skill-sets):
 
 ```yaml
 id: web
@@ -460,6 +578,10 @@ interfaces:
   api_server: true
 ```
 
+Set `SKILL_MANIFEST` to the manifest's path to opt in, or leave it unset and the
+agent auto-detects a `gaia-agent.yaml` beside its module; `SKILL_DIRS` still
+points at any bundled `skills/` folder. An agent that sets neither is unaffected.
+
 The block resolves the way `dependencies:` resolves agent-to-agent links:
 topological order (a skill providing a tool another declares in `tools_required`
 loads first), the highest installed version satisfying the range, and fail-loud on
@@ -468,8 +590,8 @@ must already be installed, so an agent never pulls code from the network at
 startup. A missing `required: true` skill raises with the `gaia skill install`
 command that fixes it; a missing optional one is logged and skipped.
 
-`skill_sets:` — naming a reusable group instead of individual skills — is
-[#2466](https://github.com/amd/gaia/issues/2466). It expands to the same
+`skill_sets:` — naming a reusable group instead of individual skills
+([#2466](https://github.com/amd/gaia/issues/2466)) — expands to the same
 requirements and resolves through the same path, so there is one resolver.
 
 ## Agent Skills / Claude Code compatibility
@@ -529,6 +651,7 @@ standard intentionally leaves open.
 ## Related
 
 - [Skill Format](/plans/skill-format) — `SKILL.md` schema, permission grammar, tiers, CLI
+- [Composing skills and skill sets](/guides/composing-skills) — author walkthrough
 - [CLI Reference → Skills](/reference/cli#skills) — `gaia skill list|info|create|import|export`
 - [Agent Hub Restructure](/spec/agent-hub-restructure) — `gaia-agent.yaml`, packaging, distribution
 - [Agent Hub](/plans/agent-hub) — marketplace vision

@@ -6511,6 +6511,33 @@ Example output:
 _INFER_REFRESH_DAYS = 30  # Re-run LLM inference after this many days
 
 
+def _collect_signal(source_key: str, scanner):
+    """Run `scanner` unless this platform has no branch for `source_key`.
+
+    Applies the same platform gate as ``scan_all``, which a direct scanner call
+    bypasses — otherwise an unsupported source is indistinguishable from a user
+    who genuinely has nothing to find.
+
+    Args:
+        source_key: A discovery source name as used by ``scan_all``.
+        scanner: Zero-argument callable returning the scanner's fact dicts.
+
+    Returns:
+        The scanner's fact dicts, or [] after printing why there are none.
+    """
+    from gaia.agents.base.discovery import unsupported_reason
+
+    reason = unsupported_reason(source_key)
+    if reason:
+        print(f"\n  Skipped: {reason}")
+        return []
+    try:
+        return scanner()
+    except Exception as e:
+        print(f"\n  '{source_key}' scan failed, continuing without it: {e}")
+        return []
+
+
 def _bootstrap_infer():
     """Phase 3 (optional): LLM-assisted profile inference from browser history + system data.
 
@@ -6564,8 +6591,10 @@ def _bootstrap_infer():
                             return
         finally:
             store_check.close()
-    except Exception:
-        pass  # Non-critical — proceed anyway
+    except Exception as e:
+        # Non-critical — inference still runs, but say why the staleness check
+        # did not, or a broken store looks like "no facts yet".
+        print(f"  Could not check for existing inferred facts: {e}")
 
     # Explicit consent for browser history access
     try:
@@ -6586,92 +6615,73 @@ def _bootstrap_infer():
 
     # 1. Browser history (top domains, visit counts)
     if use_browser:
-        try:
-            browser_results = discovery.scan_browser_history(days=30)
-            if browser_results:
-                lines = []
-                for item in browser_results[:40]:
-                    # content is "Frequently visited: domain.com (N visits)"
-                    lines.append(f"  {item['content']}")
-                sections.append(
-                    "BROWSER HISTORY (top domains, last 30 days):\n" + "\n".join(lines)
-                )
-        except Exception:
-            pass
+        browser_results = _collect_signal(
+            "browser_history", lambda: discovery.scan_browser_history(days=30)
+        )
+        if browser_results:
+            # content is "Frequently visited: domain.com (N visits)"
+            lines = [f"  {item['content']}" for item in browser_results[:40]]
+            sections.append(
+                "BROWSER HISTORY (top domains, last 30 days):\n" + "\n".join(lines)
+            )
 
     # 2. Installed applications
-    try:
-        app_results = discovery.scan_installed_apps()
-        if app_results:
-            # Extract just the app names from content strings like "Installed app: VS Code"
-            apps = []
-            for item in app_results:
-                content = item.get("content", "")
-                if content.startswith("Installed app: "):
-                    apps.append(content[len("Installed app: ") :].strip())
-            if apps:
-                sections.append("INSTALLED APPS:\n  " + ", ".join(apps))
-    except Exception:
-        pass
+    app_results = _collect_signal("installed_apps", discovery.scan_installed_apps)
+    apps = [
+        item["content"][len("Installed app: ") :].strip()
+        for item in app_results
+        if item.get("content", "").startswith("Installed app: ")
+    ]
+    if apps:
+        sections.append("INSTALLED APPS:\n  " + ", ".join(apps))
 
     # 3. Git identity (name / employer domain — not raw email)
-    try:
-        git_results = discovery.scan_git_identity()
-        if git_results:
-            git_lines = []
-            for item in git_results:
-                # Skip sensitive (raw email) items
-                if not item.get("sensitive") and item.get("content"):
-                    git_lines.append(f"  {item['content']}")
-            if git_lines:
-                sections.append("GIT IDENTITY:\n" + "\n".join(git_lines))
-    except Exception:
-        pass
+    git_results = _collect_signal("git_identity", discovery.scan_git_identity)
+    git_lines = [
+        f"  {item['content']}"
+        for item in git_results
+        if not item.get("sensitive") and item.get("content")
+    ]
+    if git_lines:
+        sections.append("GIT IDENTITY:\n" + "\n".join(git_lines))
 
     # 4. Project languages / manifests (non-sensitive)
-    try:
-        manifest_results = discovery.scan_project_manifests()
-        if manifest_results:
-            manifest_lines = []
-            for item in manifest_results[:10]:
-                if not item.get("sensitive") and item.get("content"):
-                    manifest_lines.append(f"  {item['content']}")
-            if manifest_lines:
-                sections.append(
-                    "PROJECT MANIFESTS (sample):\n" + "\n".join(manifest_lines)
-                )
-    except Exception:
-        pass
+    manifest_results = _collect_signal(
+        "project_manifests", discovery.scan_project_manifests
+    )
+    manifest_lines = [
+        f"  {item['content']}"
+        for item in manifest_results[:10]
+        if not item.get("sensitive") and item.get("content")
+    ]
+    if manifest_lines:
+        sections.append("PROJECT MANIFESTS (sample):\n" + "\n".join(manifest_lines))
 
-    # 5. App launch frequency (UserAssist — covers consumer apps like Spotify, Outlook)
-    try:
-        userassist_results = discovery.scan_windows_userassist()
-        if userassist_results:
-            lines = [f"  {item['content']}" for item in userassist_results[:20]]
-            sections.append(
-                "FREQUENTLY LAUNCHED APPS (actual usage frequency):\n"
-                + "\n".join(lines)
-            )
-    except Exception:
-        pass
+    # 5. App launch frequency — covers consumer apps like Spotify and Outlook
+    usage_results = _collect_signal(
+        "windows_userassist", discovery.scan_windows_userassist
+    ) + _collect_signal("macos_app_usage", discovery.scan_macos_app_usage)
+    if usage_results:
+        lines = [f"  {item['content']}" for item in usage_results[:20]]
+        sections.append(
+            "FREQUENTLY LAUNCHED APPS (actual usage frequency):\n" + "\n".join(lines)
+        )
 
     # 6. Recent file type patterns
-    try:
-        filetype_results = discovery.scan_recent_file_types()
-        if filetype_results:
-            lines = [f"  {item['content']}" for item in filetype_results]
-            sections.append("RECENT FILE TYPES (work patterns):\n" + "\n".join(lines))
-    except Exception:
-        pass
+    filetype_results = _collect_signal(
+        "recent_file_types", discovery.scan_recent_file_types
+    )
+    if filetype_results:
+        lines = [f"  {item['content']}" for item in filetype_results]
+        sections.append("RECENT FILE TYPES (work patterns):\n" + "\n".join(lines))
 
     # 7. Gaming and media
-    try:
-        gaming_results = discovery.scan_gaming_and_media()
-        if gaming_results:
-            lines = [f"  {item['content']}" for item in gaming_results]
-            sections.append("GAMING AND MEDIA:\n" + "\n".join(lines))
-    except Exception:
-        pass
+    gaming_results = _collect_signal(
+        "gaming_and_media", discovery.scan_gaming_and_media
+    )
+    if gaming_results:
+        lines = [f"  {item['content']}" for item in gaming_results]
+        sections.append("GAMING AND MEDIA:\n" + "\n".join(lines))
 
     print(" done.")
 

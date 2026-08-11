@@ -853,7 +853,8 @@ export function {component_name}({{ }}: {component_name}Props) {{
                     "hint": "Check that src/app/page.tsx exists and is writable",
                 }
 
-        @tool
+        # npm install of the Vitest stack runs up to 1200s internally.
+        @tool(timeout=1500)
         def setup_nextjs_testing(
             project_dir: str,
             resource_name: Optional[str] = None,
@@ -1251,7 +1252,8 @@ export function {component_name}({{ }}: {component_name}Props) {{
                     "error_type": "scaffold_generation_error",
                 }
 
-        @tool
+        # Chains prisma format/generate/db-push — up to ~3600s of inner budget.
+        @tool(timeout=3900)
         def manage_data_model(
             project_dir: str,
             model_name: str,
@@ -1656,7 +1658,8 @@ model {model_name} {{
                     "error_type": "config_error",
                 }
 
-        @tool
+        # Shells out to npm with a 600s inner budget.
+        @tool(timeout=900)
         def generate_style_tests(
             project_dir: str, resource_name: str = "Item"
         ) -> Dict[str, Any]:

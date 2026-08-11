@@ -49,7 +49,7 @@ from gaia.llm.lemonade_client import (
 if TYPE_CHECKING:
     from gaia.agents.base.goal_store import Goal, Proposal
     from gaia.connectors.providers.base import ConnectorRequirement
-    from gaia.skills import Skill, SkillManager
+    from gaia.skills import Skill, SkillManager, SkillSetResolution, SkillSets
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -197,6 +197,21 @@ class HardwareRequirement:
 _SD_CAPABILITY_TOOLS: Tuple[str, ...] = ("generate_image",)
 
 
+# Final answer when a turn still overflows the model's context window after
+# the one-shot shrink-and-retry (#2763) -- shared across every agent, so it
+# names the constraint generically (no tool- or domain-specific vocabulary)
+# rather than assuming a search/date-range shape. The prior copy ("re-ask in
+# a fresh chat with just the essentials") never said WHAT was too big or HOW
+# to shrink it, so every occurrence read identically regardless of cause --
+# this repo's fail-loud rule requires naming the constraint and a next step.
+_CONTEXT_STILL_OVERFLOWING_MESSAGE = (
+    "This request needs more than fits in the model's context window, even "
+    "after trimming older results. Try narrowing it — fewer results, a "
+    "shorter date range, or a more specific query — or start a fresh "
+    "conversation and ask again."
+)
+
+
 # Tools that mutate external state (mark read, archive, star, …). A small
 # model that loses track of sequential state may re-issue an identical
 # mutation (same tool + same id). Unlike query dedup we key on the *args*,
@@ -329,6 +344,15 @@ class Agent(abc.ABC):
     _skill_manager: Optional[Any] = None
     _loaded_skills: Optional[Dict[str, Any]] = None
 
+    # Skill sets (#2466): the parsed manifest declarations, the explicit
+    # ``--skill-set`` request, and the set that actually resolved.
+    _skill_sets: Optional[Any] = None
+    _requested_skill_set: Optional[str] = None
+    _active_skill_set: Optional[str] = None
+    # Names the last ``load_skill_set`` loaded, so switching sets unloads only
+    # what a set brought in — never a skill the agent loaded itself.
+    _skill_set_loaded: Optional[List[str]] = None
+
     # Define state constants
     STATE_PLANNING = "PLANNING"
     STATE_EXECUTING_PLAN = "EXECUTING_PLAN"
@@ -358,10 +382,12 @@ class Agent(abc.ABC):
     # copy. Empty = the agent bundles no skills.
     SKILL_DIRS: ClassVar[List[str]] = []
 
-    # Path to the ``gaia-agent.yaml`` whose ``skills:`` block this agent composes
-    # (#2467 scope D). ``None`` auto-detects the manifest beside the agent's own
-    # module — which is why a custom harness needs no code change to consume an
-    # installed hub skill. Relative paths resolve against the agent's module dir.
+    # Path to the ``gaia-agent.yaml`` whose ``skills:`` / ``skill_sets:`` blocks
+    # this agent composes (#2466, #2467 scope D). The base ``__init__`` reads it
+    # and loads the resolved set at startup. ``None`` auto-detects the manifest
+    # beside the agent's own module — which is why a custom harness needs no code
+    # change to consume an installed hub skill. Relative paths resolve against
+    # the agent's module dir.
     SKILL_MANIFEST: ClassVar[Optional[str]] = None
 
     # Set False to skip the automatic ``load_declared_skills()`` in ``__init__``.
@@ -458,6 +484,7 @@ Do NOT wrap conversational replies in JSON.
         min_context_size: int = 32768,
         skip_lemonade: bool = False,
         device: Optional[str] = None,
+        skill_set: Optional[str] = None,
     ):
         """
         Initialize the Agent with LLM client.
@@ -484,6 +511,12 @@ Do NOT wrap conversational replies in JSON.
             min_context_size: Minimum context size required for this agent (default: 32768).
             skip_lemonade: If True, skip Lemonade server initialization (default: False).
                           Use this when connecting to a different OpenAI-compatible backend.
+            skill_set: Explicit skill set to activate (the generic
+                          ``--skill-set`` override, #2466). Highest precedence —
+                          beats the agent's ``select_skill_set()`` hook and the
+                          manifest's ``default_skill_set``. An undeclared name
+                          fails loudly, naming the valid sets. Only meaningful
+                          when ``SKILL_MANIFEST`` declares ``skill_sets:``.
             device: Runtime device selector ('cpu', 'gpu', 'npu') chosen by the
                           user (Agent UI dropdown / CLI --device). Validated against
                           detected hardware at startup via LemonadeManager.ensure_ready;
@@ -492,6 +525,9 @@ Do NOT wrap conversational replies in JSON.
         Note: Uses local LLM server by default unless use_claude or use_chatgpt is True.
         """
         self.device = device
+        # Stored before _register_tools so an agent's selector hook and the
+        # post-registration skill-set load both see the explicit request.
+        self._requested_skill_set = skill_set
         self.error_history = []  # Store error history for learning
         self.conversation_history = (
             []
@@ -583,11 +619,12 @@ Do NOT wrap conversational replies in JSON.
         # _response_format_template must be set above before this call).
         self._register_tools()
 
-        # Declarative skills (#2467 scope D): compose whatever this agent's
-        # gaia-agent.yaml declares. After _register_tools so a skill's tools land
-        # on top of the agent's own, and before the system prompt is first
-        # composed so the skill bodies are in it. A no-op for an agent with no
-        # manifest or no `skills:` block, which is every agent today.
+        # Declarative skills (#2466, #2467 scope D): compose whatever this
+        # agent's gaia-agent.yaml declares. After _register_tools so a skill's
+        # tools land on top of the agent's own registry (and survive a subclass's
+        # ``_snapshot_tools()``), and before the system prompt is first composed
+        # so the skill bodies are in it. A no-op for an agent with no manifest,
+        # which is every agent today.
         if self.AUTOLOAD_DECLARED_SKILLS:
             self.load_declared_skills()
 
@@ -1085,44 +1122,21 @@ Do NOT wrap conversational replies in JSON.
         Raises:
             SkillNotFoundError: a **required** declared skill is not installed.
             SkillValidationError: a required skill is installed at a version the
-                pin excludes, or the manifest's ``skills:`` block is malformed.
+                pin excludes, or the manifest's skill blocks are malformed.
+            SkillSetError: an explicitly requested skill set is not declared.
         """
         # Locate the manifest with plain path checks first. This runs in every
         # Agent.__init__, and importing gaia.skills would pull in the connector
         # base module for the overwhelming majority of agents that declare no
         # skills at all — so the import waits until there is a manifest to read.
         path = self._resolve_skill_manifest(manifest_path)
-        if path is None:
+        if path is None and not (self._requested_skill_set or "").strip():
             return {}
 
-        from gaia.skills.consume import load_manifest_requirements, resolve_requirements
-
-        requirements = load_manifest_requirements(path)
-        if not requirements:
-            return {}
-
-        resolver = manager if manager is not None else self.skill_manager
-        resolved = resolve_requirements(requirements, manager=resolver)
-        for name, reason in resolved.skipped.items():
-            logger.info(
-                "Agent %s: optional skill '%s' not loaded — %s",
-                type(self).__name__,
-                name,
-                reason,
-            )
-
-        loaded: Dict[str, "Skill"] = {}
-        for skill in resolved.order:
-            loaded[skill.name] = self.load_skill(skill.name, manager=resolver)
-        if loaded:
-            logger.info(
-                "Agent %s loaded %d declared skill(s) from %s: %s",
-                type(self).__name__,
-                len(loaded),
-                path,
-                ", ".join(sorted(loaded)),
-            )
-        return loaded
+        if manifest_path is not None:
+            # An explicit manifest replaces whatever SKILL_MANIFEST cached.
+            self._skill_sets = self._parse_skill_declarations(path)
+        return self.load_skill_set(manager=manager)
 
     #: Manifest filename searched for beside an agent's module. Duplicated from
     #: ``gaia.skills.consume.AGENT_MANIFEST_FILENAME`` so the hot path in
@@ -1192,6 +1206,205 @@ Do NOT wrap conversational replies in JSON.
         self.rebuild_system_prompt()
         logger.info("Unloaded skill '%s'", name)
         return True
+
+    # ------------------------------------------------------------------
+    # Skill sets (issue #2466) — declarative, per-launch skill bundles
+    # ------------------------------------------------------------------
+
+    @property
+    def skill_sets(self) -> "SkillSets":
+        """This agent's parsed ``skills:`` / ``skill_sets:`` declarations.
+
+        Read once from :attr:`SKILL_MANIFEST` — or from the manifest found beside
+        the agent's own module — and cached. Falsy (and empty) when the agent has
+        no manifest, so nothing changes for an agent that does not use skills.
+
+        Raises:
+            SkillValidationError: the manifest is unreadable, or its skill blocks
+                are malformed. An agent whose own manifest cannot be read is
+                broken, not degraded.
+        """
+        if getattr(self, "_skill_sets", None) is None:
+            self._skill_sets = self._parse_skill_declarations(
+                self._resolve_skill_manifest()
+            )
+        return self._skill_sets
+
+    def _parse_skill_declarations(self, path: Optional[Path]) -> "SkillSets":
+        """Parse the ``skills:`` / ``skill_sets:`` blocks of the manifest at *path*.
+
+        Reads the YAML directly rather than going through
+        :func:`gaia.hub.manifest.parse` so a custom agent under
+        ``~/.gaia/agents/<id>/`` — whose manifest need not carry the hub's
+        publishing fields — declares skills the same way a packaged agent does.
+        """
+        from gaia.skills.sets import SkillSets, parse_skill_sets
+
+        if path is None:
+            return SkillSets()
+
+        import yaml
+
+        try:
+            data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError) as exc:
+            raise _skill_validation_error(
+                f"Could not read the agent manifest at {path}: {exc}. Fix the "
+                "YAML — an unreadable manifest may be hiding a 'skills:' block, "
+                "so GAIA will not assume the agent declares none."
+            ) from exc
+
+        if data is None:
+            return SkillSets()
+        return parse_skill_sets(data, where=f" in {path}")
+
+    @property
+    def active_skill_set(self) -> Optional[str]:
+        """The skill set this agent resolved at startup, or ``None``."""
+        return getattr(self, "_active_skill_set", None)
+
+    def select_skill_set(self) -> Optional[str]:
+        """Selector hook: which skill set fits this launch's runtime state?
+
+        The framework calls this when no explicit ``skill_set`` was passed.
+        Override it to key the active set off something the agent already knows
+        — a connected account's type, a workspace mode, a device profile.
+        Returning ``None`` means "no opinion", which defers to the manifest's
+        ``default_skill_set``. Returning a name this agent does not declare
+        fails loudly rather than falling back.
+        """
+        return None
+
+    def resolve_skill_set(
+        self, requested: Optional[str] = None
+    ) -> "SkillSetResolution":
+        """Resolve the active set: *requested* → :meth:`select_skill_set` → default.
+
+        Args:
+            requested: Explicit override. Defaults to the ``skill_set`` argument
+                passed to ``__init__``.
+
+        Raises:
+            SkillSetError: the resolved name is not a declared set.
+        """
+        declarations = self.skill_sets
+        explicit = requested if requested is not None else self._requested_skill_set
+        # Only consult the hook when nothing explicit was asked for — an
+        # explicit request must never be second-guessed by agent state.
+        selected = None if (explicit or "").strip() else self.select_skill_set()
+        return declarations.resolve(requested=explicit, selected=selected)
+
+    def load_skill_set(
+        self,
+        requested: Optional[str] = None,
+        *,
+        manager: Optional["SkillManager"] = None,
+    ) -> Dict[str, "Skill"]:
+        """Resolve and load this agent's declared skills. Returns what loaded.
+
+        A no-op returning ``{}`` when the agent declares no skills. Otherwise it
+        loads the always-on ``skills:`` list plus the resolved set: each entry's
+        SemVer range is matched against what is installed, and a skill whose
+        tools another declared skill consumes loads first (declaration order
+        breaks every remaining tie). A skill declared ``required: false`` that is
+        missing or version-incompatible is logged and skipped; every other
+        failure propagates, because an agent launched with the wrong
+        capabilities is worse than one that refuses to launch.
+
+        Called automatically at the end of ``Agent.__init__``. Call it again with
+        a different name to switch sets mid-session; the previous set's skills are
+        unloaded once the new set has loaded, so the two never overlap.
+
+        **All-or-nothing.** A failure part-way through leaves the agent exactly as
+        it was — the previous set still loaded, ``active_skill_set`` still
+        accurate. A half-switched agent reporting one set while carrying another's
+        skills is worse than a raised error.
+
+        Note the switch is not sticky: a later bare ``load_skill_set()`` re-runs
+        the full resolution and returns to whatever that yields (the explicit
+        ``skill_set`` passed to ``__init__``, else the hook, else the default).
+        Pass the name again to stay on it.
+        """
+        from gaia.skills.consume import requirements_from_refs, resolve_requirements
+
+        declarations = self.skill_sets
+        explicit = requested if requested is not None else self._requested_skill_set
+        if not declarations:
+            if (explicit or "").strip():
+                # Never drop an explicit request on the floor — resolve() raises
+                # with the actionable "this agent declares no skill_sets" message.
+                declarations.resolve(requested=explicit)
+            return {}
+
+        resolution = self.resolve_skill_set(requested)
+        wanted = {ref.name for ref in resolution.skills}
+        previously_loaded = list(self._skill_set_loaded or [])
+        resolver = manager if manager is not None else self.skill_manager
+
+        # Match the declared version ranges against what is installed and order
+        # by intra-set tool dependencies BEFORE loading anything. A missing or
+        # incompatible *required* skill raises here, so the agent is untouched.
+        resolved = resolve_requirements(
+            requirements_from_refs(
+                resolution.skills,
+                origin=(
+                    f"skill set '{resolution.name}'"
+                    if resolution.name
+                    else self._SKILL_MANIFEST_FILENAME
+                ),
+            ),
+            manager=resolver,
+        )
+        for name, reason in resolved.skipped.items():
+            logger.warning(
+                "Agent %s: optional skill '%s' not loaded — %s",
+                type(self).__name__,
+                name,
+                reason,
+            )
+
+        # Load the new set BEFORE dropping the old one, and track what this call
+        # actually brought in, so a failure can be undone completely.
+        loaded: Dict[str, "Skill"] = {}
+        newly_loaded: List[str] = []
+        try:
+            for skill in resolved.order:
+                already_present = skill.name in self.loaded_skills
+                loaded[skill.name] = self.load_skill(skill.name, manager=resolver)
+                if not already_present:
+                    newly_loaded.append(skill.name)
+        except Exception:
+            # Roll back to the pre-call state: drop only what this call added,
+            # and leave _active_skill_set / _skill_set_loaded untouched so the
+            # agent keeps reporting the set it is actually carrying.
+            for name in newly_loaded:
+                self.unload_skill(name)
+            logger.error(
+                "Skill set '%s' failed to load; the agent is unchanged and skill "
+                "set '%s' remains active.",
+                resolution.name,
+                self._active_skill_set or "(none)",
+            )
+            raise
+
+        # The new set is fully loaded — now retire the previous one's leftovers.
+        # Scoped to set-loaded names, so a skill the agent loaded itself via
+        # ``load_skill`` is never a set's to unload.
+        for stale in [n for n in previously_loaded if n not in wanted]:
+            self.unload_skill(stale)
+
+        self._active_skill_set = resolution.name
+        self._skill_set_loaded = list(loaded)
+        logger.info(
+            "Skill set '%s' active (chosen by: %s) — loaded %d of %d declared "
+            "skill(s): %s",
+            resolution.name or "(none)",
+            resolution.source,
+            len(loaded),
+            len(resolution.skills),
+            ", ".join(loaded) or "(none)",
+        )
+        return loaded
 
     def get_skills_system_prompt(self) -> str:
         """Render the loaded skills' bodies as a system-prompt fragment.
@@ -3274,6 +3487,18 @@ Do NOT wrap conversational replies in JSON.
         cancelled = getattr(self.console, "cancelled", None)
         return cancelled is not None and cancelled.is_set()
 
+    def finalize_answer(self, answer: str, _conversation: Any) -> str:
+        """Last chance to correct the final answer, BEFORE it is emitted.
+
+        Runs ahead of ``console.print_final_answer``, so a subclass's
+        correction reaches every consumer — the SSE ``answer`` event the TUI
+        renders, the CLI console, and ``process_query``'s return value — rather
+        than only the callers that re-read the return dict (#2789).
+
+        Identity by default; override to post-process.
+        """
+        return answer
+
     def process_query(
         self,
         user_input: str,
@@ -3903,12 +4128,11 @@ Do NOT wrap conversational replies in JSON.
                             }
                         )
                         if is_ctx_overflow:
-                            final_answer = (
-                                "I had to trim the conversation to fit my "
-                                "memory but I'm still not making progress. "
-                                "Could you re-ask in a fresh chat with just "
-                                "the essentials?"
-                            )
+                            # Name the actual constraint and a next step
+                            # (#2763) -- "re-ask with just the essentials" told
+                            # the user nothing about WHAT was too big or HOW to
+                            # shrink it, so every retry looked identical.
+                            final_answer = _CONTEXT_STILL_OVERFLOWING_MESSAGE
                         else:
                             final_answer = (
                                 f"Sorry, I ran into a problem while processing your request. "
@@ -4052,12 +4276,11 @@ Do NOT wrap conversational replies in JSON.
                             }
                         )
                         if is_ctx_overflow:
-                            final_answer = (
-                                "I had to trim the conversation to fit my "
-                                "memory but I'm still not making progress. "
-                                "Could you re-ask in a fresh chat with just "
-                                "the essentials?"
-                            )
+                            # Name the actual constraint and a next step
+                            # (#2763) -- "re-ask with just the essentials" told
+                            # the user nothing about WHAT was too big or HOW to
+                            # shrink it, so every retry looked identical.
+                            final_answer = _CONTEXT_STILL_OVERFLOWING_MESSAGE
                         else:
                             # If we have a typed Lemonade error in the
                             # cause-chain (e.g. ``LemonadeUpstreamTimeoutError``
@@ -5237,7 +5460,7 @@ Do NOT wrap conversational replies in JSON.
                             "start GAIA with the `--sd` flag to enable it."
                         )
 
-                final_answer = answer_candidate
+                final_answer = self.finalize_answer(answer_candidate, conversation)
                 self.execution_state = self.STATE_COMPLETION
                 self.console.print_final_answer(final_answer, streaming=self.streaming)
                 break

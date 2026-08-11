@@ -63,6 +63,9 @@ class GrantedBackend:
         }
         self.calls: list[tuple[str, str]] = []
 
+    def get_user_email(self) -> str:
+        return f"me-{self.name}@example.com"
+
     def list_messages(
         self, *, query=None, label_ids=None, max_results=25, page_token=None
     ):
@@ -83,6 +86,14 @@ class UngrantedBackend:
 
     def __init__(self, name: str):
         self.name = name
+
+    def get_user_email(self) -> str:
+        raise AuthRequiredError(
+            AuthRequiredError.Reason.AGENT_NOT_GRANTED,
+            provider=self.name,
+            agent_id="installed:email",
+            missing_scopes=["gmail.readonly"],
+        )
 
     def list_messages(
         self, *, query=None, label_ids=None, max_results=25, page_token=None

@@ -84,6 +84,7 @@ def connectors(monkeypatch):
 
     class _Provider:
         provider_id = "google"
+        default_scopes = ("openid", "https://www.googleapis.com/auth/userinfo.email")
 
         @property
         def client_id(self):
@@ -401,6 +402,30 @@ def test_oauth_flow_grants_the_agent_in_the_same_pass(connectors):
     assert max(connectors["timeouts"]) > 120
     # The copy-paste fallback is offered before the 2-minute wait, not after.
     assert any("https://accounts/auth" in m for m in agent.console.info)
+
+
+def test_walkthrough_reauth_requests_the_full_union_not_just_mail(connectors):
+    """AC-12 (#2730): given an existing google connection carrying ALL_SCOPES,
+    self-repair's OAuth request must be default ∪ ALL_SCOPES (mail +
+    calendar) — not the mail-only union it sent before. Sending mail-only
+    here is exactly what silently drops an existing calendar grant on
+    reconnect. ``required_scopes()`` (the GRANT) stays unchanged — it is the
+    usability gate, not the request."""
+    from gaia_agent_email.scopes import ALL_SCOPES
+
+    connectors["connection"] = _connection(scopes=ALL_SCOPES)
+    agent = _FakeAgent(answers=["yes"])
+
+    ob._run_oauth(agent, "google")
+
+    assert len(connectors["configured"]) == 1
+    _, config = connectors["configured"][0]
+    requested = set(config["scopes"])
+    for scope in ALL_SCOPES:
+        assert scope in requested, (scope, requested)
+    # required_scopes() is still the mail-only GATE — the grant, unchanged.
+    assert config["grant_agents"] == {ms.AGENT_ID: GMAIL_SCOPES}
+    assert ms.required_scopes("google") == GMAIL_SCOPES
 
 
 def test_missing_oauth_client_is_explained_before_it_is_asked_for(connectors):

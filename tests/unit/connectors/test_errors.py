@@ -106,6 +106,44 @@ class TestAuthRequiredErrorReason:
         # "reconnect", or "authenticate again". Must direct user to act.
         assert any(token in msg for token in ("reauth", "re-auth", "reconnect"))
 
+    def test_connection_missing_scopes_prints_the_real_scope_complete_command(self):
+        """#2730 D0/AC-9a: the printed remedy must be copy-pasteable — the
+        connection's current scopes UNIONED with what's now missing, never
+        just the missing subset (--scopes REPLACES, it doesn't add) and
+        never a <scope>/<scopes> placeholder."""
+        err = AuthRequiredError(
+            AuthRequiredError.Reason.CONNECTION_MISSING_SCOPES,
+            provider="google",
+            missing_scopes=["gmail.send"],
+            full_scopes=["gmail.modify", "gmail.send"],
+        )
+        msg = str(err)
+        assert "<scope" not in msg
+        assert "--scopes gmail.modify gmail.send" in msg
+
+    def test_agent_not_granted_prints_the_real_scope_complete_command(self):
+        err = AuthRequiredError(
+            AuthRequiredError.Reason.AGENT_NOT_GRANTED,
+            provider="google",
+            agent_id="installed:email",
+            missing_scopes=["gmail.modify", "gmail.send"],
+        )
+        msg = str(err)
+        assert "<scope" not in msg
+        assert "--scopes gmail.modify gmail.send" in msg
+
+    def test_agent_not_granted_with_no_scopes_supplied_names_the_gap_not_a_placeholder(
+        self,
+    ):
+        """Degenerate caller-bug case: no scope list at all. Must not fall
+        back to an unfillable <scope> placeholder."""
+        err = AuthRequiredError(
+            AuthRequiredError.Reason.AGENT_NOT_GRANTED,
+            provider="google",
+            agent_id="installed:email",
+        )
+        assert "<scope" not in str(err)
+
 
 class TestScopeMismatchError:
     def test_required_and_granted_attributes_set(self):
@@ -133,6 +171,18 @@ class TestScopeMismatchError:
             provider="google",
         )
         assert sorted(err.missing_scopes) == ["b", "c"]
+
+    def test_message_prints_the_real_scope_complete_command_not_a_placeholder(self):
+        """#2730 D0/AC-9a: granted ∪ required, never a <scope> placeholder —
+        --scopes REPLACES the connection's scopes rather than adding to them."""
+        err = ScopeMismatchError(
+            required=["gmail.modify", "gmail.send"],
+            granted=["gmail.modify"],
+            provider="google",
+        )
+        msg = str(err)
+        assert "<scope" not in msg
+        assert "--scopes gmail.modify gmail.send" in msg
 
 
 class TestRateLimitedError:
@@ -232,16 +282,18 @@ class TestOAuthClientNotConfiguredError:
         # Exact CLI commands, spec-driven off provider_id.
         assert "gaia connectors configure google --client-id" in s
         # connect authorizes scopes AND grants the agent in one flow (#2347):
-        # --grant-agent folds in the grant so scopes can't drift.
-        assert "gaia connectors connect google --scopes" in s
-        assert "--grant-agent <agent-id>" in s
+        # --grant-agent folds in the grant so scopes can't drift. No --scopes
+        # placeholder (#2730 AC-9a) — omitting it derives the declared scopes.
+        assert "gaia connectors connect google --grant-agent <agent-id>" in s
+        assert "<scope" not in s
         assert "amd-gaia.ai/docs/connectors/google" in s
         # UI path named too.
         assert "Settings -> Connections -> Google" in s
 
     def test_example_block_is_optional(self):
         # Omitting the example drops the copy-paste block but keeps the generic
-        # command template (connect --scopes ... --grant-agent).
+        # command template (connect --grant-agent, no --scopes placeholder).
         s = str(self._err(example=None))
         assert "For the email agent" not in s
-        assert "gaia connectors connect google --scopes <scope> ... --grant-agent" in s
+        assert "gaia connectors connect google --grant-agent <agent-id>" in s
+        assert "<scope" not in s

@@ -332,7 +332,7 @@ def test_result_summary_required():
 
 
 def test_schema_version_unchanged_by_multi_inbox():
-    """Schema 2.9 is the current frozen contract version.
+    """Schema 2.12 is the current frozen contract version.
 
     2.1 was additive over the 2.0 5-bucket taxonomy (no triage shape change):
     it added inbox search (#1781), mailbox actions (#1779), the calendar
@@ -358,11 +358,20 @@ def test_schema_version_unchanged_by_multi_inbox():
     denominator — no existing field changed. 2.10 is additive over 2.9
     (#2716): AttentionCoverage gains message_errors (Optional[List[
     MessageError]]) — a Gmail rate-limit surviving retry now degrades one
-    message instead of the whole scan — no existing field changed. If this
+    message instead of the whole scan — no existing field changed. 2.11 is
+    additive over 2.10 (#2743): EmailPreScanResult gains needs_you (List[
+    NeedsYouItem]), needs_you_total (int), and bulk (Optional[BulkSummary]) —
+    a worklist view built on top of the already-classified urgent/actionable/
+    needs_review buckets, never a second independent classification pass — no
+    existing field changed. 2.12 is additive over 2.11 (#2829): POST
+    /v1/email/query gains an optional session_id — when the host sends it,
+    the run resolves the SAME agent every other turn on that id used
+    (instead of a throwaway per-turn agent), so a reference to something an
+    earlier turn surfaced can resolve — no existing field changed. If this
     fails, someone changed the version unexpectedly; that requires an
     explicit version negotiation, not a drive-by edit.
     """
-    assert SCHEMA_VERSION == "2.10"
+    assert SCHEMA_VERSION == "2.12"
 
 
 def test_triage_result_gained_no_new_required_field():

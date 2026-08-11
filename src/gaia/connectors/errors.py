@@ -32,10 +32,10 @@ class OAuthClientNotConfiguredError(ConfigurationError):
     GAIA ships no OAuth credentials — each user creates their own client once in
     the provider's cloud console, then registers it. The message is
     self-documenting for a headless CLI user (the console setup steps plus the
-    exact ``gaia connectors ...`` commands) and also names the Agent UI path, so
-    whoever hits it can unblock themselves without leaving the terminal. Inherits
-    :class:`ConfigurationError` so the CLI (exit 3) and the UI router (HTTP 503)
-    keep handling it unchanged.
+    exact ``gaia connectors`` commands to run) and also names the Agent UI
+    path, so whoever hits it can unblock themselves without leaving the
+    terminal. Inherits :class:`ConfigurationError` so the CLI (exit 3) and
+    the UI router (HTTP 503) keep handling it unchanged.
     """
 
     def __init__(
@@ -77,8 +77,9 @@ class OAuthClientNotConfiguredError(ConfigurationError):
             f"Then register the client and sign in — no Agent UI required:\n"
             f"  gaia connectors configure {pid} --client-id <ID> "
             f"--client-secret <SECRET>\n"
-            f"  gaia connectors connect {pid} --scopes <scope> ... "
-            f"--grant-agent <agent-id>\n"
+            f"  gaia connectors connect {pid} --grant-agent <agent-id>\n"
+            f"  (omitting --scopes derives them from the agent's own "
+            f"declaration; pass --scopes explicitly for a narrower set)\n"
             f"{example_block}"
             f"(Power users / CI can instead set {env_prefix}_CLIENT_ID and "
             f"{env_prefix}_CLIENT_SECRET in the environment before launching "
@@ -115,39 +116,78 @@ class AuthRequiredError(ConnectorsError):
         provider: str = "",
         agent_id: str | None = None,
         missing_scopes: Iterable[str] | None = None,
+        full_scopes: Iterable[str] | None = None,
         message: str | None = None,
     ):
         self.reason = reason
         self.provider = provider
         self.agent_id = agent_id
         self.missing_scopes = list(missing_scopes or [])
+        # The scope-complete list a printed remedy command should carry
+        # (#2730 D0) — never just the missing subset, since `--scopes`
+        # REPLACES the connection's scopes rather than adding to them.
+        # Falls back to missing_scopes for reasons where that already IS
+        # the full wanted set (e.g. AGENT_NOT_GRANTED, raised before any
+        # scope is known to be missing from the connection itself).
+        self.full_scopes = list(full_scopes or missing_scopes or [])
         super().__init__(message or self._default_message())
 
     def _default_message(self) -> str:
         prov = self.provider or "the connection"
+        # A single clean token for the connector-id position in printed
+        # commands (never a multi-word Python expression split across
+        # backticks — AC-9a's remedy scanner parses these as real argv).
+        pid = self.provider or "<provider>"
         if self.reason is AuthRequiredError.Reason.NOT_CONNECTED:
             return (
                 f"No {prov} connection. Connect via Settings → Connections in "
                 "AgentUI, or run `gaia connectors connect "
-                f"{self.provider or '<provider>'}`. "
+                f"{pid}`. "
                 "See docs/sdk/infrastructure/connections.mdx."
             )
         if self.reason is AuthRequiredError.Reason.AGENT_NOT_GRANTED:
             agent = self.agent_id or "this agent"
+            if self.full_scopes:
+                command = (
+                    f"`gaia connectors grants grant {pid} "
+                    f"{agent} --scopes {' '.join(self.full_scopes)}`"
+                )
+            else:
+                # No scope list was supplied at the raise site — name the
+                # gap rather than print an unfillable placeholder. Not
+                # backtick-wrapped: the bare "grants grant" subcommand alone
+                # has no positional args and is a command FAMILY, not a
+                # literal invocation, so it must not read as one.
+                command = (
+                    "the gaia connectors grants grant command with the scopes "
+                    "this call actually needs (none were supplied to this "
+                    "error — that is a caller bug, not something to guess a "
+                    "command for)"
+                )
             return (
                 f"Agent '{agent}' has no grant for {prov}. Grant the required "
-                "scopes in Settings → Connections, or run "
-                f"`gaia connectors grants grant {self.provider or '<provider>'} "
-                f"{agent} --scopes <scope> ...`. "
+                f"scopes in Settings → Connections, or run {command}. "
                 "See docs/sdk/infrastructure/connections.mdx."
             )
         if self.reason is AuthRequiredError.Reason.CONNECTION_MISSING_SCOPES:
             scopes = ", ".join(self.missing_scopes) or "<unknown>"
+            if self.full_scopes:
+                command = (
+                    f"`gaia connectors connect {pid} "
+                    f"--scopes {' '.join(self.full_scopes)}`"
+                )
+            else:
+                # Not backtick-wrapped, same reason as the AGENT_NOT_GRANTED
+                # branch above: no positional args, not a literal invocation.
+                command = (
+                    "the gaia connectors connect command with the full scope "
+                    "list this connection needs (none was supplied to this "
+                    "error)"
+                )
             return (
                 f"The {prov} connection lacks required scopes ({scopes}). "
                 "Reconnect with the missing scopes from Settings → Connections, "
-                f"or run `gaia connectors connect {self.provider or '<provider>'} "
-                "--scopes <scope> ...`. "
+                f"or run {command}. "
                 "See docs/sdk/infrastructure/connections.mdx."
             )
         if self.reason is AuthRequiredError.Reason.REAUTH_REQUIRED:
@@ -155,7 +195,7 @@ class AuthRequiredError(ConnectorsError):
                 f"The stored {prov} credentials are no longer valid (client "
                 "rotation or remote revocation). Reconnect from Settings → "
                 f"Connections, or run `gaia connectors connect "
-                f"{self.provider or '<provider>'}`. "
+                f"{pid}`. "
                 "See docs/runbooks/google-oauth-client.md."
             )
         if self.reason is AuthRequiredError.Reason.TENANT_MISMATCH:
@@ -163,7 +203,7 @@ class AuthRequiredError(ConnectorsError):
                 f"The stored {prov} connection was authenticated against a "
                 "different Microsoft tenant than the connector currently "
                 "resolves to. Reconnect from Settings → Connections, or run "
-                f"`gaia connectors connect {self.provider or '<provider>'}`. "
+                f"`gaia connectors connect {pid}`. "
                 "See docs/connectors/microsoft.mdx."
             )
         # Fallback — should be unreachable since Reason is a closed enum.
@@ -208,12 +248,20 @@ class ScopeMismatchError(ConnectorsError):
 
     def _default_message(self) -> str:
         prov = self.provider or "connection"
+        pid = self.provider or "<provider>"
         missing = ", ".join(self.missing_scopes) or "<none>"
+        # granted ∪ required — NEVER just the missing subset. `--scopes`
+        # REPLACES the connection's scopes rather than adding to them, so a
+        # remedy naming only the gap would authorize an account that has
+        # lost everything it already had (#2730 D0). Do not "simplify" this
+        # to `missing_scopes` alone — that reintroduces the bug.
+        full_scopes = sorted(set(self.granted) | set(self.required))
         return (
             f"The {prov} stored connection is missing required scopes "
             f"({missing}). Reconnect with the missing scopes via Settings → "
             f"Connections, or run `gaia connectors connect "
-            f"{self.provider or '<provider>'} --scopes <scope> ...`. "
+            f"{pid} --scopes "
+            f"{' '.join(full_scopes) or '<none>'}`. "
             "See docs/sdk/infrastructure/connections.mdx."
         )
 
