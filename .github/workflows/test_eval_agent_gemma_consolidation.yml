@@ -85,6 +85,13 @@
 # survive a GitHub Actions step boundary (see the single-session note in
 # test_agent_behavior_e2e.yml).
 #
+# Lemonade must serve TWO models, not one. ensure-lemonade-running.ps1 warms
+# only the chat model, but rag_quality and context_retention answer out of RAG
+# chunks, so the embedder is just as load-bearing — and when it cannot start,
+# those categories collapse to ~2/10 non-answers that read as a model
+# regression. The preflight therefore probes it with a real /embeddings call
+# before the job spends three and a half hours measuring nothing.
+#
 # The third prerequisite is the Claude Code CLI, which is easy to miss because
 # ANTHROPIC_API_KEY looks like the whole story: `gaia eval agent` DRIVES each
 # scenario by shelling out to `claude -p` with an MCP config, and its preflight
@@ -311,13 +318,14 @@ jobs:
           # moved once (8000 -> 13305 in Lemonade v10.1.0) and a stale literal
           # would fail a healthy runner.
           $global:LASTEXITCODE = 0
-          $probe = @(python -c "from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME, _get_lemonade_config; print(_get_lemonade_config()[2]); print(DEFAULT_MODEL_NAME)")
-          if ($LASTEXITCODE -ne 0 -or $probe.Count -lt 2) {
+          $probe = @(python -c "from gaia.llm.lemonade_client import DEFAULT_EMBEDDING_MODEL, DEFAULT_MODEL_NAME, _get_lemonade_config; print(_get_lemonade_config()[2]); print(DEFAULT_MODEL_NAME); print(DEFAULT_EMBEDDING_MODEL)")
+          if ($LASTEXITCODE -ne 0 -or $probe.Count -lt 3) {
             Write-Host "::error::Could not resolve the Lemonade URL / model under test - the venv install is broken."
             exit 1
           }
-          $lemonadeUrl = $probe[-2]
-          $modelUnderTest = $probe[-1]
+          $lemonadeUrl = $probe[-3]
+          $modelUnderTest = $probe[-2]
+          $embeddingModel = $probe[-1]
 
           try {
             Invoke-RestMethod -Uri "$lemonadeUrl/health" -TimeoutSec 10 | Out-Null
@@ -344,6 +352,88 @@ jobs:
             exit 1
           }
           Write-Host "Model under test present: $modelUnderTest"
+
+          # THE RAG CATEGORIES RUN ON A SECOND MODEL. rag_quality and
+          # context_retention answer entirely out of chunks the EMBEDDER
+          # produced, so an embedder that cannot start turns every doc-grounded
+          # scenario into a ~2/10 non-answer that reads exactly like a model
+          # regression. ensure-lemonade-running.ps1 warms only the chat model
+          # and nothing asserted the embedder, so run 31051933420 spent 3h31m
+          # proving it: llama-server returned model_load_error on every index,
+          # RAG got 0 chunks, and rag_quality scored 3.1 against a 9.4 baseline
+          # captured with the SAME chat model. Probe it here, in seconds.
+          #
+          # Probed AFTER the chat model is warm on purpose: the embedder is
+          # co-resident with it (#1544), so probing an idle server would not
+          # reproduce the condition the eval actually runs under.
+          #
+          # Presence in /models is not enough - it proves the GGUF is on disk,
+          # not that llama-server can serve it, and "on disk but unservable" is
+          # the exact failure above. So this registers/downloads the embedder
+          # the way gaia.rag.sdk does (custom `user.` model: checkpoint +
+          # recipe + embedding label) and then makes a real /embeddings call.
+          $embedProbe = Join-Path $env:RUNNER_TEMP "gaia_preflight_embedder.py"
+          @'
+          import sys
+
+          from gaia.llm.lemonade_client import (
+              DEFAULT_EMBEDDING_MODEL,
+              MODELS,
+              LemonadeClient,
+          )
+
+          model = DEFAULT_EMBEDDING_MODEL
+          requirement = next((m for m in MODELS.values() if m.model_id == model), None)
+          if requirement is None:
+              print("no MODELS entry for " + model)
+              sys.exit(1)
+
+          client = LemonadeClient()
+          try:
+              downloaded = client.ensure_model_downloaded(
+                  model,
+                  show_progress=False,
+                  checkpoint=requirement.checkpoint,
+                  recipe=requirement.recipe,
+                  embedding=requirement.embedding,
+              )
+          except Exception as exc:
+              print("register/download raised " + type(exc).__name__ + ": " + str(exc))
+              sys.exit(1)
+          if not downloaded:
+              print("register/download returned False for " + model)
+              sys.exit(1)
+
+          try:
+              response = client.embeddings("gaia eval preflight", model=model)
+          except Exception as exc:
+              print("embeddings call raised " + type(exc).__name__ + ": " + str(exc))
+              sys.exit(1)
+
+          vectors = (response or {}).get("data") or []
+          vector = vectors[0].get("embedding") if vectors else None
+          if not vector:
+              print("embeddings returned no vector for " + model)
+              sys.exit(1)
+          print("embedder ok: " + model + " (dim " + str(len(vector)) + ")")
+          '@ | Set-Content -Path $embedProbe -Encoding ASCII
+
+          # Continue, not Stop, around the call: gaia logs to stderr, and under
+          # Stop the first stderr line becomes a terminating NativeCommandError
+          # that would report as a crashed step instead of the message below.
+          # Same reasoning as the eval step's own $ErrorActionPreference note.
+          $ErrorActionPreference = "Continue"
+          $global:LASTEXITCODE = 0
+          $embedOut = & python $embedProbe 2>&1
+          $embedCode = $LASTEXITCODE
+          $ErrorActionPreference = "Stop"
+          $embedOut | ForEach-Object { Write-Host "$_" }
+          # Require the success line, not just exit 0: a command that fails to
+          # LAUNCH leaves $LASTEXITCODE at the reset 0 and would read as a pass.
+          if ($embedCode -ne 0 -or -not ($embedOut -match 'embedder ok:')) {
+            Write-Host "::error::The RAG embedder $embeddingModel cannot serve embeddings on this runner (probe exit $embedCode; its output is above). rag_quality and context_retention would score ~2/10 as non-answers against a ~9/10 baseline and look like a model regression. Provision it on the runner with ``gaia init --profile chat`` (registers + pulls it), then check the Lemonade server log for the llama-server start failure if the pull succeeds but the load still 500s. Do NOT re-run the eval until this probe passes - it costs 3.5h and measures nothing."
+            exit 1
+          }
 
       - name: Run the three eval categories serially
         # Own timeout so an overrun fails HERE, by name, with the collect /
