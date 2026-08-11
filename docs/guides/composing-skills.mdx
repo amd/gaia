@@ -1,0 +1,250 @@
+---
+title: "Composing Skills and Skill Sets"
+description: "Bundle several Agent Skills with your agent and activate a different set per launch"
+icon: "layer-group"
+---
+
+An agent that does one job needs one set of instructions. An agent that does the
+same job in two different contexts needs two — and hardcoding `load_skill` calls
+forces you to pick one, or to ship two agents.
+
+**Skill sets** solve that. You bundle a small library of skills with your agent,
+group them into named sets in `gaia-agent.yaml`, and let exactly one set activate
+per launch — chosen explicitly, or by whatever runtime signal your agent already
+has.
+
+This guide builds a worked example: a code-review agent that reviews differently
+for a library than for an application.
+
+<Info>
+  **Prerequisites:** you have an agent package with a `gaia-agent.yaml` — see
+  [Custom Agents](/guides/custom-agent). Background on the format itself is in
+  [Agent Skills](/spec/agent-skills) and [Skill Format](/plans/skill-format).
+</Info>
+
+## 1. Bundle the skills
+
+Put each skill in its own directory inside your importable package, so the wheel
+and any frozen binary ship it:
+
+```
+my_agent/
+├── __init__.py
+├── agent.py
+└── skills/
+    ├── review-basics/SKILL.md
+    ├── api-compatibility/SKILL.md
+    ├── changelog-discipline/SKILL.md
+    └── ux-regression/SKILL.md
+```
+
+<Warning>
+  A `skills/` folder *beside* your package rather than inside it works from a
+  source checkout and then vanishes from an installed wheel — the classic
+  works-on-my-machine failure. Keep it inside the package and declare it as
+  package data (`[tool.setuptools.package-data]`), plus `--add-data` if you freeze
+  a binary.
+</Warning>
+
+A skill is a `SKILL.md`: frontmatter plus a Markdown body. Keep the body short —
+it is injected into the system prompt when the skill loads, and every token it
+takes is a token your tool results no longer have.
+
+```markdown
+---
+name: api-compatibility
+description: Check a change for breaking API surface. Use when reviewing a diff that touches public functions, classes, or types.
+version: 0.1.0
+metadata:
+  gaia:
+    tools_required:
+      - read_file
+      - search_code
+---
+
+# API Compatibility
+
+A change is breaking if an existing caller stops compiling or starts behaving
+differently. Removed or renamed public symbols, narrowed parameter types,
+widened return types, and changed defaults all qualify.
+
+- Identify the public surface the diff touches, then find its callers with
+  `search_code` before judging severity.
+- A new required parameter is breaking; a new optional one is not.
+- Report each finding as `<symbol> · <what breaks> · <who calls it>`.
+```
+
+`tools_required` names registry tools the skill's recipe *consumes* — it does not
+grant anything. A name your agent has not registered is logged at load time, so a
+skill that cannot execute its own recipe is diagnosable rather than silently
+useless.
+
+## 2. Declare the sets
+
+Three top-level keys in `gaia-agent.yaml`:
+
+```yaml
+id: my-agent
+name: My Review Agent
+version: 0.1.0
+language: python
+
+# Always on, whichever set is active.
+skills:
+  - review-basics
+
+# Named, mutually exclusive. Exactly ONE is active per launch.
+skill_sets:
+  library:
+    - api-compatibility
+    - changelog-discipline
+  application:
+    - ux-regression
+    - changelog-discipline
+
+# Applies when nothing selects a set.
+default_skill_set: application
+```
+
+`changelog-discipline` is in both sets — sets overlap, they do not partition. The
+one thing a set may **not** do is re-declare a skill that is already in the
+always-on `skills:` list; that contradiction fails to parse.
+
+An entry is a plain name or a mapping:
+
+```yaml
+skill_sets:
+  library:
+    - api-compatibility                # required (the default)
+    - name: changelog-discipline
+      version: ">=0.1.0"               # recorded, not yet resolved
+      required: false                  # missing ⇒ logged and skipped
+```
+
+## 3. Point the agent at both
+
+```python
+from pathlib import Path
+from typing import ClassVar, List, Optional
+
+from gaia.agents.base.agent import Agent
+
+_HERE = Path(__file__).resolve().parent
+
+
+class MyReviewAgent(Agent):
+    # Highest-precedence discovery root: the skills you bundle always win over a
+    # same-named user or Claude Code copy.
+    SKILL_DIRS: ClassVar[List[str]] = [str(_HERE / "skills")]
+    # Opt in to the declarative blocks.
+    SKILL_MANIFEST: ClassVar[Optional[str]] = str(_HERE / "gaia-agent.yaml")
+```
+
+That is enough. `Agent.__init__` resolves a set and loads it — the always-on
+skills plus that set's, in declaration order.
+
+## 4. Choose the set at runtime
+
+Selection resolves in one order, every time:
+
+<Steps>
+<Step title="Explicit — `skill_set=`">
+  `MyReviewAgent(skill_set="library")`, which your CLI surfaces as
+  `--skill-set library`. Highest precedence, and never second-guessed.
+</Step>
+<Step title="Your selector hook">
+  Override `select_skill_set()` to answer from state the agent already has.
+</Step>
+<Step title="`default_skill_set`">
+  The manifest's declared default.
+</Step>
+</Steps>
+
+The hook is one method:
+
+```python
+    def select_skill_set(self) -> Optional[str]:
+        """Pick a set from the repository being reviewed."""
+        kind = self.detect_project_kind()      # your own logic
+        if kind is None:
+            # Unknown is a real answer. Returning None resolves the manifest's
+            # default explicitly — never guess a set.
+            return None
+        return "library" if kind == "library" else "application"
+```
+
+<Warning>
+  **Never guess, and never fall back.** A name neither the manifest declares
+  raises `SkillSetError` listing the valid sets — whether it came from
+  `--skill-set` or from your hook. An agent running with the wrong capability
+  bundle is worse than one that refuses to start, and a hook that returns a set
+  it invented is a wiring bug, not a reason to improvise.
+</Warning>
+
+## 5. Verify what actually loaded
+
+```python
+agent = MyReviewAgent(skill_set="library")
+
+agent.active_skill_set        # 'library'
+sorted(agent.loaded_skills)   # ['api-compatibility', 'changelog-discipline', 'review-basics']
+```
+
+The startup log names the set, the rule that chose it, and every skill that
+loaded:
+
+```
+Skill set 'library' active (chosen by: explicit) — loaded 3 of 3 declared
+skill(s): review-basics, api-compatibility, changelog-discipline
+```
+
+And from the CLI:
+
+```bash
+gaia skill list          # every discovered skill, with its root and precedence
+gaia skill info api-compatibility
+```
+
+Switching sets mid-session is one call — the previous set's skills are unloaded
+first, so a stale set never lingers in the prompt:
+
+```python
+agent.load_skill_set("application")
+```
+
+## Budget the set
+
+Loading a set injects each body into the system prompt. Three skills of ~250
+tokens each is ~750 tokens gone from a window your tool results were already
+using — enough to overflow a tight context and turn a working run into a
+`context_length_exceeded` error.
+
+Two habits keep it safe:
+
+- **Keep bodies short.** Procedure and judgement calls, not prose. If a skill
+  needs reference material, put it in a file the body links to — resources load
+  only when the agent actually reads them.
+- **Subtract the cost where you budget context.** If your agent sizes a
+  tool-result envelope against the window, take the loaded set's cost out of that
+  budget. The email agent's bulk-triage path does exactly this.
+
+## A shipped example
+
+The [email agent](https://github.com/amd/gaia/tree/main/hub/agents/email) is the
+reference consumer. It bundles six instruction-only skills and declares two sets —
+`personal` (triage, newsletter digests, travel itineraries) and `work` (triage,
+meeting scheduling, action-item extraction, escalation routing), with
+`inbox-triage` in both.
+
+Its selector keys off the connected mailbox: a personal Microsoft account
+activates `personal`, a work/school account activates `work`. A Gmail mailbox
+carries no equivalent signal, so its kind is unknown, the selector returns `None`,
+and the manifest's default applies — explicitly, never by assuming a work mailbox
+is personal.
+
+## Related
+
+- [Agent Skills](/spec/agent-skills#skill-sets) — architecture, discovery, selection
+- [Skill Format](/plans/skill-format#manifest-side-grammar-skills-skill_sets-default_skill_set) — the full field grammar
+- [Custom Agents](/guides/custom-agent) — building the agent the skills attach to
+- [CLI Reference → Skills](/reference/cli#skills) — `gaia skill list|info|create|import|export`

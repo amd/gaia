@@ -72,6 +72,9 @@ class SpyBackend:
 
     # -- Read ---------------------------------------------------------------
 
+    def get_user_email(self) -> str:
+        return f"me-{self.name}@example.com"
+
     def list_messages(
         self, *, query=None, label_ids=None, max_results=25, page_token=None
     ):

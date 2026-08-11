@@ -172,3 +172,69 @@ def test_ensure_agent_rejects_prehistoric_daemon(monkeypatch):
 
     with pytest.raises(DaemonVersionError):
         client.ensure_agent("email")
+
+
+# ---------------------------------------------------------------------------
+# run_query's payload — session_id parity with model/max_steps (#2829)
+# ---------------------------------------------------------------------------
+
+
+def _stub_ensure(monkeypatch, base_url="http://127.0.0.1:9999"):
+    """Stub client.ensure_agent so run_query never touches a real daemon."""
+    from gaia.daemon import agent_query
+    from gaia.daemon.instance import DaemonInstance
+
+    inst = DaemonInstance(
+        pid=1, port=9999, token="T", host="127.0.0.1", api_version="1.1"
+    )
+    monkeypatch.setattr(agent_query.client, "ensure_agent", lambda agent_id: inst)
+    return inst
+
+
+def _stub_stream_post(monkeypatch, captured):
+    """Stub requests.post to capture the JSON payload and return one 'final'
+    SSE frame, without opening a real connection."""
+    import requests
+
+    class _Resp:
+        status_code = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def iter_lines(self, decode_unicode=True):
+            yield 'data: {"type": "final", "answer": "ok"}'
+            yield ""
+
+    def _fake_post(url, headers=None, json=None, stream=None, timeout=None):
+        captured["json"] = json
+        return _Resp()
+
+    monkeypatch.setattr(requests, "post", _fake_post)
+
+
+def test_run_query_omits_session_id_when_none(monkeypatch):
+    from gaia.daemon.agent_query import run_query
+
+    _stub_ensure(monkeypatch)
+    captured: dict = {}
+    _stub_stream_post(monkeypatch, captured)
+
+    run_query("email", "hi")
+
+    assert "session_id" not in captured["json"]
+
+
+def test_run_query_sends_session_id_when_given(monkeypatch):
+    from gaia.daemon.agent_query import run_query
+
+    _stub_ensure(monkeypatch)
+    captured: dict = {}
+    _stub_stream_post(monkeypatch, captured)
+
+    run_query("email", "hi", session_id="conv-123")
+
+    assert captured["json"]["session_id"] == "conv-123"

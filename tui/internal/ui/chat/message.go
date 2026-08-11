@@ -36,6 +36,16 @@ type Message struct {
 	Render string
 	Data   json.RawMessage
 
+	// Identity marks a RoleCard message as the ONE singular card of its
+	// kind per turn-sequence (#2743) -- today only the email pre-scan card,
+	// which can arrive from two independent sources (a typed turn's
+	// tool_result, or the on-open pre-scan fetch) that must update the SAME
+	// message in place rather than each appending its own. Empty for every
+	// other card, which always appends. Looked up by identity, not by a
+	// tracked index: `/clear` sets ChatModel.messages to nil (model.go), so
+	// a stale index would panic or silently overwrite an unrelated message.
+	Identity string
+
 	// cardCache memoizes the drawn card. updateViewport re-renders every message
 	// on each streamed token, and laying a card out means re-parsing its JSON —
 	// so without this a long answer re-parses every card on screen per token.

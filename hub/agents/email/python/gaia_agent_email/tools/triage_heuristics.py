@@ -107,8 +107,11 @@ class HeuristicResult:
     category without LLM consultation. ``confident=False`` means the
     heuristic returned a best-guess fallback (e.g., ``informational``)
     and the caller should escalate to the LLM. The ``reason`` field is
-    the source-of-truth for verbose-mode logging -- it tells the operator
-    exactly which rule fired.
+    rendered verbatim to the user as the attention card's "why" line
+    (#2744) -- it MUST read as a fact about the message (sender type,
+    a deadline, an urgency signal) and never as a classifier-internal
+    trace (a raw label constant, "escalating", "LLM", "heuristic", or a
+    ``--`` separator).
     """
 
     category: str
@@ -338,6 +341,26 @@ def _has_commitment_signal(subject_lower: str, body_lower: str) -> bool:
     return False
 
 
+# What each of IMPORTANT/STARRED means to the user who reads the "why"
+# line -- a flag they (or Gmail's significance model, echoing their own
+# behavior) set on the message, never the fact that it's being escalated.
+_MATCHED_LABEL_PHRASES = {
+    LABEL_IMPORTANT: "flagged as important",
+    LABEL_STARRED: "starred",
+}
+
+
+def _important_starred_reason(matched_labels: List[str]) -> str:
+    """Render the user-facing reason for the IMPORTANT/STARRED escalation.
+
+    The only ``reason`` built at runtime rather than as a source literal
+    (#2744) -- which of the two flags is set genuinely varies per message,
+    so it can't be a fixed string the way the other branches' reasons are.
+    """
+    phrases = [_MATCHED_LABEL_PHRASES[label] for label in matched_labels]
+    return " and ".join(phrases).capitalize()
+
+
 def classify_category_heuristic(
     subject: str,
     sender: str,
@@ -410,10 +433,7 @@ def classify_category_heuristic(
                 spam_confident=spam_confident,
                 is_phishing=is_phishing,
                 confident=False,
-                reason=(
-                    "Gmail CATEGORY_PROMOTIONS label set but body has a "
-                    "deadline/commitment signal -- escalating to LLM"
-                ),
+                reason="Looks like a promotional email, but mentions a deadline",
                 matched_label_ids=(LABEL_CATEGORY_PROMOTIONS,),
             )
         return HeuristicResult(
@@ -421,7 +441,7 @@ def classify_category_heuristic(
             is_spam=is_spam,
             spam_confident=spam_confident,
             confident=True,
-            reason="Gmail CATEGORY_PROMOTIONS label set",
+            reason="Looks like a promotional email",
             matched_label_ids=(LABEL_CATEGORY_PROMOTIONS,),
         )
 
@@ -436,10 +456,7 @@ def classify_category_heuristic(
                 spam_confident=spam_confident,
                 is_phishing=is_phishing,
                 confident=False,
-                reason=(
-                    "Gmail CATEGORY_SOCIAL label set but body has a "
-                    "deadline/commitment signal -- escalating to LLM"
-                ),
+                reason="Looks like a social media notification, but mentions a deadline",
                 matched_label_ids=(LABEL_CATEGORY_SOCIAL,),
             )
         return HeuristicResult(
@@ -447,7 +464,7 @@ def classify_category_heuristic(
             is_spam=is_spam,
             spam_confident=spam_confident,
             confident=True,
-            reason="Gmail CATEGORY_SOCIAL label set",
+            reason="Looks like a social media notification",
             matched_label_ids=(LABEL_CATEGORY_SOCIAL,),
         )
 
@@ -464,10 +481,7 @@ def classify_category_heuristic(
                 spam_confident=spam_confident,
                 is_phishing=is_phishing,
                 confident=False,
-                reason=(
-                    "Gmail CATEGORY_UPDATES label set but body has a "
-                    "deadline/commitment signal -- escalating to LLM"
-                ),
+                reason="Looks like an automated update, but mentions a deadline",
                 matched_label_ids=(LABEL_CATEGORY_UPDATES,),
             )
         return HeuristicResult(
@@ -475,7 +489,7 @@ def classify_category_heuristic(
             is_spam=is_spam,
             spam_confident=spam_confident,
             confident=True,
-            reason="Gmail CATEGORY_UPDATES label set",
+            reason="Looks like an automated update",
             matched_label_ids=(LABEL_CATEGORY_UPDATES,),
         )
 
@@ -488,7 +502,7 @@ def classify_category_heuristic(
             spam_confident=spam_confident,
             is_phishing=is_phishing,
             confident=True,
-            reason="Gmail CATEGORY_PERSONAL label set",
+            reason="Looks like personal correspondence",
             matched_label_ids=(LABEL_CATEGORY_PERSONAL,),
         )
 
@@ -503,7 +517,7 @@ def classify_category_heuristic(
                 spam_confident=spam_confident,
                 is_phishing=is_phishing,
                 confident=True,
-                reason=f"subject contains promotional keyword '{kw}'",
+                reason="Looks like a promotional email",
             )
 
     # 7. Automated-sender fallback -- newsletters, alert bots, etc.
@@ -521,10 +535,7 @@ def classify_category_heuristic(
                     spam_confident=spam_confident,
                     is_phishing=is_phishing,
                     confident=False,
-                    reason=(
-                        f"sender contains automated-sender keyword '{kw}' but "
-                        "subject has urgent signal -- escalating to LLM"
-                    ),
+                    reason="Automated sender, but subject signals urgency",
                 )
             return HeuristicResult(
                 category=CATEGORY_FYI,
@@ -532,7 +543,7 @@ def classify_category_heuristic(
                 spam_confident=spam_confident,
                 is_phishing=is_phishing,
                 confident=True,
-                reason=f"sender contains automated-sender keyword '{kw}'",
+                reason="Automated or no-reply sender",
             )
 
     # 8. Built-in IMPORTANT / STARRED labels -- Gmail has decided this is
@@ -552,7 +563,7 @@ def classify_category_heuristic(
             spam_confident=spam_confident,
             is_phishing=is_phishing,
             confident=False,
-            reason=f"Gmail flagged as {', '.join(matched)} -- escalating to LLM",
+            reason=_important_starred_reason(matched),
             matched_label_ids=tuple(matched),
         )
 
@@ -573,10 +584,7 @@ def classify_category_heuristic(
                 spam_confident=spam_confident,
                 is_phishing=is_phishing,
                 confident=False,
-                reason=(
-                    "List-Unsubscribe header present but body has a "
-                    "deadline/commitment signal -- escalating to LLM"
-                ),
+                reason="Looks like a newsletter, but mentions a deadline",
             )
         return HeuristicResult(
             category=CATEGORY_PROMOTIONAL,
@@ -584,7 +592,7 @@ def classify_category_heuristic(
             spam_confident=spam_confident,
             is_phishing=is_phishing,
             confident=True,
-            reason="List-Unsubscribe header present (RFC 2369 bulk-mail signal)",
+            reason="Looks like a newsletter",
         )
 
     # 9. No high-confidence heuristic matched -- escalate. Category is
@@ -600,7 +608,7 @@ def classify_category_heuristic(
         spam_confident=False,
         is_phishing=is_phishing,
         confident=False,
-        reason="no heuristic match -- escalating to LLM",
+        reason="No clear signal from the sender or subject",
     )
 
 

@@ -12,99 +12,89 @@ import (
 
 // The fixtures below are built from pre_scan_inbox_impl's documented envelope
 // (hub/agents/email/python/gaia_agent_email/tools/read_tools.py) and its TS
-// mirror (hub/agents/email/npm/src/types.ts, EmailPreScanResult): kind, urgent,
-// actionable, informational_count, suggested_archives, suggested_drafts (always
-// empty, reserved), preferences_applied, totals — plus the two SSE-only
-// supersets from merge_pre_scan_backends: per-item `mailbox` and top-level
-// `mailbox_errors`.
+// mirror (hub/agents/email/npm/src/types.ts, EmailPreScanResult): kind,
+// scanned, needs_you, needs_you_total, bulk, preferences_applied — plus the
+// two SSE-only supersets from merge_pre_scan_backends: per-item `mailbox`
+// and top-level `mailbox_errors`. #2743 replaced the four raw buckets
+// (urgent/actionable/needs_review/suggested_archives) with needs_you, a
+// server-built VIEW over them; these fixtures only populate needs_you, the
+// one thing the client renders from.
 
 const populatedPreScan = `{
   "kind": "email_pre_scan",
-  "urgent": [
-    {"message_id":"m1","thread_id":"t1","sender":"\"Sarah Chen\" <sarah.chen@example.com>",
+  "urgent": [], "actionable": [], "informational_count": 6,
+  "suggested_archives": [], "suggested_drafts": [], "needs_review": [],
+  "scanned": 15,
+  "needs_you": [
+    {"ref":1,"kind":"urgent","message_id":"m1","thread_id":"t1","sender":"\"Sarah Chen\" <sarah.chen@example.com>",
      "subject":"Prod incident follow-up","why":"asked for a reply by Friday"},
-    {"message_id":"m2","thread_id":"t2","sender":"billing@vendorco.com",
-     "subject":"Invoice 4471 past due","why":"payment date has passed"}
-  ],
-  "actionable": [
-    {"message_id":"m3","thread_id":"t3","sender":"Marcus Webb <marcus@example.org>",
+    {"ref":2,"kind":"urgent","message_id":"m2","thread_id":"t2","sender":"billing@vendorco.com",
+     "subject":"Invoice 4471 past due","why":"payment date has passed"},
+    {"ref":3,"kind":"needs_response","message_id":"m3","thread_id":"t3","sender":"Marcus Webb <marcus@example.org>",
      "subject":"Re: Q3 roadmap review","why":"direct question to you"},
-    {"message_id":"m4","thread_id":"t4","sender":"recruiting@acme.io",
+    {"ref":4,"kind":"needs_response","message_id":"m4","thread_id":"t4","sender":"recruiting@acme.io",
      "subject":"Interview times for Thursday","why":"asked you to pick a slot"},
-    {"message_id":"m5","thread_id":"t5","sender":"\"Priya N.\" <priya@example.net>",
+    {"ref":5,"kind":"needs_response","message_id":"m5","thread_id":"t5","sender":"\"Priya N.\" <priya@example.net>",
      "subject":"Re: contract redlines","why":"waiting on your sign-off"}
   ],
-  "informational_count": 6,
-  "suggested_archives": [
-    {"message_id":"m6","thread_id":"t6","sender":"news@substack.com",
-     "subject":"Weekly digest #212","reason":"newsletter"},
-    {"message_id":"m7","thread_id":"t7","sender":"offers@retailer.com",
-     "subject":"48-hour sale","reason":"promotional"}
-  ],
-  "suggested_drafts": [],
+  "needs_you_total": 5,
+  "bulk": {"count": 4, "filter_tests": ["no_direct_question"]},
   "preferences_applied": {
     "priority_senders": ["Sarah Chen", "Priya N."],
     "low_priority_senders": [],
     "category_defaults": {}
-  },
-  "totals": {"urgent": 2, "actionable": 5, "informational": 6, "suggested_archives": 2}
+  }
 }`
 
-// capsHitPreScan: every list is at its agent-side cap while `totals` reports the
-// real pre-cap counts, so each header must read "N of M".
+// capsHitPreScan: needs_you carries fewer rows (5) than needs_you_total (40)
+// reports as the real pre-cap count -- NEEDS_YOU_CAP is 10 server-side, so
+// this fixture demonstrates the header reading "N of M" honestly whenever
+// N < M, without needing to hit the cap exactly.
 const capsHitPreScan = `{
   "kind": "email_pre_scan",
-  "urgent": [
-    {"message_id":"u1","sender":"a@x.com","subject":"one","why":"r1"},
-    {"message_id":"u2","sender":"b@x.com","subject":"two","why":"r2"},
-    {"message_id":"u3","sender":"c@x.com","subject":"three","why":"r3"},
-    {"message_id":"u4","sender":"d@x.com","subject":"four","why":"r4"},
-    {"message_id":"u5","sender":"e@x.com","subject":"five","why":"r5"}
+  "urgent": [], "actionable": [], "informational_count": 4,
+  "suggested_archives": [], "suggested_drafts": [], "needs_review": [],
+  "scanned": 40,
+  "needs_you": [
+    {"ref":1,"kind":"urgent","message_id":"u1","sender":"a@x.com","subject":"one","why":"r1"},
+    {"ref":2,"kind":"urgent","message_id":"u2","sender":"b@x.com","subject":"two","why":"r2"},
+    {"ref":3,"kind":"urgent","message_id":"u3","sender":"c@x.com","subject":"three","why":"r3"},
+    {"ref":4,"kind":"urgent","message_id":"u4","sender":"d@x.com","subject":"four","why":"r4"},
+    {"ref":5,"kind":"urgent","message_id":"u5","sender":"e@x.com","subject":"five","why":"r5"}
   ],
-  "actionable": [
-    {"message_id":"a1","sender":"f@x.com","subject":"six","why":"r6"},
-    {"message_id":"a2","sender":"g@x.com","subject":"seven","why":"r7"},
-    {"message_id":"a3","sender":"h@x.com","subject":"eight","why":"r8"},
-    {"message_id":"a4","sender":"i@x.com","subject":"nine","why":"r9"},
-    {"message_id":"a5","sender":"j@x.com","subject":"ten","why":"r10"}
-  ],
-  "informational_count": 4,
-  "suggested_archives": [
-    {"message_id":"s1","sender":"k@x.com","subject":"promo","reason":"promotional"}
-  ],
-  "suggested_drafts": [],
-  "preferences_applied": null,
-  "totals": {"urgent": 9, "actionable": 17, "informational": 4, "suggested_archives": 31}
+  "needs_you_total": 40,
+  "bulk": {"count": 1, "filter_tests": ["no_direct_question"]},
+  "preferences_applied": null
 }`
 
-// emptyPreScan: the "nothing needs you" state — only informational_count is set.
+// emptyPreScan: the "nothing needs you" state — only bulk.count is set.
 const emptyPreScan = `{
   "kind": "email_pre_scan",
-  "urgent": [],
-  "actionable": [],
-  "informational_count": 19,
-  "suggested_archives": [],
-  "suggested_drafts": [],
-  "preferences_applied": {"priority_senders": [], "low_priority_senders": [], "category_defaults": {}},
-  "totals": {"urgent": 0, "actionable": 0, "informational": 19, "suggested_archives": 0}
+  "urgent": [], "actionable": [], "informational_count": 19,
+  "suggested_archives": [], "suggested_drafts": [], "needs_review": [],
+  "scanned": 19,
+  "needs_you": [],
+  "needs_you_total": 0,
+  "bulk": {"count": 19, "filter_tests": ["no_deadline_signal"]},
+  "preferences_applied": {"priority_senders": [], "low_priority_senders": [], "category_defaults": {}}
 }`
 
-// mailboxErrorsPreScan: multi-account scan where one grant is broken. Items carry
-// the SSE-only `mailbox` tag and the envelope carries `mailbox_errors`.
+// mailboxErrorsPreScan: multi-account scan where one grant is broken. Items
+// carry the SSE-only `mailbox` tag and the envelope carries `mailbox_errors`.
 const mailboxErrorsPreScan = `{
   "kind": "email_pre_scan",
-  "urgent": [
-    {"message_id":"m1","sender":"Sarah Chen <sarah@example.com>","subject":"Prod incident",
+  "urgent": [], "actionable": [], "informational_count": 3,
+  "suggested_archives": [], "suggested_drafts": [], "needs_review": [],
+  "scanned": 5,
+  "needs_you": [
+    {"ref":1,"kind":"urgent","message_id":"m1","sender":"Sarah Chen <sarah@example.com>","subject":"Prod incident",
      "why":"asked for a reply by Friday","mailbox":"google"},
-    {"message_id":"m2","sender":"ops@corp.example","subject":"Change window tonight",
+    {"ref":2,"kind":"needs_response","message_id":"m2","sender":"ops@corp.example","subject":"Change window tonight",
      "why":"needs sign-off today","mailbox":"microsoft"}
   ],
-  "actionable": [],
-  "informational_count": 3,
-  "suggested_archives": [],
-  "suggested_drafts": [],
+  "needs_you_total": 2,
+  "bulk": {"count": 3, "filter_tests": []},
   "preferences_applied": null,
-  "totals": {"urgent": 2, "actionable": 0, "informational": 3, "suggested_archives": 0},
   "mailbox_errors": [{"mailbox":"microsoft","error":"token expired — reconnect Outlook"}]
 }`
 
@@ -148,6 +138,18 @@ func raw(t *testing.T, s string) json.RawMessage {
 		t.Fatalf("fixture is not valid JSON: %s", s)
 	}
 	return json.RawMessage(s)
+}
+
+func atoi(t *testing.T, s string) int {
+	t.Helper()
+	n := 0
+	for _, r := range strings.TrimSpace(s) {
+		if r < '0' || r > '9' {
+			t.Fatalf("not a number: %q", s)
+		}
+		n = n*10 + int(r-'0')
+	}
+	return n
 }
 
 // rowNumberPattern matches a rendered card's numbered-row gutter once a

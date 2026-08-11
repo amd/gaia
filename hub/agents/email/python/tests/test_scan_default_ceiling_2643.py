@@ -5,15 +5,19 @@
 Two DIFFERENT numbers govern the pre_scan_inbox / triage_inbox tools, and
 this issue only touches one of them:
 
-- The tool's OWN Python default (``max_messages: int = 25`` on the
-  registered ``@tool`` function) — what the agent gets when it calls the
-  tool WITHOUT specifying a count. This is what #2643 raises, to 50.
+- The tool's OWN Python default — what the agent gets when it calls the
+  tool WITHOUT specifying a count. #2643 raised it to 50; #2743 gave that
+  value one home, ``config.DEFAULT_INBOX_SCAN_MESSAGES``, and moved every
+  call site (this tool included) to import it instead of restating its own
+  literal — closing the bug class where two scans of different depth
+  produced two disagreeing summaries of the same inbox.
 - The hard ceiling (``config.default_inbox_scan_ceiling()``, 100 by
   default, overridable via ``GAIA_EMAIL_TRIAGE_MAX_MESSAGES``) — the most
   the agent can ask for even when it explicitly requests more. This was
-  ALREADY 100 before #2643 and is unchanged by it.
+  ALREADY 100 before #2643 and is unchanged by it or by #2743.
 
-These tests pin both: the default moves, the ceiling doesn't.
+These tests pin both: the default moves (now via the shared constant), the
+ceiling doesn't.
 """
 
 from __future__ import annotations
@@ -26,7 +30,11 @@ import pytest
 pytest.importorskip("gaia_agent_email")
 
 from gaia_agent_email.agent import EmailTriageAgent  # noqa: E402
-from gaia_agent_email.config import EmailAgentConfig, default_inbox_scan_ceiling  # noqa: E402
+from gaia_agent_email.config import (  # noqa: E402
+    DEFAULT_INBOX_SCAN_MESSAGES,
+    EmailAgentConfig,
+    default_inbox_scan_ceiling,
+)
 
 from tests.fixtures.email.fake_gmail import FakeGmailBackend  # noqa: E402
 
@@ -60,8 +68,9 @@ class TestDefaultCeilingRaisedTo50:
             default = inspect.signature(fn).parameters["max_messages"].default
         finally:
             agent.close_db()
-        assert default == 50, (
-            f"pre_scan_inbox's own default must be 50 (was 25 pre-#2643), "
+        assert default == DEFAULT_INBOX_SCAN_MESSAGES, (
+            "pre_scan_inbox's own default must match config."
+            f"DEFAULT_INBOX_SCAN_MESSAGES ({DEFAULT_INBOX_SCAN_MESSAGES!r}), "
             f"got {default!r}"
         )
 
@@ -72,8 +81,9 @@ class TestDefaultCeilingRaisedTo50:
             default = inspect.signature(fn).parameters["max_messages"].default
         finally:
             agent.close_db()
-        assert default == 50, (
-            f"triage_inbox's own default must be 50 (was 25 pre-#2643), "
+        assert default == DEFAULT_INBOX_SCAN_MESSAGES, (
+            "triage_inbox's own default must match config."
+            f"DEFAULT_INBOX_SCAN_MESSAGES ({DEFAULT_INBOX_SCAN_MESSAGES!r}), "
             f"got {default!r}"
         )
 
@@ -83,8 +93,9 @@ class TestHardCeilingUnchangedByThisIssue:
         monkeypatch.delenv("GAIA_EMAIL_TRIAGE_MAX_MESSAGES", raising=False)
         assert default_inbox_scan_ceiling() == 100, (
             "the hard ceiling was already 100 before #2643 (config.py's "
-            "DEFAULT_INBOX_SCAN_CEILING) -- #2643 raises the tool's OWN "
-            "default (25->50), never this ceiling"
+            "DEFAULT_INBOX_SCAN_CEILING) -- #2643 raised the tool's OWN "
+            "default (25->50) and #2743 gave that default one shared home "
+            "(config.DEFAULT_INBOX_SCAN_MESSAGES); neither touches this ceiling"
         )
 
     def test_pre_scan_inbox_can_still_be_asked_for_up_to_100(self, tmp_path):
