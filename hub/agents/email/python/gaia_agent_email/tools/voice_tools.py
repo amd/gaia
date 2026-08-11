@@ -97,8 +97,9 @@ class VoiceToolsMixin:
                     )
                 if not agent._backends:
                     return _envelope_err(
-                        "no mailbox is connected — connect Gmail or Outlook "
-                        "via `gaia connectors` first, then retry"
+                        "no mailbox is connected — connect Gmail, Outlook, "
+                        "or Microsoft 365 via `gaia connectors` first, then "
+                        "retry"
                     )
                 provider = mailbox or next(iter(agent._backends))
                 backend = agent._backends.get(provider)

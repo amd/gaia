@@ -306,9 +306,12 @@ def _run_oauth(agent: Any, provider: str) -> Dict[str, Any]:
 def _run_connect(agent: Any, provider: str) -> None:
     """Run whichever sign-in *provider* actually uses.
 
-    Microsoft goes through the guided device-code walkthrough (#2590) — no
-    client secret, no browser required. Every other provider keeps the
-    existing browser-loopback path.
+    Personal Microsoft goes through the guided device-code walkthrough
+    (#2590) — no client secret, no browser required. ``microsoft_work``
+    deliberately falls through to the generic browser-loopback path instead
+    (``setup_routes.ROUTES`` has no entry for it): a work tenant registers
+    its own app and consent policy, so the personal walkthrough's
+    assumptions don't hold. Every other provider uses the same generic path.
     """
     if provider == "microsoft":
         _run_microsoft_setup(agent)
@@ -457,7 +460,12 @@ def _choose_provider(agent: Any, states: List[Dict[str, Any]]) -> str:
             Option(
                 "microsoft",
                 "Outlook",
-                "An outlook.com or Microsoft 365 account.",
+                "An outlook.com or Hotmail account.",
+            ),
+            Option(
+                "microsoft_work",
+                "Microsoft 365",
+                "A work or school Microsoft 365 / Entra account.",
             ),
             Option(_NO, "Neither right now", "Change nothing and carry on."),
         ),
