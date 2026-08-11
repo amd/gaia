@@ -115,9 +115,9 @@ on:
         type: boolean
         default: false
       eval_model:
-        description: 'Judge model for the eval harness'
+        description: 'Driver + judge model for the eval harness (must match the baseline)'
         required: false
-        default: 'claude-opus-5'
+        default: 'claude-sonnet-4-6'
   push:
     branches-ignore:
       - main
@@ -155,7 +155,15 @@ env:
   # message opts in — workflow_dispatch is not offered until this file is on the
   # default branch, so without this there is no way to enforce pre-merge.
   ENFORCE: ${{ github.event.inputs.enforce || (contains(github.event.head_commit.message, '[eval-enforce]') && 'true') || 'false' }}
-  EVAL_MODEL: ${{ github.event.inputs.eval_model || 'claude-opus-5' }}
+  # PINNED TO THE BASELINE'S JUDGE, and that is not a stale value to bump.
+  # `--model` is not a judge-only knob: runner.py passes it to `claude -p`, which
+  # DRIVES every scenario as well as scoring it. The committed baselines record
+  # `eval_model: claude-sonnet-4-6` (meta.json), so driving with anything else
+  # compares two different agents-under-test and folds the new driver's wall
+  # clock into the same >2x time verdict. #2859 moved every Claude workflow to
+  # Opus 5; this one value is exempt until the baselines are regenerated with
+  # that driver. Override per-run via the dispatch input above.
+  EVAL_MODEL: ${{ github.event.inputs.eval_model || 'claude-sonnet-4-6' }}
   # Loopback services — bypass any runner proxy. This covers the PYTHON side
   # (httpx/requests in the eval, the agents and the backend); PowerShell's
   # Invoke-RestMethod ignores NO_PROXY and uses the system proxy instead.
