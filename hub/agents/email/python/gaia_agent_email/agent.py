@@ -701,12 +701,13 @@ class EmailTriageAgent(
         }
     )
 
-    # Declares BOTH mailbox providers so the user can connect either Google or
-    # a personal Microsoft account and have the agent grant-checked correctly.
-    # ``mail_provider`` (config) selects which one the live backend talks to;
-    # the requirements list is provider-superset so the AgentUI offers both
-    # tiles. Gmail (#962) and Outlook (#1275) coexist — neither breaks the
-    # other.
+    # Declares all THREE mailbox connectors (#2629) so the user can connect
+    # Google, a personal Microsoft account, or a work Microsoft 365 account
+    # and have the agent grant-checked correctly. ``mail_provider`` (config)
+    # selects which one the live backend talks to; the requirements list is
+    # provider-superset so the AgentUI offers all three tiles. Gmail (#962),
+    # personal Outlook (#1275) and work Microsoft 365 (#2628) coexist — none
+    # breaks the others.
     REQUIRED_CONNECTORS: ClassVar[List[ConnectorRequirement]] = [
         ConnectorRequirement(
             connector_id="google",
@@ -720,10 +721,19 @@ class EmailTriageAgent(
             connector_id="microsoft",
             scopes=OUTLOOK_MAIL_SCOPES + OUTLOOK_CALENDAR_SCOPES,
             reason=(
-                "Read and organize your Outlook mailbox — personal "
-                "(Outlook.com) or work/school (Microsoft 365) — send messages "
-                "on your behalf, and read/respond to your Outlook calendar via "
+                "Read and organize your personal Outlook mailbox "
+                "(Outlook.com / Hotmail / Live), send messages on your "
+                "behalf, and read/respond to your Outlook calendar via "
                 "Microsoft Graph."
+            ),
+        ),
+        ConnectorRequirement(
+            connector_id="microsoft_work",
+            scopes=OUTLOOK_MAIL_SCOPES + OUTLOOK_CALENDAR_SCOPES,
+            reason=(
+                "Read and organize your work Microsoft 365 mailbox, send "
+                "messages on your behalf, and read/respond to your work "
+                "calendar via Microsoft Graph."
             ),
         ),
     ]

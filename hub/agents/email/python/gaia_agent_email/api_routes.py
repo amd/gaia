@@ -43,6 +43,7 @@ Design commitments
 from __future__ import annotations
 
 import asyncio
+import functools
 import hashlib
 import hmac
 import json
@@ -56,6 +57,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, StreamingResponse
 from gaia_agent_email import caller_auth
 from gaia_agent_email.config import DEFAULT_INBOX_SCAN_MESSAGES, EmailAgentConfig
+from gaia_agent_email.mailbox_state import PROVIDERS, backend_family
 from gaia_agent_email.context_budget import estimate_tokens, thread_budget_tokens
 from gaia_agent_email.contract import (
     ActionItem,
@@ -1215,24 +1217,26 @@ def get_send_backend():
             ),
         )
     provider = providers[0]
-    if provider == "google":
+    try:
+        family = backend_family(provider)
+    except ValueError:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Connected mailbox provider '{provider}' has no send backend. "
+                f"Expected one of: {', '.join(PROVIDERS)}."
+            ),
+        ) from None
+    if family == "gmail":
         from gaia_agent_email.gmail_backend import LiveGmailBackend, _get_gmail_token
 
         return LiveGmailBackend(_get_gmail_token)
-    if provider == "microsoft":
-        from gaia_agent_email.outlook_backend import (
-            LiveOutlookBackend,
-            _get_outlook_token,
-        )
-
-        return LiveOutlookBackend(_get_outlook_token)
-    raise HTTPException(
-        status_code=503,
-        detail=(
-            f"Connected mailbox provider '{provider}' has no send backend. "
-            "Expected 'google' or 'microsoft'."
-        ),
+    from gaia_agent_email.outlook_backend import (
+        LiveOutlookBackend,
+        _get_outlook_token,
     )
+
+    return LiveOutlookBackend(functools.partial(_get_outlook_token, provider))
 
 
 # Module-level indirection the send handler calls after the gate. Tests swap
@@ -1262,24 +1266,26 @@ def _resolve_backend_for_provider(provider: Optional[str]):
                 f"single connected mailbox. Connected: {connected or '(none)'}."
             ),
         )
-    if provider == "google":
+    try:
+        family = backend_family(provider)
+    except ValueError:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Provider '{provider}' has no send backend. "
+                f"Expected one of: {', '.join(PROVIDERS)}."
+            ),
+        ) from None
+    if family == "gmail":
         from gaia_agent_email.gmail_backend import LiveGmailBackend, _get_gmail_token
 
         return LiveGmailBackend(_get_gmail_token)
-    if provider == "microsoft":
-        from gaia_agent_email.outlook_backend import (
-            LiveOutlookBackend,
-            _get_outlook_token,
-        )
-
-        return LiveOutlookBackend(_get_outlook_token)
-    raise HTTPException(
-        status_code=503,
-        detail=(
-            f"Provider '{provider}' has no send backend. "
-            "Expected 'google' or 'microsoft'."
-        ),
+    from gaia_agent_email.outlook_backend import (
+        LiveOutlookBackend,
+        _get_outlook_token,
     )
+
+    return LiveOutlookBackend(functools.partial(_get_outlook_token, provider))
 
 
 # ---------------------------------------------------------------------------
@@ -1319,24 +1325,26 @@ def get_search_backend():
             ),
         )
     provider = providers[0]
-    if provider == "google":
+    try:
+        family = backend_family(provider)
+    except ValueError:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Connected mailbox provider '{provider}' has no search "
+                f"backend. Expected one of: {', '.join(PROVIDERS)}."
+            ),
+        ) from None
+    if family == "gmail":
         from gaia_agent_email.gmail_backend import LiveGmailBackend, _get_gmail_token
 
         return LiveGmailBackend(_get_gmail_token)
-    if provider == "microsoft":
-        from gaia_agent_email.outlook_backend import (
-            LiveOutlookBackend,
-            _get_outlook_token,
-        )
-
-        return LiveOutlookBackend(_get_outlook_token)
-    raise HTTPException(
-        status_code=503,
-        detail=(
-            f"Connected mailbox provider '{provider}' has no search backend. "
-            "Expected 'google' or 'microsoft'."
-        ),
+    from gaia_agent_email.outlook_backend import (
+        LiveOutlookBackend,
+        _get_outlook_token,
     )
+
+    return LiveOutlookBackend(functools.partial(_get_outlook_token, provider))
 
 
 def _search_inbox(
@@ -1537,20 +1545,26 @@ def _build_calendar_backend(provider: str):
     the calendar scope was never granted — surfaced as a 403 reconnect CTA at the
     route, never a silent empty calendar.
     """
-    if provider == "google":
+    try:
+        family = backend_family(provider)
+    except ValueError:
+        family = None
+    if family == "gmail":
         from gaia_agent_email.calendar_backend import (
             LiveCalendarBackend,
             _get_calendar_token,
         )
 
         return LiveCalendarBackend(_get_calendar_token)
-    if provider == "microsoft":
+    if family == "graph":
         from gaia_agent_email.outlook_calendar_backend import (
             LiveOutlookCalendarBackend,
             _get_outlook_calendar_token,
         )
 
-        return LiveOutlookCalendarBackend(_get_outlook_calendar_token)
+        return LiveOutlookCalendarBackend(
+            functools.partial(_get_outlook_calendar_token, provider)
+        )
     raise HTTPException(
         status_code=503,
         detail=(
@@ -1681,17 +1695,21 @@ def _raise_calendar_connector_http(exc: ConnectorsError) -> NoReturn:
 
 def _build_prescan_live_backend(provider: str):
     """Build the read-only (list/get) live backend for one connected provider."""
-    if provider == "google":
+    try:
+        family = backend_family(provider)
+    except ValueError:
+        family = None
+    if family == "gmail":
         from gaia_agent_email.gmail_backend import LiveGmailBackend, _get_gmail_token
 
         return LiveGmailBackend(_get_gmail_token)
-    if provider == "microsoft":
+    if family == "graph":
         from gaia_agent_email.outlook_backend import (
             LiveOutlookBackend,
             _get_outlook_token,
         )
 
-        return LiveOutlookBackend(_get_outlook_token)
+        return LiveOutlookBackend(functools.partial(_get_outlook_token, provider))
     raise HTTPException(
         status_code=503,
         detail=(

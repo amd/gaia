@@ -337,11 +337,15 @@ class LiveOutlookCalendarBackend:
 # ---------------------------------------------------------------------------
 
 
-def _get_outlook_calendar_token() -> str:
+def _get_outlook_calendar_token(connector_id: str = "microsoft") -> str:
     """Return an MS Graph access token for the calendar scope via the
     grant-checked connector path.
 
-    Uses the ``microsoft`` connector + ``oauth_pkce`` handler seam from #1105:
+    ``connector_id`` selects WHICH Microsoft account this token is for —
+    ``"microsoft"`` (personal, the default) or ``"microsoft_work"`` (work
+    Microsoft 365, #2628/#2629) — mirroring ``_get_outlook_token``.
+
+    Uses the ``oauth_pkce`` handler seam from #1105:
     ``get_credential(spec, required_scopes=[...])`` -> ``{"access_token": ...}``.
     The grant dispatcher raises ``AuthRequiredError`` (no grant / missing
     scopes) BEFORE any network round-trip; we let it propagate so the agent can
@@ -350,20 +354,20 @@ def _get_outlook_calendar_token() -> str:
     Module-level (not a method) so it mirrors ``_get_outlook_token`` /
     ``_get_calendar_token`` and can be unit-tested without instantiating the
     agent. In the daemon deployment (#2154) it returns the daemon-forwarded
-    'microsoft' token instead of reading the keyring.
+    token for ``connector_id`` instead of reading the keyring.
     """
     from gaia_agent_email import forwarded_credentials
 
     def _live() -> str:
         cred = get_credential_sync(
-            "microsoft",
+            connector_id,
             agent_id=AGENT_NAMESPACED_ID,
             required_scopes=list(OUTLOOK_CALENDAR_SCOPES),
         )
         return cred["access_token"]
 
     return forwarded_credentials.resolve_access_token(
-        "microsoft", list(OUTLOOK_CALENDAR_SCOPES), live_fetch=_live
+        connector_id, list(OUTLOOK_CALENDAR_SCOPES), live_fetch=_live
     )
 
 
