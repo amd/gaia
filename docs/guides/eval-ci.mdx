@@ -83,6 +83,25 @@ jobs:
   - Use a self-hosted runner with AMD hardware
 </Warning>
 
+<Warning>
+  **The RAG categories need a second model.** `rag_quality` and `context_retention`
+  answer out of retrieved chunks, so the embedder is as load-bearing as the chat
+  model — and when it cannot load, those scenarios score ~2/10 as non-answers that
+  read exactly like a model regression. Warming the chat model is not enough.
+  Assert the embedder before the run, which for a multi-hour eval saves hours of
+  measuring nothing:
+
+```bash
+python tests/ci_lemonade_check.py --model user.embeddinggemma-300m-GGUF \
+  --checkpoint ggml-org/embeddinggemma-300M-GGUF:Q8_0 --recipe llamacpp \
+  --register-embedding --embeddings --llamacpp-args "--ubatch-size 2048"
+```
+
+  `--register-embedding` re-registers before pulling, which repairs a stale
+  registration left by an earlier job; `--llamacpp-args` reproduces the exact load
+  `gaia.rag.sdk` performs, so a probe that passes means RAG's load will too.
+</Warning>
+
 ---
 
 ## Baseline Workflow
