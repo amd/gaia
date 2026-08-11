@@ -35,6 +35,10 @@ import os
 import sys
 from pathlib import Path
 
+# How --skill-set reaches the per-request agent sessions (#2466): via the env var
+# EmailAgentConfig.skill_set reads. Imported so the two cannot drift.
+from gaia_agent_email.config import SKILL_SET_ENV
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
@@ -199,6 +203,30 @@ def build_app():
 app = build_app()
 
 
+def _read_declared_skill_sets() -> list[str]:
+    """Skill-set names this build declares. Raises if the manifest is unreadable."""
+    from gaia.hub.manifest import parse as parse_manifest
+
+    from gaia_agent_email.agent import EmailTriageAgent
+
+    return list(parse_manifest(EmailTriageAgent.SKILL_MANIFEST).skill_sets.set_names)
+
+
+def _declared_skill_sets() -> list[str]:
+    """Declared set names for the ``--skill-set`` help string, or ``[]``.
+
+    Help-text only, so an unreadable manifest degrades the wording rather than
+    breaking ``--help``. **Never use this to validate a requested name** — a
+    swallowed read error would turn validation into "accept anything". Use
+    :func:`_read_declared_skill_sets`, which raises.
+    """
+    try:
+        return _read_declared_skill_sets()
+    except Exception as e:  # noqa: BLE001 — help text only
+        log.debug("Could not read declared skill sets for --skill-set help: %s", e)
+        return []
+
+
 def _add_serve_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--host", default=DEFAULT_HOST, help="Bind host.")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT, help="Bind port.")
@@ -222,6 +250,15 @@ def _add_serve_args(parser: argparse.ArgumentParser) -> None:
         action="store_true",
         help="Developer mode: implies --reload and logs the caller-token-off "
         "banner. For local iteration only — never ship this.",
+    )
+    parser.add_argument(
+        "--skill-set",
+        default=None,
+        metavar="NAME",
+        help="Activate this bundled skill set for every agent session instead "
+        "of the one the connected mailbox's account type selects. Valid names "
+        "come from gaia-agent.yaml's skill_sets: block "
+        f"({', '.join(_declared_skill_sets()) or 'none declared'}).",
     )
     parser.add_argument(
         "--print-openapi",
@@ -253,6 +290,38 @@ def main(argv=None) -> int:
 
     if args.port == 4001:
         parser.error("port 4001 is reserved and must never be used")
+
+    # Validate a pinned skill set here, at startup, rather than letting the first
+    # session fail — and validate the env-var form identically to the flag, since
+    # the docs tell integrators the two are equivalent. The flag wins when both
+    # are set.
+    requested_set = args.skill_set or os.environ.get(SKILL_SET_ENV, "").strip()
+    if requested_set:
+        source = (
+            "--skill-set" if args.skill_set else f"{SKILL_SET_ENV} in the environment"
+        )
+        try:
+            declared = _read_declared_skill_sets()
+        except Exception as exc:  # noqa: BLE001 — re-raised as a CLI error below
+            parser.error(
+                f"{source} requested skill set {requested_set!r}, but this "
+                f"build's declared sets could not be read: {exc}"
+            )
+        if requested_set not in declared:
+            parser.error(
+                f"{source} requested skill set {requested_set!r}, which this "
+                f"agent does not declare. Valid sets: {', '.join(declared)}."
+            )
+        # Every agent session is built per-request inside the app (which is
+        # constructed at import time), so the override travels by env var —
+        # inherited by the --reload child process too.
+        os.environ[SKILL_SET_ENV] = requested_set
+        log.info(
+            "Email sidecar: skill set pinned to %r via %s for every session "
+            "(overrides mailbox account-type selection).",
+            requested_set,
+            source,
+        )
 
     reload = bool(args.reload or args.dev)
     if reload and getattr(sys, "frozen", False):

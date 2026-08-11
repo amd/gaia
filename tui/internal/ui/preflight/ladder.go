@@ -115,9 +115,13 @@ func (l Ladder) Error(op string, err error) Diagnosis {
 	if errors.As(err, &version) {
 		return Diagnosis{
 			Cause: fmt.Sprintf("The running background service speaks host API v%s, "+
-				"which this build cannot use.", version.Have),
-			Remedy:  "Restart it so it comes up on the version this app expects.",
-			Command: "gaia daemon restart",
+				"but this app needs v%s or newer — %s.",
+				version.Have, version.Want, version.Reason),
+			// The version comes from the installed core, so a restart relaunches
+			// the same one; saying so stops the user looping on it.
+			Remedy: "Upgrade the installed GAIA core so it matches this app, or re-run " +
+				"the installer from https://amd-gaia.ai. A restart brings the same version back.",
+			Command: "pip install --upgrade amd-gaia",
 			Where:   daemonLog(),
 		}
 	}

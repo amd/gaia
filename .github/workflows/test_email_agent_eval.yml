@@ -1,7 +1,8 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-# Nightly + manual offline eval for the email-triage agent (#1112).
+# Offline eval for the email-triage agent (#1112) — weekly, on email PRs,
+# on demand, and as a release gate via workflow_call.
 #
 # Drives the email-triage throughput/quality benchmark over the committed
 # SYNTHETIC corpus (tests/fixtures/email/) via FakeGmailBackend — never a live
@@ -9,29 +10,34 @@
 # / 50-email latency / peak memory, #1277) gates and the categorization-accuracy
 # / phishing-precision numbers, logs them, and uploads the full gate report.
 #
-# MIXED MODE. The gate bars + the single on/off switch live in ONE committed
+# SINGLE SOURCE. The gate bars + the single on/off switch live in ONE committed
 # source each — the threshold manifests under tests/fixtures/email/, read here
 # only through the harness loaders (no thresholds are hardcoded in this YAML):
-#   - tests/fixtures/email/quality_gate_thresholds.json  (FP<5% / FN<2% — report mode)
-#   - tests/fixtures/email/perf_gate_thresholds.json      (TTFT / tps / latency / mem — ENFORCING)
-#   - tests/fixtures/email/drafting_gate_thresholds.json  (draft-approval >=70%, #1269 — ENFORCING)
-#   - tests/fixtures/email/briefing_gate_thresholds.json  (briefing quality, #1951 — ENFORCING)
+#   - tests/fixtures/email/quality_gate_thresholds.json      (FP<5% / FN<2%, #1278)
+#   - tests/fixtures/email/perf_gate_thresholds.json         (TTFT / tps / latency / mem, #1277)
+#   - tests/fixtures/email/drafting_gate_thresholds.json     (draft-approval >=70%, #1269)
+#   - tests/fixtures/email/briefing_gate_thresholds.json     (briefing quality, #1951)
+#   - tests/fixtures/email/action_items_gate_thresholds.json (P/R/F1, #1949)
 #
-# NOTE: the perf (#1277), drafting (#1269) and briefing (#1951) gates now ship
-# enforce:TRUE — a bar/quality breach fails the build (no report-mode fallback).
-# Only the FP/FN quality gate remains report mode. The judged evals (drafting,
-# briefing) hard-require ANTHROPIC_API_KEY: a missing key fails the build (exit 1,
-# no silent skip — CLAUDE.md fail-loudly), never an un-judged pass. See the
-# briefing block near the end of this job.
+# ALL FIVE CURRENTLY SHIP `enforce: false` — every gate is in REPORT MODE. #2038
+# ("unblock v0.4.0 — calibrate perf bars, report-mode unvalidated judge gates")
+# flipped perf, drafting and briefing to false and this header was not updated
+# with it; the paragraphs below used to claim they were ENFORCING and were wrong
+# from #2038 until this line was written. Read the manifests, not this comment,
+# if the two ever disagree again — `git grep '"enforce"' tests/fixtures/email/`.
 #
-# CI keys off each gate's `should_fail` (= enforce and not passed). The perf,
-# drafting, and briefing manifests now ship `enforce: true`, so a breach in any
-# of them fails the build. The FP/FN quality manifest still ships
-# `enforce: false` — its gate machinery runs, logs, and uploads, but a breach
-# stays green (categorization accuracy is still ~0.40, so the FP/FN bars are not
-# yet meaningful). Enforcement is toggled IN THE MANIFEST (data, not this
-# workflow); flip the FP/FN manifest to `enforce: true` once #1266
-# (categorization) / #1271 (phishing) land. No edit to this file is needed then.
+# CI keys off each gate's `should_fail` (= enforce AND not passed). With enforce
+# false everywhere, `should_fail` is never true, so a breached BAR cannot fail any
+# run on any trigger today. What still fails the build, on every trigger, is the
+# class of things that mean the eval could not prove anything: a missing
+# ANTHROPIC_API_KEY, an errored or unjudged case, a judge transport error, or a
+# harness crash (CLAUDE.md fail-loudly — never an un-judged pass).
+#
+# Enforcement is toggled IN THE MANIFEST (data, not this workflow): flip a gate's
+# `"enforce"` to true and it blocks the weekly, the release AND the PR at once.
+# No edit to this file is needed. The bars become meaningful gate-by-gate as
+# #1266 (categorization) / #1271 (phishing) land and the judged evals accumulate
+# a stable baseline.
 #
 # NOTE on accuracy gates: categorization >=85% (#1266) and phishing precision
 # >=90% (#1271) do not yet have committed threshold manifests (they are owned by
@@ -39,18 +45,82 @@
 # precision the benchmark already emits, but does not gate on them — there is no
 # committed bar to read, and inventing one in YAML would violate the single-source
 # rule above. They become gating once their manifests land and this gate-reader is
-# pointed at them. Draft-approval >=70% (#1269) DOES now have a committed manifest
-# (tests/fixtures/email/drafting_gate_thresholds.json, enforce:true) — it is
-# scored by the voice-drafting eval step below (#1607 / #1948) and now enforcing:
-# a draft-approval breach fails the build, and a missing judge credential also
-# fails it (eval_drafting_report.py exits 1 — no silent skip).
+# pointed at them. Draft-approval >=70% (#1269) DOES have a committed manifest
+# (tests/fixtures/email/drafting_gate_thresholds.json) — it is scored by the
+# voice-drafting eval step below (#1607 / #1948) and reported, not enforced
+# (enforce:false, per #2038: no stable judged baseline yet). A missing judge
+# credential still fails the build (eval_drafting_report.py exits 1 — no silent
+# skip).
 #
 # Self-hosted: this needs a running Lemonade Server on AMD hardware, so it runs
 # on the [self-hosted, Windows, stx] pool. The install-lemonade action pins the
 # runner to the expected LEMONADE_VERSION (installs if missing, reconciles if
 # drifted) and ensure-lemonade-running.ps1 starts + warms the server before the
 # eval. Serial execution across the eval workflows is enforced by the shared
-# `lemonade-eval` concurrency group (below), NOT by a runner label.
+# `lemonade-eval` concurrency group (now on the JOB — see the note there), NOT
+# by a runner label.
+#
+# ── PULL-REQUEST COVERAGE (#2695 fallout) ─────────────────────────────────────
+# Until this trigger existed, a PR could change the email agent's system prompt,
+# tools, or triage behavior and merge with ZERO LLM-behavior evidence: pytest and
+# the non-LLM integration suites went green and nothing ran an eval. #2695
+# (bundled skills, merged as bbf69fd6) is the proof — it injected three Agent
+# Skills into the system prompt by default and re-sized the bulk-triage envelope
+# budget, having already blown the 16,384-token window once at 16,602 tokens
+# during development. It landed at 16,106 — 278 tokens of headroom, established
+# by a single manual run and pinned by nothing in CI.
+#
+# The `pull_request` trigger below closes that. Three things keep it affordable
+# on a scarce, strictly-serial runner pool:
+#
+#   1. PATHS. It fires only on PRs touching the email agent's own code, its
+#      corpus/threshold manifests, the eval machinery that scores it, the skills
+#      runtime that injects text into its system prompt, or this workflow and the
+#      composite actions it runs. Deliberately NOT `src/gaia/agents/base/**` or
+#      `src/gaia/llm/**`: those are cross-agent surfaces already covered by
+#      test_eval_agent_gemma_consolidation.yml, and adding them here would roughly
+#      double the load on the single Lemonade slot. For a core-only change that
+#      you suspect moves email behavior, `workflow_dispatch` this workflow against
+#      the branch.
+#   2. SUPERSEDING. PR runs share a per-PR concurrency group with
+#      cancel-in-progress, so rapid pushes never stack up 90-minute jobs.
+#   3. LIMIT. PR runs triage 20 emails, not 50 — same slice the release gate uses.
+#
+# COST TO THE RELEASE PATH, STATED PLAINLY. The `lemonade-eval` group holds one
+# running plus one pending run; a newly-queued run CANCELS the previously pending
+# one. Adding ~1 PR run/day to that group therefore makes it possible for a
+# release-gate or weekly call to be evicted while pending. That is the price of
+# pre-merge coverage on a single-slot pool, and it is bounded, not hidden:
+# per-PR cancel-in-progress collapses repeated pushes to one run, and
+# weekly_eval.yml now treats a non-success (not merely a 'failure') callee as a
+# reportable outcome so an eviction cannot pass as a clean run. Making the same
+# eviction visible in publish.yml / release_agent_email.yml is tracked separately.
+# It cuts the other way too: a PR run can itself be evicted while pending, which
+# leaves that PR with no eval and no auto-requeue. Re-run the job from the Checks
+# tab if the coverage matters for the change under review.
+#
+# A PR RUN IS ADVISORY, AND THAT IS NOT A TRIGGER-SCOPED CHOICE. Per the enforce
+# state above, no gate blocks anything on any trigger right now, so a PR run is
+# report mode for free. There is deliberately NO "report only on PRs" override
+# here: it would break the single-source rule, and — with every manifest at
+# enforce:false — the only exits it could soften are the fail-loudly ones. To make
+# a gate block a PR, flip its manifest's `"enforce"` to true; it then blocks the
+# weekly, the release AND the PR together, which is the right coupling.
+#
+# WHAT MAKES THE ADVISORY RESULT VISIBLE. A breached bar under enforce:false is a
+# GREEN step with no annotation — evidence that exists only inside an artifact
+# nobody opens is not coverage. The "Gate verdicts" step near the end of this job
+# therefore parses the gate reports the eval writes to eval-out/ and republishes
+# every gate's pass/fail into the job summary, raising a `::warning::` per breach.
+# That, not the exit code, is the PR-facing signal today.
+#
+# FORKS. The job does not run for fork PRs — pointing a self-hosted runner at
+# unreviewed fork code is not acceptable, and a fork PR carries no
+# ANTHROPIC_API_KEY, so it could only ever produce an un-judged result.
+# test_eval_agent_gemma_consolidation.yml reaches the same end by having no
+# `pull_request` trigger at all; this workflow needs one, so the guard is explicit
+# in the job's `if:`. A fork PR touching the email agent needs a maintainer to
+# push the branch into this repo and re-run.
 
 name: Email Agent Eval (offline, report mode)
 
@@ -61,6 +131,31 @@ on:
   # release_agent_email.yml eval-gate — so daily cadence here is unnecessary.)
   schedule:
     - cron: '17 7 * * 1'
+  # Pre-merge coverage for email-agent behavior changes — see the PULL-REQUEST
+  # COVERAGE block in the header for why these paths and not more. Advisory
+  # (report mode) by default; `ready_for_review` is in `types` so undrafting a PR
+  # triggers the run that the draft state skipped.
+  pull_request:
+    branches: [ main ]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      # The agent itself — prompts, tools, triage/condense, bundled skills, and
+      # the packaging/eval_*_report.py gate readers this workflow invokes.
+      - 'hub/agents/email/python/**'
+      # The synthetic corpus, ground truth, and every committed threshold
+      # manifest the gates are read from.
+      - 'tests/fixtures/email/**'
+      # The skills runtime injects skill bodies into the agent's system prompt
+      # and charges them against the triage context budget (#2695).
+      - 'src/gaia/skills/**'
+      # The gate machinery this workflow executes: gaia.eval.performance,
+      # draft_quality, action_item_quality, briefing_quality and the threshold
+      # loaders. A change here moves the verdict without touching the agent.
+      - 'src/gaia/eval/**'
+      - '.github/workflows/test_email_agent_eval.yml'
+      - '.github/actions/setup-venv/**'
+      - '.github/actions/install-lemonade/**'
+      - 'installer/scripts/ensure-lemonade-running.ps1'
   # Manual trigger, with a knob for repeat experiments (variance).
   workflow_dispatch:
     inputs:
@@ -102,14 +197,32 @@ on:
         default: '1'
     secrets:
       ANTHROPIC_API_KEY:
-        description: 'Judge credential for the drafting / action-item / briefing judged evals — REQUIRED; absent → those evals fail loudly (exit 1), never a skip.'
+        description: 'Judge credential for the drafting / action-item / briefing judged evals — REQUIRED; absent → the preflight step fails the run before any eval spend, never a skip. (Declared optional only so the call site does not have to name it when using `secrets: inherit`.)'
         required: false
 
 concurrency:
-  # Share the single Lemonade backend slot with the other self-hosted evals so
-  # two runs never race-evict each other's model (see CLAUDE.md: evals serial).
-  group: lemonade-eval
-  cancel-in-progress: false
+  # PER-INVOCATION SUPERSEDING — NOT the serial slot. The `lemonade-eval` group
+  # that serializes this against the other self-hosted evals moved to the JOB
+  # below; it is deliberately NOT repeated here, because a workflow run holding a
+  # group at the workflow level while its only job waits on the same group at the
+  # job level is a self-deadlock.
+  #
+  # This group exists so a rapid re-push to a PR cancels the 90-minute run it
+  # superseded instead of queueing a second one behind it.
+  #
+  # The non-PR key is `github.run_id`, deliberately, NOT `github.ref`. A called
+  # reusable workflow's `concurrency` is evaluated in the CALLER's context — this
+  # repo has the scar to prove it (weekly_eval.yml: a caller holding the group the
+  # callee needed produced the phantom-job bug, every Weekly Eval run 2026-07-09..19
+  # dying in <60s and filing issue #2026 on a no-op). So this expression is live on
+  # the release path too, and keying it to the run id makes each release/weekly run
+  # the sole member of its own group: it can never queue behind, cancel, or be
+  # cancelled by anything. A PR key is the PR number so successive pushes to the
+  # SAME PR share one group and supersede each other.
+  group: email-agent-eval-${{ github.event.pull_request.number || github.run_id }}
+  # PR runs only. A weekly/dispatch/release run is never cancelled by a newer one
+  # (and, being alone in its group, has nothing to be cancelled by).
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -119,7 +232,12 @@ env:
   # workflow_dispatch AND workflow_call — on a reusable call github.event.inputs
   # is empty. On schedule `inputs` is null and each falls back to its default.
   EMAIL_EVAL_MODEL: ${{ inputs.model || 'Gemma-4-E4B-it-GGUF' }}
-  EMAIL_EVAL_LIMIT: ${{ inputs.limit || '50' }}
+  # PR runs triage 20 emails, not 50 — the same slice release_agent_email.yml
+  # passes. TTFT/throughput are per-token and count-independent, and the three
+  # judge evals run their own fixed-size seed corpora, so the only thing 20 costs
+  # is categorization-accuracy sample size. It buys back ~19 min of a scarce,
+  # strictly-serial runner slot on every email PR.
+  EMAIL_EVAL_LIMIT: ${{ inputs.limit || (github.event_name == 'pull_request' && '20') || '50' }}
   EMAIL_EVAL_EXPERIMENTS: ${{ inputs.experiments || '1' }}
   GAIA_MEMORY_DISABLED: "1"
   PYTHONIOENCODING: "utf-8"
@@ -155,10 +273,66 @@ jobs:
     # The event_name guard keeps the pull_request dereference off schedule /
     # workflow_dispatch / workflow_call runs, where that context is absent.
     runs-on: ${{ fromJSON(github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'stx-test') && '["self-hosted","Windows","stx-test"]' || '["self-hosted","Windows","stx"]') }}
+    # THE SERIAL SLOT. Same group name as email_scorecard_refresh.yml and
+    # test_eval_agent_gemma_consolidation.yml — `lemonade-eval`, exactly — so at
+    # most one eval touches the single Lemonade backend at a time (CLAUDE.md: at
+    # most one `gaia eval agent` process, period). Two concurrent runs
+    # race-evict each other's model and produce chaotic ctx/model_load failures.
+    #
+    # It lives on the JOB rather than the workflow now, purely so the workflow
+    # level is free for the per-PR superseding group above. Concurrency groups are
+    # repository-wide and shared between job-level and workflow-level declarations
+    # ("only a single job OR WORKFLOW using the same concurrency group will run at
+    # a time"), so serialization against those sibling workflows is unchanged.
+    #
+    # Do NOT also declare `lemonade-eval` at the workflow level of this file: the
+    # run would hold the group while its only job waited for it — a self-deadlock,
+    # and the same shape as the phantom-job bug weekly_eval.yml documents.
+    concurrency:
+      group: lemonade-eval
+      cancel-in-progress: false
+    # PR guard (no-op for schedule / workflow_dispatch / workflow_call):
+    #   - fork PRs never reach the self-hosted pool, and could only produce an
+    #     un-judged result anyway (no ANTHROPIC_API_KEY) — see the header;
+    #   - drafts skip the 90-minute run until marked ready (or labeled
+    #     `ready_for_ci`), matching test_email_agent.yml;
+    #   - `skip-email-eval` is the documented opt-OUT for an email PR that
+    #     provably cannot move behavior (docs, comments, packaging metadata).
+    #     It is opt-OUT on purpose: an opt-IN label would leave the default at
+    #     "no coverage", which is the gap this trigger exists to close.
+    # Kept flat-indented on purpose: a YAML folded scalar preserves newlines on
+    # more-indented lines, and an `if:` expression must fold to a single line.
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+      (github.event.pull_request.draft == false ||
+      contains(github.event.pull_request.labels.*.name, 'ready_for_ci')) &&
+      !contains(github.event.pull_request.labels.*.name, 'skip-email-eval'))
     timeout-minutes: 90
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      # Fail-fast preflight. The three judged evals (drafting / action-item /
+      # briefing) each hard-require the judge credential and exit 1 without it —
+      # but only after the ~40-minute benchmark has already run. Checking it here
+      # turns "burn 40 minutes of the single serial Lemonade slot, then die" into
+      # "die in 10 seconds", which matters much more now that PRs queue for that
+      # slot too. Fails on EVERY trigger — a run that cannot judge cannot produce
+      # evidence (CLAUDE.md: fail loudly, no silent skip).
+      # Deliberately NOT a Lemonade check: the "Start Lemonade Server" step below
+      # is already that preflight and throws when the server is not ready.
+      - name: Preflight — judge credential
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          # Single-quoted: a backtick in a double-quoted PowerShell string is the
+          # escape character and would eat the markdown ticks.
+          if ([string]::IsNullOrWhiteSpace($env:ANTHROPIC_API_KEY)) {
+            Write-Host '::error::ANTHROPIC_API_KEY is not set. The drafting, action-item and briefing evals score with the Claude judge (src/gaia/eval/claude.py) and exit 1 without it, so this run could only ever produce an un-judged result. Add the ANTHROPIC_API_KEY repository secret, or pass `secrets: inherit` from the calling workflow.'
+            exit 1
+          }
+          Write-Host "Judge credential present."
 
       - name: Setup Python Environment
         uses: ./.github/actions/setup-venv
@@ -233,16 +407,19 @@ jobs:
 
       # =================================================================
       # BEGIN voice-drafting quality eval (#1607 feature / #1269 metric /
-      # #1948 tracking) — ADDITIVE, self-contained block. Enforcing.
+      # #1948 tracking) — ADDITIVE, self-contained block. Report mode.
       #
       # Judge-scored draft quality over the committed drafting seed corpus with
       # the #1607 voice profile active (Lemonade, FakeGmailBackend — drafting
       # only, nothing is ever sent); a Claude judge scores each draft against
       # the case rubric. The aggregate draft_approval_rate is compared to the
       # committed manifest tests/fixtures/email/drafting_gate_thresholds.json
-      # (enforce:true) — same single-source rule as the gates above. A breach
-      # fails the build; a missing judge credential ALSO fails it
-      # (eval_drafting_report.py exits 1 — no silent skip, CLAUDE.md fail-loudly).
+      # — same single-source rule as the gates above. The manifest currently ships
+      # enforce:false (#2038), so a breach is REPORTED (see the "Gate verdicts"
+      # step) rather than failing the build; flip `enforce` there to make it
+      # block. A missing judge credential fails the run on every trigger (the
+      # preflight step, and eval_drafting_report.py itself exits 1 — no silent
+      # skip, CLAUDE.md fail-loudly).
       #
       # Runs AFTER the triage benchmark in the same job, so Lemonade access stays
       # strictly serial (CLAUDE.md: evals serial).
@@ -297,7 +474,8 @@ jobs:
 
       # =================================================================
       # BEGIN daily-briefing summary-quality eval (#1608 feature / #1951
-      # tracking) — ADDITIVE, self-contained block. ENFORCING gate.
+      # tracking) — ADDITIVE, self-contained block. Report mode (was ENFORCING
+      # until #2038 flipped the manifest).
       #
       # Judge-scored briefing quality: the REAL scheduled-briefing path
       # (gaia_agent_email.briefing.run_briefing_job -> pre_scan_inbox_impl)
@@ -306,21 +484,25 @@ jobs:
       # Claude judge scores each briefing against the case inbox + rubric on
       # faithfulness / must-include recall / hallucination-free / grouping. The
       # aggregate is compared to the committed manifest
-      #   tests/fixtures/email/briefing_gate_thresholds.json  (enforce:true)
+      #   tests/fixtures/email/briefing_gate_thresholds.json  (enforce:false)
       # via gaia.eval.briefing_quality — same single-source rule as the gates
       # above: no thresholds inlined in this YAML; tune the bars in the manifest
       # (data, not code).
       #
-      # This gate BLOCKS: a quality breach, any errored/unjudged case, a missing
-      # judge credential, or a judge transport error all fail the build. There
-      # is deliberately NO report-mode fallback and NO silent skip — if the eval
-      # cannot prove the briefing is good, the pipeline goes red.
+      # NO SILENT SKIP: any errored/unjudged case, a missing judge credential, or
+      # a judge transport error fails the build on every trigger — if the eval
+      # cannot prove anything, the pipeline goes red. The QUALITY BAR itself is
+      # currently reported, not enforced: this manifest was flipped to
+      # enforce:false by #2038 along with perf and drafting (this comment claimed
+      # otherwise until the PR trigger landed). Flip `enforce` back to true in the
+      # manifest to restore blocking; breaches are surfaced meanwhile by the
+      # "Gate verdicts" step.
       #
       # Runs AFTER the drafting eval in the same job, so Lemonade access stays
       # strictly serial (CLAUDE.md: evals serial). Keep this block
       # self-contained so concurrent edits to this workflow merge cleanly.
       # =================================================================
-      - name: Daily-briefing summary-quality eval (judge-scored, enforcing gate)
+      - name: Daily-briefing summary-quality eval (judge-scored)
         env:
           # Judge credential for gaia.eval.claude.ClaudeClient — REQUIRED. This
           # gate has no report-mode fallback: an absent key fails the build.
@@ -340,6 +522,33 @@ jobs:
           path: eval-out/
           if-no-files-found: warn
 
+      # =================================================================
+      # GATE VERDICTS — the reporting half of report mode.
+      #
+      # Every gate manifest ships enforce:false, so a breached bar exits 0: the eval
+      # steps are GREEN and the number lives only inside the uploaded artifact. Without
+      # this step the PR trigger would add a check that cannot say "this got
+      # worse" — exactly the silent degradation CLAUDE.md forbids. eval_summary.py
+      # reads the gate reports the eval already wrote and republishes every
+      # verdict into the job summary, one ::warning:: per breach.
+      #
+      # Runs on EVERY trigger, not just PRs: the weekly and the release gate have
+      # the same blind spot and get the same evidence.
+      #
+      # `if: always()` so the verdict is written even when an earlier step
+      # (preflight / Lemonade / benchmark) failed the job — a reviewer needs to see
+      # WHICH stage died, and "no gate report was produced" stated out loud beats a
+      # bare red X. The script carries no gate semantics — it never turns a passing
+      # run red over a breach, nor rescues a failing one. The `throw` below is not a
+      # gate either: a nonzero exit means the REPORTER itself broke (missing venv,
+      # missing file), which is a real failure and must not pass quietly.
+      # =================================================================
+      - name: Gate verdicts (job summary)
+        if: always()
+        run: |
+          python hub/agents/email/python/packaging/eval_summary.py eval-out
+          if ($LASTEXITCODE -ne 0) { throw "eval summary failed" }
+
       - name: Eval summary
         if: always()
         run: |
@@ -352,8 +561,13 @@ jobs:
           Write-Host "(FP/FN) and performance gates from the committed threshold"
           Write-Host "manifests under tests/fixtures/email/."
           Write-Host ""
-          Write-Host "Perf gate: ENFORCING (enforce:true) - a breach fails the build."
-          Write-Host "FP/FN quality gate: report mode (enforce:false) - a breach is logged"
-          Write-Host "+ uploaded but does NOT fail the build. Enforcement is toggled in the"
-          Write-Host "manifest (data, not this workflow) - see the header of this file."
+          Write-Host "ALL gate manifests currently ship enforce:false (report mode), so a"
+          Write-Host "breached BAR is logged, summarized and uploaded but does NOT fail the"
+          Write-Host "build - on any trigger, PRs included. See the per-gate verdicts in the"
+          Write-Host "job summary. Enforcement is toggled in the manifest (data, not this"
+          Write-Host "workflow) - see the header of this file."
+          Write-Host ""
+          Write-Host "What DOES fail the build, everywhere: a missing judge credential, an"
+          Write-Host "unreachable Lemonade, an unjudged case, or a harness crash. Report mode"
+          Write-Host "softens 'we measured and it got worse', never 'we did not measure'."
           Write-Host "================================================================"

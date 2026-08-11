@@ -21,7 +21,7 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 from threading import Event, Thread
-from typing import Any, Callable, Dict, Generator, List, Optional, Union
+from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union
 
 import openai  # For exception types
 import psutil
@@ -182,6 +182,31 @@ def profile_ctx_size(device: Optional[str]) -> int:
     fails the load outright.
     """
     return NPU_CTX_SIZE if (device or "").strip().lower() == "npu" else GPU_CTX_SIZE
+
+
+# ``_handle_large_tool_result``'s truncation trigger/target were tuned as a
+# flat 30000/20000 chars for the NPU's 32768 ctx (#2620). Keep that profile
+# exact and scale the same ratio to the active device's window instead of
+# inventing a new budget.
+_TRUNCATE_THRESHOLD_RATIO = 30000 / NPU_CTX_SIZE  # chars per ctx token
+_TRUNCATE_TARGET_FRACTION = 2 / 3  # 20000 / 30000
+
+
+def truncation_budget(device: Optional[str]) -> Tuple[int, int]:
+    """(threshold, target) char budget for large tool-result truncation.
+
+    Deliberately more conservative than ``profile_ctx_size``: an unset or
+    unrecognized *device* resolves to the NPU profile (today's flat
+    30000/20000), never the larger GPU one. Handing an unconfirmed device
+    the bigger budget would reopen the #1030 context-overflow class if the
+    caller turns out to actually be running on NPU — only an explicit
+    non-NPU device earns the larger allowance.
+    """
+    normalized = (device or "").strip().lower()
+    ctx = NPU_CTX_SIZE if not normalized or normalized == "npu" else GPU_CTX_SIZE
+    threshold = round(ctx * _TRUNCATE_THRESHOLD_RATIO)
+    target = round(threshold * _TRUNCATE_TARGET_FRACTION)
+    return threshold, target
 
 
 # =========================================================================

@@ -46,6 +46,12 @@ type fakeRelay struct {
 	// onEnsure runs after a successful ensure — used to simulate a daemon
 	// restart (and therefore a token rotation) mid-Send.
 	onEnsure func()
+	// prescanStatus, when non-zero, is the HTTP status POST /v1/<agent>/prescan
+	// returns instead of prescanBody (e.g. 503 for "no mailbox connected").
+	prescanStatus int
+	// prescanBody is the raw JSON body POST /v1/<agent>/prescan returns on
+	// success (prescanStatus == 0, defaulting to 200).
+	prescanBody string
 
 	mu          sync.Mutex
 	token       string
@@ -151,6 +157,22 @@ func (f *fakeRelay) handle(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"apiVersion":%q,"agentVersion":"0.5.0"}`, f.contractVersion)
 
+	case strings.HasSuffix(r.URL.Path, "/prescan"):
+		if r.Method != http.MethodPost {
+			f.t.Errorf("prescan request method = %q, want POST", r.Method)
+		}
+		if f.prescanStatus != 0 {
+			w.WriteHeader(f.prescanStatus)
+			_, _ = w.Write([]byte(`{"detail":"no mailbox connected"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		body := f.prescanBody
+		if body == "" {
+			body = `{"schema_version":"2.11","result":{"kind":"email_pre_scan","urgent":[],"actionable":[],"informational_count":0,"suggested_archives":[],"suggested_drafts":[],"needs_review":[],"scanned":0,"needs_you":[],"needs_you_total":0,"bulk":{"count":0,"filter_tests":[]}}}`
+		}
+		_, _ = w.Write([]byte(body))
+
 	case strings.HasSuffix(r.URL.Path, "/cancel"):
 		parts := strings.Split(r.URL.Path, "/")
 		f.mu.Lock()
@@ -187,13 +209,26 @@ func (f *fakeRelay) handle(w http.ResponseWriter, r *http.Request) {
 
 		if f.strictBody {
 			// The accepted field set is the one THIS peer's contract declares —
-			// 2.6 knows can_answer_questions, older versions do not. Modelling
-			// only one of the two would make the fake agree with the client by
-			// construction, which is how the 422 shipped in the first place.
+			// 2.6 knows can_answer_questions, 2.12 adds session_id, older
+			// versions know neither. Modelling only the newest shape would
+			// make the fake agree with the client by construction, which is
+			// how the 422 shipped in the first place (#2496).
 			dec := json.NewDecoder(strings.NewReader(string(raw)))
 			dec.DisallowUnknownFields()
 			var derr error
-			if contractAtLeast(f.contractVersion, 2, 6) {
+			switch {
+			case contractAtLeast(f.contractVersion, 2, 12):
+				var strict struct {
+					Query              string `json:"query"`
+					RunID              string `json:"run_id"`
+					Context            []Turn `json:"context"`
+					Model              string `json:"model"`
+					MaxSteps           int    `json:"max_steps"`
+					CanAnswerQuestions *bool  `json:"can_answer_questions"`
+					SessionID          string `json:"session_id"`
+				}
+				derr = dec.Decode(&strict)
+			case contractAtLeast(f.contractVersion, 2, 6):
 				var strict struct {
 					Query              string `json:"query"`
 					RunID              string `json:"run_id"`
@@ -203,7 +238,7 @@ func (f *fakeRelay) handle(w http.ResponseWriter, r *http.Request) {
 					CanAnswerQuestions *bool  `json:"can_answer_questions"`
 				}
 				derr = dec.Decode(&strict)
-			} else {
+			default:
 				var strict struct {
 					Query    string `json:"query"`
 					RunID    string `json:"run_id"`

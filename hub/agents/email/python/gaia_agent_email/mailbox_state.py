@@ -45,6 +45,32 @@ PROVIDERS = ("google", "microsoft")
 #: Human names — the user picked "Gmail", not "google".
 PROVIDER_LABELS = {"google": "Gmail", "microsoft": "Outlook"}
 
+#: User/model-facing vocabulary -> canonical provider id (#2590). This
+#: agent's own copy says "Gmail" and "Outlook" everywhere (``provider_label``
+#: above) — a model that hears "Outlook" has every reason to pass that word
+#: back as the ``provider`` argument, not the internal id ``"microsoft"``.
+#: Validating against ``PROVIDERS`` directly rejected exactly the word the
+#: product itself teaches, with a message that named that same word as
+#: supported — resolve aliases FIRST, before any validation happens.
+PROVIDER_ALIASES: Dict[str, str] = {
+    "microsoft": "microsoft",
+    "outlook": "microsoft",
+    "outlook.com": "microsoft",
+    "hotmail": "microsoft",
+    "live": "microsoft",
+    "office365": "microsoft",
+    "o365": "microsoft",
+    "microsoft 365": "microsoft",
+    "entra": "microsoft",
+    "exchange": "microsoft",
+    "google": "google",
+    "gmail": "google",
+    "gmail.com": "google",
+    "googlemail": "google",
+    "google workspace": "google",
+    "gsuite": "google",
+}
+
 STATE_OK = "ok"
 STATE_NOT_CONNECTED = "not_connected"
 STATE_NOT_GRANTED = "agent_not_granted"
@@ -68,11 +94,26 @@ def provider_label(provider: str) -> str:
     return PROVIDER_LABELS.get(provider, provider)
 
 
+def resolve_provider(value: str) -> Optional[str]:
+    """Normalize a user/model-supplied provider string to a canonical id.
+
+    Accepts both the internal id (``"google"`` / ``"microsoft"``) and the
+    vocabulary this agent's own copy uses everywhere (``provider_label``'s
+    ``"Gmail"`` / ``"Outlook"``), plus common real-world aliases (see
+    ``PROVIDER_ALIASES``). Case- and whitespace-insensitive. Returns
+    ``None`` for anything unrecognized — never raises, so a caller renders
+    its own actionable rejection rather than getting a bare exception.
+    """
+    return PROVIDER_ALIASES.get((value or "").strip().lower())
+
+
 def required_scopes(provider: str) -> List[str]:
-    """The mail scopes this agent needs from *provider*.
+    """The mail scopes this agent needs from *provider* — the usability GATE.
 
     Calendar scopes are deliberately excluded: a user who only wants triage
-    should not be forced to hand over their calendar to get it.
+    should not be forced to hand over their calendar to get it. This stays
+    the narrow set self-repair CHECKS against; :func:`requested_scopes` is
+    the wider set it now ASKS for (#2730 D1/D3) — request vs. enforce.
     """
     if provider == "google":
         from gaia_agent_email.scopes import GMAIL_SCOPES
@@ -82,6 +123,30 @@ def required_scopes(provider: str) -> List[str]:
         from gaia_agent_email.outlook_scopes import OUTLOOK_MAIL_SCOPES
 
         return list(OUTLOOK_MAIL_SCOPES)
+    raise ValueError(
+        f"Unknown mailbox provider {provider!r}. Supported: {', '.join(PROVIDERS)}."
+    )
+
+
+def requested_scopes(provider: str) -> List[str]:
+    """The FULL scope set this agent requests from *provider* at consent time
+    — mail + calendar (#2730 D3).
+
+    Wider than :func:`required_scopes` on purpose: every connect path
+    (CLI, Agent UI, this agent's own self-repair) must request the same
+    union, or whichever one requests less silently narrows an existing
+    connection the moment it reconnects. Declining calendar at the consent
+    screen is still fine — :func:`required_scopes` is what self-repair
+    actually gates on.
+    """
+    if provider == "google":
+        from gaia_agent_email.scopes import ALL_SCOPES
+
+        return list(ALL_SCOPES)
+    if provider == "microsoft":
+        from gaia_agent_email.outlook_scopes import OUTLOOK_ALL_SCOPES
+
+        return list(OUTLOOK_ALL_SCOPES)
     raise ValueError(
         f"Unknown mailbox provider {provider!r}. Supported: {', '.join(PROVIDERS)}."
     )
@@ -286,6 +351,7 @@ def best_repair_target(states: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]
 __all__ = [
     "AGENT_ID",
     "PROVIDERS",
+    "PROVIDER_ALIASES",
     "PROVIDER_LABELS",
     "REPAIRABLE",
     "STATE_ERROR",
@@ -299,5 +365,6 @@ __all__ = [
     "inspect_provider",
     "provider_label",
     "required_scopes",
+    "resolve_provider",
     "survey",
 ]

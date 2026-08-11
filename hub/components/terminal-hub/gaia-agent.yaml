@@ -24,7 +24,10 @@ icon: terminal
 tools_count: 0
 models: []
 
-min_gaia_version: "0.22.0"
+# Needs daemon host API v1.1; released 0.22.0 ships v1, so the first core that
+# can serve this binary is the next release. util/check_component_core_api.py
+# enforces it and blocks a publish under an older core.
+min_gaia_version: "0.23.0"
 
 requirements:
   # The binary is statically linked with CGO_ENABLED=0 and holds no model. The

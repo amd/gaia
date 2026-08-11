@@ -281,6 +281,21 @@ def check_python_syntax(source: str, filename: str = "<doc>") -> Optional[str]:
     """Return None if *source* compiles, or an error message string."""
     if _is_pseudo_code(source):
         return None
+
+    # Try the block as written before applying any excerpt heuristics. Those
+    # heuristics wrap the source in `def _doc_wrapper():` whenever a `return`
+    # appears anywhere — including one correctly indented inside a function — so
+    # a COMPLETE, valid module gets wrapped and then fails on rules that only
+    # hold at module level (`from __future__` must come first). Parsing the real
+    # source first means a whole file is judged as a whole file.
+    dedented = textwrap.dedent(source)
+    if dedented.strip():
+        try:
+            compile(dedented, filename, "exec")
+            return None
+        except SyntaxError:
+            pass  # fall through to the excerpt-normalizing path below
+
     normalized = _normalize_python_source(source)
     if not normalized.strip():
         return None

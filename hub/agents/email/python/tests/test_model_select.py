@@ -18,6 +18,23 @@ constants.
 ``gaia_agent_email.model_select`` does not exist yet (a teammate implements
 it after this file lands) -- every test here is expected to fail collection
 with ``ModuleNotFoundError`` until then. That is the correct RED state.
+
+Logging assertions here filter ``caplog.records`` by BOTH level AND logger
+name (``_MODEL_SELECT_LOGGER``), not level alone (#2584 CI flake). A bare
+``r.levelno == logging.INFO`` filter captures every INFO record on the root
+logger during the ``with caplog.at_level(...)`` window, from ANY logger in
+the process -- in a full-suite run this occasionally picks up
+``gaia.database.mixin``'s "Database initialized" messages, logged by an
+unrelated earlier test's agent construction that ran inside a
+``_call_tool_bounded`` (``gaia/agents/base/agent.py``) daemon worker thread
+that outlived its timeout join. That is a real, pre-existing test-isolation
+gap in the shared base-Agent tool-timeout mechanism (the daemon thread
+cannot be killed and keeps running/logging into whatever test happens to be
+capturing next) -- unrelated to this module and out of scope to fix here.
+Scoping the filter to this module's own logger name asserts what these
+tests actually mean to assert: how many INFO messages
+``resolve_default_email_model`` itself logged, not how many INFO records
+appeared anywhere in the process during a race-sensitive window.
 """
 
 from __future__ import annotations
@@ -39,6 +56,22 @@ from gaia_agent_email.model_select import (  # noqa: E402
 )
 
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME  # noqa: E402
+
+# gaia_agent_email.model_select's own logger (logging.getLogger(__name__)
+# there) -- scoping caplog filters to it isolates this module's logging
+# behavior from unrelated loggers active elsewhere in the same process.
+_MODEL_SELECT_LOGGER = "gaia_agent_email.model_select"
+
+
+def _info_records(caplog) -> list:
+    """This module's own INFO records from ``caplog`` -- see the module
+    docstring for why level alone is not a safe filter in a shared process.
+    """
+    return [
+        r
+        for r in caplog.records
+        if r.levelno == logging.INFO and r.name == _MODEL_SELECT_LOGGER
+    ]
 
 
 def _system_info_body(*, npu_available, extra_npu_fields=None):
@@ -121,7 +154,7 @@ def test_npu_available_but_flm_not_servable_falls_back_and_logs(monkeypatch, cap
         result = resolve_default_email_model("http://127.0.0.1:9602")
 
     assert result == DEFAULT_MODEL_NAME
-    info_records = [r for r in caplog.records if r.levelno == logging.INFO]
+    info_records = _info_records(caplog)
     assert len(info_records) == 1
     assert "gaia init --profile npu" in info_records[0].getMessage()
 
@@ -164,7 +197,7 @@ def test_system_info_connection_error_falls_back_and_logs(monkeypatch, caplog):
         result = resolve_default_email_model("http://127.0.0.1:9620")
 
     assert result == DEFAULT_MODEL_NAME
-    info_records = [r for r in caplog.records if r.levelno == logging.INFO]
+    info_records = _info_records(caplog)
     assert len(info_records) == 1
 
 
@@ -179,7 +212,7 @@ def test_system_info_timeout_falls_back_and_logs(monkeypatch, caplog):
         result = resolve_default_email_model("http://127.0.0.1:9621")
 
     assert result == DEFAULT_MODEL_NAME
-    info_records = [r for r in caplog.records if r.levelno == logging.INFO]
+    info_records = _info_records(caplog)
     assert len(info_records) == 1
 
 
@@ -212,7 +245,7 @@ def test_models_probe_transport_failure_falls_back_and_logs(monkeypatch, caplog)
         result = resolve_default_email_model("http://127.0.0.1:9623")
 
     assert result == DEFAULT_MODEL_NAME
-    info_records = [r for r in caplog.records if r.levelno == logging.INFO]
+    info_records = _info_records(caplog)
     assert len(info_records) == 1
 
 

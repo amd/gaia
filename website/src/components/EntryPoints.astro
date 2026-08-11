@@ -3,19 +3,17 @@
 // SPDX-License-Identifier: MIT
 
 // The two ways to run GAIA, given peer billing: the Agent UI (Electron desktop
-// app) and the terminal hub (the Go binary in tui/). Both are becoming hub
-// components published to the catalog, so this deliberately carries no install
-// command and no release-asset deep link — the Agent UI CTA is the existing
-// OS-detecting DownloadButton, and the terminal hub points at the Hub, which is
-// where its catalog entry will render its own versions, platforms and sizes.
+// app) and the terminal hub (the Go binary in tui/). The Agent UI CTA is the
+// OS-detecting DownloadButton; the terminal hub carries the one-line installer
+// until its hub component entry is published.
 //
 // Naming is the product's own: "Agent UI" and "terminal hub" (cobra Short
 // "GAIA Terminal Agent Hub"). Never "Agent TUI" — it appears nowhere.
 //
-// Until the terminal hub's catalog entry lands, the only true way to obtain it
-// is a source build, so BOTH the CTA and the note point at the CLI reference.
-// Pointing the CTA at /hub would strand the visitor on a list of agents that
-// contains no terminal hub. Repoint it at the component page once that ships.
+// The terminal-hub CTA points at the quickstart, which carries the one-line
+// installer per platform. It must not point at the CLI reference (a command
+// list for a binary the visitor does not have), at /hub (a list of agents that
+// contains no terminal hub), or at /hub/terminal-hub (unpublished, 404).
 
 import DownloadButton from './DownloadButton.astro';
 
@@ -26,7 +24,9 @@ interface Props {
 
 const { class: className = '', align = 'left' } = Astro.props;
 
-const TUI_DOCS = 'https://amd-gaia.ai/docs/reference/cli#terminal-hub-gaia-tui';
+const QUICKSTART = 'https://amd-gaia.ai/docs/quickstart';
+const INSTALL_SH = 'curl -fsSL https://amd-gaia.ai/install.sh | sh';
+const INSTALL_PS1 = 'irm https://amd-gaia.ai/install.ps1 | iex';
 const centered = align === 'center';
 ---
 
@@ -34,7 +34,7 @@ const centered = align === 'center';
   <div class:list={['flex flex-wrap gap-3', centered && 'justify-center']}>
     <DownloadButton variant="primary" size="lg" />
     <a
-      href={TUI_DOCS}
+      href={QUICKSTART}
       target="_blank"
       rel="noopener noreferrer"
       class="g-btn g-btn-secondary px-6 py-3 text-[15px]"
@@ -45,13 +45,15 @@ const centered = align === 'center';
     <div class="min-w-0">
       <dt class="g-label text-g-gold-text">Agent UI</dt>
       <dd class="mono mt-1 text-[11.5px] leading-[1.6] text-g-faint">
-        Desktop app · Windows, macOS, Linux
+        Desktop app · Windows, Linux, macOS (Apple Silicon)
       </dd>
     </div>
     <div class="min-w-0">
       <dt class="g-label text-g-gold-text">Terminal hub</dt>
       <dd class="mono mt-1 text-[11.5px] leading-[1.6] text-g-faint">
-        Single Go binary · needs the GAIA CLI · source build
+        One-line installer
+        <span class="block"><code class="bg-transparent p-0">{INSTALL_SH}</code></span>
+        <span class="block">Windows: <code class="bg-transparent p-0">{INSTALL_PS1}</code></span>
       </dd>
     </div>
   </dl>

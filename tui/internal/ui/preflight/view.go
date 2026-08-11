@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/amd/gaia/tui/internal/ui/theme"
 )
 
 // Colour is ADDITIVE here. Every state is already carried by its text marker
@@ -12,17 +14,17 @@ import (
 // reads identically on a monochrome terminal, over a pipe, or to a user who
 // cannot distinguish red from green.
 var (
-	titleStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("150"))
-	summaryStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
-	dividerStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("238"))
-	labelStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-	dimStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
-	okStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
-	failStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
-	unknownStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
-	keyStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("39"))
-	noteStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
-	cmdStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("150"))
+	titleStyle   = lipgloss.NewStyle().Bold(true).Foreground(theme.AccentBright)
+	summaryStyle = lipgloss.NewStyle().Foreground(theme.Dim)
+	dividerStyle = lipgloss.NewStyle().Foreground(theme.Divider)
+	labelStyle   = lipgloss.NewStyle().Foreground(theme.Text)
+	dimStyle     = lipgloss.NewStyle().Foreground(theme.Dim)
+	okStyle      = lipgloss.NewStyle().Foreground(theme.Success)
+	failStyle    = lipgloss.NewStyle().Foreground(theme.Danger)
+	unknownStyle = lipgloss.NewStyle().Foreground(theme.Warning)
+	keyStyle     = lipgloss.NewStyle().Bold(true).Foreground(theme.Info)
+	noteStyle    = lipgloss.NewStyle().Foreground(theme.Warning)
+	cmdStyle     = lipgloss.NewStyle().Foreground(theme.Accent)
 )
 
 const (
@@ -121,7 +123,7 @@ func (m Model) footer(w int) string {
 	keys = append(keys, [2]string{"d", "details"})
 	if !m.Busy() && !m.rep.Ready() &&
 		(!m.rep.Blocked() || m.rep.OfferableDespiteFailure()) {
-		keys = append(keys, [2]string{"enter", "start anyway"})
+		keys = append(keys, [2]string{"enter", "continue"})
 	}
 	keys = append(keys, [2]string{"esc", "back"})
 

@@ -322,7 +322,7 @@ function majorOf(version: string): number {
 }
 
 export interface VersionCheckOptions {
-  /** The apiVersion the client was built against. Default SCHEMA_VERSION ("2.4"). */
+  /** The apiVersion the client was built against. Default SCHEMA_VERSION ("2.12"). */
   expectedApiVersion?: string;
 }
 

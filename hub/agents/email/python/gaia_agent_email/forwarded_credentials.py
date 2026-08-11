@@ -49,6 +49,24 @@ FORWARDED_MODE_ENV_VAR = "GAIA_EMAIL_FORWARDED_CREDENTIALS"
 _EXPIRY_BUFFER_SECONDS = 30.0
 
 
+def _all_scopes_for(provider: str) -> List[str]:
+    """The FULL requested scope set for *provider* (#2730 D3/AC-9a) — used
+    only to render a copy-pasteable remedy command. Deliberately ALL_SCOPES,
+    never REQUIRED_SCOPES: printing the narrower enforced-only set here
+    would reproduce the exact silent-narrowing defect this issue removes —
+    a user who follows the remedy would end up with LESS than what a
+    same-account connect from any other surface would have granted them."""
+    if provider == "google":
+        from gaia_agent_email.scopes import ALL_SCOPES
+
+        return list(ALL_SCOPES)
+    if provider == "microsoft":
+        from gaia_agent_email.outlook_scopes import OUTLOOK_ALL_SCOPES
+
+        return list(OUTLOOK_ALL_SCOPES)
+    return []
+
+
 @dataclass(frozen=True)
 class _ForwardedCredential:
     """One provider's forwarded access token + metadata. No refresh token."""
@@ -168,7 +186,8 @@ def get_forwarded_token(provider: str, scopes: List[str]) -> str:
             f"no forwarded '{provider}' credential is available to the email "
             "sidecar. The connection may not be granted to this agent, or it was "
             "revoked/withdrawn. Connect and grant it in one command — no Agent UI "
-            f"required: `gaia connectors connect {provider} --scopes <scopes> "
+            f"required: `gaia connectors connect {provider} --scopes "
+            f"{' '.join(_all_scopes_for(provider))} "
             "--grant-agent installed:email`, or use Settings -> Connections in "
             "the Agent UI. The daemon forwards a token on the next use."
         )
@@ -177,16 +196,23 @@ def get_forwarded_token(provider: str, scopes: List[str]) -> str:
             f"the forwarded '{provider}' access token has expired and the daemon "
             "has not re-forwarded a fresh one yet. Retry in a moment; if it "
             f"persists, reconnect with `gaia connectors connect {provider} "
-            "--scopes <scopes>` (or Settings -> Connections in the Agent UI)."
+            f"--scopes {' '.join(_all_scopes_for(provider))}` (or Settings -> "
+            "Connections in the Agent UI)."
         )
     missing = [s for s in scopes if s not in cred.scopes]
     if missing:
+        # Union of currently-held and newly-required scopes, not just the
+        # missing ones — `--grant-agent` REPLACES the grant (grants.grant_agent
+        # overwrites rather than unions), so a "missing-only" suggestion would
+        # silently drop the scopes already held on reconnect (#2603).
+        suggested = sorted(set(cred.scopes) | set(scopes))
         raise ConnectorsError(
             f"the forwarded '{provider}' token does not cover the required "
             f"scopes {missing}. Reconnect with those scopes in one command: "
-            f"`gaia connectors connect {provider} --scopes {' '.join(missing)} "
-            f"--grant-agent installed:email` (or Settings -> Connections in the "
-            "Agent UI) so the daemon can forward a token that covers them."
+            f"`gaia connectors connect {provider} --scopes "
+            f"{' '.join(suggested)} --grant-agent installed:email` (or "
+            "Settings -> Connections in the Agent UI) so the daemon can "
+            "forward a token that covers them."
         )
     return cred.access_token
 

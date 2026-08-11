@@ -41,9 +41,12 @@ func TestMalformedPreScanNeverClaimsAnEmptyInbox(t *testing.T) {
 	}
 
 	// A genuinely empty scan still gets the empty state — the guard must not
-	// swallow the real thing.
+	// swallow the real thing. emptyPreScan sets no total_inbox, so the
+	// verdict is the SCOPED form (#2743 checkpoint review), not "Nothing
+	// needs you." verbatim -- either way it must never be swallowed by the
+	// malformed-payload guard above.
 	out := Render("email_pre_scan", raw(t, emptyPreScan), width80)
-	assertContains(t, out, "Nothing needs you.")
+	assertContains(t, out, "Nothing in the 19 most recent needs a reply.")
 }
 
 // §4.3 marks only `title` (and `ordered`) optional. An absent `items` is a

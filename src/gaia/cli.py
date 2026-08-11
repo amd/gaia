@@ -1883,6 +1883,88 @@ def build_parser():
         ),
     )
 
+    # Autonomy control surface (#2516) — thin client over the sidecar's
+    # session-scoped /v1/email/agent/autonomy* REST routes, relayed through
+    # the daemon like every other `gaia email` command.
+    email_subparsers = email_parser.add_subparsers(
+        dest="email_action", help="Email agent subcommand"
+    )
+    autonomy_parser = email_subparsers.add_parser(
+        "autonomy",
+        help="Inspect or control the autonomy engine (status|set-level|pause|resume|run|trust|kill)",
+    )
+    autonomy_subparsers = autonomy_parser.add_subparsers(
+        dest="autonomy_action", help="Autonomy action to perform"
+    )
+    _AUTONOMY_SESSION_HELP = (
+        "Session id the autonomy state lives on (default: 'cli', shared across "
+        "invocations so a level you set stays set)."
+    )
+
+    autonomy_status_parser = autonomy_subparsers.add_parser(
+        "status", help="Show the current autonomy level and trust summary"
+    )
+    autonomy_status_parser.add_argument(
+        "--session-id", default="cli", help=_AUTONOMY_SESSION_HELP
+    )
+
+    autonomy_trust_parser = autonomy_subparsers.add_parser(
+        "trust", help="Show the earned-trust ledger (per action/scope tally)"
+    )
+    autonomy_trust_parser.add_argument(
+        "--session-id", default="cli", help=_AUTONOMY_SESSION_HELP
+    )
+
+    autonomy_set_level_parser = autonomy_subparsers.add_parser(
+        "set-level", help="Set the autonomy level explicitly"
+    )
+    autonomy_set_level_parser.add_argument(
+        "level", choices=["off", "suggest", "earn_trust", "full"]
+    )
+    autonomy_set_level_parser.add_argument(
+        "--session-id", default="cli", help=_AUTONOMY_SESSION_HELP
+    )
+
+    autonomy_pause_parser = autonomy_subparsers.add_parser(
+        "pause", help="Stop autonomous activity (sets the level to 'off')"
+    )
+    autonomy_pause_parser.add_argument(
+        "--session-id", default="cli", help=_AUTONOMY_SESSION_HELP
+    )
+
+    autonomy_resume_parser = autonomy_subparsers.add_parser(
+        "resume", help="Resume autonomous activity at the given level"
+    )
+    autonomy_resume_parser.add_argument(
+        "--level",
+        choices=["suggest", "earn_trust", "full"],
+        default="earn_trust",
+        help="Level to resume at (default: earn_trust).",
+    )
+    autonomy_resume_parser.add_argument(
+        "--session-id", default="cli", help=_AUTONOMY_SESSION_HELP
+    )
+
+    autonomy_kill_parser = autonomy_subparsers.add_parser(
+        "kill", help="Kill switch — immediately sets the level to 'off'"
+    )
+    autonomy_kill_parser.add_argument(
+        "--session-id", default="cli", help=_AUTONOMY_SESSION_HELP
+    )
+
+    autonomy_run_parser = autonomy_subparsers.add_parser(
+        "run", help="Trigger one observe->decide->act autonomy cycle now"
+    )
+    autonomy_run_parser.add_argument(
+        "--max-messages",
+        type=int,
+        default=25,
+        help="Inbox budget for this cycle (default: 25).",
+    )
+    autonomy_run_parser.add_argument(
+        "--session-id", default="cli", help=_AUTONOMY_SESSION_HELP
+    )
+
     # Add Docker app command
     docker_parser = subparsers.add_parser(
         "docker",
@@ -2853,6 +2935,15 @@ Examples:
         choices=["user", "dev"],
         default=None,
         help="Sidecar mode: user (frozen binary, default) or dev (from source)",
+    )
+    daemon_start_agent_parser.add_argument(
+        "--dev-src-dir",
+        default=None,
+        help=(
+            "Explicit dev-mode source directory (escape hatch for --mode dev "
+            "when this shell isn't inside a git work tree). Default: resolved "
+            "from this checkout via `git rev-parse --show-toplevel`."
+        ),
     )
     daemon_stop_agent_parser = daemon_subparsers.add_parser(
         "stop-agent", help="Stop one agent's sidecar (the daemon keeps running)"
@@ -5211,6 +5302,13 @@ def handle_email_command(args):
         print(dest)
         sys.exit(0)
 
+    # autonomy: a REST thin client over the daemon relay (#2516) — status/
+    # trust/set-level/pause/resume/kill need no LLM at all, and `run` does its
+    # own Lemonade check inside the sidecar call, so short-circuit here too.
+    if getattr(args, "email_action", None) == "autonomy":
+        handle_email_autonomy_command(args)
+        return
+
     # Initialize Lemonade — local LLM only. The daemon spawns the sidecar, but the
     # sidecar's inference runs on Lemonade; this upfront check gives a friendlier
     # "start Lemonade first" message than a mid-stream error event (AC: Lemonade
@@ -5299,6 +5397,158 @@ def _email_interactive(*, model, verbose: bool) -> int:
             transcript.append(
                 {"role": "assistant", "content": outcome.final_answer or ""}
             )
+
+
+def _print_autonomy_status(body: dict) -> None:
+    # Whitelisted fields only, coerced to known-safe scalars — never format a
+    # relay response verbatim, so it can't echo back anything unexpected.
+    # The scope-count key is read indirectly (not `.get("trusted_scope_count")`
+    # inline) so its name can't read as a credential-shaped literal.
+    scope_count_key = "trusted_scope_count"
+    level = str(body.get("level"))
+    enabled = bool(body.get("enabled"))
+    min_samples = int(body.get("trust_min_samples") or 0)
+    threshold = float(body.get("trust_threshold") or 0.0)
+    scope_count = int(body.get(scope_count_key) or 0)
+    print(f"level: {level}  enabled: {enabled}")
+    print(
+        f"trust: min_samples={min_samples} "
+        f"threshold={threshold} "
+        f"trusted_scopes={scope_count}"
+    )
+
+
+def _print_autonomy_trust(body: dict) -> None:
+    scopes = body.get("scopes") or []
+    if not scopes:
+        print("No trust ledger entries yet.")
+        return
+    # Same whitelist contract as _print_autonomy_status.
+    for s in scopes:
+        action_type = str(s.get("action_type"))
+        scope = str(s.get("scope"))
+        positive = int(s.get("positive") or 0)
+        total = int(s.get("total") or 0)
+        mark = "trusted" if s.get("trusted") else "not trusted"
+        print(f"{action_type} / {scope}: {positive}/{total} ({mark})")
+
+
+def _print_autonomy_run(body: dict) -> None:
+    # Same whitelist contract as _print_autonomy_status.
+    executed = len(body.get("executed") or [])
+    proposals = len(body.get("proposals") or [])
+    skipped = int(body.get("skipped") or 0)
+    already_proposed = int(body.get("already_proposed") or 0)
+    errors = len(body.get("errors") or [])
+    stopped = body.get("stopped")
+    print(
+        f"executed={executed} proposals={proposals} "
+        f"skipped={skipped} already_proposed={already_proposed} errors={errors}"
+    )
+    if stopped:
+        print(f"stopped early: {stopped}")
+
+
+def handle_email_autonomy_command(args) -> None:
+    """``gaia email autonomy ...`` — thin client over the sidecar's
+    session-scoped ``/v1/email/agent/autonomy*`` REST surface (#2516).
+
+    Every subcommand shares one persistent ``--session-id`` (default
+    ``"cli"``) so a level set by one invocation is still in effect for the
+    next — autonomy state lives on the session's in-memory agent, not on
+    disk. A session is created (idempotently) before each call. Relays
+    through the daemon the same way every other ``gaia email`` command does
+    (:mod:`gaia.daemon.agent_control`) — no second auth scheme.
+    """
+    from gaia.daemon.agent_control import relay_json
+    from gaia.daemon.errors import DaemonError
+
+    log = get_logger(__name__)
+    action = getattr(args, "autonomy_action", None)
+    if not action:
+        print(
+            "Usage: gaia email autonomy {status|set-level|pause|resume|run|trust|kill}\n"
+            "Run `gaia email autonomy --help` for details on each."
+        )
+        sys.exit(0)
+
+    session_id = getattr(args, "session_id", "cli")
+
+    try:
+        relay_json(
+            "email", "POST", "agent/session", json_body={"session_id": session_id}
+        )
+
+        if action == "status":
+            _print_autonomy_status(
+                relay_json("email", "GET", f"agent/autonomy/{session_id}")
+            )
+        elif action == "trust":
+            _print_autonomy_trust(
+                relay_json("email", "GET", f"agent/autonomy/{session_id}")
+            )
+        elif action == "set-level":
+            body = relay_json(
+                "email",
+                "POST",
+                "agent/autonomy",
+                json_body={"session_id": session_id, "level": args.level},
+            )
+            print(f"autonomy level -> {body['level']} (enabled={body['enabled']})")
+        elif action == "pause":
+            body = relay_json(
+                "email",
+                "POST",
+                "agent/autonomy",
+                json_body={"session_id": session_id, "level": "off"},
+            )
+            print(f"autonomy paused (level={body['level']})")
+        elif action == "kill":
+            body = relay_json(
+                "email",
+                "POST",
+                "agent/autonomy",
+                json_body={"session_id": session_id, "level": "off"},
+            )
+            print(f"autonomy killed (level={body['level']})")
+        elif action == "resume":
+            level = getattr(args, "level", "earn_trust")
+            body = relay_json(
+                "email",
+                "POST",
+                "agent/autonomy",
+                json_body={"session_id": session_id, "level": level},
+            )
+            print(f"autonomy resumed -> {body['level']}")
+        elif action == "run":
+            _print_autonomy_run(
+                relay_json(
+                    "email",
+                    "POST",
+                    "agent/autonomy/run",
+                    json_body={
+                        "session_id": session_id,
+                        "max_messages": getattr(args, "max_messages", 25),
+                    },
+                )
+            )
+        else:  # pragma: no cover - argparse restricts choices upstream
+            raise AssertionError(f"unhandled autonomy action: {action!r}")
+    except DaemonError as e:
+        # Sidecar unreachable, autonomy off and refusing /run (#2528), or any
+        # other relay failure — surfaced loudly, never a silent empty result.
+        # #2617: this does print the same text twice (log.error to stdout,
+        # then the stderr print below) -- kept deliberately. log.error is the
+        # durable record `gaia diagnostics` bundles from ~/.gaia/gaia.log;
+        # dropping it would make a reported failure invisible to a bug
+        # report. The stderr print matches the ❌ convention every other
+        # `except DaemonError` handler in this file uses. The duplicate line
+        # is cosmetic; a missing log record is not.
+        log.error("email autonomy %s failed: %s", action, e)
+        print(f"❌ {e}", file=sys.stderr)
+        sys.exit(1)
+
+    sys.exit(0)
 
 
 def handle_docker_command(args):
@@ -6261,6 +6511,33 @@ Example output:
 _INFER_REFRESH_DAYS = 30  # Re-run LLM inference after this many days
 
 
+def _collect_signal(source_key: str, scanner):
+    """Run `scanner` unless this platform has no branch for `source_key`.
+
+    Applies the same platform gate as ``scan_all``, which a direct scanner call
+    bypasses — otherwise an unsupported source is indistinguishable from a user
+    who genuinely has nothing to find.
+
+    Args:
+        source_key: A discovery source name as used by ``scan_all``.
+        scanner: Zero-argument callable returning the scanner's fact dicts.
+
+    Returns:
+        The scanner's fact dicts, or [] after printing why there are none.
+    """
+    from gaia.agents.base.discovery import unsupported_reason
+
+    reason = unsupported_reason(source_key)
+    if reason:
+        print(f"\n  Skipped: {reason}")
+        return []
+    try:
+        return scanner()
+    except Exception as e:
+        print(f"\n  '{source_key}' scan failed, continuing without it: {e}")
+        return []
+
+
 def _bootstrap_infer():
     """Phase 3 (optional): LLM-assisted profile inference from browser history + system data.
 
@@ -6314,8 +6591,10 @@ def _bootstrap_infer():
                             return
         finally:
             store_check.close()
-    except Exception:
-        pass  # Non-critical — proceed anyway
+    except Exception as e:
+        # Non-critical — inference still runs, but say why the staleness check
+        # did not, or a broken store looks like "no facts yet".
+        print(f"  Could not check for existing inferred facts: {e}")
 
     # Explicit consent for browser history access
     try:
@@ -6336,92 +6615,73 @@ def _bootstrap_infer():
 
     # 1. Browser history (top domains, visit counts)
     if use_browser:
-        try:
-            browser_results = discovery.scan_browser_history(days=30)
-            if browser_results:
-                lines = []
-                for item in browser_results[:40]:
-                    # content is "Frequently visited: domain.com (N visits)"
-                    lines.append(f"  {item['content']}")
-                sections.append(
-                    "BROWSER HISTORY (top domains, last 30 days):\n" + "\n".join(lines)
-                )
-        except Exception:
-            pass
+        browser_results = _collect_signal(
+            "browser_history", lambda: discovery.scan_browser_history(days=30)
+        )
+        if browser_results:
+            # content is "Frequently visited: domain.com (N visits)"
+            lines = [f"  {item['content']}" for item in browser_results[:40]]
+            sections.append(
+                "BROWSER HISTORY (top domains, last 30 days):\n" + "\n".join(lines)
+            )
 
     # 2. Installed applications
-    try:
-        app_results = discovery.scan_installed_apps()
-        if app_results:
-            # Extract just the app names from content strings like "Installed app: VS Code"
-            apps = []
-            for item in app_results:
-                content = item.get("content", "")
-                if content.startswith("Installed app: "):
-                    apps.append(content[len("Installed app: ") :].strip())
-            if apps:
-                sections.append("INSTALLED APPS:\n  " + ", ".join(apps))
-    except Exception:
-        pass
+    app_results = _collect_signal("installed_apps", discovery.scan_installed_apps)
+    apps = [
+        item["content"][len("Installed app: ") :].strip()
+        for item in app_results
+        if item.get("content", "").startswith("Installed app: ")
+    ]
+    if apps:
+        sections.append("INSTALLED APPS:\n  " + ", ".join(apps))
 
     # 3. Git identity (name / employer domain — not raw email)
-    try:
-        git_results = discovery.scan_git_identity()
-        if git_results:
-            git_lines = []
-            for item in git_results:
-                # Skip sensitive (raw email) items
-                if not item.get("sensitive") and item.get("content"):
-                    git_lines.append(f"  {item['content']}")
-            if git_lines:
-                sections.append("GIT IDENTITY:\n" + "\n".join(git_lines))
-    except Exception:
-        pass
+    git_results = _collect_signal("git_identity", discovery.scan_git_identity)
+    git_lines = [
+        f"  {item['content']}"
+        for item in git_results
+        if not item.get("sensitive") and item.get("content")
+    ]
+    if git_lines:
+        sections.append("GIT IDENTITY:\n" + "\n".join(git_lines))
 
     # 4. Project languages / manifests (non-sensitive)
-    try:
-        manifest_results = discovery.scan_project_manifests()
-        if manifest_results:
-            manifest_lines = []
-            for item in manifest_results[:10]:
-                if not item.get("sensitive") and item.get("content"):
-                    manifest_lines.append(f"  {item['content']}")
-            if manifest_lines:
-                sections.append(
-                    "PROJECT MANIFESTS (sample):\n" + "\n".join(manifest_lines)
-                )
-    except Exception:
-        pass
+    manifest_results = _collect_signal(
+        "project_manifests", discovery.scan_project_manifests
+    )
+    manifest_lines = [
+        f"  {item['content']}"
+        for item in manifest_results[:10]
+        if not item.get("sensitive") and item.get("content")
+    ]
+    if manifest_lines:
+        sections.append("PROJECT MANIFESTS (sample):\n" + "\n".join(manifest_lines))
 
-    # 5. App launch frequency (UserAssist — covers consumer apps like Spotify, Outlook)
-    try:
-        userassist_results = discovery.scan_windows_userassist()
-        if userassist_results:
-            lines = [f"  {item['content']}" for item in userassist_results[:20]]
-            sections.append(
-                "FREQUENTLY LAUNCHED APPS (actual usage frequency):\n"
-                + "\n".join(lines)
-            )
-    except Exception:
-        pass
+    # 5. App launch frequency — covers consumer apps like Spotify and Outlook
+    usage_results = _collect_signal(
+        "windows_userassist", discovery.scan_windows_userassist
+    ) + _collect_signal("macos_app_usage", discovery.scan_macos_app_usage)
+    if usage_results:
+        lines = [f"  {item['content']}" for item in usage_results[:20]]
+        sections.append(
+            "FREQUENTLY LAUNCHED APPS (actual usage frequency):\n" + "\n".join(lines)
+        )
 
     # 6. Recent file type patterns
-    try:
-        filetype_results = discovery.scan_recent_file_types()
-        if filetype_results:
-            lines = [f"  {item['content']}" for item in filetype_results]
-            sections.append("RECENT FILE TYPES (work patterns):\n" + "\n".join(lines))
-    except Exception:
-        pass
+    filetype_results = _collect_signal(
+        "recent_file_types", discovery.scan_recent_file_types
+    )
+    if filetype_results:
+        lines = [f"  {item['content']}" for item in filetype_results]
+        sections.append("RECENT FILE TYPES (work patterns):\n" + "\n".join(lines))
 
     # 7. Gaming and media
-    try:
-        gaming_results = discovery.scan_gaming_and_media()
-        if gaming_results:
-            lines = [f"  {item['content']}" for item in gaming_results]
-            sections.append("GAMING AND MEDIA:\n" + "\n".join(lines))
-    except Exception:
-        pass
+    gaming_results = _collect_signal(
+        "gaming_and_media", discovery.scan_gaming_and_media
+    )
+    if gaming_results:
+        lines = [f"  {item['content']}" for item in gaming_results]
+        sections.append("GAMING AND MEDIA:\n" + "\n".join(lines))
 
     print(" done.")
 
@@ -7441,18 +7701,43 @@ def _handle_daemon_start_agent(args):
 
     from gaia.daemon import client
     from gaia.daemon.errors import DaemonError
+    from gaia.daemon.sidecars.errors import DevSrcDirResolutionError
+    from gaia.daemon.sidecars.spec import (
+        repo_root_from_agent_dev_src_dir,
+        resolve_caller_dev_src_dir,
+        resolve_caller_mode,
+    )
+
+    # Resolve THIS process's own intent before ever contacting the daemon —
+    # the daemon is a long-lived singleton with its own environment and
+    # checkout, neither of which reflect the caller's (issue #2588).
+    resolved_mode = resolve_caller_mode(args.agent_id, override=args.mode)
+    dev_src_dir = None
+    if resolved_mode == "dev":
+        try:
+            dev_src_dir = resolve_caller_dev_src_dir(
+                args.agent_id, explicit=args.dev_src_dir
+            )
+        except DevSrcDirResolutionError as e:
+            print(f"❌ {e}")
+            sys.exit(1)
 
     try:
         inst = client.start_or_attach()
     except DaemonError as e:
         print(f"❌ {e}")
         sys.exit(1)
+
+    body_payload = {"mode": resolved_mode}
+    if dev_src_dir is not None:
+        body_payload["dev_src_dir"] = str(dev_src_dir)
+
     try:
         # Read generously: a first-run ensure may lazily fetch the binary.
         r = requests.post(
             f"{inst.base_url}/daemon/v1/agents/{args.agent_id}/ensure",
             headers={"Authorization": f"Bearer {inst.token}"},
-            json={"mode": args.mode},
+            json=body_payload,
             timeout=(5.0, 900.0),
         )
     except requests.exceptions.RequestException as e:
@@ -7466,11 +7751,47 @@ def _handle_daemon_start_agent(args):
         sys.exit(1)
     # The ensure body carries the sidecar bearer token — print ONLY these fields.
     body = r.json()
+
+    if dev_src_dir is not None:
+        # A daemon that predates #2588 silently ignores dev_src_dir and just
+        # reports whatever IT resolved — never trust a match we can't verify.
+        reported = body.get("dev_src_dir")
+        if reported != str(dev_src_dir):
+            # The remedy must name the REPO ROOT — restarting a Python
+            # environment/editable install rooted at the agent SOURCE dir
+            # (dev_src_dir itself) does nothing to the daemon's own anchor.
+            try:
+                remedy_root = repo_root_from_agent_dev_src_dir(
+                    dev_src_dir, args.agent_id
+                )
+                remedy = (
+                    "Restart the daemon from a Python environment/editable "
+                    f"install rooted at {remedy_root}, or upgrade it."
+                )
+            except DevSrcDirResolutionError:
+                # Only reachable via an explicit --dev-src-dir that doesn't
+                # follow the hub/agents/<id>/python layout — no repo root
+                # exists to name, so say so rather than naming the agent
+                # subdir as something to "root a Python environment at".
+                remedy = (
+                    "Restart the daemon from the Python environment/editable "
+                    f"install that serves '{dev_src_dir}' as this agent's "
+                    "dev source, or upgrade it."
+                )
+            print(
+                f"❌ the daemon reported dev source '{reported}' but expected "
+                f"'{dev_src_dir}' — the running daemon predates this fix and "
+                f"silently ignored the dev-mode source check. {remedy}"
+            )
+            sys.exit(1)
+
     print(
         f"✅ agent '{args.agent_id}' sidecar running "
         f"(mode: {body.get('mode')}, pid: {body.get('pid')}, "
         f"port: {body.get('port')}, api: v{body.get('api_version')})"
     )
+    if body.get("mode") == "dev" and body.get("dev_src_dir"):
+        print(f"   source: {body.get('dev_src_dir')}")
 
 
 def _handle_daemon_stop_agent(args):

@@ -16,8 +16,9 @@ seams and is the only stateful caller.
 
 Two corpora, one format: the on-disk #691 ``SKILL.md`` schema is *referenced*
 here, never redefined.  The LLM emits only the four *derived* fields
-(``name``, ``when_to_use``, ``tools_required``, body); ``Skill.parse`` validates
-that intermediate shape and ``Skill.to_skill_md`` injects the two *fixed*
+(``name``, ``when_to_use``, ``tools_required``, body);
+``DistilledProcedure.parse`` validates that intermediate shape and
+``DistilledProcedure.to_skill_md`` injects the two *fixed*
 constants (``license: MIT``, ``version: 1.0.0``) and maps to the canonical
 document.  See ``docs/plans/skill-synthesis.mdx`` "The format contract".
 
@@ -151,12 +152,12 @@ def load_synthesis_config(settings: Optional[Dict] = None) -> SynthesisConfig:
 
 
 # ============================================================================
-# Skill — the intermediate (pre-#691) shape + the canonical mapping
+# DistilledProcedure — the intermediate (pre-#691) shape + the canonical mapping
 # ============================================================================
 
 
 @dataclass(frozen=True)
-class Skill:
+class DistilledProcedure:
     """A distilled procedure in the *intermediate* four-field shape.
 
     These are the only fields the LLM derives.  The fixed constants
@@ -178,8 +179,8 @@ class Skill:
     tools_required: List[str] = field(default_factory=list)
 
     @classmethod
-    def parse(cls, intermediate_md: str) -> Optional["Skill"]:
-        """Validate the distiller's intermediate Markdown into a ``Skill``.
+    def parse(cls, intermediate_md: str) -> Optional["DistilledProcedure"]:
+        """Validate the distiller's intermediate Markdown into a ``DistilledProcedure``.
 
         The expected shape is YAML frontmatter (``name``, ``when_to_use``,
         ``tools_required``) delimited by ``---`` lines, followed by the Markdown
@@ -192,7 +193,8 @@ class Skill:
                 tags / code fences by ``distill_cluster``).
 
         Returns:
-            A validated ``Skill``, or ``None`` for ``SKIP`` / malformed input.
+            A validated ``DistilledProcedure``, or ``None`` for ``SKIP`` /
+            malformed input.
         """
         if intermediate_md is None:
             return None
@@ -536,12 +538,12 @@ def cluster_by_goal(
 
 def distill_cluster(
     cluster: GoalCluster, send_messages_fn: Callable
-) -> Optional[Skill]:
-    """DISTILL — one low-temperature LLM call turning a cluster into a ``Skill``.
+) -> Optional[DistilledProcedure]:
+    """DISTILL — one low-temp call turning a cluster into a procedure.
 
     Reuses the same ``self.chat.send_messages`` seam the extraction /
     consolidation passes use (no new client).  The response is stripped of think
-    tags and code fences, then validated by ``Skill.parse``.
+    tags and code fences, then validated by ``DistilledProcedure.parse``.
 
     Fail-loud split: a raised exception from ``send_messages_fn`` (Lemonade
     unreachable) propagates so the caller can skip the WHOLE pass; a structurally
@@ -553,7 +555,7 @@ def distill_cluster(
         send_messages_fn: The ``self.chat.send_messages`` callable.
 
     Returns:
-        A validated ``Skill``, or ``None`` for ``SKIP`` / malformed output.
+        A validated ``DistilledProcedure``, or ``None`` for ``SKIP`` / malformed output.
     """
     response = send_messages_fn(
         messages=[{"role": "user", "content": _build_distill_user_prompt(cluster)}],
@@ -568,7 +570,7 @@ def distill_cluster(
         raw_text = re.sub(r"^```(?:[a-zA-Z]+)?\s*", "", raw_text)
         raw_text = re.sub(r"\s*```$", "", raw_text).strip()
 
-    skill = Skill.parse(raw_text)
+    skill = DistilledProcedure.parse(raw_text)
     if skill is None:
         logger.info(
             "[skill_synthesis] no usable skill from cluster goal=%r (SKIP or malformed)",
@@ -651,7 +653,7 @@ def _nearest_enabled_procedure(
 
 
 def reconcile_and_store(
-    candidate: Skill,
+    candidate: DistilledProcedure,
     cluster: GoalCluster,
     store,
     embedding: Optional[bytes] = None,
@@ -676,7 +678,7 @@ def reconcile_and_store(
     only the *match key* moved from name to meaning — dominance is unchanged.
 
     Args:
-        candidate: The distilled ``Skill`` (intermediate fields).
+        candidate: The distilled ``DistilledProcedure`` (intermediate fields).
         cluster: The cluster it was distilled from (track record + provenance).
         store: The ``MemoryStore`` to write to.
         embedding: The ``when_to_use`` embedding BLOB — now both persisted and

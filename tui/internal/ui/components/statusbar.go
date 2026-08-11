@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/amd/gaia/tui/internal/ui/theme"
 )
 
 type StatusBarState struct {
@@ -17,19 +19,25 @@ type StatusBarState struct {
 
 var (
 	statusBarStyle = lipgloss.NewStyle().
-			Background(lipgloss.Color("236")).
-			Foreground(lipgloss.Color("252")).
+			Background(theme.SurfaceBG).
+			Foreground(theme.OnSurface).
 			Padding(0, 1)
 
-	connectedDot    = lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Render("●")
-	disconnectedDot = lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Render("●")
+	connectedDotStyle    = lipgloss.NewStyle().Foreground(theme.Success)
+	disconnectedDotStyle = lipgloss.NewStyle().Foreground(theme.Danger)
 )
 
+// The dots are rendered per call, not stored pre-rendered: an AdaptiveColor
+// resolves when it is rendered, and a package-level Render() would freeze the
+// light/dark choice before theme.Init has made it.
+func connectedDot() string    { return connectedDotStyle.Render("●") }
+func disconnectedDot() string { return disconnectedDotStyle.Render("●") }
+
 func RenderStatusBar(state StatusBarState, width int) string {
-	dot := disconnectedDot
+	dot := disconnectedDot()
 	status := "disconnected"
 	if state.Connected {
-		dot = connectedDot
+		dot = connectedDot()
 		status = "connected"
 	}
 	if state.Streaming {

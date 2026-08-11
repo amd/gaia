@@ -12,6 +12,8 @@ import (
 	"github.com/amd/gaia/tui/internal/catalog"
 	"github.com/amd/gaia/tui/internal/ui/components"
 	"github.com/amd/gaia/tui/internal/vote"
+
+	"github.com/amd/gaia/tui/internal/ui/theme"
 )
 
 // compactHeightRows is the terminal height below which the ASCII logo is
@@ -586,8 +588,8 @@ func (m HubModel) line(s string, style lipgloss.Style) string {
 
 func (m HubModel) renderHeader() string {
 	if m.compact() {
-		wordmark := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("150")).Render(" G A I A")
-		sub := lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Italic(true).
+		wordmark := lipgloss.NewStyle().Bold(true).Foreground(theme.AccentBright).Render(" G A I A")
+		sub := lipgloss.NewStyle().Foreground(theme.Dim).Italic(true).
 			Render("  Local AI Agent Hub — by AMD")
 		return m.line(wordmark+sub, lipgloss.NewStyle())
 	}
@@ -596,11 +598,11 @@ func (m HubModel) renderHeader() string {
 
 	gaiaText := lipgloss.NewStyle().
 		Bold(true).
-		Foreground(lipgloss.Color("150")).
+		Foreground(theme.AccentBright).
 		Render("  G A I A")
 
 	subtitle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("243")).
+		Foreground(theme.Dim).
 		Italic(true).
 		Render("  Local AI Agent Hub — by AMD")
 
@@ -610,12 +612,12 @@ func (m HubModel) renderHeader() string {
 // colorizeRobotLogo renders the GAIA robot ASCII art with colors matching the mascot PNG.
 func colorizeRobotLogo() string {
 	// Colors from the GAIA mascot: green body, cyan eyes, dark background
-	bright := lipgloss.NewStyle().Foreground(lipgloss.Color("150")) // brightest green (body highlights)
-	body := lipgloss.NewStyle().Foreground(lipgloss.Color("114"))   // solid green (body)
-	mid := lipgloss.NewStyle().Foreground(lipgloss.Color("107"))    // muted green (mid-tone)
-	detail := lipgloss.NewStyle().Foreground(lipgloss.Color("65"))  // dark green (detail)
-	shadow := lipgloss.NewStyle().Foreground(lipgloss.Color("238")) // dark shadow
-	eye := lipgloss.NewStyle().Foreground(lipgloss.Color("51"))     // cyan (eyes)
+	bright := lipgloss.NewStyle().Foreground(theme.ArtBright) // body highlights
+	body := lipgloss.NewStyle().Foreground(theme.ArtBody)     // solid green
+	mid := lipgloss.NewStyle().Foreground(theme.ArtMid)       // mid-tone
+	detail := lipgloss.NewStyle().Foreground(theme.ArtDetail) // detail
+	shadow := lipgloss.NewStyle().Foreground(theme.ArtShadow) // shading
+	eye := lipgloss.NewStyle().Foreground(theme.ArtEye)       // eyes
 
 	lines := []string{
 		"               +=-------                 ",
@@ -726,8 +728,8 @@ func (m HubModel) renderBody() string {
 }
 
 func (m HubModel) emptyState() string {
-	dim := lipgloss.NewStyle().Foreground(lipgloss.Color("243"))
-	accent := lipgloss.NewStyle().Foreground(lipgloss.Color("150"))
+	dim := lipgloss.NewStyle().Foreground(theme.Dim)
+	accent := lipgloss.NewStyle().Foreground(theme.AccentBright)
 
 	if m.list.FilterState() != list.Unfiltered {
 		return dim.Render("\n  Nothing matches that search.  esc clears it.")
@@ -785,7 +787,7 @@ func (m HubModel) renderStatus() string {
 	// firstLine, not just truncate: ansi.Truncate does not collapse newlines,
 	// and a multi-line message (a daemon start failure quotes its launcher
 	// output) would silently break chromeHeight's one-row budget.
-	return m.line(" "+firstLine(text), lipgloss.NewStyle().Foreground(lipgloss.Color("214")))
+	return m.line(" "+firstLine(text), lipgloss.NewStyle().Foreground(theme.Warning))
 }
 
 func (m HubModel) renderFooter() string {

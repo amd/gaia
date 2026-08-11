@@ -194,8 +194,8 @@ def _auth(token="secret-tok"):
 
 def _post_install(client, agent_id="email", *, trusted=True, **body):
     """POST an install. Defaults to trusted=True because the fixture agent is
-    in the ``experimental`` tier, like the real email agent — the refusal path
-    is asserted explicitly in its own tests."""
+    in the ``experimental`` tier — the refusal path is asserted explicitly in its
+    own tests."""
     return client.post(
         f"/daemon/v1/agents/{agent_id}/install",
         headers=_auth(),

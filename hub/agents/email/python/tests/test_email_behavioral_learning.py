@@ -574,13 +574,20 @@ class TestPromotionOnDemandAtTriage:
         finally:
             agent.close_db()
 
-    def test_triaged_message_from_promoted_sender_is_urgent(self, tmp_path):
-        """After promotion, a triaged message from the promoted sender is urgent.
+    def test_sender_promoted_during_the_same_triage_call_that_observed_them(
+        self, tmp_path
+    ):
+        """Promotion applies within the SAME triage call that observed the
+        qualifying reply behavior — no second call needed.
 
         The promo writes the sender into _session_preferences['priority_senders']
-        so the next triage call (same turn) classifies their messages as urgent.
-        This test calls triage once, which both promotes the sender AND returns
-        the message; the final message category must be 'urgent'.
+        during triage. This test calls triage once, which both promotes the
+        sender AND returns the message. (#2632: a priority-sender match tags
+        ``preference_applied`` for salience but never overrides category —
+        this test's fixture message hardcodes its own category, since the
+        real ``triage_inbox_impl``/``_apply_session_preferences`` path is
+        mocked out here; see ``tests/unit/agents/email/
+        test_priority_sender_severity.py`` for the real-path regression.)
         """
         agent = _build_agent(tmp_path)
         try:

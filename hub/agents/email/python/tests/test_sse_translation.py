@@ -193,12 +193,14 @@ def test_tool_result_carries_tool_and_data():
     ]
 
 
-def test_tool_result_render_key_for_pre_scan():
+def test_pre_scan_draws_no_card():
+    """The triage reply is the single inbox view: a pre-scan card landing
+    mid-turn showed a partial list beside the answer still being written."""
     t = _tr()
     t.translate({"type": "tool_start", "tool": "pre_scan_inbox"})
     t.translate({"type": "tool_args", "tool": "pre_scan_inbox", "args": {}})
     out = t.translate({"type": "tool_result", "title": "Result", "summary": "scan"})
-    assert out[0]["render"] == "email_pre_scan"
+    assert "render" not in out[0]
 
 
 def test_tool_end_after_result_is_dropped():
@@ -219,6 +221,29 @@ def test_tool_end_without_result_synthesizes_tool_result():
 
 def test_agent_error_maps_to_terminal_error():
     out = _tr().translate({"type": "agent_error", "content": "boom"})
+    assert out == [{"type": "error", "detail": "boom", "status": 500}]
+
+
+def test_recoverable_agent_error_maps_to_non_terminal_status():
+    """#2515: a per-tool error the agent loop is retrying (agent.py's
+    STATE_ERROR_RECOVERY path) is NOT terminal — the two layers must agree
+    that "recoverable" means the run continues, not that the wire-level
+    terminal contract gets loosened for every agent_error."""
+    out = _tr().translate(
+        {"type": "agent_error", "content": "boom", "recoverable": True}
+    )
+    assert out[0]["type"] not in TERMINAL_TYPES
+    assert out[0]["type"] == "status"
+    # The user must still SEE the failure — never silently swallowed.
+    assert "boom" in out[0]["message"]
+
+
+def test_recoverable_false_agent_error_is_still_terminal():
+    # An explicit False (as well as the field's absence, covered above) keeps
+    # the existing terminal contract — this is not a blanket downgrade.
+    out = _tr().translate(
+        {"type": "agent_error", "content": "boom", "recoverable": False}
+    )
     assert out == [{"type": "error", "detail": "boom", "status": 500}]
 
 

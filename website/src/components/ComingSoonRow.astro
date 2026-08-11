@@ -5,6 +5,10 @@
 // A hub row for an agent that exists in the repo but is not published. It is a
 // <div>, not a link — there is nothing to open — and carries no version, size,
 // arrow, or hover state, because none of those exist before a release.
+//
+// "Not published" is carried by the badge, the muted name, and the borderless
+// icon chip. NOT by a wrapper opacity: that multiplies every text node inside
+// and put all 13 of these rows under 3:1 in both themes.
 import AgentIcon from './AgentIcon.astro';
 import { categoryLabel } from '../data/catalog';
 import type { InDevelopmentAgent } from '../data/inDevelopment';
@@ -17,7 +21,7 @@ const { agent } = Astro.props;
 ---
 
 <div
-  class="soon-row grid grid-cols-[44px_1fr] items-center gap-[18px] border-b border-g-border px-[22px] py-[18px] opacity-[0.62] sm:grid-cols-[44px_1fr_auto]"
+  class="soon-row grid grid-cols-[44px_1fr] items-center gap-[18px] border-b border-g-border px-[22px] py-[18px] sm:grid-cols-[44px_1fr_auto]"
   data-id={agent.id}
   data-name={agent.name.toLowerCase()}
   data-description={agent.description.toLowerCase()}
