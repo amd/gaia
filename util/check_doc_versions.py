@@ -118,9 +118,10 @@ def build_lemonade_patterns(version: str) -> list[tuple[str, str]]:
             rf"lemonade(?:-sdk)?/lemonade/releases/download/v(?P<version>{semver})/",
             "Lemonade GitHub release URL",
         ),
-        # Filenames: lemonade-server-minimal.msi or lemonade-server_<VERSION>_amd64.deb
+        # Filenames: lemonade-server_<VERSION>-<distro>_<arch>.deb (distro infix optional
+        # so pre-rename references are still version-checked)
         (
-            rf"lemonade(?:-server)?_(?P<version>{semver})_amd64\.deb",
+            rf"lemonade(?:-server)?_(?P<version>{semver})(?:-[a-z0-9]+)?_(?:amd64|arm64)\.deb",
             "Lemonade .deb filename",
         ),
         # Release page links: releases/tag/v<VERSION>

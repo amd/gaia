@@ -12,6 +12,14 @@ talks to it over local HTTP. There is **no Python** and no separate GAIA install
 
 Follow these steps to wire it into an app.
 
+> **This file is NOT one of the agent's own skills.** It is the integration
+> playbook — how *you* wire this npm package into an app. The sidecar separately
+> bundles six **Agent Skills** at `gaia_agent_email/skills/<name>/SKILL.md`, which
+> are instructions the *email agent itself* loads into its own prompt at runtime.
+> Same filename, different artifact: don't load those into your assistant, and
+> don't ship this one as an agent skill. See
+> [Skill sets](#skill-sets--pin-the-agents-behaviour-for-a-work-mailbox) below.
+
 ## 1. Install
 
 ```bash
@@ -100,7 +108,7 @@ The interface:
 | `triage(req)` | Local LLM only | Classify / summarize / extract action items + phishing signals on the message you pass. No mailbox read. Action items also persist to the sidecar's local task list (keyed by `message_id`, de-duplicated on re-triage) — the response shape is unchanged. |
 | `triageBatch(req)` | Local LLM only | Same as `triage` for an `items` array (1–100). Parallel `results` array; per-item failures isolate (200 can carry errored items — inspect `results[].error`). |
 | `search(req)` | A connected mailbox | Read-only inbox search by `query`/`labels`; returns message metadata (id, subject, sender, snippet, labels), no body. No token. No mailbox → 503, two+ → 400. |
-| `prescan(req?)` | A connected mailbox | Read-only inbox pre-scan → triage-card envelope (`kind: "email_pre_scan"`: urgent / actionable / suggested-archive rows + an informational count). No mailbox connected → 503; 2+ → 400. Heuristic-only, no Lemonade call. |
+| `prescan(req?)` | A connected mailbox | Read-only inbox pre-scan → triage-card envelope (`kind: "email_pre_scan"`), whose `needs_you` (schema 2.11) is the ONE worklist the card renders — up to 5 things that need you, plus `bulk` for the filtered remainder. No mailbox connected → 503; 2+ → 400. Heuristic-only, no Lemonade call. `NeedsYouItem.detail` is reserved on the wire but always empty today on every surface — see [`CHANGELOG.md`](./CHANGELOG.md). |
 | `draft(req)` | Nothing external | Returns a single-use confirmation token. Optional `attachments` (schema 2.2): `{ filename, mime_type, content_base64 }` each, ≤ 25 MB decoded. |
 | `send(req)` | Draft token + a connected mailbox | Gate fires first: no/invalid `draft` token → 403; valid token but no mailbox connected on the host → 503. Attachments must exactly match the confirmed draft's (the token binds their content digests). |
 | `confirmAction(req)` | Nothing external | Mints a single-use token for `"archive"`/`"quarantine"`, bound to the `(action, message_id)`. |
@@ -151,12 +159,12 @@ import { EmailClient } from "@amd-gaia/agent-email/client";
 const client = new EmailClient({ baseUrl: "http://127.0.0.1:8131", authToken });
 ```
 
-## Canonical agent-loop query (`POST /v1/email/query`, schema 2.4)
+## Canonical agent-loop query (`POST /v1/email/query`, schema 2.6)
 
 The v2 keystone (#2016): NL request in, the agent reasons and chains its tools, the
-**seven canonical Server-Sent Event types** out — `status` / `token` / `tool_call` /
-`tool_result` / `needs_confirmation` / `final` / `error`, terminated by exactly one
-`final` or `error`. This is the one loop every v2 front-door relays to. The **host
+**canonical Server-Sent Event types** out — `status` / `token` / `tool_call` /
+`tool_result` / `needs_confirmation` / `needs_input` / `final` / `error`, terminated by
+exactly one `final` or `error`. This is the one loop every v2 front-door relays to. The **host
 mints `run_id`** and **pushes** the transcript slice in `context`, so the sidecar
 stays stateless. The typed client wraps it (#2097): `query()` returns an async
 iterator of typed `QueryEvent`s; `cancelQuery(runId)` stops the run between steps:
@@ -174,6 +182,9 @@ for await (const ev of sidecar.client.query({
     case "tool_call":    console.log(`→ ${ev.tool}`, ev.args); break;
     case "tool_result":  console.log(`← ${ev.tool}`, ev.data); break;
     case "needs_confirmation": break; // run then ends with a final refusal (D1)
+    case "needs_input":               // PAUSED — answer, then keep iterating
+      await sidecar.client.respondToQuery(runId, ev.request_id, await askUser(ev));
+      break;
     case "final":        console.log(ev.answer); break;   // terminal
     case "error":        console.error(ev.detail); break; // terminal, verbatim
     default:             console.warn("unsupported event", ev); // future additive type
@@ -192,7 +203,23 @@ Rules an integration must respect:
   `QueryStreamError` for a non-SSE response / malformed event / stream that closes
   without a terminal). Never treat iterator completion without a `final` as success —
   the client already throws for you.
-- **Handle the `default` branch.** A `type` outside the frozen seven arrives as
+- **Gate `can_answer_questions` on the peer's version.** Call `version()` first:
+  a sidecar below `apiVersion` 2.6 does not know the field and answers `422` to
+  every request carrying it — including `false`. Omit it below 2.6 and treat
+  mid-run questions as unavailable.
+- **Declare `can_answer_questions` honestly.** It defaults to `false`. Set it
+  `true` only when a human is watching a UI that renders the question; a one-shot
+  or batch job must leave it off, and then gets an immediate actionable refusal
+  instead of a run parked on a question nobody can see.
+- **Answer `needs_input`, do not restart.** The run is parked on the SAME stream.
+  Call `respondToQuery(runId, ev.request_id, value)` and keep iterating the existing
+  iterator — issuing a fresh `query()` abandons the paused run. `value` is an
+  option's `value` (its `label` also works) or free text when `allow_free_text`.
+  Render every option's `description`: the label alone does not tell the user what
+  they are agreeing to. When `sensitive` is set, mask the input and never log it.
+  Ignoring the question is safe but wasteful — the run ends with an `error` after
+  `timeout_seconds`.
+- **Handle the `default` branch.** A `type` outside the canonical vocabulary arrives as
   `{ type: "unknown", eventType, raw }` — render an "unsupported event" placeholder or
   log it; it is never silently dropped.
 - **Long runs are normal.** `timeoutMs` bounds time-to-first-response only. To abort
@@ -202,7 +229,25 @@ Rules an integration must respect:
 A confirmation-requiring step (a destructive tool such as `send_now`) emits
 `needs_confirmation` then ends with a `final` refusal pointing at the fixed-function
 route — mint a token via `draft()`, then `send()` (stateless stub, epic decision D1;
-`confirm_url` omitted).
+`confirm_url` omitted). That is an **approval** and stays terminal and deny-by-default;
+a **question** (`needs_input`) is the resumable one. Do not treat them alike.
+
+**Mailbox setup is the agent's job now (#2469).** When the agent has no usable mailbox —
+not connected, credentials broken, missing a scope, or connected-but-not-granted — it
+asks the user about that specific problem via `needs_input` and fixes it, rather than
+returning an error telling them to run a CLI command. Two cases are worth knowing:
+the connected-but-not-granted case needs no browser at all (a local permission write),
+and connecting Google still requires the user to supply their own OAuth client ID and
+secret, so expect a `sensitive: true` question on that path.
+
+**Mail-required, calendar-optional (#2730).** Every setup/reconnect path — this
+self-repair flow included — requests the full mail + calendar scope union at
+consent time, but only the mail scopes gate whether the flow reports success. A
+user who declines calendar still ends up with a working mailbox; calendar
+tools raise their own actionable error, naming the exact scope, the first time
+one is actually called. Do not "fix" a self-repair flow that requests only
+mail scopes — that narrower request is the bug this issue removed, not a
+simplification to reintroduce.
 
 ## Stateful agent surface (`/v1/email/agent/*`, 0.4.0)
 
@@ -250,6 +295,91 @@ Other endpoints: `POST /cancel`, `DELETE /session/{id}`, `GET /session/{id}/hist
 and the runtime memory toggle `POST /memory` + `GET /memory/{id}` (enabling memory that
 was never initialized returns **409**, never a silent no-op). One turn at a time per
 session — an overlapping `/query` returns **409**. See `SPEC.md` for the full table.
+
+### Full autonomy (`/v1/email/agent/autonomy/*`)
+
+The agent can run **proactively** at the `earn_trust` level: it archives low-signal
+(promotional/spam) mail and marks FYI mail read on its own **where your explicit
+preferences already sanction it** (a low-priority sender, or a category you default to
+archive) or a sender/category has earned enough trust, and **always asks before anything
+destructive** (send / forward / RSVP / quarantine). There is no permanent-delete — the
+agent only ever moves mail to Trash, which is always reversible. Reply drafting is not yet
+wired into this proactive loop (the policy layer supports it, but no candidate reaches it
+today).
+Turn it on and inspect the earned trust:
+
+```js
+// Turn on full autonomy (levels: off | suggest | earn_trust | full; "off" = kill switch)
+await fetch(`${base}/v1/email/agent/autonomy`, {
+  method: "POST", headers: { "content-type": "application/json" },
+  body: JSON.stringify({ session_id: "s1", level: "earn_trust" }),
+});
+
+// Run one observe→decide→act cycle now (the daemon/scheduler drives this in production)
+const r = await fetch(`${base}/v1/email/agent/autonomy/run`, {
+  method: "POST", headers: { "content-type": "application/json" },
+  body: JSON.stringify({ session_id: "s1", max_messages: 25 }),
+});
+const report = await r.json();
+// { level, executed:[…], proposals:[…], decisions:[…], skipped }
+// decisions[] explains EVERY candidate considered: { message_id, tool, action, outcome, reason, sender }
+
+// Inspect the earned-trust ledger — autonomy is never a black box
+const status = await (await fetch(`${base}/v1/email/agent/autonomy/s1`)).json();
+// { level, enabled, trust_min_samples, trust_threshold, trusted_scope_count, scopes:[…] }
+```
+
+The agent **learns from your corrections**: undoing an auto-executed action —
+`POST /v1/email/agent/autonomy/undo` with `{ session_id, action_id }` from the `executed[]`
+entry, or the conversational `undo_archive_batch` tool for a batch archive — is captured as
+a negative outcome that pulls the sender/category back below the trust bar. (Positive-outcome
+accrual — trust *rising* as suggestions are accepted or left standing — is not yet wired, so
+today the ledger only ratchets trust down.) Every auto-action is reversible with undo. A bad
+`level` returns **400**; an unknown session returns **404**; undoing an unknown/expired
+`action_id` returns **409**; `/run` while the level is `off` returns **409** too — it refuses
+rather than returning the same 200 shape a real, found-nothing cycle would (#2528).
+
+The Python host also ships a thin-client CLI over this same surface:
+`gaia email autonomy {status|set-level|pause|resume|run|trust|kill}` (#2516).
+
+## Skill sets — pin the agent's behaviour for a work mailbox
+
+The agent bundles six Agent Skills and activates one **set** per launch, so it
+approaches a personal mailbox differently from a work one. Nothing in the API
+changes — same endpoints, same tools, same permissions — only how the agent
+reasons about the mail.
+
+| Set | Skills it loads |
+|-----|-----------------|
+| `personal` (default) | `inbox-triage`, `newsletter-digest`, `travel-itinerary` |
+| `work` | `inbox-triage`, `meeting-scheduling`, `action-item-extraction`, `escalation-routing` |
+
+**It usually chooses for itself.** For an Outlook mailbox, GAIA records at connect
+time whether the Microsoft account is personal or work/school (from the `tid`
+tenant claim in the OAuth `id_token`), and the agent maps that onto the matching
+set. **Gmail carries no equivalent claim**, so a Gmail-only mailbox has an unknown
+kind and resolves through the manifest default — `personal`. A work Gmail mailbox
+is therefore something you should pin explicitly.
+
+Two ways to pin it at spawn time, both via `startSidecar` — use either, not both:
+
+```ts
+const sidecar = await startSidecar({
+  binaryPath,
+  port: 8131,
+  // CLI flag: validated against the declared sets, so a typo fails at startup.
+  extraArgs: ["--skill-set", "work"],
+  // Env var, equivalent — and the form to use if you spawn the binary yourself:
+  // env: { GAIA_EMAIL_SKILL_SET: "work" },
+});
+```
+
+Either one pins the set for **every** session that sidecar serves and overrides the
+mailbox-derived choice. To let the agent do the mapping but tell it what kind of
+mailbox it has, set `GAIA_EMAIL_ACCOUNT_TYPE` to `personal` or `work` instead.
+
+Only `personal` and `work` are declared. An undeclared name never silently falls
+back — the sidecar refuses to start and names the valid sets.
 
 ## Running in a server / long-lived app
 
@@ -341,11 +471,20 @@ Until then the binary boots, but the first `triage` returns **HTTP 502**.
 - **Some capabilities are agent-loop-only — no REST endpoint, no client method.**
   Scheduled send / snooze (#1609), **voice / style-matched drafting** (#1607 —
   `build_voice_profile` learns a local style profile from Sent mail so drafts
-  come out in the user's own voice), and **follow-up tracking** (#1606 —
-  `check_followups` flags sent mail still awaiting a reply, detection only) all
-  run in the agent tool loop. The REST contract has no routes for them yet, so
-  don't look for `client.scheduleSend()` / `client.snooze()` / a voice or
-  follow-up method — they don't exist (and none of these moves `SCHEMA_VERSION`).
+  come out in the user's own voice), **follow-up tracking** (#1606 —
+  `check_followups` flags sent mail still awaiting a reply, detection only),
+  and **waiting-on-you detection** (#2581 — `list_waiting_on_you` flags
+  INBOUND mail awaiting the user's reply; it only qualifies a message that has
+  both a genuine ask/meeting-time signal and corroboration that it's real
+  correspondence) all run in the agent tool loop. The REST contract has no
+  routes for them yet, so don't look for `client.scheduleSend()` /
+  `client.snooze()` / a voice, follow-up, or waiting-on-you method — they
+  don't exist (and none of these moves `SCHEMA_VERSION`).
+- **A Gmail mailbox always gets the `personal` skill set unless you pin one.** The
+  set is normally derived from the Microsoft account kind, and Gmail exposes no
+  equivalent signal — so pass `--skill-set work` (or `GAIA_EMAIL_SKILL_SET=work`)
+  for a work Gmail mailbox, or the agent won't load the meeting / action-item /
+  escalation skills. This affects judgement only; no endpoint or tool changes.
 - **ESM-only.** `require("@amd-gaia/agent-email")` fails; use `import` / dynamic
   `import()`.
 

@@ -86,8 +86,9 @@ class InstallRequest(BaseModel):
 
     id: str
     version: Optional[str] = None
-    # Explicit opt-in to install a non-verified native (C++) agent. The UI sets
-    # this after the user accepts the "Trust & Install" confirmation.
+    # Explicit opt-in to install a non-verified agent (any language). The UI sets
+    # this after the user accepts the "Trust & Install" confirmation. The wire
+    # field name is kept as ``trust_native`` for client compatibility.
     trust_native: bool = False
 
 
@@ -145,7 +146,7 @@ def _run_install(
     version: Optional[str],
     registry,
     *,
-    trust_native: bool,
+    trusted: bool,
     manifest: Optional[dict],
 ) -> None:
     """Background install worker. Errors are recorded in install progress."""
@@ -154,7 +155,7 @@ def _run_install(
             agent_id,
             version=version,
             registry=registry,
-            trust_native=trust_native,
+            trusted=trusted,
             manifest=manifest,
         )
     except installer_mod.InstallError as exc:
@@ -190,9 +191,7 @@ async def install_agent(
     except catalog_mod.CatalogError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     try:
-        installer_mod.ensure_native_trust(
-            body.id, manifest, trust_native=body.trust_native
-        )
+        installer_mod.ensure_trust_ack(body.id, manifest, trusted=body.trust_native)
     except installer_mod.TrustRequiredError as exc:
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
@@ -207,7 +206,7 @@ async def install_agent(
         body.id,
         body.version,
         registry,
-        trust_native=body.trust_native,
+        trusted=body.trust_native,
         manifest=manifest,
     )
     return {"id": body.id, "status": "queued"}

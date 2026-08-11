@@ -80,9 +80,13 @@ class StdioTransport(MCPTransport):
                 merged_env = os.environ.copy()
                 merged_env.update(self.env)
 
+            # Legacy from_command() path passes a full shell command string
+            # (documented contract) and needs shell parsing; modern from_config()
+            # passes an args list and runs shell=False. Command is caller-supplied
+            # SDK config, not external/untrusted input.
             self._process = subprocess.Popen(
                 cmd,
-                shell=use_shell,
+                shell=use_shell,  # nosec B602 - legacy shell-string API, trusted SDK config
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,

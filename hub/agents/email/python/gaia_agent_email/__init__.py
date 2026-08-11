@@ -88,9 +88,10 @@ def build_registration():
             connector_id="microsoft",
             scopes=OUTLOOK_MAIL_SCOPES + OUTLOOK_CALENDAR_SCOPES,
             reason=(
-                "Read and organize your personal Outlook.com mailbox, send "
-                "messages on your behalf, and read/respond to your Outlook "
-                "calendar via Microsoft Graph."
+                "Read and organize your Outlook mailbox — personal "
+                "(Outlook.com) or work/school (Microsoft 365) — send messages "
+                "on your behalf, and read/respond to your Outlook calendar via "
+                "Microsoft Graph."
             ),
         ),
     ]
@@ -120,5 +121,5 @@ def build_registration():
         category="productivity",
         tags=["email", "gmail", "calendar", "triage"],
         icon="mail",
-        tools_count=55,  # guarded by tests/test_email_agent.py (#1232)
+        tools_count=65,  # guarded by tests/test_email_agent.py (#1232)
     )

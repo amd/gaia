@@ -88,7 +88,9 @@ def build_chat():
         category="conversation",
         tags=["chat", "general", "personality"],
         icon="message-circle",
-        tools_count=0,
+        # Introspected registry size for prompt_profile="chat" (shell tools
+        # only) — drift-guarded by tests/unit/test_chat_fix_contracts.py.
+        tools_count=1,
         model_tiers=tiers,
     )
 
@@ -115,7 +117,9 @@ def build_doc():
         category="documents",
         tags=["rag", "files", "search", "mcp"],
         icon="file-text",
-        tools_count=15,
+        # Introspected registry size for prompt_profile="doc" — drift-guarded
+        # by tests/unit/test_chat_fix_contracts.py.
+        tools_count=37,
         model_tiers=tiers,
     )
 
@@ -142,6 +146,9 @@ def build_file():
         category="productivity",
         tags=["files", "search", "filesystem", "shell"],
         icon="folder-search",
-        tools_count=10,
+        # Introspected registry size for prompt_profile="file" (with
+        # enable_filesystem=True, matching this factory's extra kwarg) —
+        # drift-guarded by tests/unit/test_chat_fix_contracts.py.
+        tools_count=33,
         model_tiers=tiers,
     )

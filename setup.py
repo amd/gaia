@@ -103,6 +103,7 @@ setup(
         "gaia.connectors",
         "gaia.connectors.catalog",
         "gaia.connectors.providers",
+        "gaia.skills",
     ],
     package_data={
         "gaia.eval": [
@@ -214,7 +215,10 @@ setup(
             "bpy",
         ],
         "mcp": [
-            "mcp>=1.1.0",
+            # Capped below 2.0: mcp 2.0.0 (released 2026-07-28) breaks
+            # MCPClient.connect() — the custom-agent harness went red with no
+            # code change. Lift the cap in a change that ports the client.
+            "mcp>=1.1.0,<3.0",
             "starlette",
             "uvicorn",
         ],
@@ -244,6 +248,10 @@ setup(
             "autoflake",
             "mypy",
             "bandit",
+            # CVSS 4.0 scoring for the security-audit workflow (util/cvss4.py,
+            # util/findings_to_sarif.py). Pinned: its 4.0 scores match the FIRST
+            # v4 calculator, which the audit's scores must agree with.
+            "cvss>=3.6,<4.0",
             "responses",
             "requests",
             # gaia.connectors runtime deps surfaced in [dev] so that

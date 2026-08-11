@@ -756,3 +756,46 @@
 .oauth-client-editor .oauth-setup-form {
     padding: 0 8px 8px;
 }
+
+/* Device-code sign-in block (#1275) — shown after "Sign in with a code". */
+.device-code-block {
+    margin-top: 10px;
+    padding: 12px;
+    border: 1px solid var(--border-color, #333);
+    border-radius: 8px;
+    background: var(--surface-2, rgba(255, 255, 255, 0.03));
+}
+
+.device-code-instructions {
+    margin: 0 0 8px;
+    font-size: 12px;
+    color: var(--text-primary);
+}
+
+.device-code-value {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.device-code-value code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 18px;
+    letter-spacing: 2px;
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 6px;
+    background: var(--surface-3, rgba(255, 255, 255, 0.06));
+    color: var(--text-primary);
+    user-select: all;
+}
+
+.device-code-waiting {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0 0 8px;
+    font-size: 12px;
+    color: var(--text-muted);
+}

@@ -19,7 +19,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from gaia.agents.base.agent import Agent
+from gaia.agents.base.agent import _CONTEXT_STILL_OVERFLOWING_MESSAGE, Agent
 
 
 class _DummyAgent(Agent):
@@ -193,6 +193,38 @@ class TestProcessQueryRecoversOnContextOverflow:
             assert "exceeds the available context size" not in text
             assert "Traceback" not in text
 
+    def test_flm_context_overflow_after_retry_gives_friendly_fallback(self, agent):
+        """#2513 work item 3: once the FastFlowLM 400 is reachable, an
+        exhausted retry must render the SAME actionable overflow message
+        the llama.cpp path already has (``_CONTEXT_STILL_OVERFLOWING_MESSAGE``,
+        #2763) -- not the generic "Sorry, I ran into an unexpected problem"
+        wrapper, and not a leaked "Max length reached!" backend string.
+        """
+        agent.streaming = False
+        agent._is_loaded_ctx_too_small = lambda: False
+        flm_error_text = (
+            "Error in chat completions (status 400): "
+            '{"error":{"code":400,"details":{"backend":"FastFlowLM",'
+            '"response":{"error":{"code":400,"message":"Max length reached!",'
+            '"type":"model_error"}}},"message":"Max length reached!",'
+            '"status_code":400,"type":"model_error"}}'
+        )
+        responses = [RuntimeError(flm_error_text), RuntimeError(flm_error_text)]
+        chat = MagicMock()
+
+        def _send(*_, **__):
+            raise responses.pop(0)
+
+        chat.send_messages = MagicMock(side_effect=_send)
+        agent.chat = chat
+        result = agent.process_query("x", max_steps=5)
+        # ``process_query`` returns ``{"status": ..., "result": <final_answer>, ...}``
+        text = result["result"] if isinstance(result, dict) else str(result)
+        assert text, "expected the friendly trim-exhausted fallback text"
+        assert text == _CONTEXT_STILL_OVERFLOWING_MESSAGE
+        assert "Max length reached" not in text
+        assert "Sorry, I ran into" not in text
+
     def test_wrong_ctx_loaded_reraises_for_model_reload(self, agent):
         """When the probe reports a too-small loaded ctx, the overflow is
         re-raised so the chat helper can reload the model — instead of being
@@ -219,6 +251,111 @@ class TestProcessQueryRecoversOnContextOverflow:
         assert not any(
             e.get("type") == "llm_context_overflow_trimmed" for e in agent.error_history
         )
+
+    def test_flm_context_overflow_non_streaming_triggers_trim_and_retry(self, agent):
+        """#2513: the exact FastFlowLM 400 must trigger the same trim-and-
+        retry recovery as the llama.cpp phrasings above. Before the fix,
+        "Max length reached!" matched none of the llama.cpp-only substrings,
+        so this recovery was unreachable on the NPU backend.
+        """
+        agent.streaming = False
+        agent._is_loaded_ctx_too_small = lambda: False
+        good = json.dumps({"thought": "ok", "answer": "Here you go."})
+        flm_error_text = (
+            "Error in chat completions (status 400): "
+            '{"error":{"code":400,"details":{"backend":"FastFlowLM",'
+            '"response":{"error":{"code":400,"message":"Max length reached!",'
+            '"type":"model_error"}}},"message":"Max length reached!",'
+            '"status_code":400,"type":"model_error"}}'
+        )
+        chat = self._stub_chat_with_exception_then_answer(
+            agent, RuntimeError(flm_error_text), good
+        )
+        result = agent.process_query("anything", max_steps=5)
+        assert chat.send_messages.call_count == 2
+        assert any(
+            e.get("type") == "llm_context_overflow_trimmed" for e in agent.error_history
+        )
+        # ``process_query`` returns ``{"status": ..., "result": <final_answer>, ...}``
+        text = result["result"] if isinstance(result, dict) else str(result)
+        assert text, "expected the retried answer to reach the user"
+        assert "Max length reached" not in text
+        assert "Sorry, I ran into" not in text
+
+
+class TestProcessQueryRecoversOnContextOverflowStreaming:
+    """Same trim-and-retry recovery as ``TestProcessQueryRecoversOnContextOverflow``,
+    exercised on the streaming path -- #2513 fixed both call sites, which had
+    duplicated the same stale llama.cpp-only substring check.
+    """
+
+    @staticmethod
+    def _chunk(text, is_complete=False):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(text=text, is_complete=is_complete, stats={})
+
+    def test_flm_context_overflow_streaming_triggers_trim_and_retry(self, agent):
+        """First streamed call raises the FastFlowLM 400, second succeeds."""
+        agent.streaming = True
+        agent._is_loaded_ctx_too_small = lambda: False
+        flm_error_text = (
+            "Error in chat completions (status 400): "
+            '{"error":{"code":400,"details":{"backend":"FastFlowLM",'
+            '"response":{"error":{"code":400,"message":"Max length reached!",'
+            '"type":"model_error"}}},"message":"Max length reached!",'
+            '"status_code":400,"type":"model_error"}}'
+        )
+        good_stream = [self._chunk("Here you go.", is_complete=False)]
+        call_count = {"n": 0}
+
+        def _send_stream(*_, **__):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                raise RuntimeError(flm_error_text)
+            return iter(good_stream)
+
+        agent.chat.send_messages_stream = MagicMock(side_effect=_send_stream)
+
+        result = agent.process_query("anything", max_steps=5)
+
+        assert call_count["n"] == 2
+        assert any(
+            e.get("type") == "llm_context_overflow_trimmed" for e in agent.error_history
+        )
+        # ``process_query`` returns ``{"status": ..., "result": <final_answer>, ...}``
+        text = result["result"] if isinstance(result, dict) else str(result)
+        assert text, "expected the retried streamed answer to reach the user"
+        assert "Max length reached" not in text
+
+    def test_context_overflow_streaming_after_retry_gives_actionable_fallback(
+        self, agent
+    ):
+        """#2763: the streaming path's exhausted-retry fallback must be the
+        SAME actionable ``_CONTEXT_STILL_OVERFLOWING_MESSAGE`` the
+        non-streaming path renders (``test_flm_context_overflow_after_retry_
+        gives_friendly_fallback`` above) -- not a leaked exception string.
+        Previously untested: only the streaming SUCCESS-after-retry case
+        (the test above) had coverage; the streaming STILL-overflowing case
+        did not.
+        """
+        agent.streaming = True
+        agent._is_loaded_ctx_too_small = lambda: False
+        call_count = {"n": 0}
+
+        def _send_stream(*_, **__):
+            call_count["n"] += 1
+            raise RuntimeError("exceeds the available context size")
+
+        agent.chat.send_messages_stream = MagicMock(side_effect=_send_stream)
+
+        result = agent.process_query("anything", max_steps=5)
+
+        assert call_count["n"] == 2  # initial attempt + one trim-and-retry
+        text = result["result"] if isinstance(result, dict) else str(result)
+        assert text == _CONTEXT_STILL_OVERFLOWING_MESSAGE
+        assert "exceeds the available context size" not in text
+        assert "Sorry, I ran into" not in text
 
 
 class TestRepairInvalidJsonEscapes:

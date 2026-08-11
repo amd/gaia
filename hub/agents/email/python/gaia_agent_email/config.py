@@ -22,6 +22,11 @@ from urllib.parse import urlparse
 
 from gaia.agents.base.agent import default_max_steps
 from gaia.connectors.api import connected_mailbox_providers, get_connection
+from gaia.connectors.errors import ConnectorsError
+from gaia.connectors.providers.microsoft import ACCOUNT_TYPES
+from gaia.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class ConfigurationError(ValueError):
@@ -55,6 +60,147 @@ def _allowed_hosts() -> set[str]:
     return out
 
 
+# The 120s default is a chat-speed floor. Chat-mediated bulk operations run
+# through the LLM tool-loop and take real time (a multi-item archive could
+# exceed the old 30s default on a slow local model, #2447), so the default is
+# raised and remains overridable via GAIA_EMAIL_UNDO_WINDOW_SECONDS.
+_UNDO_WINDOW_ENV = "GAIA_EMAIL_UNDO_WINDOW_SECONDS"
+_DEFAULT_UNDO_WINDOW_SECONDS = 120
+
+
+def default_undo_window_seconds() -> int:
+    """Resolve the undo window from ``GAIA_EMAIL_UNDO_WINDOW_SECONDS``, else 120.
+
+    A malformed or non-positive override raises ``ConfigurationError`` rather
+    than silently falling back to the default — a bad env value is a
+    configuration error the operator must fix, not a value to guess past.
+    """
+    raw = os.environ.get(_UNDO_WINDOW_ENV, "").strip()
+    if not raw:
+        return _DEFAULT_UNDO_WINDOW_SECONDS
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ConfigurationError(
+            f"{_UNDO_WINDOW_ENV}={raw!r} is not an integer. Set it to a "
+            f"positive number of seconds (e.g. 120), or unset it to use the "
+            f"{_DEFAULT_UNDO_WINDOW_SECONDS}s default."
+        ) from exc
+    if value <= 0:
+        raise ConfigurationError(
+            f"{_UNDO_WINDOW_ENV}={raw!r} must be a positive number of seconds. "
+            f"Unset it to use the {_DEFAULT_UNDO_WINDOW_SECONDS}s default."
+        )
+    return value
+
+
+# The single owner of "how many messages does a scan look at by default"
+# (#2643 measured/pinned this at 50; #2743 collapsed every call site that
+# used to restate its own literal — 25, 50, or 100 — into this one constant,
+# closing the bug class where two scans of different depth produced two
+# disagreeing summaries of the same inbox). Distinct from the ceiling below:
+# this is what a caller gets when it asks for the default; the ceiling is
+# the most it can ask for even when it explicitly requests more.
+DEFAULT_INBOX_SCAN_MESSAGES = 50
+
+# Per-call ceiling for inbox-scanning tools (triage / pre-scan). Bounds an
+# interactive call so the LLM can't trigger a thousand-message scan. The eval
+# benchmark raises it to cover a whole labelled corpus deterministically.
+_INBOX_SCAN_CEILING_ENV = "GAIA_EMAIL_TRIAGE_MAX_MESSAGES"
+DEFAULT_INBOX_SCAN_CEILING = 100
+
+
+def default_inbox_scan_ceiling() -> int:
+    """Resolve the scan ceiling from ``GAIA_EMAIL_TRIAGE_MAX_MESSAGES``, else 100.
+
+    Resolved at construction (like :func:`default_undo_window_seconds`) so a bad
+    value fails startup instead of degrading every later tool call.
+    """
+    raw = os.environ.get(_INBOX_SCAN_CEILING_ENV, "").strip()
+    if not raw:
+        return DEFAULT_INBOX_SCAN_CEILING
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ConfigurationError(
+            f"{_INBOX_SCAN_CEILING_ENV}={raw!r} is not an integer. Set it to a "
+            f"positive message count (e.g. 250), or unset it to use the "
+            f"{DEFAULT_INBOX_SCAN_CEILING}-message default."
+        ) from exc
+    if value <= 0:
+        raise ConfigurationError(
+            f"{_INBOX_SCAN_CEILING_ENV}={raw!r} must be a positive message "
+            f"count. Unset it to use the {DEFAULT_INBOX_SCAN_CEILING}-message "
+            "default."
+        )
+    return value
+
+
+# Microsoft-family connector ids, in registry order (#2628 split the single
+# ``microsoft`` connector into a personal one and ``microsoft_work``). The
+# account kind is recorded on whichever the user connected.
+_MICROSOFT_CONNECTOR_IDS = ("microsoft", "microsoft_work")
+
+SKILL_SET_ENV = "GAIA_EMAIL_SKILL_SET"
+ACCOUNT_TYPE_ENV = "GAIA_EMAIL_ACCOUNT_TYPE"
+
+
+def default_skill_set() -> Optional[str]:
+    """Read an explicit skill-set override from ``GAIA_EMAIL_SKILL_SET``.
+
+    ``None`` (unset) means "let the agent resolve one" — the account-type
+    selector, then the manifest's ``default_skill_set``. The name itself is
+    validated by the framework against the manifest's declared sets, so a typo
+    fails at startup naming the valid names rather than here with less context.
+    """
+    return os.environ.get(SKILL_SET_ENV, "").strip() or None
+
+
+def default_account_type() -> Optional[str]:
+    """Read an explicit account kind from ``GAIA_EMAIL_ACCOUNT_TYPE``.
+
+    ``personal`` or ``work``; unset means "derive it from the connected
+    mailbox". A malformed value raises rather than being ignored — an operator
+    who set it meant to pin the behaviour, and silently discarding the value
+    would activate the wrong skill set.
+    """
+    raw = os.environ.get(ACCOUNT_TYPE_ENV, "").strip().lower()
+    if not raw:
+        return None
+    if raw not in ACCOUNT_TYPES:
+        raise ConfigurationError(
+            f"{ACCOUNT_TYPE_ENV}={raw!r} is not a valid account type. Use one "
+            f"of: {', '.join(ACCOUNT_TYPES)}, or unset it to derive the kind "
+            "from the connected mailbox."
+        )
+    return raw
+# The SLM layer is experimental and off by default (see ``use_slm`` below).
+# ``GAIA_EMAIL_USE_SLM`` is how it gets turned on without editing source —
+# matching GAIA_EMAIL_BRIEFING_ENABLED / GAIA_EMAIL_AUTONOMY_ENABLED.
+_USE_SLM_ENV = "GAIA_EMAIL_USE_SLM"
+_TRUE_VALUES = frozenset({"1", "true", "yes"})
+_FALSE_VALUES = frozenset({"0", "false", "no", ""})
+
+
+def default_use_slm() -> bool:
+    """Resolve ``use_slm`` from ``GAIA_EMAIL_USE_SLM``, else False.
+
+    An unparseable value raises ``ConfigurationError`` rather than guessing —
+    an operator who typed ``GAIA_EMAIL_USE_SLM=ture`` should be told, not
+    silently given the default.
+    """
+    raw = os.environ.get(_USE_SLM_ENV, "").strip().lower()
+    if raw in _TRUE_VALUES:
+        return True
+    if raw in _FALSE_VALUES:
+        return False
+    raise ConfigurationError(
+        f"{_USE_SLM_ENV}={os.environ.get(_USE_SLM_ENV)!r} is not a valid "
+        "boolean. Use 'true'/'1'/'yes' to enable the experimental SLM "
+        "classifiers, or unset it (they are off by default)."
+    )
+
+
 @dataclass
 class EmailAgentConfig:
     """Configuration for ``EmailTriageAgent``.
@@ -76,9 +222,15 @@ class EmailAgentConfig:
     - ``silent_mode``: suppress all console output (for JSON-only API
       usage).
     - ``output_dir``: where the agent dumps transcripts / artifacts.
-    - ``undo_window_seconds``: how long after a soft-delete the user has
-      to ``restore_message``. After this window ``restore_message``
-      raises with a "use Trash to recover" message.
+    - ``undo_window_seconds``: how long after a soft-delete/archive the user
+      has to ``restore_message`` / ``undo_archive_batch`` via their action_id.
+      After this window those two raise, pointing at their state-reconciling
+      counterparts instead (``restore_trashed_message`` / ``search_trash``
+      for trash — #2523 — has no window at all: it works any time the
+      message is still in Trash). Defaults to 120 (a chat-speed floor) but is
+      overridable via the ``GAIA_EMAIL_UNDO_WINDOW_SECONDS`` env var so
+      chat-mediated bulk operations — which run through the slower LLM
+      tool-loop — stay undoable after completion (#2447).
     - ``followup_window_days``: how many days a sent message may sit
       without an inbound reply before ``check_followups`` flags it
       (#1606). Must be a positive integer.
@@ -94,8 +246,8 @@ class EmailAgentConfig:
       ``resolve_mail_backend`` stays connector-agnostic (``None`` → Gmail) for
       the eval seam. Case-insensitive.
     - ``calendar_provider``: which calendar provider the agent operates on —
-      ``"google"`` (the default) or ``"microsoft"`` (personal Outlook.com
-      calendar via MS Graph, #1276). Selects the live backend in
+      ``"google"`` (the default) or ``"microsoft"`` (Outlook calendar —
+      personal or work/school — via MS Graph, #1276). Selects the live backend in
       ``resolve_calendar_backend``. Case-insensitive. When ``None`` (the
       default), tracks ``mail_provider`` so a Microsoft-only user who set
       ``mail_provider="microsoft"`` gets the Outlook calendar too without
@@ -109,6 +261,20 @@ class EmailAgentConfig:
     - ``scheduler_poll_seconds`` / ``start_scheduler``: the one-shot scheduler
       for scheduled send + snooze (#1609). ``start_scheduler=False`` skips the
       polling thread — tests drive ``fire_due_jobs()`` deterministically.
+    - ``use_slm``: enable the SLM classifiers (phishing detection + triage
+      category). **Experimental — defaults to False.** Set True (or
+      ``GAIA_EMAIL_USE_SLM=true``) to run the classifiers; otherwise the
+      heuristic + LLM flow handles both. Local Lemonade only (AC3).
+    - ``slm_triage_model`` / ``slm_triage_checkpoint``: Lemonade model id and
+      checkpoint (``org/repo:file.gguf``) for the triage-category SLM. Labels
+      are the five triage categories. Both must be set together or the task is
+      skipped (fail safe).
+    - ``slm_phishing_model`` / ``slm_phishing_checkpoint``: Lemonade model id
+      and checkpoint for the phishing SLM (labels ``"True"`` / ``"False"``).
+      When available, runs first as the sole phishing decision; on miss the
+      agent falls back to ``detect_phishing``.
+    - ``force_llm``: when True, every message is routed to the LLM classifier
+      (benchmarking) — also skips the SLM triage step.
     - ``ctx_size``: exact context-window pin for THIS agent's LLM client
       (#1892). When set, the agent wires it as the LemonadeClient's
       instance-scoped ``ctx_size_override`` so every model load happens at
@@ -124,7 +290,8 @@ class EmailAgentConfig:
     silent_mode: bool = False
     show_stats: bool = False
     output_dir: Optional[str] = None
-    undo_window_seconds: int = 30
+    undo_window_seconds: int = field(default_factory=default_undo_window_seconds)
+    inbox_scan_ceiling: int = field(default_factory=default_inbox_scan_ceiling)
     followup_window_days: int = 3
     db_path: Optional[str] = None
     memory_db_path: Optional[str] = None
@@ -141,12 +308,41 @@ class EmailAgentConfig:
     outlook_backend: Optional[Any] = None
     calendar_backend: Optional[Any] = None
     force_llm: bool = False
+    use_slm: bool = field(default_factory=default_use_slm)
+    slm_triage_model: Optional[str] = "specific-ai-triage"
+    slm_triage_checkpoint: Optional[str] = (
+        "specific-AI/email-agent-triage:bert-base-only.gguf"
+    )
+    slm_phishing_model: Optional[str] = "specific-ai-phishing-detection"
+    slm_phishing_checkpoint: Optional[str] = (
+        "specific-AI/email-agent-phishing-detection:bert-base-only.gguf"
+    )
     # One-shot scheduler (#1609): scheduled send + snooze. ``start_scheduler``
     # controls the built-in polling thread; tests set it False and drive
     # ``EmailJobScheduler.fire_due_jobs()`` deterministically instead.
     scheduler_poll_seconds: float = 30.0
     start_scheduler: bool = True
     ctx_size: Optional[int] = None
+    # Full-autonomy earn-trust engine (#1483 / #1287). ``autonomy_level`` is the
+    # single switch: "off" (default — chat only, no autonomous activity),
+    # "suggest" (propose only), "earn_trust" (auto-execute reversible actions in
+    # trusted/approved scopes, draft replies, suggest the rest — this is what
+    # "full autonomy mode" maps to), or "full" (auto-execute every reversible
+    # action). The destructive/irreversible confirm-floor (send, forward,
+    # permanent delete, RSVP, quarantine) ALWAYS asks, at every level — see
+    # ``trust.TrustPolicy``. A scope becomes trusted only after
+    # ``autonomy_trust_min_samples`` decisions at/above ``autonomy_trust_threshold``.
+    autonomy_level: str = "off"
+    autonomy_trust_min_samples: int = 5
+    autonomy_trust_threshold: float = 0.85
+    # Agent Skills (#2466). ``skill_set`` is the explicit override (the
+    # ``--skill-set`` flag / GAIA_EMAIL_SKILL_SET) and beats everything.
+    # ``account_type`` pins the mailbox kind the selector maps to a set; unset
+    # means "derive it from the connected mailbox" — the Microsoft id_token
+    # ``tid`` claim recorded at connect time. Gmail has no equivalent claim, so a
+    # Gmail-only mailbox resolves through the manifest's ``default_skill_set``.
+    skill_set: Optional[str] = field(default_factory=default_skill_set)
+    account_type: Optional[str] = field(default_factory=default_account_type)
 
     def validate(self) -> None:
         """Run startup-time invariants. Called from the agent's __init__.
@@ -171,6 +367,15 @@ class EmailAgentConfig:
                     "cloud LLM endpoints are permitted (AC3). To use a "
                     "non-default Lemonade port, set LEMONADE_BASE_URL."
                 )
+        if not isinstance(self.undo_window_seconds, int) or (
+            self.undo_window_seconds <= 0
+        ):
+            raise ConfigurationError(
+                f"EmailAgentConfig.undo_window_seconds must be a positive "
+                f"integer number of seconds, got {self.undo_window_seconds!r}. "
+                f"Set {_UNDO_WINDOW_ENV} to a positive value or leave it unset "
+                f"for the {_DEFAULT_UNDO_WINDOW_SECONDS}s default."
+            )
         if not isinstance(self.followup_window_days, int) or (
             self.followup_window_days <= 0
         ):
@@ -178,6 +383,20 @@ class EmailAgentConfig:
                 f"EmailAgentConfig.followup_window_days must be a positive "
                 f"integer number of days, got {self.followup_window_days!r}."
             )
+        if self.use_slm:
+            # Both model and checkpoint required per task; both-empty = skip.
+            for task, model, checkpoint in (
+                ("triage", self.slm_triage_model, self.slm_triage_checkpoint),
+                ("phishing", self.slm_phishing_model, self.slm_phishing_checkpoint),
+            ):
+                if bool(model) != bool(checkpoint):
+                    raise ConfigurationError(
+                        f"EmailAgentConfig SLM {task} task is half-configured: "
+                        f"slm_{task}_model={model!r} and "
+                        f"slm_{task}_checkpoint={checkpoint!r}. Set BOTH (the "
+                        "Lemonade model id and its 'org/repo:file.gguf' "
+                        "checkpoint) or leave both unset to skip the task."
+                    )
         if self.ctx_size is not None and (
             not isinstance(self.ctx_size, int) or self.ctx_size <= 0
         ):
@@ -187,6 +406,80 @@ class EmailAgentConfig:
                 "envelope target) or leave it None for Lemonade's default "
                 "floor."
             )
+        # Import here (not at module top) to keep config import-cheap for the
+        # many callers that never touch the autonomy engine.
+        from gaia_agent_email.trust import AUTONOMY_LEVELS
+
+        if self.autonomy_level not in AUTONOMY_LEVELS:
+            raise ConfigurationError(
+                f"EmailAgentConfig.autonomy_level must be one of "
+                f"{list(AUTONOMY_LEVELS)}, got {self.autonomy_level!r}."
+            )
+        if (
+            not isinstance(self.autonomy_trust_min_samples, int)
+            or self.autonomy_trust_min_samples < 1
+        ):
+            raise ConfigurationError(
+                f"EmailAgentConfig.autonomy_trust_min_samples must be a "
+                f"positive integer, got {self.autonomy_trust_min_samples!r}."
+            )
+        if not 0.0 < self.autonomy_trust_threshold <= 1.0:
+            raise ConfigurationError(
+                f"EmailAgentConfig.autonomy_trust_threshold must be in (0, 1], "
+                f"got {self.autonomy_trust_threshold!r}."
+            )
+        if self.account_type is not None and self.account_type not in ACCOUNT_TYPES:
+            raise ConfigurationError(
+                f"EmailAgentConfig.account_type must be one of "
+                f"{list(ACCOUNT_TYPES)} or None, got {self.account_type!r}. "
+                "Leave it None to derive the kind from the connected mailbox."
+            )
+
+    def resolve_account_type(self) -> Optional[str]:
+        """The mailbox kind that keys skill-set selection (#2466).
+
+        Resolution order:
+          1. An explicit ``account_type`` (config field / ``GAIA_EMAIL_ACCOUNT_TYPE``).
+          2. The kind recorded on a connected Microsoft mailbox, derived from the
+             id_token ``tid`` claim at connect time. Both Microsoft connectors are
+             consulted in registry order (#2628 split ``microsoft`` — personal,
+             ``consumers`` authority — from ``microsoft_work``); the first with a
+             recorded kind wins. Today only ``microsoft`` is in this agent's
+             ``REQUIRED_CONNECTORS``, so ``microsoft_work`` is checked purely so
+             this keeps working when #2629 wires it up.
+          3. ``None`` — unknown.
+
+        ``None`` is a real answer, not a failure: a Gmail-only mailbox has no
+        Microsoft tenant to inspect, so there is nothing to classify. The caller
+        then resolves through the manifest's ``default_skill_set`` — a declared
+        default, reached explicitly and logged, rather than a kind inferred from
+        the mailbox.
+
+        Note this reads the Microsoft connection regardless of ``mail_provider``:
+        the account kind describes the *user*, not which mailbox this run happens
+        to read, so a Gmail-filtered run on a machine with a work Microsoft
+        account still resolves ``work``. Set ``account_type`` explicitly if that
+        is not what you want.
+        """
+        if self.account_type:
+            return self.account_type
+        try:
+            for connector_id in _MICROSOFT_CONNECTOR_IDS:
+                recorded = (get_connection(connector_id) or {}).get("account_type")
+                if recorded:
+                    return recorded
+            return None
+        except ConnectorsError as e:
+            # The connection store is unreadable (no keyring backend, corrupt
+            # blob). The kind is unknown, which the caller handles explicitly.
+            logger.warning(
+                "Could not read the Microsoft connection to derive the account "
+                "type (%s) — the mailbox kind is unknown, so the manifest's "
+                "default skill set applies. Set GAIA_EMAIL_ACCOUNT_TYPE to pin "
+                "it.",
+                e,
+            )
+            return None
 
     def resolved_db_path(self) -> str:
         """Return the SQLite path with ``$HOME`` expanded.

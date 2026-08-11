@@ -20,6 +20,7 @@ from gaia.llm.lemonade_client import (
     LemonadeClient,
     LemonadeClientError,
 )
+from gaia.llm.lemonade_launcher import describe_start_hint
 from gaia.logger import get_logger
 
 # Allow-list mapping from detected device -> Lemonade recipe
@@ -330,13 +331,10 @@ class LemonadeManager:
             )
             print("If auto-start fails, you can start it manually by:", file=sys.stderr)
             print("  • Double-clicking the desktop shortcut, or", file=sys.stderr)
-            if min_context_size >= 32768:
-                print(
-                    f"  • Running: lemonade-server serve --ctx-size {min_context_size}",
-                    file=sys.stderr,
-                )
-            else:
-                print("  • Running: lemonade-server serve", file=sys.stderr)
+            print(
+                f"  • {describe_start_hint(min_context_size).instruction}",
+                file=sys.stderr,
+            )
             print("", file=sys.stderr)
             if min_context_size >= 32768:
                 print(
@@ -384,7 +382,7 @@ class LemonadeManager:
         print("   To fix this issue:", file=sys.stderr)
         print("   1. Stop the Lemonade server (if running)", file=sys.stderr)
         print(
-            f"   2. Restart with: lemonade-server serve --ctx-size {required_size}",
+            f"   2. {describe_start_hint(required_size).instruction}",
             file=sys.stderr,
         )
         print("", file=sys.stderr)
@@ -422,11 +420,11 @@ class LemonadeManager:
                             if k in item:
                                 detected.add(str(item[k]))
                                 break
-        # Lemonade on Apple Silicon reports the llama.cpp Metal backend as
-        # 'metal' in system_info while its health payload calls the same device
-        # 'gpu' — normalize to the generic GPU tier so a default device='gpu'
-        # request validates on macOS instead of falling through to cpu.
-        if "metal" in detected:
+        # Live Lemonade groups AMD/NVIDIA GPUs under amd_gpu/nvidia_gpu (a list),
+        # and Apple Silicon uses 'metal' — none are in _DEVICE_PRIORITY's legacy
+        # amd_igpu/amd_dgpu keys. Normalize any detected GPU to the generic GPU
+        # tier so a present dGPU isn't rejected and forced to CPU.
+        if any(_is_gpu_device_key(d) for d in detected):
             detected.add("amd_dgpu")
         # Find highest-capability detected device
         highest = None
@@ -552,7 +550,8 @@ class LemonadeManager:
 
         Note:
             The Lemonade server must be running before calling this method.
-            Start it with: lemonade-server serve --ctx-size 32768
+            :func:`gaia.llm.lemonade_launcher.describe_start_hint` renders the
+            platform-correct way to start it.
         """
         # Callers thread config values through verbatim — an unset (None)
         # floor means the default, never a TypeError at the ctx comparison.
@@ -653,8 +652,9 @@ class LemonadeManager:
                                 return True
                             cls._log.warning(
                                 f"Lemonade running with {cls._context_size} tokens, "
-                                f"but {min_context_size} requested. "
-                                f"Restart with: lemonade-server serve --ctx-size {min_context_size}"
+                                f"but {min_context_size} requested. Restart Lemonade "
+                                f"Server. "
+                                f"{describe_start_hint(min_context_size).instruction}"
                             )
                             if not quiet:
                                 cls.print_context_message(
@@ -806,9 +806,8 @@ class LemonadeManager:
         Closes the gap left by `_try_reload_with_ctx`, which only handles the
         "model already loaded with too-small ctx" path.  When the server is
         running but idle (no model loaded, no ctx reported), this helper
-        proactively seeds it so the user does not see the legacy
-        "Restart with: lemonade-server serve --ctx-size N" message
-        (issue #839).
+        proactively seeds it so the user does not see the "restart with a
+        bigger context" message at all (issue #839).
 
         Releases `lock` for the duration of the blocking `load_model` call —
         important because `auto_download=True` means a first-run user pays a
@@ -818,8 +817,9 @@ class LemonadeManager:
 
         Raises:
             LemonadeClientError: if `load_model` fails. Carries an actionable
-                message (Lemonade / ctx_size= / lemonade-server serve) so the
-                user can recover manually if the auto-preload cannot.
+                message (Lemonade / ctx_size= / the platform's real start
+                command) so the user can recover manually if the auto-preload
+                cannot.
         """
         cls._log.info(
             "Preloading '%s' with ctx_size=%d on idle Lemonade server",
@@ -850,8 +850,8 @@ class LemonadeManager:
                 f"Failed to preload Lemonade model {DEFAULT_MODEL_NAME!r} with "
                 f"ctx_size={min_context_size} on idle server at "
                 f"{client.base_url}.\n"
-                f"To recover manually: stop the running server, then run "
-                f"'lemonade-server serve --ctx-size {min_context_size}' and "
+                f"To recover manually: stop the running server, then restart it "
+                f"({describe_start_hint(min_context_size).instruction}) and "
                 f"re-run your GAIA command.\n"
                 f"See the Lemonade server log for details "
                 f"(typical path: ~/.cache/lemonade/server.log)."

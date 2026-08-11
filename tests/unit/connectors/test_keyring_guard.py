@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import builtins
 import importlib
+import os
 import sys
 
 import pytest
@@ -69,3 +70,78 @@ def test_keyring_shim_reexports_real_module() -> None:
     real = importlib.import_module("keyring")
     assert shim.keyring is real
     assert hasattr(shim.keyring, "errors")
+
+
+# ---------------------------------------------------------------------------
+# PYTHON_KEYRING_BACKEND normalization + loud failure (issue #2441)
+#
+# keyring resolves PYTHON_KEYRING_BACKEND as a fully-qualified 'module.Class'
+# path (value.rpartition('.')). A dotless value — the common dev/test shorthand
+# 'null' — yields an empty module name and __import__('') raises
+# ``ValueError: Empty module name`` deep inside keyring, which the email sidecar
+# surfaced as an opaque 502 on macOS dev mode.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("shorthand", ["null", "none", "off", "disabled", "  NULL  "])
+def test_normalize_rewrites_null_shorthand_to_real_backend(
+    shorthand: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A dotless no-op-store shorthand is rewritten to keyring's null backend
+    class BEFORE keyring resolves it — so ``keyring.get_keyring()`` no longer
+    raises ``Empty module name``."""
+    from gaia.connectors._keyring import (
+        _NULL_KEYRING_BACKEND,
+        normalize_keyring_backend_env,
+    )
+
+    monkeypatch.setenv("PYTHON_KEYRING_BACKEND", shorthand)
+    normalize_keyring_backend_env()
+    assert os.environ["PYTHON_KEYRING_BACKEND"] == _NULL_KEYRING_BACKEND
+
+    # The rewritten value is a real, resolvable keyring backend (proves the
+    # Empty-module-name crash is gone for the documented dev/test workflow).
+    import keyring
+
+    monkeypatch.setattr(keyring.core, "_keyring_backend", None, raising=False)
+    backend = keyring.get_keyring()
+    assert type(backend).__module__ == "keyring.backends.null"
+
+
+def test_normalize_is_noop_for_unset_and_dotted_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A fully-qualified path (or an unset var) is left untouched — normalization
+    only ever rewrites the dotless shorthands."""
+    from gaia.connectors._keyring import normalize_keyring_backend_env
+
+    monkeypatch.delenv("PYTHON_KEYRING_BACKEND", raising=False)
+    normalize_keyring_backend_env()
+    assert "PYTHON_KEYRING_BACKEND" not in os.environ
+
+    monkeypatch.setenv("PYTHON_KEYRING_BACKEND", "keyring.backends.fail.Keyring")
+    normalize_keyring_backend_env()
+    assert os.environ["PYTHON_KEYRING_BACKEND"] == "keyring.backends.fail.Keyring"
+
+
+def test_verify_keyring_backend_raises_actionable_error_on_bad_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unresolvable (non-shorthand) PYTHON_KEYRING_BACKEND surfaces as an
+    actionable ``ConnectorsError`` naming the offending value and the correct
+    form — never keyring's opaque ``Empty module name`` / import error."""
+    import keyring
+
+    from gaia.connectors.store import verify_keyring_backend
+
+    monkeypatch.setenv("PYTHON_KEYRING_BACKEND", "totally.bogus.Backend")
+    monkeypatch.setattr(keyring.core, "_keyring_backend", None, raising=False)
+
+    with pytest.raises(ConnectorsError) as excinfo:
+        verify_keyring_backend()
+
+    msg = str(excinfo.value)
+    assert "totally.bogus.Backend" in msg  # names the offending value
+    assert "keyring.backends.null.Keyring" in msg  # names the correct form
+    # The opaque keyring message must be wrapped, not surfaced bare.
+    assert "Could not initialize the keyring backend" in msg

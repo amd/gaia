@@ -83,6 +83,39 @@ agent = MyAgent(output_handler=handler)
 
 ---
 
+## Confirming Dangerous Tools
+
+Tools listed in the agent's `confirmation_required_tools()` set — the generic
+shell / file-mutation names plus whatever the agent declares in
+`CONFIRMATION_REQUIRED_TOOLS` (email send, permanent delete, calendar RSVP) —
+never execute until `confirm_tool_execution()` returns `True`. The gate is
+name-based and applies to `Agent._execute_tool`, so a tool that isn't in that set
+(or code that bypasses the agent loop) is not covered. What a confirmation means
+depends on the handler:
+
+| Handler | Behaviour |
+|---------|-----------|
+| `AgentConsole` / `SilentConsole`, stdin **and** stdout are a terminal | Prints the tool and its literal arguments, then asks `[y]es / [N]o / [a]lways for this tool`. Defaults to **no**; Ctrl-C and EOF also mean no. `a` remembers that one tool for the life of the console (never offered for `run_shell_command` / `run_cli_command`, where the name says nothing about the next call). Silent mode suppresses narration, not consent. |
+| Either console with piped stdin, redirected stdout, CI, or a subprocess host | **Denies** — there is nobody to ask, or nowhere the question would be visible. The tool result explains why and how to proceed. |
+| Any handler that doesn't override the default (e.g. the OpenAI-compatible API server's SSE handler) | **Denies**, same reasoning. |
+| Agent UI's `SSEOutputHandler` | Emits a `permission_request` event, blocks up to 60 s for the modal's answer, denies on timeout. |
+
+The agent loop turns a denial into a `{"status": "denied", "error": ...}` tool
+result, so the model can explain itself or pick a different action instead of the
+run crashing.
+
+<Warning>
+  For a genuinely unattended run (CI, a batch job, a host that already asked the
+  user), set `GAIA_AUTO_APPROVE_TOOLS=1` in the launching environment, or
+  construct the console with `AgentConsole(auto_approve_gated_tools=True)`. Every
+  approval taken this way is logged with the tool name. The variable is read from
+  the environment as it was at startup, so a project-local `.env` cannot enable
+  it. Do not leave it set on a machine with a live mailbox connected — it lets the
+  model send, forward, and permanently delete without asking.
+</Warning>
+
+---
+
 ## Related Topics
 
 - **[Agent System](./agent-system)** - Learn about the agent foundation

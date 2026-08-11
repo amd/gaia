@@ -11,6 +11,7 @@ import inspect
 import os
 import platform
 import re
+import sys
 import threading
 import time
 import warnings
@@ -617,6 +618,14 @@ class AgentRegistry:
         else:
             logger.info("registry: No custom agent directory found at %s", agents_dir)
 
+        # 2.5. Prime sys.path with every hub-installed wheel agent's
+        # site-packages BEFORE the entry-point scan below. installer.install()
+        # only mutates sys.path in the process that ran the install
+        # (_hot_register); a fresh process (e.g. the next `gaia chat`
+        # invocation) never sees a wheel agent installed by an earlier `gaia
+        # init` unless something re-adds it here (#2358).
+        self._prime_installed_wheel_agents_path()
+
         # 3. Discover installed Python agents exposed by standalone wheels
         self._discover_installed_agents()
 
@@ -629,6 +638,59 @@ class AgentRegistry:
             len(agent_ids),
             agent_ids,
         )
+
+    def _prime_installed_wheel_agents_path(self) -> None:
+        """Append every hub-installed WHEEL agent's ``site-packages`` to
+        ``sys.path`` so the entry-point scan in ``_discover_installed_agents``
+        can find it, even in a process that never ran the install (#2358).
+
+        Import of ``gaia.hub.installer`` is deliberately function-local:
+        ``installer.py`` does an unconditional module-level ``from
+        gaia.agents.registry import _RESERVED_BUILTIN_IDS``, so a module-level
+        import here would create a circular partial-init error on whichever
+        module happens to import ``gaia.agents.registry`` first.
+
+        Uses ``sys.path.append`` (never ``insert(0)``): entry-point discovery
+        via ``importlib.metadata.entry_points()`` unions dist-info across
+        every ``sys.path`` entry regardless of order, so prepending buys
+        nothing for discovery here — but it WOULD give an isolated per-agent
+        ``site-packages`` process-wide precedence over the active
+        environment's own pinned dependencies (``amd-gaia`` and its NPU/
+        torch/numpy pins), since ``pip install --target`` installs a fresh
+        copy of any dependency the active env doesn't already satisfy.
+        """
+        from gaia.hub import installer as hub_installer
+
+        try:
+            installed = hub_installer.list_installed()
+        except Exception as exc:  # noqa: BLE001 - best-effort discovery step
+            logger.warning(
+                "registry: could not list hub-installed agents for sys.path "
+                "priming: %s",
+                exc,
+            )
+            return
+
+        for agent_id, info in installed.items():
+            if info.artifact_kind != hub_installer.ARTIFACT_KIND_WHEEL:
+                continue
+            if info.path is None:
+                continue
+            site_packages = info.path / hub_installer.SITE_PACKAGES_DIRNAME
+            if not site_packages.is_dir():
+                continue
+            sp = str(site_packages)
+            if sp not in sys.path:
+                sys.path.append(sp)
+                logger.debug(
+                    "registry: primed sys.path with %s's site-packages (%s)",
+                    agent_id,
+                    sp,
+                )
+
+        # Invalidate import-machinery caches (mirrors _hot_register) so the
+        # entry-point scan right after this sees the newly appended paths.
+        importlib.invalidate_caches()
 
     # ------------------------------------------------------------------
     # Built-in agents
@@ -1206,6 +1268,60 @@ class AgentRegistry:
         rename.
         """
         return self._agents.get(self.canonical_id(agent_id))
+
+    def register_sidecar(
+        self,
+        agent_id: str,
+        display_name: str,
+        required_connections: List[ConnectorRequirement],
+    ) -> None:
+        """Register a daemon-supervised sidecar agent (e.g. email) (#2408).
+
+        A sidecar install (frozen binary + ``.installed`` sentinel under
+        ``~/.gaia/agents/<id>/``) ships no ``agent.py``, so ``discover()``'s
+        directory scan never finds it and the connectors grant flow 404s on
+        its namespaced id forever. This registers a lightweight stand-in with
+        real identity and the connector scopes the daemon spec declares, but
+        a factory that fails loudly rather than importing or instantiating
+        the out-of-process agent — the UI backend never imports the hub
+        wheel (server.py:621-629).
+
+        Idempotent: a no-op if *agent_id* (the BARE id, not the namespaced
+        one) is already registered — protects a real wheel/custom-agent
+        registration, or a repeated call, from being clobbered by this stub.
+        Called by ``gaia.hub.installer.register_installed_sidecars``.
+        """
+        if self.get(agent_id) is not None:
+            return
+
+        def _sidecar_factory(**_kwargs):
+            raise RuntimeError(
+                f"'{agent_id}' runs out-of-process as a daemon sidecar; it "
+                "is not instantiated in-process by the AgentRegistry. It is "
+                "supervised by the gaia daemon and reached over its own "
+                "REST/MCP surface."
+            )
+
+        self._register(
+            AgentRegistration(
+                id=agent_id,
+                name=display_name,
+                description=f"{display_name} agent",
+                source="installed",
+                conversation_starters=[],
+                factory=_sidecar_factory,
+                agent_dir=None,
+                models=[],
+                hidden=False,
+                required_connections=list(required_connections),
+                namespaced_agent_id=f"installed:{agent_id}",
+            )
+        )
+        logger.info(
+            "registry: Registered sidecar agent: %s (namespaced installed:%s)",
+            agent_id,
+            agent_id,
+        )
 
     def list(self) -> List[AgentRegistration]:
         """Return all registered agents."""

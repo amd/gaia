@@ -68,8 +68,8 @@ _GATE_FIXTURES_DIR = _REPO_ROOT / "tests" / "fixtures" / "email"
 # Committed, generated artifact.
 ARTIFACT_PATH = _EMAIL_ROOT / "CAPABILITY_MATRIX.md"
 
-# REST path suffixes that are probe/utility endpoints, not part of the 16
-# functional verbs (still counted in the 19-operation frozen contract).
+# REST path suffixes that are probe/utility endpoints: excluded from the
+# functional-verb count, still counted in the frozen contract's total.
 _PROBE_SUFFIXES = frozenset({"health", "version", "init"})
 
 # Suite -> the report/gate script whose presence means CI actually consumes
@@ -91,18 +91,28 @@ _SUITE_REPORT_FILENAMES: Dict[str, str] = {
 # quality eval, so a reviewed mapping is the only truthful mechanism.
 # ---------------------------------------------------------------------------
 
+# Template, not a finished string — the surface counts are derived, so a
+# literal here silently drifts from what this file computes.
 TOOLS_COUNT_DEFINITION = (
     "tools_count = the number of internal @tool-decorated agent-loop "
     "functions across gaia_agent_email/tools/*.py mixins (one per capability "
     "the agent's own LLM tool-calling loop can invoke). This is distinct "
-    "from, and larger than, the REST API's 16 functional verbs and the MCP "
-    "interface's 4 task-level tools -- both smaller, purpose-built surfaces "
-    "for external callers, not agent-loop tools."
+    "from, and larger than, the REST API's {rest_functional} functional verbs "
+    "and the MCP interface's {mcp_tools} task-level tools -- both smaller, "
+    "purpose-built surfaces for external callers, not agent-loop tools."
 )
+
+
+def tools_count_definition(rest_functional: int, mcp_tools: int) -> str:
+    """Render :data:`TOOLS_COUNT_DEFINITION` against the derived surface counts."""
+    return TOOLS_COUNT_DEFINITION.format(
+        rest_functional=rest_functional, mcp_tools=mcp_tools
+    )
+
 
 _NO_EVAL_SENTINEL = "no quality eval (contract-tested only)"
 
-# The 25 exposed ops (21 REST functional + 4 MCP) -> the eval suite that
+# Every exposed op (REST functional + MCP) -> the eval suite that
 # actually exercises them for quality, or the sentinel meaning "only
 # contract/shape-tested, no judged quality bar". Op names mirror
 # ``_derive_rest_ops``'s naming scheme: the REST path suffix after
@@ -114,6 +124,10 @@ OP_EVAL_COVERAGE: Dict[str, str] = {
     "search": _NO_EVAL_SENTINEL,
     "prescan": _NO_EVAL_SENTINEL,
     "briefing": "briefing",
+    # #2582 attention view: merges four already-tested read-only signals into
+    # one read-model -- contract/shape-tested (and the aggregator's own
+    # unit suite), no separate judged quality bar of its own.
+    "attention": _NO_EVAL_SENTINEL,
     "draft": "drafting",
     "send": _NO_EVAL_SENTINEL,
     "confirm": _NO_EVAL_SENTINEL,
@@ -129,6 +143,7 @@ OP_EVAL_COVERAGE: Dict[str, str] = {
     # judged quality bar of their own -- contract/shape-tested only.
     "query": _NO_EVAL_SENTINEL,
     "query/{run_id}/cancel": _NO_EVAL_SENTINEL,
+    "query/{run_id}/respond": _NO_EVAL_SENTINEL,
     # #2154 OAuth forward-OUT intake: the daemon delivers short-lived connector
     # tokens here; a credential-plumbing surface with no judged quality bar --
     # contract/shape-tested only.
@@ -481,7 +496,9 @@ def render_markdown(matrix: CapabilityMatrix) -> str:
     lines.append("")
     # The constant leads with "tools_count = " (right for the yaml comment);
     # the bullet already labels it, so strip the prefix to avoid doubling.
-    definition_body = TOOLS_COUNT_DEFINITION.removeprefix("tools_count = ")
+    definition_body = tools_count_definition(
+        matrix.rest_functional_count, len(matrix.mcp_tools)
+    ).removeprefix("tools_count = ")
     lines.append(f"- **tools_count**: {definition_body}")
     lines.append(
         f"- **no quality eval sentinel**: `{_NO_EVAL_SENTINEL}` -- the op is "
@@ -526,9 +543,10 @@ def render_markdown(matrix: CapabilityMatrix) -> str:
         )
     lines.append(
         "- Additionally served but **out of the frozen contract** (footnote "
-        "context, not guarded machinery): `agent_routes.py` 8 session routes, "
-        "`connector_routes.py` 4 OAuth routes, `server.py` 2 inline probes "
-        "-- ~36 total routes served by the sidecar."
+        "context, not guarded machinery): `agent_routes.py` 12 session routes "
+        "(includes the autonomy control surface, #2529), `connector_routes.py` "
+        "4 OAuth routes, `server.py` 2 inline probes "
+        "-- ~43 total routes served by the sidecar."
     )
     lines.append("")
 

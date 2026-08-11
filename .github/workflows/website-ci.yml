@@ -13,15 +13,20 @@
 
 name: Website CI
 
+# The agent manifests are in the filter because the snapshot gate below is the
+# only thing that catches them drifting — and the change it exists to catch
+# (adding an agent under hub/agents/) touches nothing in website/.
 on:
   pull_request:
     paths:
       - 'website/**'
+      - 'hub/agents/**/gaia-agent.yaml'
       - '.github/workflows/website-ci.yml'
   push:
     branches: [main]
     paths:
       - 'website/**'
+      - 'hub/agents/**/gaia-agent.yaml'
       - '.github/workflows/website-ci.yml'
 
 permissions:
@@ -45,14 +50,22 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Must match website/package.json `engines.node` — Railway's Nixpacks builder
+      # reads that field to pick the production Node, so CI and prod build alike.
       - uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
           cache-dependency-path: website/package-lock.json
 
       - name: Install dependencies
         run: npm ci
+
+      # The Agent Hub's "in development" rows ship as a committed snapshot,
+      # because `railway up` uploads only website/ and cannot read ../hub at
+      # deploy time. This is what stops the snapshot going stale silently.
+      - name: Agent snapshot is in sync with hub/agents
+        run: npm run check:agents
 
       - name: Type-check (astro check)
         run: npx astro check
@@ -62,3 +75,24 @@ jobs:
 
       - name: Build (astro build from the live catalog)
         run: npx astro build
+
+      # Production's start command was previously never exercised by CI, so a
+      # missing `serve` dependency or a broken command only surfaced on Railway.
+      # Nixpacks puts node_modules/.bin on PATH; Actions does not, so add it here
+      # and run the same bare `serve dist` command website/railway.json uses.
+      - name: Production start command serves the built site
+        env:
+          PORT: 4173
+        run: |
+          set -euo pipefail
+          export PATH="$PWD/node_modules/.bin:$PATH"
+          serve dist -l "${PORT:-3000}" &
+          for _ in $(seq 1 30); do
+            curl -sf -o /dev/null "http://localhost:${PORT}/" && break
+            sleep 1
+          done
+          for route in / /hub /hub/email; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "http://localhost:${PORT}${route}")
+            echo "${route} -> ${code}"
+            [ "${code}" = 200 ] || { echo "::error::${route} returned ${code} from the production start command"; exit 1; }
+          done

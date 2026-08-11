@@ -191,6 +191,9 @@ async def onboarding_preflight() -> PreflightReport:
         install_dir=Path.home() / ".gaia",
         detected_npu=npu_detected,
         detected_gpu_vram_gb=gpu_vram,
+        # No agent has been chosen yet during first-run setup — frame the warnings
+        # around the recommended model, not "This agent" (#2396).
+        subject="The recommended model",
     )
 
     ram_gb = report.total_memory_gb

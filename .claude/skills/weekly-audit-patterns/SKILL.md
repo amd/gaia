@@ -1,6 +1,6 @@
 ---
 name: "weekly-audit-patterns"
-description: "The non-obvious invariants of the proactive weekly Claude audit workflow (.github/workflows/claude-weekly-audit.yml): the stable dedup-key scheme that keeps it from re-filing findings every week, the private channel for security findings, the five audit dimensions and which one owns the Fail-Loudly check, and the `bug`-label → auto-fix promotion path. Read before editing that workflow, changing how findings are filed/deduped, or adding an audit dimension."
+description: "The non-obvious invariants of the proactive weekly Claude audit workflow (.github/workflows/claude-weekly-audit.yml): the stable dedup-key scheme that keeps it from re-filing findings every week, the four audit dimensions (security has its own workflow, claude-security-audit.yml) and which one owns the Fail-Loudly check, and the `bug`-label → auto-fix promotion path. Read before editing that workflow, changing how findings are filed/deduped, or adding an audit dimension."
 ---
 
 # Weekly Audit Patterns
@@ -10,9 +10,13 @@ lens — a scheduled deep review (not triggered by a PR) that fans out one read-
 Claude job per dimension and files a ranked triage issue. Everything else in
 `claude.yml` is reactive. These are the invariants a future editor will otherwise break.
 
-## The five dimensions are mutually exclusive
+## The four dimensions are mutually exclusive
 
-`security`, `correctness`, `docs`, `tests`, `features` — a matrix of one Claude job each.
+`correctness`, `docs`, `tests`, `features` — a matrix of one Claude job each. **Security
+is NOT a dimension here** — it moved to its own workflow, `claude-security-audit.yml`
+(deterministic semgrep + a Claude taint/authz/suppression sweep, CVSS-scored, findings to
+the private code-scanning tab). Don't re-add it here; that created two half-owners and the
+single general "security lens" is what missed the hub tar-slip.
 The lenses **overlap unless the prompt keeps them disjoint**, and the first run proved it:
 correctness findings (a rollback that never rolls back, a poller returning null, a mode
 that no-ops) leaked into `features`, and the priciest job's output vanished from the
@@ -50,7 +54,7 @@ missing test** — never rate "module X has no tests" above a feature that's act
 broken. High = security / data loss / default-path break; medium = broken user-facing
 behavior, a false doc, or a missing test guarding auth/a gate/destructive logic; low =
 missing tests on non-risk logic, cosmetic gaps. The synthesis emits a section per
-dimension (fixed order: Security, Correctness, Features, Docs, Tests), grouping each
+dimension (fixed order: Correctness, Features, Docs, Tests), grouping each
 finding under the dimension it **declares** — it never re-buckets.
 
 ## Child issues are 🔴/🟠 only, and tagged auto-fixable
@@ -102,16 +106,13 @@ closes them, trading tracker tidiness for guaranteeing unaddressed findings stay
 The parent opens with a one-line tally (new/low/suppressed counts) for trend. On a
 zero-new-findings run, synthesis posts nothing and does not touch any prior parent.
 
-## Security findings stay private
+## Security is out of scope here — it has its own workflow
 
-A GitHub Actions run has no DM channel and the triage issue is **public**. So the
-security dimension writes full detail (file, symbol, remediation) ONLY to the **job
-run log** (visible to those with Actions read access), and puts a redacted stub in
-`findings-security.json` — coarse directory path, no exploit, title exactly
-`"Security finding (details in run log)"`. The synthesis job renders security as a
-**count + run-log pointer + `@kovtcharov-amd`**, never a `file:line` or payload. This
-matches the CLAUDE.md "Security Handling Protocol" and the `code-reviewer` agent's rule.
-Do not "improve" this by putting detail in the public issue.
+Security moved to `.github/workflows/claude-security-audit.yml` (see its own patterns
+skill). This audit files to a **public** triage issue, which is the wrong channel for a
+vulnerability — so the prompt now tells every lens to hand off any security issue it
+notices rather than file it, and the synthesis emits **no** security section. Do not
+re-add a security dimension here or route a security finding into the public issue.
 
 ## Promotion: `bug` label → existing auto-fix job
 
@@ -129,7 +130,7 @@ route promotions through `bug` unless you deliberately widen the auto-fix `if`.
   `claude-fable-5` for maximum depth at ~2x cost. A measured Fable deep run was ~$45 of
   API-equivalent subscription usage; Opus roughly halves that.
 - **Serialized dimensions**: the matrix runs `max-parallel: 1` so the run is a steady
-  drip, not a 5-job burst — this keeps it under the Max subscription's rolling (5-hour)
+  drip, not a 4-job burst — this keeps it under the Max subscription's rolling (5-hour)
   rate limit. If you re-parallelize, expect a token spike that can trip that limit.
 - **Skip-if-empty**: normal mode exits in `preflight` before any Claude call on a
   no-change week. Deep mode never skips.

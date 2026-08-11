@@ -84,6 +84,7 @@ _LABEL_INBOX = "INBOX"
 _LABEL_UNREAD = "UNREAD"
 _LABEL_STARRED = "STARRED"
 _LABEL_SENT = "SENT"
+_LABEL_IMPORTANT = "IMPORTANT"
 
 # ``$select`` for ``get_message`` — pull exactly the fields the Gmail-shape
 # translation needs (Graph returns a large default projection otherwise).
@@ -91,6 +92,19 @@ _MESSAGE_SELECT = (
     "id,conversationId,subject,from,toRecipients,ccRecipients,"
     "receivedDateTime,sentDateTime,isRead,isDraft,flag,categories,"
     "bodyPreview,body,parentFolderId"
+)
+
+# Metadata-only ``$select`` (#2643 lever 1) — identical to ``_MESSAGE_SELECT``
+# minus ``body``, the one heavy field a heuristic-only scan never reads.
+# ``bodyPreview`` (Gmail's ``snippet`` equivalent) stays, since the category
+# heuristic and meeting-request detector both read that. Batched fetches
+# (Gmail lever 2) are NOT implemented for Outlook in this change — Graph's
+# ``$batch`` is a materially different JSON wire protocol, left as a
+# follow-up; this backend still benefits from skipping the body field alone.
+_MESSAGE_SELECT_METADATA = (
+    "id,conversationId,subject,from,toRecipients,ccRecipients,"
+    "receivedDateTime,sentDateTime,isRead,isDraft,flag,categories,"
+    "bodyPreview,parentFolderId"
 )
 
 
@@ -123,20 +137,25 @@ def _b64url(text: str) -> str:
     return base64.urlsafe_b64encode(text.encode("utf-8")).decode("ascii").rstrip("=")
 
 
-def graph_message_to_gmail(msg: Dict[str, Any]) -> Dict[str, Any]:
+def graph_message_to_gmail(
+    msg: Dict[str, Any], *, include_body: bool = True
+) -> Dict[str, Any]:
     """Translate a Microsoft Graph ``message`` resource into a Gmail API v1
-    ``messages.get?format=full`` shaped dict.
+    ``messages.get?format=full`` (or ``format=metadata``) shaped dict.
 
     The returned ``payload`` is a single leaf part (Graph hands us the body
     already assembled as one ``text``/``html`` blob — there is no MIME tree to
     walk), with the headers the read tools read (``Subject``/``From``/``To``/
     ``Date``) reconstructed from the structured Graph fields.
-    """
-    body = msg.get("body") or {}
-    content_type = (body.get("contentType") or "text").lower()
-    mime_type = "text/html" if content_type == "html" else "text/plain"
-    raw_content = body.get("content") or ""
 
+    ``include_body=False`` (#2643 lever 1) mirrors Gmail's ``format=metadata``
+    shape: ``payload.body`` carries no ``data`` key, only ``size: 0`` — so a
+    caller that decodes a metadata-mode message gets nothing back, exactly
+    matching what a real metadata-mode fetch (no ``body`` in the Graph
+    ``$select``) actually returns, rather than silently serving a stale or
+    truncated "complete" body. Default True is byte-identical to every call
+    site that predates #2643.
+    """
     headers = [
         {"name": "Subject", "value": msg.get("subject") or ""},
         {"name": "From", "value": _format_address(msg.get("from"))},
@@ -147,10 +166,23 @@ def graph_message_to_gmail(msg: Dict[str, Any]) -> Dict[str, Any]:
     if cc:
         headers.append({"name": "Cc", "value": cc})
 
+    if include_body:
+        body = msg.get("body") or {}
+        content_type = (body.get("contentType") or "text").lower()
+        mime_type = "text/html" if content_type == "html" else "text/plain"
+        raw_content = body.get("content") or ""
+        payload_body: Dict[str, Any] = {
+            "size": len(raw_content),
+            "data": _b64url(raw_content),
+        }
+    else:
+        mime_type = "text/plain"
+        payload_body = {"size": 0}
+
     payload = {
         "mimeType": mime_type,
         "headers": headers,
-        "body": {"size": len(raw_content), "data": _b64url(raw_content)},
+        "body": payload_body,
     }
 
     return {
@@ -177,6 +209,10 @@ def _derive_label_ids(msg: Dict[str, Any]) -> List[str]:
         labels.append(_LABEL_UNREAD)
     if ((msg.get("flag") or {}).get("flagStatus") or "") == "flagged":
         labels.append(_LABEL_STARRED)
+    # Graph ``importance:high`` is the Outlook equivalent of Gmail's IMPORTANT
+    # label — the auto-archive safety guard (#2426) keys off this string.
+    if (msg.get("importance") or "").strip().lower() == "high":
+        labels.append(_LABEL_IMPORTANT)
     for category in msg.get("categories") or []:
         if category:
             labels.append(category)
@@ -434,14 +470,17 @@ class LiveOutlookBackend:
             # Carry the @odata.nextLink so paginated callers keep working;
             # Gmail callers treat any truthy token as "more pages".
             "nextPageToken": data.get("@odata.nextLink"),
-            "resultSizeEstimate": len(messages),
+            # Graph's list response carries no honest mailbox-total field the
+            # way Gmail's resultSizeEstimate does — len(messages) is just the
+            # page size just fetched, and reporting it as a total silently
+            # lies about coverage (#2584). None: unavailable, never fabricated.
+            "resultSizeEstimate": None,
         }
 
-    def get_message(self, message_id: str) -> Dict[str, Any]:
-        data = self._get(
-            f"/me/messages/{message_id}", params={"$select": _MESSAGE_SELECT}
-        )
-        return graph_message_to_gmail(data)
+    def get_message(self, message_id: str, *, format: str = "full") -> Dict[str, Any]:
+        select = _MESSAGE_SELECT_METADATA if format == "metadata" else _MESSAGE_SELECT
+        data = self._get(f"/me/messages/{message_id}", params={"$select": select})
+        return graph_message_to_gmail(data, include_body=(format != "metadata"))
 
     def get_thread(self, thread_id: str) -> Dict[str, Any]:
         # Graph has no thread-get; fetch every message in the conversation.
@@ -469,6 +508,22 @@ class LiveOutlookBackend:
             if name:
                 out.append({"id": name, "name": name, "type": "user"})
         return out
+
+    def get_label(self, label_id: str) -> Dict[str, Any]:
+        # Graph has no label/folder resource with an exact unread count the
+        # way Gmail's labels().get does — report unavailable (None) rather
+        # than fabricate one (#2584, same principle as list_messages's
+        # resultSizeEstimate). No HTTP call: this is a structural stand-in
+        # so Outlook still satisfies the GmailBackend Protocol.
+        return {
+            "id": label_id,
+            "name": label_id,
+            "type": "system",
+            "messagesTotal": None,
+            "messagesUnread": None,
+            "threadsTotal": None,
+            "threadsUnread": None,
+        }
 
     # -- Mutate APIs --------------------------------------------------------
 

@@ -32,13 +32,25 @@ Distinctions from the stateful ``/v1/email/agent/*`` surface
 
 Confirmation (epic decision D1, UNSIGNED — stateless stub)
 ----------------------------------------------------------
-Stateful server-side *resume* is intentionally NOT wired here. A step that needs
-confirmation (a destructive/external tool such as ``send_now``) emits a
-``needs_confirmation`` event (specced shape) and then the run ends with a ``final``
-refusal that points the caller at the deterministic fixed-function route (mint a
-token via ``POST /v1/email/draft``, then ``POST /v1/email/send``). ``confirm_url``
-is omitted (spec §5 / Q4). When D1 is signed off, the resume model can be wired
-without changing this event's shape.
+Stateful server-side *resume* of an APPROVAL is intentionally NOT wired here. A
+step that needs confirmation (a destructive/external tool such as ``send_now``)
+emits a ``needs_confirmation`` event (specced shape) and then the run ends with a
+``final`` refusal that points the caller at the deterministic fixed-function
+route (mint a token via ``POST /v1/email/draft``, then ``POST /v1/email/send``).
+``confirm_url`` is omitted (spec §5 / Q4). Deny-by-default on approvals is a
+security control; #2469 deliberately left it exactly as it was.
+
+Mid-run questions (#2469 — resumable)
+-------------------------------------
+A *question* is a different animal from an approval, and now has its own
+canonical event: ``needs_input`` (spec §5.1). The agent asks it from inside a
+tool via ``gaia_agent_email.question.ask``, which blocks the worker thread on
+``SSEOutputHandler.request_user_input_blocking`` — the same out-of-band
+resolve/timeout machinery the stateful Agent UI path uses, not a fork of it.
+The stream forwards the event and KEEPS READING; ``POST
+/v1/email/query/{run_id}/respond`` delivers the answer and the run continues on
+the same stream. Nothing answers it → the handler's own timeout fires and the
+tool raises, so an abandoned question fails loudly instead of hanging forever.
 
 Auth rides the existing per-session bearer (#1980): this router is mounted under
 the same ``require_caller_token`` gate as the rest of ``/v1/email/*`` — no new
@@ -50,7 +62,9 @@ from __future__ import annotations
 import asyncio
 import json
 import queue
+import re
 import threading
+import time
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -69,6 +83,11 @@ router = APIRouter(tags=["email-query"])
 
 # Providers the local-only email agent (AC3: local Lemonade inference) accepts.
 _ALLOWED_PROVIDERS = frozenset({"lemonade"})
+
+#: How long the stream may stay silent before it emits an SSE comment. Well
+#: under the 300s read-idle watchdog the TUI and the daemon relay both run, so a
+#: run parked on a question is never mistaken for a dead one.
+_HEARTBEAT_SECONDS = 10.0
 
 
 # ---------------------------------------------------------------------------
@@ -102,6 +121,10 @@ class _QueryRun:
         self.agent = agent
         self.handler = handler
         self.cancel_event = threading.Event()
+        # ``process_query``'s return dict, captured so the stream can surface the
+        # agent's own computed answer if the run ends without streaming a
+        # terminal event (see ``_terminal_from_run_result``, #2444).
+        self.result: Optional[Dict[str, Any]] = None
 
 
 class _RunRegistry:
@@ -195,6 +218,30 @@ class QueryRequest(_Strict):
         ge=1,
         description="Agent-loop step ceiling. Omitted → the agent's configured default.",
     )
+    can_answer_questions: bool = Field(
+        default=False,
+        description=(
+            "Whether THIS caller can render a 'needs_input' event and POST the "
+            "answer back to /query/{run_id}/respond. Defaults to false, which is "
+            "the safe answer: a caller that cannot answer would otherwise park "
+            "the run until the question times out, which reads as a hang. When "
+            "false, a step that would ask instead fails immediately with what "
+            "the user should do on this surface."
+        ),
+    )
+    session_id: Optional[str] = Field(
+        default=None,
+        pattern=r"^[A-Za-z0-9_-]{1,128}$",
+        description=(
+            "Opaque conversation id, minted by the host once per conversation "
+            "(#2829). Omitted -> a fresh throwaway agent per call, exactly like "
+            "before. Present -> the run resolves the SAME agent used by every "
+            "other turn on this id (via the session-scoped registry), so a "
+            "reference to something an earlier turn surfaced can resolve. "
+            "Constrained to the charset a dict key / URL path segment / log "
+            "line tolerates."
+        ),
+    )
 
     @field_validator("run_id")
     @classmethod
@@ -216,6 +263,39 @@ class QueryCancelResponse(_Strict):
     status: str = Field(default="ok", description="Always 'ok' on success.")
 
 
+class QueryRespondRequest(_Strict):
+    """Body of ``POST /v1/email/query/{run_id}/respond`` (spec §5.1)."""
+
+    request_id: str = Field(
+        ...,
+        min_length=1,
+        description=(
+            "The 'request_id' from the needs_input event being answered. An "
+            "answer for a question that is no longer pending is rejected (409) "
+            "rather than applied to whatever the run is waiting on now."
+        ),
+    )
+    value: str = Field(
+        ...,
+        min_length=1,
+        description=(
+            "The answer: an option's 'value' (or its 'label'), or free text "
+            "when the question set allow_free_text."
+        ),
+    )
+
+
+class QueryRespondResponse(_Strict):
+    """Result of ``POST /v1/email/query/{run_id}/respond``."""
+
+    run_id: str = Field(..., description="The run the answer was delivered to.")
+    request_id: str = Field(..., description="The question that was answered.")
+    accepted: bool = Field(
+        default=True, description="True once the answer unblocked the run."
+    )
+    status: str = Field(default="ok", description="Always 'ok' on success.")
+
+
 # ---------------------------------------------------------------------------
 # SSE framing helpers
 # ---------------------------------------------------------------------------
@@ -226,17 +306,167 @@ def _sse(event: Dict[str, Any]) -> str:
     return f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
 
+def _terminal_from_run_result(result: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Build a terminal event from ``process_query``'s return dict (#2444).
+
+    The base agent handles some failures — Lemonade unreachable being the most
+    common for ``gaia email -q`` — *inside* its loop: it sets an actionable
+    ``final_answer`` and breaks WITHOUT calling ``print_final_answer``, so no
+    ``answer`` event ever reaches the SSE handler. The Agent UI surfaces that
+    copy because the loop returns it; the CLI's terminal-error path used to fall
+    back to a generic "no final answer" here, dropping the actionable message.
+    Surface the agent's own ``result`` so both front-doors show the same copy.
+    """
+    text: Optional[str] = None
+    status: Optional[str] = None
+    if isinstance(result, dict):
+        raw = result.get("result") or result.get("answer")
+        if isinstance(raw, str) and raw.strip():
+            text = raw.strip()
+        status = result.get("status")
+    if text is None:
+        # No computed answer either — keep failing loudly, never silently.
+        return {
+            "type": "error",
+            "detail": "The agent finished without producing a final answer.",
+            "status": 500,
+        }
+    if status == "success":
+        return {"type": "final", "answer": text}
+    return {"type": "error", "detail": text, "status": 500}
+
+
+# ---------------------------------------------------------------------------
+# Terminal-error classification (issue #2139)
+# ---------------------------------------------------------------------------
+
+# Connection-establishment fragments of the ``requests`` / ``urllib3`` /
+# ``httpx`` error reprs a down Lemonade Server produces. Those transport errors
+# are siblings of the builtin ``ConnectionError`` (under ``OSError``, or under
+# ``httpx.HTTPError``), so an ``isinstance`` check alone misses them — the string
+# shape is the reliable signal. Deliberately narrow: a non-match falls through to
+# the raw exception text so unrelated failures are never masked.
+#
+# Timeouts are intentionally NOT matched. A not-running local Lemonade refuses
+# the connection instantly (ECONNREFUSED) — it does not time out; a *timeout*
+# means a server is up-but-slow, or the fault is a different host entirely (the
+# Gmail/Outlook backends use ``httpx`` with their own timeouts, so a Gmail
+# ``ReadTimeout`` must NOT be relabelled "Lemonade unreachable — start it").
+_LEMONADE_DOWN_RE = re.compile(
+    r"connection\s+(?:refused|reset|aborted|error)"
+    r"|connectionerror"
+    r"|connection\s*pool"
+    r"|failed to establish a new connection"
+    r"|max retries exceeded"
+    r"|newconnectionerror"
+    r"|could\s*n[o']t\s+(?:reach|connect|resolve)"
+    r"|no route to host"
+    r"|name or service not known"
+    r"|not reachable",
+    re.IGNORECASE,
+)
+
+#: Where a user looks next — kept as a constant so tests assert on it and the
+#: copy stays stable. Matches the sidecar's other Lemonade-down guidance
+#: (``api_routes._assert_lemonade_reachable``).
+_LEMONADE_DOCS_URL = "https://amd-gaia.ai/docs/guides/email"
+
+
+def _flatten_exception_text(exc: BaseException) -> str:
+    """Join ``str()`` of *exc* and its ``__cause__`` / ``__context__`` chain.
+
+    A transport error is often wrapped (``raise ... from e``), so the
+    connection-shaped detail can live on a cause rather than the outer
+    exception. Cycle-guarded against pathological exception graphs.
+    """
+    parts: List[str] = []
+    cur: Optional[BaseException] = exc
+    seen: set = set()
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        text = str(cur)
+        parts.append(text if text else type(cur).__name__)
+        cur = cur.__cause__ or cur.__context__
+    return "\n".join(parts)
+
+
+def _is_lemonade_unreachable(exc: BaseException) -> bool:
+    """True when *exc* (or its cause chain) is a Lemonade-unreachable failure.
+
+    Two signals: a builtin ``ConnectionError`` anywhere in the cause chain
+    (``ConnectionRefusedError`` / ``ConnectionResetError`` all subclass it),
+    and — for the ``requests`` / ``httpx`` / ``urllib3`` errors that are NOT
+    builtin ``ConnectionError`` subclasses — the connection-shaped repr.
+    """
+    cur: Optional[BaseException] = exc
+    seen: set = set()
+    while cur is not None and id(cur) not in seen:
+        seen.add(id(cur))
+        if isinstance(cur, ConnectionError):
+            return True
+        cur = cur.__cause__ or cur.__context__
+    return bool(_LEMONADE_DOWN_RE.search(_flatten_exception_text(exc)))
+
+
+def _terminal_error_detail(exc: BaseException) -> str:
+    """Build the ``agent_error`` content for a failed ``/query`` run.
+
+    A Lemonade-unreachable failure — the most common consumer failure — gets
+    the standard actionable guidance (what failed, what to do, where to look),
+    with the original exception appended (never replacing it) for debugging.
+    Every other exception passes through as ``str(exc)`` so a genuinely
+    unexpected failure is surfaced verbatim, not masked behind a Lemonade
+    message.
+    """
+    if not _is_lemonade_unreachable(exc):
+        return str(exc)
+
+    try:
+        from gaia_agent_email.model_select import _resolve_probe_base
+
+        target = _resolve_probe_base(None)
+    except Exception as resolve_exc:  # noqa: BLE001
+        # Naming the exact URL is cosmetic; never let message-building throw and
+        # lose the original error. Log so the resolution failure isn't silent.
+        logger.debug(
+            "could not resolve Lemonade base URL for error copy: %s", resolve_exc
+        )
+        target = "the local Lemonade Server"
+
+    raw = str(exc) or type(exc).__name__
+    return (
+        f"Local Lemonade Server is not reachable at {target}. The email agent "
+        "runs local inference, so it needs Lemonade Server running. Start it "
+        "with `lemonade-server serve` (or run `gaia init`), then retry. "
+        f"Docs: {_LEMONADE_DOCS_URL}"
+        f"\n\nTechnical details: {raw}"
+    )
+
+
+#: Human labels for the confirmation-gated actions the chat surface can end on.
+_CONFIRMATION_LABELS = {
+    "send_now": "Sending this email",
+    "send_draft": "Sending this draft",
+    "forward_message": "Forwarding this email",
+    "quarantine_phishing_message": "Quarantining this message",
+    "unquarantine_message": "Restoring this message from quarantine",
+    "archive_message": "Archiving this message",
+}
+
+
 def _confirmation_refusal(action: str) -> Dict[str, Any]:
-    """The terminal ``final`` that ends the stateless-stub confirmation flow (D1)."""
+    """The terminal ``final`` that ends a confirmation-gated step (spec D1).
+
+    Plain-language for the chat surface — no internal REST contract, no jargon.
+    The gate itself is deliberate; the message states nothing was sent.
+    """
+    subject = _CONFIRMATION_LABELS.get(action, f"The '{action}' action")
     return {
         "type": "final",
         "answer": (
-            f"This step needs your confirmation to run '{action}', which the "
-            "/query endpoint does not perform yet (it runs stateless, per epic "
-            "decision D1 — no server-side resume). To complete a destructive or "
-            "external action, use the fixed-function route: POST /v1/email/draft "
-            "to mint a single-use confirmation token, then POST /v1/email/send "
-            "(or the matching /archive, /quarantine, /calendar route) with it."
+            f"{subject} needs your explicit confirmation before it runs — an "
+            "intentional safety gate on sending email and other external or "
+            "destructive actions. Nothing has been sent."
         ),
     }
 
@@ -256,8 +486,13 @@ _QUERY_SSE_RESPONSES = {
             "one canonical event discriminated on `type`, one of: status "
             "{message} | token {delta} | tool_call {tool, args} | tool_result "
             "{tool, render?, data} | needs_confirmation {run_id, action, summary} "
-            "| final {answer, usage?} | error {detail, status}. The stream is "
-            "terminated by exactly one `final` or one `error`."
+            "| needs_input {run_id, request_id, question, options, "
+            "allow_free_text, respond_url, timeout_seconds?} | final {answer, "
+            "usage?} | error {detail, status}. The stream is terminated by "
+            "exactly one `final` or one `error`; `needs_input` pauses the run "
+            "until POST /v1/email/query/{run_id}/respond delivers the answer, "
+            "then the SAME stream continues. `:`-prefixed heartbeat comments may "
+            "appear at any time and carry no payload."
         ),
         "content": {
             "text/event-stream": {
@@ -287,7 +522,9 @@ async def query(request: QueryRequest) -> StreamingResponse:
     relays the loop as the seven canonical event types (spec §4). The stream ends
     with exactly one ``final`` or ``error``. A confirmation-requiring step ends the
     stream with a ``needs_confirmation`` followed by a ``final`` refusal (the
-    stateless D1 stub — see module docstring).
+    stateless D1 stub — see module docstring). A step that asks the user a
+    question emits ``needs_input`` and the stream STAYS OPEN, resuming once
+    ``POST /v1/email/query/{run_id}/respond`` delivers the answer.
     """
     # Lazy imports: keep module import (and the OpenAPI export) dependency-light.
     from gaia_agent_email.sse_translation import TERMINAL_TYPES, CanonicalTranslator
@@ -307,61 +544,161 @@ async def query(request: QueryRequest) -> StreamingResponse:
     if request.model:
         config_kwargs["model_id"] = request.model
 
-    try:
-        agent = await asyncio.to_thread(build_query_agent, **config_kwargs)
-    except Exception as exc:  # construction failure → fail loud, before the stream
-        raise HTTPException(
-            status_code=502,
-            detail=f"Failed to start the email agent for this query: {exc}",
-        ) from exc
+    # session_id resolves through the SAME session-scoped registry the
+    # stateful /v1/email/agent/* surface uses (#2829), so the agent — and
+    # anything an earlier turn set on it — persists across turns on this id.
+    # Omitted -> today's behaviour exactly: a throwaway per-turn agent.
+    session: Optional[Any] = None
+    continuity_lost = False
+    if request.session_id is not None:
+        from gaia_agent_email import agent_routes
 
-    handler = SSEOutputHandler()
-    run = _QueryRun(request.run_id, agent, handler)
-    try:
-        registry.add(run)
-    except KeyError as exc:
-        raise HTTPException(
-            status_code=409,
-            detail=f"run_id {request.run_id!r} is already in flight.",
-        ) from exc
-
-    # Push the transcript slice as the agent's conversation history (spec §2.4).
-    agent.conversation_history = [
-        {"role": item.role, "content": item.content} for item in request.context
-    ]
-    agent.console = handler
-    # The base agent loop observes this at each step boundary (agent.py) — the
-    # cancel endpoint sets it so tool execution stops between steps.
-    agent._cancel_event = run.cancel_event
-
-    max_steps = request.max_steps
-    user_query = request.query
-
-    def _run_agent() -> None:
+        # A session_id the registry has never seen, arriving WITH prior
+        # context, means the sidecar restarted mid-conversation (the
+        # registry is in-memory) — surfaced below, never a silent cold
+        # start. A brand-new conversation (empty context) is not continuity
+        # loss: no session was ever expected to exist yet.
+        continuity_lost = (
+            agent_routes.registry.get(request.session_id) is None
+            and len(request.context) > 0
+        )
         try:
-            if max_steps is not None:
-                agent.process_query(user_query, max_steps=max_steps)
-            else:
-                agent.process_query(user_query)
-        except Exception as exc:  # surface loudly as a terminal error event
-            logger.exception("email /query run failed for run_id=%s", run.run_id)
-            handler._emit({"type": "agent_error", "content": str(exc)})
-        finally:
-            handler.signal_done()
+            session = await asyncio.to_thread(
+                agent_routes.registry.get_or_create,
+                request.session_id,
+                **config_kwargs,
+            )
+        except Exception as exc:  # construction/capacity failure → fail loud
+            raise HTTPException(
+                status_code=502,
+                detail=f"Failed to start the email agent for this query: {exc}",
+            ) from exc
+        # One turn at a time per session (mandatory — mirrors
+        # agent_routes.py:645-649): without this, agent.console /
+        # agent._cancel_event / agent._current_query are overwritten under a
+        # running worker thread, silently misrouting one caller's stream
+        # into another's. Reachable via the ordinary Esc-then-retype path,
+        # since cancellation is cooperative.
+        if not session.run_lock.acquire(blocking=False):
+            raise HTTPException(
+                status_code=409,
+                detail="A turn is already in progress for this session.",
+            )
+        agent = session.agent
+    else:
+        try:
+            agent = await asyncio.to_thread(build_query_agent, **config_kwargs)
+        except Exception as exc:  # construction failure → fail loud, before the stream
+            raise HTTPException(
+                status_code=502,
+                detail=f"Failed to start the email agent for this query: {exc}",
+            ) from exc
 
-    thread = threading.Thread(target=_run_agent, daemon=True)
-    thread.start()
+    # Between acquiring session.run_lock (above) and the worker thread taking
+    # ownership of it, ANY failure in this block must release the lock and
+    # deregister the run — otherwise the session is wedged at 409 forever
+    # (mirrors agent_routes.py:651-701, which covers this exact span with one
+    # guard rather than patching each call site). run_registered tracks
+    # whether ``registry.add`` actually succeeded, so a run_id COLLISION
+    # (a real, unrelated in-flight run) is reported as its own 409 without
+    # deregistering that other run.
+    run_registered = False
+    try:
+        handler = SSEOutputHandler()
+        run = _QueryRun(request.run_id, agent, handler)
+        try:
+            registry.add(run)
+        except KeyError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=f"run_id {request.run_id!r} is already in flight.",
+            ) from exc
+        run_registered = True
+
+        # Push the transcript slice as the agent's conversation history (spec
+        # §2.4). REPLACES, never appends — the session-scoped agent already
+        # had whatever an earlier turn left in its OWN state (memory,
+        # connectors); only conversation_history is refreshed from what the
+        # host pushes, so a later change can't silently double-count turns.
+        agent.conversation_history = [
+            {"role": item.role, "content": item.content} for item in request.context
+        ]
+        agent.console = handler
+        # Read by ``question.ask``: a caller that cannot answer must be
+        # refused at the point of asking, not parked until it times out.
+        agent.can_answer_questions = bool(request.can_answer_questions)
+        # The base agent loop observes this at each step boundary
+        # (agent.py) — the cancel endpoint sets it so tool execution stops
+        # between steps.
+        agent._cancel_event = run.cancel_event
+
+        max_steps = request.max_steps
+        user_query = request.query
+
+        def _run_agent() -> None:
+            try:
+                if max_steps is not None:
+                    run.result = agent.process_query(user_query, max_steps=max_steps)
+                else:
+                    run.result = agent.process_query(user_query)
+            except Exception as exc:  # surface loudly as a terminal error event
+                logger.exception("email /query run failed for run_id=%s", run.run_id)
+                # Lemonade-down is the most common failure; emit actionable
+                # copy (never the raw urllib3/requests repr) while leaving
+                # genuinely unexpected errors verbatim (#2139).
+                handler._emit(
+                    {"type": "agent_error", "content": _terminal_error_detail(exc)}
+                )
+            finally:
+                handler.signal_done()
+                if session is not None:
+                    session.run_lock.release()
+
+        thread = threading.Thread(target=_run_agent, daemon=True)
+        thread.start()
+    except Exception as exc:
+        if session is not None:
+            session.run_lock.release()
+        if run_registered:
+            registry.remove(request.run_id)
+        if isinstance(exc, HTTPException):
+            raise
+        raise HTTPException(
+            status_code=500, detail=f"Failed to start the query run: {exc}"
+        ) from exc
 
     async def _stream():
         translator = CanonicalTranslator(request.run_id)
         terminated = False
+        last_write = time.monotonic()
         try:
+            if continuity_lost:
+                yield _sse(
+                    {
+                        "type": "status",
+                        "message": (
+                            "conversation continuity was lost — the agent "
+                            "restarted and does not remember earlier turns in "
+                            "this session. Continuing with the pushed "
+                            "context only."
+                        ),
+                    }
+                )
+                last_write = time.monotonic()
             while True:
                 try:
                     event = handler.event_queue.get_nowait()
                 except queue.Empty:
                     if not thread.is_alive() and handler.event_queue.empty():
                         break
+                    # A run parked on a needs_input question emits nothing until
+                    # the user answers. Without a heartbeat that silence trips
+                    # the client's read-idle watchdog and the question is
+                    # abandoned mid-thought. `:` lines are SSE comments — every
+                    # conformant reader skips them and resets its timer.
+                    if time.monotonic() - last_write >= _HEARTBEAT_SECONDS:
+                        last_write = time.monotonic()
+                        yield ": keepalive\n\n"
                     await asyncio.sleep(0.03)
                     continue
 
@@ -371,6 +708,12 @@ async def query(request: QueryRequest) -> StreamingResponse:
                 for canonical in translator.translate(event):
                     ctype = canonical.get("type")
                     yield _sse(canonical)
+                    last_write = time.monotonic()
+                    if ctype == "needs_input":
+                        # Answerable, so the run stays alive: keep draining the
+                        # queue while the worker thread blocks in
+                        # request_user_input_blocking waiting for /respond.
+                        continue
                     if ctype == "needs_confirmation":
                         # Stateless stub (D1): end the run with a final refusal
                         # and stop the loop so it doesn't block on approval.
@@ -390,14 +733,12 @@ async def query(request: QueryRequest) -> StreamingResponse:
                 if canonical.get("type") in TERMINAL_TYPES:
                     terminated = True
             if not terminated:
-                # No final/error was produced — fail loud rather than close silently.
-                yield _sse(
-                    {
-                        "type": "error",
-                        "detail": "The agent finished without producing a final answer.",
-                        "status": 500,
-                    }
-                )
+                # No final/error streamed — the loop may have set an actionable
+                # answer on an internal error branch (e.g. Lemonade unreachable)
+                # and returned it without emitting an ``answer`` event. Surface
+                # that computed message so the CLI shows the same copy the Agent
+                # UI does, falling back to a loud generic error (#2444).
+                yield _sse(_terminal_from_run_result(run.result))
         finally:
             # If the client disconnected mid-run, ask the loop to stop.
             handler.cancelled.set()
@@ -434,6 +775,51 @@ async def cancel_query(run_id: str) -> QueryCancelResponse:
     return QueryCancelResponse(run_id=run_id, cancelled=True)
 
 
+@router.post("/query/{run_id}/respond", response_model=QueryRespondResponse)
+async def respond_query(run_id: str, body: QueryRespondRequest) -> QueryRespondResponse:
+    """Answer a ``needs_input`` question and let the paused run continue.
+
+    The run's worker thread is blocked inside ``request_user_input_blocking``;
+    this hands it the answer through the same out-of-band resolve the stateful
+    Agent UI path uses, and the run resumes emitting on its ORIGINAL ``/query``
+    stream — no second request, no replayed context.
+
+    Failure modes are distinct on purpose, because "the agent never saw my
+    answer" is otherwise indistinguishable from "the agent is thinking":
+
+    - **404** — no run with that ``run_id`` is in flight (it finished, was
+      cancelled, or the id is wrong).
+    - **409** — the run is live but ``request_id`` is not what it is waiting on:
+      a stale answer to a question that already timed out or was answered.
+      Rejected rather than applied to whatever question is pending now.
+    """
+    run = registry.get(run_id)
+    if run is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"No in-flight run for run_id {run_id!r}. It has already "
+                "finished or been cancelled, so there is nothing to answer."
+            ),
+        )
+    if not run.handler.resolve_user_input(body.request_id, body.value):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Run {run_id!r} is not waiting on request_id "
+                f"{body.request_id!r}. The question was already answered, timed "
+                "out, or belongs to a different run. Re-send your request to be "
+                "asked again."
+            ),
+        )
+    logger.info(
+        "email /query run_id=%s resumed: answered request_id=%s",
+        run_id,
+        body.request_id,
+    )
+    return QueryRespondResponse(run_id=run_id, request_id=body.request_id)
+
+
 __all__ = [
     "router",
     "registry",
@@ -441,4 +827,6 @@ __all__ = [
     "QueryRequest",
     "QueryContextItem",
     "QueryCancelResponse",
+    "QueryRespondRequest",
+    "QueryRespondResponse",
 ]

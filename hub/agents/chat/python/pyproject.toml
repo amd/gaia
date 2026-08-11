@@ -1,5 +1,8 @@
 [build-system]
-requires = ["setuptools>=61.0"]
+# >=70.0 for SPDX `license = "..."` string-expression support (PEP 639) below
+# -- the classic `license = { text = "..." }` table form setuptools still
+# accepts is hard-deprecated for removal 2027-02.
+requires = ["setuptools>=70.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,12 +10,19 @@ name = "gaia-agent-chat"
 version = "0.1.0"
 description = "GAIA chat agent — conversation, document Q&A (RAG), and file-system profiles"
 authors = [{ name = "AMD" }]
-license = { text = "MIT" }
+license = "MIT"
 readme = "README.md"
 requires-python = ">=3.10"
 # Floor: 0.22.0 is the first core release shipping
 # gaia.agents.registry.get_embedding_model_for_device, imported at agent
 # start (#2112). tests/test_chat_dependency_floor.py guards this floor.
+#
+# Intentionally bare `amd-gaia` (no `[rag]` extras marker): a plain
+# `pip install gaia-agent-chat` must not implicitly pull faiss/pymupdf/
+# sentence-transformers just to import ChatAgent. RAG's real dependencies
+# come from `gaia init --profile chat`'s own `_install_pip_extras()` step
+# into the ACTIVE interpreter, not from this wheel's install -- do not "fix"
+# this by adding `[rag]` here (#2358).
 dependencies = ["amd-gaia>=0.22.0"]
 
 [project.entry-points."gaia.agent"]

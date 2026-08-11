@@ -6,6 +6,152 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## Unreleased
 
+- **`query()` can now carry a conversation forward.** `EmailQueryRequest`
+  gains an optional `session_id`: set it once and reuse it on every turn of
+  a conversation (e.g. `crypto.randomUUID()`), and the sidecar resolves the
+  SAME agent each time instead of a throwaway one per call — so a
+  follow-up referring to something an earlier turn surfaced has something
+  to resolve against. Leave it unset and nothing changes (#2829, schema
+  2.12).
+- **One inbox triage card instead of two that disagreed.** Asking the agent
+  to triage your inbox used to draw two summary boxes from two separate scans
+  at different depths — one might say "nothing needs you" while the other,
+  five lines below, listed a message needing review. The card is now one
+  worklist (`needs_you`, schema 2.11) built from a single scan: up to five
+  things that genuinely need you, each tagged with what to do (reply, decide,
+  check, or a carried-over action item) and how old it is. Everything
+  filtered out is counted alongside the test that filtered it (`bulk`), so a
+  claim like "47 filtered" is something you can judge rather than take on
+  faith. `NeedsYouItem` / `BulkSummary` are new on `EmailPreScanResult`;
+  nothing existing was removed or renamed (#2743). `NeedsYouItem.detail` is
+  also new — reserved for a couple of lines of real substance per row (the
+  question actually asked, the meeting time actually proposed, the deadline
+  actually quoted) — but ships **always empty** in this release: the
+  per-item extraction pass that would fill it was implemented and then
+  withdrawn before merge so it could ship on a firm timing budget rather
+  than risk a slow scan; a follow-up will populate it.
+- **Reconnecting your mailbox with no flags — the exact command GAIA's own
+  error message told you to run — could silently wipe your permissions
+  instead of fixing them.** A bare `gaia connectors connect google` (or the
+  same reconnect from a first-time self-repair conversation) used to fall
+  back to identity-only sign-in scopes whenever it wasn't told exactly what
+  to ask for, overwriting a working mail-plus-calendar connection with
+  nothing usable. That path now fails with a clear, copy-pasteable command
+  instead of guessing, and every surface — the CLI, the Agent UI, this
+  package's own connector setup, and the in-chat self-repair flow — now asks
+  for the same scopes so none of them can quietly narrow what another one
+  granted. Separately, calendar access is now clearly **optional**: a mailbox
+  missing only calendar permission still triages, drafts, and sends normally,
+  and calendar tools name the exact scope to add instead of taking the whole
+  mailbox down with them (#2730).
+- **The agent can now tell you which inbound mail is waiting on your reply —
+  not just which of your own messages went unanswered.** Previously the agent
+  could only flag sent mail nobody replied to; a colleague's "did you get a
+  chance to look at this? can we meet Thursday?" was invisible to it. It now
+  also flags inbound messages that ask directly for a reply, a decision, or a
+  meeting time — but only when there's real corroboration that it's genuine
+  correspondence (an existing back-and-forth in the thread, or a sender
+  you've emailed before). A question mark or a convincing-looking sender name
+  is deliberately not enough on its own — both show up constantly in
+  marketing and cold-outreach mail, and a false "someone is waiting on you"
+  costs more trust than a missed one.
+- **Triggering an autonomy cycle while autonomy is switched off now tells you
+  so, instead of quietly reporting nothing happened.** `POST
+  /v1/email/agent/autonomy/run` used to return the same "nothing to do"
+  response whether autonomy was disabled or had genuinely run and found
+  nothing — there was no way to tell which. It now returns an error naming
+  the current level and how to turn autonomy back on.
+- **Asking the agent to draft a reply or forward now actually drafts one,
+  instead of asking you to write it.** The agent would correctly find the
+  right email, then ask you to supply the reply or forward text — the exact
+  thing you'd asked it to write. Nothing told it that composing the message
+  was its own job (that instruction only existed once it had learned your
+  writing style from enough sent mail, so it never applied to a fresh
+  mailbox). It now writes the reply or forward itself from the original
+  message plus whatever you specified (length, tone, points to hit), and
+  still uses your exact wording when you hand it over yourself. Sending is
+  unchanged — every draft still needs your confirmation before it goes out
+  (#2524).
+- **The agent now works differently for a personal mailbox than for a work one.**
+  It used to bring exactly the same instincts to both: the same triage advice for
+  a mailbox full of newsletters and flight confirmations as for one full of
+  meeting invites and things people are waiting on you for. It now ships six
+  built-in skills and turns on one set of them per run — `personal` (inbox triage,
+  newsletter digests, trip itineraries) or `work` (inbox triage, meeting
+  scheduling, action items, escalation). For an Outlook mailbox it picks the set
+  itself from the kind of Microsoft account you connected. Gmail doesn't say which
+  kind it is, so a Gmail mailbox gets `personal` unless you pin one — start the
+  sidecar with `extraArgs: ["--skill-set", "work"]` or
+  `env: { GAIA_EMAIL_SKILL_SET: "work" }`. This changes how the agent approaches
+  your mail, not what it can do: same endpoints, same tools, same permissions, no
+  schema bump (#2466).
+- **Opt-in preview: small on-device models can now decide phishing flags and
+  triage categories instead of keyword rules.** Turn it on with
+  `GAIA_EMAIL_USE_SLM=true` on the sidecar (or `use_slm=True` in config).
+  A compact classifier — running on the same local Lemonade server as the chat
+  model, so nothing leaves the machine — makes the phishing call, and a second
+  one labels the triage category, taking that decision away from the bigger LLM
+  (which is still consulted for the spam verdict when the rules can't settle it).
+  It is experimental, so it stays off unless you turn it on. If the
+  models are unavailable for any reason, triage falls back to exactly the
+  previous behavior. No API shape changed.
+- **A trashed email is recoverable any time it's still in Trash — not just for
+  a few seconds after you delete it.** The only way back used to be a short
+  undo window right after trashing; miss it, and the agent told you the
+  message was stuck, even though Gmail actually keeps Trash for 30 days. It
+  can now find the message and restore it any time it's still there. The
+  agent also stopped calling a trashed message "archived" in its confirmation
+  — trash and archive recover differently, so it now says exactly what it did.
+- **The agent no longer claims it can permanently delete email — because it
+  can't.** Permanently deleting a Gmail message needs a scope GAIA
+  deliberately never asks for (it would hand over delete access to your whole
+  mailbox for one rare action), so every attempt failed. Asked directly, the
+  agent used to say it could do it anyway. Now it says plainly it can only
+  move mail to Trash.
+- **Full autonomy now does more than archive, explains its decisions, and can be undone.**
+  Previously the proactive `earn_trust`/`full` loop only ever archived low-signal mail —
+  every other reversible action the trust model already declared (marking mail read,
+  starring, labeling) was unreachable, the run report never said *why* a message was held
+  back, and there was no way to undo an auto-executed action other than the archive-only
+  `undo_archive_batch` tool. Now: FYI mail is marked read instead of archived (it stays
+  visible, just no longer sits unread); `POST /v1/email/agent/autonomy/run` returns a new
+  `decisions[]` field explaining every candidate's outcome and reason, including "held back
+  for confirmation" and "held back — provider-flagged IMPORTANT"; and a new
+  `POST /v1/email/agent/autonomy/undo` reverses any auto-executed action and records the
+  correction against its trust scope, the same negative-feedback loop `undo_archive_batch`
+  already gave archives. The destructive floor (send/forward/permanent-delete/RSVP/quarantine)
+  is unaffected — it was already inviolable and stays that way at every level (#2529).
+- **The agent sets up your mailbox itself, in the conversation.** Before, hitting
+  the email agent without a working mailbox produced an error and a shell command
+  to go run somewhere else — a dead end for anyone in a terminal or chat window.
+  It now works out *which* of the four problems it actually has (nothing
+  connected, credentials stopped working, a missing permission, or connected but
+  not allowed for this agent), says something specific about that one, and offers
+  to fix it right there. The connected-but-not-allowed case is fixed with no
+  browser at all. Connecting Google still needs your own OAuth client ID and
+  secret — the agent now tells you that up front with a link, instead of failing
+  later (#2469).
+  Integrators: `can_answer_questions` is only understood from 2.6 onward, so
+  check `version()` before sending it — an older sidecar rejects the unknown
+  field outright rather than ignoring it.
+- **New: the agent can ask you a question mid-run** — schema 2.6, additive. A new
+  non-terminal SSE event `needs_input` carries a question, 2-4 labelled options
+  each with a description of what choosing it does, and a free-text escape;
+  `respondToQuery(runId, requestId, value)` (`POST
+  /v1/email/query/{run_id}/respond`) delivers the answer and the ORIGINAL stream
+  resumes. An unanswered question ends the run with an error rather than hanging.
+  Approvals (`needs_confirmation`) are unchanged: still terminal, still
+  deny-by-default (#2469).
+- **Work/school Outlook (Microsoft 365 / Entra ID) mailboxes now work, not just
+  personal Outlook.com.** The Microsoft connector previously signed in only
+  against the `consumers` tenant, so a corporate Microsoft 365 account was
+  rejected before GAIA ever saw a token. It now uses the `common` tenant by
+  default (both account types), overridable with `GAIA_MICROSOFT_TENANT`. A new
+  zero-setup device-code sign-in connects without an Azure app registration or
+  loopback redirect — from the CLI (`gaia connectors connect microsoft --device`)
+  or the Agent UI (a **Sign in with a code** button on the Microsoft tile). No
+  email-agent tool changed — the existing Outlook backend just reaches more
+  mailboxes (#1275).
 - **In the GAIA daemon deployment, the sidecar no longer holds long-lived OAuth
   secrets.** Previously a sidecar read the mailbox connection straight from the
   machine keyring. Now, under the Agent UI daemon, the daemon (the custody home)

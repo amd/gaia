@@ -66,9 +66,45 @@ def test_permission_request_maps_to_needs_confirmation_without_confirm_url():
     assert out[0]["type"] == "needs_confirmation"
     assert out[0]["run_id"] == RUN_ID
     assert out[0]["action"] == "send_now"
-    assert "a@b.com" in out[0]["summary"]
+    # Human-readable headline, not a raw key=value dump (issue #2404).
+    summary = out[0]["summary"]
+    assert "a@b.com" in summary
+    assert "Send this email" in summary
+    assert 'subject "Hi"' in summary
+    assert "send_now:" not in summary
+    assert "body=" not in summary
     # Stateless stop-and-hand-off (D1): confirm_url is omitted.
     assert "confirm_url" not in out[0]
+
+
+def test_permission_request_summary_omits_body_and_is_human_readable():
+    out = _tr().translate(
+        {
+            "type": "permission_request",
+            "tool": "send_now",
+            "args": {
+                "to": "rocm-ci@amd.com",
+                "subject": "Re: Security Incident SIC-4482",
+                "body": "Acknowledged. I will review the security incident.",
+            },
+        }
+    )
+    summary = out[0]["summary"]
+    assert summary.startswith("Send this email to rocm-ci@amd.com")
+    # The verbatim body must never reach the confirmation headline.
+    assert "Acknowledged" not in summary
+    assert "body=" not in summary
+
+
+def test_permission_request_summary_for_non_send_action():
+    out = _tr().translate(
+        {
+            "type": "permission_request",
+            "tool": "quarantine_phishing_message",
+            "args": {"message_id": "abc123"},
+        }
+    )
+    assert out[0]["summary"] == "Quarantine this message as phishing?"
 
 
 # ---------------------------------------------------------------------------
@@ -157,12 +193,14 @@ def test_tool_result_carries_tool_and_data():
     ]
 
 
-def test_tool_result_render_key_for_pre_scan():
+def test_pre_scan_draws_no_card():
+    """The triage reply is the single inbox view: a pre-scan card landing
+    mid-turn showed a partial list beside the answer still being written."""
     t = _tr()
     t.translate({"type": "tool_start", "tool": "pre_scan_inbox"})
     t.translate({"type": "tool_args", "tool": "pre_scan_inbox", "args": {}})
     out = t.translate({"type": "tool_result", "title": "Result", "summary": "scan"})
-    assert out[0]["render"] == "email_pre_scan"
+    assert "render" not in out[0]
 
 
 def test_tool_end_after_result_is_dropped():
@@ -186,6 +224,29 @@ def test_agent_error_maps_to_terminal_error():
     assert out == [{"type": "error", "detail": "boom", "status": 500}]
 
 
+def test_recoverable_agent_error_maps_to_non_terminal_status():
+    """#2515: a per-tool error the agent loop is retrying (agent.py's
+    STATE_ERROR_RECOVERY path) is NOT terminal — the two layers must agree
+    that "recoverable" means the run continues, not that the wire-level
+    terminal contract gets loosened for every agent_error."""
+    out = _tr().translate(
+        {"type": "agent_error", "content": "boom", "recoverable": True}
+    )
+    assert out[0]["type"] not in TERMINAL_TYPES
+    assert out[0]["type"] == "status"
+    # The user must still SEE the failure — never silently swallowed.
+    assert "boom" in out[0]["message"]
+
+
+def test_recoverable_false_agent_error_is_still_terminal():
+    # An explicit False (as well as the field's absence, covered above) keeps
+    # the existing terminal contract — this is not a blanket downgrade.
+    out = _tr().translate(
+        {"type": "agent_error", "content": "boom", "recoverable": False}
+    )
+    assert out == [{"type": "error", "detail": "boom", "status": 500}]
+
+
 def test_policy_alert_maps_to_error_with_tail():
     out = _tr().translate(
         {
@@ -202,7 +263,12 @@ def test_policy_alert_maps_to_error_with_tail():
     assert "send_now" in out[0]["detail"] and "r1" in out[0]["detail"]
 
 
-def test_user_input_request_maps_to_needs_confirmation_input():
+def test_user_input_request_maps_to_needs_input_not_confirmation():
+    """Spec §9 Q3 (#2469): a question is its own type, not a flavour of approval.
+
+    Folding it into ``needs_confirmation`` would make the run-terminating,
+    deny-by-default approval behaviour depend on an optional field.
+    """
     out = _tr().translate(
         {
             "type": "user_input_request",
@@ -211,9 +277,58 @@ def test_user_input_request_maps_to_needs_confirmation_input():
             "choices": ["a", "b"],
         }
     )
-    assert out[0]["type"] == "needs_confirmation"
-    assert out[0]["action"] == "input"
-    assert "a, b" in out[0]["summary"]
+    assert out[0]["type"] == "needs_input"
+    assert out[0]["request_id"] == "r"
+    assert out[0]["question"] == "Which?"
+    # Bare `choices` still become pickable options rather than prose.
+    assert out[0]["options"] == [
+        {"value": "a", "label": "a", "description": ""},
+        {"value": "b", "label": "b", "description": ""},
+    ]
+    assert out[0]["respond_url"].endswith("/respond")
+
+
+def test_user_input_request_carries_rich_options():
+    out = _tr().translate(
+        {
+            "type": "user_input_request",
+            "request_id": "r",
+            "message": "Which mailbox?",
+            "choices": ["google"],
+            "options": [
+                {
+                    "value": "google",
+                    "label": "Gmail",
+                    "description": "A gmail.com account.",
+                }
+            ],
+            "allow_free_text": False,
+            "sensitive": False,
+            "timeout_seconds": 240,
+        }
+    )
+    assert out[0]["options"] == [
+        {"value": "google", "label": "Gmail", "description": "A gmail.com account."}
+    ]
+    assert out[0]["allow_free_text"] is False
+    assert out[0]["timeout_seconds"] == 240
+
+
+def test_needs_input_is_not_terminal():
+    """The run resumes after a question, so it must not end the stream."""
+    assert "needs_input" not in TERMINAL_TYPES
+
+
+def test_sensitive_question_is_flagged_for_masking():
+    out = _tr().translate(
+        {
+            "type": "user_input_request",
+            "request_id": "r",
+            "message": "Paste the client secret",
+            "sensitive": True,
+        }
+    )
+    assert out[0]["sensitive"] is True
 
 
 def test_tool_confirm_denied_folds_to_status():
@@ -278,6 +393,7 @@ def test_every_documented_source_type_is_mapped(source_type):
         "tool_call",
         "tool_result",
         "needs_confirmation",
+        "needs_input",
         "final",
         "error",
     }

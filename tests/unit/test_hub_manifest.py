@@ -3,12 +3,16 @@
 """Unit tests for the gaia-agent.yaml manifest parser/validator (#1091)."""
 
 import textwrap
+from pathlib import Path
 
 import pytest
 import yaml
 
 from gaia.hub import AgentManifest, ManifestError, parse
-from gaia.hub.manifest import DEFAULT_SECURITY_TIER
+from gaia.hub.installer import VERIFIED_TIER, ensure_trust_ack, requires_trust_ack
+from gaia.hub.manifest import DEFAULT_SECURITY_TIER, VALID_SECURITY_TIERS
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # ---------------------------------------------------------------------------
 # Fixtures / builders
@@ -301,6 +305,15 @@ def test_invalid_language_raises():
         AgentManifest.from_dict(data)
 
 
+# cpp is covered by test_valid_cpp_manifest_parses — it needs its own `cpp:`
+# section, so it cannot ride the Python fixture here.
+@pytest.mark.parametrize("language", ["python", "go", "typescript"])
+def test_supported_languages_parse(language):
+    """go/typescript admit the terminal hub and the Agent UI as hub packages."""
+    data = dict(VALID_PYTHON_MANIFEST, language=language)
+    assert AgentManifest.from_dict(data).language == language
+
+
 def test_type_defaults_to_agent():
     data = dict(VALID_PYTHON_MANIFEST)
     assert "type" not in data
@@ -404,6 +417,80 @@ def test_negative_memory_raises():
         AgentManifest.from_dict(data)
 
 
+# ---------------------------------------------------------------------------
+# requirements.min_lemonade_version
+#
+# This block exists because the field was declared in a shipped manifest and
+# silently dropped by the parser for months. A test that only compares the YAML
+# text to a constant cannot catch that — it proves two files agree while the
+# value reaches nobody. These assert the parsed object actually carries it.
+# ---------------------------------------------------------------------------
+
+
+def test_min_lemonade_version_survives_parsing():
+    data = dict(VALID_PYTHON_MANIFEST)
+    data["requirements"] = dict(data["requirements"], min_lemonade_version="10.2.0")
+
+    parsed = AgentManifest.from_dict(data)
+
+    assert parsed.requirements.min_lemonade_version == "10.2.0"
+
+
+def test_min_lemonade_version_survives_a_round_trip_through_yaml(tmp_path):
+    """The path a real agent takes: YAML on disk → parse → consumer."""
+    data = dict(VALID_PYTHON_MANIFEST)
+    data["requirements"] = dict(data["requirements"], min_lemonade_version="11.5.0")
+    path = tmp_path / "gaia-agent.yaml"
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+
+    assert parse(path).requirements.min_lemonade_version == "11.5.0"
+
+
+def test_min_lemonade_version_is_optional():
+    """Most agents declare no backend floor; that is not an error."""
+    data = dict(VALID_PYTHON_MANIFEST)
+    data["requirements"] = {
+        k: v for k, v in data["requirements"].items() if k != "min_lemonade_version"
+    }
+
+    assert AgentManifest.from_dict(data).requirements.min_lemonade_version is None
+
+
+def test_absent_requirements_block_leaves_min_lemonade_version_none():
+    data = dict(VALID_PYTHON_MANIFEST)
+    data.pop("requirements")
+
+    assert AgentManifest.from_dict(data).requirements.min_lemonade_version is None
+
+
+def test_dict_to_requirements_coercion_keeps_min_lemonade_version():
+    """The second dict → Requirements path must not drop it either.
+
+    ``check_compatibility`` accepts a raw mapping and coerces it. That converter
+    is a separate parse path from the manifest one, and a field added to only
+    half of them is the same silent drop with a different entry point.
+    """
+    from gaia.hub.compatibility import _coerce_requirements
+
+    coerced = _coerce_requirements({"min_lemonade_version": "10.2.0"})
+
+    assert coerced.min_lemonade_version == "10.2.0"
+
+
+def test_malformed_min_lemonade_version_raises():
+    """A floor nothing can compare against is worse than none — fail loudly.
+
+    A readiness check that cannot parse the declared minimum reports the
+    version gate as indeterminate, so a typo here would silently disable the
+    very check the field exists to drive.
+    """
+    data = dict(VALID_PYTHON_MANIFEST)
+    data["requirements"] = dict(data["requirements"], min_lemonade_version="10.2")
+
+    with pytest.raises(ManifestError, match="min_lemonade_version"):
+        AgentManifest.from_dict(data)
+
+
 def test_bool_tools_count_raises():
     data = dict(VALID_PYTHON_MANIFEST, tools_count=True)
     with pytest.raises(ManifestError, match="tools_count"):
@@ -488,3 +575,59 @@ def test_real_world_yaml_text(tmp_path):
     assert m.id == "chatty"
     assert m.requirements.min_memory_gb == 8
     assert m.interfaces.mcp_server is True
+
+
+# ---------------------------------------------------------------------------
+# Shipped manifests
+#
+# Mirrors the Worker's equivalent block (workers/agent-hub/test/manifest.test.ts):
+# parse the manifests this repo actually publishes, with the parser that runs in
+# production. Without this, a bad edit to a shipped manifest is only caught by
+# the release job that tries to publish it.
+# ---------------------------------------------------------------------------
+
+SHIPPED_AGENT_MANIFESTS = sorted(
+    (REPO_ROOT / "hub" / "agents").glob("*/python/gaia-agent.yaml")
+)
+
+
+def test_shipped_agent_manifests_are_discoverable():
+    """A path typo above would silently parametrize zero manifests."""
+    assert SHIPPED_AGENT_MANIFESTS, f"no shipped manifests under {REPO_ROOT}/hub/agents"
+
+
+@pytest.mark.parametrize(
+    "manifest_path", SHIPPED_AGENT_MANIFESTS, ids=lambda p: p.parent.parent.name
+)
+def test_shipped_agent_manifest_parses(manifest_path):
+    # The id is not asserted against the directory name: some agents ship a
+    # registry id that differs deliberately (analyst -> data, browser -> web).
+    m = parse(manifest_path)
+    assert m.id
+    assert m.security_tier in VALID_SECURITY_TIERS
+
+
+def test_email_agent_declares_the_verified_tier():
+    """The email manifest omitted ``security_tier``, so it published as
+    ``experimental`` — and a non-verified agent refuses to install without an
+    explicit trust opt-in, making ``gaia agent install email`` fail for a
+    first-time user of AMD's own agent.
+    """
+    path = REPO_ROOT / "hub" / "agents" / "email" / "python" / "gaia-agent.yaml"
+
+    assert "security_tier" in yaml.safe_load(path.read_text(encoding="utf-8")), (
+        "gaia-agent.yaml must declare security_tier explicitly — an omitted tier "
+        f"defaults to {DEFAULT_SECURITY_TIER!r}, which forces `--trust` on install"
+    )
+    assert parse(path).security_tier == VERIFIED_TIER
+
+
+def test_email_agent_installs_without_a_trust_opt_in():
+    """The tier only matters through the install gate, so assert the gate itself
+    rather than just the parsed value (the min_lemonade_version lesson above).
+    """
+    path = REPO_ROOT / "hub" / "agents" / "email" / "python" / "gaia-agent.yaml"
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+
+    assert requires_trust_ack(raw) is False
+    ensure_trust_ack("email", raw, trusted=False)  # must not raise

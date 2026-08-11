@@ -29,15 +29,21 @@ Design commitments
 - **Buffer ``tool_start`` + ``tool_args`` into one ``tool_call``** (spec §6.3): the
   handler emits the name first and the arguments separately; the canonical
   ``tool_call`` carries ``{tool, args}`` together.
-- **Fail loudly, never silently.** ``agent_error`` and a governance
-  ``policy_alert`` map to a terminal ``error`` with an actionable ``detail`` — never
-  a placeholder. The ``None`` queue sentinel is *stream close*, handled by the
-  drain loop, not a wire event.
+- **Fail loudly, never silently.** A fatal top-level ``agent_error`` and a
+  governance ``policy_alert`` map to a terminal ``error`` with an actionable
+  ``detail`` — never a placeholder. A **recoverable** ``agent_error`` (the
+  source event's ``recoverable`` flag, set by ``agent.py``'s
+  ``STATE_ERROR_RECOVERY`` retry path) is explicitly NOT terminal — it folds
+  to a ``status`` line so the run continues (#2515). The ``None`` queue
+  sentinel is *stream close*, handled by the drain loop, not a wire event.
 
 Spec open questions surfaced in this file (do not block #2016):
 - **Q2** — ``policy_alert`` maps to ``error`` (status 403). A governance block is
   per-*tool* (the run may continue) whereas canonical ``error`` is terminal; a
   dedicated additive event type may be warranted. See spec §9 Q2.
+- **Q3 — RESOLVED (#2469).** ``user_input_request`` maps to the eighth canonical
+  type ``needs_input`` (answerable, run continues), NOT to
+  ``needs_confirmation`` (terminal approve/deny). See spec §5.1.
 - **Q4 (D1)** — ``needs_confirmation`` omits ``confirm_url`` under the stateless
   stop-and-hand-off model (no server-side resume). See spec §5 / §9 Q4.
 """
@@ -49,10 +55,18 @@ from typing import Any, Dict, List, Optional
 # Mirrors ``gaia.ui.sse_handler.SSEOutputHandler._RENDER_TOOL_TO_LANG`` — the
 # tool→card-key map that tells the host which typed ``tool_result.render`` card to
 # draw (spec §4.2, replacing the #1000 fence-injection hack). Duplicated (not
-# imported) to keep this module free of the ``gaia.ui`` import chain; the email
-# agent's only render tool today is the inbox pre-scan.
+# imported) to keep this module free of the ``gaia.ui`` import chain; a test
+# (``test_render_tool_to_lang_maps_stay_in_sync``) pins the two dicts equal so
+# this duplication can't silently drift.
 _RENDER_TOOL_TO_LANG: Dict[str, str] = {
-    "pre_scan_inbox": "email_pre_scan",
+    # ``pre_scan_inbox`` deliberately draws NO card: it landed mid-turn as a
+    # partial list while the model was still writing the full triage answer,
+    # so the user read two overlapping views of one inbox and could not tell
+    # which to act on. The triage reply is the single view; refs still resolve
+    # from tool data (``resolve_needs_you_reference``), not from a render.
+    # #2765: a generic ``table`` card (no new client code) so the thread
+    # view renders straight from tool data instead of model prose.
+    "get_thread": "table",
 }
 
 # HTTP-style status codes for the canonical ``error`` event's ``status`` field.
@@ -237,6 +251,14 @@ class CanonicalTranslator:
 
     def _on_agent_error(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
         detail = str(event.get("content") or "Unknown agent error")
+        if event.get("recoverable"):
+            # A per-tool error the agent loop is retrying (agent.py's
+            # STATE_ERROR_RECOVERY path, e.g. a bad tool argument) is not
+            # terminal — the run continues on this same stream. Fold it to a
+            # status line, same pattern as ``_on_tool_confirm_denied``, so
+            # the user still SEES the failure without the stream (and the
+            # still-retrying agent) being cut out from under it (#2515).
+            return [{"type": "status", "message": f"Tool call failed, retrying: {detail}"}]
         return [{"type": "error", "detail": detail, "status": _ERROR_STATUS_AGENT}]
 
     def _on_policy_alert(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -270,20 +292,27 @@ class CanonicalTranslator:
         ]
 
     def _on_user_input_request(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
-        message = str(event.get("message") or "Input requested")
-        choices = event.get("choices") or []
-        summary = message
-        if choices:
-            summary = f"{message} (choices: {', '.join(str(c) for c in choices)})"
-        # Same "pause for the user" primitive as approve/deny (spec §6.2 / Q3).
-        return [
-            {
-                "type": "needs_confirmation",
-                "run_id": self._run_id,
-                "action": "input",
-                "summary": summary,
-            }
-        ]
+        # Spec §9 Q3 resolved: a mid-run question is its OWN canonical type, not
+        # a flavour of needs_confirmation. The two differ in the only way that
+        # matters on the wire — needs_confirmation is a terminal approve/deny
+        # (deny-by-default, run over), needs_input is answerable and the run
+        # continues on the same stream. Folding them would have made the
+        # security-relevant terminal behaviour depend on an optional field.
+        question = str(event.get("message") or "Input requested")
+        canonical: Dict[str, Any] = {
+            "type": "needs_input",
+            "run_id": self._run_id,
+            "request_id": str(event.get("request_id") or ""),
+            "question": question,
+            "options": _normalize_options(event),
+            "allow_free_text": bool(event.get("allow_free_text", True)),
+            "sensitive": bool(event.get("sensitive", False)),
+            "respond_url": f"/v1/email/query/{self._run_id}/respond",
+        }
+        timeout = event.get("timeout_seconds")
+        if isinstance(timeout, (int, float)) and timeout > 0:
+            canonical["timeout_seconds"] = int(timeout)
+        return [canonical]
 
     def _on_tool_confirm_denied(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
         # Unattended auto-deny is informational — the run continues and the agent
@@ -318,26 +347,79 @@ class CanonicalTranslator:
 
 
 #: Canonical terminal event types — exactly one ends a run (spec §3).
+#: ``needs_input`` is deliberately NOT here: the run pauses on it and resumes on
+#: the same stream once the answer arrives (spec §5.1).
 TERMINAL_TYPES = frozenset({"final", "error"})
 
 
-def _render_args_summary(tool: str, args: Dict[str, Any]) -> str:
-    """Render tool args as the literal text the user would approve.
+def _normalize_options(event: Dict[str, Any]) -> List[Dict[str, str]]:
+    """Build the canonical ``options`` array for a ``needs_input`` event.
 
-    Kept deterministic and compact — recipients/subject/body for a send, or a
-    ``key=value`` join for any other gated action.
+    Prefers the rich ``options`` list (``{value, label, description}``) and falls
+    back to the flat ``choices`` strings, so a caller that only passed choices
+    still gets a pickable list rather than an unlabelled blob buried in prose.
     """
-    if not args:
-        return f"{tool} (no arguments)"
-    if isinstance(args, dict):
-        parts = []
-        for key, value in args.items():
-            text = str(value)
-            if len(text) > 200:
-                text = text[:200] + "…"
-            parts.append(f"{key}={text}")
-        return f"{tool}: " + ", ".join(parts)
-    return f"{tool}: {args}"
+    out: List[Dict[str, str]] = []
+    raw_options = event.get("options")
+    if isinstance(raw_options, list):
+        for item in raw_options:
+            if not isinstance(item, dict):
+                continue
+            value = str(item.get("value") or item.get("label") or "").strip()
+            if not value:
+                continue
+            out.append(
+                {
+                    "value": value,
+                    "label": str(item.get("label") or value),
+                    "description": str(item.get("description") or ""),
+                }
+            )
+    if out:
+        return out
+    for choice in event.get("choices") or []:
+        text = str(choice).strip()
+        if text:
+            out.append({"value": text, "label": text, "description": ""})
+    return out
+
+
+# Human labels for the confirmation-gated actions the /query stream surfaces.
+# The machine action name still rides on the event's ``action`` field as
+# anti-spoof metadata; this map is only for the human-readable headline.
+_ACTION_LABELS = {
+    "send_now": "Send this email",
+    "send_draft": "Send this draft",
+    "forward_message": "Forward this email",
+    "quarantine_phishing_message": "Quarantine this message as phishing",
+    "unquarantine_message": "Restore this message from quarantine",
+    "archive_message": "Archive this message",
+}
+
+
+def _render_args_summary(tool: str, args: Dict[str, Any]) -> str:
+    """Render a human-readable confirmation prompt for a gated tool call.
+
+    Produces a plain sentence a chat user can approve — e.g. ``Send this email
+    to a@b.com — subject "Re: …"?`` — rather than a raw ``key=value`` dump. The
+    machine action name is carried on the event's ``action`` field, not here.
+    """
+    label = _ACTION_LABELS.get(tool, f"Run '{tool}'")
+    if not isinstance(args, dict) or not args:
+        return f"{label}?"
+    detail = []
+    recipient = args.get("to")
+    if recipient:
+        detail.append(f"to {recipient}")
+    subject = args.get("subject")
+    if subject:
+        text = str(subject)
+        if len(text) > 120:
+            text = text[:120] + "…"
+        detail.append(f'— subject "{text}"')
+    if detail:
+        return f"{label} " + " ".join(detail) + "?"
+    return f"{label}?"
 
 
 __all__ = ["CanonicalTranslator", "TERMINAL_TYPES"]

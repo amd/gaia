@@ -15,10 +15,10 @@ def kill_process_on_port(port):
         raise ValueError(f"Invalid port number: {port!r}")
     try:
         if sys.platform.startswith("win"):
-            # Windows: use netstat + taskkill
+            # Windows: use netstat + taskkill (filter output in Python, no shell pipe)
             result = subprocess.run(
-                f"netstat -ano | findstr :{port}",
-                shell=True,
+                ["netstat", "-ano"],
+                shell=False,
                 capture_output=True,
                 text=True,
                 check=False,
@@ -39,7 +39,7 @@ def kill_process_on_port(port):
                     print(f"Found process with PID {pid} on port {port}")
                     try:
                         subprocess.run(
-                            f"taskkill /F /PID {pid}", shell=True, check=False
+                            ["taskkill", "/F", "/PID", pid], shell=False, check=False
                         )
                         print(f"Killed process with PID {pid}")
                     except Exception as e:
@@ -50,8 +50,8 @@ def kill_process_on_port(port):
         else:
             # Unix/macOS: use lsof + kill
             result = subprocess.run(
-                f"lsof -ti :{port}",
-                shell=True,
+                ["lsof", "-ti", f":{port}"],
+                shell=False,
                 capture_output=True,
                 text=True,
                 check=False,
@@ -64,7 +64,9 @@ def kill_process_on_port(port):
                     if pid:
                         print(f"Found process with PID {pid} on port {port}")
                         try:
-                            subprocess.run(f"kill -9 {pid}", shell=True, check=False)
+                            subprocess.run(
+                                ["kill", "-9", pid], shell=False, check=False
+                            )
                             print(f"Killed process with PID {pid}")
                         except Exception as e:
                             print(f"Error killing PID {pid}: {e}")

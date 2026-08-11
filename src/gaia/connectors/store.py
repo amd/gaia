@@ -32,10 +32,18 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
+import zlib
 from typing import List, Optional
 
-from gaia.connectors._keyring import keyring  # actionable error if missing (#1621)
+from gaia.connectors._keyring import (  # actionable error if missing (#1621)
+    _KEYRING_BACKEND_ENV_VAR,
+    _NULL_KEYRING_ALIASES,
+    _NULL_KEYRING_BACKEND,
+    keyring,
+    normalize_keyring_backend_env,
+)
 from gaia.connectors.errors import (
     AuthRequiredError,
     ConnectorsError,
@@ -93,8 +101,33 @@ def verify_keyring_backend() -> None:
     Raise ``ConnectorsError`` if the active keyring is one of the refused
     backends. Called eagerly at every save and at every load — cheap, and
     closes the silent-plaintext-fallback path (A4).
+
+    Also the single eager choke point where an unresolvable
+    ``PYTHON_KEYRING_BACKEND`` first surfaces (#2441): keyring resolves the var
+    as a ``module.Class`` path, so a bad value raises deep inside keyring
+    (a dotless value → ``ValueError: Empty module name``). Turn that opaque
+    failure into an actionable error naming the offending value and the correct
+    form — never let it bubble up as an unexplained sidecar 502.
     """
-    backend = keyring.get_keyring()
+    normalize_keyring_backend_env()
+    try:
+        backend = keyring.get_keyring()
+    except Exception as e:  # noqa: BLE001 - re-raised loudly with context below
+        configured = os.environ.get(_KEYRING_BACKEND_ENV_VAR)
+        hint = ""
+        if configured:
+            hint = (
+                f" {_KEYRING_BACKEND_ENV_VAR}={configured!r} is not a valid "
+                "keyring backend identifier: keyring expects a fully-qualified "
+                "'module.Class' path (for example "
+                f"'{_NULL_KEYRING_BACKEND}' to disable the store in "
+                "dev/testing), or one of the GAIA shorthands "
+                f"{sorted(_NULL_KEYRING_ALIASES)}."
+            )
+        raise ConnectorsError(
+            f"Could not initialize the keyring backend: {e}.{hint} "
+            "See docs/security/connections.mdx."
+        ) from e
     cls_name = type(backend).__name__
     if cls_name in _REFUSED_BACKEND_CLASS_NAMES:
         raise ConnectorsError(
@@ -128,6 +161,151 @@ def _wrap_keyring_call(operation: str):
     return wrapper
 
 
+# ---------------------------------------------------------------------------
+# Transparent large-blob chunking (#1275 Windows fix)
+# ---------------------------------------------------------------------------
+# Windows Credential Manager caps a single credential blob at 2560 bytes
+# (CRED_MAX_CREDENTIAL_BLOB_SIZE). keyring stores the value as UTF-16, so the
+# practical ceiling is ~1280 chars — and CredWrite fails with a cryptic
+# "The stub received bad data" (error 1783) past it. Google refresh tokens
+# (~100 chars) never came close, so this went unnoticed; Microsoft Graph
+# refresh tokens (~1600 chars) blow straight past it. We transparently split
+# an oversized value across extra keyring slots (``<username>#<idx>``) and
+# reassemble on read. Small values stay in a single raw slot — backward
+# compatible with every pre-existing entry and the short Google blobs.
+#
+# Torn-write safety: keyring has no atomic multi-slot transaction, and
+# Microsoft rotates the refresh token on every refresh (varying length →
+# varying chunk count), so an overwrite can crash mid-rewrite with slots and
+# manifest out of sync. The manifest therefore carries a CRC32 of the full
+# payload; ``_kr_get`` validates the reassembled value against it and returns
+# ``None`` ("reconnect") on any mismatch — a torn state can never surface as a
+# truncated-but-valid-looking token.
+_CHUNK_CHARS = 1024
+_CHUNK_SENTINEL = "\x00gaia-chunked\x00"  # cannot occur inside a JSON blob
+
+
+def _payload_crc(payload: str) -> str:
+    """Non-cryptographic integrity check for reassembled chunk payloads."""
+    return format(zlib.crc32(payload.encode("utf-8")), "08x")
+
+
+def _chunk_username(username: str, idx: int) -> str:
+    return f"{username}#{idx}"
+
+
+def _kr_raw_set(username: str, value: str) -> None:
+    @_wrap_keyring_call("set_password")
+    def _set():
+        keyring.set_password(SERVICE_NAME, username, value)
+
+    _set()
+
+
+def _kr_raw_get(username: str) -> Optional[str]:
+    @_wrap_keyring_call("get_password")
+    def _get():
+        return keyring.get_password(SERVICE_NAME, username)
+
+    return _get()
+
+
+def _kr_raw_delete(username: str) -> None:
+    try:
+        keyring.delete_password(SERVICE_NAME, username)
+    except keyring.errors.PasswordDeleteError:
+        pass
+    except keyring.errors.KeyringError as e:
+        raise ConnectorsError(
+            f"Keyring delete_password failed: {e}. See "
+            "docs/security/connections.mdx."
+        ) from e
+
+
+def _kr_clear_chunks(username: str) -> None:
+    """Best-effort removal of any leftover chunk slots for ``username``."""
+    idx = 0
+    while _kr_raw_get(_chunk_username(username, idx)) is not None:
+        _kr_raw_delete(_chunk_username(username, idx))
+        idx += 1
+
+
+def _kr_set(username: str, payload: str) -> None:
+    """Store ``payload`` under ``username``, chunking if it exceeds the
+    single-slot ceiling. Chunks are written BEFORE the manifest so a reader
+    never sees a manifest pointing at not-yet-written parts."""
+    if len(payload) <= _CHUNK_CHARS:
+        _kr_raw_set(username, payload)
+        # A prior write may have been chunked; sweep stale chunk slots.
+        _kr_clear_chunks(username)
+        return
+    chunks = [
+        payload[i : i + _CHUNK_CHARS] for i in range(0, len(payload), _CHUNK_CHARS)
+    ]
+    for idx, chunk in enumerate(chunks):
+        _kr_raw_set(_chunk_username(username, idx), chunk)
+    # Publish the manifest (count + CRC of the full payload) BEFORE sweeping
+    # stale high slots, so a reader after this point reassembles against the
+    # new count and the CRC guards any partial state.
+    _kr_raw_set(username, f"{_CHUNK_SENTINEL}{len(chunks)}:{_payload_crc(payload)}")
+    # Drop any extra chunk slots left over from a longer previous value.
+    stale = len(chunks)
+    while _kr_raw_get(_chunk_username(username, stale)) is not None:
+        _kr_raw_delete(_chunk_username(username, stale))
+        stale += 1
+
+
+def _parse_manifest(raw: str) -> Optional[tuple[int, Optional[str]]]:
+    """Parse ``<SENTINEL><count>[:<crc>]`` → ``(count, crc)``. ``None`` if the
+    manifest is malformed. ``crc`` is ``None`` for a legacy count-only manifest."""
+    body = raw[len(_CHUNK_SENTINEL) :]
+    count_str, _, crc = body.partition(":")
+    try:
+        return int(count_str), (crc or None)
+    except ValueError:
+        return None
+
+
+def _kr_get(username: str) -> Optional[str]:
+    """Read a (possibly chunked) value stored via :func:`_kr_set`.
+
+    Any partial/torn state (missing slot, or a CRC mismatch from a crashed
+    mid-rewrite) resolves to ``None`` — never a truncated-but-valid-looking
+    value."""
+    raw = _kr_raw_get(username)
+    if raw is None or not raw.startswith(_CHUNK_SENTINEL):
+        return raw
+    parsed = _parse_manifest(raw)
+    if parsed is None:
+        return None
+    count, crc = parsed
+    parts: list[str] = []
+    for idx in range(count):
+        part = _kr_raw_get(_chunk_username(username, idx))
+        if part is None:
+            # Missing slot — torn entry; treat as "not configured".
+            return None
+        parts.append(part)
+    value = "".join(parts)
+    if crc is not None and _payload_crc(value) != crc:
+        # Reassembled payload doesn't match the manifest CRC — a crashed
+        # mid-rewrite left slots and manifest out of sync. Fail safe.
+        return None
+    return value
+
+
+def _kr_delete(username: str) -> None:
+    """Delete a (possibly chunked) value and all its chunk slots. Idempotent."""
+    raw = _kr_raw_get(username)
+    _kr_raw_delete(username)
+    if raw is not None and raw.startswith(_CHUNK_SENTINEL):
+        parsed = _parse_manifest(raw)
+        count = parsed[0] if parsed else 0
+        for idx in range(count):
+            _kr_raw_delete(_chunk_username(username, idx))
+    _kr_clear_chunks(username)
+
+
 def save_connection(
     *,
     provider: str,
@@ -136,6 +314,8 @@ def save_connection(
     scopes: List[str],
     client_id_hash: str,
     connected_at: Optional[float] = None,
+    tenant: Optional[str] = None,
+    account_type: Optional[str] = None,
 ) -> None:
     """
     Atomically persist a connection record to the keyring.
@@ -154,16 +334,36 @@ def save_connection(
     keyring slots per email) is a v2 follow-up; the username-key shape
     ``"<provider>:<account_email>"`` is forward-compatible for that
     migration.
+
+    ``tenant`` (D8, #2628): the OAuth authority that minted this
+    connection's refresh token, e.g. ``"organizations"`` or a specific
+    Directory (tenant) ID. Omitted from the blob when ``None`` (mirrors
+    ``save_provider_credentials``'s A7 contract) so a legacy blob with no
+    recorded tenant is distinguishable from one that recorded a value —
+    ``load_connection`` treats the two very differently.
+
+    ``account_type`` records what KIND of account signed in when the provider
+    can tell (Microsoft derives ``personal`` / ``work`` from the id_token ``tid``
+    claim, #2466). Distinct from ``tenant``, which records the authority the app
+    signed in *against*: the ``common`` authority admits both kinds, so the two
+    answer different questions. Omitted from the blob when ``None`` — an absent
+    key means "unknown", which readers must handle explicitly rather than
+    assuming a kind. Callers that re-save an existing connection (e.g.
+    refresh-token rotation) MUST pass both values through or they are lost.
     """
     verify_keyring_backend()
 
-    blob = {
+    blob: dict = {
         "account_email": account_email,
         "refresh_token": refresh_token,
         "scopes": list(scopes),
         "connected_at": connected_at if connected_at is not None else time.time(),
         "client_id_hash": client_id_hash,
     }
+    if tenant is not None:
+        blob["tenant"] = tenant
+    if account_type:
+        blob["account_type"] = account_type
     payload = json.dumps(blob, sort_keys=True)
     # v1 single-account per provider (per A10): the keyring KEY is always
     # built with DEFAULT_ACCOUNT; ``account_email`` lives in the metadata
@@ -171,17 +371,14 @@ def save_connection(
     # migration since the username shape already accommodates it.
     username = _connection_username(provider, DEFAULT_ACCOUNT)
 
-    @_wrap_keyring_call("set_password")
-    def _set():
-        keyring.set_password(SERVICE_NAME, username, payload)
-
-    _set()
+    _kr_set(username, payload)
 
 
 def load_connection(
     provider: str,
     *,
     current_client_id_hash: str,
+    current_tenant: Optional[str] = None,
     account_email: str = DEFAULT_ACCOUNT,
 ) -> Optional[dict]:
     """
@@ -191,15 +388,21 @@ def load_connection(
     against ``current_client_id_hash``; on mismatch the entry is cleared
     and ``None`` is returned. The caller (``tokens.get_access_token``)
     then raises ``AuthRequiredError(REAUTH_REQUIRED)``.
+
+    ``current_tenant`` (D8/A6/A18, #2628): a second, independent tripwire
+    mirroring the hash check above. When the caller passes the tenant the
+    connector currently resolves to AND the stored blob recorded a tenant
+    (i.e. NOT a legacy pre-#2628 blob) AND the two disagree, that is a
+    genuine positive signal — clear the entry and raise
+    ``AuthRequiredError(TENANT_MISMATCH)`` naming both values. A legacy
+    blob with no recorded tenant, or a caller that passes
+    ``current_tenant=None`` (the default), skips this check entirely —
+    "we don't know" is not the same as "we know they disagree".
     """
     verify_keyring_backend()
     username = _connection_username(provider, account_email)
 
-    @_wrap_keyring_call("get_password")
-    def _get():
-        return keyring.get_password(SERVICE_NAME, username)
-
-    raw = _get()
+    raw = _kr_get(username)
     if raw is None:
         return None
 
@@ -225,6 +428,28 @@ def load_connection(
         delete_connection(provider, account_email=account_email)
         raise AuthRequiredError(
             AuthRequiredError.Reason.REAUTH_REQUIRED, provider=provider
+        )
+
+    stored_tenant = blob.get("tenant")
+    if (
+        current_tenant is not None
+        and stored_tenant is not None
+        and stored_tenant != current_tenant
+    ):
+        delete_connection(provider, account_email=account_email)
+        raise AuthRequiredError(
+            AuthRequiredError.Reason.TENANT_MISMATCH,
+            provider=provider,
+            message=(
+                f"The stored {provider!r} connection was authenticated "
+                f"against tenant {stored_tenant!r}, but this connector "
+                f"currently resolves to tenant {current_tenant!r}. This "
+                "usually means the account is a different type than "
+                "expected, or a Directory (tenant) ID setup field changed "
+                "after connecting. Reconnect via the correct connector, or "
+                f"run `gaia connectors connect {provider}` again once the "
+                "tenant configuration is fixed."
+            ),
         )
 
     return blob  # type: ignore[no-any-return]
@@ -261,11 +486,7 @@ def peek_connection(
     verify_keyring_backend()
     username = _connection_username(provider, account_email)
 
-    @_wrap_keyring_call("get_password")
-    def _get():
-        return keyring.get_password(SERVICE_NAME, username)
-
-    raw = _get()
+    raw = _kr_get(username)
     if raw is None:
         return None
     try:
@@ -282,21 +503,15 @@ def delete_connection(provider: str, *, account_email: str = DEFAULT_ACCOUNT) ->
     """Remove the keyring entry for ``provider`` if present. Idempotent."""
     verify_keyring_backend()
     username = _connection_username(provider, account_email)
-
-    try:
-        keyring.delete_password(SERVICE_NAME, username)
-    except keyring.errors.PasswordDeleteError:
-        # Already gone — fine.
-        pass
-    except keyring.errors.KeyringError as e:
-        raise ConnectorsError(
-            f"Keyring delete_password failed: {e}. See "
-            "docs/security/connections.mdx."
-        ) from e
+    _kr_delete(username)
 
 
 def save_provider_credentials(
-    provider: str, *, client_id: str, client_secret: str = ""
+    provider: str,
+    *,
+    client_id: str,
+    client_secret: str = "",
+    tenant: Optional[str] = None,
 ) -> None:
     """Persist the *application's* OAuth client credentials for *provider*.
 
@@ -304,22 +519,25 @@ def save_provider_credentials(
     blob in the keyring, distinct from any connection blob. Lets users
     self-onboard via the AgentUI without ever touching env vars; the
     blob is encrypted at rest by the OS credential store.
+
+    ``tenant`` (plan amendment D5/A7, #2628): the optional single-tenant
+    override a ``microsoft_work``-style connector's setup form collects
+    (its ``ConfigField(key="tenant_id")``). Omitted from the blob entirely
+    when ``None`` — a test locks the exact two-key shape of an existing
+    Google blob, so this must never add a ``tenant`` key unless the caller
+    actually passed one.
     """
     verify_keyring_backend()
     if not client_id:
         raise ConnectorsError(
             f"save_provider_credentials({provider!r}): client_id is empty"
         )
-    payload = json.dumps(
-        {"client_id": client_id, "client_secret": client_secret}, sort_keys=True
-    )
+    blob: dict = {"client_id": client_id, "client_secret": client_secret}
+    if tenant is not None:
+        blob["tenant"] = tenant
+    payload = json.dumps(blob, sort_keys=True)
     username = _provider_credentials_username(provider)
-
-    @_wrap_keyring_call("set_password")
-    def _set():
-        keyring.set_password(SERVICE_NAME, username, payload)
-
-    _set()
+    _kr_set(username, payload)
 
 
 def peek_provider_credentials(provider: str) -> Optional[dict]:
@@ -332,11 +550,7 @@ def peek_provider_credentials(provider: str) -> Optional[dict]:
     verify_keyring_backend()
     username = _provider_credentials_username(provider)
 
-    @_wrap_keyring_call("get_password")
-    def _get():
-        return keyring.get_password(SERVICE_NAME, username)
-
-    raw = _get()
+    raw = _kr_get(username)
     if raw is None:
         return None
     try:
@@ -349,15 +563,7 @@ def clear_provider_credentials(provider: str) -> None:
     """Remove the stored OAuth client credentials for *provider*. Idempotent."""
     verify_keyring_backend()
     username = _provider_credentials_username(provider)
-    try:
-        keyring.delete_password(SERVICE_NAME, username)
-    except keyring.errors.PasswordDeleteError:
-        pass
-    except keyring.errors.KeyringError as e:
-        raise ConnectorsError(
-            f"Keyring delete_password failed: {e}. See "
-            "docs/security/connections.mdx."
-        ) from e
+    _kr_delete(username)
 
 
 def list_connections() -> List[str]:
@@ -384,9 +590,9 @@ def list_connections() -> List[str]:
     for provider in known:
         username = _connection_username(provider, DEFAULT_ACCOUNT)
         try:
-            if keyring.get_password(SERVICE_NAME, username) is not None:
+            if _kr_raw_get(username) is not None:
                 found.append(provider)
-        except keyring.errors.KeyringError:
+        except ConnectorsError:
             # Translate-and-skip is OK for an enumeration call: a single
             # failed backend doesn't invalidate the list.
             continue

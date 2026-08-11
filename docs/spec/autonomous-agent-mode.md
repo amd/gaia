@@ -5,11 +5,15 @@
 **Date:** 2026-04-01
 
 > **Implementation status (2026-07):** `manual` and `goal_driven` are shipped
-> and `goal_driven` is the default. `autonomous` mode is **not implemented** —
-> its defining observation cycle (§6.7) has not shipped, so the settings API
-> rejects `agent_mode="autonomous"` rather than silently running it as
-> `goal_driven`. Tracked in
-> [#2005](https://github.com/amd/gaia/issues/2005).
+> and `goal_driven` is the default. The generic `autonomous` mode in the core UI
+> loop is still gated (§6.7 observation cycle, [#2005](https://github.com/amd/gaia/issues/2005)),
+> so the settings API rejects `agent_mode="autonomous"` there. **The Email
+> Triage agent is the first concrete implementation of the observe→decide→act
+> cycle**, on an earn-trust gradient with an inviolable confirm-floor and a
+> closed correction→learning loop — see
+> [`docs/plans/email-full-autonomy.mdx`](/plans/email-full-autonomy)
+> (`autonomy_level = earn_trust`). Generalizing that engine back into the base
+> `Agent` loop for every agent remains #2005.
 
 ---
 

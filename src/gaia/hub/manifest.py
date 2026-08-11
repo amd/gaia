@@ -29,6 +29,8 @@ from typing import Any, Dict, List, Optional, Union
 import yaml
 
 from gaia.agents.registry import _RESERVED_BUILTIN_IDS
+from gaia.skills.errors import SkillValidationError
+from gaia.skills.sets import SkillSets, parse_skill_sets
 
 # ---------------------------------------------------------------------------
 # Validation vocabulary
@@ -53,7 +55,9 @@ _SEMVER_RE = re.compile(
 # (filesystem:read, network:write, etc.)").
 _PERMISSION_RE = re.compile(r"^[a-z][a-z0-9_]*:[a-z][a-z0-9_]*$")
 
-VALID_LANGUAGES = frozenset({"python", "cpp"})
+# go/typescript admit the two shipped non-agent packages: the Go terminal hub
+# and the Electron Agent UI. Keep in lock-step with the Worker's manifest.ts.
+VALID_LANGUAGES = frozenset({"python", "cpp", "go", "typescript"})
 
 VALID_SECURITY_TIERS = frozenset({"verified", "community", "experimental"})
 
@@ -120,11 +124,18 @@ class ManifestError(ValueError):
 
 @dataclass
 class Requirements:
-    """System requirements block from ``requirements:``."""
+    """System requirements block from ``requirements:``.
+
+    ``min_lemonade_version`` is the minimum Lemonade Server version the agent
+    needs. It is what a readiness check compares the running server against, so
+    an agent that declares it can report "your backend is too old" instead of
+    failing later with something less specific.
+    """
 
     min_memory_gb: Optional[float] = None
     min_disk_gb: Optional[float] = None
     min_context_size: Optional[int] = None
+    min_lemonade_version: Optional[str] = None
     platforms: List[str] = field(default_factory=list)
     npu: bool = False
     gpu_vram_gb: Optional[float] = None
@@ -213,6 +224,11 @@ class AgentManifest:
     required_connections: List[str] = field(default_factory=list)
     interfaces: Interfaces = field(default_factory=Interfaces)
 
+    # Agent Skills declarations (#2466): the always-on ``skills:`` list, the
+    # named ``skill_sets:`` bundles, and ``default_skill_set:``. Empty (falsy)
+    # when the manifest declares none — the grammar is additive.
+    skill_sets: SkillSets = field(default_factory=SkillSets)
+
     # Provenance — set by :func:`parse`; not part of the YAML.
     source_path: Optional[Path] = None
 
@@ -289,6 +305,7 @@ class AgentManifest:
             _validate_semver(data["min_gaia_version"], "min_gaia_version", where)
 
         permissions = _validate_permissions(data.get("permissions"), where)
+        skill_sets = _parse_skill_sets(data, where)
         requirements = _parse_requirements(data.get("requirements"), where)
         interfaces = _parse_interfaces(data.get("interfaces"), where)
         python_cfg = _parse_python(data.get("python"), where)
@@ -333,6 +350,7 @@ class AgentManifest:
                 data.get("required_connections"), "required_connections", where
             ),
             interfaces=interfaces,
+            skill_sets=skill_sets,
             source_path=src,
         )
 
@@ -422,6 +440,19 @@ def _validate_semver(value: Any, field_name: str, where: str) -> None:
             f"Use MAJOR.MINOR.PATCH (e.g. '0.1.0' or '1.2.3-rc.1'). "
             f"See https://semver.org."
         )
+
+
+def _parse_skill_sets(data: Dict[str, Any], where: str) -> SkillSets:
+    """Parse ``skills:`` / ``skill_sets:`` / ``default_skill_set:`` (#2466).
+
+    The grammar lives in :mod:`gaia.skills.sets` so the runtime and the manifest
+    validator can never disagree; this only re-raises as :class:`ManifestError`
+    so a manifest author sees one error type.
+    """
+    try:
+        return parse_skill_sets(data, where=where)
+    except SkillValidationError as e:
+        raise ManifestError(f"gaia-agent.yaml{where}: {e}") from e
 
 
 def _validate_permissions(raw: Any, where: str) -> List[str]:
@@ -530,6 +561,10 @@ def _parse_requirements(raw: Any, where: str) -> Requirements:
     if raw is None:
         return Requirements()
     data = _require_mapping(raw, "requirements", where)
+    if data.get("min_lemonade_version") is not None:
+        _validate_semver(
+            data["min_lemonade_version"], "requirements.min_lemonade_version", where
+        )
     return Requirements(
         min_memory_gb=_parse_number(
             data.get("min_memory_gb"), "requirements.min_memory_gb", where
@@ -547,6 +582,7 @@ def _parse_requirements(raw: Any, where: str) -> Requirements:
                 0,
             )
         ),
+        min_lemonade_version=data.get("min_lemonade_version"),
         platforms=_validate_platforms(
             data.get("platforms"), "requirements.platforms", where
         ),

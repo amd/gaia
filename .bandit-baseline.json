@@ -1,0 +1,4 @@
+{
+  "_comment": "Allowlist of accepted bandit HIGH-severity findings, keyed by (path, test_id) — line numbers are intentionally NOT part of the key. Empty means ANY HIGH finding fails the gate. All 18 pre-existing HIGH findings were fixed or converted to justified inline `# nosec` (see .security-suppressions.json); keep this empty unless a genuinely unavoidable HIGH is reviewed and accepted.",
+  "findings": []
+}

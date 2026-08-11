@@ -41,8 +41,10 @@ from gaia_agent_email.tools.calendar_tools import (  # noqa: E402
     list_calendar_events_impl,
 )
 from gaia_agent_email.tools.delete_tools import (  # noqa: E402
+    find_trashed_messages_impl,
     permanent_delete_impl,
     restore_message_impl,
+    restore_trashed_message_impl,
     trash_message_impl,
 )
 from gaia_agent_email.tools.organize_tools import (  # noqa: E402
@@ -265,10 +267,12 @@ class TestPreScanInbox:
         # The override-skipped marker should be set so logs show why.
         assert phishing_decision.get("preference_applied") == "skipped_phishing_or_spam"
 
-    def test_priority_sender_promotes_to_urgent(self, fake_gmail):
-        """A sender flagged via session preference bypasses the heuristic."""
-        # Pick a sender from the fixture that the heuristic would NOT
-        # classify as urgent — any non-spam non-promo non-phishing one.
+    def test_priority_sender_does_not_change_category(self, fake_gmail):
+        """A sender flagged via session preference is tagged for salience
+        but never has its category overridden (#2632) — content alone
+        decides urgency, so the same message classifies identically with
+        and without the preference.
+        """
         first_msg = fake_gmail.get_message(list(fake_gmail._messages.keys())[0])
         first_sender = next(
             h["value"]
@@ -281,18 +285,31 @@ class TestPreScanInbox:
             "low_priority_senders": set(),
             "category_defaults": {},
         }
-        out = pre_scan_inbox_impl(
+        baseline = triage_inbox_impl(fake_gmail, max_messages=50)
+        with_pref = triage_inbox_impl(
             fake_gmail, max_messages=50, session_preferences=prefs
         )
-        urgent_senders = [
-            extract_sender_email(item["sender"]) for item in out["urgent"]
-        ]
-        assert addr in urgent_senders, (
-            f"priority sender {addr} should land in urgent; "
-            f"saw urgent={urgent_senders}"
+        baseline_decision = next(
+            r for r in baseline["results"] if r["id"] == first_msg["id"]
+        )
+        with_pref_decision = next(
+            r for r in with_pref["results"] if r["id"] == first_msg["id"]
         )
 
-    def test_low_priority_sender_lands_in_archives(self, fake_gmail):
+        assert with_pref_decision["category"] == baseline_decision["category"], (
+            "priority-sender preference must not change category; baseline="
+            f"{baseline_decision['category']!r} with_pref="
+            f"{with_pref_decision['category']!r}"
+        )
+        assert with_pref_decision.get("preference_applied") == "priority_sender"
+
+    def test_low_priority_sender_does_not_change_category(self, fake_gmail):
+        """A sender flagged low-priority via session preference is tagged
+        for de-prioritization but never has its category overridden
+        (#2666, mirrors #2632's priority-sender direction) — content alone
+        decides severity, so the same message classifies identically with
+        and without the preference.
+        """
         first_msg = fake_gmail.get_message(list(fake_gmail._messages.keys())[0])
         first_sender = next(
             h["value"]
@@ -305,16 +322,23 @@ class TestPreScanInbox:
             "low_priority_senders": {addr},
             "category_defaults": {},
         }
-        out = pre_scan_inbox_impl(
+        baseline = triage_inbox_impl(fake_gmail, max_messages=50)
+        with_pref = triage_inbox_impl(
             fake_gmail, max_messages=50, session_preferences=prefs
         )
-        archive_senders = [
-            extract_sender_email(item["sender"]) for item in out["suggested_archives"]
-        ]
-        assert addr in archive_senders, (
-            f"low-priority sender {addr} should land in archives; "
-            f"saw archives={archive_senders}"
+        baseline_decision = next(
+            r for r in baseline["results"] if r["id"] == first_msg["id"]
         )
+        with_pref_decision = next(
+            r for r in with_pref["results"] if r["id"] == first_msg["id"]
+        )
+
+        assert with_pref_decision["category"] == baseline_decision["category"], (
+            "low-priority-sender preference must not change category; baseline="
+            f"{baseline_decision['category']!r} with_pref="
+            f"{with_pref_decision['category']!r}"
+        )
+        assert with_pref_decision.get("preference_applied") == "low_priority_sender"
 
     def test_category_default_archive_lifts_informational(self, fake_gmail):
         baseline = pre_scan_inbox_impl(fake_gmail, max_messages=50)
@@ -387,6 +411,23 @@ def _make_email_agent(fake_gmail, fake_calendar, tmp_path):
         mock_sdk.return_value = MagicMock()
         agent = EmailTriageAgent(config=cfg)
     return agent
+
+
+def _section_containing(pre_scan_data, addr):
+    """Which pre_scan_inbox section (if any) a sender's message landed in.
+
+    Checks the four list sections a message can appear in; returns None if
+    the address isn't found in any of them (e.g. it's informational and
+    only reflected in the count, or the corresponding message wasn't
+    matched by ``extract_sender_email``).
+    """
+    for section in ("urgent", "actionable", "suggested_archives", "needs_review"):
+        addresses = {
+            extract_sender_email(item["sender"]) for item in pre_scan_data[section]
+        }
+        if addr in addresses:
+            return section
+    return None
 
 
 class TestPreferenceTools:
@@ -520,8 +561,12 @@ class TestPreferenceTools:
         self, fake_gmail, fake_calendar, tmp_path
     ):
         """End-to-end: setting a priority sender via the tool, then
-        invoking pre_scan_inbox via the tool registry, must promote that
-        sender to ``urgent`` in the rendered envelope.
+        invoking pre_scan_inbox via the tool registry, must NOT change
+        that sender's rendered category (#2632) -- content decides
+        severity, a session preference never does. The live tool-registry
+        path is proven to have picked up the preference by comparing
+        against a baseline scan with no preference set: the same message
+        must land in the same section either way.
         """
         agent = _make_email_agent(fake_gmail, fake_calendar, tmp_path)
         try:
@@ -533,15 +578,28 @@ class TestPreferenceTools:
                 if h["name"].lower() == "from"
             )
             addr = extract_sender_email(first_sender)
-            self._tool("set_priority_sender")(addr)
 
+            baseline_envelope = json.loads(self._tool("pre_scan_inbox")(50))
+            assert baseline_envelope["ok"] is True
+            baseline_section = _section_containing(baseline_envelope["data"], addr)
+
+            self._tool("set_priority_sender")(addr)
             envelope = json.loads(self._tool("pre_scan_inbox")(50))
             assert envelope["ok"] is True
             data = envelope["data"]
+
             urgent_addresses = [
                 extract_sender_email(item["sender"]) for item in data["urgent"]
             ]
-            assert addr in urgent_addresses
+            assert addr not in urgent_addresses, (
+                "a priority-sender match must not force urgent; content "
+                f"alone decides severity. urgent={urgent_addresses}"
+            )
+            assert _section_containing(data, addr) == baseline_section, (
+                "priority-sender preference must not move this sender's "
+                f"message to a different section; baseline={baseline_section!r} "
+                f"with_pref={_section_containing(data, addr)!r}"
+            )
         finally:
             agent.close_db()
 
@@ -597,9 +655,12 @@ class TestOrderingInvariantParameterized:
                 lambda gmail, db: archive_message_impl(gmail, db, message_id="nope"),
             ),
             (
+                # Use a real label so resolution (#2428) passes and the failure
+                # still lands at the Gmail mutation for the missing message —
+                # the ordering invariant this case exists to prove.
                 "label",
                 lambda gmail, db: label_message_impl(
-                    gmail, db, message_id="nope", label_id="Label_1"
+                    gmail, db, message_id="nope", label_id="STARRED"
                 ),
             ),
             (
@@ -787,6 +848,72 @@ class TestDeleteTools:
         out = permanent_delete_impl(fake_gmail, db, message_id=msg_id)
         assert out["irreversible"] is True
         assert msg_id not in fake_gmail._messages
+
+    # -- restore_trashed_message (#2523) -------------------------------
+
+    def test_restore_trashed_message_round_trip(self, fake_gmail, db):
+        """State-reconciling restore: no action_id, no undo window."""
+        msg_id = list(fake_gmail._messages.keys())[0]
+        trash_message_impl(fake_gmail, db, message_id=msg_id)
+        assert "TRASH" in fake_gmail.get_message(msg_id)["labelIds"]
+
+        result = restore_trashed_message_impl(fake_gmail, db, message_id=msg_id)
+        assert result["restored"] is True
+        post = fake_gmail.get_message(msg_id)
+        assert "INBOX" in post["labelIds"]
+        assert "TRASH" not in post["labelIds"]
+
+    def test_restore_trashed_message_works_after_undo_window_elapsed(
+        self, fake_gmail, db
+    ):
+        """Regression guard for #2523: restore_message respects the undo
+        window (proven below); restore_trashed_message must not — it never
+        even queries the action_store row that carries the window."""
+        msg_id = list(fake_gmail._messages.keys())[0]
+        out = trash_message_impl(fake_gmail, db, message_id=msg_id)
+        action_id = out["action_id"]
+        import time
+
+        db.update(
+            "email_actions",
+            {"created_at": time.time() - 3600},
+            "action_id = :id",
+            {"id": action_id},
+        )
+        # The old fast path is now expired -- confirm it really is.
+        with pytest.raises(RuntimeError):
+            restore_message_impl(
+                lambda _action: fake_gmail,
+                db,
+                action_id=action_id,
+                window_seconds=30,
+            )
+        # The state-reconciling path is unaffected: the message is still
+        # physically in Trash, so it still restores.
+        result = restore_trashed_message_impl(fake_gmail, db, message_id=msg_id)
+        assert result["restored"] is True
+        post = fake_gmail.get_message(msg_id)
+        assert "INBOX" in post["labelIds"]
+        assert "TRASH" not in post["labelIds"]
+
+    def test_restore_trashed_message_requires_live_trash_state(self, fake_gmail, db):
+        """Fails loud -- never a silent no-op -- when the message is not
+        actually in Trash right now."""
+        msg_id = list(fake_gmail._messages.keys())[0]
+        assert "TRASH" not in fake_gmail.get_message(msg_id)["labelIds"]
+        with pytest.raises(RuntimeError) as exc:
+            restore_trashed_message_impl(fake_gmail, db, message_id=msg_id)
+        assert "not in Trash" in str(exc.value)
+
+    def test_find_trashed_messages_returns_only_trash(self, fake_gmail, db):
+        ids = list(fake_gmail._messages.keys())[:2]
+        trash_message_impl(fake_gmail, db, message_id=ids[0])
+
+        result = find_trashed_messages_impl(fake_gmail)
+
+        found_ids = {m["id"] for m in result["messages"]}
+        assert ids[0] in found_ids
+        assert ids[1] not in found_ids
 
 
 # ---------------------------------------------------------------------------

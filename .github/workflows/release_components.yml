@@ -1,0 +1,338 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Publish the two non-agent Hub packages to the Agent Hub R2 catalog:
+#
+#   terminal-hub  (type: component, Go)         — the `gaia tui` binary, 6 targets
+#   agent-ui      (type: app, TypeScript)       — the Electron desktop installers
+#
+# Same pattern as release_agent_email.yml / release_agent_chat.yml: CI never
+# talks to R2 directly, it POSTs to the Worker's /publish endpoint, which
+# computes the SHA-256 server-side and stores each object immutably at
+# agents/<id>/<version>/<filename>. Re-running a published version is a no-op
+# (409 version_exists is reconciled by byte-comparison, not overwritten).
+#
+# Why these are Hub packages at all: the hub catalog is what the website builds
+# its download surfaces from. Before this, the terminal hub had NO user-facing
+# distribution — `docs/reference/cli.mdx` documented `gaia tui` while the only
+# way to get the binary was `cd tui && make build`.
+#
+# Ordering note: terminal-hub builds its own binaries here and has no external
+# dependency. agent-ui does NOT rebuild the Electron installers (that is
+# build-installers.yml, which runs on the same tag) — it waits for that
+# workflow to attach them to the GitHub release, then republishes them to R2.
+# The wait is bounded and fails loudly; it never publishes a partial set.
+
+name: Publish Hub Components (R2)
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Build and validate without publishing to R2'
+        type: boolean
+        default: true
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  TERMINAL_HUB_MANIFEST: hub/components/terminal-hub/gaia-agent.yaml
+  AGENT_UI_MANIFEST: hub/components/agent-ui/gaia-agent.yaml
+
+jobs:
+  # ── Resolve the version once, and prove every manifest agrees with the tag ──
+  # A manifest that still says 0.22.0 under a v0.23.0 tag would publish the new
+  # binaries under the OLD immutable version path — silently, and unfixably,
+  # because the path is immutable. Fail before anything is built.
+  version:
+    name: Resolve & gate version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      dry_run: ${{ steps.v.outputs.dry_run }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - id: v
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # A dispatch has no tag to read; take the version from the manifests
+            # themselves and default to a dry run unless explicitly disabled.
+            VERSION="$(python -c "import yaml,sys; print(yaml.safe_load(open('${TERMINAL_HUB_MANIFEST}'))['version'])")"
+            if [ "${{ github.event.inputs.dry_run }}" = "false" ]; then
+              echo "dry_run=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "dry_run=true" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+            echo "dry_run=false" >> "$GITHUB_OUTPUT"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "resolved version: ${VERSION}"
+
+      - name: Assert both manifests match the resolved version
+        shell: bash
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet pyyaml
+          fail=0
+          for m in "${TERMINAL_HUB_MANIFEST}" "${AGENT_UI_MANIFEST}"; do
+            got="$(python -c "import yaml; print(yaml.safe_load(open('${m}'))['version'])")"
+            if [ "${got}" != "${VERSION}" ]; then
+              echo "::error file=${m}::version ${got} does not match the release version ${VERSION}. Bump it — R2 paths are immutable, so publishing under a stale version cannot be undone."
+              fail=1
+            else
+              echo "✓ ${m} = ${got}"
+            fi
+          done
+          exit "${fail}"
+
+      # A manifest can agree with the tag and STILL be a lie: the terminal hub
+      # needs daemon host API v1.1, which released 0.22.0 does not serve.
+      # --verify-released re-reads what each release shipped from its published
+      # wheel, because this tree is ahead of all of them.
+      - name: Assert each component's declared minimum core can serve it
+        shell: bash
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          set -euo pipefail
+          python -m pip install --quiet pyyaml
+          python util/check_component_core_api.py \
+            --verify-released \
+            --release-version "${VERSION}"
+
+  # ── terminal-hub: build the 6 targets and publish them ──────────────────────
+  terminal-hub:
+    name: Publish terminal-hub
+    needs: version
+    runs-on: ubuntu-latest
+    environment: agent-publish
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: tui/go.mod
+          cache-dependency-path: tui/go.sum
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.x'
+
+      # Cross-compile the same 6 targets build_tui.yml produces, stamped with
+      # the release version. CGO_ENABLED=0 keeps each binary static.
+      - name: Build all targets
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p bin
+          PKG=github.com/amd/gaia/tui/internal/cli
+          DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          cd tui
+          while read -r goos goarch platform; do
+            EXT=""
+            [ "${goos}" = "windows" ] && EXT=".exe"
+            CGO_ENABLED=0 GOOS="${goos}" GOARCH="${goarch}" go build \
+              -ldflags="-s -w -X ${PKG}.version=${VERSION} -X ${PKG}.commit=${GITHUB_SHA} -X ${PKG}.date=${DATE}" \
+              -o "../bin/gaia-${platform}${EXT}" ./cmd/gaia
+            echo "built gaia-${platform}${EXT}"
+          done <<'TARGETS'
+          linux   amd64 linux-x64
+          linux   arm64 linux-arm64
+          darwin  amd64 darwin-x64
+          darwin  arm64 darwin-arm64
+          windows amd64 win-x64
+          windows arm64 win-arm64
+          TARGETS
+
+      - name: Verify the built binary reports the release version
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          # `version` is a cobra subcommand — rootCmd sets no Version field, so
+          # `--version` is an unknown flag and exits 1.
+          # The linux-x64 build is the only one this runner can execute. A
+          # stamped-but-wrong version would otherwise only surface to a user.
+          got="$(./bin/gaia-linux-x64 version 2>&1 || true)"
+          echo "gaia version -> ${got}"
+          case "${got}" in
+            *"${VERSION}"*) echo "✓ version stamp present" ;;
+            *) echo "::error::built binary does not report ${VERSION} (got: ${got})"; exit 1 ;;
+          esac
+
+      - name: Require the publish token
+        if: needs.version.outputs.dry_run == 'false'
+        env:
+          GAIA_HUB_TOKEN: ${{ secrets.GAIA_HUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GAIA_HUB_TOKEN:-}" ]; then
+            echo "::error::missing environment secret GAIA_HUB_TOKEN on the agent-publish environment (must match the Worker's PUBLISH_TOKENS). See workers/agent-hub/README.md."
+            exit 1
+          fi
+
+      - name: Install publisher deps
+        if: needs.version.outputs.dry_run == 'false'
+        run: python -m pip install --upgrade requests pyyaml
+
+      - name: Publish to the Agent Hub (POST /publish)
+        if: needs.version.outputs.dry_run == 'false'
+        shell: bash
+        env:
+          AGENT_HUB_PUBLISH_TOKEN: ${{ secrets.GAIA_HUB_TOKEN }}
+          GAIA_HUB_PUBLISH_URL: ${{ vars.GAIA_HUB_PUBLISH_URL }}
+          GAIA_HUB_BASE_URL: ${{ vars.GAIA_HUB_BASE_URL }}
+        run: |
+          set -euo pipefail
+          # Explicit =<platform-key> on every artifact: the publisher's
+          # inference only special-cases email-agent-* filenames.
+          python hub/agents/email/python/packaging/publish_to_r2.py \
+            --base-url "${GAIA_HUB_PUBLISH_URL:-${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}}" \
+            --manifest "${TERMINAL_HUB_MANIFEST}" \
+            --artifact "bin/gaia-linux-x64=linux-x64" \
+            --artifact "bin/gaia-linux-arm64=linux-arm64" \
+            --artifact "bin/gaia-darwin-x64=darwin-x64" \
+            --artifact "bin/gaia-darwin-arm64=darwin-arm64" \
+            --artifact "bin/gaia-win-x64.exe=win-x64" \
+            --artifact "bin/gaia-win-arm64.exe=win-arm64" \
+            --readme tui/README.md \
+            --summary-out published.json
+          echo "=== publish summary ==="
+          cat published.json
+
+  # ── agent-ui: republish the installers build-installers.yml already made ────
+  agent-ui:
+    name: Publish agent-ui
+    needs: version
+    runs-on: ubuntu-latest
+    environment: agent-publish
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.x'
+
+      # build-installers.yml runs on this same tag, so the assets may not exist
+      # yet. Wait for the full set, bounded — and fail loudly on timeout rather
+      # than publishing a partial platform set that the catalog would then
+      # advertise as complete.
+      - name: Wait for the installer assets on the release
+        if: needs.version.outputs.dry_run == 'false'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          TAG="v${VERSION}"
+          want_exe="gaia-agent-ui-${VERSION}-x64-setup.exe"
+          want_dmg="gaia-agent-ui-${VERSION}-arm64.dmg"
+          want_app="gaia-agent-ui-${VERSION}-x86_64.AppImage"
+          deadline=$(( SECONDS + 3600 ))
+          while :; do
+            names="$(gh release view "${TAG}" --json assets --jq '.assets[].name' 2>/dev/null || true)"
+            missing=""
+            for w in "${want_exe}" "${want_dmg}" "${want_app}"; do
+              grep -qxF "${w}" <<<"${names}" || missing="${missing} ${w}"
+            done
+            if [ -z "${missing}" ]; then
+              echo "✓ all three installers present on ${TAG}"
+              break
+            fi
+            if [ "${SECONDS}" -ge "${deadline}" ]; then
+              echo "::error::timed out after 60m waiting for installer assets on ${TAG}. Missing:${missing}. build-installers.yml likely failed — check that run, then re-run this workflow. Nothing was published."
+              exit 1
+            fi
+            echo "waiting for:${missing}"
+            sleep 60
+          done
+
+      - name: Download the installers
+        if: needs.version.outputs.dry_run == 'false'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          gh release download "v${VERSION}" --dir dist \
+            --pattern "gaia-agent-ui-${VERSION}-x64-setup.exe" \
+            --pattern "gaia-agent-ui-${VERSION}-arm64.dmg" \
+            --pattern "gaia-agent-ui-${VERSION}-x86_64.AppImage"
+          ls -la dist
+
+      - name: Require the publish token
+        if: needs.version.outputs.dry_run == 'false'
+        env:
+          GAIA_HUB_TOKEN: ${{ secrets.GAIA_HUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GAIA_HUB_TOKEN:-}" ]; then
+            echo "::error::missing environment secret GAIA_HUB_TOKEN on the agent-publish environment (must match the Worker's PUBLISH_TOKENS). See workers/agent-hub/README.md."
+            exit 1
+          fi
+
+      - name: Install publisher deps
+        if: needs.version.outputs.dry_run == 'false'
+        run: python -m pip install --upgrade requests pyyaml
+
+      - name: Publish to the Agent Hub (POST /publish)
+        if: needs.version.outputs.dry_run == 'false'
+        shell: bash
+        env:
+          AGENT_HUB_PUBLISH_TOKEN: ${{ secrets.GAIA_HUB_TOKEN }}
+          GAIA_HUB_PUBLISH_URL: ${{ vars.GAIA_HUB_PUBLISH_URL }}
+          GAIA_HUB_BASE_URL: ${{ vars.GAIA_HUB_BASE_URL }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          # One artifact per platform key. The .deb stays on the GitHub release
+          # for apt users — publishing it as a second linux-x64 object would
+          # make the catalog's per-platform download ambiguous.
+          python hub/agents/email/python/packaging/publish_to_r2.py \
+            --base-url "${GAIA_HUB_PUBLISH_URL:-${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}}" \
+            --manifest "${AGENT_UI_MANIFEST}" \
+            --artifact "dist/gaia-agent-ui-${VERSION}-x64-setup.exe=win-x64" \
+            --artifact "dist/gaia-agent-ui-${VERSION}-arm64.dmg=darwin-arm64" \
+            --artifact "dist/gaia-agent-ui-${VERSION}-x86_64.AppImage=linux-x64" \
+            --summary-out published.json
+          echo "=== publish summary ==="
+          cat published.json
+
+  # ── The website builds its Hub pages from the live index.json at deploy time,
+  # so a publish only becomes visible after a rebuild. deploy_website.yml
+  # auto-triggers on website/** only, and a hub publish touches no such file.
+  redeploy-website:
+    name: Redeploy website
+    needs: [version, terminal-hub, agent-ui]
+    if: needs.version.outputs.dry_run == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh workflow run deploy_website.yml --ref main
+          echo "✓ requested website redeploy (deploy_website.yml on main)"

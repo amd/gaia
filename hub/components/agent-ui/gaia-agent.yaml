@@ -1,0 +1,47 @@
+# The Electron desktop app — the GAIA Agent UI. Published to the Agent Hub R2
+# catalog as an app (not an agent): it is a front end that talks to agents over
+# the local API, so it registers no tools and loads no model of its own.
+#
+# Version tracks src/gaia/apps/webui/package.json, which tracks the core GAIA
+# release. The publish workflow reads this file and asserts the two agree.
+id: agent-ui
+name: GAIA Agent UI
+version: 0.22.0
+description: "Desktop app for chatting with GAIA agents, with documents and RAG"
+author: AMD
+license: MIT
+
+type: app
+language: typescript
+
+# Also on npm as a global CLI (`gaia-ui`), at the same version as the
+# installers. Both are real paths, so the hub page offers both.
+npm_package: "@amd-gaia/agent-ui"
+
+category: tools
+tags: [desktop, ui, chat, electron, rag]
+icon: monitor
+
+# An app drives agents over the local API; it registers no @tool functions and
+# loads no model of its own. The agent it opens declares its own model.
+tools_count: 0
+models: []
+
+min_gaia_version: "0.22.0"
+
+requirements:
+  # The Electron shell alone. Whichever agent the user opens adds its own model
+  # footprint on top of this — this is not a floor for running inference.
+  min_memory_gb: 2
+  # macOS ships Apple Silicon only: build-installers.yml runs macos-latest
+  # (arm64) and Intel would need a macos-13 runner. Do not widen this to
+  # darwin-x64 without adding that runner — the catalog would offer a download
+  # that is never built.
+  platforms: [win-x64, linux-x64, darwin-arm64]
+
+interfaces:
+  tui: false
+  cli: false
+  pipe: false
+  api_server: false
+  mcp_server: false

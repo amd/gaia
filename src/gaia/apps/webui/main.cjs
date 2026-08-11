@@ -68,6 +68,7 @@ const {
   parseDeepLink,
   extractDeepLinkFromArgv,
   dispatchDeepLink,
+  buildInstallPrompt,
 } = require("./services/deep-link.cjs");
 
 // ── F7: Ozone hint (issue #782) ─────────────────────────────────────────────
@@ -813,25 +814,46 @@ function handleDeepLink(rawUrl) {
 }
 
 /**
- * Explicit per-agent confirmation for a web-triggered install. This is the
- * security gate: the user must confirm the SPECIFIC agent before any download
- * happens (issue #2196 review). Defaults to the safe (Cancel) option.
+ * Explicit, INFORMED per-agent confirmation for a web-triggered install. This
+ * is the security gate: the user must confirm the SPECIFIC agent — and see
+ * its real trust tier and permissions, not just its bare id — before any
+ * download happens (issue #2196 review; hardened so the shown facts match
+ * the backend's non-verified gate, which now covers every non-verified
+ * agent, not just native ones). Defaults to the safe (Cancel) option.
+ *
+ * Fails closed: if the agent can't be found in the catalog, or the backend
+ * is unreachable, the install is refused with an explanatory error — never
+ * installed blind.
  * @returns {Promise<boolean>}
  */
 async function confirmDeepLinkInstall(command) {
+  let entry;
+  try {
+    entry = await agentProcessManager.fetchCatalogEntry(command.agentId);
+  } catch (err) {
+    const message = err && err.message ? err.message : String(err);
+    console.error(
+      `[main] Refusing deep-link install of "${command.agentId}": ${message}`
+    );
+    try {
+      dialog.showErrorBox("Could not verify this agent", message);
+    } catch {
+      /* best-effort */
+    }
+    return false;
+  }
+
+  const prompt = buildInstallPrompt(entry);
   const choice = await dialog.showMessageBox(
     mainWindow && !mainWindow.isDestroyed() ? mainWindow : null,
     {
       type: "question",
-      buttons: ["Install", "Cancel"],
+      buttons: [prompt.requiresTrust ? "Trust & Install" : "Install", "Cancel"],
       defaultId: 1, // Enter selects the safe option
       cancelId: 1,
-      title: "Install agent from the web?",
-      message: `Install the "${command.agentId}" agent?`,
-      detail:
-        `A website asked GAIA to install "${command.agentId}". ` +
-        "Only continue if you trust this source — installing downloads and " +
-        "runs third-party code on your machine.",
+      title: prompt.title,
+      message: prompt.message,
+      detail: prompt.detail,
       noLink: true,
     }
   );
@@ -844,7 +866,7 @@ async function runDeepLink(command) {
   try {
     await dispatchDeepLink(command, {
       confirm: confirmDeepLinkInstall,
-      installAgent: (agentId) => agentProcessManager.installAgent(agentId),
+      installAgent: (agentId, opts) => agentProcessManager.installAgent(agentId, opts),
       focusWindow: () => {
         if (mainWindow && !mainWindow.isDestroyed()) {
           if (mainWindow.isMinimized()) mainWindow.restore();

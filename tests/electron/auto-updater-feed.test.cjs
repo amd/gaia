@@ -161,4 +161,32 @@ describe("forward feed resolution", () => {
     });
     expect(checkSpy).toHaveBeenCalled();
   });
+
+  test("arms the periodic scheduler when a feed is configured after a no-feed start", async () => {
+    jest.useFakeTimers();
+    try {
+      const mod = loadModule();
+      mod.init(makeMockWindow());
+      expect(mod.getState().status).toBe(mod.STATES.NO_CHANNEL);
+
+      // A no-feed start must not have armed any timer.
+      expect(jest.getTimerCount()).toBe(0);
+
+      // Feed goes live, then the first check runs (e.g. via the IPC check).
+      process.env.GAIA_UPDATE_FEED_URL = "https://updates.example.com/gaia";
+      const checkSpy = jest
+        .spyOn(mockAutoUpdaterInstance, "checkForUpdates")
+        .mockResolvedValue(null);
+
+      await mod.checkForUpdates();
+      expect(checkSpy).toHaveBeenCalledTimes(1);
+
+      // The periodic scheduler must now be armed — advancing past the 4h
+      // interval fires another background check (previously it never did).
+      await jest.advanceTimersByTimeAsync(4 * 60 * 60 * 1000);
+      expect(checkSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
 });

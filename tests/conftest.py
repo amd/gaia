@@ -84,6 +84,38 @@ def _reset_model_broker_state():
     _reset()
 
 
+@pytest.fixture(autouse=True)
+def _isolate_hub_installer_active_env_pth(tmp_path_factory, monkeypatch):
+    """Redirect ``gaia.hub.installer``'s active-environment ``.pth`` target (#2358).
+
+    ``installer.install()``/``uninstall()`` write/remove an absolute
+    site-packages path in a ``.pth`` file under the ACTIVE interpreter's own
+    site-packages by default (``_default_active_env_site_packages()``) so a
+    hub-installed wheel agent stays importable by a later, unrelated process
+    using the same interpreter/venv -- not just the one that ran the install.
+    Every test in ``test_hub_installer.py`` (and anywhere else that calls
+    ``install()``) builds a wheel-shaped manifest by default, so without this
+    guard EVERY such test would write into the REAL dev/CI venv's
+    site-packages, accumulating stale entries across every test run. This
+    autouse fixture makes that impossible: each test gets its own isolated,
+    throwaway target unless it explicitly overrides ``active_env_site_packages=``
+    for a test that needs to prove the real mechanism (e.g. a dedicated
+    throwaway venv in an integration test).
+    """
+    try:
+        from gaia.hub import installer as hub_installer
+    except ImportError:
+        yield
+        return
+    fake_site_packages = tmp_path_factory.mktemp("hub-installer-active-env")
+    monkeypatch.setattr(
+        hub_installer,
+        "_default_active_env_site_packages",
+        lambda: fake_site_packages,
+    )
+    yield
+
+
 def pytest_addoption(parser):
     parser.addoption(
         "--hybrid",

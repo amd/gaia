@@ -42,13 +42,20 @@ class DatabaseMixin:
     _db: Optional[sqlite3.Connection] = None
     _in_tx: bool = False
 
-    def init_db(self, path: str = ":memory:") -> None:
+    def init_db(self, path: str = ":memory:", *, quiet: bool = False) -> None:
         """
         Initialize SQLite database.
 
         Args:
             path: Database file path, or ":memory:" for in-memory database.
                   Parent directories are created automatically.
+            quiet: Skip the "Database initialized" INFO line. Defaults to
+                   False — every existing one-shot-at-startup caller keeps
+                   today's behavior unchanged. Set True only for a caller that
+                   opens a fresh connection on a recurring cadence (e.g. a
+                   polling driver opening one per pass), where that same INFO
+                   line would otherwise become a permanent, unbounded log-noise
+                   cost rather than a one-time startup confirmation.
 
         Example:
             self.init_db("data/myagent.db")  # File-based
@@ -64,7 +71,8 @@ class DatabaseMixin:
         self._db.row_factory = sqlite3.Row
         self._db.execute("PRAGMA foreign_keys = ON")
         self._in_tx = False
-        logger.info("Database initialized: %s", path)
+        if not quiet:
+            logger.info("Database initialized: %s", path)
 
     def close_db(self) -> None:
         """

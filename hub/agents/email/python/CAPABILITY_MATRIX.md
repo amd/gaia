@@ -9,12 +9,12 @@ python hub/agents/email/python/packaging/capability_matrix.py
 
 ## Definitions
 
-- **tools_count**: the number of internal @tool-decorated agent-loop functions across gaia_agent_email/tools/*.py mixins (one per capability the agent's own LLM tool-calling loop can invoke). This is distinct from, and larger than, the REST API's 16 functional verbs and the MCP interface's 4 task-level tools -- both smaller, purpose-built surfaces for external callers, not agent-loop tools.
+- **tools_count**: the number of internal @tool-decorated agent-loop functions across gaia_agent_email/tools/*.py mixins (one per capability the agent's own LLM tool-calling loop can invoke). This is distinct from, and larger than, the REST API's 23 functional verbs and the MCP interface's 4 task-level tools -- both smaller, purpose-built surfaces for external callers, not agent-loop tools.
 - **no quality eval sentinel**: `no quality eval (contract-tested only)` -- the op is contract/shape-tested only; no judged quality bar exists for it.
 
 ## Capability matrix
 
-25 exposed ops (21 REST functional + 4 MCP) and their eval coverage:
+27 exposed ops (23 REST functional + 4 MCP) and their eval coverage:
 
 | Op | Surface | Eval coverage |
 |---|---|---|
@@ -22,6 +22,7 @@ python hub/agents/email/python/packaging/capability_matrix.py
 | `/v1/connections/{provider} (DELETE)` | REST | no quality eval (contract-tested only) |
 | `/v1/connections/{provider} (POST)` | REST | no quality eval (contract-tested only) |
 | `archive` | REST | no quality eval (contract-tested only) |
+| `attention` | REST | no quality eval (contract-tested only) |
 | `briefing` | REST | briefing |
 | `calendar/events (GET)` | REST | no quality eval (contract-tested only) |
 | `calendar/events (POST)` | REST | no quality eval (contract-tested only) |
@@ -34,6 +35,7 @@ python hub/agents/email/python/packaging/capability_matrix.py
 | `quarantine` | REST | no quality eval (contract-tested only) |
 | `query` | REST | no quality eval (contract-tested only) |
 | `query/{run_id}/cancel` | REST | no quality eval (contract-tested only) |
+| `query/{run_id}/respond` | REST | no quality eval (contract-tested only) |
 | `search` | REST | no quality eval (contract-tested only) |
 | `send` | REST | no quality eval (contract-tested only) |
 | `send_email` | MCP | no quality eval (contract-tested only) |
@@ -46,21 +48,25 @@ python hub/agents/email/python/packaging/capability_matrix.py
 
 ## Surface totals
 
-- Internal `@tool` agent-loop functions: **55**
+- Internal `@tool` agent-loop functions: **65**
   - `briefing_tools`: 3
   - `calendar_tools`: 6
-  - `delete_tools`: 3
+  - `connection_tools`: 1
+  - `delete_tools`: 4
   - `followup_tools`: 1
+  - `onboarding_tools`: 2
   - `organize_tools`: 15
   - `phishing_tools`: 2
-  - `preference_tools`: 4
+  - `preference_tools`: 8
   - `profile_tools`: 1
   - `read_tools`: 8
+  - `ref_resolve`: 1
   - `reply_tools`: 5
   - `schedule_tools`: 4
   - `summarize_tools`: 1
   - `voice_tools`: 2
-- REST functional verbs: **21** (24 total operations in the frozen contract, including health/version/init probes)
+  - `waiting_on_you_tools`: 1
+- REST functional verbs: **23** (26 total operations in the frozen contract, including health/version/init probes)
 - MCP tools: **4**
   - `draft_reply`
   - `send_email`
@@ -73,7 +79,7 @@ python hub/agents/email/python/packaging/capability_matrix.py
   - `followups`: enforce=False, acceptance_enforce=None, wired=False
   - `perf`: enforce=False, acceptance_enforce=None, wired=True
   - `quality`: enforce=False, acceptance_enforce=True, wired=True
-- Additionally served but **out of the frozen contract** (footnote context, not guarded machinery): `agent_routes.py` 8 session routes, `connector_routes.py` 4 OAuth routes, `server.py` 2 inline probes -- ~36 total routes served by the sidecar.
+- Additionally served but **out of the frozen contract** (footnote context, not guarded machinery): `agent_routes.py` 12 session routes (includes the autonomy control surface, #2529), `connector_routes.py` 4 OAuth routes, `server.py` 2 inline probes -- ~43 total routes served by the sidecar.
 
 ## MCP Scope Decision
 

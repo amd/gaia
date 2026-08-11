@@ -625,6 +625,25 @@ class TestPrintError:
         events = _drain(handler)
         assert "bad value" in events[0]["content"]
 
+    def test_recoverable_flag_defaults_to_omitted(self, handler):
+        # No "recoverable" key at all when the caller doesn't pass it — keeps
+        # the wire shape unchanged for every existing (fatal) caller (#2515).
+        handler.print_error("Something went wrong")
+        events = _drain(handler)
+        assert "recoverable" not in events[0]
+
+    def test_recoverable_true_is_carried_onto_the_event(self, handler):
+        # A per-tool error the agent loop is retrying (agent.py's
+        # STATE_ERROR_RECOVERY path) must be distinguishable from a fatal
+        # top-level failure downstream (#2515).
+        handler.print_error("retryable failure", recoverable=True)
+        events = _drain(handler)
+        assert events[0] == {
+            "type": "agent_error",
+            "content": "retryable failure",
+            "recoverable": True,
+        }
+
 
 # ===========================================================================
 # SSEOutputHandler.print_warning

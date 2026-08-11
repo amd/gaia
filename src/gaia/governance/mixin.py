@@ -327,13 +327,12 @@ class GovernedAgentMixin:
         intentionally NOT caught — those should propagate.
 
         An explicit ``governance_reviewer`` callback takes precedence.
-        Without one, GAIA's ``AgentConsole.confirm_tool_execution`` is
-        consulted only when the console advertises
-        ``blocking_confirmation = True``. The default console returns
-        ``True`` immediately, so silently treating every console as a
-        reviewer would break the fail-closed contract. Agent UI's
-        ``SSEOutputHandler`` sets that flag because it blocks on the
-        frontend permission modal.
+        Without one, ``console.confirm_tool_execution`` is consulted only
+        when the console advertises ``blocking_confirmation = True``.
+        ``AgentConsole`` does not: it prompts only when stdin is a terminal
+        and denies otherwise (#2210), so it cannot promise a reviewer is
+        reachable. Agent UI's ``SSEOutputHandler`` sets the flag because it
+        blocks on the frontend permission modal.
         """
         reviewer = self._governance_reviewer
         if reviewer is None:

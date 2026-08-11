@@ -25,7 +25,10 @@ import pytest
 
 from gaia.connectors.errors import AuthRequiredError, ConnectorsError
 from gaia.connectors.store import (
+    _CHUNK_CHARS,
+    _CHUNK_SENTINEL,
     SERVICE_NAME,
+    _chunk_username,
     _connection_username,
     _provider_credentials_username,
     clear_provider_credentials,
@@ -126,6 +129,107 @@ class TestRoundTrip:
         assert "mcp-git" not in ids
 
 
+class TestLargeBlobChunking:
+    """#1275: Windows Credential Manager caps a blob at ~2560 bytes. Microsoft
+    refresh tokens (~1600 chars) exceed it, so the store transparently chunks
+    oversized values across extra slots. These tests exercise that path (the
+    in-memory keyring has no size cap, so we assert the chunk *mechanics*
+    directly rather than relying on a backend to reject the write)."""
+
+    def test_torn_rewrite_fails_safe_to_none(self):
+        # A crashed mid-rewrite (chunk overwritten but manifest still points at
+        # a stale count/CRC) must NOT reassemble into a truncated-but-valid
+        # token — the CRC guard turns it into None ("reconnect").
+        import keyring as _kr
+
+        from gaia.connectors.store import _chunk_username
+
+        save_connection(
+            provider="microsoft",
+            account_email="a@example.com",
+            refresh_token="R" * (_CHUNK_CHARS * 2),  # 2 chunks
+            scopes=["s1"],
+            client_id_hash="h",
+        )
+        username = _connection_username("microsoft", "default")
+        # Simulate a torn rewrite: chunk #0 gets new (longer) data, but the
+        # manifest still describes the old payload.
+        _kr.set_password(SERVICE_NAME, _chunk_username(username, 0), "X" * _CHUNK_CHARS)
+        assert load_connection("microsoft", current_client_id_hash="h") is None
+
+    def test_large_refresh_token_round_trips(self):
+        big_token = "R" * (_CHUNK_CHARS * 3 + 17)  # forces 4 chunks
+        save_connection(
+            provider="microsoft",
+            account_email="a@example.com",
+            refresh_token=big_token,
+            scopes=["s1"],
+            client_id_hash="h",
+        )
+        blob = load_connection("microsoft", current_client_id_hash="h")
+        assert blob is not None
+        assert blob["refresh_token"] == big_token
+
+    def test_large_blob_writes_sentinel_and_chunk_slots(self):
+        big_token = "R" * (_CHUNK_CHARS * 2)
+        save_connection(
+            provider="microsoft",
+            account_email="a@example.com",
+            refresh_token=big_token,
+            scopes=["s1"],
+            client_id_hash="h",
+        )
+        username = _connection_username("microsoft", "default")
+        # Base slot holds the manifest sentinel, not raw JSON.
+        base = keyring.get_password(SERVICE_NAME, username)
+        assert base.startswith(_CHUNK_SENTINEL)
+        # At least the first chunk slot exists.
+        assert (
+            keyring.get_password(SERVICE_NAME, _chunk_username(username, 0)) is not None
+        )
+
+    def test_delete_removes_all_chunk_slots(self):
+        big_token = "R" * (_CHUNK_CHARS * 2)
+        save_connection(
+            provider="microsoft",
+            account_email="a@example.com",
+            refresh_token=big_token,
+            scopes=["s1"],
+            client_id_hash="h",
+        )
+        username = _connection_username("microsoft", "default")
+        delete_connection("microsoft")
+        assert keyring.get_password(SERVICE_NAME, username) is None
+        assert keyring.get_password(SERVICE_NAME, _chunk_username(username, 0)) is None
+        assert load_connection("microsoft", current_client_id_hash="h") is None
+
+    def test_shrink_from_chunked_to_small_sweeps_stale_chunks(self):
+        # A large value (chunked) overwritten by a small one must not leave
+        # orphaned chunk slots that a later reader could trip over.
+        username = _connection_username("microsoft", "default")
+        save_connection(
+            provider="microsoft",
+            account_email="a@example.com",
+            refresh_token="R" * (_CHUNK_CHARS * 2),
+            scopes=["s1"],
+            client_id_hash="h",
+        )
+        assert (
+            keyring.get_password(SERVICE_NAME, _chunk_username(username, 0)) is not None
+        )
+        # Overwrite with a short token — stored raw, chunk slots swept.
+        save_connection(
+            provider="microsoft",
+            account_email="a@example.com",
+            refresh_token="short",
+            scopes=["s1"],
+            client_id_hash="h",
+        )
+        assert keyring.get_password(SERVICE_NAME, _chunk_username(username, 0)) is None
+        blob = load_connection("microsoft", current_client_id_hash="h")
+        assert blob["refresh_token"] == "short"
+
+
 class TestSingleBlobAtomicity:
     def test_one_keyring_slot_per_connection(self):
         # A5 fix: a single keyring slot stores token + metadata in one JSON
@@ -199,6 +303,119 @@ class TestClientIdHashTripwire:
         )
         loaded = load_connection("google", current_client_id_hash="HASH-1")
         assert loaded is not None
+
+
+class TestTenantMismatchTripwire:
+    """D8/A6/A18 (#2628): the connection blob records which OAuth tenant
+    minted it. A disagreement with the tenant the connector currently
+    resolves to is a genuine positive signal (unlike a legacy blob with no
+    recorded tenant at all) — clear the entry and raise a DEDICATED
+    TENANT_MISMATCH reason, not the generic REAUTH_REQUIRED."""
+
+    def test_save_connection_persists_tenant(self):
+        save_connection(
+            provider="microsoft_work",
+            account_email="a@example.com",
+            refresh_token=SENTINEL_REFRESH_TOKEN,
+            scopes=["s"],
+            client_id_hash="HASH-1",
+            tenant="organizations",
+        )
+        blob = peek_connection("microsoft_work")
+        assert blob["tenant"] == "organizations"
+
+    def test_save_connection_omits_tenant_when_not_passed(self):
+        # A7-style contract extended to the connection blob: no tenant key
+        # unless one was actually passed (existing Google connections stay
+        # a 5-key blob, not a 6-key one with tenant=None serialized in).
+        save_connection(
+            provider="google",
+            account_email="a@example.com",
+            refresh_token=SENTINEL_REFRESH_TOKEN,
+            scopes=["s"],
+            client_id_hash="HASH-1",
+        )
+        assert "tenant" not in peek_connection("google")
+
+    def test_mismatch_clears_entry_and_raises_tenant_mismatch(self):
+        save_connection(
+            provider="microsoft_work",
+            account_email="a@example.com",
+            refresh_token=SENTINEL_REFRESH_TOKEN,
+            scopes=["s"],
+            client_id_hash="HASH-1",
+            tenant="organizations",
+        )
+        with pytest.raises(AuthRequiredError) as exc:
+            load_connection(
+                "microsoft_work",
+                current_client_id_hash="HASH-1",
+                current_tenant="deadbeef-0000-1111-2222-333344445555",
+            )
+        assert exc.value.reason is AuthRequiredError.Reason.TENANT_MISMATCH
+        # Both tenant values must be in the message (A6).
+        assert "organizations" in str(exc.value)
+        assert "deadbeef-0000-1111-2222-333344445555" in str(exc.value)
+        # Entry was cleared.
+        assert (
+            load_connection(
+                "microsoft_work",
+                current_client_id_hash="HASH-1",
+                current_tenant="organizations",
+            )
+            is None
+        )
+
+    def test_match_returns_blob_unharmed(self):
+        save_connection(
+            provider="microsoft_work",
+            account_email="a@example.com",
+            refresh_token=SENTINEL_REFRESH_TOKEN,
+            scopes=["s"],
+            client_id_hash="HASH-1",
+            tenant="organizations",
+        )
+        blob = load_connection(
+            "microsoft_work",
+            current_client_id_hash="HASH-1",
+            current_tenant="organizations",
+        )
+        assert blob is not None
+        assert blob["tenant"] == "organizations"
+
+    def test_legacy_blob_with_no_recorded_tenant_is_not_a_mismatch(self):
+        # A5: a blob that predates this feature has no "tenant" key at all.
+        # That is NOT the same as "recorded tenant disagrees" — it must NOT
+        # raise TENANT_MISMATCH merely because current_tenant was passed.
+        save_connection(
+            provider="microsoft_work",
+            account_email="a@example.com",
+            refresh_token=SENTINEL_REFRESH_TOKEN,
+            scopes=["s"],
+            client_id_hash="HASH-1",
+            # no tenant= kwarg at all
+        )
+        blob = load_connection(
+            "microsoft_work",
+            current_client_id_hash="HASH-1",
+            current_tenant="organizations",
+        )
+        assert blob is not None
+
+    def test_current_tenant_none_skips_the_check(self):
+        # A callsite that doesn't (yet) know the current tenant must not be
+        # forced to opt in — current_tenant=None is the default and must be
+        # side-effect-free with respect to the tenant check.
+        save_connection(
+            provider="microsoft_work",
+            account_email="a@example.com",
+            refresh_token=SENTINEL_REFRESH_TOKEN,
+            scopes=["s"],
+            client_id_hash="HASH-1",
+            tenant="organizations",
+        )
+        blob = load_connection("microsoft_work", current_client_id_hash="HASH-1")
+        assert blob is not None
 
 
 class TestBackendAllowlist:
@@ -419,6 +636,21 @@ class TestProviderCredentials:
     def test_save_rejects_empty_client_id(self):
         with pytest.raises(ConnectorsError, match="client_id is empty"):
             save_provider_credentials("google", client_id="", client_secret="x")
+
+    def test_tenant_omitted_when_not_passed(self):
+        # A7: the two-key Google blob shape must survive unchanged — a
+        # tenant key must never appear unless explicitly passed.
+        save_provider_credentials("google", client_id="x", client_secret="y")
+        creds = peek_provider_credentials("google")
+        assert "tenant" not in creds
+        assert creds == {"client_id": "x", "client_secret": "y"}
+
+    def test_tenant_persisted_when_passed(self):
+        save_provider_credentials(
+            "microsoft_work", client_id="x", tenant="organizations"
+        )
+        creds = peek_provider_credentials("microsoft_work")
+        assert creds["tenant"] == "organizations"
 
     def test_save_does_not_disturb_connection_blob(self):
         # Saving provider creds and a connection blob for the same provider

@@ -33,7 +33,7 @@ Use this integration path when you want:
 - **Your own UX and mailbox connection** — your app runs OAuth, owns the tokens, and
   forwards a connection to GAIA so the agent can read/send on the user's behalf.
 - **A structured contract** — a frozen request/response schema (`SCHEMA_VERSION`
-  `2.3`) you can code against, over REST **or** MCP stdio.
+  `2.5`) you can code against, over REST **or** MCP stdio.
 
 ## Architecture
 
@@ -298,7 +298,7 @@ offline access and the scopes the agent needs:
 | Provider | OAuth flow | Mail scopes to request |
 |---|---|---|
 | **Gmail** | Web or Desktop-app client (authorization-code) | `https://www.googleapis.com/auth/gmail.modify`, `https://www.googleapis.com/auth/gmail.send` |
-| **Personal Outlook.com** | **Device-code** flow | `https://graph.microsoft.com/Mail.ReadWrite`, `https://graph.microsoft.com/Mail.Send` |
+| **Outlook** (personal Outlook.com **or** work/school Microsoft 365) | Browser (PKCE) or **device-code** flow, `common` tenant | `https://graph.microsoft.com/Mail.ReadWrite`, `https://graph.microsoft.com/Mail.Send` |
 
 Add calendar scopes only if you use the calendar endpoints: Google
 `https://www.googleapis.com/auth/calendar.events` (and/or `calendar.readonly`),
@@ -323,7 +323,7 @@ curl -s -X POST http://127.0.0.1:4200/v1/connections/google \
   }'
 ```
 
-For personal Outlook, `POST /v1/connections/microsoft` with the Graph scopes above.
+For Outlook (personal or work/school), `POST /v1/connections/microsoft` with the Graph scopes above.
 
 **Response** — `201 Created`, metadata only (secrets are never echoed back):
 
@@ -361,7 +361,7 @@ token, the forwarded client credentials, and every per-agent grant.
 
 ## The triage contract
 
-*(#1262, frozen at `SCHEMA_VERSION` 2.3)* `POST /v1/email/triage` takes an email or a full
+*(#1262, frozen at `SCHEMA_VERSION` 2.5)* `POST /v1/email/triage` takes an email or a full
 thread and returns structured analysis. **No mail is read or sent** — it analyzes only the
 payload in the request, so you can build and verify triage with **zero connector setup**.
 See the full schema in the [Email Triage Contract](https://github.com/amd/gaia/blob/main/hub/agents/email/python/CONTRACT.md).
@@ -394,7 +394,7 @@ curl -s -X POST http://127.0.0.1:4200/v1/email/triage \
 
 ```json
 {
-  "schema_version": "2.3",
+  "schema_version": "2.12",
   "request_kind": "single",
   "result": {
     "category": "URGENT",
@@ -440,6 +440,61 @@ returns one result per item, order-preserved. Per-item failures are isolated: **
 can carry errored items**, so inspect each `results[].error`, not just the status. A
 **502** means Lemonade was unreachable or the triage model is unavailable there,
 detected before any item was processed.
+
+## Mid-run questions (`needs_input`)
+
+*(#2469, contract 2.6)* The agent can ask the user a question **while a `/query` run
+is in flight**, and carry on from the answer. It uses this most often to set up or
+repair mailbox access: rather than returning an error telling the user to go run
+`gaia connectors connect google …`, it works out which of the four problems it has
+(nothing connected, credentials stopped working, a missing scope, or connected but
+not granted to this agent), asks about that one, and fixes it.
+
+**Declare whether you can answer.** `POST /v1/email/query` takes
+`can_answer_questions` (default `false`). Set it to `true` only if your UI can render
+a question and POST the answer. Leave it false for a one-shot, a batch job, or
+anything unattended — the agent then refuses the step immediately with something
+actionable, instead of parking the run until the question times out.
+
+```jsonc
+// A needs_input event on the stream. It is NOT terminal — keep reading.
+{
+  "type": "needs_input",
+  "run_id": "0f9c…",
+  "request_id": "8c21…",
+  "question": "Your Gmail sign-in has stopped working. Reconnect?",
+  "options": [
+    {"value": "yes", "label": "Reconnect Gmail",
+     "description": "Opens your browser to sign in again. Your mail is untouched."},
+    {"value": "no", "label": "Not now", "description": "Change nothing."}
+  ],
+  "allow_free_text": true,
+  "sensitive": false,
+  "respond_url": "/v1/email/query/0f9c…/respond",
+  "timeout_seconds": 240
+}
+```
+
+Answer it out of band; the **original** stream resumes — do not issue a second
+`/query`:
+
+```bash
+curl -s -X POST http://127.0.0.1:4200/v1/email/query/$RUN_ID/respond \
+  -H 'content-type: application/json' \
+  -d '{"request_id": "8c21…", "value": "yes"}'
+# {"run_id":"0f9c…","request_id":"8c21…","accepted":true,"status":"ok"}
+```
+
+`404` means no run with that id is in flight; `409` means the run is not waiting on
+that `request_id` (already answered, or timed out) — a stale answer is rejected
+rather than applied to whatever is pending now.
+
+Two rules worth respecting in your UI: **render each option's `description`** (the
+label alone does not tell the user what they are agreeing to), and when
+`sensitive` is `true` **mask the input and never log it** — that flag is set when the
+agent asks for an OAuth client secret. Lines beginning `:` on the stream are
+heartbeat comments; skip them, but let them reset any read-idle timer you keep, or
+you will abandon a run that is simply waiting on a human.
 
 ## Draft → confirmed send
 
@@ -536,7 +591,7 @@ Tools exposed: `triage_email`, `triage_email_batch`, `draft_reply`, `send_email`
 ## Self-describing reference
 
 - **`GET /v1/email/spec`** — a human-readable HTML page describing every endpoint.
-- **`GET /v1/email/version`** — `{"apiVersion": "2.3", "agentVersion": "…"}`. `apiVersion`
+- **`GET /v1/email/version`** — `{"apiVersion": "2.5", "agentVersion": "…"}`. `apiVersion`
   is the frozen contract version; negotiate against its MAJOR so a breaking upgrade fails
   loudly.
 - **`GET /v1/email/init`** — readiness: the effective Lemonade `base_url`, the resolved
@@ -554,10 +609,10 @@ Tools exposed: `triage_email`, `triage_email_batch`, `draft_reply`, `send_email`
 ## Provider coverage
 
 - **Gmail** — full support (triage, search, draft/send, archive, quarantine, calendar).
-- **Personal Outlook.com** — supported via the device-code OAuth flow; phishing
-  quarantine is **Gmail-only** (an Outlook mailbox is refused with **400**, because its
-  label-based undo can't reverse Outlook's folder move).
-- **Enterprise Microsoft Graph** — deferred.
+- **Outlook** — personal (Outlook.com) **and** work/school (Microsoft 365 / Entra
+  ID) mailboxes, via the browser (PKCE) or device-code OAuth flow on the `common`
+  tenant. Phishing quarantine is **Gmail-only** (an Outlook mailbox is refused with
+  **400**, because its label-based undo can't reverse Outlook's folder move).
 
 ## Related
 

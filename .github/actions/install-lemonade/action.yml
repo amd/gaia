@@ -317,7 +317,30 @@ runs:
                     # llama-server) would leave the stale backend in place and
                     # the next load would fail with the same "llama-server
                     # failed to start" -- with no signal pointing back here.
+                    #
+                    # The cached backend nests ROCm Composable-Kernel headers
+                    # (e.g. ``device_grouped_conv_fwd_..._instance.hpp``) whose
+                    # full paths exceed the 260-char MAX_PATH limit, so a plain
+                    # ``Remove-Item -Recurse`` throws "Could not find a part of
+                    # the path". Mirror an empty dir over it with robocopy first
+                    # -- robocopy uses long-path-safe APIs -- then remove the
+                    # emptied tree.
                     try {
+                        $emptyDir = Join-Path $env:RUNNER_TEMP "lemonade-wipe-empty"
+                        if (-not (Test-Path $emptyDir)) {
+                            New-Item -ItemType Directory -Path $emptyDir -Force | Out-Null
+                        }
+                        # /MIR mirrors the (empty) source, deleting everything in
+                        # $backendDir regardless of path length. Exit codes < 8
+                        # are success; >= 8 is a real failure.
+                        robocopy $emptyDir $backendDir /MIR /NFL /NDL /NJH /NJS /NC /NS /NP | Out-Null
+                        if ($LASTEXITCODE -ge 8) {
+                            throw "robocopy mirror-wipe failed with exit code $LASTEXITCODE"
+                        }
+                        # robocopy signals success with non-zero codes (1-7);
+                        # reset so the trailing GitHub pwsh ``exit $LASTEXITCODE``
+                        # doesn't read a successful mirror as a step failure.
+                        $global:LASTEXITCODE = 0
                         Remove-Item $backendDir -Recurse -Force -ErrorAction Stop
                     } catch {
                         Write-Host "ERROR: failed to clear stale backend cache at $backendDir : $($_.Exception.Message)"

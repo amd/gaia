@@ -802,8 +802,8 @@ class _FakeRegistry:
         self.ensure_calls = []
         self.stop_calls = []
 
-    def ensure(self, agent_id, mode=None):
-        self.ensure_calls.append((agent_id, mode))
+    def ensure(self, agent_id, mode=None, dev_src_dir=None):
+        self.ensure_calls.append((agent_id, mode, dev_src_dir))
         if self._ensure_error:
             raise self._ensure_error
         return self._ensure_result
@@ -890,7 +890,7 @@ def test_post_ensure_omitted_body_defaults_mode_to_none():
     client = _routes_client(reg)
     r = client.post("/daemon/v1/agents/email/ensure", headers=_auth())
     assert r.status_code == 200
-    assert reg.ensure_calls == [("email", None)]
+    assert reg.ensure_calls == [("email", None, None)]
 
 
 def test_post_ensure_passes_mode_through():
@@ -907,7 +907,46 @@ def test_post_ensure_passes_mode_through():
         "/daemon/v1/agents/email/ensure", headers=_auth(), json={"mode": "dev"}
     )
     assert r.status_code == 200
-    assert reg.ensure_calls == [("email", "dev")]
+    assert reg.ensure_calls == [("email", "dev", None)]
+
+
+def test_post_ensure_passes_dev_src_dir_through():
+    """#2588: the caller sends the dev_src_dir it believes it's asking for
+    alongside mode, and the route must forward it verbatim to the registry's
+    new comparison gate."""
+    reg = _FakeRegistry(
+        ensure_result={
+            "agent_id": "email",
+            "state": "running",
+            "mode": "dev",
+            "token": "t",
+        }
+    )
+    client = _routes_client(reg)
+    r = client.post(
+        "/daemon/v1/agents/email/ensure",
+        headers=_auth(),
+        json={"mode": "dev", "dev_src_dir": "/some/path"},
+    )
+    assert r.status_code == 200
+    assert reg.ensure_calls == [("email", "dev", "/some/path")]
+
+
+def test_post_ensure_omitted_dev_src_dir_defaults_to_none():
+    reg = _FakeRegistry(
+        ensure_result={
+            "agent_id": "email",
+            "state": "running",
+            "mode": "dev",
+            "token": "t",
+        }
+    )
+    client = _routes_client(reg)
+    r = client.post(
+        "/daemon/v1/agents/email/ensure", headers=_auth(), json={"mode": "dev"}
+    )
+    assert r.status_code == 200
+    assert reg.ensure_calls[0][2] is None
 
 
 def test_post_stop_returns_stopped_state():
@@ -977,6 +1016,24 @@ def test_mode_conflict_error_maps_to_409_naming_both_modes():
     assert r.status_code == 409
     detail = r.json()["detail"]
     assert "dev" in detail and "user" in detail
+
+
+def test_dev_src_dir_resolution_error_maps_to_400():
+    """#2588: a non-absolute dev_src_dir arriving over the wire (or any other
+    dev-src-dir resolution failure surfaced by the registry gate) is a client
+    error, not a 409 mode conflict and not a 502 spawn failure."""
+    from gaia.daemon.sidecars.errors import DevSrcDirResolutionError
+
+    distinctive = "DISTINCTIVE-DEV-SRC-DIR-ERROR"
+    reg = _FakeRegistry(ensure_error=DevSrcDirResolutionError(distinctive))
+    client = _routes_client(reg)
+    r = client.post(
+        "/daemon/v1/agents/email/ensure",
+        headers=_auth(),
+        json={"mode": "dev", "dev_src_dir": "relative/path"},
+    )
+    assert r.status_code == 400
+    assert distinctive in r.json()["detail"]
 
 
 def test_capacity_error_maps_to_409_naming_running_agents():

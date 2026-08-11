@@ -81,7 +81,7 @@ def check_black(fix: bool = False) -> CheckResult:
     if fix:
         print("\n[1/2] Fixing code formatting with Black...")
     else:
-        print("\n[1/10] Checking code formatting with Black...")
+        print("\n[1/11] Checking code formatting with Black...")
     print("-" * 40)
 
     if fix:
@@ -155,7 +155,7 @@ def check_isort(fix: bool = False) -> CheckResult:
     if fix:
         print("\n[2/2] Fixing import sorting with isort...")
     else:
-        print("\n[2/10] Checking import sorting with isort...")
+        print("\n[2/11] Checking import sorting with isort...")
     print("-" * 40)
 
     if fix:
@@ -200,7 +200,7 @@ def check_isort(fix: bool = False) -> CheckResult:
 
 def check_pylint() -> CheckResult:
     """Run Pylint (errors only)."""
-    print("\n[3/10] Running Pylint (errors only)...")
+    print("\n[3/11] Running Pylint (errors only)...")
     print("-" * 40)
 
     cmd = uvx(
@@ -225,7 +225,7 @@ def check_pylint() -> CheckResult:
 
 def check_flake8() -> CheckResult:
     """Run Flake8."""
-    print("\n[4/10] Running Flake8...")
+    print("\n[4/11] Running Flake8...")
     print("-" * 40)
 
     cmd = uvx(
@@ -258,7 +258,7 @@ def check_flake8() -> CheckResult:
 
 def check_mypy() -> CheckResult:
     """Run MyPy type checking (warning only)."""
-    print("\n[5/10] Running MyPy type checking (warning only)...")
+    print("\n[5/11] Running MyPy type checking (warning only)...")
     print("-" * 40)
 
     cmd = uvx("mypy", SRC_DIR, "--ignore-missing-imports")
@@ -283,35 +283,90 @@ def check_mypy() -> CheckResult:
     return CheckResult("Type Checking (MyPy)", True, True, 0, output)
 
 
+def _import_security_gates():
+    """Import util/check_security_gates regardless of how lint.py was invoked."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import check_security_gates  # noqa: E402
+
+    return check_security_gates
+
+
 def check_bandit() -> CheckResult:
-    """Run Bandit security check (warning only)."""
-    print("\n[6/10] Running security check with Bandit (warning only)...")
+    """Run Bandit security check.
+
+    HIGH-severity findings are BLOCKING: any HIGH finding not allow-listed in
+    ``.bandit-baseline.json`` fails the check. MEDIUM/LOW findings are still
+    reported (warning-only) so they stay visible without blocking the build.
+    """
+    print("\n[6/11] Running security check with Bandit (HIGH = blocking)...")
     print("-" * 40)
 
-    cmd = uvx("bandit", "-r", SRC_DIR, "-ll", "--exclude", EXCLUDE_DIRS)
+    from check_security_gates import (
+        format_finding,
+        load_baseline,
+        new_bandit_highs,
+        run_bandit,
+    )
 
-    print(f"[CMD] {' '.join(cmd)}")
-    exit_code, output = run_command(cmd)
+    # Scan once; drive both the HIGH gate and the MEDIUM/LOW count off one report.
+    try:
+        report = run_bandit(SRC_DIR, EXCLUDE_DIRS)
+    except (RuntimeError, ValueError) as exc:
+        print(f"[ERROR] Could not run Bandit: {exc}")
+        return CheckResult("Security Check (Bandit)", False, False, 1, str(exc))
 
-    if exit_code != 0:
-        # Count issue lines
-        issues = output.count(">> Issue:") or 1
-        print(f"\n[WARNING] Bandit found security issues (non-blocking):")
-        lines = output.strip().split("\n")[:30]
-        for line in lines:
-            print(line)
-        if len(output.strip().split("\n")) > 30:
-            print("... (output truncated, showing first 30 lines)")
-        print("\nNote: Many are false positives for ML applications.")
-        return CheckResult("Security Check (Bandit)", False, True, issues, output)
+    new_highs = new_bandit_highs(
+        report.get("results", []), load_baseline(".bandit-baseline.json")
+    )
+    passed = not new_highs
 
-    print("[OK] No security issues found!")
-    return CheckResult("Security Check (Bandit)", True, True, 0, output)
+    # Surface MEDIUM/LOW counts as an informational warning (non-blocking).
+    med_low = [
+        r
+        for r in report.get("results", [])
+        if r.get("issue_severity") in ("MEDIUM", "LOW")
+    ]
+    if med_low:
+        print(f"[INFO] {len(med_low)} MEDIUM/LOW finding(s) (non-blocking).")
+
+    if not passed:
+        print(f"\n[BLOCKING] Bandit found {len(new_highs)} HIGH-severity issue(s):")
+        for finding in new_highs:
+            print(f"  - {format_finding(finding)}")
+        print(
+            "\nFix the finding, or (only if genuinely unavoidable) add an inline "
+            "`# nosec <rule>` with a matching justified entry in "
+            "`.security-suppressions.json`, then allowlist it in "
+            "`.bandit-baseline.json`."
+        )
+        return CheckResult(
+            "Security Check (Bandit)", False, False, len(new_highs), str(new_highs)
+        )
+
+    print("[OK] No HIGH-severity security issues found!")
+    return CheckResult("Security Check (Bandit)", True, False, 0, "")
+
+
+def check_security_suppressions() -> CheckResult:
+    """Every '# noqa: S<n>' / '# nosec' must be reviewed in .security-suppressions.json."""
+    print("\n[7/11] Checking security suppressions are reviewed...")
+    print("-" * 40)
+    gates = _import_security_gates()
+    try:
+        ok, msgs = gates.check_suppressions()
+    except (FileNotFoundError, ValueError) as exc:
+        print(f"[FAIL] {exc}")
+        return CheckResult("Security Suppressions", False, False, 1, str(exc))
+    for m in msgs:
+        print(m)
+    return CheckResult(
+        "Security Suppressions", ok, False, 0 if ok else 1, "\n".join(msgs)
+    )
 
 
 def check_imports() -> CheckResult:
     """Test comprehensive SDK imports."""
-    print("\n[7/10] Testing comprehensive SDK imports...")
+    print("\n[8/11] Testing comprehensive SDK imports...")
     print("-" * 40)
 
     # Pre-check: verify gaia is installed
@@ -432,7 +487,7 @@ def check_imports() -> CheckResult:
 
 def check_agents() -> CheckResult:
     """Check GAIA agent conventions — inheritance, tests, docs, registry wiring."""
-    print("\n[8/10] Checking agent conventions...")
+    print("\n[9/11] Checking agent conventions...")
     print("-" * 40)
 
     # Import lazily so the check is self-contained and testable standalone.
@@ -468,7 +523,7 @@ def check_agents() -> CheckResult:
 
 def check_dependabot() -> CheckResult:
     """Validate .github/dependabot.yml (no soft-disabled entries, npm groups present)."""
-    print("\n[9/10] Validating .github/dependabot.yml...")
+    print("\n[10/11] Validating .github/dependabot.yml...")
     print("-" * 40)
 
     try:
@@ -499,7 +554,7 @@ def check_dependabot() -> CheckResult:
 
 def check_doc_versions() -> CheckResult:
     """Check documentation version consistency."""
-    print("\n[10/10] Checking documentation version consistency...")
+    print("\n[11/11] Checking documentation version consistency...")
     print("-" * 40)
 
     # Import and run the check
@@ -661,6 +716,11 @@ def main():
     parser.add_argument("--flake8", action="store_true", help="Run Flake8")
     parser.add_argument("--mypy", action="store_true", help="Run MyPy")
     parser.add_argument("--bandit", action="store_true", help="Run Bandit")
+    parser.add_argument(
+        "--security",
+        action="store_true",
+        help="Check security suppressions are reviewed (.security-suppressions.json)",
+    )
     parser.add_argument("--imports", action="store_true", help="Test imports")
     parser.add_argument(
         "--agents",
@@ -692,6 +752,7 @@ def main():
             args.flake8,
             args.mypy,
             args.bandit,
+            args.security,
             args.imports,
             args.agents,
             args.dependabot,
@@ -740,6 +801,9 @@ def main():
 
     if args.bandit or run_all:
         results.append(check_bandit())
+
+    if args.security or run_all:
+        results.append(check_security_suppressions())
 
     if args.agents or run_all:
         results.append(check_agents())

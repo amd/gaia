@@ -5,7 +5,10 @@ import (
 	"fmt"
 )
 
-// ParseEvent parses a JSONL line into a concrete event type.
+// ParseEvent parses a JSONL line into a concrete LEGACY event type — the
+// subprocess transport's vocabulary (see the freeze note in types.go).
+//
+// Use ParseCanonicalEvent for anything arriving over the daemon relay.
 // Returns the typed event or an error if the line is invalid JSON or has an unknown type.
 func ParseEvent(line []byte) (interface{}, error) {
 	var base Event

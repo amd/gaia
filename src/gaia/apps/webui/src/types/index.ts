@@ -128,9 +128,9 @@ export interface AgentInfo {
      */
     permissions?: string[];
     /**
-     * True when installing this agent needs an explicit native-trust opt-in —
-     * a non-verified native (C++) package that runs unsandboxed. The Hub shows
-     * a "Trust & Install" confirmation before sending ``trust_native``.
+     * True when installing this agent needs an explicit trust opt-in — any
+     * non-verified package (of any language) that runs third-party code. The
+     * Hub shows a "Trust & Install" confirmation before sending ``trust_native``.
      */
     requires_trust?: boolean;
     /** Optional remote avatar image URL from the catalog. */
@@ -277,6 +277,13 @@ export interface ConnectorRow {
     mcp_env_keys: string[];
     default_scopes: string[];
     available_scopes: string[];
+    /**
+     * Whether the provider supports the RFC 8628 device-code flow (#1275) —
+     * a short code entered at a URL, no browser redirect and no per-user Azure
+     * app registration. When ``true`` the tile offers a "Sign in with a code"
+     * option alongside the browser Connect button (Microsoft today).
+     */
+    supports_device_code?: boolean;
     /**
      * First-time setup fields the user fills in to provide OAuth-app
      * client credentials (e.g. Google Cloud Console client_id +
@@ -441,6 +448,10 @@ export interface DownloadProgress {
 
 export interface SystemStatus {
     lemonade_running: boolean;
+    /** How to start Lemonade on this host, resolved server-side. */
+    start_instruction?: string | null;
+    /** Shell command, or null on hosts started from a GUI (tray / app). */
+    start_command?: string | null;
     model_loaded: string | null;
     embedding_model_loaded: boolean;
     disk_space_gb: number;

@@ -48,6 +48,7 @@ import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
 from gaia.connectors.activations import list_agent_activations
 from gaia.connectors.api import activate as activate_connector_for_agent
 from gaia.connectors.api import deactivate as deactivate_connector_for_agent
+from gaia.connectors.api import resolve_declared_scopes
 from gaia.connectors.errors import (
     AuthRequiredError,
     ConfigurationError,
@@ -56,7 +57,10 @@ from gaia.connectors.errors import (
     ConsentDeniedError,
     FlowInProgressError,
     FlowTimeoutError,
+    NoDeclaredScopesError,
     ScopeMismatchError,
+    ScopeNotAllowedError,
+    UnknownAgentError,
 )
 from gaia.connectors.events import set_emitter
 from gaia.connectors.flow import _pending as _flow_pending
@@ -301,12 +305,15 @@ def _resolve_grant_scopes(
 ) -> Dict[str, List[str]]:
     """Resolve ``[namespaced_agent_id]`` → ``{agent_id: required_scopes}`` (#2117).
 
-    Each agent's scopes come from its ``REQUIRED_CONNECTORS`` declaration for
-    ``connector_id`` — the same single source of truth the forwarded-connection
-    route uses. Fails loudly (no silent skips): an unknown agent → 404; an
-    agent that declares no requirement for this connector → 400. Both would
-    otherwise produce a connect that silently grants nothing — the exact
-    dead-end this flow removes.
+    Thin wrapper over the shared ``gaia.connectors.api.resolve_declared_scopes``
+    (#2603) — the CLI's ``gaia connectors connect --grant-agent`` calls the
+    SAME function, so the two surfaces cannot drift. This wrapper's only job
+    is translating the shared resolver's exceptions into this router's HTTP
+    contract: an unknown agent → 404; an agent that declares no requirement
+    for this connector → 400; a declared scope outside the connector's
+    ``available_scopes`` → 400. All three would otherwise produce a connect
+    that silently grants nothing (or, for the scope ceiling, too much) — the
+    exact dead-end / escalation this flow removes.
     """
     if not agent_ids:
         return {}
@@ -314,32 +321,50 @@ def _resolve_grant_scopes(
     if registry is None:
         raise HTTPException(status_code=503, detail="Agent registry not initialized")
 
-    by_nsid = {reg.namespaced_agent_id: reg for reg in registry.list()}
-    unknown = [nsid for nsid in agent_ids if nsid not in by_nsid]
-    if unknown:
+    try:
+        return resolve_declared_scopes(registry, connector_id, agent_ids)
+    except UnknownAgentError as e:
         raise HTTPException(
             status_code=404,
-            detail={"error": "unknown_agent", "agent_ids": unknown},
-        )
+            detail={"error": "unknown_agent", "agent_ids": e.agent_ids},
+        ) from e
+    except NoDeclaredScopesError as e:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "agent_declares_no_scopes",
+                "agent_id": e.agent_id,
+                "connector_id": e.connector_id,
+            },
+        ) from e
+    except ScopeNotAllowedError as e:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "scope_not_allowed",
+                "agent_id": e.agent_id,
+                "connector_id": e.connector_id,
+                "scopes": e.scopes,
+            },
+        ) from e
 
-    resolved: Dict[str, List[str]] = {}
-    for nsid in agent_ids:
-        reg = by_nsid[nsid]
-        scopes: set[str] = set()
-        for cr in reg.required_connections:
-            if cr.connector_id == connector_id:
-                scopes.update(cr.scopes)
-        if not scopes:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "agent_declares_no_scopes",
-                    "agent_id": nsid,
-                    "connector_id": connector_id,
-                },
-            )
-        resolved[nsid] = sorted(scopes)
-    return resolved
+
+def _widen_empty_scopes(
+    scopes: List[str], grant_map: Dict[str, List[str]]
+) -> List[str]:
+    """Same contract as the CLI's bare ``connect`` (#2730 D0/AC-8): an empty
+    ``scopes`` body must not silently reach ``start_authorization`` narrower
+    than what the request's own ``grant_agents`` already declare. When the
+    caller supplied scopes explicitly, or resolved no grant map at all,
+    return unchanged — ``start_authorization``'s own D0 guard decides the
+    genuinely-empty case (raise on an existing connection, fall back to
+    ``default_scopes`` on a real first connect)."""
+    if scopes or not grant_map:
+        return scopes
+    union: set = set()
+    for agent_scopes in grant_map.values():
+        union.update(agent_scopes)
+    return sorted(union)
 
 
 def _connector_summary(connector_id: str) -> Dict[str, Any]:
@@ -481,6 +506,9 @@ def _connector_summary(connector_id: str) -> Dict[str, Any]:
         "mcp_env_keys": list(spec.mcp_env_keys),
         "default_scopes": list(spec.default_scopes),
         "available_scopes": list(spec.available_scopes),
+        # Device-code capability (#1275): lets the UI offer "sign in with a
+        # code" (no browser redirect / no Azure app registration).
+        "supports_device_code": spec.supports_device_code,
         # OAuth setup form (e.g. Google client_id/client_secret) — empty
         # tuple for connectors that don't need first-time provider creds.
         "oauth_setup_fields": [
@@ -842,10 +870,87 @@ async def authorize(
     grant_map = _resolve_grant_scopes(request, connector_id, body.grant_agents)
     try:
         return await connections.start_authorization(
-            connector_id, scopes=body.scopes, grant_agents=grant_map or None
+            connector_id,
+            scopes=_widen_empty_scopes(body.scopes, grant_map),
+            grant_agents=grant_map or None,
         )
     except ConnectorsError as e:
         raise _raise_http_for(e) from e
+
+
+# Keeps background device-poll tasks referenced so they aren't garbage
+# collected mid-flight (asyncio holds only weak refs to bare tasks).
+_device_poll_tasks: set = set()
+
+
+@router.post(
+    "/{connector_id}/authorize-device", dependencies=[Depends(_require_ui_header)]
+)
+async def authorize_device(
+    request: Request, connector_id: str, body: AuthorizeRequest
+) -> Dict[str, Any]:
+    """Start a device-code flow (no browser redirect / no Azure app needed).
+
+    Returns ``{user_code, verification_uri, expires_in, interval, message}`` for
+    the UI to display. Unlike the browser flow there is no loopback callback, so
+    the server kicks off a background poller; on completion ``poll_device_flow``
+    emits ``connector.oauth.completed`` (and ``connection.connected``) over the
+    same SSE stream the UI already watches, and this endpoint emits
+    ``connector.oauth.error`` if it fails. ``grant_agents`` are resolved up front
+    and committed atomically on success, mirroring ``authorize``.
+
+    The ``device_code`` is intentionally NOT returned — it is a bearer-equivalent
+    for polling and the server owns the poll loop.
+    """
+    grant_map = _resolve_grant_scopes(request, connector_id, body.grant_agents)
+    try:
+        info = await connections.start_device_flow(
+            connector_id, scopes=_widen_empty_scopes(body.scopes, grant_map)
+        )
+    except ConnectorsError as e:
+        raise _raise_http_for(e) from e
+
+    async def _poll_and_emit() -> None:
+        try:
+            # poll_device_flow emits connector.oauth.completed itself on success.
+            await connections.poll_device_flow(
+                connector_id,
+                info["device_code"],
+                scopes=info["scopes"],
+                interval=info["interval"],
+                expires_in=info["expires_in"],
+                grant_agents=grant_map or None,
+            )
+        except ConnectorsError as e:
+            await _emitter.emit(
+                "connector.oauth.error",
+                {"connector_id": connector_id, "error": str(e)},
+            )
+        except Exception:  # noqa: BLE001 — surface, don't crash the loop
+            # Unexpected (non-ConnectorsError) failure: keep the detail in the
+            # server log, emit a generic message so an arbitrary exception
+            # string never reaches the client over SSE.
+            logger.exception("device-flow poll failed for %s", connector_id)
+            await _emitter.emit(
+                "connector.oauth.error",
+                {
+                    "connector_id": connector_id,
+                    "error": "Device-code sign-in failed unexpectedly. "
+                    "Check the server logs and try again.",
+                },
+            )
+
+    task = asyncio.create_task(_poll_and_emit())
+    _device_poll_tasks.add(task)
+    task.add_done_callback(_device_poll_tasks.discard)
+
+    return {
+        "user_code": info["user_code"],
+        "verification_uri": info["verification_uri"],
+        "expires_in": info["expires_in"],
+        "interval": info["interval"],
+        "message": info["message"],
+    }
 
 
 @router.delete(

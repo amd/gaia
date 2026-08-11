@@ -106,8 +106,9 @@ An explicit `governance_reviewer` takes precedence. If none is configured,
 governance delegates to `console.confirm_tool_execution` only when the console
 advertises `blocking_confirmation = True`; Agent UI's `SSEOutputHandler`
 ([`gaia.ui.sse_handler`](https://github.com/amd/gaia/blob/main/src/gaia/ui/sse_handler.py))
-does this and emits the existing `permission_request` modal. GAIA's default
-console is not consulted because its confirmation method auto-approves.
+does this and emits the existing `permission_request` modal. GAIA's CLI console is not
+consulted: it prompts only when stdin is a terminal and denies otherwise
+(#2210), so it cannot guarantee a reviewer is reachable.
 
 <Note>
 Two different classes share the name `SSEOutputHandler`. The Agent UI one above

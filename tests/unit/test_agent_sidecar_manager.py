@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.allow_network
+
 from gaia.daemon.sidecars import manager as mgr
 from gaia.daemon.sidecars.errors import (
     BinaryNotFoundError,
@@ -85,6 +87,32 @@ def test_email_spec_dev_src_dir_resolves_under_repo_root():
     repo_root = Path(__file__).resolve().parents[2]
     expected = repo_root / "hub" / "agents" / "email" / "python"
     assert builtin_specs()["email"].dev_src_dir == expected
+
+
+def test_real_email_spec_dev_spawn_has_nonempty_module_and_existing_app_dir(
+    monkeypatch,
+):
+    """Regression guard for #2441's misdiagnosis: the dev-mode spawn was NEVER
+    the source of the "Empty module name" crash (that was an invalid
+    PYTHON_KEYRING_BACKEND). Prove it here against the REAL builtin email spec —
+    the dev spawn always yields a non-empty import module and an app-dir that
+    exists on disk in a source checkout."""
+    monkeypatch.setenv("GAIA_EMAIL_AGENT_MODE", "dev")
+    spec = builtin_specs()["email"]
+    # Non-empty import module (the value uvicorn __import__s).
+    module = spec.dev_module.split(":", 1)[0]
+    assert module, "dev_module import path must not be empty"
+    assert spec.dev_module == "server:app"
+
+    m = mgr.AgentSidecarManager(spec)
+    argv, kwargs = m.build_spawn_command(port=9127)
+    app_dir = Path(argv[argv.index("--app-dir") + 1])
+    assert app_dir == spec.dev_src_dir / spec.dev_app_dir
+    # In this source checkout the app-dir (and server.py) really exist.
+    assert app_dir.is_dir(), f"dev app-dir does not exist: {app_dir}"
+    assert (app_dir / "server.py").is_file()
+    # The module uvicorn loads is the non-empty top-level `server`, not empty.
+    assert "server:app" in argv and "" not in argv
 
 
 # ---------------------------------------------------------------------------
@@ -205,6 +233,52 @@ def test_user_mode_fetch_failure_raises_with_remedy(monkeypatch):
         m.build_spawn_command(port=9123)
 
 
+def test_user_mode_failure_names_working_remedies(monkeypatch):
+    """The user-mode failure must name remedies that actually work today (#2347):
+    the Agent Hub install (with a headless one-liner), dev mode, the log dir,
+    and the docs URL — and must NOT wrap the original fetch cause."""
+    monkeypatch.setenv("GAIA_EMAIL_AGENT_MODE", "user")
+
+    def _boom(**kw):
+        raise RuntimeError("cannot read the sidecar binary lock at /x")
+
+    monkeypatch.setattr(mgr.fetch, "fetch_binary", _boom)
+    m = mgr.AgentSidecarManager(builtin_specs()["email"])
+    with pytest.raises(SidecarSpawnError) as exc_info:
+        m.build_spawn_command(port=9123)
+    msg = str(exc_info.value)
+    # Working remedies, spec-driven.
+    assert "Agent Hub" in msg
+    assert "gaia agent install email" in msg  # headless CLI path
+    assert "GAIA_EMAIL_AGENT_MODE=dev" in msg
+    assert "Sidecar logs:" in msg
+    assert "https://amd-gaia.ai/docs/guides/email" in msg
+    # The original cause is preserved for debugging.
+    assert "cannot read the sidecar binary lock" in msg
+
+
+def test_user_mode_failure_is_spec_driven_no_email_leak(monkeypatch):
+    """A non-email spec's failure must be truly generic — its own agent_id and
+    mode env var, no leftover hardcoded email strings, and no docs line when the
+    spec declares no docs_url."""
+    monkeypatch.delenv("GAIA_EMAIL_AGENT_MODE", raising=False)
+    monkeypatch.setenv("GAIA_TOY_AGENT_MODE", "user")
+
+    def _boom(**kw):
+        raise RuntimeError("no binary")
+
+    monkeypatch.setattr(mgr.fetch, "fetch_binary", _boom)
+    m = mgr.AgentSidecarManager(_TOY_SPEC)
+    with pytest.raises(SidecarSpawnError) as exc_info:
+        m.build_spawn_command(port=9123)
+    msg = str(exc_info.value)
+    assert "gaia agent install toy" in msg
+    assert "GAIA_TOY_AGENT_MODE=dev" in msg
+    assert "email" not in msg.lower()
+    assert "GAIA_EMAIL_AGENT_MODE" not in msg
+    assert "Docs:" not in msg  # _TOY_SPEC has no docs_url
+
+
 def test_user_mode_spawns_hub_installed_binary_despite_placeholder_lock(
     monkeypatch, tmp_path
 ):
@@ -271,7 +345,9 @@ def test_dev_mode_spawn_command_is_uvicorn_app_dir(monkeypatch, tmp_path):
     # (which would resolve to the PyPI packaging library).
     assert "server:app" in argv
     assert "packaging.server:app" not in argv
-    assert "--reload" in argv
+    # No --reload: the daemon supervises the sidecar; uvicorn's own spawn-based
+    # reload supervisor is what fails on macOS with "Empty module name" (#2441).
+    assert "--reload" not in argv
     assert "--app-dir" in argv
     app_dir = argv[argv.index("--app-dir") + 1]
     assert app_dir == str(src / "packaging")

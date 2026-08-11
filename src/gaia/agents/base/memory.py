@@ -38,6 +38,7 @@ import json
 import logging
 import os
 import re
+import sys
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -52,7 +53,10 @@ from gaia.agents.base.memory_store import (
     VALID_CATEGORIES,
 )
 from gaia.agents.base.procedural_memory import ProceduralMemoryMixin
-from gaia.llm.lemonade_client import DEFAULT_EMBEDDING_MODEL
+from gaia.llm.lemonade_client import (
+    DEFAULT_EMBEDDING_CHECKPOINT,
+    DEFAULT_EMBEDDING_MODEL,
+)
 
 if TYPE_CHECKING:
     from gaia.agents.base.bootstrap import BootstrapResult
@@ -263,6 +267,21 @@ _cross_encoder_model = None
 _CROSS_ENCODER_UNAVAILABLE = False
 
 
+#: Opt back in where faiss and torch share one OpenMP runtime and coexist fine
+#: (common on Linux). The guard below cannot tell that host from one that would
+#: abort, so it errs toward staying alive and lets those users say otherwise.
+_OMP_OVERRIDE_ENV = "GAIA_ALLOW_FAISS_TORCH_OMP"
+
+
+def _omp_conflict_override() -> bool:
+    """True when the operator has declared this host safe for both runtimes."""
+    return os.environ.get(_OMP_OVERRIDE_ENV, "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
+
+
 def _get_cross_encoder():
     """Lazy-load the cross-encoder reranking model. Cached at module level.
 
@@ -274,6 +293,25 @@ def _get_cross_encoder():
         return None
     if _cross_encoder_model is not None:
         return _cross_encoder_model
+    # faiss and torch each link their own OpenMP runtime; whichever loads
+    # second aborts the process with "OMP: Error #15" — a SIGABRT no except
+    # clause can catch, so the guards below would never run. Refuse the import
+    # we know is fatal rather than take the process down mid-conversation.
+    if (
+        "faiss" in sys.modules
+        and "torch" not in sys.modules
+        and not _omp_conflict_override()
+    ):
+        logger.warning(
+            "[MemoryMixin] cross-encoder reranking disabled: faiss is already "
+            "loaded and importing torch alongside it aborts the process "
+            "(OpenMP double-initialisation). Retrieval falls back to vector "
+            "similarity, which is ordered but not reranked. Set "
+            "%s=1 to keep reranking on a host where the two runtimes coexist.",
+            _OMP_OVERRIDE_ENV,
+        )
+        _CROSS_ENCODER_UNAVAILABLE = True
+        return None
     try:
         from sentence_transformers import CrossEncoder
 
@@ -301,6 +339,36 @@ def _embedding_to_blob(vec: np.ndarray) -> bytes:
 def _blob_to_embedding(blob: bytes) -> np.ndarray:
     """Convert a raw bytes BLOB back to a float32 numpy vector."""
     return np.frombuffer(blob, dtype=np.float32).copy()
+
+
+#: Reason codes for why memory is unavailable this session (#2519). Distinct
+#: codes because the remedies differ: an unset env var, a model that was
+#: never pulled into a *running* Lemonade, and Lemonade not running at all
+#: are three different problems with three different fixes.
+MEMORY_UNAVAILABLE_DISABLED_BY_ENV = "disabled_by_env"
+MEMORY_UNAVAILABLE_MODEL_NOT_PULLED = "model_not_pulled"
+MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE = "service_unreachable"
+
+#: Substrings that identify a Lemonade "model not found" response (the
+#: service answered, it just doesn't have this model pulled) rather than a
+#: connection failure. Matches Lemonade's own error body, e.g. status 404
+#: with ``{"error":{"code":"model_not_found", ...}}``.
+_MODEL_NOT_FOUND_MARKERS = ("model_not_found", "was not found", "404")
+
+
+def _classify_embedding_failure(exc: Exception) -> str:
+    """Classify why the embedding connectivity probe failed at startup.
+
+    Returns ``MEMORY_UNAVAILABLE_MODEL_NOT_PULLED`` when Lemonade answered
+    but rejected the embedding model as unknown (never pulled), or
+    ``MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE`` for everything else (Lemonade
+    down, wrong port, connection refused/timeout, etc.) — the safer default
+    when the failure can't be positively identified as "model not pulled".
+    """
+    text = str(exc).lower()
+    if any(marker in text for marker in _MODEL_NOT_FOUND_MARKERS):
+        return MEMORY_UNAVAILABLE_MODEL_NOT_PULLED
+    return MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE
 
 
 class MemoryMixin(ProceduralMemoryMixin):
@@ -354,6 +422,12 @@ class MemoryMixin(ProceduralMemoryMixin):
         self._embedding_model = embedding_model or EMBEDDING_MODEL
         # Pre-probe default; refined from the live embedder below.
         self._embedding_dim = EMBEDDING_DIM
+        # Why memory is unavailable this session, or None while it's live.
+        # Set on every path below (#2519) so callers can report the REAL
+        # cause instead of guessing between "env var" / "not pulled" /
+        # "unreachable" after the fact.
+        self._memory_unavailable_reason: Optional[str] = None
+        self._memory_unavailable_detail: Optional[str] = None
 
         if os.environ.get("GAIA_MEMORY_DISABLED") == "1":
             logger.info(
@@ -361,6 +435,7 @@ class MemoryMixin(ProceduralMemoryMixin):
                 "skipping init"
             )
             self._memory_store = None
+            self._memory_unavailable_reason = MEMORY_UNAVAILABLE_DISABLED_BY_ENV
             self._memory_context = context
             self._auto_extract_enabled = False
             self._incognito = True
@@ -408,9 +483,10 @@ class MemoryMixin(ProceduralMemoryMixin):
         # the composed system prompt.  Empty string = no recall = the system
         # prompt stays byte-identical to a build without procedural memory.
         self._recalled_skill_prompt = ""
-        # The matched Skill objects from the same per-turn recall (#1451): the
-        # tool loader reads their tools_required via _recalled_skill_tools as the
-        # SKILL signal.  Empty list = no recall = no SKILL signal this turn.
+        # The matched DistilledProcedure objects from the same per-turn recall
+        # (#1451): the tool loader reads their tools_required via
+        # _recalled_skill_tools as the SKILL signal.  Empty list = no recall =
+        # no SKILL signal this turn.
         self._recalled_skills = []
 
         # Step 2: Validate Lemonade embedding service connectivity.
@@ -463,12 +539,24 @@ class MemoryMixin(ProceduralMemoryMixin):
                 )
             self._memory_store.set_embedder_id(self._embedding_model)
         except Exception as e:
-            logger.warning(
-                "[MemoryMixin] Lemonade embedding service unreachable — "
-                "memory v2 disabled for this session (start lemonade-server "
-                "and reload to enable). Reason: %s",
-                e,
-            )
+            reason = _classify_embedding_failure(e)
+            self._memory_unavailable_reason = reason
+            self._memory_unavailable_detail = str(e)
+            if reason == MEMORY_UNAVAILABLE_MODEL_NOT_PULLED:
+                logger.warning(
+                    "[MemoryMixin] embedding model '%s' is not pulled in "
+                    "Lemonade — memory v2 disabled for this session (pull "
+                    "the model and restart the agent to enable). Reason: %s",
+                    self._embedding_model,
+                    e,
+                )
+            else:
+                logger.warning(
+                    "[MemoryMixin] Lemonade embedding service unreachable — "
+                    "memory v2 disabled for this session (start lemonade-server "
+                    "and reload to enable). Reason: %s",
+                    e,
+                )
             # Tear down the partially-built state so no later code path tries
             # to use memory.
             self._memory_store = None
@@ -666,13 +754,13 @@ class MemoryMixin(ProceduralMemoryMixin):
 
         store = self.memory_store  # raises if init_memory() was never called
         if store is None:
+            reason = self.memory_unavailable_message() or (
+                "memory is disabled for this session"
+            )
             raise RuntimeError(
-                "Cannot run onboarding: memory is disabled for this session "
-                "(the embedding service was unreachable at agent start, or "
-                "GAIA_MEMORY_DISABLED=1 is set). Start lemonade-server and "
-                "re-create the agent, or run `gaia memory bootstrap "
-                "--chat-only`, which onboards without an embedder. See "
-                "docs/guides/memory.mdx."
+                f"Cannot run onboarding: {reason} Alternatively, run `gaia "
+                "memory bootstrap --chat-only`, which onboards without an "
+                "embedder. See docs/guides/memory.mdx."
             )
 
         return _run_bootstrap_conversation(
@@ -691,6 +779,62 @@ class MemoryMixin(ProceduralMemoryMixin):
         vec = self._embed_text(content)
         self.memory_store.store_embedding(knowledge_id, _embedding_to_blob(vec))
         self._faiss_add(knowledge_id, vec)
+
+    # ------------------------------------------------------------------
+    # Degraded-state reporting (#2519)
+    # ------------------------------------------------------------------
+
+    def memory_unavailable_message(self) -> Optional[str]:
+        """Human-readable reason + remedy for why memory is off this session.
+
+        Returns ``None`` when a memory store is live. Otherwise returns one of
+        three DISTINCT messages, keyed off the real cause recorded by
+        ``init_memory()`` — never conflates "the model was never pulled" (the
+        service is reachable and running fine) with "the service itself is
+        down" (start it), since a user who acts on the wrong one is sent down
+        the wrong remedy. Every branch also says a running session cannot
+        recover on its own — memory availability is decided once at startup.
+        """
+        if getattr(self, "_memory_store", None) is not None:
+            return None
+        reason = getattr(self, "_memory_unavailable_reason", None)
+        model = getattr(self, "_embedding_model", EMBEDDING_MODEL)
+        restart_note = (
+            "Restart the agent to pick this up — a running session cannot "
+            "recover memory on its own."
+        )
+        if reason == MEMORY_UNAVAILABLE_DISABLED_BY_ENV:
+            return (
+                "Memory is unavailable this session: disabled via "
+                "GAIA_MEMORY_DISABLED=1. Unset it and restart the agent to "
+                "enable memory."
+            )
+        if reason == MEMORY_UNAVAILABLE_MODEL_NOT_PULLED:
+            if model == EMBEDDING_MODEL:
+                remedy = (
+                    f"Pull it — POST /api/v1/pull "
+                    f'{{"model_name": "{model}", "checkpoint": '
+                    f'"{DEFAULT_EMBEDDING_CHECKPOINT}", "recipe": "llamacpp", '
+                    '"embedding": true}'
+                )
+            else:
+                remedy = f"Pull '{model}' in Lemonade"
+            return (
+                f"Memory is unavailable this session: the embedding model '{model}' "
+                "has not been pulled into Lemonade — Lemonade itself is "
+                f"running and reachable. {remedy}, then restart the agent. "
+                f"{restart_note}"
+            )
+        # MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE, or an unclassified failure —
+        # treat as unreachable, the safer default (matches the pre-#2519
+        # behavior for anything we can't positively identify).
+        detail = getattr(self, "_memory_unavailable_detail", None)
+        detail_suffix = f" ({detail})" if detail else ""
+        return (
+            "Memory is unavailable this session: the Lemonade embedding service was "
+            f"unreachable at startup{detail_suffix}. Start Lemonade Server, "
+            f"then restart the agent. {restart_note}"
+        )
 
     # ------------------------------------------------------------------
     # Properties
@@ -1364,9 +1508,13 @@ class MemoryMixin(ProceduralMemoryMixin):
                         source="llm_extract",
                         context=self._memory_context,
                     )
-                    # Mark old as superseded and remove from FAISS
-                    store.update(old_id, superseded_by=new_id)
-                    self._faiss_remove(old_id)
+                    # Only supersede when store() actually created a new row.
+                    # Dedup can collapse near-identical content back into old_id,
+                    # which would point superseded_by at the row itself and hide
+                    # it from every active query (recall, get_by_category).
+                    if new_id != old_id:
+                        store.update(old_id, superseded_by=new_id)
+                        self._faiss_remove(old_id)
                     # Embed the new item
                     try:
                         vec = self._embed_text(op["content"])

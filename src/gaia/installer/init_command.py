@@ -33,8 +33,13 @@ except ImportError:
 
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.install_hints import source_install_command
+from gaia.installer._stdin import stdin_is_tty
 from gaia.installer.lemonade_installer import LemonadeInfo, LemonadeInstaller
-from gaia.llm.lemonade_launcher import build_start_command, resolve_lemonade
+from gaia.llm.lemonade_launcher import (
+    build_start_command,
+    describe_start_hint,
+    resolve_lemonade,
+)
 from gaia.version import LEMONADE_VERSION
 
 log = logging.getLogger(__name__)
@@ -342,7 +347,7 @@ class InitCommand:
             if not response:
                 return default
             return response in ("y", "yes")
-        except (EOFError, KeyboardInterrupt):
+        except EOFError:
             self._print("")
             return False
 
@@ -454,11 +459,16 @@ class InitCommand:
                     break
             break
 
+        # The fallback message must resolve in a stock venv with no `uv` on
+        # PATH (same reasoning as gaia.agents.install_hints.
+        # source_install_command, #2358) -- this is the frontend the loop
+        # below always ends up trying last, so it's the one the user's
+        # terminal message must actually work with.
         if editable and location:
-            install_spec = f'uv pip install -e ".[{extras_str}]"'
+            install_spec = f'{sys.executable} -m pip install -e ".[{extras_str}]"'
             install_args = ["install", "-e", f"{location}[{extras_str}]"]
         else:
-            install_spec = f'uv pip install "amd-gaia[{extras_str}]"'
+            install_spec = f'{sys.executable} -m pip install "amd-gaia[{extras_str}]"'
             install_args = ["install", f"amd-gaia[{extras_str}]"]
 
         self._print_success(f"Installing extras: {extras_str}")
@@ -498,10 +508,33 @@ class InitCommand:
         Returns:
             Exit code (0 for success, non-zero for failure)
         """
+        # No one to answer prompts non-interactively -- refuse instead of
+        # silently declining every one and claiming a setup that never ran.
+        if not self.yes and not stdin_is_tty():
+            print(
+                f"Error: refusing to run 'gaia init --profile {self.profile}' "
+                "non-interactively without --yes.\n"
+                "Pass --yes to auto-confirm setup prompts (add --skip-models "
+                "to also skip downloading models).\n"
+                "Note: --yes also authorizes an unattended Lemonade upgrade, "
+                "which uninstalls the current Lemonade install before "
+                "reinstalling, if the detected version is below this "
+                "profile's minimum.",
+                file=sys.stderr,
+            )
+            return 1
+
         self._print_header()
 
         profile_config = INIT_PROFILES[self.profile]
         has_pip_extras = bool(profile_config.get("pip_extras"))
+        # Data-driven scope (#2358): "chat" and "npu" both declare
+        # `"agent": "chat"` (they resolve to the same standalone wheel), so
+        # keying off the declared agent -- not a hardcoded profile-name
+        # literal -- naturally covers both without a special case, and never
+        # touches profiles for other hub agents (sd/code/analyst/email/...),
+        # each of which has its own, separately-owned install lifecycle.
+        has_hub_agent_check = profile_config.get("agent") == "chat"
 
         _webui_src = Path(__file__).resolve().parent.parent / "apps" / "webui" / "src"
         _is_dev_install = _webui_src.is_dir()
@@ -515,6 +548,8 @@ class InitCommand:
         if has_backend_install:
             total_steps += 1
         if has_pip_extras:
+            total_steps += 1
+        if has_hub_agent_check:
             total_steps += 1
         if _is_dev_install:
             total_steps += 1
@@ -597,6 +632,25 @@ class InitCommand:
                 )
                 self._install_pip_extras()
 
+            # Ensure the profile's hub agent (chat's standalone wheel) is
+            # installed (#2358). Independent of the pip-extras step above:
+            # the hub install targets the isolated
+            # ~/.gaia/agents/chat/site-packages dir, while [rag] extras
+            # target the ACTIVE interpreter — one must not replace or block
+            # the other. Unlike _install_pip_extras (warn-but-continue), a
+            # genuine failure here is allowed to propagate into this
+            # method's own top-level `except Exception` below, which already
+            # converts it into an actionable non-zero exit — silently
+            # continuing would just recreate the "chat isn't installed"
+            # state this issue exists to close.
+            if has_hub_agent_check:
+                step_num += 1
+                self._print("")
+                self._print_step(
+                    step_num, total_steps, "Checking chat agent installation..."
+                )
+                self._ensure_hub_agent_installed()
+
             # Build Agent UI frontend (dev/source installs only)
             if _is_dev_install:
                 step_num += 1
@@ -668,7 +722,7 @@ class InitCommand:
             self._print_error(
                 f"Platform '{platform_name}' is not supported for automatic installation."
             )
-            self._print("   GAIA init only supports Windows and Linux.")
+            self._print("   GAIA init only supports Windows, Linux, and macOS.")
             self._print(
                 "   Please install Lemonade Server manually from: https://www.lemonade-server.ai"
             )
@@ -951,6 +1005,14 @@ class InitCommand:
             True on success, False on failure
         """
         self._print("")
+
+        # macOS has no scripted uninstall, but `installer -pkg` upgrades in place —
+        # calling uninstall() would only print removal instructions the user
+        # doesn't need.
+        if self.installer.system == "darwin":
+            self._print(f"   Upgrading Lemonade v{old_version} in place...")
+            return self._install_lemonade()
+
         if RICH_AVAILABLE and self.console:
             self.console.print(
                 f"   [bold]Uninstalling[/bold] Lemonade [red]v{old_version}[/red]..."
@@ -1006,7 +1068,12 @@ class InitCommand:
                 plain_label = _re.sub(r"\[.*?\]", "", label)
                 self._print(f"   {plain_label}")
 
-            if installer_path is not None and not self.yes:
+            # macOS installs run headless via `installer -pkg`; only the MSI pops a window.
+            if (
+                installer_path is not None
+                and not self.yes
+                and self.installer.system == "windows"
+            ):
                 if RICH_AVAILABLE and self.console:
                     self.console.print()
                     self.console.print(
@@ -1254,24 +1321,17 @@ class InitCommand:
                 )
             else:
                 # Give the user the exact start command for their tooling
-                tooling = resolve_lemonade()
-                if tooling.found:
-                    min_ctx = INIT_PROFILES[self.profile].get("min_context_size")
-                    spec = build_start_command(tooling, min_ctx)
-                    cmd_str = " ".join(spec.argv)
-                    if spec.env:
-                        env_prefix = " ".join(f"{k}={v}" for k, v in spec.env.items())
-                        cmd_str = f"{env_prefix} {cmd_str}"
-                    if tooling.kind == "legacy":
-                        cmd_str += " &"
+                min_ctx = INIT_PROFILES[self.profile].get("min_context_size")
+                hint = describe_start_hint(min_ctx)
+                if hint.command:
+                    # We block on input() next — hand back the shell.
+                    cmd_str = f"{hint.command} &" if hint.foreground else hint.command
                     self.console.print(f"   [dim]• Run:[/dim] [cyan]{cmd_str}[/cyan]")
-                else:
                     self.console.print(
-                        "   [dim]• Run:[/dim] [cyan]lemonade-server serve &[/cyan]"
+                        "   [dim]• If command not found, open a new terminal or run:[/dim] [cyan]hash -r[/cyan]"
                     )
-                self.console.print(
-                    "   [dim]• If command not found, open a new terminal or run:[/dim] [cyan]hash -r[/cyan]"
-                )
+                else:
+                    self.console.print(f"   [dim]• {hint.instruction}[/dim]")
             self.console.print()
 
             # Wait for user to start the server
@@ -1280,7 +1340,7 @@ class InitCommand:
                     "   [bold]Press Enter when server is started...[/bold]", end=""
                 )
                 input()
-            except (EOFError, KeyboardInterrupt):
+            except EOFError:
                 self.console.print()
                 self._print_error("Initialization cancelled")
                 return False
@@ -1382,7 +1442,7 @@ class InitCommand:
         except ConnectionError as e:
             self._print_error(f"Cannot reach Lemonade Server to detect hardware: {e}")
             self._print_error(
-                "Ensure Lemonade Server is running: lemonade-server serve"
+                f"Ensure Lemonade Server is running. {describe_start_hint().instruction}"
             )
             return False
         except Exception as e:
@@ -1735,7 +1795,8 @@ class InitCommand:
                 else:
                     self._print_error(f"Failed to configure {min_ctx} token context")
                     self._print_error(
-                        f"Try: lemonade-server serve --ctx-size {min_ctx}"
+                        f"Restart Lemonade Server with a {min_ctx} token context. "
+                        f"{describe_start_hint(min_ctx).instruction}"
                     )
                     return False
 
@@ -1777,7 +1838,6 @@ class InitCommand:
 
             models_passed = 0
             models_failed = []
-            interrupted = False
 
             try:
                 for model_id in model_ids:
@@ -1829,16 +1889,14 @@ class InitCommand:
             except KeyboardInterrupt:
                 self.console.print()
                 self._print_warning("Verification interrupted")
-                interrupted = True
+                # Ctrl-C means stop, not "skip the rest and declare success" --
+                # propagate to run()'s own KeyboardInterrupt handler.
+                raise
 
             # Summary
             total = len(model_ids)
             self.console.print()
-            if interrupted:
-                self._print_success(
-                    f"Verified {models_passed} model(s) before interruption"
-                )
-            elif models_failed:
+            if models_failed:
                 self._print_warning(f"Models verified: {models_passed}/{total} passed")
                 self.console.print()
                 self.console.print(
@@ -1901,6 +1959,15 @@ class InitCommand:
             return False
 
     @staticmethod
+    def _is_hub_agent_available(agent_id: str) -> bool:
+        """Whether the standalone ``gaia-agent-<agent_id>`` wheel is
+        importable in THIS process (by the same naming convention
+        ``install_hints._AGENT_SOURCE_SUBDIRS`` and every ``gaia-agent-*``
+        wheel already use: import name ``gaia_agent_<id>``).
+        """
+        return importlib.util.find_spec(f"gaia_agent_{agent_id}") is not None
+
+    @staticmethod
     def _chat_agent_available() -> bool:
         """Whether the standalone gaia-agent-chat wheel is importable.
 
@@ -1909,7 +1976,93 @@ class InitCommand:
         chat` as a ready next step when it isn't installed is a false
         promise, so completion messaging checks first.
         """
-        return importlib.util.find_spec("gaia_agent_chat") is not None
+        return InitCommand._is_hub_agent_available("chat")
+
+    def _ensure_hub_agent_installed(self) -> None:
+        """Install this profile's hub agent from the Agent Hub catalog if it
+        isn't already available and the live catalog confirms it's published.
+
+        Scoped by ``run()``'s ``has_hub_agent_check`` (profiles whose
+        declared ``"agent"`` is ``"chat"`` -- both ``chat`` and ``npu``).
+
+        Distinguishes two catalog states (#2358):
+
+        * Not yet published (today's state — only ``email`` is live on the
+          Hub): NOT an error. A blind "call install() and fail loud" would
+          turn today's soft success (``init`` completes, prints a
+          source-install hint) into a hard failure for every `gaia init
+          --profile chat` until the publish lands — a real regression this
+          method must not introduce. Silently returns; the existing
+          ``_print_completion()`` hint already tells the user how to
+          source-install it in the meantime.
+        * Published but the install itself genuinely fails: this method
+          does NOT catch that exception — it propagates into ``run()``'s
+          own top-level ``except Exception`` handler, which already turns
+          any unexpected exception into an actionable non-zero exit. Unlike
+          ``_install_pip_extras``, a real hub-install failure must fail
+          loudly, not warn-and-continue (that would just recreate the
+          "agent isn't installed" state this issue exists to close).
+
+        A catalog-fetch failure (network down, no offline cache) is treated
+        the same as "not yet published" — `gaia init` must not hard-fail
+        merely because the Hub catalog service is briefly unreachable.
+        """
+        agent_id = INIT_PROFILES[self.profile]["agent"]
+
+        if self._is_hub_agent_available(agent_id):
+            return
+
+        from gaia.hub import catalog as hub_catalog
+
+        try:
+            catalog_result = hub_catalog.load_index()
+            published = any(
+                agent.get("id") == agent_id for agent in catalog_result.agents
+            )
+        except Exception as exc:  # noqa: BLE001 - catalog reachability, not install
+            log.warning(
+                "Could not check the Agent Hub catalog for '%s': %s -- "
+                "treating as not-yet-published (non-fatal)",
+                agent_id,
+                exc,
+            )
+            published = False
+
+        if not published:
+            log.debug(
+                "'%s' is not yet published to the Agent Hub catalog; "
+                "skipping the hub install for this run.",
+                agent_id,
+            )
+            return
+
+        from gaia.hub import installer as hub_installer
+
+        self._print(f"   Installing '{agent_id}' from the Agent Hub...")
+        # Curated first-run profile agent: a hardcoded INIT_PROFILES id, not user
+        # input, so GAIA's own curation is the trust decision. Pass the trust
+        # opt-in explicitly — every non-verified agent now needs it, and the
+        # profile agents are not published in the "verified" tier.
+        result = hub_installer.install(agent_id, trusted=True)
+        self._print_success(f"Installed '{agent_id}' from the Agent Hub")
+
+        # No AgentRegistry exists in this process to hot-register into (we
+        # deliberately don't construct one just for this), so mirror the
+        # sys.path side of _hot_register directly: without this, THIS same
+        # process's own _print_completion() would still (incorrectly) show
+        # the "chat agent not installed yet" hint immediately after a
+        # successful install, since installer.install() only mutates
+        # sys.path when a registry= is passed. isinstance-guarded (rather
+        # than a bare truthiness/attribute check) so a test double standing
+        # in for InstallResult can't accidentally make it past this into a
+        # real sys.path mutation.
+        if isinstance(result.path, Path):
+            site_packages = result.path / hub_installer.SITE_PACKAGES_DIRNAME
+            if site_packages.is_dir():
+                sp = str(site_packages)
+                if sp not in sys.path:
+                    sys.path.append(sp)
+                    importlib.invalidate_caches()
 
     def _print_completion(self):
         """Print completion message with next steps."""
@@ -1918,11 +2071,23 @@ class InitCommand:
             "Chat agent not installed yet -- run: "
             f"{source_install_command('gaia-agent-chat')}"
         )
+        # Scoped like run()'s has_hub_agent_check (agent == "chat" covers
+        # chat + npu) -- gating on chat_agent_available alone would mark
+        # sd/vlm/minimal permanently "incomplete"; they never install it.
+        setup_incomplete = (
+            INIT_PROFILES[self.profile].get("agent") == "chat"
+            and not chat_agent_available
+        )
+        headline = (
+            "GAIA initialization incomplete - see below"
+            if setup_incomplete
+            else "GAIA initialization complete!"
+        )
         if RICH_AVAILABLE and self.console:
             self.console.print()
             self.console.print(
                 Panel(
-                    "[bold green]GAIA initialization complete![/bold green]",
+                    f"[bold green]{headline}[/bold green]",
                     border_style="green",
                     padding=(0, 2),
                 )
@@ -2004,7 +2169,7 @@ class InitCommand:
         else:
             self._print("")
             self._print("=" * 60)
-            self._print("  GAIA initialization complete!")
+            self._print(f"  {headline}")
             self._print("=" * 60)
             self._print("")
             self._print("  Quick start commands:")

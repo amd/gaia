@@ -1,6 +1,9 @@
 // Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it } from "vitest";
 
 import { HttpError } from "../src/http";
@@ -44,6 +47,30 @@ describe("parseManifest", () => {
     expect(() => parseManifest(`${sampleManifest()}type: plugin\n`)).toThrow(
       /agent, app, component/
     );
+  });
+
+  // The terminal hub is Go and the Agent UI is Electron/TypeScript. Before
+  // these were admitted, a non-agent component could declare type: component
+  // and still be rejected on its language.
+  it.each(["python", "cpp", "go", "typescript"])("accepts language %s", (lang) => {
+    expect(parseManifest(sampleManifest({ language: lang })).language).toBe(lang);
+  });
+
+  // Parse the manifests this repo actually publishes, with the parser the
+  // Worker runs at POST /publish. Without this, a bad edit to a shipped
+  // manifest is only caught by the release job that tries to publish it.
+  it.each([
+    ["terminal-hub", "component", "go"],
+    ["agent-ui", "app", "typescript"],
+  ])("parses the shipped %s manifest", (id, pkgType, language) => {
+    const path = fileURLToPath(
+      new URL(`../../../hub/components/${id}/gaia-agent.yaml`, import.meta.url)
+    );
+    const m = parseManifest(readFileSync(path, "utf8"));
+    expect(m.id).toBe(id);
+    expect(m.type).toBe(pkgType);
+    expect(m.language).toBe(language);
+    expect(m.requirements.platforms.length).toBeGreaterThan(0);
   });
 
   it.each([

@@ -5,33 +5,67 @@ description: "Connect GAIA to Outlook mail, calendar, and OneDrive via Microsoft
 ---
 
 <Info>
-  **Connector ID:** `microsoft` · **Type:** `oauth_pkce` · **Catalog entry:** [`src/gaia/connectors/catalog/microsoft.py`](https://github.com/amd/gaia/blob/main/src/gaia/connectors/catalog/microsoft.py)
+  Two connectors, both `type: oauth_pkce`, share this page: **Microsoft Personal**
+  (`microsoft`) and **Microsoft Work or School** (`microsoft_work`). Catalog entry:
+  [`src/gaia/connectors/catalog/microsoft.py`](https://github.com/amd/gaia/blob/main/src/gaia/connectors/catalog/microsoft.py)
 </Info>
 
-GAIA connects to your **personal** Microsoft account — Outlook.com, Hotmail,
-or Live — using the Microsoft identity platform v2.0 with PKCE. Work and
-school (Microsoft Entra ID) accounts are not supported in this release.
+GAIA connects to Microsoft accounts through two separate connectors — you can
+have a personal mailbox and a work/school mailbox connected **at the same
+time**, each with its own client credentials and its own grant list:
 
-## What you'll need
+| Connector ID | Display name | Account type | Sign-in authority |
+| --- | --- | --- | --- |
+| `microsoft` | Microsoft Personal | Outlook.com, Hotmail, Live | `consumers` |
+| `microsoft_work` | Microsoft Work or School | Microsoft 365 / Entra ID | `organizations` (or a single pinned Directory/tenant ID) |
+
+The authority each connector signs in against is **spec data**, not an
+environment variable — every connect, refresh, and daemon restart resolves it
+the same way, regardless of what environment the process happens to be
+running in.
+
+There are two ways to sign in to either connector:
+
+- **Browser (PKCE)** — the default. Needs an Azure **App registration** you
+  create once (below). Best when you control your own app registration.
+- **Device code** — `gaia connectors connect <id> --device`. You enter a
+  short code at a Microsoft URL; no loopback redirect. This is the zero-setup
+  path when a pre-registered public **client ID** is supplied via env var. See
+  [Device-code sign-in](#device-code-sign-in) below.
+
+## What you'll need (browser flow)
 
 Microsoft requires every app — including GAIA running locally — to identify
-itself with an **App registration** that you create once in the Azure portal.
-For a single-developer machine it takes a few minutes and is free.
+itself with an **App registration** that you create once in the Azure portal,
+**per connector** (personal and work/school each need their own client
+credentials; do not reuse one registration's client ID for both). For a
+single-developer machine each registration takes a few minutes and is free.
 
-You will register one app and paste a single value into the GAIA Agent UI: an
+You will register an app and paste a single value into the GAIA Agent UI: an
 **Application (client) ID**. Unlike Google, the standard desktop flow needs
 **no client secret** — Microsoft forbids secrets for public (desktop) clients.
-GAIA stores the Client ID encrypted in your OS keyring.
+GAIA stores the Client ID encrypted in your OS keyring, per connector.
 
 ## Step 1 — Register an app in Azure
 
 1. Go to the [Azure portal → App registrations](https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps/ApplicationsListBlade).
 2. Click **New registration**.
-3. **Name**: `GAIA Personal` (or whatever you like).
-4. **Supported account types**: choose **Personal Microsoft accounts only**.
-   <Tooltip tip="This maps to the 'consumers' tenant GAIA uses. Picking a work/school option would target a tenant GAIA does not authenticate against in this release.">Why this option?</Tooltip>
+3. **Name**: `GAIA` (or whatever you like — include "Personal" or "Work" if
+   you're registering one for each connector).
+4. **Supported account types** — pick the audience matching the connector you're
+   registering for:
+   - **Microsoft Personal** (`microsoft`): choose **Personal Microsoft
+     accounts only** (or the combined "any organizational directory and
+     personal Microsoft accounts" audience, which also authenticates fine
+     against the `consumers` authority this connector uses).
+   - **Microsoft Work or School** (`microsoft_work`): choose an
+     organizational-directory audience — **Accounts in this organizational
+     directory only** for a single tenant, or **Accounts in any
+     organizational directory** for multi-tenant.
 5. Click **Register**. The **Overview** page shows the **Application (client)
-   ID** — copy it for Step 3.
+   ID** — copy it for Step 3. If you registered a single-tenant work/school
+   app, also copy the **Directory (tenant) ID** shown on the same page — you'll
+   need it in Step 3 too.
 
 ## Step 2 — Add the loopback redirect URI
 
@@ -50,9 +84,14 @@ You do **not** need to create a client secret for the standard flow.
 
 1. Launch the Agent UI: `gaia chat --ui`.
 2. Click **Settings** (gear) → **Connections**.
-3. Click the **Microsoft** tile to expand it.
-4. Paste the **Application (client) ID** from Step 1. Leave the **Client
-   Secret** field blank.
+3. Click the **Microsoft Personal** or **Microsoft Work or School** tile to
+   expand it, matching the account type you registered in Step 1.
+4. Paste the **Application (client) ID**. Leave **Client Secret** blank.
+   On **Microsoft Work or School**, optionally paste the **Directory (tenant)
+   ID** into the field of the same name if you registered a single-tenant
+   app — this narrows sign-in to that one organization and is what lets a
+   background daemon (with no environment variables set) refresh correctly
+   without depending on the multi-tenant `organizations` default.
 5. Click **Save & Connect**.
 
 Already past first-time setup (client came from env vars, or you need to
@@ -60,20 +99,23 @@ rotate it)? Expand the tile's collapsible **OAuth client** section — it
 shows which client GAIA currently resolves (saved / environment / none)
 and accepts a replacement at any time. **Save client** persists to the OS
 keyring without starting a sign-in; saved credentials take precedence over
-`GAIA_MICROSOFT_CLIENT_ID`, exactly like
-`gaia connectors configure microsoft`.
+the environment variable, exactly like `gaia connectors configure <id>`.
 
 GAIA will:
 
-1. Store the Client ID in your OS keyring (macOS Keychain on Mac,
-   gnome-keyring/kwallet on Linux, Credential Locker on Windows).
+1. Store the Client ID (and Directory tenant ID, if set) in your OS keyring
+   (macOS Keychain on Mac, gnome-keyring/kwallet on Linux, Credential Locker
+   on Windows).
 2. Open Microsoft's consent screen in your default browser.
 3. Receive the callback on a temporary loopback server.
 4. Exchange the auth code for a refresh token (also stored in the keyring).
    The refresh token is issued because GAIA requests the `offline_access`
    scope.
 
-The tile flips to **Connected as you@outlook.com** once the flow completes.
+The tile flips to **Connected as you@outlook.com** (or your work/school
+address) once the flow completes. Connecting one connector never affects the
+other — you can have both a personal and a work/school mailbox connected at
+the same time.
 
 ## Step 4 — Per-agent grants
 
@@ -88,12 +130,17 @@ You can adjust or revoke grants at any time from the same tile's
 **Per-agent grants** section, or via the CLI:
 
 ```bash
-# Grant an agent read-only Outlook mail access
+# Grant an agent read-only Outlook mail access (personal connector)
 gaia connectors grants grant microsoft builtin:chat \
+  --scopes https://graph.microsoft.com/Mail.Read
+
+# Same, for the work/school connector
+gaia connectors grants grant microsoft_work builtin:chat \
   --scopes https://graph.microsoft.com/Mail.Read
 ```
 
-The scopes a connection can request are listed in the spec at
+The scopes a connection can request are identical for both connectors (they
+share one scope list in the catalog spec) and are listed at
 [`src/gaia/connectors/catalog/microsoft.py`](https://github.com/amd/gaia/blob/main/src/gaia/connectors/catalog/microsoft.py):
 
 | Scope | Grants |
@@ -103,6 +150,50 @@ The scopes a connection can request are listed in the spec at
 | `https://graph.microsoft.com/Mail.ReadWrite` | Read, organize, and manage your email |
 | `https://graph.microsoft.com/Calendars.Read` | Read your calendar events |
 | `https://graph.microsoft.com/Calendars.ReadWrite` | Manage your calendar events |
+
+## Device-code sign-in
+
+The device-code flow skips the Azure app registration and the loopback
+redirect entirely — useful for headless machines, or when a public **client
+ID** is already available (e.g. an org-published GAIA app registration).
+
+**In the Agent UI:** with a client ID configured (env or the OAuth-client
+form), each Microsoft tile in Settings → Connections shows a **Sign in with a
+code** button next to **Connect**. Click it, then enter the displayed code at
+the Microsoft URL — the tile flips to **Connected** automatically when you
+finish. No browser redirect, no app registration.
+
+**From the CLI:**
+
+```bash
+# Personal — Outlook.com / Hotmail / Live
+export GAIA_MICROSOFT_CLIENT_ID=<application-client-id>
+gaia connectors connect microsoft --device
+
+# Work or school — Microsoft 365 / Entra ID
+export GAIA_MICROSOFT_WORK_CLIENT_ID=<application-client-id>
+gaia connectors connect microsoft_work --device
+```
+
+GAIA prints a short code and a URL (`https://microsoft.com/devicelogin`). Open
+the URL on any device, enter the code, and approve. GAIA polls until sign-in
+completes, then stores the refresh token in your OS keyring — identical to the
+browser flow from that point on. Grant an agent afterward:
+
+```bash
+gaia connectors grants grant microsoft installed:email \
+  --scopes https://graph.microsoft.com/Mail.ReadWrite \
+           https://graph.microsoft.com/Mail.Send
+```
+
+<Note>
+  The client ID used for device code must be a **public client** with the
+  audience matching the connector (personal-only for `microsoft`, an
+  organizational directory for `microsoft_work`) and device-code flow
+  allowed. GAIA does not ship a client ID — supply your own via
+  `GAIA_MICROSOFT_CLIENT_ID` / `GAIA_MICROSOFT_WORK_CLIENT_ID`, or use the
+  browser flow with your own app registration.
+</Note>
 
 ## Common issues
 
@@ -114,9 +205,17 @@ or you added it under the wrong platform. Re-check Step 2 — it must be a
 
 ### `AADSTS700016` / `unauthorized_client`
 
-The Client ID is wrong, or the app was registered for the wrong account type.
-Confirm you copied the **Application (client) ID** from the Overview page and
-chose **Personal Microsoft accounts only** in Step 1.
+The Client ID is wrong, or the app's audience doesn't match the connector you
+used it with. Confirm you copied the **Application (client) ID** from the
+Overview page and registered the audience described in Step 1 — a
+personal-only app for `microsoft`, an organizational-directory app for
+`microsoft_work`.
+
+### `AADSTS9002346` (device code)
+
+The app registration is personal-account-only, but you connected via
+`microsoft_work`. Reconnect using `microsoft` instead — see
+[Device-code sign-in](#device-code-sign-in).
 
 ### `AADSTS65001` / consent required
 
@@ -132,14 +231,16 @@ restart the flow with the full default scope set.
 
 ## Revoking access
 
-Two places — both work:
+Two places — both work, per connector:
 
-- **From GAIA**: Settings → Connections → Microsoft → **Disconnect**. Removes
-  the refresh token from the keyring; the next API call errors with
-  `NOT_CONNECTED`.
-- **From Microsoft**: <a href="https://account.live.com/consent/Manage"
-  target="_blank">account.live.com/consent/Manage</a> → find your app →
-  **Remove these permissions**.
+- **From GAIA**: Settings → Connections → the connector tile →
+  **Disconnect**. Removes that connector's refresh token from the keyring;
+  the next API call for it errors with `NOT_CONNECTED`. The other Microsoft
+  connector (if connected) is unaffected.
+- **From Microsoft**: personal accounts at <a href="https://account.live.com/consent/Manage"
+  target="_blank">account.live.com/consent/Manage</a>; work/school accounts at
+  <a href="https://myapps.microsoft.com" target="_blank">myapps.microsoft.com</a>
+  → find your app → **Remove these permissions**.
 
 ## See also
 

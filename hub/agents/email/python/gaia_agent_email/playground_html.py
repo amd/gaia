@@ -781,7 +781,9 @@ function agRender(ev, append){
   else if(t === "permission_request"){ append("⚠ permission requested: " + ev.tool + "\n"); $("ag-perm").style.display = "inline"; }
   else if(t === "status") append("· " + (ev.message||ev.status||"") + "\n");
   else if(t === "error") append("✗ " + (ev.message||"error") + "\n");
-  else if(t === "run_complete"){ append("\n✅ " + (ev.answer || "(done)") + "\n"); $("ag-perm").style.display = "none"; }
+  // No ✅ without an answer — a dead worker emits error + an empty run_complete,
+  // and a green check after that reads as success.
+  else if(t === "run_complete"){ append(ev.answer ? "\n✅ " + ev.answer + "\n" : "\n— run ended with no answer —\n"); $("ag-perm").style.display = "none"; }
 }
 async function agQuery(){
   const out = $("ag-out"); out.className = "out show"; out.textContent = "";

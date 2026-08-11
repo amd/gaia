@@ -211,13 +211,40 @@ These map to [CLAUDE.md](CLAUDE.md). Re-read them whenever this skill runs.
    ```
    Confirm [src/gaia/apps/webui/package.json](src/gaia/apps/webui/package.json) now reads the new version.
 
-6. **Confirm `__version__` is correct.**
+6. **Bump the hub component manifests.** The terminal hub and Agent UI publish to
+   the Agent Hub R2 catalog on a version tag, and `release_components.yml` gates
+   the tag against each manifest — R2 paths are immutable, so publishing under a
+   stale version cannot be undone. A mismatch **fails the release**, by design.
+   ```bash
+   sed -i '' "s/^version: .*/version: <version>/" \
+     hub/components/terminal-hub/gaia-agent.yaml \
+     hub/components/agent-ui/gaia-agent.yaml     # GNU sed: drop the ''
+   grep -H '^version:' hub/components/*/gaia-agent.yaml   # both must read <version>
+   ```
+
+   Then bump the terminal hub's **`min_gaia_version`** to `<version>` too. It needs
+   daemon host API v1.1, which no release before this one ships — so the release it
+   publishes alongside *is* its minimum, and `release_components.yml` refuses to
+   publish it under an older core. Leave `agent-ui`'s alone: it talks to
+   `gaia.ui.server`, not the daemon control plane.
+   ```bash
+   sed -i '' "s/^min_gaia_version: .*/min_gaia_version: \"<version>\"/" \
+     hub/components/terminal-hub/gaia-agent.yaml     # GNU sed: drop the ''
+   python util/check_component_core_api.py --release-version <version>
+   ```
+
+   Finally, record what the **previous** release shipped in `RELEASED_DAEMON_API`
+   in [util/check_component_core_api.py](util/check_component_core_api.py) — the
+   guard resolves an already-published version from that table, and a missing row
+   makes it fall back to trusting this tree, which is the drift it exists to catch.
+
+7. **Confirm `__version__` is correct.**
    ```bash
    grep -E '^__version__' src/gaia/version.py
    ```
    The post-prior-release bump usually handles this, but a squash-merge can revert it silently. If it's wrong, edit it. If it's right but reverted later (see Phase 3), the validator will catch it.
 
-7. **Validate — both checks.** Run from the repo's activated venv (`source .venv/bin/activate` on Linux/macOS, `.venv\Scripts\activate` on Windows; the bare-`python` Microsoft Store stub will fail). If you're working from a git worktree without its own venv, run from the parent checkout's venv.
+8. **Validate — both checks.** Run from the repo's activated venv (`source .venv/bin/activate` on Linux/macOS, `.venv\Scripts\activate` on Windows; the bare-`python` Microsoft Store stub will fail). If you're working from a git worktree without its own venv, run from the parent checkout's venv.
    ```bash
    python util/validate_release_notes.py docs/releases/v<version>.mdx --tag v<version>
    (cd docs && npx -y mintlify@latest validate)   # the docs.yml `validate` job — MUST also pass
@@ -248,7 +275,9 @@ Show the diff (`git diff --stat` plus the new `.mdx` file inline). Ask: **"Appro
    ```bash
    git checkout -b v<version>-release
    git add docs/releases/v<version>.mdx docs/docs.json src/gaia/version.py \
-           src/gaia/apps/webui/package.json src/gaia/apps/webui/package-lock.json
+           src/gaia/apps/webui/package.json src/gaia/apps/webui/package-lock.json \
+           hub/components/terminal-hub/gaia-agent.yaml \
+           hub/components/agent-ui/gaia-agent.yaml
    git status              # confirm scope-clean — no drive-by edits
    git diff --cached --stat
    git commit -m "Release v<version>"

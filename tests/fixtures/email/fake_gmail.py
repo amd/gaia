@@ -33,6 +33,24 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, cast
 
+# Deliberately duplicated from gaia_agent_email.gmail_backend.METADATA_SCAN_HEADERS
+# rather than imported: this fixture lives in the GAIA-core repo tree and
+# several src/gaia/eval/*.py call sites import it before gaia_agent_email is
+# guaranteed to be installed (it's a soft, packaged-extra dependency) -- a
+# fresh top-level cross-package import here would turn "gaia_agent_email not
+# installed" into an import-time failure at a different, less obvious call
+# site instead of the actionable RuntimeError those call sites already raise.
+# Keep in sync with METADATA_SCAN_HEADERS if that set ever changes (#2643).
+_METADATA_SCAN_HEADERS = ("Subject", "From", "To", "Date", "List-Unsubscribe")
+_METADATA_HEADER_NAMES = {h.lower() for h in _METADATA_SCAN_HEADERS}
+
+# Mirrors LiveGmailBackend's own chunking ceiling (see
+# gmail_backend._BATCH_MAX_SUBREQUESTS) so a hermetic get_messages_batch
+# round-trip COUNT means the same thing it would against live Gmail -- a
+# benchmark run against this fake is directly comparable to a live one on
+# this axis.
+_BATCH_MAX_SUBREQUESTS = 25
+
 # ---------------------------------------------------------------------------
 # mbox → Gmail-API translator
 # ---------------------------------------------------------------------------
@@ -251,6 +269,41 @@ def _estimate_size(msg: Message) -> int:
     return len(msg.as_bytes()) if hasattr(msg, "as_bytes") else len(str(msg))
 
 
+def _metadata_view(msg: Dict[str, Any]) -> Dict[str, Any]:
+    """Reduce a full Gmail-API-shape message to what ``format="metadata"``
+    actually returns (#2643): headers narrowed to ``_METADATA_HEADER_NAMES``,
+    NO ``payload.parts`` / ``body.data``. Every other top-level field (id,
+    threadId, labelIds, snippet, internalDate, sizeEstimate) passes through
+    unchanged -- those are present on a real metadata-mode response too.
+
+    Deliberately produces a payload ``decode_message_body`` cannot extract
+    real content from (empty ``parts``, ``body: {"size": 0}``) -- a
+    production bug that decodes a metadata-mode message instead of
+    re-fetching ``format="full"`` must fail a hermetic test, not silently
+    pass because the fake kept the real body around anyway.
+    """
+    payload = msg.get("payload") or {}
+    headers = [
+        h
+        for h in payload.get("headers", [])
+        if (h.get("name") or "").lower() in _METADATA_HEADER_NAMES
+    ]
+    return {
+        "id": msg.get("id"),
+        "threadId": msg.get("threadId"),
+        "labelIds": list(msg.get("labelIds", [])),
+        "snippet": msg.get("snippet", ""),
+        "internalDate": msg.get("internalDate"),
+        "sizeEstimate": msg.get("sizeEstimate"),
+        "payload": {
+            "mimeType": payload.get("mimeType", ""),
+            "filename": payload.get("filename", ""),
+            "headers": headers,
+            "body": {"size": 0},
+        },
+    }
+
+
 # ---------------------------------------------------------------------------
 # In-memory store
 # ---------------------------------------------------------------------------
@@ -278,6 +331,7 @@ class FakeGmailBackend:
         *,
         user_email: str = "user@example.com",
         transport: Optional[FakeGmailTransport] = None,
+        rate_limit_subrequest_ceiling: Optional[int] = None,
     ):
         self._user_email = user_email
         self._transport = transport or FakeGmailTransport()
@@ -285,6 +339,12 @@ class FakeGmailBackend:
         self._labels: List[Dict[str, Any]] = _DEFAULT_SYSTEM_LABELS[:]
         self._drafts: Dict[str, Dict[str, Any]] = {}
         self._next_draft_seq = 1
+        # Opt-in simulation of Gmail's real per-user concurrency limit --
+        # None (the default) means every batch succeeds regardless of size.
+        # Set to a Gmail-like value (e.g. gmail_backend._BATCH_MAX_SUBREQUESTS)
+        # to make a regression test prove production code never sends an
+        # oversized chunk, independent of whatever that constant is set to.
+        self._rate_limit_subrequest_ceiling = rate_limit_subrequest_ceiling
         if mbox_path is not None:
             self.load_mbox(mbox_path)
 
@@ -334,7 +394,13 @@ class FakeGmailBackend:
         q_lower = (query or "").lower()
         for msg in self._messages.values():
             ids = set(msg.get("labelIds", []))
-            if not (wanted_labels & ids):
+            # AND, not OR (#2638): Gmail's users.messages.list documents
+            # multiple labelIds as "match ALL of the specified label IDs" --
+            # a set-intersection (any one label) check let a message with
+            # only "INBOX" match a ["INBOX", "UNREAD"] query, which made
+            # _PRE_SCAN_LABEL_IDS's old UNREAD narrowing a no-op in this fake
+            # and would have made the #2638 regression tests pass vacuously.
+            if not wanted_labels.issubset(ids):
                 continue
             if q_lower and not _query_matches(q_lower, msg):
                 continue
@@ -350,11 +416,58 @@ class FakeGmailBackend:
             "resultSizeEstimate": len(keep),
         }
 
-    def get_message(self, message_id: str) -> Dict[str, Any]:
-        self._transport.record("get_message", message_id=message_id)
+    def get_message(self, message_id: str, *, format: str = "full") -> Dict[str, Any]:
+        self._transport.record("get_message", message_id=message_id, format=format)
         if message_id not in self._messages:
             raise KeyError(f"FakeGmailBackend: no message {message_id!r}")
-        return self._messages[message_id]
+        msg = self._messages[message_id]
+        if format == "metadata":
+            return _metadata_view(msg)
+        return msg
+
+    def get_messages_batch(
+        self, message_ids: Iterable[str], *, format: str = "full"
+    ) -> Dict[str, Dict[str, Any]]:
+        """Fetch multiple messages, chunked and recorded exactly like
+        ``LiveGmailBackend.get_messages_batch`` (#2643) -- ONE transport
+        entry per chunk (the round-trip), not one per message, so a
+        hermetic fetch-count/round-trip assertion means the same thing it
+        would against live Gmail.
+        """
+        ids = list(message_ids)
+        if not ids:
+            return {}
+        out: Dict[str, Dict[str, Any]] = {}
+        for start in range(0, len(ids), _BATCH_MAX_SUBREQUESTS):
+            chunk = ids[start : start + _BATCH_MAX_SUBREQUESTS]
+            if (
+                self._rate_limit_subrequest_ceiling is not None
+                and len(chunk) > self._rate_limit_subrequest_ceiling
+            ):
+                from gaia.connectors.errors import RateLimitedError
+
+                raise RateLimitedError(
+                    "google",
+                    message_ids=list(chunk),
+                    partial_results=dict(out),
+                    message=(
+                        f"Gmail rate-limited a {len(chunk)}-message batch "
+                        f"fetch (exceeds the "
+                        f"{self._rate_limit_subrequest_ceiling}-subrequest "
+                        "safe ceiling) after exhausting retries. Try again "
+                        "in a minute — this is a transient per-user "
+                        "concurrency limit."
+                    ),
+                )
+            self._transport.record(
+                "get_messages_batch", message_ids=list(chunk), format=format
+            )
+            for mid in chunk:
+                if mid not in self._messages:
+                    raise KeyError(f"FakeGmailBackend: no message {mid!r}")
+                msg = self._messages[mid]
+                out[mid] = _metadata_view(msg) if format == "metadata" else msg
+        return out
 
     def get_thread(self, thread_id: str) -> Dict[str, Any]:
         self._transport.record("get_thread", thread_id=thread_id)
@@ -364,6 +477,26 @@ class FakeGmailBackend:
     def list_labels(self) -> List[Dict[str, Any]]:
         self._transport.record("list_labels")
         return list(self._labels)
+
+    def get_label(self, label_id: str) -> Dict[str, Any]:
+        """Exact per-label counts, mirroring Gmail's ``labels().get`` shape
+        (#2584) — unlike ``list_messages``'s ``resultSizeEstimate``, this is
+        an exact count over every message actually held, not an estimate.
+        """
+        self._transport.record("get_label", label_id=label_id)
+        with_label = [
+            m for m in self._messages.values() if label_id in set(m.get("labelIds", ()))
+        ]
+        unread = [m for m in with_label if "UNREAD" in set(m.get("labelIds", ()))]
+        return {
+            "id": label_id,
+            "name": label_id,
+            "type": "system",
+            "messagesTotal": len(with_label),
+            "messagesUnread": len(unread),
+            "threadsTotal": len(with_label),
+            "threadsUnread": len(unread),
+        }
 
     # -- Mutate -------------------------------------------------------------
 
@@ -643,18 +776,97 @@ class FakeCalendarBackend:
 # ---------------------------------------------------------------------------
 
 
+_RELATIVE_UNIT_SECONDS = {
+    "h": 3600,
+    "d": 86_400,
+    "w": 7 * 86_400,
+    "m": 30 * 86_400,
+    "y": 365 * 86_400,
+}
+
+
+def _relative_window_seconds(value: str) -> Optional[int]:
+    """Parse a Gmail relative window like ``1d`` / ``2w`` / ``3m`` into seconds."""
+    m = re.fullmatch(r"(\d+)\s*([hdwmy])", value.strip().lower())
+    if not m:
+        return None
+    return int(m.group(1)) * _RELATIVE_UNIT_SECONDS[m.group(2)]
+
+
+def _absolute_date_epoch(value: str) -> Optional[float]:
+    """Parse a normalized ``YYYY/MM/DD`` Gmail date into an epoch (UTC midnight)."""
+    m = re.fullmatch(r"(\d{4})/(\d{1,2})/(\d{1,2})", value.strip())
+    if not m:
+        return None
+    try:
+        dt = datetime(
+            int(m.group(1)), int(m.group(2)), int(m.group(3)), tzinfo=timezone.utc
+        )
+    except ValueError:
+        return None
+    return dt.timestamp()
+
+
+def _msg_epoch(msg: Dict[str, Any]) -> float:
+    """Message receipt time in epoch seconds from Gmail's millis ``internalDate``."""
+    try:
+        return int(msg.get("internalDate", "0")) / 1000.0
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _date_operator_matches(
+    token: str, msg: Dict[str, Any], now: float
+) -> Optional[bool]:
+    """Evaluate a date operator token against ``msg``.
+
+    Returns True/False if ``token`` is a recognized date operator, else None so
+    the caller falls through to its other token handling. Models the operators
+    the email agent emits — ``newer_than``/``older_than`` (relative windows) and
+    the absolute ``after``/``before``/``newer``/``older`` (``YYYY/MM/DD``, the
+    form ``normalize_gmail_date_operators`` produces).
+    """
+    when = _msg_epoch(msg)
+    if token.startswith(("newer_than:", "older_than:")):
+        op, _, val = token.partition(":")
+        window = _relative_window_seconds(val)
+        if window is None:
+            return None
+        if op == "newer_than":
+            return when >= now - window
+        return when <= now - window
+    for op in ("after", "before", "newer", "older"):
+        prefix = op + ":"
+        if token.startswith(prefix):
+            epoch = _absolute_date_epoch(token[len(prefix) :])
+            if epoch is None:
+                return None
+            if op in ("after", "newer"):
+                return when >= epoch
+            return when < epoch
+    return None
+
+
 def _query_matches(query: str, msg: Dict[str, Any]) -> bool:
     """Tiny subset of Gmail's query DSL.
 
-    Only ``is:unread``, ``from:``, ``subject:`` are honored — enough for
-    the eval-harness scenarios we run.
+    ``is:unread``, ``from:``, ``subject:`` and the date operators
+    (``newer_than``/``older_than``/``after``/``before``/``newer``/``older``) are
+    honored — enough for the eval-harness scenarios and the #2406 same-day
+    search coverage.
     """
     headers = {
         (h.get("name") or "").lower(): h.get("value", "")
         for h in (msg.get("payload") or {}).get("headers", [])
     }
     label_ids = set(msg.get("labelIds", []))
+    now = datetime.now(timezone.utc).timestamp()
     for token in query.split():
+        date_verdict = _date_operator_matches(token, msg, now)
+        if date_verdict is not None:
+            if not date_verdict:
+                return False
+            continue
         if token == "is:unread":
             if "UNREAD" not in label_ids:
                 return False

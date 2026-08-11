@@ -11,19 +11,25 @@ from __future__ import annotations
 import os
 import threading
 import time
+from contextlib import contextmanager
+from pathlib import Path
 from typing import Callable, Optional
 
 import psutil
 
 from gaia.daemon.sidecars.errors import (
     CapacityError,
+    DevSrcDirResolutionError,
     ModeConflictError,
     SidecarNotRunningError,
     StopFailedError,
     UnknownAgentError,
 )
 from gaia.daemon.sidecars.manager import AgentSidecarManager
-from gaia.daemon.sidecars.spec import AgentSidecarSpec
+from gaia.daemon.sidecars.spec import (
+    AgentSidecarSpec,
+    repo_root_from_agent_dev_src_dir,
+)
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -128,8 +134,21 @@ class SidecarRegistry:
         if self._custody_auth is not None:
             self._custody_auth.revoke(agent_id)
 
-    def ensure(self, agent_id: str, mode: Optional[str] = None) -> dict:
-        """Spawn-or-attach *agent_id*'s sidecar; return its fields + token."""
+    def ensure(
+        self,
+        agent_id: str,
+        mode: Optional[str] = None,
+        dev_src_dir: Optional[str] = None,
+    ) -> dict:
+        """Spawn-or-attach *agent_id*'s sidecar; return its fields + token.
+
+        *dev_src_dir* is the caller's own belief about which checkout it is
+        asking for (issue #2588) — it is COMPARED against ``spec.dev_src_dir``,
+        never executed. The daemon always spawns from its own configured
+        source; a caller in a different checkout gets a loud refusal instead
+        of silently being served the daemon's checkout (or, in the attach
+        case, whatever checkout is already running).
+        """
         spec = self._spec(agent_id)
         with self._lock:
             holder = self._managers.get(agent_id)
@@ -141,6 +160,7 @@ class SidecarRegistry:
                 self._managers[agent_id] = holder
         manager, agent_lock = holder
         with agent_lock:
+            self._check_dev_src_dir(agent_id, spec, mode, dev_src_dir)
             if manager.is_running:
                 # Attaching without an explicit mode is not a mode request —
                 # only an explicit, differing mode conflicts (compared against
@@ -206,14 +226,65 @@ class SidecarRegistry:
     def _manager_mode(manager) -> str:
         return manager.mode
 
+    def _check_dev_src_dir(
+        self,
+        agent_id: str,
+        spec: AgentSidecarSpec,
+        mode: Optional[str],
+        dev_src_dir: Optional[str],
+    ) -> None:
+        """Refuse BEFORE the attach/spawn branch if *dev_src_dir* names a
+        different checkout than the daemon can actually serve (issue #2588).
+
+        Runs ahead of every path into ``ensure()`` — attach, fresh spawn, and
+        stopped-manager reuse alike — because all three previously let a
+        caller's mismatched checkout through silently. The daemon NEVER
+        executes *dev_src_dir*; this is a comparison, nothing else.
+
+        No "stop the sidecar first" alternative is offered here (unlike the
+        mode-conflict message below): stopping a sidecar does not change
+        ``spec.dev_src_dir`` — a checkout mismatch is neither fixed nor
+        helped by it, only by restarting the daemon itself (which stops the
+        sidecar anyway).
+        """
+        if dev_src_dir is None or spec.dev_src_dir is None:
+            return
+        if self._resolve_mode(spec, mode) != "dev":
+            return
+        caller_path = Path(dev_src_dir)
+        if not caller_path.is_absolute():
+            raise DevSrcDirResolutionError(
+                f"dev_src_dir must be an absolute path; got '{dev_src_dir}'."
+            )
+        caller_resolved = caller_path.expanduser().resolve()
+        daemon_resolved = Path(spec.dev_src_dir).expanduser().resolve()
+        if caller_resolved == daemon_resolved:
+            return
+        # The remedy names a REPO ROOT (what a Python environment is rooted
+        # at, and what the daemon's own parents[4] anchor depends on) — never
+        # the agent source dir above, restarting from which changes nothing.
+        caller_repo_root = repo_root_from_agent_dev_src_dir(caller_resolved, agent_id)
+        raise ModeConflictError(
+            f"agent '{agent_id}' dev mode would be served from {daemon_resolved} "
+            f"(the daemon's own checkout), not the caller's checkout at "
+            f"{caller_resolved}. The daemon never runs code from a path a "
+            "caller sends it — restart the daemon from a Python "
+            f"environment/editable install rooted at {caller_repo_root}."
+        )
+
     def connection(self, agent_id: str) -> "tuple[str, str]":
         """``(base_url, bearer token)`` for *agent_id*'s RUNNING sidecar.
 
         The relay's single server-side token source (#2150): the sidecar bearer
         never has to travel through a client to reach proxied calls. Raises
-        :class:`UnknownAgentError` (unregistered id) or
-        :class:`SidecarNotRunningError` (registered but not running) so the
+        :class:`UnknownAgentError` (unregistered id),
+        :class:`SidecarNotRunningError` (registered but not running) or
+        :class:`SidecarUnresponsiveError` (alive but no longer serving) so the
         HTTP layer can map them to distinct loud 404/503 responses.
+
+        The responsiveness probe runs here because this is the one place every
+        relayed request passes through, and a process-alive check cannot tell a
+        serving sidecar from a wedged one.
         """
         self._spec(agent_id)
         with self._lock:
@@ -225,6 +296,7 @@ class SidecarRegistry:
                 f"Start it first (`gaia daemon start-agent {agent_id}` or "
                 f"POST /daemon/v1/agents/{agent_id}/ensure), then retry."
             )
+        manager.check_responsive()
         return manager.base_url, manager.auth_token
 
     def authenticate_callback(self, credential: str) -> Optional[str]:
@@ -251,6 +323,18 @@ class SidecarRegistry:
                 return agent_id
         return None
 
+    def running_connections(self) -> "list[tuple[str, str, str]]":
+        """``(agent_id, base_url, bearer)`` for every RUNNING sidecar that has a
+        base_url — the enumeration the re-forward timer (#2388) iterates so it
+        never has to reach into the registry's private manager map."""
+        with self._lock:
+            holders = list(self._managers.items())
+        return [
+            (agent_id, manager.base_url, manager.auth_token)
+            for agent_id, (manager, _) in holders
+            if manager.is_running and manager.base_url
+        ]
+
     def list_agents(self) -> "list[dict]":
         """One entry per registered spec, running or not. NEVER includes tokens."""
         with self._lock:
@@ -273,7 +357,11 @@ class SidecarRegistry:
                         "api_version": None,
                         "agent_version": None,
                         "started_at": None,
-                        "dev_src_dir": self._dev_src_dir(agent_id),
+                        # No manager is running, so nothing IS being served in
+                        # dev mode -- unconditionally None (see _entry() for
+                        # the running case), never the spec's default (issue
+                        # #2588 AC-3: one field must not carry two meanings).
+                        "dev_src_dir": None,
                     }
                 )
         return entries
@@ -292,17 +380,63 @@ class SidecarRegistry:
             return {"agent_id": agent_id, "state": "stopped"}
         manager, agent_lock = holder
         with agent_lock:
-            if not manager.is_running:
-                return {"agent_id": agent_id, "state": "stopped"}
-            pid = manager.pid
-            manager.shutdown()
-            if pid is not None and psutil.pid_exists(pid):
-                raise StopFailedError(
-                    f"agent '{agent_id}' sidecar pid {pid} survived the "
-                    "tree-kill and is still alive. Inspect the process and "
-                    "kill it manually before retrying."
-                )
+            self._stop_locked(agent_id, manager)
         return {"agent_id": agent_id, "state": "stopped"}
+
+    def _stop_locked(self, agent_id: str, manager) -> None:
+        """Kill + verify, with *agent_id*'s per-agent lock already held."""
+        if not manager.is_running:
+            return
+        pid = manager.pid
+        manager.shutdown()
+        if pid is not None and psutil.pid_exists(pid):
+            raise StopFailedError(
+                f"agent '{agent_id}' sidecar pid {pid} survived the "
+                "tree-kill and is still alive. Inspect the process and "
+                "kill it manually before retrying."
+            )
+
+    @contextmanager
+    def hold_for_mutation(self, agent_id: str):
+        """Stop the sidecar and keep it stopped for the body of the ``with``.
+
+        Install/uninstall rewrite the very directory the sidecar runs from, so
+        stopping it once at t=0 is not enough: an ``ensure`` arriving mid-download
+        would respawn the process and the installer would then replace a live
+        binary (silently on POSIX, as a locked-file error on Windows). Holding
+        the per-agent lock makes ``ensure``/``stop`` of THIS agent wait until the
+        mutation finishes — other agents are unaffected.
+
+        Raises:
+            UnknownAgentError: no spec for *agent_id*.
+            StopFailedError: the pid survived the tree-kill — the caller MUST
+                abort rather than mutate a live process's directory.
+        """
+        spec = self._spec(agent_id)
+        _, agent_lock = self._holder(agent_id, spec)
+        with agent_lock:
+            # Re-read under the lock. ``ensure(mode=...)`` REPLACES the manager
+            # for a stopped agent, so the one captured a moment ago can be a
+            # stale object whose is_running is False while the manager that
+            # replaced it is live — stopping the stale one would leave a running
+            # sidecar and let the caller mutate its directory anyway.
+            manager, _ = self._holder(agent_id, spec)
+            self._stop_locked(agent_id, manager)
+            yield
+
+    def _holder(self, agent_id: str, spec: AgentSidecarSpec) -> tuple:
+        """The ``(manager, lock)`` pair for *agent_id*, creating it if needed.
+
+        The lock object is stable for an agent id's lifetime (``ensure`` reuses
+        it when it swaps the manager), which is what makes re-reading the
+        manager under that lock safe.
+        """
+        with self._lock:
+            holder = self._managers.get(agent_id)
+            if holder is None:
+                holder = (self._new_manager(agent_id, spec, None), threading.Lock())
+                self._managers[agent_id] = holder
+            return holder
 
     def shutdown_all(self) -> None:
         """Tree-kill every running sidecar (daemon shutdown path)."""
@@ -328,7 +462,12 @@ class SidecarRegistry:
             "api_version": manager.api_version,
             "agent_version": manager.agent_version,
             "started_at": manager.started_at,
-            "dev_src_dir": self._dev_src_dir(agent_id),
+            # Only a dev-mode manager is actually serving from this path
+            # (issue #2588 AC-3) -- a user-mode entry reporting it would
+            # advertise a source it isn't running.
+            "dev_src_dir": (
+                self._dev_src_dir(agent_id) if manager.resolved_mode == "dev" else None
+            ),
         }
         if include_token:
             entry["token"] = manager.auth_token

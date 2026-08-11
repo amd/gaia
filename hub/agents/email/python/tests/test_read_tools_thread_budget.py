@@ -69,6 +69,7 @@ from gaia_agent_email.tools.read_tools import (  # noqa: E402
     UNTRUSTED_BODY_OPEN,
     ReadToolsMixin,
     _format_message_for_llm,
+    _thread_table_card,
     get_thread_impl,
     wrap_untrusted_body,
 )
@@ -125,16 +126,13 @@ def _thread_messages(
     """Build a ``FakeGmailBackend`` seeded with one thread of messages.
 
     Messages share ``threadId=thread_id`` so ``FakeGmailBackend.get_thread``
-    groups them; insertion order is preserved (dict insertion order), which
-    is the order ``get_thread_impl`` must return (it does NOT sort — that is
-    ``_format_thread_for_summary``'s job, not this one).
-
-    ``internalDate`` is assigned in DESCENDING order as insertion proceeds
-    (m0 newest, m_last oldest) — deliberately the REVERSE of insertion
-    order. If a future change to ``get_thread_impl`` accidentally imported
-    the chronological (``_thread_message_sort_key``) sort used by
-    ``_format_thread_for_summary`` / ``summarize_thread_impl``, these tests'
-    insertion-order assertions would flip and fail, catching the regression.
+    groups them. ``internalDate`` is assigned in ASCENDING order as
+    insertion proceeds (m0 oldest, m_last newest), so insertion order
+    already matches chronological order — ``get_thread_impl`` now sorts
+    defensively by ``internalDate`` (#2531), and this keeps every
+    byte-identity assertion below expressed in terms of the original
+    ``msgs`` list. Dedicated sort-defense tests (misordered backends) live
+    in ``test_get_thread_chronology_2531.py``.
     """
     gmail = FakeGmailBackend(user_email="user@example.com")
     msgs: List[Dict[str, Any]] = []
@@ -145,11 +143,26 @@ def _thread_messages(
             msg_id,
             body,
             threadId=thread_id,
-            internalDate=str(base_date - i),
+            internalDate=str(base_date + i),
         )
         gmail.add_message(msg)
         msgs.append(msg)
     return gmail, msgs
+
+
+def _expected_thread_output(
+    msgs: List[Dict[str, Any]], *, body_limit: int = DEFAULT_BODY_LIMIT_CHARS
+) -> List[Dict[str, Any]]:
+    """The formatted+indexed output ``get_thread_impl`` must produce for
+    ``msgs`` (already in chronological order — see ``_thread_messages``)."""
+    total = len(msgs)
+    out = []
+    for position, m in enumerate(msgs, start=1):
+        formatted = _format_message_for_llm(m, body_limit=body_limit)
+        formatted["index"] = position
+        formatted["of_total"] = total
+        out.append(formatted)
+    return out
 
 
 def _measure_wrap_overhead() -> int:
@@ -246,7 +259,7 @@ class TestFitsUnderBudgetDifferential:
 
         gmail, msgs = _thread_messages([body] * n)
         result = get_thread_impl(gmail, thread_id="t1")
-        expected = [_format_message_for_llm(m) for m in msgs]
+        expected = _expected_thread_output(msgs)
 
         assert result["thread_id"] == "t1"
         assert [m["id"] for m in result["messages"]] == [m["id"] for m in msgs]
@@ -277,7 +290,7 @@ class TestFitsUnderBudgetDifferential:
 
         gmail, msgs = _thread_messages(bodies)
         result = get_thread_impl(gmail, thread_id="t1")
-        expected = [_format_message_for_llm(m) for m in msgs]
+        expected = _expected_thread_output(msgs)
 
         assert [m["id"] for m in result["messages"]] == [m["id"] for m in msgs]
         assert result["messages"] == expected
@@ -299,6 +312,13 @@ class TestWireLevelByteIdentity:
         must equal ``_envelope_ok({...})`` byte-for-byte — not just
         structurally-equal-after-parsing. Pins AC3's "byte-identical" claim
         at the actual wire, not just dict equality.
+
+        The expected envelope now also carries the #2765 table-card fields
+        (``kind``/``title``/``columns``/``rows``), computed via the SAME
+        ``_thread_table_card`` helper production code uses — so this stays
+        a real regression pin on "the budget-shrink path doesn't corrupt
+        message content OR the card projected from it", not a hand-typed
+        guess that happens to match today's output.
         """
         from gaia_agent_email.tools.envelope import _envelope_ok
 
@@ -309,11 +329,12 @@ class TestWireLevelByteIdentity:
         get_thread = _registered_get_thread(host)
 
         actual = get_thread(thread_id="t1")
+        expected_result = {
+            "thread_id": "t1",
+            "messages": _expected_thread_output(msgs),
+        }
         expected = _envelope_ok(
-            {
-                "thread_id": "t1",
-                "messages": [_format_message_for_llm(m) for m in msgs],
-            }
+            {**expected_result, **_thread_table_card(expected_result)}
         )
         assert actual == expected
 
@@ -372,7 +393,7 @@ class TestExactBoundaryPair:
         assert actual_total == DEFAULT_THREAD_TRANSCRIPT_CHARS
 
         result = get_thread_impl(gmail, thread_id="t1")
-        expected = [_format_message_for_llm(m) for m in msgs]
+        expected = _expected_thread_output(msgs)
         assert result["messages"] == expected
         assert all(m["body_truncated"] is False for m in result["messages"])
 
@@ -398,7 +419,7 @@ class TestExactBoundaryPair:
 
         result = get_thread_impl(gmail, thread_id="t1")
         big = result["messages"][0]
-        expected_big = _format_message_for_llm(msgs[0], body_limit=fair_share)
+        expected_big = _expected_thread_output(msgs, body_limit=fair_share)[0]
 
         assert big == expected_big
         assert big["body_truncated"] is True
@@ -441,8 +462,8 @@ class TestOverBudgetFairShare:
         assert len(result["messages"]) == n
 
         expected_dropped = DEFAULT_BODY_LIMIT_CHARS - fair_share
-        for out_msg, src_msg in zip(result["messages"], msgs):
-            expected = _format_message_for_llm(src_msg, body_limit=fair_share)
+        expected_all = _expected_thread_output(msgs, body_limit=fair_share)
+        for out_msg, expected in zip(result["messages"], expected_all):
             assert out_msg == expected
             assert out_msg["body_truncated"] is True
             assert out_msg["body_chars_dropped"] == expected_dropped
@@ -493,10 +514,10 @@ class TestOverBudgetFairShare:
         assert len(result["messages"]) == n
 
         expected_dropped = body_size - THREAD_MIN_PER_MESSAGE_CHARS
-        for out_msg, src_msg in zip(result["messages"], msgs):
-            expected = _format_message_for_llm(
-                src_msg, body_limit=THREAD_MIN_PER_MESSAGE_CHARS
-            )
+        expected_all = _expected_thread_output(
+            msgs, body_limit=THREAD_MIN_PER_MESSAGE_CHARS
+        )
+        for out_msg, expected in zip(result["messages"], expected_all):
             assert out_msg == expected
             assert out_msg["body_truncated"] is True
             assert out_msg["body_chars_dropped"] == expected_dropped

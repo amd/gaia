@@ -66,7 +66,7 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
     p_status.add_argument("connector_id", nargs="?")
     p_status.add_argument("--json", action="store_true", dest="as_json")
 
-    # connect (OAuth PKCE)
+    # connect (OAuth PKCE, or device-code with --device)
     p_conn = sub.add_parser(
         "connect", help="Authorize an OAuth connector (opens browser)"
     )
@@ -75,6 +75,27 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
         "--scopes",
         nargs="+",
         help="OAuth scopes to request (connector-specific)",
+    )
+    p_conn.add_argument(
+        "--grant-agent",
+        dest="grant_agent",
+        help=(
+            "Also grant this connector to the named namespaced agent id (e.g. "
+            "'installed:email') in the same flow — one command instead of a "
+            "separate `grants grant`, and the scopes always match. Without "
+            "--scopes, the scopes are derived from the agent's own declared "
+            "REQUIRED_CONNECTORS; pass --scopes explicitly to grant a narrower "
+            "set instead."
+        ),
+    )
+    p_conn.add_argument(
+        "--device",
+        action="store_true",
+        help=(
+            "Use the device-code flow (enter a short code at a URL) instead of "
+            "the browser redirect. Needed for zero-setup Microsoft sign-in "
+            "(no Azure app registration). Provider must support device code."
+        ),
     )
 
     # configure (generic dispatcher + OAuth-client convenience flags)
@@ -87,15 +108,21 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
         "--client-id",
         dest="client_id",
         help=(
-            "OAuth client id for an oauth_pkce connector (e.g. the Google "
-            "Desktop-app client). Persists to the keyring; requires --client-secret. "
-            "Run 'gaia connectors connect <id>' afterward to complete login."
+            "OAuth client id for an oauth_pkce connector (e.g. the Google or "
+            "Microsoft Desktop-app client). Persists to the keyring. Google "
+            "additionally needs --client-secret; other providers (e.g. "
+            "Microsoft, a public PKCE client) do not send one. Run 'gaia "
+            "connectors connect <id>' afterward to complete login."
         ),
     )
     p_cfg.add_argument(
         "--client-secret",
         dest="client_secret",
-        help="OAuth client secret (paired with --client-id; stored encrypted in the keyring)",
+        help=(
+            "OAuth client secret (paired with --client-id; stored encrypted "
+            "in the keyring). Required for Google; omit for providers that "
+            "use a secretless public PKCE client (e.g. Microsoft)."
+        ),
     )
     p_cfg.add_argument(
         "--set",
@@ -302,19 +329,159 @@ def _handle_list(args: argparse.Namespace) -> int:
 
 
 def _handle_connect(args: argparse.Namespace) -> int:
-    from gaia.connectors.api import complete_authorization, start_authorization
+    # Importing the catalog registers the built-in specs so an unknown-connector
+    # error is actionable rather than a bare KeyError.
+    import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+
+    if getattr(args, "device", False):
+        return _handle_connect_device(args)
+
+    from gaia.connectors.api import (
+        complete_authorization,
+        resolve_declared_scopes,
+        start_authorization,
+    )
+
+    grant_agent = getattr(args, "grant_agent", None)
+    explicit_scopes = args.scopes or []
+
+    if grant_agent and not explicit_scopes:
+        # Derive scopes from the agent's own REQUIRED_CONNECTORS declaration
+        # (#2603) instead of demanding the user type them out. Authorize the
+        # UNION with the provider's default_scopes (Google issues no id_token,
+        # and this provider has no userinfo fallback, without `openid` — see
+        # GoogleOAuthProvider.default_scopes) but grant exactly the declared
+        # set so the agent's own credential ceiling is never widened.
+        from gaia.agents.registry import AgentRegistry
+        from gaia.connectors.providers import get as get_provider
+        from gaia.hub.installer import register_installed_sidecars
+
+        # Three-call sequence, not two (#2408): a binary-only sidecar agent
+        # (e.g. installed:email) has no importable Python package, so
+        # discover()'s entry-point scan never sees it — only
+        # register_installed_sidecars bridges the daemon's sidecar specs into
+        # this registry.
+        registry = AgentRegistry()
+        registry.discover()
+        register_installed_sidecars(registry)
+
+        resolved = resolve_declared_scopes(registry, args.connector_id, [grant_agent])
+        declared_scopes = resolved[grant_agent]
+        provider = get_provider(args.connector_id)
+        scopes = sorted(set(declared_scopes) | set(provider.default_scopes))
+        grant_agents = {grant_agent: declared_scopes}
+    elif not explicit_scopes:
+        # Bare `connect` — no --scopes, no --grant-agent (#2730 D0/AC-8). This
+        # is the exact command GAIA's own error text tells a user to run, so
+        # it must not silently narrow an existing connection. Derive the
+        # request from whatever agents already hold a grant for this
+        # connector, the same declared-scopes machinery --grant-agent uses,
+        # rather than requiring --grant-agent up front before it applies.
+        from gaia.connectors.grants import list_agent_grants
+
+        granted_agent_ids = sorted(list_agent_grants(args.connector_id).keys())
+        if granted_agent_ids:
+            from gaia.agents.registry import AgentRegistry
+            from gaia.connectors.registry import REGISTRY
+            from gaia.hub.installer import register_installed_sidecars
+
+            registry = AgentRegistry()
+            registry.discover()
+            register_installed_sidecars(registry)
+            resolved = resolve_declared_scopes(
+                registry, args.connector_id, granted_agent_ids
+            )
+            declared: set = set()
+            for agent_scopes in resolved.values():
+                declared.update(agent_scopes)
+            # The catalog spec's default_scopes (not the raw OAuthProvider's)
+            # — the same source connector_routes._build_scope_union and the
+            # TUI's connectScopes union against, so a bare connect matches
+            # what every other surface would request for the same account.
+            catalog_defaults = REGISTRY.get(args.connector_id).default_scopes
+            scopes = sorted(declared | set(catalog_defaults))
+        else:
+            # No granted agent to derive a union from. Send nothing and let
+            # start_authorization's own D0 guard decide: raise loudly if a
+            # connection already exists (never guess a narrower list), or
+            # fall back to default_scopes for a genuine first-time connect.
+            scopes = []
+        grant_agents = None
+    else:
+        scopes = explicit_scopes
+        # One-flow connect + grant: authorize the scopes AND grant them to the
+        # agent so the two can never drift (the Agent UI does this via the
+        # same path).
+        grant_agents = {grant_agent: list(scopes)} if grant_agent else None
+
+    if scopes:
+        # Human-readable preview before the browser opens (#2603) — the same
+        # descriptions the Agent UI's consent dialog renders for a scope.
+        from gaia.connectors.providers.google import SCOPE_DESCRIPTIONS
+
+        sys.stdout.write(f"Requesting access to {args.connector_id}:\n")
+        for scope in scopes:
+            sys.stdout.write(f"  - {SCOPE_DESCRIPTIONS.get(scope, scope)}\n")
 
     async def _run() -> str:
-        info = await start_authorization(args.connector_id, scopes=args.scopes or [])
+        info = await start_authorization(
+            args.connector_id, scopes=scopes, grant_agents=grant_agents
+        )
         sys.stdout.write(
             f"Open this URL to authorize {args.connector_id}:\n"
             f"  {info['authorization_url']}\n"
+            "Sign-in completes via a callback to 127.0.0.1 on THIS machine. On a "
+            "remote/headless box, open the URL in a browser here, or forward the "
+            "callback port over SSH — a browser on another machine cannot reach "
+            "this loopback and the flow will time out.\n"
         )
         sys.stdout.flush()
         result = await complete_authorization(info["flow_id"])
         return result.get("account_email") or "<unknown>"
 
     email = asyncio.run(_run())
+    msg = f"Connected as {email}"
+    if grant_agent:
+        granted_scopes = grant_agents[grant_agent]
+        msg += (
+            f"; granted {args.connector_id} → {grant_agent}: "
+            f"{', '.join(granted_scopes)}"
+        )
+    sys.stdout.write(msg + "\n")
+    return 0
+
+
+def _handle_connect_device(args: argparse.Namespace) -> int:
+    """Device-code connect: print the code + URL, then poll until sign-in."""
+    from gaia.connectors.api import poll_device_flow, start_device_flow
+
+    async def _run() -> str:
+        info = await start_device_flow(args.connector_id, scopes=args.scopes or [])
+        # Prefer the provider's own message (it already contains the URL + code);
+        # fall back to a constructed instruction line.
+        if info.get("message"):
+            sys.stdout.write(info["message"] + "\n")
+        else:
+            sys.stdout.write(
+                f"To authorize {args.connector_id}, visit "
+                f"{info['verification_uri']} and enter code: {info['user_code']}\n"
+            )
+        sys.stdout.write("Waiting for sign-in...\n")
+        sys.stdout.flush()
+        result = await poll_device_flow(
+            args.connector_id,
+            info["device_code"],
+            scopes=info["scopes"],
+            interval=info["interval"],
+            expires_in=info["expires_in"],
+        )
+        return result.get("account_email") or "<unknown>"
+
+    try:
+        email = asyncio.run(_run())
+    except ConnectorsError as e:
+        sys.stderr.write(f"gaia connectors connect --device: {e}\n")
+        return 1
     sys.stdout.write(f"Connected as {email}\n")
     return 0
 
@@ -378,20 +545,16 @@ def _handle_configure_client_credentials(
     provider so the next construction re-reads them. Does NOT start the PKCE
     flow — the browser login stays a separate ``gaia connectors connect``.
 
-    Both flags are required together: Google rejects token requests that omit
-    the secret even for Desktop PKCE clients, so a half-configured client would
-    fail loudly later instead of here. Mixing with ``--set`` / ``--json`` is a
-    usage error to avoid an ambiguous double-write.
+    ``--client-secret`` is only required together with ``--client-id`` for
+    providers in ``oauth_pkce.PROVIDERS_REQUIRING_CLIENT_SECRET`` (currently
+    just Google, which rejects token requests that omit the secret even for
+    Desktop PKCE clients). Public PKCE clients like Microsoft/Entra must NOT
+    send one, so a missing secret there is not an error (#1638). Mixing with
+    ``--set`` / ``--json`` is a usage error to avoid an ambiguous double-write.
     """
     if not client_id:
         sys.stderr.write(
             "gaia connectors configure: --client-secret requires --client-id.\n"
-        )
-        return 2
-    if not client_secret:
-        sys.stderr.write(
-            "gaia connectors configure: --client-id requires --client-secret "
-            "(Google requires the secret even for Desktop-app PKCE clients).\n"
         )
         return 2
     if getattr(args, "config_pairs", None) or getattr(args, "config_json", None):
@@ -402,6 +565,7 @@ def _handle_configure_client_credentials(
         return 2
 
     import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
+    from gaia.connectors.oauth_pkce import PROVIDERS_REQUIRING_CLIENT_SECRET
     from gaia.connectors.providers import _registry as _provider_registry
     from gaia.connectors.registry import REGISTRY
     from gaia.connectors.store import save_provider_credentials
@@ -422,10 +586,20 @@ def _handle_configure_client_credentials(
         return 2
 
     provider_id = spec.oauth_provider_ref or spec.id
+    if not client_secret and provider_id in PROVIDERS_REQUIRING_CLIENT_SECRET:
+        sys.stderr.write(
+            "gaia connectors configure: --client-id requires --client-secret "
+            "(Google requires the secret even for Desktop-app PKCE clients).\n"
+        )
+        return 2
+
     save_provider_credentials(
         provider_id,
         client_id=client_id,
-        client_secret=client_secret,
+        # Coerce None -> "" so a secretless provider (e.g. Microsoft) never
+        # persists a null client_secret (--client-secret has no argparse
+        # default, so an omitted flag arrives as None).
+        client_secret=client_secret or "",
     )
     # Evict any cached provider instance so the next get_provider() re-reads the
     # freshly persisted creds instead of a stale id/secret.

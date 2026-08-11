@@ -21,11 +21,14 @@ Coverage:
 from __future__ import annotations
 
 import asyncio
+import logging
 from urllib.parse import parse_qs, urlparse
 
 import httpx
 import pytest
 import respx
+
+pytestmark = pytest.mark.allow_network
 
 from gaia.connectors.errors import (
     ConsentDeniedError,
@@ -108,6 +111,151 @@ class TestSuccessPath:
         )
         assert result["account_email"] == "alice@example.com"
         assert result["scopes"] == ["openid"]
+
+
+class TestGrantedScopesTruthfulness:
+    """D6/AC-10 (#2730): the connection record must carry the scopes the
+    token endpoint actually returned, not the ones GAIA asked for. Google's
+    granular-consent screen lets a user untick Calendar while approving
+    Gmail — before this fix the connection blob claimed the full request
+    regardless, so a coverage check would pass against a fabricated record
+    and the user hit an opaque provider 403 instead of GAIA's actionable
+    error."""
+
+    @respx.mock
+    async def test_narrower_returned_scope_is_what_gets_persisted(
+        self, google_provider
+    ):
+        requested = [
+            "openid",
+            "https://www.googleapis.com/auth/gmail.modify",
+            "https://www.googleapis.com/auth/gmail.send",
+            "https://www.googleapis.com/auth/calendar.events",
+            "https://www.googleapis.com/auth/calendar.readonly",
+        ]
+        respx.post("https://oauth2.googleapis.com/token").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "access_token": "fresh-access",
+                    "refresh_token": "fresh-refresh",
+                    "expires_in": 3600,
+                    # The user declined calendar at the consent screen.
+                    "scope": "openid https://www.googleapis.com/auth/gmail.modify "
+                    "https://www.googleapis.com/auth/gmail.send",
+                    "id_token": (
+                        "header." "eyJlbWFpbCI6ICJhbGljZUBleGFtcGxlLmNvbSJ9" ".sig"
+                    ),
+                },
+            )
+        )
+        respx.route(host="127.0.0.1").pass_through()
+
+        from gaia.connectors.store import peek_connection
+
+        info = await start_authorization("google", scopes=requested)
+        params = parse_qs(urlparse(info["authorization_url"]).query)
+        redirect_uri = params["redirect_uri"][0]
+        state = params["state"][0]
+        async with httpx.AsyncClient() as c:
+            await c.get(f"{redirect_uri}?code=ok&state={state}")
+        result = await asyncio.wait_for(
+            complete_authorization(info["flow_id"]), timeout=2.0
+        )
+
+        expected_granted = {
+            "openid",
+            "https://www.googleapis.com/auth/gmail.modify",
+            "https://www.googleapis.com/auth/gmail.send",
+        }
+        assert set(result["scopes"]) == expected_granted
+        blob = peek_connection("google")
+        assert set(blob["scopes"]) == expected_granted
+        assert "https://www.googleapis.com/auth/calendar.events" not in blob["scopes"]
+
+    @respx.mock
+    async def test_omitted_scope_field_keeps_the_requested_list(self, google_provider):
+        """RFC 6749 §5.1: an absent ``scope`` means "as requested," not
+        "nothing was granted" — the requested list must be kept, not
+        dropped to empty."""
+        respx.post("https://oauth2.googleapis.com/token").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "access_token": "fresh-access",
+                    "refresh_token": "fresh-refresh",
+                    "expires_in": 3600,
+                    # No "scope" key at all.
+                    "id_token": (
+                        "header." "eyJlbWFpbCI6ICJhbGljZUBleGFtcGxlLmNvbSJ9" ".sig"
+                    ),
+                },
+            )
+        )
+        respx.route(host="127.0.0.1").pass_through()
+
+        from gaia.connectors.store import peek_connection
+
+        info = await start_authorization("google", scopes=["openid", "email"])
+        params = parse_qs(urlparse(info["authorization_url"]).query)
+        redirect_uri = params["redirect_uri"][0]
+        state = params["state"][0]
+        async with httpx.AsyncClient() as c:
+            await c.get(f"{redirect_uri}?code=ok&state={state}")
+        result = await asyncio.wait_for(
+            complete_authorization(info["flow_id"]), timeout=2.0
+        )
+
+        assert set(result["scopes"]) == {"openid", "email"}
+        blob = peek_connection("google")
+        assert set(blob["scopes"]) == {"openid", "email"}
+
+
+class TestTenantRecordedOnConnect:
+    """D8 (#2628): the loopback exchange must record the minting authority
+    on the connection blob — the very first place a tenant value exists to
+    record, and the only place a legacy (no-tenant) blob would otherwise
+    come from forever."""
+
+    @pytest.fixture
+    def microsoft_provider(self, monkeypatch):
+        monkeypatch.setenv("GAIA_MICROSOFT_CLIENT_ID", "test-ms-client")
+        _registry.clear()
+        from gaia.connectors.providers import get as get_provider
+
+        return get_provider("microsoft")
+
+    @respx.mock
+    async def test_successful_exchange_records_the_tenant(self, microsoft_provider):
+        respx.post(microsoft_provider.token_url).mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "access_token": "fresh-access",
+                    "refresh_token": "fresh-refresh",
+                    "expires_in": 3600,
+                    "scope": "openid",
+                    "id_token": (
+                        "header." "eyJlbWFpbCI6ICJhbGljZUBleGFtcGxlLmNvbSJ9" ".sig"
+                    ),
+                },
+            )
+        )
+        respx.route(host="127.0.0.1").pass_through()
+
+        info = await start_authorization("microsoft", scopes=["openid"])
+        params = parse_qs(urlparse(info["authorization_url"]).query)
+        redirect_uri = params["redirect_uri"][0]
+        state = params["state"][0]
+
+        async with httpx.AsyncClient() as c:
+            await c.get(f"{redirect_uri}?code=test-code&state={state}")
+        await asyncio.wait_for(complete_authorization(info["flow_id"]), timeout=2.0)
+
+        from gaia.connectors.store import peek_connection
+
+        blob = peek_connection("microsoft")
+        assert blob["tenant"] == "consumers"
 
 
 class TestStateValidation:
@@ -397,3 +545,50 @@ class TestDecodeEmailFromIdToken:
 
     def test_empty_string_returns_none(self):
         assert _decode_email_from_id_token("") is None
+
+
+class TestBrowserLaunchReporting:
+    """A launch that never happened must not look like one that did.
+
+    ``webbrowser.open`` returns False when no browser is registered — the normal
+    case on headless Ubuntu, WSL and SSH — rather than raising. Only the raising
+    case was handled, so the caller went on telling the user to check a browser
+    that was never opened, and nothing recorded that the copy-paste URL had
+    become the only way through.
+    """
+
+    @respx.mock
+    async def test_a_browser_that_never_opened_is_reported(
+        self, google_provider, monkeypatch, caplog
+    ):
+        monkeypatch.setattr("webbrowser.open", lambda *_, **__: False)
+        _mock_token_endpoint()
+
+        with caplog.at_level(logging.WARNING, logger="gaia.connectors.flow"):
+            info = await start_authorization("google", scopes=["openid"])
+            # The launch is fire-and-forget and runs in an executor thread, so
+            # yield long enough for it to finish rather than a bare sleep(0).
+            for _ in range(50):
+                if any("no browser" in r.message for r in caplog.records):
+                    break
+                await asyncio.sleep(0.01)
+
+        assert "authorization_url" in info, "the fallback URL must still be returned"
+        assert any(
+            "no browser could be launched" in r.message for r in caplog.records
+        ), f"a failed launch went unreported: {[r.message for r in caplog.records]}"
+
+    @respx.mock
+    async def test_a_successful_launch_stays_quiet(
+        self, google_provider, monkeypatch, caplog
+    ):
+        monkeypatch.setattr("webbrowser.open", lambda *_, **__: True)
+        _mock_token_endpoint()
+
+        with caplog.at_level(logging.WARNING, logger="gaia.connectors.flow"):
+            await start_authorization("google", scopes=["openid"])
+            await asyncio.sleep(0.1)
+
+        assert not any(
+            "no browser could be launched" in r.message for r in caplog.records
+        ), "a browser that opened fine was reported as failed"

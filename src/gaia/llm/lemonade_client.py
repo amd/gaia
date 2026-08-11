@@ -21,7 +21,7 @@ import time
 from dataclasses import dataclass, field
 from enum import Enum
 from threading import Event, Thread
-from typing import Any, Callable, Dict, Generator, List, Optional, Union
+from typing import Any, Callable, Dict, Generator, List, Optional, Tuple, Union
 
 import openai  # For exception types
 import psutil
@@ -33,6 +33,7 @@ from openai import OpenAI
 
 from gaia.llm.lemonade_launcher import (
     build_start_command,
+    describe_start_hint,
     get_installed_version,
     resolve_lemonade,
 )
@@ -181,6 +182,31 @@ def profile_ctx_size(device: Optional[str]) -> int:
     fails the load outright.
     """
     return NPU_CTX_SIZE if (device or "").strip().lower() == "npu" else GPU_CTX_SIZE
+
+
+# ``_handle_large_tool_result``'s truncation trigger/target were tuned as a
+# flat 30000/20000 chars for the NPU's 32768 ctx (#2620). Keep that profile
+# exact and scale the same ratio to the active device's window instead of
+# inventing a new budget.
+_TRUNCATE_THRESHOLD_RATIO = 30000 / NPU_CTX_SIZE  # chars per ctx token
+_TRUNCATE_TARGET_FRACTION = 2 / 3  # 20000 / 30000
+
+
+def truncation_budget(device: Optional[str]) -> Tuple[int, int]:
+    """(threshold, target) char budget for large tool-result truncation.
+
+    Deliberately more conservative than ``profile_ctx_size``: an unset or
+    unrecognized *device* resolves to the NPU profile (today's flat
+    30000/20000), never the larger GPU one. Handing an unconfirmed device
+    the bigger budget would reopen the #1030 context-overflow class if the
+    caller turns out to actually be running on NPU — only an explicit
+    non-NPU device earns the larger allowance.
+    """
+    normalized = (device or "").strip().lower()
+    ctx = NPU_CTX_SIZE if not normalized or normalized == "npu" else GPU_CTX_SIZE
+    threshold = round(ctx * _TRUNCATE_THRESHOLD_RATIO)
+    target = round(threshold * _TRUNCATE_TARGET_FRACTION)
+    return threshold, target
 
 
 # =========================================================================
@@ -528,6 +554,71 @@ class ModelDownloadCancelledError(LemonadeClientError):
 
 class InsufficientDiskSpaceError(LemonadeClientError):
     """Raised when there's not enough disk space for model download."""
+
+
+# Phrases indicating a backend rejected a request because the prompt plus
+# conversation history exceeded the loaded model's context window.
+# Case-insensitive; matched against the backend's own error message once
+# extracted from a Lemonade error envelope (see ``is_context_overflow_error``
+# below). A new backend's overflow wording only needs a new entry here, not
+# a new classification branch (#2513: FastFlowLM's "Max length reached!"
+# matched none of the original llama.cpp-only phrasings, so the agent's
+# trim-and-retry recovery never engaged on NPU).
+CONTEXT_OVERFLOW_PHRASES = (
+    "exceed_context_size",
+    "exceeds the available context size",
+    "got too long",
+    "max length reached",
+)
+
+
+def _extract_backend_error_message(error_text: str) -> Optional[str]:
+    """Pull the backend's own ``message`` out of a Lemonade JSON error
+    envelope embedded in *error_text*, preferring the nested
+    ``details.response.error`` shape used for backend-wrapped failures
+    (e.g. FastFlowLM) over the outer envelope. Returns ``None`` when no
+    envelope can be located/parsed so the caller falls back to scanning
+    the raw text.
+    """
+    start = error_text.find("{")
+    if start == -1:
+        return None
+    try:
+        payload = json.loads(error_text[start:])
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    err = payload.get("error")
+    if not isinstance(err, dict):
+        return None
+    nested = None
+    details = err.get("details")
+    if isinstance(details, dict):
+        response = details.get("response")
+        if isinstance(response, dict):
+            nested = response.get("error")
+    source = nested if isinstance(nested, dict) else err
+    message = source.get("message")
+    return str(message) if message else None
+
+
+def is_context_overflow_error(error_text: str) -> bool:
+    """Classify a stringified backend error as context overflow.
+
+    Structure first, text second: when *error_text* embeds a Lemonade JSON
+    error envelope, phrase-matching runs against just that envelope's own
+    message — so unrelated text elsewhere (e.g. an echoed request body)
+    can't produce a false positive. Falls back to scanning the raw text
+    when no envelope can be parsed, which keeps non-JSON backend phrasings
+    working. Shared by the agent loop's streaming and non-streaming retry
+    paths so every backend benefits from one classifier (#2513).
+    """
+    if not error_text:
+        return False
+    message = _extract_backend_error_message(error_text)
+    haystack = (message or error_text).lower()
+    return any(phrase in haystack for phrase in CONTEXT_OVERFLOW_PHRASES)
 
 
 @dataclass
@@ -1109,7 +1200,17 @@ class LemonadeClient:
                 # For subprocess.Popen
                 if sys.platform.startswith("win") and self.server_process.pid:
                     # On Windows, use taskkill to ensure process tree is terminated
-                    os.system(f"taskkill /F /PID {self.server_process.pid} /T")
+                    subprocess.run(
+                        [
+                            "taskkill",
+                            "/F",
+                            "/PID",
+                            str(self.server_process.pid),
+                            "/T",
+                        ],
+                        shell=False,
+                        check=False,
+                    )
                 elif self.server_process.pid:
                     # On Linux/Unix, kill the process group to terminate child processes
                     try:
@@ -1519,15 +1620,32 @@ class LemonadeClient:
             raise last_error
 
     def _execute_with_auto_download(
-        self, api_call: Callable, model: str, auto_download: bool = True
+        self,
+        api_call: Callable,
+        model: str,
+        auto_download: bool = True,
+        *,
+        error: Exception,
     ):
         """
-        Execute an API call with auto-download retry logic.
+        Recover from a failed API call by auto-downloading/loading the
+        model — but ONLY when *error* is actually the missing-model
+        condition this exists for.
+
+        Every caller invokes this from an ``except`` block after
+        ``api_call()`` already failed once; *error* is that failure.
+        This used to retry ``api_call()`` unconditionally before even
+        looking at *error*, so any failure — context overflow included —
+        silently repeated the identical request. #2513 measured that as
+        two identical 400s per turn on the NPU/FastFlowLM backend.
+        Anything that isn't a missing-model error is re-raised immediately
+        instead of retried.
 
         Args:
             api_call: Function to call (should raise exception if model not loaded)
             model: Model name
             auto_download: Whether to auto-download on model error
+            error: The exception the caller's own first attempt raised
 
         Returns:
             Result of api_call()
@@ -1535,29 +1653,27 @@ class LemonadeClient:
         Raises:
             ModelDownloadCancelledError: If user cancels download
             InsufficientDiskSpaceError: If not enough disk space
-            LemonadeClientError: If download/load fails
+            LemonadeClientError: If download/load fails, or if *error* is
+                not a missing-model error (re-raised unchanged)
         """
-        try:
-            return api_call()
-        except Exception as e:
-            # Check if this is a model loading error and auto_download is enabled
-            if auto_download and self._is_model_error(e):
-                self.log.info(
-                    f"{_emoji('📥', '[AUTO-DOWNLOAD]')} Model '{model}' not loaded, "
-                    f"attempting auto-download and load..."
-                )
+        if not (auto_download and self._is_model_error(error)):
+            # Not the missing-model condition this recovery is for --
+            # retrying would just repeat the same failing request.
+            raise error
 
-                # Load model with auto-download (includes prompt, validation, etc.)
-                self.load_model(model, timeout=60, auto_download=True)
+        self.log.info(
+            f"{_emoji('📥', '[AUTO-DOWNLOAD]')} Model '{model}' not loaded, "
+            f"attempting auto-download and load..."
+        )
 
-                # Retry the API call
-                self.log.info(
-                    f"{_emoji('🔄', '[RETRY]')} Retrying API call with model: {model}"
-                )
-                return api_call()
+        # Load model with auto-download (includes prompt, validation, etc.)
+        self.load_model(model, timeout=60, auto_download=True)
 
-            # Re-raise original error
-            raise
+        # Retry the API call
+        self.log.info(
+            f"{_emoji('🔄', '[RETRY]')} Retrying API call with model: {model}"
+        )
+        return api_call()
 
     def chat_completions(
         self,
@@ -1639,17 +1755,6 @@ class LemonadeClient:
                 **kwargs,
             )
 
-        # Pre-flight: ensure the model is loaded at the GAIA-expected ctx.
-        # The streaming path already does this via
-        # ``_stream_chat_completions_with_openai`` -> ``_ensure_model_loaded``.
-        # Pre-#1030 follow-up the non-streaming path skipped the check, so
-        # when something (e.g. the RAG SDK's embedder warm-up) unloaded the
-        # LLM, the next non-streaming chat_completion let Lemonade auto-load
-        # Gemma at its own default ctx (32K) — bypassing
-        # MODELS[…].min_ctx_size and silently capping doc-Q&A at 32K.
-        if auto_download:
-            self._ensure_model_loaded(model, auto_download=True)
-
         # Note: self.base_url already includes /api/v1
         url = f"{self.base_url}/chat/completions"
         data = {
@@ -1707,12 +1812,32 @@ class LemonadeClient:
 
             return result
 
-        # Execute with auto-download retry logic
-        try:
-            return _make_request()
-        except (requests.exceptions.RequestException, LemonadeClientError):
-            # Use helper to handle auto-download and retry
-            return self._execute_with_auto_download(_make_request, model, auto_download)
+        # Hold the model-slot lease across BOTH the pre-flight load and the
+        # inference request (#2380). The broker hands out one lease at a time and
+        # its contract is that the holder does the load AND the inference before
+        # releasing; a lease dropped after the load lets another sidecar acquire
+        # it and evict this model mid-generation. Re-entrant per thread, so the
+        # load's own inner lease folds into this one.
+        #
+        # The pre-flight ensure also guards the GAIA-expected ctx: pre-#1030 the
+        # non-streaming path skipped it, so an embedder warm-up that unloaded the
+        # LLM let Lemonade auto-load Gemma at its 32K default, silently capping
+        # doc-Q&A. (The streaming path does the same via _ensure_model_loaded.)
+        with self._model_slot_lease(model):
+            if auto_download:
+                self._ensure_model_loaded(model, auto_download=True)
+
+            # Execute with auto-download retry logic
+            try:
+                return _make_request()
+            except (requests.exceptions.RequestException, LemonadeClientError) as e:
+                # Use helper to handle auto-download and retry. Passing the
+                # already-caught error lets it skip the retry entirely for
+                # non-missing-model failures (#2513) instead of repeating
+                # the identical request first.
+                return self._execute_with_auto_download(
+                    _make_request, model, auto_download, error=e
+                )
 
     def _stream_chat_completions_with_openai(
         self,
@@ -1746,9 +1871,45 @@ class LemonadeClient:
             }]
         }
         """
-        # Proactively ensure model is loaded before making request
-        self._ensure_model_loaded(model, auto_download)
+        # Hold the model-slot lease across BOTH the load and the entire
+        # generation (#2380). The broker's contract is that one holder does the
+        # load AND the inference before releasing; a lease dropped after the
+        # load lets another sidecar acquire it and evict this model mid-stream.
+        # Re-entrant per thread, so the load's own inner lease folds into this.
+        # As a generator the lease is acquired on first iteration and released
+        # when the consumer finishes or closes the stream.
+        with self._model_slot_lease(model):
+            self._ensure_model_loaded(model, auto_download)
+            yield from self._stream_chat_chunks(
+                model=model,
+                messages=messages,
+                temperature=temperature,
+                max_completion_tokens=max_completion_tokens,
+                stop=stop,
+                timeout=timeout,
+                logprobs=logprobs,
+                tools=tools,
+                **kwargs,
+            )
 
+    def _stream_chat_chunks(
+        self,
+        model: str,
+        messages: List[Dict[str, str]],
+        temperature: float = 0.7,
+        max_completion_tokens: int = 1000,
+        stop: Optional[Union[str, List[str]]] = None,
+        timeout: int = DEFAULT_REQUEST_TIMEOUT,
+        logprobs: Optional[bool] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        **kwargs,
+    ) -> Generator[Dict[str, Any], None, None]:
+        """Stream chat chunks from Lemonade's OpenAI-compatible endpoint.
+
+        The caller (:meth:`_stream_chat_completions_with_openai`) holds the
+        model-slot lease across the whole iteration so the model cannot be
+        evicted mid-stream (#2380).
+        """
         # Create a client just for this request.
         # ``api_key`` is required by the OpenAI SDK (rejects None/"" with
         # OpenAIError); when no real key is configured the placeholder is
@@ -1982,9 +2143,12 @@ class LemonadeClient:
         # Execute with auto-download retry logic
         try:
             return _make_request()
-        except (requests.exceptions.RequestException, LemonadeClientError):
-            # Use helper to handle auto-download and retry
-            return self._execute_with_auto_download(_make_request, model, auto_download)
+        except (requests.exceptions.RequestException, LemonadeClientError) as e:
+            # Use helper to handle auto-download and retry (#2513: only
+            # when *e* is actually the missing-model condition).
+            return self._execute_with_auto_download(
+                _make_request, model, auto_download, error=e
+            )
 
     def _stream_completions_with_openai(
         self,
@@ -3751,8 +3915,8 @@ class LemonadeClient:
             else:
                 error_msg = (
                     f"Insufficient context size: server has {reported_ctx} tokens, "
-                    f"but {required_tokens} tokens are required. "
-                    f"Restart with: {self._start_command_hint(required_tokens)}"
+                    f"but {required_tokens} tokens are required. Restart Lemonade "
+                    f"Server. {self._start_command_hint(required_tokens)}"
                 )
                 if not quiet:
                     print(f"❌ {error_msg}")
@@ -4046,18 +4210,15 @@ class LemonadeClient:
         """
         return get_installed_version(resolve_lemonade())
 
-    def _start_command_hint(self, ctx_size: Optional[int]) -> str:
-        """Render the exact start command for the installed tooling.
+    @staticmethod
+    def _start_command_hint(ctx_size: Optional[int]) -> str:
+        """Platform-accurate "here's how to start it" text for the user.
 
-        Used in user-facing guidance so modern installs aren't told to run
-        the removed ``lemonade-server`` CLI.
+        Delegates to the shared resolver so modern installs aren't told to
+        run the removed ``lemonade-server`` CLI, and so platforms started
+        from a GUI get prose instead of an invented shell command.
         """
-        tooling = resolve_lemonade()
-        if tooling.found:
-            spec = build_start_command(tooling, ctx_size)
-            env_prefix = " ".join(f"{k}={v}" for k, v in spec.env.items())
-            return f"{env_prefix} {' '.join(spec.argv)}".strip()
-        return f"lemonade-server serve --ctx-size {ctx_size}"
+        return describe_start_hint(ctx_size).instruction
 
     def _check_version_compatibility(
         self,
@@ -4236,7 +4397,7 @@ class LemonadeClient:
                         f"is less than recommended ({required_ctx})"
                     )
                     print(
-                        f"   For better performance, restart with: "
+                        f"   For better performance, restart Lemonade Server. "
                         f"{self._start_command_hint(required_ctx)}"
                     )
                     print("")
@@ -4247,7 +4408,7 @@ class LemonadeClient:
         if not auto_start:
             if not quiet:
                 print(f"{_emoji('❌', '[ERROR]')} Lemonade Server is not running")
-                print(f"   Start with: {self._start_command_hint(required_ctx)}")
+                print(f"   {self._start_command_hint(required_ctx)}")
             status.error = "Server not running"
             return status
 

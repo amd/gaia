@@ -9,9 +9,9 @@ handler on every API-served agent, the confirmation gate in
 prompt injection reaching the agent could drive ``write_file`` /
 ``run_shell_command`` / any MCP write tool with no user in the loop (CWE-862).
 
-The handler now fails closed and emits a ``tool_confirm_denied`` event so the
-caller can see why. An opt-in env escape hatch exists for trusted localhost
-deployments; it is off by default and logs loudly when on.
+The handler fails closed and emits a ``tool_confirm_denied`` event so the caller
+can see why. The unattended opt-in is the shared ``GAIA_AUTO_APPROVE_TOOLS``
+(#2210) — this surface deliberately does not add a second knob of its own.
 """
 
 import logging
@@ -19,15 +19,26 @@ import logging
 import pytest
 
 from gaia.agents.base.agent import TOOLS_REQUIRING_CONFIRMATION, Agent
-from gaia.agents.base.console import OutputHandler
+from gaia.agents.base.console import AUTO_APPROVE_ENV_VAR, OutputHandler
 from gaia.agents.base.tools import tool
-from gaia.api.sse_handler import ALLOW_UNCONFIRMED_TOOLS_ENV, SSEOutputHandler
+from gaia.api.sse_handler import SSEOutputHandler
 
 
 @pytest.fixture(autouse=True)
 def _clear_escape_hatch(monkeypatch):
-    """Never inherit the escape hatch from the ambient environment."""
-    monkeypatch.delenv(ALLOW_UNCONFIRMED_TOOLS_ENV, raising=False)
+    """Every test starts from the user's real state: no unattended opt-in set."""
+    import gaia
+
+    monkeypatch.delenv(AUTO_APPROVE_ENV_VAR, raising=False)
+    monkeypatch.delitem(gaia._PRE_DOTENV_ENVIRON, AUTO_APPROVE_ENV_VAR, raising=False)
+
+
+def _set_env_opt_in(monkeypatch, value: str = "1") -> None:
+    """Opt in the way an operator does: in the real process environment."""
+    import gaia
+
+    monkeypatch.setenv(AUTO_APPROVE_ENV_VAR, value)
+    monkeypatch.setitem(gaia._PRE_DOTENV_ENVIRON, AUTO_APPROVE_ENV_VAR, value)
 
 
 class _ApiAgent(Agent):
@@ -107,14 +118,16 @@ class TestFailsClosed:
         assert result.get("status") == "denied"
         assert agent._fired == []
 
-    def test_handler_does_not_inherit_auto_approve(self):
-        """Regression pin: the base implementation auto-approves, so inheriting
-        it is exactly the bug. The override must be the handler's own."""
-        assert OutputHandler.confirm_tool_execution(object(), "x", {}) is True
+    def test_override_adds_the_visible_refusal(self):
+        """The base already fails closed (#2210); this handler's own override is
+        what puts the reason on the wire. Pin both halves."""
         assert (
             SSEOutputHandler.confirm_tool_execution
             is not OutputHandler.confirm_tool_execution
         )
+        handler = SSEOutputHandler()
+        assert handler.confirm_tool_execution("write_file", {}) is False
+        assert _denial_events(handler)
 
     def test_not_advertised_as_blocking(self):
         """``blocking_confirmation`` means 'waits for a user decision'. This
@@ -144,7 +157,7 @@ class TestDenialEvent:
         # What to do instead
         assert "gaia chat --ui" in message
         # The documented opt-out, with its caveat
-        assert ALLOW_UNCONFIRMED_TOOLS_ENV in message
+        assert AUTO_APPROVE_ENV_VAR in message
         assert "shared or exposed host" in message
 
     def test_event_reaches_the_client_stream(self):
@@ -162,57 +175,67 @@ class TestDenialEvent:
 
     def test_denial_is_logged(self, caplog):
         handler = SSEOutputHandler()
-        with caplog.at_level(logging.WARNING, logger="gaia.api.sse_handler"):
+        with caplog.at_level(logging.WARNING, logger="gaia.agents.base.console"):
             handler.confirm_tool_execution("write_file", {})
         assert "Denied confirmation-gated tool 'write_file'" in caplog.text
 
+    def test_denial_reason_is_bound_to_the_tool(self):
+        """``confirmation_denied_reason`` feeds the model's denied tool result —
+        it must carry this surface's reason, not the generic 'user said no'."""
+        handler = SSEOutputHandler()
+        handler.confirm_tool_execution("write_file", {})
+        assert "no channel" in handler.confirmation_denied_reason("write_file")
+
 
 class TestEscapeHatch:
-    def test_off_by_default(self):
-        assert SSEOutputHandler().allow_unconfirmed_tools is False
+    """The opt-in is the shared GAIA_AUTO_APPROVE_TOOLS (#2210), not an
+    API-only variable — one bypass knob, so an operator cannot lock one door
+    and leave the other open."""
 
-    def test_env_var_opts_in(self, monkeypatch, caplog):
-        monkeypatch.setenv(ALLOW_UNCONFIRMED_TOOLS_ENV, "1")
-        with caplog.at_level(logging.WARNING, logger="gaia.api.sse_handler"):
-            handler = SSEOutputHandler()
-        assert handler.allow_unconfirmed_tools is True
-        assert "prompt-injection backstop" in caplog.text
+    def test_off_by_default(self):
+        handler = SSEOutputHandler()
+        assert handler.auto_approve_confirmations_enabled() is False
+        assert handler.confirm_tool_execution("write_file", {}) is False
+
+    def test_env_var_opts_in(self, monkeypatch):
+        _set_env_opt_in(monkeypatch)
+        assert SSEOutputHandler().auto_approve_confirmations_enabled() is True
 
     def test_opted_in_tool_runs_and_warns(self, monkeypatch, caplog):
-        monkeypatch.setenv(ALLOW_UNCONFIRMED_TOOLS_ENV, "1")
+        _set_env_opt_in(monkeypatch)
         handler = SSEOutputHandler()
         agent = _make_agent(handler)
 
-        with caplog.at_level(logging.WARNING, logger="gaia.api.sse_handler"):
+        with caplog.at_level(logging.WARNING, logger="gaia.agents.base.console"):
             result = agent._execute_tool(
                 "write_file", {"path": "/tmp/ok", "content": "x"}
             )
 
         assert result == "WROTE"
         assert agent._fired == ["/tmp/ok"]
-        assert "Auto-approved 'write_file'" in caplog.text
+        assert "Auto-approved confirmation-gated tool 'write_file'" in caplog.text
         warnings = [e for e in handler.get_events() if e["type"] == "warning"]
         assert any(
             "Auto-approved 'write_file'" in w["data"]["message"] for w in warnings
         )
 
-    @pytest.mark.parametrize("value", ["0", "true", "yes", ""])
-    def test_only_literal_one_opts_in(self, monkeypatch, value):
-        """Anything other than "1" must not silently enable the bypass."""
-        monkeypatch.setenv(ALLOW_UNCONFIRMED_TOOLS_ENV, value)
-        assert SSEOutputHandler().allow_unconfirmed_tools is False
+    @pytest.mark.parametrize("value", ["0", "false", "no", ""])
+    def test_falsy_values_do_not_opt_in(self, monkeypatch, value):
+        """A value that is not affirmative must not silently enable the bypass."""
+        _set_env_opt_in(monkeypatch, value)
+        assert SSEOutputHandler().confirm_tool_execution("write_file", {}) is False
 
-    def test_constructor_arg_overrides_env(self, monkeypatch):
-        monkeypatch.setenv(ALLOW_UNCONFIRMED_TOOLS_ENV, "1")
-        assert (
-            SSEOutputHandler(allow_unconfirmed_tools=False).allow_unconfirmed_tools
-            is False
-        )
-        monkeypatch.delenv(ALLOW_UNCONFIRMED_TOOLS_ENV)
-        assert (
-            SSEOutputHandler(allow_unconfirmed_tools=True).allow_unconfirmed_tools
-            is True
-        )
+    def test_dotenv_alone_cannot_grant_approval(self, monkeypatch):
+        """A project ``.env`` travels with a directory and is not an operator
+        decision, so os.environ alone must not open the gate."""
+        monkeypatch.setenv(AUTO_APPROVE_ENV_VAR, "1")  # no _PRE_DOTENV_ENVIRON entry
+        assert SSEOutputHandler().confirm_tool_execution("write_file", {}) is False
+
+    def test_host_can_opt_in_without_the_env(self):
+        """A library host that already obtained consent sets the attribute."""
+        handler = SSEOutputHandler()
+        handler.auto_approve_gated_tools = True
+        assert handler.confirm_tool_execution("write_file", {}) is True
 
 
 class TestRegistryWiring:
@@ -231,10 +254,10 @@ class TestRegistryWiring:
                 agent = registry.get_agent("gaia-code")
 
         assert isinstance(agent.console, SSEOutputHandler)
-        assert agent._execute_tool("write_file", {"path": "/x", "content": "y"}) == {
-            "status": "denied",
-            "error": "Tool 'write_file' was denied by the user.",
-        }
+        result = agent._execute_tool("write_file", {"path": "/x", "content": "y"})
+        assert result["status"] == "denied"
+        # Not the generic "the user said no" — there was no user to say it.
+        assert "no channel to ask for it" in result["error"]
         assert agent._fired == []
 
 
@@ -288,12 +311,17 @@ class TestNonStreamingSurface:
         assert any(e["type"] == "info" for e in handler.get_events())
 
 
+@pytest.mark.allow_network
 class TestHttpSurface:
     """End-to-end through the real FastAPI app — the surface an attacker hits.
 
     Pins that the refusal survives the registry, the agent loop, the SSE
     formatter, and the streaming filter, none of which the unit tests above
     exercise together.
+
+    ``allow_network``: ``TestClient`` serves in-process, but opening its event
+    loop uses a loopback ``socket.socketpair()`` on Windows. No traffic leaves
+    the machine.
     """
 
     @staticmethod
@@ -374,31 +402,31 @@ class TestBypassBannerReachesTheOperator:
     """
 
     def test_banner_prints_when_bypass_enabled(self, monkeypatch, capsys):
-        from gaia.api.sse_handler import (
-            ALLOW_UNCONFIRMED_TOOLS_ENV,
-            warn_if_unconfirmed_tools_allowed,
-        )
+        from gaia.api.sse_handler import warn_if_unconfirmed_tools_allowed
 
-        monkeypatch.setenv(ALLOW_UNCONFIRMED_TOOLS_ENV, "1")
+        _set_env_opt_in(monkeypatch)
         assert warn_if_unconfirmed_tools_allowed() is True
         out = capsys.readouterr().out
-        assert ALLOW_UNCONFIRMED_TOOLS_ENV in out
+        assert AUTO_APPROVE_ENV_VAR in out
         assert "NO user approval" in out
 
-    @pytest.mark.parametrize("value", [None, "0", "false", "true", "yes"])
-    def test_banner_silent_unless_value_is_exactly_one(
-        self, monkeypatch, capsys, value
-    ):
-        """A security control must not be switchable by a truthy accident."""
-        from gaia.api.sse_handler import (
-            ALLOW_UNCONFIRMED_TOOLS_ENV,
-            warn_if_unconfirmed_tools_allowed,
-        )
+    @pytest.mark.parametrize("value", [None, "0", "false", "no", ""])
+    def test_banner_silent_when_bypass_is_off(self, monkeypatch, capsys, value):
+        """The banner must track the real opt-in, so it can never claim the
+        gate is open when it is shut (or stay quiet when it is open)."""
+        from gaia.api.sse_handler import warn_if_unconfirmed_tools_allowed
 
-        if value is None:
-            monkeypatch.delenv(ALLOW_UNCONFIRMED_TOOLS_ENV, raising=False)
-        else:
-            monkeypatch.setenv(ALLOW_UNCONFIRMED_TOOLS_ENV, value)
+        if value is not None:
+            _set_env_opt_in(monkeypatch, value)
+        assert warn_if_unconfirmed_tools_allowed() is False
+        assert capsys.readouterr().out == ""
+
+    def test_banner_ignores_a_dotenv_only_value(self, monkeypatch, capsys):
+        """os.environ alone cannot grant approval, so it must not print a banner
+        claiming approval was granted."""
+        from gaia.api.sse_handler import warn_if_unconfirmed_tools_allowed
+
+        monkeypatch.setenv(AUTO_APPROVE_ENV_VAR, "1")
         assert warn_if_unconfirmed_tools_allowed() is False
         assert capsys.readouterr().out == ""
 

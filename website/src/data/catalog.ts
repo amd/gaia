@@ -17,7 +17,12 @@
 // Nothing else in the app changes: pages consume getCatalog()/getAgent() only.
 
 export type SecurityTier = 'verified' | 'community' | 'experimental';
-export type AgentLanguage = 'python' | 'cpp';
+export type AgentLanguage = 'python' | 'cpp' | 'go' | 'typescript';
+
+// What a catalog entry IS. Agents are the default; the terminal hub publishes
+// as a component and the Agent UI as an app, so a listing that shows only
+// agents must filter on this rather than assume every entry is one.
+export type PackageType = 'agent' | 'app' | 'component';
 
 export interface AgentRequirements {
   min_memory_gb: number;
@@ -36,6 +41,9 @@ export interface Agent {
   latest_version: string;
   icon: string;
   language: AgentLanguage;
+  // Optional so the site keeps building against an index.json served before the
+  // Worker that emits `type` is deployed. Read it through packageType().
+  type?: PackageType;
   author: string;
   security_tier: SecurityTier;
   download_size_bytes: number;
@@ -114,16 +122,16 @@ async function fetchLiveCatalog(baseUrl: string): Promise<CatalogFile> {
   } catch (e) {
     throw new Error(
       `[catalog] Failed to fetch the live catalog from ${url}: ${(e as Error).message}. ` +
-        `HUB_CATALOG_URL is set, so the build must use the live hub — it will not ` +
-        `fall back to the bundled fixture. Start the agent-hub worker (see ` +
-        `workers/agent-hub/README.md) or unset HUB_CATALOG_URL to build from the fixture.`
+        `The website has no bundled fixture — the live hub is the only source, so the ` +
+        `build cannot continue. Check that the hub is reachable, or start a local ` +
+        `agent-hub worker and point HUB_CATALOG_URL at it (workers/agent-hub/README.md).`
     );
   }
   if (!res.ok) {
     throw new Error(
       `[catalog] Live catalog request to ${url} returned HTTP ${res.status}. ` +
         `Check that the agent-hub worker is healthy (GET /health) and has at least ` +
-        `one published agent, or unset HUB_CATALOG_URL to build from the fixture.`
+        `one published agent (workers/agent-hub/README.md).`
     );
   }
   const catalog = (await res.json()) as CatalogFile;
@@ -180,6 +188,9 @@ export async function getAgent(id: string): Promise<Agent | undefined> {
 
 // ---- Display helpers ----
 
+// Every category any hub/agents manifest declares. A missing entry falls through
+// to the raw slug, which renders as a lowercase odd-one-out next to the labelled
+// pills — so add the label here when a manifest introduces a new category.
 const CATEGORY_LABELS: Record<string, string> = {
   conversation: 'Conversation',
   development: 'Development',
@@ -187,6 +198,10 @@ const CATEGORY_LABELS: Record<string, string> = {
   integrations: 'Integrations',
   creative: 'Creative',
   vision: 'Vision',
+  research: 'Research',
+  infrastructure: 'Infrastructure',
+  healthcare: 'Healthcare',
+  examples: 'Examples',
 };
 
 export function categoryLabel(category: string): string {
@@ -196,6 +211,8 @@ export function categoryLabel(category: string): string {
 const LANGUAGE_LABELS: Record<AgentLanguage, string> = {
   python: 'Python',
   cpp: 'C++',
+  go: 'Go',
+  typescript: 'TypeScript',
 };
 
 export function languageLabel(language: AgentLanguage): string {
@@ -269,7 +286,41 @@ export interface InstallMethod {
  *  - Otherwise: the GAIA app install, a pip package for Python agents, and a
  *    source build (language-driven, the long-standing default).
  */
+/** An entry's package type, defaulting to 'agent' as the manifest schema does. */
+export function packageType(agent: Agent): PackageType {
+  return agent.type ?? 'agent';
+}
+
+/** True for the entries that ARE agents — excludes the Agent UI and terminal hub. */
+export function isAgent(agent: Agent): boolean {
+  return packageType(agent) === 'agent';
+}
+
 export function installMethods(agent: Agent): InstallMethod[] {
+  // A component/app is not installed *into* GAIA and has no PyPI wheel — it is
+  // downloaded per platform. `gaia agent install <id>` would not work for it.
+  // An npm package, where one exists, is a real second path (the Agent UI
+  // ships `gaia-ui` globally), so offer it alongside rather than instead.
+  if (!isAgent(agent)) {
+    const methods: InstallMethod[] = [
+      {
+        key: 'download',
+        label: 'Download',
+        command: '',
+        note: 'Download the build for your platform from the release below.',
+      },
+    ];
+    if (agent.npm_package) {
+      methods.push({
+        key: 'npm',
+        label: 'npm',
+        command: `npm install -g ${agent.npm_package}`,
+        note: 'Global CLI install from npm.',
+      });
+    }
+    return methods;
+  }
+
   if (agent.npm_package) {
     return [
       {
@@ -306,10 +357,14 @@ export function installMethods(agent: Agent): InstallMethod[] {
   return methods;
 }
 
+// Wording mirrors the Agent UI's trust gate (src/gaia/apps/webui/src/utils/hubLanes.ts)
+// so the same tier never reads differently in two places. Describe only what the
+// hub actually enforces — there is no publisher-signing scheme and no Python
+// sandbox, so neither may be implied here.
 const SECURITY_TIER_DESCRIPTIONS: Record<SecurityTier, string> = {
   verified: 'Built and reviewed by AMD.',
-  community: 'Publisher-signed but not reviewed by AMD — install with the usual third-party caution.',
-  experimental: 'Opt-in only; may run outside the Python sandbox. Review the source before installing.',
+  community: 'Community-published — not audited by AMD. Install with the usual third-party caution.',
+  experimental: 'Unreviewed and may be unstable. Review the source before installing.',
 };
 
 export function securityTierDescription(tier: SecurityTier): string {

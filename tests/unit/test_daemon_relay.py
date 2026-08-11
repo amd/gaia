@@ -41,6 +41,8 @@ import time
 
 import pytest
 
+pytestmark = pytest.mark.allow_network
+
 from gaia.daemon.relay import (
     TERMINAL_TYPES,
     _run_id_from_body,
@@ -219,6 +221,11 @@ class _FakeManager:
     def is_running(self):
         return self._running
 
+    def check_responsive(self, timeout=None):
+        """Stands in for the real readiness re-probe: a started fake serves."""
+        if not self._running:
+            raise SidecarNotRunningError(f"{self.spec.agent_id} sidecar not running")
+
     def start(self):
         self.resolved_mode = "user"
         self.pid = 4321
@@ -274,7 +281,16 @@ def test_connection_running_returns_base_url_and_bearer():
     assert bearer == ensured["token"]
 
 
-def test_connection_stopped_after_running_raises_again():
+def test_connection_stopped_after_running_raises_again(monkeypatch):
+    # The fake manager reports a hardcoded pid but owns no real OS process, so
+    # its shutdown() can't make that pid disappear. registry.stop() verifies the
+    # pid is gone via psutil.pid_exists against the real process table, which
+    # flakes when the fake pid collides with a live process on the runner. Model
+    # the fake sidecar as fully terminated so the check reflects the double's
+    # intent, not the host's process table.
+    monkeypatch.setattr(
+        "gaia.daemon.sidecars.registry.psutil.pid_exists", lambda pid: False
+    )
     reg = _toy_registry()
     reg.ensure("toy")
     reg.stop("toy")
@@ -466,6 +482,34 @@ class _FakeSidecar:
             sidecar.cancels.append((run_id, request.headers.get("authorization")))
             sidecar.release.set()  # a held stream ends on cancel
             return {"status": "cancelled", "run_id": run_id}
+
+        @app.post("/v1/email/agent/autonomy/run")
+        async def autonomy_run(request: Request):
+            # #2617: mirrors the sidecar's own fixed-function error contract
+            # once ``agent_routes.py`` maps an unhandled ``ConnectorsError``
+            # to ``HTTPException(status_code=500, detail=str(exc))`` instead
+            # of letting it become a textless 500 — a real JSON body on a
+            # non-2xx status, not the default FastAPI 404 envelope the other
+            # non-2xx passthrough test already covers.
+            sidecar.seen.append(
+                (
+                    "/v1/email/agent/autonomy/run",
+                    request.headers.get("authorization"),
+                    request.headers.get("x-client-extra"),
+                )
+            )
+            return JSONResponse(
+                {
+                    "detail": (
+                        "All connected mailboxes failed during triage: "
+                        "microsoft: CONNECTOR_ERROR: no forwarded "
+                        "'microsoft' credential is available to the email "
+                        "sidecar. ... gaia connectors connect microsoft "
+                        "--scopes <scopes> --grant-agent installed:email ..."
+                    )
+                },
+                status_code=500,
+            )
 
         @app.post("/v1/email/triage")
         async def triage(request: Request):
@@ -714,6 +758,33 @@ def test_upstream_non_2xx_passes_through_with_body(live_relay):
     # The SIDECAR's own 404 envelope, not the daemon's unknown-agent 404.
     assert r.status_code == 404
     assert r.json() == {"detail": "Not Found"}
+
+
+@needs_live_servers
+def test_upstream_500_with_json_detail_body_passes_through_verbatim(live_relay):
+    """#2617 regression guard: relay.py is untouched by the route-boundary
+    fix, so a REAL JSON error body on a non-2xx status (not just the default
+    FastAPI 404 envelope covered above) must already relay byte-for-byte —
+    this proves the daemon relay is not where the missing-detail bug lives."""
+    import requests
+
+    _, daemon_url = live_relay
+    r = requests.post(
+        f"{daemon_url}/v1/email/agent/autonomy/run",
+        json={"session_id": "s1"},
+        headers=_auth(),
+        timeout=10,
+    )
+    assert r.status_code == 500
+    assert r.json() == {
+        "detail": (
+            "All connected mailboxes failed during triage: "
+            "microsoft: CONNECTOR_ERROR: no forwarded "
+            "'microsoft' credential is available to the email "
+            "sidecar. ... gaia connectors connect microsoft "
+            "--scopes <scopes> --grant-agent installed:email ..."
+        )
+    }
 
 
 @needs_live_servers

@@ -92,6 +92,18 @@ class ConnectorSpec:
     default_scopes: tuple[str, ...] = field(default_factory=tuple)
     available_scopes: tuple[str, ...] = field(default_factory=tuple)
     oauth_provider_ref: str | None = None
+    # oauth_pkce only: the OAuth authority segment this connector defaults to
+    # (e.g. "consumers" / "organizations" for Microsoft). Per-connector spec
+    # data, not an env var — see plan amendment D2/#2628. None for providers
+    # with a single fixed authority (e.g. Google).
+    oauth_tenant: str | None = None
+    # oauth_pkce only: which provider CLASS implements this spec. Distinct
+    # from ``oauth_provider_ref`` (the per-connector credential/token STORAGE
+    # key) — two specs can share one ``oauth_impl`` while keeping separate
+    # storage, which is exactly how Microsoft Personal / Work-School share
+    # ``MicrosoftOAuthProvider`` but never share a keyring slot. Defaults to
+    # ``id`` when unset (single-audience providers like Google).
+    oauth_impl: str | None = None
     # OAuth-app credentials the user pastes in once during first-time
     # setup (e.g. Google Cloud Console "Desktop client" client_id +
     # client_secret). Empty tuple = no setup form required (provider is
@@ -101,6 +113,12 @@ class ConnectorSpec:
     # setup fields persist as *provider* credentials reused across many
     # connect/disconnect cycles.
     oauth_setup_fields: tuple[ConfigField, ...] = field(default_factory=tuple)
+    # oauth_pkce only: the provider also supports the RFC 8628 device-code flow
+    # (a short code entered at a URL — no loopback redirect / no per-user app
+    # registration). Surfaced to the UI so it can offer a "sign in with a code"
+    # path alongside the browser button. Default False — the provider must
+    # implement the device-code endpoints (e.g. Microsoft).
+    supports_device_code: bool = False
     # mcp_server only
     mcp_command: str | None = None
     mcp_args: tuple[str, ...] = field(default_factory=tuple)

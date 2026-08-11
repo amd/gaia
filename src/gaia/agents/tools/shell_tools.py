@@ -87,6 +87,26 @@ ALLOWED_COMMANDS = {
     "git",  # Individual git subcommands checked separately
 }
 
+# Actions/predicates that turn otherwise read-only commands into a write,
+# delete, or arbitrary-command-execution primitive. The whitelist only checks
+# the command NAME, so these must be inspected explicitly or an allowed command
+# (find/sort/uniq) becomes a bypass (CWE-184).
+#
+# find: -exec/-execdir/-ok/-okdir run any binary (incl. ones NOT in
+# ALLOWED_COMMANDS); -delete removes files; -fprint/-fprintf/-fls write files.
+# The read-only predicates (-print/-print0/-printf/-ls/-name/-type/…) are fine.
+DANGEROUS_FIND_ACTIONS = {
+    "-exec",
+    "-execdir",
+    "-ok",
+    "-okdir",
+    "-delete",
+    "-fprint",
+    "-fprint0",
+    "-fprintf",
+    "-fls",
+}
+
 # Safe read-only git subcommands
 SAFE_GIT_COMMANDS = {
     "status",
@@ -345,6 +365,82 @@ class ShellToolsMixin:
                         "has_errors": True,
                         "hint": "Allowed: Get-*, Select-Object, Format-List, Format-Table, Where-Object, Sort-Object",
                     }
+        # Special handling for find - block predicates that run, delete, or
+        # write files. Without this, `find ... -exec touch {} +` executes a
+        # binary that is NOT in ALLOWED_COMMANDS, bypassing the whitelist.
+        elif cmd_base == "find":
+            for part in cmd_parts[1:]:
+                if part.lower() in DANGEROUS_FIND_ACTIONS:
+                    return {
+                        "status": "error",
+                        "error": (
+                            f"find action '{part}' is not allowed: it can run "
+                            "arbitrary commands, delete, or write files, "
+                            "bypassing the read-only command whitelist."
+                        ),
+                        "has_errors": True,
+                        "hint": "Use read-only find predicates only: -name, -type, -path, -print, -ls.",
+                    }
+        # Special handling for sort - -o/--output writes to a file. Cover every
+        # spelling: -o FILE, -oFILE, -o=FILE, bundled short clusters (-ro), and
+        # every GNU long-option abbreviation of --output (--o, --out, --output=).
+        # Any short cluster containing 'o' is treated as -o; this over-blocks a
+        # few exotic clusters (e.g. -to, separator 'o'), which is acceptable for
+        # a read-only security guard.
+        elif cmd_base == "sort":
+            for part in cmd_parts[1:]:
+                part_lower = part.lower()
+                flag = part_lower.split("=", 1)[0]
+                is_output = False
+                if flag.startswith("--"):
+                    # --output and any unambiguous abbreviation (--o, --out, ...).
+                    if len(flag) > 2 and "--output".startswith(flag):
+                        is_output = True
+                elif part_lower.startswith("-") and part_lower != "-":
+                    # The leading run of letters is the short-flag cluster;
+                    # anything after it is an attached value (-oFILE, -ro/tmp/x).
+                    cluster = re.match(r"[a-z]*", flag[1:]).group(0)
+                    if "o" in cluster:
+                        is_output = True
+                if is_output:
+                    return {
+                        "status": "error",
+                        "error": "sort -o/--output writes to a file, which is not allowed under the read-only command policy.",
+                        "has_errors": True,
+                        "hint": "Drop -o/--output and read sort's result from stdout (e.g. 'sort file' or 'sort file | head').",
+                    }
+        # Special handling for uniq - a second file operand is an output file.
+        elif cmd_base == "uniq":
+            # Flags that consume the following token as their value; the operand
+            # counter must skip that value so it isn't mistaken for a file.
+            _uniq_value_flags = {
+                "-f",
+                "--skip-fields",
+                "-s",
+                "--skip-chars",
+                "-w",
+                "--check-chars",
+            }
+            operands = []
+            skip_next = False
+            for part in cmd_parts[1:]:
+                if skip_next:
+                    skip_next = False
+                    continue
+                if part in _uniq_value_flags:
+                    skip_next = True
+                    continue
+                if part.startswith("-") and part != "-":
+                    continue  # flag (incl. --flag=value and bundled short flags)
+                operands.append(part)
+            # operands = [input, output]; a second operand is a write target.
+            if len(operands) >= 2:
+                return {
+                    "status": "error",
+                    "error": "uniq with an output file is not allowed: it writes to disk, violating the read-only command policy.",
+                    "has_errors": True,
+                    "hint": "Use a single input (or stdin) and read stdout, e.g. 'uniq file' or 'sort file | uniq'.",
+                }
         elif cmd_base not in ALLOWED_COMMANDS:
             return {
                 "status": "error",
@@ -644,7 +740,7 @@ class ShellToolsMixin:
                         timeout=timeout,
                         check=False,
                         env=os.environ.copy(),
-                        shell=use_shell,
+                        shell=use_shell,  # nosec B602 - Windows-only; command whitelist-validated above, shell needed for cmd.exe built-ins/pipes
                     )
                     duration = time.monotonic() - start_time
 

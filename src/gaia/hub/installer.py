@@ -39,6 +39,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import sysconfig
 import tarfile
 import tempfile
 import threading
@@ -50,6 +51,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from gaia.agents.registry import _RESERVED_BUILTIN_IDS
+from gaia.daemon.sidecars.spec import builtin_specs
 from gaia.hub import catalog as catalog_mod
 from gaia.hub.compatibility import check_compatibility, current_platform_key
 from gaia.logger import get_logger
@@ -66,14 +68,29 @@ BACKUP_DIRNAME = ".backup"
 # Where Python wheels get installed (``uv pip install --target``).
 SITE_PACKAGES_DIRNAME = "site-packages"
 
+# ``.pth`` file written into the ACTIVE environment's own site-packages
+# (never the isolated per-agent one above) at wheel install time. A `pip
+# install --target` install is only importable via an explicit sys.path
+# mutation in the installing process (see _hot_register) -- a later, unrelated
+# process using the SAME interpreter/venv (e.g. the next `gaia chat`
+# invocation, which imports `gaia_agent_chat` directly rather than through
+# AgentRegistry) would otherwise never see it. Python's `site` module reads
+# every `.pth` file in site-packages at interpreter startup and appends each
+# line to sys.path, so one shared file with one absolute path per installed
+# wheel agent closes that gap with no code change anywhere else (#2358). This
+# is the same mechanism `pip install -e` uses for editable installs -- a
+# pointer file, not core-bundling.
+ACTIVE_ENV_PTH_FILENAME = "gaia-hub-agents.pth"
+
 # ``artifact_kind`` values recorded in the sentinel. A sentinel written before
 # this field existed reads as "wheel" (the only kind installed pre-#2084).
 ARTIFACT_KIND_WHEEL = "wheel"
 ARTIFACT_KIND_BINARY = "binary"
 ARTIFACT_KIND_CPP = "cpp"
 
-# The only security tier whose native agents install without an explicit trust
-# opt-in. ``community`` / ``experimental`` C++ agents require ``trust_native``.
+# The only security tier whose agents install without an explicit trust opt-in.
+# Any non-verified agent (``community`` / ``experimental``, of any language)
+# requires the caller to pass ``trusted=True``.
 VERIFIED_TIER = "verified"
 
 # Least-privileged default when a manifest omits its tier (mirrors the manifest
@@ -111,12 +128,12 @@ class InstallInProgressError(InstallError):
 
 
 class TrustRequiredError(InstallError):
-    """A native (C++) non-verified agent needs explicit trust to install.
+    """A non-verified agent needs an explicit trust opt-in to install.
 
-    Native agents run as unsandboxed binaries on the user's machine, so a
-    ``community``/``experimental`` C++ package is only installed when the caller
-    explicitly opts in (``trust_native=True`` / the UI's *Trust & Install*
-    confirmation). Maps to HTTP 403 at the router boundary.
+    A non-verified agent runs third-party code on the user's machine, so any
+    ``community``/``experimental`` package (of any language) is only installed
+    when the caller explicitly opts in (``trusted=True`` / the UI's
+    *Trust & Install* confirmation). Maps to HTTP 403 at the router boundary.
     """
 
 
@@ -382,25 +399,47 @@ def _download_and_verify(
 
 
 def _default_run_pip(args: List[str]) -> None:
-    """Run ``uv pip install <args>``; raise InstallError on failure."""
-    cmd = ["uv", "pip", "install", *args]
-    try:
-        proc = subprocess.run(  # noqa: S603 - args are constructed, not shell
-            cmd,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except FileNotFoundError as exc:
-        raise InstallError(
-            "Could not run 'uv' to install the agent's Python package. Install "
-            "uv (https://docs.astral.sh/uv/) or ensure it is on PATH."
-        ) from exc
-    if proc.returncode != 0:
-        raise InstallError(
-            f"'uv pip install' failed (exit {proc.returncode}): "
+    """Install ``args`` via pip, trying frontends in order until one works.
+
+    Mirrors the frontend list in
+    ``gaia.installer.init_command.InitCommand._install_pip_extras``: the
+    standalone ``uv`` binary leads (fastest, honours the active venv), then
+    ``python -m uv``, then ``python -m pip`` -- guaranteed present in any
+    venv, so a machine with no ``uv`` on PATH (the #2358 dead end: a stock
+    ``pip install amd-gaia`` user hitting ``gaia init --profile chat``)
+    still installs the wheel instead of hard-failing. Raises InstallError
+    only if every frontend fails.
+    """
+    frontends = [
+        ["uv", "pip", "install"],
+        [sys.executable, "-m", "uv", "pip", "install"],
+        [sys.executable, "-m", "pip", "install"],
+    ]
+    attempts: List[str] = []
+    for frontend in frontends:
+        cmd = [*frontend, *args]
+        try:
+            proc = subprocess.run(  # noqa: S603 - args are constructed, not shell
+                cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except FileNotFoundError:
+            attempts.append(f"{frontend[0]} (not found on PATH)")
+            continue
+        if proc.returncode == 0:
+            return
+        attempts.append(
+            f"{' '.join(frontend)} (exit {proc.returncode}): "
             f"{proc.stderr.strip() or proc.stdout.strip()}"
         )
+    raise InstallError(
+        "Could not install the agent's Python package -- every pip frontend "
+        "failed:\n" + "\n".join(f"  - {a}" for a in attempts) + "\n"
+        f"Install uv (https://docs.astral.sh/uv/) or ensure "
+        f"'{sys.executable} -m pip' works, then retry."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -697,6 +736,127 @@ def _snapshot_backup(agent_id: str, install_root: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Active-environment .pth priming (#2358)
+#
+# _hot_register (below) makes a freshly-installed wheel importable in the
+# CALLING process only, via an in-memory sys.path mutation. Some callers
+# never construct an AgentRegistry at all -- e.g. `gaia chat`'s CLI handler
+# does a bare `from gaia_agent_chat.agent import ChatAgent` (cli.py) -- so a
+# later, unrelated `gaia` invocation using the SAME interpreter/venv would
+# still fail to import a wheel agent installed by an earlier `gaia init`.
+# Writing one absolute site-packages path per installed wheel agent into a
+# shared `.pth` file in the ACTIVE environment's own site-packages closes
+# that gap generically, with no call-site change required anywhere: Python's
+# `site` module reads every `.pth` file at interpreter startup and appends
+# each line to sys.path before user code runs.
+# ---------------------------------------------------------------------------
+
+
+def _default_active_env_site_packages() -> Path:
+    """The current interpreter's own (active-environment) site-packages dir.
+
+    This is deliberately NOT the isolated per-agent ``site-packages`` under
+    ``install_root/<id>/`` -- it's the ambient environment's own
+    (``sysconfig``'s ``purelib`` scheme path), the one Python's ``site``
+    module scans for ``.pth`` files at interpreter startup.
+    """
+    return Path(sysconfig.get_path("purelib"))
+
+
+def _read_pth_lines(pth_path: Path) -> List[str]:
+    if not pth_path.exists():
+        return []
+    return [
+        line
+        for line in pth_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
+def _write_pth_lines(pth_path: Path, lines: List[str]) -> None:
+    """Write *lines* to *pth_path* atomically (temp file + ``os.replace``),
+    so a crash mid-write never corrupts a ``.pth`` file other packages also
+    rely on. Deletes the file entirely when *lines* is empty."""
+    if not lines:
+        pth_path.unlink(missing_ok=True)
+        return
+    pth_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_fd, tmp_name = tempfile.mkstemp(
+        dir=str(pth_path.parent), prefix=".gaia-hub-pth-"
+    )
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        os.replace(str(tmp_path), str(pth_path))
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
+
+
+def _add_wheel_agent_to_active_env_path(
+    site_packages: Path, active_env_site_packages: Optional[Path] = None
+) -> None:
+    """Add *site_packages* to the active environment's ``.pth`` file (idempotent).
+
+    Raises:
+        InstallError: If the ``.pth`` file cannot be written (permissions,
+            missing directory, etc.) -- a wheel agent that isn't importable
+            outside the installing process is a real, actionable failure, not
+            one to silently swallow (CLAUDE.md fail-loudly).
+    """
+    target_dir = active_env_site_packages or _default_active_env_site_packages()
+    pth_path = target_dir / ACTIVE_ENV_PTH_FILENAME
+    line = str(site_packages)
+    try:
+        lines = _read_pth_lines(pth_path)
+        if line in lines:
+            return
+        lines.append(line)
+        _write_pth_lines(pth_path, lines)
+        logger.info(
+            "installer: added %s to %s (wheel agent importable in any new "
+            "process using this environment)",
+            line,
+            pth_path,
+        )
+    except OSError as exc:
+        raise InstallError(
+            f"Could not write {pth_path} to make the newly installed wheel "
+            f"agent at {site_packages} importable outside this process: "
+            f"{exc}. Check write permissions on {target_dir}."
+        ) from exc
+
+
+def _remove_wheel_agent_from_active_env_path(
+    site_packages: Path, active_env_site_packages: Optional[Path] = None
+) -> None:
+    """Remove *site_packages* from the active environment's ``.pth`` file.
+
+    No-op if the file or the line is already absent (uninstall of an agent
+    whose install predates this mechanism, or a repeated uninstall).
+
+    Raises:
+        InstallError: If the ``.pth`` file cannot be rewritten/removed.
+    """
+    target_dir = active_env_site_packages or _default_active_env_site_packages()
+    pth_path = target_dir / ACTIVE_ENV_PTH_FILENAME
+    line = str(site_packages)
+    try:
+        lines = _read_pth_lines(pth_path)
+        if line not in lines:
+            return
+        remaining = [entry for entry in lines if entry != line]
+        _write_pth_lines(pth_path, remaining)
+        logger.info("installer: removed %s from %s", line, pth_path)
+    except OSError as exc:
+        raise InstallError(
+            f"Could not clean up {pth_path} after removing the wheel agent "
+            f"at {site_packages}: {exc}."
+        ) from exc
+
+
+# ---------------------------------------------------------------------------
 # Hot-register
 # ---------------------------------------------------------------------------
 
@@ -733,40 +893,76 @@ def _hot_register(agent_id: str, install_dir: Path, language: str, registry) -> 
     return registry.get(agent_id) is not None
 
 
+def register_installed_sidecars(registry: Any) -> None:
+    """Register every hub-installed daemon-sidecar agent into *registry* (#2408).
+
+    Bridges ``gaia.daemon.sidecars.spec.builtin_specs()`` (what the daemon can
+    supervise, and the connector scopes it declares) with :func:`list_installed`
+    (what is actually on disk) so a binary sidecar agent (e.g. email) is visible
+    to the connectors grant flow and ``/api/agents`` without an importable
+    wheel. A binary install has no site-packages to entry-point-scan, so
+    :func:`_hot_register` never covers it.
+
+    Called once at server startup (right after ``AgentRegistry.discover()``)
+    and again the moment a binary sidecar finishes installing from the Hub
+    panel, so neither trigger point leaves the registry stale until a
+    restart. ``AgentRegistry.register_sidecar`` is itself idempotent against
+    an already-registered bare id, so calling this repeatedly is safe.
+
+    Best-effort at the :func:`list_installed` I/O boundary (mirrors
+    ``AgentRegistry._prime_installed_wheel_agents_path``): a disk read
+    failure logs and registers nothing rather than failing UI boot.
+    """
+    if registry is None:
+        return
+    try:
+        installed = list_installed()
+    except Exception as exc:  # noqa: BLE001 - best-effort discovery step
+        logger.warning(
+            "installer: could not list installed agents for sidecar "
+            "connector registration: %s",
+            exc,
+        )
+        return
+
+    for agent_id, spec in builtin_specs().items():
+        if agent_id not in installed:
+            continue
+        registry.register_sidecar(
+            agent_id, spec.display_name, spec.required_connections
+        )
+
+
 # ---------------------------------------------------------------------------
 # Security tier / native-agent trust
 # ---------------------------------------------------------------------------
 
 
-def requires_native_trust(manifest: Dict[str, Any]) -> bool:
-    """Whether installing *manifest* needs an explicit native-trust opt-in.
+def requires_trust_ack(manifest: Dict[str, Any]) -> bool:
+    """Whether installing *manifest* needs an explicit trust opt-in.
 
-    True for native (``language: cpp``) agents that are not in the ``verified``
-    tier — they ship an unsandboxed binary from a non-AMD-audited publisher.
+    True for any agent not in the ``verified`` tier — a non-AMD-verified package
+    runs third-party code on the user's machine regardless of its language.
     """
-    language = manifest.get("language", "python")
     tier = manifest.get("security_tier", DEFAULT_SECURITY_TIER)
-    return language == "cpp" and tier != VERIFIED_TIER
+    return tier != VERIFIED_TIER
 
 
-def ensure_native_trust(
-    agent_id: str, manifest: Dict[str, Any], *, trust_native: bool
-) -> None:
-    """Raise :class:`TrustRequiredError` if native trust is needed but absent.
+def ensure_trust_ack(agent_id: str, manifest: Dict[str, Any], *, trusted: bool) -> None:
+    """Raise :class:`TrustRequiredError` if trust is needed but not acknowledged.
 
-    No-op for Python agents and ``verified`` native agents. Called both by the
-    router (synchronous 403) and :func:`install` (defense in depth).
+    No-op for ``verified`` agents. Called both by the router (synchronous 403)
+    and :func:`install` (defense in depth).
     """
-    if trust_native or not requires_native_trust(manifest):
+    if trusted or not requires_trust_ack(manifest):
         return
     tier = manifest.get("security_tier", DEFAULT_SECURITY_TIER)
     raise TrustRequiredError(
-        f"'{agent_id}' is a native (C++) agent in the '{tier}' security tier. "
-        f"Native agents run as unsandboxed binaries on your machine, so this one "
-        f"is not installed automatically. Re-install with explicit trust "
-        f"(trust_native=true, or the UI's 'Trust & Install' confirmation) only if "
-        f"you trust its publisher. See "
-        f"https://amd-gaia.ai/docs/spec/agent-hub-restructure."
+        f"'{agent_id}' is a non-verified agent in the '{tier}' security tier. "
+        f"It runs third-party code on your machine, so it is not installed "
+        f"automatically. Re-install with explicit trust (trusted=true, or the "
+        f"UI's 'Trust & Install' confirmation) only if you trust its publisher. "
+        f"See https://amd-gaia.ai/docs/spec/agent-hub-restructure."
     )
 
 
@@ -808,8 +1004,9 @@ def install(
     install_root: Optional[Path] = None,
     registry: Any = None,
     skip_compatibility_check: bool = False,
-    trust_native: bool = False,
+    trusted: bool = False,
     platform_key: Optional[str] = None,
+    active_env_site_packages: Optional[Path] = None,
 ) -> InstallResult:
     """Download, verify, and install an agent from the hub.
 
@@ -822,11 +1019,16 @@ def install(
         install_root: Install root; defaults to ``~/.gaia/agents``.
         registry: Live :class:`AgentRegistry` to hot-register into.
         skip_compatibility_check: Skip the platform/disk gate (tests/forced).
-        trust_native: Explicit opt-in to install a non-verified native (C++)
-            agent. Required for ``community``/``experimental`` C++ packages.
+        trusted: Explicit opt-in to install a non-verified agent. Required for
+            any ``community``/``experimental`` package (of any language).
         platform_key: Artifact-filename platform key (``win32-x64`` etc.) used
             to select among ``versions[v].artifacts[]``; defaults to the real
             host's key (injectable for tests).
+        active_env_site_packages: Where to write the ``.pth`` entry that makes
+            a wheel install importable by ANY later process using this same
+            interpreter/venv (not just the calling process); defaults to this
+            interpreter's own site-packages (``sysconfig``'s ``purelib``).
+            Injectable so tests don't write into the real active environment.
 
     Raises:
         InstallInProgressError, ChecksumError, DiskSpaceError,
@@ -848,10 +1050,10 @@ def install(
                 )
             language = manifest.get("language", "python")
 
-            # Native-agent trust gate — refuse non-verified C++ packages unless
-            # the caller explicitly opted in (defense in depth; the router also
-            # enforces this synchronously for a clean 403).
-            ensure_native_trust(agent_id, manifest, trust_native=trust_native)
+            # Trust gate — refuse any non-verified package unless the caller
+            # explicitly opted in (defense in depth; the router also enforces
+            # this synchronously for a clean 403).
+            ensure_trust_ack(agent_id, manifest, trusted=trusted)
 
             # Deprecation is non-fatal but must be loud: a deprecated agent may
             # be unmaintained or superseded.
@@ -946,6 +1148,16 @@ def install(
                     artifact_kind=artifact_kind,
                     executable=generic_name,
                 )
+                # Prime the ACTIVE environment (not just this process) so a
+                # later, unrelated `gaia` invocation using the same
+                # interpreter/venv can import this wheel too (#2358) — closes
+                # the gap for call sites that never touch AgentRegistry (e.g.
+                # `gaia chat`'s hardcoded `import gaia_agent_chat`).
+                if artifact_kind == ARTIFACT_KIND_WHEEL:
+                    _add_wheel_agent_to_active_env_path(
+                        install_dir / SITE_PACKAGES_DIRNAME,
+                        active_env_site_packages,
+                    )
             except Exception:
                 # Install failed mid-write — restore the backup if we made one so
                 # the user is left with a working previous version, not a stub.
@@ -960,13 +1172,15 @@ def install(
                 percent=90,
                 version=resolved_version,
             )
-            # Binary installs have no site-packages to scan (nothing to
-            # hot-register), regardless of the manifest's declared language.
-            hot = (
-                False
-                if artifact_kind == ARTIFACT_KIND_BINARY
-                else _hot_register(agent_id, install_dir, language, registry)
-            )
+            # Binary installs have no site-packages to scan (nothing for
+            # _hot_register), regardless of the manifest's declared language —
+            # bridge it into the registry directly instead, so a sidecar
+            # agent's connector grants work without a server restart (#2408).
+            if artifact_kind == ARTIFACT_KIND_BINARY:
+                register_installed_sidecars(registry)
+                hot = registry is not None and registry.get(agent_id) is not None
+            else:
+                hot = _hot_register(agent_id, install_dir, language, registry)
 
             # NOTE: the backup snapshot is intentionally retained after a
             # successful update so rollback() can restore the prior version. It
@@ -1058,8 +1272,14 @@ def uninstall(
     *,
     install_root: Optional[Path] = None,
     registry: Any = None,
+    active_env_site_packages: Optional[Path] = None,
 ) -> None:
     """Remove a hub-installed agent. Refuses builtins.
+
+    Args:
+        active_env_site_packages: Where the ``.pth`` entry added at install
+            time lives; defaults to this interpreter's own site-packages.
+            Injectable so tests don't touch the real active environment.
 
     Raises:
         InstallError: If *agent_id* is a reserved builtin.
@@ -1071,7 +1291,8 @@ def uninstall(
         )
     root = install_root or default_install_root()
     install_dir = agent_install_dir(agent_id, root)
-    if read_sentinel(agent_id, root) is None:
+    installed = read_sentinel(agent_id, root)
+    if installed is None:
         raise NotInstalledError(
             f"'{agent_id}' is not installed (no {SENTINEL_NAME} at {install_dir})."
         )
@@ -1082,6 +1303,10 @@ def uninstall(
             f"Could not remove '{agent_id}': {exc}. It appears to be running — "
             f"close it and retry."
         ) from exc
+    if installed.artifact_kind == ARTIFACT_KIND_WHEEL:
+        _remove_wheel_agent_from_active_env_path(
+            install_dir / SITE_PACKAGES_DIRNAME, active_env_site_packages
+        )
     _discard_backup(agent_id, root)
     if registry is not None:
         _deregister(agent_id, registry)

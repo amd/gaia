@@ -83,6 +83,7 @@ def create_app(
     broker=None,
     custody_auth=None,
     custody_store=None,
+    clock=None,
 ):
     """Build the FastAPI app bound to this daemon's identity.
 
@@ -106,6 +107,11 @@ def create_app(
     its OWN per-spawn secrets (bound at mint), NOT the client ``token`` — it is a
     separate surface with its own MAJOR (§0.31), so it is not behind
     ``require_token``.
+
+    *clock* (a :class:`gaia.daemon.scheduler.clock.DaemonClock`) additively
+    reports its running state, last poll time, and pending/failed job counts
+    on ``GET /daemon/v1/status`` (#2379); ``None`` (the default) leaves the
+    response exactly as it was before the clock existed.
     """
     from fastapi import Depends, FastAPI, HTTPException
 
@@ -133,7 +139,7 @@ def create_app(
     @app.get(f"{API_PREFIX}/status")
     def status(_: None = Depends(require_token)) -> dict:
         now = time.time()
-        return {
+        payload = {
             "service": SERVICE_ID,
             "api_version": DAEMON_API_VERSION,
             "pid": pid,
@@ -142,6 +148,15 @@ def create_app(
             "started_at": started_at,
             "uptime_seconds": max(0.0, now - started_at),
         }
+        if clock is not None:
+            counts = clock.job_counts()
+            payload["clock"] = {
+                "running": clock.running,
+                "last_poll_at": clock.last_poll_at,
+                "pending_jobs": counts["pending"],
+                "failed_jobs": counts["failed"],
+            }
+        return payload
 
     @app.post(f"{API_PREFIX}/shutdown")
     def shutdown(_: None = Depends(require_token)) -> dict:

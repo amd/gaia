@@ -78,6 +78,35 @@ icon: "bug"
 ## Agent & SDK Issues
 
 <AccordionGroup>
+  <Accordion title="Agent says a tool 'requires explicit user approval'" icon="shield-halved">
+    Dangerous tools — shell commands, file writes, email send / forward /
+    permanent delete, calendar RSVP — only run after you approve them. If nothing
+    can ask you, the tool is denied rather than run silently:
+
+    ```
+    'send_now' requires explicit user approval and cannot run unattended…
+    ```
+
+    You'll see this when the agent is driven without a terminal: output piped or
+    redirected (`gaia chat -q "…" > out.txt`), a CI job, or a host process such as
+    the OpenAI-compatible `gaia api` server, which has no way to show a prompt.
+
+    - **Working interactively?** Run the command in a terminal without redirecting
+      stdout, and answer the `[y]es / [N]o / [a]lways` prompt. In the Agent UI,
+      approve the permission dialog instead.
+    - **Genuinely unattended run you trust** (CI, a batch job, a host that already
+      asked the user): export `GAIA_AUTO_APPROVE_TOOLS=1` in the environment that
+      launches GAIA. Every tool approved this way is logged with its name. A `.env`
+      file cannot set it — that would let a project directory switch off your
+      prompts.
+
+    <Warning>
+      Don't leave `GAIA_AUTO_APPROVE_TOOLS=1` set on a machine with a mailbox
+      connected: it lets the model send, forward, and permanently delete mail
+      without asking.
+    </Warning>
+  </Accordion>
+
   <Accordion title="Agent not found after install" icon="magnifying-glass">
     ```bash
     # Verify package is installed

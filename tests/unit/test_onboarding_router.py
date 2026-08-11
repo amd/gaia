@@ -59,7 +59,10 @@ def test_preflight_full_tier_compatible(client, monkeypatch):
     assert not any("NPU" in w for w in body["warnings"])
 
 
-def test_preflight_no_npu_emits_warning(client, monkeypatch):
+def test_preflight_no_npu_with_gpu_is_informational(client, monkeypatch):
+    # No-NPU box with a capable GPU (the #2396 Radeon dGPU case): the Hardware
+    # check must read as informational — no "agent" framing, no "install your
+    # Ryzen AI NPU driver" CTA.
     monkeypatch.setattr(
         onboarding_mod, "_probe_lemonade_devices", _stub_devices(npu_detected=False)
     )
@@ -69,7 +72,28 @@ def test_preflight_no_npu_emits_warning(client, monkeypatch):
     body = client.get("/api/onboarding/preflight").json()
     assert body["compatible"] is True  # advisory, still runnable
     assert body["tier"] == "standard"
+    npu_warnings = [w for w in body["warnings"] if "NPU" in w]
+    assert npu_warnings, "expected an informational NPU line"
+    joined = " ".join(npu_warnings)
+    assert "agent" not in joined.lower()
+    assert "install" not in joined.lower()
+    assert "optional" in joined.lower()
+
+
+def test_preflight_no_npu_no_gpu_still_warns_to_remediate(client, monkeypatch):
+    # A box with neither NPU nor a detectable GPU keeps the remediation warning.
+    monkeypatch.setattr(
+        onboarding_mod,
+        "_probe_lemonade_devices",
+        _stub_devices(npu_detected=False, gpu_vram_gb=None, gpu_name=None),
+    )
+    monkeypatch.setattr(compatibility, "detect_total_memory_gb", lambda: 16.0)
+    monkeypatch.setattr(compatibility, "detect_free_disk_gb", lambda _p: 500.0)
+
+    body = client.get("/api/onboarding/preflight").json()
     assert any("none was detected" in w for w in body["warnings"])
+    # Still no "agent" framing in the onboarding context.
+    assert not any("agent" in w.lower() for w in body["warnings"])
 
 
 def test_preflight_low_disk_is_blocker(client, monkeypatch):

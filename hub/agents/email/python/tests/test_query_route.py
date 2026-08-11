@@ -139,6 +139,121 @@ class _RaisingFakeAgent:
         raise RuntimeError("Lemonade Server is not reachable at http://localhost:13305")
 
 
+class _ConnectionErrorFakeAgent:
+    """Raises a realistic ``requests`` ConnectionError — the raw urllib3 repr a
+    user actually sees when Lemonade is down, NOT a hand-written friendly
+    string (issue #2139 acceptance)."""
+
+    def __init__(self):
+        self.conversation_history = []
+        self.console = None
+        self._cancel_event = None
+
+    def process_query(self, query, max_steps=None):
+        self.console.print_processing_start(query, 20, "fake-model")
+        import requests
+
+        raise requests.exceptions.ConnectionError(
+            "HTTPConnectionPool(host='localhost', port=8000): Max retries "
+            "exceeded with url: /api/v1/chat/completions (Caused by "
+            "NewConnectionError('<urllib3.connection.HTTPConnection object at "
+            "0x10a>: Failed to establish a new connection: [Errno 61] "
+            "Connection refused'))"
+        )
+
+
+class _BuiltinConnRefusedFakeAgent:
+    """Raises a builtin ``ConnectionRefusedError`` (an OS-level transport error,
+    not a friendly string) — classified by type, not string shape."""
+
+    def __init__(self):
+        self.conversation_history = []
+        self.console = None
+        self._cancel_event = None
+
+    def process_query(self, query, max_steps=None):
+        self.console.print_processing_start(query, 20, "fake-model")
+        raise ConnectionRefusedError(61, "Connection refused")
+
+
+class _UnrelatedErrorFakeAgent:
+    """Raises an error that has nothing to do with connectivity — it must pass
+    through verbatim, never masked behind Lemonade copy (issue #2139)."""
+
+    def __init__(self):
+        self.conversation_history = []
+        self.console = None
+        self._cancel_event = None
+
+    def process_query(self, query, max_steps=None):
+        self.console.print_processing_start(query, 20, "fake-model")
+        raise ValueError("triage produced malformed JSON at row 4")
+
+
+class _RecoverableRetryFakeAgent:
+    """Reproduces #2515: a per-tool error the agent loop is retrying (e.g. the
+    live repro — ``archive_message_batch`` called with a spurious ``mailbox``
+    kwarg), NOT a fatal top-level failure. Pauses right after emitting the
+    recoverable error so the test can inspect ``run.cancel_event`` /
+    ``handler.cancelled`` BEFORE the retry step runs — proving the streaming
+    layer didn't cut the response and cancel the still-retrying agent out
+    from under it.
+    """
+
+    def __init__(self):
+        self.conversation_history = []
+        self.console = None
+        self._cancel_event = None
+        self.error_emitted = threading.Event()
+
+    def process_query(self, query, max_steps=None):
+        self.console.print_processing_start(query, 20, "fake-model")
+        self.console.print_step_header(1, 20)
+        self.console.print_tool_usage("archive_message_batch")
+        self.console.print_error(
+            "Unexpected argument(s) for archive_message_batch: mailbox. "
+            "Accepted argument(s): message_ids.",
+            recoverable=True,
+        )
+        self.error_emitted.set()
+        # Give the streaming layer a beat to process the queued event (and,
+        # pre-fix, cut the stream + cancel this run) before the retry.
+        if self._cancel_event is not None:
+            self._cancel_event.wait(timeout=2)
+            if self._cancel_event.is_set():
+                self.console.print_final_answer("Cancelled.", streaming=False)
+                return {"answer": "Cancelled."}
+        self.console.print_step_header(2, 20)
+        self.console.print_tool_usage("archive_message_batch")
+        self.console.pretty_print_json({"message_ids": ["m1"]}, title="Arguments")
+        self.console.pretty_print_json({"archived": 1})
+        self.console.print_tool_complete()
+        self.console.print_final_answer("Archived 1 message.", streaming=False)
+        return {"answer": "Archived 1 message."}
+
+
+class _InternalErrorFakeAgent:
+    """Mimics the base agent's Lemonade-down branch: it sets an actionable
+    ``final_answer`` and returns a failed result WITHOUT calling
+    ``print_final_answer`` — so no ``answer`` event ever reaches the stream (#2444).
+    """
+
+    ANSWER = (
+        "Local Lemonade Server is not reachable at http://localhost:13305 — "
+        "start it with `lemonade-server serve` (or run `gaia init`), then retry."
+    )
+
+    def __init__(self):
+        self.conversation_history = []
+        self.console = None
+        self._cancel_event = None
+
+    def process_query(self, query, max_steps=None):
+        self.console.print_processing_start(query, 20, "fake-model")
+        # Note: no print_final_answer — the real loop breaks on the error branch.
+        return {"status": "failed", "result": self.ANSWER, "error_count": 1}
+
+
 # ---------------------------------------------------------------------------
 # Happy path — the canonical event SEQUENCE
 # ---------------------------------------------------------------------------
@@ -217,11 +332,16 @@ def test_confirmation_step_ends_with_needs_confirmation_then_final_refusal(
     nc = events[types.index("needs_confirmation")]
     assert nc["action"] == "send_now"
     assert "confirm_url" not in nc  # stateless stop-and-hand-off (D1)
-    # The run ends with a final refusal that points at the fixed-function route.
+    # The run ends with a plain-language refusal — no internal REST contract or
+    # architecture jargon leaked to the chat user (issue #2404).
     assert events[-1]["type"] == "final"
-    assert "/v1/email/send" in events[-1]["answer"]
+    answer = events[-1]["answer"]
+    assert "confirmation" in answer.lower()
+    assert "/v1/email" not in answer
+    assert "D1" not in answer
+    assert "POST" not in answer
     # The gated tool never actually "sent".
-    assert "Sent." not in events[-1]["answer"]
+    assert "Sent." not in answer
 
 
 # ---------------------------------------------------------------------------
@@ -271,6 +391,51 @@ def test_cancel_unknown_run_id_is_404(app_client):
 
 
 # ---------------------------------------------------------------------------
+# #2515 — a recoverable per-tool error must not end the stream or cancel the
+# still-retrying agent
+# ---------------------------------------------------------------------------
+
+
+def test_recoverable_tool_error_does_not_terminate_stream_or_cancel_run(monkeypatch):
+    fake = _RecoverableRetryFakeAgent()
+    monkeypatch.setattr(query_routes, "build_query_agent", lambda **k: fake)
+    client = TestClient(export_openapi.build_app())
+    run_id = str(uuid.uuid4())
+    collected = {}
+
+    def _stream():
+        resp = client.post(
+            "/v1/email/query",
+            json={"query": "archive stuff", "run_id": run_id, "context": []},
+        )
+        collected["text"] = resp.text
+
+    t = threading.Thread(target=_stream, daemon=True)
+    t.start()
+
+    assert fake.error_emitted.wait(timeout=10), "recoverable error never emitted"
+    # Give the async stream generator a moment to drain the queued
+    # ``agent_error`` event through the translator before asserting nothing
+    # tore the run down in response to it.
+    time.sleep(0.3)
+    run = query_routes.registry.get(run_id)
+    assert run is not None, "run ended prematurely — was cancelled before the retry"
+    assert not run.cancel_event.is_set(), "recoverable error set the cancel event"
+    assert not run.handler.cancelled.is_set(), "recoverable error cancelled the handler"
+
+    t.join(timeout=10)
+    events = _parse_sse(collected["text"])
+    types = _types(events)
+    # Both the failed attempt (step 1) AND the retried attempt (step 2) got
+    # their tool_call streamed — proving the loop was not cut off after the
+    # recoverable error and reached completion (#2515).
+    assert types.count("tool_call") == 2
+    assert types.count("error") == 0
+    assert types[-1] == "final"
+    assert events[-1]["answer"] == "Archived 1 message."
+
+
+# ---------------------------------------------------------------------------
 # Error path — a failed run ends with a terminal error event
 # ---------------------------------------------------------------------------
 
@@ -284,6 +449,129 @@ def test_run_failure_ends_with_terminal_error(app_client, monkeypatch):
     assert events[-1]["type"] == "error"
     assert events[-1]["status"] == 500
     assert "Lemonade" in events[-1]["detail"]
+
+
+def test_internal_error_branch_surfaces_agent_answer(app_client, monkeypatch):
+    # The loop set an actionable answer but never emitted an ``answer`` event.
+    # The stream must surface that copy, not a generic "no final answer" (#2444).
+    fake = _InternalErrorFakeAgent()
+    monkeypatch.setattr(query_routes, "build_query_agent", lambda **k: fake)
+    resp = app_client.post("/v1/email/query", json=_req())
+    assert resp.status_code == 200
+    events = _parse_sse(resp.text)
+    assert events[-1]["type"] == "error"
+    assert events[-1]["status"] == 500
+    assert events[-1]["detail"] == _InternalErrorFakeAgent.ANSWER
+    assert "producing a final answer" not in events[-1]["detail"]
+
+
+def _assert_actionable_lemonade_detail(detail: str) -> None:
+    """The three-part actionable contract (#2139): what failed, what to do,
+    where to look."""
+    lower = detail.lower()
+    assert "lemonade server is not reachable" in lower  # what failed
+    # what to do — start it (either remediation is acceptable copy).
+    assert "lemonade-server serve" in lower or "gaia init" in lower
+    assert "amd-gaia.ai/docs/guides/email" in lower  # where to look
+
+
+def test_lemonade_down_connection_error_gets_actionable_detail(app_client, monkeypatch):
+    """A realistic requests ConnectionError → actionable guidance, with the raw
+    exception appended for debugging (not replacing it)."""
+    fake = _ConnectionErrorFakeAgent()
+    monkeypatch.setattr(query_routes, "build_query_agent", lambda **k: fake)
+    resp = app_client.post("/v1/email/query", json=_req())
+    assert resp.status_code == 200
+
+    events = _parse_sse(resp.text)
+    assert events[-1]["type"] == "error"
+    assert events[-1]["status"] == 500
+    detail = events[-1]["detail"]
+    _assert_actionable_lemonade_detail(detail)
+    # The original exception text is preserved for debugging — appended, never
+    # dropped (the guidance leads, the raw repr trails).
+    assert "Technical details:" in detail
+    assert "Connection refused" in detail
+    assert detail.lower().index("not reachable") < detail.index("Technical details:")
+
+
+def test_lemonade_down_builtin_connection_error_gets_actionable_detail(
+    app_client, monkeypatch
+):
+    """A builtin ConnectionRefusedError is classified by TYPE (its str carries
+    no 'Lemonade' token), proving detection isn't just substring luck."""
+    fake = _BuiltinConnRefusedFakeAgent()
+    monkeypatch.setattr(query_routes, "build_query_agent", lambda **k: fake)
+    resp = app_client.post("/v1/email/query", json=_req())
+    assert resp.status_code == 200
+
+    events = _parse_sse(resp.text)
+    assert events[-1]["type"] == "error"
+    _assert_actionable_lemonade_detail(events[-1]["detail"])
+    assert "Connection refused" in events[-1]["detail"]
+
+
+def test_unrelated_error_passes_through_unmasked(app_client, monkeypatch):
+    """A non-connectivity failure is surfaced verbatim — never rewritten as a
+    Lemonade message (no silent masking of unrelated bugs)."""
+    fake = _UnrelatedErrorFakeAgent()
+    monkeypatch.setattr(query_routes, "build_query_agent", lambda **k: fake)
+    resp = app_client.post("/v1/email/query", json=_req())
+    assert resp.status_code == 200
+
+    events = _parse_sse(resp.text)
+    assert events[-1]["type"] == "error"
+    assert events[-1]["status"] == 500
+    assert events[-1]["detail"] == "triage produced malformed JSON at row 4"
+    assert "Lemonade" not in events[-1]["detail"]
+
+
+# ---------------------------------------------------------------------------
+# Classification helper — pure-function coverage (no TestClient)
+# ---------------------------------------------------------------------------
+
+
+def test_terminal_error_detail_classifies_wrapped_connection_cause():
+    """A transport error hidden behind ``raise ... from`` is still classified
+    unreachable — the cause chain is walked, not just ``str(exc)``."""
+    try:
+        raise ConnectionRefusedError(61, "Connection refused")
+    except ConnectionRefusedError as cause:
+        wrapped = RuntimeError("triage tool failed")
+        wrapped.__cause__ = cause
+
+    assert query_routes._is_lemonade_unreachable(wrapped) is True
+    detail = query_routes._terminal_error_detail(wrapped)
+    _assert_actionable_lemonade_detail(detail)
+    # The wrapper's own message is preserved in the appended technical details.
+    assert "triage tool failed" in detail
+
+
+def test_terminal_error_detail_leaves_unrelated_errors_verbatim():
+    exc = ValueError("some unrelated parse failure")
+    assert query_routes._is_lemonade_unreachable(exc) is False
+    assert query_routes._terminal_error_detail(exc) == "some unrelated parse failure"
+
+
+def test_timeout_is_not_classified_as_lemonade_down():
+    """A timeout means up-but-slow, or a *different* host (the Gmail/Outlook
+    backends use httpx with their own timeouts) — never a not-running local
+    Lemonade, which refuses instantly. Such errors must pass through verbatim so
+    the user isn't told to restart Lemonade when Gmail is merely slow (#2139)."""
+
+    class _ReadTimeout(Exception):
+        """Stands in for httpx.ReadTimeout — its repr carries 'timeout'."""
+
+    for exc in (
+        _ReadTimeout("The read operation timed out"),
+        _ReadTimeout(""),  # empty str → class-name fallback still says nothing Lemonade
+        TimeoutError("timed out"),
+        RuntimeError("Gmail API call: connect timeout after 15s"),
+        RuntimeError("host is unreachable via the proxy"),
+    ):
+        assert query_routes._is_lemonade_unreachable(exc) is False, exc
+        # And the actionable Lemonade copy is NOT prepended.
+        assert "Lemonade" not in query_routes._terminal_error_detail(exc)
 
 
 # ---------------------------------------------------------------------------
@@ -321,3 +609,267 @@ def test_non_lemonade_provider_is_400(app_client, monkeypatch):
     resp = app_client.post("/v1/email/query", json=_req(provider="claude"))
     assert resp.status_code == 400
     assert "local inference only" in resp.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# session_id — schema (#2829). Omitted -> today's behaviour exactly; present
+# -> constrained to the same charset a dict key / path segment / log value
+# tolerates (agent_routes.py:395,404 use it as a URL path segment).
+# ---------------------------------------------------------------------------
+
+
+def test_session_id_is_optional_and_defaults_to_none():
+    req = query_routes.QueryRequest(query="hi", run_id=str(uuid.uuid4()), context=[])
+    assert req.session_id is None
+
+
+def test_session_id_accepts_the_documented_charset():
+    req = query_routes.QueryRequest(
+        query="hi", run_id=str(uuid.uuid4()), context=[], session_id="abc-123_XYZ"
+    )
+    assert req.session_id == "abc-123_XYZ"
+
+
+@pytest.mark.parametrize(
+    "bad_id",
+    [
+        "",  # too short (min length 1)
+        "has a space",
+        "has/slash",
+        "has.dot",
+        "x" * 129,  # over the 128 cap
+    ],
+)
+def test_session_id_rejects_characters_outside_the_charset(bad_id):
+    import pydantic
+
+    with pytest.raises(pydantic.ValidationError):
+        query_routes.QueryRequest(
+            query="hi", run_id=str(uuid.uuid4()), context=[], session_id=bad_id
+        )
+
+
+def test_omitted_session_id_still_works_end_to_end(app_client, monkeypatch):
+    """Today's behaviour, byte-for-byte: no session_id -> the old per-turn agent."""
+    fake = _HappyFakeAgent()
+    monkeypatch.setattr(query_routes, "build_query_agent", lambda **k: fake)
+    resp = app_client.post("/v1/email/query", json=_req())
+    assert resp.status_code == 200
+    events = _parse_sse(resp.text)
+    assert _types(events)[-1] == "final"
+    assert fake.seen_query == "Triage my inbox."
+
+
+# ---------------------------------------------------------------------------
+# session_id — resolution, concurrency, continuity (#2829, layer 2)
+#
+# A session_id resolves through agent_routes.registry, the SAME session
+# store the stateful /v1/email/agent/* surface uses -- so tests patch
+# agent_routes.build_session_agent (not query_routes.build_query_agent) and
+# swap agent_routes.registry for a fresh _SessionRegistry() per test, or
+# sessions leak across test files (test_email_agent_routes.py:162-168).
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def session_registry(monkeypatch):
+    from gaia_agent_email import agent_routes
+
+    fresh = agent_routes._SessionRegistry()
+    monkeypatch.setattr(agent_routes, "registry", fresh, raising=True)
+
+    built: list = []
+
+    def _factory(**kwargs):
+        agent = _HappyFakeAgent()
+        built.append(agent)
+        return agent
+
+    monkeypatch.setattr(agent_routes, "build_session_agent", _factory, raising=True)
+    return fresh, built
+
+
+def test_same_session_id_reuses_the_same_agent(app_client, session_registry):
+    registry, built = session_registry
+    resp1 = app_client.post("/v1/email/query", json=_req(session_id="s1"))
+    assert resp1.status_code == 200
+    assert _types(_parse_sse(resp1.text))[-1] == "final"
+
+    resp2 = app_client.post(
+        "/v1/email/query", json=_req(session_id="s1", query="second turn")
+    )
+    assert resp2.status_code == 200
+
+    assert len(built) == 1
+    assert registry.get("s1").agent is built[0]
+
+
+def test_different_session_ids_get_different_agents(app_client, session_registry):
+    registry, built = session_registry
+    app_client.post("/v1/email/query", json=_req(session_id="s1"))
+    app_client.post("/v1/email/query", json=_req(session_id="s2"))
+    assert len(built) == 2
+    assert registry.get("s1").agent is not registry.get("s2").agent
+
+
+def test_concurrent_calls_same_session_get_409(app_client, session_registry):
+    registry, _built = session_registry
+    session = registry.get_or_create("s1")
+    session.run_lock.acquire()
+    try:
+        resp = app_client.post("/v1/email/query", json=_req(session_id="s1"))
+        assert resp.status_code == 409
+        assert (
+            resp.json()["detail"] == "A turn is already in progress for this session."
+        )
+    finally:
+        session.run_lock.release()
+
+
+def test_setup_failure_after_lock_acquired_releases_the_lock(
+    app_client, session_registry, monkeypatch
+):
+    """Between acquiring run_lock and the worker thread owning it, any setup
+    failure must release it -- otherwise the session is wedged at 409 forever
+    (mirrors agent_routes.py:694-701)."""
+    import gaia.ui.sse_handler as sse_mod
+
+    registry, _built = session_registry
+
+    def _boom():
+        raise RuntimeError("cannot build handler")
+
+    monkeypatch.setattr(sse_mod, "SSEOutputHandler", _boom)
+    resp = app_client.post("/v1/email/query", json=_req(session_id="s1"))
+    assert resp.status_code >= 500
+    session = registry.get("s1")
+    assert session is not None
+    assert not session.run_lock.locked()
+
+
+def test_thread_start_failure_releases_the_lock_and_deregisters_the_run(
+    app_client, session_registry, monkeypatch
+):
+    """The realistic trigger for the lock-release guard: thread.start() can
+    raise under thread exhaustion, and the finally that releases run_lock
+    lives INSIDE _run_agent -- which never runs if start() itself raises. A
+    spot-fix on only SSEOutputHandler()/registry.add() would miss this and
+    wedge the session at 409 forever, with no recovery path (/clear ->
+    DELETE is deliberately out of scope for #2829)."""
+    run_id = str(uuid.uuid4())
+
+    # Scoped to the route's OWN worker thread only -- TestClient/anyio start
+    # their own background threads to drive the request, and those must keep
+    # working or the test can't even make the call.
+    real_thread_cls = threading.Thread
+
+    class _FailingThread(real_thread_cls):
+        def start(self):
+            if getattr(self._target, "__name__", "") == "_run_agent":
+                raise RuntimeError("can't start new thread")
+            super().start()
+
+    monkeypatch.setattr(query_routes.threading, "Thread", _FailingThread)
+    resp = app_client.post(
+        "/v1/email/query", json=_req(session_id="s1", run_id=run_id)
+    )
+    assert resp.status_code == 500
+
+    registry, _built = session_registry
+    session = registry.get("s1")
+    assert session is not None
+    assert not session.run_lock.locked()
+    # Deregistered too, or a retry with the SAME run_id hits a spurious 409.
+    assert query_routes.registry.get(run_id) is None
+
+
+def test_run_id_collision_does_not_deregister_the_other_run(
+    app_client, session_registry
+):
+    """A run_id collision is a DIFFERENT, unrelated in-flight run -- the
+    failure path must report its own 409 without deregistering that run."""
+    run_id = str(uuid.uuid4())
+    other_handler = object()
+    other_run = query_routes._QueryRun(run_id, agent=object(), handler=other_handler)
+    query_routes.registry.add(other_run)
+    try:
+        resp = app_client.post(
+            "/v1/email/query", json=_req(session_id="s1", run_id=run_id)
+        )
+        assert resp.status_code == 409
+        assert query_routes.registry.get(run_id) is other_run
+    finally:
+        query_routes.registry.remove(run_id)
+
+
+def test_context_replaces_conversation_history_not_appends(
+    app_client, session_registry
+):
+    """Regression pin (#2829): agent.conversation_history is REPLACED by the
+    pushed context every turn, never appended to -- a later change that
+    accidentally appends would silently double-count history."""
+    registry, _built = session_registry
+    app_client.post("/v1/email/query", json=_req(session_id="s1", context=[]))
+    agent = registry.get("s1").agent
+    assert agent.seen_history == []
+
+    ctx = [
+        {"role": "user", "content": "turn one"},
+        {"role": "assistant", "content": "reply one"},
+    ]
+    app_client.post(
+        "/v1/email/query",
+        json=_req(session_id="s1", context=ctx, query="turn two"),
+    )
+    assert len(agent.conversation_history) == len(ctx)
+    assert agent.seen_history == ctx
+
+
+def test_unknown_session_with_prior_context_gets_continuity_notice(
+    app_client, session_registry
+):
+    """A session_id the registry has never seen, arriving WITH prior context,
+    means the sidecar restarted mid-conversation (the registry is in-memory).
+    That must be surfaced, never a silent cold start."""
+    resp = app_client.post(
+        "/v1/email/query",
+        json=_req(
+            session_id="s-restarted",
+            context=[
+                {"role": "user", "content": "earlier"},
+                {"role": "assistant", "content": "earlier reply"},
+            ],
+        ),
+    )
+    assert resp.status_code == 200
+    events = _parse_sse(resp.text)
+    statuses = [e.get("message", "") for e in events if e["type"] == "status"]
+    assert any("continuity" in s.lower() for s in statuses), statuses
+
+
+def test_brand_new_session_with_empty_context_gets_no_notice(
+    app_client, session_registry
+):
+    """First turn of a genuinely new conversation is NOT a continuity loss --
+    no session was ever expected to exist yet."""
+    resp = app_client.post(
+        "/v1/email/query", json=_req(session_id="s-new", context=[])
+    )
+    assert resp.status_code == 200
+    events = _parse_sse(resp.text)
+    statuses = [e.get("message", "") for e in events if e["type"] == "status"]
+    assert not any("continuity" in s.lower() for s in statuses), statuses
+
+
+def test_session_construction_failure_is_502(app_client, monkeypatch):
+    from gaia_agent_email import agent_routes
+
+    fresh = agent_routes._SessionRegistry()
+    monkeypatch.setattr(agent_routes, "registry", fresh, raising=True)
+
+    def _boom(**kwargs):
+        raise RuntimeError("cannot start agent")
+
+    monkeypatch.setattr(agent_routes, "build_session_agent", _boom, raising=True)
+    resp = app_client.post("/v1/email/query", json=_req(session_id="s1"))
+    assert resp.status_code == 502

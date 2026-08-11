@@ -97,9 +97,10 @@ When a `REVIEW` decision fires, an explicit `governance_reviewer`
 callback takes precedence. If none is configured, the mixin delegates to
 `console.confirm_tool_execution` only when the active console advertises
 `blocking_confirmation = True`. Agent UI's `SSEOutputHandler` sets this flag and
-emits the existing `permission_request` modal. GAIA's default console is not used
-as an implicit reviewer because it returns `True`, and a silent auto-approve
-would defeat the decision.
+emits the existing `permission_request` modal. GAIA's CLI console is not used as
+an implicit reviewer: it prompts only when stdin is a terminal (#2210), so it
+cannot promise a live decision channel — governance keeps failing closed unless
+the caller wraps it in an explicit `governance_reviewer`.
 
 ```python
 def my_reviewer(tool_name, tool_args, decision) -> bool:

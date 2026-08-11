@@ -11,17 +11,23 @@ npm_package: "@amd-gaia/agent-email"
 playground_url: "http://127.0.0.1:8131/v1/email/playground"
 
 category: productivity
+# Must stay declared: an omitted tier defaults to `experimental`, which makes
+# `gaia agent install email` refuse without an explicit `--trust` opt-in.
+security_tier: verified
 tags: [email, gmail, calendar, triage]
 icon: mail
 # tools_count = the number of internal @tool-decorated agent-loop functions
-# across gaia_agent_email/tools/*.py mixins — NOT the REST (16 verbs) or MCP
-# (4 tools) surface. Full definition: CAPABILITY_MATRIX.md. Drift guards:
+# across gaia_agent_email/tools/*.py mixins — NOT the REST or MCP surface,
+# whose verb counts are derived. Full definition + current counts:
+# CAPABILITY_MATRIX.md. Drift guards:
 # tests/test_capability_matrix.py (AST-derived, reconciled against
 # __init__.py) and tests/test_email_agent.py (live registry, #1232);
 # a mismatch fails CI.
-tools_count: 55
+tools_count: 65
 
 language: python
+# NOTE (#2590): stays at 0.22.0, not the setup_routes floor — see the
+# comment on the dependencies floor in pyproject.toml.
 min_gaia_version: "0.22.0"
 models: [Gemma-4-E4B-it-GGUF]
 
@@ -36,7 +42,7 @@ requirements:
   # Minimum Lemonade Server version the triage stack needs. Mirrors
   # gaia_agent_email.version.MIN_LEMONADE_VERSION (the runtime source of truth
   # for the GET /v1/email/init readiness check); a test keeps the two in
-  # lock-step. `gaia init` reads this manifest value for the install path.
+  # lock-step.
   min_lemonade_version: "10.2.0"
   platforms: [win-x64, linux-x64, darwin-arm64]
 
@@ -46,3 +52,30 @@ interfaces:
   pipe: true
   api_server: true
   mcp_server: true
+
+# Agent Skills (#2466). Bundled instruction-only skills live in
+# gaia_agent_email/skills/<name>/SKILL.md and are loaded from there — that folder
+# is this agent's highest-precedence discovery root (SKILL_DIRS).
+#
+# Exactly ONE set is active per launch. EmailTriageAgent.select_skill_set() maps
+# the connected mailbox's account type onto a set (personal Microsoft account →
+# personal, work/school → work); `--skill-set` and GAIA_EMAIL_SKILL_SET override
+# it, and default_skill_set applies when the kind cannot be determined — which is
+# every Gmail-only mailbox, since Gmail has no equivalent of the Microsoft
+# id_token `tid` claim.
+#
+# `inbox-triage` appears in both sets deliberately: sets overlap, they do not
+# partition. Anything that should load for every set belongs in a top-level
+# `skills:` list instead.
+skill_sets:
+  personal:
+    - inbox-triage
+    - newsletter-digest
+    - travel-itinerary
+  work:
+    - inbox-triage
+    - meeting-scheduling
+    - action-item-extraction
+    - escalation-routing
+
+default_skill_set: personal

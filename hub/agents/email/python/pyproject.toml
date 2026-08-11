@@ -17,7 +17,25 @@ requires-python = ">=3.10"
 # Floor: 0.22.0 is the first core release shipping
 # gaia.agents.registry.get_embedding_model_for_device, imported at agent
 # start (#2112). tests/test_dependency_floor.py guards this floor.
-dependencies = ["amd-gaia[api]>=0.22.0"]
+#
+# NOTE (#2590): tools/setup_walkthrough.py now also imports
+# gaia.connectors.setup_routes, a core module that ships in the NEXT core
+# release, not 0.22.0. The floor CANNOT be bumped to reflect that yet — core
+# on this branch is still 0.22.0 and no higher version is published, so a
+# naive bump makes this package uninstallable everywhere (verified: a cold
+# `pip install -e .[dev,api] -e hub/agents/email/python` produces
+# ResolutionImpossible). Raise this floor to the release that actually
+# contains setup_routes once it is cut; until then the real protection is
+# the publish-time gate in .github/workflows/release_agent_email.yml, which
+# refuses to publish a build whose resolved core lacks the module.
+#
+# specific-ai-tools is pinned exactly, not floored: it supplies the SLM
+# classifier the agent loads model weights through, so the version that ships
+# is the version the SLM path was validated against.
+dependencies = [
+    "amd-gaia[api]>=0.22.0",
+    "specific-ai-tools==0.1.1",
+]
 
 # Console script for the REST sidecar — the fast dev-iteration entry point.
 # `gaia-agent-email serve --reload` runs the same app the frozen binary serves,
@@ -38,3 +56,16 @@ test = ["pytest"]
 
 [tool.setuptools.packages.find]
 include = ["gaia_agent_email*"]
+
+# Bundled Agent Skills (#2466) are data, not modules — without this they are
+# absent from an installed wheel and SKILL_DIRS points at nothing.
+[tool.setuptools.package-data]
+gaia_agent_email = ["skills/*/SKILL.md", "skills/*/*.py", "gaia-agent.yaml"]
+
+# gaia-agent.yaml lives at the package ROOT (the hub artifact), but the agent
+# reads it at runtime and an installed wheel has no directory above
+# gaia_agent_email/ — package-data cannot reach outside its own package. The
+# build_py hook copies it in, so every install path ships it from the single
+# authored file. See _build_hooks.py.
+[tool.setuptools.cmdclass]
+build_py = "_build_hooks.build_py"

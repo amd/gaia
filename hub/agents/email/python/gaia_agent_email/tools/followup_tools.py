@@ -285,11 +285,16 @@ class FollowupToolsMixin:
                 JSON envelope with ``{"awaiting_reply": [...]}`` — per item:
                 message_id, thread_id, recipient, recipients, subject,
                 sent_at, age_days, mailbox — sorted most overdue first, plus
-                ``window_days``, ``sent_scanned``, and ``scan_truncated``.
-                ``scan_truncated`` is true when the Sent-folder scan hit its
-                ``max_sent`` ceiling in any connected mailbox — older sent
-                threads exist beyond what was scanned, so tell the user the
-                list may be incomplete.
+                ``count`` (the exact length of ``awaiting_reply`` — state
+                this number verbatim in your reply rather than counting the
+                list yourself), ``window_days``, ``sent_scanned``, and
+                ``scan_truncated``. ``scan_truncated`` is true when the
+                Sent-folder scan hit its ``max_sent`` ceiling in any
+                connected mailbox — older sent threads exist beyond what was
+                scanned, so tell the user the list may be incomplete.
+                REPORT EVERY ENTRY in ``awaiting_reply`` individually — do
+                not summarize, merge, or quietly drop entries from a long
+                list.
             """
             try:
                 effective_window = int(window_days or 0)
@@ -327,6 +332,10 @@ class FollowupToolsMixin:
                 return _envelope_ok(
                     {
                         "awaiting_reply": merged,
+                        # Explicit, pre-counted total — a model asked to both
+                        # enumerate a long list and count it tends to get the
+                        # count wrong; state it here so nothing is left to miscount.
+                        "count": len(merged),
                         "window_days": effective_window,
                         "sent_scanned": sent_scanned,
                         "scan_truncated": scan_truncated,

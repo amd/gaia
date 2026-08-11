@@ -51,6 +51,8 @@ _EXPECTED_RESPONSE_MODELS = {
     # Scheduled daily briefing (#1608 additive) — the pull surface for the
     # sidecar's scheduled pre-scan runs.
     ("get", "/v1/email/briefing"): "EmailBriefingResponse",
+    # Attention view (schema 2.8, #2582) — the "what needs you" read-model.
+    ("get", "/v1/email/attention"): "EmailAttentionResponse",
     ("post", "/v1/email/draft"): "EmailDraftResponse",
     ("post", "/v1/email/send"): "EmailSendResponse",
     # Mailbox actions (schema 2.1, #1779).
@@ -71,6 +73,9 @@ _EXPECTED_RESPONSE_MODELS = {
     # route returns a JSON model; /query streams text/event-stream (no JSON
     # response model) and is asserted separately in _EXPECTED_STREAMING_ROUTES.
     ("post", "/v1/email/query/{run_id}/cancel"): "QueryCancelResponse",
+    # Mid-run question resume (schema 2.6, #2469) — answers the needs_input
+    # event the run is paused on; the ORIGINAL /query stream then continues.
+    ("post", "/v1/email/query/{run_id}/respond"): "QueryRespondResponse",
     # OAuth forward-out intake (schema 2.5, #2154) — the daemon forwards
     # short-lived access tokens to these; part of the frozen sidecar contract.
     ("post", "/v1/connections/{provider}"): "ForwardedConnectionSummary",
@@ -601,7 +606,7 @@ def test_confirm_then_archive_round_trips(action_env):
     assert body["archived"] is True
     assert body["schema_version"] == SCHEMA_VERSION
     assert body["post_archive_id"] == "m1"  # label-based backend keeps the id
-    assert body["undo_window_seconds"] == 30
+    assert body["undo_window_seconds"] == 120
     assert "INBOX" not in mailbox.messages["m1"]["labelIds"]
 
     # The same token cannot be replayed (single-use).
@@ -1028,6 +1033,7 @@ def _prescan_gmail_message(
     sender: str,
     label_ids: list[str],
     snippet: str = "",
+    internal_date: str = "1700000000000",
 ) -> dict:
     """Build a minimal Gmail-API-v1-shaped message the pre-scan path reads."""
     return {
@@ -1035,6 +1041,7 @@ def _prescan_gmail_message(
         "threadId": f"t-{msg_id}",
         "labelIds": label_ids,
         "snippet": snippet,
+        "internalDate": internal_date,
         "payload": {
             "headers": [
                 {"name": "Subject", "value": subject},
@@ -1047,10 +1054,15 @@ def _prescan_gmail_message(
 
 
 class _FakePreScanBackend:
-    """In-memory backend exposing just the read calls pre_scan_inbox_impl uses."""
+    """In-memory backend exposing the read calls pre_scan_inbox_impl uses —
+    including the waiting-on-you sub-scan it runs internally (#2743
+    redirect): ``get_user_email`` and ``get_thread``."""
 
     def __init__(self, messages: list[dict]):
         self._messages = {m["id"]: m for m in messages}
+
+    def get_user_email(self) -> str:
+        return "me@example.com"
 
     def list_messages(self, *, label_ids=None, max_results=25, **_):  # noqa: ANN001
         ids = list(self._messages)[:max_results]
@@ -1063,6 +1075,14 @@ class _FakePreScanBackend:
 
     def get_message(self, message_id: str) -> dict:
         return self._messages[message_id]
+
+    def get_thread(self, thread_id: str) -> dict:
+        return {
+            "id": thread_id,
+            "messages": [
+                m for m in self._messages.values() if m["threadId"] == thread_id
+            ],
+        }
 
 
 @pytest.fixture
@@ -1110,14 +1130,29 @@ def test_prescan_returns_card_envelope_shape(prescan_client):
         "urgent",
         "actionable",
         "informational_count",
+        # Full informational list, empty via REST (no include_informational
+        # request field yet, #2633) but always present for schema stability.
+        "informational",
         "suggested_archives",
         "suggested_drafts",
         "preferences_applied",
         "totals",
+        # Pre-scan coverage-honesty fields (#2584, extended #2638).
+        "needs_review",
+        "scanned",
+        "total_unread",
+        "total_inbox",
+        "degraded",
+        "mailbox_errors",
+        # #2743: the one-card worklist view + its filtered remainder.
+        "needs_you",
+        "needs_you_total",
+        "bulk",
     }
     for section in ("urgent", "actionable", "suggested_archives"):
         assert isinstance(result[section], list)
     assert isinstance(result["informational_count"], int)
+    assert result["informational"] == []
     assert result["suggested_drafts"] == []
     # The promotional message is surfaced as a suggested archive with a reason;
     # the plain message lands in the informational count (not listed).
@@ -1892,3 +1927,85 @@ def test_spec_page_serves_html(client):
     resp = client.get("/v1/email/spec")
     assert resp.status_code == 200
     assert "<html" in resp.text.lower()
+
+
+# ---------------------------------------------------------------------------
+# 8. REST parity for the #2406 fixes — the same-day search normalization and
+#    the archive-verify guard must reach the REST endpoints, not just the
+#    in-loop tool path (both surfaces close #2406).
+# ---------------------------------------------------------------------------
+
+
+def test_search_rest_normalizes_same_day_operator(client):
+    # A raw `after:today` from a REST caller must be normalized to the
+    # timezone-robust `newer_than:1d` window before it reaches the backend —
+    # parity with the agent's in-loop search (#2406).
+    fake = _FakeSearchBackend([])
+    client.app.dependency_overrides[api_routes.get_search_backend] = lambda: fake
+    try:
+        resp = client.post("/v1/email/search", json={"query": "from:alice after:today"})
+    finally:
+        client.app.dependency_overrides.pop(api_routes.get_search_backend, None)
+    assert resp.status_code == 200, resp.text
+    assert fake.calls == [
+        {
+            "query": "from:alice newer_than:1d",
+            "label_ids": None,
+            "max_results": 25,
+            "page_token": None,
+        }
+    ]
+
+
+class _NoOpArchiveMailbox(_FakeMailbox):
+    """Archive is a silent no-op — the modify response still echoes INBOX, the
+    false-success case #2406 guards against (mirrors the label-based backend
+    whose post-mutation labelIds still contain INBOX)."""
+
+    def archive_message(self, message_id):
+        # Return the (unchanged) message so post_labels still carries INBOX,
+        # tripping archive_message_impl's verify guard.
+        return {
+            "id": message_id,
+            "labelIds": list(self.messages[message_id]["labelIds"]),
+        }
+
+
+def test_archive_rest_surfaces_actionable_error_not_500(monkeypatch):
+    # When the provider no-ops the archive (message still in INBOX),
+    # archive_message_impl raises RuntimeError. The REST handler must translate
+    # that to a 4xx carrying the actionable message — not leak a bare 500 with
+    # the guidance stripped (#2406).
+    from gaia_agent_email import action_store
+    from gaia_agent_email import api_routes as email_routes
+
+    from gaia.database.mixin import DatabaseMixin
+
+    class _DB(DatabaseMixin):
+        pass
+
+    db = _DB()
+    db.init_db(":memory:")
+    action_store.init_schema(db)
+
+    mailbox = _NoOpArchiveMailbox()
+    monkeypatch.setattr(email_routes, "resolve_action_db", lambda: db)
+    monkeypatch.setattr(
+        email_routes, "_resolve_mutate_backend", lambda provider: (mailbox, "google")
+    )
+    client = TestClient(export_openapi.build_app())
+
+    tok = client.post(
+        "/v1/email/confirm", json={"action": "archive", "message_id": "m1"}
+    ).json()["confirmation_token"]
+    resp = client.post(
+        "/v1/email/archive", json={"message_id": "m1", "confirmation_token": tok}
+    )
+
+    assert resp.status_code == 409, resp.text  # not 500
+    assert "archive" in resp.json()["detail"].lower()
+    # The message is genuinely still in the inbox — no false "archived".
+    assert "INBOX" in mailbox.messages["m1"]["labelIds"]
+    # No phantom undo row was recorded for a failed archive.
+    rows = db.query("SELECT COUNT(*) AS n FROM email_actions", one=True)
+    assert rows["n"] == 0

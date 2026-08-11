@@ -19,6 +19,8 @@ optimistic default.
 
 from __future__ import annotations
 
+from typing import Optional
+
 CONTEXT_TARGET_TOKENS = 16384
 CONTEXT_MAX_TOKENS = 32768
 
@@ -57,20 +59,101 @@ def thread_budget_tokens() -> int:
     )
 
 
-def envelope_budget_tokens() -> int:
+def envelope_budget_tokens(
+    ctx_size: Optional[int] = None, extra_fixed_tokens: int = 0
+) -> int:
     """Usable token budget for a tool-result envelope re-read on the agent
-    loop's next turn (#2087).
+    loop's next turn (#2087, #2514, #2466).
 
-    ``CONTEXT_TARGET_TOKENS`` minus the agent-loop fixed prompt cost (system
-    prompt + full tool schema) and the response reserve — the slice actually
-    available for a tool result once the surrounding scaffolding and the model's
-    own output are accounted for. Bulk triage condenses its result envelope to
-    fit this so the post-tool turn stays under ``CONTEXT_TARGET_TOKENS``.
+    ``ctx_size`` (default ``CONTEXT_TARGET_TOKENS``, the eval harness's
+    pinned 16K target) minus the agent-loop fixed prompt cost (system prompt
+    + full tool schema) and the response reserve — the slice actually
+    available for a tool result once the surrounding scaffolding and the
+    model's own output are accounted for, floored at 0. Bulk triage
+    condenses its result envelope to the default so its gated measurement
+    stays comparable across runs (#2087). A caller that needs the REAL
+    device ceiling instead of the eval target — ``list_inbox``'s combined
+    body budget (#2514) — passes the active profile's window explicitly,
+    e.g. ``envelope_budget_tokens(ctx_size=active_profile_ctx_size())``:
+    GPU/CPU 65536, NPU 32768 (``gaia.llm.lemonade_client``).
+
+    ``extra_fixed_tokens`` accounts for prompt text this launch carries that
+    ``_AGENT_LOOP_FIXED_TOKENS`` does not model — today, the bodies of the
+    loaded Agent Skills (#2466), which vary by which skill set is active. It is
+    a *subtraction from the envelope*, never an increase in the ctx: every token
+    a skill adds to the prompt is a token the tool result must give back, or the
+    post-tool turn overflows the window. Measured, not guessed — see
+    :func:`skill_prompt_tokens`.
     """
-    return (
-        CONTEXT_TARGET_TOKENS
+    base = CONTEXT_TARGET_TOKENS if ctx_size is None else ctx_size
+    return max(
+        0,
+        base
         - _AGENT_LOOP_FIXED_TOKENS
         - _RESPONSE_RESERVE_TOKENS
+        - max(0, extra_fixed_tokens),
+    )
+
+
+def active_profile_ctx_size() -> int:
+    """The active device profile's context window (GPU/CPU 65536, NPU 32768).
+
+    Resolves through ``gaia.llm.lemonade_client.profile_ctx_size`` against
+    the persisted ``GaiaConfig.default_device`` — the same source of truth
+    ``gaia.cli`` uses to size the model load itself, so the budget this
+    module hands out always matches what the running Lemonade server can
+    actually serve. Deferred imports keep this module import-cheap for
+    callers that never need live device resolution (most budget checks pass
+    ``ctx_size`` explicitly, e.g. in tests).
+    """
+    from gaia.config import GaiaConfig, GaiaConfigError
+    from gaia.llm.lemonade_client import profile_ctx_size
+
+    try:
+        device = GaiaConfig.load().default_device
+    except GaiaConfigError as exc:
+        # Mirrors gaia.cli._configured_device(): a corrupt config must not
+        # silently pick a device — re-raise with the fix, never guess past it.
+        raise GaiaConfigError(
+            f"Cannot resolve the inference device to size the email context "
+            f"budget: {exc}. Fix or delete {GaiaConfig.config_path()}, or run "
+            "`gaia config set default_device gpu`."
+        ) from exc
+    return profile_ctx_size(device)
+
+
+# Chars per token for prose-heavy Markdown, measured on real hardware: the
+# verbatim 60-email envelope was 23,965 chars → ~11.4K tokens (see
+# ``estimate_tokens_json``). ``estimate_tokens``' chars//4 prose ratio therefore
+# under-counts by ~2x, which is fine for a *capacity* estimate and wrong for a
+# *budget subtraction* — under-crediting the skill cost is how the post-tool turn
+# 400s. Round pessimistically, always.
+_SKILL_BODY_CHARS_PER_TOKEN = 2.1
+
+
+def skill_prompt_tokens(agent) -> int:
+    """Token cost of the Agent Skills bodies loaded into *agent*'s prompt.
+
+    Zero when the agent has no skills loaded, which keeps every pre-#2466 budget
+    calculation byte-identical. Measured off the rendered fragment the agent
+    actually injects, so a trimmed or extended skill body is reflected without
+    touching a constant.
+
+    Deliberately pessimistic (``_SKILL_BODY_CHARS_PER_TOKEN``, not
+    ``estimate_tokens``): this figure is *subtracted* from the envelope, so an
+    under-count silently hands the tool result budget the prompt is already
+    using. Over-crediting costs exemplar slots; under-crediting costs a 400.
+    """
+    render = getattr(agent, "get_skills_system_prompt", None)
+    if not callable(render):
+        return 0
+    fragment = render()
+    if not fragment:
+        return 0
+    # Never below the generic estimate — this is a floor, not a replacement.
+    return max(
+        estimate_tokens(fragment),
+        int(len(fragment) / _SKILL_BODY_CHARS_PER_TOKEN) + 1,
     )
 
 

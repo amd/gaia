@@ -72,8 +72,30 @@ class ModeConflictError(SidecarError):
     """The sidecar is running in a different mode than the ensure requested."""
 
 
+class DevSrcDirResolutionError(SidecarError):
+    """A caller's dev-mode source directory could not be resolved or was invalid.
+
+    Raised client-side (CLI, Agent UI) before any request reaches the daemon —
+    an explicit ``--dev-src-dir`` was not absolute, or the caller's cwd is not
+    inside a git work tree — and daemon-side when a non-absolute ``dev_src_dir``
+    arrives over the wire. Neither case has a silent guess to fall back to.
+    """
+
+
 class SidecarNotRunningError(SidecarError):
     """The agent is registered but has no running sidecar to talk to."""
+
+
+class SidecarUnresponsiveError(SidecarError):
+    """The sidecar process is alive but no longer answering its own /health.
+
+    Distinct from :class:`SidecarNotRunningError` (no process) and
+    :class:`HealthTimeoutError` (never came up at all): the process passed its
+    startup handshake and has since stopped serving — a blocked event loop, a
+    wedged credential-store read, or a hung dependency. The process being alive
+    is why this cannot be detected by ``poll()``, and why the startup health
+    check alone reports it as healthy forever.
+    """
 
 
 class CapacityError(SidecarError):
@@ -82,3 +104,39 @@ class CapacityError(SidecarError):
 
 class StopFailedError(SidecarError):
     """The sidecar process survived a tree-kill — it is still alive."""
+
+
+class UnsupervisedAgentError(SidecarError):
+    """The agent cannot be installed/managed by the daemon.
+
+    Either a reserved framework built-in (never installable) or an agent the
+    daemon has no sidecar spec for, so installing it would leave something the
+    daemon then refuses to start.
+    """
+
+
+class InstallBusyError(SidecarError):
+    """An install for this agent id is already running (one install per id)."""
+
+
+class AgentTrustRequiredError(SidecarError):
+    """A non-verified agent needs an explicit trust opt-in to install.
+
+    The daemon-side mirror of :class:`gaia.hub.installer.TrustRequiredError`,
+    so the route layer maps it to 403 without importing ``gaia.hub``. 403 is a
+    distinct, actionable status: a client renders a "Trust & Install" prompt
+    and retries with ``trusted: true``. There is no bypass — the gate exists
+    because installing runs third-party code on the user's machine.
+    """
+
+
+class AgentNotInstalledError(SidecarError):
+    """The agent has no ``.installed`` sentinel — there is nothing to remove."""
+
+
+class InstallFailedError(SidecarError):
+    """An install/uninstall could not complete (disk, permissions, bad manifest)."""
+
+
+class HubUnavailableError(SidecarError):
+    """The Agent Hub could not be reached and no usable offline cache exists."""

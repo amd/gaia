@@ -27,6 +27,11 @@ a cloud service, and that's enforced when the agent starts up.
   from an email.
 - **Track follow-ups** — flag replies you're still waiting on past a window you
   choose (it points them out; it never nudges anyone for you).
+- **Spot what's waiting on you** — flag inbound mail that asks you directly for
+  a reply, decision, or meeting time, with a sender, subject, and how long it's
+  been sitting there. Requires a real back-and-forth already in that thread —
+  a bare question mark, a convincing cold-outreach email, or having emailed
+  the sender before in some unrelated thread never qualifies on its own.
 - **Daily briefing** — generate a morning inbox summary on a schedule, no prompt
   needed.
 - **Plain-language requests** — describe what you want done ("find today's
@@ -98,6 +103,11 @@ for await (const ev of sidecar.client.query({
   context: [],
 })) {
   if (ev.type === "status") console.log(ev.message);
+  // The agent can ask you something mid-run — answer it and the same stream
+  // carries on. This is how it sets up mailbox access without sending you away.
+  if (ev.type === "needs_input") {
+    await sidecar.client.respondToQuery(runId, ev.request_id, await askUser(ev));
+  }
   if (ev.type === "final") console.log(ev.answer); // last event
 }
 ```
@@ -105,13 +115,55 @@ for await (const ev of sidecar.client.query({
 Triage classifies and drafts using only the local model — no mailbox connection
 needed. Reading or acting on a live inbox (search, send, archive, calendar) uses
 the **Google or Microsoft connector** you set up in GAIA under
-*Settings → Connectors*. (Inside the full GAIA Agent UI daemon the connector token
+*Settings → Connectors* — or, from 2.6, that the agent sets up **with you, in the
+conversation**: if it has no usable mailbox it works out which of the four
+problems it has and offers to fix that one, asking through `needs_input` rather
+than returning a command for you to go run (#2469). Connecting Google still
+requires your own OAuth client ID and secret; the agent says so up front. (Inside the full GAIA Agent UI daemon the connector token
 is forwarded to the agent by the daemon — sidecar contract 2.5, #2154; a standalone
 integrator using this package is unaffected and resolves the mailbox from the local
 GAIA connector store.)
 
+Mail is **required**; calendar is **requested but optional** — consent asks for
+both up front so you're never prompted twice, but declining calendar (or
+connecting with an older, mail-only grant) still leaves you with a fully
+working triage/reply/send mailbox. Calendar tools fail loudly, naming the
+exact scope to add, only when you actually try to use one.
+
 Want to try it without writing code? Run `npx @amd-gaia/agent-email playground`
 for a local page to test triage, drafting, and a live send.
+
+## Personal mailbox vs work mailbox
+
+The agent behaves differently depending on the kind of mailbox it's connected to.
+It ships six built-in **skills** — short playbooks it loads into its own thinking —
+and turns on one **set** of them per run:
+
+- **Personal** (the default): inbox triage, newsletter digests, and building a trip
+  itinerary out of scattered booking confirmations.
+- **Work**: inbox triage, meeting scheduling, pulling action items out of threads,
+  and deciding what needs escalating.
+
+It picks the set automatically for an Outlook mailbox — a personal Microsoft
+account gets the personal set, a work or school account gets the work set. Two
+mailboxes need you to say which you want: Gmail, which doesn't expose the kind at
+all, and a work or school Microsoft account, whose connector the agent doesn't
+offer yet ([#2629](https://github.com/amd/gaia/issues/2629)). Both fall back to
+the personal set until you pin one.
+
+To pin it yourself, start the sidecar with the set you want:
+
+```ts
+const sidecar = await startSidecar({
+  binaryPath,
+  port: 8131,
+  extraArgs: ["--skill-set", "work"], // or env: { GAIA_EMAIL_SKILL_SET: "work" }
+});
+```
+
+This changes how the agent *approaches* your mail, not what it's allowed to do —
+the tools, permissions, and API are identical either way. Full detail in
+[`SPEC.md`](https://github.com/amd/gaia/blob/agent-pkg-email-v0.5.0/hub/agents/email/npm/SPEC.md).
 
 ## How it works
 
@@ -128,7 +180,7 @@ Full architecture, the complete API, authentication, and every endpoint are in
 
 ## How good is the triage?
 
-Scores **83.4 / 100** on a labeled benchmark inbox — see the **Scorecard** tab (or
+Scores **84.53 / 100** on a labeled benchmark inbox — see the **Scorecard** tab (or
 [`SCORECARD.md`](https://github.com/amd/gaia/blob/agent-pkg-email-v0.5.0/hub/agents/email/npm/SCORECARD.md))
 for the full breakdown, and the **Evaluation** tab for how it's measured.
 

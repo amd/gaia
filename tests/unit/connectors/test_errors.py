@@ -21,6 +21,8 @@ from gaia.connectors.errors import (
     ConsentDeniedError,
     FlowInProgressError,
     FlowTimeoutError,
+    OAuthClientNotConfiguredError,
+    RateLimitedError,
     ScopeMismatchError,
 )
 
@@ -40,14 +42,24 @@ class TestHierarchy:
 
 
 class TestAuthRequiredErrorReason:
-    def test_reason_enum_has_exactly_four_values(self):
+    def test_reason_enum_has_exactly_five_values(self):
+        # A6: TENANT_MISMATCH added — distinct from REAUTH_REQUIRED because
+        # the remedy differs (use the other Microsoft connector, not "just
+        # reconnect this one").
         values = {r.value for r in AuthRequiredError.Reason}
         assert values == {
             "not_connected",
             "agent_not_granted",
             "connection_missing_scopes",
             "reauth_required",
+            "tenant_mismatch",
         }
+
+    def test_tenant_mismatch_is_distinct_from_reauth_required(self):
+        assert (
+            AuthRequiredError.Reason.TENANT_MISMATCH
+            is not AuthRequiredError.Reason.REAUTH_REQUIRED
+        )
 
     def test_reason_enum_is_string_serializable(self):
         # Router serializes reasons into JSON; enum must coerce to str cleanly.
@@ -94,6 +106,44 @@ class TestAuthRequiredErrorReason:
         # "reconnect", or "authenticate again". Must direct user to act.
         assert any(token in msg for token in ("reauth", "re-auth", "reconnect"))
 
+    def test_connection_missing_scopes_prints_the_real_scope_complete_command(self):
+        """#2730 D0/AC-9a: the printed remedy must be copy-pasteable — the
+        connection's current scopes UNIONED with what's now missing, never
+        just the missing subset (--scopes REPLACES, it doesn't add) and
+        never a <scope>/<scopes> placeholder."""
+        err = AuthRequiredError(
+            AuthRequiredError.Reason.CONNECTION_MISSING_SCOPES,
+            provider="google",
+            missing_scopes=["gmail.send"],
+            full_scopes=["gmail.modify", "gmail.send"],
+        )
+        msg = str(err)
+        assert "<scope" not in msg
+        assert "--scopes gmail.modify gmail.send" in msg
+
+    def test_agent_not_granted_prints_the_real_scope_complete_command(self):
+        err = AuthRequiredError(
+            AuthRequiredError.Reason.AGENT_NOT_GRANTED,
+            provider="google",
+            agent_id="installed:email",
+            missing_scopes=["gmail.modify", "gmail.send"],
+        )
+        msg = str(err)
+        assert "<scope" not in msg
+        assert "--scopes gmail.modify gmail.send" in msg
+
+    def test_agent_not_granted_with_no_scopes_supplied_names_the_gap_not_a_placeholder(
+        self,
+    ):
+        """Degenerate caller-bug case: no scope list at all. Must not fall
+        back to an unfillable <scope> placeholder."""
+        err = AuthRequiredError(
+            AuthRequiredError.Reason.AGENT_NOT_GRANTED,
+            provider="google",
+            agent_id="installed:email",
+        )
+        assert "<scope" not in str(err)
+
 
 class TestScopeMismatchError:
     def test_required_and_granted_attributes_set(self):
@@ -121,6 +171,45 @@ class TestScopeMismatchError:
             provider="google",
         )
         assert sorted(err.missing_scopes) == ["b", "c"]
+
+    def test_message_prints_the_real_scope_complete_command_not_a_placeholder(self):
+        """#2730 D0/AC-9a: granted ∪ required, never a <scope> placeholder —
+        --scopes REPLACES the connection's scopes rather than adding to them."""
+        err = ScopeMismatchError(
+            required=["gmail.modify", "gmail.send"],
+            granted=["gmail.modify"],
+            provider="google",
+        )
+        msg = str(err)
+        assert "<scope" not in msg
+        assert "--scopes gmail.modify gmail.send" in msg
+
+
+class TestRateLimitedError:
+    def test_is_a_connectors_error(self):
+        assert issubclass(RateLimitedError, ConnectorsError)
+
+    def test_attributes_set(self):
+        err = RateLimitedError(
+            "google",
+            message_ids=["m1", "m3"],
+            partial_results={"m2": {"id": "m2"}},
+        )
+        assert err.provider == "google"
+        assert err.message_ids == ["m1", "m3"]
+        assert err.partial_results == {"m2": {"id": "m2"}}
+
+    def test_default_message_names_provider_and_ids_and_remedy(self):
+        err = RateLimitedError("google", message_ids=["m1"])
+        msg = str(err).lower()
+        assert "google" in msg
+        assert "m1" in msg
+        assert "retry" in msg or "try again" in msg
+
+    def test_defaults_are_empty_not_none(self):
+        err = RateLimitedError("google")
+        assert err.message_ids == []
+        assert err.partial_results == {}
 
 
 class TestConnectionRevokedError:
@@ -161,3 +250,50 @@ class TestConfigurationError:
         s = str(err)
         assert "GAIA_GOOGLE_CLIENT_ID" in s
         assert "docs/runbooks/google-oauth-client.md" in s
+
+
+class TestOAuthClientNotConfiguredError:
+    """The self-documenting missing-client error (#2347): a headless user must
+    be able to unblock themselves from the message alone."""
+
+    def _err(self, **overrides):
+        kwargs = dict(
+            provider_id="google",
+            provider_label="Google",
+            console_steps="  1. Do a thing at https://console.example",
+            docs="https://amd-gaia.ai/docs/connectors/google",
+            example="  For the email agent:\n    gaia connectors connect google ...",
+        )
+        kwargs.update(overrides)
+        return OAuthClientNotConfiguredError(kwargs.pop("provider_id"), **kwargs)
+
+    def test_is_a_configuration_error(self):
+        # Subclass so the CLI (exit 3) and the UI router (503) keep handling it.
+        err = self._err()
+        assert isinstance(err, ConfigurationError)
+        assert isinstance(err, ConnectorsError)
+        assert err.provider_id == "google"
+        assert err.provider_label == "Google"
+
+    def test_message_is_self_documenting(self):
+        s = str(self._err())
+        assert "not configured" in s
+        assert "https://console.example" in s  # console setup steps
+        # Exact CLI commands, spec-driven off provider_id.
+        assert "gaia connectors configure google --client-id" in s
+        # connect authorizes scopes AND grants the agent in one flow (#2347):
+        # --grant-agent folds in the grant so scopes can't drift. No --scopes
+        # placeholder (#2730 AC-9a) — omitting it derives the declared scopes.
+        assert "gaia connectors connect google --grant-agent <agent-id>" in s
+        assert "<scope" not in s
+        assert "amd-gaia.ai/docs/connectors/google" in s
+        # UI path named too.
+        assert "Settings -> Connections -> Google" in s
+
+    def test_example_block_is_optional(self):
+        # Omitting the example drops the copy-paste block but keeps the generic
+        # command template (connect --grant-agent, no --scopes placeholder).
+        s = str(self._err(example=None))
+        assert "For the email agent" not in s
+        assert "gaia connectors connect google --grant-agent <agent-id>" in s
+        assert "<scope" not in s

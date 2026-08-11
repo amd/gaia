@@ -7,7 +7,7 @@ daemon can supervise more than one kind of sidecar (issue #2142, T1).
 Modes (``spec.mode_env_var``):
   user (default) — spawn the verified frozen binary: a Hub-installed one when
                    present (#2095), else lazy-fetched via binaries.lock.json.
-  dev            — spawn ``uvicorn <spec.dev_module> --reload --app-dir
+  dev            — spawn ``uvicorn <spec.dev_module> --app-dir
                    <spec.dev_src_dir>/<spec.dev_app_dir>`` from source. Loaded
                    as a TOP-LEVEL module (NOT ``packaging.server:app``, which
                    would resolve to the PyPI ``packaging`` library — the
@@ -53,7 +53,9 @@ from gaia.daemon.constants import (
 from gaia.daemon.sidecars import fetch
 from gaia.daemon.sidecars.errors import (
     HealthTimeoutError,
+    SidecarNotRunningError,
     SidecarSpawnError,
+    SidecarUnresponsiveError,
     VersionMismatchError,
 )
 from gaia.daemon.sidecars.spec import AgentSidecarSpec
@@ -66,6 +68,11 @@ _VALID_MODES = ("user", "dev")
 # Keep only the most recent N per-port sidecar logs; ephemeral ports mean a new
 # file per restart, which would otherwise accumulate without bound.
 _MAX_SIDECAR_LOGS = 5
+# Pre-relay readiness probe budget. /health touches nothing, so a healthy
+# sidecar answers in milliseconds; this only has to be long enough to survive
+# scheduling jitter, and short enough that a wedged sidecar is reported as such
+# instead of stalling the caller behind the relay's own read timeout.
+_READINESS_TIMEOUT = 2.0
 
 
 def find_free_port(host: str = _HOST) -> int:
@@ -295,10 +302,18 @@ class AgentSidecarManager:
                     agent_dir_name=self.spec.cache_dir_name,
                 )
             except Exception as e:  # re-raise with the user-mode remedy
+                docs = f" Docs: {self.spec.docs_url}." if self.spec.docs_url else ""
                 raise SidecarSpawnError(
-                    f"{self.spec.display_name} sidecar binary unavailable in user "
-                    f"mode: {e} Set {self.spec.mode_env_var}=dev to run from "
-                    "source, or publish the agent so the binary + real SHA exist."
+                    f"Cannot start the {self.spec.display_name} agent: no verified "
+                    f"sidecar binary is available in user mode. {e}\n"
+                    "Fix it one of these ways:\n"
+                    f"  * Install '{self.spec.agent_id}' from the Agent Hub — run "
+                    f"`gaia agent install {self.spec.agent_id}` (or click Install "
+                    "in the Agent UI). It downloads and verifies the binary and "
+                    "records the install this resolver reads.\n"
+                    f"  * Or, from a GAIA source checkout, set "
+                    f"{self.spec.mode_env_var}=dev to run the agent from source.\n"
+                    f"Sidecar logs: {self.log_dir}.{docs}"
                 ) from e
             self.installed_binary_version = result.version
             argv = [str(result.binary_path), "--host", self.host, "--port", str(port)]
@@ -317,12 +332,17 @@ class AgentSidecarManager:
                 "it is missing. Run from a source checkout, or install it: "
                 "`uv pip install -e hub/agents/email/python`."
             )
+        # No ``--reload``: it makes uvicorn run its own multiprocessing-spawn
+        # reload supervisor on top of a sidecar the daemon already supervises,
+        # and that spawn child's app re-import is what fails on macOS with
+        # "Empty module name" (#2441). Without it uvicorn imports the app in the
+        # same process that ``--app-dir`` prepends to ``sys.path`` — robust
+        # cross-OS, and the daemon supervises the real ASGI process directly.
         argv = [
             sys.executable,
             "-m",
             "uvicorn",
             self.spec.dev_module,
-            "--reload",
             "--app-dir",
             str(app_dir),
             "--host",
@@ -337,6 +357,46 @@ class AgentSidecarManager:
         import requests
 
         return requests.get(url, timeout=timeout)
+
+    def check_responsive(self, timeout: float = _READINESS_TIMEOUT) -> None:
+        """Raise unless the sidecar answers ``/health`` right now.
+
+        ``is_running`` only proves the PROCESS exists. A sidecar whose event
+        loop is blocked keeps that process alive forever while serving nothing,
+        so the startup health check — which runs once and is never re-checked —
+        goes on reporting it healthy. This is the re-check, and it is
+        deliberately a single bounded probe: no retry loop, because a retry
+        would convert a hard failure into a longer hang and hide it.
+
+        Raises :class:`SidecarUnresponsiveError` (alive but not serving) or
+        :class:`SidecarNotRunningError` (process gone).
+        """
+        import requests
+
+        if not self.is_running:
+            raise SidecarNotRunningError(
+                f"{self.spec.agent_id} sidecar process is not running. Start it "
+                f"with `gaia daemon start-agent {self.spec.agent_id}`."
+            )
+        url = f"{self.base_url}/health"
+        try:
+            r = self._http_get(url, timeout=timeout)
+        except requests.exceptions.RequestException as e:
+            raise SidecarUnresponsiveError(
+                f"{self.spec.agent_id} sidecar (pid {self.pid}) is alive but did "
+                f"not answer {url} within {timeout}s ({type(e).__name__}: {e}). "
+                "It passed its startup health check, so it has stopped serving "
+                "since — typically a blocked event loop or a hung dependency. "
+                f"Restart it with `gaia daemon start-agent {self.spec.agent_id}` "
+                f"and check the sidecar log at {self._log_path or self.log_dir}."
+            ) from e
+        if r.status_code != 200:
+            raise SidecarUnresponsiveError(
+                f"{self.spec.agent_id} sidecar (pid {self.pid}) answered {url} "
+                f"with HTTP {r.status_code}, not 200. Restart it with "
+                f"`gaia daemon start-agent {self.spec.agent_id}` and check the "
+                f"sidecar log at {self._log_path or self.log_dir}."
+            )
 
     def _open_log(self, port: int):
         # Redirect the sidecar's stdout+stderr to a per-port file. A plain PIPE

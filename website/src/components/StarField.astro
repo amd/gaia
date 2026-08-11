@@ -1,0 +1,55 @@
+---
+// Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+// The signature background: a deterministic constellation field with gold signal
+// packets travelling the lines, reactive to the pointer. Mounted ONCE in
+// Layout.astro so all pages share one canvas.
+//
+// Two fixed layers: the canvas (z-0) and the readability gradient (z-1) that
+// keeps text legible over the stars. Page content sits at z-2 (see Layout).
+---
+
+<canvas
+  id="gaia-sky"
+  aria-hidden="true"
+  class="pointer-events-none fixed inset-0 z-0 h-full w-full"
+></canvas>
+<div
+  aria-hidden="true"
+  class="pointer-events-none fixed inset-0 z-[1] bg-g-sky-overlay"
+></div>
+
+<script>
+  import { mountStarField } from '../scripts/starfield.js';
+
+  const canvas = document.getElementById('gaia-sky') as HTMLCanvasElement | null;
+
+  if (canvas) {
+    const root = document.documentElement;
+    const num = (s: string) => s.trim().split(/\s+/).map(Number);
+
+    // The palette lives in tokens.css so the theme owns it, not this module.
+    const readPalette = () => {
+      const cs = getComputedStyle(root);
+      const v = (name: string) => cs.getPropertyValue(name).trim();
+      return {
+        stars: v('--g-sky-stars').split(',').map(num),
+        line: num(v('--g-sky-line').replace(/,/g, ' ')),
+        lineAlpha: parseFloat(v('--g-sky-line-alpha')),
+        glow: num(v('--g-sky-glow').replace(/,/g, ' ')),
+        glowAlpha: parseFloat(v('--g-sky-glow-alpha')),
+        packetCore: num(v('--g-sky-packet-core').replace(/,/g, ' ')),
+      };
+    };
+
+    let destroy = mountStarField(canvas, readPalette());
+
+    // The theme toggle rewrites --g-sky-*; the field bakes colors per star at
+    // build time, so it has to be rebuilt rather than restyled.
+    new MutationObserver(() => {
+      destroy();
+      destroy = mountStarField(canvas, readPalette());
+    }).observe(root, { attributes: true, attributeFilter: ['data-theme'] });
+  }
+</script>

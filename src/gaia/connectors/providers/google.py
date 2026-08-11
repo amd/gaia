@@ -28,7 +28,7 @@ import zlib
 from typing import Iterable, Sequence
 from urllib.parse import urlencode
 
-from gaia.connectors.errors import ConfigurationError
+from gaia.connectors.errors import OAuthClientNotConfiguredError
 
 # Plain-language descriptions for the AgentUI consent dialog (AC23). The
 # router and the CLI both surface this map; agents declare scope URLs in
@@ -45,6 +45,8 @@ SCOPE_DESCRIPTIONS: dict[str, str] = {
     "https://www.googleapis.com/auth/userinfo.email": "See your email address",
     "https://www.googleapis.com/auth/userinfo.profile": "See your basic profile",
     "openid": "Verify your identity",
+    "email": "See your email address",
+    "profile": "See your basic profile",
 }
 
 
@@ -90,13 +92,38 @@ class GoogleOAuthProvider:
             else stored.get("client_id") or os.environ.get("GAIA_GOOGLE_CLIENT_ID", "")
         )
         if not resolved_id:
-            raise ConfigurationError(
-                "Google OAuth client is not configured. Open Settings → "
-                "Connections → Google in the AgentUI and paste the Client ID "
-                "and Client Secret from your Google Cloud Console Desktop-app "
-                "OAuth client. (Power users may also set the "
-                "GAIA_GOOGLE_CLIENT_ID and GAIA_GOOGLE_CLIENT_SECRET env vars "
-                "before launching GAIA.) See docs/runbooks/google-oauth-client.md."
+            raise OAuthClientNotConfiguredError(
+                "google",
+                provider_label="Google",
+                # Missing the Data access step; see docs/connectors/google.mdx until #2594 restructures this.
+                console_steps=(
+                    "  1. Create or pick a project at "
+                    "https://console.cloud.google.com\n"
+                    "  2. Enable the Gmail API (and any other Google API you "
+                    "need) for that project\n"
+                    "  3. Configure the OAuth consent screen (External; add "
+                    "yourself as a test user)\n"
+                    "  4. Create an OAuth client ID of type 'Desktop app' — this "
+                    "gives you a Client ID and Client Secret"
+                ),
+                example=(
+                    "  For the email agent, copy-paste (bash) after creating the "
+                    "client above:\n"
+                    "    gaia connectors configure google --client-id <ID> "
+                    "--client-secret <SECRET>\n"
+                    "    gaia connectors connect google --grant-agent "
+                    "installed:email\n"
+                    "  (Naming the agent is enough — GAIA reads the scopes it "
+                    "already declares, no need to type them out. To grant a "
+                    "narrower set instead, pass --scopes explicitly:\n"
+                    '    SCOPES="https://www.googleapis.com/auth/gmail.modify '
+                    "https://www.googleapis.com/auth/gmail.send "
+                    "https://www.googleapis.com/auth/calendar.events "
+                    'https://www.googleapis.com/auth/calendar.readonly"\n'
+                    "    gaia connectors connect google --scopes $SCOPES "
+                    "--grant-agent installed:email)"
+                ),
+                docs="https://amd-gaia.ai/docs/connectors/google",
             )
         self.client_id: str = resolved_id
         # CRC32 fingerprint for log correlation / tripwire comparison only.
@@ -120,6 +147,14 @@ class GoogleOAuthProvider:
         - ``prompt=consent`` — force the consent screen on every connect, so
           we always receive a refresh token (Google issues a refresh token
           ONLY on the first consent unless ``prompt=consent`` is set).
+
+        Deliberately NOT setting ``include_granted_scopes=true`` (#2603): it
+        would make ``flow.py``'s persisted ``scopes`` (what was requested)
+        diverge from what Google actually granted, which ``flow.py`` never
+        reconciles (it persists ``flow.scopes`` and never reads back
+        ``payload.get("scope")``) — GAIA's recorded scope metadata would
+        under-report real token access. See #2605 for the reconciliation
+        this needs before turning the flag on.
         """
         return {"access_type": "offline", "prompt": "consent"}
 

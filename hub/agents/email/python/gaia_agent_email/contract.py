@@ -88,7 +88,62 @@ CATEGORY_PERSONAL = "PERSONAL"
 #   - GET /v1/connections               — metadata-only view of forwarded creds.
 #   - DELETE /v1/connections/{provider} — withdraw a forward (revoke/uninstall).
 # No existing shape changed, so 2.4 consumers keep working (additive MINOR).
-SCHEMA_VERSION = "2.5"
+# 2.6 is additive over 2.5 (#2469): the agent can ask the user a question MID-RUN
+# and carry on from the answer, instead of ending the run with a shell command
+# for the user to go run somewhere else.
+#   - a new canonical SSE event, ``needs_input`` {run_id, request_id, question,
+#     options[{value,label,description}], allow_free_text, sensitive?,
+#     respond_url, timeout_seconds?} — NON-terminal: the run stays parked on the
+#     open stream. Distinct from ``needs_confirmation``, whose terminal
+#     deny-by-default approval behaviour is unchanged.
+#   - POST /v1/email/query/{run_id}/respond — deliver the answer; the ORIGINAL
+#     stream resumes. 404 unknown run, 409 stale/unknown request_id.
+# No existing shape changed, so 2.5 consumers keep working (additive MINOR).
+# 2.8 is additive over 2.7 (#2582): a new read-only attention-view surface
+#   - GET /v1/email/attention — the merged "what needs you" read-model: inbound
+#     waiting-on-you items (#2581), meeting proposals found during the scan
+#     (#2583, including messages that would otherwise collapse into the
+#     pre-scan envelope's bare informational_count), unreviewed messages
+#     (#2584), and open action items from prior triage. Computed on open and
+#     cached — never scheduler-driven — so the response carries its own
+#     ``cache_age_seconds`` / ``stale`` so a renderer never presents a cached
+#     result as current. No existing shape changed, so 2.7 consumers keep
+#     working (additive MINOR).
+# 2.9 is additive over 2.8 (#2638/#2643): EmailPreScanResult gains
+# ``total_inbox`` (exact whole-INBOX message count, Optional[int]) — pre-scan
+# now covers read + unread mail (#2638, previously unread-only on a rationale
+# #2584 itself made obsolete), so total_unread alone is no longer an honest
+# scan-coverage denominator; total_inbox is. No existing field changed, so
+# 2.8 consumers keep working (additive MINOR).
+# 2.10 is additive over 2.9 (#2716): AttentionCoverage gains
+# ``message_errors`` (Optional[List[MessageError]]) — a Gmail rate-limit
+# that survives retry now degrades one message instead of the whole scan;
+# ``degraded`` can now be True for a message-level gap as well as a
+# mailbox-level one. No existing field changed, so 2.9 consumers keep
+# working (additive MINOR).
+# 2.11 is additive over 2.10 (#2743): EmailPreScanResult gains ``needs_you``
+# (List[NeedsYouItem]), ``needs_you_total`` (int), and ``bulk``
+# (Optional[BulkSummary]) — a single worklist view built ON TOP OF the
+# already-classified urgent/actionable/needs_review buckets PLUS the
+# waiting-on-you detector and persisted action items (neither of which has
+# a category bucket of its own, so both were invisible until this view
+# folded them in), never re-derived from raw scan results, so the pre-scan
+# card can tell the user what to do instead of what was classified.
+# ``NeedsYouItem.kind`` reuses the published ``AttentionItemKind`` enum
+# (extended with ``URGENT``/``NEEDS_RESPONSE`` so a category bucket is never
+# mislabeled as the detector's own ``WAITING_ON_YOU`` signal) rather than a
+# new one. ``BulkSummary.filter_tests`` carries opaque ids (never prose)
+# that a renderer maps to a sentence, so a filter description can't
+# silently go stale when the underlying heuristic changes. No existing
+# field changed, so 2.10 consumers keep working (additive MINOR).
+# 2.12 is additive over 2.11 (#2829): ``POST /v1/email/query`` gains an
+# optional ``session_id`` — when the host sends it, the run resolves the
+# SAME agent every other turn on that id used (via the session-scoped
+# registry `agent_routes._SessionRegistry`) instead of a throwaway
+# per-turn agent, so a reference to something an earlier turn surfaced can
+# resolve. Omitted -> byte-for-byte the old per-turn behaviour. No existing
+# field changed, so 2.11 consumers keep working (additive MINOR).
+SCHEMA_VERSION = "2.12"
 
 # Maximum number of items in a single batch request. Protects the single-tenant
 # local model slot from runaway batches. Enforced via Pydantic max_length.
@@ -759,7 +814,7 @@ class EmailSearchResponse(_Strict):
 #
 # These are MUTATING operations on the live mailbox, so — like /send — every
 # one is gated on a single-use confirmation token (minted by the confirm step
-# below). Both are reversible inside a 30s undo window via their reversal
+# below). Both are reversible inside a 120s undo window via their reversal
 # endpoints; the reversal path is itself NOT gated (it restores, never
 # destroys). The shapes preserve the two #1738 gotchas: archive returns the
 # ``batch_id`` undo handle AND the ``post_archive_id`` (the id a folder-based
@@ -837,7 +892,7 @@ class EmailArchiveRequest(_Strict):
 
 
 class EmailArchiveResponse(_Strict):
-    """Result of an archive — carries the undo handle for the 30s window."""
+    """Result of an archive — carries the undo handle for the 120s window."""
 
     schema_version: str = Field(
         default=SCHEMA_VERSION, description="Echoes the contract version."
@@ -945,7 +1000,7 @@ class EmailQuarantineRequest(_Strict):
 
 
 class EmailQuarantineResponse(_Strict):
-    """Result of a quarantine — carries the action id for the 30s undo."""
+    """Result of a quarantine — carries the action id for the 120s undo."""
 
     schema_version: str = Field(
         default=SCHEMA_VERSION, description="Echoes the contract version."
@@ -1258,6 +1313,14 @@ class PreScanItem(_Strict):
         default=None,
         description="Rationale for a suggested-archive row (the heuristic reason).",
     )
+    is_meeting_request: bool = Field(
+        default=False,
+        description=(
+            "True when the heuristic confidently detected a meeting/"
+            "scheduling request in this message's subject/snippet (#2583). "
+            "Read-only signal — detection makes no calendar changes."
+        ),
+    )
 
 
 class PreScanPreferencesApplied(_Strict):
@@ -1269,7 +1332,11 @@ class PreScanPreferencesApplied(_Strict):
     """
 
     priority_senders: List[str] = Field(
-        default_factory=list, description="Senders always treated as urgent."
+        default_factory=list,
+        description=(
+            "Senders surfaced/ordered ahead of others (#2632); does not "
+            "change category — content still decides urgency."
+        ),
     )
     low_priority_senders: List[str] = Field(
         default_factory=list, description="Senders always treated as low-priority."
@@ -1293,6 +1360,170 @@ class PreScanTotals(_Strict):
     suggested_archives: int = Field(
         default=0, description="Total suggested-archive messages found."
     )
+    needs_review: int = Field(
+        default=0,
+        description=(
+            "Total messages the heuristic was NOT confident about (#2584) — "
+            "surfaced for human review rather than filed under a placeholder "
+            "category guess."
+        ),
+    )
+
+
+class MailboxError(_Strict):
+    """One connected mailbox that failed during a pre-scan (#2584).
+
+    A partial failure never silently shrinks the result — every skipped
+    mailbox is named here so the caller can tell "empty inbox" apart from
+    "half the inbox couldn't be scanned".
+    """
+
+    mailbox: str = Field(
+        ..., description="Provider name of the failed mailbox ('google' / 'microsoft')."
+    )
+    error: str = Field(..., description="Actionable error message for the failure.")
+
+
+class MessageError(_Strict):
+    """One message that could not be fetched during a scan (#2716).
+
+    Distinct from ``MailboxError``: a rate-limited message is NOT a mailbox
+    failure — every other message in that mailbox's scan is still present
+    in the result. Not reusable as ``MailboxError`` since that model has no
+    ``message_id`` field.
+    """
+
+    message_id: str = Field(..., description="Provider message id that failed.")
+    error: str = Field(..., description="Actionable error message for the failure.")
+
+
+class AttentionItemKind(str, Enum):
+    """Why one attention-view item is here — the source signal it came from.
+
+    Defined here (ahead of the ATTENTION VIEW section below, #2743) so
+    ``NeedsYouItem.kind`` — which reuses this enum rather than a parallel
+    verb enum — resolves eagerly instead of as a class-body-time forward
+    reference; see the ATTENTION VIEW section's comment for why that matters.
+
+    ``URGENT`` / ``NEEDS_RESPONSE`` were added after the initial #2743 cut:
+    ``needs_you`` originally tagged every category-classified item
+    ``WAITING_ON_YOU``, which collided with that value's real, published
+    meaning (the waiting-on-you *detector* found a thread awaiting reply) the
+    moment the detector's own output was wired into the same view. ``kind``
+    is pure provenance — which signal put this row here — never a verb; the
+    REPLY/DECIDE/CHECK label a renderer shows is a render-time lookup.
+    """
+
+    MEETING_REQUEST = "meeting_request"
+    WAITING_ON_YOU = "waiting_on_you"
+    NEEDS_REVIEW = "needs_review"
+    ACTION_ITEM = "action_item"
+    URGENT = "urgent"
+    NEEDS_RESPONSE = "needs_response"
+
+
+class NeedsYouItem(_Strict):
+    """One thing a human must act on (#2743) — a VIEW over the already-
+    classified urgent/actionable/needs_review buckets PLUS the waiting-on-you
+    detector and persisted action items, never re-derived from raw scan
+    results (see the module's 2.11 changelog entry above).
+
+    ``kind`` reuses the published :class:`AttentionItemKind` rather than a
+    parallel verb enum — the renderer maps ``kind`` to a verb label
+    (REPLY/DECIDE/CHECK) at render time; the wire only carries the source
+    signal, so a category-classified item is never mislabeled with the
+    detector's own ``waiting_on_you`` value.
+    """
+
+    ref: int = Field(
+        ...,
+        ge=1,
+        description=(
+            "1-based row number, stable within ONE card render only — a "
+            "rescan re-orders and renumbers by design (older mail found by "
+            "a deeper scan sorts to the front)."
+        ),
+    )
+    kind: AttentionItemKind = Field(
+        ..., description="Which signal surfaced this item."
+    )
+    message_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Provider message id (opaque). None only for an action item "
+            "carried from a prior triage with no recoverable source message."
+        ),
+    )
+    thread_id: Optional[str] = Field(
+        default=None, description="Provider thread id, when known."
+    )
+    sender: str = Field(default="", description="Raw 'From' header of the source message.")
+    subject: str = Field(default="", description="Subject line of the source message.")
+    age_seconds: Optional[int] = Field(
+        default=None,
+        description="Seconds since the message was received, when known.",
+    )
+    why: str = Field(..., description="Plain-language reason this item needs attention.")
+    detail: List[str] = Field(
+        default_factory=list,
+        max_length=2,
+        description=(
+            "Reserved for up to two lines of real substance (the question "
+            "actually asked, the meeting time actually proposed, the "
+            "deadline actually quoted). ALWAYS EMPTY today — the per-item "
+            "LLM extraction pass that would fill it was implemented and "
+            "then withdrawn from #2743 before merge (see commit "
+            "25738509 for the working extraction + injection-defense "
+            "wrapping a follow-up issue will build on). The field ships "
+            "now, empty, so populating it later is additive rather than a "
+            "second contract bump."
+        ),
+    )
+    due_hint: Optional[str] = Field(
+        default=None, description="Free-text due hint (action items only); null otherwise."
+    )
+    mailbox: Optional[str] = Field(
+        default=None,
+        description=(
+            "Provider name ('google' / 'microsoft') this item came from. "
+            "Set only when more than one mailbox is connected."
+        ),
+    )
+
+    @field_validator("detail")
+    @classmethod
+    def _detail_entries_bounded(cls, value: List[str]) -> List[str]:
+        for entry in value:
+            if len(entry) > 240:
+                raise ValueError(
+                    f"detail entry exceeds 240 chars ({len(entry)}): {entry[:60]!r}..."
+                )
+        return value
+
+
+class BulkSummary(_Strict):
+    """The filtered remainder (#2743) — a count PLUS the test(s) that
+    filtered it, so the user can judge whether the filter was right, never
+    just a bare unauditable number.
+    """
+
+    count: int = Field(default=0, description="Messages filtered into the low-signal remainder.")
+    filter_tests: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Ids (never prose) of the filter tests actually applied this "
+            "run — a renderer maps each id to a sentence. An unmapped id "
+            "degrades visibly rather than rendering a stale claim."
+        ),
+    )
+
+
+# Mirror ``config.DEFAULT_INBOX_SCAN_MESSAGES`` / ``DEFAULT_INBOX_SCAN_CEILING``
+# — duplicated, not imported, to keep this module free of the connector-
+# backend import chain (see module docstring). Kept in sync by
+# ``test_contract_schema.test_prescan_request_bounds_match_config``.
+_PRESCAN_DEFAULT_MAX_MESSAGES = 50
+_PRESCAN_MAX_MESSAGES_CEILING = 100
 
 
 class EmailPreScanRequest(_Strict):
@@ -1303,9 +1534,9 @@ class EmailPreScanRequest(_Strict):
         description="Contract version. Mismatch lets a consumer fail loudly.",
     )
     max_messages: int = Field(
-        default=25,
+        default=_PRESCAN_DEFAULT_MAX_MESSAGES,
         ge=1,
-        le=100,
+        le=_PRESCAN_MAX_MESSAGES_CEILING,
         description=(
             "How many recent inbox messages to scan. Bounded so a caller can't "
             "request an unbounded mailbox sweep."
@@ -1333,7 +1564,21 @@ class EmailPreScanResult(_Strict):
     )
     informational_count: int = Field(
         default=0,
-        description="Count of informational (FYI/PERSONAL) messages — not listed.",
+        description=(
+            "Count of informational (FYI/PERSONAL) messages. Empty by "
+            "default in ``informational`` below (#2633) — request "
+            "``include_informational=True`` on the call to get the full "
+            "list instead of just this count."
+        ),
+    )
+    informational: List[PreScanItem] = Field(
+        default_factory=list,
+        description=(
+            "The informational (FYI/PERSONAL) messages this count "
+            "represents (#2633) — empty unless the caller passed "
+            "``include_informational=True``, so a bare count is never the "
+            "only way to audit what was filtered."
+        ),
     )
     suggested_archives: List[PreScanItem] = Field(
         default_factory=list,
@@ -1349,6 +1594,86 @@ class EmailPreScanResult(_Strict):
     totals: Optional[PreScanTotals] = Field(
         default=None, description="Pre-cap totals per bucket."
     )
+    needs_review: List[PreScanItem] = Field(
+        default_factory=list,
+        description=(
+            "Messages the heuristic was NOT confident about (capped, #2584) — "
+            "surfaced for human review rather than silently filed under a "
+            "placeholder category guess (e.g. an unconfident FYI or PROMOTIONAL "
+            "guess). ``why`` carries the heuristic's escalation reason."
+        ),
+    )
+    scanned: int = Field(
+        default=0,
+        description=(
+            "How many messages this pre-scan actually classified (sum across "
+            "every bucket, including needs_review) — the honest numerator for "
+            "'how much of the inbox did we look at' (#2584)."
+        ),
+    )
+    total_unread: Optional[int] = Field(
+        default=None,
+        description=(
+            "Exact total UNREAD message count in the scanned mailbox(es) — a "
+            "secondary coverage figure (#2584), NOT the scan-coverage "
+            "denominator since #2638 (pre-scan now covers read mail too; see "
+            "total_inbox for that). Gmail reports this via labels().get's "
+            "messagesUnread — an exact integer, not list_messages's "
+            "resultSizeEstimate (measured 2.6x off on a real mailbox). "
+            "Outlook has no equivalent honest source and reports null — "
+            "never a fabricated page-size number."
+        ),
+    )
+    total_inbox: Optional[int] = Field(
+        default=None,
+        description=(
+            "Exact total INBOX message count (read + unread) in the scanned "
+            "mailbox(es) — the honest denominator for scan coverage (#2638), "
+            "now that pre-scan covers all of INBOX, not just unread mail. "
+            "Gmail reports this via labels().get's messagesTotal — an exact "
+            "integer, sourced from the SAME call as total_unread (no extra "
+            "round-trip). Outlook has no equivalent honest source and "
+            "reports null — never a fabricated page-size number."
+        ),
+    )
+    degraded: bool = Field(
+        default=False,
+        description=(
+            "True when at least one connected mailbox could not be scanned "
+            "(see mailbox_errors) — the surviving mailboxes' results are still "
+            "shown, but coverage is partial (#2584)."
+        ),
+    )
+    mailbox_errors: Optional[List[MailboxError]] = Field(
+        default=None,
+        description=(
+            "Connected mailboxes that failed during this pre-scan, if any "
+            "(#2584) — surfaced to the caller, not only logged."
+        ),
+    )
+    needs_you: List[NeedsYouItem] = Field(
+        default_factory=list,
+        description=(
+            "(#2743) The worklist view: a deterministic VIEW over urgent/"
+            "actionable/needs_review — never a second, independent "
+            "classification pass — capped at 5, ordered by kind then "
+            "oldest-first. ``ref`` is stable within this render only."
+        ),
+    )
+    needs_you_total: int = Field(
+        default=0,
+        description=(
+            "(#2743) The true count of needs_you candidates before the "
+            "5-item cap — lets the renderer say '5 of N' honestly."
+        ),
+    )
+    bulk: Optional[BulkSummary] = Field(
+        default=None,
+        description=(
+            "(#2743) The filtered informational/promotional remainder — a "
+            "count plus the filter test(s) that produced it."
+        ),
+    )
 
 
 class EmailPreScanResponse(_Strict):
@@ -1358,6 +1683,182 @@ class EmailPreScanResponse(_Strict):
         default=SCHEMA_VERSION, description="Echoes the contract version."
     )
     result: EmailPreScanResult = Field(..., description="The pre-scan envelope.")
+
+
+# ---------------------------------------------------------------------------
+# ATTENTION VIEW (schema 2.8, #2582) — the read-only, no-prompt "what needs
+# you" surface rendered when the TUI/Agent UI opens the email agent. Merges
+# four signals that each already exist as their own tool: waiting-on-you
+# (#2581), meeting proposals (#2583), unreviewed messages (#2584), and open
+# action items from prior triage (#2110/#2525). Computed directly from the
+# underlying tools rather than derived from the pre-scan envelope above —
+# ``EmailPreScanResult.informational_count`` is a bare count with no rows, so
+# a meeting proposal in a confidently-classified informational message would
+# be silently invisible if this view depended on that envelope instead.
+#
+# ``AttentionItemKind`` itself is defined earlier in this module (with
+# ``NeedsYouItem``, #2743) — it is now reused by BOTH the attention view and
+# the pre-scan worklist, so it must resolve eagerly wherever a model
+# references it: a class-body-time ``ForwardRef`` (pydantic v2, deferred
+# annotations) only resolves on first use, which made generated docs
+# (``spec_html.py``) render a raw ``ForwardRef(...)`` instead of the type
+# name until something else happened to instantiate the model first.
+# ---------------------------------------------------------------------------
+
+
+class AttentionItem(_Strict):
+    """One item the attention view surfaces, tagged with why it's here.
+
+    Passive data only — the view never acts on a message, so this carries no
+    action affordance, just enough to identify the message and explain the
+    reason a person should look at it.
+    """
+
+    kind: AttentionItemKind = Field(..., description="Which signal surfaced this item.")
+    message_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Provider message id (opaque). Null for an action_item with no "
+            "recoverable source message (e.g. a pre-#1605 task row)."
+        ),
+    )
+    thread_id: Optional[str] = Field(
+        default=None, description="Provider thread id, when known."
+    )
+    sender: str = Field(
+        default="", description="Raw 'From' header of the source message."
+    )
+    subject: str = Field(
+        default="",
+        description=(
+            "Subject line of the source message. For an action_item this is "
+            "the extracted action description, not an email subject."
+        ),
+    )
+    why: str = Field(
+        ..., description="Plain-language reason this item needs attention."
+    )
+    due_hint: Optional[str] = Field(
+        default=None,
+        description="Free-text due hint (action items only); null otherwise.",
+    )
+    mailbox: Optional[str] = Field(
+        default=None,
+        description=(
+            "Provider name ('google' / 'microsoft') this item came from. Set "
+            "only when more than one mailbox is connected — with a single "
+            "mailbox, tagging every row is noise, not information."
+        ),
+    )
+
+
+class AttentionCoverage(_Strict):
+    """How much of the mailbox this attention view actually covered.
+
+    Carries the same honesty fields #2584 established for the pre-scan
+    envelope, so the renderer can state what was scanned rather than let
+    'nothing needs you' read as an unqualified whole-mailbox claim.
+    """
+
+    scanned: int = Field(
+        default=0, description="Messages actually scanned across every mailbox."
+    )
+    total_unread: Optional[int] = Field(
+        default=None,
+        description=(
+            "Exact total unread count when the backend can report it "
+            "honestly (Gmail); null when it can't (Outlook) — never a "
+            "fabricated number."
+        ),
+    )
+    scan_truncated: bool = Field(
+        default=False,
+        description=(
+            "True when the scan hit its message ceiling in any connected "
+            "mailbox — older mail may exist beyond what was looked at."
+        ),
+    )
+    degraded: bool = Field(
+        default=False,
+        description=(
+            "True when at least one connected mailbox could not be scanned "
+            "(see mailbox_errors), OR at least one individual message could "
+            "not be fetched after Gmail rate-limited it past its retry "
+            "budget (see message_errors, #2716) — either way, the "
+            "surviving results are still shown, but coverage is partial."
+        ),
+    )
+    mailbox_errors: Optional[List[MailboxError]] = Field(
+        default=None,
+        description="Connected mailboxes that failed during this scan, if any.",
+    )
+    message_errors: Optional[List[MessageError]] = Field(
+        default=None,
+        description=(
+            "Individual messages that could not be fetched during this "
+            "scan, if any (#2716) — e.g. a Gmail rate-limit that survived "
+            "retry. Every other message in the same mailbox is still "
+            "included in ``items``; this is a per-message gap, not a "
+            "mailbox failure."
+        ),
+    )
+
+
+class EmailAttentionResult(_Strict):
+    """The merged attention-view envelope — computed on open, then cached.
+
+    ``items == []`` is NOT itself a "nothing needs you" claim — it only means
+    nothing surfaced from what was actually scanned. A consumer MUST read
+    ``coverage`` before asserting the mailbox is clear, and must qualify the
+    claim when ``coverage.scan_truncated`` or ``coverage.degraded`` is set
+    (e.g. "of the 200 most recent" / "one mailbox couldn't be scanned") —
+    rendering an empty ``items`` list as an unqualified whole-mailbox claim is
+    the exact defect #2584 fixed one layer down for the pre-scan envelope.
+    """
+
+    kind: Literal["email_attention"] = Field(
+        default="email_attention",
+        description="Discriminator identifying this envelope shape.",
+    )
+    items: List[AttentionItem] = Field(
+        default_factory=list,
+        description="Every surfaced item, unordered across signal types.",
+    )
+    coverage: AttentionCoverage = Field(
+        ..., description="What this view actually scanned."
+    )
+    generated_at: str = Field(
+        ...,
+        description="UTC ISO-8601 timestamp of the underlying scan this result reflects.",
+    )
+    cache_age_seconds: float = Field(
+        default=0.0,
+        ge=0,
+        description=(
+            "Seconds since ``generated_at``. 0 on a freshly-computed result; "
+            "positive when served from cache — a renderer must label a "
+            "nonzero age rather than present a cached result as current."
+        ),
+    )
+    stale: bool = Field(
+        default=False,
+        description=(
+            "True when the cache exceeded its freshness threshold and a live "
+            "refresh was attempted but failed (e.g. a transient mailbox "
+            "error) — the result is last-known-good, not current."
+        ),
+    )
+
+
+class EmailAttentionResponse(_Strict):
+    """Top-level attention-view response envelope (#2582)."""
+
+    schema_version: str = Field(
+        default=SCHEMA_VERSION, description="Echoes the contract version."
+    )
+    result: EmailAttentionResult = Field(
+        ..., description="The attention-view envelope."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1512,6 +2013,13 @@ __all__ = [
     "EmailQuarantineResponse",
     "EmailUnquarantineRequest",
     "EmailUnquarantineResponse",
+    # Attention view (schema 2.8, #2582; message_errors added #2716).
+    "AttentionItemKind",
+    "AttentionItem",
+    "AttentionCoverage",
+    "MessageError",
+    "EmailAttentionResult",
+    "EmailAttentionResponse",
     # Calendar surface (schema 2.1, #1780).
     "CalendarEventDateTime",
     "CalendarEvent",

@@ -242,6 +242,32 @@ export async function authorizeConnector(
     );
 }
 
+export interface DeviceAuthInfo {
+    user_code: string;
+    verification_uri: string;
+    expires_in: number;
+    interval: number;
+    message: string;
+}
+
+export async function authorizeConnectorDevice(
+    connectorId: string,
+    scopes: string[],
+    grantAgents: string[] = [],
+): Promise<DeviceAuthInfo> {
+    // Device-code sign-in: no browser redirect / no Azure app registration.
+    // The server polls in the background and emits connector.oauth.completed /
+    // connector.oauth.error over SSE (useConnectorsSSE) when the user finishes,
+    // so the caller displays the code and waits for the same events the browser
+    // flow uses. `grantAgents` are committed atomically on success.
+    return apiFetch(
+        'POST',
+        `/connectors/${connectorId}/authorize-device`,
+        { scopes, grant_agents: grantAgents },
+        UI_HEADER,
+    );
+}
+
 export async function configureConnector(
     connectorId: string,
     config: Record<string, unknown>,

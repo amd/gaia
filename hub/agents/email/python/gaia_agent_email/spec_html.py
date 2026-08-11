@@ -35,6 +35,8 @@ from gaia_agent_email.contract import (
     SCHEMA_VERSION,
     ActionItem,
     AttachmentMeta,
+    AttentionCoverage,
+    AttentionItem,
     BatchItemError,
     BatchItemResult,
     BatchTriageRequest,
@@ -54,6 +56,8 @@ from gaia_agent_email.contract import (
     EmailAddress,
     EmailArchiveRequest,
     EmailArchiveResponse,
+    EmailAttentionResponse,
+    EmailAttentionResult,
     EmailCategory,
     EmailMessage,
     EmailPreScanRequest,
@@ -71,6 +75,7 @@ from gaia_agent_email.contract import (
     EmailUnarchiveResponse,
     EmailUnquarantineRequest,
     EmailUnquarantineResponse,
+    NeedsYouItem,
     OutgoingAttachment,
     PreScanItem,
     SingleEmailInput,
@@ -454,19 +459,31 @@ def render_endpoint_spec_html() -> str:
     prescan_block = _endpoint_block(
         path="/v1/email/prescan",
         description=(
-            "Inbox pre-scan (#1778). Lists the most-recent inbox messages from "
-            "the connected mailbox and returns the aggregate triage-card "
-            "envelope the Agent UI renders — top urgent / actionable rows, an "
-            "informational count, and suggested archives, each with a heuristic "
-            "reason. Read-only: nothing is archived, marked, or sent. "
-            "Classification reuses the agent's pre_scan_inbox path. Fails loudly "
-            "when no mailbox is connected (503) or 2+ are (400)."
+            "Inbox pre-scan (#1778). Lists the most-recent INBOX messages — "
+            "read AND unread alike (#2638) — from the connected mailbox and "
+            "returns the aggregate triage-card envelope the Agent UI renders — "
+            "top urgent / actionable / needs-review rows, an informational "
+            "count, and suggested archives, each with a heuristic reason. "
+            "``needs_review`` (#2584) holds messages the heuristic was not "
+            "confident about; ``scanned`` / ``total_inbox`` / ``total_unread`` "
+            "/ ``degraded`` / ``mailbox_errors`` report how much of the mailbox "
+            "this pre-scan actually covered — ``total_inbox`` (exact whole-"
+            "INBOX count) is the coverage denominator since #2638, "
+            "``total_unread`` a secondary figure. ``needs_you`` (#2743) is a "
+            "deterministic worklist VIEW over urgent/actionable/needs_review — "
+            "capped at 5, ``needs_you_total`` carries the true count; ``bulk`` "
+            "is the filtered informational/promotional remainder plus the "
+            "filter test(s) that produced it. Read-only: nothing is "
+            "archived, marked, or sent. Classification reuses the agent's "
+            "pre_scan_inbox path. Fails loudly when no mailbox is connected "
+            "(503) or 2+ are (400)."
         ),
         request_sections=[("EmailPreScanRequest", EmailPreScanRequest)],
         response_sections=[
             ("EmailPreScanResponse", EmailPreScanResponse),
             ("EmailPreScanResult", EmailPreScanResult),
             ("PreScanItem", PreScanItem),
+            ("NeedsYouItem", NeedsYouItem),
         ],
     )
 
@@ -505,6 +522,35 @@ def render_endpoint_spec_html() -> str:
             ("EmailBriefingResponse", EmailBriefingResponse),
             ("EmailPreScanResult", EmailPreScanResult),
             ("PreScanItem", PreScanItem),
+        ],
+    )
+
+    attention_block = _endpoint_block(
+        path="/v1/email/attention",
+        method="GET",
+        description=(
+            "The read-only 'what needs you' attention view (#2582), rendered "
+            "without a user prompt when the email agent opens. Merges four "
+            "signals by calling the underlying tools directly rather than the "
+            "pre-scan envelope: inbound waiting-on-you items (#2581), meeting "
+            "proposals found during the scan (#2583) -- including messages "
+            "that would otherwise collapse into the pre-scan envelope's bare "
+            "informational_count -- unreviewed messages (#2584), and open "
+            "action items from prior triage (#2110/#2525). Computed on open "
+            "and cached (no scheduler dependency): a call within the "
+            "freshness window returns the cached result with its real "
+            "cache_age_seconds; a failed refresh past that window falls back "
+            "to the last known-good result marked stale=true rather than "
+            "presenting it as current. items == [] is NOT itself a 'nothing "
+            "needs you' claim -- always read coverage first. Read-only "
+            "throughout: never archives, marks, replies, or sends."
+        ),
+        request_sections=[],
+        response_sections=[
+            ("EmailAttentionResponse", EmailAttentionResponse),
+            ("EmailAttentionResult", EmailAttentionResult),
+            ("AttentionItem", AttentionItem),
+            ("AttentionCoverage", AttentionCoverage),
         ],
     )
 
@@ -620,7 +666,7 @@ def render_endpoint_spec_html() -> str:
     archive_block = _endpoint_block(
         path="/v1/email/archive",
         description=(
-            "Archive a message — gated on confirmation, reversible for 30s. The "
+            "Archive a message — gated on confirmation, reversible for 120s. The "
             "gate fires FIRST: no valid token for this (action='archive', "
             "message_id) is rejected with HTTP 403 before any backend call. "
             "Returns a batch_id undo handle and the post_archive_id (the id a "
@@ -646,7 +692,7 @@ def render_endpoint_spec_html() -> str:
         path="/v1/email/quarantine",
         description=(
             "Quarantine a phishing message — gated on confirmation, reversible "
-            "for 30s. Applies the GAIA_PHISHING_QUARANTINE label and removes the "
+            "for 120s. Applies the GAIA_PHISHING_QUARANTINE label and removes the "
             "message from the inbox. The gate fires FIRST (HTTP 403 without a "
             "valid token). Refuses is_phishing=false with HTTP 400."
         ),
@@ -741,13 +787,27 @@ def render_endpoint_spec_html() -> str:
     sent; the transcript slice is <b>pushed</b> in <code>context</code> (the sidecar
     stays stateless).</p>
   <p class="desc">Each SSE frame is <code>data: {json}</code> discriminated on
-    <code>type</code>, one of the <b>seven canonical event types</b>:
+    <code>type</code>, one of the <b>eight canonical event types</b>:
     <code>status</code> {message} &middot; <code>token</code> {delta} &middot;
     <code>tool_call</code> {tool, args} &middot; <code>tool_result</code>
     {tool, render?, data} &middot; <code>needs_confirmation</code>
-    {run_id, action, summary} &middot; <code>final</code> {answer, usage?} &middot;
+    {run_id, action, summary} &middot; <code>needs_input</code>
+    {run_id, request_id, question, options, allow_free_text, respond_url} &middot;
+    <code>final</code> {answer, usage?} &middot;
     <code>error</code> {detail, status}. The stream is terminated by <b>exactly one
-    <code>final</code> or <code>error</code></b>.</p>
+    <code>final</code> or <code>error</code></b>. Lines beginning <code>:</code>
+    are heartbeat comments and carry no payload.</p>
+  <p class="desc"><b>Mid-run questions (#2469):</b> the agent can ask the user
+    something <i>while it runs</i> — most importantly to set up or repair mailbox
+    access instead of printing a shell command. It emits <code>needs_input</code>
+    carrying the question, 0-4 mutually exclusive
+    <code>options</code> (each with a <code>label</code> and a
+    <code>description</code> of what choosing it does) and an
+    <code>allow_free_text</code> escape. <code>needs_input</code> is
+    <b>not terminal</b>: the run stays parked on the open stream until
+    <code>POST /v1/email/query/{run_id}/respond</code> delivers the answer, then
+    the same stream continues. An unanswered question times out and the run ends
+    with an <code>error</code> — it never hangs.</p>
   <p class="desc"><b>Confirmation (stateless stub, epic decision D1):</b> a step
     that needs approval (a destructive/external tool such as <code>send_now</code>)
     emits <code>needs_confirmation</code> and then the run ends with a
@@ -764,6 +824,21 @@ def render_endpoint_spec_html() -> str:
     between steps (cooperative, not a kill). Returns
     <code>{ run_id, cancelled, status }</code>. 404 if no run with that id is in
     flight.</p>
+</div>
+
+<div class="endpoint-block">
+  <span class="method-badge">POST</span>
+  <span class="path">/v1/email/query/{run_id}/respond</span>
+  <p class="desc">Answer the <code>needs_input</code> question an in-flight
+    <code>/query</code> run is paused on; the run resumes on its
+    <b>original</b> stream. Body:
+    <code>{ "request_id": str, "value": str }</code> — <code>value</code> is an
+    option's <code>value</code> (its <code>label</code> is also accepted) or free
+    text. Returns <code>{ run_id, request_id, accepted, status }</code>.
+    <b>404</b> if no run with that id is in flight; <b>409</b> if the run is not
+    waiting on that <code>request_id</code> (already answered, timed out, or from
+    another run) — a stale answer is rejected, never applied to whatever question
+    is pending now.</p>
 </div>
 """
 
@@ -838,6 +913,46 @@ def render_endpoint_spec_html() -> str:
   <p class="desc">Report the session agent's memory state without changing it:
     <code>{ enabled, available, message }</code>.</p>
 </div>
+
+<div class="endpoint-block">
+  <span class="method-badge">GET</span>
+  <span class="path">/v1/email/agent/autonomy/{session_id}</span>
+  <p class="desc">Inspectable snapshot of the autonomy engine — level, trust
+    thresholds, and the earned-trust ledger:
+    <code>{ level, enabled, trust_min_samples, trust_threshold,
+    trusted_scope_count, scopes:[{ action_type, scope, positive, negative,
+    total, score, trusted }] }</code>. This is the read-model
+    <code>gaia email autonomy status</code> / <code>trust</code> render, so
+    autonomy behavior is always explainable. 404 if the session is unknown.</p>
+</div>
+
+<div class="endpoint-block">
+  <span class="method-badge">POST</span>
+  <span class="path">/v1/email/agent/autonomy</span>
+  <p class="desc">Set the autonomy level at runtime — pause/resume/kill.
+    Body: <code>{ "session_id": str, "level": "off"|"suggest"|"earn_trust"|"full" }</code>.
+    <code>off</code> is the kill switch. Returns
+    <code>{ level, enabled }</code>. <b>400</b> on an unknown level; 404 if
+    the session is unknown.</p>
+</div>
+
+<div class="endpoint-block">
+  <span class="method-badge">POST</span>
+  <span class="path">/v1/email/agent/autonomy/run</span>
+  <p class="desc">Trigger one observe-&gt;decide-&gt;act autonomy cycle now —
+    the <code>gaia email autonomy run</code> / daemon-scheduler driver seam.
+    Body: <code>{ "session_id": str, "max_messages"?: int (1-200, default 25) }</code>.
+    Returns <code>{ level, executed:[...], proposals:[...], skipped,
+    already_proposed }</code>. <b>409</b> while the session's level is
+    <code>off</code> — the kill switch refuses the run instead of returning
+    the same 200 shape a real, found-nothing cycle would (#2528), so a caller
+    can always tell "disabled" apart from "ran and found nothing to do". 404
+    if the session is unknown. <b>501</b> if this agent build does not expose
+    autonomy. <b>500</b> if a connected mailbox raises a connector error
+    (missing/expired/under-scoped credential) — the response <code>detail</code>
+    carries the actionable message and the exact <code>gaia connectors
+    connect ...</code> command to fix it (#2617), never a bare status code.</p>
+</div>
 """
 
     body = f"""<!DOCTYPE html>
@@ -898,6 +1013,8 @@ def render_endpoint_spec_html() -> str:
 
 {briefing_block}
 
+{attention_block}
+
 {search_block}
 
 {draft_block}
@@ -913,7 +1030,8 @@ def render_endpoint_spec_html() -> str:
   Reversible mailbox mutations exposed on the contract (#1779). Each acts on the
   mailbox connected in GAIA on the host and is gated on a single-use confirmation
   token from <code>/v1/email/confirm</code> — the same explicit-confirmation rule as
-  <code>/v1/email/send</code>. Both are reversible within a 30-second undo window via
+  <code>/v1/email/send</code>. Both are reversible within a 120-second undo
+  window (configurable via <code>GAIA_EMAIL_UNDO_WINDOW_SECONDS</code>) via
   the ungated <code>/unarchive</code> · <code>/unquarantine</code>.
 </p>
 
