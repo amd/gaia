@@ -237,6 +237,26 @@ TEST(SkillRoundTrip, AmbiguousScalarsKeepTheirType) {
     EXPECT_EQ(gaia::parseSkill(gaia::toMarkdown(skill)), skill);
 }
 
+TEST(SkillRoundTrip, ExponentialFloatsKeepTheirDot) {
+    // ostringstream renders 1e16 as "1e+16", which floatPattern() (like
+    // PyYAML's) rejects for want of a dot -- so a rewrite would silently
+    // retype the float to a string. PyYAML's represent_float inserts ".0"
+    // before the exponent; the emitter has to do the same.
+    const Skill skill = gaia::parseSkill(frontmatter(
+        "name: ok\ndescription: d\nbig: 1.0e+16\nsmall: 1.0e-16\n"));
+    ASSERT_TRUE(skill.extraFields["big"].is_number_float());
+    ASSERT_TRUE(skill.extraFields["small"].is_number_float());
+
+    const std::string rewritten = gaia::toMarkdown(skill);
+    EXPECT_NE(rewritten.find("1.0e+16"), std::string::npos) << rewritten;
+    EXPECT_NE(rewritten.find("1.0e-16"), std::string::npos) << rewritten;
+
+    const Skill reparsed = gaia::parseSkill(rewritten);
+    EXPECT_TRUE(reparsed.extraFields["big"].is_number_float()) << rewritten;
+    EXPECT_TRUE(reparsed.extraFields["small"].is_number_float()) << rewritten;
+    EXPECT_EQ(reparsed, skill);
+}
+
 TEST(SkillRoundTrip, MultiLineAndSpecialCharacterValuesSurvive) {
     Skill skill;
     skill.name = "quoting";

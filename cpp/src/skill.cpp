@@ -422,8 +422,15 @@ std::string formatDouble(double value) {
         text = os.str();
         if (std::strtod(text.c_str(), nullptr) == value) break;
     }
-    // Keep it a float on re-read: "1" would come back as an int.
-    if (text.find_first_of(".eEn") == std::string::npos) text += ".0";
+    // Keep it a float on re-read. floatPattern() requires a dot in the
+    // mantissa, so "1" would come back as an int and "1e+16" as a string.
+    // inf/nan (the only outputs carrying an 'n') must stay verbatim.
+    if (text.find('n') == std::string::npos &&
+        text.find('.') == std::string::npos) {
+        const std::size_t exponent = text.find_first_of("eE");
+        if (exponent == std::string::npos) text += ".0";
+        else                               text.insert(exponent, ".0");
+    }
     return text;
 }
 
