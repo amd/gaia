@@ -7,8 +7,6 @@
 #include <iostream>
 #include <stdexcept>
 
-#include <httplib.h>
-
 #include "gaia/sse_parser.h"
 #include "gaia/types.h" // getEnvVar
 
@@ -56,7 +54,8 @@ LemonadeClient::LemonadeClient(const LemonadeClientConfig& config)
     if (url.empty()) {
         url = LEMONADE_DEFAULT_URL;
     }
-    baseUrl_ = normalizeUrl(url);
+    setBaseUrl(url);
+    http_.setDebug(debug_);
 
     // Resolve model: config → env LEMONADE_MODEL → empty
     model_ = config.model;
@@ -77,139 +76,22 @@ LemonadeClient::LemonadeClient(const std::string& baseUrl, bool debug)
 
 void LemonadeClient::setBaseUrl(const std::string& url) {
     baseUrl_ = normalizeUrl(url);
+    http_.setBaseUrl(baseUrl_);
 }
 
 // ---------------------------------------------------------------------------
-// URL parsing
-// ---------------------------------------------------------------------------
-
-LemonadeClient::UrlParts LemonadeClient::parseUrl(const std::string& url) const {
-    UrlParts parts;
-    std::string rest = url;
-
-    if (rest.substr(0, 8) == "https://") {
-        parts.useSSL = true;
-        parts.port   = 443;
-        rest         = rest.substr(8);
-    } else if (rest.substr(0, 7) == "http://") {
-        rest = rest.substr(7);
-    }
-
-    // Split authority from path
-    auto slashPos = rest.find('/');
-    std::string authority;
-    if (slashPos != std::string::npos) {
-        authority       = rest.substr(0, slashPos);
-        parts.basePath  = rest.substr(slashPos);
-    } else {
-        authority = rest;
-    }
-
-    // Split host:port
-    auto colonPos = authority.find(':');
-    if (colonPos != std::string::npos) {
-        parts.host = authority.substr(0, colonPos);
-        try {
-            parts.port = std::stoi(authority.substr(colonPos + 1));
-        } catch (const std::exception&) {
-            throw std::runtime_error("Invalid port in URL: " + url);
-        }
-    } else {
-        parts.host = authority;
-    }
-
-    return parts;
-}
-
-// ---------------------------------------------------------------------------
-// Low-level HTTP helpers
+// Low-level HTTP helpers — thin forwards to gaia::HttpClient
 // ---------------------------------------------------------------------------
 
 std::string LemonadeClient::httpGet(const std::string& path, int timeoutSec) {
-    UrlParts p = parseUrl(baseUrl_);
-    std::string fullPath = p.basePath + path;
-    if (fullPath.empty()) fullPath = "/";
-
-    if (debug_) {
-        std::cerr << "[Lemonade] GET " << p.host << ":" << p.port << fullPath << std::endl;
-    }
-
-    if (p.useSSL) {
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-        httplib::SSLClient cli(p.host, p.port);
-        cli.set_connection_timeout(timeoutSec);
-        cli.set_read_timeout(timeoutSec);
-        auto res = cli.Get(fullPath);
-        if (!res) {
-            throw std::runtime_error("GET " + fullPath + " failed: connection error");
-        }
-        if (res->status < 200 || res->status >= 300) {
-            throw std::runtime_error("GET " + fullPath + " returned HTTP " +
-                                     std::to_string(res->status));
-        }
-        return res->body;
-#else
-        throw std::runtime_error("SSL not supported. Use http:// base URL.");
-#endif
-    }
-
-    httplib::Client cli(p.host, p.port);
-    cli.set_connection_timeout(timeoutSec);
-    cli.set_read_timeout(timeoutSec);
-    auto res = cli.Get(fullPath);
-    if (!res) {
-        throw std::runtime_error("GET " + fullPath + " failed: connection error to " +
-                                 p.host + ":" + std::to_string(p.port));
-    }
-    if (res->status < 200 || res->status >= 300) {
-        throw std::runtime_error("GET " + fullPath + " returned HTTP " +
-                                 std::to_string(res->status));
-    }
-    return res->body;
+    // Lemonade health probes must fail fast, so the connect timeout tracks the
+    // read timeout rather than the client default.
+    return http_.get(path, {}, timeoutSec, timeoutSec).body;
 }
 
 std::string LemonadeClient::httpPost(const std::string& path, const std::string& body,
                                      int timeoutSec) {
-    UrlParts p = parseUrl(baseUrl_);
-    std::string fullPath = p.basePath + path;
-    if (fullPath.empty()) fullPath = "/";
-
-    if (debug_) {
-        std::cerr << "[Lemonade] POST " << p.host << ":" << p.port << fullPath << std::endl;
-    }
-
-    if (p.useSSL) {
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-        httplib::SSLClient cli(p.host, p.port);
-        cli.set_connection_timeout(30);
-        cli.set_read_timeout(timeoutSec);
-        auto res = cli.Post(fullPath, body, "application/json");
-        if (!res) {
-            throw std::runtime_error("POST " + fullPath + " failed: connection error");
-        }
-        if (res->status < 200 || res->status >= 300) {
-            throw std::runtime_error("POST " + fullPath + " returned HTTP " +
-                                     std::to_string(res->status) + ": " + res->body);
-        }
-        return res->body;
-#else
-        throw std::runtime_error("SSL not supported. Use http:// base URL.");
-#endif
-    }
-
-    httplib::Client cli(p.host, p.port);
-    cli.set_connection_timeout(30);
-    cli.set_read_timeout(timeoutSec);
-    auto res = cli.Post(fullPath, body, "application/json");
-    if (!res) {
-        throw std::runtime_error("POST " + fullPath + " failed: connection error to " +
-                                 p.host + ":" + std::to_string(p.port));
-    }
-    if (res->status < 200 || res->status >= 300) {
-        throw std::runtime_error("POST " + fullPath + " returned HTTP " +
-                                 std::to_string(res->status) + ": " + res->body);
-    }
-    return res->body;
+    return http_.post(path, body, {}, timeoutSec).body;
 }
 
 // ---------------------------------------------------------------------------
@@ -463,77 +345,11 @@ std::string LemonadeClient::chatCompletions(const json& requestBody, int timeout
 
 void LemonadeClient::httpPostStreaming(const std::string& path, const std::string& body,
                                        std::function<bool(const char*, size_t)> receiver,
-                                       bool& streamDone, int timeoutSec) {
-    UrlParts p = parseUrl(baseUrl_);
-    std::string fullPath = p.basePath + path;
-    if (fullPath.empty()) fullPath = "/";
-
-    if (debug_) {
-        std::cerr << "[Lemonade] POST (stream) " << p.host << ":" << p.port << fullPath << std::endl;
-    }
-
-    // Use a lambda that captures the caller's receiver and the streamDone flag.
-    // The ContentReceiverWithProgress signature is (data, len, offset, total).
-    auto contentReceiver = [&receiver, &streamDone](
-                               const char* data, size_t len,
-                               uint64_t /*offset*/, uint64_t /*total*/) -> bool {
-        const bool cont = receiver(data, len);
-        if (!cont) streamDone = true;
-        return cont;
-    };
-
-    // Capture HTTP status via the response handler (fires after headers, before body).
-    int httpStatus = 0;
-    auto responseHandler = [&httpStatus](const httplib::Response& res) -> bool {
-        httpStatus = res.status;
-        return true; // always proceed to read body (needed for error messages)
-    };
-
-    auto buildAndSend = [&](auto& cli) {
-        cli.set_connection_timeout(30);
-        cli.set_read_timeout(timeoutSec);
-
-        httplib::Request req;
-        req.method = "POST";
-        req.path   = fullPath;
-        req.set_header("Content-Type", "application/json");
-        req.body             = body;
-        req.response_handler = responseHandler;
-        req.content_receiver = contentReceiver;
-
-        return cli.send(req);
-    };
-
-    httplib::Result result;
-    if (p.useSSL) {
-#ifdef CPPHTTPLIB_OPENSSL_SUPPORT
-        httplib::SSLClient cli(p.host, p.port);
-        result = buildAndSend(cli);
-#else
-        throw std::runtime_error("SSL not supported. Use http:// base URL.");
-#endif
-    } else {
-        httplib::Client cli(p.host, p.port);
-        result = buildAndSend(cli);
-    }
-
-    if (!result) {
-        // Error::Canceled is expected when the SSE [DONE] sentinel causes the
-        // content receiver to return false. Treat it as normal completion,
-        // but still validate the HTTP status captured before the body arrived.
-        if (result.error() == httplib::Error::Canceled && streamDone) {
-            if (httpStatus >= 200 && httpStatus < 300) return;
-            throw std::runtime_error("POST " + fullPath + " returned HTTP " +
-                                     std::to_string(httpStatus));
-        }
-        throw std::runtime_error("POST " + fullPath + " streaming failed: " +
-                                 httplib::to_string(result.error()));
-    }
-
-    if (httpStatus < 200 || httpStatus >= 300) {
-        throw std::runtime_error("POST " + fullPath + " returned HTTP " +
-                                 std::to_string(httpStatus));
-    }
+                                       int timeoutSec) {
+    http_.postStreaming(
+        path, body,
+        [&receiver](const char* data, size_t len) { return receiver(data, len); },
+        {}, timeoutSec);
 }
 
 std::string LemonadeClient::chatCompletionsStreaming(const json& requestBody,
@@ -554,7 +370,6 @@ std::string LemonadeClient::chatCompletionsStreaming(const json& requestBody,
 
     SseParser parser(onToken);
     std::string rawBytes;
-    bool streamDone = false;
 
     httpPostStreaming(
         "/chat/completions",
@@ -563,7 +378,6 @@ std::string LemonadeClient::chatCompletionsStreaming(const json& requestBody,
             rawBytes.append(data, len);
             return parser.feed(data, len);
         },
-        streamDone,
         timeoutSec
     );
 

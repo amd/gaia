@@ -38,6 +38,7 @@ Unit tests are built by default and run without an LLM server. They cover all tw
 | Security | `test_security.cpp` | `ToolPolicy`, `validatePath`, shell-arg sanitisation, `AllowedToolsStore` |
 | SSE parser | `test_sse_parser.cpp` | OpenAI-style streaming-event parsing and recovery |
 | Lemonade client | `test_lemonade_client.cpp` | Lemonade HTTP surface (health, models, chat completions) |
+| HTTP client | `test_http_client.cpp` | `gaia::HttpClient` GET/POST/streaming, headers, timeouts, `HttpError` |
 | Process runner | `test_process.cpp` | Cross-platform subprocess execution and pipes; `ShellSession` cwd/environment persistence |
 | File tools | `test_file_tools.cpp` | `file_read`/`file_write`/`file_edit`/`file_search`, stale-write rejection, ignore-aware search |
 | Ignore rules | `test_ignore.cpp` | `globMatch` patterns and `.gitignore` evaluation |

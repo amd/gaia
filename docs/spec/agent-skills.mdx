@@ -16,10 +16,14 @@ discovery roots with auditable precedence, progressive disclosure,
 whose reference implementation is the email agent (which currently ships with its
 sets commented out — see [below](#reference-implementation-the-email-agent)).
 
-Also shipped ([#2467](https://github.com/amd/gaia/issues/2467)): the marketplace
-verbs `search`/`install`/`remove`/`publish`, bundle signing + install-time tier
-ceilings, `skill-lock.json`, and the local resolver that turns a declared
-`skills:` / `skill_sets:` block into loaded skills at construction.
+**Also shipped (hub side):** the `skill` catalog lane — `POST /publish/skill`,
+the `skills/` R2 namespace, server-side validation of the SKILL.md grammar, and
+the pre-publish audit gate ([#2467](https://github.com/amd/gaia/issues/2467)).
+
+**Also shipped (client side, [#2467](https://github.com/amd/gaia/issues/2467)):**
+the marketplace verbs `search`/`install`/`remove`/`publish`, bundle signing +
+install-time tier ceilings, `skill-lock.json`, and the local resolver that turns
+a declared `skills:` / `skill_sets:` block into loaded skills at construction.
 
 **Still proposed:** the local-capability permission **sandbox**
 ([#1019](https://github.com/amd/gaia/issues/1019)), plus the `/api/skills` router
@@ -544,6 +548,9 @@ scoped per agent, not a global capability.
 
 Skills are first-class Agent Hub artifacts, distributed and versioned alongside
 agent packages from the [Agent Hub Restructure](/spec/agent-hub-restructure).
+They are a **fourth catalog lane** on the existing hub — not a second registry:
+the same Worker, the same R2 bucket, the same `index.json`, the same signing and
+immutability rules ([#2467](https://github.com/amd/gaia/issues/2467)).
 
 **Distribution.** A skill ships one of two ways:
 
@@ -560,9 +567,70 @@ agent packages from the [Agent Hub Restructure](/spec/agent-hub-restructure).
   that agent, no separate install. Shipped: the agent points `SKILL_DIRS` at it and
   the folder becomes the highest-precedence root.
 
+### The catalog lane
+
+A published skill is a catalog entry with `type: "skill"`, served from the same
+`GET /index.json` as every other package. Segmenting a Skills lane is a **filter
+on `type`**, not a second document — which is why adding the lane broke no
+existing consumer.
+
+| | Agent / app / component | Skill |
+|---|---|---|
+| Manifest | `gaia-agent.yaml` | `SKILL.md` front matter ([Skill Format](/plans/skill-format)) |
+| Publish | `POST /publish` | `POST /publish/skill` |
+| R2 prefix | `agents/<id>/…` | `skills/<name>/…` |
+| Read back | `GET /agents/<id>/manifest.json` | `GET /skills/<name>/manifest.json` |
+| Install | `gaia agent install <id>` | `gaia skill install <name>` (**PROPOSED** — the verb does not exist yet) |
+
+A skill entry reuses the shared catalog keys where the meaning is identical —
+`name`, `description`, `latest_version`, `security_tier`, `permissions` — and
+nests everything skill-specific under `skill_metadata`: the `tools` it provides,
+the `tools_required` it consumes, its `requirements` block, and the audit record
+below. Its `readme` carries the SKILL.md body, since for a skill that markdown
+*is* the package's primary doc.
+
+<Warning>
+**A consumer that lists installable agents must filter on `type`.** A skill
+installs into `~/.gaia/skills/`, not through the agent installer, so rendering
+every catalog entry as an agent offers an install path that cannot work. Package
+ids are one namespace across all lanes: a skill name can never collide with an
+agent id (the hub rejects the publish).
+</Warning>
+
+**Publish gates.** Two rules apply to the skill lane specifically:
+
+- A SemVer `version` is **required** to publish, and `0.0.0` — the format's
+  "unversioned" sentinel — is rejected, so it can never become an immutable
+  release.
+- The **pre-publish security audit**
+  ([#2468](https://github.com/amd/gaia/issues/2468)) gates the tier a skill may
+  claim. `community` and `verified` are refused without a cleared report, and a
+  `BLOCK` verdict is rejected. A `REVIEW` verdict is currently **refused** too:
+  holding it needs a quarantine lane and a maintainer sign-off path, which do not
+  exist yet ([#2675](https://github.com/amd/gaia/issues/2675)) — refusing beats
+  admitting an unreviewed skill. An `experimental` skill may publish without a
+  report and is recorded as `unaudited` rather than stamped as having passed, so
+  the catalog never implies an audit that did not happen.
+
+<Note>
+**The gate resists replay, not forgery.** The audit report is attached by the
+publisher and is not yet signed, so nothing proves it was produced by a trusted
+engine. Binding it to the skill, version, and audited bytes is
+[#2468](https://github.com/amd/gaia/issues/2468); making it unforgeable needs a
+signing key the publisher cannot mint
+([#1710](https://github.com/amd/gaia/issues/1710)). Until then a recorded tier
+means *consistent*, not *vouched for*.
+</Note>
+
+**Verification.** Every published artifact's Worker-computed SHA-256 is recorded
+in the per-skill `manifest.json`, the same way the agent lane does it, so an
+installer can verify the bytes it downloaded. The installer that will check it is
+part of the marketplace client and is still proposed.
+
 **Versioning.** Skills are SemVer'd independently of the framework and of the
 agents that use them. Major = breaking tool-signature or permission change;
-minor = additive; patch = fixes. Agent manifests pin ranges.
+minor = additive; patch = fixes. Agent manifests pin ranges. Each version
+re-earns its audit verdict.
 
 **The `gaia-agent.yaml` link.** An agent declares the skills it composes in its
 manifest, and the base `Agent` resolves and loads them at construction via

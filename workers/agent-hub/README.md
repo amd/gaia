@@ -15,10 +15,25 @@ depend on any `src/gaia` code.
 | Route | Auth | Purpose |
 |-------|------|---------|
 | `POST /publish` | Bearer | Publish a new agent version (validate → scope-check → immutability-check → checksum → store → rebuild index). Form parts: `manifest` (gaia-agent.yaml text), `artifact` (wheel/binary/zip file), optional `readme` + `changelog` + `spec` + `skill` + `evaluation` + `capability_matrix` + `eval_scorecard` (markdown, rendered as the Hub page's doc tabs), and optional `package_files` (JSON `{files:[{name,size_bytes}]}` listing the contents of a whole-package `.zip` artifact — surfaced as the catalog's `package`) |
-| `GET /index.json` | none | Catalog of every agent (latest version only), including the latest README + CHANGELOG + SPEC + SKILL + EVALUATION + CAPABILITY_MATRIX + scorecard markdown |
+| `POST /publish/skill` | Bearer | Publish a new **skill** version (#2467). Form parts: `skill` (the full `SKILL.md` — front matter + body), `artifact` (the packaged skill directory), optional `changelog`, optional `audit` (the security-audit report JSON, #2468) |
+| `GET /index.json` | none | Catalog of every published package (latest version only), including the latest README + CHANGELOG + SPEC + SKILL + EVALUATION + CAPABILITY_MATRIX + scorecard markdown |
 | `GET /agents/<id>/manifest.json` | none | Per-agent aggregate manifest (all versions) |
 | `GET /agents/<id>/<version>/<file>` | none | Download an artifact, the raw `gaia-agent.yaml`, `README.md`, `CHANGELOG.md`, `SPEC.md`, `SKILL.md`, `EVALUATION.md`, `CAPABILITY_MATRIX.md`, or `SCORECARD.md` |
+| `GET /skills/<name>/manifest.json` | none | Per-skill aggregate manifest (all versions) |
+| `GET /skills/<name>/<version>/<file>` | none | Download a skill bundle, its raw `SKILL.md`, `CHANGELOG.md`, or `audit.json` |
 | `GET /health` | none | Liveness probe |
+
+### Catalog lanes
+
+`index.json` carries **one array** — `agents` — holding every lane, discriminated
+by each entry's `type`: `agent` (default) · `app` · `component` (#1716) · `skill`
+(#2467). The key keeps its historical name so every published consumer parses the
+catalog unchanged; segmenting a lane is a filter, not a second document. **A
+reader that renders every entry as an installable agent must filter on `type`** —
+skills install through `gaia skill install`, not the agent install path.
+
+Ids are one namespace across lanes: a skill may not shadow an agent id, and vice
+versa (`409 id_conflict`).
 
 ### Publish guarantees
 
@@ -47,12 +62,20 @@ depend on any `src/gaia` code.
   it received — never trusted from the request. It is also handed to R2's `put`
   integrity check.
 - **Automatic index rebuild.** After every successful publish, `index.json` is
-  regenerated from all per-agent manifests.
+  regenerated from all per-agent and per-skill manifests.
+- **Security-audit gate (skills only).** `POST /publish/skill` refuses a skill
+  claiming `community` or `verified` unless a cleared audit report rides along in
+  the `audit` part; `BLOCK` is rejected (`403`), `REVIEW` is held (`409`), and an
+  `experimental` skill published without a report is recorded honestly as
+  `unaudited` rather than stamped `ALLOW`. The verdict-enforcement half lives in
+  [`src/audit.ts`](./src/audit.ts); the scanning engine that *produces* the
+  verdict is issue [#2468](https://github.com/amd/gaia/issues/2468) and runs
+  publisher-side as `gaia skill audit`.
 
 ## R2 bucket layout
 
 ```
-index.json                                     # lightweight catalog (all agents)
+index.json                                     # lightweight catalog (all lanes)
 agents/<id>/manifest.json                       # per-agent aggregate (all versions)
 agents/<id>/<version>/gaia-agent.yaml           # exact manifest uploaded for this version
 agents/<id>/<version>/README.md                 # README markdown for this version (if published)
@@ -63,6 +86,12 @@ agents/<id>/<version>/EVALUATION.md             # EVALUATION markdown for this v
 agents/<id>/<version>/CAPABILITY_MATRIX.md      # capability matrix markdown for this version (if published)
 agents/<id>/<version>/SCORECARD.md              # eval scorecard markdown for this version (if published)
 agents/<id>/<version>/<filename>                # the artifact (wheel or binary)
+
+skills/<name>/manifest.json                     # per-skill aggregate (all versions)
+skills/<name>/<version>/SKILL.md                # exact SKILL.md uploaded for this version
+skills/<name>/<version>/CHANGELOG.md            # CHANGELOG markdown for this version (if published)
+skills/<name>/<version>/audit.json              # security-audit report (#2468) (if supplied)
+skills/<name>/<version>/<filename>              # the skill bundle artifact
 ```
 
 Example:
@@ -80,6 +109,10 @@ agents/email/0.1.0/email-agent-win32-x64.exe        # multi-platform: 4 binaries
 agents/email/0.1.0/email-agent-darwin-arm64         # one version
 agents/email/0.1.0/email-agent-darwin-x64
 agents/email/0.1.0/email-agent-linux-x64
+skills/web-research/manifest.json
+skills/web-research/0.1.0/SKILL.md
+skills/web-research/0.1.0/audit.json
+skills/web-research/0.1.0/web-research-0.1.0.zip
 ```
 
 ## JSON shapes
@@ -108,13 +141,23 @@ schemas live in [`schemas/`](./schemas):
   `package` (`{ filename, size_bytes, files: [{name, size_bytes}] }` — the
   whole-package `.zip` download + its file listing, present only when a
   `package_files` manifest was published). This shape is the build-time contract
-  for the website Hub pages (`website/src/data/catalog.ts`).
+  for the website Hub pages (`website/src/data/catalog.ts`). It also carries
+  `type` (the lane discriminator) and, on `type: "skill"` entries only,
+  `skill_metadata` (`tools`, `tools_required`, the skill-shaped `requirements`,
+  and the `audit` record). A skill entry populates every agent-lane key with a
+  stable empty value (`requirements` zeroed, `tags`/`models` empty), so a
+  consumer that reads them unconditionally never hits `undefined`; its `readme`
+  carries the **SKILL.md body** (front matter stripped), which is a skill's
+  primary doc.
 - [`schemas/manifest.schema.json`](./schemas/manifest.schema.json) —
   `GET /agents/<id>/manifest.json`. Full display metadata plus a `versions` map;
   each version carries `published_at`, `publisher`, `deprecated`, an `artifact`
   block (the primary — `filename`, `path`, `size_bytes`, `sha256`,
   `content_type`), and an `artifacts[]` array of every per-platform artifact in
-  that version.
+  that version. `GET /skills/<name>/manifest.json` uses the same `versions` shape
+  with skill-lane display metadata (`security_tier`, `permissions`, `tools`,
+  `tools_required`, `requirements`, `audit`) — install-time artifact verification
+  reads `versions[v].artifact.sha256` from here, exactly as the agent lane does.
 
 ## Local development & testing
 
@@ -211,14 +254,18 @@ Railway injects `PORT` automatically; the container listens on `0.0.0.0:$PORT`.
 ```
 workers/agent-hub/
 ├── src/
-│   ├── index.ts      # entry point + router
-│   ├── publish.ts    # POST /publish handler
-│   ├── auth.ts       # bearer auth + publisher scope
-│   ├── manifest.ts   # gaia-agent.yaml validation + semver
-│   ├── catalog.ts    # per-agent manifest + index.json rebuild
-│   ├── storage.ts    # R2 key layout + read/write helpers
-│   ├── http.ts       # HttpError + JSON response helpers
-│   └── types.ts      # shared types (mirror gaia-agent.yaml)
+│   ├── index.ts           # entry point + router
+│   ├── publish.ts         # POST /publish handler (agents/apps/components)
+│   ├── skill-publish.ts   # POST /publish/skill handler (skills lane, #2467)
+│   ├── auth.ts            # bearer auth + publisher scope
+│   ├── multipart.ts       # form-part + artifact helpers shared by both lanes
+│   ├── manifest.ts        # gaia-agent.yaml validation + semver
+│   ├── skill-manifest.ts  # SKILL.md front-matter validation (skill-format grammar)
+│   ├── audit.ts           # security-audit gate for skill publishes (#2468 seam)
+│   ├── catalog.ts         # per-agent/per-skill manifest + index.json rebuild
+│   ├── storage.ts         # R2 key layout + read/write helpers
+│   ├── http.ts            # HttpError + JSON response helpers
+│   └── types.ts           # shared types (mirror gaia-agent.yaml / SKILL.md)
 ├── schemas/          # index.schema.json, manifest.schema.json
 ├── test/             # vitest suite + in-memory R2 fake
 ├── wrangler.toml
