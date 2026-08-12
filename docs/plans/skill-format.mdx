@@ -195,8 +195,8 @@ Each entry in `skills` or a set's list is either a **skill name** or a mapping:
 | Key | Type | Required | Description |
 |---|---|---|---|
 | `name` | string | yes | A skill name per [naming](#naming). |
-| `version` | string | no | SemVer or range. **Recorded, not resolved** in this phase — see below. |
-| `required` | bool | no | Default `true`. A missing `required: false` skill is logged and skipped; a missing required one fails the launch. |
+| `version` | string | no | SemVer or range, **enforced at load** against the installed skill's version — see below. |
+| `required` | bool | no | Default `true`. A `required: false` skill that is missing *or version-incompatible* is logged and skipped; either failure on a required one fails the launch. |
 
 **Set names** use the same slug shape as skill names, capped at 32 chars — a
 lowercase alphanumeric start and end with internal hyphens:

@@ -143,7 +143,33 @@ def test_validate_spec_accepts_every_supported_range_shape():
         "~=1.2",
         "!=1.0.0",
         ">=1.2.0, <2.0.0",
+        ">=1.2.3-beta.1, <2.0.0",
+        ">= 1.0.0 , < 2.0.0",  # whitespace around the conjunction
     ):
+        validate_spec(spec)
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        ">=1.2.0, 1.2.x",
+        ">=1.2.0, >=v2",
+        ">=1.2.0, <2.0.0.0",
+        "<2.0.0, junk",
+    ],
+)
+def test_validate_spec_checks_every_clause_of_a_conjunction(spec):
+    """The gate must not stop at the first clause a probe version fails.
+
+    ``matches`` is ``all()`` over a generator, so it short-circuits: probing
+    with a sentinel meant `>=1.2.0` returned False and the unreadable clause
+    after it was never parsed. The manifest was then accepted, and the failure
+    resurfaced at load only on machines with that skill installed at a version
+    passing clause one — the machine-dependent verdict this gate exists to kill.
+    """
+    from gaia.skills.versions import validate_spec
+
+    with pytest.raises(SkillValidationError, match="does not name a version number"):
         validate_spec(spec)
 
 

@@ -158,7 +158,15 @@ def validate_spec(spec: Optional[str]) -> None:
     Raises:
         SkillValidationError: naming the clause that could not be read.
     """
-    matches("0.0.0", spec)
+    # Every clause, deliberately not via ``matches``: its ``all()`` short-circuits
+    # on the first clause a probe version fails, which would leave a later
+    # unreadable clause of a conjunction unchecked.
+    normalized = (spec or "").strip()
+    if normalized.lower() in ANY_SPECS:
+        return
+    for clause in normalized.split(","):
+        if clause.strip():
+            _matches_clause("0.0.0", clause)
 
 
 def highest(versions: Iterable[str]) -> Optional[str]:

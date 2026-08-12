@@ -12,6 +12,7 @@ previous run left it lying around is not a passing test.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -604,15 +605,25 @@ def test_agent_required_pin_violation_fails_the_launch(tmp_path, pinned):
     assert agent.active_skill_set is None
 
 
-def test_agent_optional_pin_violation_is_skipped_with_a_reason(tmp_path, pinned):
+def test_agent_optional_pin_violation_is_skipped_with_a_reason(
+    tmp_path, pinned, caplog
+):
     agent = _pinned_agent(
         tmp_path,
         pinned,
         {"name": "inbox-triage", "version": ">=2.0.0", "required": False},
     )
 
-    assert agent.load_skill_set() == {}
+    with caplog.at_level(logging.INFO):
+        assert agent.load_skill_set() == {}
     assert agent.active_skill_set == "work"
+
+    # "Skipped" has to be visible, not invisible: the reason names the pin and
+    # the version on disk, or the agent quietly runs without the capability.
+    skipped = "\n".join(
+        r.getMessage() for r in caplog.records if "inbox-triage" in r.getMessage()
+    )
+    assert ">=2.0.0" in skipped and "1.4.0" in skipped
 
 
 def test_agent_pin_against_an_unversioned_skill_is_refused(tmp_path, pinned):
