@@ -97,7 +97,7 @@ type CanonicalInputOption struct {
 }
 
 // CanonicalFinalEvent — terminal success. Usage is an optional
-// {steps?, tools_used?, elapsed?, tokens?} object.
+// {steps?, tools_used?, elapsed?, tokens?, ttft?} object.
 type CanonicalFinalEvent struct {
 	Type   string          `json:"type"`
 	Answer string          `json:"answer"`
@@ -108,11 +108,24 @@ type CanonicalFinalEvent struct {
 // Fields absent from the payload stay zero and are simply not displayed.
 // Tokens is the real generated-token count (#2899) — the TUI no longer
 // guesses from the answer string's character length.
+// TTFT is the turn's FIRST LLM call's own measured time-to-first-token, in
+// seconds (#2899 follow-up) — the fallback the client uses when no
+// CanonicalTokenEvent ever streamed this turn (every native tool-calling
+// model forces every step non-streaming, so that is the common case, not an
+// edge case). Deliberately the first step, not the last that happened to
+// produce the visible answer: nothing but cheap in-process work happens
+// between query submit and the first LLM call, so it is the closest
+// available proxy for "submit to first inference token" — a last-step
+// reading would silently drop every earlier step's tool-decision latency.
+// Real, server-measured latency, not a client-side approximation; see
+// ChatModel.handleCanonicalEvent's CanonicalFinalEvent case for how it
+// combines with a client-observed ttft.
 type CanonicalUsage struct {
 	Steps     int     `json:"steps"`
 	ToolsUsed int     `json:"tools_used"`
 	Elapsed   float64 `json:"elapsed"`
 	Tokens    int     `json:"tokens"`
+	TTFT      float64 `json:"ttft"`
 }
 
 // CanonicalErrorEvent — terminal failure. Detail is actionable and surfaced

@@ -10,6 +10,7 @@ to JSON events that the streaming endpoint sends to the frontend.
 
 import json
 import logging
+import math
 import queue
 import re
 import socket
@@ -548,6 +549,7 @@ class SSEOutputHandler(OutputHandler):
         answer: str,
         streaming: bool = True,  # pylint: disable=unused-argument
         total_tokens: Optional[int] = None,
+        ttft_seconds: Optional[float] = None,
     ):
         if answer:
             answer = _THINK_TAG_SUB_RE.sub("", answer)
@@ -573,6 +575,17 @@ class SSEOutputHandler(OutputHandler):
         # if it were a measured zero (#2899, fail-loud: no silent fake data).
         if total_tokens is not None:
             event["tokens"] = total_tokens
+        # Same omit-don't-fake rule for ttft (#2899 follow-up): a non-streaming
+        # turn (every native tool-calling model, every step) never fires a
+        # `chunk` event to anchor a client-side ttft, so this is the only value
+        # that reaches the wire at all — real, from Lemonade's own generation
+        # timing (see agent.py's _query_ttft_seconds), never a guess.
+        if (
+            ttft_seconds is not None
+            and math.isfinite(ttft_seconds)
+            and ttft_seconds > 0
+        ):
+            event["ttft"] = round(ttft_seconds, 3)
         self._emit(event)
 
     def print_repeated_tool_warning(self):

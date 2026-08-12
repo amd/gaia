@@ -786,6 +786,37 @@ class TestPrintFinalAnswer:
         events = _drain(handler)
         assert events[0]["elapsed"] == 0.0
 
+    # ── ttft_seconds (#2899 follow-up) ──────────────────────────────────
+    #
+    # Same omit-don't-fake contract already established for total_tokens: a
+    # real positive value rides the wire as "ttft"; anything else (None, 0,
+    # a negative) is left off entirely rather than shown as a fake 0.0s.
+
+    def test_positive_ttft_is_emitted(self, handler):
+        handler.print_final_answer("answer", ttft_seconds=9.4321)
+        events = _drain(handler)
+        assert events[0]["ttft"] == 9.432  # rounded to 3 decimals
+
+    def test_ttft_omitted_when_none(self, handler):
+        handler.print_final_answer("answer", ttft_seconds=None)
+        events = _drain(handler)
+        assert "ttft" not in events[0]
+
+    def test_ttft_omitted_when_zero(self, handler):
+        handler.print_final_answer("answer", ttft_seconds=0.0)
+        events = _drain(handler)
+        assert "ttft" not in events[0]
+
+    def test_ttft_omitted_when_negative(self, handler):
+        handler.print_final_answer("answer", ttft_seconds=-1.0)
+        events = _drain(handler)
+        assert "ttft" not in events[0]
+
+    def test_ttft_omitted_by_default(self, handler):
+        handler.print_final_answer("answer")
+        events = _drain(handler)
+        assert "ttft" not in events[0]
+
 
 # ===========================================================================
 # SSEOutputHandler.print_repeated_tool_warning

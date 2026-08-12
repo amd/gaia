@@ -27,6 +27,7 @@ import pytest
 from gaia.agents.base.agent import (
     Agent,
     _extract_tool_usage,
+    _query_ttft_seconds,
     _safe_number,
     _sum_conversation_tokens,
 )
@@ -149,6 +150,160 @@ class TestSumConversationTokens:
         tool_usage = [{"prompt_tokens": 5, "completion_tokens": 20}]
         total_in, total_out = _sum_conversation_tokens(conversation, tool_usage)
         assert (total_in, total_out) == (15, 25)
+
+
+# ─────────────────────── _query_ttft_seconds (#2899 follow-up) ────────────
+#
+# A live run against a real mailbox showed the token half of #2899 working
+# but ttft never rendering at all on any of 4 real queries — not a wrong
+# value, an absent one. Root cause: EmailAgentConfig.streaming defaults False
+# and nothing overrides it on the daemon/TUI path, so the agent never calls
+# send_messages_stream() and no `chunk` event ever fires to anchor a
+# client-side ttft. Even flipping that default would not reliably fix it:
+# native tool-calling models attach their full tool schema on every step, and
+# Lemonade forces a request non-streaming whenever `tools` is attached
+# (lemonade.py's `effective_stream = stream and not (tool_capable and
+# tools)`) — so the non-streaming path is not an edge case for this agent,
+# it is the only path. This reads the one real per-request timing value
+# Lemonade already reports (via /stats, already polled every step for the
+# token count) off the same per-step 'stats' conversation entries.
+#
+# The FIRST step's value is read, not the last: a last-step reading times
+# only the final LLM call, dropping every earlier step's tool-decision
+# latency — on the #2899 baseline's own warm-query shape (~8s tool-call
+# decision, more steps, ~69s total) that reproduces the exact "implausibly
+# small ttft on a minute-long query" defect #2899 opened to fix, just with a
+# different number (see review discussion on this PR). Step 1's own
+# time_to_first_token is the closest available proxy for "query submit to
+# first inference token" because nothing but cheap in-process work (message
+# assembly, no I/O) happens between process_query's start_time and the first
+# LLM call.
+class TestQueryTTFTSeconds:
+    def test_reads_ttft_off_the_first_stats_entry(self):
+        conversation = [
+            {
+                "role": "system",
+                "content": {
+                    "type": "stats",
+                    "step": 1,
+                    "performance_stats": {"time_to_first_token": 8.2},
+                },
+            },
+            {
+                "role": "system",
+                "content": {
+                    "type": "stats",
+                    "step": 2,
+                    "performance_stats": {"time_to_first_token": 1.5},
+                },
+            },
+        ]
+        # Step 1 — the first LLM call of the turn — not the final step that
+        # happened to produce the visible answer, and not an average/sum.
+        assert _query_ttft_seconds(conversation) == 8.2
+
+    def test_no_stats_entries_returns_none(self):
+        assert _query_ttft_seconds([]) is None
+        assert _query_ttft_seconds([{"role": "user", "content": "hi"}]) is None
+
+    def test_missing_field_on_first_step_returns_none_not_a_later_steps_value(self):
+        # Step 1 reported stats but no ttft; step 2 has one. Falling through
+        # to step 2 would mislabel a later (typically much smaller, warmer)
+        # request's latency as "time to first token from submit" — the same
+        # misrepresentation this function exists to avoid, just shifted by
+        # one step. Must omit, not substitute.
+        conversation = [
+            {
+                "role": "system",
+                "content": {
+                    "type": "stats",
+                    "step": 1,
+                    "performance_stats": {"input_tokens": 10, "output_tokens": 5},
+                },
+            },
+            {
+                "role": "system",
+                "content": {
+                    "type": "stats",
+                    "step": 2,
+                    "performance_stats": {"time_to_first_token": 1.5},
+                },
+            },
+        ]
+        assert _query_ttft_seconds(conversation) is None
+
+    def test_step_1_entry_entirely_missing_returns_none_not_step_2s_value(self):
+        # The real (not hypothetical) failure mode caught in review: a failed
+        # /stats poll returns {} (falsy), so the caller's `if perf_stats:`
+        # skips appending a stats entry for step 1 at all — the EARLIEST
+        # entry actually present in conversation is step 2's. Trusting
+        # "first entry found" instead of the entry's own step number would
+        # silently misattribute step 2's (typically much smaller, warmer)
+        # latency as the turn's ttft — reproducing the exact bug this
+        # function exists to prevent, one step later.
+        conversation = [
+            {
+                "role": "system",
+                "content": {
+                    "type": "stats",
+                    "step": 2,
+                    "performance_stats": {"time_to_first_token": 1.5},
+                },
+            },
+        ]
+        assert _query_ttft_seconds(conversation) is None
+
+    def test_zero_or_negative_reported_value_is_treated_as_unavailable(self):
+        conversation = [
+            {
+                "role": "system",
+                "content": {
+                    "type": "stats",
+                    "step": 1,
+                    "performance_stats": {"time_to_first_token": 0},
+                },
+            },
+        ]
+        assert _query_ttft_seconds(conversation) is None
+
+    def test_non_finite_value_is_treated_as_unavailable(self):
+        conversation = [
+            {
+                "role": "system",
+                "content": {
+                    "type": "stats",
+                    "step": 1,
+                    "performance_stats": {"time_to_first_token": float("inf")},
+                },
+            },
+        ]
+        assert _query_ttft_seconds(conversation) is None
+
+    def test_non_dict_performance_stats_does_not_raise(self):
+        conversation = [
+            {
+                "role": "system",
+                "content": {
+                    "type": "stats",
+                    "step": 1,
+                    "performance_stats": "not a dict",
+                },
+            },
+        ]
+        assert _query_ttft_seconds(conversation) is None
+
+    def test_malformed_value_does_not_raise(self):
+        conversation = [
+            {
+                "role": "system",
+                "content": {
+                    "type": "stats",
+                    "step": 1,
+                    "performance_stats": {"time_to_first_token": "bad"},
+                },
+            },
+        ]
+        assert _query_ttft_seconds(conversation) is None
 
 
 # ─────────────────────────── _extract_tool_usage ──────────────────────────

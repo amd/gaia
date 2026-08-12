@@ -72,6 +72,29 @@ def test_answer_omits_tokens_when_source_has_none():
     assert "tokens" not in out[0]["usage"]
 
 
+def test_answer_maps_ttft_into_usage():
+    # #2899 follow-up: real ttft was never reaching the TUI at all on the
+    # non-streaming daemon path (every native tool-calling model's normal
+    # path) -- when the source event carries one, it must reach usage.ttft.
+    out = _tr().translate(
+        {
+            "type": "answer",
+            "content": "Done.",
+            "steps": 2,
+            "tools_used": 1,
+            "tokens": 72,
+            "ttft": 9.4,
+        }
+    )
+    assert out[0]["usage"]["ttft"] == 9.4
+
+
+def test_answer_omits_ttft_when_source_has_none():
+    # No real value available -> omitted entirely, never a fake 0.
+    out = _tr().translate({"type": "answer", "content": "Done.", "steps": 1})
+    assert "ttft" not in out[0]["usage"]
+
+
 def test_answer_is_terminal():
     out = _tr().translate({"type": "answer", "content": "Done."})
     assert out[0]["type"] in TERMINAL_TYPES

@@ -27,7 +27,7 @@ type Message struct {
 	ToolName  string
 	Success   *bool
 	Duration  time.Duration // time from query to answer
-	TTFT      time.Duration // time from query submit to first inference token — not model-load or a tool/status event
+	TTFT      time.Duration // time to first inference token — client-observed from query submit when a token actually streamed, else the turn's first LLM call's own server-reported latency (#2899 follow-up); never model-load or a tool/status event
 	Steps     int           // agent steps taken
 	ToolsUsed int           // tools invoked
 	Tokens    int           // real generated-token count from usage.tokens; 0 => not reported, omit from display

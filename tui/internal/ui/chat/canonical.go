@@ -129,6 +129,21 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 
 	case event.CanonicalFinalEvent:
 		usage := event.CanonicalUsageOf(e)
+		// Server-reported ttft fallback (#2899 follow-up): native tool-calling
+		// models attach their full tool schema on every step, and Lemonade
+		// forces a request non-streaming whenever `tools` is attached — so no
+		// CanonicalTokenEvent ever arrives to anchor m.ttft client-side on
+		// that (common) path. usage.TTFT is the turn's FIRST LLM call's own
+		// measured latency (agent.py's _query_ttft_seconds), not a last-step
+		// reading — nothing but cheap in-process work happens between query
+		// submit and that first call, so this is a real, not approximated,
+		// answer to "time to first inference token". A genuine
+		// client-observed ttft still wins when one was actually captured: it
+		// is an end-to-end wall-clock measurement (covers the wire too),
+		// where the server value is only Lemonade's own internal timer.
+		if !m.firstToken && usage.TTFT > 0 {
+			m.ttft = time.Duration(usage.TTFT * float64(time.Second))
+		}
 		// `answer` is the contract's authoritative field (§4), so it wins over the
 		// streamed tokens rather than the other way round — otherwise the view and
 		// the transcript pushed back as `context` could disagree. The buffered

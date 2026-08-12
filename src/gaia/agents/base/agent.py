@@ -13,6 +13,7 @@ import datetime
 import inspect
 import json
 import logging
+import math
 import os
 import re
 import subprocess
@@ -336,6 +337,77 @@ def _sum_conversation_tokens(
             usage.get("completion_tokens") or usage.get("output_tokens")
         )
     return total_input, total_output
+
+
+def _query_ttft_seconds(conversation: List[Dict[str, Any]]) -> Optional[float]:
+    """Real time-to-first-token for the turn, read off the EARLIEST per-step
+    'stats' entry already appended to ``conversation`` (same source
+    ``_sum_conversation_tokens`` reads for output tokens) — i.e. the first
+    LLM call of the turn, not the one that happened to produce the visible
+    answer.
+
+    Native tool-calling models attach the full tool schema on every step, and
+    Lemonade forces a request non-streaming whenever ``tools`` is attached
+    (see ``LemonadeProvider.chat``'s ``effective_stream`` gate) — so no
+    ``CanonicalTokenEvent`` is ever emitted to anchor the TUI's client-side
+    ttft on the daemon path (#2899 follow-up). Lemonade's own ``/stats``
+    endpoint's ``time_to_first_token`` is per-request measured latency, not a
+    wall-clock approximation — polled by the agent loop after every step
+    regardless of streaming, so it is available for step 1 same as any other.
+
+    Step 1 is deliberately the one read, not the last step: nothing of
+    substance happens between ``process_query``'s start_time and the first
+    LLM call (message-list assembly only, no I/O), so step 1's own
+    time_to_first_token is the closest available proxy for "query submit to
+    first inference token" — the AC's actual quantity. The LAST step's ttft
+    was tried first and rejected: it times only the final LLM call, silently
+    dropping every earlier step's tool-decision latency (the #2899 baseline's
+    own warm-query numbers: an ~8s tool-call decision, then more steps, on a
+    ~69s turn — a last-step reading would land near ~1-2s, reproducing
+    exactly the "implausibly small ttft on a minute-long query" defect this
+    issue exists to fix, just with a different number).
+
+    There is no further pre-step latency (queue time, model-load time) to add
+    on top: Lemonade's ``/stats`` payload has exactly five fields
+    (time_to_first_token, tokens_per_second, input_tokens, output_tokens,
+    decode_token_times — see ``tests/test_lemonade_client.py::test_get_stats``)
+    and none of them separates that out, so step 1's own value already is the
+    real number, not a component of a larger one still to be assembled.
+
+    Returns ``None`` when step 1 reported no positive value — never a
+    fabricated 0.0, and never a later step's value standing in for it. That
+    last case is real, not hypothetical: a failed ``/stats`` poll returns
+    ``{}`` (falsy, so the caller's ``if perf_stats:`` skips the append for
+    that step) and a parse-recovery retry can ``continue`` past the append
+    too, so the EARLIEST 'stats' entry present in ``conversation`` is not
+    always step 1's. Each entry carries its own step number, so that is
+    checked explicitly rather than trusting entry order (fail-loud: no
+    silent fake data, matching the token-count precedent above)."""
+    for entry in conversation:
+        if entry.get("role") == "system" and isinstance(entry.get("content"), dict):
+            content = entry["content"]
+            if content.get("type") == "stats" and "performance_stats" in content:
+                if content.get("step") != 1:
+                    # The earliest stats entry present belongs to a later
+                    # step (step 1's own poll failed or was skipped) —
+                    # omit rather than misattribute a later step's latency
+                    # as the turn's ttft.
+                    return None
+                stats = content["performance_stats"]
+                ttft = (
+                    stats.get("time_to_first_token")
+                    if isinstance(stats, dict)
+                    else None
+                )
+                if (
+                    isinstance(ttft, (int, float))
+                    and not isinstance(ttft, bool)
+                    and math.isfinite(ttft)
+                    and ttft > 0
+                ):
+                    return float(ttft)
+                return None
+    return None
 
 
 # Only these field names are ever accepted from a tool's self-reported
@@ -5669,6 +5741,7 @@ Do NOT wrap conversational replies in JSON.
                     final_answer,
                     streaming=self.streaming,
                     total_tokens=pre_output_tokens,
+                    ttft_seconds=_query_ttft_seconds(conversation),
                 )
                 break
 
