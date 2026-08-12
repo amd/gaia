@@ -258,9 +258,6 @@ def run(host: str = HOST) -> None:
     from gaia.daemon.constants import BROKER_URL_ENV_VAR
 
     broker = ModelSlotBroker()
-    # A reaped sidecar can never release its own lease, so free it here. The
-    # broker's TTL would get there eventually, but not before callers time out.
-    registry.on_agent_reaped(broker.release_holder)
     # Advertise the broker to the processes this daemon spawns. Sidecars inherit
     # os.environ at spawn (AgentSidecarManager builds spawn_env from it) and add
     # their own launch token as GAIA_MODEL_BROKER_TOKEN, so both host-side and

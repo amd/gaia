@@ -56,10 +56,6 @@ class SidecarRegistry:
         self.max_live = max_live
         self._on_spawn = on_spawn
         self._on_stop = on_stop
-        # Extra callbacks fired with the agent_id once its process is confirmed
-        # gone. Registered after construction by owners that outlive a single
-        # sidecar (the model-slot broker, which must free a dead holder's lease).
-        self._reaped_hooks: "list[Callable[[str], None]]" = []
         # Fires AFTER a fresh start() succeeds (sidecar healthy + version-gated),
         # NOT on attach to an already-running sidecar. The daemon wires this to
         # the OAuth forward-out on-spawn push (#2154) — forwarding must happen
@@ -122,8 +118,6 @@ class SidecarRegistry:
             if self._on_stop is not None:
                 self._on_stop(_aid)
             self._revoke_custody(_aid)
-            for hook in self._reaped_hooks:
-                hook(_aid)
 
         manager.on_process_reaped = _on_reaped
         # Mint the custody secret at construction (the mint point) and hand the
@@ -134,10 +128,6 @@ class SidecarRegistry:
             manager.custody_url = self._custody_base_url
             manager.custody_secret = self._custody_auth.mint(agent_id)
         return manager
-
-    def on_agent_reaped(self, hook: "Callable[[str], None]") -> None:
-        """Call *hook* with the agent_id whenever a sidecar's process is reaped."""
-        self._reaped_hooks.append(hook)
 
     def _revoke_custody(self, agent_id: str) -> None:
         """Drop *agent_id*'s custody secret binding (idempotent)."""
