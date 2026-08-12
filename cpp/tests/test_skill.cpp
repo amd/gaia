@@ -882,9 +882,26 @@ TEST(SkillEncoding, CrlfFrontmatterParses) {
         if (*p == '\n') crlf += '\r';
         crlf += *p;
     }
-    const Skill skill = gaia::parseSkill(crlf);
-    EXPECT_EQ(skill.name, "bare-standard");
-    EXPECT_THAT(skill.body, HasSubstr("# Incident Review"));
+    // Python reads SKILL.md in text mode, so CRLF never reaches its parser. A
+    // Windows-authored skill has to give both runtimes the same body, not just
+    // one that happens to contain the same substring.
+    EXPECT_EQ(gaia::parseSkill(crlf), gaia::parseSkill(kBare));
+    EXPECT_EQ(gaia::parseSkill(crlf).body,
+              "# Incident Review\n\n1. Establish the timeline.");
+}
+
+TEST(SkillEncoding, CrlfDoesNotLeakIntoMultiLineScalars) {
+    // The body is not the only place a carriage return can survive — a literal
+    // block in the frontmatter carries it into the field value itself.
+    const std::string lf =
+        "---\nname: ok\ndescription: |\n  Line one.\n  Line two.\n---\n\nbody\n";
+    std::string crlf;
+    for (char c : lf) {
+        if (c == '\n') crlf += '\r';
+        crlf += c;
+    }
+    EXPECT_EQ(gaia::parseSkill(crlf), gaia::parseSkill(lf));
+    EXPECT_EQ(gaia::parseSkill(crlf).description.find('\r'), std::string::npos);
 }
 
 TEST(SkillEncoding, LeadingBomIsTolerated) {
