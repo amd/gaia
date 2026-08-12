@@ -345,6 +345,41 @@ describe("POST /publish/skill — SKILL.md grammar validation", () => {
     expect(res.status).toBe(400);
     expect(await errorCode(res)).toBe("invalid_request");
   });
+
+  it("rejects a request with no SKILL.md part (400, nothing written)", async () => {
+    const env = makeEnv();
+    const res = await publishSkill(env, { ...VALID, omitSkill: true });
+    expect(res.status).toBe(400);
+    expect(await errorCode(res)).toBe("invalid_request");
+    expect(env.bucket.keys()).toEqual([]);
+  });
+
+  it("rejects a non-multipart body (415), naming the parts it expects", async () => {
+    const env = makeEnv();
+    const res = await worker.fetch(
+      new Request("https://hub.amd-gaia.ai/publish/skill", {
+        method: "POST",
+        headers: { authorization: "Bearer tok_amd", "content-type": "application/json" },
+        body: JSON.stringify({ skill: sampleSkill() }),
+      }),
+      env as never
+    );
+    expect(res.status).toBe(415);
+    const body = (await res.json()) as { error: { code: string; message: string } };
+    expect(body.error.code).toBe("unsupported_media_type");
+    expect(body.error.message).toContain("multipart/form-data");
+    expect(env.bucket.keys()).toEqual([]);
+  });
+
+  it("rejects an artifact over the configured size ceiling (413, nothing written)", async () => {
+    // The skills lane enforces the limit itself rather than inheriting the
+    // agent lane's check, so it needs its own guard against a regression.
+    const env = makeEnv({ maxBytes: "16" });
+    const res = await publishSkill(env, { ...VALID, artifact: "x".repeat(17) });
+    expect(res.status).toBe(413);
+    expect(await errorCode(res)).toBe("artifact_too_large");
+    expect(env.bucket.keys()).toEqual([]);
+  });
 });
 
 describe("POST /publish/skill — security-audit gate (#2468)", () => {
@@ -598,7 +633,18 @@ describe("published index.json matches schemas/index.schema.json", () => {
     readFileSync(new URL("../schemas/index.schema.json", import.meta.url), "utf8")
   ) as {
     definitions: {
-      indexEntry: { required: string[]; properties: Record<string, unknown> };
+      indexEntry: {
+        required: string[];
+        properties: {
+          id: { pattern: string; maxLength: number };
+          type: { enum: string[] };
+          skill_metadata: {
+            required: string[];
+            properties: { audit: { properties: { verdict: { enum: string[] } } } };
+          };
+          [k: string]: unknown;
+        };
+      };
     };
   };
 
@@ -628,6 +674,62 @@ describe("published index.json matches schemas/index.schema.json", () => {
     const missing = schema.definitions.indexEntry.required.filter((k) => !(k in entry));
     expect(missing).toEqual([]);
   });
+
+  // The Worker ships no JSON-Schema validator (zero runtime deps), so the
+  // schema's own discriminating constraints are asserted directly. Without
+  // these the schema could silently drift from the publish validator and
+  // legitimately-published entries would be invalid against their own contract.
+  describe("the schema's constraints agree with what publish enforces", () => {
+    const idPattern = new RegExp(schema.definitions.indexEntry.properties.id.pattern);
+
+    it.each(["web-research", "chat", "a", "a1-b2-c3", "a".repeat(64)])(
+      "accepts the id %s that the publish validator accepts",
+      (name) => {
+        expect(idPattern.test(name)).toBe(true);
+        expect(name.length).toBeLessThanOrEqual(
+          schema.definitions.indexEntry.properties.id.maxLength
+        );
+      }
+    );
+
+    it.each(["Web-Research", "web_research", "-web", "web-", "web--research", ""])(
+      "rejects the id %s that the publish validator rejects",
+      (name) => {
+        expect(idPattern.test(name)).toBe(false);
+      }
+    );
+
+    it("caps ids at the same 64 characters the skill-name validator does", () => {
+      expect(schema.definitions.indexEntry.properties.id.maxLength).toBe(64);
+    });
+
+    it("declares every catalog lane in the type enum", () => {
+      expect([...schema.definitions.indexEntry.properties.type.enum].sort()).toEqual([
+        "agent",
+        "app",
+        "component",
+        "skill",
+      ]);
+    });
+
+    it("admits only verdicts that can actually reach the catalog", () => {
+      // BLOCK and REVIEW are refused at publish, so a catalog entry carrying
+      // one would mean the audit gate had been bypassed.
+      const verdicts =
+        schema.definitions.indexEntry.properties.skill_metadata.properties.audit.properties.verdict
+          .enum;
+      expect([...verdicts].sort()).toEqual(["ALLOW", "unaudited"]);
+    });
+
+    it("requires the skill_metadata sub-objects a consumer reads unconditionally", () => {
+      expect([...schema.definitions.indexEntry.properties.skill_metadata.required].sort()).toEqual([
+        "audit",
+        "requirements",
+        "tools",
+        "tools_required",
+      ]);
+    });
+  });
 });
 
 describe("cross-lane id namespace", () => {
@@ -655,6 +757,69 @@ describe("cross-lane id namespace", () => {
     });
     expect(res.status).toBe(409);
     expect(await errorCode(res)).toBe("id_conflict");
+  });
+
+  it("keeps skill objects out of the agents/ prefix entirely", async () => {
+    // `listAgentIds` lists delimited prefixes under `agents/`. If the skills
+    // prefix ever nested beneath it, every skill would be re-emitted as an
+    // agent-lane entry — so the storage separation IS the lane separation.
+    const env = makeEnv();
+    expect((await publishSkill(env, VALID)).status).toBe(201);
+
+    expect(env.bucket.keys().filter((k) => k.startsWith("agents/"))).toEqual([]);
+    expect(env.bucket.keys().filter((k) => k.startsWith("skills/"))).not.toEqual([]);
+
+    const index = await readIndex(env);
+    expect(index.agents).toHaveLength(1);
+    expect(index.agents[0].type).toBe("skill");
+  });
+
+  it("never mislabels an entry's lane across a mixed catalog", async () => {
+    // The headline invariant at the Worker layer: `type` is right for EVERY
+    // entry, and `skill_metadata` appears on exactly the skill entries — so a
+    // consumer filtering on `type` can never be handed a skill as an agent.
+    const env = makeEnv();
+    for (const id of ["chat", "analyst"]) {
+      expect(
+        (
+          await publishAgent(env, {
+            token: "tok_amd",
+            manifestYaml: sampleManifest({ id }),
+            artifact: "w",
+            filename: `${id}-0.1.0.whl`,
+          })
+        ).status
+      ).toBe(201);
+    }
+    for (const name of ["web-research", "incident-review"]) {
+      expect(
+        (
+          await publishSkill(env, {
+            ...VALID,
+            skillMarkdown: sampleSkill({ name }),
+            filename: `${name}-0.1.0.zip`,
+          })
+        ).status
+      ).toBe(201);
+    }
+
+    const index = await readIndex(env);
+    expect(index.agents).toHaveLength(4);
+
+    const skills = index.agents.filter((a) => a.type === "skill");
+    const agents = index.agents.filter((a) => a.type !== "skill");
+    expect(skills.map((s) => s.id).sort()).toEqual(["incident-review", "web-research"]);
+    expect(agents.map((a) => a.id).sort()).toEqual(["analyst", "chat"]);
+
+    for (const skill of skills) {
+      expect(skill.category).toBe("skills");
+      expect(skill.skill_metadata).toBeDefined();
+    }
+    for (const agent of agents) {
+      expect(agent.type).toBe("agent");
+      expect(agent.category).not.toBe("skills");
+      expect(agent.skill_metadata).toBeUndefined();
+    }
   });
 
   it("rejects a gaia-agent.yaml declaring type: skill, pointing at the skill route", async () => {

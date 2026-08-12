@@ -2114,8 +2114,8 @@ Manage agent memory: run day-zero onboarding and view memory statistics.
 Author and manage agent skills. A skill is a directory whose only required file is `SKILL.md`; GAIA implements the [Agent Skills](https://agentskills.io) open standard, so a Claude Code skill loads unchanged.
 
 ```bash
-gaia skill {list,info,create,import,export} [OPTIONS]            # author locally
-gaia skill audit <dir> [OPTIONS]                                 # pre-publish gate
+gaia skill {list,info,create,import,export,migrate} [OPTIONS]     # author locally
+gaia skill audit <dir> [OPTIONS]                                  # pre-publish gate
 gaia skill {search,install,remove,publish,keygen,trust} [OPTIONS] # marketplace
 ```
 
@@ -2136,6 +2136,7 @@ Skills are discovered from three roots, highest precedence first:
 | `create <name>` | Scaffold a new skill directory |
 | `import <source>` | Copy a skill folder, `.zip`, or URL into `~/.gaia/skills/` |
 | `export <name>` | Export a skill to a `.zip` bundle |
+| `migrate <source>` | Convert an OpenClaw or Hermes skill to GAIA format |
 | `search [query]` | Search the Agent Hub's skills lane |
 | `install <name[@range]>` | Install a published skill into `~/.gaia/skills/` |
 | `remove <name>` | Delete an installed skill and drop its lock entry |
@@ -2238,6 +2239,29 @@ Skills are discovered from three roots, highest precedence first:
     Use `--tier community` to check a claim *before* making it — a skill cannot be stamped a tier whose gate it did not clear, so this is the difference between finding out locally and finding out as a publish rejection.
 
     Nothing is imported, executed, or fetched, so auditing an untrusted skill is itself safe.
+  </Tab>
+
+  <Tab title="migrate">
+    ```bash
+    gaia skill migrate <source> [--from openclaw|hermes|auto] [OPTIONS]
+    ```
+
+    | Option | Description |
+    |--------|-------------|
+    | `--from` | Source format: `openclaw` \| `hermes` \| `auto` (default — detect from `metadata.<vendor>`) |
+    | `--out` | Write migrated skills here instead of installing into `~/.gaia/skills/` |
+    | `--name` | Migrate under this name (single-skill sources only) |
+    | `--force` | Replace an existing skill of the same name (refused when the target resolves to the source's own directory — replacing it there would delete the source) |
+    | `--dry-run` | Report what would be migrated without writing anything |
+    | `--json` | Emit the migration report as JSON |
+
+    `<source>` is one skill directory, its `SKILL.md`, or a directory **of** skill directories — so a whole ClawHub checkout migrates in one command.
+
+    The foreign `metadata.<vendor>` namespace becomes a `metadata.gaia` block. Fields GAIA models fully are consumed; anything partially or un-modeled stays under `metadata.<vendor>` and is listed in the report, so nothing is dropped silently. **Every migrated skill lands at the `experimental` tier**, whatever the source claimed — the same trust reset `import` applies.
+
+    <Warning>
+    **A source needing a local capability is refused, not downgraded.** `requires.bins` maps to `shell:execute:<bin>` and `requires.config` to `filesystem:read:<path>`; both need the deferred permission sandbox ([#1019](https://github.com/amd/gaia/issues/1019)), so the skill is reported unmigratable with the reason rather than quietly stripped of the permission. Other skills in the same batch still migrate — exit code is `4` when any were refused.
+    </Warning>
   </Tab>
 
   <Tab title="search">
@@ -2416,6 +2440,12 @@ gaia skill export web-research --output ./web-research.zip
 gaia skill import ./web-research.zip --name web-research-copy
 ```
 
+```bash Bring an OpenClaw skill over
+gaia skill migrate ./my-openclaw-skill --from openclaw
+gaia skill migrate ~/clawhub-skills --dry-run     # whole collection, no writes
+gaia skill migrate ~/clawhub-skills --json | jq '.skills[] | select(.migrated == false)'
+```
+
 ```bash Install from the hub
 gaia skill search "web search"
 gaia skill install web-research@^1.2
@@ -2483,7 +2513,7 @@ skipped. Set `AUTOLOAD_DECLARED_SKILLS = False` on the class to opt out and call
 </Warning>
 
 <Note>
-`gaia skill migrate` (Hermes / OpenClaw import) is **not implemented** and does not parse — it lands in Phase 3. `search` / `install` / `remove` / `publish` shipped with the marketplace ([#2467](https://github.com/amd/gaia/issues/2467)); `skill_sets:` is [#2466](https://github.com/amd/gaia/issues/2466).
+`search` / `install` / `remove` / `publish` shipped with the marketplace ([#2467](https://github.com/amd/gaia/issues/2467)); `gaia skill migrate` (OpenClaw / Hermes import) shipped with [#692](https://github.com/amd/gaia/issues/692); `skill_sets:` is [#2466](https://github.com/amd/gaia/issues/2466).
 </Note>
 
 [→ Agent Skills Spec](/spec/agent-skills) · [→ Skill Format Reference](/plans/skill-format)
