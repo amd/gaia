@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/amd/gaia/tui/internal/event"
 )
 
@@ -168,36 +170,51 @@ func toolNarration(tool string, args json.RawMessage, narration string) string {
 // An unrecognised leading verb yields "Running <tool>" rather than a guess:
 // "Pre scan inbox" reads like a bug, "Running pre_scan_inbox" reads like a tool.
 func derivePhrase(tool string) toolPhrase {
+	// The tool name goes into a Sprintf FORMAT string, so a literal "%" in it
+	// would be read as a verb: derivePhrase("get_100%_done") produced
+	// "Getting 100%!d(string=arg)one". Escaped, never trusted.
+	safe := strings.ReplaceAll(tool, "%", "%%")
 	parts := strings.Split(tool, "_")
 	verb, ok := verbForms[strings.ToLower(parts[0])]
-	if !ok || len(parts) == 1 {
-		if ok {
-			return toolPhrase{With: verb + " %s", Without: verb}
-		}
-		return toolPhrase{With: "Running " + tool + ": %s", Without: "Running " + tool}
+	if !ok {
+		return toolPhrase{With: "Running " + safe + ": %s", Without: "Running " + tool}
+	}
+	if len(parts) == 1 {
+		return toolPhrase{With: verb + " %s", Without: verb}
 	}
 	object := strings.Join(parts[1:], " ")
-	return toolPhrase{With: verb + " " + object + ": %s", Without: verb + " " + object}
+	return toolPhrase{
+		With:    verb + " " + strings.ReplaceAll(object, "%", "%%") + ": %s",
+		Without: verb + " " + object,
+	}
 }
 
 // toolResultDetail is the single `└` line under a tool call: what came back, how
 // much of it, and how long it took. One line, always — the transcript's render
 // card is where a full result goes.
 func toolResultDetail(e event.CanonicalToolResultEvent) string {
+	// Classified FIRST, so every return below can carry the word. A preview that
+	// short-circuited ahead of this left a failed call marked in red and nothing
+	// else — the exact colour-only signal renderActivityItem promises never to
+	// rely on.
+	failed := !toolResultSucceeded(e.Data)
+
 	if p := clean(e.Preview); p != "" {
-		return truncateRunes(p, detailWidth)
+		return markFailed(p, failed)
 	}
 
 	data := decodeObject(e.Data)
 	if data == nil {
+		if failed {
+			return "failed"
+		}
 		return ""
 	}
 	if p := clean(stringOf(data["preview"])); p != "" {
-		return truncateRunes(p, detailWidth)
+		return markFailed(p, failed)
 	}
 
 	var parts []string
-	failed := !toolResultSucceeded(e.Data)
 
 	if summary := firstLine(stringOf(data["summary"])); summary != "" && !isBareStatusWord(summary) {
 		parts = append(parts, summary)
@@ -228,9 +245,12 @@ func toolResultDetail(e event.CanonicalToolResultEvent) string {
 		return "done"
 	}
 
-	line := strings.Join(parts, " · ")
-	// Failure has to survive a terminal with no colour, so it is a word, not a
-	// red tick.
+	return markFailed(strings.Join(parts, " · "), failed)
+}
+
+// markFailed puts the outcome's state into the WORDS. Failure has to survive a
+// terminal with no colour, so it is never left to failStyle alone.
+func markFailed(line string, failed bool) string {
 	if failed && !strings.HasPrefix(strings.ToLower(line), "failed") {
 		line = "failed — " + line
 	}
@@ -258,10 +278,20 @@ func countPhrase(data map[string]interface{}) string {
 	return ""
 }
 
-// pluralize drops a trailing "s" for a count of one. "1 skills" is the kind of
-// detail that makes a UI feel machine-generated.
+// pluralize singularizes a payload key for a count of one. "1 skills" is the
+// kind of detail that makes a UI feel machine-generated — and so is "1 matche",
+// which a bare TrimSuffix("s") produces from "matches".
 func pluralize(noun string, n int) string {
-	if n == 1 {
+	if n != 1 {
+		return noun
+	}
+	switch {
+	case strings.HasSuffix(noun, "ies"):
+		return strings.TrimSuffix(noun, "ies") + "y" // entries -> entry
+	case strings.HasSuffix(noun, "ches"), strings.HasSuffix(noun, "shes"),
+		strings.HasSuffix(noun, "sses"), strings.HasSuffix(noun, "xes"):
+		return strings.TrimSuffix(noun, "es") // matches -> match
+	case strings.HasSuffix(noun, "s"):
 		return strings.TrimSuffix(noun, "s")
 	}
 	return noun
@@ -352,8 +382,6 @@ func scalarString(v interface{}) string {
 		return t.String()
 	case bool:
 		return fmt.Sprintf("%t", t)
-	case float64:
-		return strings.TrimSuffix(fmt.Sprintf("%v", t), ".0")
 	default:
 		return ""
 	}
@@ -391,12 +419,32 @@ func floatOf(v interface{}) (float64, bool) {
 	return 0, false
 }
 
-// clean collapses a value onto one line — the work log has exactly one row per
-// event and a stray newline would silently push everything below it off screen.
+// clean makes an agent-supplied string safe to measure and to print on one row.
+//
+// Every string this file handles — narration, preview, summary, error text, raw
+// argument values — comes off the wire from the agent, and the work log renders
+// it through a bare lipgloss style. So the same scrub the card path applies
+// (cards.clean, box.go) applies here: ANSI escapes stripped (a payload can carry
+// a real ESC — "" is legal JSON) and C0/DEL controls dropped, because they
+// have no width but move the cursor, which makes the width math and the terminal
+// disagree. Newlines become spaces on top of that: the log has exactly one row
+// per event, and a stray newline would push everything below it off screen.
 func clean(s string) string {
-	s = strings.ReplaceAll(s, "\r", " ")
-	s = strings.ReplaceAll(s, "\n", " ")
-	s = strings.ReplaceAll(s, "\t", " ")
+	if s == "" {
+		return s
+	}
+	if strings.ContainsRune(s, 0x1b) {
+		s = ansi.Strip(s)
+	}
+	s = strings.Map(func(r rune) rune {
+		switch {
+		case r == '\t' || r == '\n' || r == '\r':
+			return ' ' // keep the word break, drop the cursor movement
+		case r < 0x20 || r == 0x7f:
+			return -1
+		}
+		return r
+	}, s)
 	for strings.Contains(s, "  ") {
 		s = strings.ReplaceAll(s, "  ", " ")
 	}
@@ -410,15 +458,37 @@ func firstLine(s string) string {
 	return clean(s)
 }
 
-// truncateRunes cuts by rune, not byte: a path with a non-ASCII character cut
-// mid-rune renders as a replacement box.
+// truncateRunes cuts to a COLUMN budget, not a rune count.
+//
+// Both matter and they are different numbers: cutting mid-rune renders a
+// replacement box, while counting runes overruns the line for any text that is
+// not width-1 — 74 CJK runes occupy 148 columns, which silently doubles the
+// live region's real height and shoves the transcript off the pane. ansi.Strip
+// first so a caller that already styled its text is measured on what the reader
+// actually sees.
 func truncateRunes(s string, limit int) string {
-	r := []rune(s)
-	if len(r) <= limit {
+	if limit <= 0 {
+		return ""
+	}
+	if ansi.StringWidth(s) <= limit {
 		return s
 	}
-	if limit <= 1 {
-		return string(r[:limit])
+	if limit == 1 {
+		return "…"
 	}
-	return strings.TrimRight(string(r[:limit-1]), " ") + "…"
+	var b strings.Builder
+	used := 0
+	for _, r := range s {
+		w := ansi.StringWidth(string(r))
+		if used+w > limit-1 {
+			break
+		}
+		b.WriteRune(r)
+		used += w
+	}
+	return strings.TrimRight(b.String(), " ") + "…"
 }
+
+// displayWidth is the column count of s, exported to the package for tests and
+// for callers budgeting a line.
+func displayWidth(s string) int { return ansi.StringWidth(s) }
