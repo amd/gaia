@@ -17,11 +17,14 @@
 #pragma once
 
 #include <functional>
+#include <map>
 #include <string>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 
 #include "gaia/export.h"
+#include "gaia/types.h"
 
 namespace gaia {
 
@@ -53,6 +56,19 @@ public:
     /// Return true if at least one token has been emitted via the callback.
     bool hasTokens() const { return hasTokens_; }
 
+    /// Native tool calls accumulated from ``choices[0].delta.tool_calls``.
+    ///
+    /// Servers fragment these across chunks: the first delta for an index
+    /// carries the id and (usually) the function name, and the JSON argument
+    /// string then arrives in arbitrary pieces. Entries are returned ordered by
+    /// their ``index`` field, which is how parallel calls are distinguished.
+    /// Valid only once done() is true — the arguments string is incomplete
+    /// before then.
+    std::vector<ToolCall> toolCalls() const;
+
+    /// Return true if any tool_calls delta has been seen.
+    bool hasToolCalls() const { return !toolCallsByIndex_.empty(); }
+
 private:
     /// Process one complete SSE line (after newline stripping).
     void processLine(const std::string& line);
@@ -60,10 +76,17 @@ private:
     /// Handle the payload of a data: SSE line.
     void processData(const std::string& payload);
 
+    /// Merge one ``delta.tool_calls`` array into the accumulator.
+    void accumulateToolCalls(const json& deltaToolCalls);
+
     TokenCallback callback_;
     std::string   buffer_;     // Accumulates partial lines across feed() calls
     bool          done_      = false;
     bool          hasTokens_ = false;
+
+    // Keyed by the delta's ``index`` so parallel calls stay separate and
+    // out-of-order chunks land in the right slot. std::map keeps index order.
+    std::map<int, ToolCall> toolCallsByIndex_;
 };
 
 } // namespace gaia

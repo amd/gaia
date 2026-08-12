@@ -323,9 +323,12 @@ class _StubAgent:
     _requested_skill_set = None
     _active_skill_set = None
     _skill_set_loaded = None
+    _SKILL_MANIFEST_FILENAME = Agent._SKILL_MANIFEST_FILENAME
 
     skill_manager = Agent.skill_manager
     skill_sets = Agent.skill_sets
+    _resolve_skill_manifest = Agent._resolve_skill_manifest
+    _parse_skill_declarations = Agent._parse_skill_declarations
     active_skill_set = Agent.active_skill_set
     loaded_skills = Agent.loaded_skills
     _tools_registry = Agent._tools_registry

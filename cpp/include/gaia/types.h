@@ -137,11 +137,41 @@ inline std::string roleToString(MessageRole r) {
     return "unknown";
 }
 
+/// One entry of an OpenAI ``tool_calls`` array.
+///
+/// ``arguments`` is kept as the raw JSON *string* the model emitted, exactly as
+/// the wire format carries it. Decoding is explicit via parsedArgs() so a
+/// malformed payload surfaces as a thrown error at the point of use rather than
+/// as a silently-empty argument object.
+struct ToolCall {
+    std::string id;        // e.g. "call_abc123" — correlates the role=tool reply
+    std::string name;      // function.name
+    std::string arguments; // function.arguments — a JSON object encoded as a string
+
+    /// Decode ``arguments`` into a JSON object.
+    /// An empty/whitespace-only string decodes to ``{}`` (what servers emit for
+    /// a zero-argument function). Anything that is not a JSON object throws
+    /// std::runtime_error naming the tool, the id, and the offending payload.
+    json parsedArgs() const;
+
+    /// Serialize to the OpenAI ``tool_calls`` element shape.
+    json toJson() const;
+
+    /// Parse one ``tool_calls`` element. Throws std::runtime_error with an
+    /// actionable message when ``id`` or ``function.name`` is missing or blank.
+    static ToolCall fromJson(const json& j);
+};
+
 struct Message {
     MessageRole role;
     std::string content;
     std::optional<std::string> name;       // Tool name (for role=TOOL)
     std::optional<std::string> toolCallId; // Tool call ID (for role=TOOL)
+
+    /// Native OpenAI tool calls carried by an ASSISTANT message. When non-empty,
+    /// toJson() emits a spec-correct ``tool_calls`` array and sends ``content``
+    /// as JSON null if it is empty (matching Python's assistant-turn shape).
+    std::vector<ToolCall> toolCalls;
 
     /// When present, `parts` supersedes `content` on serialization:
     /// toJson() emits content as a JSON array of ContentPart. `content` is
@@ -222,7 +252,16 @@ using StreamCallback = std::function<void(const std::string& token)>;
 
 // ---- Security Types ----
 
+// Declared in order of increasing severity — stricterPolicy() relies on it.
 enum class ToolPolicy { ALLOW, CONFIRM, DENY };
+
+/// Return the stricter of two policies. Used where a gate must never be
+/// weakened by a laxer default (e.g. MCP tool registration).
+constexpr ToolPolicy stricterPolicy(ToolPolicy a, ToolPolicy b) {
+    static_assert(ToolPolicy::ALLOW < ToolPolicy::CONFIRM && ToolPolicy::CONFIRM < ToolPolicy::DENY,
+                  "ToolPolicy must stay ordered by severity");
+    return a < b ? b : a;
+}
 
 enum class ToolConfirmResult { ALLOW_ONCE, ALWAYS_ALLOW, DENY };
 
@@ -304,6 +343,41 @@ struct Decision {
     std::string description; // hint: "Confirm and proceed"
 };
 
+// ---- Response / tool-call protocol selection ----
+
+/// Shape the agent asks the model to reply in when the prompt-JSON path is
+/// active. Mirrors Python ``Agent.response_mode``.
+///   Planning       — JSON-only replies with thought/goal/plan/tool structure.
+///   Conversational — plain text, with a bare JSON object only for tool calls.
+/// Ignored when native tool calling is active: the model then uses the OpenAI
+/// function-calling protocol and no response-format template is sent at all.
+enum class ResponseMode { Planning, Conversational };
+
+/// Whether to drive tools with the native OpenAI ``tools`` / ``tool_calls``
+/// protocol instead of the prompt-JSON envelope.
+///   Auto   — decide per model via isToolCallingModel() (default).
+///   Always — force native, whatever the model id says. Use for an
+///            OpenAI-compatible server whose model ids this build cannot know.
+///   Never  — force the prompt-JSON path.
+enum class NativeToolCalls { Auto, Always, Never };
+
+inline std::string responseModeToString(ResponseMode m) {
+    return m == ResponseMode::Conversational ? "conversational" : "planning";
+}
+
+inline std::string nativeToolCallsToString(NativeToolCalls m) {
+    switch (m) {
+        case NativeToolCalls::Auto:   return "auto";
+        case NativeToolCalls::Always: return "always";
+        case NativeToolCalls::Never:  return "never";
+    }
+    return "auto";
+}
+
+/// Throws std::invalid_argument on an unrecognized value (no silent default).
+ResponseMode responseModeFromString(const std::string& s);
+NativeToolCalls nativeToolCallsFromString(const std::string& s);
+
 struct AgentConfig {
     std::string baseUrl = defaultBaseUrl();
     std::string modelId = "Qwen3-4B-GGUF";
@@ -321,6 +395,21 @@ struct AgentConfig {
                                     // even during streaming. Used by JsonEventOutputHandler
                                     // so the TUI/WebUI gets both stream tokens AND agent events.
     double temperature = 0.7;  // LLM sampling temperature (0.0 = deterministic)
+
+    /// Reply shape requested on the prompt-JSON path. Ignored under native
+    /// tool calling.
+    ResponseMode responseMode = ResponseMode::Planning;
+
+    /// Native OpenAI tool-calling policy. Auto consults isToolCallingModel().
+    NativeToolCalls nativeToolCalls = NativeToolCalls::Auto;
+
+    /// Value sent as ``tool_choice`` when native tool calling is active.
+    /// "auto" lets the model decide; "required" forces a call. To disable
+    /// native tool calling entirely, set nativeToolCalls = NativeToolCalls::Never.
+    std::string toolChoice = "auto";
+
+    /// Resolve the Auto policy against ``modelId``.
+    bool useNativeToolCalls() const;
 
     /// Validate config fields; throws std::invalid_argument on violation.
     void validate() const;

@@ -75,6 +75,12 @@ public:
     /// Connect to an MCP server and register its tools.
     /// Mirrors Python MCPClientMixin.connect_mcp_server().
     ///
+    /// Each discovered tool is registered with ToolPolicy::CONFIRM unless the
+    /// server proves it read-only — see mcpToolRequiresConfirmation() in
+    /// mcp_client.h. A silentMode agent has no confirm callback, so gated MCP
+    /// tools are denied (fail-closed) until one is installed via
+    /// setToolConfirmCallback() or the tool is pre-approved in AllowedToolsStore.
+    ///
     /// @param name Friendly name for the server
     /// @param config Config with "command" and optional "args"
     /// @return true if connection succeeded
@@ -113,8 +119,12 @@ public:
     /// Delegates to ToolRegistry::setConfirmCallback().
     void setToolConfirmCallback(ToolConfirmCallback cb);
 
-    /// Set the default policy for all tools (local and MCP) registered without an explicit policy.
-    /// Delegates to ToolRegistry::setDefaultPolicy().
+    /// Set the default policy for local tools registered without an explicit policy.
+    /// Delegates to ToolRegistry::setDefaultPolicy(). Affects only tools
+    /// registered afterwards.
+    /// For MCP tools discovered by a later connectMcpServer() call this can only
+    /// raise the classifier's verdict (ALLOW < CONFIRM < DENY) — a gated MCP
+    /// tool is never lowered back to ALLOW.
     void setDefaultPolicy(ToolPolicy policy);
 
     /// Get the output handler.
@@ -141,12 +151,11 @@ public:
 
     /// Replace conversation history (for session resume).
     /// Must NOT be called while processQuery() is running (guarded by inFlight_).
-    void setHistory(std::vector<Message> history) {
-        if (inFlight_.load()) {
-            throw std::runtime_error("Cannot set history while processQuery() is running");
-        }
-        conversationHistory_ = std::move(history);
-    }
+    /// Broken native tool-call pairs are repaired on ingestion: a session file
+    /// written by another build (or hand-edited) can carry a role=tool message
+    /// whose assistant tool_calls turn is missing, which the server rejects on
+    /// the very first request of the next turn.
+    void setHistory(std::vector<Message> history);
 
     /// Request cancellation of the current processQuery() run.
     /// The agent loop checks this flag between steps and exits early
@@ -211,6 +220,9 @@ private:
     struct LlmResult {
         std::string content;
         UsageStats usage;
+        /// Native OpenAI tool calls, when the model answered with them.
+        /// Always empty on the prompt-JSON path.
+        std::vector<ToolCall> toolCalls;
     };
 
     /// Send messages to the LLM and get a response with usage stats.
@@ -227,8 +239,14 @@ private:
     /// Resolve plan parameter placeholders ($PREV.field, $STEP_N.field).
     json resolvePlanParameters(const json& toolArgs, const std::vector<json>& stepResults);
 
-    /// Compose the full system prompt from parts.
+    /// Compose the full system prompt from parts, using a live config snapshot.
     std::string composeSystemPrompt() const;
+
+    /// Compose against an explicit config. The agent loop uses this with its
+    /// turn snapshot so the prompt and the request body can never disagree
+    /// about which tool protocol is active (a concurrent setModel() would
+    /// otherwise flip one and not the other mid-turn).
+    std::string composeSystemPromptFor(const AgentConfig& cfg) const;
 
     /// Call an MCP tool with automatic reconnect on connection failure.
     json callMcpTool(const std::string& serverName, const std::string& toolName, const json& args);
@@ -274,8 +292,11 @@ private:
     // Mutex protecting config_ for concurrent setters / processQuery()
     mutable std::mutex configMutex_;
 
-    // Response format template (shared across all agents)
-    static const std::string RESPONSE_FORMAT_TEMPLATE;
+    // Response format templates (shared across all agents). Neither is sent
+    // when native tool calling is active — the model then uses the OpenAI
+    // function-calling protocol it was trained on.
+    static const std::string RESPONSE_FORMAT_TEMPLATE;              // ResponseMode::Planning
+    static const std::string CONVERSATIONAL_FORMAT_TEMPLATE;        // ResponseMode::Conversational
 };
 
 } // namespace gaia

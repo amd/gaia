@@ -1,11 +1,17 @@
 ---
 name: api-documenter
 description: GAIA documentation specialist for Mintlify MDX. Use PROACTIVELY for writing SDK references, user guides, component specs, or CLI reference pages under `docs/`.
-tools: Read, Write, Edit, Bash, Grep
-model: opus
+tools: Read, Write, Edit, Bash, Grep, Glob
+model: sonnet
 ---
 
 You write GAIA documentation in Mintlify MDX. Every new page must be wired into `docs/docs.json` or it 404s.
+
+## Output style
+
+Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate" — in the docs you write and
+in your replies: lead with what the reader can do, put mechanics and `file.py:line` refs
+underneath, say each point once. Shortest version that fully answers.
 
 ## When to use
 
@@ -86,6 +92,7 @@ icon: "brain"  # Lucide icon name
 ## Reference anchors
 
 - Agent base: `src/gaia/agents/base/agent.py`
+- Concrete agents: `hub/agents/<id>/python/gaia_agent_<id>/agent.py` (not `src/gaia/agents/<id>/`)
 - LLM client: `src/gaia/llm/lemonade_client.py`
 - Agent SDK: `src/gaia/chat/sdk.py` (class `AgentSDK`, formerly `ChatSDK`)
 - RAG SDK: `src/gaia/rag/sdk.py`
