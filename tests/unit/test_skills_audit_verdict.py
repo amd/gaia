@@ -76,6 +76,38 @@ def test_unknown_tier_is_rejected_not_defaulted():
 
 
 # ----------------------------------------------------------------------
+# Code the analyzers could not read is never passed off as clean
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("rule_id", ["code.unparseable", "code.unreadable"])
+@pytest.mark.parametrize("tier", ["experimental", "community", "verified"])
+def test_unreadable_code_never_earns_allow(rule_id, tier):
+    """The advisory tier used to ALLOW a skill whose code was never scanned."""
+    assert severity_verdict((_f("high", rule_id=rule_id),), tier) != "ALLOW"
+
+
+def test_unparseable_code_is_held_for_review_at_the_advisory_tier():
+    verdict, reason = verdict_for_tier(
+        (_f("high", rule_id="code.unparseable"),), "experimental"
+    )
+    assert verdict == "REVIEW"
+    assert "read" in reason.lower()
+
+
+def test_unreadable_code_clears_no_tier():
+    findings = (_f("high", rule_id="code.unreadable"),)
+    assert cleared_tiers(findings) == ()
+    assert highest_cleared_tier(findings) is None
+
+
+def test_the_unauditable_rule_does_not_soften_a_block():
+    """A critical finding alongside unparseable code still BLOCKs."""
+    findings = (_f("high", rule_id="code.unparseable"), _f("critical"))
+    assert severity_verdict(findings, "community") == "BLOCK"
+
+
+# ----------------------------------------------------------------------
 # The human-audit hook: the robot cannot stamp 'verified'
 # ----------------------------------------------------------------------
 

