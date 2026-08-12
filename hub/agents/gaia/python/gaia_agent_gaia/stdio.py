@@ -53,31 +53,60 @@ def _write(event: Dict[str, Any], out) -> None:
     out.flush()
 
 
-def _route_everything_but_events_to_stderr(real_stdout) -> None:
-    """Make stdout carry JSON events and nothing else.
+def log_path() -> "Path":
+    """Where the agent's log lands. One file, not a per-run directory."""
+    from pathlib import Path
 
-    A single unstructured line desynchronises the reader's line scanner for the
-    rest of the process's life, so this is a correctness requirement, not
-    tidiness. Two moves are needed together: logging handlers built at import
-    time already hold a reference to the real stdout and must be repointed, and
-    ``sys.stdout`` itself is rebound so anything created later — or any stray
-    ``print`` in code we do not control — lands on stderr too.
+    return Path.home() / ".gaia" / "logs" / "gaia-agent.log"
+
+
+def _configure_logging(real_stdout, *, dev: bool) -> "Path":
+    """Send logs to a file and keep stdout carrying JSON events only.
+
+    stdout is the wire: a single unstructured line desynchronises the reader's
+    line scanner for the rest of the process's life, so this is a correctness
+    requirement rather than tidiness. Handlers built at import time already hold
+    the real stdout, so they are removed outright, and ``sys.stdout`` is rebound
+    so a stray ``print`` in code we do not control cannot reach the wire either.
+
+    User mode logs errors only — a healthy run should leave a boring file.
+    ``--dev`` turns on DEBUG for the whole tree, because the questions a
+    developer asks (which tool, how long, why that step) are answered by the
+    records user mode drops.
     """
     import logging
+    from pathlib import Path
 
     sys.stdout = sys.stderr
 
-    loggers = [logging.getLogger()]
-    loggers += [
+    path = log_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    root = logging.getLogger()
+    loggers = [root] + [
         logging.getLogger(name) for name in list(logging.root.manager.loggerDict)
     ]
     for lg in loggers:
         for handler in list(getattr(lg, "handlers", []) or []):
-            if (
-                isinstance(handler, logging.StreamHandler)
-                and getattr(handler, "stream", None) is real_stdout
+            stream = getattr(handler, "stream", None)
+            if isinstance(handler, logging.StreamHandler) and stream in (
+                real_stdout,
+                sys.stderr,
             ):
-                handler.setStream(sys.stderr)
+                lg.removeHandler(handler)
+        lg.propagate = True
+
+    level = logging.DEBUG if dev else logging.ERROR
+    file_handler = logging.FileHandler(path, encoding="utf-8")
+    file_handler.setLevel(level)
+    file_handler.setFormatter(
+        logging.Formatter("%(asctime)s | %(levelname)s | %(name)s | %(message)s")
+    )
+    root.handlers = [file_handler]
+    root.setLevel(level)
+    for lg in loggers:
+        lg.setLevel(logging.NOTSET)
+    return Path(path)
 
 
 def _terminal_error(exc: BaseException) -> Dict[str, Any]:
@@ -193,16 +222,16 @@ def main(argv: Optional[list] = None) -> int:
         help="Accepted for symmetry with the other subprocess agents; this "
         "transport only ever speaks JSON lines, so it changes nothing.",
     )
+    parser.add_argument(
+        "--dev",
+        action="store_true",
+        help="Developer mode: DEBUG-level logging to the log file instead of "
+        "errors only.",
+    )
     args = parser.parse_args(argv)
 
-    # stdout is the wire: one JSON event per line and nothing else. Everything
-    # that would otherwise print there — the logger, a library's stray print,
-    # a warning — is rebound to stderr, because a single unstructured line
-    # desynchronises the reader's scanner for the rest of the process's life.
-    # Rebinding sys.stdout (rather than only reconfiguring logging) is what
-    # makes that hold for code we do not control.
     out = sys.stdout
-    _route_everything_but_events_to_stderr(out)
+    _configure_logging(out, dev=args.dev)
 
     # Built ONCE, before the first query, and kept for the life of the process.
     # A failure here is fatal and must say so on the turn the user actually
