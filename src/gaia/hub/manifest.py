@@ -224,9 +224,12 @@ class AgentManifest:
     required_connections: List[str] = field(default_factory=list)
     interfaces: Interfaces = field(default_factory=Interfaces)
 
-    # Agent Skills declarations (#2466): the always-on ``skills:`` list, the
-    # named ``skill_sets:`` bundles, and ``default_skill_set:``. Empty (falsy)
-    # when the manifest declares none — the grammar is additive.
+    # Agent Skills declarations (#2466 + #2467 scope D): the always-on
+    # ``skills:`` list, the named ``skill_sets:`` bundles, and
+    # ``default_skill_set:``. Each entry carries a SemVer range and a
+    # ``required`` flag; ranges are matched against what is installed at agent
+    # construction by ``Agent.load_declared_skills()``. Empty (falsy) when the
+    # manifest declares none — the grammar is additive.
     skill_sets: SkillSets = field(default_factory=SkillSets)
 
     # Provenance — set by :func:`parse`; not part of the YAML.
