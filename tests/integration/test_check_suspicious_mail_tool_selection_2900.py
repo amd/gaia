@@ -107,7 +107,9 @@ def _fresh_agent(tmp_path: Path, model_id: str = HARNESS_MODEL) -> EmailTriageAg
     )
 
 
-def test_check_suspicious_mail_selected_for_scoped_phrasings(require_lemonade, tmp_path):
+def test_check_suspicious_mail_selected_for_scoped_phrasings(
+    require_lemonade, tmp_path
+):
     """Re-runs the #2910 live sweep's 5 phrasings, one fresh agent per
     phrasing, and tallies tool selection exactly as the live sweep reported:
     N = alone, K = also called pre_scan_inbox, never = neither.
@@ -125,9 +127,7 @@ def test_check_suspicious_mail_selected_for_scoped_phrasings(require_lemonade, t
         outcome = agent.process_query(phrasing)
         results[phrasing] = _tool_names_called(outcome)
 
-    alone = sum(
-        1 for tools in results.values() if tools == ["check_suspicious_mail"]
-    )
+    alone = sum(1 for tools in results.values() if tools == ["check_suspicious_mail"])
     also_pre_scan = sum(
         1
         for tools in results.values()
