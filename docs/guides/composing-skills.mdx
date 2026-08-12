@@ -117,8 +117,8 @@ skill_sets:
   library:
     - api-compatibility                # required (the default)
     - name: changelog-discipline
-      version: ">=0.1.0"               # recorded, not yet resolved
-      required: false                  # missing ⇒ logged and skipped
+      version: ">=0.1.0"               # checked against the installed version
+      required: false                  # missing/incompatible ⇒ logged, skipped
 ```
 
 ## 3. Point the agent at both

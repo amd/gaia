@@ -170,6 +170,14 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		if usage.Steps > 0 {
 			m.totalSteps = usage.Steps
 		}
+		// This — not doneMsg — is the real settlement point for a daemon-relay
+		// turn: nothing below reschedules waitForEvent, so the channel's
+		// eventual close is never observed here. A cancelled turn that ends
+		// this way (the server's cooperative cancel just produces an ordinary
+		// `final` with the "stopped" text) must still clear cancelPending here,
+		// or the next Esc/Ctrl+C's guard is stuck failing for the rest of the
+		// session (#2901 second-cycle crash).
+		m.settleTurn()
 		m.updateViewport()
 		return m, nil, true
 
@@ -181,6 +189,9 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		m.streaming = false
 		m.activity = nil
 		m.question = nil
+		// See the matching comment on CanonicalFinalEvent above — this is the
+		// real settlement point, not doneMsg.
+		m.settleTurn()
 		m.updateViewport()
 		return m, nil, true
 

@@ -30,10 +30,35 @@ type eventMsg struct {
 	ch    <-chan interface{}
 	event interface{}
 }
-type errMsg struct{ err error }
+
+// errMsg fires from sendQuery's own Cmd, exactly when c.Send() failed to
+// mint a channel in the first place — so unlike eventMsg/doneMsg it has no
+// channel to key supersededTurn off of. turnSeq is its own scoping token
+// instead: it captures ChatModel.turnSeq at the moment the Cmd was created,
+// so a late delivery from an abandoned turn (the user already resent) can be
+// told apart from the live turn's own failure. See ChatModel.turnSeq.
+//
+// turnSeq's zero value means "pre-first-turn" — sendQuery increments
+// ChatModel.turnSeq before capturing it, so a real turn's errMsg always
+// carries >= 1. Always set turnSeq from a live turn when constructing one;
+// the Update guard also rejects 0 outright rather than only comparing
+// against ChatModel.turnSeq, so an errMsg built without the field cannot
+// accidentally pass by matching a fresh model's own zero-valued turnSeq.
+type errMsg struct {
+	err     error
+	turnSeq int
+}
 type doneMsg struct{ ch <-chan interface{} }
 type sendQueryMsg struct{ query string }
 type channelReadyMsg struct{ ch <-chan interface{} }
+
+// cancelRequestFailedMsg carries a failure of the out-of-band Cancel() call
+// (client.AgentCanceler, #2901) — asking the server to stop the run, not the
+// run itself. The run may still be live and settle on its own; this only
+// reports that the ASK to stop it could not be delivered, so it never touches
+// m.streaming/m.cancelPending — only the eventual doneMsg (or errMsg) for the
+// run's own channel does that.
+type cancelRequestFailedMsg struct{ err error }
 
 // preScanFetchedMsg / preScanFetchFailedMsg / preScanDegradedMsg deliver the
 // result of the on-open inbox pre-scan fetch (#2743, replacing the #2582
@@ -113,6 +138,17 @@ type ChatModel struct {
 	messages  []Message
 	activity  []ActivityItem
 	streaming bool
+	// cancelPending is true from the moment Esc/Ctrl+C requests a cancel until
+	// doneMsg confirms the run's channel actually closed. It exists only to
+	// let the doneMsg handler distinguish "this settlement was a cancel" (so
+	// it can append the confirmed "cancelled" line) from any other doneMsg
+	// delivery — it plays no part in gating Enter, which is m.streaming's job.
+	cancelPending bool
+	// turnSeq increments on every sendQuery call. It scopes errMsg (see its
+	// doc comment) the way eventMsg/doneMsg are scoped by m.events — a
+	// channel identity doesn't exist yet when errMsg fires, so this integer
+	// generation stands in for it instead.
+	turnSeq int
 	// buffer accumulates streamed answer text. A plain string, not a
 	// strings.Builder: Bubble Tea copies the model on every update, and a
 	// Builder panics the moment a copied non-zero one is written to again.
@@ -356,6 +392,21 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.events = msg.ch
 		return m, waitForEvent(m.events)
 
+	case cancelRequestFailedMsg:
+		// The ASK to stop the run (client.AgentCanceler.Cancel) could not be
+		// delivered — the run itself may still be live and settling on its
+		// own. Report it without touching m.streaming/m.cancelPending: only
+		// the run's own doneMsg/errMsg gets to decide the composer is free
+		// again (#2901) — this failure alone must not silently re-enable
+		// Enter into a run that is, for all this client knows, still there.
+		m.messages = append(m.messages, Message{
+			Role: RoleStatus,
+			Content: fmt.Sprintf("[!] could not deliver the cancel request: %v. "+
+				"Waiting for the run to finish on its own.", msg.err),
+		})
+		m.updateViewport()
+		return m, nil
+
 	case preScanFetchedMsg:
 		if m.streaming {
 			// Buffer -- appending now would land the card between this turn's question and its reply.
@@ -400,19 +451,40 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.streaming = false
-		m.events = nil
-		m.cancelFn = nil
 		m.question = nil
 		m.confirmation = nil
 		m.flushBuffer()
 		m.activity = nil
+		// The channel closing is the settlement signal a cancel was waiting
+		// on (#2901) — settleTurn appends the confirmed "cancelled" line only
+		// now, once it is actually confirmed rather than merely requested.
+		m.settleTurn()
 		m.updateViewport()
 		return m, nil
 
 	case errMsg:
+		if msg.turnSeq == 0 || msg.turnSeq != m.turnSeq {
+			// A late failure from an already-abandoned turn — the user has
+			// since resent (a new sendQuery minted a fresh turnSeq). Must not
+			// stomp the live turn's state (#2901: this is exactly what let a
+			// stray errMsg reset a live second turn's cancelFn/cancelPending
+			// out from under it, so the next Esc/Ctrl+C fell through to quit).
+			//
+			// The == 0 check is redundant once a turn has been sent, but not
+			// before: a fresh model's own turnSeq is also 0, so without it an
+			// errMsg constructed without setting the field (turnSeq's zero
+			// value, see its doc comment) would silently pass here on a
+			// pre-first-turn model instead of being dropped as invalid
+			// (#2912 review).
+			return m, nil
+		}
 		m.streaming = false
-		m.events = nil
-		m.cancelFn = nil
+		// A pending cancel settles here too — the run ended in an error
+		// instead of the clean close doneMsg handles, but either way the
+		// composer must not stay hostage to a cancel that will never see its
+		// happy-path settlement message (the guards in handleKey key off
+		// this alongside m.streaming).
+		m.settleTurn()
 		m.question = nil
 		m.confirmation = nil
 		m.err = msg.err
@@ -530,40 +602,32 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.Type {
 	case tea.KeyCtrlC:
-		if m.streaming && m.cancelFn != nil {
-			m.cancelFn()
-			m.streaming = false
-			m.events = nil
-			m.cancelFn = nil
-			m.activity = nil
-			m.question = nil
-			m.confirmation = nil
-			m.messages = append(m.messages, Message{
-				Role:    RoleStatus,
-				Content: "cancelled",
-			})
-			m.drainPendingPreScan()
-			m.updateViewport()
-			return m, nil
+		if m.streaming && m.cancelFn != nil && !m.cancelPending {
+			return m.requestCancel()
+		}
+		// Same escape hatch as Esc below, deliberately: Ctrl+C's first press
+		// here already cancels rather than quitting, so it has already left
+		// the "twice to force-quit" terminal idiom -- a second press must stay
+		// consistent with that and abort locally rather than discarding the
+		// transcript (#2901 review).
+		if m.streaming && m.cancelPending {
+			return m.forceLocalAbort()
 		}
 		return m, tea.Quit
 
 	case tea.KeyEsc:
-		if m.streaming && m.cancelFn != nil {
-			m.cancelFn()
-			m.streaming = false
-			m.events = nil
-			m.cancelFn = nil
-			m.activity = nil
-			m.question = nil
-			m.confirmation = nil
-			m.messages = append(m.messages, Message{
-				Role:    RoleStatus,
-				Content: "cancelled",
-			})
-			m.drainPendingPreScan()
-			m.updateViewport()
-			return m, nil
+		if m.streaming && m.cancelFn != nil && !m.cancelPending {
+			return m.requestCancel()
+		}
+		// A cancel already asked the server to stop, but cooperative
+		// cancellation is only checked at agent-loop step boundaries, so this
+		// pending window can run tens of seconds with the composer frozen
+		// (worst case the 300s read-idle watchdog, sse.go). A second Esc is
+		// the expected reaction to a spinner that keeps spinning, and it must
+		// not cost the user their session -- abort the local read instead of
+		// falling through to ReturnToHubMsg/tea.Quit below (#2901 review).
+		if m.streaming && m.cancelPending {
+			return m.forceLocalAbort()
 		}
 		if m.fromHub {
 			return m, func() tea.Msg {
@@ -633,6 +697,97 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// requestCancel begins cancelling the in-flight turn (Esc / Ctrl+C).
+//
+// The first version of this fix (#2901) blocked Enter on doneMsg — the run's
+// event channel closing — reasoning that was the one locally-observable
+// settlement signal. A live run against the real daemon proved that wrong:
+// cancelFn (the caller's own context.CancelFunc) tears down THIS client's
+// read of the SSE stream, and that local abort is what closed the channel —
+// well before the daemon's session run_lock was actually released by the
+// sidecar's worker thread, which notices a cancel only cooperatively, at the
+// next agent-loop step boundary (see
+// hub/agents/email/python/gaia_agent_email/query_routes.py). Calling
+// cancelFn() here reproduced the exact race it was meant to close: 5/5
+// cancel-then-resend attempts still hit a bare-lock 409 downstream.
+//
+// The fix is to stop manufacturing that local "done" at all. For a transport
+// that implements client.AgentCanceler (the daemon relay), Cancel() asks the
+// SERVER to stop the run out of band, while THIS call leaves m.cancelFn /
+// m.events untouched — the existing read keeps running, so it can observe
+// whatever terminal signal the turn actually produces. In practice that is
+// almost always the turn's own CanonicalFinalEvent/CanonicalErrorEvent, NOT
+// the channel closing: the server's cooperative cancel just returns an
+// ordinary "stopped" answer over the still-open stream, and those handlers
+// stop rescheduling waitForEvent the moment they fire, so doneMsg can never
+// arrive for them (see settleTurn's doc comment). doneMsg only settles a
+// transport where the channel closing IS the terminal signal. Either way,
+// settleTurn() is the single place that clears cancelPending once the turn's
+// OWN signal — not this call — says it is over.
+//
+// A transport with no such server-side lock (e.g. a local subprocess) does
+// not implement AgentCanceler; for it, tearing down the local connection IS
+// the whole cancellation, so the old immediate cancelFn() behavior is exactly
+// right and unchanged below.
+func (m ChatModel) requestCancel() (tea.Model, tea.Cmd) {
+	m.cancelPending = true
+	m.activity = nil
+	m.question = nil
+	m.confirmation = nil
+	m.messages = append(m.messages, Message{
+		Role:    RoleStatus,
+		Content: "cancelling… (the agent stops at its next step — press again to stop waiting)",
+	})
+	m.drainPendingPreScan()
+	m.updateViewport()
+
+	if canceler, ok := m.client.(client.AgentCanceler); ok {
+		return m, func() tea.Msg {
+			ctx, cancel := context.WithTimeout(context.Background(), answerTimeout)
+			defer cancel()
+			if err := canceler.Cancel(ctx); err != nil {
+				return cancelRequestFailedMsg{err: err}
+			}
+			return nil
+		}
+	}
+
+	m.cancelFn()
+	m.cancelFn = nil
+	return m, nil
+}
+
+// forceLocalAbort is the escape hatch for a SECOND Esc/Ctrl+C pressed while a
+// cancel is already pending (#2912 review). Cooperative cancellation is only
+// checked at agent-loop step boundaries, so the pending window opened by
+// requestCancel can run tens of seconds — worst case the 300s read-idle
+// watchdog (sse.go) — with the composer frozen and keystrokes dropped. A
+// user pressing the key again because nothing visibly happened must not lose
+// the whole session to tea.Quit: this tears the local read down immediately
+// (the pre-#2901 per-key behavior) and frees the composer, while warning
+// that the run may still be finishing server-side — a following Enter can
+// legitimately land on the actionable 409 the AgentCanceler branch above
+// already produces a clear message for.
+func (m ChatModel) forceLocalAbort() (tea.Model, tea.Cmd) {
+	if m.cancelFn != nil {
+		m.cancelFn()
+	}
+	m.cancelFn = nil
+	m.events = nil
+	m.streaming = false
+	m.cancelPending = false
+	m.question = nil
+	m.confirmation = nil
+	m.activity = nil
+	m.messages = append(m.messages, Message{
+		Role: RoleStatus,
+		Content: "gave up waiting locally — the run may still be finishing on the server; " +
+			"a retry may briefly answer \"already in progress\"",
+	})
+	m.updateViewport()
+	return m, nil
+}
+
 func (m ChatModel) sendQuery(query string) (tea.Model, tea.Cmd) {
 	m.messages = append(m.messages, Message{
 		Role:    RoleUser,
@@ -651,13 +806,16 @@ func (m ChatModel) sendQuery(query string) (tea.Model, tea.Cmd) {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelFn = cancel
 
+	m.turnSeq++
+	seq := m.turnSeq
+
 	c := m.client
 	return m, tea.Batch(
 		m.spinner.Tick,
 		func() tea.Msg {
 			ch, err := c.Send(ctx, query)
 			if err != nil {
-				return errMsg{err: err}
+				return errMsg{err: err, turnSeq: seq}
 			}
 			return channelReadyMsg{ch: ch}
 		},
@@ -681,6 +839,35 @@ func waitForEvent(ch <-chan interface{}) tea.Cmd {
 // the current one, so it must be ignored rather than allowed to end the live turn.
 func (m ChatModel) supersededTurn(ch <-chan interface{}) bool {
 	return ch != nil && ch != m.events
+}
+
+// settleTurn clears the per-turn cancellation bookkeeping once THIS turn's
+// own terminal signal proves it is over: doneMsg/errMsg (already scoped to
+// the live turn above) or a terminal canonical/legacy event
+// (CanonicalFinalEvent, CanonicalErrorEvent, AnswerEvent, DoneEvent,
+// AgentErrorEvent, legacy ErrorEvent, StatusEvent{complete}). Every caller
+// already knows the signal belongs to the current turn — eventMsg's own
+// dispatch in Update ran supersededTurn before handleEvent ever saw the
+// event — so it is always safe to clear m.cancelFn/m.events here.
+//
+// Without this, a cancelled turn that settles via its own terminal event —
+// the ONLY way a daemon-relay turn ever settles, since CanonicalFinalEvent
+// and CanonicalErrorEvent stop rescheduling waitForEvent the moment they
+// fire (correctly: no more events are expected), so doneMsg can never arrive
+// for them — left cancelPending stuck true for the rest of the session. The
+// next Esc/Ctrl+C's `!m.cancelPending` guard then permanently failed and
+// fell through to tea.Quit instead of cancelling (#2901 second-cycle crash,
+// reproduced live 3/3 against the real daemon).
+func (m *ChatModel) settleTurn() {
+	m.events = nil
+	m.cancelFn = nil
+	if m.cancelPending {
+		m.cancelPending = false
+		m.messages = append(m.messages, Message{
+			Role:    RoleStatus,
+			Content: "cancelled",
+		})
+	}
 }
 
 // CancelActiveTurn stops any in-flight turn. The UI owns the per-turn context, so
@@ -776,6 +963,7 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 			m.flushBuffer()
 			m.streaming = false
 			m.activity = nil
+			m.settleTurn()
 			m.updateViewport()
 			return m, nil
 		}
@@ -806,6 +994,7 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 		m.streaming = false
 		m.activity = nil
 		m.totalSteps = e.Steps
+		m.settleTurn()
 		m.updateViewport()
 		return m, nil
 
@@ -823,6 +1012,7 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 		})
 		m.streaming = false
 		m.activity = nil
+		m.settleTurn()
 		m.updateViewport()
 		return m, nil
 
@@ -833,6 +1023,7 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 		})
 		m.streaming = false
 		m.activity = nil
+		m.settleTurn()
 		m.updateViewport()
 		return m, nil
 
@@ -840,6 +1031,7 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 		m.flushBuffer()
 		m.streaming = false
 		m.activity = nil
+		m.settleTurn()
 		m.updateViewport()
 		return m, nil
 	}
