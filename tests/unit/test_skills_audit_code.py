@@ -78,6 +78,17 @@ def test_eval_is_critical():
     assert _severity(analysis, "code.exec.eval") == "critical"
 
 
+def test_a_sink_named_only_in_a_docstring_or_comment_is_not_a_finding():
+    """The analyzer is AST-based; prose about a sink is not a call to it."""
+    analysis = _analyze(
+        "def run(cmd):\n"
+        '    """Do not use os.system(cmd) or eval(cmd) here - unsafe."""\n'
+        "    # eval() and exec() are banned in this module\n"
+        "    return cmd.upper()\n"
+    )
+    assert analysis.findings == ()
+
+
 def test_exec_is_critical():
     analysis = _analyze("def f(x):\n    exec(x)\n")
     assert _severity(analysis, "code.exec.exec") == "critical"

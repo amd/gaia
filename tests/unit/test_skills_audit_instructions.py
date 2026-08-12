@@ -427,6 +427,20 @@ def test_ordinary_bold_prose_is_still_clean():
     assert _rules(body) == set()
 
 
+def test_prose_naming_dangerous_builtins_is_not_a_finding():
+    """A skill that teaches "never use eval" must not be flagged for saying so.
+
+    Security guidance is the likeliest honest text to name these, so a rule
+    keyed on the word rather than the behaviour fails here first.
+    """
+    body = (
+        "# Safe Coding\n\n"
+        "Never call eval() on untrusted input. Avoid exec and os.system too; "
+        "use subprocess with shell=False instead.\n"
+    )
+    assert _rules(body) == set()
+
+
 # ----------------------------------------------------------------------
 # Code fences: documentation about attacks is not an attack
 # ----------------------------------------------------------------------
