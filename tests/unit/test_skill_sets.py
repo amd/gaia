@@ -196,6 +196,20 @@ def test_skills_for_prepends_the_always_on_list():
             },
             "missing a skill name",
         ),
+        # A range that parses as a string but names no version (#2864). Caught
+        # here, not at load, so the verdict does not depend on whether the
+        # pinned skill happens to be installed on this machine.
+        (
+            {
+                "skill_sets": {"work": [{"name": "x", "version": ">=v2"}]},
+                "default_skill_set": "work",
+            },
+            "not a version range GAIA can evaluate",
+        ),
+        (
+            {"skills": [{"name": "x", "version": "1.2.x"}]},
+            "not a version range GAIA can evaluate",
+        ),
         (
             {"skill_sets": {"work": ["Inbox_Triage"]}, "default_skill_set": "work"},
             "not a valid",
@@ -516,6 +530,109 @@ def test_agent_missing_optional_skill_is_skipped(tmp_path, bundled):
 
     assert list(loaded) == ["meeting-scheduling"]
     assert agent.active_skill_set == "work"
+
+
+# ----------------------------------------------------------------------
+# Version pins — a declared range is checked, never silently accepted (#2864)
+#
+# The resolver itself is unit-tested in ``test_skills_consume.py``. These drive
+# the surface an agent author actually touches: a ``version:`` in the manifest,
+# resolved through ``load_skill_set``. A pin that parses and is then dropped on
+# the floor is the silent-fallback mode CLAUDE.md prohibits.
+# ----------------------------------------------------------------------
+
+
+def _versioned_skill_text(name: str, version: str) -> str:
+    return (
+        f"---\nname: {name}\nversion: {version}\n"
+        f"description: Test skill {name}. Use when exercising version pins.\n"
+        f"---\n\n# {name.title()}\n\nBody of {name}.\n"
+    )
+
+
+@pytest.fixture
+def pinned(tmp_path: Path) -> Path:
+    """A bundled root with one versioned skill and one that declares no version."""
+    root = tmp_path / "pkg" / "skills"
+    write_skill_dir(
+        root, "inbox-triage", _versioned_skill_text("inbox-triage", "1.4.0")
+    )
+    write_skill_dir(root, "no-version", _skill_text("no-version"))
+    return root
+
+
+def _pinned_agent(tmp_path, pinned, entry) -> _StubAgent:
+    return _agent(
+        tmp_path, pinned, skill_sets={"work": [entry]}, default_skill_set="work"
+    )
+
+
+def test_agent_loads_a_skill_whose_version_satisfies_the_pin(tmp_path, pinned):
+    agent = _pinned_agent(
+        tmp_path, pinned, {"name": "inbox-triage", "version": ">=1.0.0"}
+    )
+
+    loaded = agent.load_skill_set()
+
+    assert list(loaded) == ["inbox-triage"]
+    assert loaded["inbox-triage"].version == "1.4.0"
+
+
+def test_agent_with_no_pin_declared_accepts_whatever_is_installed(tmp_path, pinned):
+    """The common case must stay byte-identical: no pin, no version gate."""
+    for entry in ("inbox-triage", {"name": "inbox-triage"}):
+        agent = _pinned_agent(tmp_path, pinned, entry)
+        assert list(agent.load_skill_set()) == ["inbox-triage"]
+
+
+def test_agent_required_pin_violation_fails_the_launch(tmp_path, pinned):
+    agent = _pinned_agent(
+        tmp_path, pinned, {"name": "inbox-triage", "version": ">=2.0.0"}
+    )
+
+    with pytest.raises(SkillValidationError) as excinfo:
+        agent.load_skill_set()
+    message = str(excinfo.value)
+
+    # What failed: the pin and the version actually on disk, both named.
+    assert ">=2.0.0" in message and "1.4.0" in message
+    # What to do, and where to look next.
+    assert "gaia skill install inbox-triage@>=2.0.0" in message
+    assert "loosen the pin" in message
+    # The agent is untouched — a refused launch never half-loads.
+    assert agent.loaded_skills == {}
+    assert agent.active_skill_set is None
+
+
+def test_agent_optional_pin_violation_is_skipped_with_a_reason(tmp_path, pinned):
+    agent = _pinned_agent(
+        tmp_path,
+        pinned,
+        {"name": "inbox-triage", "version": ">=2.0.0", "required": False},
+    )
+
+    assert agent.load_skill_set() == {}
+    assert agent.active_skill_set == "work"
+
+
+def test_agent_pin_against_an_unversioned_skill_is_refused(tmp_path, pinned):
+    """Unsatisfiable by unknowability: absence of a version is not a match."""
+    agent = _pinned_agent(
+        tmp_path, pinned, {"name": "no-version", "version": ">=1.0.0"}
+    )
+
+    with pytest.raises(SkillValidationError, match="unversioned"):
+        agent.load_skill_set()
+    assert agent.loaded_skills == {}
+
+
+def test_agent_unreadable_pin_is_rejected_rather_than_widened(tmp_path, pinned):
+    """'>=v2' parses as a manifest string but names no version — never treat as any."""
+    agent = _pinned_agent(tmp_path, pinned, {"name": "inbox-triage", "version": ">=v2"})
+
+    with pytest.raises(SkillValidationError, match="does not name a version number"):
+        agent.load_skill_set()
+    assert agent.loaded_skills == {}
 
 
 def test_agent_without_a_manifest_loads_nothing(tmp_path, bundled):

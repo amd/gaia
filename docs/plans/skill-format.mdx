@@ -218,12 +218,18 @@ undeclared set, an unrecognized key in a reference mapping, a non-boolean
 set of skills or does not load.
 
 <Note>
-**`version:` is a declaration surface only in this phase.** It is parsed,
-validated as a non-empty string, and surfaced — but no constraint solving
-happens until [#2467](https://github.com/amd/gaia/issues/2467) can install
-versioned skills from the marketplace. Until then, a bundled skill's version is
-whatever the agent package ships. This mirrors how `network:` permissions are
-recorded but not enforced in Phase 1.
+**`version:` is enforced at load.** The range is matched against the installed
+skill's frontmatter `version`, and a mismatch is fail-loud: a `required` entry
+raises and the agent does not launch, an optional one is skipped with the reason
+logged. A skill with no `version` in its frontmatter cannot satisfy a pin —
+otherwise a local edit would silently shadow a pinned hub install. A range that
+names no version (`>=v2`, `1.2.x`) is rejected at manifest-parse time with the
+shapes above, rather than treated as "any" — so the verdict never depends on
+which skills happen to be installed on the machine doing the parsing.
+
+What [#2467](https://github.com/amd/gaia/issues/2467) still owns is resolution
+*across installable versions* — choosing which version to fetch from the
+marketplace. Checking the one version actually installed happens today.
 </Note>
 
 Selection semantics — the order a set is chosen in, the selector hook, and the

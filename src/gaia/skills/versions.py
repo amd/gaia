@@ -52,6 +52,24 @@ def _core(version: str) -> tuple[int, int, int]:
     return int(major), int(minor or 0), int(patch or 0)
 
 
+def _reject_unreadable_target(clause: str, target: str) -> None:
+    """Refuse a comparator target that is not a version number.
+
+    ``compare_versions`` is the catalog's *sort* comparator: it coerces
+    unreadable text to a sortable key instead of raising. Handing it a garbage
+    target therefore answers True for ``>=``/``>``/``!=`` — silently widening
+    the pin to "any", the one thing this module promises never to do.
+    """
+    if _PARTIAL_RE.match(target):
+        return
+    raise SkillValidationError(
+        f"Version range {clause.strip()!r} does not name a version number GAIA "
+        f"can read ({target!r}). Use MAJOR[.MINOR[.PATCH]] after the operator, "
+        f"e.g. '>=1.2.0', '^1.2', or '1' — with no 'v' prefix and no fourth "
+        f"component. See {_DOCS}"
+    )
+
+
 def _matches_clause(version: str, clause: str) -> bool:
     """Whether *version* satisfies a single comparator clause."""
     if "||" in clause:
@@ -72,6 +90,7 @@ def _matches_clause(version: str, clause: str) -> bool:
             f"Could not parse version range {clause!r}. See {_DOCS}"
         )
     operator, target = match.group(1), match.group(2)
+    _reject_unreadable_target(clause, target)
 
     if operator is None or operator == "==":
         # A bare partial version is a prefix match: '1.2' accepts any 1.2.x,
@@ -127,6 +146,19 @@ def matches(version: str, spec: Optional[str]) -> bool:
         for clause in normalized.split(",")
         if clause.strip()
     )
+
+
+def validate_spec(spec: Optional[str]) -> None:
+    """Raise if *spec* is not a range this module can evaluate.
+
+    Lets a manifest reject an unreadable pin when it is *parsed*, rather than at
+    the first launch that happens to have the skill installed — otherwise the
+    same manifest fails on one machine and passes on another.
+
+    Raises:
+        SkillValidationError: naming the clause that could not be read.
+    """
+    matches("0.0.0", spec)
 
 
 def highest(versions: Iterable[str]) -> Optional[str]:
