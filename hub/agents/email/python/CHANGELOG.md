@@ -56,6 +56,17 @@ contract version is tracked separately as
 
 ### Fixed
 
+- **A reply/draft/send action could report failure even though it actually
+  succeeded, and a retry made things worse (#2902).** After a draft was
+  created or a message sent, a separate local audit-log write (`state.db`,
+  shared with the scheduler's background agent, #1115) could transiently
+  fail with `database is locked` — and that bookkeeping failure was reported
+  to the user as if the whole action had failed. `draft_reply`,
+  `draft_forward`, and `send_draft` now match `send_now`'s existing
+  ordering-invariant guard: the audit write is logged, not raised, once the
+  real Gmail/Outlook call has already succeeded. Retrying `send_draft`
+  against a draft id already consumed by a prior send now gets a plain
+  "already sent" message instead of a generic connector-error dump.
 - **Asked about upcoming meetings or calendar invites, the agent could invent
   attendee names and invite confirmations that exist nowhere in the mailbox
   or the tool trace (#2766).** A calendar event's real `organizer` was

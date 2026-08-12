@@ -138,6 +138,9 @@ concurrency:
   # runs never race-evict each other's model (CLAUDE.md: evals run serially).
   group: lemonade-eval
   cancel-in-progress: false
+  # `queue: single` (the default) keeps only ONE pending run and cancels the
+  # previously-queued one — a phantom red X on the PR. `max` queues them FIFO.
+  queue: max
 
 permissions:
   contents: write   # auto-commit the refreshed scorecard to the branch

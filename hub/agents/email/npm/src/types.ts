@@ -1080,6 +1080,8 @@ export interface QueryUsage {
   elapsed?: number;
   /** Token counts, when the backend reports them. */
   tokens?: number;
+  /** Time to first inference token, in seconds, when the backend reports it. */
+  ttft?: number;
   [key: string]: unknown;
 }
 
