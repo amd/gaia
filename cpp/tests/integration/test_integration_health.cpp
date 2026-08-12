@@ -89,6 +89,13 @@ public:
         : Agent(healthTestConfig(maxSteps)) {
         init();
 
+        // MCP tools are CONFIRM-gated unless the server proves them read-only,
+        // and a silentMode agent gets no confirm callback (fail-closed). This
+        // harness exists to exercise mcp_windows_Shell, so it opts in.
+        setToolConfirmCallback([](const std::string&, const gaia::json&) {
+            return gaia::ToolConfirmResult::ALLOW_ONCE;
+        });
+
         // Connect to Windows MCP server — same as health_agent.cpp
         bool ok = connectMcpServer("windows", {
             {"command", "uvx"},

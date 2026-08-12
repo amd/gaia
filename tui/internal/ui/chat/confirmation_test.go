@@ -342,6 +342,10 @@ func TestStaleConfirmationTimeoutIsDropped(t *testing.T) {
 }
 
 // Ctrl+C still works as the universal way out while a confirmation is up.
+// Streaming does not clear synchronously — see requestCancel (#2901): Enter
+// must stay blocked until the run's channel actually closes (doneMsg), not
+// merely on the local cancelFn() call, or a resend on the same session can
+// race the daemon's still-held run_lock into a 409.
 func TestCtrlCWhilePendingConfirmationCancelsTheTurn(t *testing.T) {
 	m, _ := newTestModel(t)
 	m.streaming = true
@@ -357,7 +361,13 @@ func TestCtrlCWhilePendingConfirmationCancelsTheTurn(t *testing.T) {
 	if m.confirmation != nil {
 		t.Error("Ctrl+C must take the confirmation down with the turn")
 	}
+	if !m.streaming {
+		t.Error("streaming must stay true until the run's channel settles (doneMsg), not flip synchronously")
+	}
+
+	updated, _ = m.Update(doneMsg{ch: m.events})
+	m = updated.(ChatModel)
 	if m.streaming {
-		t.Error("the turn must be marked stopped")
+		t.Error("the turn must be marked stopped once settlement is confirmed")
 	}
 }

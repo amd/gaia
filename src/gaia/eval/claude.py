@@ -38,7 +38,8 @@ class ClaudeClient:
             temperature: Sampling temperature forwarded to every completion call.
                 Left as None (the default), no temperature is sent and the API
                 default applies — generation callers depend on that diversity.
-                Judges pass 0.0 explicitly (#2094).
+                Leave it unset for current models: they reject sampling params
+                with a 400, so pinning a value fails the call outright.
         """
         # Check for required dependencies
         if anthropic is None:

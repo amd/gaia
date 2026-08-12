@@ -186,6 +186,15 @@ export function parseManifest(yamlText: string): ParsedManifest {
   }
 
   const pkgType = (d.type as string) ?? DEFAULT_TYPE;
+  // `skill` is a catalog lane (#2467) but NOT a gaia-agent.yaml type: a skill is
+  // published from its SKILL.md through POST /publish/skill. Say so rather than
+  // letting it fall into the generic "not a valid package type" message.
+  if (pkgType === "skill") {
+    bad(
+      "gaia-agent.yaml: type 'skill' cannot be published here. Skills are published " +
+        "from their SKILL.md via POST /publish/skill (`gaia skill publish ./my-skill/`)."
+    );
+  }
   if (!VALID_TYPES.has(pkgType)) {
     bad(
       `gaia-agent.yaml: type ${JSON.stringify(pkgType)} is not a valid package type. ` +

@@ -112,3 +112,11 @@ Both rows are complete vectors — paste either straight into `util/cvss4.py`.
 Outcome: valid weakness, **No CVE** (confirmation gate is the real boundary), fixed as
 hardening in PR #2740. The corrected vector — computed, not guessed — lands a full band below
 the AI's assertion.
+
+## Writing it up
+
+The triage you hand back follows [CLAUDE.md → How You
+Communicate](../../../CLAUDE.md#how-you-communicate): open with the verdict in plain words —
+is it real, is it exploitable, does it need a CVE — then the CVSS vector, CWE, and evidence
+underneath. A reviewer deciding whether to file should not have to parse the vector string to
+learn the answer. State the computed score, never a guessed one.

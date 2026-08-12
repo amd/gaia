@@ -150,6 +150,7 @@ never write by hand, like `versions`). A real example is the
 id: my-agent                 # the short name used in URLs (/hub/my-agent); lowercase + hyphens
 name: My Agent               # the display name shown to people
 type: agent                  # agent | app | component — omit it and it defaults to agent
+                             # (skills are their own lane and publish from SKILL.md — see below)
 version: 0.1.0               # the release number (see "Versioning" — once published it can't change)
 description: "One-line summary shown on the hub card"
 author: your-name-or-org     # YOUR identity — shown on the hub; must match your token's scope (Step 6)
@@ -388,6 +389,96 @@ goes one step further and ships a **frozen native binary** plus an npm package
 (`@amd-gaia/agent-email`) so JavaScript apps can run it with no Python installed.
 That packaging is currently hand-built per agent; reusable tooling to make any agent
 an npm sidecar is on the roadmap.
+
+## Publishing a skill instead of an agent
+
+A **skill** is a reusable capability any agent composes, not a package that runs
+on its own — so it is a separate hub lane with a separate publish contract
+([#2467](https://github.com/amd/gaia/issues/2467)).
+
+**Skills are contributed by pull request, and only by pull request.** Like agents,
+there is no self-serve publish: the Hub's publish endpoint is gated on a
+maintainer-held token secret, so a contributor never handles one. Unlike the agent
+route, there is not even a direct-publish option to choose from — `gaia skill
+publish` is the mechanism maintainers and CI run *after* your PR merges.
+
+<Steps>
+  <Step title="Put your skill in skills/community/">
+    One directory per skill: `skills/community/<your-skill-name>/SKILL.md`, plus
+    `tools.py` and `scripts/` if it ships code. (`skills/starter/` is the AMD
+    starter pack — worked examples to copy, not a place to submit.) See
+    [`skills/community/README.md`](https://github.com/amd/gaia/blob/main/skills/community/README.md).
+  </Step>
+  <Step title="Audit it locally">
+    ```bash
+    gaia skill audit ./skills/community/<your-skill-name>/
+    ```
+    Exit `0` (`ALLOW`) is what merges cleanly. This is the same engine CI runs, so
+    a clean local run is the whole requirement — no guessing.
+  </Step>
+  <Step title="Open a PR">
+    Automated checks run and a maintainer reviews. The **Skill Audit
+    (deterministic gate)** check is required: `BLOCK` or an unparseable skill fails
+    it outright, and `REVIEW` holds the PR until a maintainer applies the
+    `skill-audit-reviewed` label. Findings appear as counts and rule ids in a PR
+    comment, with the detail in the repository's private Security tab.
+  </Step>
+  <Step title="Publication happens after merge">
+    A maintainer publishes from AMD's credentials. You never touch a token.
+  </Step>
+</Steps>
+
+<Warning>
+**Merging is not a tier promotion.** A skill's `security_tier` is earned by the
+audit verdict plus publisher signing — `verified` additionally needs a human AMD
+audit that no automated scan grants. A maintainer signing off on a `REVIEW`
+verdict unblocks your PR; it does not change the verdict on record, and publishing
+still refuses a skill that has not earned `ALLOW`.
+
+This differs from the agent route above, where review is what sets the trust
+level. For skills the gate owns the tier, not the reviewer.
+</Warning>
+
+The rest of this section is the publish contract that runs after merge — useful to
+understand, but not something a contributor executes. If what you have is a
+`SKILL.md` folder, the differences from an agent package are:
+
+| | Agent package | Skill |
+|---|---|---|
+| Manifest | `gaia-agent.yaml` | the YAML front matter of `SKILL.md` ([Skill Format](/plans/skill-format)) |
+| Publish route | `POST /publish` | `POST /publish/skill` |
+| Installs with | `gaia agent install <id>` | `gaia skill install <name>` (into `~/.gaia/skills/`) |
+| Storage | `agents/<id>/…` | `skills/<name>/…` |
+
+Everything else carries over: the same token and publisher scope, the same
+SemVer + immutability rules, the same `security_tier` vocabulary, and the same
+`index.json` (a skill is a `type: "skill"` entry). Two skill-only rules:
+
+- **A version is required, and `0.0.0` is rejected** — that value is the
+  format's "unversioned" sentinel, so it can never become an immutable release.
+  Bump it in your PR when you change a skill; each version re-earns its verdict.
+- **`community` and `verified` need a cleared security audit.** Produce the
+  report with `gaia skill audit ./<skill>/ --json`
+  ([#2468](https://github.com/amd/gaia/issues/2468)) and attach it as the `audit`
+  form part. The publish call refuses those tiers without one; an `experimental`
+  skill may publish without a report and is recorded as `unaudited` rather than
+  stamped as passing.
+
+  Two consequences that also shape what the PR gate tells you:
+
+  - **You cannot claim a tier the audit did not clear.** The report lists the
+    tiers your findings actually cleared and the hub checks the claim against it.
+    Check before you claim with `gaia skill audit ./<skill>/ --tier community`.
+    `verified` is never cleared by the automated scan — it needs the AMD audit on
+    top of a passing one, so a spotless skill claiming it earns `REVIEW`.
+  - **Every version re-earns its verdict.** The report is bound to the skill,
+    the version, and a digest of the `SKILL.md` you audited, so re-run the audit
+    after any edit. Publishing a bumped version with the previous report fails
+    with `audit_stale`, and editing the manifest after auditing fails with
+    `audit_digest_mismatch`.
+
+Skill names share one namespace with agent ids, so a name already taken by a
+published agent is rejected (and vice versa).
 
 ## How your agent shows up on the website
 

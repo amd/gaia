@@ -20,8 +20,14 @@ facts* for a different audience.
 
 - **Input:** a path to a repo file (`.md`, `.mdx`, `.json`, `.html`, `.txt`) — the primary
   form. Pasted text is accepted as a fallback when no file exists.
-- **Output:** `<source-dir>/presentations/<source-stem>.executive.html` (deterministic;
-  re-runs overwrite in place — never hand-edit the output).
+- **Output:** `presentations/<source-path-slug>.executive.html` at the **repo root**, where
+  the slug is the source path with `/` replaced by `-` (so `hub/agents/email/python/README.md`
+  → `presentations/hub-agents-email-python-README.executive.html`). Deterministic; re-runs
+  overwrite in place — never hand-edit the output.
+- **Never write next to the source.** Decks are local scratch, and many sources live in
+  directories that ship (`hub/agents/*/python/`, `src/`). The root `presentations/` dir is
+  gitignored; a `presentations/` dir dropped next to a package is not, and would land in the
+  published artifact. The path slug keeps two same-named sources (two `README.md`s) apart.
 
 ## Shared design system
 

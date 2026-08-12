@@ -41,6 +41,60 @@ class MyAgent(DatabaseAgent):
 
 **Auto-registered tools:** `db_query`, `db_insert`, `db_update`, `db_delete`, `db_tables`, `db_schema`
 
+`db_query` is read-only, and `db_update`/`db_delete` take structured conditions rather than a WHERE string — see [LLM-facing tools vs. the Python API](#llm-facing-tools-vs-the-python-api).
+
+#### LLM-facing tools vs. the Python API
+
+The mixin methods and the auto-registered tools sit at **different trust levels**, and deliberately have different shapes.
+
+| | `DatabaseMixin` methods | `DatabaseAgent` tools |
+|---|---|---|
+| Caller | Your Python code | The LLM |
+| Filter | `where` — a raw SQL fragment you write | `where` — a list of condition objects |
+| Reads | `query()` (unrestricted) | `db_query` (read-only, enforced by SQLite) |
+
+`update()`/`delete()` interpolate `where` into the statement, so it must be a literal you wrote. **Never build it from LLM output or end-user input** — bind untrusted values through `:param` placeholders inside a literal fragment instead:
+
+```python
+# Good - the fragment is a literal; the untrusted value is bound
+self.delete("sessions", "user_id = :uid", {"uid": untrusted_id})
+
+# Bad - untrusted text becomes part of the SQL
+self.delete("sessions", f"user_id = {untrusted_id}", {})
+```
+
+The LLM-facing tools don't accept a fragment at all. Each condition is an object, and GAIA builds the predicate and binds every value:
+
+```python
+db_delete("sessions", [{"column": "user_id", "op": "=", "value": 42}])
+# -> DELETE FROM sessions WHERE user_id = :__w0   params {"__w0": 42}
+```
+
+| Key | Required | Notes |
+|-----|----------|-------|
+| `column` | Yes | Must be a bare identifier (`[A-Za-z_][A-Za-z0-9_]*`) |
+| `op` | No (default `=`) | One of `=`, `!=`, `<`, `<=`, `>`, `>=`, `LIKE`, `NOT LIKE`, `IN`, `NOT IN`, `IS NULL`, `IS NOT NULL` |
+| `value` | Depends on `op` | A list for `IN`/`NOT IN` (max 900 items, SQLite's bind ceiling); omitted entirely for `IS NULL`/`IS NOT NULL` |
+
+Conditions are combined with `AND`. There is no `OR` and no nesting — an `AND` chain of allowlisted predicates can only narrow the row set, which is what makes `OR 1=1`-style payloads unrepresentable. If an agent genuinely needs `OR`, expose a domain-specific tool that runs the query you intend rather than widening the generic one.
+
+An empty condition list is **rejected** unless you pass `all_rows=True`, so a full-table update or delete is always deliberate:
+
+```python
+db_delete("logs", [], all_rows=True)   # explicit; anything less raises
+```
+
+Because the tool schema types parameters as strings, the JSON-encoded forms are
+also accepted: `where` as a JSON array, `data` as a JSON object, and `all_rows`
+as `"true"`/`"false"`. Only those exact spellings — an ambiguous value like
+`"yes"` raises rather than being guessed at.
+
+Malformed input raises `ValueError` naming the offending value and the rule, which the agent loop surfaces to the model so it can correct itself.
+
+<Note>
+These tools still give the LLM read and write access to **every** table in the database — there is no per-table authorization. Point `db_path` at a database holding only what the agent should be able to change, or override `_register_db_tools()` to expose domain-specific operations.
+</Note>
+
 #### Composing with Other Mixins
 
 `DatabaseAgent` can be extended with additional mixins for more capabilities:
@@ -114,9 +168,12 @@ class MyAgent(Agent, DatabaseMixin):
 | Method | Returns | Description |
 |--------|---------|-------------|
 | `query(sql, params, one)` | `list[dict]` or `dict` | Execute SELECT query |
+| `query_readonly(sql, params, one)` | `list[dict]` or `dict` | As `query()`, but SQLite refuses writes, DDL, `ATTACH`, and pragmas outside a schema-inspection allowlist. Raises `PermissionError` on a blocked statement. Use for any SQL not written by you. |
 | `insert(table, data)` | `int` (row ID) | Insert a row |
 | `update(table, data, where, params)` | `int` (affected count) | Update rows |
 | `delete(table, where, params)` | `int` (deleted count) | Delete rows |
+
+`insert`, `update`, and `delete` interpolate the table name — and `insert`/`update` the `data` keys — into the SQL, so all of them must be bare identifiers matching `[A-Za-z_][A-Za-z0-9_]*`; anything else raises `ValueError`. Quoted or non-ASCII identifiers that SQLite would otherwise accept are rejected. Empty `data` and a blank `where` raise as well, rather than producing a malformed statement.
 
 ### Schema & Transactions
 
@@ -208,6 +265,8 @@ self.query("SELECT * FROM users WHERE name = :name", {"name": user_input})
 # Bad - string formatting (SQL injection risk)
 self.query(f"SELECT * FROM users WHERE name = '{user_input}'")
 ```
+
+Placeholders only protect **values** — SQLite cannot bind identifiers or predicates. Those are covered separately: table and column names are validated as bare identifiers, and LLM-supplied filters go through structured conditions instead of a WHERE string. See [LLM-facing tools vs. the Python API](#llm-facing-tools-vs-the-python-api). For SQL you didn't write yourself, use `query_readonly()`.
 
 ### Initialize Schema Once
 

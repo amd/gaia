@@ -204,7 +204,7 @@ def test_canonical_event_set_matches_translator_outputs():
     )
     # Drive the translator across its whole source vocabulary and assert every
     # emitted type is canonical (a source-vocab leak would fail here).
-    translator = sse_translation.build_translator("run-coherence")
+    translator = sse_translation.CanonicalTranslator("run-coherence")
     source_events = [
         {"type": "status", "message": "s"},
         {"type": "step", "step": 1, "total": 3},
