@@ -14,7 +14,10 @@ discovery roots with auditable precedence, progressive disclosure,
 `skills:` / `skill_sets:` manifest blocks and per-launch
 [skill-set selection](#skill-sets) ([#2466](https://github.com/amd/gaia/issues/2466)),
 whose reference implementation is the email agent (which currently ships with its
-sets commented out — see [below](#reference-implementation-the-email-agent)).
+sets commented out — see [below](#reference-implementation-the-email-agent)); and
+`gaia skill migrate --from openclaw|hermes|auto`
+([#692](https://github.com/amd/gaia/issues/692)), which converts a third-party
+skill to GAIA format at the `experimental` tier.
 
 **Also shipped (hub side):** the `skill` catalog lane — `POST /publish/skill`,
 the `skills/` R2 namespace, server-side validation of the SKILL.md grammar, and
@@ -684,6 +687,15 @@ as an instruction-only skill with no changes. Claude Code skill libraries in
 `.claude/skills/` are discovered directly (read-only import root). `gaia skill
 import <path>` copies one into `~/.gaia/skills/` and stamps it
 `experimental` for explicit promotion.
+
+**Third-party format → GAIA.** Hermes and OpenClaw/ClawHub nest their fields
+under `metadata.<vendor>`, the same pattern `metadata.gaia` uses, so
+`gaia skill migrate --from openclaw|hermes|auto` reads the foreign namespace and
+writes a `metadata.gaia` block ([#692](https://github.com/amd/gaia/issues/692)).
+Fields GAIA models are consumed; the rest stay under `metadata.<vendor>` and are
+reported. Migrated skills land `experimental`, and one needing a local capability
+GAIA cannot yet enforce is refused with the reason rather than downgraded — see
+[Skill Format → Cross-format compatibility](/plans/skill-format#cross-format-compatibility--migration).
 
 **GAIA skill → standard runtime.** A GAIA skill degrades gracefully: the
 frontmatter `name`/`description` and Markdown body are standard, so the
