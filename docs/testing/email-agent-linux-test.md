@@ -64,7 +64,7 @@ none).
 
 **5a. Create a Google OAuth client** (Google Cloud Console):
 
-1. Create or pick a project at <https://console.cloud.google.com>
+1. Create or pick a project at [console.cloud.google.com](https://console.cloud.google.com)
 2. **Enable the Gmail API** for that project
 3. Configure the **OAuth consent screen** (External; add yourself as a test user)
 4. Create an **OAuth client ID** of type **Desktop app** — this gives you a

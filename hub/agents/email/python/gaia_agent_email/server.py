@@ -307,6 +307,15 @@ def main(argv=None) -> int:
                 f"{source} requested skill set {requested_set!r}, but this "
                 f"build's declared sets could not be read: {exc}"
             )
+        if not declared:
+            # This build ships with gaia-agent.yaml's skill_sets: commented out,
+            # so there is nothing to pin. Say that, rather than "Valid sets: ".
+            parser.error(
+                f"{source} requested skill set {requested_set!r}, but this "
+                "agent declares no skill sets — Agent Skills are switched off "
+                "in this build. Drop the option, or uncomment the 'skill_sets:' "
+                "and 'default_skill_set:' blocks in gaia-agent.yaml."
+            )
         if requested_set not in declared:
             parser.error(
                 f"{source} requested skill set {requested_set!r}, which this "
