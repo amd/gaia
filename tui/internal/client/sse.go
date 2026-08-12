@@ -662,14 +662,17 @@ func (s *SSEClient) cancelRun(handle *runHandle) {
 // worker thread's own `finally`, checked once per agent-loop step; see
 // hub/agents/email/python/gaia_agent_email/query_routes.py).
 //
-// Leaving the read running is what makes the eventual channel close a true
-// settlement signal: the sidecar's stream generator only sees its
-// signal_done sentinel — and therefore only closes the HTTP response — after
-// the SAME worker-thread `finally` has already released run_lock (signal_done
-// runs, then release runs next, same thread, no I/O between them; the
-// generator polls for the sentinel on a coarser interval than that gap). A
-// client that aborts its own read instead observes a "done" that raced ahead
-// of that release, which is the bug this method exists to avoid reintroducing.
+// Leaving the read running is what makes the eventual terminal signal a
+// near-certain settlement signal in practice — not a proven one. The
+// sidecar's `finally` runs signal_done() and only THEN run_lock.release(),
+// same thread, no I/O between the two statements, so by the time anything
+// downstream notices signal_done the lock is released in all but a
+// vanishingly rare preemption between those two lines (#2912 review). A
+// client that aborts its own read instead observes a "done" that is
+// guaranteed to race ahead of the release, which is the bug this method
+// exists to avoid reintroducing. Closing that last window for good is a
+// one-line server-side reorder (release, then signal_done) — tracked
+// separately, not required here since this is a Go-only change.
 func (s *SSEClient) Cancel(ctx context.Context) error {
 	s.mu.Lock()
 	inst := s.inst

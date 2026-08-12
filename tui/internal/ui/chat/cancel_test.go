@@ -283,6 +283,61 @@ func TestSecondCancelThenResendDoesNotQuitTheApp(t *testing.T) {
 	}
 }
 
+// TestSecondEscWhileCancelPendingDoesNotQuit is the PR #2912 review's MUST
+// FIX: a cancel that is genuinely still pending -- the daemon has not yet
+// settled it, unlike the already-fixed TestSecondCancelThenResendDoesNotQuitTheApp
+// scenario above, where cancelPending was stuck true by a settlement bug.
+// Cooperative cancellation is checked only at agent-loop step boundaries, so
+// this legitimately-pending window can run tens of seconds. Before this fix,
+// a second Esc pressed in that window fell through requestCancel's
+// `!m.cancelPending` guard straight to tea.Quit -- destroying the session
+// because nothing visibly happened after the first press. It must instead
+// abort the local read and free the composer, leaving the transcript intact.
+func TestSecondEscWhileCancelPendingDoesNotQuit(t *testing.T) {
+	c := &cancelingClient{}
+	m := NewChatModel(c, "email", "", false)
+	m.width, m.height = 100, 30
+	m.streaming = true
+	localAborted := false
+	m.cancelFn = func() { localAborted = true }
+	ch := make(chan interface{})
+	m.events = ch
+
+	// First Esc: asks the server to stop, leaves the read running, pending.
+	updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(ChatModel)
+	if cmd == nil {
+		t.Fatal("test setup: first Esc must return the Cancel() command")
+	}
+	updated, _ = m.Update(cmd())
+	m = updated.(ChatModel)
+	if !m.cancelPending {
+		t.Fatal("test setup: cancelPending must be true after the first Esc")
+	}
+	if !m.streaming {
+		t.Fatal("test setup: streaming must still be true -- the run has not settled")
+	}
+
+	// Second Esc, still pending -- nothing has settled the turn yet.
+	updated, cmd2 := m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(ChatModel)
+	if cmd2 != nil {
+		if _, quit := cmd2().(tea.QuitMsg); quit {
+			t.Fatal("a second Esc during a pending cancel must not quit the app -- " +
+				"the user asked twice, it must abort locally instead")
+		}
+	}
+	if !localAborted {
+		t.Error("the second Esc must force a local abort of the still-running read")
+	}
+	if m.streaming {
+		t.Error("streaming must clear once the second Esc forces a local abort")
+	}
+	if m.cancelPending {
+		t.Error("cancelPending must clear once the second Esc forces a local abort")
+	}
+}
+
 // Same reproduction on Ctrl+C, which hits the identical guard in handleKey.
 func TestSecondCtrlCThenResendDoesNotQuitTheApp(t *testing.T) {
 	c := &cancelingClient{}
@@ -319,5 +374,46 @@ func TestSecondCtrlCThenResendDoesNotQuitTheApp(t *testing.T) {
 	}
 	if _, quit := cmd().(tea.QuitMsg); quit {
 		t.Fatal("second Ctrl+C quit the app instead of cancelling the second turn (#2901)")
+	}
+}
+
+// Ctrl+C variant of TestSecondEscWhileCancelPendingDoesNotQuit — same
+// #2912-review escape hatch, deliberately given to Ctrl+C too (see the
+// handleKey comment on tea.KeyCtrlC): its first press already cancels
+// instead of quitting, so it already left the "twice to force-quit" idiom,
+// and a genuinely-still-pending cancel must not cost the session either.
+func TestSecondCtrlCWhileCancelPendingDoesNotQuit(t *testing.T) {
+	c := &cancelingClient{}
+	m := NewChatModel(c, "email", "", false)
+	m.width, m.height = 100, 30
+	m.streaming = true
+	localAborted := false
+	m.cancelFn = func() { localAborted = true }
+	ch := make(chan interface{})
+	m.events = ch
+
+	updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlC})
+	m = updated.(ChatModel)
+	if cmd == nil {
+		t.Fatal("test setup: first Ctrl+C must return the Cancel() command")
+	}
+	updated, _ = m.Update(cmd())
+	m = updated.(ChatModel)
+	if !m.cancelPending {
+		t.Fatal("test setup: cancelPending must be true after the first Ctrl+C")
+	}
+
+	updated, cmd2 := m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlC})
+	m = updated.(ChatModel)
+	if cmd2 != nil {
+		if _, quit := cmd2().(tea.QuitMsg); quit {
+			t.Fatal("a second Ctrl+C during a pending cancel must not quit the app")
+		}
+	}
+	if !localAborted {
+		t.Error("the second Ctrl+C must force a local abort of the still-running read")
+	}
+	if m.streaming {
+		t.Error("streaming must clear once the second Ctrl+C forces a local abort")
 	}
 }
