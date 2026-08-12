@@ -31,6 +31,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, FastAPI, HTTPException
+from gaia_agent_gaia.session_registry import registry as session_registry
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.responses import StreamingResponse
 
@@ -403,6 +404,7 @@ async def query(request: QueryRequest):
         )
 
     handler = SSEOutputHandler()
+    session = None
     try:
         kwargs: Dict[str, Any] = {}
         if request.model:
@@ -412,7 +414,25 @@ async def query(request: QueryRequest):
             # set per UI session, so dropping this makes the agent forget a
             # document between the turn that indexed it and the next question.
             kwargs["ui_session_id"] = request.session_id
-        agent = build_query_agent(**kwargs)
+            # Schema 2.12 (#2829): a session_id resolves a RETAINED agent rather
+            # than a throwaway. Whatever the turn puts on the instance — most
+            # visibly Agent.loaded_skills — vanishes next turn otherwise, while
+            # the model goes on telling the user the skill is still loaded.
+            session = session_registry.get_or_create(request.session_id, **kwargs)
+            if not session.run_lock.acquire(blocking=False):
+                session = None  # not ours to release
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"session {request.session_id} is already running a turn. "
+                        "Cancel that run or wait for it to finish, then retry."
+                    ),
+                )
+            agent = session.agent
+        else:
+            # No session handle — a genuine one-shot. Nothing persists past this
+            # turn, and the agent is told so rather than over-promising.
+            agent = build_query_agent(**kwargs)
         agent.console = handler
         if request.can_answer_questions is False:
             # Nobody is there to answer. Let the loop know so it resolves
@@ -428,8 +448,17 @@ async def query(request: QueryRequest):
         run = _QueryRun(request.run_id, agent, handler)
         _registry.add(run)
         agent._cancel_event = run.cancel_event
+    except HTTPException:
+        # Already an actionable status (e.g. the 409 above) — do not relabel it
+        # as a generic 500.
+        _registry.remove(request.run_id)
+        if session is not None:
+            session.run_lock.release()
+        raise
     except Exception as exc:
         _registry.remove(request.run_id)
+        if session is not None:
+            session.run_lock.release()
         raise HTTPException(
             status_code=500, detail=f"Failed to start the query run: {exc}"
         ) from exc
@@ -449,6 +478,10 @@ async def query(request: QueryRequest):
             )
         finally:
             handler.signal_done()
+            # Release only after the agent is done touching the instance, so the
+            # next turn on this session cannot start mid-run.
+            if session is not None:
+                session.run_lock.release()
 
     thread = threading.Thread(target=_run_agent, daemon=True)
     thread.start()
