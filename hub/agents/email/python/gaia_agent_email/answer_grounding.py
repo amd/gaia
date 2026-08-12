@@ -502,6 +502,22 @@ def render_suspicious_list(envelope: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _suspicious_scan_has_coverage_gap(envelope: Dict[str, Any]) -> bool:
+    """True when a zero-finding scan still owes the user a caveat: a
+    mailbox failed (``degraded``) or the inbox scan didn't reach everything
+    (``scanned`` under ``total_inbox``). Same fields ``_honest_suspicious_summary``
+    already turns into prose — this only decides whether that prose is
+    needed when there is no flagged-mail list to attach it to.
+    """
+    if envelope.get("degraded"):
+        return True
+    scanned = envelope.get("scanned")
+    total_inbox = envelope.get("total_inbox")
+    return (
+        isinstance(scanned, int) and isinstance(total_inbox, int) and scanned < total_inbox
+    )
+
+
 def rewrite_suspicious_mail_answer(
     final_answer: str, conversation: Optional[List[Dict[str, Any]]]
 ) -> str:
@@ -533,6 +549,18 @@ def rewrite_suspicious_mail_answer(
     unconditionally preferring the grounded summary is simpler than pattern-
     matching every way a model could phrase a false all-clear, and strictly
     safer.
+
+    Zero findings is normally a no-op (there is no list, so there is
+    nothing to protect against paraphrase) — EXCEPT when the scan itself
+    was incomplete (``_suspicious_scan_has_coverage_gap``): a failed
+    mailbox or a partial inbox pass turns "nothing flagged" from a clean
+    bill of health into a false all-clear, the same failure mode this
+    function exists to prevent, just with an empty list instead of a wrong
+    one (#2900 follow-up). That case unconditionally replaces the answer
+    with ``_honest_suspicious_summary`` too, for the same reason as the
+    non-empty branch above: detecting whether the model's own prose already
+    disclosed the gap is exactly the fragile pattern-matching this module
+    already rejected once.
     """
     if last_tool_payload(conversation, "pre_scan_inbox") is not None:
         return final_answer
@@ -541,6 +569,8 @@ def rewrite_suspicious_mail_answer(
         return final_answer
     rendered = render_suspicious_list(scan)
     if not rendered:
+        if _suspicious_scan_has_coverage_gap(scan):
+            return _honest_suspicious_summary(scan)
         return final_answer
     lead = _honest_suspicious_summary(scan)
     return f"{lead}\n\n{rendered}"

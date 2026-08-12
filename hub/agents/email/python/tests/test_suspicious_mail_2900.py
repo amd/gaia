@@ -1074,6 +1074,86 @@ class TestSuspiciousSummaryCoverageCaveats:
 
 
 # ---------------------------------------------------------------------------
+# rewrite_suspicious_mail_answer — a ZERO-finding scan is not always a
+# no-op (review follow-up on #2910/#2900): an unqualified "nothing
+# suspicious" is a false all-clear when part of the account was never
+# scanned, which is worse than the wordy-lead case the flagged path already
+# fixes, since there is no list underneath to tip the user off.
+# ---------------------------------------------------------------------------
+
+
+class TestRewriteSuspiciousMailAnswerZeroFindingsCoverageGap:
+    def test_degraded_zero_findings_names_the_failed_mailbox(self):
+        envelope = {
+            "kind": "email_suspicious_scan",
+            "suspicious": [],
+            "suspicious_total": 0,
+            "scanned": 25,
+            "degraded": True,
+            "mailbox_errors": [{"mailbox": "microsoft", "error": "token expired"}],
+        }
+        conversation = [_tool_entry("check_suspicious_mail", envelope)]
+        model_answer = "Nothing suspicious this scan."
+        out = rewrite_suspicious_mail_answer(model_answer, conversation)
+        assert out != model_answer, (
+            "an unqualified all-clear must not survive a degraded scan with "
+            "zero findings — the model's bare 'nothing suspicious' is exactly "
+            "the false all-clear this guard exists to prevent"
+        )
+        assert "Outlook" in out
+        assert "couldn't be scanned" in out
+
+    def test_partial_zero_findings_states_the_denominator(self):
+        envelope = {
+            "kind": "email_suspicious_scan",
+            "suspicious": [],
+            "suspicious_total": 0,
+            "scanned": 50,
+            "total_inbox": 812,
+        }
+        conversation = [_tool_entry("check_suspicious_mail", envelope)]
+        model_answer = "Nothing suspicious this scan."
+        out = rewrite_suspicious_mail_answer(model_answer, conversation)
+        assert out != model_answer
+        assert "50 of 812 in the inbox scanned" in out
+
+    def test_clean_complete_zero_findings_is_still_a_noop(self):
+        """The acceptance bar this fix must not break: a genuinely clean,
+        complete scan leaves the model's own (already correct) prose alone
+        — no caveat is invented when there is nothing to disclose."""
+        envelope = {
+            "kind": "email_suspicious_scan",
+            "suspicious": [],
+            "suspicious_total": 0,
+            "scanned": 812,
+            "total_inbox": 812,
+        }
+        conversation = [_tool_entry("check_suspicious_mail", envelope)]
+        model_answer = "Nothing suspicious this scan."
+        out = rewrite_suspicious_mail_answer(model_answer, conversation)
+        assert out == model_answer
+
+    def test_pre_scan_inbox_also_ran_is_still_a_noop(self):
+        """The existing deferral (both tools ran this turn) still wins over
+        the new coverage-gap check — rewrite_triage_answer's card already
+        covers this turn, so this function must not touch it either way."""
+        suspicious_envelope = {
+            "suspicious": [],
+            "suspicious_total": 0,
+            "degraded": True,
+            "mailbox_errors": [{"mailbox": "microsoft", "error": "token expired"}],
+        }
+        prescan_envelope = {"kind": "email_pre_scan", "scanned": 10}
+        conversation = [
+            _tool_entry("check_suspicious_mail", suspicious_envelope),
+            _tool_entry("pre_scan_inbox", prescan_envelope),
+        ]
+        already_rendered_card = "### Waiting on your reply\n\n1. Someone — Subject"
+        out = rewrite_suspicious_mail_answer(already_rendered_card, conversation)
+        assert out == already_rendered_card
+
+
+# ---------------------------------------------------------------------------
 # Contract additivity (schema 2.13)
 # ---------------------------------------------------------------------------
 
