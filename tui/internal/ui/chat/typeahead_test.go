@@ -154,17 +154,17 @@ func TestTheQueuedMessageIsVisibleOnScreen(t *testing.T) {
 	}
 }
 
-// Mid-sentence the user needs to see their own text, not a status readout.
+// Mid-sentence the user needs to see their own text, and nothing else on that
+// row competing with it.
 func TestTheComposerRowShowsTypingInsteadOfTheAgentStatus(t *testing.T) {
-	m := newTestChat(t)
-	if out := ansi.Strip(m.View()); !strings.Contains(out, "◆") {
-		t.Fatalf("precondition: an idle composer should report on the agent:\n%s", out)
-	}
+	m := typeInto(t, newTestChat(t), "half a thought")
 
-	m = typeInto(t, m, "half a thought")
 	out := ansi.Strip(m.View())
 	if !strings.Contains(out, "half a thought") {
 		t.Errorf("the user cannot see what they are typing:\n%s", out)
+	}
+	if !strings.Contains(out, "⏎ queues") {
+		t.Errorf("nothing says what Enter will do with the half-typed line:\n%s", out)
 	}
 }
 

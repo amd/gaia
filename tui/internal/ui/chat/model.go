@@ -1836,17 +1836,6 @@ func (m ChatModel) renderActivityItem(item ActivityItem, live bool, elapsed time
 	return lines
 }
 
-// currentActivityLabel is what the agent is doing right now, in one phrase.
-// Falls back to the same honest description the live region uses rather than to
-// "Waiting for agent" — the agent is not being waited on, it is working.
-func (m ChatModel) currentActivityLabel() string {
-	log := collapseActivity(m.activity)
-	if n := len(log); n > 0 && !log[n-1].Done {
-		return truncateRunes(log[n-1].Content, narrationWidth)
-	}
-	return m.idlePhrase(len(log))
-}
-
 func (m ChatModel) View() string {
 	if m.width == 0 {
 		return m.renderWelcome()
@@ -1858,12 +1847,11 @@ func (m ChatModel) View() string {
 
 	inputView := m.input.View()
 	if m.streaming {
-		// While the agent works this row is shared. Whatever the user is doing
-		// with it wins: mid-sentence they need to see their own text, and a
-		// queued line needs to be visible or they cannot tell it was accepted.
-		// Only when they are doing neither does it report on the agent — the
-		// live region above is already saying that, and this is the one row
-		// always on screen (#2804).
+		// This row belongs to the user, not to the agent. It once mirrored the
+		// live region's action and clock, which put one event on screen twice
+		// with two clocks that disagreed — "Thinking about the next step 1:05"
+		// three rows above "Thinking about the next step 65s". The live region
+		// owns that line; here only the user's own text has anything to add.
 		switch {
 		case strings.TrimSpace(m.input.Value()) != "":
 			inputView = m.input.View() + "  " + activityStyle.Render("⏎ queues")
@@ -1872,9 +1860,10 @@ func (m ChatModel) View() string {
 				statusMsgStyle.Render(truncateRunes(m.queued, m.answerWidth())) +
 				activityStyle.Render("  Esc to take it back")
 		default:
-			elapsed := time.Since(m.queryStart)
-			inputView = m.spinner.View() + " ◆ " + m.currentActivityLabel() + "  " +
-				activityStyle.Render(fmt.Sprintf("%.0fs", elapsed.Seconds()))
+			// Mid-turn Enter queues rather than sends, so the idle prompt is
+			// untrue while the agent works — an empty composer says it better.
+			m.input.Placeholder = ""
+			inputView = m.input.View()
 		}
 	}
 
@@ -1901,10 +1890,13 @@ func (m ChatModel) View() string {
 		hint = fmt.Sprintf("step %d · %s", m.totalSteps, hint)
 	}
 
+	// Steps is deliberately not passed: the bar renders it only when the hint is
+	// empty, which it never is here, and the step count already rides the hint
+	// under --dev. Passing it kept a second renderer for one number alive, one
+	// that would print it in user mode the day the hint did come back empty.
 	statusBar := components.RenderStatusBar(components.StatusBarState{
 		AgentName: m.agentName,
 		Connected: m.connected,
-		Steps:     m.totalSteps,
 		Streaming: m.streaming,
 		Hint:      hint,
 	}, m.width)
