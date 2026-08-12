@@ -91,9 +91,6 @@ var (
 	userStyle = lipgloss.NewStyle().
 			Foreground(theme.Dim)
 
-	errorStyle = lipgloss.NewStyle().
-			Foreground(theme.Danger)
-
 	activityStyle = lipgloss.NewStyle().
 			Foreground(theme.Dim)
 
@@ -597,6 +594,14 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewport()
 		return m, nil
 
+	case clipboardResultMsg:
+		m.messages = append(m.messages, Message{
+			Role:    RoleStatus,
+			Content: copyHint(msg.label, msg.err),
+		})
+		m.updateViewport()
+		return m, nil
+
 	case tea.MouseMsg:
 		// The wheel scrolls the transcript. In an alt-screen app the terminal's
 		// own scrollback does not exist, so this and the arrow keys are the only
@@ -716,6 +721,23 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 		return m.submit(query)
+
+	case tea.KeyCtrlY:
+		// Mouse reporting is on so the wheel can scroll, which is exactly what
+		// breaks the terminal's own click-drag selection. Without a copy key
+		// the answer is trapped on screen.
+		return m, copyToClipboard(m.lastAnswer(), "answer")
+
+	case tea.KeyCtrlB:
+		if block := lastCodeBlock(m.lastAnswer()); block != "" {
+			return m, copyToClipboard(block, "code block")
+		}
+		m.messages = append(m.messages, Message{
+			Role:    RoleStatus,
+			Content: "no code block in the last answer",
+		})
+		m.updateViewport()
+		return m, nil
 
 	case tea.KeyPgUp:
 		m.viewport.HalfViewUp()
