@@ -472,3 +472,147 @@ def test_the_offline_disk_cache_still_splits_the_lanes(tmp_path):
     assert unified.offline is True
     assert [a["id"] for a in unified.agents] == ["demo"]
     assert [s["id"] for s in unified.skills] == ["web-research"]
+
+
+# ---------------------------------------------------------------------------
+# Offline-cache staleness (#2467 follow-up)
+#
+# The offline cache used to be able to serve arbitrarily old data with nothing
+# saying so. Working offline is supported; presenting a months-old catalog as
+# the current one is not.
+# ---------------------------------------------------------------------------
+
+
+def _stale_cache(tmp_path, *, age_days, agent_id="cached"):
+    """Write a disk cache stamped ``age_days`` in the past."""
+    import datetime
+
+    cache = tmp_path / "catalog-cache.json"
+    stamped_at = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(
+        days=age_days
+    )
+    document = _index(_entry(agent_id))
+    document[catalog.CACHE_STAMP_KEY] = stamped_at.isoformat(timespec="seconds")
+    cache.write_text(json.dumps(document))
+    return cache
+
+
+def _offline(cache):
+    def failing_fetcher(url):
+        raise ConnectionError("no network")
+
+    return load_index(
+        base_url="https://hub.test",
+        fetcher=failing_fetcher,
+        cache_path=cache,
+        force=True,
+    )
+
+
+def test_a_live_fetch_stamps_the_cache_with_its_refresh_time(tmp_path):
+    """Without the stamp there is nothing to measure age against."""
+    cache = tmp_path / "catalog-cache.json"
+
+    result = load_index(
+        base_url="https://hub.test",
+        fetcher=lambda url: json.dumps(_index(_entry("demo"))).encode(),
+        cache_path=cache,
+        force=True,
+    )
+
+    assert result.age_seconds == 0
+    assert result.stale is False
+    assert catalog.CACHE_STAMP_KEY in json.loads(cache.read_text())
+
+
+def test_a_live_fetch_does_not_put_the_stamp_in_the_in_memory_catalog(tmp_path):
+    """The stamp is ours; it must not look like a field the hub sent."""
+    load_index(
+        base_url="https://hub.test",
+        fetcher=lambda url: json.dumps(_index(_entry("demo"))).encode(),
+        cache_path=tmp_path / "catalog-cache.json",
+        force=True,
+    )
+
+    assert catalog.CACHE_STAMP_KEY not in (catalog._MEM.raw or {})
+
+
+def test_a_stale_offline_cache_is_flagged_and_warns(tmp_path, caplog):
+    cache = _stale_cache(tmp_path, age_days=90)
+
+    with caplog.at_level("WARNING", logger="gaia.hub.catalog"):
+        result = _offline(cache)
+
+    assert result.offline is True
+    assert result.stale is True
+    assert result.age_seconds > catalog.CACHE_STALE_AFTER_SECONDS
+    assert "90 days ago" in result.age_text
+    # Offline must still WORK — the point is that it says how old it is.
+    assert [a["id"] for a in result.agents] == ["cached"]
+    assert any("last refreshed" in r.getMessage() for r in caplog.records)
+
+
+def test_a_fresh_offline_cache_is_not_flagged_stale(tmp_path, caplog):
+    cache = _stale_cache(tmp_path, age_days=1)
+
+    with caplog.at_level("WARNING", logger="gaia.hub.catalog"):
+        result = _offline(cache)
+
+    assert result.offline is True
+    assert result.stale is False
+    assert result.age_seconds < catalog.CACHE_STALE_AFTER_SECONDS
+    assert not any("last refreshed" in r.getMessage() for r in caplog.records)
+
+
+def test_a_cache_just_over_the_threshold_is_stale(tmp_path):
+    """The boundary is where an off-by-one would hide the whole feature."""
+    threshold_days = catalog.CACHE_STALE_AFTER_SECONDS / 86400
+
+    assert _offline(_stale_cache(tmp_path, age_days=threshold_days + 0.5)).stale is True
+    assert (
+        _offline(_stale_cache(tmp_path, age_days=threshold_days - 0.5)).stale is False
+    )
+
+
+def test_an_unstamped_cache_falls_back_to_its_file_mtime(tmp_path):
+    """A cache written by an older GAIA must not read as fresh by default."""
+    import os
+    import time
+
+    cache = tmp_path / "catalog-cache.json"
+    cache.write_text(json.dumps(_index(_entry("legacy"))))
+    old = time.time() - catalog.CACHE_STALE_AFTER_SECONDS * 2
+    os.utime(cache, (old, old))
+
+    result = _offline(cache)
+
+    assert result.stale is True
+    assert result.age_seconds > catalog.CACHE_STALE_AFTER_SECONDS
+
+
+def test_build_catalog_surfaces_the_cache_age_to_its_consumers(tmp_path):
+    """The UI renders this dict; if age never reaches it, nothing can show it."""
+    unified = build_catalog(
+        _FakeReg([]),
+        base_url="https://hub.test",
+        fetcher=_raise_offline,
+        cache_path=_stale_cache(tmp_path, age_days=45),
+        force=True,
+    )
+
+    payload = unified.to_dict()
+    assert payload["stale"] is True
+    assert payload["age_text"] == "45 days ago"
+    assert payload["age_seconds"] > catalog.CACHE_STALE_AFTER_SECONDS
+
+
+def _raise_offline(url):
+    raise ConnectionError("no network")
+
+
+def test_describe_age_reads_like_a_person_wrote_it():
+    assert catalog.describe_age(0) == "just now"
+    assert catalog.describe_age(60 * 30) == "30 minutes ago"
+    assert catalog.describe_age(3600 * 5) == "5 hours ago"
+    assert catalog.describe_age(86400 * 3) == "3 days ago"
+    assert catalog.describe_age(None) == "unknown"
