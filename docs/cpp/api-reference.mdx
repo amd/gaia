@@ -504,6 +504,61 @@ Unlike the Python runtime, the C++ registry does **not** read an `mcp_servers.js
 the current working directory: this config names commands to spawn, and a native binary
 that trusts whichever directory it was started from is an attack surface.
 
+### HttpClient
+
+Blocking HTTP/HTTPS client for tools that need to call a web service. The
+transport (cpp-httplib) is a private dependency compiled into `gaia_core`, so
+including `gaia/http_client.h` does not pull a 10k-line header into your build.
+
+```cpp
+#include <gaia/http_client.h>
+
+struct HttpResponse {
+    int status; std::string body; HttpHeaders headers;
+    bool ok() const;                                  // 2xx
+    std::string header(const std::string& name,       // case-insensitive
+                       const std::string& fallback = "") const;
+};
+
+class HttpClient {
+public:
+    explicit HttpClient(const HttpClientConfig& config = {});  // baseUrl, timeouts,
+    explicit HttpClient(const std::string& baseUrl);           // defaultHeaders, TLS
+
+    HttpResponse get(const std::string& path, const HttpHeaders& headers = {},
+                     int timeoutSec = 0, int connectTimeoutSec = 0);
+    HttpResponse post(const std::string& path, const std::string& body,
+                      const HttpHeaders& headers = {}, int timeoutSec = 0,
+                      int connectTimeoutSec = 0);
+    HttpResponse postStreaming(const std::string& path, const std::string& body,
+                               HttpChunkCallback onChunk,
+                               const HttpHeaders& headers = {}, int timeoutSec = 0,
+                               int connectTimeoutSec = 0);
+};
+```
+
+Every failure — connection refused, timeout, TLS unavailable, or a non-2xx
+status — throws `HttpError` (a `std::runtime_error`) naming the URL and the
+failure mode; the client never returns an empty response instead. `HttpError`
+also exposes `status()` and `body()` for programmatic handling.
+
+```cpp
+gaia::HttpClient http({"https://api.example.com"});
+try {
+    auto res = http.get("/v1/models", {{"Authorization", "Bearer " + token}});
+    process(res.body);
+} catch (const gaia::HttpError& e) {
+    std::cerr << e.what() << std::endl;   // "GET https://… returned HTTP 401: …"
+}
+```
+
+For streaming responses (SSE), `postStreaming` hands each chunk to your
+callback; returning `false` ends the stream normally — that is how
+`LemonadeClient` stops on the `[DONE]` sentinel. Request `path` may also be an
+absolute URL, in which case the configured base URL is ignored. HTTPS requires
+an OpenSSL-enabled build (see [HTTPS Support](#https-support)); an `https://`
+URL on an HTTP-only build raises rather than downgrading.
+
 ### VectorIndex
 
 Flat (brute-force) vector search over `float32` embeddings, with save/load
@@ -783,6 +838,73 @@ See [`cpp/examples/vlm_agent.cpp`](https://github.com/amd/gaia/blob/main/cpp/exa
 ```bash
 ./build/vlm_agent path/to/image.png "What is in this image?"
 ```
+
+---
+
+## Skills (`SKILL.md`)
+
+`<gaia/skill.h>` reads the same `SKILL.md` files the Python runtime does — same
+schema, same constants, same refusal messages — so a skill written once loads in
+either runtime. The C++ side is **read-only**: it parses, validates, and renders
+skills; publishing, signing, and installing stay in the `gaia skill` CLI.
+
+```cpp
+#include <gaia/skill.h>
+
+// Parse a skill directory (or its SKILL.md directly).
+gaia::Skill skill = gaia::parseSkillFile("~/.gaia/skills/web-search");
+
+// Level 1 of progressive disclosure: frontmatter only, body dropped.
+gaia::Skill listing = gaia::parseSkillMetadata("~/.gaia/skills/web-search");
+
+// Render back to SKILL.md text. Round-trip is identity.
+std::string text = gaia::toMarkdown(skill);
+```
+
+### Types
+
+```cpp
+struct Skill {
+    std::string name;                      // ^[a-z0-9]+(-[a-z0-9]+)*$, <= 64 chars
+    std::string description;               // <= 1024 chars — the trigger signal
+    std::string body;                      // the Markdown instructions
+    std::optional<std::string> license;
+    std::optional<std::string> version;    // SemVer 2.0.0; 0.0.0 = unversioned
+    GaiaMetadata gaia;                     // the metadata.gaia namespace
+    nlohmann::json otherMetadata;          // metadata.<vendor> — preserved verbatim
+    nlohmann::json extraFields;            // unknown top-level keys — preserved
+
+    std::string path, root;                // provenance — not part of equality
+    bool readOnly;
+};
+
+struct GaiaMetadata {
+    std::string securityTier;              // verified | community | experimental
+    std::vector<std::string> permissions;  // <domain>:<level>[:scope]
+    SkillRequirements requirements;        // advisory
+    std::vector<SkillTool> tools;          // tools the skill provides
+    std::vector<std::string> toolsRequired;// registry tools it consumes
+    nlohmann::json extra;                  // unknown metadata.gaia keys — preserved
+};
+```
+
+### Guarantees
+
+- **Round-trip is identity.** `parseSkill(toMarkdown(parseSkill(t))) == parseSkill(t)`,
+  including foreign `metadata.<vendor>` namespaces, keys GAIA does not model, and the
+  author's key order. Nothing is lost by passing a third-party skill through GAIA.
+- **Scalars resolve exactly as PyYAML does**, because the Python runtime reads the
+  same files with `yaml.safe_load`. `flag: yes` is a bool and `mode: 0755` is 493 in
+  both runtimes. A value PyYAML types as something JSON cannot hold — a timestamp,
+  an infinity, the `=`/`<<` control tags — is kept as its literal text and written
+  back unquoted, so Python still reads the value it read before.
+- **`compatibility`, `allowed-tools`, and `disallowed-tools` are parsed, preserved,
+  and ignored.** They overlap `metadata.gaia` and are never a permission mechanism —
+  permissions come only from `metadata.gaia.permissions`.
+- **Failures are loud.** Every violation throws `gaia::SkillValidationError` naming
+  the field, the rule, and a doc link, and nothing partial is returned. Name must
+  equal the directory name; a mismatch is refused.
+- **BOM and CRLF tolerant**, so a skill authored on Windows parses unchanged.
 
 ---
 

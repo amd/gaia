@@ -69,7 +69,7 @@ The first run will automatically download and cache `windows-mcp` via `uvx windo
 
 ## Building
 
-All dependencies (nlohmann/json, cpp-httplib, Google Test) are fetched automatically by CMake at configure time — no manual installs required.
+All dependencies (nlohmann/json, cpp-httplib, yaml-cpp, Google Test) are fetched automatically by CMake at configure time — no manual installs required.
 
 ### Windows (Visual Studio / MSVC)
 
@@ -235,7 +235,8 @@ gaia/                           # repo root
     │   ├── tool_registry.h     # Tool registration and execution
     │   ├── mcp_client.h        # MCP JSON-RPC client (stdio transport)
     │   ├── json_utils.h        # JSON extraction with multi-strategy fallback
-    │   ├── lemonade_client.h   # HTTP client for the Lemonade inference server
+    │   ├── http_client.h       # General HTTP/HTTPS client (GET/POST/streaming)
+    │   ├── lemonade_client.h   # Lemonade inference server client (built on HttpClient)
     │   ├── sse_parser.h        # SSE parser for streaming chat completions
     │   ├── console.h           # TerminalConsole / SilentConsole output handlers
     │   ├── clean_console.h     # CleanConsole — polished TUI with colors and word-wrap
@@ -245,7 +246,8 @@ gaia/                           # repo root
     ├── src/
     │   ├── agent.cpp           # Agent loop state machine
     │   ├── tool_registry.cpp
-    │   ├── lemonade_client.cpp # HTTP client (blocking + SSE streaming)
+    │   ├── http_client.cpp     # HTTP transport (cpp-httplib behind a pimpl)
+    │   ├── lemonade_client.cpp # Lemonade client (blocking + SSE streaming)
     │   ├── sse_parser.cpp      # SSE token stream parser
     │   ├── mcp_client.cpp      # Cross-platform subprocess + pipes (Win32 / POSIX)
     │   ├── json_utils.cpp
@@ -259,6 +261,7 @@ gaia/                           # repo root
     │   ├── test_agent.cpp
     │   ├── test_tool_registry.cpp
     │   ├── test_json_utils.cpp
+    │   ├── test_http_client.cpp
     │   ├── test_lemonade_client.cpp
     │   ├── test_sse_parser.cpp
     │   ├── test_mcp_client.cpp
@@ -468,6 +471,7 @@ No manual installation needed — CMake fetches these at configure time.
 |---------|---------|---------|---------|
 | [nlohmann/json](https://github.com/nlohmann/json) | 3.11.3 | MIT | JSON parsing |
 | [cpp-httplib](https://github.com/yhirose/cpp-httplib) | 0.15.3 | MIT | HTTP client (LLM API calls) |
+| [yaml-cpp](https://github.com/jbeder/yaml-cpp) | 0.8.0 | MIT | `SKILL.md` frontmatter parsing |
 | [FTXUI](https://github.com/ArthurSonzogni/FTXUI) | 6.1.9 | MIT | TUI console (optional, `GAIA_BUILD_TUI`) |
 | [Google Test](https://github.com/google/googletest) | 1.14.0 | BSD-3 | Unit testing |
 

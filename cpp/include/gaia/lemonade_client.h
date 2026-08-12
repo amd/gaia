@@ -17,6 +17,7 @@
 #include <nlohmann/json.hpp>
 
 #include "gaia/export.h"
+#include "gaia/http_client.h"
 #include "gaia/types.h"
 
 namespace gaia {
@@ -97,7 +98,7 @@ public:
     /// @param debug    Emit extra diagnostics to stderr when true
     LemonadeClient(const std::string& baseUrl, bool debug = false);
 
-    // Non-copyable (contains no resources but keep consistent with Agent)
+    // Non-copyable (owns an HttpClient; keeps consistency with Agent)
     LemonadeClient(const LemonadeClient&) = delete;
     LemonadeClient& operator=(const LemonadeClient&) = delete;
 
@@ -233,42 +234,32 @@ public:
     void setContextSize(int ctx) { contextSize_ = ctx; }
 
     bool debug() const { return debug_; }
-    void setDebug(bool d) { debug_ = d; }
+    void setDebug(bool d) { debug_ = d; http_.setDebug(d); }
 
 private:
     /// Normalize URL: strip trailing slashes, preserve /v1 or /api/v1, append /api/v1 otherwise.
     static std::string normalizeUrl(const std::string& url);
 
-    /// Parsed URL components.
-    struct UrlParts {
-        std::string host;
-        int port = 80;
-        std::string basePath; // everything after host:port (may be "")
-        bool useSSL = false;
-    };
-
-    UrlParts parseUrl(const std::string& url) const;
-
-    /// GET request; returns response body or throws.
+    /// GET request; returns response body or throws HttpError.
     std::string httpGet(const std::string& path, int timeoutSec = 10);
 
-    /// POST request; returns response body or throws.
+    /// POST request; returns response body or throws HttpError.
     std::string httpPost(const std::string& path, const std::string& body,
                          int timeoutSec = 30);
 
-    /// Streaming POST request using httplib::Client::send().
-    /// Calls receiver for each response body chunk. Sets streamDone=true when
-    /// receiver returns false (i.e. SseParser got [DONE]) so the caller can
-    /// distinguish intentional stream completion from a real cancellation error.
-    /// @throws std::runtime_error on connection error or non-2xx status
+    /// Streaming POST request. Calls receiver for each response body chunk;
+    /// receiver returning false ends the stream normally (i.e. SseParser got
+    /// [DONE]) rather than raising.
+    /// @throws HttpError on connection error or non-2xx status
     void httpPostStreaming(const std::string& path, const std::string& body,
                            std::function<bool(const char*, size_t)> receiver,
-                           bool& streamDone, int timeoutSec);
+                           int timeoutSec);
 
     std::string baseUrl_;
     std::string model_;
     int contextSize_ = 0;
     bool debug_ = false;
+    HttpClient http_;
 };
 
 } // namespace gaia

@@ -11,6 +11,7 @@ No WebSockets, just clean HTTP + JSON-RPC for maximum compatibility
 import io
 import json
 import os
+import secrets
 import shutil
 import sys
 import tempfile
@@ -38,6 +39,17 @@ logger = get_logger(__name__)
 
 # Global verbose flag for request logging
 VERBOSE = False
+
+# Environment variable used to hand the bridge its auth token without exposing
+# it in the process command line.
+AUTH_TOKEN_ENV_VAR = "GAIA_MCP_AUTH_TOKEN"
+
+# Paths reachable without credentials even when a token is configured. /health
+# returns only liveness plus agent/tool counts, so orchestrator probes and
+# `gaia mcp status` keep working. Matching is exact — every other path,
+# including unknown ones, is authenticated. (CORS preflight is also exempt, but
+# via do_OPTIONS: browsers never send Authorization on a preflight.)
+PUBLIC_PATHS = frozenset({"/health"})
 
 
 class MultipartCollector:
@@ -122,10 +134,12 @@ class GAIAMCPBridge:
         port: int = 8765,
         base_url: str = None,
         verbose: bool = False,
+        auth_token: str = None,
     ):
         self.host = host
         self.port = port
         self.base_url = base_url or "http://localhost:13305/api/v1"
+        self.auth_token = auth_token or None
         self.agents = {}
         self.tools = {}
         self.llm_client = None
@@ -487,10 +501,75 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             if body:
                 logger.debug(f"Request body: {json.dumps(body, indent=2)}")
 
+    def _check_auth(self):
+        """Classify the request's credentials.
+
+        Returns ``None`` when the request may proceed, otherwise an
+        ``(http_status, message)`` pair to send back.
+        """
+        if not self.bridge.auth_token:
+            return None
+
+        header = self.headers.get("Authorization", "")
+        if not header:
+            return 401, "Missing Authorization header. Expected: Bearer <token>"
+
+        scheme, _, presented = header.partition(" ")
+        if scheme.lower() != "bearer" or not presented:
+            return 401, "Malformed Authorization header. Expected: Bearer <token>"
+
+        # compare_digest keeps the check constant-time so a network caller
+        # can't recover the token byte-by-byte from response timing. Compare as
+        # bytes — the str form rejects non-ASCII input with a TypeError.
+        if not secrets.compare_digest(
+            presented.encode("utf-8", "surrogateescape"),
+            self.bridge.auth_token.encode("utf-8", "surrogateescape"),
+        ):
+            return 403, "Invalid authentication token"
+
+        return None
+
+    def _drain_request_body(self):
+        """Consume any pending request body so the client can read our reply."""
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+        except (TypeError, ValueError):
+            return
+        while length > 0:
+            chunk = self.rfile.read(min(length, 65536))
+            if not chunk:
+                break
+            length -= len(chunk)
+
+    def _reject_unauthenticated(self, path):
+        """Send 401/403 for a credential-less request. True when rejected."""
+        if path in PUBLIC_PATHS:
+            return False
+
+        failure = self._check_auth()
+        if failure is None:
+            return False
+
+        status, message = failure
+        client_addr = self.client_address[0] if self.client_address else "unknown"
+        logger.warning(
+            "Rejected unauthenticated MCP request: %s %s from %s (%s)",
+            self.command,
+            path,
+            client_addr,
+            message,
+        )
+        self._drain_request_body()
+        self.send_json(status, {"error": message})
+        return True
+
     def do_GET(self):
         """Handle GET requests."""
         self.log_request_details("GET", self.path)
         parsed = urlparse(self.path)
+
+        if self._reject_unauthenticated(parsed.path):
+            return
 
         if parsed.path == "/health":
             self.send_json(
@@ -548,9 +627,13 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         """Handle POST requests - main MCP endpoint."""
-        content_length = int(self.headers.get("Content-Length", 0))
-
         parsed = urlparse(self.path)
+
+        # Authenticate before the body is read or any tool runs.
+        if self._reject_unauthenticated(parsed.path):
+            return
+
+        content_length = int(self.headers.get("Content-Length", 0))
         ctype = self.headers.get("content-type", "")
 
         if ctype.startswith("application/json") and content_length > 0:
@@ -688,7 +771,7 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
         self.end_headers()
 
     def send_sse_headers(self):
@@ -736,39 +819,50 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             super().log_message(format, *args)
 
 
-def resolve_bind_host(host):
+def resolve_bind_host(host, authenticated=False):
     """Map the requested host to the address the socket actually binds.
 
-    The bridge is unauthenticated, so "localhost" must never widen beyond
-    loopback. On non-Windows it resolves to 127.0.0.1 (Python may otherwise
-    bind ::1, which curl can't reach by default). Binding all interfaces
-    requires the caller to pass a wildcard address explicitly, and is loudly
-    logged because it exposes the bridge to the whole network.
+    "localhost" must never widen beyond loopback. On non-Windows it resolves to
+    127.0.0.1 (Python may otherwise bind ::1, which curl can't reach by
+    default). Binding all interfaces requires the caller to pass a wildcard
+    address explicitly, and is logged — as a warning when no auth token is
+    configured, since then anyone on the network can invoke the bridge's tools.
     """
     if host == "localhost" and sys.platform != "win32":
         return "127.0.0.1"
     if host in ("0.0.0.0", "::"):  # nosec B104 - explicit caller opt-in only
-        logger.warning(
-            "MCP bridge binding to ALL network interfaces (%s). The bridge is "
-            "UNAUTHENTICATED - anyone on the network can invoke its tools. "
-            "Use --host localhost unless network exposure is intentional.",
-            host,
-        )
+        if authenticated:
+            logger.info(
+                "MCP bridge binding to ALL network interfaces (%s) with "
+                "authentication enabled.",
+                host,
+            )
+        else:
+            logger.warning(
+                "MCP bridge binding to ALL network interfaces (%s). The bridge is "
+                "UNAUTHENTICATED - anyone on the network can invoke its tools. "
+                "Pass --auth-token, or use --host localhost unless network "
+                "exposure is intentional.",
+                host,
+            )
     return host
 
 
-def start_server(host="localhost", port=8765, base_url=None, verbose=False):
+def start_server(
+    host="localhost", port=8765, base_url=None, verbose=False, auth_token=None
+):
     """Start the HTTP MCP server."""
     # Fix Windows Unicode
     if sys.platform == "win32":
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
-    bind_host = resolve_bind_host(host)
+    auth_token = auth_token or os.environ.get(AUTH_TOKEN_ENV_VAR) or None
+    bind_host = resolve_bind_host(host, authenticated=bool(auth_token))
 
     logger.info(f"Creating MCP bridge for {host}:{port}")
 
     # Create bridge with verbose flag
-    bridge = GAIAMCPBridge(host, port, base_url, verbose=verbose)
+    bridge = GAIAMCPBridge(host, port, base_url, verbose=verbose, auth_token=auth_token)
 
     # Create handler with bridge
     def handler(*args, **kwargs):
@@ -792,6 +886,10 @@ def start_server(host="localhost", port=8765, base_url=None, verbose=False):
     print(f"LLM Backend: {bridge.base_url}")
     print(f"Agents: {list(bridge.agents.keys())}")
     print(f"Tools: {list(bridge.tools.keys())}")
+    if bridge.auth_token:
+        print("Auth: 🔒 Bearer token required (/health stays public)")
+    else:
+        print("Auth: ⚠️  none - every endpoint is open to any client that can reach it")
     if verbose:
         print("\n🔍 Verbose Mode: ENABLED")
         print("   All requests will be logged to console and gaia.log")
@@ -837,9 +935,18 @@ def main():
     parser.add_argument(
         "--verbose", action="store_true", help="Enable verbose logging for all requests"
     )
+    parser.add_argument(
+        "--auth-token",
+        help=(
+            "Require 'Authorization: Bearer <token>' on every request except "
+            f"/health. Defaults to ${AUTH_TOKEN_ENV_VAR}."
+        ),
+    )
 
     args = parser.parse_args()
-    start_server(args.host, args.port, args.base_url, args.verbose)
+    start_server(
+        args.host, args.port, args.base_url, args.verbose, auth_token=args.auth_token
+    )
 
 
 if __name__ == "__main__":
