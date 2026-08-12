@@ -93,6 +93,86 @@ def test_unsupported_range_syntax_raises_rather_than_matching_everything(spec):
         matches("1.5.0", spec)
 
 
+@pytest.mark.parametrize(
+    "spec",
+    [
+        ">=v2",  # a 'v' prefix — the most likely real-world typo
+        ">=1.0.0.0",  # a fourth component after an operator
+        "1.2.3.4",  # ...and bare: this one used to answer True
+        "1.2.x",  # npm x-range syntax GAIA does not implement
+        ">=junk",
+        ">junk",
+        "!=junk",
+        "<=junk",
+        "==junk",
+        "abc.def.ghi",
+    ],
+)
+def test_a_comparator_target_that_is_not_a_version_raises(spec):
+    """``compare_versions`` is a lenient *sort* comparator (#2864).
+
+    It coerces unreadable text to a sortable key rather than raising, so
+    delegating a garbage target straight to it answered a value instead of
+    raising — True for '>=', '>' and '!=' (silently widening the pin to "any"),
+    False for the rest (silently narrowing it). Both are wrong: a range GAIA
+    cannot read must be rejected, not guessed at.
+    """
+    from gaia.skills.versions import matches
+
+    with pytest.raises(SkillValidationError, match="does not name a version number"):
+        matches("1.5.0", spec)
+
+
+def test_validate_spec_accepts_every_supported_range_shape():
+    """The parse-time gate must not reject a range the matcher can evaluate."""
+    from gaia.skills.versions import validate_spec
+
+    for spec in (
+        None,
+        "",
+        "*",
+        "latest",
+        "1",
+        "1.2",
+        "1.2.3",
+        ">=1.2.3-beta.1",  # prerelease — legal per format.SEMVER_PATTERN
+        "<2.0.0+build.5",  # build metadata
+        ">= 1.0.0",  # whitespace after the operator
+        "^1.2",
+        "~1",
+        "~=1.2",
+        "!=1.0.0",
+        ">=1.2.0, <2.0.0",
+        ">=1.2.3-beta.1, <2.0.0",
+        ">= 1.0.0 , < 2.0.0",  # whitespace around the conjunction
+    ):
+        validate_spec(spec)
+
+
+@pytest.mark.parametrize(
+    "spec",
+    [
+        ">=1.2.0, 1.2.x",
+        ">=1.2.0, >=v2",
+        ">=1.2.0, <2.0.0.0",
+        "<2.0.0, junk",
+    ],
+)
+def test_validate_spec_checks_every_clause_of_a_conjunction(spec):
+    """The gate must not stop at the first clause a probe version fails.
+
+    ``matches`` is ``all()`` over a generator, so it short-circuits: probing
+    with a sentinel meant `>=1.2.0` returned False and the unreadable clause
+    after it was never parsed. The manifest was then accepted, and the failure
+    resurfaced at load only on machines with that skill installed at a version
+    passing clause one — the machine-dependent verdict this gate exists to kill.
+    """
+    from gaia.skills.versions import validate_spec
+
+    with pytest.raises(SkillValidationError, match="does not name a version number"):
+        validate_spec(spec)
+
+
 # ---------------------------------------------------------------------------
 # Tiers
 # ---------------------------------------------------------------------------
@@ -682,6 +762,24 @@ def test_remote_skill_resolve_lists_published_versions_when_no_match():
         remote.resolve(">=2.0.0")
     # The user needs to see what IS published to fix their pin.
     assert "1.0.0, 1.2.0" in str(excinfo.value)
+
+
+def test_remote_skill_resolve_reports_an_unreadable_pin_as_such():
+    """Not as 'nothing satisfies it' — including when nothing is published.
+
+    ``resolve`` matches lazily, so with an empty candidate list the bad spec was
+    never evaluated and the user got the wrong diagnosis (#2864).
+    """
+    from gaia.skills.hub import RemoteSkill
+
+    for versions in ({"1.0.0": {}}, {}):
+        remote = RemoteSkill(
+            name="web-research", latest_version="1.0.0", versions=versions
+        )
+        with pytest.raises(
+            SkillValidationError, match="does not name a version number"
+        ):
+            remote.resolve(">=v2")
 
 
 def test_manifest_without_a_verifiable_artifact_is_refused():
