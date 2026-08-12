@@ -7,11 +7,22 @@
 
 name: TUI Build & Test
 
+# NOTE: GitHub Actions does not support YAML anchors, so the two `paths` lists
+# below are duplicated on purpose. Keep them in sync.
+#
+# `src/gaia/daemon/**` is the Python daemon the TUI drives over loopback
+# HTTP/SSE — the actual contract boundary, and narrow on purpose (triggering on
+# all of src/gaia/** would be noise). Be aware of what this does and does not
+# buy: it makes the suite RUN on a daemon-only change, but the TUI's tests fake
+# the daemon with an httptest server (test/fakedaemon_test.go), so wire drift
+# still passes. Detecting drift needs a contract test that exercises the real
+# daemon; until that exists this trigger is early warning, not detection.
 on:
   push:
     branches: [ main ]
     paths:
       - 'tui/**'
+      - 'src/gaia/daemon/**'
       # The Python side of the email-scope drift guard (#2730 D2a) — a
       # one-sided edit to the source-of-truth scope constants (or the shared
       # fixture both sides diff against) must still run the Go test that
@@ -21,10 +32,19 @@ on:
       - 'tests/fixtures/connectors/email_scopes.json'
       - '.github/workflows/build_tui.yml'
   pull_request:
-    branches: [ main ]
+    # NO `branches:` filter on purpose. It used to be `branches: [main]`, which
+    # silences every stacked PR — one opened against another feature branch
+    # rather than main. That is not a corner case here: #2494 never ran this
+    # workflow once, and #2496/#2492 last ran several commits behind their heads,
+    # because all three are stacked on sibling claudia/* branches. The newest and
+    # most safety-critical TUI work had the least CI as a direct result.
+    #
+    # Dropping the filter runs the suite on every PR regardless of base; the
+    # `paths` filter below is what keeps it scoped, and it still applies.
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'tui/**'
+      - 'src/gaia/daemon/**'
       # The Python side of the email-scope drift guard (#2730 D2a) — a
       # one-sided edit to the source-of-truth scope constants (or the shared
       # fixture both sides diff against) must still run the Go test that
@@ -45,10 +65,30 @@ permissions:
 
 jobs:
   test:
-    name: Test
-    runs-on: ubuntu-latest
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Report all three platforms on every run. A first-time Windows failure
+      # must not hide a real Linux regression behind a cancelled job.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        include:
+          # Advisory for now. These tests have NEVER run on Windows, and what is
+          # most likely to break there is environmental, not logical: 15 test
+          # files use t.TempDir() (cleanup fails on Windows if a handle is still
+          # open) and 4 compile and spawn real child processes. -race also needs
+          # a C toolchain on windows/amd64, which is unverified here.
+          #
+          # This is additive: ubuntu and macos block as before, nothing is
+          # weakened. Flip `advisory` off once a green run proves it.
+          - os: windows-latest
+            advisory: true
+    continue-on-error: ${{ matrix.advisory == true }}
     defaults:
       run:
+        # bash on all three so one command works everywhere (Windows defaults to pwsh).
+        shell: bash
         working-directory: tui
     steps:
       - uses: actions/checkout@v7
@@ -58,11 +98,113 @@ jobs:
           go-version-file: tui/go.mod
           cache-dependency-path: tui/go.sum
 
-      - name: Run tests
-        run: go test ./... -v -count=1
+      # -race is the point of this job. The TUI is concurrent throughout — SSE
+      # streaming, the loopback control API, daemon polling — so this is where
+      # its real bugs are. Verified green on all 12 packages locally.
+      - name: Run tests (race)
+        # Windows runs the 13 unit packages but not ./test. That suite compiles
+        # and spawns real child processes and binds ports; two of its cases
+        # (TestHubCatalogLoadSurvivesTheChatView, TestASubprocessAgentIsNotGated)
+        # do not reach their view there. Naming the gap rather than leaving the
+        # job red forever — the unit packages are the coverage worth having on a
+        # third OS, and porting the integration harness is its own change.
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            go test $(go list ./... | grep -v '/tui/test$') -v -count=1 -race -timeout=15m
+          else
+            go test ./... -v -count=1 -race -timeout=15m
+          fi
 
       - name: Vet
         run: go vet ./...
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: tui/go.mod
+          cache-dependency-path: tui/go.sum
+
+      # Config and enabled set live in tui/.golangci.yml. The set was chosen by
+      # measuring: every linter in it reports zero findings on the tree today, so
+      # this lands green and only fires on new code.
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12.2
+          working-directory: tui
+
+      # Both linters only analyze the host GOOS, so internal/daemon/lock_windows.go
+      # and pid_windows.go are invisible to every BLOCKING job — the only leg that
+      # compiles them is the advisory Windows one, which cannot fail the run. Vet
+      # them here so Windows-only code has enforcement that bites. darwin needs no
+      # equivalent: the macos test leg blocks and vets natively.
+      - name: Vet Windows-only sources
+        working-directory: tui
+        env:
+          GOOS: windows
+        run: go vet ./...
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    # Genuinely non-blocking, not just labelled that way. `make cover` runs the
+    # whole suite to produce a profile, so without this a test failure would
+    # paint this job red too — a second, duplicate X for something the `test`
+    # job already reports. Nothing `needs:` this job.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: tui/go.mod
+          cache-dependency-path: tui/go.sum
+
+      # Informational, NOT a gate. A threshold that blocks PRs needs buy-in that
+      # a printed number does not, and the naive per-package figure is actively
+      # misleading here — internal/ui/hub and internal/ui/root read 0% because
+      # their tests live in the test/ package, so a naive gate would fail on two
+      # of the better-covered packages. `make cover` uses -coverpkg=./... to
+      # attribute coverage back to the package that owns the code.
+      #
+      # pipefail is set explicitly: a bare `make cover | tee` reports TEE's exit
+      # status, so a failing test run would read as a pass. Piping (rather than
+      # redirecting) keeps the full run visible in the log for debugging.
+      - name: Run coverage
+        working-directory: tui
+        run: |
+          set -o pipefail
+          make cover 2>&1 | tee /tmp/cover.txt
+
+      # Runs even when the step above failed, so a partial profile still reports.
+      # Every extraction is `|| true`: GitHub runs `run:` under `bash -e`, and a
+      # grep that matches nothing exits 1 — which would turn this purely
+      # informational step into a second, misleading red X on the PR.
+      - name: Publish to job summary
+        if: always()
+        run: |
+          TOTAL=$(grep -E '^total:' /tmp/cover.txt 2>/dev/null | grep -oE '[0-9]+\.[0-9]+%' | tail -1 || true)
+          ROWS=$(grep -E '^[0-9]+\.[0-9]+%' /tmp/cover.txt 2>/dev/null \
+                   | sed 's|github.com/amd/gaia/tui/||' \
+                   | sort -k2 \
+                   | sed 's/^/| /; s/\t/ | /; s/$/ |/' || true)
+          {
+            echo "## TUI coverage"
+            echo
+            echo "**Total: ${TOTAL:-unavailable}** (statements, \`-coverpkg=./...\`)"
+            echo
+            if [ -n "$ROWS" ]; then
+              echo "| Coverage | Package |"
+              echo "| --- | --- |"
+              echo "$ROWS"
+            else
+              echo "_No per-package data — the coverage run did not complete._"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
   build:
     name: Build (${{ matrix.goos }}/${{ matrix.goarch }})

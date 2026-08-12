@@ -488,9 +488,9 @@ The milestone deliverable, per decision 8. New `cpp/agents/generic/` following t
 - Ships bundled skill sets (`coding`, `research`) as the real consumer P3.4 needs, and packages
   via `cpp/packaging/package_agents.py`.
 
-**Naming note:** `gaia-agent` parallels `gaia-bash`. It is a distinct binary from the `gaia agent
-{export|import}` CLI subcommand; if that proves confusing in review, `gaia-native` is the
-fallback. Settle it in the issue, not at package time.
+**Naming note:** `gaia-agent` parallels `gaia-bash`. It is a distinct binary from the
+`gaia agent {export|import}` CLI subcommand; if that proves confusing in review,
+`gaia-native` is the fallback. Settle it in the issue, not at package time.
 
 **Supersedes** the previously planned hardcoded `gaia-code` binary. A coding agent is now the
 `coding` skill set on this binary — one artifact to build, sign, package, and eval.

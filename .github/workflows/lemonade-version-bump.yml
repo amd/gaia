@@ -137,7 +137,7 @@ jobs:
 
       - name: Open Lemonade bump PR
         if: steps.detect.outputs.should_bump == 'true'
-        uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b  # v1.0.183
+        uses: anthropics/claude-code-action@86180fa9e4d311eed10c9cc49854c53dab5d517a  # v1.0.184
         with:
           # Prefer subscription OAuth, fall back to API key — same wiring as claude.yml.
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
@@ -325,7 +325,7 @@ jobs:
               is clearly met, capped at two.
           claude_args: |
             --max-turns 100
-            --model claude-opus-4-8
+            --model claude-opus-5
             --allowedTools Edit,Read,Write,Grep,Glob,Bash
 
       # Fail loudly: a silent failure here means the pin quietly goes stale. Fires on ANY

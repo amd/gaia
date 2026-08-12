@@ -9,11 +9,11 @@
 
 #include <gtest/gtest.h>
 #include <ftxui/dom/elements.hpp>
+#include <ftxui/screen/screen.hpp>
 
-// Declare the function (defined in tui_markdown.cpp).
-namespace gaia {
-ftxui::Element renderMarkdown(const std::string& markdown);
-}
+#include <gaia/tui_markdown.h>
+
+#include "support/screen_text.h"
 
 // ---- Basic rendering ----
 
@@ -168,6 +168,68 @@ TEST(TuiMarkdown, NoMarkdown) {
     // Plain text with no markdown syntax should still render
     auto elem = gaia::renderMarkdown("Just a plain sentence with no special formatting.");
     ASSERT_TRUE(elem);
+}
+
+// ---- Rendered output (not just non-null) ----
+
+namespace {
+
+std::string renderToText(const std::string& markdown, int width = 80, int height = 24) {
+    auto screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(width),
+                                        ftxui::Dimension::Fixed(height));
+    auto element = gaia::renderMarkdown(markdown);
+    ftxui::Render(screen, element);
+    // Styles are stripped: a styled word boundary would otherwise put escape
+    // bytes in the middle of the text being searched for.
+    return gaia_test::stripAnsi(screen.ToString());
+}
+
+bool hasText(const std::string& haystack, const std::string& needle) {
+    return haystack.find(needle) != std::string::npos;
+}
+
+} // namespace
+
+TEST(TuiMarkdownRender, PlainTextAppearsOnTheScreen) {
+    EXPECT_TRUE(hasText(renderToText("hello world"), "hello world"));
+}
+
+TEST(TuiMarkdownRender, LongParagraphWrapsInsteadOfBeingClipped) {
+    std::string paragraph = "alpha";
+    for (int i = 0; i < 40; ++i) paragraph += " filler";
+    paragraph += " omega";
+
+    const std::string frame = renderToText(paragraph);
+    EXPECT_TRUE(hasText(frame, "alpha"));
+    EXPECT_TRUE(hasText(frame, "omega")) << "long answers must wrap, not be cut at 80 columns";
+}
+
+TEST(TuiMarkdownRender, BoldAndCodeSurviveWrapping) {
+    std::string markdown = "Run **make build** then `ctest --output-on-failure` to check.";
+    const std::string frame = renderToText(markdown);
+    EXPECT_TRUE(hasText(frame, "make build"));
+    EXPECT_TRUE(hasText(frame, "ctest"));
+}
+
+TEST(TuiMarkdownRender, CodeBlocksAndQuotesAreAsciiOnly) {
+    const std::string markdown =
+        "# Title\n"
+        "\n"
+        "```bash\n"
+        "echo hi\n"
+        "```\n"
+        "\n"
+        "- bullet one\n"
+        "\n"
+        "> quoted line\n";
+
+    const std::string frame = renderToText(markdown);
+    EXPECT_TRUE(hasText(frame, "echo hi"));
+    EXPECT_TRUE(hasText(frame, "bullet one"));
+    EXPECT_TRUE(hasText(frame, "quoted line"));
+    for (unsigned char c : frame) {
+        EXPECT_LT(c, 0x80u) << "non-ASCII byte in rendered markdown";
+    }
 }
 
 #endif // GAIA_HAS_TUI

@@ -1045,7 +1045,7 @@ that keymap. `ctrl+g`, `ctrl+l`, `ctrl+r`, `ctrl+z` are the safe ones used here;
 `ctrl+s` / `ctrl+q`, which terminals swallow as flow control.
 
 Slash commands: `/help` `/hub` `/clear` exist. **`/init` must be removed or wired** — today
-it prints "Initializing <agent>..." and does nothing (`chat/model.go:299-305`). Point it at
+it prints "Initializing `<agent>`..." and does nothing (`chat/model.go:299-305`). Point it at
 the preflight screen. Add `/settings` and `/accounts`.
 
 ### Focus mode (inside a card)
@@ -1262,7 +1262,7 @@ base64-raster-only and cannot render in a terminal; `diff` has no producer. Buil
 `key_value`, `list` and the two fallback behaviours; the fallback covers the rest for free.
 
 **D-h. `/init` in chat is currently a lie and should be in Phase 1's cleanup list.** It
-prints "Initializing <agent>..." and returns. It is in the same category as the plan's §5
+prints "Initializing `<agent>`..." and returns. It is in the same category as the plan's §5
 bug list and costs one line to either delete or point at preflight.
 
 **D-i. Add two home-screen fixes to the §5 bug list.** The hub opens on an empty
@@ -1328,7 +1328,7 @@ auto-approve fix, which stands alone as a security fix regardless of the TUI. Do
 agent-initiated send cannot happen without a keystroke, and a 60-second silence denies.
 
 **Step 5 — It knows you were away.**
-Briefing on launch, the "since <day>" summary, the activity screen backed by
+Briefing on launch, the "since `<day>`" summary, the activity screen backed by
 `GET /v1/email/jobs` **[backend]**. Done when: opening on day 5 shows what happened and what
 is pending before anything is typed.
 
