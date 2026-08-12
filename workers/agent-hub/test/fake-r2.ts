@@ -201,9 +201,11 @@ export function skillPublishRequest(opts: {
   audit?: string;
   /** Omit the artifact part entirely (to exercise the missing-part guard). */
   omitArtifact?: boolean;
+  /** Omit the SKILL.md part entirely (to exercise the missing-part guard). */
+  omitSkill?: boolean;
 }): Request {
   const form = new FormData();
-  form.set("skill", opts.skillMarkdown);
+  if (!opts.omitSkill) form.set("skill", opts.skillMarkdown);
   if (opts.changelog !== undefined) form.set("changelog", opts.changelog);
   if (opts.audit !== undefined) form.set("audit", opts.audit);
   if (!opts.omitArtifact) {

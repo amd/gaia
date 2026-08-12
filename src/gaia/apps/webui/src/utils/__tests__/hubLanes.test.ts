@@ -78,6 +78,45 @@ describe('groupIntoLanes', () => {
             expect(lanes[lane.key]).toEqual([]);
         }
     });
+
+    it('funnels unknown lane values into agents and never into skills', () => {
+        // A newer hub can serve a lane this build has never heard of, and a
+        // near-miss ('skills', 'Skill') must not be read as the real thing:
+        // promoting an unknown kind into the Skills lane would render it with
+        // an installer that cannot handle it. Falling back to agents is the
+        // documented default; the one thing that must never happen is a
+        // silent promotion.
+        const lanes = groupIntoLanes([
+            agent({ id: 'plural', type: 'skills' as never }),
+            agent({ id: 'capitalised', type: 'Skill' as never }),
+            agent({ id: 'blank', type: '' as never }),
+            agent({ id: 'future', type: 'workflow' as never }),
+            agent({ id: 'real-skill', type: 'skill' }),
+        ]);
+        expect(lanes.skill.map((a) => a.id)).toEqual(['real-skill']);
+        expect(lanes.agent.map((a) => a.id)).toEqual([
+            'plural',
+            'capitalised',
+            'blank',
+            'future',
+        ]);
+        expect(lanes.app).toEqual([]);
+        expect(lanes.component).toEqual([]);
+    });
+
+    it('accounts for every entry exactly once across the lanes', () => {
+        const catalog = [
+            agent({ id: 'studio', type: 'app' }),
+            agent({ id: 'rag-kit', type: 'component' }),
+            agent({ id: 'chat', type: 'agent' }),
+            agent({ id: 'web-research', type: 'skill' }),
+            agent({ id: 'mystery', type: 'nonsense' as never }),
+        ];
+        const lanes = groupIntoLanes(catalog);
+        const laned = LANES.flatMap((l) => lanes[l.key].map((a) => a.id));
+        // No entry silently dropped, and none duplicated into two lanes.
+        expect(laned.sort()).toEqual(catalog.map((a) => a.id).sort());
+    });
 });
 
 describe('filterCatalog', () => {

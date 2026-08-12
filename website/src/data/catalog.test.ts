@@ -4,7 +4,7 @@
 // Pure catalog helpers — the lane discriminator and the per-lane install
 // command. No network: loadCatalog() is not exercised here.
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   categoryLabel,
@@ -96,5 +96,119 @@ describe('display labels', () => {
   it('labels the skills category and the markdown language', () => {
     expect(categoryLabel('skills')).toBe('Skills');
     expect(languageLabel('markdown')).toBe('Markdown');
+  });
+});
+
+// The lane split the Hub page actually renders. getAgentPackages() is what
+// keeps a skill out of the agent listing on the website — the third and last
+// layer of that invariant (the Python client and the in-app Hub page are the
+// other two), and the only one that reaches the network, so it needs the
+// catalog loader stubbed rather than a pure-helper call.
+describe('getAgentPackages / getSkills — the rendered lane split', () => {
+  const HUB = 'https://hub.test';
+  const originalHubUrl = process.env.HUB_CATALOG_URL;
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    if (originalHubUrl === undefined) delete process.env.HUB_CATALOG_URL;
+    else process.env.HUB_CATALOG_URL = originalHubUrl;
+  });
+
+  /** Load a fresh catalog module served the given entries. */
+  async function loadWith(entries: Partial<Agent>[]) {
+    vi.resetModules();
+    process.env.HUB_CATALOG_URL = HUB;
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            schema_version: 1,
+            generated_at: '2026-07-29T00:00:00.000Z',
+            agents: entries.map((e) => entry(e)),
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    return { mod: await import('./catalog'), fetchMock };
+  }
+
+  const MIXED: Partial<Agent>[] = [
+    { id: 'chat', name: 'Chat', type: 'agent', category: 'conversation' },
+    { id: 'web-research', name: 'web-research', type: 'skill' },
+    { id: 'studio', name: 'Studio', type: 'app' },
+    { id: 'rag-kit', name: 'Rag Kit', type: 'component' },
+    { id: 'legacy', name: 'Legacy', type: undefined },
+    { id: 'incident-review', name: 'incident-review', type: 'skill' },
+  ];
+
+  it('never lets a skill into the agent listing', async () => {
+    const { mod } = await loadWith(MIXED);
+    const agents = await mod.getAgentPackages();
+    expect(agents.map((a) => a.id).sort()).toEqual([
+      'chat',
+      'legacy',
+      'rag-kit',
+      'studio',
+    ]);
+    expect(agents.some((a) => a.type === 'skill')).toBe(false);
+  });
+
+  it('returns exactly the skills on the skills lane', async () => {
+    const { mod } = await loadWith(MIXED);
+    const skills = await mod.getSkills();
+    expect(skills.map((s) => s.id).sort()).toEqual(['incident-review', 'web-research']);
+    for (const skill of skills) {
+      expect(skill.type).toBe('skill');
+      // Every skill row offers the skill installer, never the agent one.
+      expect(mod.installMethods(skill)[0].command).toBe(`gaia skill install ${skill.id}`);
+    }
+  });
+
+  it('partitions the whole catalog between the two lanes, losing nothing', async () => {
+    const { mod } = await loadWith(MIXED);
+    const all = await mod.getCatalog();
+    const agents = await mod.getAgentPackages();
+    const skills = await mod.getSkills();
+
+    expect(agents.length + skills.length).toBe(all.length);
+    expect([...agents, ...skills].map((a) => a.id).sort()).toEqual(
+      MIXED.map((e) => e.id).sort(),
+    );
+  });
+
+  it('keeps an unknown lane out of the skills listing', async () => {
+    // A newer hub can serve a lane this build predates. It may keep appearing
+    // in the agent listing (the historical default), but it must never be
+    // rendered as a skill — that would advertise `gaia skill install` for
+    // something that is not a skill.
+    const { mod } = await loadWith([
+      { id: 'chat', type: 'agent' },
+      { id: 'future', type: 'workflow' as never },
+      { id: 'web-research', type: 'skill' },
+    ]);
+    expect((await mod.getSkills()).map((s) => s.id)).toEqual(['web-research']);
+    expect((await mod.getAgentPackages()).map((a) => a.id).sort()).toEqual([
+      'chat',
+      'future',
+    ]);
+  });
+
+  it('renders an older catalog with no skills at all as pure agents', async () => {
+    const { mod } = await loadWith([
+      { id: 'chat', type: undefined },
+      { id: 'demo', type: undefined },
+    ]);
+    expect(await mod.getSkills()).toEqual([]);
+    expect((await mod.getAgentPackages()).map((a) => a.id).sort()).toEqual(['chat', 'demo']);
+  });
+
+  it('fetches the catalog once per build across both lanes', async () => {
+    const { mod, fetchMock } = await loadWith(MIXED);
+    await mod.getAgentPackages();
+    await mod.getSkills();
+    await mod.getCatalog();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0][0])).toContain(`${HUB}/index.json`);
   });
 });
