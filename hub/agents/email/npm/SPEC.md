@@ -554,8 +554,8 @@ await dev.client.triage({ payload: { /* … */ } });
 The `serve` CLI (`gaia_agent_email.server:main`) accepts `--host`, `--port`
 (rejects the reserved 4001), `--reload` (import-string app + watches the package
 dir; add `--reload-dir` for your core checkout), `--dev` (implies `--reload`),
-`--skill-set <name>` (pin a bundled [skill set](#skill-sets-2466) for every session
-instead of letting the mailbox's account type choose), and
+`--skill-set <name>` (accepted but currently unusable — the agent declares no
+[skill sets](#skill-sets-2466), so any value errors at startup), and
 `--print-openapi`. Running without `GAIA_EMAIL_SIDECAR_TOKEN` disables the caller
 token (local dev only, logged loudly); Host/Origin protection still applies.
 Auto-reload resets in-process `/v1/email/agent/*` sessions — irrelevant to the
@@ -654,10 +654,30 @@ yet**.
 
 ## Skill sets (#2466)
 
-The agent bundles six **Agent Skills** and activates one named **set** of them per
-launch, so a personal mailbox and a work mailbox get different judgement out of the
-same binary — newsletters and trip itineraries for one, meetings and action items
-for the other.
+**Status: disabled. The agent loads zero skills.** It bundles six **Agent Skills**
+and the machinery to activate one named **set** of them per launch, but the
+`skill_sets:` and `default_skill_set:` blocks in `gaia-agent.yaml` are commented
+out pending an eval run that shows the skills improve triage. Concretely, on the
+shipped binary:
+
+- `active_skill_set` is `None` and `loaded_skills` is empty; no skill text reaches
+  the system prompt.
+- A personal and a work mailbox get identical behaviour.
+- `--skill-set` / `GAIA_EMAIL_SKILL_SET` **fail loudly** at startup — the agent
+  declares no sets, so there is no valid name to pass: *"requested skill set
+  'personal', but this agent declares no skill sets — Agent Skills are switched
+  off in this build. Drop the option, or uncomment the 'skill_sets:' and
+  'default_skill_set:' blocks in gaia-agent.yaml."* That is the
+  no-silent-fallbacks rule working, not a bug.
+- The bulk-triage result envelope is back to its full **6144 tokens**
+  (16384 − 9216 − 1024), the pre-skills value; the `personal` set had cut it to
+  4810 and `work` to 4070.
+- Nothing else moves: same endpoints, same tools, same permissions, same
+  `SCHEMA_VERSION`.
+
+Re-enabling is uncommenting those two manifest blocks — both together, since a
+non-empty `skill_sets:` without a `default_skill_set:` is a parse error. The rest
+of this section describes what the machinery does *when enabled*.
 
 > **Two different files in this package are named `SKILL.md`. They are not the
 > same kind of artifact.**
@@ -666,16 +686,16 @@ for the other.
 >   instructions for an AI coding assistant helping a developer wire this npm
 >   package into an app.
 > - `gaia_agent_email/skills/<name>/SKILL.md`, inside the sidecar, are **Agent
->   Skills** — instructions the *email agent itself* loads into its own prompt at
->   runtime to do email work better.
+>   Skills** — instructions the *email agent itself* would load into its own
+>   prompt at runtime (none load today, per the status above).
 >
 > Different audience, different format. Everything in this section is about the
 > second kind; nothing here changes the integration playbook.
 
 ### The bundled skills
 
-Each is a Markdown procedure (`skills/<name>/SKILL.md` in the sidecar), loaded into
-the agent's system prompt when its set is active:
+Each is a Markdown procedure (`skills/<name>/SKILL.md` in the sidecar). All six
+still ship in the binary; none currently loads:
 
 | Skill | What it makes the agent better at |
 |-------|-----------------------------------|
@@ -686,9 +706,10 @@ the agent's system prompt when its set is active:
 | `action-item-extraction` | Pulling the concrete commitments out of a thread: who owes what, by when. |
 | `escalation-routing` | Deciding what needs attention now, what can wait, and what belongs to someone else. |
 
-### The two sets
+### The two sets (currently commented out)
 
-Declared in the agent's `gaia-agent.yaml`; **exactly one is active per launch**:
+These are the sets `gaia-agent.yaml` declares when the blocks are uncommented;
+**exactly one would be active per launch**:
 
 | Set | Skills |
 |-----|--------|
@@ -699,7 +720,7 @@ Declared in the agent's `gaia-agent.yaml`; **exactly one is active per launch**:
 that should load for every set belongs in the manifest's top-level `skills:` list
 instead; this agent declares none.)
 
-### Resolution order
+### Resolution order (inert while the blocks are commented out)
 
 1. **Explicit request** — the `--skill-set` flag or `GAIA_EMAIL_SKILL_SET`. Wins
    over everything.
@@ -710,63 +731,24 @@ instead; this agent declares none.)
    type is unknown.
 
 An **undeclared set name never falls back** — it raises at startup naming the valid
-sets, per GAIA's no-silent-fallbacks rule. `--skill-set` additionally rejects an
-undeclared name at argument-parse time.
+sets, per GAIA's no-silent-fallbacks rule. With no sets declared *every* name is
+undeclared, which is why `--skill-set` currently always errors.
 
-### How the account type is derived
-
-At connect time GAIA classifies a **Microsoft** account from the `tid` (tenant id)
-claim of its OAuth `id_token`: the well-known consumers tenant means a personal
-account (Outlook.com / Hotmail / Live), any other tenant id means a work or school
-(Entra ID) account. The result is stored on the connection and exposed as
-`account_type` (`"personal"` / `"work"`) by the GAIA connector store.
-
-Three consequences worth knowing:
-
-- **Gmail has no equivalent claim**, so a Gmail-only mailbox has no account type to
-  read. The kind is genuinely **unknown**, and the manifest's `default_skill_set`
-  applies. Be clear about what that means: a *work* Gmail mailbox does get the
-  `personal` set — not because anything inferred it from the mailbox, but because
-  that is the declared default, and the resolution is logged. Nothing guesses;
-  nothing is silent; the default is still a default. **Pin
-  `GAIA_EMAIL_ACCOUNT_TYPE=work` or `--skill-set work` for a work Gmail mailbox.**
-- **The work path is not reachable through this agent yet.** GAIA now splits
-  Microsoft into two connectors — `microsoft` (personal, `consumers` authority)
-  and `microsoft_work` — and only `microsoft` is in this agent's
-  `REQUIRED_CONNECTORS` ([#2629](https://github.com/amd/gaia/issues/2629) tracks
-  the rest). The derivation reads both connectors, so it starts working the moment
-  that lands; until then, pin `work` explicitly. The `tid` classification itself is
-  already correct for either.
-- **The kind is recorded when the connection is made.** A Microsoft mailbox
-  connected before this feature shipped carries no `account_type` until it is
-  reconnected, so it too resolves through the default.
-- **No new permission or scope** is involved — the claim is already in the token
-  the connect flow receives.
-
-### Configuration
-
-| Surface | Values | Effect |
-|---------|--------|--------|
-| `--skill-set <name>` (sidecar `serve`) | a declared set name | Pins the set for **every** agent session this sidecar serves. Validated against the manifest; exported as `GAIA_EMAIL_SKILL_SET` so per-request sessions see it. |
-| `GAIA_EMAIL_SKILL_SET` | a declared set name | Same effect, as an env var. Backs `EmailAgentConfig.skill_set`. |
-| `GAIA_EMAIL_ACCOUNT_TYPE` | `personal` \| `work` | Pins the **mailbox kind** instead of the set, letting the selector do the mapping. Backs `EmailAgentConfig.account_type`. An invalid value raises rather than being ignored. |
-
-From this package, either one reaches the sidecar through `startSidecar`:
-
-```ts
-const sidecar = await startSidecar({
-  binaryPath,
-  port: 8131,
-  extraArgs: ["--skill-set", "work"],        // the CLI flag …
-  // env: { GAIA_EMAIL_SKILL_SET: "work" }, // … or the env var. Equivalent.
-});
-```
+`GAIA_EMAIL_ACCOUNT_TYPE` (`personal` | `work`) still pins the mailbox kind and
+still rejects an invalid value, but with no sets declared it selects nothing. The
+account type itself is unaffected by any of this: GAIA classifies a **Microsoft**
+account at connect time from the `tid` (tenant id) claim of its OAuth `id_token`
+— the well-known consumers tenant means personal, any other tenant means work or
+school — and stores it on the connection as `account_type`. Gmail carries no
+equivalent claim, so a Gmail mailbox has no account type at all. No new permission
+or scope is involved; the claim is already in the token the connect flow receives.
 
 ### What skill sets do NOT change
 
 The bundled skills are **instruction-only**: none declares `tools:` or
-`permissions:`, so activating a set changes only what the agent knows how to do
-well, never what it is *able* to do.
+`permissions:`, so activating a set would change only what the agent knows how to
+do well, never what it is *able* to do. Disabling them therefore removes no
+capability:
 
 - The agent's tool count is unchanged (59), and so is every tool's behaviour.
 - The REST and MCP contracts are unchanged — no new endpoints, no schema bump, and

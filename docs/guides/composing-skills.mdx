@@ -226,21 +226,33 @@ Two habits keep it safe:
   only when the agent actually reads them.
 - **Subtract the cost where you budget context.** If your agent sizes a
   tool-result envelope against the window, take the loaded set's cost out of that
-  budget. The email agent's bulk-triage path does exactly this.
+  budget. The email agent's bulk-triage path does exactly this — and measure the
+  result: its three-skill `personal` set costs ~1,334 prompt tokens, cutting that
+  envelope from 6,144 to 4,810 (the four-skill `work` set, to 4,070). Losing a
+  fifth to a third of the room for tool results is why its sets are currently
+  switched off pending an eval.
 
-## A shipped example
+## A worked example in the tree
 
 The [email agent](https://github.com/amd/gaia/tree/main/hub/agents/email) is the
-reference consumer. It bundles six instruction-only skills and declares two sets —
-`personal` (triage, newsletter digests, travel itineraries) and `work` (triage,
-meeting scheduling, action-item extraction, escalation routing), with
-`inbox-triage` in both.
+reference implementation of this pattern. It bundles six instruction-only skills
+and its manifest carries two sets — `personal` (triage, newsletter digests,
+travel itineraries) and `work` (triage, meeting scheduling, action-item
+extraction, escalation routing), with `inbox-triage` in both — plus a selector
+that keys off the connected mailbox: a personal Microsoft account picks
+`personal`, a work/school account picks `work`. A Gmail mailbox carries no
+equivalent signal, so its kind is unknown, the selector returns `None`, and the
+manifest's default applies — explicitly, never by assuming a work mailbox is
+personal.
 
-Its selector keys off the connected mailbox: a personal Microsoft account
-activates `personal`, a work/school account activates `work`. A Gmail mailbox
-carries no equivalent signal, so its kind is unknown, the selector returns `None`,
-and the manifest's default applies — explicitly, never by assuming a work mailbox
-is personal.
+<Note>
+  Read it as a code reference, not as "skills are on by default in a shipped
+  agent": the email agent's `skill_sets:` and `default_skill_set:` blocks are
+  **commented out** in `gaia-agent.yaml` pending an eval that shows the skills
+  help, so on the shipped binary it loads no skills at all. The wiring is what's
+  worth copying; whether to turn it on is an eval question for your own agent
+  too.
+</Note>
 
 ## Related
 
