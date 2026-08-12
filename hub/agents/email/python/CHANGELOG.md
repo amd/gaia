@@ -30,6 +30,17 @@ contract version is tracked separately as
   gets a one-time notice instead of silently starting over.
 ### Changed
 
+- **`office365`/`o365`/`m365`/"microsoft 365"/`entra`/`exchange` now resolve
+  to the work connector, not the personal one (#2629, BREAKING).** Before
+  this release these six words (`resolve_provider()`, used by tool-argument
+  normalization and the mailbox-targeting NLU guard) mapped to the personal
+  `microsoft` Outlook.com connector — the only Microsoft connector that
+  existed. They now map to `microsoft_work`. A user who has only the
+  personal connector configured and refers to their mailbox as "office365"
+  or "exchange" now names a connector they have not connected, and gets the
+  actionable not-connected error for `microsoft_work` instead of being
+  served from `microsoft`. Bare `microsoft`/`outlook`/`outlook.com`/
+  `hotmail`/`live` are unaffected.
 - **Agent Skills ship disabled for this agent, pending eval evidence (#2695
   follow-up).** The `skill_sets:` and `default_skill_set: personal` blocks in
   `gaia-agent.yaml` are commented out, so `parse_manifest(...).skill_sets` is
