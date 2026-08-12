@@ -3179,40 +3179,57 @@ class ReadToolsMixin:
                 max_messages: How many INBOX messages (read + unread) to
                     scan (default 50, max 100).
             """
-            try:
-                if not agent._backends:
-                    return _envelope_err(NO_MAILBOX_CONNECTED_MESSAGE)
-                max_messages = max(
-                    1,
-                    min(int(max_messages or DEFAULT_INBOX_SCAN_MESSAGES), scan_ceiling),
-                )
-                # Reuses the exact same shared pre-scan pass every other
-                # pre-scan-derived tool uses (mailbox fan-out, SLM wiring,
-                # budget split) — no new classification code, no new
-                # mailbox plumbing. Deliberately NOT named "pre_scan_inbox":
-                # rewrite_triage_answer (answer_grounding.py) keys its
-                # four-bucket rewrite on that literal tool name, so a call
-                # to THIS tool can never trigger it.
-                envelope = agent._pre_scan_all_backends(
-                    max_messages=max_messages, include_informational=False
-                )
-                out: Dict[str, Any] = {
-                    "kind": "email_suspicious_scan",
-                    "suspicious": envelope.get("suspicious", []),
-                    "suspicious_total": envelope.get("suspicious_total", 0),
-                    "scanned": envelope.get("scanned", 0),
-                    "total_inbox": envelope.get("total_inbox"),
-                }
-                if envelope.get("degraded"):
-                    out["degraded"] = True
-                    out["mailbox_errors"] = envelope.get("mailbox_errors", [])
-                # Deliberately never touches agent._last_needs_you_card
-                # (#2745) — that positional-reference card is exclusive to
-                # pre_scan_inbox; this tool's rows carry no ``ref`` and must
-                # never be resolved by number.
-                return _envelope_ok(out)
-            except ConnectorsError as exc:
-                return _envelope_err(format_connector_error(exc))
-            except Exception as exc:
-                log.exception("email tool error: %s", type(exc).__name__)
-                return _envelope_err(f"{type(exc).__name__}: {exc}")
+            # This tool has no ``_impl`` of its own — it composes its result
+            # straight from ``pre_scan_inbox_impl`` (via
+            # ``_pre_scan_all_backends``), which logs its OWN call under the
+            # literal name "pre_scan_inbox". Without this wrapper, a
+            # successful ``check_suspicious_mail`` invocation was
+            # indistinguishable from ``pre_scan_inbox`` in the tool trace —
+            # this is the one place that logs under this tool's actual name.
+            with log_tool_call(
+                "check_suspicious_mail", {"max_messages": max_messages}, debug=debug_flag
+            ) as st:
+                try:
+                    if not agent._backends:
+                        st["ok"] = False
+                        st["error"] = NO_MAILBOX_CONNECTED_MESSAGE
+                        return _envelope_err(NO_MAILBOX_CONNECTED_MESSAGE)
+                    max_messages_clamped = max(
+                        1,
+                        min(int(max_messages or DEFAULT_INBOX_SCAN_MESSAGES), scan_ceiling),
+                    )
+                    # Reuses the exact same shared pre-scan pass every other
+                    # pre-scan-derived tool uses (mailbox fan-out, SLM wiring,
+                    # budget split) — no new classification code, no new
+                    # mailbox plumbing. Deliberately NOT named "pre_scan_inbox":
+                    # rewrite_triage_answer (answer_grounding.py) keys its
+                    # four-bucket rewrite on that literal tool name, so a call
+                    # to THIS tool can never trigger it.
+                    envelope = agent._pre_scan_all_backends(
+                        max_messages=max_messages_clamped, include_informational=False
+                    )
+                    out: Dict[str, Any] = {
+                        "kind": "email_suspicious_scan",
+                        "suspicious": envelope.get("suspicious", []),
+                        "suspicious_total": envelope.get("suspicious_total", 0),
+                        "scanned": envelope.get("scanned", 0),
+                        "total_inbox": envelope.get("total_inbox"),
+                    }
+                    if envelope.get("degraded"):
+                        out["degraded"] = True
+                        out["mailbox_errors"] = envelope.get("mailbox_errors", [])
+                    st["result_summary"] = {"suspicious_total": out["suspicious_total"]}
+                    # Deliberately never touches agent._last_needs_you_card
+                    # (#2745) — that positional-reference card is exclusive to
+                    # pre_scan_inbox; this tool's rows carry no ``ref`` and must
+                    # never be resolved by number.
+                    return _envelope_ok(out)
+                except ConnectorsError as exc:
+                    st["ok"] = False
+                    st["error"] = repr(exc)
+                    return _envelope_err(format_connector_error(exc))
+                except Exception as exc:
+                    st["ok"] = False
+                    st["error"] = repr(exc)
+                    log.exception("email tool error: %s", type(exc).__name__)
+                    return _envelope_err(f"{type(exc).__name__}: {exc}")

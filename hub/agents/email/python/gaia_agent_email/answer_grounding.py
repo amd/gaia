@@ -468,6 +468,73 @@ def rewrite_triage_answer(
     return f"{lead}\n\n{rendered}"
 
 
+def render_suspicious_list(envelope: Dict[str, Any]) -> str:
+    """Build the numbered flagged-mail list straight from ``suspicious``.
+
+    The narrow-tool counterpart to ``render_needs_you_list`` — same
+    rationale: the list is entirely determined by the tool's own output, so
+    composing it is not a judgement the model should be making. A
+    phishing/spam list is higher-stakes to get wrong (drop, merge, or
+    invent an entry) than a general triage list, not lower.
+    """
+    items = envelope.get("suspicious") or []
+    if not items:
+        return ""
+    lines = ["### Flagged this scan", ""]
+    for i, row in enumerate(items, start=1):
+        who = _sender_label(row.get("sender"))
+        what = str(row.get("subject") or "").strip() or "(no subject)"
+        tags = [t for t, flag in (("phishing", row.get("is_phishing")), ("spam", row.get("is_spam"))) if flag]
+        why = str(row.get("why") or "").strip()
+        notes = [n for n in (", ".join(tags), why) if n]
+        suffix = f" ({' · '.join(notes)})" if notes else ""
+        lines.append(f"{i}. {who} — {what}{suffix}")
+    return "\n".join(lines)
+
+
+def rewrite_suspicious_mail_answer(
+    final_answer: str, conversation: Optional[List[Dict[str, Any]]]
+) -> str:
+    """Replace ``check_suspicious_mail``'s flagged-mail list with one built
+    from the scan itself — the narrow-tool counterpart to
+    ``rewrite_triage_answer``.
+
+    Same rationale (#2900): a model paraphrasing a precomputed
+    phishing/spam list is exactly the failure mode ``rewrite_triage_answer``
+    exists to prevent for ``pre_scan_inbox``'s ``needs_you`` list, and a
+    flagged-mail list is higher-stakes to get wrong, not lower. Keyed on
+    tool PRESENCE, never question parsing (#2762).
+
+    Deliberately a no-op when ``pre_scan_inbox`` ALSO ran this turn —
+    ``rewrite_triage_answer``'s four-bucket card already wins that turn (see
+    its own docstring and the pinned #2900 residual-risk test); rendering a
+    narrower list here on top would silently discard that card instead of
+    leaving it as the documented residual risk.
+    """
+    if last_tool_payload(conversation, "pre_scan_inbox") is not None:
+        return final_answer
+    scan = last_tool_payload(conversation, "check_suspicious_mail")
+    if not scan:
+        return final_answer
+    rendered = render_suspicious_list(scan)
+    if not rendered:
+        return final_answer
+    lead = _lead_paragraph(final_answer) or _honest_suspicious_summary(scan)
+    return f"{lead}\n\n{rendered}"
+
+
+def _honest_suspicious_summary(envelope: Dict[str, Any]) -> str:
+    """A minimal, always-grounded summary sentence built straight from the
+    envelope's own counts — the fallback used when the model's own framing
+    sentence contradicts that same envelope."""
+    total = envelope.get("suspicious_total")
+    if not isinstance(total, int):
+        total = len(envelope.get("suspicious") or [])
+    noun = "message" if total == 1 else "messages"
+    coverage = f"{envelope.get('scanned', 0)} messages scanned"
+    return f"{total} flagged {noun} this scan. {coverage}."
+
+
 def _honest_prescan_summary(envelope: Dict[str, Any]) -> str:
     """A minimal, always-grounded pre-scan sentence built straight from the
     envelope's own counts — the fallback used when the model's own framing
@@ -870,6 +937,10 @@ def ground_final_answer(result: Dict[str, Any]) -> Dict[str, Any]:
     # the model to retype it is what makes one list, correctly numbered, every
     # time — see rewrite_triage_answer.
     final_answer = rewrite_triage_answer(final_answer, conversation)
+    # Same guarantee for the narrow "anything suspicious?" tool (#2900) — see
+    # rewrite_suspicious_mail_answer's docstring for why it defers to the
+    # above when both tools ran this turn.
+    final_answer = rewrite_suspicious_mail_answer(final_answer, conversation)
 
     success_claim = find_ungrounded_success_claim(final_answer, conversation)
     if success_claim:

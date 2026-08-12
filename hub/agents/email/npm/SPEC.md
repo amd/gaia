@@ -2,7 +2,7 @@
 
 Detailed reference for `@amd-gaia/agent-email`. For a quick start, see
 [`README.md`](./README.md); for an AI-assisted integration walkthrough, see
-[`SKILL.md`](./SKILL.md). This client pins `SCHEMA_VERSION` **2.12**, matching
+[`SKILL.md`](./SKILL.md). This client pins `SCHEMA_VERSION` **2.13**, matching
 the sidecar's current contract — every schema bump since 2.4 has been additive
 (see `contract.py`'s own per-version changelog for the full log), so nothing
 here is a breaking upgrade for an existing integration.
@@ -820,10 +820,13 @@ each): OAuth-forward `/v1/connections` (2.5, #2154), mid-run `needs_input` +
 #2582), `EmailPreScanResult.total_inbox` (2.9, #2638/#2643),
 `AttentionCoverage.message_errors` (2.10, #2716), the pre-scan `needs_you`
 worklist view (`NeedsYouItem[]`) plus the filtered-remainder `BulkSummary`
-(2.11, #2743, see below), and — current, `SCHEMA_VERSION = "2.12"` —
-`EmailQueryRequest.session_id`: an optional conversation id that resolves the
-same agent across turns sharing it, instead of a throwaway per-call agent
-(#2829).
+(2.11, #2743, see below), `EmailQueryRequest.session_id`: an optional
+conversation id that resolves the same agent across turns sharing it,
+instead of a throwaway per-call agent (2.12, #2829), and — current,
+`SCHEMA_VERSION = "2.13"` — `PreScanItem.is_phishing`/`is_spam` plus
+`EmailPreScanResult.suspicious`/`suspicious_total`: the phishing/spam-
+flagged subset of `actionable`, captured before its own cap so a flagged
+message ranked past it is never silently dropped from the count (#2900).
 
 They are hand-written (vs. generated from `/openapi.json`) because the contract is
 small and version-gated, keeping the published package free of a typegen build

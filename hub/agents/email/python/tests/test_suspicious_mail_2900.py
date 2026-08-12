@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -58,6 +59,8 @@ pytest.importorskip("gaia_agent_email")
 from gaia_agent_email.agent import _SYSTEM_PROMPT  # noqa: E402
 from gaia_agent_email.answer_grounding import (  # noqa: E402
     last_tool_payload,
+    render_suspicious_list,
+    rewrite_suspicious_mail_answer,
     rewrite_triage_answer,
 )
 from gaia_agent_email.contract import (  # noqa: E402
@@ -434,6 +437,35 @@ class TestCheckSuspiciousMailTool:
         assert out["ok"] is False
         assert out["error"] == NO_MAILBOX_CONNECTED_MESSAGE
 
+    def test_logs_its_own_tool_name_not_only_pre_scan_inbox(self, monkeypatch, caplog):
+        """Review follow-up on #2900/#2910: the tool has no ``_impl`` of its
+        own — it composes its result from ``pre_scan_inbox_impl`` (via
+        ``_pre_scan_all_backends``), which logs its OWN call as literal
+        "pre_scan_inbox". Without the outer wrapper, a successful
+        ``check_suspicious_mail`` call was indistinguishable from
+        ``pre_scan_inbox`` in the tool trace — a live sweep scored tool
+        selection from those log lines and reported a false "0/5" that was
+        later retracted."""
+        monkeypatch.setattr(
+            "gaia_agent_email.tools.read_tools.triage_inbox_impl",
+            lambda *a, **k: {
+                "results": [_fake_triage_result("phish-1", is_phishing=True)]
+            },
+        )
+        host = _Host({"google": FakeGmailBackend()})
+        fn = _tool(host, "check_suspicious_mail")
+        with caplog.at_level(logging.INFO, logger="gaia_agent_email"):
+            fn(max_messages=25)
+        tool_result_names = [
+            getattr(r, "tool_name", None)
+            for r in caplog.records
+            if getattr(r, "stage", None) == "tool_result"
+        ]
+        assert "check_suspicious_mail" in tool_result_names, (
+            "check_suspicious_mail must emit its own tool_result log entry "
+            f"— got {tool_result_names}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # rewrite_triage_answer — must never fire on a check_suspicious_mail-only turn
@@ -557,6 +589,109 @@ class TestRewriteTriageAnswerScoping:
         ]
         out = rewrite_triage_answer("Nothing flagged this scan.", conversation)
         assert "### Needs a response" in out  # the full card still renders
+
+
+# ---------------------------------------------------------------------------
+# rewrite_suspicious_mail_answer — review follow-up: the flagged-mail list
+# must reach the user grounded in tool data, not free-form model prose
+# (mirrors rewrite_triage_answer's guarantee for pre_scan_inbox).
+# ---------------------------------------------------------------------------
+
+
+class TestRewriteSuspiciousMailAnswer:
+    def test_renders_flagged_rows_from_tool_data_not_model_prose(self):
+        envelope = {
+            "kind": "email_suspicious_scan",
+            "suspicious": [
+                {
+                    "message_id": "phish-1",
+                    "sender": "security@paypa1-alerts.example",
+                    "subject": _PHISHING_SUBJECT,
+                    "why": "flagged as phishing",
+                    "is_phishing": True,
+                    "is_spam": False,
+                }
+            ],
+            "suspicious_total": 1,
+            "scanned": 25,
+        }
+        conversation = [_tool_entry("check_suspicious_mail", envelope)]
+        # Deliberately wrong model prose (dropped the flagged message) — the
+        # rewrite must replace it with the tool's own row, not trust this.
+        model_answer = "Nothing flagged this scan."
+        out = rewrite_suspicious_mail_answer(model_answer, conversation)
+        assert "### Flagged this scan" in out
+        assert "security@paypa1-alerts.example" in out or "paypa1-alerts" in out
+        assert _PHISHING_SUBJECT in out
+        assert "phishing" in out.lower()
+
+    def test_zero_findings_is_a_noop_model_prose_stands(self):
+        """A clean negative carries no list to render, so the model's own
+        (already-correct) prose is left alone — mirrors
+        render_needs_you_list's ``if not items: return ""`` behavior."""
+        envelope = {"kind": "email_suspicious_scan", "suspicious": [], "suspicious_total": 0}
+        conversation = [_tool_entry("check_suspicious_mail", envelope)]
+        model_answer = "Nothing flagged this scan."
+        out = rewrite_suspicious_mail_answer(model_answer, conversation)
+        assert out == model_answer
+
+    def test_no_check_suspicious_mail_call_is_a_noop(self):
+        out = rewrite_suspicious_mail_answer("some reply", conversation=[])
+        assert out == "some reply"
+
+    def test_defers_to_pre_scan_inbox_when_both_tools_ran(self):
+        """When both tools ran this turn, pre_scan_inbox's four-bucket card
+        already won (rewrite_triage_answer fires first in
+        ground_final_answer) — this function must not then clobber that
+        card with a narrower suspicious-only list underneath it."""
+        suspicious_envelope = {
+            "suspicious": [
+                {
+                    "message_id": "phish-1",
+                    "sender": "a@example.com",
+                    "subject": _PHISHING_SUBJECT,
+                    "is_phishing": True,
+                    "is_spam": False,
+                }
+            ],
+            "suspicious_total": 1,
+        }
+        prescan_envelope = {"kind": "email_pre_scan", "scanned": 10}
+        conversation = [
+            _tool_entry("check_suspicious_mail", suspicious_envelope),
+            _tool_entry("pre_scan_inbox", prescan_envelope),
+        ]
+        already_rendered_card = "### Waiting on your reply\n\n1. Someone — Subject"
+        out = rewrite_suspicious_mail_answer(already_rendered_card, conversation)
+        assert out == already_rendered_card
+
+    def test_render_suspicious_list_numbers_every_row_with_no_summarizing(self):
+        envelope = {
+            "suspicious": [
+                {
+                    "message_id": "m1",
+                    "sender": "a@example.com",
+                    "subject": "Sub A",
+                    "is_phishing": True,
+                    "is_spam": False,
+                    "why": "flagged as phishing",
+                },
+                {
+                    "message_id": "m2",
+                    "sender": "b@example.com",
+                    "subject": "Sub B",
+                    "is_phishing": False,
+                    "is_spam": True,
+                    "why": "flagged as spam",
+                },
+            ]
+        }
+        out = render_suspicious_list(envelope)
+        assert "1. " in out and "Sub A" in out and "phishing" in out
+        assert "2. " in out and "Sub B" in out and "spam" in out
+
+    def test_render_suspicious_list_empty_returns_empty_string(self):
+        assert render_suspicious_list({"suspicious": []}) == ""
 
 
 # ---------------------------------------------------------------------------

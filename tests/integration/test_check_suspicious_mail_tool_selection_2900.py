@@ -79,8 +79,16 @@ SCOPED_PHRASINGS = [
 ]
 # AC#2 control from #2900: a genuinely general ask must still reach the
 # general tool — the narrowing must never suppress the intended full-triage
-# flow.
-CONTROL_PHRASING = "triage my inbox"
+# flow. The system prompt's "MUST be used instead" imperative (added to fix
+# AC#1 tool selection) is exactly the kind of change that could over-steer a
+# general ask toward the narrow tool, so this covers several unrehearsed
+# general phrasings, not just one.
+CONTROL_PHRASINGS = [
+    "triage my inbox",
+    "what's in my inbox",
+    "catch me up",
+    "what needs me today",
+]
 
 
 def _tool_names_called(outcome: Dict[str, Any]) -> List[str]:
@@ -153,14 +161,15 @@ def test_check_suspicious_mail_selected_for_scoped_phrasings(
     )
 
 
-def test_general_triage_control_unaffected(require_lemonade, tmp_path):
+@pytest.mark.parametrize("phrasing", CONTROL_PHRASINGS)
+def test_general_triage_control_unaffected(require_lemonade, tmp_path, phrasing):
     """AC#2 control: a genuinely general request must still reach
     pre_scan_inbox — narrowing check_suspicious_mail's selection must not
     suppress the general triage path."""
     agent = _fresh_agent(tmp_path)
-    outcome = agent.process_query(CONTROL_PHRASING)
+    outcome = agent.process_query(phrasing)
     tools = _tool_names_called(outcome)
-    print(f"\ncontrol {CONTROL_PHRASING!r} ({HARNESS_MODEL}): {tools}")
+    print(f"\ncontrol {phrasing!r} ({HARNESS_MODEL}): {tools}")
     assert "pre_scan_inbox" in tools, (
         f"general triage request must still reach pre_scan_inbox, got {tools} "
         f"on {HARNESS_MODEL}"
