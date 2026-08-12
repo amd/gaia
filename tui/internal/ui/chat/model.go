@@ -30,7 +30,17 @@ type eventMsg struct {
 	ch    <-chan interface{}
 	event interface{}
 }
-type errMsg struct{ err error }
+
+// errMsg fires from sendQuery's own Cmd, exactly when c.Send() failed to
+// mint a channel in the first place — so unlike eventMsg/doneMsg it has no
+// channel to key supersededTurn off of. turnSeq is its own scoping token
+// instead: it captures ChatModel.turnSeq at the moment the Cmd was created,
+// so a late delivery from an abandoned turn (the user already resent) can be
+// told apart from the live turn's own failure. See ChatModel.turnSeq.
+type errMsg struct {
+	err     error
+	turnSeq int
+}
 type doneMsg struct{ ch <-chan interface{} }
 type sendQueryMsg struct{ query string }
 type channelReadyMsg struct{ ch <-chan interface{} }
@@ -127,6 +137,11 @@ type ChatModel struct {
 	// it can append the confirmed "cancelled" line) from any other doneMsg
 	// delivery — it plays no part in gating Enter, which is m.streaming's job.
 	cancelPending bool
+	// turnSeq increments on every sendQuery call. It scopes errMsg (see its
+	// doc comment) the way eventMsg/doneMsg are scoped by m.events — a
+	// channel identity doesn't exist yet when errMsg fires, so this integer
+	// generation stands in for it instead.
+	turnSeq int
 	// buffer accumulates streamed answer text. A plain string, not a
 	// strings.Builder: Bubble Tea copies the model on every update, and a
 	// Builder panics the moment a copied non-zero one is written to again.
@@ -429,36 +444,33 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.streaming = false
-		m.events = nil
-		m.cancelFn = nil
 		m.question = nil
 		m.confirmation = nil
 		m.flushBuffer()
 		m.activity = nil
 		// The channel closing is the settlement signal a cancel was waiting
-		// on (#2901) — the "cancelling…" line posted at request time becomes
-		// "cancelled" only now, once it is actually confirmed rather than
-		// merely requested.
-		if m.cancelPending {
-			m.cancelPending = false
-			m.messages = append(m.messages, Message{
-				Role:    RoleStatus,
-				Content: "cancelled",
-			})
-		}
+		// on (#2901) — settleTurn appends the confirmed "cancelled" line only
+		// now, once it is actually confirmed rather than merely requested.
+		m.settleTurn()
 		m.updateViewport()
 		return m, nil
 
 	case errMsg:
+		if msg.turnSeq != m.turnSeq {
+			// A late failure from an already-abandoned turn — the user has
+			// since resent (a new sendQuery minted a fresh turnSeq). Must not
+			// stomp the live turn's state (#2901: this is exactly what let a
+			// stray errMsg reset a live second turn's cancelFn/cancelPending
+			// out from under it, so the next Esc/Ctrl+C fell through to quit).
+			return m, nil
+		}
 		m.streaming = false
-		m.events = nil
-		m.cancelFn = nil
 		// A pending cancel settles here too — the run ended in an error
 		// instead of the clean close doneMsg handles, but either way the
 		// composer must not stay hostage to a cancel that will never see its
 		// happy-path settlement message (the guards in handleKey key off
 		// this alongside m.streaming).
-		m.cancelPending = false
+		m.settleTurn()
 		m.question = nil
 		m.confirmation = nil
 		m.err = msg.err
@@ -726,13 +738,16 @@ func (m ChatModel) sendQuery(query string) (tea.Model, tea.Cmd) {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelFn = cancel
 
+	m.turnSeq++
+	seq := m.turnSeq
+
 	c := m.client
 	return m, tea.Batch(
 		m.spinner.Tick,
 		func() tea.Msg {
 			ch, err := c.Send(ctx, query)
 			if err != nil {
-				return errMsg{err: err}
+				return errMsg{err: err, turnSeq: seq}
 			}
 			return channelReadyMsg{ch: ch}
 		},
@@ -756,6 +771,35 @@ func waitForEvent(ch <-chan interface{}) tea.Cmd {
 // the current one, so it must be ignored rather than allowed to end the live turn.
 func (m ChatModel) supersededTurn(ch <-chan interface{}) bool {
 	return ch != nil && ch != m.events
+}
+
+// settleTurn clears the per-turn cancellation bookkeeping once THIS turn's
+// own terminal signal proves it is over: doneMsg/errMsg (already scoped to
+// the live turn above) or a terminal canonical/legacy event
+// (CanonicalFinalEvent, CanonicalErrorEvent, AnswerEvent, DoneEvent,
+// AgentErrorEvent, legacy ErrorEvent, StatusEvent{complete}). Every caller
+// already knows the signal belongs to the current turn — eventMsg's own
+// dispatch in Update ran supersededTurn before handleEvent ever saw the
+// event — so it is always safe to clear m.cancelFn/m.events here.
+//
+// Without this, a cancelled turn that settles via its own terminal event —
+// the ONLY way a daemon-relay turn ever settles, since CanonicalFinalEvent
+// and CanonicalErrorEvent stop rescheduling waitForEvent the moment they
+// fire (correctly: no more events are expected), so doneMsg can never arrive
+// for them — left cancelPending stuck true for the rest of the session. The
+// next Esc/Ctrl+C's `!m.cancelPending` guard then permanently failed and
+// fell through to tea.Quit instead of cancelling (#2901 second-cycle crash,
+// reproduced live 3/3 against the real daemon).
+func (m *ChatModel) settleTurn() {
+	m.events = nil
+	m.cancelFn = nil
+	if m.cancelPending {
+		m.cancelPending = false
+		m.messages = append(m.messages, Message{
+			Role:    RoleStatus,
+			Content: "cancelled",
+		})
+	}
 }
 
 // CancelActiveTurn stops any in-flight turn. The UI owns the per-turn context, so
@@ -851,6 +895,7 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 			m.flushBuffer()
 			m.streaming = false
 			m.activity = nil
+			m.settleTurn()
 			m.updateViewport()
 			return m, nil
 		}
@@ -881,6 +926,7 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 		m.streaming = false
 		m.activity = nil
 		m.totalSteps = e.Steps
+		m.settleTurn()
 		m.updateViewport()
 		return m, nil
 
@@ -898,6 +944,7 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 		})
 		m.streaming = false
 		m.activity = nil
+		m.settleTurn()
 		m.updateViewport()
 		return m, nil
 
@@ -908,6 +955,7 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 		})
 		m.streaming = false
 		m.activity = nil
+		m.settleTurn()
 		m.updateViewport()
 		return m, nil
 
@@ -915,6 +963,7 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 		m.flushBuffer()
 		m.streaming = false
 		m.activity = nil
+		m.settleTurn()
 		m.updateViewport()
 		return m, nil
 	}

@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/amd/gaia/tui/internal/event"
 )
 
 // cancelingClient implements client.AgentCanceler on top of nullClient, so
@@ -209,5 +211,113 @@ func TestFailedCancelRequestDoesNotReenableSend(t *testing.T) {
 	}
 	if !m.cancelPending {
 		t.Error("cancelPending must stay true -- Esc was still requested, only the ask to the server failed")
+	}
+}
+
+// TestSecondCancelThenResendDoesNotQuitTheApp is the live-evidence regression
+// for #2901: on the real daemon, a cancelled turn NEVER settles via doneMsg —
+// it settles via its own CanonicalFinalEvent (the cooperative server-side
+// cancel just breaks the agent loop with an ordinary "stopped" answer, which
+// query_routes.py's _terminal_from_run_result reports as a plain `final`, not
+// an `error`). CanonicalFinalEvent's handler stops rescheduling waitForEvent
+// once it fires (correctly -- no more events are expected), so doneMsg for
+// that channel can never arrive.
+//
+// Before the fix, cancelPending was cleared only by doneMsg, so it got stuck
+// true for the rest of the session. A SECOND cancel-then-resend cycle then
+// hit requestCancel's `!m.cancelPending` guard failing on the very first
+// Esc/Ctrl+C of the new turn -- which falls through to tea.Quit instead of
+// cancelling. Reproduced live 3/3 against the real daemon (clean quit, no
+// panic).
+func TestSecondCancelThenResendDoesNotQuitTheApp(t *testing.T) {
+	c := &cancelingClient{}
+	m := NewChatModel(c, "email", "", false)
+	m.width, m.height = 100, 30
+
+	// --- Cycle 1: send, cancel, and settle the way the real daemon does --
+	// via the run's OWN terminal event, never doneMsg.
+	updated, _ := m.Update(sendQueryMsg{query: "triage my inbox"})
+	m = updated.(ChatModel)
+	ch1 := make(chan interface{})
+	updated, _ = m.Update(channelReadyMsg{ch: ch1})
+	m = updated.(ChatModel)
+
+	updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(ChatModel)
+	if cmd == nil {
+		t.Fatal("test setup: first Esc must return the Cancel() command")
+	}
+	updated, _ = m.Update(cmd()) // deliver the (successful) Cancel() result
+	m = updated.(ChatModel)
+	if !m.cancelPending {
+		t.Fatal("test setup: cancelPending must be true after the first Esc")
+	}
+
+	updated, _ = m.Update(eventMsg{ch: ch1, event: event.CanonicalFinalEvent{
+		Type:   "final",
+		Answer: "The request was stopped because it exceeded the allowed time before completing.",
+	}})
+	m = updated.(ChatModel)
+	if m.streaming {
+		t.Fatal("test setup: the terminal event must end the first turn")
+	}
+
+	// --- Cycle 2: resend, then cancel again.
+	updated, _ = m.Update(sendQueryMsg{query: "try again"})
+	m = updated.(ChatModel)
+	if !m.streaming {
+		t.Fatal("test setup: the resend must start a new turn")
+	}
+
+	updated, cmd = m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(ChatModel)
+	if cmd == nil {
+		t.Fatal("second Esc must still return a command")
+	}
+	if _, quit := cmd().(tea.QuitMsg); quit {
+		t.Fatal("second Esc quit the app instead of cancelling the second turn -- " +
+			"cancelPending was left stuck true by the first turn's settlement (#2901)")
+	}
+	if !m.streaming {
+		t.Error("the second turn must still be marked streaming -- Esc must cancel it, not fall through to quit")
+	}
+}
+
+// Same reproduction on Ctrl+C, which hits the identical guard in handleKey.
+func TestSecondCtrlCThenResendDoesNotQuitTheApp(t *testing.T) {
+	c := &cancelingClient{}
+	m := NewChatModel(c, "email", "", false)
+	m.width, m.height = 100, 30
+
+	updated, _ := m.Update(sendQueryMsg{query: "triage my inbox"})
+	m = updated.(ChatModel)
+	ch1 := make(chan interface{})
+	updated, _ = m.Update(channelReadyMsg{ch: ch1})
+	m = updated.(ChatModel)
+
+	updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlC})
+	m = updated.(ChatModel)
+	if cmd == nil {
+		t.Fatal("test setup: first Ctrl+C must return the Cancel() command")
+	}
+	updated, _ = m.Update(cmd())
+	m = updated.(ChatModel)
+
+	updated, _ = m.Update(eventMsg{ch: ch1, event: event.CanonicalFinalEvent{
+		Type:   "final",
+		Answer: "The request was stopped because it exceeded the allowed time before completing.",
+	}})
+	m = updated.(ChatModel)
+
+	updated, _ = m.Update(sendQueryMsg{query: "try again"})
+	m = updated.(ChatModel)
+
+	updated, cmd = m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlC})
+	m = updated.(ChatModel)
+	if cmd == nil {
+		t.Fatal("second Ctrl+C must still return a command")
+	}
+	if _, quit := cmd().(tea.QuitMsg); quit {
+		t.Fatal("second Ctrl+C quit the app instead of cancelling the second turn (#2901)")
 	}
 }
