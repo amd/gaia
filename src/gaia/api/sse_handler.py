@@ -10,7 +10,7 @@ import json
 import logging
 import time
 from collections import deque
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from gaia.agents.base.console import (
     AUTO_APPROVE_ENV_VAR,
@@ -212,9 +212,18 @@ class SSEOutputHandler(OutputHandler):
     # === Completion Methods (Required) ===
 
     def print_final_answer(
-        self, answer: str, streaming: bool = True
+        self,
+        answer: str,
+        streaming: bool = True,
+        total_tokens: Optional[int] = None,
     ):  # pylint: disable=unused-argument
-        """Print final answer/result."""
+        """Print final answer/result.
+
+        total_tokens is accepted for interface parity with the base
+        OutputHandler contract (#2899) but not emitted here — this is the API
+        server's SSE handler, a different consumer from the Agent-UI/TUI
+        wire contract this issue's token plumbing targets.
+        """
         self._add_event("final_answer", {"answer": answer})
 
     def print_repeated_tool_warning(self):

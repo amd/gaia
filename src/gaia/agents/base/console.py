@@ -308,8 +308,13 @@ class OutputHandler(ABC):
     # === Completion Methods (Required) ===
 
     @abstractmethod
-    def print_final_answer(self, answer: str):
-        """Print final answer/result."""
+    def print_final_answer(self, answer: str, total_tokens: Optional[int] = None):
+        """Print final answer/result.
+
+        total_tokens: real output-token count generated across the run, if
+        known (#2899). None means no real count is available — never
+        substitute an estimate; the caller omits the stat instead.
+        """
         ...
 
     @abstractmethod
@@ -1520,7 +1525,10 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
             print(f"\n⚠️ WARNING: {message}\n")
 
     def print_final_answer(
-        self, answer: str, streaming: bool = True  # pylint: disable=unused-argument
+        self,
+        answer: str,
+        streaming: bool = True,  # pylint: disable=unused-argument
+        total_tokens: Optional[int] = None,  # pylint: disable=unused-argument
     ) -> None:
         """
         Print the final answer with appropriate styling.
@@ -1528,6 +1536,7 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
         Args:
             answer: The final answer to display
             streaming: Not used (kept for compatibility)
+            total_tokens: Not used here (CLI stats table is out of scope for #2899)
         """
         if self.rich_available:
             self.console.print()  # Add newline before
@@ -2474,7 +2483,10 @@ class SilentConsole(TerminalConfirmationMixin, OutputHandler):
 
     # Implementation of OutputHandler abstract methods - all no-ops
     def print_final_answer(
-        self, answer: str, streaming: bool = True  # pylint: disable=unused-argument
+        self,
+        answer: str,
+        streaming: bool = True,  # pylint: disable=unused-argument
+        total_tokens: Optional[int] = None,  # pylint: disable=unused-argument
     ) -> None:
         """
         Print the final answer.
@@ -2483,6 +2495,7 @@ class SilentConsole(TerminalConfirmationMixin, OutputHandler):
         Args:
             answer: The final answer to display
             streaming: Not used (kept for compatibility)
+            total_tokens: Not used here (JSON-only mode has its own stats path)
         """
         if self.silence_final_answer:
             return  # Completely silent
