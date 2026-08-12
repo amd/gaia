@@ -6,6 +6,21 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## Unreleased
 
+- **`query()` can now carry a conversation forward.** `EmailQueryRequest`
+  gains an optional `session_id`: set it once and reuse it on every turn of
+  a conversation (e.g. `crypto.randomUUID()`), and the sidecar resolves the
+  SAME agent each time instead of a throwaway one per call — so a
+  follow-up referring to something an earlier turn surfaced has something
+  to resolve against. Leave it unset and nothing changes (#2829, schema
+  2.12).
+- **The agent's built-in skills ship switched off, so the whole context window
+  goes back to your mail.** The six skills below are still in the package, but
+  no set is active and none of them loads: nothing yet shows they make triage
+  better, and an active set was consuming most of the room the agent had for
+  bulk-triage results. A personal and a work mailbox get identical behaviour
+  again, and `--skill-set` / `GAIA_EMAIL_SKILL_SET` now fail at startup saying
+  there are no sets to pick rather than quietly doing nothing. Nothing else
+  changes — same endpoints, same tools, same permissions.
 - **One inbox triage card instead of two that disagreed.** Asking the agent
   to triage your inbox used to draw two summary boxes from two separate scans
   at different depths — one might say "nothing needs you" while the other,
@@ -65,6 +80,14 @@ behind any entry — API shapes, endpoints, and version semantics — see
   still uses your exact wording when you hand it over yourself. Sending is
   unchanged — every draft still needs your confirmation before it goes out
   (#2524).
+- **Six built-in skills, and the groundwork for treating a personal mailbox
+  differently from a work one — shipped switched off.** The skills (`personal`:
+  inbox triage, newsletter digests, trip itineraries; `work`: inbox triage,
+  meeting scheduling, action items, escalation) and the machinery that picks a
+  set from the kind of Microsoft account you connected are in the package, but
+  no set is declared, so none of it is active — see the first entry above.
+  Turning it on is a change inside the agent; nothing in your integration
+  changes either way (#2466).
 - **Opt-in preview: small on-device models can now decide phishing flags and
   triage categories instead of keyword rules.** Turn it on with
   `GAIA_EMAIL_USE_SLM=true` on the sidecar (or `use_slm=True` in config).

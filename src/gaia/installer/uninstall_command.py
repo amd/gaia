@@ -60,6 +60,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, List, Optional
 
+from gaia.installer._stdin import stdin_is_tty
+
 log = logging.getLogger(__name__)
 
 
@@ -342,11 +344,12 @@ def _should_skip_prompt(yes: bool) -> bool:
 
 
 def _stdin_is_tty() -> bool:
-    """Return True if stdin looks like an interactive terminal."""
-    try:
-        return bool(sys.stdin.isatty())
-    except (AttributeError, ValueError, OSError):
-        return False
+    """Return True if stdin looks like an interactive terminal.
+
+    Delegates to the shared predicate in ``gaia.installer._stdin`` so
+    uninstall and init share exactly one implementation.
+    """
+    return stdin_is_tty()
 
 
 def _confirm(

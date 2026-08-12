@@ -136,6 +136,10 @@ graph TB
 
 The agent subclasses `gaia::Agent` and connects to the Windows MCP server at construction time. Unlike the Wi-Fi agent (which registers tools as C++ lambdas), this agent gets all its tools from the MCP server — every diagnostic runs through `mcp_windows_Shell`.
 
+<Note>
+`mcp_windows_Shell` runs PowerShell, so the framework asks for confirmation before each call — MCP tools are [CONFIRM-gated](/cpp/security#mcp-tools-are-confirm-gated-by-default) unless the server proves them read-only. Choose **[2] Always allow** to approve the tool for good; the decision persists in `~/.gaia/security/allowed_tools.json`.
+</Note>
+
 ---
 
 ## How It Works

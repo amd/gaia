@@ -14,6 +14,13 @@
 #      tools can't do, over an explicit worklist so nothing is sampled away.
 #      Every '# noqa: S*' / '# nosec' is RE-VERIFIED from scratch, never trusted.
 #
+# A later miss (the shell find -exec whitelist bypass, CWE-184) sharpened the
+# lenses further: both sink-taint and suppression-review looked straight at the
+# guarded subprocess call and passed it because a guard EXISTED — neither asked
+# whether the command allowlist was SOUND (can an allowed command act as a gadget
+# for a forbidden action?). The lens prompts now demand that allowlist-soundness
+# check explicitly.
+#
 # PRIVACY: findings never go to a public issue. Both layers upload SARIF to the
 # repo's private Security > Code scanning tab; Claude's full detail also goes to
 # the (access-controlled) run log. High-severity findings ping @kovtcharov-amd.
@@ -29,9 +36,16 @@ name: Claude Security Audit
 
 on:
   schedule:
-    # 06:00 UTC every Thursday — offset from the Monday weekly audit so the two
-    # proactive Claude runs don't stack on the shared subscription rate limit.
-    - cron: "0 6 * * 4"
+    # 09:13 UTC nightly = 02:13 PDT / 01:13 PST. Security findings age worst, so this
+    # runs every night rather than weekly. GitHub cron is UTC-only with no DST handling,
+    # so one fixed hour cannot be the same local time year-round; the 1h winter drift is
+    # accepted. The off-the-hour minute avoids the ":00" fleet-wide queue.
+    #
+    # Deliberately ~1.4h BEFORE claude-weekly-audit.yml's nightly 10:37 UTC slot — the two
+    # proactive Claude runs must not stack on the shared subscription rate limit, and this
+    # one goes first because it is the shorter job (deterministic semgrep + a single
+    # Claude sweep, vs. four serialized lenses + synthesis).
+    - cron: "13 9 * * *"
   workflow_dispatch:
     inputs:
       target_ref:
@@ -46,12 +60,51 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  AUDIT_MODEL: claude-opus-4-8
+  AUDIT_MODEL: claude-opus-5
 
 jobs:
   # ---------------------------------------------------------------------------
   # Deterministic layer — maintained security rules, native SARIF.
   # ---------------------------------------------------------------------------
+  # ---------------------------------------------------------------------------
+  # Cost guard for the nightly cadence. The Claude layer below is 3 lenses x 30
+  # turns + synthesis; running that unconditionally every night would burn the
+  # shared subscription pool re-reading an unchanged tree. Mirrors the
+  # skip-if-empty preflight in claude-weekly-audit.yml.
+  #
+  # semgrep is deliberately NOT gated on this — it is cheap, deterministic, and
+  # its rulesets update independently of this repo, so it still has something to
+  # say on a night with zero commits. Only the reasoning layer skips.
+  #
+  # A workflow_dispatch NEVER skips: dispatch means someone explicitly wants a
+  # run (usually backtesting target_ref against a known-vuln commit).
+  # ---------------------------------------------------------------------------
+  preflight:
+    if: github.repository == 'amd/gaia'
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.scope.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Skip the Claude layer on a night with no commits
+        id: scope
+        env:
+          IS_DISPATCH: ${{ github.event_name == 'workflow_dispatch' }}
+        run: |
+          set -euo pipefail
+          skip=false
+          if [ "$IS_DISPATCH" != "true" ]; then
+            count=$(git log --since="1 day ago" --oneline | wc -l | tr -d ' ')
+            echo "Commits in the last day: $count"
+            [ "$count" = "0" ] && skip=true
+          else
+            echo "workflow_dispatch — never skipping."
+          fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
+          echo "Resolved: skip=$skip"
+
   semgrep:
     if: github.repository == 'amd/gaia'
     runs-on: ubuntu-latest
@@ -84,7 +137,10 @@ jobs:
   # lens crashing doesn't sink the others.
   # ---------------------------------------------------------------------------
   audit:
-    if: github.repository == 'amd/gaia'
+    needs: preflight
+    # The custom `if` drops the implicit needs-succeeded guard, so re-assert the repo
+    # gate — otherwise a fork (where preflight is skipped, leaving skip empty) would run.
+    if: github.repository == 'amd/gaia' && needs.preflight.outputs.skip != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -121,15 +177,27 @@ jobs:
       - name: Run Claude (${{ matrix.lens }} lens)
         id: claude
         continue-on-error: true
-        uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b  # v1.0.183
+        uses: anthropics/claude-code-action@86180fa9e4d311eed10c9cc49854c53dab5d517a  # v1.0.184
         with:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           prompt: |
             You are one lens of GAIA's proactive SECURITY audit. YOUR LENS: ${{ matrix.lens }}.
-            Find real, exploitable security weaknesses. Precision beats recall — a false
-            finding erodes trust in the whole audit.
+            Find real, exploitable security weaknesses.
+
+            REPORT WHAT YOU FIND — do not pre-filter for confidence. Ground every finding
+            in code you actually read and opened (never a grep hit alone), then report it,
+            including ones you are unsure about; say so in the finding and let the CVSS
+            vector carry the severity. The synthesis step scores, dedupes, and routes;
+            findings land in the PRIVATE code-scanning tab, not a public issue, so an
+            over-reported finding is cheap to dismiss while a missed one ships.
+            This audit exists because the previous single security lens MISSED the hub
+            tar-slip (CWE-22) — it sampled and trusted a suppression comment. That was a
+            recall failure, so a "precision beats recall / be conservative" instruction
+            here works directly against the workflow's purpose: Claude Opus 5 follows such
+            wording literally and reports less while investigating just as hard. Do not
+            reintroduce it.
 
             REPO: ${{ github.repository }}
             RUN LOG: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -145,6 +213,13 @@ jobs:
               extraction, deserialization, subprocess/shell, eval). A sink is only a finding if
               untrusted data can reach it. The hub tar-slip (CWE-22) is the archetype: a hub
               archive's member paths reached `tarfile.extractall` with no per-member check.
+              When a subprocess/shell sink is "guarded" by a command ALLOWLIST, do NOT stop at
+              "a guard exists" — audit the allowlist's SOUNDNESS: can any allowed command perform
+              the very actions the policy forbids? Whitelisted commands are routinely gadgets
+              (GTFOBins-style) that spawn others or write/delete via a flag — `find -exec`/`-delete`/
+              `-fprintf`, `sort -o`, `uniq IN OUT`, `xargs`, `awk 'BEGIN{system()}'`, `git -c
+              core.pager=`, `tar --to-command`. A "read-only" allowlist that admits any such gadget
+              is incomplete (CWE-184) and IS a finding, even though every input is "validated".
             - **authz**: access-control gaps — a sandbox/allowlist/trust gate that one code path
               enforces and a sibling path skips. The read_file bypass (CWE-284) is the archetype:
               `write_file` called the PathValidator but `read_file` did not. Look for ASYMMETRIC
@@ -153,7 +228,12 @@ jobs:
             - **suppression-review**: for EACH `# noqa: S<n>` / `# nosec` in the worklist, RE-DERIVE
               whether the finding it silences is truly safe. TREAT THE COMMENT AS AN UNPROVEN CLAIM,
               NOT A DECISION — "hub artifacts are trusted" is exactly the assumption that shipped the
-              tar-slip. If the suppressed risk is real, report it.
+              tar-slip. If the suppressed risk is real, report it. A justification of the form
+              "command whitelist-validated above" claims the allowlist is SOUND, not merely present:
+              verify no allowed command can perform the forbidden action, and check whether the
+              comment reasons about the wrong axis (the `find -exec` bypass, CWE-184, hid behind
+              `# nosec B602 - Windows-only; command whitelist-validated above` — but the bypass is
+              platform-independent and has nothing to do with the shell=True the comment defends).
 
             ## Published hub agents (`hub/agents/**`) run on integrators' machines — hold to the
             strictest reading and bump any real finding up one severity.
@@ -215,8 +295,11 @@ jobs:
   # and uploads to the private code-scanning tab. Only job with security-events.
   # ---------------------------------------------------------------------------
   synthesize:
-    needs: [audit]
-    if: github.repository == 'amd/gaia' && !cancelled()
+    needs: [preflight, audit]
+    # !cancelled() lets synthesis still run when a lens crashed (continue-on-error), but
+    # it must NOT run when preflight skipped the whole Claude layer — otherwise it would
+    # synthesise zero findings every quiet night.
+    if: github.repository == 'amd/gaia' && !cancelled() && needs.preflight.outputs.skip != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read

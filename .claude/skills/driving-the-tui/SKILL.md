@@ -65,3 +65,10 @@ Cards are rendered by the TUI from `tool_result.render`, not by the sidecar. The
 transcript pushed back as `context` must therefore carry a compact record of what
 was displayed, or a follow-up referring to a visible row ("when is that one?")
 resolves against nothing. See `SSEClient.appendTurn` / `displayedCard`.
+
+## Reporting what you saw
+
+Write results per [CLAUDE.md → How You
+Communicate](../../../CLAUDE.md#how-you-communicate): open with whether the thing works, in
+one plain sentence, then the captures and `file:line` detail beneath it. Say plainly which
+screens you never reached — an unstated gap reads as a pass.

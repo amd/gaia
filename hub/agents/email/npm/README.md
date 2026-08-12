@@ -133,6 +133,25 @@ exact scope to add, only when you actually try to use one.
 Want to try it without writing code? Run `npx @amd-gaia/agent-email playground`
 for a local page to test triage, drafting, and a live send.
 
+## Personal mailbox vs work mailbox
+
+The package ships six built-in **skills** — short playbooks the agent can load into
+its own thinking — grouped into a `personal` set (inbox triage, newsletter digests,
+trip itineraries) and a `work` set (inbox triage, meeting scheduling, action items,
+escalation).
+
+**They are switched off in this release.** Nothing is loaded at launch and a
+personal and a work mailbox get identical behaviour, because there is no eval
+evidence yet that the skills improve triage. The skill files stay in the package,
+inert, and the agent's full context window goes to your mail instead of to skill
+text.
+
+Nothing for you to do or change: there is no set to pin, and passing
+`--skill-set` / `GAIA_EMAIL_SKILL_SET` fails at startup saying so rather than
+quietly doing nothing. Re-enabling is a change inside the agent, not in your
+integration. Full detail in
+[`SPEC.md`](https://github.com/amd/gaia/blob/agent-pkg-email-v0.5.0/hub/agents/email/npm/SPEC.md).
+
 ## How it works
 
 Three pieces, all on your own machine — no cloud, no separate GAIA install:

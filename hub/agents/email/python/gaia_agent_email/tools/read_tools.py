@@ -37,6 +37,7 @@ from gaia_agent_email.context_budget import (
     active_profile_ctx_size,
     envelope_budget_tokens,
     estimate_tokens_json,
+    skill_prompt_tokens,
 )
 from gaia_agent_email.gmail_backend import decode_message_body
 from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
@@ -169,6 +170,38 @@ def _format_message_for_llm(
         "body_truncated": body_chars_dropped > 0,
         "body_chars_dropped": body_chars_dropped,
         "attachments": attachments,
+    }
+
+
+def _format_message_metadata_for_llm(msg: Dict[str, Any]) -> Dict[str, Any]:
+    """Reduce a metadata-format Gmail message (no body) to fields the LLM
+    can act on for a counting/listing question (#2763).
+
+    Companion to ``_format_message_for_llm``: that one decodes and wraps a
+    body, which costs up to ``DEFAULT_BODY_LIMIT_CHARS`` per message and is
+    the entire payload cost for a question like "how many emails from X"
+    that never reads message content. This formatter never touches
+    ``payload.body``/``payload.parts`` — a ``format="metadata"`` fetch
+    doesn't populate them (see ``GmailBackend.get_message``'s docstring),
+    so there is nothing to decode. No per-message or envelope budget check
+    is needed here: at the tool's 100-message ceiling, a metadata row (a
+    handful of headers + a ~200-char snippet) stays orders of magnitude
+    below any device profile's context budget.
+    """
+    payload = msg.get("payload") or {}
+    headers = {
+        (h.get("name") or "").lower(): h.get("value", "")
+        for h in payload.get("headers", [])
+    }
+    return {
+        "id": msg.get("id"),
+        "thread_id": msg.get("threadId"),
+        "subject": headers.get("subject", ""),
+        "from": headers.get("from", ""),
+        "to": headers.get("to", ""),
+        "date": headers.get("date", ""),
+        "label_ids": list(msg.get("labelIds", [])),
+        "snippet": msg.get("snippet", ""),
     }
 
 
@@ -334,6 +367,42 @@ def get_thread_impl(gmail, *, thread_id: str, debug: bool = False) -> Dict[str, 
             "bodies_clipped": bodies_clipped,
         }
         return {"thread_id": thread_id, "messages": out}
+
+
+def _thread_table_card(thread_result: Dict[str, Any]) -> Dict[str, Any]:
+    """Project ``get_thread_impl``'s output into a ``table`` render card (#2765).
+
+    #2765: a real 8-message thread came back from the agent with a
+    duplicated message, another message replaced by a repeat of an earlier
+    one, a misattributed sender, and a timestamp (``11:40 AM +0000``) that
+    existed nowhere in the mailbox or the tool's own trace -- i.e. the raw
+    ``get_thread_impl`` payload (already ordered/numbered/labeled per
+    #2531) was correct, and the fabrication happened in the model's own
+    free-composed prose reply, upstream of any formatting layer.
+
+    A docstring instruction alone cannot fix that -- the payload was
+    already complete and correct and the model invented anyway. So this
+    hands the chat surface a card it renders DIRECTLY from tool data
+    (``kind: "table"``, the pre-existing generic render primitive --
+    ``docs/spec/agent-ui-query-sse-contract.md`` Sec 4.3 -- no new client
+    code) instead of from the model's prose. Every cell is copied verbatim
+    from the SAME ``from``/``date``/``index`` fields the model itself
+    reads (no reformatting, no timezone conversion), so what renders on
+    screen cannot diverge from what the tool actually returned, regardless
+    of anything the model goes on to say.
+    """
+    messages = thread_result.get("messages", [])
+    subject = (messages[0].get("subject") if messages else "") or "Thread"
+    count = len(messages)
+    title = f"{subject} — {count} message{'s' if count != 1 else ''}"
+    return {
+        "kind": "table",
+        "title": title,
+        "columns": ["#", "From", "Date"],
+        "rows": [
+            [m.get("index"), m.get("from", ""), m.get("date", "")] for m in messages
+        ],
+    }
 
 
 def _thread_message_sort_key(msg: Dict[str, Any]) -> int:
@@ -850,11 +919,32 @@ def search_messages_impl(
     debug: bool = False,
     operator_retry: bool = True,
     budget_tokens: Optional[int] = None,
+    include_bodies: bool = False,
 ) -> Dict[str, Any]:
+    """``include_bodies`` defaults to ``False`` (#2763): metadata-only (no
+    body decode, no per-message/envelope budget check needed -- see
+    ``_format_message_metadata_for_llm``). Live-hardware evidence showed a
+    docstring-only opt-IN (default ``True``, model sets ``False`` for a
+    counting question) is not reliable enough: a 4B-class local model did
+    not choose it on the very probe this issue is about, reproducing the
+    original overflow byte-for-byte (measured ``n_prompt_tokens`` within 1%
+    of the pre-fix run). Defaulting to the cheap, safe path and requiring an
+    explicit ``include_bodies=True`` opt-in for the expensive one means the
+    fix does not depend on the model reliably choosing a new parameter on
+    the failure path that actually destroys the conversation -- the
+    asymmetry matters: a content question that forgets to opt in gets a
+    recoverable "no body available" rather than a context-ending overflow.
+    Full bodies via ``_format_messages_within_budget`` are still available
+    with ``include_bodies=True``.
+    """
     query = normalize_gmail_date_operators(query)
     with log_tool_call(
         "search_messages",
-        {"query": query, "max_results": max_results},
+        {
+            "query": query,
+            "max_results": max_results,
+            "include_bodies": include_bodies,
+        },
         debug=debug,
     ) as st:
         listing = gmail.list_messages(query=query, max_results=max_results)
@@ -871,13 +961,29 @@ def search_messages_impl(
                     query=retried_query, max_results=max_results
                 )
                 stubs = listing.get("messages", [])
-        full_msgs = [gmail.get_message(stub["id"]) for stub in stubs]
-        out = _format_messages_within_budget(
-            full_msgs,
-            tool_name="search_messages",
-            max_results=max_results,
-            budget_tokens=budget_tokens,
-        )
+        if include_bodies:
+            full_msgs = [gmail.get_message(stub["id"]) for stub in stubs]
+            out = _format_messages_within_budget(
+                full_msgs,
+                tool_name="search_messages",
+                max_results=max_results,
+                budget_tokens=budget_tokens,
+            )
+        else:
+            # Metadata-only: fetch in as few round-trips as the backend
+            # supports (batch when available), then re-walk ``stubs`` to
+            # preserve the backend's own ordering -- _fetch_messages returns
+            # an id-keyed dict, not a list (mirrors triage_inbox_impl's
+            # phase-1 pattern, read_tools.py:~1264).
+            stub_ids = [stub["id"] for stub in stubs]
+            metadata_by_id, _dropped_ids = _fetch_messages(
+                gmail, stub_ids, format="metadata"
+            )
+            out = [
+                _format_message_metadata_for_llm(metadata_by_id[sid])
+                for sid in stub_ids
+                if sid in metadata_by_id
+            ]
         # Real cursor only -- never len(stubs) == max_results (see
         # _list_all_stubs's scan_truncated docstring above for why that
         # heuristic is wrong the moment a mailbox's true size matches the ask).
@@ -925,15 +1031,21 @@ def _apply_session_preferences(
 
     Mutates a copy of ``decision`` and returns it.
 
-    Resolution rule (#2632): a priority-sender match never overrides
-    ``category`` — content (the heuristic or the LLM) decides severity,
-    a sender preference only raises salience. "I care about this sender"
-    is not "this message is urgent": a newsletter from a priority sender
-    stays exactly as low-signal as its content says, tagged with
-    ``preference_applied`` so a caller can still surface/order it earlier.
-    The low-priority-sender branch is unchanged — it still commits
-    PROMOTIONAL, since that is an explicit user request to downrank a
-    sender rather than an inferred one.
+    Resolution rule (#2632, #2666): neither a priority- nor a
+    low-priority-sender match ever overrides ``category`` — content (the
+    heuristic or the LLM) decides severity in both directions.
+    "I care about this sender" is not "this message is urgent", and
+    "I don't care about most of this sender's mail" is not "this specific
+    message is never urgent": a newsletter from a priority sender stays
+    exactly as low-signal as its content says, and a genuinely urgent
+    message from a muted sender stays exactly as urgent as its content
+    says. Both branches only tag ``preference_applied`` — today that tag
+    has no reader anywhere in this codebase (#2777); it does not reorder
+    or highlight anything in the rendered triage card. ``low_priority_senders``
+    separately has a real effect outside this function, in the autonomy
+    loop: ``TrustPolicy._explicitly_preferred`` (``trust.py``) reads the
+    raw set directly to auto-archive without confirmation. ``priority_senders``
+    has no reader anywhere outside this function.
 
     Safety override: a phishing-flagged message bypasses BOTH priority
     and low-priority sender preferences. A user can't safely promote a
@@ -967,11 +1079,14 @@ def _apply_session_preferences(
             f"From a priority sender · category unchanged · {decision.get('rationale', '')}"
         )
     elif sender_addr and sender_addr in low_priority_senders:
-        out["category"] = CATEGORY_PROMOTIONAL
-        out["confident"] = True
         out["preference_applied"] = "low_priority_sender"
+        # #2666: category stays whatever content decided, so a genuinely
+        # urgent message from a muted sender no longer becomes an
+        # autonomy archive candidate (agent.py's _autonomy_candidate keys
+        # off category) just because the sender is muted. Same rule,
+        # stated explicitly, as the priority-sender branch above.
         out["rationale"] = (
-            f"From a low-priority sender · {decision.get('rationale', '')}"
+            f"From a low-priority sender · category unchanged · {decision.get('rationale', '')}"
         )
     return out
 
@@ -1472,9 +1587,11 @@ PRE_SCAN_ARCHIVE_CAP = 10
 # reaches the caller via ``totals["needs_review"]``.
 PRE_SCAN_NEEDS_REVIEW_CAP = 5
 
-# #2743 — the "one card" worklist. Capped small on purpose: a triage card
-# listing 30 rows is a report, not a worklist a person can act on today.
-NEEDS_YOU_CAP = 5
+# #2743 — the "one card" worklist. Still capped well below the inbox: a
+# worklist of 30 rows is a report nobody acts on. Raised from 5 so the
+# needs-a-look bucket carries a ``ref`` too — an item the user can see but
+# not name is one they cannot ask the agent to act on.
+NEEDS_YOU_CAP = 10
 
 # Filter-test ids for BulkSummary.filter_tests (#2743) — ids, never prose
 # (see contract.py's NeedsYouItem/BulkSummary docstrings): a renderer maps
@@ -1790,9 +1907,7 @@ def _build_needs_you_view(
         candidates.append({**item, "kind": kind})
         _remember(item.get("message_id"))
     for item in actionable:
-        kind = (
-            "meeting_request" if item.get("is_meeting_request") else "needs_response"
-        )
+        kind = "meeting_request" if item.get("is_meeting_request") else "needs_response"
         candidates.append({**item, "kind": kind})
         _remember(item.get("message_id"))
     for item in needs_review:
@@ -1879,12 +1994,17 @@ def pre_scan_inbox_impl(
 
     Reshapes ``triage_inbox_impl`` output into a typed envelope optimized
     for a daily-driver triage card: top-N urgent, top-N actionable,
-    informational count, suggested archives derived from the low-priority
-    bucket and (when configured) from category defaults, and a needs-review
-    bucket for messages the heuristic was not confident about (#2584). The
-    caller is expected to set ``kind`` in the rendered output to
-    ``email_pre_scan`` so the chat surface can detect and render the
-    structured card component.
+    informational count, suggested archives derived from a confident
+    PROMOTIONAL classification and (when configured) from category
+    defaults, and a needs-review bucket for messages the heuristic was not
+    confident about (#2584). A low-priority-sender match does not by
+    itself route a message into suggested_archives (#2666) — only content
+    does. The ``preference_applied`` tag it carries instead has no reader
+    in this envelope today (#2777); it does not reorder or highlight
+    anything rendered here. The caller is expected to set ``kind`` in the
+    rendered output to ``email_pre_scan``
+    so the chat surface can detect and render the structured card
+    component.
 
     ``session_preferences`` flow through to ``triage_inbox_impl`` so
     sender overrides shape the underlying classification, and category
@@ -2114,7 +2234,10 @@ def pre_scan_inbox_impl(
         def _drop_internal_date(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             # ``internal_date`` is a needs_you-only working field (#2743) —
             # never part of the public PreScanItem shape (extra="forbid").
-            return [{k: v for k, v in item.items() if k != "internal_date"} for item in items]
+            return [
+                {k: v for k, v in item.items() if k != "internal_date"}
+                for item in items
+            ]
 
         scanned = len(triage["results"])
         inbox_counts = _fetch_inbox_counts(gmail)
@@ -2133,7 +2256,9 @@ def pre_scan_inbox_impl(
                 suggested_archives[: max(0, archive_cap)]
             ),
             "suggested_drafts": [],
-            "needs_review": _drop_internal_date(needs_review[: max(0, needs_review_cap)]),
+            "needs_review": _drop_internal_date(
+                needs_review[: max(0, needs_review_cap)]
+            ),
             "preferences_applied": {
                 "priority_senders": sorted(prefs.get("priority_senders") or []),
                 "low_priority_senders": sorted(prefs.get("low_priority_senders") or []),
@@ -2528,6 +2653,9 @@ class ReadToolsMixin:
         def get_thread(thread_id: str, mailbox: str = "") -> str:
             """Fetch every message in a thread (conversation view).
 
+            Use this to catch the user up on, recap, or answer a question
+            about one email conversation.
+
             Messages are returned sorted chronologically (oldest first) and
             each carries ``index``/``of_total`` (its 1-based position in the
             thread) — use these, not the raw list order, when listing or
@@ -2536,12 +2664,24 @@ class ReadToolsMixin:
             ``...[truncated]`` marker; messages are never dropped.
             ``mailbox`` (optional) routes when multiple mailboxes are
             connected.
+
+            The chat surface renders a table card straight from this result
+            (``kind: "table"``) showing every message's real sender and
+            timestamp, in order — do NOT re-list, re-serialize, or
+            paraphrase that list into your reply; it is already visible to
+            the user (#2765). Answer what the user actually asked — what
+            was decided, what's still open, where the conversation landed —
+            by reading each message's body, not by reciting the thread.
+            Any sender or timestamp you DO mention in your own prose must
+            be copied VERBATIM from that message's ``from``/``date``
+            field — never estimate, convert, average, or reconstruct one
+            from memory; if you are not quoting one of those fields
+            directly, do not state a sender or a time at all.
             """
             try:
                 backend = agent._backend_for_message(thread_id, mailbox or None)
-                return _envelope_ok(
-                    get_thread_impl(backend, thread_id=thread_id, debug=debug_flag)
-                )
+                result = get_thread_impl(backend, thread_id=thread_id, debug=debug_flag)
+                return _envelope_ok({**result, **_thread_table_card(result)})
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))
             except Exception as exc:
@@ -2597,7 +2737,9 @@ class ReadToolsMixin:
                 return _envelope_err(f"{type(exc).__name__}: {exc}")
 
         @tool
-        def search_messages(query: str, max_results: int = 25) -> str:
+        def search_messages(
+            query: str, max_results: int = 25, include_bodies: bool = False
+        ) -> str:
             """Search across ALL connected mailboxes.
 
             When multiple mailboxes are connected, searches both with a shared
@@ -2625,13 +2767,25 @@ class ReadToolsMixin:
             query automatically, but forming the operator query yourself is
             more reliable.
 
-            A large ``max_results`` may shrink every hit's body TOGETHER (never
-            independently, never dropping a hit) so the whole result stays
-            within the model's context window — shrunk messages report
-            ``body_truncated: true``. If even the smallest usable body can't fit
-            every requested hit, the tool returns an actionable error instead of
-            silently returning fewer hits than asked for — retry with a smaller
-            ``max_results``.
+            By DEFAULT this returns METADATA ONLY — id/subject/from/to/date/
+            label_ids/snippet, no body text — which is all a counting or
+            listing question needs ("how many emails from X", "list the
+            emails from Y this week", "do I have anything from Z"), at a
+            small fraction of the cost of a full search, so a large or
+            long-bodied result set never risks the model's context window.
+            Set ``include_bodies=True`` ONLY when the question needs what a
+            message actually SAYS — summarizing, quoting, or answering about
+            body content — since fetching bodies costs far more context and
+            can force the tool to shrink or refuse a large request.
+
+            When ``include_bodies=True``, a large ``max_results`` may shrink
+            every hit's body TOGETHER (never independently, never dropping a
+            hit) so the whole result stays within the model's context window
+            — shrunk messages report ``body_truncated: true``. If even the
+            smallest usable body can't fit every requested hit, the tool
+            returns an actionable error instead of silently returning fewer
+            hits than asked for — retry with a smaller ``max_results`` or
+            drop back to the metadata-only default.
 
             Returns:
                 JSON envelope with ``{"messages": [...]}`` plus ``count`` (the
@@ -2641,7 +2795,11 @@ class ReadToolsMixin:
                 ``max_results`` — say "at least N", never present N as the
                 total). REPORT EVERY ENTRY in ``messages`` individually — do
                 not summarize, merge, or quietly drop entries from a long
-                list. If ``operator_retry`` is present, the literal query you
+                list. With ``include_bodies=False`` each entry has no ``body``
+                field at all — never claim to quote or summarize content from
+                a metadata-only result; re-call with ``include_bodies=True``
+                (narrowing the query first) if content is actually needed.
+                If ``operator_retry`` is present, the literal query you
                 passed found nothing and this is the broadened operator query
                 that was retried instead — say the search was broadened
                 before stating the count, since it may include hits (e.g. a
@@ -2678,6 +2836,7 @@ class ReadToolsMixin:
                             query=query,
                             max_results=per_backend,
                             debug=debug_flag,
+                            include_bodies=include_bodies,
                         )
                     except ConnectorsError as exc:
                         msg = format_connector_error(exc)
@@ -2769,7 +2928,8 @@ class ReadToolsMixin:
             """
             try:
                 max_messages = max(
-                    1, min(int(max_messages or DEFAULT_INBOX_SCAN_MESSAGES), scan_ceiling)
+                    1,
+                    min(int(max_messages or DEFAULT_INBOX_SCAN_MESSAGES), scan_ceiling),
                 )
 
                 # Phase 2 (#1603): scan every connected mailbox, tag each item
@@ -2805,7 +2965,13 @@ class ReadToolsMixin:
                     log.debug("triage: host signature unreadable (%s)", exc)
 
                 return _envelope_ok(
-                    condense_triage_result(agent._triage_all_backends(**kwargs))
+                    condense_triage_result(
+                        agent._triage_all_backends(**kwargs),
+                        # Loaded skill bodies are prompt text the agent re-reads
+                        # on the post-tool turn (#2466) — give the envelope back
+                        # what they cost, or the turn overflows the window.
+                        extra_fixed_tokens=skill_prompt_tokens(agent),
+                    )
                 )
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))
@@ -2892,7 +3058,8 @@ class ReadToolsMixin:
             """
             try:
                 max_messages = max(
-                    1, min(int(max_messages or DEFAULT_INBOX_SCAN_MESSAGES), scan_ceiling)
+                    1,
+                    min(int(max_messages or DEFAULT_INBOX_SCAN_MESSAGES), scan_ceiling),
                 )
                 # Phase 2 (#1603): pre-scan every connected mailbox, tag each
                 # section item with its source mailbox, split the budget, merge.

@@ -52,3 +52,43 @@ interfaces:
   pipe: true
   api_server: true
   mcp_server: true
+
+# Agent Skills (#2466) — DISABLED pending eval validation (#2695 follow-up).
+#
+# The skills below are still shipped: gaia_agent_email/skills/<name>/SKILL.md,
+# SKILL_DIRS, select_skill_set(), the account-type mapping, and the
+# context-budget accounting are all intact but inert. Re-enabling is exactly
+# "uncomment the two blocks below" — nothing else to restore.
+#
+# Why off: no eval evidence backs the prompt cost. The personal set costs ~1,334
+# prompt tokens, cutting the bulk-triage result envelope from 6144 to 4810 (work,
+# to 4070); commented out, envelope_budget_tokens() is back to 6144, the
+# pre-skills value. Turn these back on only with an eval run behind them
+# (CLAUDE.md: "Run agent evals when changing LLM-affecting code paths").
+#
+# BOTH blocks must be uncommented together — parse_skill_sets() rejects a
+# non-empty skill_sets: with no default_skill_set:.
+#
+# Exactly ONE set is active per launch. EmailTriageAgent.select_skill_set() maps
+# the connected mailbox's account type onto a set (personal Microsoft account →
+# personal, work/school → work); `--skill-set` and GAIA_EMAIL_SKILL_SET override
+# it, and default_skill_set applies when the kind cannot be determined — which is
+# every Gmail-only mailbox, since Gmail has no equivalent of the Microsoft
+# id_token `tid` claim.
+#
+# `inbox-triage` appears in both sets deliberately: sets overlap, they do not
+# partition. Anything that should load for every set belongs in a top-level
+# `skills:` list instead.
+#
+# skill_sets:
+#   personal:
+#     - inbox-triage
+#     - newsletter-digest
+#     - travel-itinerary
+#   work:
+#     - inbox-triage
+#     - meeting-scheduling
+#     - action-item-extraction
+#     - escalation-routing
+#
+# default_skill_set: personal

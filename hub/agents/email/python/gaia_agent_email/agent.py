@@ -102,10 +102,51 @@ from gaia.agents.registry import get_embedding_model_for_device
 from gaia.connectors.errors import ConnectorsError
 from gaia.connectors.formatting import format_connector_error
 from gaia.connectors.providers.base import ConnectorRequirement
+from gaia.connectors.providers.microsoft import (
+    ACCOUNT_TYPE_PERSONAL,
+    ACCOUNT_TYPE_WORK,
+)
 from gaia.database.mixin import DatabaseMixin
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
+
+# Agent Skills (#2466). The bundled skills always sit inside the package, so one
+# path covers every distribution. ``gaia-agent.yaml`` is the hub artifact and
+# lives at the *package root* in a source checkout, so the frozen sidecar and the
+# wheel get a copy staged inside the package instead — hence two candidates.
+_SKILLS_DIR = Path(__file__).resolve().parent / "skills"
+_MANIFEST_CANDIDATES = (
+    # Packaged: staged into the package (frozen sidecar --add-data, wheel
+    # package-data).
+    Path(__file__).resolve().parent / "gaia-agent.yaml",
+    # Source checkout / editable install: the canonical hub artifact.
+    Path(__file__).resolve().parent.parent / "gaia-agent.yaml",
+)
+
+
+# Mailbox account type → the skill set it activates (#2466). The set names must
+# exist in gaia-agent.yaml's ``skill_sets:`` block; a test keeps the two in
+# lock-step. An account type absent from this map fails loudly rather than
+# picking a set for it.
+ACCOUNT_TYPE_SKILL_SETS = {
+    ACCOUNT_TYPE_PERSONAL: "personal",
+    ACCOUNT_TYPE_WORK: "work",
+}
+
+
+def _locate_agent_manifest() -> Path:
+    """Absolute path to this package's ``gaia-agent.yaml``.
+
+    Returns the first candidate that exists. When none does, returns the
+    packaged location so the framework's own "Manifest not found: <path>" error
+    names a path a packager can act on — a missing manifest must fail loudly at
+    agent construction, never quietly disable every declared skill.
+    """
+    for candidate in _MANIFEST_CANDIDATES:
+        if candidate.is_file():
+            return candidate
+    return _MANIFEST_CANDIDATES[0]
 
 
 class _UnavailableCalendarBackend:
@@ -352,6 +393,16 @@ an error (no card yet, out of range, ambiguous), or the user's phrasing
 doesn't clearly name one row (e.g. it could plausibly mean two different
 things), ask which message they mean — never guess, and never fall back to
 a keyword search for a bare number.
+
+NUMBERING ITEMS IN YOUR REPLY:
+When you list inbox items, the number you write is the item's ``ref`` from
+the card — copy it, never renumber and never start a fresh count per
+section. Say "2.", not "Row 2". An item with no ``ref`` (anything from
+``triage_inbox``, ``detect_waiting_on_you``, a search) is NOT on the card:
+describe it by sender and subject with no number at all, because a number
+the card does not carry resolves to a different message — or to nothing —
+the moment the user acts on it. Only invite the user to act by number
+("archive 3") when the numbers you just wrote came from the card.
 
 BRIEFING & TASKS:
 - For a daily briefing / morning brief / "summarize my inbox for today",
@@ -692,6 +743,14 @@ class EmailTriageAgent(
     # stops the cycle early.
     AUTONOMY_MAX_CONSECUTIVE_FAILURES = 3
 
+    # Agent Skills (#2466). The bundled ``skills/`` folder is this agent's
+    # highest-precedence discovery root; ``gaia-agent.yaml`` declares which
+    # skills each set activates. Both resolve from this module's own location so
+    # a source checkout, an installed wheel, and the frozen sidecar all find
+    # them.
+    SKILL_DIRS: ClassVar[List[str]] = [str(_SKILLS_DIR)]
+    SKILL_MANIFEST: ClassVar[Optional[str]] = str(_locate_agent_manifest())
+
     def __init__(self, config: Optional[EmailAgentConfig] = None):
         config = config or EmailAgentConfig()
         config.validate()
@@ -846,6 +905,9 @@ class EmailTriageAgent(
         self._load_persisted_preferences()
 
         self.response_mode = "conversational"
+        # The text finalize_answer already grounded, so process_query's
+        # fallback never grounds the same answer a second time.
+        self._grounded_answer: Optional[str] = None
         super().__init__(
             base_url=effective_base_url,
             model_id=effective_model_id,
@@ -862,6 +924,9 @@ class EmailTriageAgent(
             min_context_size=(
                 config.ctx_size if config.ctx_size is not None else 32768
             ),
+            # Explicit skill-set override (--skill-set / GAIA_EMAIL_SKILL_SET).
+            # Beats select_skill_set() below; an undeclared name fails loudly.
+            skill_set=config.skill_set,
         )
 
         # Surface the degraded-memory state where the user actually is
@@ -947,6 +1012,50 @@ class EmailTriageAgent(
         if profile is None:
             return _SYSTEM_PROMPT
         return _SYSTEM_PROMPT + "\n" + render_style_guidance(profile)
+
+    # -- Skill-set selection (#2466) ---------------------------------------
+
+    def select_skill_set(self) -> Optional[str]:
+        """Map the connected mailbox's account type onto a skill set.
+
+        A personal mailbox gets the personal set (newsletters, travel); a
+        work/school mailbox gets the work set (meetings, action items,
+        escalation). The kind comes from the Microsoft id_token ``tid`` claim
+        recorded at connect time, or from an explicit ``account_type`` config /
+        ``GAIA_EMAIL_ACCOUNT_TYPE``.
+
+        Returns ``None`` when the kind is unknown — a Gmail-only mailbox has no
+        Microsoft tenant to inspect. The framework then resolves the manifest's
+        ``default_skill_set`` explicitly. It is never treated as personal by
+        assumption: a work mailbox silently given the personal set is exactly the
+        wrong-capabilities failure this indirection exists to prevent.
+
+        ``--skill-set`` / ``config.skill_set`` overrides this entirely.
+        """
+        account_type = self.config.resolve_account_type()
+        if account_type is None:
+            logger.info(
+                "No mailbox account type could be determined (no connected "
+                "Microsoft mailbox, or a Gmail-only mailbox, which has no "
+                "equivalent claim) — falling through to the manifest's default "
+                "skill set. Set GAIA_EMAIL_ACCOUNT_TYPE or --skill-set to pin "
+                "one."
+            )
+            return None
+        skill_set = ACCOUNT_TYPE_SKILL_SETS.get(account_type)
+        if skill_set is None:
+            # A new account type reached this map without a set to go with it.
+            raise ConfigurationError(
+                f"Mailbox account type {account_type!r} has no skill set mapped "
+                f"to it. Known mappings: "
+                f"{', '.join(f'{k}->{v}' for k, v in ACCOUNT_TYPE_SKILL_SETS.items())}"
+                ". Pass --skill-set explicitly, or add the mapping in "
+                "gaia_agent_email/agent.py."
+            )
+        logger.info(
+            "Mailbox account type is %r → skill set %r", account_type, skill_set
+        )
+        return skill_set
 
     # -- Runtime memory control (#1666) ------------------------------------
 
@@ -1075,13 +1184,28 @@ class EmailTriageAgent(
         # consumers never see raw TeX in the final answer (#2115).
         if isinstance(result, dict) and isinstance(result.get("result"), str):
             result["result"] = _normalize_plain_text_answer(result["result"])
-        if isinstance(result, dict):
-            # Single deterministic post-check hook: success-claim / negative-
-            # claim / cross-mailbox / scaffolding-leak / calendar-conflict
-            # (#2571) / attention-card (#2636) guards all live in
-            # answer_grounding.py.
+        if isinstance(result, dict) and result.get("result") != self._grounded_answer:
+            # Normally finalize_answer already grounded this text before the
+            # loop emitted it. This covers the branches that never reach that
+            # call — the loop setting an actionable answer on an internal error
+            # and returning it directly — without grounding the same text twice
+            # (the append-style guards would repeat their correction).
             result = ground_final_answer(result)
         return result
+
+    def finalize_answer(self, answer: str, conversation: Any) -> str:
+        """Ground the answer BEFORE the loop emits it (#2789).
+
+        Grounding used to run on ``process_query``'s return value, which the
+        REST/TUI stream never re-reads — so every correction fired, logged, and
+        reached nobody on the surface users actually drive.
+        """
+        grounded = ground_final_answer(
+            {"result": answer, "conversation": conversation, "status": "success"}
+        )
+        corrected = grounded.get("result")
+        self._grounded_answer = corrected if isinstance(corrected, str) else answer
+        return self._grounded_answer
 
     def _mailbox_target_guard(self, user_input: str) -> Optional[Dict[str, Any]]:
         """Reject a request that targets a mailbox the SESSION has ruled out (#2164).
