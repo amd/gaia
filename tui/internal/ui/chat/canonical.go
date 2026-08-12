@@ -41,6 +41,12 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		// to know what is happening NOW; an accumulating list of "Step 2/50"
 		// and "Thinking" answers a question nobody asked and buries the tool
 		// call that actually says what the agent is doing.
+		// Tracked in both modes, shown in neither by itself: the canonical
+		// transport reports steps only in the `final` event's usage, so without
+		// this the step count is unknown until the turn is already over.
+		if n, ok := stepNumberOf(e.Message); ok {
+			m.totalSteps = n
+		}
 		if msg := userFacingStatus(e.Message); msg != "" {
 			m.setLiveStatus(msg)
 		} else if m.dev {
@@ -58,11 +64,18 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		m.buffer += e.Delta
 
 	case event.CanonicalToolCallEvent:
-		m.activity = append(m.activity, ActivityItem{
+		item := ActivityItem{
 			Kind:    "tool",
 			Tool:    e.Tool,
 			Content: toolNarration(e.Tool, e.Args, e.Narration),
-		})
+		}
+		if m.dev {
+			// The narration says what the call MEANS; this says what was
+			// actually passed. When an agent calls the right tool with the
+			// wrong argument the two disagree, and that gap is the bug.
+			item.Args = devPayload(e.Args, devPayloadWidth)
+		}
+		m.activity = append(m.activity, item)
 
 	case event.CanonicalToolResultEvent:
 		// Only trust the failure classifier where a card was declared. Outside
@@ -80,6 +93,8 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			// this two-state presentation mapping (S3): Succeeded and Unknown
 			// both still tick green via markToolDone below.
 			m.setOpenToolOutcome(e.Tool, false, failureDetail(e, toolErr))
+			// A failed call is the one whose payload a developer most wants.
+			m.setOpenToolOutput(e)
 			m.messages = append(m.messages, Message{
 				Role:    RoleError,
 				Content: sanitizeErrorText(composeToolErrorText(e.Tool, toolErr)),
@@ -374,6 +389,31 @@ func (m ChatModel) confirmAction(runID, action string, approved bool) tea.Cmd {
 // much of it, and how long it took.
 func (m *ChatModel) markToolDone(e event.CanonicalToolResultEvent) {
 	m.setOpenToolOutcome(e.Tool, toolResultSucceeded(e.Data), toolResultDetail(e))
+	m.setOpenToolOutput(e)
+}
+
+// setOpenToolOutput attaches the raw result payload to the tool line just
+// closed. Developer mode only, and a no-op otherwise.
+//
+// Separate from setOpenToolOutcome because it runs AFTER the item is marked
+// done, so it deliberately matches the most recent completed call rather than
+// an open one.
+func (m *ChatModel) setOpenToolOutput(e event.CanonicalToolResultEvent) {
+	if !m.dev {
+		return
+	}
+	payload := devPayload(e.Data, devPayloadWidth)
+	if payload == "" {
+		return
+	}
+	for i := len(m.activity) - 1; i >= 0; i-- {
+		item := &m.activity[i]
+		if item.Kind != "tool" || item.Output != "" {
+			continue
+		}
+		item.Output = payload
+		return
+	}
 }
 
 // failureDetail is the `└` line for a tool the render-domain classifier judged

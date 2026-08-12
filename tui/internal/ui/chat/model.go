@@ -94,6 +94,13 @@ var (
 	activityStyle = lipgloss.NewStyle().
 			Foreground(theme.Dim)
 
+	// Developer payload lines sit one rung below the outcome line they hang
+	// under: in --dev they are the most numerous thing on screen, so they are
+	// also the dimmest, keeping the narration readable through them.
+	devPayloadStyle = lipgloss.NewStyle().
+			Foreground(theme.Dim).
+			Faint(true)
+
 	toolNameStyle = lipgloss.NewStyle().
 			Bold(true).
 			Foreground(theme.Info)
@@ -946,6 +953,9 @@ func (m ChatModel) sendQuery(query string) (tea.Model, tea.Cmd) {
 	m.queryStart = time.Now()
 	m.firstToken = false
 	m.ttft = 0
+	// Per-turn, like ttft above it. Left standing, a turn whose `final` carries
+	// no usage.steps reported the PREVIOUS turn's count as its own.
+	m.totalSteps = 0
 	// A new turn starts having drawn no card yet -- see drainPendingPreScan.
 	m.preScanRenderedThisTurn = false
 	m.updateViewport()
@@ -1720,8 +1730,13 @@ func collapseActivity(items []ActivityItem) []ActivityItem {
 				last.Done = item.Done
 				last.Success = item.Success
 				// The newest call's outcome is the one worth showing; an older
-				// repeat's `└` line describes work already superseded.
+				// repeat's `└` line describes work already superseded. The dev
+				// payloads follow it for the same reason: showing call #1's
+				// arguments under a line reading "x14" would be a lie about
+				// which call they came from.
 				last.Detail = item.Detail
+				last.Args = item.Args
+				last.Output = item.Output
 				continue
 			}
 		}
@@ -1804,6 +1819,20 @@ func (m ChatModel) renderActivityItem(item ActivityItem, live bool, elapsed time
 		}
 		lines = append(lines, "    "+style.Render(glyphDetail+" "+detail))
 	}
+	// Developer mode only. Args and Output are populated nowhere else, so the
+	// user-mode log is genuinely unchanged rather than merely filtered here.
+	for _, extra := range []struct{ label, text string }{
+		{"args", item.Args},
+		{"out", item.Output},
+	} {
+		if extra.text == "" {
+			continue
+		}
+		label := extra.label + " "
+		if body := truncateRunes(extra.text, width-6-len(label)); body != "" {
+			lines = append(lines, "      "+devPayloadStyle.Render(label+body))
+		}
+	}
 	return lines
 }
 
@@ -1864,6 +1893,13 @@ func (m ChatModel) View() string {
 	if !m.followTail {
 		hint = "End to jump to latest · " + hint
 	}
+	// The agent loop's step count is a loop bound, not user progress — it says
+	// neither what is happening nor how far along the work is. For someone
+	// tuning the loop it is the number that matters, so it rides the one row
+	// that is always on screen, and only in --dev.
+	if m.dev && m.totalSteps > 0 {
+		hint = fmt.Sprintf("step %d · %s", m.totalSteps, hint)
+	}
 
 	statusBar := components.RenderStatusBar(components.StatusBarState{
 		AgentName: m.agentName,
@@ -1912,10 +1948,16 @@ func extractCommandFromArgs(raw json.RawMessage) string {
 // rendered "GAIA │ GAIA" — a divider separating a word from itself.
 func (m ChatModel) renderHeader() string {
 	title := headerStyle.Render("GAIA")
-	if isBrandName(m.agentName) {
-		return title
+	if !isBrandName(m.agentName) {
+		title += lipgloss.NewStyle().Foreground(theme.Text).Render(" │ " + m.agentName)
 	}
-	return title + lipgloss.NewStyle().Foreground(theme.Text).Render(" │ "+m.agentName)
+	// Developer mode is worth stating on every frame: it also redirects the
+	// agent's file logging to DEBUG, so someone reading a log full of detail —
+	// or an empty one — needs to be able to see which mode produced it.
+	if m.dev {
+		title += activityStyle.Render(" │ dev")
+	}
+	return title
 }
 
 // isBrandName reports whether an agent's display name is just the product name,

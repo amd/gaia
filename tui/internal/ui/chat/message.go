@@ -94,7 +94,13 @@ type ActivityItem struct {
 	Tool string
 	// Detail is the one-line outcome drawn under the item once its result
 	// lands ("18 skills · 21ms"). Empty until then.
-	Detail  string
+	Detail string
+	// Args and Output are the raw call arguments and raw result payload, one
+	// line each. Populated only in developer mode — in user mode they are left
+	// empty rather than filled and hidden at render time, so the quiet path
+	// never pays to format text nobody will read.
+	Args    string
+	Output  string
 	Done    bool
 	Success *bool
 	// Repeat counts additional consecutive occurrences folded into this item by
