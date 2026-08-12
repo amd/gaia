@@ -159,8 +159,19 @@ class OutputHandler(ABC):
     # === Completion Methods (Required) ===
 
     @abstractmethod
-    def print_final_answer(self, answer: str):
-        """Print final answer/result."""
+    def print_final_answer(
+        self,
+        answer: str,
+        total_tokens: Optional[int] = None,
+        ttft_seconds: Optional[float] = None,
+    ):
+        """Print final answer/result.
+
+        total_tokens: real output-token count generated across the run, if
+        known. ttft_seconds: real time-to-first-token for the LLM call that
+        produced this answer, if known. Both None when no real value is
+        available — never a substituted estimate.
+        """
         ...
 
     @abstractmethod
@@ -364,7 +375,13 @@ class SilentConsole(TerminalConfirmationMixin, OutputHandler):
         self.silence_final_answer = silence_final_answer
         self.auto_approve_gated_tools = auto_approve_gated_tools
 
-    def print_final_answer(self, answer: str, streaming: bool = True) -> None:
+    def print_final_answer(
+        self,
+        answer: str,
+        streaming: bool = True,
+        total_tokens: Optional[int] = None,
+        ttft_seconds: Optional[float] = None,
+    ) -> None:
         """
         Print the final answer.
         Only suppressed if silence_final_answer is True.

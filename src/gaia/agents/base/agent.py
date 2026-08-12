@@ -13,6 +13,7 @@ import datetime
 import inspect
 import json
 import logging
+import math
 import os
 import re
 import subprocess
@@ -300,6 +301,113 @@ def _find_matching_close_paren(text: str, open_pos: int) -> Optional[int]:
     return None
 
 
+def _safe_number(value: Any) -> int:
+    """Coerce a usage-stat value to a non-negative int; anything else
+    (string, None, nested structure, bool) is untrusted input and yields 0
+    rather than raising — a malformed stat must never break the run that
+    carries it."""
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, (int, float)) and value >= 0:
+        return int(value)
+    return 0
+
+
+def _sum_conversation_tokens(
+    conversation: List[Dict[str, Any]],
+    tool_usage_entries: Optional[List[Dict[str, Any]]] = None,
+) -> Tuple[int, int]:
+    """Sum input/output tokens from per-step 'stats' entries already appended
+    to conversation, plus any tool-reported usage folded in separately (see
+    ``_extract_tool_usage``). Returns (total_input, total_output)."""
+    total_input = 0
+    total_output = 0
+    for entry in conversation:
+        if entry.get("role") == "system" and isinstance(entry.get("content"), dict):
+            content = entry["content"]
+            if content.get("type") == "stats" and "performance_stats" in content:
+                stats = content["performance_stats"]
+                total_input += _safe_number(stats.get("input_tokens"))
+                total_output += _safe_number(stats.get("output_tokens"))
+    for usage in tool_usage_entries or []:
+        total_input += _safe_number(
+            usage.get("prompt_tokens") or usage.get("input_tokens")
+        )
+        total_output += _safe_number(
+            usage.get("completion_tokens") or usage.get("output_tokens")
+        )
+    return total_input, total_output
+
+
+def _query_ttft_seconds(conversation: List[Dict[str, Any]]) -> Optional[float]:
+    """Turn's ttft = the FIRST step's own time_to_first_token; a later step's
+    value would drop all earlier tool-decision latency. None when step 1 has
+    no positive value — never a fabricated 0.0."""
+    for entry in conversation:
+        if entry.get("role") == "system" and isinstance(entry.get("content"), dict):
+            content = entry["content"]
+            if content.get("type") == "stats" and "performance_stats" in content:
+                if content.get("step") != 1:
+                    # Step 1's own poll failed/was skipped — never misattribute
+                    # a later step's latency as the turn's ttft.
+                    return None
+                stats = content["performance_stats"]
+                ttft = (
+                    stats.get("time_to_first_token")
+                    if isinstance(stats, dict)
+                    else None
+                )
+                if (
+                    isinstance(ttft, (int, float))
+                    and not isinstance(ttft, bool)
+                    and math.isfinite(ttft)
+                    and ttft > 0
+                ):
+                    return float(ttft)
+                return None
+    return None
+
+
+# Only these field names are ever accepted from a tool's self-reported
+# ``usage`` dict — deliberately narrower than "any dict under a `usage` key",
+# so a tool with an unrelated `usage` value (rate-limit/quota/disk usage, not
+# LLM tokens) is never misread as token accounting (#2899).
+_TOOL_USAGE_TOKEN_FIELDS = (
+    "prompt_tokens",
+    "completion_tokens",
+    "input_tokens",
+    "output_tokens",
+)
+
+
+def _extract_tool_usage(tool_result: Any) -> Optional[Dict[str, Any]]:
+    """Pull a tool-reported usage dict off a tool's own return payload, if
+    present and shaped like real token accounting. Some tools make their own
+    internal LLM calls outside the normal per-step chat-completion accounting
+    (e.g. a triage tool that classifies many items with its own client calls)
+    and report the aggregate on their own return value instead of through the
+    per-step stats path. Never raises — a malformed payload (bad JSON, wrong
+    shape, non-numeric fields) yields ``None``, the same as "no usage to
+    report"."""
+    try:
+        payload = tool_result
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        if not isinstance(payload, dict):
+            return None
+        usage = payload.get("usage")
+        if not isinstance(usage, dict):
+            return None
+        has_real_token_field = any(
+            isinstance(usage.get(f), (int, float))
+            and not isinstance(usage.get(f), bool)
+            for f in _TOOL_USAGE_TOKEN_FIELDS
+        )
+        return usage if has_real_token_field else None
+    except (ValueError, TypeError):
+        return None
+
+
 # Suffix appended to the last tool-result message when ``single_tool_per_turn``
 # agents have completed their one tool call. The model sees this and emits a
 # short final reply instead of calling another tool. Greppable for fixtures
@@ -533,6 +641,10 @@ Do NOT wrap conversational replies in JSON.
         # post-registration skill-set load both see the explicit request.
         self._requested_skill_set = skill_set
         self.error_history = []  # Store error history for learning
+        # Safe default so _execute_tool -> _fold_tool_usage never AttributeErrors
+        # if called outside the normal process_query loop (e.g. directly in a
+        # test); _process_query_impl resets this per-turn (#2899).
+        self._tool_reported_usage: List[Dict[str, Any]] = []
         self.conversation_history = (
             []
         )  # Store conversation history for session persistence
@@ -2653,6 +2765,22 @@ Do NOT wrap conversational replies in JSON.
             return bool(flag)
         return tool_name.startswith("mcp_")
 
+    def _fold_tool_usage(self, tool_name: str, tool_result: Any) -> None:
+        """Record a tool's self-reported LLM usage (see ``_extract_tool_usage``)
+        against this turn's running total. Called from the single success path
+        inside ``_execute_tool`` so every caller is covered uniformly. Never
+        raises — extraction failures are already swallowed by
+        ``_extract_tool_usage``; this method only appends.
+
+        A tool whose internal LLM calls already route through ``self.chat``
+        would double-count here — a constraint on future tools, not a live one.
+        """
+        usage = _extract_tool_usage(tool_result)
+        if usage is None:
+            return
+        logger.debug("Tool '%s' reported its own LLM usage: %s", tool_name, usage)
+        self._tool_reported_usage.append(usage)
+
     def _execute_tool(self, tool_name: str, tool_args: Dict[str, Any]) -> Any:
         """
         Execute a tool by name with the provided arguments.
@@ -2796,6 +2924,7 @@ Do NOT wrap conversational replies in JSON.
         try:
             result = self._call_tool_bounded(tool, tool_args, tool_name)
             logger.debug(f"Tool execution result: {result}")
+            self._fold_tool_usage(tool_name, result)
             return result
         except ToolExecutionTimeout as e:
             # Bounded-execution guard fired: the tool body blocked past its
@@ -3666,6 +3795,10 @@ Do NOT wrap conversational replies in JSON.
         self.current_step = 0
         self.total_plan_steps = 0
         self.plan_iterations = 0  # Reset plan iteration counter
+        # Tool-reported LLM usage this turn (see _fold_tool_usage / #2899) —
+        # reset per-turn since an Agent instance persists across queries in
+        # an interactive session.
+        self._tool_reported_usage: List[Dict[str, Any]] = []
 
         # Add user query to the conversation history
         conversation.append({"role": "user", "content": user_input})
@@ -5538,7 +5671,20 @@ Do NOT wrap conversational replies in JSON.
 
                 final_answer = self.finalize_answer(answer_candidate, conversation)
                 self.execution_state = self.STATE_COMPLETION
-                self.console.print_final_answer(final_answer, streaming=self.streaming)
+                # Compute the real token total BEFORE printing the answer so it
+                # can ride the same event, instead of the post-loop aggregation
+                # below which runs after print_final_answer already fired
+                # (#2899). Output tokens only — "tokens actually generated",
+                # matching the tok/s calc downstream which is also output-only.
+                _pre_input_tokens, pre_output_tokens = _sum_conversation_tokens(
+                    conversation, self._tool_reported_usage
+                )
+                self.console.print_final_answer(
+                    final_answer,
+                    streaming=self.streaming,
+                    total_tokens=pre_output_tokens,
+                    ttft_seconds=_query_ttft_seconds(conversation),
+                )
                 break
 
             # Check if we're at the limit and ask user if they want to continue
@@ -5603,18 +5749,14 @@ Do NOT wrap conversational replies in JSON.
         # Calculate total duration
         total_duration = time.time() - start_time
 
-        # Aggregate token counts from conversation stats
-        total_input_tokens = 0
-        total_output_tokens = 0
-        for entry in conversation:
-            if entry.get("role") == "system" and isinstance(entry.get("content"), dict):
-                content = entry["content"]
-                if content.get("type") == "stats" and "performance_stats" in content:
-                    stats = content["performance_stats"]
-                    if stats.get("input_tokens") is not None:
-                        total_input_tokens += stats["input_tokens"]
-                    if stats.get("output_tokens") is not None:
-                        total_output_tokens += stats["output_tokens"]
+        # Aggregate token counts from conversation stats, plus any usage a
+        # tool self-reported (e.g. a triage tool's internal per-message LLM
+        # calls, #2899) — same helper the pre-answer computation above uses,
+        # reading identical inputs since nothing mutates conversation or
+        # self._tool_reported_usage between the two calls.
+        total_input_tokens, total_output_tokens = _sum_conversation_tokens(
+            conversation, self._tool_reported_usage
+        )
 
         # Return the result
         has_errors = len(self.error_history) > 0

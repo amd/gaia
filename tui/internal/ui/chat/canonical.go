@@ -46,6 +46,10 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		}
 
 	case event.CanonicalTokenEvent:
+		if !m.firstToken {
+			m.firstToken = true
+			m.ttft = time.Since(m.queryStart)
+		}
 		m.buffer += e.Delta
 
 	case event.CanonicalToolCallEvent:
@@ -125,6 +129,11 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 
 	case event.CanonicalFinalEvent:
 		usage := event.CanonicalUsageOf(e)
+		// Server-reported ttft fallback for turns where no token ever
+		// streamed client-side (e.g. non-streaming tool-calling requests).
+		if !m.firstToken && usage.TTFT > 0 {
+			m.ttft = time.Duration(usage.TTFT * float64(time.Second))
+		}
 		// `answer` is the contract's authoritative field (§4), so it wins over the
 		// streamed tokens rather than the other way round — otherwise the view and
 		// the transcript pushed back as `context` could disagree. The buffered
@@ -143,6 +152,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			TTFT:      m.ttft,
 			Steps:     usage.Steps,
 			ToolsUsed: usage.ToolsUsed,
+			Tokens:    usage.Tokens,
 		})
 		// Drain here, not on doneMsg: streaming flips false in THIS handler, and doneMsg fires later, after a second query could already be in flight.
 		m.drainPendingPreScan()

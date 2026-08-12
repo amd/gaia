@@ -10,6 +10,7 @@ to JSON events that the streaming endpoint sends to the frontend.
 
 import json
 import logging
+import math
 import queue
 import re
 import socket
@@ -544,8 +545,12 @@ class SSEOutputHandler(OutputHandler):
     # === Completion Methods ===
 
     def print_final_answer(
-        self, answer: str, streaming: bool = True
-    ):  # pylint: disable=unused-argument
+        self,
+        answer: str,
+        streaming: bool = True,  # pylint: disable=unused-argument
+        total_tokens: Optional[int] = None,
+        ttft_seconds: Optional[float] = None,
+    ):
         if answer:
             answer = _THINK_TAG_SUB_RE.sub("", answer)
             # Extract answer text from {"thought":..., "answer":...} JSON before
@@ -559,15 +564,30 @@ class SSEOutputHandler(OutputHandler):
             answer = _TOOL_CALL_JSON_SUB_RE.sub("", answer)
             answer = _THOUGHT_JSON_SUB_RE.sub("", answer)
             answer = answer.strip()
-        self._emit(
-            {
-                "type": "answer",
-                "content": _fix_double_escaped(answer) if answer else answer,
-                "elapsed": self._elapsed(),
-                "steps": self._step_count,
-                "tools_used": self._tool_count,
-            }
-        )
+        event: Dict[str, Any] = {
+            "type": "answer",
+            "content": _fix_double_escaped(answer) if answer else answer,
+            "elapsed": self._elapsed(),
+            "steps": self._step_count,
+            "tools_used": self._tool_count,
+        }
+        # Omit entirely when no real count exists — never emit a fake zero.
+        # `_sum_conversation_tokens` returns 0 both when a real turn generated
+        # zero output tokens (never happens for a completed answer) and when
+        # no per-step stats were collected at all (the common "no real count"
+        # case) — it can't tell the two apart, so treat <= 0 as unavailable,
+        # same as the ttft guard below.
+        if total_tokens is not None and total_tokens > 0:
+            event["tokens"] = total_tokens
+        # Same omit-don't-fake rule for ttft: real value from Lemonade's own
+        # generation timing, or nothing.
+        if (
+            ttft_seconds is not None
+            and math.isfinite(ttft_seconds)
+            and ttft_seconds > 0
+        ):
+            event["ttft"] = round(ttft_seconds, 3)
+        self._emit(event)
 
     def print_repeated_tool_warning(self):
         self._emit(
