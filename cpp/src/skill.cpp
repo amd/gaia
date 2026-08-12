@@ -601,6 +601,23 @@ std::string stripBom(const std::string& text) {
     return offset ? text.substr(offset) : text;
 }
 
+/// Collapse CRLF and lone CR to LF. Python opens SKILL.md in text mode, so its
+/// parser never sees a carriage return; without this the two runtimes disagree
+/// on every Windows-authored file.
+std::string normalizeNewlines(const std::string& text) {
+    if (text.find('\r') == std::string::npos) return text;
+    std::string out;
+    out.reserve(text.size());
+    for (size_t i = 0; i < text.size(); ++i) {
+        if (text[i] != '\r') {
+            out += text[i];
+        } else if (i + 1 >= text.size() || text[i + 1] != '\n') {
+            out += '\n';
+        }
+    }
+    return out;
+}
+
 bool splitFrontmatter(const std::string& text, std::string& yamlOut,
                       std::string& bodyOut) {
     const size_t n = text.size();
@@ -972,7 +989,7 @@ std::string toMarkdown(const Skill& skill) {
 Skill parseSkill(const std::string& text, const std::string& source) {
     std::string rawYaml;
     std::string body;
-    if (!splitFrontmatter(stripBom(text), rawYaml, body)) {
+    if (!splitFrontmatter(normalizeNewlines(stripBom(text)), rawYaml, body)) {
         throw SkillValidationError(
             source +
             ": no YAML frontmatter found. A SKILL.md must open with a '---' line, the "
