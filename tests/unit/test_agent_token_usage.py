@@ -27,6 +27,7 @@ import pytest
 from gaia.agents.base.agent import (
     Agent,
     _extract_tool_usage,
+    _query_ttft_seconds,
     _safe_number,
     _sum_conversation_tokens,
 )
@@ -53,10 +54,6 @@ def _make_agent(**kwargs) -> _TokenUsageAgent:
     """Construct a real Agent without touching Lemonade or the network."""
     with patch("gaia.agents.base.agent.AgentSDK"):
         agent = _TokenUsageAgent(skip_lemonade=True, silent_mode=True, **kwargs)
-    # A bare MagicMock is truthy, which would make _fold_tool_usage's
-    # "does self.chat look like it just made a call" heuristic fire on every
-    # test. Tests that care about that heuristic override this explicitly.
-    agent.chat.get_stats.return_value = None
     return agent
 
 
@@ -149,6 +146,130 @@ class TestSumConversationTokens:
         tool_usage = [{"prompt_tokens": 5, "completion_tokens": 20}]
         total_in, total_out = _sum_conversation_tokens(conversation, tool_usage)
         assert (total_in, total_out) == (15, 25)
+
+
+# ─────────────────────── _query_ttft_seconds (#2899 follow-up) ────────────
+#
+# Reads the real per-request ttft Lemonade's /stats already reports off the
+# turn's FIRST step, not the last — a last-step reading drops every earlier
+# step's tool-decision latency.
+class TestQueryTTFTSeconds:
+    def test_reads_ttft_off_the_first_stats_entry(self):
+        conversation = [
+            {
+                "role": "system",
+                "content": {
+                    "type": "stats",
+                    "step": 1,
+                    "performance_stats": {"time_to_first_token": 8.2},
+                },
+            },
+            {
+                "role": "system",
+                "content": {
+                    "type": "stats",
+                    "step": 2,
+                    "performance_stats": {"time_to_first_token": 1.5},
+                },
+            },
+        ]
+        # Step 1 — the first LLM call of the turn — not the final step that
+        # happened to produce the visible answer, and not an average/sum.
+        assert _query_ttft_seconds(conversation) == 8.2
+
+    def test_no_stats_entries_returns_none(self):
+        assert _query_ttft_seconds([]) is None
+        assert _query_ttft_seconds([{"role": "user", "content": "hi"}]) is None
+
+    def test_missing_field_on_first_step_returns_none_not_a_later_steps_value(self):
+        # Step 1 has no ttft; step 2 does. Must omit, not fall through to step 2.
+        conversation = [
+            {
+                "role": "system",
+                "content": {
+                    "type": "stats",
+                    "step": 1,
+                    "performance_stats": {"input_tokens": 10, "output_tokens": 5},
+                },
+            },
+            {
+                "role": "system",
+                "content": {
+                    "type": "stats",
+                    "step": 2,
+                    "performance_stats": {"time_to_first_token": 1.5},
+                },
+            },
+        ]
+        assert _query_ttft_seconds(conversation) is None
+
+    def test_step_1_entry_entirely_missing_returns_none_not_step_2s_value(self):
+        # A failed /stats poll can skip step 1's entry entirely, leaving
+        # step 2's as the earliest present — must check the step number,
+        # not just take the first entry found.
+        conversation = [
+            {
+                "role": "system",
+                "content": {
+                    "type": "stats",
+                    "step": 2,
+                    "performance_stats": {"time_to_first_token": 1.5},
+                },
+            },
+        ]
+        assert _query_ttft_seconds(conversation) is None
+
+    def test_zero_or_negative_reported_value_is_treated_as_unavailable(self):
+        conversation = [
+            {
+                "role": "system",
+                "content": {
+                    "type": "stats",
+                    "step": 1,
+                    "performance_stats": {"time_to_first_token": 0},
+                },
+            },
+        ]
+        assert _query_ttft_seconds(conversation) is None
+
+    def test_non_finite_value_is_treated_as_unavailable(self):
+        conversation = [
+            {
+                "role": "system",
+                "content": {
+                    "type": "stats",
+                    "step": 1,
+                    "performance_stats": {"time_to_first_token": float("inf")},
+                },
+            },
+        ]
+        assert _query_ttft_seconds(conversation) is None
+
+    def test_non_dict_performance_stats_does_not_raise(self):
+        conversation = [
+            {
+                "role": "system",
+                "content": {
+                    "type": "stats",
+                    "step": 1,
+                    "performance_stats": "not a dict",
+                },
+            },
+        ]
+        assert _query_ttft_seconds(conversation) is None
+
+    def test_malformed_value_does_not_raise(self):
+        conversation = [
+            {
+                "role": "system",
+                "content": {
+                    "type": "stats",
+                    "step": 1,
+                    "performance_stats": {"time_to_first_token": "bad"},
+                },
+            },
+        ]
+        assert _query_ttft_seconds(conversation) is None
 
 
 # ─────────────────────────── _extract_tool_usage ──────────────────────────

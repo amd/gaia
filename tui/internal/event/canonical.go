@@ -97,7 +97,7 @@ type CanonicalInputOption struct {
 }
 
 // CanonicalFinalEvent — terminal success. Usage is an optional
-// {steps?, tools_used?, elapsed?, tokens?} object.
+// {steps?, tools_used?, elapsed?, tokens?, ttft?} object.
 type CanonicalFinalEvent struct {
 	Type   string          `json:"type"`
 	Answer string          `json:"answer"`
@@ -106,13 +106,15 @@ type CanonicalFinalEvent struct {
 
 // CanonicalUsage is the shape the TUI reads out of CanonicalFinalEvent.Usage.
 // Fields absent from the payload stay zero and are simply not displayed.
-// Tokens is the real generated-token count (#2899) — the TUI no longer
-// guesses from the answer string's character length.
+// Tokens is the real generated-token count. TTFT is the turn's first LLM
+// call's own measured time-to-first-token — the server-measured fallback
+// used when no token ever streamed this turn.
 type CanonicalUsage struct {
 	Steps     int     `json:"steps"`
 	ToolsUsed int     `json:"tools_used"`
 	Elapsed   float64 `json:"elapsed"`
 	Tokens    int     `json:"tokens"`
+	TTFT      float64 `json:"ttft"`
 }
 
 // CanonicalErrorEvent — terminal failure. Detail is actionable and surfaced

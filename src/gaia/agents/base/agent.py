@@ -13,6 +13,7 @@ import datetime
 import inspect
 import json
 import logging
+import math
 import os
 import re
 import subprocess
@@ -336,6 +337,35 @@ def _sum_conversation_tokens(
             usage.get("completion_tokens") or usage.get("output_tokens")
         )
     return total_input, total_output
+
+
+def _query_ttft_seconds(conversation: List[Dict[str, Any]]) -> Optional[float]:
+    """Turn's ttft = the FIRST step's own time_to_first_token; a later step's
+    value would drop all earlier tool-decision latency. None when step 1 has
+    no positive value — never a fabricated 0.0."""
+    for entry in conversation:
+        if entry.get("role") == "system" and isinstance(entry.get("content"), dict):
+            content = entry["content"]
+            if content.get("type") == "stats" and "performance_stats" in content:
+                if content.get("step") != 1:
+                    # Step 1's own poll failed/was skipped — never misattribute
+                    # a later step's latency as the turn's ttft.
+                    return None
+                stats = content["performance_stats"]
+                ttft = (
+                    stats.get("time_to_first_token")
+                    if isinstance(stats, dict)
+                    else None
+                )
+                if (
+                    isinstance(ttft, (int, float))
+                    and not isinstance(ttft, bool)
+                    and math.isfinite(ttft)
+                    and ttft > 0
+                ):
+                    return float(ttft)
+                return None
+    return None
 
 
 # Only these field names are ever accepted from a tool's self-reported
@@ -2743,28 +2773,12 @@ Do NOT wrap conversational replies in JSON.
         ``_extract_tool_usage``; this method only appends.
 
         A tool whose internal LLM calls already route through ``self.chat``
-        would double-count here (its tokens would land in BOTH the per-step
-        ``performance_stats`` conversation entries AND this fold). No known
-        tool does this today — this is a constraint on future tools, not a
-        live bug. Warn loudly if it ever happens rather than silently
-        inflating the total.
+        would double-count here — a constraint on future tools, not a live one.
         """
         usage = _extract_tool_usage(tool_result)
         if usage is None:
             return
-        try:
-            stats_look_fresh = bool(self.chat.get_stats())
-        except Exception:  # pylint: disable=broad-except
-            # get_stats() is best-effort diagnostics, not part of this
-            # method's contract — never let it block a real usage fold.
-            stats_look_fresh = False
-        if stats_look_fresh:
-            logger.warning(
-                "Tool '%s' reported its own LLM usage AND self.chat has fresh "
-                "stats — likely double-counting; folding it in anyway but "
-                "this combination should not exist. See _fold_tool_usage.",
-                tool_name,
-            )
+        logger.debug("Tool '%s' reported its own LLM usage: %s", tool_name, usage)
         self._tool_reported_usage.append(usage)
 
     def _execute_tool(self, tool_name: str, tool_args: Dict[str, Any]) -> Any:
@@ -5669,6 +5683,7 @@ Do NOT wrap conversational replies in JSON.
                     final_answer,
                     streaming=self.streaming,
                     total_tokens=pre_output_tokens,
+                    ttft_seconds=_query_ttft_seconds(conversation),
                 )
                 break
 

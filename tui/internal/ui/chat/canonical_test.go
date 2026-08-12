@@ -148,13 +148,9 @@ func TestCanonicalRenderOmitsTokensWhenZero(t *testing.T) {
 	}
 }
 
-// TestCanonicalTTFTAnchorsOnFirstToken reproduces the WARM-query shape
-// measured against a live sidecar (#2899): the status frame arrives
-// essentially immediately, but real generation doesn't start for several
-// more seconds. Before the fix, ttft was set on the status frame and read
-// ~0s in this exact shape — a cold-load-only test (large gap before even the
-// status frame) would not catch that regression, since the old code happened
-// to look right by coincidence when the delay came before the first frame.
+// TestCanonicalTTFTAnchorsOnFirstToken covers the warm-query shape: the
+// status frame arrives immediately, but ttft must anchor on the first real
+// token, not the status frame.
 func TestCanonicalTTFTAnchorsOnFirstToken(t *testing.T) {
 	m, _ := newTestModel(t)
 	m.streaming = true
@@ -183,13 +179,8 @@ func TestCanonicalTTFTAnchorsOnFirstToken(t *testing.T) {
 	}
 }
 
-// TestCanonicalLegacyTransportNeverSetsTTFT locks in a deliberate decision:
-// the legacy subprocess transport's ChunkEvent is documented as "disabled in
-// v1 json-events mode" (types.go), so a legacy AnswerEvent with no preceding
-// ChunkEvent leaves ttft at 0 and the stats line omits it entirely — a
-// strict improvement over the old "any first frame" anchor, which showed a
-// wrong non-zero value there. This is not a bug to fix; this test exists so
-// a future reader doesn't mistake the omission for one.
+// TestCanonicalLegacyTransportNeverSetsTTFT: the legacy transport never
+// fires ChunkEvent, so ttft stays 0 and is omitted — intentional, not a bug.
 func TestCanonicalLegacyTransportNeverSetsTTFT(t *testing.T) {
 	m, _ := newTestModel(t)
 	m.streaming = true
@@ -200,6 +191,67 @@ func TestCanonicalLegacyTransportNeverSetsTTFT(t *testing.T) {
 	last := m.messages[len(m.messages)-1]
 	if last.TTFT != 0 {
 		t.Errorf("legacy transport with no ChunkEvent must leave TTFT at 0, got %v", last.TTFT)
+	}
+}
+
+// TestCanonicalTTFTFallsBackToServerReportedValue: when no token ever
+// streamed this turn (the normal non-streaming tool-calling path), the
+// client must use the server-reported usage.ttft instead of leaving it at 0.
+func TestCanonicalTTFTFallsBackToServerReportedValue(t *testing.T) {
+	m, _ := newTestModel(t)
+	m.streaming = true
+	m.queryStart = time.Now().Add(-82 * time.Second)
+
+	// No CanonicalTokenEvent anywhere in this turn — the non-streaming
+	// daemon path a native tool-calling model always takes.
+	m = feed(t, m, event.CanonicalFinalEvent{
+		Type:   "final",
+		Answer: "triage summary",
+		Usage:  []byte(`{"steps":2,"tools_used":1,"tokens":72,"ttft":9.4}`),
+	})
+
+	last := m.messages[len(m.messages)-1]
+	wantTTFT := time.Duration(9.4 * float64(time.Second))
+	if last.TTFT != wantTTFT {
+		t.Fatalf("TTFT = %v, want %v from the server-reported usage.ttft fallback", last.TTFT, wantTTFT)
+	}
+
+	rendered := m.renderMessage(&last, nil)
+	if !strings.Contains(rendered, "ttft 9.4s") {
+		t.Errorf("rendered stats line missing \"ttft 9.4s\" — ttft still never reaches the user:\n%s", rendered)
+	}
+}
+
+// TestCanonicalTTFTClientObservedWinsOverServerReported ensures a genuinely
+// streamed token still anchors ttft on the real client-observed timestamp
+// rather than the server-reported fallback: the client's wall-clock
+// measurement is an end-to-end observation (covers the wire too), while the
+// server-reported value is only Lemonade's own internal timer for the first
+// LLM call. The two are not interchangeable, so the more complete
+// measurement must win whenever it was actually captured.
+func TestCanonicalTTFTClientObservedWinsOverServerReported(t *testing.T) {
+	m, _ := newTestModel(t)
+	m.streaming = true
+	m.queryStart = time.Now().Add(-8 * time.Second)
+
+	m = feed(t, m, event.CanonicalTokenEvent{Type: "token", Delta: "Hi"})
+	clientTTFT := m.ttft
+	if clientTTFT <= 0 {
+		t.Fatalf("test setup: client-observed ttft should be positive, got %v", clientTTFT)
+	}
+
+	// The final event's server-reported ttft is deliberately a very different
+	// value (0.05s) — if the fallback ever overrides a real client
+	// observation, this assertion catches it.
+	m = feed(t, m, event.CanonicalFinalEvent{
+		Type:   "final",
+		Answer: "Hi there",
+		Usage:  []byte(`{"ttft":0.05}`),
+	})
+
+	last := m.messages[len(m.messages)-1]
+	if last.TTFT != clientTTFT {
+		t.Errorf("TTFT = %v, want the client-observed %v (server-reported fallback must not override it)", last.TTFT, clientTTFT)
 	}
 }
 

@@ -10,6 +10,7 @@ to JSON events that the streaming endpoint sends to the frontend.
 
 import json
 import logging
+import math
 import queue
 import re
 import socket
@@ -548,6 +549,7 @@ class SSEOutputHandler(OutputHandler):
         answer: str,
         streaming: bool = True,  # pylint: disable=unused-argument
         total_tokens: Optional[int] = None,
+        ttft_seconds: Optional[float] = None,
     ):
         if answer:
             answer = _THINK_TAG_SUB_RE.sub("", answer)
@@ -569,10 +571,22 @@ class SSEOutputHandler(OutputHandler):
             "steps": self._step_count,
             "tools_used": self._tool_count,
         }
-        # Omit entirely when no real count exists — never emit "tokens": 0 as
-        # if it were a measured zero (#2899, fail-loud: no silent fake data).
-        if total_tokens is not None:
+        # Omit entirely when no real count exists — never emit a fake zero.
+        # `_sum_conversation_tokens` returns 0 both when a real turn generated
+        # zero output tokens (never happens for a completed answer) and when
+        # no per-step stats were collected at all (the common "no real count"
+        # case) — it can't tell the two apart, so treat <= 0 as unavailable,
+        # same as the ttft guard below.
+        if total_tokens is not None and total_tokens > 0:
             event["tokens"] = total_tokens
+        # Same omit-don't-fake rule for ttft: real value from Lemonade's own
+        # generation timing, or nothing.
+        if (
+            ttft_seconds is not None
+            and math.isfinite(ttft_seconds)
+            and ttft_seconds > 0
+        ):
+            event["ttft"] = round(ttft_seconds, 3)
         self._emit(event)
 
     def print_repeated_tool_warning(self):

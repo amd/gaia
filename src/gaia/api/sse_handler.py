@@ -216,13 +216,14 @@ class SSEOutputHandler(OutputHandler):
         answer: str,
         streaming: bool = True,
         total_tokens: Optional[int] = None,
+        ttft_seconds: Optional[float] = None,
     ):  # pylint: disable=unused-argument
         """Print final answer/result.
 
-        total_tokens is accepted for interface parity with the base
-        OutputHandler contract (#2899) but not emitted here — this is the API
-        server's SSE handler, a different consumer from the Agent-UI/TUI
-        wire contract this issue's token plumbing targets.
+        total_tokens / ttft_seconds are accepted for interface parity with
+        the base OutputHandler contract (#2899, #2899 follow-up) but not
+        emitted here — this is the API server's SSE handler, a different
+        consumer from the Agent-UI/TUI wire contract this plumbing targets.
         """
         self._add_event("final_answer", {"answer": answer})
 

@@ -308,12 +308,20 @@ class OutputHandler(ABC):
     # === Completion Methods (Required) ===
 
     @abstractmethod
-    def print_final_answer(self, answer: str, total_tokens: Optional[int] = None):
+    def print_final_answer(
+        self,
+        answer: str,
+        total_tokens: Optional[int] = None,
+        ttft_seconds: Optional[float] = None,
+    ):
         """Print final answer/result.
 
         total_tokens: real output-token count generated across the run, if
         known (#2899). None means no real count is available — never
         substitute an estimate; the caller omits the stat instead.
+        ttft_seconds: real time-to-first-token for the LLM call that produced
+        this answer, if known (#2899 follow-up). None means no real value is
+        available — never substitute an estimate.
         """
         ...
 
@@ -1529,6 +1537,7 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
         answer: str,
         streaming: bool = True,  # pylint: disable=unused-argument
         total_tokens: Optional[int] = None,  # pylint: disable=unused-argument
+        ttft_seconds: Optional[float] = None,  # pylint: disable=unused-argument
     ) -> None:
         """
         Print the final answer with appropriate styling.
@@ -1537,6 +1546,7 @@ class AgentConsole(TerminalConfirmationMixin, OutputHandler):
             answer: The final answer to display
             streaming: Not used (kept for compatibility)
             total_tokens: Not used here (CLI stats table is out of scope for #2899)
+            ttft_seconds: Not used here (CLI stats table is out of scope for #2899)
         """
         if self.rich_available:
             self.console.print()  # Add newline before
@@ -2487,6 +2497,7 @@ class SilentConsole(TerminalConfirmationMixin, OutputHandler):
         answer: str,
         streaming: bool = True,  # pylint: disable=unused-argument
         total_tokens: Optional[int] = None,  # pylint: disable=unused-argument
+        ttft_seconds: Optional[float] = None,  # pylint: disable=unused-argument
     ) -> None:
         """
         Print the final answer.
@@ -2496,6 +2507,7 @@ class SilentConsole(TerminalConfirmationMixin, OutputHandler):
             answer: The final answer to display
             streaming: Not used (kept for compatibility)
             total_tokens: Not used here (JSON-only mode has its own stats path)
+            ttft_seconds: Not used here (JSON-only mode has its own stats path)
         """
         if self.silence_final_answer:
             return  # Completely silent
