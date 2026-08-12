@@ -572,7 +572,12 @@ class SSEOutputHandler(OutputHandler):
             "tools_used": self._tool_count,
         }
         # Omit entirely when no real count exists — never emit a fake zero.
-        if total_tokens is not None:
+        # `_sum_conversation_tokens` returns 0 both when a real turn generated
+        # zero output tokens (never happens for a completed answer) and when
+        # no per-step stats were collected at all (the common "no real count"
+        # case) — it can't tell the two apart, so treat <= 0 as unavailable,
+        # same as the ttft guard below.
+        if total_tokens is not None and total_tokens > 0:
             event["tokens"] = total_tokens
         # Same omit-don't-fake rule for ttft: real value from Lemonade's own
         # generation timing, or nothing.

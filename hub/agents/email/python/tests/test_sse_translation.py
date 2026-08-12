@@ -5,7 +5,9 @@
 These assert the translation map is TOTAL — every top-level event type
 ``sse_handler.py`` emits has an explicit canonical mapping — and that the
 ``tool_start`` + ``tool_args`` → one ``tool_call`` buffering (spec §6.3) is exact.
-Dependency-light: no Lemonade, Gmail, or ``gaia.ui`` needed.
+Dependency-light by default: no Lemonade or Gmail needed. A handful of tests
+that guard the producer/translator boundary (see ``_real_answer_event``)
+import ``gaia.ui.sse_handler`` — a deliberate, narrow exception; see #2911.
 """
 
 from __future__ import annotations
@@ -22,6 +24,27 @@ def _tr() -> CanonicalTranslator:
 
 def _types(events):
     return [e["type"] for e in events]
+
+
+def _real_answer_event(**print_final_answer_kwargs) -> dict:
+    """Drive the REAL producer — ``SSEOutputHandler.print_final_answer`` —
+    and return the ``answer`` event it actually emits, instead of a
+    hand-typed guess of its shape.
+
+    #2911 review: a synthetic ``{"type": "answer", ...}`` dict that simply
+    omits a key (e.g. "tokens") passes against the translator's mapping
+    logic even when the real producer emits that key with a fake `0`
+    instead of leaving it off — the translator was never wrong, so the
+    hand-built input can't catch a producer-side regression. Importing
+    ``gaia.ui`` here is a deliberate, narrow exception to this file's
+    dependency-light default, scoped to the tests that specifically guard
+    the producer/translator boundary.
+    """
+    from gaia.ui.sse_handler import SSEOutputHandler
+
+    handler = SSEOutputHandler()
+    handler.print_final_answer("Done.", **print_final_answer_kwargs)
+    return handler.event_queue.get_nowait()
 
 
 # ---------------------------------------------------------------------------
@@ -52,23 +75,20 @@ def test_answer_maps_to_final_with_usage():
 def test_answer_maps_tokens_into_usage():
     # #2899: the real generated-token count, when the source event carries
     # one, must reach usage.tokens — the TUI reads it in place of its old
-    # char-count guess.
-    out = _tr().translate(
-        {
-            "type": "answer",
-            "content": "Done.",
-            "elapsed": 1.2,
-            "steps": 3,
-            "tools_used": 2,
-            "tokens": 42,
-        }
-    )
+    # char-count guess. Driven off the real producer (see
+    # ``_real_answer_event``) so this fails if the wire key ever changes.
+    out = _tr().translate(_real_answer_event(total_tokens=42))
     assert out[0]["usage"]["tokens"] == 42
 
 
 def test_answer_omits_tokens_when_source_has_none():
     # No real count available -> omitted entirely, never a fake 0 (#2899).
-    out = _tr().translate({"type": "answer", "content": "Done.", "steps": 1})
+    # Regression guard for #2911: the producer used to always pass an int
+    # (0 when no per-step stats existed), so this event legitimately carried
+    # `tokens: 0` on the wire until the producer-side guard was fixed to
+    # match ttft's. A hand-built dict without the "tokens" key can't catch
+    # that — it has to come from the real producer.
+    out = _tr().translate(_real_answer_event(total_tokens=0))
     assert "tokens" not in out[0]["usage"]
 
 
@@ -76,22 +96,13 @@ def test_answer_maps_ttft_into_usage():
     # #2899 follow-up: real ttft was never reaching the TUI at all on the
     # non-streaming daemon path (every native tool-calling model's normal
     # path) -- when the source event carries one, it must reach usage.ttft.
-    out = _tr().translate(
-        {
-            "type": "answer",
-            "content": "Done.",
-            "steps": 2,
-            "tools_used": 1,
-            "tokens": 72,
-            "ttft": 9.4,
-        }
-    )
+    out = _tr().translate(_real_answer_event(total_tokens=72, ttft_seconds=9.4))
     assert out[0]["usage"]["ttft"] == 9.4
 
 
 def test_answer_omits_ttft_when_source_has_none():
     # No real value available -> omitted entirely, never a fake 0.
-    out = _tr().translate({"type": "answer", "content": "Done.", "steps": 1})
+    out = _tr().translate(_real_answer_event(total_tokens=0))
     assert "ttft" not in out[0]["usage"]
 
 
