@@ -91,9 +91,6 @@ var (
 	userStyle = lipgloss.NewStyle().
 			Foreground(theme.Dim)
 
-	assistantStyle = lipgloss.NewStyle().
-			Foreground(theme.Text)
-
 	errorStyle = lipgloss.NewStyle().
 			Foreground(theme.Danger)
 
@@ -104,9 +101,6 @@ var (
 			Bold(true).
 			Foreground(theme.Info)
 
-	successStyle = lipgloss.NewStyle().
-			Foreground(theme.Success)
-
 	failStyle = lipgloss.NewStyle().
 			Foreground(theme.Danger)
 
@@ -115,10 +109,6 @@ var (
 
 	thinkingStyle = lipgloss.NewStyle().
 			Foreground(theme.Success)
-
-	stepStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(theme.Info)
 
 	statusMsgStyle = lipgloss.NewStyle().
 			Foreground(theme.Dim).
@@ -715,12 +705,18 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.viewport.LineDown(1)
 		return m.afterScroll(), nil
 
-	case tea.KeyHome:
-		m.viewport.GotoTop()
-		return m.afterScroll(), nil
-
-	case tea.KeyEnd:
-		m.viewport.GotoBottom()
+	case tea.KeyHome, tea.KeyEnd:
+		// Home/End belong to whatever the user is working in. Mid-sentence they
+		// are cursor keys; with an empty composer there is no cursor to move, so
+		// they jump the transcript instead.
+		if strings.TrimSpace(m.input.Value()) != "" {
+			break
+		}
+		if msg.Type == tea.KeyHome {
+			m.viewport.GotoTop()
+		} else {
+			m.viewport.GotoBottom()
+		}
 		return m.afterScroll(), nil
 	}
 
@@ -1345,21 +1341,61 @@ func (m ChatModel) renderMessage(msg *Message, seen map[string]bool) string {
 	}
 }
 
-// workLogLines caps the live work log. Bounded so a long turn cannot push the
-// transcript off screen, deep enough that repeated tool calls read as progress.
+// workLogLines caps how many ACTIONS the live work log keeps. Bounded so a long
+// turn cannot push the transcript off screen, deep enough that repeated tool
+// calls read as progress.
 const workLogLines = 6
+
+// workLogMaxRows caps the log's rendered HEIGHT. An action can occupy two rows
+// once its outcome lands, so the action cap alone would let the region grow to
+// 13 rows and shove the answer the user is reading off the top.
+const workLogMaxRows = 9
+
+// logRows is the height budget for THIS terminal: never more than half the
+// visible pane, so the log cannot crowd out the transcript on a short window
+// (a 12-row terminal leaves the viewport 5 rows — the fixed cap alone would
+// fill it and then some).
+func (m ChatModel) logRows() int {
+	budget := workLogMaxRows
+	if h := m.viewport.Height; h > 0 && h/2 < budget {
+		budget = h / 2
+	}
+	if budget < 2 {
+		budget = 2
+	}
+	return budget
+}
+
+// logWidth is the column budget for one work-log line on THIS terminal. The
+// fixed caps are a readability ceiling, not a layout assumption: below ~80
+// columns every line would soft-wrap and double the region's real height.
+func (m ChatModel) logWidth() int {
+	// 4 for the marker gutter, 2 for the viewport's own edge.
+	w := m.width - 6
+	if w > narrationWidth {
+		w = narrationWidth
+	}
+	if w < 16 {
+		w = 16
+	}
+	return w
+}
 
 // stillWorkingAfter is when the live region starts saying the wait is expected.
 // A local 4B model routinely takes 60-90s on an inbox triage; without this line
 // the user's next move is ctrl+c.
 const stillWorkingAfter = 20 * time.Second
 
-// Work-log glyphs. Deliberately symbols, not emoji: the braille spinner already
-// on this line proves the terminal handles wide Unicode, but an emoji font is a
-// separate bet. State is never carried by a glyph or a colour alone — a failed
-// call says "failed" in words on its own outcome line.
+// Work-log glyphs, all width-1 and none of them emoji.
+//
+// The first cut used ⚒ (U+2692), which carries Emoji=Yes: a terminal with an
+// emoji font renders it DOUBLE width while ansi.StringWidth still reports 1, so
+// every tool line overruns its budget by a column. ▪ (U+25AA), ✻ (U+273B) and
+// └ carry no emoji presentation and measure 1 everywhere. State is never carried
+// by a glyph or a colour anyway — a failed call says "failed" in words on its
+// own outcome line.
 const (
-	glyphTool   = "⚒"
+	glyphTool   = "▪"
 	glyphStatus = "✻"
 	glyphDetail = "└"
 )
@@ -1388,21 +1424,49 @@ func (m ChatModel) renderLiveRegion() string {
 		live = n - 1
 	}
 
-	var lines []string
+	// Rendered per action, so the height cap can drop whole actions. Trimming
+	// raw lines instead would leave a `└` outcome line orphaned at the top,
+	// hanging under nothing.
+	groups := make([][]string, 0, len(log)+1)
 	for i, item := range log {
-		lines = append(lines, m.renderActivityItem(item, i == live, elapsed)...)
+		groups = append(groups, m.renderActivityItem(item, i == live, elapsed))
 	}
 	if live < 0 {
-		lines = append(lines, m.renderLiveLine(m.idlePhrase(len(log)), elapsed))
+		groups = append(groups, []string{m.renderLiveLine(m.idlePhrase(len(log)), elapsed)})
 	}
-
 	// Shown until something has actually COMPLETED. A stage line alone does not
 	// count: a turn that sits on "Working out how to answer" for 1:47 with no
 	// tool result under it is precisely the wait that needs saying is normal.
-	// Once a result has landed the log itself is the reassurance, and the line
-	// would only cost the newest entry its screen row.
-	if !anyCompleted(log) && elapsed >= stillWorkingAfter {
-		lines = append(lines, "     "+activityStyle.Render(glyphDetail+" still working — local model, usually 60-90s"))
+	// Measured against the WHOLE turn, not the trimmed window, or the hint
+	// reappears the moment the last finished action scrolls out of view.
+	hint := ""
+	if !anyCompleted(m.activity) && elapsed >= stillWorkingAfter {
+		hint = "     " + activityStyle.Render(glyphDetail+" still working — local model, usually 60-90s")
+	}
+
+	// The hint is part of the height budget, not an extra row bolted on after
+	// it — counted here so the region can never exceed logRows().
+	budget := m.logRows()
+	if hint != "" {
+		budget--
+	}
+	// Oldest first: the newest action is the one being watched, and the live
+	// line is always last.
+	rows := 0
+	for i := len(groups) - 1; i >= 0; i-- {
+		rows += len(groups[i])
+		if rows > budget {
+			groups = groups[i+1:]
+			break
+		}
+	}
+
+	var lines []string
+	for _, g := range groups {
+		lines = append(lines, g...)
+	}
+	if hint != "" {
+		lines = append(lines, hint)
 	}
 
 	return strings.Join(lines, "\n")
@@ -1427,6 +1491,11 @@ func anyCompleted(log []ActivityItem) bool {
 // directly under it, and two lines saying the same thing read as a stuck loop.
 func (m ChatModel) idlePhrase(logLen int) string {
 	switch {
+	case m.cancelPending:
+		// requestCancel clears the activity log but leaves the turn streaming,
+		// so without this the spinner sat under "cancelling…" cheerfully
+		// announcing "Getting started".
+		return "Stopping at the next step"
 	case m.buffer != "":
 		return "Writing your answer"
 	case logLen == 0:
@@ -1504,11 +1573,18 @@ func formatElapsed(d time.Duration) string {
 // line begins with the word "failed" (see toolResultDetail / failureDetail), so
 // the state survives a terminal with no colour.
 func (m ChatModel) renderActivityItem(item ActivityItem, live bool, elapsed time.Duration) []string {
+	width := m.logWidth()
+	// The counter is reserved BEFORE truncating, not appended after. Appending
+	// after meant any narration already at the cap — which shell commands and
+	// long paths routinely are, and which are exactly the calls that repeat —
+	// had its "x14" cut straight back off.
 	content := item.Content
 	if item.Repeat > 0 {
-		content += fmt.Sprintf(" x%d", item.Repeat+1)
+		suffix := fmt.Sprintf(" x%d", item.Repeat+1)
+		content = truncateRunes(content, width-len(suffix)) + suffix
+	} else {
+		content = truncateRunes(content, width)
 	}
-	content = truncateRunes(content, narrationWidth)
 
 	var head string
 	switch {
@@ -1528,7 +1604,7 @@ func (m ChatModel) renderActivityItem(item ActivityItem, live bool, elapsed time
 	}
 
 	lines := []string{head}
-	if detail := truncateRunes(clean(item.Detail), detailWidth); detail != "" {
+	if detail := truncateRunes(clean(item.Detail), width-2); detail != "" {
 		style := activityStyle
 		if item.Success != nil && !*item.Success {
 			style = failStyle

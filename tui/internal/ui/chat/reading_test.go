@@ -209,3 +209,52 @@ func TestProseIsCappedToAReadableMeasure(t *testing.T) {
 		t.Errorf("answer width %d exceeds the terminal's own %d columns", w, 60)
 	}
 }
+
+// An action can occupy two rows once its outcome lands, so capping ACTIONS
+// alone let the live region grow to 13 rows and shove the answer being read off
+// the top of the pane.
+func TestTheLiveRegionHasABoundedHeight(t *testing.T) {
+	m := newTestChat(t)
+	for _, tool := range []string{
+		"list_inbox", "get_message", "classify", "apply_prefs",
+		"pre_scan_inbox", "index_document", "read_file", "summarize",
+	} {
+		m = feed(t, m,
+			event.CanonicalToolCallEvent{Type: "tool_call", Tool: tool},
+			event.CanonicalToolResultEvent{Type: "tool_result", Tool: tool, Preview: "done in 12ms"},
+		)
+	}
+
+	out := ansi.Strip(m.renderLiveRegion())
+	t.Logf("\n%s", out)
+	if n := len(strings.Split(out, "\n")); n > workLogMaxRows {
+		t.Errorf("live region is %d rows; capped at %d", n, workLogMaxRows)
+	}
+	// Trimming drops whole actions, so no outcome line is left hanging under
+	// nothing at the top.
+	if first := strings.TrimSpace(strings.Split(out, "\n")[0]); strings.HasPrefix(first, glyphDetail) {
+		t.Errorf("an outcome line was orphaned at the top: %q", first)
+	}
+}
+
+// Home/End are cursor keys while there is something to move the cursor in.
+func TestHomeAndEndYieldToTheComposer(t *testing.T) {
+	m := newTestChat(t)
+	m.streaming = false
+	for i := 0; i < 40; i++ {
+		m.messages = append(m.messages, Message{Role: RoleUser, Content: "question"})
+	}
+	m.updateViewport()
+
+	m.input.SetValue("half a sentence")
+	updated, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyHome})
+	if !updated.(ChatModel).viewport.AtBottom() {
+		t.Error("Home scrolled the transcript while the user was mid-sentence")
+	}
+
+	m.input.SetValue("")
+	updated, _ = m.handleKey(tea.KeyMsg{Type: tea.KeyHome})
+	if updated.(ChatModel).viewport.AtBottom() {
+		t.Error("Home did not jump the transcript with an empty composer")
+	}
+}
