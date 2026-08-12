@@ -87,6 +87,12 @@ type SSEClient struct {
 	// noticedOldPeer records that the "this agent cannot be asked anything"
 	// notice has already been shown, so it appears once per launch, not per turn.
 	noticedOldPeer bool
+	// sessionID identifies this conversation to a peer that supports it
+	// (#2829). Minted lazily on first Send (mirrors runID's own mint time,
+	// so a mint failure surfaces the same way runID's does); "" means "mint
+	// on next Send". /clear clears it here so the NEXT turn starts a new
+	// conversation server-side too, not just in the visible transcript.
+	sessionID string
 }
 
 // runHandle is the cancel side of the currently streaming run.
@@ -129,6 +135,11 @@ type queryRequest struct {
 	// and then send it explicitly — including `false`, which is a real answer
 	// the agent branches on, not an absence.
 	CanAnswerQuestions *bool `json:"can_answer_questions,omitempty"`
+	// Plain string (not a pointer, unlike CanAnswerQuestions): unlike a bool,
+	// there is no legitimate "explicit empty" session_id to distinguish from
+	// absence -- a minted id is never "", so plain omitempty is enough. Sent
+	// only once negotiation proves the peer is >= 2.12 (#2829).
+	SessionID string `json:"session_id,omitempty"`
 }
 
 // Send starts one turn. The returned channel carries the canonical event types
@@ -174,6 +185,13 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 		interactive := s.opts.Interactive
 		canAnswer = &interactive
 	}
+	var sessionID string
+	if peer.supportsSession {
+		sessionID, err = s.ensureSessionID()
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	payload, err := json.Marshal(queryRequest{
 		Query:              query,
@@ -182,6 +200,7 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 		Model:              s.opts.Model,
 		MaxSteps:           s.opts.MaxSteps,
 		CanAnswerQuestions: canAnswer,
+		SessionID:          sessionID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("could not encode the '%s' query request: %w", s.agentID, err)
@@ -621,6 +640,13 @@ func (s *SSEClient) clearActive(handle *runHandle) {
 	s.mu.Unlock()
 }
 
+// uiContextMarker labels the card-row block appended to a stored assistant
+// turn. It reads as metadata, not as a quotable heading — a bare
+// "[shown to the user]" sits in the transcript looking exactly like content
+// the model itself wrote, and a later turn would copy it verbatim into a new
+// reply instead of treating it as a reference note.
+const uiContextMarker = "[ui-context: cards already shown to the user — reference only, never repeat verbatim]"
+
 func (s *SSEClient) appendTurn(query, answer string, shown []string) {
 	// The assistant turn records what the USER saw, not only what the model
 	// said. Cards are drawn by this client, so their contents never reach the
@@ -629,7 +655,7 @@ func (s *SSEClient) appendTurn(query, answer string, shown []string) {
 	content := answer
 	if len(shown) > 0 {
 		content = strings.TrimSpace(
-			answer + "\n\n[shown to the user]\n" + strings.Join(shown, "\n"),
+			answer + "\n\n" + uiContextMarker + "\n" + strings.Join(shown, "\n"),
 		)
 	}
 	s.mu.Lock()
@@ -687,10 +713,37 @@ func (s *SSEClient) Transcript() []Turn {
 // ResetTranscript drops the accumulated context, so the next turn starts fresh.
 // Wired to the chat screen's /clear, which would otherwise clear the visible
 // history while still pushing it as `context`.
+//
+// Also drops the session id (#2829): /clear starts a NEW conversation, and a
+// stale id would let the sidecar resolve the pre-clear agent even though the
+// visible transcript says otherwise. No network call — matches ResetTranscript
+// itself, which has no error return and is called outside a tea.Cmd
+// (model.go), so a blocking DELETE here would freeze the UI. The next Send
+// mints a fresh id lazily, exactly like the very first turn.
 func (s *SSEClient) ResetTranscript() {
 	s.mu.Lock()
 	s.transcript = nil
+	s.sessionID = ""
 	s.mu.Unlock()
+}
+
+// ensureSessionID returns this conversation's session id, minting one on
+// first use. Lazy and mutex-guarded so concurrent callers never mint two
+// (Send() itself is documented as serialized, but this stays correct either
+// way). Reuses newRunID's generator; a mint failure is reported the same way
+// a run_id mint failure already is, by Send returning the error.
+func (s *SSEClient) ensureSessionID() (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sessionID != "" {
+		return s.sessionID, nil
+	}
+	id, err := newRunID()
+	if err != nil {
+		return "", fmt.Errorf("could not mint a session id: %w", err)
+	}
+	s.sessionID = id
+	return id, nil
 }
 
 // Close cancels any in-flight run and refuses further sends.

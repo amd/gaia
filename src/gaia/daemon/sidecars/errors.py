@@ -72,8 +72,30 @@ class ModeConflictError(SidecarError):
     """The sidecar is running in a different mode than the ensure requested."""
 
 
+class DevSrcDirResolutionError(SidecarError):
+    """A caller's dev-mode source directory could not be resolved or was invalid.
+
+    Raised client-side (CLI, Agent UI) before any request reaches the daemon —
+    an explicit ``--dev-src-dir`` was not absolute, or the caller's cwd is not
+    inside a git work tree — and daemon-side when a non-absolute ``dev_src_dir``
+    arrives over the wire. Neither case has a silent guess to fall back to.
+    """
+
+
 class SidecarNotRunningError(SidecarError):
     """The agent is registered but has no running sidecar to talk to."""
+
+
+class SidecarUnresponsiveError(SidecarError):
+    """The sidecar process is alive but no longer answering its own /health.
+
+    Distinct from :class:`SidecarNotRunningError` (no process) and
+    :class:`HealthTimeoutError` (never came up at all): the process passed its
+    startup handshake and has since stopped serving — a blocked event loop, a
+    wedged credential-store read, or a hung dependency. The process being alive
+    is why this cannot be detected by ``poll()``, and why the startup health
+    check alone reports it as healthy forever.
+    """
 
 
 class CapacityError(SidecarError):

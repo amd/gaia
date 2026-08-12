@@ -33,6 +33,7 @@ except ImportError:
 
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.install_hints import source_install_command
+from gaia.installer._stdin import stdin_is_tty
 from gaia.installer.lemonade_installer import LemonadeInfo, LemonadeInstaller
 from gaia.llm.lemonade_launcher import (
     build_start_command,
@@ -346,7 +347,7 @@ class InitCommand:
             if not response:
                 return default
             return response in ("y", "yes")
-        except (EOFError, KeyboardInterrupt):
+        except EOFError:
             self._print("")
             return False
 
@@ -507,6 +508,22 @@ class InitCommand:
         Returns:
             Exit code (0 for success, non-zero for failure)
         """
+        # No one to answer prompts non-interactively -- refuse instead of
+        # silently declining every one and claiming a setup that never ran.
+        if not self.yes and not stdin_is_tty():
+            print(
+                f"Error: refusing to run 'gaia init --profile {self.profile}' "
+                "non-interactively without --yes.\n"
+                "Pass --yes to auto-confirm setup prompts (add --skip-models "
+                "to also skip downloading models).\n"
+                "Note: --yes also authorizes an unattended Lemonade upgrade, "
+                "which uninstalls the current Lemonade install before "
+                "reinstalling, if the detected version is below this "
+                "profile's minimum.",
+                file=sys.stderr,
+            )
+            return 1
+
         self._print_header()
 
         profile_config = INIT_PROFILES[self.profile]
@@ -705,7 +722,7 @@ class InitCommand:
             self._print_error(
                 f"Platform '{platform_name}' is not supported for automatic installation."
             )
-            self._print("   GAIA init only supports Windows and Linux.")
+            self._print("   GAIA init only supports Windows, Linux, and macOS.")
             self._print(
                 "   Please install Lemonade Server manually from: https://www.lemonade-server.ai"
             )
@@ -988,6 +1005,14 @@ class InitCommand:
             True on success, False on failure
         """
         self._print("")
+
+        # macOS has no scripted uninstall, but `installer -pkg` upgrades in place —
+        # calling uninstall() would only print removal instructions the user
+        # doesn't need.
+        if self.installer.system == "darwin":
+            self._print(f"   Upgrading Lemonade v{old_version} in place...")
+            return self._install_lemonade()
+
         if RICH_AVAILABLE and self.console:
             self.console.print(
                 f"   [bold]Uninstalling[/bold] Lemonade [red]v{old_version}[/red]..."
@@ -1043,7 +1068,12 @@ class InitCommand:
                 plain_label = _re.sub(r"\[.*?\]", "", label)
                 self._print(f"   {plain_label}")
 
-            if installer_path is not None and not self.yes:
+            # macOS installs run headless via `installer -pkg`; only the MSI pops a window.
+            if (
+                installer_path is not None
+                and not self.yes
+                and self.installer.system == "windows"
+            ):
                 if RICH_AVAILABLE and self.console:
                     self.console.print()
                     self.console.print(
@@ -1310,7 +1340,7 @@ class InitCommand:
                     "   [bold]Press Enter when server is started...[/bold]", end=""
                 )
                 input()
-            except (EOFError, KeyboardInterrupt):
+            except EOFError:
                 self.console.print()
                 self._print_error("Initialization cancelled")
                 return False
@@ -1808,7 +1838,6 @@ class InitCommand:
 
             models_passed = 0
             models_failed = []
-            interrupted = False
 
             try:
                 for model_id in model_ids:
@@ -1860,16 +1889,14 @@ class InitCommand:
             except KeyboardInterrupt:
                 self.console.print()
                 self._print_warning("Verification interrupted")
-                interrupted = True
+                # Ctrl-C means stop, not "skip the rest and declare success" --
+                # propagate to run()'s own KeyboardInterrupt handler.
+                raise
 
             # Summary
             total = len(model_ids)
             self.console.print()
-            if interrupted:
-                self._print_success(
-                    f"Verified {models_passed} model(s) before interruption"
-                )
-            elif models_failed:
+            if models_failed:
                 self._print_warning(f"Models verified: {models_passed}/{total} passed")
                 self.console.print()
                 self.console.print(
@@ -2044,11 +2071,23 @@ class InitCommand:
             "Chat agent not installed yet -- run: "
             f"{source_install_command('gaia-agent-chat')}"
         )
+        # Scoped like run()'s has_hub_agent_check (agent == "chat" covers
+        # chat + npu) -- gating on chat_agent_available alone would mark
+        # sd/vlm/minimal permanently "incomplete"; they never install it.
+        setup_incomplete = (
+            INIT_PROFILES[self.profile].get("agent") == "chat"
+            and not chat_agent_available
+        )
+        headline = (
+            "GAIA initialization incomplete - see below"
+            if setup_incomplete
+            else "GAIA initialization complete!"
+        )
         if RICH_AVAILABLE and self.console:
             self.console.print()
             self.console.print(
                 Panel(
-                    "[bold green]GAIA initialization complete![/bold green]",
+                    f"[bold green]{headline}[/bold green]",
                     border_style="green",
                     padding=(0, 2),
                 )
@@ -2130,7 +2169,7 @@ class InitCommand:
         else:
             self._print("")
             self._print("=" * 60)
-            self._print("  GAIA initialization complete!")
+            self._print(f"  {headline}")
             self._print("=" * 60)
             self._print("")
             self._print("  Quick start commands:")

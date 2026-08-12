@@ -399,6 +399,9 @@ class SSEOutputHandler(OutputHandler):
     that can be consumed by the API server.
     """
 
+    # Denies outright rather than waiting for a user decision.
+    blocking_confirmation: bool = False
+
     def __init__(self, debug_mode: bool = False):
         """
         Initialize the SSE output handler.
@@ -411,6 +414,21 @@ class SSEOutputHandler(OutputHandler):
         self.debug_mode = debug_mode
         self.current_step = 0
         self.total_steps = 0
+
+    def confirm_tool_execution(self, tool_name, tool_args) -> bool:
+        """Deny confirmation-gated tools — the API has no approval channel.
+
+        The base handler already fails closed; this override emits a
+        ``tool_confirm_denied`` event naming the tool, why it was refused, and
+        to use the Agent UI instead, so the reason reaches the caller. Returns
+        True only under the shared GAIA_AUTO_APPROVE_TOOLS opt-in.
+        """
+        if self.auto_approve_confirmations_enabled():
+            self.log_auto_approval(tool_name)
+            self._add_event("warning", {"message": "Auto-approved without review"})
+            return True
+        self._add_event("tool_confirm_denied", {"tool": tool_name, "message": "..."})
+        return self.deny_tool_execution(tool_name, "...")
 
     def _add_event(self, event_type: str, data: Dict[str, Any]):
         """Add an event to the output queue."""

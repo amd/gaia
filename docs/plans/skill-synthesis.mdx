@@ -103,9 +103,9 @@ new model, no new store engine.
      of ≥ MIN_OCCURRENCES
                                  │
                                  ▼
-  3. DISTILL  distill_cluster(cluster, llm) → Skill | None     PROPOSED
+  3. DISTILL  distill_cluster(cluster, llm) → DistilledProcedure|None PROPOSED
      one low-temp LLM call per cluster (DISTILL_SYSTEM_PROMPT);
-     Skill.parse() validates; literal "SKIP" → None
+     DistilledProcedure.parse() validates; literal "SKIP" → None
                                  │
                                  ▼
   4. STORE    reconcile_and_store(candidate, store)            PROPOSED
@@ -242,11 +242,11 @@ The pipeline *emits* a `SKILL.md`; it does **not** define the format. The format
 **references** that schema and never redefines a field.
 
 The subtlety — and the single most important correctness point — is the split
-between **what the LLM emits** and **what `Skill.parse()` injects**. The guiding
+between **what the LLM emits** and **what `DistilledProcedure.parse()` injects**. The guiding
 rule: **the LLM emits only the fields it *derives* from the learned procedure;
 fixed constants are injected, never emitted.** So `DISTILL_SYSTEM_PROMPT` asks the
 model for an **intermediate** frontmatter of four learned fields, and a
-deterministic `Skill.parse()` maps them to the canonical #691 document and adds the
+deterministic `DistilledProcedure.parse()` maps them to the canonical #691 document and adds the
 two constants:
 
 | Field | Origin | → Canonical `SKILL.md` (#691) | Why |
@@ -254,8 +254,8 @@ two constants:
 | `name` | **LLM (derived)** | `name` | Identity, derived from the cluster. Matches the rule at [`skill-format.mdx:150`](https://github.com/amd/gaia/blob/main/docs/plans/skill-format.mdx). |
 | `when_to_use` | **LLM (derived)** | `description` | **`when_to_use` is the LLM-emitted field on purpose** — it forces the model to *conclude the trigger boundaries* of the skill; `description` is too vague a label to constrain it. Its embedding is what `recall_skill(goal)` matches against. Maps to the required `description` ([`skill-format.mdx:151`](https://github.com/amd/gaia/blob/main/docs/plans/skill-format.mdx)). |
 | `tools_required` (top-level) | **LLM (derived)** | `metadata.gaia.tools_required` | The tool set the procedure actually used. #691 **locks** `tools_required` as the cross-spec recipe contract and nests it under `metadata.gaia` ([`skill-format.mdx:143`](https://github.com/amd/gaia/blob/main/docs/plans/skill-format.mdx), `:158`). |
-| `markdown_body` | **LLM (derived)** | body | The LLM writes the **full procedure — numbered steps *and* a `## Edge cases` section — inline**. `Skill.parse()` does not synthesize a separate edge-case section; the distilled body already carries it. |
-| `license: MIT`, `version: 1.0.0` | **`Skill.parse()` (fixed)** | `license`, `version` | **Fixed constants, not learned content — the LLM does *not* emit them.** `license` is always the repository license ([`skill-format.mdx:152`](https://github.com/amd/gaia/blob/main/docs/plans/skill-format.mdx)); a freshly synthesised skill is always `version: 1.0.0` (SemVer — [`skill-format.mdx:153`](https://github.com/amd/gaia/blob/main/docs/plans/skill-format.mdx)). Injecting them keeps the prompt's output surface purely dynamic and removes any chance the model emits a wrong version. |
+| `markdown_body` | **LLM (derived)** | body | The LLM writes the **full procedure — numbered steps *and* a `## Edge cases` section — inline**. `DistilledProcedure.parse()` does not synthesize a separate edge-case section; the distilled body already carries it. |
+| `license: MIT`, `version: 1.0.0` | **`DistilledProcedure.parse()` (fixed)** | `license`, `version` | **Fixed constants, not learned content — the LLM does *not* emit them.** `license` is always the repository license ([`skill-format.mdx:152`](https://github.com/amd/gaia/blob/main/docs/plans/skill-format.mdx)); a freshly synthesised skill is always `version: 1.0.0` (SemVer — [`skill-format.mdx:153`](https://github.com/amd/gaia/blob/main/docs/plans/skill-format.mdx)). Injecting them keeps the prompt's output surface purely dynamic and removes any chance the model emits a wrong version. |
 
 A synthesised recipe therefore emits a **bounded field set** — `name`,
 `description`, `license`, `version`, `metadata.gaia.tools_required`, and the body.
@@ -269,10 +269,10 @@ most-restrictive `experimental` at load time.
 This is the **one deliberate refinement** of the maintainer's pseudocode: his
 `DISTILL_SYSTEM_PROMPT` listed `version: 1.0.0` *inside* the LLM's required output
 ([#887 technical-spec comment](https://github.com/amd/gaia/issues/887#issuecomment-4321407541));
-this spec moves `version` (and `license`) to `Skill.parse()` injection because both
+this spec moves `version` (and `license`) to `DistilledProcedure.parse()` injection because both
 are fixed, not derived. The pipeline otherwise keeps the maintainer's prompt as
 written, and **(a)** treats the four learned fields as the intermediate shape,
-**(b)** specifies `Skill.parse()` as the translator to the locked schema, and
+**(b)** specifies `DistilledProcedure.parse()` as the translator to the locked schema, and
 **(c)** guarantees the emitted file validates under #691 — an explicit acceptance
 criterion (see [Acceptance criteria traceability](#acceptance-criteria-traceability)).
 
@@ -448,7 +448,7 @@ current code; these are the corrections an implementer must internalize.
 
 | Original framing | Reality on `main` | Consequence |
 |---|---|---|
-| `DISTILL_SYSTEM_PROMPT` emits `when_to_use` + top-level `tools_required` as the on-disk shape | #691 locks `description` + `metadata.gaia.tools_required` ([`skill-format.mdx:151`](https://github.com/amd/gaia/blob/main/docs/plans/skill-format.mdx), `:158`) | The prompt fields are the **intermediate** shape; `Skill.parse()` maps them. See [The format contract](#the-format-contract). |
+| `DISTILL_SYSTEM_PROMPT` emits `when_to_use` + top-level `tools_required` as the on-disk shape | #691 locks `description` + `metadata.gaia.tools_required` ([`skill-format.mdx:151`](https://github.com/amd/gaia/blob/main/docs/plans/skill-format.mdx), `:158`) | The prompt fields are the **intermediate** shape; `DistilledProcedure.parse()` maps them. See [The format contract](#the-format-contract). |
 | Scope C: *"New **tool**: `recall_skill`"* | The memory registry is exactly five tools ([`memory.py:1984`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py)+) and the planner calls recall programmatically | `recall_skill` is an **internal method**, not a sixth `@tool`. See [Decided design](#decided-design). |
 | Hook is `on_consolidation_pass` → `_consolidate_old_sessions / _reconcile_contradictions / _prune_stale` | Those names don't exist; the real pass is `_run_memory_post_init` → `reconcile_memory` + `consolidate_old_sessions` ([`memory.py:1206`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py)) | Bind `_synthesize_skills` to the **real** maintenance method. |
 | Tunables in `~/.gaia/config.toml [memory.skill_synthesis]` | Memory is configured via `~/.gaia/memory_settings.json` ([`memory.py:57`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py)) + `GAIA_MEMORY_DISABLED`; there is **no** `config.toml` `[memory]` section | Surface the thresholds on the **existing** memory-settings surface, not a new TOML section — see [Open questions](#open-questions). |
@@ -460,7 +460,7 @@ current code; these are the corrections an implementer must internalize.
 - **The intermediate frontmatter is not the on-disk schema.** A reader of the
   maintainer's `DISTILL_SYSTEM_PROMPT` must not write `when_to_use` /
   top-level `tools_required` to disk. The on-disk file is the #691 schema
-  (`description`, `metadata.gaia.tools_required`); `Skill.parse()` is the only
+  (`description`, `metadata.gaia.tools_required`); `DistilledProcedure.parse()` is the only
   bridge.
 - **`recall_skill` is not an LLM tool.** Do not register a sixth memory `@tool`;
   it would change the five-tool registry the rest of the system assumes.
@@ -510,7 +510,7 @@ mirroring the v1→v2 `ADD COLUMN` pattern
 ### Phase 1 — Detect → cluster → distill → reconcile/store (PROPOSED)
 
 `skill_synthesis.py` with `extract_sequences` / `cluster_by_goal` /
-`distill_cluster` / `Skill.parse` / `reconcile_and_store`, hooked into the
+`distill_cluster` / `DistilledProcedure.parse` / `reconcile_and_store`, hooked into the
 maintenance pass as `_synthesize_skills` after `consolidate_old_sessions`
 ([`memory.py:1233`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py)).
 Reuses the nomic-768 embedder ([`memory.py:148`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py)).
@@ -569,9 +569,9 @@ The recipe reuses `triage-support-ticket`
 so its `tools_required` resolve to real registry tools.
 
 <AccordionGroup>
-<Accordion title="A. The synthesised SKILL.md (Skill.parse output — the on-disk #691 document)">
+<Accordion title="A. The synthesised SKILL.md (DistilledProcedure.parse output — the on-disk #691 document)">
 
-What `Skill.parse()` writes after distillation — a valid #691 document. `name`,
+What `DistilledProcedure.parse()` writes after distillation — a valid #691 document. `name`,
 `description`, `license`, `version`, and `metadata.gaia.tools_required` are all the
 locked schema. Each `tools_required` name is a real registry tool (`query_documents`
 from `RAGToolsMixin`, `read_file` from `FileIOToolsMixin`, `remember` from the
@@ -606,12 +606,12 @@ metadata:
 ```
 
 </Accordion>
-<Accordion title="B. The intermediate DISTILL_SYSTEM_PROMPT output (before Skill.parse)">
+<Accordion title="B. The intermediate DISTILL_SYSTEM_PROMPT output (before DistilledProcedure.parse)">
 
 What the LLM emits — **only the four learned fields**: top-level `name`,
 `when_to_use`, `tools_required`, and a body that already contains the
 `## Edge cases` section. No `version`, no `license` — those are fixed constants.
-`Skill.parse()` maps `when_to_use → description`, `tools_required →
+`DistilledProcedure.parse()` maps `when_to_use → description`, `tools_required →
 metadata.gaia.tools_required`, and **injects the fixed `license: MIT` and
 `version: 1.0.0`** to produce example A.
 
@@ -672,7 +672,7 @@ tool-loader's `CORE ∪ SKILL ∪ SEMANTIC` union ahead of semantic results.
 # PROPOSED — at turn start, before tool selection (internal method, not an @tool)
 matches = self.recall_skill(user_goal, top_k=2)
 # matches → [
-#   Skill(
+#   DistilledProcedure(
 #     name="triage-support-ticket",
 #     when_to_use="Triage an inbound support ticket end to end. ...",
 #     body="# Triage a Support Ticket\n1. ...\n## Edge cases\n- ...",
@@ -746,7 +746,7 @@ The memory layer it builds on is real and merged; the synthesis pipeline is
 | Prompt composition | `_compose_system_prompt`, `_select_tools_for_turn` | `agent.py:591`, `:786` | **Exists** — injection seam |
 | Memory REST + dashboard | `/api/memory/*`, `X-Gaia-UI` guard, three-tab dashboard | `ui/routers/memory.py:26`, `:29`; `MemoryDashboard.tsx:267` | **Exists** — exposes procedural data |
 | `category='skill'` (a fact, not a procedure) | `VALID_CATEGORIES` includes `"skill"` | `memory_store.py:97` | **Exists** — *different concept* |
-| **`skill_synthesis.py` / `procedures` table / `extract_sequences` / `cluster_by_goal` / `distill_cluster` / `Skill.parse` / `SkillProvenance` / `reconcile_and_store` / `recall_skill` / `_synthesize_skills` / `put_skill` / `search_skills` / `supersede_skill` / `iter_sessions`** | — | **NOT FOUND** (verified absent on `main`) | **Greenfield — PROPOSED** |
+| **`skill_synthesis.py` / `procedures` table / `extract_sequences` / `cluster_by_goal` / `distill_cluster` / `DistilledProcedure.parse` / `SkillProvenance` / `reconcile_and_store` / `recall_skill` / `_synthesize_skills` / `put_skill` / `search_skills` / `supersede_skill` / `iter_sessions`** | — | **NOT FOUND** (verified absent on `main`) | **Greenfield — PROPOSED** |
 
 ---
 
@@ -779,7 +779,7 @@ guarantees a consumer. Deferrals are explicit, with the track that owns them.
 | **Scope E** — Dashboard "Procedures" tab + provenance + promote | [Phase 2 deferral](#phased-build) | **Tab build DEFERRED to #606's dashboard track**; #887 stores provenance + exposes the data. |
 | **AC** — after 3 successful similar sequences, auto-create a `SKILL.md` discoverable via `recall_skill()` | [KPIs](#kpis), [Phase 1](#phased-build) + [Phase 2](#phased-build) | The headline KPI. |
 | **AC** — recall measurably reduces tool-step count on the 4th attempt | [KPIs](#kpis), [Phase 2](#phased-build) | Measured vs the tool-loader baseline. |
-| **AC** — synthesised skills are valid agentskills.io documents (Hermes parser) | [The format contract](#the-format-contract), [Examples A–B](#examples) | `Skill.parse()` round-trip; 100% validity KPI. |
+| **AC** — synthesised skills are valid agentskills.io documents (Hermes parser) | [The format contract](#the-format-contract), [Examples A–B](#examples) | `DistilledProcedure.parse()` round-trip; 100% validity KPI. |
 | **AC** — Dashboard shows count / last-used / provenance | [Phase 2 deferral](#phased-build) | **Data exposed by #887**; *rendering* is #606's tab. |
 | **AC** — disabling a skill prevents recall | [Off-states](#off-states-as-safe-floors), [Phase 2](#phased-build) | The recall path honours `enabled = 0` (this **is** #887); the toggle UI is #606's tab. |
 | **Out of scope** — marketplace / tiers / OpenClaw shim | [Dependencies](#dependencies) | → #647 / #692. |

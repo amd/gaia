@@ -4,15 +4,407 @@
 #include "gaia/file_tools.h"
 
 #include <algorithm>
+#include <array>
+#include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <map>
+#include <mutex>
 #include <sstream>
 #include <string>
 #include <vector>
 
+#include "gaia/ignore.h"
+
 namespace fs = std::filesystem;
 
 namespace gaia {
+
+namespace {
+
+// ---------------------------------------------------------------------------
+// SHA-256 (FIPS 180-4) — self-contained so the framework picks up no new
+// dependency for content hashing.
+// ---------------------------------------------------------------------------
+
+class Sha256 {
+public:
+    Sha256() { reset(); }
+
+    void reset() {
+        state_ = {0x6a09e667u, 0xbb67ae85u, 0x3c6ef372u, 0xa54ff53au,
+                  0x510e527fu, 0x9b05688cu, 0x1f83d9abu, 0x5be0cd19u};
+        bufferLen_ = 0;
+        totalBits_ = 0;
+    }
+
+    void update(const char* data, size_t len) {
+        totalBits_ += static_cast<std::uint64_t>(len) * 8u;
+        append(reinterpret_cast<const unsigned char*>(data), len);
+    }
+
+    std::string hex() {
+        // Pad: 0x80, zeros, then the 64-bit big-endian bit count. The padding
+        // is appended without touching totalBits_ — it is framing, not message.
+        const std::uint64_t bits = totalBits_;
+
+        std::array<unsigned char, 72> pad{};
+        pad[0] = 0x80;
+        const size_t padLen = (bufferLen_ < 56) ? (56 - bufferLen_)
+                                                : (120 - bufferLen_);
+        append(pad.data(), padLen);
+
+        std::array<unsigned char, 8> lenBytes{};
+        for (int i = 0; i < 8; ++i) {
+            lenBytes[static_cast<size_t>(i)] =
+                static_cast<unsigned char>((bits >> (56 - 8 * i)) & 0xffu);
+        }
+        append(lenBytes.data(), 8);
+
+        static const char* kHex = "0123456789abcdef";
+        std::string out;
+        out.reserve(64);
+        for (std::uint32_t word : state_) {
+            for (int shift = 24; shift >= 0; shift -= 8) {
+                const unsigned byte = (word >> shift) & 0xffu;
+                out.push_back(kHex[byte >> 4]);
+                out.push_back(kHex[byte & 0x0fu]);
+            }
+        }
+        return out;
+    }
+
+private:
+    static std::uint32_t rotr(std::uint32_t x, int n) {
+        return (x >> n) | (x << (32 - n));
+    }
+
+    void append(const unsigned char* data, size_t len) {
+        while (len > 0) {
+            const size_t take = std::min(len, size_t{64} - bufferLen_);
+            std::memcpy(buffer_.data() + bufferLen_, data, take);
+            bufferLen_ += take;
+            data += take;
+            len -= take;
+            if (bufferLen_ == 64) {
+                transform(buffer_.data());
+                bufferLen_ = 0;
+            }
+        }
+    }
+
+    void transform(const unsigned char* block) {
+        static const std::uint32_t K[64] = {
+            0x428a2f98u, 0x71374491u, 0xb5c0fbcfu, 0xe9b5dba5u, 0x3956c25bu,
+            0x59f111f1u, 0x923f82a4u, 0xab1c5ed5u, 0xd807aa98u, 0x12835b01u,
+            0x243185beu, 0x550c7dc3u, 0x72be5d74u, 0x80deb1feu, 0x9bdc06a7u,
+            0xc19bf174u, 0xe49b69c1u, 0xefbe4786u, 0x0fc19dc6u, 0x240ca1ccu,
+            0x2de92c6fu, 0x4a7484aau, 0x5cb0a9dcu, 0x76f988dau, 0x983e5152u,
+            0xa831c66du, 0xb00327c8u, 0xbf597fc7u, 0xc6e00bf3u, 0xd5a79147u,
+            0x06ca6351u, 0x14292967u, 0x27b70a85u, 0x2e1b2138u, 0x4d2c6dfcu,
+            0x53380d13u, 0x650a7354u, 0x766a0abbu, 0x81c2c92eu, 0x92722c85u,
+            0xa2bfe8a1u, 0xa81a664bu, 0xc24b8b70u, 0xc76c51a3u, 0xd192e819u,
+            0xd6990624u, 0xf40e3585u, 0x106aa070u, 0x19a4c116u, 0x1e376c08u,
+            0x2748774cu, 0x34b0bcb5u, 0x391c0cb3u, 0x4ed8aa4au, 0x5b9cca4fu,
+            0x682e6ff3u, 0x748f82eeu, 0x78a5636fu, 0x84c87814u, 0x8cc70208u,
+            0x90befffau, 0xa4506cebu, 0xbef9a3f7u, 0xc67178f2u};
+
+        std::uint32_t w[64];
+        for (int i = 0; i < 16; ++i) {
+            const size_t o = static_cast<size_t>(i) * 4;
+            w[i] = (static_cast<std::uint32_t>(block[o]) << 24) |
+                   (static_cast<std::uint32_t>(block[o + 1]) << 16) |
+                   (static_cast<std::uint32_t>(block[o + 2]) << 8) |
+                   (static_cast<std::uint32_t>(block[o + 3]));
+        }
+        for (int i = 16; i < 64; ++i) {
+            const std::uint32_t s0 =
+                rotr(w[i - 15], 7) ^ rotr(w[i - 15], 18) ^ (w[i - 15] >> 3);
+            const std::uint32_t s1 =
+                rotr(w[i - 2], 17) ^ rotr(w[i - 2], 19) ^ (w[i - 2] >> 10);
+            w[i] = w[i - 16] + s0 + w[i - 7] + s1;
+        }
+
+        std::uint32_t a = state_[0], b = state_[1], c = state_[2], d = state_[3];
+        std::uint32_t e = state_[4], f = state_[5], g = state_[6], h = state_[7];
+
+        for (int i = 0; i < 64; ++i) {
+            const std::uint32_t S1 = rotr(e, 6) ^ rotr(e, 11) ^ rotr(e, 25);
+            const std::uint32_t ch = (e & f) ^ (~e & g);
+            const std::uint32_t t1 = h + S1 + ch + K[i] + w[i];
+            const std::uint32_t S0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
+            const std::uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
+            const std::uint32_t t2 = S0 + maj;
+
+            h = g; g = f; f = e; e = d + t1;
+            d = c; c = b; b = a; a = t1 + t2;
+        }
+
+        state_[0] += a; state_[1] += b; state_[2] += c; state_[3] += d;
+        state_[4] += e; state_[5] += f; state_[6] += g; state_[7] += h;
+    }
+
+    std::array<std::uint32_t, 8> state_{};
+    std::array<unsigned char, 64> buffer_{};
+    size_t bufferLen_ = 0;
+    std::uint64_t totalBits_ = 0;
+};
+
+/// Short prefix used in error messages — 12 hex chars is plenty to name a
+/// divergence and keeps the message readable.
+std::string shortHash(const std::string& full) {
+    return full.size() > 12 ? full.substr(0, 12) : full;
+}
+
+/// Canonical map key so "./a.txt", "a.txt" and "/abs/a.txt" share a record.
+std::string trackerKey(const std::string& path) {
+    std::error_code ec;
+    fs::path p = fs::weakly_canonical(fs::path(path), ec);
+    if (ec || p.empty()) {
+        p = fs::absolute(fs::path(path), ec);
+        if (ec) p = fs::path(path);
+    }
+    return p.generic_string();
+}
+
+/// Read a whole file as raw bytes. Returns false when it cannot be opened.
+bool readWholeFile(const std::string& path, std::string& out) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file.is_open()) return false;
+    std::ostringstream buffer;
+    buffer << file.rdbuf();
+    out = buffer.str();
+    return true;
+}
+
+/// Locate a whitespace-insensitive near-match for `needle`, so a failed edit
+/// can say *why* it failed instead of just "not found".
+std::string collapseWhitespace(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    bool pendingSpace = false;
+    for (char c : s) {
+        if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
+            pendingSpace = !out.empty();
+            continue;
+        }
+        if (pendingSpace) {
+            out.push_back(' ');
+            pendingSpace = false;
+        }
+        out.push_back(c);
+    }
+    return out;
+}
+
+} // namespace
+
+// ---------------------------------------------------------------------------
+// FileStateTracker
+// ---------------------------------------------------------------------------
+
+struct FileStateTracker::Impl {
+    struct Record {
+        std::string hash;
+        std::uint64_t size = 0;
+    };
+    mutable std::mutex mutex;
+    std::map<std::string, Record> records;
+};
+
+FileStateTracker::Impl& FileStateTracker::impl() {
+    static Impl storage;
+    return storage;
+}
+
+FileStateTracker& FileStateTracker::instance() {
+    static FileStateTracker tracker;
+    return tracker;
+}
+
+std::string FileStateTracker::hashContent(const std::string& contents) {
+    Sha256 sha;
+    sha.update(contents.data(), contents.size());
+    return sha.hex();
+}
+
+std::string FileStateTracker::hashFile(const std::string& path) {
+    std::ifstream file(path, std::ios::binary);
+    if (!file.is_open()) return "";
+
+    Sha256 sha;
+    std::array<char, 64 * 1024> buffer{};
+    while (file.good()) {
+        file.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+        const std::streamsize got = file.gcount();
+        if (got > 0) sha.update(buffer.data(), static_cast<size_t>(got));
+        if (got == 0) break;
+    }
+    // A read that failed part way through would otherwise be recorded as the
+    // hash of the whole file, and the anchor would name bytes that never were.
+    if (file.bad()) return "";
+    return sha.hex();
+}
+
+void FileStateTracker::recordRead(const std::string& path,
+                                  const std::string& contents) {
+    Impl& storage = impl();
+    std::lock_guard<std::mutex> lock(storage.mutex);
+    Impl::Record record;
+    record.hash = hashContent(contents);
+    record.size = static_cast<std::uint64_t>(contents.size());
+    storage.records[trackerKey(path)] = std::move(record);
+}
+
+void FileStateTracker::recordWrite(const std::string& path,
+                                   const std::string& contents) {
+    recordRead(path, contents);
+}
+
+void FileStateTracker::recordHash(const std::string& path,
+                                  const std::string& hash,
+                                  std::uint64_t size) {
+    if (hash.empty()) return;
+    Impl& storage = impl();
+    std::lock_guard<std::mutex> lock(storage.mutex);
+    Impl::Record record;
+    record.hash = hash;
+    record.size = size;
+    storage.records[trackerKey(path)] = std::move(record);
+}
+
+std::string FileStateTracker::recordFromDisk(const std::string& path) {
+    const std::string hash = hashFile(path);
+    if (hash.empty()) return "";
+
+    std::error_code ec;
+    const auto size = fs::file_size(fs::path(path), ec);
+
+    Impl& storage = impl();
+    std::lock_guard<std::mutex> lock(storage.mutex);
+    Impl::Record record;
+    record.hash = hash;
+    record.size = ec ? 0 : static_cast<std::uint64_t>(size);
+    storage.records[trackerKey(path)] = record;
+    return hash;
+}
+
+FileStateTracker::Divergence FileStateTracker::check(
+        const std::string& path, const std::string& currentContents) const {
+    Divergence result;
+
+    Impl& storage = impl();
+    std::lock_guard<std::mutex> lock(storage.mutex);
+    auto it = storage.records.find(trackerKey(path));
+    if (it == storage.records.end()) return result;
+
+    const std::string hashNow = hashContent(currentContents);
+    result.hashAtRead = shortHash(it->second.hash);
+    result.hashNow = shortHash(hashNow);
+    result.sizeAtRead = it->second.size;
+    result.sizeNow = static_cast<std::uint64_t>(currentContents.size());
+
+    if (hashNow == it->second.hash) return result;
+
+    result.diverged = true;
+    result.reason = "content hash at read " + result.hashAtRead +
+                    ", on disk now " + result.hashNow + " (" +
+                    std::to_string(result.sizeAtRead) + " -> " +
+                    std::to_string(result.sizeNow) + " bytes)";
+    return result;
+}
+
+FileStateTracker::Divergence FileStateTracker::checkFile(
+        const std::string& path) const {
+    Divergence result;
+
+    // Look the record up first: with nothing to compare against there is no
+    // reason to touch the file at all.
+    std::string recordedHash;
+    std::uint64_t recordedSize = 0;
+    {
+        Impl& storage = impl();
+        std::lock_guard<std::mutex> lock(storage.mutex);
+        auto it = storage.records.find(trackerKey(path));
+        if (it == storage.records.end()) return result;
+        recordedHash = it->second.hash;
+        recordedSize = it->second.size;
+    }
+
+    result.hashAtRead = shortHash(recordedHash);
+    result.sizeAtRead = recordedSize;
+
+    // Streamed, so checking a multi-gigabyte file costs bounded memory.
+    const std::string hashNow = hashFile(path);
+    if (hashNow.empty()) {
+        result.diverged = true;
+        result.reason = "the file was readable at hash " + result.hashAtRead +
+                        " but can no longer be read (deleted, renamed, or "
+                        "permissions changed)";
+        return result;
+    }
+
+    std::error_code ec;
+    const auto sizeNow = fs::file_size(fs::path(path), ec);
+    result.sizeNow = ec ? 0 : static_cast<std::uint64_t>(sizeNow);
+    result.hashNow = shortHash(hashNow);
+
+    if (hashNow == recordedHash) return result;
+
+    result.diverged = true;
+    result.reason = "content hash at read " + result.hashAtRead +
+                    ", on disk now " + result.hashNow + " (" +
+                    std::to_string(result.sizeAtRead) + " -> " +
+                    std::to_string(result.sizeNow) + " bytes)";
+    return result;
+}
+
+bool FileStateTracker::hasRecord(const std::string& path) const {
+    Impl& storage = impl();
+    std::lock_guard<std::mutex> lock(storage.mutex);
+    return storage.records.count(trackerKey(path)) > 0;
+}
+
+void FileStateTracker::forget(const std::string& path) {
+    Impl& storage = impl();
+    std::lock_guard<std::mutex> lock(storage.mutex);
+    storage.records.erase(trackerKey(path));
+}
+
+void FileStateTracker::clear() {
+    Impl& storage = impl();
+    std::lock_guard<std::mutex> lock(storage.mutex);
+    storage.records.clear();
+}
+
+size_t FileStateTracker::size() const {
+    Impl& storage = impl();
+    std::lock_guard<std::mutex> lock(storage.mutex);
+    return storage.records.size();
+}
+
+namespace {
+
+/// Build the rejection payload for a diverged file. Shared by write and edit
+/// so the model sees one recovery instruction, not two phrasings of it.
+json staleRejection(const std::string& path,
+                    const std::string& operation,
+                    const FileStateTracker::Divergence& divergence) {
+    return json{
+        {"error", operation + " rejected: " + path +
+                      " changed on disk after it was read — " +
+                      divergence.reason +
+                      ". Nothing was written. Re-read the file with file_read "
+                      "and reissue the change against the current contents."},
+        {"stale", true},
+        {"path", path},
+        {"hash_at_read", divergence.hashAtRead},
+        {"hash_now", divergence.hashNow},
+    };
+}
+
+} // namespace
 
 // ---------------------------------------------------------------------------
 // registerAll
@@ -34,7 +426,9 @@ ToolInfo FileIOTools::fileRead() {
     info.name = "file_read";
     info.description =
         "Read the contents of a file. Optionally specify a line range with "
-        "start_line and end_line (1-based, inclusive).";
+        "start_line and end_line (1-based, inclusive). The returned "
+        "content_hash anchors later edits: file_write and file_edit refuse to "
+        "touch the file if it changed after this read.";
     info.policy = ToolPolicy::ALLOW;
     info.parameters = {
         {"path", ToolParamType::STRING, /*required=*/true,
@@ -50,6 +444,7 @@ ToolInfo FileIOTools::fileRead() {
 
 json FileIOTools::doFileRead(const json& args) {
     static constexpr size_t kMaxReadBytes = 32 * 1024;
+    static constexpr size_t kChunkBytes = 64 * 1024;
 
     try {
         std::string path = args.value("path", "");
@@ -57,67 +452,88 @@ json FileIOTools::doFileRead(const json& args) {
             return json{{"error", "path is required"}};
         }
 
-        std::ifstream file(path);
+        // Binary, so what the model is shown is byte-for-byte what file_edit
+        // will search: a CRLF file must not read back as LF and then fail to
+        // match. One pass, so the hash anchors exactly the bytes returned —
+        // a second read could hash a version the model never saw.
+        std::ifstream file(path, std::ios::binary);
         if (!file.is_open()) {
             return json{{"error", "Cannot open file: " + path}};
         }
 
-        int startLine = args.value("start_line", 0);
-        int endLine = args.value("end_line", 0);
+        const int startLine = args.value("start_line", 0);
+        const int endLine = args.value("end_line", 0);
 
-        std::string line;
-        std::ostringstream content;
-        int lineNumber = 0;
-        int linesIncluded = 0;
-        size_t bytesRead = 0;
+        Sha256 sha;
+        std::string content;
+        std::vector<char> buffer(kChunkBytes);
+        int lineNumber = 1;        // line the next byte belongs to
+        int emittedLines = 0;      // in-range lines started so far
+        bool lineOpen = false;     // a line's first in-range byte was seen
         bool truncated = false;
+        bool lastByteWasNewline = false;
+        std::uint64_t totalBytes = 0;
 
-        while (std::getline(file, line)) {
-            ++lineNumber;
+        while (file.good()) {
+            file.read(buffer.data(), static_cast<std::streamsize>(kChunkBytes));
+            const std::streamsize got = file.gcount();
+            if (got <= 0) break;
 
-            bool inRange = true;
-            if (startLine > 0 && lineNumber < startLine) inRange = false;
-            if (endLine > 0 && lineNumber > endLine) inRange = false;
+            sha.update(buffer.data(), static_cast<size_t>(got));
+            totalBytes += static_cast<std::uint64_t>(got);
 
-            if (inRange) {
-                size_t lineBytes = line.size() + (linesIncluded > 0 ? 1 : 0);
-                if (bytesRead + lineBytes > kMaxReadBytes) {
-                    truncated = true;
-                    break;
+            for (std::streamsize i = 0; i < got; ++i) {
+                const char c = buffer[static_cast<size_t>(i)];
+                lastByteWasNewline = (c == '\n');
+
+                const bool inRange =
+                    (startLine <= 0 || lineNumber >= startLine) &&
+                    (endLine <= 0 || lineNumber <= endLine);
+
+                if (inRange && !truncated) {
+                    if (!lineOpen) {
+                        // Included lines are joined by '\n', no trailing one.
+                        if (emittedLines > 0) content.push_back('\n');
+                        ++emittedLines;
+                        lineOpen = true;
+                    }
+                    if (c != '\n') {
+                        if (content.size() < kMaxReadBytes) {
+                            content.push_back(c);
+                        } else {
+                            truncated = true;
+                        }
+                    }
                 }
-                if (linesIncluded > 0) content << '\n';
-                content << line;
-                bytesRead += lineBytes;
-                ++linesIncluded;
-            }
 
-            // Optimization: stop reading past end_line
-            if (endLine > 0 && lineNumber >= endLine) {
-                // Count remaining lines for total
-                while (std::getline(file, line)) {
+                if (c == '\n') {
+                    lineOpen = false;
                     ++lineNumber;
                 }
-                break;
             }
         }
 
-        // Count remaining lines if we truncated early
-        if (truncated) {
-            while (std::getline(file, line)) {
-                ++lineNumber;
-            }
+        if (file.bad()) {
+            return json{{"error", "Read failed part way through: " + path}};
         }
 
-        std::string result = content.str();
+        // Trailing '\n' handling: "a\nb\n" is 2 lines, "a\nb" is also 2.
+        int totalLines = lineNumber - 1;
+        if (totalBytes > 0 && !lastByteWasNewline) ++totalLines;
+
         if (truncated) {
-            result += "\n... [output truncated at 32 KB]";
+            content += "\n... [output truncated at 32 KB]";
         }
+
+        const std::string hash = sha.hex();
+        FileStateTracker::instance().recordHash(path, hash, totalBytes);
 
         return json{
-            {"content", result},
-            {"lines", lineNumber},
+            {"content", content},
+            {"lines", totalLines},
             {"path", path},
             {"truncated", truncated},
+            {"content_hash", shortHash(hash)},
         };
     } catch (const std::exception& e) {
         return json{{"error", std::string("file_read failed: ") + e.what()}};
@@ -133,7 +549,8 @@ ToolInfo FileIOTools::fileWrite() {
     info.name = "file_write";
     info.description =
         "Write content to a file. Creates parent directories if they do not "
-        "exist. Overwrites the file if it already exists.";
+        "exist. Overwrites the file if it already exists. Rejected if the file "
+        "changed on disk after the last file_read — re-read it first.";
     info.policy = ToolPolicy::CONFIRM;
     info.parameters = {
         {"path", ToolParamType::STRING, /*required=*/true,
@@ -157,6 +574,23 @@ json FileIOTools::doFileWrite(const json& args) {
         }
         const std::string& content = args["content"].get_ref<const std::string&>();
 
+        FileStateTracker& tracker = FileStateTracker::instance();
+        bool recreated = false;
+        std::error_code existsEc;
+        if (fs::exists(fs::path(path), existsEc) && !existsEc) {
+            const auto divergence = tracker.checkFile(path);
+            if (divergence.diverged) {
+                return staleRejection(path, "file_write", divergence);
+            }
+        } else if (tracker.hasRecord(path)) {
+            // Read, then deleted, now written again. There is no content to
+            // clobber so this is allowed — but someone removed that file on
+            // purpose, so say the write brought it back rather than let it
+            // look like an ordinary create.
+            recreated = true;
+            tracker.forget(path);
+        }
+
         // Create parent directories if needed
         fs::path filePath(path);
         if (filePath.has_parent_path()) {
@@ -178,11 +612,16 @@ json FileIOTools::doFileWrite(const json& args) {
         }
         file.close();
 
-        return json{
+        tracker.recordWrite(path, content);
+
+        json result{
             {"success", true},
             {"path", path},
             {"bytes_written", static_cast<int>(content.size())},
+            {"content_hash", shortHash(FileStateTracker::hashContent(content))},
         };
+        if (recreated) result["recreated"] = true;
+        return result;
     } catch (const std::exception& e) {
         return json{{"error", std::string("file_write failed: ") + e.what()}};
     }
@@ -197,7 +636,9 @@ ToolInfo FileIOTools::fileEdit() {
     info.name = "file_edit";
     info.description =
         "Perform surgical string replacement in a file. Finds all occurrences "
-        "of old_string and replaces them with new_string.";
+        "of old_string and replaces them with new_string. Rejected if the file "
+        "changed on disk after the last file_read, or if old_string does not "
+        "appear verbatim — in both cases the file is left untouched.";
     info.policy = ToolPolicy::CONFIRM;
     info.parameters = {
         {"path", ToolParamType::STRING, /*required=*/true,
@@ -225,16 +666,16 @@ json FileIOTools::doFileEdit(const json& args) {
 
         std::string newStr = args.value("new_string", "");
 
-        // Read entire file
-        std::ifstream inFile(path);
-        if (!inFile.is_open()) {
+        std::string content;
+        if (!readWholeFile(path, content)) {
             return json{{"error", "Cannot open file: " + path}};
         }
 
-        std::ostringstream buffer;
-        buffer << inFile.rdbuf();
-        std::string content = buffer.str();
-        inFile.close();
+        FileStateTracker& tracker = FileStateTracker::instance();
+        const auto divergence = tracker.check(path, content);
+        if (divergence.diverged) {
+            return staleRejection(path, "file_edit", divergence);
+        }
 
         // Replace all occurrences
         int replacements = 0;
@@ -246,7 +687,24 @@ json FileIOTools::doFileEdit(const json& args) {
         }
 
         if (replacements == 0) {
-            return json{{"error", "old_string not found in file: " + path}};
+            // A silent no-op is the failure mode this tool exists to avoid:
+            // say what did not match and what to do about it.
+            std::string hint;
+            if (collapseWhitespace(content).find(collapseWhitespace(oldStr)) !=
+                std::string::npos) {
+                hint = " A whitespace-insensitive match does exist, so the "
+                       "indentation, tabs-vs-spaces, or line endings in "
+                       "old_string differ from the file.";
+            }
+            return json{
+                {"error", "old_string not found in file: " + path +
+                              " — no replacement was made and the file is "
+                              "unchanged." + hint +
+                              " Re-read the file with file_read and copy "
+                              "old_string verbatim from its contents."},
+                {"path", path},
+                {"replacements", 0},
+            };
         }
 
         // Write back
@@ -261,10 +719,13 @@ json FileIOTools::doFileEdit(const json& args) {
         }
         outFile.close();
 
+        tracker.recordWrite(path, content);
+
         return json{
             {"success", true},
             {"path", path},
             {"replacements", replacements},
+            {"content_hash", shortHash(FileStateTracker::hashContent(content))},
         };
     } catch (const std::exception& e) {
         return json{{"error", std::string("file_edit failed: ") + e.what()}};
@@ -279,13 +740,17 @@ ToolInfo FileIOTools::fileSearch() {
     ToolInfo info;
     info.name = "file_search";
     info.description =
-        "Search for files by name pattern and/or content. The pattern is matched "
-        "against file names using simple glob wildcards (* and ?). Optionally "
-        "filter by content_pattern (substring match within file contents).";
+        "Search for files by name pattern and/or content. The pattern supports "
+        "glob wildcards (*, ?, [abc], and ** for directories); a pattern "
+        "containing '/' is matched against the path relative to the search "
+        "root, otherwise against the file name. Files excluded by .gitignore "
+        "and the .git directory are skipped. Optionally filter by "
+        "content_pattern (substring match within file contents).";
     info.policy = ToolPolicy::ALLOW;
     info.parameters = {
         {"pattern", ToolParamType::STRING, /*required=*/true,
-         "Glob pattern to match file names (e.g. '*.cpp', 'test_*')"},
+         "Glob pattern to match file names or relative paths "
+         "(e.g. '*.cpp', 'test_*', 'src/**/*.h')"},
         {"path", ToolParamType::STRING, /*required=*/false,
          "Root directory to search in (default: current directory)"},
         {"content_pattern", ToolParamType::STRING, /*required=*/false,
@@ -299,9 +764,21 @@ ToolInfo FileIOTools::fileSearch() {
 
 json FileIOTools::doFileSearch(const json& args) {
     try {
+        static constexpr size_t kMaxPatternBytes = 512;
+
         std::string pattern = args.value("pattern", "");
         if (pattern.empty()) {
             return json{{"error", "pattern is required"}};
+        }
+        if (pattern.size() > kMaxPatternBytes) {
+            // The matcher's memo table is pattern-length times path-length, so
+            // an unbounded pattern is an unbounded allocation per file.
+            return json{{"error",
+                         "pattern is " + std::to_string(pattern.size()) +
+                             " bytes; the limit is " +
+                             std::to_string(kMaxPatternBytes) +
+                             ". Use a shorter glob and filter the results, or "
+                             "pass content_pattern for a substring search."}};
         }
 
         std::string searchPath = args.value("path", ".");
@@ -317,8 +794,23 @@ json FileIOTools::doFileSearch(const json& args) {
             return json{{"error", "Search path is not a directory: " + searchPath}};
         }
 
+        // Rules governing the root are resolved up front; each subdirectory's
+        // own .gitignore is folded in as the walk reaches it. Rules are scoped
+        // to their own directory, so a nested file cannot affect a sibling.
+        GitignoreMatcher ignore = GitignoreMatcher::forDirectory(searchPath);
+
+        std::error_code rootEc;
+        fs::path root = fs::weakly_canonical(fs::path(searchPath), rootEc);
+        if (rootEc) root = fs::path(searchPath);
+
+        // A pattern with a separator addresses a path; otherwise a file name.
+        const bool pathPattern = pattern.find('/') != std::string::npos;
+        const GlobOptions globOpts{/*pathMode=*/pathPattern,
+                                   /*caseInsensitive=*/false};
+
         json matches = json::array();
         int total = 0;
+        int ignoredSkipped = 0;
 
         std::error_code ec;
         for (auto it = fs::recursive_directory_iterator(searchPath, fs::directory_options::skip_permission_denied, ec);
@@ -328,18 +820,50 @@ json FileIOTools::doFileSearch(const json& args) {
                 continue;
             }
 
+            const fs::path& entryPath = it->path();
+            const std::string filename = entryPath.filename().string();
+
+            if (it->is_directory(ec) && !ec) {
+                // .git is never interesting and is huge; it is pruned always
+                // and is not counted as an ignore-rule skip, or the counter
+                // would be non-zero on every repository and say nothing.
+                if (filename == ".git") {
+                    it.disable_recursion_pending();
+                    continue;
+                }
+                if (ignore.isIgnored(entryPath.string(), /*isDirectory=*/true)) {
+                    it.disable_recursion_pending();
+                    ++ignoredSkipped;
+                    continue;
+                }
+                ignore.addFile((entryPath / ".gitignore").string());
+                continue;
+            }
+            ec.clear();
+
             if (!it->is_regular_file(ec)) continue;
             if (ec) { ec.clear(); continue; }
 
-            std::string filename = it->path().filename().string();
-
-            if (!matchGlob(pattern, filename)) {
+            if (ignore.isIgnored(entryPath.string(), /*isDirectory=*/false)) {
+                ++ignoredSkipped;
                 continue;
             }
 
+            bool nameMatches;
+            if (pathPattern) {
+                std::error_code relEc;
+                fs::path rel = fs::relative(entryPath, root, relEc);
+                const std::string relStr =
+                    relEc ? entryPath.generic_string() : rel.generic_string();
+                nameMatches = globMatch(pattern, relStr, globOpts);
+            } else {
+                nameMatches = globMatch(pattern, filename, globOpts);
+            }
+            if (!nameMatches) continue;
+
             // If content_pattern is specified, search within file
             if (!contentPattern.empty()) {
-                std::ifstream file(it->path());
+                std::ifstream file(entryPath);
                 if (!file.is_open()) continue;
 
                 std::string line;
@@ -350,7 +874,7 @@ json FileIOTools::doFileSearch(const json& args) {
                         ++total;
                         if (static_cast<int>(matches.size()) < maxResults) {
                             json match;
-                            match["path"] = it->path().generic_string();
+                            match["path"] = entryPath.generic_string();
                             match["line"] = lineNum;
                             // Trim context to reasonable length
                             std::string context = line;
@@ -367,7 +891,7 @@ json FileIOTools::doFileSearch(const json& args) {
                 ++total;
                 if (static_cast<int>(matches.size()) < maxResults) {
                     json match;
-                    match["path"] = it->path().generic_string();
+                    match["path"] = entryPath.generic_string();
                     matches.push_back(std::move(match));
                 }
             }
@@ -376,42 +900,11 @@ json FileIOTools::doFileSearch(const json& args) {
         return json{
             {"matches", matches},
             {"total", total},
+            {"ignored_skipped", ignoredSkipped},
         };
     } catch (const std::exception& e) {
         return json{{"error", std::string("file_search failed: ") + e.what()}};
     }
-}
-
-// ---------------------------------------------------------------------------
-// matchGlob — simple glob matching (* = any chars, ? = one char)
-// ---------------------------------------------------------------------------
-
-bool FileIOTools::matchGlob(const std::string& pattern, const std::string& text) {
-    size_t pi = 0, ti = 0;
-    size_t starPi = std::string::npos, starTi = 0;
-
-    while (ti < text.size()) {
-        if (pi < pattern.size() && (pattern[pi] == '?' || pattern[pi] == text[ti])) {
-            ++pi;
-            ++ti;
-        } else if (pi < pattern.size() && pattern[pi] == '*') {
-            starPi = pi;
-            starTi = ti;
-            ++pi;
-        } else if (starPi != std::string::npos) {
-            pi = starPi + 1;
-            ++starTi;
-            ti = starTi;
-        } else {
-            return false;
-        }
-    }
-
-    while (pi < pattern.size() && pattern[pi] == '*') {
-        ++pi;
-    }
-
-    return pi == pattern.size();
 }
 
 } // namespace gaia

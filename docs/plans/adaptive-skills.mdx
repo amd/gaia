@@ -1,0 +1,1414 @@
+---
+title: "Adaptive Skills"
+description: "Agent Skills v2 — an immutable authored base plus a learned, typed, section-anchored overlay: tiered learning, empirical promotion, staged-write consent, and rebase on base update"
+icon: "layer-group"
+---
+
+<Info>
+  **Grounds on (exists today, verified on `main`):** [`src/gaia/agents/base/memory_store.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py) (`procedures` table `:283`, `put_skill` `:2532`, `search_skills` `:2674`, `supersede_skill` `:2735`, `touch_skills` `:2756`) · [`skill_synthesis.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py) (`reconcile_and_store` `:653`, `_nearest_enabled_procedure` `:580`, `SIMILARITY_TAU` `:58`) · [`procedural_memory.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/procedural_memory.py) (`recall_skill` `:181`, the procedures FAISS index `:50`) · [`tool_loader.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tool_loader.py) (`CORE ∪ SKILL ∪ SEMANTIC` `:224`, `DEFAULT_MAX_TOOLS = 14` `:72`) · [`agent.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/agent.py) (`_compose_system_prompt` `:596`) · the email agent's shipped preference store ([`preference_tools.py:63`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/tools/preference_tools.py)) and trust ledger ([`trust.py:336`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/trust.py)).
+
+  **Proposed (not written yet):** `skill_deltas` (schema v4), the delta grammar and its section anchorer, `EffectiveSkill` resolution, the staged-write consent gate, the rebase/re-anchor pass, the learning budget, and `gaia skill deltas`. Every such symbol is marked **PROPOSED** where it appears.
+
+  **In flight (do not treat as shipped):** the Phase 1 `gaia.skills` loader — `SkillManager`, `Agent.load_skill` / `unload_skill` / `get_skills_system_prompt` — lives on PR [#2669](https://github.com/amd/gaia/pull/2669), **open and unmerged**. `src/gaia/skills/` does not exist on `main`. Also in flight: the `Skill` → `DistilledProcedure` rename (part of [#2671](https://github.com/amd/gaia/issues/2671)). **This document uses the new name `DistilledProcedure` throughout** for the synthesis intermediate; on `main` that class is still `skill_synthesis.Skill` ([`:159`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py)).
+</Info>
+
+<Note>
+**Component:** the learned overlay on an authored skill — the runtime half of Agent Skills v2 (issue [#2674](https://github.com/amd/gaia/issues/2674), milestone *Agent Skills v2: Adaptive Skills*).
+
+**Module:** `gaia.agents.base` (extends the shipped memory layer) + `gaia.skills` (extends the in-flight loader). **No overlay code exists.** The design is grounded on the live `procedures` corpus, the live tool loader, and the live email-agent preference/trust stores.
+
+**Status:** **Architecture = decided** (this revision, after a code review of the shipped machinery plus an adversarial review of the milestone). **Runtime = proposed.** Four claims the umbrella issue treats as settled were **corrected** by the code review — see [What the code review corrected](#what-the-code-review-corrected) — and nine challenges from the adversarial pass moved four of the five riskiest items out of v1, see [Adversarial review](#adversarial-review-the-nine-challenges). [Skill Format](/plans/skill-format) owns the on-disk field grammar; [Skill Synthesis](/plans/skill-synthesis) owns the synthesized-procedure loop; this document owns the *overlay* on an **authored** skill.
+
+**Sub-issues this document specifies:** [#2677](https://github.com/amd/gaia/issues/2677) (tiered store), [#2678](https://github.com/amd/gaia/issues/2678) (resolution + off-states), [#2679](https://github.com/amd/gaia/issues/2679) (write path), [#2680](https://github.com/amd/gaia/issues/2680) (rebase), [#2681](https://github.com/amd/gaia/issues/2681) (legibility), [#2682](https://github.com/amd/gaia/issues/2682) (budget + consolidation + decay), [#2683](https://github.com/amd/gaia/issues/2683) (email reference agent). Three scopes are **not yet covered by any issue**: the [learning trigger](#the-learning-trigger), [privacy/retention/deletion](#privacy-retention-and-deletion), and [outcome attribution](#correction-4-the-empirical-promotion-gate-has-no-counter).
+
+**Target consumers:** [#888](https://github.com/amd/gaia/issues/888) (loader/format — blocking), [#2671](https://github.com/amd/gaia/issues/2671) (graduation bridge), [#2468](https://github.com/amd/gaia/issues/2468) (injection analyzer), [#2466](https://github.com/amd/gaia/issues/2466) (email reference agent), [#1451](https://github.com/amd/gaia/issues/1451) (tool-loader `SKILL` term), [#2672](https://github.com/amd/gaia/issues/2672) (skill sandbox — see [local-capability skills](#interaction-with-local-capability-skills-2672)), [#2676](https://github.com/amd/gaia/issues/2676) + [#2686](https://github.com/amd/gaia/issues/2686) (the two shipped-path defects v2 inherits).
+</Note>
+
+---
+
+## Why this exists
+
+A skill shipped in milestone 60 behaves identically on day 1 and day 300. That is
+the *point* of an authored skill — it is a portable, shareable, reviewable
+artifact. But it is also generic by necessity: `triage-inbox` cannot know that
+`cfo@company.com` outranks everything else in *your* mailbox, and it must not,
+because the file is publishable.
+
+So the capability has to grow somewhere that is **not the file**. This document
+specifies where: a per-user, provenance-tagged, typed overlay whose effective
+value is `base ⊕ deltas`, where discarding the overlay returns exactly the
+shipped behavior.
+
+The hard constraint is that GAIA runs locally. On the default profile the model
+is Gemma-4-E4B (~4B, [`lemonade_client.py:124`](https://github.com/amd/gaia/blob/main/src/gaia/llm/lemonade_client.py))
+inside a 32,768-token NPU window (`NPU_CTX_SIZE`,
+[`:174`](https://github.com/amd/gaia/blob/main/src/gaia/llm/lemonade_client.py); 65,536 on
+GPU/CPU, [`:173`](https://github.com/amd/gaia/blob/main/src/gaia/llm/lemonade_client.py)).
+A learning design that writes prose into that window is a slow context leak, and
+re-prefilling an NPU window costs far more than the learning saves. **The
+constraint is what makes this design better rather than merely different:** most
+of what an agent learns is not prose, and the cheap representations are already
+sitting in the codebase unused for this purpose.
+
+### Prior art (credit before contribution)
+
+GAIA does **not** invent adaptive skills. This design was stress-tested against
+shipped implementations rather than derived in isolation, and three of its
+mechanisms are adopted wholesale. Crediting the prior art before the contribution
+is a repo convention, not a courtesy — see
+[Skill Format → Prior art](/plans/skill-format#prior-art-credit-before-contribution)
+and [#893](https://github.com/amd/gaia/issues/893).
+
+| Source | What it contributes to this design |
+|---|---|
+| **[Hermes Agent](https://hermes-agent.nousresearch.com/docs/)** (Nous Research) | The existence proof that a shipped agent can safely learn and rewrite its own skills, and three mechanisms adopted directly: the **staged-write consent gate** (`skills.write_approval` — every create/edit/patch/delete queues for review with a unified diff before it affects future sessions), **archive-never-delete** for superseded skills, and **consolidating similar micro-skills into an umbrella skill**. Hermes also supplied the corrective that a blanket immutable-base rule is wrong: it mutates skill files in place, which is *correct* for self-generated skills. |
+| **[agentskills.io](https://agentskills.io)** | The `SKILL.md` base format the authored layer uses (adopted in [#888](https://github.com/amd/gaia/issues/888) / [Skill Format](/plans/skill-format)) — the artifact the overlay attaches to and never writes. |
+| **Mem0** | The ADD / UPDATE / NOOP reconciliation shape already implemented by `reconcile_and_store` ([`skill_synthesis.py:653`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py)). |
+| **Zep** | The insert-new-then-supersede lineage (`superseded_by`) that keeps history immutable while the head moves — already implemented by `supersede_skill` ([`memory_store.py:2735`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py)). |
+| **OverlayFS / Docker layers / the CSS cascade** | The general copy-on-write shape: an immutable base plus a mutable layer, base recoverable by discarding the layer. |
+| **`git rebase` / three-way merge** | The vocabulary for [rebase on base update](#rebase-on-base-update-v1-is-deliberately-crude) — re-anchor, orphan, conflict. The *mechanism* is not reusable (a delta is typed, not a text hunk), only the failure taxonomy. |
+
+**GAIA's contribution** is the part none of the above solves: applying a learned
+overlay to a **third-party authored** skill that can be updated upstream, which
+requires typed, section-anchored deltas and a rebase story (Hermes never faces
+this — it has no authored base to update against); **tiered representation**, so
+a lesson is recorded at the cheapest layer that can hold it instead of always as
+prose; and **empirical promotion** gated on a measured success rate rather than
+the model's own judgment that a skill is wrong — which matters more here than
+anywhere, because the judge is a 4B local model.
+
+---
+
+## What the code review corrected
+
+Before designing anything, the shipped machinery was read end to end. Three
+working assumptions from the umbrella issue's discussion did not survive, and one
+open question turned out to be already answered — inconsistently.
+
+| Assumption going in | Verdict | Evidence |
+|---|---|---|
+| Mutability follows provenance: synthesized skills are mutable via supersede lineage; authored ones need an immutable base + overlay. | **Holds.** | `provenance` is a free-form JSON column ([`memory_store.py:292`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py)); the only writer sets `{"source": "synthesized", …}` ([`skill_synthesis.py:690`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py)). Nothing keys behavior off it yet, so a second `source` value is additive. |
+| **One store, not two — extend the `procedures` table; do not build a parallel overlay store.** | **Half wrong.** One *database* and one *lineage idiom*: yes. One *table*: no. | Three blockers, cited in [Storage](#storage-one-database-two-tables). |
+| Tiered learning; tier 1 = the tool loader's `SKILL` term at **zero added text**. | **Mostly holds, one correction.** Tier 1 is *bounded*, not zero. | `select()` admits `skill_tools` into the loaded set ([`tool_loader.py:310`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tool_loader.py)); below the cap that renders one extra tool schema, at the cap it LRU-evicts and is net-zero ([`:326`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tool_loader.py)). |
+| Local constraints (32K NPU, ~4B model, 14 tools, 1500-char recall cap) drive the design. | **Holds, all four verified.** | [`lemonade_client.py:173-174`](https://github.com/amd/gaia/blob/main/src/gaia/llm/lemonade_client.py), [`:124`](https://github.com/amd/gaia/blob/main/src/gaia/llm/lemonade_client.py), [`tool_loader.py:72`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tool_loader.py), [`skill_synthesis.py:65`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py). |
+| Empirical gating is mandatory, not preferable. | **Holds — and there are already two implementations to reuse.** | `reconcile_and_store` promotes on `success_count` dominance ([`skill_synthesis.py:713`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py)); the email agent's `TrustLedger(min_samples=5, threshold=0.85)` tallies per-scope accept/reject outcomes ([`trust.py:345`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/trust.py)). |
+| **Prefix stability: the loader is monotonic, so deltas must apply at session boundaries only.** | **Requirement holds; the premise is already violated in the worst possible place.** | See below. |
+| Procedures are atomic; chunk `references/`, never `SKILL.md` bodies. | **Holds, and the violation is live.** | The recall block hard-cuts the body at a character offset ([`procedural_memory.py:356`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/procedural_memory.py)) under a header telling the model these are proven steps to reuse ([`:361`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/procedural_memory.py)). Tracked as [#2676](https://github.com/amd/gaia/issues/2676). |
+
+### Correction 1: `procedures` cannot hold delta rows
+
+The `procedures` table cannot hold a delta row without lying about it. Every
+column and every read path assumes **the row is a standalone, recallable
+procedure**:
+
+1. **`when_to_use` and `markdown_body` are `NOT NULL`**
+   ([`memory_store.py:286-287`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py)) and `put_skill` raises on either
+   being blank ([`:2580-2583`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py)).
+   A tier-2 delta ("`followup_hours = 48`") has neither a trigger sentence nor a
+   Markdown body. Storing one means inventing both. SQLite cannot drop a
+   `NOT NULL` without rebuilding the table — so the "additive migration" story
+   breaks immediately.
+2. **The reconcile match scan would eat deltas.** `_nearest_enabled_procedure`
+   scans *every* enabled, non-superseded row with an embedding
+   ([`skill_synthesis.py:620-625`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py))
+   and supersedes the nearest match above τ. A delta row carrying an embedding
+   becomes a supersede *target* for an unrelated synthesized candidate.
+3. **The recall FAISS index would surface deltas as procedures.**
+   `_rebuild_proc_faiss_index` indexes every enabled non-superseded row
+   ([`procedural_memory.py:80-82`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/procedural_memory.py)),
+   and `recall_skill` injects whatever it finds. A fragment would be presented as
+   a complete proven procedure — the exact failure [#2676](https://github.com/amd/gaia/issues/2676) describes.
+
+Fixing 2 and 3 in place means adding a `WHERE kind = 'procedure'` guard to every
+existing read path — three call sites today, and every future one, each a silent
+corruption if forgotten. **The correct reading of "one store" is: one SQLite
+file, one migration chain, one lineage idiom (`superseded_by` + `enabled`, never
+`DELETE`), one embedder — and a sibling `skill_deltas` table.** That keeps the
+`procedures` corpus meaning exactly what it means today.
+
+### Correction 2: tier 1 is bounded, not free
+
+Admitting a recalled procedure's `tools_required` renders that tool's schema into
+the `AVAILABLE TOOLS` block. Below `max_tools` that is real added text (~40–80
+tokens per tool); at the cap the loader LRU-evicts a non-CORE tool and the cost
+is genuinely net-zero ([`tool_loader.py:326-337`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tool_loader.py)).
+The honest claim: **tier 1 adds no prose and is hard-bounded by `DEFAULT_MAX_TOOLS = 14`
+regardless of how much is learned.** That is still categorically cheaper than
+prose — an unbounded corpus of tool-selection priors costs at most 14 schemas —
+but "zero" overstates it.
+
+There is also a security property here worth naming, because it falls out of the
+existing code rather than needing enforcement: the `SKILL` term drops any name
+absent from the live registry ([`tool_loader.py:316-323`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tool_loader.py)),
+and the loader never touches `_TOOL_REGISTRY` at all
+([`:5-8`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tool_loader.py)).
+So a tier-1 delta is **structurally incapable** of adding a tool the agent does
+not already have. It can only reorder what is already there.
+
+### Correction 3: the KV-cache premise is already broken
+
+`_refresh_recalled_skills` runs **every user turn** ([`memory.py:2053`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py))
+and calls `rebuild_system_prompt()` whenever the recalled set changes
+([`procedural_memory.py:418-425`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/procedural_memory.py)).
+Mixin fragments — including the recalled-procedure block and (on PR #2669) the
+authored skills block — are composed **first**
+([`agent.py:617-618`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/agent.py)),
+while the deliberately volatile tools block was moved **last** precisely to
+protect the prefix ([`:625-651`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/agent.py)).
+The docstring three lines above the refresh call even states that "the system
+prompt is left frozen so the LLM inference engine can reuse its KV cache across
+turns" ([`memory.py:2038-2039`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py)) —
+and then unfreezes it from the front.
+
+So the requirement ("deltas apply at session boundaries only") is right, but it
+is **not sufficient and not yet true of the shipped recall path**. Two rules,
+not one:
+
+- **Timing:** learned content is resolved once per session, at session start.
+  Never mid-turn. (Cold cache at session start makes position irrelevant there.)
+- **Position:** if any mid-session application is ever permitted, the learned
+  fragment must render in the **volatile tail** alongside the tools block, not in
+  the mixin-prompt prefix. Tier 1 already satisfies this by construction — it
+  lands in the tools block.
+
+The existing tier-3 recall path satisfies neither. **Filed as
+[#2686](https://github.com/amd/gaia/issues/2686) against milestone 60** — it is a
+defect in shipped code, worth fixing independently of v2, and adjacent to
+[#2676](https://github.com/amd/gaia/issues/2676) in the same recall path.
+
+### Correction 4: the empirical promotion gate has no counter
+
+The design's central safety claim — promote on measured track record, never on
+model judgment — rests on `success_count` / `attempt_count`. Those columns are
+**written once, at insert, from the cluster that produced the row, and never
+updated again.**
+
+`reconcile_and_store` always inserts with `skill_id=None`
+([`skill_synthesis.py:693-704`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py)),
+so `put_skill`'s update branch — the only `UPDATE … success_count` in the store
+([`memory_store.py:2613`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py)) —
+is unreachable from the synthesis path. There is no `increment`, no
+`record_procedure_outcome`, nothing. A recalled procedure that is used and fails
+twenty times carries the same counters it was born with.
+
+Worse, what those counters measure is not what the design assumes. `iter_sessions`
+increments `success_count` per **tool call that did not error**
+([`memory_store.py:2855-2858`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py)),
+so `MIN_SUCCESS_RATE = 0.80` ([`skill_synthesis.py:55`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py))
+reads "80% of tool calls returned without raising" — not "the user got what they
+wanted." A procedure can be born with a 100% rate having produced a completely
+wrong answer, provided every tool returned cleanly.
+
+So the empirical gate as it stands is **a proxy measured on the raw sessions
+before distillation, not a track record of the artifact after adoption.** Two
+consequences for v2:
+
+1. **Outcome attribution is a prerequisite, not a detail.** Something must record
+   "delta D (or procedure P) was in context on this turn, and the turn's outcome
+   was positive/negative," and increment the right row. The shape already exists
+   in the email agent — `TrustLedger.record_outcome(db, action_type, scope,
+   positive)` keyed per scope
+   ([`trust.py:358`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/trust.py)) —
+   but nothing links a *delta* to a *scope*. This needs its own issue; without it
+   [#2679](https://github.com/amd/gaia/issues/2679)'s "promotion requires a track
+   record, not a model assertion" is unimplementable for deltas.
+2. **The outcome signal must be user-observable, not tool-return-code.** A
+   correction, an undo, an accepted suggestion — the things the trust ledger
+   already counts. Tool-call non-error is available and nearly worthless as a
+   quality signal, and it is what would get used by default if nobody says
+   otherwise.
+
+**This is the most consequential gap found in either review pass, because it
+invalidates an assumption both the umbrella issue and this document treat as
+already satisfied.**
+
+### The open question that was already answered inconsistently
+
+"Per-agent or per-user?" has a de-facto answer today, and it differs by agent.
+`procedures` has **no agent or context column**
+([`memory_store.py:283-299`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py)),
+so scope is decided by which DB file the host opens: the email agent passes its
+own `db_path` ([`agent.py:637-639`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/agent.py)),
+while ChatAgent takes the default `~/.gaia/memory.db`
+([`memory_store.py:354-357`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py)).
+Meanwhile tier-0 preferences live in the email agent's own `state.db`
+([`preference_tools.py:63`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/tools/preference_tools.py)) —
+per-agent by construction. **Deltas must carry an explicit scope column rather
+than inheriting whatever DB the host happened to open.**
+
+### Adversarial review: the nine challenges
+
+A second review pass challenged nine points. All nine are addressed; two are
+accepted only in part, and one is accepted *further* than proposed.
+
+| # | Challenge | Verdict | Addressed in |
+|:--:|---|---|---|
+| 1 | Tier 0 is oversold — "zero cost" hides integration cost | **Accepted.** Quantified: the email agent registers 59 tools; **two** consult the learned store. | [Integration cost](#the-honest-cost-of-tier-0-integration-not-inference) |
+| 2 | Four tiers may be over-engineered for v1 | **Accepted in part — and revised further than asked.** v1 ships tiers **0, 1, 3**; tier 2 is deferred; the *tier classifier* is deleted and replaced by declaration at the write site. | [Why v1 ships three tiers](#why-v1-ships-three-tiers-not-four) |
+| 3 | Nothing owns the learning trigger | **Accepted — needs its own issue.** Three shipped signals, no new detector. | [The learning trigger](#the-learning-trigger) |
+| 4 | No milestone-level success metric | **Accepted.** Three measured KPIs plus one named anti-KPI. | [KPIs](#kpis) |
+| 5 | Rebase may be premature | **Accepted, plainly.** v1 orphans **all** deltas on a base change; anchors are recorded but not acted on. Materially de-risks the milestone. | [Rebase](#rebase-on-base-update-v1-is-deliberately-crude) |
+| 6 | The "validated" gate is undefined | **Accepted.** Seven concrete exit criteria. | [Entry gate](#entry-gate-what-milestone-60-validated-means) |
+| 7 | Privacy and deletion are unscoped | **Accepted — needs its own issue.** Includes the archive-never-delete ↔ right-to-erasure conflict, named rather than glossed. | [Privacy](#privacy-retention-and-deletion) |
+| 8 | Email may be the wrong first reference agent | **Accepted in part; rejected in the form proposed.** Keep email; restrict v1 deltas to read-path tools so a wrong delta mis-ranks rather than mis-sends. | [Blast radius](#blast-radius-why-email-stays-but-only-half-of-it) |
+| 9 | Phase-2 sandbox interaction unaddressed | **Accepted.** "Never widen" is necessary and insufficient; v1 forbids deltas on local-capability skills outright. | [Local-capability skills](#interaction-with-local-capability-skills-2672) |
+
+The net effect is a **materially smaller v1**: no tier classifier, no tier-2
+grammar, no selective re-anchoring, no deltas on capability-bearing skills. What
+remains is the spine — a delta store, an appended learned block, tier-0/1
+wiring, the consent gate, legibility, a budget, and orphan-on-change. Four of the
+five things most likely to be wrong on the first attempt are deferred behind
+evidence rather than built speculatively.
+
+---
+
+## Decided design
+
+### The three layers, one direction of trust
+
+| Layer | Where | Mutability | Shareable |
+|---|---|---|---|
+| **Authored** | `SKILL.md` on disk ([#888](https://github.com/amd/gaia/issues/888)) | **Immutable at runtime** | Yes — publishable to the hub |
+| **Learned** | `skill_deltas` rows (PROPOSED), provenance-tagged | Agent-written, staged for review | No — private by construction |
+| **Session** | In-context only | Ephemeral | No |
+
+The effective skill is `base ⊕ deltas`. **Nothing ever writes to the authored
+file.** Reset = delete the deltas, and it always returns exactly the shipped
+behavior, byte-identically.
+
+### Mutability follows provenance
+
+A blanket "never mutate" rule would be a regression: it would make the shipped
+synthesized corpus worse, since supersede lineage is *how* that corpus improves.
+
+| Skill origin | Mutability | Mechanism | State |
+|---|---|---|---|
+| Synthesized (`provenance.source == "synthesized"`) | Mutable head, immutable history | Supersede lineage: insert new, mark old `superseded_by` | **Shipped** — [`skill_synthesis.py:713-726`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py) |
+| Authored / hub-installed | Immutable base | Learned overlay in `skill_deltas` | **PROPOSED** — this document |
+
+The two are not alternatives. A synthesized procedure that proves itself can be
+*graduated* into an authored skill ([#2671](https://github.com/amd/gaia/issues/2671)),
+at which point it stops being mutable and starts accruing deltas instead.
+
+---
+
+## Tiered learning — the cheapest representation wins
+
+Most of what an agent learns is not prose. "This sender matters," "for this goal
+use these four tools," "escalate above 48 hours" are structured facts wearing a
+sentence as a costume. Encode them structurally and they cost almost nothing.
+
+| Tier | What it holds | Resident context cost | Storage | State |
+|:--:|---|---|---|---|
+| **0 — Data** | Facts the *tools* query directly | **Zero** — never enters the prompt | The agent's own `state.db` | **Shipped** (email agent) |
+| **1 — Selection** | Tool priors per goal | **Bounded** — ≤ `max_tools` schemas, net-zero at the cap | `tools_required` → the loader's `SKILL` term | **Shipped** ([#1451](https://github.com/amd/gaia/issues/1451)) |
+| **2 — Parameters** | Typed knobs bound to a named base section | Tens of tokens | `skill_deltas` | **DEFERRED past v1** |
+| **3 — Prose** | Genuinely procedural knowledge | Hundreds of tokens, retrieval-gated | `skill_deltas` + embedding | **PROPOSED** |
+
+**The governing rule: a lesson is recorded at the lowest tier that can represent
+it. Prose is the escape hatch, never the default.** Hermes only has tier 3 —
+everything it learns becomes a file destined for the context window. GAIA can do
+better because it has a tool layer between the model and the work.
+
+Note what tiers 0 and 1 buy beyond token cost: **they need no embedder.** When
+the embedding model is unreachable, or after `clear_all_embeddings()` nulls every
+procedure vector on an embedder change
+([`memory_store.py:1487-1512`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py)),
+tier-3 recall goes dark while tiers 0–2 keep working. Pushing learning down the
+stack buys robustness, not just tokens.
+
+### The honest cost of tier 0: integration, not inference
+
+Tier 0's "zero cost" claim is true about **inference** and misleading about
+**engineering**, and the correction is the same shape as
+[Correction 2](#correction-2-tier-1-is-bounded-not-free): a cost was moved, not
+removed. Learning stored as data costs nothing to carry — but it only helps a tool
+that was written to read it.
+
+The shipped numbers, counted on the email agent:
+
+| Measure | Count |
+|---|---:|
+| `@tool` registrations in the package | **59** |
+| Modules that touch `_session_preferences` | **3** (`agent.py`, `preference_tools.py`, `read_tools.py`) |
+| Modules that *consume* a learned preference | **1** — `read_tools.py` (`triage_inbox`, `pre_scan_inbox`) |
+
+So a user can mark a sender important and **57 of 59 tools will not care.** The
+per-tool integration is small (read a dict, branch), but it is paid once per tool,
+by hand, and it is invisible when skipped. That last part is the real hazard:
+
+<Warning>
+**The silent no-op is worse than the token cost.** A tier-0 fact written to a
+store no tool reads looks exactly like successful learning — the write succeeds,
+the confirmation says "saved", and behavior never changes. A tier-3 prose delta at
+least reaches the model. **Tier 0 trades a visible cost for an invisible failure
+mode**, and nothing in the current design would surface it.
+</Warning>
+
+Two mitigations, both cheap, both required:
+
+1. **A shared opt-in seam, not a bespoke store per agent.** Today the email
+   agent's preferences are a hand-rolled table plus an instance dict. Generalize
+   it once on the memory layer: a `learned_facts` table (namespace, key, value,
+   scope, provenance) plus one accessor a tool calls in a single line —
+   `self.learned("priority_senders", default=frozenset())`. An agent author opts a
+   tool in by calling it; nothing else changes. This is the same
+   extract-shared-logic move [`KNOWN_TOOLS`](https://github.com/amd/gaia/blob/main/src/gaia/agents/registry.py)
+   already applies to tool mixins.
+2. **Declared consumers, so the gap is legible.** A tool that honors a tier-0
+   namespace declares it (a `@tool(learns_from=…)` argument or a mixin-level
+   registry). Then `gaia skill deltas` can render *"12 senders marked important —
+   honored by `triage_inbox`, `pre_scan_inbox`"*, and a fact with **zero** declared
+   consumers is reported as inert rather than presented as learned. Without this,
+   the legibility work in [#2681](https://github.com/amd/gaia/issues/2681) shows a
+   count that does not mean what a user will read it to mean.
+
+**Revised claim, for the record:** tier 0 has *zero resident context cost and
+zero embedder dependency, at the price of one small, explicit integration per
+consuming tool, and it must report which tools consume it.* "Zero cost" without
+that qualifier should not appear in any issue or doc.
+
+### Why v1 ships three tiers, not four
+
+The challenge — that a four-tier taxonomy built before we know what users teach
+agents is speculative — is right, and the answer is not "keep four for elegance"
+nor "cut to 0 and 3". It is that **two of the four tiers are not new machinery at
+all, and the genuinely speculative part is the classifier, not the tiers.**
+
+| Tier | Is the mechanism new? | v1 |
+|:--:|---|---|
+| **0 — Data** | No. Shipped in the email agent ([`preference_tools.py:63`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/tools/preference_tools.py)). Needs generalizing, not inventing. | **Ship** |
+| **1 — Selection** | No. Shipped as `ToolLoader.select(skill_tools=…)` ([`tool_loader.py:310`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tool_loader.py)) for #1451. A delta feeding it is a wire-up, not a mechanism. | **Ship** |
+| **2 — Parameters** | **Yes** — typed payloads, allowlisted keys per section, a rendering path, plus the anchoring it depends on. | **Defer** |
+| **3 — Prose** | Partly. The retrieval + injection path is shipped for procedures ([`procedural_memory.py:334`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/procedural_memory.py)); deltas reuse it. | **Ship** |
+
+Dropping tier 1 would not save building anything — it would decline to use
+something that already exists and costs at most 14 tool schemas. Dropping tier 2
+saves real work. And there is a design reason to suspect tier 2 was never a tier:
+
+> **The tier-2 collapse hypothesis.** If a learned value *can* be read by a tool,
+> it is tier 0. If it *cannot*, prose is the only thing that can carry it. Tier 2
+> — "a typed value the model reads as one rendered line" — is tier 0 for values
+> whose tool has not been wired yet, plus a rendering convention. If that holds,
+> tier 2 should never be built; the right fix is to wire the tool.
+
+Defer it and find out. A threshold expressed as one short tier-3 sentence costs
+roughly twenty tokens, which is not worth a new grammar, a new payload validator,
+and a new anchoring dependency before a single user has taught an agent anything.
+
+**The tier classifier is deleted from v1 entirely.** In its place: the tier is
+**declared at the write site** by whatever captured the lesson — a preference tool
+call is tier 0 by construction, a recipe outcome is tier 1 by construction,
+everything else is tier 3. No general classifier, no misclassification risk, and
+[#2677](https://github.com/amd/gaia/issues/2677)'s requirement that a
+misclassified delta be promotable between tiers becomes cheap because the only
+move is 3 → 0 (write the tool that reads it).
+
+### Worked examples — the email agent ([#2466](https://github.com/amd/gaia/issues/2466))
+
+<AccordionGroup>
+<Accordion title="Tier 0 — 'alice@example.com is always urgent' (zero context, shipped today)">
+
+The user says *"anything from Alice is urgent."* The lesson becomes a **row**, not
+a sentence.
+
+```
+set_priority_sender("alice@example.com")
+  → agent._session_preferences["priority_senders"].add(...)
+  → upsert into state.db  email_preferences  (single JSON row)
+  → triage_inbox / pre_scan_inbox read it and classify urgent,
+    bypassing the keyword heuristic entirely
+```
+
+This is **already shipped**: the table DDL is at
+[`preference_tools.py:63`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/tools/preference_tools.py),
+the tool at [`:355`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/tools/preference_tools.py),
+and the consuming triage path is documented at
+[`:21-27`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/tools/preference_tools.py).
+The agent gets measurably better at *your* mail with **zero prompt growth** and
+no embedder dependency. Note also that the tool reports a `persisted` flag and
+refuses to claim durability it does not have — the honesty pattern every tier
+should copy.
+
+**v2's job here is not to build this. It is to (a) generalize the pattern so any
+agent can declare a tier-0 store without hand-rolling one, and (b) make the write
+site route sender-shaped lessons here instead of writing "Alice is important" into
+a prompt.**
+
+</Accordion>
+<Accordion title="Tier 1 — 'for inbox cleanup, this recipe works' (bounded, shipped today)">
+
+Across five sessions the goal *"clean up my inbox"* succeeded via
+`pre_scan_inbox → archive_message → summarize_thread`. Synthesis distils that
+into a procedure whose `tools_required` records the recipe
+([`skill_synthesis.py:171`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py)),
+and on the next matching goal:
+
+```
+recall_skill("clean up my inbox")        # cosine ≥ τ over when_to_use
+  → _recalled_skill_tools()              # flattened tools_required
+  → ToolLoader.select(..., skill_tools=[...])
+  → admitted after CORE, AHEAD of semantic candidates
+```
+
+Precedence is `CORE > SKILL > SEMANTIC`
+([`tool_loader.py:22-27`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tool_loader.py)),
+the admission loop is cap-bound with no bundle pull-in
+([`:310-337`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tool_loader.py)),
+and the recall is free because it rides the single per-turn pass
+`_refresh_recalled_skills` already makes
+([`procedural_memory.py:369-387`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/procedural_memory.py)).
+
+**What learning changes is which schemas render — not how much text is added.**
+
+**v2's job:** feed the *same* signal from an authored skill's overlay. A
+`tool-hint` delta on `triage-inbox` contributes names to the identical
+`skill_tools` list. Because the loader drops registry-absent names
+([`:316-323`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tool_loader.py)),
+a delta cannot smuggle in a tool the agent lacks — the invariant is enforced by
+construction, not by a check that could be forgotten.
+
+</Accordion>
+<Accordion title="Tier 2 — 'escalate CFO threads after 48h, not 72h' (DEFERRED past v1)">
+
+<Note>
+**Deferred past v1** — kept here because it is the clearest illustration of what a
+typed delta *would* buy, and because the [collapse hypothesis](#why-v1-ships-three-tiers-not-four)
+is stated against this exact example: if `followup_hours` is a value the escalation
+tool could read, the right fix is to wire the tool (tier 0), not to invent a tier.
+</Note>
+
+The authored `triage-inbox` skill has a section:
+
+```markdown
+## Escalation
+Escalate a thread when it has been waiting longer than the follow-up window
+without a reply.
+```
+
+The user corrects the agent twice: 72 hours is too slow for the CFO. Instead of
+appending a paragraph, one typed row:
+
+```yaml
+kind: parameter
+base: triage-inbox
+base_version: 1.2.0
+anchor:
+  section: escalation           # slug of "## Escalation"
+  digest: 9f2c1ab4e77d          # sha256 prefix of that section's text
+payload:
+  key: followup_hours
+  value: 48
+  scope: "sender:cfo@company.com"
+provenance:
+  source: user_instruction      # trusted
+  turns: [sess_91f3#12, sess_a04c#7]
+evidence: { positive: 6, negative: 0 }
+status: active
+```
+
+Rendered into the prompt as a single line under the anchored section
+(`Follow-up window for cfo@company.com: 48h (learned)`) — or, better, consumed
+directly by the escalation tool and rendered as nothing at all. **A typed
+parameter is individually inspectable, diffable, and revertible; a prose
+paragraph saying the same thing is none of those.**
+
+</Accordion>
+<Accordion title="Tier 3 — 'how to decline a recruiter' (hundreds of tokens, retrieval-gated, PROPOSED)">
+
+Some lessons genuinely are procedural prose:
+
+> When declining a recruiter, keep it to two sentences, thank them by name, and
+> never mention a competing offer or a salary figure.
+
+No parameter holds that. It becomes a `preference` delta with a body, anchored to
+`## Drafting replies`, **with its own trigger embedding** — so it is
+*retrievable, not resident*. It enters the prompt only when the turn's goal
+matches its trigger above τ (`SIMILARITY_TAU = 0.82`,
+[`skill_synthesis.py:58`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py)),
+reusing the FAISS mechanism `reconcile_and_store` already maintains.
+
+Tier 3 must remain a **genuine** escape hatch. A lesson forced into a tier too
+weak to hold it is worse than a lesson that cost 200 tokens — burying knowledge in
+a representation that cannot carry it is the failure mode that would have made a
+tier classifier the second-riskiest item in the milestone. Deleting the classifier
+and [declaring the tier at the write site](#why-v1-ships-three-tiers-not-four)
+retires that risk rather than mitigating it: the only lessons that reach tier 3 are
+the ones no shipped mechanism claimed.
+
+</Accordion>
+</AccordionGroup>
+
+---
+
+## The learning trigger
+
+[#2679](https://github.com/amd/gaia/issues/2679) owns *how* a delta is written and
+approved. Nothing owned *when* one is proposed — a real gap, because "explicit
+user correction only" is a policy, and a policy with no detector is a policy that
+never fires.
+
+The answer is not a correction *detector*. It is three signals the codebase
+already produces, in descending order of confidence, none of which requires the
+model to judge anything:
+
+| Signal | What it is | Confidence | State |
+|---|---|---|---|
+| **A preference-setting tool call** | The user asked for a rule and the model called the tool that stores it — `set_priority_sender`, `set_category_default`, … ([`preference_tools.py:355`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/tools/preference_tools.py)). The call *is* the correction; nothing needs detecting. | **Highest** | **Shipped** — needs only a delta write alongside the store write |
+| **A recorded negative outcome** | The user undid, rejected, or edited an agent action, and `TrustLedger.record_outcome(..., positive=False)` logged it ([`trust.py:358`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/trust.py)). Machine-observable, no interpretation. | **High** | **Shipped** — needs a link from the scope to a candidate delta |
+| **An explicit "remember this" affordance** | A `remember_correction`-style tool the model may call only when the user used corrective language, or a `/teach` command the user invokes. Model-*proposed*, human-*confirmed*, so a misread costs a declined prompt, not a bad delta. | Medium | **New** — the only new machinery |
+
+**Explicitly out of scope for v2.0:** inferring a preference from repeated
+behavior without the user saying anything. That is where both the injection risk
+and the compounding-error risk live.
+
+### GAIA does not need Hermes' trigger heuristic
+
+Hermes creates a skill autonomously after a complex task — 5+ tool calls. It is
+cheap and concrete, and GAIA's equivalent already exists and is **stricter**:
+synthesis requires a goal to recur across `MIN_OCCURRENCES = 3` sessions at
+`MIN_SUCCESS_RATE = 0.80` ([`skill_synthesis.py:52-55`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py)) —
+repetition *and* measured success, not merely complexity. A 5-tool-call heuristic
+fires on one hard task that may have gone badly.
+
+So the trigger gap is narrower than it looks: it exists only for **deltas on
+authored skills**, not for the synthesized corpus, which has had a trigger since
+#887. But note the qualifier from
+[Correction 4](#correction-4-the-empirical-promotion-gate-has-no-counter): that
+0.80 is measured on tool calls that did not raise, not on outcomes the user
+endorsed. The trigger is stricter than Hermes'; the *quality* of the signal it
+gates on is weaker than the number suggests.
+
+**This needs its own issue** — it is a peer of #2679, not a sub-clause of it.
+Sequencing matters: signals 1 and 2 exist today and can land with the store,
+while signal 3 is the only piece with design risk.
+
+---
+
+## The delta grammar
+
+A bounded vocabulary, not free prose. The agent may add a preference or an
+exception; it may not rewrite the procedure.
+
+| `kind` | Tier | Payload shape | Applies as |
+|---|:--:|---|---|
+| `fact` | 0 | *(routed away — see below)* | Never a delta; a write to the agent's tier-0 store |
+| `tool-hint` | 1 | `{prefer: [name, …], drop: [name, …]}` — names must already be in the live registry | Contributed to (or withheld from) the loader's `skill_tools` list |
+| `parameter` | 2 | `{key, value, scope?}` — `key` allowlisted per base section | **Deferred past v1** — see [the tier-2 collapse hypothesis](#why-v1-ships-three-tiers-not-four) |
+| `exception` | 2 | `{condition, action}` — `action` from a restrictive-only set | **Deferred past v1**; expressible as a bounded tier-3 `preference` meanwhile |
+| `preference` | 3 | `{body}` ≤ 400 chars | Retrieval-gated prose under the anchored section |
+| `example` | 3 | `{input, output}` ≤ 400 chars total | Retrieval-gated worked example |
+
+**`fact` is deliberately not storable as a delta.** If a lesson is a fact the
+tools can query, the write site routes it to tier 0 and the delta write is
+refused. Allowing prose facts is how a 32K window silently fills with things
+that could have been rows.
+
+### Section anchoring, not line offsets
+
+A delta anchors to a **named section** of the base, identified by three things:
+
+| Field | Purpose |
+|---|---|
+| `anchor.section` | Slug of the base's Markdown heading (`## Escalation` → `escalation`). Survives rewording of the section body. |
+| `anchor.digest` | `sha256` prefix of the anchored section's text at write time. Detects that the section changed without vanishing — the signal that a delta may be stale rather than orphaned. |
+| `base_version` | The base's top-level `version` at write time, when it has one. |
+
+Two honest caveats:
+
+1. **No section parser exists.** The in-flight loader keeps the body as one
+   opaque string (`Skill.body: str`, PR #2669 `skills/format.py:341`); nothing
+   splits it into headings. The anchorer is **new machinery**, and it must be
+   deterministic — the same body must always yield the same slugs, or every
+   delta re-anchors on a whitespace change.
+2. **`version` is optional in the format** ([Skill Format → field reference](/plans/skill-format#field-reference)),
+   so rebase cannot depend on a bumped version to know the base changed. The
+   digest is the primary drift signal; `base_version` is corroborating detail. A
+   skill body with **no headings at all** (a legal bare-standard skill) anchors
+   only at the whole-body level, and whole-body-anchored deltas are the ones most
+   likely to orphan on any edit — surface that at write time so the user knows
+   the learning is fragile before it is stored.
+
+<Note>
+**v1 records anchors; it does not act on them.** Writing an anchor is one small
+function (slug + digest at write time). *Matching* an anchor across a base update
+is the research problem, and v1 declines it — see
+[Rebase](#rebase-on-base-update-v1-is-deliberately-crude). Every v1 delta still
+carries a full anchor so it stays rebaseable later, and rendering prefers the
+anchored section when it resolves cleanly, falling back to a single appended
+**Learned adjustments** block. That fallback is also the *only* rendering path
+needed for a base with no headings, which removes anchoring from v1's critical
+path without losing forward compatibility.
+</Note>
+
+### Provenance and trust class
+
+Every delta carries where it came from. This is the injection control, and it is
+the highest-stakes part of the design: today an injected instruction lasts one
+turn; a persisted one lasts forever.
+
+| `provenance.source` | Trust class | Write behavior |
+|---|---|---|
+| `user_instruction` | **Trusted** | Staged, one-click approve; auto-approvable by setting |
+| `outcome_evidence` (accept/reject tallies the user produced by acting) | **Trusted** | Staged; promotion additionally gated on evidence thresholds |
+| `observed_content` (an email body, a fetched page, a document) | **Untrusted** | **Quarantined.** Never applied without explicit per-delta confirmation. Scanned by [#2468](https://github.com/amd/gaia/issues/2468) before it is even shown. |
+| absent / unparseable | **Untrusted** | Most-restrictive floor (see [Off-states](#off-states-safe-floors)) |
+
+**Deltas may never widen permissions, add tools, or raise a security tier.** They
+move in the restrictive direction only. Concretely: a delta may not edit
+`metadata.gaia.permissions`, may not change `security_tier`, and may not
+introduce a tool name — the last being unforgeable by construction
+([`tool_loader.py:316-323`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tool_loader.py)).
+A delta *may* narrow: tighten a threshold, add an exception that declines an
+action, remove a tool from a recipe.
+
+---
+
+## Storage: one database, two tables
+
+One SQLite file, one migration chain, one lineage idiom, one embedder — and a
+sibling table, for the three reasons in [Correction 1](#correction-1-procedures-cannot-hold-delta-rows).
+
+### Minimal additive migration: v3 → v4 (PROPOSED)
+
+The existing migration pattern is `CREATE TABLE IF NOT EXISTS` in `_SCHEMA_SQL`
+plus a version-marker bump — exactly how v2→v3 added `procedures`
+([`memory_store.py:457-470`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py)).
+v4 follows it identically: **no `ALTER TABLE`, no row rewrite, no change to any
+existing read path.**
+
+```sql
+-- Learned overlay on an AUTHORED skill (v4 — adaptive skills, #2674).
+-- Sibling to `procedures`, not a subtype of it: a delta is an attachment to a
+-- base, keyed by (base identity, section anchor) — not a recallable procedure.
+CREATE TABLE IF NOT EXISTS skill_deltas (
+    id            TEXT PRIMARY KEY,        -- delta_<uuid>
+    base_name     TEXT NOT NULL,           -- authored skill name (== its directory)
+    base_root     TEXT,                    -- discovery-root label that supplied the base
+    base_version  TEXT,                    -- base `version` at write time (may be NULL)
+    scope         TEXT NOT NULL,           -- namespaced_agent_id, or 'user' for shared
+    kind          TEXT NOT NULL,           -- tool-hint | parameter | exception | preference | example
+    tier          INTEGER NOT NULL,        -- 1..3 (0 is never stored here)
+    anchor        TEXT NOT NULL,           -- JSON {section, digest}
+    payload       TEXT NOT NULL,           -- JSON, shape per `kind`
+    provenance    TEXT NOT NULL,           -- JSON {source, turns:[...]} — trust class
+    status        TEXT NOT NULL DEFAULT 'staged',  -- staged | active | quarantined | orphaned | archived
+    success_count INTEGER NOT NULL DEFAULT 0,
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    embedding     BLOB,                    -- tier-3 trigger vector only; NULL for tiers 1-2
+    superseded_by TEXT,                    -- Zep lineage; row is KEPT, never deleted
+    created_at    TEXT NOT NULL,
+    approved_at   TEXT,                    -- consent-gate timestamp; NULL while staged
+    last_used_at  TEXT                     -- decay/consolidation input
+);
+CREATE INDEX IF NOT EXISTS idx_delta_base   ON skill_deltas(base_name, scope);
+CREATE INDEX IF NOT EXISTS idx_delta_active ON skill_deltas(status) WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS idx_delta_super  ON skill_deltas(superseded_by)
+    WHERE superseded_by IS NOT NULL;
+```
+
+**What this borrows from `procedures` unchanged** — deliberately, so there is one
+idiom to learn: `provenance` as JSON, `success_count`/`attempt_count` as the
+empirical gate, `superseded_by` lineage with no `DELETE` path, `embedding` as a
+raw float32 BLOB via the existing `_embedding_to_blob` layout
+([`memory.py:331`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py)),
+and `last_used_at` for decay.
+
+**What it adds because `procedures` has no equivalent:** `base_name` +
+`base_root` + `base_version` (a delta is *attached*; a procedure is standalone),
+`anchor` (where inside the base), `kind`/`tier`/`payload` (typed rather than
+prose), `scope` (the leak boundary [the review found missing](#the-open-question-that-was-already-answered-inconsistently)),
+and `status` + `approved_at` (the staged-write consent gate has no analogue in the
+synthesized loop, which writes directly).
+
+**Store-layer methods to add** (mirroring the `procedures` accessors so the
+review surface is familiar): `put_delta`, `search_deltas(base_name, scope,
+status, …)`, `supersede_delta`, `approve_delta`, `touch_deltas`. Every one
+additive; none changes a `procedures` signature.
+
+### Reuse, extend, build — the review's verdict per module
+
+| Module | Reusable as-is | Needs extension | Must be new |
+|---|---|---|---|
+| `memory_store.py` | WAL + lock + migration harness ([`:373-470`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py)); the `procedures` accessors and their lineage semantics; `clear_all_embeddings` ([`:1487`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py)) | `_SCHEMA_SQL` + a v3→v4 marker bump; `clear_all_embeddings` should also null `skill_deltas.embedding` | `skill_deltas` table + its five accessors |
+| `skill_synthesis.py` | `DistilledProcedure.parse` / `to_skill_md` ([`:181`, `:255`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py)); `SynthesisConfig` + `load_synthesis_config` override pattern ([`:107`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py)); `cluster_by_goal`'s deterministic seeding ([`:500-502`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py)); `SIMILARITY_TAU` | A `DeltaConfig` sibling section in `memory_settings.json`; the ADD/UPDATE/NOOP *shape* re-applied to deltas keyed on `(base, anchor, kind)` instead of embedding cosine | The delta reconciler; consolidation / umbrella merge; outcome attribution ([Correction 4](#correction-4-the-empirical-promotion-gate-has-no-counter)). **Not** a tier classifier — deleted from v1 |
+| `procedural_memory.py` | The FAISS add/search/rebuild trio ([`:50`, `:118`, `:145`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/procedural_memory.py)); the change-detect-then-rebuild guard ([`:418-425`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/procedural_memory.py)); the off-state ladder in `recall_skill`'s docstring ([`:193-207`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/procedural_memory.py)) — the model for this doc's off-state table | Give the delta corpus its **own** index; do not add deltas to `_proc_faiss_index` | Session-boundary resolution instead of per-turn refresh; the structural-boundary fix for [#2676](https://github.com/amd/gaia/issues/2676) |
+| `tool_loader.py` | **Everything.** `skill_tools` is the tier-1 mechanism and needs no change ([`:224-249`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tool_loader.py), [`:310-337`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tool_loader.py)) | Nothing. The caller supplies a longer list; the loader is agnostic | Nothing |
+| `memory.py` / `agent.py` | `_embed_text`, blob helpers, `GAIA_MEMORY_DISABLED` off-state ([`:393-412`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py)); `_get_mixin_prompts` auto-discovery ([`agent.py:549`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/agent.py)) | Prompt *position*: a learned fragment must not sit in the mixin prefix if it can change mid-session ([`agent.py:617-618`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/agent.py)) | `EffectiveSkill` resolution; the `--no-learned-skills` switch |
+| `src/gaia/skills/` (PR #2669) | Discovery roots + precedence + `shadowed()`; progressive disclosure levels; the permission refusal gate | `Skill` gains an `effective()` view; `get_skills_system_prompt` renders `base ⊕ deltas` | The section anchorer; the rebase pass; `gaia skill deltas` |
+
+---
+
+## Effective-skill resolution
+
+```
+EffectiveSkill = base ⊕ deltas   where deltas = active, in-scope, non-orphaned,
+                                 non-superseded, anchor-resolved
+```
+
+**Precedence, most specific last:** base section text → tier-2 `parameter` →
+tier-2 `exception` → tier-3 `preference` / `example`. Within a tier, later
+`created_at` wins; a superseded delta never applies. Tier-1 hints do not
+participate in text composition at all — they go to the loader.
+
+Because [tier 2 is deferred](#why-v1-ships-three-tiers-not-four), **v1's ladder is
+just base → tier-3 prose**, rendered in the appended *Learned adjustments* block.
+The full ladder is specified now so that adding tier 2 later is an insertion into a
+defined order rather than a redesign.
+
+**Resolution happens once, at session start.** The resolved fragment is cached
+for the session's lifetime. A delta approved mid-session takes effect on the
+*next* session — stated in the approval UI, not discovered by the user.
+
+**Rendering is deterministic and stable:** deltas render in `(tier, kind,
+created_at, id)` order so two sessions with the same delta set produce
+byte-identical text. A learned fragment that reorders between sessions would
+defeat any prefix reuse and make bug reports irreproducible.
+
+### Off-states (safe floors)
+
+Every degraded condition lands on a conservative floor. **No condition anywhere
+in this table produces a more-permissive result than the authored base.**
+
+| Condition | Floor behavior |
+|---|---|
+| **`--no-learned-skills`** (or `skills.learned_enabled = false`) | Resolution short-circuits before any store read. The composed system prompt and the loader's `skill_tools` list are **byte-identical to a no-delta build** — asserted by a hash-equality test, not by inspection. |
+| **Memory disabled** (`GAIA_MEMORY_DISABLED=1`) | No store → no deltas → pure base ([`memory.py:393-412`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py) is the existing precedent). |
+| **Embedder unreachable** | Tier-3 retrieval yields nothing (matching `recall_skill`'s existing floor, [`procedural_memory.py:234-242`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/procedural_memory.py)). Tiers 0–2 unaffected — they need no vectors. |
+| **Embeddings cleared after an embedder change** ([`memory_store.py:1487`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py)) | Same as above: tier-3 dark until re-embedded; anchored tier-1/2 deltas keep applying. |
+| **Base skill missing, renamed, or now shadowed by a different root** | Deltas are **orphaned, not applied**, and surfaced for review. Never re-attached to a same-named skill from a different root without confirmation. |
+| **Anchor section vanished on a base update** | Delta orphaned **visibly**; never silently dropped and never silently re-applied to different text. |
+| **Anchor digest changed but section still exists** | Delta applies but is flagged `stale` in inspection output. A changed section is a *warning*, not an orphan. |
+| **Delta payload unparseable / `kind` unknown** | That delta is skipped with a loud log; the rest resolve. Never a partial payload, never a guessed default. |
+| **Untrusted provenance, not yet approved** | `quarantined` — excluded from resolution entirely. |
+| **Provenance absent or unreadable** | Treated as **untrusted** — the most restrictive class, never trusted-by-default. |
+| **Trust/evidence signal unavailable** | Promotion does not fire. A delta stays `staged`; it never auto-activates on missing evidence. |
+| **Delta would widen a permission, add a tool, or raise a security tier** | **Refused at write time** with an actionable error. Not stored, not staged. |
+| **Learning budget exceeded** | Lowest-value tier-3 deltas demote to retrieval-only, then archive. **Never truncate a delta or a procedure body mid-step** — the [#2676](https://github.com/amd/gaia/issues/2676) rule applies to learned content identically. |
+| **Eval run** | Deltas **off** by default (see [Eval strategy](#eval-strategy)). |
+| **Overlay not yet shipped (today)** | Authored skills load exactly as [#888](https://github.com/amd/gaia/issues/888) defines. The grammar is an inert contract — nothing reads it, so nothing can misbehave. |
+
+---
+
+## The write path
+
+Adopted from Hermes' `skills.write_approval` model, made typed.
+
+```
+observe → classify tier → propose (staged) → review diff → approve → active
+                              ↓ refused                        ↓ evidence gate
+                          not stored                    promotion / archive
+```
+
+1. **Trigger.** v2.0 default is **explicit user correction only** — the user says
+   the agent got it wrong, or the outcome ledger records a rejection. Inference
+   from observed behavior stays behind a setting until the safety rails have run
+   in the field. This is the conservative fork and it is deliberate.
+2. **Route, don't classify.** The tier is **declared by whatever captured the
+   lesson**: a preference-tool call is tier 0 by construction, a recipe outcome is
+   tier 1 by construction, everything else is tier 3. A `fact`-shaped lesson writes
+   a tier-0 row and **no delta**. There is no general classifier to misfile
+   anything — see [why v1 ships three tiers](#why-v1-ships-three-tiers-not-four).
+3. **Stage.** The delta is written `status = 'staged'` — stored, inert, invisible
+   to resolution. Nothing a staged delta contains reaches the model.
+4. **Review.** `gaia skill deltas <name> --pending` shows a **reviewable diff**
+   of the effective skill with and without the delta. Hermes' reviewers
+   consistently single out that its learning is *legible* — a file you can open
+   and diff — as what makes the feature feel real rather than claimed. Legibility
+   is product surface, not tooling polish.
+5. **Gate.** Trusted provenance: one-click approve, optionally auto-approve by
+   setting. Untrusted provenance: `quarantined`, scanned by
+   [#2468](https://github.com/amd/gaia/issues/2468)'s body-injection analyzer
+   *before* it is shown, and never auto-approvable at any setting.
+6. **Promote on evidence, not opinion.** A delta earns `active` on a measured
+   track record — the shape the email agent already ships
+   (`min_samples=5, threshold=0.85`, [`trust.py:345`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/trust.py))
+   and the dominance rule `reconcile_and_store` already uses
+   ([`skill_synthesis.py:713`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py)).
+   **Never on the model's judgment that the base is wrong.** Hermes patches on
+   model judgment; with a ~4B local model that is not a safe import — a
+   confidently wrong model would degrade its own instructions with nothing to
+   stop it.
+7. **Archive, never delete.** Retirement sets `superseded_by` or
+   `status = 'archived'`. History stays inspectable, matching
+   `supersede_skill` ([`memory_store.py:2735-2754`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py)).
+
+<Warning>
+**The escalation this creates.** Today a prompt injection lasts one turn.
+A persisted delta lasts forever. Local execution makes the payoff bigger —
+GAIA can learn from full message content that a cloud agent must not persist —
+which raises the stakes proportionally. The staged-diff consent gate is what
+makes exercising that capability safe, and it is **not** optional
+scaffolding to be added later: an inference-driven write path shipped without it
+converts a one-shot attack into permanent compromise.
+</Warning>
+
+---
+
+## Interaction with local-capability skills ([#2672](https://github.com/amd/gaia/issues/2672))
+
+"Deltas may never widen permissions" is **necessary and not sufficient**, and the
+challenge that says so is correct. Permissions gate *whether* a capability exists;
+a delta steers *how* it is used inside a grant that was already given. Two
+examples that widen nothing and are still bad:
+
+- A skill granted `filesystem:write:./**` plus a learned delta *"when the user
+  asks to clean up, delete the oldest files in the working directory."*
+- A skill granted `shell:execute:git` plus *"if the branch has diverged, use
+  `git push --force`."*
+
+Both are inside the declared permission. Both are destructive. Neither trips a
+permission check, a tier check, or a tool-addition check. So three further
+controls:
+
+1. **Deltas inherit the tool-confirmation policy; they never bypass it.** A delta
+   whose instruction leads to a tool in the agent's confirmation set still hits
+   that gate at execution time — the email agent's `CONFIRMATION_REQUIRED_TOOLS`
+   ([`agent.py:453`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/agent.py))
+   unioned with the base `TOOLS_REQUIRING_CONFIRMATION`
+   ([`agent.py:152`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/agent.py)).
+   A delta can change *what the agent proposes*; it can never change *what
+   executes unattended*. This is the load-bearing control, and it already exists.
+2. **Trust class is the minimum of provenance trust and skill-capability trust.**
+   A delta on a skill carrying any local-capability permission
+   (`filesystem`/`shell`/`database`/`desktop`/`env` — the domains
+   [Skill Format](/plans/skill-format#permission-model) routes to the sandbox) is
+   **untrusted regardless of who authored it**, because being wrong there is
+   unrecoverable rather than annoying.
+3. **v1 does not allow deltas on capability-bearing skills at all.** Deltas are
+   restricted to skills whose `metadata.gaia.permissions` is empty or purely
+   connector-backed (`network:*`, `mcp:connect`). Note this is already the *only*
+   loadable class of skill: PR #2669's loader refuses a skill declaring a
+   local-capability permission outright rather than loading it unenforced
+   (`refuse_unbridged_permissions`). So the restriction costs nothing today and
+   becomes a real gate the moment #2672's sandbox lands and those skills become
+   loadable.
+
+Sequencing consequence: **adaptive skills must not ship deltas on
+capability-bearing skills before #2672's enforcement exists.** That is a hard
+dependency in one direction only — v2 does not block #2672, but the reverse
+combination (sandboxed capabilities plus unreviewed learned instructions steering
+them) is the compounding risk the challenge identifies.
+
+---
+
+## Privacy, retention, and deletion
+
+Deltas derive from real mail, real documents, real pages. [#2671](https://github.com/amd/gaia/issues/2671)
+covers graduation (private → shareable) and nothing covered the rest. Filed
+gap; needs its own issue.
+
+### Where learned data lives, and its posture today
+
+Deltas live in the same SQLite file as the rest of memory — `~/.gaia/memory.db`
+by default, or the agent's own path
+([`memory_store.py:354-357`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py);
+the email agent passes its own,
+[`agent.py:637-639`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/agent.py)).
+
+**It is not encrypted at rest, and neither is today's `memory.db`.** Deltas
+therefore add no *new* exposure — but they make an existing gap more acute,
+because a prose delta can quote message text where a knowledge row usually
+paraphrases. Encryption at rest is a memory-layer decision, out of scope here,
+and it should be named as an open gap rather than implied to be handled.
+
+### The controls that are in scope
+
+| Control | Rule |
+|---|---|
+| **Payloads carry the lesson, not the evidence** | A delta stores *"decline recruiters in two sentences"*, never the recruiter's email body. Provenance references session/turn ids — the `from_sessions` precedent ([`skill_synthesis.py:690`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py)) — never message content. **The single most important privacy control, and the cheapest.** |
+| **Incognito suppresses delta writes** | `_incognito` already no-ops memory writes ([`memory.py:421-423`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory.py)); deltas honor it identically, and the write path reports session-only honestly rather than claiming persistence — the pattern `set_priority_sender`'s `persisted` flag already sets. |
+| **Export** | `gaia skill deltas <name> --json` dumps what is stored, for inspection and portability. Legibility and portability are the same feature. |
+| **Hard delete** | `gaia memory forget --learned [--agent <id>] [--skill <name>]` **removes rows and their embeddings**, and purges the FAISS index — not just the row, or the vector keeps answering. |
+
+### The conflict worth naming: archive-never-delete vs. right-to-erasure
+
+Archive-never-delete is the correct default for *learning* operations: it is what
+makes a bad delta recoverable and lineage auditable, and it is the property
+`superseded_by` gives the whole store today. It is the **wrong** answer for a user
+who says "delete everything you learned about me."
+
+Resolution: these are two different operations and the spec should stop conflating
+them.
+
+- **Learning retirement** (supersede, revert, consolidate, decay) → archive. Never
+  deletes.
+- **User-initiated erasure** → genuinely deletes rows, embeddings, and index
+  entries. "The user asked to forget" outranks lineage, and a system that cannot
+  honor it has a compliance problem, not a design preference.
+
+`gaia skill reset <name>` is the *learning* operation (archive). Erasure is a
+separate, explicitly-named command, so nobody discovers that "reset" left the
+content on disk.
+
+---
+
+## Rebase on base update: v1 is deliberately crude
+
+The base goes `v1.0 → v1.1` with deltas attached. **There is no prior art
+anywhere.** Hermes never faces this — it has no authored base to update against;
+`git`'s three-way merge gives only the failure vocabulary, because a delta is
+typed structured data, not a text hunk.
+
+The original plan (and [#2680](https://github.com/amd/gaia/issues/2680)) was to
+build selective re-anchoring in v1. **That is now judged premature, and the
+challenge that raised it is accepted plainly** — this is the single largest
+de-risking available in the milestone.
+
+The reasoning is a timing argument, not a difficulty argument. At launch the hub
+carries approximately zero authored skills with real version history, so a
+re-anchoring path would be **built, shipped, and never exercised** — untested code
+guarding a rare event, which is how a subtle silent-reapplication bug reaches
+production a year later when skill updates finally become common. The scenario is
+rare early and common late; the code should arrive on the same schedule.
+
+### v1 behavior: orphan everything, retain everything, surface everything
+
+On any change to a base skill's content digest:
+
+1. **Every** delta attached to that skill moves to `status = 'orphaned'`.
+2. No delta is deleted, ever — same archive-never-delete property as
+   `supersede_skill` ([`memory_store.py:2735`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py)).
+3. The user is told, once, with a list and a **bulk re-approve** action alongside
+   per-delta approve/discard.
+4. Nothing re-applies until the user says so.
+
+| Property | v1 crude | v2 selective |
+|---|:--:|:--:|
+| A delta is never silently dropped | ✅ | ✅ |
+| A delta is never silently re-applied to changed text | ✅ | ✅ |
+| A permission narrowing in the new base always wins | ✅ | ✅ |
+| Surviving deltas re-attach with no user action | ❌ | ✅ |
+| Requires a working anchor *matcher* | ❌ | ✅ |
+| Requires "materially changed" to be defined | ❌ | ✅ |
+
+**Both safety properties are preserved. What v1 gives up is convenience.** The
+honest cost: a skill that updates frequently produces review fatigue, and a fatigued
+user bulk-approves without reading — which is the same failure the consent gate
+exists to prevent. That is the argument for building v2's selective path
+*eventually*, and it is an argument from observed update frequency, which is data
+v1 will produce.
+
+### What v2 still has to solve (research, not review)
+
+- **"Materially changed."** Heading identity, content hash, or embedding distance —
+  each with a different false-positive/false-negative profile. Hash is the
+  conservative default (any edit orphans); embeddings introduce a judgment call the
+  local model is poorly suited to make.
+- **Re-anchoring to a *renamed* section.** Almost certainly unsafe by similarity
+  alone — that is precisely the silent-reapplication failure. If it ships at all it
+  ships as a *user-confirmed suggestion*.
+- **Do orphans expire?** They accumulate. Proposed: they persist but stop being
+  offered for re-approval after N base updates, and are then archived — visible in
+  history, out of the active surface.
+
+**Bases with no headings** anchor whole-body, so under v2's selective scheme any
+edit orphans everything on them — i.e. v2's worst case equals v1's normal case.
+Another reason v1 loses less than it appears to.
+
+---
+
+## Consolidation, learning budget, and decay
+
+Three related bounds. Without them a long-lived agent accumulates near-duplicate
+learning that each individually clears every threshold.
+
+**Consolidation (umbrella merge).** `reconcile_and_store` matches a candidate
+against a **single** nearest neighbour and supersedes it
+([`skill_synthesis.py:691-726`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py)) —
+it never merges several related items into one. Hermes does: it extracts the core
+steps of similar micro-skills into a master umbrella. Adopt that for both
+corpora: when N deltas on the same base and anchor say near-identical things, or
+N procedures cluster tightly, propose one consolidated replacement through the
+same staged-diff gate. Consolidation is a *proposal*, not an automatic rewrite.
+
+**One more finding the budget has to cover.** The in-flight loader renders every
+loaded skill's **full** body into the system prompt with no cap (PR #2669,
+`Agent.get_skills_system_prompt`) — correct for atomicity (#888's "no partial
+load"), but it means authored skills have *no runtime ceiling at all*, bounded
+only by what an agent author chooses to load. That is the mirror image of the
+truncated recall path ([#2676](https://github.com/amd/gaia/issues/2676)): one
+half cuts mid-step, the other half is unbounded. The budget below must cover the
+authored + learned total, not the learned part alone, or a well-behaved overlay
+can still be the thing that overflows a 32K window.
+
+**Learning budget, enforced.** Tier-2 and tier-3 deltas get a hard resident-token
+ceiling per agent, sized against the 32K NPU window and the existing
+`MAX_RECALL_BODY_CHARS = 1500` recall cap
+([`skill_synthesis.py:65`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/skill_synthesis.py)).
+At the ceiling: consolidate first, then demote the lowest-value tier-3 deltas to
+retrieval-only, then archive. Tiers 0 and 1 are exempt — tier 0 never enters the
+prompt and tier 1 is already capped at `DEFAULT_MAX_TOOLS = 14`
+([`tool_loader.py:72`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tool_loader.py)).
+Unbounded accumulation is untidy on a 64K window and fatal on 32K.
+
+**Decay.** `last_used_at` exists and is stamped on every recall
+([`memory_store.py:2756`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py),
+called from [`procedural_memory.py:281-289`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/procedural_memory.py))
+but **has exactly one consumer today: a `MAX(last_used_at)` readout for
+`gaia memory status`** ([`memory_store.py:2017`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/memory_store.py)).
+Nothing prunes or ranks on it. So decay is a **scoping decision, not a schema
+change** — the data has been accruing all along. Proposed policy: `last_used_at`
+is a *ranking* input for budget eviction and a *surfacing* input for
+consolidation, and it **never** silently disables a delta the user explicitly
+approved. Age demotes; it does not delete.
+
+---
+
+## Inspection and control surface
+
+Legibility is the feature, not the tooling. All **PROPOSED**; extends the
+`gaia skill` subcommand from PR [#2669](https://github.com/amd/gaia/pull/2669).
+
+```bash
+gaia skill deltas <name>                # list active deltas: tier, kind, anchor, evidence
+gaia skill deltas <name> --pending      # staged + quarantined, with reviewable diffs
+gaia skill deltas <name> --diff         # effective skill vs. authored base
+gaia skill deltas <name> --orphaned     # orphans awaiting re-point or discard
+gaia skill approve <delta-id>           # consent gate
+gaia skill revert <delta-id>            # archive one delta (never a hard delete)
+gaia skill reset <name>                 # archive ALL deltas → pure authored base
+gaia chat --no-learned-skills           # session-level off-switch (byte-identical prompt)
+```
+
+The Agent UI panel mirrors this on the skills panel [Skill Format](/plans/skill-format#agent-ui-dashboard-support)
+proposes: a per-skill delta count, the diff view, approve/revert, and a visible
+badge when a skill is running with an overlay. **A user must be able to see, at a
+glance, that an agent is not running the shipped skill.**
+
+---
+
+## Eval strategy
+
+Two runs, one baseline.
+
+1. **Baselines run deltas-off.** Non-negotiable: per-user divergence makes a
+   scorecard unreproducible and a bug report uninterpretable. `gaia eval agent`
+   must force the off-state. **Today it does not isolate memory at all** — there
+   is no `GAIA_MEMORY_DISABLED` handling anywhere in `src/gaia/eval/`, so a
+   machine's synthesized `procedures` corpus can *already* contaminate a
+   baseline. That is a pre-existing gap this milestone must close, not a new
+   requirement it introduces.
+2. **A second eval measures what deltas add.** Same scenarios, deltas on, seeded
+   with a fixture delta set; the delta is the *difference between the two
+   scorecards*. A learning feature whose value cannot be measured against its own
+   off-state is not shippable — and per CLAUDE.md, any change touching prompt
+   assembly requires an eval run against the committed baseline before merge.
+
+Fixture deltas live in `tests/fixtures/skill_deltas/` alongside the existing
+`tests/fixtures/skills/` set PR #2669 adds, so the on/off comparison is
+reproducible on any machine.
+
+### Blast radius: why email stays, but only half of it
+
+The challenge that email is the wrong first reference agent — highest value,
+highest stakes, and a wrong delta means mis-triaged important mail — is **half
+right, and the half that is right does not imply switching agents.**
+
+Rejected: proving the mechanism on a lower-stakes agent first (analyst, browser).
+Three reasons, and they compound:
+
+1. Neither ships a tier-0 store or an outcome ledger, so "proving the mechanism"
+   there means **building both from scratch** — the opposite of de-risking. Email
+   has both already ([`preference_tools.py:63`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/tools/preference_tools.py),
+   [`trust.py:336`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/trust.py)).
+2. **Low-stakes agents have low-value learning.** Nobody teaches the browser agent
+   anything worth remembering, so the eval delta would be unmeasurable — and an
+   unmeasurable reference example cannot satisfy the
+   [measured-value KPI](#kpis).
+3. What is learned on a low-stakes agent does not transfer to the agent that
+   actually needs it, so the risk is deferred rather than retired.
+
+Accepted instead: **cut the blast radius inside email rather than changing
+agents.** In v1, deltas may affect only **read-path and classification** tools —
+`triage_inbox`, `pre_scan_inbox`, `summarize_thread` — and never the write path:
+`send_draft`, `send_now`, `schedule_send`, `forward_message`, `accept_invite`,
+`decline_invite`, `create_event_from_email`, `trash_message`, `archive_message`.
+
+That set is not invented here; it is the agent's existing
+`CONFIRMATION_REQUIRED_TOOLS`
+([`agent.py:453`](https://github.com/amd/gaia/blob/main/hub/agents/email/python/gaia_agent_email/agent.py))
+plus the destructive/organizing tools. **So the v1 rule reduces to: a delta may
+change what the agent proposes and how it ranks, never what it sends, deletes, or
+files.** The worst outcome of a wrong delta is that an important message is
+ranked low and the user sees it later — bad, visible, and recoverable — rather
+than a message sent or archived on a learned instruction nobody reviewed.
+
+The write path opens up in v2, gated on the correction-non-recurrence KPI having
+held on the read path for a release.
+
+---
+
+## KPIs
+
+### Milestone-level: how we would know this was worth building
+
+Nothing previously answered that question, and it is the one a reviewer should ask
+first. Three metrics, each measurable with data the system already records or
+records as part of this milestone.
+
+| KPI | How it is measured | Target |
+|---|---|---|
+| **Correction non-recurrence** — the user-felt claim, and the only one that is falsifiable without a benchmark | From the trigger's own correction log (§[The learning trigger](#the-learning-trigger)): count distinct `(scope, lesson)` pairs the user states more than once within their next 20 sessions. Needs no eval harness and no judge model. | **≥70%** of corrections stated exactly once. A user repeating themselves is the failure this milestone exists to remove. |
+| **Measured eval delta with a provably inert off-state** | Two `gaia eval agent` runs on the email category, run **serially**: deltas-off must equal the committed baseline *exactly* (proves inertness), deltas-on with the fixture delta set must beat it. | Off = baseline (zero drift); on **≥ +5 points** with **zero** category regressions. Both halves required — a gain with a drifting off-state is unattributable. |
+| **Cost of learning** | Median and p100 resident tokens added per session vs. the configured budget, plus TTFT measured at the budget ceiling against a no-delta build. | p100 ≤ hard ceiling; **≤2% TTFT regression** at the ceiling. Guards against winning on quality by spending the 32K window. |
+
+<Warning>
+**Named anti-KPI: the number of things learned.** Hermes' "20+ skills → 40%
+faster" is vendor-adjacent and directional only — treat it as evidence the
+category is real, not as a target. A system optimized for delta count will
+manufacture deltas, and delta count is precisely the quantity the
+[learning budget](#consolidation-learning-budget-and-decay) exists to *bound*.
+Any dashboard that shows a growing count must show cost and non-recurrence beside
+it.
+</Warning>
+
+### Implementation-level
+
+| KPI | Type | Target |
+|---|---|---|
+| **Off-state byte-identity** | Headline (correctness) | `--no-learned-skills` produces a system prompt and `skill_tools` list byte-identical to a no-delta build. Hash-asserted in CI. |
+| **Tier discipline** | Design | ≥50% of accepted lessons land at tier 0 or 1 in v1 (tier 2 is deferred, so the v1 bar is lower than a four-tier build would set). A rising tier-3 share is the signal to wire a tool, not to add a tier. |
+| **Resident cost of learning** | Efficiency | Median added resident tokens per session ≤ the configured budget, 100% of sessions ≤ hard ceiling. Zero mid-session prompt-prefix rebuilds attributable to deltas. |
+| **Promotion precision** | Safety | Zero deltas activated below the evidence threshold. Zero untrusted deltas applied without explicit approval. |
+| **Permission monotonicity** | Safety | Zero deltas that widen a permission, add a tool, or raise a tier — enforced at write time and asserted by test. |
+| **Rebase honesty** | Correctness | 100% of deltas on a changed base surfaced; **zero** silently re-anchored; zero silently dropped. (v1 satisfies this by orphaning all of them.) |
+| **Atomicity** | Correctness | Zero deltas or procedure bodies delivered cut mid-step ([#2676](https://github.com/amd/gaia/issues/2676)). |
+| **Measured value** | Headline (product) | Deltas-on scorecard ≥ deltas-off on the email reference category, with the difference attributable to specific deltas. |
+| **Legibility** | Product | Every active delta is listable, diffable, and revertible individually. |
+| **No hallucinated runtime** | Grounding | Every `file:line` in this document resolves on `main`, or is marked in-flight / PROPOSED. |
+
+---
+
+## Entry gate: what "milestone 60 validated" means
+
+[#2674](https://github.com/amd/gaia/issues/2674) says do not start until milestone
+60 ships "and is validated," which was undefined and therefore unenforceable.
+Concrete exit criteria — all seven, not a majority:
+
+| # | Criterion | Why it is the gate |
+|:--:|---|---|
+| 1 | PR [#2669](https://github.com/amd/gaia/pull/2669) merged; `gaia.skills` exists on `main`; [#888](https://github.com/amd/gaia/issues/888)'s acceptance criteria closed | Today `src/gaia/skills/` is absent on `main`. There is no base to overlay. |
+| 2 | [#2676](https://github.com/amd/gaia/issues/2676) and [#2686](https://github.com/amd/gaia/issues/2686) fixed | The recall path truncates procedures mid-step and rebuilds the prompt from its head. Every v2 tier that renders text inherits both. |
+| 3 | **The `SKILL.md` frontmatter and the discovery roots have gone one full release cycle without a breaking change** | **The real gate.** Deltas anchor to the base's shape; if the shape is still moving, every stored delta is invalidated by a format revision rather than by a skill update. |
+| 4 | ≥1 authored skill shipped inside a released hub package and loaded by a released agent — not a test fixture | Fixtures prove the parser. A shipped skill proves the packaging, discovery, and precedence path a delta will attach through. |
+| 5 | `gaia skill list \| info \| create \| import \| export` exercised from a **cold start** — empty `~/.gaia/skills`, no prior state | Per CLAUDE.md's cold-state rule: a warm dev box hides exactly the first-run failures a new user hits. |
+| 6 | An eval run on the email category with skills loaded vs. not, showing no regression against the committed baseline | Establishes the baseline v2's deltas-off run must reproduce exactly. Without it there is nothing to measure a delta against. |
+| 7 | ≥1 skill authored by someone who did not write the format spec | Proves the documentation, not the code. If only the author can write a valid skill, third-party bases — the whole reason an overlay is needed — will not exist. |
+
+Criteria 3 and 7 are the ones most likely to be waved through and the ones most
+likely to cost the milestone if they are.
+
+---
+
+## Phased build
+
+Each phase holds the prior floor until it lands. **Phase 1 does not start until
+every [entry-gate](#entry-gate-what-milestone-60-validated-means) criterion is
+met** — the whole design rests on the authored layer being stable, and building an
+overlay against a moving base wastes the work.
+
+The phases below reflect the [adversarial review](#adversarial-review-the-nine-challenges):
+the classifier, tier 2, and selective re-anchoring have moved out of v1.
+
+### Phase 0 — Architecture (this revision)
+
+**Success criteria:** the layer/tier model, the delta grammar, the anchoring
+scheme, and the off-state floors are decided; the four corrections and the nine
+review verdicts are recorded; every citation resolves.
+
+### Phase 0b — Prerequisite fixes on the shipped path (PROPOSED; unblocks everything)
+
+Not optional and not part of v2 proper: three invariants v2 depends on are
+currently violated or absent in shipped code.
+
+**Success criteria:**
+- Recalled-procedure bodies cut at a structural boundary or drop whole
+  ([#2676](https://github.com/amd/gaia/issues/2676)).
+- The recalled-procedure fragment no longer rebuilds the prompt from the mixin
+  prefix mid-session, or moves to the volatile tail
+  ([#2686](https://github.com/amd/gaia/issues/2686)).
+- `gaia eval agent` forces a deterministic memory/learning off-state.
+- **Outcome attribution exists** — something increments a procedure's or delta's
+  counters after adoption, on a user-observable signal
+  ([Correction 4](#correction-4-the-empirical-promotion-gate-has-no-counter)).
+  Without it, "promotion gates on track record" cannot be implemented.
+
+### Phase 1 — Delta store + bounded grammar (PROPOSED)
+
+`skill_deltas` at schema v4, the five store accessors, the `tool-hint` /
+`preference` / `example` kinds, and the write-time anchor recorder. **No
+consumer** — writes and reads only via tests. No classifier; tier is declared at
+the write site.
+
+**Success criteria:** a v1/v2/v3 database migrates to v4 with no row rewritten; a
+delta round-trips; the anchor recorder is deterministic across whitespace changes;
+every `procedures` read path is byte-identical with deltas present.
+
+### Phase 2 — Resolution + off-states (PROPOSED)
+
+`EffectiveSkill = base ⊕ deltas`, precedence, session-start-only resolution,
+`--no-learned-skills`, eval isolation, tier-1 wiring into the existing
+`skill_tools` list, and the appended **Learned adjustments** render block.
+
+**Success criteria:** the off-state hash test passes; a tier-1 delta changes tool
+selection without changing prompt bytes elsewhere; every off-state row resolves to
+the authored base.
+
+### Phase 3 — Trigger + write path + consent gate (PROPOSED; needs [#2468](https://github.com/amd/gaia/issues/2468))
+
+The three trigger signals, staged proposals with reviewable diffs, the
+trusted/untrusted split, injection scanning, and the evidence-based promotion gate
+(which requires Phase 0b's attribution).
+
+**Success criteria:** an untrusted-provenance delta cannot reach the model without
+explicit approval at any setting; a delta that would widen a permission is refused
+at write time; a fact-shaped lesson writes a tier-0 row and no delta; v1's
+read-path-only restriction is enforced, not documented.
+
+### Phase 4 — Tier-0 generalization + legibility (PROPOSED)
+
+The shared `learned_facts` seam and its declared-consumer registry, then
+`gaia skill deltas` + the UI panel — including the *inert fact* report that makes
+a learned-but-unconsulted fact visible.
+
+**Success criteria:** a second agent adopts tier 0 without writing its own store;
+a fact with zero declared consumers is reported as inert; every active delta is
+listable, diffable, and revertible.
+
+### Phase 5 — Budget, consolidation, decay (PROPOSED)
+
+The enforced ceiling over authored **and** learned resident content, umbrella
+merge through the staged gate, and the first `last_used_at` consumer.
+
+**Success criteria:** the ceiling holds under a synthetic 200-delta corpus with
+nothing cut mid-step; consolidation supersedes rather than deletes.
+
+### Phase 6 — Deferred by evidence, not by schedule (PROPOSED)
+
+Each item here ships only when data from earlier phases says it is needed:
+
+| Item | Ships when |
+|---|---|
+| **Tier 2 (typed parameters)** | Tier-3 prose deltas are observed carrying values a tool could read *and* wiring the tool proved insufficient — i.e. the [collapse hypothesis](#why-v1-ships-three-tiers-not-four) is falsified. |
+| **Selective re-anchoring** ([#2680](https://github.com/amd/gaia/issues/2680)) | Observed base-update frequency makes orphan-all a real review burden. |
+| **Deltas on the write path** | Correction non-recurrence has held on the read path for a full release. |
+| **Deltas on capability-bearing skills** | [#2672](https://github.com/amd/gaia/issues/2672)'s sandbox enforcement exists. |
+| **Inference-based learning** | The consent gate and injection scanning have run in the field without a persisted-injection incident. |
+| **Graduation of a delta set** ([#2671](https://github.com/amd/gaia/issues/2671)) | A user has a delta set worth publishing — which requires everything above to have worked. |
+
+---
+
+---
+
+## Open questions
+
+The architectural forks (provenance-driven mutability, one database / two tables,
+tiered representation, empirical promotion, session-boundary resolution) are
+settled above. What remains:
+
+1. **Delta scope: per-agent or per-user?** Already answered inconsistently in
+   shipped code — tier-0 preferences are per-agent (`state.db`), procedures are
+   per-DB-file with no scope column, and the email agent passes its own path
+   while ChatAgent does not ([evidence](#the-open-question-that-was-already-answered-inconsistently)).
+   The `scope` column makes the choice explicit; **which default** is open.
+   Sharing is more useful and leaks more.
+2. **What is the outcome signal for attribution?** A correction, an undo, an
+   accepted suggestion, or an explicit thumbs-down —
+   [Correction 4](#correction-4-the-empirical-promotion-gate-has-no-counter) shows
+   tool-call non-error is available and nearly worthless. Whatever is chosen becomes
+   the definition of "empirical" for the whole milestone, so it deserves a decision
+   rather than a default.
+3. **Does the tier-2 collapse hypothesis hold?** If every learned value a tool
+   could read should just be wired into the tool, tier 2 never ships. v1 is
+   designed to answer this from data rather than argument.
+4. **Deltas on a shadowed skill.** Precedence roots mean a same-named skill can
+   appear in two roots (PR #2669 `SkillManager.shadowed`). Does a delta follow
+   the *name* or the *(name, root)* pair? Following the name is more forgiving and
+   is how an overlay silently attaches to a different author's skill.
+5. **Decay strength.** Does an unused delta ever deactivate on age alone, or only
+   ever demote in ranking? Proposed: demote only, never deactivate what the user
+   approved — but a 300-session mailbox may argue otherwise.
+6. **Trusted auto-approve default.** Ships off (every delta staged) or on for
+   `user_instruction` provenance? Off is safer; on is what makes the feature feel
+   alive.
+
+---
+
+## Current state of the code
+
+| Area | Symbol / fact | `file:line` | State |
+|---|---|---|---|
+| Procedures table | `procedures` (provenance, version, enabled, success/attempt, superseded_by, embedding, last_used_at) | `agents/base/memory_store.py:283` | **Exists** |
+| Procedure accessors | `put_skill`, `search_skills`, `supersede_skill`, `touch_skills` | `memory_store.py:2532`, `:2674`, `:2735`, `:2756` | **Exists** |
+| Row shape | `_row_to_procedure_dict` (14 cols; 15 with embedding) | `memory_store.py:2502`, `:2526` | **Exists** |
+| Migration harness | `_migrate_schema_locked`, v2→v3 marker bump | `memory_store.py:414`, `:457` | **Exists** — v4 mirrors it |
+| Embedding clear | `clear_all_embeddings` nulls procedure vectors | `memory_store.py:1487` | **Exists** — off-state input |
+| Reconcile | `reconcile_and_store` ADD/UPDATE/NOOP, no DELETE path | `skill_synthesis.py:653` | **Exists** |
+| Match-by-meaning | `_nearest_enabled_procedure` (cosine ≥ τ, 500-row scan cap) | `skill_synthesis.py:580`, `:87` | **Exists** — [#1818](https://github.com/amd/gaia/issues/1818) |
+| Synthesis intermediate | `Skill` (4 fields) — **being renamed `DistilledProcedure`** | `skill_synthesis.py:159` | **Exists**; rename in flight ([#2671](https://github.com/amd/gaia/issues/2671)) |
+| Thresholds | `SIMILARITY_TAU = 0.82`, `MAX_RECALL_BODY_CHARS = 1500` | `skill_synthesis.py:58`, `:65` | **Exists** |
+| Recall | `recall_skill` + the procedures FAISS index | `procedural_memory.py:181`, `:50` | **Exists** |
+| Counters | `success_count`/`attempt_count` written at insert, **never incremented after** | `memory_store.py:2613` (unreachable from synthesis), `skill_synthesis.py:693-704` | **Gap** — the empirical gate has no counter ([Correction 4](#correction-4-the-empirical-promotion-gate-has-no-counter)) |
+| Success semantics | `success_count` counts tool calls that did not raise, not endorsed outcomes | `memory_store.py:2855-2858` | **Exists** — weaker signal than `MIN_SUCCESS_RATE` implies |
+| Outcome ledger shape | `TrustLedger.record_outcome(action_type, scope, positive)` | `hub/agents/email/python/gaia_agent_email/trust.py:358` | **Exists** — no link from a delta to a scope |
+| Confirmation gate | `TOOLS_REQUIRING_CONFIRMATION` ∪ agent `CONFIRMATION_REQUIRED_TOOLS` | `agent.py:152`, `hub/agents/email/python/gaia_agent_email/agent.py:453` | **Exists** — deltas inherit it, never bypass it |
+| Tier-0 reach | 59 `@tool` registrations in the email package; **1** module consumes a learned preference | `hub/agents/email/python/gaia_agent_email/tools/read_tools.py` | **Exists** — the integration cost tier 0 hides |
+| Recall→prompt | `_build_recalled_skills_prompt` (character-offset cut) | `procedural_memory.py:334`, `:356` | **Exists** — violates atomicity ([#2676](https://github.com/amd/gaia/issues/2676)) |
+| Mid-session rebuild | `_refresh_recalled_skills` → `rebuild_system_prompt()` per turn | `procedural_memory.py:399`, `memory.py:2053` | **Exists** — breaks the KV-prefix premise |
+| Tier-1 mechanism | `ToolLoader.select(skill_tools=…)`, `CORE > SKILL > SEMANTIC` | `tool_loader.py:224`, `:310` | **Exists** — reusable unchanged |
+| Tool cap | `DEFAULT_MAX_TOOLS = 14`, `DEFAULT_THRESHOLD = 0.20` | `tool_loader.py:72`, `:68` | **Exists** |
+| Prompt composition | mixins first, volatile tools last | `agent.py:617`, `:625-651` | **Exists** — position constraint |
+| Local envelope | `NPU_CTX_SIZE = 32768`, `GPU_CTX_SIZE = 65536`, `DEFAULT_MODEL_NAME` | `llm/lemonade_client.py:174`, `:173`, `:124` | **Exists** |
+| Tier-0 precedent | `email_preferences` table + `set_priority_sender` | `hub/agents/email/python/gaia_agent_email/tools/preference_tools.py:63`, `:355` | **Exists** — the tier-0 worked example |
+| Empirical gate precedent | `TrustLedger(min_samples=5, threshold=0.85)`, `record_outcome` | `hub/agents/email/python/gaia_agent_email/trust.py:336`, `:358` | **Exists** — promotion shape to reuse |
+| Skills loader | `gaia.skills`, `SkillManager`, `Agent.load_skill` / `get_skills_system_prompt` | PR [#2669](https://github.com/amd/gaia/pull/2669) | **In flight — absent on `main`** |
+| Section parsing | anything that splits a `SKILL.md` body into named sections | — | **NOT FOUND** — new machinery |
+| Eval isolation | `GAIA_MEMORY_DISABLED` handling in `src/gaia/eval/` | — | **NOT FOUND** — pre-existing gap |
+| **`skill_deltas` / `EffectiveSkill` / delta grammar / anchorer / rebase pass / consent gate / learning budget / `gaia skill deltas`** | — | — | **Greenfield — PROPOSED** |
+
+---
+
+## Dependencies
+
+**Blocked by milestone 60 in full** — especially [#888](https://github.com/amd/gaia/issues/888)
+(loader/format, in flight as PR [#2669](https://github.com/amd/gaia/pull/2669)),
+[#2671](https://github.com/amd/gaia/issues/2671) (graduation bridge + the
+`DistilledProcedure` rename this document's naming depends on), and
+[#2468](https://github.com/amd/gaia/issues/2468) (injection analyzer, required
+before any untrusted-provenance write path).
+
+**Blocked in practice by three shipped-code gaps** —
+[#2676](https://github.com/amd/gaia/issues/2676) (procedure atomicity),
+[#2686](https://github.com/amd/gaia/issues/2686) (the mid-session prompt rebuild,
+[Correction 3](#correction-3-the-kv-cache-premise-is-already-broken)), and the
+missing outcome attribution
+([Correction 4](#correction-4-the-empirical-promotion-gate-has-no-counter), no
+issue yet). Building an overlay on a recall path that truncates mid-step, rebuilds
+the prefix every turn, and has no counter to gate promotion on would inherit all
+three.
+
+**Entry gate.** See [what "milestone 60 validated" means](#entry-gate-what-milestone-60-validated-means) —
+seven criteria, of which "the format has gone a full release cycle without a
+breaking change" is the real one.
+
+**Builds on (shipped):** [#887](https://github.com/amd/gaia/issues/887) /
+[#1451](https://github.com/amd/gaia/issues/1451) — `procedural_memory.py`,
+`skill_synthesis.py`, `memory_store.py`, `tool_loader.py`.
+
+**Reference agent:** the email agent ([#2466](https://github.com/amd/gaia/issues/2466)),
+which already ships the tier-0 store and the empirical-evidence ledger this
+design generalizes.
+
+**Design inputs:** Hermes Agent (staged-write consent, archive-never-delete,
+umbrella consolidation), agentskills.io (base format), Mem0 (ADD/UPDATE/NOOP),
+Zep (supersede lineage); in-repo [Skill Format](/plans/skill-format),
+[Skill Synthesis](/plans/skill-synthesis), [Tool Loader](/plans/tool-loader),
+[Agent Skills](/spec/agent-skills).
+
+**Non-goals.** No mutation of authored `SKILL.md` files, ever. Not a second
+synthesis engine — [#887](https://github.com/amd/gaia/issues/887) owns procedure
+synthesis. No sharing or publishing of learned deltas; graduation
+([#2671](https://github.com/amd/gaia/issues/2671)) is the only private→shareable
+path. No semantic re-anchoring of orphans. Not started before milestone 60 ships
+and is validated.

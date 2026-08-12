@@ -1,0 +1,53 @@
+---
+// Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+// Tablist for the agent-detail doc panels. Presentational only — the roving
+// tabindex / arrow-key controller and the panels themselves live on the page
+// that owns them (pages/hub/[id].astro), so the ids below must stay in sync
+// with its `docpanel-*` panels.
+
+interface Tab {
+  key: string;
+  label: string;
+}
+
+interface Props {
+  tabs: Tab[];
+  label: string;
+}
+
+const { tabs, label } = Astro.props;
+---
+
+<div
+  role="tablist"
+  aria-label={label}
+  class="flex gap-0.5 overflow-x-auto border-b border-g-border px-2"
+>
+  {tabs.map((t, i) => (
+    <button
+      type="button"
+      role="tab"
+      id={`doctab-${t.key}`}
+      aria-controls={`docpanel-${t.key}`}
+      data-doc-tab={t.key}
+      aria-selected={i === 0 ? 'true' : 'false'}
+      tabindex={i === 0 ? 0 : -1}
+      class="doc-tab"
+    >{t.label}</button>
+  ))}
+</div>
+
+<style is:global>
+  .doc-tab {
+    @apply -mb-px flex-none whitespace-nowrap border-b-2 border-transparent px-3.5 py-3.5 font-mono text-[12px] uppercase tracking-[0.06em] text-g-faint transition-colors duration-[250ms] ease-g-out hover:text-g-text;
+  }
+  /* Selected state is weight + underline, not hue alone (SC 1.4.1), and the
+     underline uses gold-TEXT so it clears 3:1 on the card in light theme —
+     the graphic gold was 2.07:1. Weight 500 is a loaded JetBrains Mono face,
+     so the strip does not reflow when selection moves. */
+  .doc-tab[aria-selected='true'] {
+    @apply border-g-gold-text font-medium text-g-gold-text;
+  }
+</style>

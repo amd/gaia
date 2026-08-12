@@ -38,7 +38,10 @@ from gaia.connectors.errors import (
     AuthRequiredError,
     ConfigurationError,
     ConnectorsError,
+    NoDeclaredScopesError,
     ScopeMismatchError,
+    ScopeNotAllowedError,
+    UnknownAgentError,
 )
 from gaia.connectors.events import emit_change
 from gaia.connectors.flow import (
@@ -63,6 +66,7 @@ from gaia.connectors.store import (
 from gaia.connectors.store import list_connections as _store_list
 from gaia.connectors.store import (
     load_connection,
+    peek_connection,
 )
 from gaia.connectors.tokens import get_or_refresh
 
@@ -78,13 +82,86 @@ logger = logging.getLogger(__name__)
 # ``get_access_token`` still enforces per-agent scope coverage at the point an
 # agent actually requests a token.
 _DEFAULT_REQUIRED_SCOPES_BY_PROVIDER: dict[str, tuple[str, ...]] = {
-    # Built-in Email Triage Agent (#962) mailbox union.
+    # Built-in Email Triage Agent (#962) mailbox union — MUST equal
+    # gaia_agent_email/scopes.py's REQUIRED_SCOPES (mail only). Calendar is
+    # DELIBERATELY absent (#2730 D1): this gates whether a forwarded
+    # connection (Path A, #1292) is usable at import time, and calendar is
+    # requested but never required, mirroring the same enforcement the
+    # daemon's forward-out mint applies. Requiring it here would reject a
+    # mail-only forwarded connection outright — the exact all-or-nothing
+    # failure this issue removes, just relocated to the import boundary.
     "google": (
-        "https://www.googleapis.com/auth/gmail.modify",
-        "https://www.googleapis.com/auth/gmail.send",
-        "https://www.googleapis.com/auth/calendar.events",
+        "https://www.googleapis.com/auth/gmail.modify",  # from gaia_agent_email/scopes.py
+        "https://www.googleapis.com/auth/gmail.send",  # from gaia_agent_email/scopes.py
     ),
 }
+
+
+def resolve_declared_scopes(
+    registry: Any, connector_id: str, agent_ids: List[str]
+) -> Dict[str, List[str]]:
+    """Resolve ``[namespaced_agent_id]`` -> ``{agent_id: declared_scopes}`` (#2603).
+
+    Each agent's scopes come from its ``REQUIRED_CONNECTORS`` declaration for
+    ``connector_id`` — the single source of truth both the CLI
+    (``gaia connectors connect --grant-agent``) and the Agent UI router's
+    ``/authorize``, ``/authorize-device``, and ``/configure`` endpoints read,
+    so the two surfaces cannot drift (#2117's original resolver, hoisted here
+    out of ``gaia.ui.routers.connectors`` so it is FastAPI-free).
+
+    ``registry`` is duck-typed — any object exposing ``.list()`` that returns
+    entries with ``.namespaced_agent_id`` and ``.required_connections``
+    (``AgentRegistry`` shaped). This module never imports ``gaia.agents``.
+
+    Fails loudly (no silent skips or truncation):
+      - an unknown agent id -> ``UnknownAgentError``;
+      - an agent that declares no scopes for ``connector_id`` -> raises
+        ``NoDeclaredScopesError`` rather than ever falling back to the
+        provider's ``default_scopes``;
+      - a declared scope outside ``REGISTRY.get(connector_id).available_scopes``
+        -> ``ScopeNotAllowedError`` naming the offending scope(s). Without
+        this ceiling, an agent's own declaration would flow straight into the
+        OAuth consent screen with no check against the catalog (#2603 C4) —
+        the registry already namespaces against a malicious custom agent
+        claiming a built-in's identity, but not against bad scope values.
+        Skipped (no ceiling enforced) only when ``connector_id`` itself is
+        not in the connector catalog — an unrelated failure surfaces later
+        at the connector lookup that every caller already performs.
+
+    Returns ``{}`` when ``agent_ids`` is empty — no resolution needed.
+    """
+    if not agent_ids:
+        return {}
+
+    by_nsid = {reg.namespaced_agent_id: reg for reg in registry.list()}
+    unknown = [nsid for nsid in agent_ids if nsid not in by_nsid]
+    if unknown:
+        raise UnknownAgentError(unknown)
+
+    from gaia.connectors.registry import REGISTRY as _CONNECTOR_REGISTRY
+
+    try:
+        available: Optional[set] = set(
+            _CONNECTOR_REGISTRY.get(connector_id).available_scopes
+        )
+    except KeyError:
+        available = None
+
+    resolved: Dict[str, List[str]] = {}
+    for nsid in agent_ids:
+        reg = by_nsid[nsid]
+        scopes: set = set()
+        for cr in reg.required_connections:
+            if cr.connector_id == connector_id:
+                scopes.update(cr.scopes)
+        if not scopes:
+            raise NoDeclaredScopesError(nsid, connector_id)
+        if available is not None:
+            disallowed = sorted(scopes - available)
+            if disallowed:
+                raise ScopeNotAllowedError(nsid, connector_id, disallowed)
+        resolved[nsid] = sorted(scopes)
+    return resolved
 
 
 def _authorize_access(
@@ -128,6 +205,7 @@ def _authorize_access(
     stored = load_connection(
         provider,
         current_client_id_hash=prov.client_id_hash,
+        current_tenant=getattr(prov, "tenant", None),
         account_email=account_email,
     )
     if stored is None:
@@ -139,6 +217,13 @@ def _authorize_access(
     if missing:
         raise AuthRequiredError(
             AuthRequiredError.Reason.CONNECTION_MISSING_SCOPES,
+            # granted ∪ missing — NEVER just the missing subset. `--scopes`
+            # REPLACES the connection's scopes rather than adding to them
+            # (flow.py: `list(scopes) or list(provider.default_scopes)`),
+            # so a remedy naming only the gap would authorize an account
+            # that has lost everything it already had (#2730 D0). Do not
+            # "simplify" this to `missing` alone — that reintroduces the bug.
+            full_scopes=sorted(granted_scopes | set(missing)),
             provider=provider,
             agent_id=resolved_agent,
             missing_scopes=missing,
@@ -304,9 +389,14 @@ def list_connections() -> List[Dict[str, Any]]:
     """
     Return all stored connections as a list of summary dicts.
 
-    Each entry: ``{provider, account_email, scopes, connected_at}``.
-    Refresh tokens are NEVER included in the return value — only the
-    metadata callers need to display "Connected as <email>".
+    Each entry: ``{provider, account_email, scopes, connected_at,
+    account_type}``. Refresh tokens are NEVER included in the return value —
+    only the metadata callers need to display "Connected as <email>".
+
+    ``account_type`` is ``"personal"`` / ``"work"`` when the provider could
+    derive it at connect time (Microsoft, from the id_token ``tid`` claim,
+    #2466), and ``None`` otherwise — including for every Google connection,
+    which has no equivalent notion.
     """
     out: List[Dict[str, Any]] = []
     for provider in _store_list():
@@ -327,9 +417,13 @@ def list_connections() -> List[Dict[str, Any]]:
             )
             continue
         try:
-            blob = load_connection(provider, current_client_id_hash=prov.client_id_hash)
+            blob = load_connection(
+                provider,
+                current_client_id_hash=prov.client_id_hash,
+                current_tenant=getattr(prov, "tenant", None),
+            )
         except AuthRequiredError:
-            # Tripwire fired — the entry has been cleared. Skip.
+            # Tripwire fired (hash OR tenant) — the entry has been cleared. Skip.
             continue
         if blob is None:
             continue
@@ -339,6 +433,7 @@ def list_connections() -> List[Dict[str, Any]]:
                 "account_email": blob.get("account_email"),
                 "scopes": blob.get("scopes", []),
                 "connected_at": blob.get("connected_at"),
+                "account_type": blob.get("account_type"),
             }
         )
     return out
@@ -366,6 +461,7 @@ def import_forwarded_connection(
     refresh_token: str,
     scopes: List[str],
     account_email: str = "",
+    account_type: Optional[str] = None,
     grant_agents: Optional[List[str]] = None,
     required_scopes: Optional[List[str]] = None,
     connected_at: Optional[float] = None,
@@ -455,6 +551,13 @@ def import_forwarded_connection(
 
     # 6. Persist the connection (refresh_token + metadata) → ``<provider>:default``
     #    keyed by the forwarded client's hash so the tripwire passes coherently.
+    #    ``save_connection`` rewrites the whole blob, so the account kind must be
+    #    threaded through explicitly or a forwarded grant silently downgrades an
+    #    already-classified mailbox to unknown (#2466). A caller that knows the
+    #    kind passes it; otherwise the stored value carries over.
+    resolved_account_type = account_type or (
+        (peek_connection(provider) or {}).get("account_type")
+    )
     save_connection(
         provider=provider,
         account_email=account,
@@ -462,6 +565,7 @@ def import_forwarded_connection(
         scopes=list(scopes),
         client_id_hash=prov.client_id_hash,
         connected_at=connected_at,
+        account_type=resolved_account_type,
     )
 
     # 7. Evict any stale access-token cache entry so the next get_or_refresh
@@ -630,10 +734,14 @@ def tripwire_check() -> None:
             logger.warning("tripwire: provider %s misconfigured: %s", provider_id, e)
             continue
         try:
-            load_connection(provider_id, current_client_id_hash=prov.client_id_hash)
+            load_connection(
+                provider_id,
+                current_client_id_hash=prov.client_id_hash,
+                current_tenant=getattr(prov, "tenant", None),
+            )
         except AuthRequiredError:
-            # Tripwire fired — load_connection already cleared the
-            # entry; nothing else to do here.
+            # Tripwire fired (hash OR tenant) — load_connection already
+            # cleared the entry; nothing else to do here.
             logger.info("tripwire: provider %s entry cleared by tripwire", provider_id)
         except Exception as e:
             logger.warning("tripwire: provider %s check failed: %s", provider_id, e)
@@ -657,7 +765,6 @@ def connected_mailbox_providers() -> list[str]:
     # imports a no-op. Mirrors the pattern in _require_mcp_server_for_activation.
     import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
     from gaia.connectors.registry import REGISTRY
-    from gaia.connectors.store import peek_connection
 
     result: list[str] = []
     for spec in REGISTRY.all():
@@ -690,6 +797,7 @@ __all__ = [
     "load_activations",
     "load_grants",
     "poll_device_flow",
+    "resolve_declared_scopes",
     "revoke_agent_grant",
     "revoke_connection",
     "start_authorization",

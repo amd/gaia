@@ -30,8 +30,9 @@ import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Tuple
 
+from gaia_agent_email.body_normalize import normalize_email_body
 from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 from gaia_agent_email.tools.read_tools import DEFAULT_BODY_LIMIT_CHARS
 from gaia_agent_email.verbose import log_tool_call
@@ -126,12 +127,24 @@ _INVITE_PHRASES = (
     "i'd like to schedule",
     "would like to schedule",
     "i want to schedule",
+    # Informal "any chance ...?" slot-proposal phrasing (#2583, the #2580
+    # incident: "any chance to meet this Thursday at 9am?"). These are
+    # invite-strength on their own — no co-occurring time required, matching
+    # the other entries in this tuple.
+    "any chance to meet",
+    "any chance we could meet",
+    "any chance you could meet",
+    "any chance you're free",
 )
 
-# Meeting nouns — only a positive signal when paired with a concrete time
-# signal (otherwise "the meeting notes are attached" would false-positive).
+# Meeting nouns/verbs — only a positive signal when paired with a concrete
+# time signal nearby (otherwise "the meeting notes are attached" would
+# false-positive). "meet" is the informal verb form of "meeting" (#2583) —
+# it lets "any chance to meet Thursday at 9am" match even where the
+# "any chance ..." phrase above doesn't exactly match a variant.
 _MEETING_NOUNS = (
     "meeting",
+    "meet",
     "call",
     "1:1",
     "one-on-one",
@@ -143,6 +156,54 @@ _MEETING_NOUNS = (
     "google meet",
     "teams meeting",
 )
+
+# How close (in characters) a meeting noun/verb and a concrete time signal
+# must appear to count as one scheduling statement, rather than two unrelated
+# mentions in the same email (#2583). "call" in particular is common enough
+# in marketing copy ("happy to jump on a quick call") that a same-email,
+# anywhere-in-the-text match with an unrelated offer-deadline time ("valid
+# only through 4PM PT today") produced false positives on 8/104 rows of the
+# vendor PROMOTIONAL corpus — the noun and the deadline clock always lived in
+# different sentences. 60 chars comfortably separates that shape (the closest
+# real false positive measured 82 chars apart) from genuine same-clause
+# phrasing like "Meeting request: budget review at 3pm" or "meet ... at 9am".
+_NOUN_TIME_PROXIMITY_CHARS = 60
+
+
+def _find_all_spans(term: str, text: str) -> List[Tuple[int, int]]:
+    """Every ``(start, end)`` span where ``term`` occurs in ``text``."""
+    spans: List[Tuple[int, int]] = []
+    start = 0
+    while True:
+        idx = text.find(term, start)
+        if idx == -1:
+            break
+        spans.append((idx, idx + len(term)))
+        start = idx + 1
+    return spans
+
+
+def _nearest_time_within(
+    noun_spans: List[Tuple[int, int]],
+    time_spans: List[Tuple[int, int, str]],
+    window: int = _NOUN_TIME_PROXIMITY_CHARS,
+) -> Optional[str]:
+    """The matched time text closest to any noun span, if within ``window``
+    characters — or ``None`` if every time mention is farther away than that.
+    """
+    best: Optional[Tuple[int, str]] = None
+    for n_start, n_end in noun_spans:
+        for t_start, t_end, t_text in time_spans:
+            if n_end <= t_start:
+                distance = t_start - n_end
+            elif t_end <= n_start:
+                distance = n_start - t_end
+            else:
+                distance = 0
+            if distance <= window and (best is None or distance < best[0]):
+                best = (distance, t_text)
+    return best[1] if best else None
+
 
 # Concrete time / date signals. ``\b`` word boundaries keep "monday" from
 # matching inside another token.
@@ -235,19 +296,25 @@ def detect_meeting_request_heuristic(subject: str, body: str) -> MeetingDetectio
             reason=f"explicit invite phrase: {invite_hits[0]!r}",
         )
 
-    # 2. Meeting noun + concrete time — high-confidence positive.
+    # 2. Meeting noun/verb + concrete time NEARBY — high-confidence positive.
+    #    Proximity (not just co-occurrence anywhere in the email) is required
+    #    — see ``_NOUN_TIME_PROXIMITY_CHARS`` for why.
     noun_hits = [n for n in _MEETING_NOUNS if n in text]
     time_match = _TIME_RE.search(text)
-    if noun_hits and time_match:
-        return MeetingDetection(
-            is_meeting_request=True,
-            confidence="high",
-            signals=tuple(noun_hits) + (time_match.group(0),),
-            reason=(
-                f"meeting noun {noun_hits[0]!r} with concrete time "
-                f"{time_match.group(0)!r}"
-            ),
-        )
+    if noun_hits:
+        noun_spans = [span for n in noun_hits for span in _find_all_spans(n, text)]
+        time_spans = [(m.start(), m.end(), m.group(0)) for m in _TIME_RE.finditer(text)]
+        nearby_time = _nearest_time_within(noun_spans, time_spans)
+        if nearby_time is not None:
+            return MeetingDetection(
+                is_meeting_request=True,
+                confidence="high",
+                signals=tuple(noun_hits) + (nearby_time,),
+                reason=(
+                    f"meeting noun {noun_hits[0]!r} with concrete time "
+                    f"{nearby_time!r} nearby"
+                ),
+            )
 
     # 3. Slot-proposal phrase + concrete time — high-confidence positive.
     #    "Here are some times: Mon 10am / Wed 2pm" is the canonical case.
@@ -343,7 +410,7 @@ def _build_llm_user_prompt(subject: str, body: str) -> str:
     # prompt is trained to treat as data.
     from gaia_agent_email.tools.read_tools import wrap_untrusted_body
 
-    clipped = (body or "").strip()[:DEFAULT_BODY_LIMIT_CHARS]
+    clipped = normalize_email_body((body or "").strip())[:DEFAULT_BODY_LIMIT_CHARS]
     return (
         "Does this email ask to schedule a meeting?\n\n"
         f"Subject: {subject}\n"
@@ -559,6 +626,29 @@ def _event_window(event: Mapping[str, Any]) -> Optional[Tuple[datetime, datetime
         return None
 
 
+def _extract_attendees(event: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    """The event's real ``attendees``, or ``[]`` when the Calendar API omits
+    the key (#2766 — every event with no one beyond the organizer omits
+    ``attendees`` entirely; ``event.get("attendees")`` is then ``None``).
+
+    Returns exactly what the backend reports — never synthesizes an entry.
+    ``response_status`` mirrors Google's own vocabulary (``needsAction`` /
+    ``declined`` / ``tentative`` / ``accepted``) unchanged, so a caller can
+    tell "invited but hasn't answered" from "confirmed" without guessing.
+    An empty return is the grounding fact this tool exists to state: no
+    attendee tool result means no attendee claim is licensed, full stop.
+    """
+    attendees = event.get("attendees") or []
+    return [
+        {
+            "email": a.get("email"),
+            "response_status": a.get("responseStatus"),
+        }
+        for a in attendees
+        if isinstance(a, Mapping) and a.get("email")
+    ]
+
+
 def intervals_overlap(a_start: Any, a_end: Any, b_start: Any, b_end: Any) -> bool:
     """Half-open ``[start, end)`` overlap test.
 
@@ -605,7 +695,9 @@ def detect_calendar_conflicts_impl(
         debug=debug,
     ) as st:
         data = cal.list_events(
-            calendar_id=calendar_id, time_min=start_iso, time_max=end_iso
+            calendar_id=calendar_id,
+            time_min=_normalize_time_bound(start_iso, param_name="start_iso"),
+            time_max=_normalize_time_bound(end_iso, param_name="end_iso"),
         )
         conflicts: List[Dict[str, Any]] = []
         for ev in data.get("items", []):
@@ -622,6 +714,7 @@ def detect_calendar_conflicts_impl(
                         "summary": ev.get("summary", ""),
                         "start": start_obj.get("dateTime") or start_obj.get("date"),
                         "end": end_obj.get("dateTime") or end_obj.get("date"),
+                        "attendees": _extract_attendees(ev),
                     }
                 )
         st["result_summary"] = {"conflict_count": len(conflicts)}
@@ -632,7 +725,177 @@ def detect_calendar_conflicts_impl(
         }
 
 
+# ===========================================================================
+# Response grounding guard (#2571)
+# ===========================================================================
+#
+# The agent must never narrate its own conflict/overlap verdict from reading
+# listed start/end times — that judgement belongs to
+# ``detect_calendar_conflicts`` alone. This is a deliberately blunt,
+# deterministic grep-level check, not an attempt to parse the model's
+# reasoning. Two ways in:
+#
+# 1. The turn called ``list_calendar_events`` (the common case — the model
+#    saw real events and narrated its own verdict about them instead of
+#    calling the conflict tool). Gated on >=2 events actually listed: below
+#    that no conflict is even possible.
+# 2. The turn called NEITHER calendar tool at all, yet the response still
+#    states a conflict verdict citing >=2 specific times — a claim with no
+#    tool grounding whatsoever (the emptier, more dangerous cousin of (1);
+#    same shape as the "confident claim, empty tool trace" pattern seen
+#    elsewhere, e.g. #2621). Reuses ``_TIME_RE`` (already defined above for
+#    meeting-request time-signal detection) as the "cites specific events"
+#    signal, so an unrelated sentence like "conflicts with your stated
+#    preference" — no times in it — still doesn't trip this.
+
+_CONFLICT_VERDICT_RE = re.compile(
+    r"\bconflicts?\b|\boverlaps?\b|\bback-to-back\b|\bback to back\b|"
+    r"\bdouble[- ]book(?:ed|ing)?\b",
+    re.IGNORECASE,
+)
+
+# How many events must actually be visible for a conflict to even be
+# possible. Below this, "no conflicts" is trivially, arithmetically true.
+_MIN_EVENTS_FOR_A_POSSIBLE_CONFLICT = 2
+
+
+def _listed_event_count_from_conversation(
+    conversation: Iterable[Mapping[str, Any]],
+) -> int:
+    """Largest event count seen in any ``list_calendar_events`` tool result
+    this turn (0 if the tool never ran or every call errored/returned none).
+
+    Reads the same ``{"role": "tool", "name": ..., "content": ...}`` shape
+    ``_tool_names_from_conversation`` (agent.py) reads for tool names — this
+    reads the tool RESULT instead, to know how many events the model
+    actually saw. A malformed/error envelope has no ``data`` key and is
+    silently skipped here (not double-counted as a crash): it already
+    surfaced through the tool's own error envelope.
+
+    Takes the MAX across every call this turn (conversation is rebuilt fresh
+    per turn by the base ``Agent`` — never a prior turn's stale data), not
+    the first/last/sum: a model that re-lists with a different window still
+    saw the largest set at some point this turn, and summing would
+    double-count events returned by more than one overlapping-window call.
+    Biasing toward the larger count only makes this guard MORE likely to
+    ask for verification, never less — consistent with fail-loud over
+    fail-silent when the two calls disagree on scope.
+
+    ``list_calendar_events`` pages at ``max_results`` (25, unrequested by
+    this caller) with no follow-up pagination — a >25-event calendar is
+    under-counted against the true total, but never below 2 when 2+ exist,
+    since the page is a same-order prefix of the full result set, not a
+    filtered subset that could skip the earliest events.
+    """
+    max_count = 0
+    for msg in conversation:
+        if msg.get("role") != "tool" or msg.get("name") != "list_calendar_events":
+            continue
+        try:
+            payload = json.loads(msg.get("content") or "")
+        except (TypeError, ValueError):
+            continue
+        events = ((payload or {}).get("data") or {}).get("events")
+        if isinstance(events, list):
+            max_count = max(max_count, len(events))
+    return max_count
+
+
+def response_has_ungrounded_conflict_claim(
+    response_text: str,
+    tool_names: Iterable[str],
+    listed_event_count: int,
+) -> bool:
+    """True when ``response_text`` renders a conflict/overlap verdict that
+    ``detect_calendar_conflicts`` never computed in the same turn.
+
+    ``tool_names`` is every tool called this turn (order doesn't matter).
+    Always ``False`` once ``detect_calendar_conflicts`` is present — the
+    verdict IS grounded regardless of anything else below.
+
+    Two ways the rest can still be ``True``:
+
+    - ``list_calendar_events`` ran and returned >=2 events (below that, no
+      conflict is even possible, so "no conflicts" is trivially true and
+      not flagged).
+    - NEITHER calendar tool ran, but the response cites >=2 specific times
+      alongside conflict language — a claim with no tool call behind it at
+      all (the emptier, more dangerous case: nothing here even to
+      cross-check against).
+
+    A conflict-shaped word with no calendar tool touched and no cited times
+    (e.g. "that conflicts with your stated preference") is never flagged —
+    it isn't a calendar-conflict claim in the first place.
+    """
+    names = set(tool_names)
+    if "detect_calendar_conflicts" in names:
+        return False
+    if not response_text or not _CONFLICT_VERDICT_RE.search(response_text):
+        return False
+    if "list_calendar_events" in names:
+        return listed_event_count >= _MIN_EVENTS_FOR_A_POSSIBLE_CONFLICT
+    return len(_TIME_RE.findall(response_text)) >= _MIN_EVENTS_FOR_A_POSSIBLE_CONFLICT
+
+
+_UNGROUNDED_CONFLICT_CORRECTION = (
+    "\n\nNote: the conflict/overlap statement above was not verified — it "
+    "was read from the listed times rather than checked with the calendar "
+    "conflict tool. Ask me to check for conflicts and I will confirm with "
+    "detect_calendar_conflicts."
+)
+
+
+def append_conflict_grounding_correction(response_text: str) -> str:
+    """Append a correction notice to a response with an ungrounded conflict
+    claim.
+
+    Never deletes or edits the original text — the listed events themselves
+    came from a real tool call and stay useful; only the conflict verdict
+    specifically is flagged as unverified. Excising just the offending
+    sentence would require parsing free-form prose, which is exactly the
+    kind of guess this guard exists to avoid.
+    """
+    return (response_text or "") + _UNGROUNDED_CONFLICT_CORRECTION
+
+
 DEFAULT_LIST_WINDOW_DAYS = 30
+
+
+def _normalize_time_bound(value: Optional[str], *, param_name: str) -> Optional[str]:
+    """Normalize a caller-supplied time bound to RFC 3339 before it reaches
+    the Calendar API.
+
+    Google's ``timeMin``/``timeMax`` require a timezone-qualified timestamp —
+    a bare date (``2026-07-27``) or a naive datetime 400s on the live API
+    (#2517). Both are coerced to UTC at the parsed instant (a bare date lands
+    on that day's midnight boundary). A value that already carries an
+    explicit offset (``Z`` or ``+HH:MM``) passes through byte-identical —
+    reparsing and reformatting it is unnecessary and would risk drifting from
+    what the caller asked for.
+
+    Raises ``ValueError`` naming the received value on anything unparseable
+    — never forwarded to the backend to 400 on.
+    """
+    if value is None:
+        return None
+    text = value.strip()
+    if not text:
+        raise ValueError(
+            f"{param_name}={value!r} is empty; expected an RFC 3339 "
+            "timestamp (e.g. '2026-07-27T00:00:00Z') or a bare date "
+            "(e.g. '2026-07-27')"
+        )
+    normalized_for_parse = text[:-1] + "+00:00" if text.endswith("Z") else text
+    try:
+        parsed = datetime.fromisoformat(normalized_for_parse)
+    except ValueError as exc:
+        raise ValueError(
+            f"{param_name}={value!r} is not a valid RFC 3339 timestamp or "
+            "date (expected e.g. '2026-07-27T00:00:00Z' or '2026-07-27')"
+        ) from exc
+    if parsed.tzinfo is not None:
+        return text
+    return parsed.replace(tzinfo=timezone.utc).isoformat()
 
 
 def list_calendar_events_impl(
@@ -643,16 +906,21 @@ def list_calendar_events_impl(
     debug: bool = False,
     now: Optional[datetime] = None,
 ) -> Dict[str, Any]:
-    """List events; explicit bounds pass through unchanged.
+    """List events; bounds are normalized to RFC 3339 before reaching the
+    backend.
 
     When BOTH bounds are absent, defaults to a forward window of
     ``now → +DEFAULT_LIST_WINDOW_DAYS`` — an unbounded listing makes the
     backend expand recurring series from their first-ever instance (#2162).
+    A bare date or naive datetime is coerced to UTC (#2517) — Google 400s on
+    a date-only ``timeMin``/``timeMax``.
     """
     if time_min is None and time_max is None:
         now_dt = now if now is not None else datetime.now(timezone.utc)
         time_min = now_dt.isoformat()
         time_max = (now_dt + timedelta(days=DEFAULT_LIST_WINDOW_DAYS)).isoformat()
+    time_min = _normalize_time_bound(time_min, param_name="time_min")
+    time_max = _normalize_time_bound(time_max, param_name="time_max")
     with log_tool_call(
         "list_calendar_events",
         {"time_min": time_min, "time_max": time_max},
@@ -673,6 +941,10 @@ def list_calendar_events_impl(
                     "location": e.get("location"),
                     "organizer": organizer,
                     "missing_organizer": organizer is None,
+                    # Real attendees only, [] when the calendar has none
+                    # beyond the organizer (#2766) — never inferred from the
+                    # organizer or anywhere else.
+                    "attendees": _extract_attendees(e),
                 }
             )
         st["result_summary"] = {"count": len(events)}
@@ -844,13 +1116,28 @@ class CalendarToolsMixin:
         ) -> str:
             """List calendar events between two RFC 3339 timestamps.
 
-            Omit both to list the next 30 days (starting now)."""
+            Omit both to list the next 30 days (starting now). This tool only
+            lists events — it does NOT determine whether they conflict. For
+            any question about conflicts, overlaps, or double-booking, call
+            ``detect_calendar_conflicts`` instead of judging the listed
+            times yourself.
+
+            Each event's ``attendees`` is exactly what the calendar carries —
+            often ``[]``. Never state who is attending, invited, or coming
+            unless a name/email actually appears in that event's own
+            ``attendees`` list; an empty list means say so, not guess. The
+            ``organizer`` is who created the event, not evidence that anyone
+            was sent or received an invite — never describe the organizer as
+            having "sent an invite"."""
             try:
                 return _envelope_ok(
                     list_calendar_events_impl(
                         cal, time_min=time_min, time_max=time_max, debug=debug_flag
                     )
                 )
+            except ValueError as exc:
+                # Unparseable time bound — bad caller input, no stack trace.
+                return _envelope_err(str(exc))
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))
             except Exception as exc:
@@ -951,6 +1238,12 @@ class CalendarToolsMixin:
             heuristic; ambiguous bodies ("let's sync sometime") are escalated
             to the LLM for a judgement. If the LLM is needed but fails, this
             surfaces the error rather than guessing "not a meeting".
+
+            This tool detects a PROPOSAL, never a confirmed invite. Never say
+            an invite was "sent" or "received" from this signal alone — say
+            the sender proposed a time, and state only the sender/subject/
+            time you actually read in the message, never a name or time this
+            tool did not return.
             """
             try:
                 # Built at call time so ``agent.chat`` is initialized.
@@ -983,14 +1276,19 @@ class CalendarToolsMixin:
         def detect_calendar_conflicts(start_iso: str, end_iso: str) -> str:
             """Flag calendar events that conflict with a proposed time.
 
-            Read-only — reads the calendar but makes no changes. ``start_iso``
-            and ``end_iso`` are RFC 3339 timestamps bounding the proposed
-            meeting. Returns an envelope whose ``data`` has ``has_conflict``
-            (bool) and ``conflicts`` (the overlapping events, each with
-            ``id``/``summary``/``start``/``end``). Overlap is half-open: a
-            meeting ending exactly when another begins does NOT conflict. If
-            the calendar can't be read, this surfaces the error rather than
-            reporting a reassuring "no conflicts".
+            Call this whenever the user asks about conflicts, overlaps, or
+            double-booking — never judge overlap yourself from listed
+            start/end times. Read-only — reads the calendar but makes no
+            changes. ``start_iso`` and ``end_iso`` are RFC 3339 timestamps
+            bounding the proposed meeting. Returns an envelope whose
+            ``data`` has ``has_conflict`` (bool) and ``conflicts`` (the
+            overlapping events, each with ``id``/``summary``/``start``/
+            ``end``/``attendees``). Overlap is half-open: a meeting ending
+            exactly when another begins does NOT conflict. If the calendar
+            can't be read, this surfaces the error rather than reporting a
+            reassuring "no conflicts". Never state an attendee for a
+            conflicting event unless that event's own ``attendees`` list
+            actually names them.
             """
             try:
                 return _envelope_ok(

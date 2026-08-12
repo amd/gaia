@@ -2,19 +2,27 @@
 // Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+// A published agent row in the hub list. The whole row is the link; it nudges
+// right on hover (padding-left 22px -> 26px).
+//
+// Deprecation is a struck-through name plus a badge, not a wrapper opacity: an
+// opacity multiplies the contrast of every text node inside it.
 import AgentIcon from './AgentIcon.astro';
-import { securityTierLabel, type Agent } from '../data/catalog';
+import { securityTierLabel, formatBytes, categoryLabel, type Agent } from '../data/catalog';
 
 interface Props {
   agent: Agent;
 }
 
 const { agent } = Astro.props;
+const size = agent.download_size_bytes > 0 ? formatBytes(agent.download_size_bytes) : null;
 ---
 
 <a
   href={`/hub/${agent.id}`}
-  class={`agent-row group flex items-center gap-4 px-4 py-4 border-b border-g-border last:border-b-0 hover:bg-g-surface transition-colors ${agent.deprecated ? 'opacity-50' : ''}`}
+  class:list={[
+    'agent-row group grid grid-cols-[44px_1fr] items-center gap-[18px] border-b border-g-border py-5 pl-[22px] pr-[22px] transition-[background-color,padding-left] duration-[250ms] ease-g-out hover:bg-g-surface2 hover:pl-[26px] sm:grid-cols-[44px_1fr_auto]',
+  ]}
   data-id={agent.id}
   data-name={agent.name.toLowerCase()}
   data-description={agent.description.toLowerCase()}
@@ -24,20 +32,31 @@ const { agent } = Astro.props;
   data-tier={agent.security_tier}
   data-deprecated={agent.deprecated ? 'true' : 'false'}
 >
-  <span class="flex-none w-10 h-10 rounded-lg border border-g-border bg-g-surface flex items-center justify-center text-g-muted group-hover:text-g-gold-text group-hover:border-g-gold/40 transition-colors">
-    <AgentIcon name={agent.icon} class="w-5 h-5" />
+  <span class="g-chip h-11 w-11 rounded-[11px]">
+    <AgentIcon name={agent.icon} class="h-5 w-5" />
   </span>
-  <span class="min-w-0 flex-1">
-    <span class="flex items-baseline gap-2.5">
-      <span class="text-[15px] font-semibold text-g-text">{agent.name}</span>
-      <span class="font-mono text-[11px] text-g-muted">v{agent.latest_version}</span>
-      {agent.security_tier === 'verified' && (
-        <span class="text-[10px] font-bold tracking-wide uppercase text-g-gold-text">{securityTierLabel(agent.security_tier)}</span>
-      )}
+
+  <span class="min-w-0">
+    <span class="flex flex-wrap items-center gap-x-[11px] gap-y-1.5">
+      <span
+        class:list={[
+          'font-display text-[17px] font-semibold',
+          agent.deprecated ? 'text-g-muted line-through' : 'text-g-text',
+        ]}>{agent.name}</span>
+      <span class="mono text-[11.5px] text-g-faint">v{agent.latest_version}</span>
+      <span class={agent.security_tier === 'verified' ? 'g-badge' : 'g-badge-muted'}>
+        {securityTierLabel(agent.security_tier)}
+      </span>
+      {agent.deprecated && <span class="g-badge-muted border-g-border2">Deprecated</span>}
     </span>
-    <span class="block text-[13px] text-g-muted truncate">{agent.description}</span>
+    <span class="mt-[5px] block text-[13.5px] leading-[1.55] text-g-muted">{agent.description}</span>
   </span>
-  <span class="flex-none text-[12px] font-medium text-g-gold-text opacity-0 group-hover:opacity-100 transition-opacity hidden sm:block">
-    Open in GAIA ›
+
+  <span class="hidden items-center gap-5 sm:flex">
+    <span class="mono text-[11px] uppercase tracking-[0.08em] text-g-faint">
+      {categoryLabel(agent.category)}
+    </span>
+    {size && <span class="mono min-w-[64px] text-right text-[11.5px] text-g-faint">{size}</span>}
+    <span class="text-g-gold-text" aria-hidden="true">→</span>
   </span>
 </a>

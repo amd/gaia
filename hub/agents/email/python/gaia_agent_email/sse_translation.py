@@ -29,10 +29,13 @@ Design commitments
 - **Buffer ``tool_start`` + ``tool_args`` into one ``tool_call``** (spec §6.3): the
   handler emits the name first and the arguments separately; the canonical
   ``tool_call`` carries ``{tool, args}`` together.
-- **Fail loudly, never silently.** ``agent_error`` and a governance
-  ``policy_alert`` map to a terminal ``error`` with an actionable ``detail`` — never
-  a placeholder. The ``None`` queue sentinel is *stream close*, handled by the
-  drain loop, not a wire event.
+- **Fail loudly, never silently.** A fatal top-level ``agent_error`` and a
+  governance ``policy_alert`` map to a terminal ``error`` with an actionable
+  ``detail`` — never a placeholder. A **recoverable** ``agent_error`` (the
+  source event's ``recoverable`` flag, set by ``agent.py``'s
+  ``STATE_ERROR_RECOVERY`` retry path) is explicitly NOT terminal — it folds
+  to a ``status`` line so the run continues (#2515). The ``None`` queue
+  sentinel is *stream close*, handled by the drain loop, not a wire event.
 
 Spec open questions surfaced in this file (do not block #2016):
 - **Q2** — ``policy_alert`` maps to ``error`` (status 403). A governance block is
@@ -52,10 +55,18 @@ from typing import Any, Dict, List, Optional
 # Mirrors ``gaia.ui.sse_handler.SSEOutputHandler._RENDER_TOOL_TO_LANG`` — the
 # tool→card-key map that tells the host which typed ``tool_result.render`` card to
 # draw (spec §4.2, replacing the #1000 fence-injection hack). Duplicated (not
-# imported) to keep this module free of the ``gaia.ui`` import chain; the email
-# agent's only render tool today is the inbox pre-scan.
+# imported) to keep this module free of the ``gaia.ui`` import chain; a test
+# (``test_render_tool_to_lang_maps_stay_in_sync``) pins the two dicts equal so
+# this duplication can't silently drift.
 _RENDER_TOOL_TO_LANG: Dict[str, str] = {
-    "pre_scan_inbox": "email_pre_scan",
+    # ``pre_scan_inbox`` deliberately draws NO card: it landed mid-turn as a
+    # partial list while the model was still writing the full triage answer,
+    # so the user read two overlapping views of one inbox and could not tell
+    # which to act on. The triage reply is the single view; refs still resolve
+    # from tool data (``resolve_needs_you_reference``), not from a render.
+    # #2765: a generic ``table`` card (no new client code) so the thread
+    # view renders straight from tool data instead of model prose.
+    "get_thread": "table",
 }
 
 # HTTP-style status codes for the canonical ``error`` event's ``status`` field.
@@ -240,6 +251,14 @@ class CanonicalTranslator:
 
     def _on_agent_error(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
         detail = str(event.get("content") or "Unknown agent error")
+        if event.get("recoverable"):
+            # A per-tool error the agent loop is retrying (agent.py's
+            # STATE_ERROR_RECOVERY path, e.g. a bad tool argument) is not
+            # terminal — the run continues on this same stream. Fold it to a
+            # status line, same pattern as ``_on_tool_confirm_denied``, so
+            # the user still SEES the failure without the stream (and the
+            # still-retrying agent) being cut out from under it (#2515).
+            return [{"type": "status", "message": f"Tool call failed, retrying: {detail}"}]
         return [{"type": "error", "detail": detail, "status": _ERROR_STATUS_AGENT}]
 
     def _on_policy_alert(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:

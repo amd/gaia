@@ -164,6 +164,11 @@ class PinnedIPAdapter(HTTPAdapter):
         return ip
 
     @staticmethod
+    def _format_ip_for_url(ip: str) -> str:
+        """Bracket IPv6 literals for use in a URL authority."""
+        return f"[{ip}]" if ipaddress.ip_address(ip).version == 6 else ip
+
+    @staticmethod
     def _strip_tls_host(url: str) -> Tuple[str, "str | None"]:
         """Extract the original hostname stashed in URL userinfo.
 
@@ -175,6 +180,9 @@ class PinnedIPAdapter(HTTPAdapter):
         tls_hostname = parsed.username
         # Rebuild netloc without userinfo
         host_part = parsed.hostname
+        if host_part is None:
+            raise ValueError("Pinned URL is missing a host")
+        host_part = PinnedIPAdapter._format_ip_for_url(host_part)
         if parsed.port:
             netloc = f"{host_part}:{parsed.port}"
         else:
@@ -198,6 +206,7 @@ class PinnedIPAdapter(HTTPAdapter):
 
         if host:
             pinned_ip = self._resolve_first_ip(host, port)
+            url_ip = self._format_ip_for_url(pinned_ip)
 
             if parsed.scheme == "https":
                 # Encode original hostname in userinfo for unique pool keys.
@@ -216,9 +225,9 @@ class PinnedIPAdapter(HTTPAdapter):
                         host,
                     )
                     self._warned_https_sni = True
-                new_netloc = f"{host}@{pinned_ip}:{port}"
+                new_netloc = f"{host}@{url_ip}:{port}"
             else:
-                new_netloc = f"{pinned_ip}:{port}"
+                new_netloc = f"{url_ip}:{port}"
 
             new_url = urlunparse(
                 (

@@ -27,6 +27,11 @@ a cloud service, and that's enforced when the agent starts up.
   from an email.
 - **Track follow-ups** — flag replies you're still waiting on past a window you
   choose (it points them out; it never nudges anyone for you).
+- **Spot what's waiting on you** — flag inbound mail that asks you directly for
+  a reply, decision, or meeting time, with a sender, subject, and how long it's
+  been sitting there. Requires a real back-and-forth already in that thread —
+  a bare question mark, a convincing cold-outreach email, or having emailed
+  the sender before in some unrelated thread never qualifies on its own.
 - **Daily briefing** — generate a morning inbox summary on a schedule, no prompt
   needed.
 - **Plain-language requests** — describe what you want done ("find today's
@@ -119,8 +124,33 @@ is forwarded to the agent by the daemon — sidecar contract 2.5, #2154; a stand
 integrator using this package is unaffected and resolves the mailbox from the local
 GAIA connector store.)
 
+Mail is **required**; calendar is **requested but optional** — consent asks for
+both up front so you're never prompted twice, but declining calendar (or
+connecting with an older, mail-only grant) still leaves you with a fully
+working triage/reply/send mailbox. Calendar tools fail loudly, naming the
+exact scope to add, only when you actually try to use one.
+
 Want to try it without writing code? Run `npx @amd-gaia/agent-email playground`
 for a local page to test triage, drafting, and a live send.
+
+## Personal mailbox vs work mailbox
+
+The package ships six built-in **skills** — short playbooks the agent can load into
+its own thinking — grouped into a `personal` set (inbox triage, newsletter digests,
+trip itineraries) and a `work` set (inbox triage, meeting scheduling, action items,
+escalation).
+
+**They are switched off in this release.** Nothing is loaded at launch and a
+personal and a work mailbox get identical behaviour, because there is no eval
+evidence yet that the skills improve triage. The skill files stay in the package,
+inert, and the agent's full context window goes to your mail instead of to skill
+text.
+
+Nothing for you to do or change: there is no set to pin, and passing
+`--skill-set` / `GAIA_EMAIL_SKILL_SET` fails at startup saying so rather than
+quietly doing nothing. Re-enabling is a change inside the agent, not in your
+integration. Full detail in
+[`SPEC.md`](https://github.com/amd/gaia/blob/agent-pkg-email-v0.5.0/hub/agents/email/npm/SPEC.md).
 
 ## How it works
 

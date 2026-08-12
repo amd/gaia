@@ -18,6 +18,7 @@ LLM/RAG calls are mocked -- these validate integration of
 server + database + models layers.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -78,6 +79,28 @@ def doc_id(client, db):
         chunk_count=12,
     )
     return doc["id"]
+
+
+@pytest.fixture
+def home_dir(tmp_path, monkeypatch):
+    """Redirect the user home to an isolated temp directory.
+
+    ``/api/documents/upload-path`` only accepts files under the user's home
+    directory (``safe_open_document``); a bare ``tempfile.NamedTemporaryFile``
+    lands in the system temp dir and is correctly rejected with 403 before any
+    other check runs. Tests that exercise upload behaviour must therefore
+    supply a path under home — redirecting home here keeps that hermetic
+    instead of writing into the developer's real home directory.
+
+    List this fixture *before* ``client`` in a test signature: pytest builds
+    fixtures in signature order, and ``create_app`` resolves ``Path.home()``
+    at construction time.
+    """
+    home = (tmp_path / "home").resolve()
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))  # Windows
+    return home
 
 
 # ── Full Session Lifecycle ──────────────────────────────────────────────────
@@ -240,12 +263,14 @@ class TestDocumentWorkflow:
     """End-to-end document management and session attachment workflows."""
 
     @patch("gaia.ui.server._index_document")
-    def test_upload_attach_detach_delete(self, mock_index, client):
+    def test_upload_attach_detach_delete(self, mock_index, home_dir, client):
         """Full document lifecycle: upload -> attach to session -> detach -> delete."""
         mock_index.return_value = 25
 
-        # 1. Create a real temp file to upload
-        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False, mode="w") as f:
+        # 1. Create a real file to upload (under home -- see home_dir fixture)
+        with tempfile.NamedTemporaryFile(
+            suffix=".txt", delete=False, mode="w", dir=home_dir
+        ) as f:
             f.write("This is a test document for integration testing.")
             tmp_path = f.name
 
@@ -373,11 +398,15 @@ class TestDocumentWorkflow:
         assert doc2["id"] in session["document_ids"]
 
     @patch("gaia.ui.server._index_document")
-    def test_duplicate_document_upload_returns_existing(self, mock_index, client):
+    def test_duplicate_document_upload_returns_existing(
+        self, mock_index, home_dir, client
+    ):
         """Uploading the same file twice returns the existing document."""
         mock_index.return_value = 10
 
-        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False, mode="w") as f:
+        with tempfile.NamedTemporaryFile(
+            suffix=".txt", delete=False, mode="w", dir=home_dir
+        ) as f:
             f.write("Deterministic content for hash test")
             tmp_path = f.name
 
@@ -388,6 +417,8 @@ class TestDocumentWorkflow:
             resp2 = client.post(
                 "/api/documents/upload-path", json={"filepath": tmp_path}
             )
+            assert resp1.status_code == 200, resp1.text
+            assert resp2.status_code == 200, resp2.text
             assert resp1.json()["id"] == resp2.json()["id"]
 
             # Only 1 document in the library
@@ -784,14 +815,20 @@ class TestSecurityIntegration:
     """Security-focused integration tests."""
 
     @patch("gaia.ui.server._index_document")
-    def test_upload_path_traversal_rejected(self, mock_index, client):
-        """Path traversal in upload filepath is blocked."""
+    def test_upload_path_traversal_rejected(self, mock_index, home_dir, client):
+        """Path traversal in upload filepath is blocked.
+
+        A relative path is resolved against the CWD, so which rejection fires
+        depends on where the suite runs: 403 when the CWD is outside home
+        (home containment), 400/404 when it is inside. All three are refusals
+        -- pinning one of them would make this test pass or fail on the
+        checkout location rather than on the behaviour.
+        """
         resp = client.post(
             "/api/documents/upload-path",
             json={"filepath": "../../etc/passwd"},
         )
-        # Either 400 (bad extension) or 404 (file not found after resolve)
-        assert resp.status_code in (400, 404)
+        assert resp.status_code in (400, 403, 404), resp.text
 
     @patch("gaia.ui.server._index_document")
     def test_upload_null_byte_injection(self, mock_index, client):
@@ -802,18 +839,42 @@ class TestSecurityIntegration:
         )
         assert resp.status_code == 400
 
+    def test_safe_open_document_rejects_null_byte(self, home_dir):
+        """The shared open gate rejects a NUL itself, not just its callers.
+
+        ``upload-path`` guards before its own ``resolve()``; this pins the
+        second layer, which is what protects every *other* caller (reindex)
+        from the unhandled ValueError ``os.path.realpath`` raises on a NUL.
+        """
+        from fastapi import HTTPException
+
+        from gaia.ui.utils import safe_open_document
+
+        real = home_dir / "ok.txt"
+        real.write_text("content")
+
+        with pytest.raises(HTTPException) as excinfo:
+            with safe_open_document(f"{real}\x00.exe"):
+                pass
+        assert excinfo.value.status_code == 400
+
     @patch("gaia.ui.server._index_document")
-    def test_upload_disallowed_extension(self, mock_index, client):
+    def test_upload_disallowed_extension(self, mock_index, home_dir, client):
         """Various dangerous extensions are rejected.
 
         Note: .bat and .ps1 are in the allowed list (shell scripts).
         Only truly dangerous/binary extensions should be rejected.
+
+        The file must live under home, otherwise the home-containment check
+        rejects it with 403 first and this never reaches the extension check.
         """
         mock_index.return_value = 0
         # These are NOT in _ALLOWED_EXTENSIONS
         dangerous_exts = [".exe", ".dll", ".msi", ".scr", ".com", ".vbs"]
         for ext in dangerous_exts:
-            with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as f:
+            with tempfile.NamedTemporaryFile(
+                suffix=ext, delete=False, dir=home_dir
+            ) as f:
                 f.write(b"test")
                 tmp_path = f.name
 
@@ -825,8 +886,34 @@ class TestSecurityIntegration:
                 assert (
                     resp.status_code == 400
                 ), f"Extension {ext} should be rejected but got {resp.status_code}"
+                # Pin *which* 400 -- the endpoint has several (null byte,
+                # cannot-stat, not-a-regular-file) and only this one means
+                # the extension allowlist did the rejecting.
+                assert "File type not allowed" in resp.json()["detail"]
             finally:
                 os.unlink(tmp_path)
+
+    @patch("gaia.ui.server._index_document")
+    def test_upload_outside_home_rejected(self, mock_index, home_dir, client):
+        """A readable, allowed-extension file outside home is still refused.
+
+        Home containment is checked before the extension allowlist, so this
+        also pins the ordering: an out-of-home path must never leak whether
+        the file exists or what type it is.
+        """
+        mock_index.return_value = 5
+        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False, mode="w") as f:
+            f.write("outside the home directory")
+            outside_path = f.name
+
+        try:
+            resp = client.post(
+                "/api/documents/upload-path",
+                json={"filepath": outside_path},
+            )
+            assert resp.status_code == 403, resp.text
+        finally:
+            os.unlink(outside_path)
 
     def test_session_id_not_predictable(self, client):
         """Session IDs are UUIDs, not sequential integers."""
@@ -1070,26 +1157,50 @@ class TestCORSIntegration:
     """Verify CORS headers are set correctly for cross-origin requests."""
 
     def test_cors_allows_localhost_origin(self, client):
-        """CORS allows requests from localhost origins."""
+        """CORS allows requests from the local dev-server origins."""
         resp = client.get(
             "/api/health",
             headers={"Origin": "http://localhost:4200"},
         )
         assert resp.status_code == 200
-        # With allow_origins=["*"], the access-control-allow-origin should be set
-        assert resp.headers.get("access-control-allow-origin") in (
-            "*",
-            "http://localhost:4200",
+        assert resp.headers.get("access-control-allow-origin") == (
+            "http://localhost:4200"
         )
 
-    def test_cors_allows_any_origin(self, client):
-        """CORS allows requests from any origin (dev mode)."""
+    def test_cors_allows_tunnel_origin(self, client):
+        """CORS allows the ngrok / devtunnels origins used for mobile access."""
+        origin = "https://gaia-test.ngrok-free.app"
+        resp = client.get("/api/health", headers={"Origin": origin})
+        assert resp.status_code == 200
+        assert resp.headers.get("access-control-allow-origin") == origin
+
+    def test_cors_rejects_unknown_origin(self, client):
+        """An origin outside the allowlist gets no allow-origin header.
+
+        The server sends credentials (``allow_credentials=True``), so the
+        origin list is deliberately an allowlist -- localhost dev ports plus
+        the tunnel domains -- never a wildcard. A page on any other origin
+        must not be able to read authenticated responses, which the browser
+        enforces by the *absence* of ``access-control-allow-origin``.
+        """
         resp = client.get(
             "/api/health",
             headers={"Origin": "http://some-other-origin.com"},
         )
-        assert resp.status_code == 200
-        assert "access-control-allow-origin" in resp.headers
+        assert "access-control-allow-origin" not in resp.headers
+
+    def test_cors_rejects_tunnel_lookalike_origin(self, client):
+        """An attacker domain that merely *starts* with a tunnel host is refused.
+
+        The tunnel regex is unanchored and only safe because Starlette applies
+        it with ``fullmatch``. This pins that: a prefix-match implementation
+        would hand credentialed responses to ``*.ngrok-free.app.evil.com``.
+        """
+        resp = client.get(
+            "/api/health",
+            headers={"Origin": "https://gaia-test.ngrok-free.app.evil.com"},
+        )
+        assert "access-control-allow-origin" not in resp.headers
 
 
 # ── CLI --ui Flag ────────────────────────────────────────────────────────────
@@ -1099,32 +1210,46 @@ class TestCLIUIFlag:
     """Test the 'gaia chat --ui' CLI integration."""
 
     def test_cli_parser_has_ui_flag(self):
-        """CLI parser recognizes --ui and --ui-port flags.
+        """``gaia chat --ui [--ui-port N]`` parses off the real CLI parser.
 
-        The GAIA CLI parser is built inside main(), so we intercept
-        sys.argv and verify parse_known_args behavior through source
-        inspection and the server's standalone parser.
+        Asserts on parser *behaviour*, not on the source text of whichever
+        function happens to build the parser today -- an earlier version
+        grepped ``main()`` for the literal ``"--ui"`` and broke the moment
+        parser construction moved into ``build_parser()``.
         """
-        # The server module has its own argparse-based main()
-        # Verify it accepts --host, --port, --debug
+        from gaia.cli import build_parser
         from gaia.ui.server import DEFAULT_PORT
 
-        assert DEFAULT_PORT == 4200
+        parser = build_parser()
 
-        # Verify the CLI source registers --ui and --ui-port on chat_parser
-        import inspect
+        args = parser.parse_args(["chat", "--ui", "--ui-port", "8080"])
+        assert args.action == "chat"
+        assert args.ui is True
+        assert args.ui_port == 8080
 
-        from gaia.cli import main as cli_main
+        # Defaults: --ui off, port matching the server's own default.
+        defaults = parser.parse_args(["chat"])
+        assert defaults.ui is False
+        assert defaults.ui_port == DEFAULT_PORT == 4200
 
-        source = inspect.getsource(cli_main)
-        assert '"--ui"' in source, "--ui flag not found in CLI main()"
-        assert '"--ui-port"' in source, "--ui-port flag not found in CLI main()"
-        assert "create_app" in source, "create_app import not found in CLI main()"
-        assert "4200" in source, "Default port 4200 not found in CLI main()"
+    def test_cli_ui_flag_launches_agent_ui(self):
+        """``gaia chat --ui --ui-port N`` actually reaches the UI launcher.
 
-        # Verify the handler logic references the right attributes
-        assert "args.ui" in source or 'getattr(args, "ui"' in source
-        assert "args.ui_port" in source or 'getattr(args, "ui_port"' in source
+        Parsing the flag is not enough — the dispatch in ``main()`` is the
+        part a user depends on, and it is separately deletable.
+        """
+        import sys as _sys
+
+        from gaia import cli as gaia_cli
+
+        with (
+            patch.object(gaia_cli, "_launch_agent_ui") as mock_launch,
+            patch.object(_sys, "argv", ["gaia", "chat", "--ui", "--ui-port", "8080"]),
+        ):
+            gaia_cli.main()
+
+        mock_launch.assert_called_once()
+        assert mock_launch.call_args.kwargs["port"] == 8080
 
     def test_create_app_returns_fastapi_instance(self):
         """create_app returns a configured FastAPI app."""
@@ -1193,10 +1318,15 @@ class TestRequestValidation:
         assert resp.json()["title"] == "Test Session"
 
     def test_document_upload_empty_filepath(self, client):
-        """Empty filepath string is rejected."""
+        """Empty filepath string is rejected, whatever the server's CWD.
+
+        An empty path used to fall through to ``resolve()``, which turns it
+        into the CWD -- so the status depended on where the suite ran (404
+        from inside home, 403 from outside). It is now a flat 400.
+        """
         resp = client.post("/api/documents/upload-path", json={"filepath": ""})
-        # Empty path should fail (no extension or file not found)
-        assert resp.status_code in (400, 404)
+        assert resp.status_code == 400, resp.text
+        assert "required" in resp.json()["detail"]
 
     def test_attach_document_missing_document_id(self, client, session_id):
         """Missing document_id in attach request returns 422."""
@@ -1663,6 +1793,7 @@ class TestStreamingGeneratorEdgeCases:
         """A BLOCK receipt remains reloadable even if the SSE client disconnects."""
         from gaia.ui._chat_helpers import _active_sse_handlers, _stream_chat_response
         from gaia.ui.models import ChatRequest
+        from gaia.ui.run_manager import run_manager
 
         class PolicyBlockedAgent:
             model_id = "TestModel-GGUF"
@@ -1705,6 +1836,18 @@ class TestStreamingGeneratorEdgeCases:
                     break
             await stream.aclose()
 
+            # Detaching the client does NOT end the turn (#1580): the run
+            # keeps going in its own task and still owns the handler, so
+            # /api/chat/cancel and /confirm-tool can reach it. Wait for the
+            # run itself to finish -- that is what must release the handler.
+            run = run_manager.get(session_id)
+            if run is not None:
+                await asyncio.wait_for(run.done.wait(), timeout=30)
+
+        # Deterministic in both branches -- keeps the `if` above from
+        # silently skipping the wait if runs ever stop being registered.
+        assert run_manager.get(session_id) is None
+        # No leak: the finished run deregistered its handler.
         assert session_id not in _active_sse_handlers
 
         assistant_messages = [

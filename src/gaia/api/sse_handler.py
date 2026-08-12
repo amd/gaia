@@ -7,11 +7,41 @@ Converts agent output into Server-Sent Events format for API clients.
 """
 
 import json
+import logging
 import time
 from collections import deque
 from typing import Any, Dict, List
 
-from gaia.agents.base.console import OutputHandler
+from gaia.agents.base.console import (
+    AUTO_APPROVE_ENV_VAR,
+    OutputHandler,
+    auto_approve_env_enabled,
+)
+
+logger = logging.getLogger(__name__)
+
+
+def warn_if_unconfirmed_tools_allowed() -> bool:
+    """Print the bypass banner to the terminal when unattended approval is on.
+
+    Returns True when the banner was printed. Every path that boots the API
+    server must call this: the bypass is invisible once the server is up, so
+    the only moment the operator can notice it is while they are still looking
+    at the terminal.
+    """
+    if not auto_approve_env_enabled():
+        return False
+    print(
+        f"\n⚠️  {AUTO_APPROVE_ENV_VAR}=1 — high-risk tools (shell "
+        "commands, file writes) will run with NO user approval.\n"
+        "   Anything this agent reads can trigger them. Trusted, "
+        "single-user, localhost only.\n"
+    )
+    logger.warning(
+        "%s=1: tool-approval bypass active on this API server",
+        AUTO_APPROVE_ENV_VAR,
+    )
+    return True
 
 
 class SSEOutputHandler(OutputHandler):
@@ -26,15 +56,19 @@ class SSEOutputHandler(OutputHandler):
 
     This stream is one-way: there is no channel for the client to answer a
     permission request, so confirmation-gated tools (shell, file mutation, email
-    send/delete) are DENIED here via the inherited ``OutputHandler`` default
-    (#2210) rather than silently approved. An operator running an intentionally
-    unattended agent opts in with ``GAIA_AUTO_APPROVE_TOOLS=1``; the proper fix
-    is a permission event plus a resolve endpoint, as the Agent UI has.
+    send/delete) are DENIED here (#2210) rather than silently approved, and the
+    refusal is streamed as a ``tool_confirm_denied`` event so the caller sees
+    why. An operator running an intentionally unattended agent opts in with
+    ``GAIA_AUTO_APPROVE_TOOLS=1``; the proper fix is a permission event plus a
+    resolve endpoint, as the Agent UI has.
 
     Args:
         debug_mode: If True, include verbose event details. If False, only stream
                    clean, user-friendly status updates.
     """
+
+    blocking_confirmation: bool = False
+    """This handler never waits for a user decision — it denies outright."""
 
     def __init__(self, debug_mode: bool = False):
         """Initialize the SSE output handler.
@@ -93,6 +127,7 @@ class SSEOutputHandler(OutputHandler):
             "checklist_reasoning",  # Checklist reasoning (debug info)
             "message",  # Generic messages from print() calls
             "agent_selected",  # Agent routing selection notification
+            "tool_confirm_denied",  # Gated tool refused — caller must see why
         }
         return event_type in streamable_events
 
@@ -144,9 +179,9 @@ class SSEOutputHandler(OutputHandler):
 
     # === Status Messages (Required) ===
 
-    def print_error(self, error_message: str):
+    def print_error(self, error_message: str, recoverable: bool = False):
         """Print error message."""
-        self._add_event("error", {"message": error_message})
+        self._add_event("error", {"message": error_message, "recoverable": recoverable})
 
     def print_warning(self, warning_message: str):
         """Print warning message."""
@@ -272,6 +307,54 @@ class SSEOutputHandler(OutputHandler):
         """Print checklist reasoning/planning."""
         self._add_event("checklist_reasoning", {"reasoning": reasoning})
 
+    # === Tool Confirmation (fail closed) ===
+
+    def confirm_tool_execution(
+        self,
+        tool_name: str,
+        tool_args: Dict[str, Any],  # pylint: disable=unused-argument
+    ) -> bool:
+        """Deny confirmation-gated tools, and put the reason on the stream.
+
+        The base handler already fails closed (#2210). This override exists for
+        the second half of the problem: the OpenAI-compatible API is one-shot
+        request/response, so a denial that is only logged server-side reaches
+        the caller as an opaque "denied" tool result. Emit an event carrying the
+        actionable reason instead.
+        """
+        if self.auto_approve_confirmations_enabled():
+            self.log_auto_approval(tool_name)
+            self._add_event(
+                "warning",
+                {
+                    "message": (
+                        f"Auto-approved '{tool_name}' without user review "
+                        f"because {AUTO_APPROVE_ENV_VAR}=1. GAIA's "
+                        "prompt-injection backstop is disabled on this server."
+                    )
+                },
+            )
+            return True
+
+        message = (
+            f"Refused to run '{tool_name}': it requires explicit user approval, "
+            "and the OpenAI-compatible API has no channel to ask for it. Run "
+            "this request through the Agent UI (`gaia chat --ui`), which shows "
+            "a permission prompt. For a trusted single-user localhost server "
+            f"you can opt out by setting {AUTO_APPROVE_ENV_VAR}=1 before "
+            "`gaia api start` — that disables the approval requirement for "
+            "every high-risk tool, so do not do it on a shared or exposed host."
+        )
+        self._add_event(
+            "tool_confirm_denied",
+            {
+                "tool": tool_name,
+                "reason": "no_approval_channel",
+                "message": message,
+            },
+        )
+        return self.deny_tool_execution(tool_name, message)
+
     def get_events(self) -> List[Dict[str, Any]]:
         """
         Get all queued events and clear the queue.
@@ -349,6 +432,10 @@ class SSEOutputHandler(OutputHandler):
         elif event_type == "warning":
             message = data.get("message", "")
             return f"Warning: {message}\n"
+
+        elif event_type == "tool_confirm_denied":
+            message = data.get("message", "")
+            return f"Permission denied: {message}\n"
 
         elif event_type == "success":
             message = data.get("message", "")

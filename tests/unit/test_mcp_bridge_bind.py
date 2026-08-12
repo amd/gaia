@@ -5,9 +5,9 @@
 
 """Bind-host resolution for the MCP bridge.
 
-The bridge is unauthenticated, so a request for "localhost" must never
-silently widen to a wildcard bind. Binding all interfaces is explicit
-opt-in only, and must be loudly logged.
+A request for "localhost" must never silently widen to a wildcard bind.
+Binding all interfaces is explicit opt-in only, and is loudly warned about
+whenever the bridge is running without an auth token.
 """
 
 import sys
@@ -49,6 +49,13 @@ class TestResolveBindHost:
             "unauthenticated" in record.getMessage().lower()
             for record in caplog.records
         ), "expected a warning that the unauthenticated bridge is network-exposed"
+
+    @pytest.mark.parametrize("wildcard", ["0.0.0.0", "::"])
+    def test_authenticated_wildcard_does_not_warn(self, wildcard, caplog):
+        """With a token configured there is no unauthenticated exposure to warn about."""
+        with caplog.at_level("WARNING", logger="gaia.mcp.mcp_bridge"):
+            assert resolve_bind_host(wildcard, authenticated=True) == wildcard
+        assert not caplog.records
 
     def test_specific_host_passes_through_without_warning(self, caplog):
         with caplog.at_level("WARNING", logger="gaia.mcp.mcp_bridge"):

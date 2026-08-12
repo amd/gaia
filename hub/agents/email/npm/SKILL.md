@@ -12,6 +12,15 @@ talks to it over local HTTP. There is **no Python** and no separate GAIA install
 
 Follow these steps to wire it into an app.
 
+> **This file is NOT one of the agent's own skills.** It is the integration
+> playbook — how *you* wire this npm package into an app. The sidecar separately
+> bundles six **Agent Skills** at `gaia_agent_email/skills/<name>/SKILL.md`, which
+> are instructions the *email agent itself* would load into its own prompt at
+> runtime — currently **disabled**, so none of them loads. Same filename,
+> different artifact: don't load those into your assistant, and don't ship this
+> one as an agent skill. See
+> [Skill sets](#skill-sets--disabled-in-this-release) below.
+
 ## 1. Install
 
 ```bash
@@ -100,7 +109,7 @@ The interface:
 | `triage(req)` | Local LLM only | Classify / summarize / extract action items + phishing signals on the message you pass. No mailbox read. Action items also persist to the sidecar's local task list (keyed by `message_id`, de-duplicated on re-triage) — the response shape is unchanged. |
 | `triageBatch(req)` | Local LLM only | Same as `triage` for an `items` array (1–100). Parallel `results` array; per-item failures isolate (200 can carry errored items — inspect `results[].error`). |
 | `search(req)` | A connected mailbox | Read-only inbox search by `query`/`labels`; returns message metadata (id, subject, sender, snippet, labels), no body. No token. No mailbox → 503, two+ → 400. |
-| `prescan(req?)` | A connected mailbox | Read-only inbox pre-scan → triage-card envelope (`kind: "email_pre_scan"`: urgent / actionable / suggested-archive rows + an informational count). No mailbox connected → 503; 2+ → 400. Heuristic-only, no Lemonade call. |
+| `prescan(req?)` | A connected mailbox | Read-only inbox pre-scan → triage-card envelope (`kind: "email_pre_scan"`), whose `needs_you` (schema 2.11) is the ONE worklist the card renders — up to 5 things that need you, plus `bulk` for the filtered remainder. No mailbox connected → 503; 2+ → 400. Heuristic-only, no Lemonade call. `NeedsYouItem.detail` is reserved on the wire but always empty today on every surface — see [`CHANGELOG.md`](./CHANGELOG.md). |
 | `draft(req)` | Nothing external | Returns a single-use confirmation token. Optional `attachments` (schema 2.2): `{ filename, mime_type, content_base64 }` each, ≤ 25 MB decoded. |
 | `send(req)` | Draft token + a connected mailbox | Gate fires first: no/invalid `draft` token → 403; valid token but no mailbox connected on the host → 503. Attachments must exactly match the confirmed draft's (the token binds their content digests). |
 | `confirmAction(req)` | Nothing external | Mints a single-use token for `"archive"`/`"quarantine"`, bound to the `(action, message_id)`. |
@@ -232,6 +241,15 @@ the connected-but-not-granted case needs no browser at all (a local permission w
 and connecting Google still requires the user to supply their own OAuth client ID and
 secret, so expect a `sensitive: true` question on that path.
 
+**Mail-required, calendar-optional (#2730).** Every setup/reconnect path — this
+self-repair flow included — requests the full mail + calendar scope union at
+consent time, but only the mail scopes gate whether the flow reports success. A
+user who declines calendar still ends up with a working mailbox; calendar
+tools raise their own actionable error, naming the exact scope, the first time
+one is actually called. Do not "fix" a self-repair flow that requests only
+mail scopes — that narrower request is the bug this issue removed, not a
+simplification to reintroduce.
+
 ## Stateful agent surface (`/v1/email/agent/*`, 0.4.0)
 
 Everything above is **stateless** — you send a payload, the sidecar analyzes it, no
@@ -281,11 +299,14 @@ session — an overlapping `/query` returns **409**. See `SPEC.md` for the full 
 
 ### Full autonomy (`/v1/email/agent/autonomy/*`)
 
-The agent can run **proactively** at the `earn_trust` level: it archives low-signal mail
-on its own **where your explicit preferences already sanction it** (a low-priority sender,
-or a category you default to archive), drafts replies for review, and **always asks before
-anything destructive** (send / forward / RSVP / quarantine). There is no permanent-delete —
-the agent only ever moves mail to Trash, which is always reversible.
+The agent can run **proactively** at the `earn_trust` level: it archives low-signal
+(promotional/spam) mail and marks FYI mail read on its own **where your explicit
+preferences already sanction it** (a low-priority sender, or a category you default to
+archive) or a sender/category has earned enough trust, and **always asks before anything
+destructive** (send / forward / RSVP / quarantine). There is no permanent-delete — the
+agent only ever moves mail to Trash, which is always reversible. Reply drafting is not yet
+wired into this proactive loop (the policy layer supports it, but no candidate reaches it
+today).
 Turn it on and inspect the earned trust:
 
 ```js
@@ -300,19 +321,47 @@ const r = await fetch(`${base}/v1/email/agent/autonomy/run`, {
   method: "POST", headers: { "content-type": "application/json" },
   body: JSON.stringify({ session_id: "s1", max_messages: 25 }),
 });
-const report = await r.json();   // { level, executed:[…], proposals:[…], skipped }
+const report = await r.json();
+// { level, executed:[…], proposals:[…], decisions:[…], skipped }
+// decisions[] explains EVERY candidate considered: { message_id, tool, action, outcome, reason, sender }
 
 // Inspect the earned-trust ledger — autonomy is never a black box
 const status = await (await fetch(`${base}/v1/email/agent/autonomy/s1`)).json();
 // { level, enabled, trust_min_samples, trust_threshold, trusted_scope_count, scopes:[…] }
 ```
 
-The agent **learns from your corrections**: undoing an auto-archive (`undo_archive_batch`)
-is captured as a negative outcome that pulls the sender/category back below the trust bar.
-(Positive-outcome accrual — trust *rising* as suggestions are accepted or left standing —
-is not yet wired, so today the ledger only ratchets trust down.) Every auto-action is
-reversible with undo. A bad `level` returns **400**; an unknown
-session returns **404**.
+The agent **learns from your corrections**: undoing an auto-executed action —
+`POST /v1/email/agent/autonomy/undo` with `{ session_id, action_id }` from the `executed[]`
+entry, or the conversational `undo_archive_batch` tool for a batch archive — is captured as
+a negative outcome that pulls the sender/category back below the trust bar. (Positive-outcome
+accrual — trust *rising* as suggestions are accepted or left standing — is not yet wired, so
+today the ledger only ratchets trust down.) Every auto-action is reversible with undo. A bad
+`level` returns **400**; an unknown session returns **404**; undoing an unknown/expired
+`action_id` returns **409**; `/run` while the level is `off` returns **409** too — it refuses
+rather than returning the same 200 shape a real, found-nothing cycle would (#2528).
+
+The Python host also ships a thin-client CLI over this same surface:
+`gaia email autonomy {status|set-level|pause|resume|run|trust|kill}` (#2516).
+
+## Skill sets — disabled in this release
+
+The sidecar bundles six Agent Skills (`personal`: `inbox-triage`,
+`newsletter-digest`, `travel-itinerary`; `work`: `inbox-triage`,
+`meeting-scheduling`, `action-item-extraction`, `escalation-routing`), but the
+agent's manifest currently declares **no sets**, so **none of them loads**. A
+personal and a work mailbox get identical behaviour. This is deliberate: the
+skills are held back until an eval run shows they improve triage.
+
+What that means for your integration:
+
+- **Do not pass `--skill-set` or `GAIA_EMAIL_SKILL_SET`.** Any value fails at
+  startup with `... but this agent declares no skill sets — Agent Skills are
+  switched off in this build.` There is no working name. This is fail-loud
+  behaviour, not a bug to work around.
+- `GAIA_EMAIL_ACCOUNT_TYPE` still validates but selects nothing.
+- Nothing in the API changes either way — same endpoints, same tools, same
+  permissions. Re-enabling happens inside the agent's `gaia-agent.yaml`; your
+  code does not change.
 
 ## Running in a server / long-lived app
 
@@ -404,11 +453,18 @@ Until then the binary boots, but the first `triage` returns **HTTP 502**.
 - **Some capabilities are agent-loop-only — no REST endpoint, no client method.**
   Scheduled send / snooze (#1609), **voice / style-matched drafting** (#1607 —
   `build_voice_profile` learns a local style profile from Sent mail so drafts
-  come out in the user's own voice), and **follow-up tracking** (#1606 —
-  `check_followups` flags sent mail still awaiting a reply, detection only) all
-  run in the agent tool loop. The REST contract has no routes for them yet, so
-  don't look for `client.scheduleSend()` / `client.snooze()` / a voice or
-  follow-up method — they don't exist (and none of these moves `SCHEMA_VERSION`).
+  come out in the user's own voice), **follow-up tracking** (#1606 —
+  `check_followups` flags sent mail still awaiting a reply, detection only),
+  and **waiting-on-you detection** (#2581 — `list_waiting_on_you` flags
+  INBOUND mail awaiting the user's reply; it only qualifies a message that has
+  both a genuine ask/meeting-time signal and corroboration that it's real
+  correspondence) all run in the agent tool loop. The REST contract has no
+  routes for them yet, so don't look for `client.scheduleSend()` /
+  `client.snooze()` / a voice, follow-up, or waiting-on-you method — they
+  don't exist (and none of these moves `SCHEMA_VERSION`).
+- **`--skill-set` / `GAIA_EMAIL_SKILL_SET` always fail right now.** Agent Skills
+  are disabled in this release, so the agent declares no sets and every name is
+  invalid. Don't wire either into your spawn options.
 - **ESM-only.** `require("@amd-gaia/agent-email")` fails; use `import` / dynamic
   `import()`.
 

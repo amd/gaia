@@ -7,6 +7,8 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/amd/gaia/tui/internal/ui/theme"
 )
 
 // QuestionModel renders a mid-run question from the agent: the question itself,
@@ -57,18 +59,18 @@ type QuestionAnsweredMsg struct {
 var (
 	questionPanelStyle = lipgloss.NewStyle().
 				Border(lipgloss.RoundedBorder()).
-				BorderForeground(lipgloss.Color("214")).
+				BorderForeground(theme.Warning).
 				Padding(0, 1)
 
-	questionTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("214"))
+	questionTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(theme.Warning)
 
-	questionSelectedStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("230"))
+	questionSelectedStyle = lipgloss.NewStyle().Bold(true).Foreground(theme.AccentBright)
 
-	questionOptionStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	questionOptionStyle = lipgloss.NewStyle().Foreground(theme.Text)
 
-	questionDescStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("245"))
+	questionDescStyle = lipgloss.NewStyle().Foreground(theme.Dim)
 
-	questionHintStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("243")).Italic(true)
+	questionHintStyle = lipgloss.NewStyle().Foreground(theme.Dim).Italic(true)
 )
 
 // NewQuestionModel builds the picker. A question with no options and no free

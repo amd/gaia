@@ -12,7 +12,7 @@ icon: "code"
 **Component:** `gaia::Agent` base class and supporting libraries
 **Language:** C++17
 **Build system:** CMake 3.14+
-**Dependencies:** nlohmann/json, cpp-httplib, Google Test (all fetched automatically)
+**Dependencies:** nlohmann/json, cpp-httplib, yaml-cpp, Google Test (all fetched automatically)
 </Note>
 
 ---
@@ -272,6 +272,7 @@ cpp/
     types.h                 # AgentConfig, Message, ToolInfo, ParsedResponse
     tool_registry.h         # Tool registration and execution
     mcp_client.h            # MCP JSON-RPC client (stdio transport)
+    mcp_registry.h          # Resolves MCP server ids from ~/.gaia/mcp_servers.json
     json_utils.h            # JSON extraction with multi-strategy fallback
     console.h               # TerminalConsole / SilentConsole output handlers
     clean_console.h         # CleanConsole — polished TUI with colors and word-wrap
@@ -279,6 +280,7 @@ cpp/
     agent.cpp               # Agent loop state machine
     tool_registry.cpp
     mcp_client.cpp          # Cross-platform subprocess + pipes
+    mcp_registry.cpp
     json_utils.cpp
     console.cpp
     clean_console.cpp
@@ -293,6 +295,7 @@ cpp/
     test_tool_registry.cpp
     test_json_utils.cpp
     test_mcp_client.cpp
+    test_mcp_registry.cpp
     test_console.cpp
     test_clean_console.cpp
     test_tool_integration.cpp

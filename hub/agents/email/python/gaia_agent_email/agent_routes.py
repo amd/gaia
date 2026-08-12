@@ -50,8 +50,22 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
+
+# ConfigurationError alias: this is gaia_agent_email.config.ConfigurationError,
+# a bare ValueError subclass -- a SEPARATE class from
+# gaia.connectors.errors.ConfigurationError imported above, sharing nothing in
+# its MRO with ConnectorsError. Aliased so the two never get conflated again.
+from gaia_agent_email import trust
+from gaia_agent_email.config import ConfigurationError as AgentConfigurationError
 from pydantic import BaseModel, ConfigDict, Field
 
+from gaia.connectors.errors import (
+    AuthRequiredError,
+    ConfigurationError,
+    ConnectionRevokedError,
+    ConnectorsError,
+    ScopeMismatchError,
+)
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -104,26 +118,60 @@ class _AgentSession:
         return self.run_lock.locked()
 
 
+#: Idle-only, generous by design (#2829): a session_id now roots an agent for
+#: the life of a conversation, not one call — the reaper exists to bound that,
+#: never to time out a conversation that is still being used.
+_DEFAULT_IDLE_TTL_SECONDS = 4 * 60 * 60  # 4 hours
+
+#: Each retained EmailTriageAgent holds a WAL sqlite connection, a second
+#: memory-store DB + embedder, and connector backends — generous, but not
+#: unbounded, for a single-tenant sidecar.
+_DEFAULT_MAX_SESSIONS = 100
+
+
 class _SessionRegistry:
     """Process-local map of session_id → :class:`_AgentSession`.
 
     In-process and single-tenant by design (the sidecar hosts one user's agent).
-    Agents are built lazily on first use and torn down on eviction.
+    Agents are built lazily on first use and torn down on eviction, idle
+    timeout, or the LRU cap — never while the session's ``run_lock`` is held.
     """
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        idle_ttl_seconds: float = _DEFAULT_IDLE_TTL_SECONDS,
+        max_sessions: int = _DEFAULT_MAX_SESSIONS,
+    ) -> None:
         self._sessions: Dict[str, _AgentSession] = {}
+        self._last_used: Dict[str, float] = {}
         self._lock = threading.Lock()
+        self._idle_ttl_seconds = idle_ttl_seconds
+        self._max_sessions = max_sessions
 
     def get(self, session_id: str) -> Optional[_AgentSession]:
         with self._lock:
             return self._sessions.get(session_id)
 
     def get_or_create(self, session_id: str, **config_kwargs: Any) -> _AgentSession:
+        self.reap()
+        evicted: Optional[_AgentSession] = None
         with self._lock:
             existing = self._sessions.get(session_id)
             if existing is not None:
+                self._last_used[session_id] = time.monotonic()
                 return existing
+            if len(self._sessions) >= self._max_sessions:
+                evicted = self._claim_lru_locked()
+                if evicted is None:
+                    raise RuntimeError(
+                        f"cannot start a new email session: {self._max_sessions} "
+                        "sessions are already active and none are idle enough "
+                        "to evict. Close an idle terminal/window, or wait for "
+                        "one to finish its current turn, and retry."
+                    )
+        if evicted is not None:
+            _close_agent(evicted.agent)
         # Build outside the lock — construction is slow (memory init, backends)
         # and must not block other sessions. A racing creator for the SAME id is
         # resolved below by discarding the loser's agent.
@@ -132,14 +180,72 @@ class _SessionRegistry:
             existing = self._sessions.get(session_id)
             if existing is not None:
                 _close_agent(agent)
+                self._last_used[session_id] = time.monotonic()
                 return existing
             session = _AgentSession(session_id, agent)
             self._sessions[session_id] = session
+            self._last_used[session_id] = time.monotonic()
             return session
+
+    def _claim_lru_locked(self) -> Optional[_AgentSession]:
+        """Pop the least-recently-used session whose ``run_lock`` this call
+        successfully CLAIMS (acquires and never releases).
+
+        Caller holds ``self._lock``. Checking ``.locked()`` and popping
+        separately is a TOCTOU race: ``get_or_create`` hands out a session
+        reference and releases ``self._lock`` *before* the caller acquires
+        ``run_lock``, so a session can look unlocked at the instant this scans
+        it and only get its lock taken a moment later by the turn that is
+        about to run on it — evicting (and closing the DB of) a session an
+        in-flight caller is about to use. Acquiring here closes that window:
+        either this call wins the lock (the session was genuinely idle, and
+        it is now permanently claimed — dead — so nothing else can acquire
+        it), or it was already taken by a real turn and is skipped, exactly
+        like ``reap()`` below. Returns ``None`` when every session is
+        currently claimed/mid-turn — nothing is safe to evict, so the caller
+        must refuse the new session rather than silently exceed the cap.
+        """
+        by_age = sorted(self._sessions, key=lambda sid: self._last_used.get(sid, 0.0))
+        for sid in by_age:
+            if self._sessions[sid].run_lock.acquire(blocking=False):
+                session = self._sessions.pop(sid)
+                self._last_used.pop(sid, None)
+                return session
+        return None
+
+    def reap(self) -> List[str]:
+        """Evict idle-expired sessions, CLAIMING each one's ``run_lock`` (see
+        ``_claim_lru_locked``) rather than merely checking it — the same
+        TOCTOU a plain ``.locked()`` check would leave open applies here: a
+        session that looks idle can be about to start a real turn.
+
+        Teardown runs OUTSIDE the lock (mirrors ``delete()``) — ``close_db()``
+        can block on I/O and must not stall every other session's
+        ``get_or_create`` while it runs.
+        """
+        now = time.monotonic()
+        evicted: List[_AgentSession] = []
+        with self._lock:
+            expired_ids = [
+                sid
+                for sid, last in self._last_used.items()
+                if now - last > self._idle_ttl_seconds
+            ]
+            for sid in expired_ids:
+                session = self._sessions[sid]
+                if not session.run_lock.acquire(blocking=False):
+                    continue  # a real turn is starting/running — never evict
+                self._sessions.pop(sid)
+                self._last_used.pop(sid, None)
+                evicted.append(session)
+        for session in evicted:
+            _close_agent(session.agent)
+        return [s.session_id for s in evicted]
 
     def delete(self, session_id: str) -> bool:
         with self._lock:
             session = self._sessions.pop(session_id, None)
+            self._last_used.pop(session_id, None)
         if session is None:
             return False
         _close_agent(session.agent)
@@ -149,6 +255,43 @@ class _SessionRegistry:
         """Drop any existing session and build a fresh one (clears history+memory session)."""
         self.delete(session_id)
         return self.get_or_create(session_id, **config_kwargs)
+
+    def broadcast_kill(self, *, exclude: Optional[str] = None) -> List[str]:
+        """Set every OTHER live session's autonomy level to ``off`` (#2624).
+
+        A kill is a safety action, so it must not depend on the caller
+        naming the right session id: both ``/autonomy`` and
+        ``/autonomy/run`` resolve ``registry.get(session_id)`` against this
+        same process-local map, and nothing reconciles a CLI kill fired at
+        the default ``"cli"`` id against a cycle actually running under a
+        different (e.g. Agent-UI) session — that kill would return 200 and
+        leave the real cycle untouched (adversarial C4). Best-effort per
+        session: one misbehaving agent is logged and skipped rather than
+        blocking the kill for the rest. Returns the session ids actually
+        stopped.
+        """
+        with self._lock:
+            sessions = list(self._sessions.values())
+        killed: List[str] = []
+        for session in sessions:
+            if session.session_id == exclude:
+                continue
+            setter = getattr(session.agent, "set_autonomy_level", None)
+            if not callable(setter):
+                continue
+            try:
+                setter(trust.LEVEL_OFF)
+            except (
+                Exception
+            ) as exc:  # pragma: no cover - defensive; must not block the rest
+                logger.warning(
+                    "autonomy kill broadcast: failed to stop session %s: %s",
+                    session.session_id,
+                    exc,
+                )
+                continue
+            killed.append(session.session_id)
+        return killed
 
 
 def _close_agent(agent: Any) -> None:
@@ -161,6 +304,10 @@ def _close_agent(agent: Any) -> None:
             logger.warning("agent session close_db failed: %s", exc)
 
 
+# #2624 — the kill-broadcast above only reaches sessions in THIS process's
+# map. The sidecar's ``server.py`` never passes uvicorn a ``workers>1``
+# (or an external multi-process runner), so one process == the whole
+# registry; that assumption breaks if the sidecar is ever run multi-worker.
 registry = _SessionRegistry()
 
 
@@ -248,9 +395,46 @@ class AutonomyRunRequest(_Strict):
     )
 
 
+class AutonomyUndoRequest(_Strict):
+    session_id: str = Field(..., description="Session whose autonomy action to undo.")
+    action_id: str = Field(
+        ..., description="The action_id from a prior autonomy/run 'executed' entry."
+    )
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
+
+def _connectors_error_to_http(exc: ConnectorsError) -> HTTPException:
+    """Map a ``ConnectorsError`` escaping mailbox I/O to its HTTP status.
+
+    Mirrors the canonical table at ``src/gaia/ui/routers/connectors.py:13-24``
+    (#2617) so an autonomy-route failure and a UI-router failure never
+    disagree on status code for the same exception type. The bug this fixes
+    was never the status code — it was letting the exception (and its
+    already-actionable message) escape uncaught as a textless 500.
+    """
+    if isinstance(exc, ConfigurationError):
+        return HTTPException(status_code=503, detail=str(exc))
+    if isinstance(exc, AuthRequiredError):
+        if exc.reason in (
+            AuthRequiredError.Reason.NOT_CONNECTED,
+            AuthRequiredError.Reason.REAUTH_REQUIRED,
+        ):
+            return HTTPException(status_code=401, detail=str(exc))
+        return HTTPException(status_code=403, detail=str(exc))
+    # ConnectionRevokedError / ScopeMismatchError are ConnectorsError SIBLINGS
+    # of AuthRequiredError (errors.py:159,175), not subclasses of it — a
+    # revoked grant is the headline scenario for this route, so missing these
+    # would silently fall through to 500 for exactly the case a client most
+    # needs to tell apart from a server-side failure.
+    if isinstance(exc, ConnectionRevokedError):
+        return HTTPException(status_code=401, detail=str(exc))
+    if isinstance(exc, ScopeMismatchError):
+        return HTTPException(status_code=403, detail=str(exc))
+    return HTTPException(status_code=500, detail=str(exc))
 
 
 def _memory_status(agent: Any) -> MemoryStatusResponse:
@@ -381,7 +565,15 @@ async def autonomy_status(session_id: str) -> Dict[str, Any]:
 
 @router.post("/autonomy")
 async def set_autonomy(request: AutonomyLevelRequest) -> Dict[str, Any]:
-    """Set the autonomy level at runtime — pause/resume/kill (``off``)."""
+    """Set the autonomy level at runtime — pause/resume/kill (``off``).
+
+    Killing (``level="off"``) also broadcasts to every OTHER live session in
+    this process (#2624 — adversarial C4): the caller's session_id might not
+    be the one an autonomy cycle is actually running under (CLI default
+    ``"cli"`` vs. an Agent-UI session), and a kill that only reaches the
+    named session would report success while leaving the real cycle
+    untouched.
+    """
     session = registry.get(request.session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="No such session.")
@@ -391,16 +583,33 @@ async def set_autonomy(request: AutonomyLevelRequest) -> Dict[str, Any]:
             status_code=501, detail="This agent build does not expose autonomy."
         )
     try:
-        return setter(request.level)
+        result = setter(request.level)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if request.level == trust.LEVEL_OFF:
+        registry.broadcast_kill(exclude=request.session_id)
+    return result
 
 
-@router.post("/autonomy/run")
+@router.post(
+    "/autonomy/run",
+    responses={
+        409: {
+            "description": (
+                "Autonomy is off for this session — the kill switch refuses "
+                "the run instead of silently doing nothing (#2528)."
+            )
+        }
+    },
+)
 async def run_autonomy(request: AutonomyRunRequest) -> Dict[str, Any]:
     """Trigger one observe->decide->act cycle now (the daemon/CLI driver seam).
 
     Runs on a worker thread — the cycle does mailbox I/O and local inference.
+    Refuses with HTTP 409 while the session's autonomy level is ``off`` (#2528)
+    — without this, "autonomy is disabled" and "autonomy ran and found
+    nothing to do" return the identical 200 shape, and a caller can't tell
+    them apart.
     """
     session = registry.get(request.session_id)
     if session is None:
@@ -410,7 +619,62 @@ async def run_autonomy(request: AutonomyRunRequest) -> Dict[str, Any]:
         raise HTTPException(
             status_code=501, detail="This agent build does not expose autonomy."
         )
-    return await asyncio.to_thread(runner, {"max_messages": request.max_messages})
+    status_fn = getattr(session.agent, "autonomy_status", None)
+    level = status_fn().get("level") if callable(status_fn) else None
+    if level == trust.LEVEL_OFF:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Autonomy is off for session '{request.session_id}' — the run "
+                "was refused, not silently skipped. POST /v1/email/agent/autonomy "
+                f'{{"session_id": "{request.session_id}", '
+                '"level": "suggest|earn_trust|full"} to enable it first.'
+            ),
+        )
+    try:
+        return await asyncio.to_thread(runner, {"max_messages": request.max_messages})
+    except ConnectorsError as exc:
+        raise _connectors_error_to_http(exc) from exc
+    except AgentConfigurationError as exc:
+        # Agent-local ConfigurationError (config.py), NOT a ConnectorsError --
+        # raised by resolve_mail_backends() for the cold-start "no mailbox
+        # connected yet" state, reached via _triage_all_backends ->
+        # _refresh_mail_backends. The except above never sees it. Maps to 503
+        # to match the canonical ConfigurationError row at
+        # ui/routers/connectors.py:13-24; its message is already actionable.
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.post("/autonomy/undo")
+async def undo_autonomy(request: AutonomyUndoRequest) -> Dict[str, Any]:
+    """Undo one autonomy-executed action, feeding a correction to the trust
+    ledger (#2529).
+
+    Without this the ledger can only ever ratchet trust up — no undo could
+    reach it except through the archive-only, conversational
+    ``undo_archive_batch`` tool. Runs on a worker thread (mailbox I/O).
+    """
+    session = registry.get(request.session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="No such session.")
+    undo_fn = getattr(session.agent, "undo_autonomy_action", None)
+    if not callable(undo_fn):
+        raise HTTPException(
+            status_code=501,
+            detail="This agent build does not expose autonomy undo.",
+        )
+    try:
+        return await asyncio.to_thread(undo_fn, request.action_id)
+    except ConnectorsError as exc:
+        raise _connectors_error_to_http(exc) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        # Covers AgentConfigurationError too (it subclasses ValueError), but
+        # undo_autonomy_action routes via the already-resolved self._backends
+        # dict, never resolve_mail_backends() -- so that class can't actually
+        # reach here; no separate 503 clause needed like in run_autonomy above.
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/confirm-tool")

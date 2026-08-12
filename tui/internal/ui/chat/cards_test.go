@@ -13,16 +13,16 @@ import (
 
 const prescanPayload = `{
   "kind": "email_pre_scan",
-  "urgent": [{"message_id":"m1","sender":"\"Sarah Chen\" <sarah@example.com>",
-              "subject":"Prod incident follow-up","why":"asked for a reply by Friday"}],
-  "actionable": [{"message_id":"m2","sender":"recruiting@acme.io",
-                  "subject":"Interview times","why":"asked you to pick a slot"}],
-  "informational_count": 6,
-  "suggested_archives": [{"message_id":"m3","sender":"news@substack.com",
-                          "subject":"Weekly digest #212","reason":"newsletter"}],
-  "suggested_drafts": [],
+  "urgent": [], "actionable": [], "informational_count": 6,
+  "suggested_archives": [], "suggested_drafts": [], "needs_review": [],
   "preferences_applied": null,
-  "totals": {"urgent": 1, "actionable": 1, "informational": 6, "suggested_archives": 1}
+  "scanned": 9,
+  "needs_you": [
+    {"ref":1,"kind":"urgent","message_id":"m1","sender":"\"Sarah Chen\" <sarah@example.com>",
+     "subject":"Prod incident follow-up","why":"asked for a reply by Friday"}
+  ],
+  "needs_you_total": 1,
+  "bulk": {"count": 7, "filter_tests": ["no_deadline_signal"]}
 }`
 
 // newTestChat returns a model sized to an 80x24 terminal with a turn in flight.
@@ -64,9 +64,9 @@ func TestToolResultWithRenderDrawsACard(t *testing.T) {
 		t.Errorf("card = {render:%q tool:%q}, want {email_pre_scan pre_scan_inbox}", card.Render, card.ToolName)
 	}
 
-	rendered := ansi.Strip(m.renderMessage(card))
+	rendered := ansi.Strip(m.renderMessage(card, nil))
 	t.Logf("\n%s", rendered)
-	for _, want := range []string{"Inbox · 9 scanned", "URGENT", "Sarah Chen", "asked for a reply by Friday"} {
+	for _, want := range []string{"Inbox", "9 inbox messages scanned", "NEEDS A REPLY", "REPLY", "Sarah Chen", "asked for a reply by Friday"} {
 		if !strings.Contains(rendered, want) {
 			t.Errorf("card render missing %q:\n%s", want, rendered)
 		}
@@ -88,7 +88,7 @@ func TestUnknownRenderStillDrawsACard(t *testing.T) {
 	})
 
 	card := lastCard(t, m)
-	rendered := ansi.Strip(m.renderMessage(&card))
+	rendered := ansi.Strip(m.renderMessage(&card, nil))
 	t.Logf("\n%s", rendered)
 	if !strings.Contains(rendered, "Unsupported card type") {
 		t.Errorf("unknown render did not degrade to the generic card:\n%s", rendered)
@@ -129,7 +129,7 @@ func TestCardRendersInlineAboveTheLiveRegion(t *testing.T) {
 	m.updateViewport()
 
 	view := ansi.Strip(m.viewport.View())
-	cardAt := strings.Index(view, "URGENT")
+	cardAt := strings.Index(view, "NEEDS A REPLY")
 	liveAt := strings.Index(view, "archive_messages")
 	if cardAt < 0 || liveAt < 0 {
 		t.Fatalf("expected both the card and the live region in the viewport:\n%s", view)
@@ -145,7 +145,7 @@ func TestCardFitsAn80ColumnTerminal(t *testing.T) {
 		Render: "email_pre_scan", Data: json.RawMessage(prescanPayload),
 	})
 
-	rendered := func() string { c := lastCard(t, m); return ansi.Strip(m.renderMessage(&c)) }()
+	rendered := func() string { c := lastCard(t, m); return ansi.Strip(m.renderMessage(&c, nil)) }()
 	for i, line := range strings.Split(rendered, "\n") {
 		if w := ansi.StringWidth(line); w > 80 {
 			t.Errorf("card line %d is %d columns wide, overflowing an 80-column terminal: %q", i, w, line)

@@ -89,6 +89,8 @@ After promotion, every `KNOWN_TOOLS` entry in `registry.py` points to `gaia.agen
 id: chat
 name: Chat
 type: agent                         # agent | app | component — defaults to agent when omitted
+                                    # (`skill` is a catalog lane too, but a skill is published
+                                    #  from its SKILL.md, not from a gaia-agent.yaml)
 version: 0.1.0                      # independent of framework version
 description: "General conversation — fast, personality-first"
 author: AMD
@@ -134,6 +136,26 @@ Both host or drive agents rather than being one, so they declare `tools_count: 0
 and no `models`. A catalog consumer that lists *agents* must filter on `type`;
 treating every entry as an agent would offer `gaia agent install terminal-hub`,
 which is not how either is installed.
+
+### The skills lane
+
+`skill` is a fourth `type` ([#2467](https://github.com/amd/gaia/issues/2467)) —
+a reusable capability any agent composes, not a package that runs on its own.
+It is the one lane that is **not** published from a `gaia-agent.yaml`: a skill's
+manifest is the YAML front matter of its `SKILL.md`
+([Skill Format](/plans/skill-format)), so it goes to `POST /publish/skill`
+instead, and a `gaia-agent.yaml` that declares `type: skill` is rejected with a
+pointer to that route. Skill artifacts live under their own R2 prefix
+(`skills/<name>/…`) and are served at `GET /skills/<name>/manifest.json`.
+
+Everything else is shared: skills appear in the same `index.json` `agents`
+array, carry the same `security_tier` / `permissions` keys, and are versioned and
+made immutable by the same rules. Ids are **one namespace across every lane** — a
+skill may not shadow an agent id, and vice versa (`409 id_conflict`).
+
+The same filtering rule applies, harder: a skill installs with `gaia skill
+install <name>` into `~/.gaia/skills/`, so a consumer that renders every entry as
+an installable agent would offer an install path that cannot work.
 
 ### `pyproject.toml`
 

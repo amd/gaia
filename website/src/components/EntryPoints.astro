@@ -1,0 +1,60 @@
+---
+// Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+// The two ways to run GAIA, given peer billing: the Agent UI (Electron desktop
+// app) and the terminal hub (the Go binary in tui/). The Agent UI CTA is the
+// OS-detecting DownloadButton; the terminal hub carries the one-line installer
+// until its hub component entry is published.
+//
+// Naming is the product's own: "Agent UI" and "terminal hub" (cobra Short
+// "GAIA Terminal Agent Hub"). Never "Agent TUI" — it appears nowhere.
+//
+// The terminal-hub CTA points at the quickstart, which carries the one-line
+// installer per platform. It must not point at the CLI reference (a command
+// list for a binary the visitor does not have), at /hub (a list of agents that
+// contains no terminal hub), or at /hub/terminal-hub (unpublished, 404).
+
+import DownloadButton from './DownloadButton.astro';
+
+interface Props {
+  class?: string;
+  align?: 'left' | 'center';
+}
+
+const { class: className = '', align = 'left' } = Astro.props;
+
+const QUICKSTART = 'https://amd-gaia.ai/docs/quickstart';
+const INSTALL_SH = 'curl -fsSL https://amd-gaia.ai/install.sh | sh';
+const INSTALL_PS1 = 'irm https://amd-gaia.ai/install.ps1 | iex';
+const centered = align === 'center';
+---
+
+<div class:list={['flex min-w-0 flex-col gap-4', centered && 'items-center', className]}>
+  <div class:list={['flex flex-wrap gap-3', centered && 'justify-center']}>
+    <DownloadButton variant="primary" size="lg" />
+    <a
+      href={QUICKSTART}
+      target="_blank"
+      rel="noopener noreferrer"
+      class="g-btn g-btn-secondary px-6 py-3 text-[15px]"
+    >Get the terminal hub</a>
+  </div>
+
+  <dl class:list={['grid gap-x-7 gap-y-2 sm:grid-cols-2', centered && 'text-center sm:text-left']}>
+    <div class="min-w-0">
+      <dt class="g-label text-g-gold-text">Agent UI</dt>
+      <dd class="mono mt-1 text-[11.5px] leading-[1.6] text-g-faint">
+        Desktop app · Windows, Linux, macOS (Apple Silicon)
+      </dd>
+    </div>
+    <div class="min-w-0">
+      <dt class="g-label text-g-gold-text">Terminal hub</dt>
+      <dd class="mono mt-1 text-[11.5px] leading-[1.6] text-g-faint">
+        One-line installer
+        <span class="block"><code class="bg-transparent p-0">{INSTALL_SH}</code></span>
+        <span class="block">Windows: <code class="bg-transparent p-0">{INSTALL_PS1}</code></span>
+      </dd>
+    </div>
+  </dl>
+</div>

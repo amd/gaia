@@ -48,6 +48,7 @@ import gaia.connectors.catalog  # noqa: F401  # pylint: disable=unused-import
 from gaia.connectors.activations import list_agent_activations
 from gaia.connectors.api import activate as activate_connector_for_agent
 from gaia.connectors.api import deactivate as deactivate_connector_for_agent
+from gaia.connectors.api import resolve_declared_scopes
 from gaia.connectors.errors import (
     AuthRequiredError,
     ConfigurationError,
@@ -56,7 +57,10 @@ from gaia.connectors.errors import (
     ConsentDeniedError,
     FlowInProgressError,
     FlowTimeoutError,
+    NoDeclaredScopesError,
     ScopeMismatchError,
+    ScopeNotAllowedError,
+    UnknownAgentError,
 )
 from gaia.connectors.events import set_emitter
 from gaia.connectors.flow import _pending as _flow_pending
@@ -301,12 +305,15 @@ def _resolve_grant_scopes(
 ) -> Dict[str, List[str]]:
     """Resolve ``[namespaced_agent_id]`` → ``{agent_id: required_scopes}`` (#2117).
 
-    Each agent's scopes come from its ``REQUIRED_CONNECTORS`` declaration for
-    ``connector_id`` — the same single source of truth the forwarded-connection
-    route uses. Fails loudly (no silent skips): an unknown agent → 404; an
-    agent that declares no requirement for this connector → 400. Both would
-    otherwise produce a connect that silently grants nothing — the exact
-    dead-end this flow removes.
+    Thin wrapper over the shared ``gaia.connectors.api.resolve_declared_scopes``
+    (#2603) — the CLI's ``gaia connectors connect --grant-agent`` calls the
+    SAME function, so the two surfaces cannot drift. This wrapper's only job
+    is translating the shared resolver's exceptions into this router's HTTP
+    contract: an unknown agent → 404; an agent that declares no requirement
+    for this connector → 400; a declared scope outside the connector's
+    ``available_scopes`` → 400. All three would otherwise produce a connect
+    that silently grants nothing (or, for the scope ceiling, too much) — the
+    exact dead-end / escalation this flow removes.
     """
     if not agent_ids:
         return {}
@@ -314,32 +321,50 @@ def _resolve_grant_scopes(
     if registry is None:
         raise HTTPException(status_code=503, detail="Agent registry not initialized")
 
-    by_nsid = {reg.namespaced_agent_id: reg for reg in registry.list()}
-    unknown = [nsid for nsid in agent_ids if nsid not in by_nsid]
-    if unknown:
+    try:
+        return resolve_declared_scopes(registry, connector_id, agent_ids)
+    except UnknownAgentError as e:
         raise HTTPException(
             status_code=404,
-            detail={"error": "unknown_agent", "agent_ids": unknown},
-        )
+            detail={"error": "unknown_agent", "agent_ids": e.agent_ids},
+        ) from e
+    except NoDeclaredScopesError as e:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "agent_declares_no_scopes",
+                "agent_id": e.agent_id,
+                "connector_id": e.connector_id,
+            },
+        ) from e
+    except ScopeNotAllowedError as e:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "scope_not_allowed",
+                "agent_id": e.agent_id,
+                "connector_id": e.connector_id,
+                "scopes": e.scopes,
+            },
+        ) from e
 
-    resolved: Dict[str, List[str]] = {}
-    for nsid in agent_ids:
-        reg = by_nsid[nsid]
-        scopes: set[str] = set()
-        for cr in reg.required_connections:
-            if cr.connector_id == connector_id:
-                scopes.update(cr.scopes)
-        if not scopes:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "agent_declares_no_scopes",
-                    "agent_id": nsid,
-                    "connector_id": connector_id,
-                },
-            )
-        resolved[nsid] = sorted(scopes)
-    return resolved
+
+def _widen_empty_scopes(
+    scopes: List[str], grant_map: Dict[str, List[str]]
+) -> List[str]:
+    """Same contract as the CLI's bare ``connect`` (#2730 D0/AC-8): an empty
+    ``scopes`` body must not silently reach ``start_authorization`` narrower
+    than what the request's own ``grant_agents`` already declare. When the
+    caller supplied scopes explicitly, or resolved no grant map at all,
+    return unchanged — ``start_authorization``'s own D0 guard decides the
+    genuinely-empty case (raise on an existing connection, fall back to
+    ``default_scopes`` on a real first connect)."""
+    if scopes or not grant_map:
+        return scopes
+    union: set = set()
+    for agent_scopes in grant_map.values():
+        union.update(agent_scopes)
+    return sorted(union)
 
 
 def _connector_summary(connector_id: str) -> Dict[str, Any]:
@@ -845,7 +870,9 @@ async def authorize(
     grant_map = _resolve_grant_scopes(request, connector_id, body.grant_agents)
     try:
         return await connections.start_authorization(
-            connector_id, scopes=body.scopes, grant_agents=grant_map or None
+            connector_id,
+            scopes=_widen_empty_scopes(body.scopes, grant_map),
+            grant_agents=grant_map or None,
         )
     except ConnectorsError as e:
         raise _raise_http_for(e) from e
@@ -877,7 +904,9 @@ async def authorize_device(
     """
     grant_map = _resolve_grant_scopes(request, connector_id, body.grant_agents)
     try:
-        info = await connections.start_device_flow(connector_id, scopes=body.scopes)
+        info = await connections.start_device_flow(
+            connector_id, scopes=_widen_empty_scopes(body.scopes, grant_map)
+        )
     except ConnectorsError as e:
         raise _raise_http_for(e) from e
 

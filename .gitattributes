@@ -1,3 +1,23 @@
 # Binary test fixtures — prevent LF/CRLF mangling
 cpp/tests/fixtures/*.png binary
 cpp/tests/fixtures/*.jpg binary
+
+# content_digest hashes these fixture bytes raw (#2468), so an autocrlf checkout
+# would change the hash and fail the vectors on Windows only.
+tests/fixtures/skill_audit_digest/** -text
+
+# Chunk-boundary fixtures are a byte-exact cross-runtime contract; a CRLF
+# checkout rewrites the documents the committed chunks were generated from.
+cpp/tests/fixtures/chunking/* -text
+
+# Vendored third-party sources — never ours to reformat, lint, or review.
+# linguist-vendored keeps them out of language stats; -diff keeps a 9 MB
+# amalgamation out of every diff that touches the directory.
+cpp/third_party/** linguist-vendored
+cpp/third_party/sqlite/sqlite3.c -diff
+cpp/third_party/sqlite/sqlite3.h -diff
+
+# Every email-agent PR appends an [Unreleased] bullet to this changelog;
+# without a union merge, sibling PRs merged close together conflict on the
+# same insertion point.
+hub/agents/email/python/CHANGELOG.md merge=union

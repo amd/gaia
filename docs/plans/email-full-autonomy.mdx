@@ -8,11 +8,13 @@ icon: "wand-magic-sparkles"
 
 > **Status:** Phases 1–5 shipped — trust engine, autonomous cycle, closed
 > learning loop, REST control surface, automatic correction capture, the
-> proactive eval harness, AND the scheduled driver (`AutonomyScheduler` +
-> `run_autonomy_job`, opt-in via `GAIA_EMAIL_AUTONOMY_ENABLED`), all tested.
-> Remaining follow-ups: registering `run_autonomy_job` on the core `DaemonClock`
-> for the daemon-supervised path (cross-process, tracked with #2156), and the npm
-> thin-client CLI (`gaia email autonomy …`) wrapping the REST surface.
+> proactive eval harness, the scheduled driver (`AutonomyScheduler` +
+> `run_autonomy_job`, opt-in via `GAIA_EMAIL_AUTONOMY_ENABLED`), AND the
+> `gaia email autonomy {status|set-level|pause|resume|run|trust|kill}`
+> thin-client CLI (#2516) wrapping the REST surface over the daemon relay,
+> all tested. Remaining follow-up: registering `run_autonomy_job` on the core
+> `DaemonClock` for the daemon-supervised path (cross-process, tracked with
+> #2156).
 >
 > **Milestone:** [Autonomy + Messaging Expansion [OSS]](https://github.com/amd/gaia/milestone/6)
 >

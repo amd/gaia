@@ -16,7 +16,7 @@ Accept one argument in any of these shapes:
 - `0.17.5` — bare semver
 - `v0.17.5` — with the `v` prefix (the actual tag form)
 - `0.17.5.1` — hotfix-style four-part version (rare; e.g. `v0.15.4.1`)
-- *(no argument)* — read `__version__` from [src/gaia/version.py](src/gaia/version.py), then suggest the next-patch bump (e.g. `0.17.4` → propose `0.17.5`) and ask the user to confirm or override before continuing.
+- *(no argument)* — read `__version__` from [src/gaia/version.py](../../../src/gaia/version.py), then suggest the next-patch bump (e.g. `0.17.4` → propose `0.17.5`) and ask the user to confirm or override before continuing.
 
 Normalise to the bare form internally (`0.17.5`) and the tag form externally (`v0.17.5`). If the user gives a version that is **older than or equal to** the current `__version__`, stop and ask — never silently roll backwards.
 
@@ -49,8 +49,9 @@ Always announce the resume decision before continuing: *"Detected `v<version>` s
 
 ## Hard rules (do not violate)
 
-These map to [CLAUDE.md](CLAUDE.md). Re-read them whenever this skill runs.
+These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill runs.
 
+- **Plain language first, in every artifact** — the release notes, PR body, Discord post, and your own between-phase status updates all follow [CLAUDE.md → How You Communicate](../../../CLAUDE.md#how-you-communicate): lead with what a user can now do, layer version numbers, SHAs, and pipeline mechanics underneath. Say each point once — don't restate a highlight in the changelog and again in the announcement.
 - **No Claude attribution anywhere** — not in PR titles, PR bodies, commit messages (no `Co-Authored-By: Claude ...` trailer), release notes, code comments, or the Discord announcement.
 - **No silent fallbacks** — if a validator fails, a step times out, or a workflow run isn't found, stop with an actionable error. Do not retry blindly. Do not "proceed anyway."
 - **Match house style for release notes** — see *Generation parameters* in Phase 1. In short: value-prop first, **local agents are the headline** (not the SDK), one agent/command per highlight, plain language, engaging but factual, and **no emoji, no fluff** (full banned-phrase list under *Generation parameters*). Read the **last 2–3 release notes** before drafting. Patch releases do **not** include a `pip install` block. Use the `Why upgrade:` framing with a short bullet list, then `## What's New`, then `## Bug Fixes`, then `## Full Changelog`.
@@ -91,13 +92,13 @@ These map to [CLAUDE.md](CLAUDE.md). Re-read them whenever this skill runs.
    If the requested version doesn't match the rubric, **stop and surface the mismatch**: *"You asked for `v<requested>` (patch). I see N feat commits since `<prev>` including `<one or two examples>` — this looks minor-shaped. Continue as patch, or bump to `v<suggested>`?"* Do not silently proceed.
 
 2. **Read the last 2–3 release notes** to match structure and length (not tone — see *Generation parameters*).
-   - [docs/releases/v0.17.4.mdx](docs/releases/v0.17.4.mdx)
-   - [docs/releases/v0.17.3.mdx](docs/releases/v0.17.3.mdx)
-   - [docs/releases/v0.17.2.mdx](docs/releases/v0.17.2.mdx)
+   - [docs/releases/v0.17.4.mdx](../../../docs/releases/v0.17.4.mdx)
+   - [docs/releases/v0.17.3.mdx](../../../docs/releases/v0.17.3.mdx)
+   - [docs/releases/v0.17.2.mdx](../../../docs/releases/v0.17.2.mdx)
 
    Cross-check: same frontmatter shape, same section headings, same *structure* and length per entry — but **not** the prior tone. The last few releases predate the *Generation parameters* below; match their shape, not their dryness. Patch releases are short; minor/major releases include `pip install` and may have a "Highlights" block.
 
-3. **Create [docs/releases/v<version>.mdx](docs/releases/)** with this skeleton (adapt to whether it's patch / minor / major):
+3. **Create [docs/releases/v<version>.mdx](../../../docs/releases/)** with this skeleton (adapt to whether it's patch / minor / major):
 
    ```mdx
    ---
@@ -201,15 +202,15 @@ These map to [CLAUDE.md](CLAUDE.md). Re-read them whenever this skill runs.
    > replies to routine mail, flags what's urgent, leaves the rest. Runs locally, so
    > your mail never leaves your machine. Try it: `gaia email`.
 
-4. **Update [docs/docs.json](docs/docs.json):**
+4. **Update [docs/docs.json](../../../docs/docs.json):**
    - Add `releases/v<version>` to the Releases tab.
-   - Bump the navbar label (e.g. `v<previous-version> · Lemonade <previous-lemonade>` → `v<version> · Lemonade <current-lemonade>`). Read [src/gaia/version.py](src/gaia/version.py) for the `LEMONADE_VERSION` constant — it is the source of truth, and the navbar may be drifted from it (Lemonade bumps land outside release PRs).
+   - Bump the navbar label (e.g. `v<previous-version> · Lemonade <previous-lemonade>` → `v<version> · Lemonade <current-lemonade>`). Read [src/gaia/version.py](../../../src/gaia/version.py) for the `LEMONADE_VERSION` constant — it is the source of truth, and the navbar may be drifted from it (Lemonade bumps land outside release PRs).
 
 5. **Sync the UI package version.**
    ```bash
    node installer/version/bump-ui-version.mjs
    ```
-   Confirm [src/gaia/apps/webui/package.json](src/gaia/apps/webui/package.json) now reads the new version.
+   Confirm [src/gaia/apps/webui/package.json](../../../src/gaia/apps/webui/package.json) now reads the new version.
 
 6. **Bump the hub component manifests.** The terminal hub and Agent UI publish to
    the Agent Hub R2 catalog on a version tag, and `release_components.yml` gates
@@ -221,6 +222,22 @@ These map to [CLAUDE.md](CLAUDE.md). Re-read them whenever this skill runs.
      hub/components/agent-ui/gaia-agent.yaml     # GNU sed: drop the ''
    grep -H '^version:' hub/components/*/gaia-agent.yaml   # both must read <version>
    ```
+
+   Then bump the terminal hub's **`min_gaia_version`** to `<version>` too. It needs
+   daemon host API v1.1, which no release before this one ships — so the release it
+   publishes alongside *is* its minimum, and `release_components.yml` refuses to
+   publish it under an older core. Leave `agent-ui`'s alone: it talks to
+   `gaia.ui.server`, not the daemon control plane.
+   ```bash
+   sed -i '' "s/^min_gaia_version: .*/min_gaia_version: \"<version>\"/" \
+     hub/components/terminal-hub/gaia-agent.yaml     # GNU sed: drop the ''
+   python util/check_component_core_api.py --release-version <version>
+   ```
+
+   Finally, record what the **previous** release shipped in `RELEASED_DAEMON_API`
+   in [util/check_component_core_api.py](../../../util/check_component_core_api.py) — the
+   guard resolves an already-published version from that table, and a missing row
+   makes it fall back to trusting this tree, which is the drift it exists to catch.
 
 7. **Confirm `__version__` is correct.**
    ```bash
@@ -443,49 +460,13 @@ Show the user the run URL, the **release PR number** (`#$RELEASE_PR`), and the *
    ```
    Required artifacts: `.whl`, `.tar.gz`, `.deb`, `.AppImage`, `.dmg`, `.exe`, and the `latest*.yml` files for the Electron auto-updater. If any are missing, the corresponding build job didn't run or didn't upload — investigate.
 
-3. **Draft the Discord announcement** using the template below. Read the just-shipped release notes (`docs/releases/v<version>.mdx`) to populate the highlight list — one bullet per "What's New" entry plus any Bug Fix worth surfacing, written in the same voice as the notes — apply the same *Generation parameters* (value-prop first, plain, engaging, no fluff/emoji).
+3. **Draft the Discord announcement.** Read the just-shipped release notes (`docs/releases/v<version>.mdx`) to populate the highlight list — one bullet per "What's New" entry plus any Bug Fix worth surfacing, written in the same voice as the notes — apply the same *Generation parameters* (value-prop first, plain, engaging, no fluff/emoji).
 
-   **Template (copy verbatim, fill the bracketed fields).** This is the v0.22.0 shape —
-   the format the maintainer actually posts. Reproduce the markdown exactly: the role
-   mention, the backticked version, the fenced install block, and the `- ` bullets are
-   all load-bearing.
-
-   ````
-   @gaia **GAIA v<version> Release**
-
-   Hi all, `v<version>` is <one-clause framing — examples: "a patch release with X and Y", "out — focused on X, Y, and Z", "a hotfix for X">. Upgrade in one command:
-
-   ```
-   npm install -g @amd-gaia/agent-ui
-   gaia-ui
-   ```
-
-   Currently tested on Strix Halo w/ 32GB+ or Radeon GPU w/ 24GB+ on Windows and Ubuntu.
-
-   **What's new in v<version>**
-
-   - **<Highlight title>** — <One-sentence what + why, plain English. 1–2 sentences max per bullet.>
-   - **<Highlight title>** — <...>
-   - **<Highlight title>** — <...>
-
-   The agent can search files, run commands, and use MCP tools — but only after you approve each action.
-
-   Agent UI guide: https://amd-gaia.ai/docs/guides/agent-ui
-   v<version> release notes: https://amd-gaia.ai/docs/releases/v<version>
-
-   Note this is a beta release of the UI and the Email Agent, if you notice any bugs or issues please report them here or create an issue!
-   ````
-
-   **Format rules** (these match the v0.22.0 announcement — the current house format):
-   - **Open with the `@gaia` role mention**, then the bold title: `@gaia **GAIA v<version> Release**`.
-   - The version in the "Hi all" line is **backticked** — `` `v0.22.0` ``.
-   - The `npm install` / `gaia-ui` lines **go in a fenced code block**, with a blank line before it.
-   - `**What's new in v<version>**` is **bold with no trailing colon** — it is not a `##` heading.
-   - Highlights **are `- ` bullets**, each `- **Title** — Description`.
-   - 3–5 highlights for a patch, 5–7 for a minor. Anything more becomes a wall of text.
-   - The "agent can search files…" and "Note this is a beta release of the UI and the Email Agent…" sentences are **fixed boilerplate** — copy them verbatim every release.
-   - First-line framing reflects the release character: patches = "a patch release with X and Y"; minor/major = "out — focused on X, Y, and Z"; hotfixes = "a hotfix for X". Match the actual scope, don't oversell.
-   - Carry the release notes' beta framing into the announcement where it applies — this channel is where users hit the rough edges first, so don't oversell here.
+   **The template and format rules live in**
+   [`reference/discord-announcement.md`](reference/discord-announcement.md) — read it and
+   copy the template verbatim. Every element in it is load-bearing (the `@gaia` role
+   mention, the backticked version, the fenced install block, the fixed boilerplate
+   sentences); do not improvise the shape.
 
 ### Gate 6 — present, do not auto-post
 

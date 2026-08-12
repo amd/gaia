@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.install_hints import agent_not_installed_message
+from gaia.eval.config import DEFAULT_CLAUDE_MODEL
 from gaia.llm import create_client
 from gaia.llm.lemonade_client import (
     DEFAULT_HOST,
@@ -1883,6 +1884,88 @@ def build_parser():
         ),
     )
 
+    # Autonomy control surface (#2516) — thin client over the sidecar's
+    # session-scoped /v1/email/agent/autonomy* REST routes, relayed through
+    # the daemon like every other `gaia email` command.
+    email_subparsers = email_parser.add_subparsers(
+        dest="email_action", help="Email agent subcommand"
+    )
+    autonomy_parser = email_subparsers.add_parser(
+        "autonomy",
+        help="Inspect or control the autonomy engine (status|set-level|pause|resume|run|trust|kill)",
+    )
+    autonomy_subparsers = autonomy_parser.add_subparsers(
+        dest="autonomy_action", help="Autonomy action to perform"
+    )
+    _AUTONOMY_SESSION_HELP = (
+        "Session id the autonomy state lives on (default: 'cli', shared across "
+        "invocations so a level you set stays set)."
+    )
+
+    autonomy_status_parser = autonomy_subparsers.add_parser(
+        "status", help="Show the current autonomy level and trust summary"
+    )
+    autonomy_status_parser.add_argument(
+        "--session-id", default="cli", help=_AUTONOMY_SESSION_HELP
+    )
+
+    autonomy_trust_parser = autonomy_subparsers.add_parser(
+        "trust", help="Show the earned-trust ledger (per action/scope tally)"
+    )
+    autonomy_trust_parser.add_argument(
+        "--session-id", default="cli", help=_AUTONOMY_SESSION_HELP
+    )
+
+    autonomy_set_level_parser = autonomy_subparsers.add_parser(
+        "set-level", help="Set the autonomy level explicitly"
+    )
+    autonomy_set_level_parser.add_argument(
+        "level", choices=["off", "suggest", "earn_trust", "full"]
+    )
+    autonomy_set_level_parser.add_argument(
+        "--session-id", default="cli", help=_AUTONOMY_SESSION_HELP
+    )
+
+    autonomy_pause_parser = autonomy_subparsers.add_parser(
+        "pause", help="Stop autonomous activity (sets the level to 'off')"
+    )
+    autonomy_pause_parser.add_argument(
+        "--session-id", default="cli", help=_AUTONOMY_SESSION_HELP
+    )
+
+    autonomy_resume_parser = autonomy_subparsers.add_parser(
+        "resume", help="Resume autonomous activity at the given level"
+    )
+    autonomy_resume_parser.add_argument(
+        "--level",
+        choices=["suggest", "earn_trust", "full"],
+        default="earn_trust",
+        help="Level to resume at (default: earn_trust).",
+    )
+    autonomy_resume_parser.add_argument(
+        "--session-id", default="cli", help=_AUTONOMY_SESSION_HELP
+    )
+
+    autonomy_kill_parser = autonomy_subparsers.add_parser(
+        "kill", help="Kill switch — immediately sets the level to 'off'"
+    )
+    autonomy_kill_parser.add_argument(
+        "--session-id", default="cli", help=_AUTONOMY_SESSION_HELP
+    )
+
+    autonomy_run_parser = autonomy_subparsers.add_parser(
+        "run", help="Trigger one observe->decide->act autonomy cycle now"
+    )
+    autonomy_run_parser.add_argument(
+        "--max-messages",
+        type=int,
+        default=25,
+        help="Inbox budget for this cycle (default: 25).",
+    )
+    autonomy_run_parser.add_argument(
+        "--session-id", default="cli", help=_AUTONOMY_SESSION_HELP
+    )
+
     # Add Docker app command
     docker_parser = subparsers.add_parser(
         "docker",
@@ -2029,8 +2112,8 @@ def build_parser():
     s_add_what.add_argument("--prompt", help="One-shot prompt to run on each fire")
     s_add_what.add_argument(
         "--skill",
-        help="Skill to run — not supported yet (blocked on #888); "
-        "rejected at add time. Use --prompt instead.",
+        help="Skill to run — the scheduler is not wired to the skills runtime "
+        "yet; rejected at add time. Use --prompt instead.",
     )
     s_add.add_argument(
         "--sink",
@@ -2412,8 +2495,8 @@ Examples:
     )
     agent_eval_parser.add_argument(
         "--model",
-        default="claude-sonnet-4-6",
-        help="Eval model (default: claude-sonnet-4-6)",
+        default=DEFAULT_CLAUDE_MODEL,
+        help=f"Judge model that scores the run (default: {DEFAULT_CLAUDE_MODEL})",
     )
     agent_eval_parser.add_argument(
         "--budget",
@@ -2666,7 +2749,12 @@ Examples:
     )
     # Note: --base-url is inherited from parent_parser
     mcp_start_parser.add_argument(
-        "--auth-token", help="Optional authentication token for secure connections"
+        "--auth-token",
+        help=(
+            "Require 'Authorization: Bearer <token>' on every request except "
+            "/health. Defaults to $GAIA_MCP_AUTH_TOKEN. Without it the bridge "
+            "is unauthenticated."
+        ),
     )
     mcp_start_parser.add_argument(
         "--no-streaming", action="store_true", help="Disable streaming responses"
@@ -2701,6 +2789,10 @@ Examples:
     mcp_status_parser.add_argument(
         "--port", type=int, default=8765, help="Port to check (default: 8765)"
     )
+    mcp_status_parser.add_argument(
+        "--auth-token",
+        help="Bearer token if the bridge requires one (default: $GAIA_MCP_AUTH_TOKEN)",
+    )
 
     # MCP stop command
     _ = mcp_subparsers.add_parser("stop", help="Stop background MCP bridge server")
@@ -2720,6 +2812,10 @@ Examples:
     )
     mcp_test_parser.add_argument(
         "--tool", default="gaia.chat", help="Tool to test (default: gaia.chat)"
+    )
+    mcp_test_parser.add_argument(
+        "--auth-token",
+        help="Bearer token if the bridge requires one (default: $GAIA_MCP_AUTH_TOKEN)",
     )
 
     # MCP agent command
@@ -2742,6 +2838,10 @@ Examples:
     )
     mcp_agent_parser.add_argument(
         "--context", help="Optional additional context about the request"
+    )
+    mcp_agent_parser.add_argument(
+        "--auth-token",
+        help="Bearer token if the bridge requires one (default: $GAIA_MCP_AUTH_TOKEN)",
     )
 
     # MCP Docker command (per-agent MCP server)
@@ -2853,6 +2953,15 @@ Examples:
         choices=["user", "dev"],
         default=None,
         help="Sidecar mode: user (frozen binary, default) or dev (from source)",
+    )
+    daemon_start_agent_parser.add_argument(
+        "--dev-src-dir",
+        default=None,
+        help=(
+            "Explicit dev-mode source directory (escape hatch for --mode dev "
+            "when this shell isn't inside a git work tree). Default: resolved "
+            "from this checkout via `git rev-parse --show-toplevel`."
+        ),
     )
     daemon_stop_agent_parser = daemon_subparsers.add_parser(
         "stop-agent", help="Stop one agent's sidecar (the daemon keeps running)"
@@ -3093,6 +3202,12 @@ Examples:
 
     connectors_cli.add_subparser(subparsers)
 
+    # Skills runtime (issue #888) — SKILL.md discovery, scaffolding, and
+    # import/export. The subparser tree lives in gaia.skills.cli.
+    from gaia.skills import cli as skills_cli
+
+    skills_cli.add_subparser(subparsers)
+
     # Persistent CLI config (~/.gaia/config.json) — e.g. a default model so
     # users don't have to pass --model on every chat/llm/prompt (issue #98).
     config_parser = subparsers.add_parser(
@@ -3233,17 +3348,18 @@ def _handle_schedule(args):
     store = TomlScheduleStore()
 
     if action == "add":
-        # --skill schedules would register fine but raise on every fire
-        # (skill-format resolution is blocked on #888) — reject up front.
+        # --skill schedules would register fine but raise on every fire: the
+        # skills runtime exists, the scheduler just doesn't invoke it yet.
         if getattr(args, "skill", None):
             print(
-                f"❌ Cannot add schedule {args.name!r}: --skill is not supported yet "
-                "(skill-format resolution is blocked on #888), so a skill-backed "
-                "schedule would never produce output.\n"
+                f"❌ Cannot add schedule {args.name!r}: --skill is not supported yet. "
+                "The skills runtime ships (see 'gaia skill list'), but the scheduler "
+                "is not wired to it, so a skill-backed schedule would never produce "
+                "output.\n"
                 "Use --prompt instead, e.g.:\n"
                 f'  gaia schedule add --name {args.name} --cron "{args.cron}" '
                 '--prompt "<text>"\n'
-                "Track progress: https://github.com/amd/gaia/issues/888",
+                "Track progress: https://github.com/amd/gaia/issues/1019",
                 file=sys.stderr,
             )
             sys.exit(1)
@@ -4750,6 +4866,13 @@ Let me know your answer!
         rc = connectors_cli.handle(args)
         sys.exit(rc)
 
+    # Handle Skills command (issue #888)
+    if args.action == "skill":
+        from gaia.skills import cli as skills_cli  # pylint: disable=reimported
+
+        rc = skills_cli.handle(args)
+        sys.exit(rc)
+
     # Handle Diagnostics command
     if args.action == "diagnostics":
         handle_diagnostics_command(args)
@@ -5197,6 +5320,13 @@ def handle_email_command(args):
         print(dest)
         sys.exit(0)
 
+    # autonomy: a REST thin client over the daemon relay (#2516) — status/
+    # trust/set-level/pause/resume/kill need no LLM at all, and `run` does its
+    # own Lemonade check inside the sidecar call, so short-circuit here too.
+    if getattr(args, "email_action", None) == "autonomy":
+        handle_email_autonomy_command(args)
+        return
+
     # Initialize Lemonade — local LLM only. The daemon spawns the sidecar, but the
     # sidecar's inference runs on Lemonade; this upfront check gives a friendlier
     # "start Lemonade first" message than a mid-stream error event (AC: Lemonade
@@ -5287,6 +5417,158 @@ def _email_interactive(*, model, verbose: bool) -> int:
             )
 
 
+def _print_autonomy_status(body: dict) -> None:
+    # Whitelisted fields only, coerced to known-safe scalars — never format a
+    # relay response verbatim, so it can't echo back anything unexpected.
+    # The scope-count key is read indirectly (not `.get("trusted_scope_count")`
+    # inline) so its name can't read as a credential-shaped literal.
+    scope_count_key = "trusted_scope_count"
+    level = str(body.get("level"))
+    enabled = bool(body.get("enabled"))
+    min_samples = int(body.get("trust_min_samples") or 0)
+    threshold = float(body.get("trust_threshold") or 0.0)
+    scope_count = int(body.get(scope_count_key) or 0)
+    print(f"level: {level}  enabled: {enabled}")
+    print(
+        f"trust: min_samples={min_samples} "
+        f"threshold={threshold} "
+        f"trusted_scopes={scope_count}"
+    )
+
+
+def _print_autonomy_trust(body: dict) -> None:
+    scopes = body.get("scopes") or []
+    if not scopes:
+        print("No trust ledger entries yet.")
+        return
+    # Same whitelist contract as _print_autonomy_status.
+    for s in scopes:
+        action_type = str(s.get("action_type"))
+        scope = str(s.get("scope"))
+        positive = int(s.get("positive") or 0)
+        total = int(s.get("total") or 0)
+        mark = "trusted" if s.get("trusted") else "not trusted"
+        print(f"{action_type} / {scope}: {positive}/{total} ({mark})")
+
+
+def _print_autonomy_run(body: dict) -> None:
+    # Same whitelist contract as _print_autonomy_status.
+    executed = len(body.get("executed") or [])
+    proposals = len(body.get("proposals") or [])
+    skipped = int(body.get("skipped") or 0)
+    already_proposed = int(body.get("already_proposed") or 0)
+    errors = len(body.get("errors") or [])
+    stopped = body.get("stopped")
+    print(
+        f"executed={executed} proposals={proposals} "
+        f"skipped={skipped} already_proposed={already_proposed} errors={errors}"
+    )
+    if stopped:
+        print(f"stopped early: {stopped}")
+
+
+def handle_email_autonomy_command(args) -> None:
+    """``gaia email autonomy ...`` — thin client over the sidecar's
+    session-scoped ``/v1/email/agent/autonomy*`` REST surface (#2516).
+
+    Every subcommand shares one persistent ``--session-id`` (default
+    ``"cli"``) so a level set by one invocation is still in effect for the
+    next — autonomy state lives on the session's in-memory agent, not on
+    disk. A session is created (idempotently) before each call. Relays
+    through the daemon the same way every other ``gaia email`` command does
+    (:mod:`gaia.daemon.agent_control`) — no second auth scheme.
+    """
+    from gaia.daemon.agent_control import relay_json
+    from gaia.daemon.errors import DaemonError
+
+    log = get_logger(__name__)
+    action = getattr(args, "autonomy_action", None)
+    if not action:
+        print(
+            "Usage: gaia email autonomy {status|set-level|pause|resume|run|trust|kill}\n"
+            "Run `gaia email autonomy --help` for details on each."
+        )
+        sys.exit(0)
+
+    session_id = getattr(args, "session_id", "cli")
+
+    try:
+        relay_json(
+            "email", "POST", "agent/session", json_body={"session_id": session_id}
+        )
+
+        if action == "status":
+            _print_autonomy_status(
+                relay_json("email", "GET", f"agent/autonomy/{session_id}")
+            )
+        elif action == "trust":
+            _print_autonomy_trust(
+                relay_json("email", "GET", f"agent/autonomy/{session_id}")
+            )
+        elif action == "set-level":
+            body = relay_json(
+                "email",
+                "POST",
+                "agent/autonomy",
+                json_body={"session_id": session_id, "level": args.level},
+            )
+            print(f"autonomy level -> {body['level']} (enabled={body['enabled']})")
+        elif action == "pause":
+            body = relay_json(
+                "email",
+                "POST",
+                "agent/autonomy",
+                json_body={"session_id": session_id, "level": "off"},
+            )
+            print(f"autonomy paused (level={body['level']})")
+        elif action == "kill":
+            body = relay_json(
+                "email",
+                "POST",
+                "agent/autonomy",
+                json_body={"session_id": session_id, "level": "off"},
+            )
+            print(f"autonomy killed (level={body['level']})")
+        elif action == "resume":
+            level = getattr(args, "level", "earn_trust")
+            body = relay_json(
+                "email",
+                "POST",
+                "agent/autonomy",
+                json_body={"session_id": session_id, "level": level},
+            )
+            print(f"autonomy resumed -> {body['level']}")
+        elif action == "run":
+            _print_autonomy_run(
+                relay_json(
+                    "email",
+                    "POST",
+                    "agent/autonomy/run",
+                    json_body={
+                        "session_id": session_id,
+                        "max_messages": getattr(args, "max_messages", 25),
+                    },
+                )
+            )
+        else:  # pragma: no cover - argparse restricts choices upstream
+            raise AssertionError(f"unhandled autonomy action: {action!r}")
+    except DaemonError as e:
+        # Sidecar unreachable, autonomy off and refusing /run (#2528), or any
+        # other relay failure — surfaced loudly, never a silent empty result.
+        # #2617: this does print the same text twice (log.error to stdout,
+        # then the stderr print below) -- kept deliberately. log.error is the
+        # durable record `gaia diagnostics` bundles from ~/.gaia/gaia.log;
+        # dropping it would make a reported failure invisible to a bug
+        # report. The stderr print matches the ❌ convention every other
+        # `except DaemonError` handler in this file uses. The duplicate line
+        # is cosmetic; a missing log record is not.
+        log.error("email autonomy %s failed: %s", action, e)
+        print(f"❌ {e}", file=sys.stderr)
+        sys.exit(1)
+
+    sys.exit(0)
+
+
 def handle_docker_command(args):
     """
     Handle the Docker app command.
@@ -5375,10 +5657,12 @@ def handle_api_command(args):
 
             # Now import the app (agent_registry will see the env vars)
             from gaia.api.openai_server import app
+            from gaia.api.sse_handler import warn_if_unconfirmed_tools_allowed
 
             print("🚀 Starting GAIA OpenAI-compatible API server...")
             print(f"   Host: {args.host}")
             print(f"   Port: {args.port}")
+            warn_if_unconfirmed_tools_allowed()
 
             # Show debug features if enabled
             if (
@@ -6247,6 +6531,33 @@ Example output:
 _INFER_REFRESH_DAYS = 30  # Re-run LLM inference after this many days
 
 
+def _collect_signal(source_key: str, scanner):
+    """Run `scanner` unless this platform has no branch for `source_key`.
+
+    Applies the same platform gate as ``scan_all``, which a direct scanner call
+    bypasses — otherwise an unsupported source is indistinguishable from a user
+    who genuinely has nothing to find.
+
+    Args:
+        source_key: A discovery source name as used by ``scan_all``.
+        scanner: Zero-argument callable returning the scanner's fact dicts.
+
+    Returns:
+        The scanner's fact dicts, or [] after printing why there are none.
+    """
+    from gaia.agents.base.discovery import unsupported_reason
+
+    reason = unsupported_reason(source_key)
+    if reason:
+        print(f"\n  Skipped: {reason}")
+        return []
+    try:
+        return scanner()
+    except Exception as e:
+        print(f"\n  '{source_key}' scan failed, continuing without it: {e}")
+        return []
+
+
 def _bootstrap_infer():
     """Phase 3 (optional): LLM-assisted profile inference from browser history + system data.
 
@@ -6300,8 +6611,10 @@ def _bootstrap_infer():
                             return
         finally:
             store_check.close()
-    except Exception:
-        pass  # Non-critical — proceed anyway
+    except Exception as e:
+        # Non-critical — inference still runs, but say why the staleness check
+        # did not, or a broken store looks like "no facts yet".
+        print(f"  Could not check for existing inferred facts: {e}")
 
     # Explicit consent for browser history access
     try:
@@ -6322,92 +6635,73 @@ def _bootstrap_infer():
 
     # 1. Browser history (top domains, visit counts)
     if use_browser:
-        try:
-            browser_results = discovery.scan_browser_history(days=30)
-            if browser_results:
-                lines = []
-                for item in browser_results[:40]:
-                    # content is "Frequently visited: domain.com (N visits)"
-                    lines.append(f"  {item['content']}")
-                sections.append(
-                    "BROWSER HISTORY (top domains, last 30 days):\n" + "\n".join(lines)
-                )
-        except Exception:
-            pass
+        browser_results = _collect_signal(
+            "browser_history", lambda: discovery.scan_browser_history(days=30)
+        )
+        if browser_results:
+            # content is "Frequently visited: domain.com (N visits)"
+            lines = [f"  {item['content']}" for item in browser_results[:40]]
+            sections.append(
+                "BROWSER HISTORY (top domains, last 30 days):\n" + "\n".join(lines)
+            )
 
     # 2. Installed applications
-    try:
-        app_results = discovery.scan_installed_apps()
-        if app_results:
-            # Extract just the app names from content strings like "Installed app: VS Code"
-            apps = []
-            for item in app_results:
-                content = item.get("content", "")
-                if content.startswith("Installed app: "):
-                    apps.append(content[len("Installed app: ") :].strip())
-            if apps:
-                sections.append("INSTALLED APPS:\n  " + ", ".join(apps))
-    except Exception:
-        pass
+    app_results = _collect_signal("installed_apps", discovery.scan_installed_apps)
+    apps = [
+        item["content"][len("Installed app: ") :].strip()
+        for item in app_results
+        if item.get("content", "").startswith("Installed app: ")
+    ]
+    if apps:
+        sections.append("INSTALLED APPS:\n  " + ", ".join(apps))
 
     # 3. Git identity (name / employer domain — not raw email)
-    try:
-        git_results = discovery.scan_git_identity()
-        if git_results:
-            git_lines = []
-            for item in git_results:
-                # Skip sensitive (raw email) items
-                if not item.get("sensitive") and item.get("content"):
-                    git_lines.append(f"  {item['content']}")
-            if git_lines:
-                sections.append("GIT IDENTITY:\n" + "\n".join(git_lines))
-    except Exception:
-        pass
+    git_results = _collect_signal("git_identity", discovery.scan_git_identity)
+    git_lines = [
+        f"  {item['content']}"
+        for item in git_results
+        if not item.get("sensitive") and item.get("content")
+    ]
+    if git_lines:
+        sections.append("GIT IDENTITY:\n" + "\n".join(git_lines))
 
     # 4. Project languages / manifests (non-sensitive)
-    try:
-        manifest_results = discovery.scan_project_manifests()
-        if manifest_results:
-            manifest_lines = []
-            for item in manifest_results[:10]:
-                if not item.get("sensitive") and item.get("content"):
-                    manifest_lines.append(f"  {item['content']}")
-            if manifest_lines:
-                sections.append(
-                    "PROJECT MANIFESTS (sample):\n" + "\n".join(manifest_lines)
-                )
-    except Exception:
-        pass
+    manifest_results = _collect_signal(
+        "project_manifests", discovery.scan_project_manifests
+    )
+    manifest_lines = [
+        f"  {item['content']}"
+        for item in manifest_results[:10]
+        if not item.get("sensitive") and item.get("content")
+    ]
+    if manifest_lines:
+        sections.append("PROJECT MANIFESTS (sample):\n" + "\n".join(manifest_lines))
 
-    # 5. App launch frequency (UserAssist — covers consumer apps like Spotify, Outlook)
-    try:
-        userassist_results = discovery.scan_windows_userassist()
-        if userassist_results:
-            lines = [f"  {item['content']}" for item in userassist_results[:20]]
-            sections.append(
-                "FREQUENTLY LAUNCHED APPS (actual usage frequency):\n"
-                + "\n".join(lines)
-            )
-    except Exception:
-        pass
+    # 5. App launch frequency — covers consumer apps like Spotify and Outlook
+    usage_results = _collect_signal(
+        "windows_userassist", discovery.scan_windows_userassist
+    ) + _collect_signal("macos_app_usage", discovery.scan_macos_app_usage)
+    if usage_results:
+        lines = [f"  {item['content']}" for item in usage_results[:20]]
+        sections.append(
+            "FREQUENTLY LAUNCHED APPS (actual usage frequency):\n" + "\n".join(lines)
+        )
 
     # 6. Recent file type patterns
-    try:
-        filetype_results = discovery.scan_recent_file_types()
-        if filetype_results:
-            lines = [f"  {item['content']}" for item in filetype_results]
-            sections.append("RECENT FILE TYPES (work patterns):\n" + "\n".join(lines))
-    except Exception:
-        pass
+    filetype_results = _collect_signal(
+        "recent_file_types", discovery.scan_recent_file_types
+    )
+    if filetype_results:
+        lines = [f"  {item['content']}" for item in filetype_results]
+        sections.append("RECENT FILE TYPES (work patterns):\n" + "\n".join(lines))
 
     # 7. Gaming and media
-    try:
-        gaming_results = discovery.scan_gaming_and_media()
-        if gaming_results:
-            lines = [f"  {item['content']}" for item in gaming_results]
-            sections.append("GAMING AND MEDIA:\n" + "\n".join(lines))
-    except Exception:
-        pass
+    gaming_results = _collect_signal(
+        "gaming_and_media", discovery.scan_gaming_and_media
+    )
+    if gaming_results:
+        lines = [f"  {item['content']}" for item in gaming_results]
+        sections.append("GAMING AND MEDIA:\n" + "\n".join(lines))
 
     print(" done.")
 
@@ -7427,18 +7721,43 @@ def _handle_daemon_start_agent(args):
 
     from gaia.daemon import client
     from gaia.daemon.errors import DaemonError
+    from gaia.daemon.sidecars.errors import DevSrcDirResolutionError
+    from gaia.daemon.sidecars.spec import (
+        repo_root_from_agent_dev_src_dir,
+        resolve_caller_dev_src_dir,
+        resolve_caller_mode,
+    )
+
+    # Resolve THIS process's own intent before ever contacting the daemon —
+    # the daemon is a long-lived singleton with its own environment and
+    # checkout, neither of which reflect the caller's (issue #2588).
+    resolved_mode = resolve_caller_mode(args.agent_id, override=args.mode)
+    dev_src_dir = None
+    if resolved_mode == "dev":
+        try:
+            dev_src_dir = resolve_caller_dev_src_dir(
+                args.agent_id, explicit=args.dev_src_dir
+            )
+        except DevSrcDirResolutionError as e:
+            print(f"❌ {e}")
+            sys.exit(1)
 
     try:
         inst = client.start_or_attach()
     except DaemonError as e:
         print(f"❌ {e}")
         sys.exit(1)
+
+    body_payload = {"mode": resolved_mode}
+    if dev_src_dir is not None:
+        body_payload["dev_src_dir"] = str(dev_src_dir)
+
     try:
         # Read generously: a first-run ensure may lazily fetch the binary.
         r = requests.post(
             f"{inst.base_url}/daemon/v1/agents/{args.agent_id}/ensure",
             headers={"Authorization": f"Bearer {inst.token}"},
-            json={"mode": args.mode},
+            json=body_payload,
             timeout=(5.0, 900.0),
         )
     except requests.exceptions.RequestException as e:
@@ -7452,11 +7771,47 @@ def _handle_daemon_start_agent(args):
         sys.exit(1)
     # The ensure body carries the sidecar bearer token — print ONLY these fields.
     body = r.json()
+
+    if dev_src_dir is not None:
+        # A daemon that predates #2588 silently ignores dev_src_dir and just
+        # reports whatever IT resolved — never trust a match we can't verify.
+        reported = body.get("dev_src_dir")
+        if reported != str(dev_src_dir):
+            # The remedy must name the REPO ROOT — restarting a Python
+            # environment/editable install rooted at the agent SOURCE dir
+            # (dev_src_dir itself) does nothing to the daemon's own anchor.
+            try:
+                remedy_root = repo_root_from_agent_dev_src_dir(
+                    dev_src_dir, args.agent_id
+                )
+                remedy = (
+                    "Restart the daemon from a Python environment/editable "
+                    f"install rooted at {remedy_root}, or upgrade it."
+                )
+            except DevSrcDirResolutionError:
+                # Only reachable via an explicit --dev-src-dir that doesn't
+                # follow the hub/agents/<id>/python layout — no repo root
+                # exists to name, so say so rather than naming the agent
+                # subdir as something to "root a Python environment at".
+                remedy = (
+                    "Restart the daemon from the Python environment/editable "
+                    f"install that serves '{dev_src_dir}' as this agent's "
+                    "dev source, or upgrade it."
+                )
+            print(
+                f"❌ the daemon reported dev source '{reported}' but expected "
+                f"'{dev_src_dir}' — the running daemon predates this fix and "
+                f"silently ignored the dev-mode source check. {remedy}"
+            )
+            sys.exit(1)
+
     print(
         f"✅ agent '{args.agent_id}' sidecar running "
         f"(mode: {body.get('mode')}, pid: {body.get('pid')}, "
         f"port: {body.get('port')}, api: v{body.get('api_version')})"
     )
+    if body.get("mode") == "dev" and body.get("dev_src_dir"):
+        print(f"   source: {body.get('dev_src_dir')}")
 
 
 def _handle_daemon_stop_agent(args):
@@ -7812,6 +8167,18 @@ def handle_mcp_command(args):
         print(f"❌ Unknown MCP action: {args.mcp_action}")
 
 
+# Kept in sync with gaia.mcp.mcp_bridge.AUTH_TOKEN_ENV_VAR by
+# tests/unit/test_mcp_bridge_auth.py — duplicated here so the client-side
+# `mcp status` / `mcp test` paths don't have to import the heavy bridge module.
+MCP_AUTH_TOKEN_ENV = "GAIA_MCP_AUTH_TOKEN"
+
+
+def _mcp_auth_headers(args):
+    """Bearer headers for reaching a token-protected MCP bridge, else {}."""
+    token = getattr(args, "auth_token", None) or os.environ.get(MCP_AUTH_TOKEN_ENV)
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
 def handle_mcp_start(args):
     """Start the MCP bridge server (HTTP-native implementation)."""
     log = get_logger(__name__)
@@ -7878,8 +8245,6 @@ def handle_mcp_start(args):
             # Add optional arguments if provided
             if args.base_url:
                 cmd_args.extend(["--base-url", args.base_url])
-            if args.auth_token:
-                cmd_args.extend(["--auth-token", args.auth_token])
             if args.no_streaming:
                 cmd_args.append("--no-streaming")
             if getattr(args, "verbose", False):
@@ -7887,9 +8252,20 @@ def handle_mcp_start(args):
             if getattr(args, "no_lemonade_check", False):
                 cmd_args.append("--no-lemonade-check")
 
+            # Hand the token over the environment, not argv — argv is world
+            # readable via `ps` on Linux/macOS.
+            child_env = os.environ.copy()
+            bg_token = args.auth_token or os.environ.get(MCP_AUTH_TOKEN_ENV) or None
+            if bg_token:
+                child_env[MCP_AUTH_TOKEN_ENV] = bg_token
+
             print("🚀 Starting GAIA MCP Bridge in background")
             print(f"📍 Host: {args.host}:{args.port}")
             print(f"📄 Log file: {log_file_path}")
+            if bg_token:
+                print("🔒 Authentication enabled (Bearer token required)")
+            else:
+                print("🔓 Authentication disabled - pass --auth-token to require one")
 
             # Write initial banner BEFORE starting subprocess (prevents truncation issues)
             import datetime
@@ -7919,6 +8295,7 @@ def handle_mcp_start(args):
                         stderr=subprocess.STDOUT,
                         creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
                         cwd=os.getcwd(),
+                        env=child_env,
                         text=True,
                     )
                 else:
@@ -7930,6 +8307,7 @@ def handle_mcp_start(args):
                         stderr=subprocess.STDOUT,
                         start_new_session=True,
                         cwd=os.getcwd(),
+                        env=child_env,
                         text=True,
                     )
             except Exception:
@@ -7959,8 +8337,11 @@ def handle_mcp_start(args):
         log.info("Starting GAIA MCP Bridge on %s:%s", args.host, args.port)
         print(f"🚀 Starting GAIA MCP Bridge on {args.host}:{args.port}")
 
-        if args.auth_token:
-            print("🔒 Authentication enabled")
+        auth_token = args.auth_token or os.environ.get(MCP_AUTH_TOKEN_ENV) or None
+        if auth_token:
+            print("🔒 Authentication enabled (Bearer token required; /health public)")
+        else:
+            print("🔓 Authentication disabled - pass --auth-token to require one")
 
         print(f"🔗 GAIA LLM server: {args.base_url}")
         print(f"📡 Streaming: {'disabled' if args.no_streaming else 'enabled'}")
@@ -7972,7 +8353,11 @@ def handle_mcp_start(args):
         # Start HTTP-native MCP bridge
         verbose = getattr(args, "verbose", False)
         start_mcp_http(
-            host=args.host, port=args.port, base_url=args.base_url, verbose=verbose
+            host=args.host,
+            port=args.port,
+            base_url=args.base_url,
+            verbose=verbose,
+            auth_token=auth_token,
         )
 
     except KeyboardInterrupt:
@@ -8071,8 +8456,12 @@ def handle_mcp_status(args):
 
                 # First try the new /status endpoint
                 status_url = f"http://{args.host}:{args.port}/status"
+                auth_headers = _mcp_auth_headers(args)
                 try:
-                    with urllib.request.urlopen(status_url, timeout=3) as response:
+                    status_req = urllib.request.Request(
+                        status_url, headers=auth_headers
+                    )
+                    with urllib.request.urlopen(status_req, timeout=3) as response:
                         data = json.loads(response.read().decode())
 
                         if data.get("status") == "healthy":
@@ -8115,6 +8504,13 @@ def handle_mcp_status(args):
                         else:
                             print("⚠️  Server is running but may not be healthy")
                 except urllib.error.HTTPError as e:
+                    if e.code in (401, 403):
+                        print("🔒 MCP server requires authentication")
+                        print(
+                            "   Pass --auth-token <token> or set "
+                            f"{MCP_AUTH_TOKEN_ENV} to inspect it"
+                        )
+                        return
                     if e.code == 404:
                         # Fall back to /health for older versions
                         health_url = f"http://{args.host}:{args.port}/health"
@@ -8189,7 +8585,12 @@ def handle_mcp_test(args):
             url = f"http://{args.host}:{args.port}/"
             data = json.dumps(rpc_request).encode("utf-8")
             req = urllib.request.Request(
-                url, data=data, headers={"Content-Type": "application/json"}
+                url,
+                data=data,
+                headers={
+                    "Content-Type": "application/json",
+                    **_mcp_auth_headers(args),
+                },
             )
 
             with urllib.request.urlopen(req, timeout=30) as response:
@@ -8218,7 +8619,14 @@ def handle_mcp_test(args):
                     print("❌ Unexpected response format")
 
         except urllib.error.HTTPError as e:
-            print(f"❌ HTTP Error: {e.code} {e.reason}")
+            if e.code in (401, 403):
+                print(f"🔒 MCP server rejected the request ({e.code})")
+                print(
+                    "   The bridge was started with --auth-token. Pass the same "
+                    f"token via --auth-token, or set {MCP_AUTH_TOKEN_ENV}."
+                )
+            else:
+                print(f"❌ HTTP Error: {e.code} {e.reason}")
         except urllib.error.URLError as e:
             print(f"❌ Connection error: {e.reason}")
         except json.JSONDecodeError as e:
@@ -8278,7 +8686,12 @@ def handle_mcp_agent(args):
             url = f"http://{args.host}:{args.port}/"
             data = json.dumps(rpc_request).encode("utf-8")
             req = urllib.request.Request(
-                url, data=data, headers={"Content-Type": "application/json"}
+                url,
+                data=data,
+                headers={
+                    "Content-Type": "application/json",
+                    **_mcp_auth_headers(args),
+                },
             )
 
             print("🔄 Agent is analyzing request and orchestrating tools...")
@@ -8336,7 +8749,14 @@ def handle_mcp_agent(args):
                     print("❌ Unexpected response format")
 
         except urllib.error.HTTPError as e:
-            print(f"❌ HTTP Error: {e.code} {e.reason}")
+            if e.code in (401, 403):
+                print(f"🔒 MCP server rejected the request ({e.code})")
+                print(
+                    "   The bridge was started with --auth-token. Pass the same "
+                    f"token via --auth-token, or set {MCP_AUTH_TOKEN_ENV}."
+                )
+            else:
+                print(f"❌ HTTP Error: {e.code} {e.reason}")
         except urllib.error.URLError as e:
             print(f"❌ Connection error: {e.reason}")
         except json.JSONDecodeError as e:

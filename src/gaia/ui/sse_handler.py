@@ -443,13 +443,17 @@ class SSEOutputHandler(OutputHandler):
 
     # === Status Messages ===
 
-    def print_error(self, error_message: str):
-        self._emit(
-            {
-                "type": "agent_error",
-                "content": str(error_message) if error_message else "Unknown error",
-            }
-        )
+    def print_error(self, error_message: str, recoverable: bool = False):
+        event: Dict[str, Any] = {
+            "type": "agent_error",
+            "content": str(error_message) if error_message else "Unknown error",
+        }
+        # Only set when True: keeps the wire shape unchanged for every
+        # existing (fatal) caller, and lets a downstream translator treat a
+        # missing/False flag as the pre-#2515 terminal default.
+        if recoverable:
+            event["recoverable"] = True
+        self._emit(event)
 
     def print_warning(self, warning_message: str):
         self._emit(
@@ -493,10 +497,14 @@ class SSEOutputHandler(OutputHandler):
     # Mapping from tool name to the card "kind" the frontend's render-card
     # registry draws (spec §4.2). Shared with the sidecar's own canonical
     # translator (``gaia_agent_email/sse_translation.py`` duplicates this map
-    # to stay dependency-light) — keep both in sync when a render tool is
-    # added.
+    # to stay dependency-light) — a test in that package
+    # (``test_render_tool_to_lang_maps_stay_in_sync``) pins the two dicts
+    # equal so the duplication can't silently drift.
     _RENDER_TOOL_TO_LANG: ClassVar[Dict[str, str]] = {
         "pre_scan_inbox": "email_pre_scan",
+        # #2765: a generic ``table`` card (no new client code) so the thread
+        # view renders straight from tool data instead of model prose.
+        "get_thread": "table",
     }
 
     def _render_card_payload(self, data: Any) -> Optional[Dict[str, Any]]:

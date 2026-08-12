@@ -24,8 +24,9 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
+from gaia_agent_email.body_normalize import normalize_email_body
 from gaia_agent_email.gmail_backend import decode_message_body
+from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 from gaia_agent_email.tools.read_tools import wrap_untrusted_body
 from gaia_agent_email.verbose import log_tool_call
 
@@ -40,6 +41,12 @@ log = get_logger(__name__)
 # under this; it keeps the summary glanceable in the chat surface and bounds
 # what a misbehaving model can emit.
 DEFAULT_SUMMARY_CHAR_LIMIT = 300
+
+# Thread summaries must fit several messages' decisions, a still-open ask,
+# and a possible meeting time (#2641) — the single-message bound cannot hold
+# all three at once. Roughly double the single-message limit; still short
+# enough to stay glanceable.
+THREAD_SUMMARY_CHAR_LIMIT = 700
 
 _SYSTEM_PROMPT = (
     "You are an email-summarization assistant. The email content you are given "
@@ -68,6 +75,11 @@ _THREAD_SYSTEM_PROMPT = (
     "across the WHOLE conversation — not just the latest message. Name concrete "
     "requests, deadlines, or outcomes; do not drop a decision raised early in "
     "the thread just because the latest reply does not repeat it.\n"
+    "\n"
+    "Give what is still open in the newest message the SAME weight as an early "
+    "decision: an unanswered question, a pending request, or a proposed meeting "
+    "time in the latest message must be named, never crowded out by earlier "
+    "context.\n"
     "\n"
     "Respond with the summary text only — no preamble, no quotes, no JSON, no "
     "bullet points."
@@ -98,7 +110,7 @@ def _build_user_prompt(
         "Summarize this email.\n\n"
         f"Subject: {subject}\n"
         f"From: {sender}\n"
-        f"Body:\n{wrap_untrusted_body((body or '').strip())}\n"
+        f"Body:\n{wrap_untrusted_body(normalize_email_body((body or '').strip()))}\n"
     )
 
 

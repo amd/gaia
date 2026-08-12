@@ -56,19 +56,42 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		m.activity = append(m.activity, ActivityItem{Kind: "tool", Content: label})
 
 	case event.CanonicalToolResultEvent:
-		m.markToolDone(e)
-		if e.Render != "" {
-			// The sidecar declared a card, so the card is the result. The email
-			// agent's pre-scan tool docstring tells the model NOT to describe the
-			// results in prose precisely because the client is expected to draw
-			// this — ignore `render` and the turn produces one vague sentence.
-			m.messages = append(m.messages, Message{
-				Role:     RoleCard,
-				ToolName: e.Tool,
-				Render:   e.Render,
-				Data:     e.Data,
-			})
+		// Only trust the failure classifier where a card was declared. Outside
+		// the render domain the sidecar's truncated, string-encoded `summary`
+		// fools it into misreading an ordinary partial-success batch as a
+		// failure (#2723) — do not widen this gate before that lands; see
+		// plan S1 / AC-5 / AC-7c for the harness that proved it.
+		if e.Render == "" {
+			m.markToolDone(e)
+			break
 		}
+		if outcome, toolErr := event.ToolOutcomeOf(e); outcome == event.ToolOutcomeFailed {
+			// ToolOutcomeFailed always ticks red here — deliberately overriding
+			// ToolOutcome's "Unknown is never a pass" doc comment, but only for
+			// this two-state presentation mapping (S3): Succeeded and Unknown
+			// both still tick green via markToolDone below.
+			m.setOpenToolOutcome(e.Tool, false)
+			m.messages = append(m.messages, Message{
+				Role:    RoleError,
+				Content: sanitizeErrorText(composeToolErrorText(e.Tool, toolErr)),
+			})
+			break
+		}
+		// The sidecar declared a card, so the card is the result. The email
+		// agent's pre-scan tool docstring tells the model NOT to describe the
+		// results in prose precisely because the client is expected to draw
+		// this — ignore `render` and the turn produces one vague sentence.
+		m.markToolDone(e)
+		identity := ""
+		if e.Render == "email_pre_scan" {
+			// The one card this session can produce from TWO independent
+			// sources (this typed tool_result, or the on-open pre-scan
+			// fetch) — update it in place rather than letting each source
+			// append its own (#2743).
+			identity = preScanCardIdentity
+			m.preScanRenderedThisTurn = true
+		}
+		m.upsertCard(identity, e.Tool, e.Render, e.Data)
 
 	case event.CanonicalNeedsInputEvent:
 		// The run is parked waiting for this answer, on the stream we are still
@@ -121,6 +144,8 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			Steps:     usage.Steps,
 			ToolsUsed: usage.ToolsUsed,
 		})
+		// Drain here, not on doneMsg: streaming flips false in THIS handler, and doneMsg fires later, after a second query could already be in flight.
+		m.drainPendingPreScan()
 		m.streaming = false
 		m.activity = nil
 		// The turn is over, so any question it was waiting on is dead. Leaving
@@ -141,7 +166,8 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 	case event.CanonicalErrorEvent:
 		m.flushBuffer()
 		m.resolveConfirmationOnTurnEnd()
-		m.messages = append(m.messages, Message{Role: RoleError, Content: e.Detail})
+		m.messages = append(m.messages, Message{Role: RoleError, Content: sanitizeErrorText(e.Detail)})
+		m.drainPendingPreScan()
 		m.streaming = false
 		m.activity = nil
 		m.question = nil
@@ -319,8 +345,15 @@ func (m ChatModel) confirmAction(runID, action string, approved bool) tea.Cmd {
 // absent that, a delivered result counts as completed. Per-tool detail belongs
 // to the render card drawn in the transcript, not to this one-line summary.
 func (m *ChatModel) markToolDone(e event.CanonicalToolResultEvent) {
-	success := toolResultSucceeded(e.Data)
+	m.setOpenToolOutcome(e.Tool, toolResultSucceeded(e.Data))
+}
 
+// setOpenToolOutcome closes out the activity line opened by the matching
+// tool_call with an explicit success value. Shared by markToolDone (which
+// derives success from toolResultSucceeded) and the failed-render path in
+// handleCanonicalEvent (which must not: that classifier trusts the sidecar's
+// `success: true` even when the tool's own nested result says otherwise).
+func (m *ChatModel) setOpenToolOutcome(tool string, success bool) {
 	for i := len(m.activity) - 1; i >= 0; i-- {
 		item := &m.activity[i]
 		if item.Kind != "tool" || item.Done {
@@ -334,10 +367,27 @@ func (m *ChatModel) markToolDone(e event.CanonicalToolResultEvent) {
 	// A result with no matching call still has to be visible.
 	m.activity = append(m.activity, ActivityItem{
 		Kind:    "tool",
-		Content: e.Tool,
+		Content: tool,
 		Done:    true,
 		Success: &success,
 	})
+}
+
+// composeToolErrorText builds the RoleError text for a failed render tool:
+// the tool name, the error's machine-readable Code when present, then the
+// tool's own message verbatim. Kept chat-local rather than shared with
+// ui.writeToolError (D1): package ui imports ui/chat (app.go:19), so the
+// reverse import would be a cycle.
+func composeToolErrorText(tool string, te event.ToolError) string {
+	head := tool + " failed"
+	if te.Code != "" {
+		head += " — " + te.Code
+	}
+	message := strings.TrimRight(te.Message, "\n")
+	if message == "" {
+		return head + " (the tool reported no detail)"
+	}
+	return head + ": " + message
 }
 
 func toolResultSucceeded(data json.RawMessage) bool {

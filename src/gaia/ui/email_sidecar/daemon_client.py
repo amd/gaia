@@ -19,7 +19,6 @@ through the routers' ``except SidecarError`` blocks to a bare 500.
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from typing import Optional
 
@@ -30,7 +29,7 @@ from gaia.daemon.client import attach, start_or_attach
 from gaia.daemon.errors import DaemonError
 from gaia.daemon.instance import DaemonInstance
 from gaia.daemon.sidecars.errors import SidecarError
-from gaia.daemon.sidecars.spec import builtin_specs
+from gaia.daemon.sidecars.spec import resolve_caller_dev_src_dir, resolve_caller_mode
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
@@ -86,12 +85,6 @@ def _check_agents_floor(inst: DaemonInstance) -> None:
         )
 
 
-def _resolved_mode(agent_id: str) -> str:
-    spec = builtin_specs().get(agent_id)
-    env_var = spec.mode_env_var if spec is not None else None
-    return (os.environ.get(env_var) if env_var else None) or "user"
-
-
 def _error_detail(response) -> str:
     try:
         body = response.json()
@@ -114,11 +107,17 @@ def acquire_handle(agent_id: str = "email") -> SidecarHandle:
         raise _wrap_daemon_error(e) from e
     _check_agents_floor(inst)
     url = f"{inst.base_url}/daemon/v1/agents/{agent_id}/ensure"
+    mode = resolve_caller_mode(agent_id)
+    payload = {"mode": mode}
+    if mode == "dev":
+        # This process's own checkout (issue #2588) — compared, never
+        # executed, against the daemon's own configured source.
+        payload["dev_src_dir"] = str(resolve_caller_dev_src_dir(agent_id))
     try:
         r = requests.post(
             url,
             headers={"Authorization": f"Bearer {inst.token}"},
-            json={"mode": _resolved_mode(agent_id)},
+            json=payload,
             timeout=_ENSURE_TIMEOUT,
         )
     except requests.exceptions.RequestException as e:

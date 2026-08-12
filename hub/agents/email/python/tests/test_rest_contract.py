@@ -51,6 +51,8 @@ _EXPECTED_RESPONSE_MODELS = {
     # Scheduled daily briefing (#1608 additive) — the pull surface for the
     # sidecar's scheduled pre-scan runs.
     ("get", "/v1/email/briefing"): "EmailBriefingResponse",
+    # Attention view (schema 2.8, #2582) — the "what needs you" read-model.
+    ("get", "/v1/email/attention"): "EmailAttentionResponse",
     ("post", "/v1/email/draft"): "EmailDraftResponse",
     ("post", "/v1/email/send"): "EmailSendResponse",
     # Mailbox actions (schema 2.1, #1779).
@@ -1031,6 +1033,7 @@ def _prescan_gmail_message(
     sender: str,
     label_ids: list[str],
     snippet: str = "",
+    internal_date: str = "1700000000000",
 ) -> dict:
     """Build a minimal Gmail-API-v1-shaped message the pre-scan path reads."""
     return {
@@ -1038,6 +1041,7 @@ def _prescan_gmail_message(
         "threadId": f"t-{msg_id}",
         "labelIds": label_ids,
         "snippet": snippet,
+        "internalDate": internal_date,
         "payload": {
             "headers": [
                 {"name": "Subject", "value": subject},
@@ -1050,10 +1054,15 @@ def _prescan_gmail_message(
 
 
 class _FakePreScanBackend:
-    """In-memory backend exposing just the read calls pre_scan_inbox_impl uses."""
+    """In-memory backend exposing the read calls pre_scan_inbox_impl uses —
+    including the waiting-on-you sub-scan it runs internally (#2743
+    redirect): ``get_user_email`` and ``get_thread``."""
 
     def __init__(self, messages: list[dict]):
         self._messages = {m["id"]: m for m in messages}
+
+    def get_user_email(self) -> str:
+        return "me@example.com"
 
     def list_messages(self, *, label_ids=None, max_results=25, **_):  # noqa: ANN001
         ids = list(self._messages)[:max_results]
@@ -1066,6 +1075,14 @@ class _FakePreScanBackend:
 
     def get_message(self, message_id: str) -> dict:
         return self._messages[message_id]
+
+    def get_thread(self, thread_id: str) -> dict:
+        return {
+            "id": thread_id,
+            "messages": [
+                m for m in self._messages.values() if m["threadId"] == thread_id
+            ],
+        }
 
 
 @pytest.fixture
@@ -1113,14 +1130,29 @@ def test_prescan_returns_card_envelope_shape(prescan_client):
         "urgent",
         "actionable",
         "informational_count",
+        # Full informational list, empty via REST (no include_informational
+        # request field yet, #2633) but always present for schema stability.
+        "informational",
         "suggested_archives",
         "suggested_drafts",
         "preferences_applied",
         "totals",
+        # Pre-scan coverage-honesty fields (#2584, extended #2638).
+        "needs_review",
+        "scanned",
+        "total_unread",
+        "total_inbox",
+        "degraded",
+        "mailbox_errors",
+        # #2743: the one-card worklist view + its filtered remainder.
+        "needs_you",
+        "needs_you_total",
+        "bulk",
     }
     for section in ("urgent", "actionable", "suggested_archives"):
         assert isinstance(result[section], list)
     assert isinstance(result["informational_count"], int)
+    assert result["informational"] == []
     assert result["suggested_drafts"] == []
     # The promotional message is surfaced as a suggested archive with a reason;
     # the plain message lands in the informational count (not listed).

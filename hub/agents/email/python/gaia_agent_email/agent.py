@@ -38,7 +38,14 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, ClassVar, Dict, List, Optional
 
-from gaia_agent_email import action_store, schedule_store, task_store, trust
+from gaia_agent_email import (
+    action_store,
+    autonomy_kill,
+    schedule_store,
+    task_store,
+    trust,
+)
+from gaia_agent_email.answer_grounding import ground_final_answer
 from gaia_agent_email.config import ConfigurationError, EmailAgentConfig
 from gaia_agent_email.model_select import (
     NPU_EMAIL_MODEL_ID,
@@ -72,10 +79,12 @@ from gaia_agent_email.tools.preference_tools import (
 )
 from gaia_agent_email.tools.profile_tools import ProfileToolsMixin
 from gaia_agent_email.tools.read_tools import ReadToolsMixin
+from gaia_agent_email.tools.ref_resolve import RefResolveToolsMixin
 from gaia_agent_email.tools.reply_tools import ReplyToolsMixin
 from gaia_agent_email.tools.schedule_tools import ScheduleToolsMixin
 from gaia_agent_email.tools.summarize_tools import SummarizeToolsMixin
 from gaia_agent_email.tools.voice_tools import VoiceToolsMixin
+from gaia_agent_email.tools.waiting_on_you_tools import WaitingOnYouToolsMixin
 from gaia_agent_email.voice_profile import render_style_guidance
 
 if TYPE_CHECKING:  # import-cheap: only for annotations, never at runtime
@@ -83,16 +92,61 @@ if TYPE_CHECKING:  # import-cheap: only for annotations, never at runtime
 
 from gaia.agents.base.agent import Agent
 from gaia.agents.base.console import AgentConsole
-from gaia.agents.base.memory import MemoryMixin
+from gaia.agents.base.memory import (
+    MEMORY_UNAVAILABLE_MODEL_NOT_PULLED,
+    MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE,
+    MemoryMixin,
+)
 from gaia.agents.base.tools import _TOOL_REGISTRY
 from gaia.agents.registry import get_embedding_model_for_device
-from gaia.connectors.errors import AuthRequiredError, ConnectorsError
+from gaia.connectors.errors import ConnectorsError
 from gaia.connectors.formatting import format_connector_error
 from gaia.connectors.providers.base import ConnectorRequirement
+from gaia.connectors.providers.microsoft import (
+    ACCOUNT_TYPE_PERSONAL,
+    ACCOUNT_TYPE_WORK,
+)
 from gaia.database.mixin import DatabaseMixin
 from gaia.logger import get_logger
 
 logger = get_logger(__name__)
+
+# Agent Skills (#2466). The bundled skills always sit inside the package, so one
+# path covers every distribution. ``gaia-agent.yaml`` is the hub artifact and
+# lives at the *package root* in a source checkout, so the frozen sidecar and the
+# wheel get a copy staged inside the package instead — hence two candidates.
+_SKILLS_DIR = Path(__file__).resolve().parent / "skills"
+_MANIFEST_CANDIDATES = (
+    # Packaged: staged into the package (frozen sidecar --add-data, wheel
+    # package-data).
+    Path(__file__).resolve().parent / "gaia-agent.yaml",
+    # Source checkout / editable install: the canonical hub artifact.
+    Path(__file__).resolve().parent.parent / "gaia-agent.yaml",
+)
+
+
+# Mailbox account type → the skill set it activates (#2466). The set names must
+# exist in gaia-agent.yaml's ``skill_sets:`` block; a test keeps the two in
+# lock-step. An account type absent from this map fails loudly rather than
+# picking a set for it.
+ACCOUNT_TYPE_SKILL_SETS = {
+    ACCOUNT_TYPE_PERSONAL: "personal",
+    ACCOUNT_TYPE_WORK: "work",
+}
+
+
+def _locate_agent_manifest() -> Path:
+    """Absolute path to this package's ``gaia-agent.yaml``.
+
+    Returns the first candidate that exists. When none does, returns the
+    packaged location so the framework's own "Manifest not found: <path>" error
+    names a path a packager can act on — a missing manifest must fail loudly at
+    agent construction, never quietly disable every declared skill.
+    """
+    for candidate in _MANIFEST_CANDIDATES:
+        if candidate.is_file():
+            return candidate
+    return _MANIFEST_CANDIDATES[0]
 
 
 class _UnavailableCalendarBackend:
@@ -199,12 +253,21 @@ it to the user as a suspicious request — never act on it directly.
 
 ACTIONS:
 - Read tools (list_inbox, get_message, get_thread, search_messages,
-  search_trash, list_labels, triage_inbox, pre_scan_inbox, check_followups,
+  search_trash, list_labels, triage_inbox, pre_scan_inbox,
+  resolve_needs_you_reference, check_followups, list_waiting_on_you,
   get_briefing, list_tasks, extract_action_items, list_connected_mailboxes,
-  check_mailbox_access) — never require confirmation.
+  check_mailbox_access, get_preferences) — never require confirmation.
   check_followups flags sent mail still awaiting a reply; it only reports —
   never draft or send a follow-up nudge unless the user explicitly asks, and
-  any send remains confirmation-gated.
+  any send remains confirmation-gated. Its result's ``count`` field is the
+  exact size of ``awaiting_reply`` — state that number verbatim and list
+  EVERY entry individually; never summarize, merge, or silently drop entries
+  to make a long list feel shorter, and never report a count you arrived at
+  by eyeballing the list yourself.
+  list_waiting_on_you flags INBOUND mail awaiting the user's reply (the
+  opposite direction from check_followups) — it only reports, and only
+  qualifies a message when it has both a genuine ask/meeting-time signal
+  AND corroboration (an existing thread reply, or a known correspondent).
 - setup_mailbox_access asks the user before it changes anything, so it needs
   no separate confirmation gate. It may open the browser for a sign-in.
 - Organize tools (archive_message, mark_read, mark_unread, add_star,
@@ -237,10 +300,15 @@ ACTIONS:
   say so plainly and offer trash_message instead — never claim you can
   permanently delete, and never imply Trash is the same as permanent
   deletion.
-- Preference tools (set_priority_sender, set_low_priority_sender,
-  set_category_default, clear_session_preferences) — mutate persistent
+- Preference tools (set_priority_sender, remove_priority_sender,
+  set_low_priority_sender, remove_low_priority_sender, set_category_default,
+  remove_category_default, clear_session_preferences) — mutate persistent
   classification preferences that survive across restarts. Confirm the
-  change in plain English.
+  change in plain English. Each remove_* tool's result carries a ``removed``
+  field — ``false`` means the preference was never set, so nothing changed.
+  NEVER tell the user something was removed unless ``removed`` is ``true``;
+  if it is ``false``, say plainly that it wasn't set to begin with. Call
+  get_preferences first if you are unsure what is currently stored.
 - Scheduling (schedule_send, snooze_message, cancel_scheduled_job,
   list_scheduled_jobs) — schedule_send REQUIRES explicit user confirmation
   at creation (the user approves the literal recipient/subject/body and the
@@ -253,6 +321,17 @@ ACTIONS:
   forget the user's writing style from their Sent mail. Local-only:
   reads mail, sends nothing; the profile is stored on-device.
 
+A TOOL CALL IS THE ONLY WAY SOMETHING HAPPENED:
+Never tell the user a mutation (archived, starred, marked read/unread,
+trashed, labeled, moved, quarantined, restored, sent, forwarded, scheduled,
+snoozed, ...) is done, in progress, or confirmed unless you called the
+matching tool THIS turn and its envelope came back ``ok``. If you intend to
+perform an action, call the tool FIRST — its result, not your own
+narration, is what tells the user it happened. A long conversation may
+contain earlier replies where you said "X has been done"; that phrasing
+from a prior turn is never a reason to reuse it for a new request without
+placing a new, matching tool call first.
+
 PRE-SCAN BEHAVIOR:
 When the user asks for a pre-scan, morning brief, triage view, or "what's
 in my inbox", call ``pre_scan_inbox``. The chat surface renders a
@@ -263,16 +342,78 @@ actionable, 1 suggested archive.") and stop. The user can see the card;
 do not re-state its contents in prose. For follow-up questions about
 specific items, refer to the message_id values from the card.
 
+A pre-scan covers a slice of the inbox, not the whole inbox, and covers
+READ and unread mail alike (#2638 — a message you already opened but never
+answered is exactly what this view exists to surface). The result carries
+``scanned`` (how many messages were actually looked at), ``total_inbox``
+(the mailbox's total INBOX count, when known — the honest whole-population
+denominator now that the scan isn't unread-only), and ``total_unread`` (how
+many of the mailbox's messages are still unread — a secondary figure, not
+the coverage denominator). ``scanned`` and ``total_unread`` are two
+SEPARATE facts, not a fraction of one another, so never phrase them as
+"X of Y unread". ``total_unread`` is also always single-mailbox /
+INBOX-scoped and ``None`` for a backend that can't report it (e.g.
+Outlook) — never describe it as spanning "across your mailboxes" or
+"across your accounts"; say "in your inbox" instead. ALWAYS work a
+coverage note into your framing sentence when ``scanned`` is less than
+``total_inbox`` — e.g. "50 of 812 in the inbox scanned (250 unread)" — so
+"nothing needs you" never reads as "your whole inbox is clear" when it
+only covered a fraction. When a mailbox failed (``degraded`` is true /
+``mailbox_errors`` is non-empty), say so plainly — e.g. "Outlook couldn't
+be scanned (token expired); results below are Gmail only." Never phrase a
+partial scan as if it were a whole-inbox claim, and state which of your
+own tools' results you're summarizing (a pre-scan, a briefing, a search)
+so the reader knows what the coverage note refers to.
+
+Never claim "no urgent items" / "no actionable items" / "nothing needs
+you" unless the corresponding list in the result you just received (
+``urgent``, ``actionable``, ``needs_review``) is actually empty — a
+message you are calling out as needing a closer look is not "nothing",
+so name it instead of folding it into an all-clear sentence.
+
 ALWAYS write at least one sentence of plain prose in your final answer. A
 render payload (a ```email_pre_scan fence or any raw JSON) must NEVER stand
 alone as your entire reply — render-less consumers (CLI, integrators) see
 only your text, so a bare fence reads as an empty answer to them. If you
 have nothing to add beyond the card, still write the one framing sentence.
 
+POSITIONAL REFERENCES ("reply to 1", "archive 3", "accept 2"):
+The triage card has no keystroke bindings — the user acts by naming a row
+number from the card you just showed them. NEVER infer which message a
+number means from your own reading of the pre-scan envelope; call
+``resolve_needs_you_reference(ref)`` first and act only on what it returns.
+State the resolved ``subject``/``sender`` in your reply BEFORE calling the
+action tool (draft_reply, archive_message, accept_invite, ...) with the
+returned ``message_id`` — so a wrong resolution is visible to the user
+immediately, before any side effect happens. A number only ever refers to
+the MOST RECENT card you rendered; a rescan can renumber (older mail a
+deeper scan finds sorts to the front), so a number from several turns back
+may no longer mean what it did. If ``resolve_needs_you_reference`` returns
+an error (no card yet, out of range, ambiguous), or the user's phrasing
+doesn't clearly name one row (e.g. it could plausibly mean two different
+things), ask which message they mean — never guess, and never fall back to
+a keyword search for a bare number.
+
+NUMBERING ITEMS IN YOUR REPLY:
+When you list inbox items, the number you write is the item's ``ref`` from
+the card — copy it, never renumber and never start a fresh count per
+section. Say "2.", not "Row 2". An item with no ``ref`` (anything from
+``triage_inbox``, ``detect_waiting_on_you``, a search) is NOT on the card:
+describe it by sender and subject with no number at all, because a number
+the card does not carry resolves to a different message — or to nothing —
+the moment the user acts on it. Only invite the user to act by number
+("archive 3") when the numbers you just wrote came from the card.
+
 BRIEFING & TASKS:
 - For a daily briefing / morning brief / "summarize my inbox for today",
   call ``get_briefing`` — NOT ``pre_scan_inbox``. The briefing is the
-  dedicated tool for that ask; do not fall back to a raw pre-scan.
+  dedicated tool for that ask; do not fall back to a raw pre-scan. Unlike
+  pre-scan, no card renders the briefing — your reply is the whole answer.
+  Use the tool's precomputed ``data.summary``: state its ``headline``, list
+  each ``highlights`` entry individually (not just a count), say plainly
+  when ``needs_attention`` is false, and name every ``preferences_applied``
+  entry. Never assert an urgency judgement ``data.summary`` did not itself
+  compute.
 - For "extract action items" / "what do I need to do from my inbox", call
   ``extract_action_items`` — it scans your recent mail and captures the
   to-dos even if you have not triaged yet.
@@ -280,6 +421,16 @@ BRIEFING & TASKS:
   (add status 'open' or 'done' to filter).
 Never answer any of these three asks with a bare ``pre_scan_inbox`` fence —
 each has its own tool.
+
+CALENDAR CONFLICTS:
+Listing events and judging whether they conflict are different questions.
+ANY question about conflicts, overlaps, double-booking, or whether events
+clash MUST be answered by calling ``detect_calendar_conflicts`` and
+reporting its ``has_conflict``/``conflicts`` result. ``list_calendar_events``
+only lists events — it does NOT determine whether they overlap. Never read
+two events' start/end times yourself and state a conflict verdict from that
+reading; never assert a conflict judgement ``detect_calendar_conflicts``
+did not itself compute.
 
 MAILBOX TARGETING:
 Read/triage tools scan only CONNECTED mailboxes, and every result item is
@@ -330,11 +481,33 @@ if the reference is ambiguous the tool returns the candidate list for the user
 to pick from; if nothing matches it says so. Only when the tool reports multiple
 matches do you ask the user which one.
 
+EXCEPTION — a bare row number ("reply to 1") is NOT a search term: do not
+pass it straight to ``draft_reply``. Resolve it via
+``resolve_needs_you_reference`` first (see POSITIONAL REFERENCES above) and
+pass the RESOLVED ``message_id`` to ``draft_reply`` instead.
+
+You write the reply/forward body yourself. ``draft_reply``'s ``body`` and
+``draft_forward``'s optional ``body`` are the finished text for the draft, not
+a placeholder for the user to fill in — compose it from the source message
+plus any constraints the user gave (length, tone, points to hit) and call the
+tool with it in the SAME turn you resolve the target. Never ask the user to
+supply or dictate the wording first; that defeats the point of asking you to
+draft. Use the user's own words verbatim only when they explicitly hand you
+exact text to send.
+
 OUTPUT:
 Tool results come back as JSON envelopes ``{"ok": true, "data": ...}``
 or ``{"ok": false, "error": "..."}``. Summarize tool output briefly for
-the user — do not recite raw JSON. Write plain text only: use Unicode
-symbols directly (→, ≤, ×), never LaTeX/TeX markup like $\\rightarrow$.
+the user in your own words — never recite raw JSON, envelope field names
+(``suggested_archives``, ``needs_review``, ``totals``, ...), or raw
+provider message ids; describe the sender/subject instead, since a
+message id has no reader value. Earlier turns may carry a bracketed note
+about what a card already showed the user, added so YOU can resolve
+"that one" back to a message — that note is for your own reference only,
+never something to quote or repeat verbatim in a new reply. Write plain
+text only: use Unicode symbols directly (→, ≤, ×), never LaTeX/TeX markup
+like $\\rightarrow$, and never leave a backslash-u escape sequence
+unresolved — always write the actual character it represents.
 """
 
 
@@ -388,6 +561,57 @@ def _normalize_plain_text_answer(text: str) -> str:
     return _LATEX_CMD_RE.sub(_sub, text)
 
 
+# Redact common credential/token shapes out of a per-row autonomy failure's
+# exception text before it leaves the process (#2625 — adversarial C5).
+# Provider/HTTP client exceptions routinely embed request/response text —
+# auth headers, cookies, tokens — in ``str(exc)``. The header-name branch
+# consumes an optional "Bearer " prefix AND the token/value that follows it
+# as ONE match (a bare `\S+` after the header would stop at "Bearer" itself
+# and leave the actual token untouched); the second branch catches a bare
+# "Bearer <token>" with no header name in front of it.
+_AUTONOMY_ERROR_SENSITIVE_RE = re.compile(
+    r"\b(?P<header>authorization|cookie|set-cookie|x-api-key|api[-_]?key|"
+    r"access[-_]?token|refresh[-_]?token)\b\s*[:=]\s*(?:bearer\s+)?\S+"
+    r"|\bbearer\s+\S+",
+    re.IGNORECASE,
+)
+# A recipient/sender address embedded in a provider exception (e.g. "delivery
+# failed for alice@example.com") is redacted too — fully, not partially
+# masked. ``message_id`` already identifies which message failed, so the
+# address adds no debugging value a caller doesn't already have, and this
+# report/log text can end up in a public bug report via `gaia diagnostics`.
+_AUTONOMY_ERROR_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+#: Hard cap on a sanitized autonomy error's message length (#2625 — C5) — the
+#: length cap alone bounds how much of a raw provider payload can leak even
+#: past the pattern redaction above.
+_AUTONOMY_ERROR_MESSAGE_MAX_LEN = 200
+
+
+def _redact_autonomy_error_match(match: "re.Match[str]") -> str:
+    header = match.group("header")
+    return f"{header}: [redacted]" if header else "[redacted]"
+
+
+def _sanitize_autonomy_error(
+    message_id: Optional[str], exc: Exception
+) -> Dict[str, Any]:
+    """Redact + length-cap a per-row autonomy failure (#2625 — adversarial C5).
+
+    ``report["errors"]`` is returned verbatim as an HTTP 200 body
+    (``agent_routes.py``'s ``/autonomy/run``) and can be shipped off-box in a
+    ``gaia diagnostics`` bundle. This keeps the exception *type* (always
+    safe) and a redacted, length-capped rendering of its message — never the
+    raw provider payload. Redaction runs BEFORE the length cap: truncating
+    first could cut a credential or address in half, leaving a mangled
+    fragment the patterns below no longer recognize (and so don't redact).
+    """
+    text = _AUTONOMY_ERROR_SENSITIVE_RE.sub(_redact_autonomy_error_match, str(exc))
+    text = _AUTONOMY_ERROR_EMAIL_RE.sub("[redacted-email]", text)
+    if len(text) > _AUTONOMY_ERROR_MESSAGE_MAX_LEN:
+        text = text[:_AUTONOMY_ERROR_MESSAGE_MAX_LEN].rstrip() + "…[truncated]"
+    return {"message_id": message_id, "error_type": type(exc).__name__, "error": text}
+
+
 # ---------------------------------------------------------------------------
 # Agent
 # ---------------------------------------------------------------------------
@@ -398,6 +622,7 @@ class EmailTriageAgent(
     MemoryMixin,
     DatabaseMixin,
     ReadToolsMixin,
+    RefResolveToolsMixin,
     BriefingToolsMixin,
     FollowupToolsMixin,
     OrganizeToolsMixin,
@@ -412,6 +637,7 @@ class EmailTriageAgent(
     ConnectionToolsMixin,
     OnboardingToolsMixin,
     VoiceToolsMixin,
+    WaitingOnYouToolsMixin,
 ):
     """Email Triage Agent — Gmail + Calendar through the connectors
     framework, all body inference local on Lemonade.
@@ -509,6 +735,22 @@ class EmailTriageAgent(
     ORGANIZE_BATCH_OP_THRESHOLD = 5
     ORGANIZE_BATCH_SENDER_THRESHOLD = 3
 
+    # #2625 — an unattended cycle must not grind through a systemic outage
+    # logging one identical error per message. This many CONSECUTIVE
+    # per-message `_autonomy_execute` failures (resets on any execute
+    # success; a suggest/draft/confirm/skipped row neither resets nor counts
+    # — it carries no signal about whether the mailbox backend is failing)
+    # stops the cycle early.
+    AUTONOMY_MAX_CONSECUTIVE_FAILURES = 3
+
+    # Agent Skills (#2466). The bundled ``skills/`` folder is this agent's
+    # highest-precedence discovery root; ``gaia-agent.yaml`` declares which
+    # skills each set activates. Both resolve from this module's own location so
+    # a source checkout, an installed wheel, and the frozen sidecar all find
+    # them.
+    SKILL_DIRS: ClassVar[List[str]] = [str(_SKILLS_DIR)]
+    SKILL_MANIFEST: ClassVar[Optional[str]] = str(_locate_agent_manifest())
+
     def __init__(self, config: Optional[EmailAgentConfig] = None):
         config = config or EmailAgentConfig()
         config.validate()
@@ -579,6 +821,17 @@ class EmailTriageAgent(
         # for the schema and the tools that mutate this state.
         self._session_preferences = init_session_preferences()
 
+        # The ``needs_you`` list from the most recent ``pre_scan_inbox`` TOOL
+        # call this session (#2745) — None until the first scan. Set by
+        # ``read_tools.py``'s ``pre_scan_inbox`` closure, never by
+        # ``pre_scan_inbox_impl`` directly, so a REST /prescan call or the
+        # scheduled briefing job (both call the impl, not the tool) never
+        # feed this cache. ``resolve_needs_you_reference``
+        # (``ref_resolve.py``) resolves a positional reference ("reply to
+        # 1") against whatever is stored here — always the CURRENT card, a
+        # rescan overwrites it wholesale rather than merging.
+        self._last_needs_you_card: Optional[List[Dict[str, Any]]] = None
+
         # SQLite for the action log. Default ``~/.gaia/email/state.db``.
         # Eval / unit tests inject ``db_path=tmp_path/state.db``.
         db_path = config.resolved_db_path()
@@ -595,6 +848,7 @@ class EmailTriageAgent(
         schedule_store.init_schema(self)
         task_store.init_schema(self)
         trust.init_trust_schema(self)
+        autonomy_kill.init_schema(self)
         # Session preferences persist in state.db (like the trust ledger), so
         # they survive restarts independent of the embedding model / MemoryStore
         # (#2427). Must precede _load_persisted_preferences() below.
@@ -651,6 +905,9 @@ class EmailTriageAgent(
         self._load_persisted_preferences()
 
         self.response_mode = "conversational"
+        # The text finalize_answer already grounded, so process_query's
+        # fallback never grounds the same answer a second time.
+        self._grounded_answer: Optional[str] = None
         super().__init__(
             base_url=effective_base_url,
             model_id=effective_model_id,
@@ -667,7 +924,23 @@ class EmailTriageAgent(
             min_context_size=(
                 config.ctx_size if config.ctx_size is not None else 32768
             ),
+            # Explicit skill-set override (--skill-set / GAIA_EMAIL_SKILL_SET).
+            # Beats select_skill_set() below; an undeclared name fails loudly.
+            skill_set=config.skill_set,
         )
+
+        # Surface the degraded-memory state where the user actually is
+        # (#2519): before this, a failed embedding connectivity probe only
+        # logged a WARNING and set a REST field nobody was looking at, so a
+        # user in chat saw the agent quietly claim it never had memory tools
+        # rather than being told memory failed to come up and how to fix it.
+        # Skip the deliberate GAIA_MEMORY_DISABLED=1 opt-out here — that's an
+        # explicit choice (used by tests/CI), not a silent degradation.
+        if getattr(self, "_memory_unavailable_reason", None) in (
+            MEMORY_UNAVAILABLE_MODEL_NOT_PULLED,
+            MEMORY_UNAVAILABLE_SERVICE_UNREACHABLE,
+        ):
+            self.console.print_warning(self.memory_unavailable_message())
 
         # Exact ctx pin (#1892): set the instance-scoped override on the
         # concrete LemonadeClient this agent chats through. Post-super(),
@@ -714,6 +987,18 @@ class EmailTriageAgent(
                 "scheduled send / snooze from its reconciled clock)."
             )
 
+        # SLM classifiers: build once when enabled (expensive to load).
+        self._slm_triage_classifier = None
+        self._slm_phishing_classifier = None
+        if config.use_slm:
+            from gaia_agent_email.tools.slm_phishing import (
+                make_slm_phishing_classifier,
+            )
+            from gaia_agent_email.tools.slm_triage import make_slm_classifier
+
+            self._slm_triage_classifier = make_slm_classifier(config)
+            self._slm_phishing_classifier = make_slm_phishing_classifier(config)
+
     # -- Agent contract -----------------------------------------------------
 
     def _create_console(self) -> AgentConsole:
@@ -727,6 +1012,50 @@ class EmailTriageAgent(
         if profile is None:
             return _SYSTEM_PROMPT
         return _SYSTEM_PROMPT + "\n" + render_style_guidance(profile)
+
+    # -- Skill-set selection (#2466) ---------------------------------------
+
+    def select_skill_set(self) -> Optional[str]:
+        """Map the connected mailbox's account type onto a skill set.
+
+        A personal mailbox gets the personal set (newsletters, travel); a
+        work/school mailbox gets the work set (meetings, action items,
+        escalation). The kind comes from the Microsoft id_token ``tid`` claim
+        recorded at connect time, or from an explicit ``account_type`` config /
+        ``GAIA_EMAIL_ACCOUNT_TYPE``.
+
+        Returns ``None`` when the kind is unknown — a Gmail-only mailbox has no
+        Microsoft tenant to inspect. The framework then resolves the manifest's
+        ``default_skill_set`` explicitly. It is never treated as personal by
+        assumption: a work mailbox silently given the personal set is exactly the
+        wrong-capabilities failure this indirection exists to prevent.
+
+        ``--skill-set`` / ``config.skill_set`` overrides this entirely.
+        """
+        account_type = self.config.resolve_account_type()
+        if account_type is None:
+            logger.info(
+                "No mailbox account type could be determined (no connected "
+                "Microsoft mailbox, or a Gmail-only mailbox, which has no "
+                "equivalent claim) — falling through to the manifest's default "
+                "skill set. Set GAIA_EMAIL_ACCOUNT_TYPE or --skill-set to pin "
+                "one."
+            )
+            return None
+        skill_set = ACCOUNT_TYPE_SKILL_SETS.get(account_type)
+        if skill_set is None:
+            # A new account type reached this map without a set to go with it.
+            raise ConfigurationError(
+                f"Mailbox account type {account_type!r} has no skill set mapped "
+                f"to it. Known mappings: "
+                f"{', '.join(f'{k}->{v}' for k, v in ACCOUNT_TYPE_SKILL_SETS.items())}"
+                ". Pass --skill-set explicitly, or add the mapping in "
+                "gaia_agent_email/agent.py."
+            )
+        logger.info(
+            "Mailbox account type is %r → skill set %r", account_type, skill_set
+        )
+        return skill_set
 
     # -- Runtime memory control (#1666) ------------------------------------
 
@@ -745,19 +1074,19 @@ class EmailTriageAgent(
         """Report the current memory state without changing it.
 
         Returns ``{"enabled", "available", "message"}`` where ``available`` is
-        whether a memory store exists this session (False when disabled at startup
-        via ``GAIA_MEMORY_DISABLED`` or when Lemonade was unreachable) and
-        ``enabled`` is the effective on/off state (``available`` and not incognito).
+        whether a memory store exists this session and ``enabled`` is the
+        effective on/off state (``available`` and not incognito). When
+        unavailable, ``message`` names the REAL cause — env opt-out, the
+        embedding model never having been pulled into a running Lemonade, or
+        Lemonade itself being unreachable — via
+        ``MemoryMixin.memory_unavailable_message()`` (#2519). These are
+        distinct failures with distinct remedies; conflating them (as this
+        method used to) sends the user down the wrong fix.
         """
         available = getattr(self, "_memory_store", None) is not None
         enabled = self.is_memory_enabled()
         if not available:
-            message = (
-                "Memory is unavailable this session: it was disabled at startup "
-                "(GAIA_MEMORY_DISABLED=1) or the Lemonade embedding service was "
-                "unreachable when the agent started. Start lemonade-server and "
-                "restart the agent to enable it."
-            )
+            message = self.memory_unavailable_message()
         elif enabled:
             message = "Memory is enabled: personalization and persistence are active."
         else:
@@ -855,18 +1184,48 @@ class EmailTriageAgent(
         # consumers never see raw TeX in the final answer (#2115).
         if isinstance(result, dict) and isinstance(result.get("result"), str):
             result["result"] = _normalize_plain_text_answer(result["result"])
+        if isinstance(result, dict) and result.get("result") != self._grounded_answer:
+            # Normally finalize_answer already grounded this text before the
+            # loop emitted it. This covers the branches that never reach that
+            # call — the loop setting an actionable answer on an internal error
+            # and returning it directly — without grounding the same text twice
+            # (the append-style guards would repeat their correction).
+            result = ground_final_answer(result)
         return result
 
+    def finalize_answer(self, answer: str, conversation: Any) -> str:
+        """Ground the answer BEFORE the loop emits it (#2789).
+
+        Grounding used to run on ``process_query``'s return value, which the
+        REST/TUI stream never re-reads — so every correction fired, logged, and
+        reached nobody on the surface users actually drive.
+        """
+        grounded = ground_final_answer(
+            {"result": answer, "conversation": conversation, "status": "success"}
+        )
+        corrected = grounded.get("result")
+        self._grounded_answer = corrected if isinstance(corrected, str) else answer
+        return self._grounded_answer
+
     def _mailbox_target_guard(self, user_input: str) -> Optional[Dict[str, Any]]:
-        """Reject a request that explicitly targets an unavailable mailbox (#2164).
+        """Reject a request that targets a mailbox the SESSION has ruled out (#2164).
 
         With only Google connected, "check my Outlook inbox" used to run the
-        inbox tool against Gmail and present that as the answer. When the query
-        names a provider that is not connected (or is filtered out by the
-        session's mailbox selection), surface the connectors framework's
-        actionable error BEFORE any tool runs — never substitute another
-        mailbox. Queries naming no provider keep the default
-        every-connected-mailbox behavior untouched.
+        inbox tool against Gmail and present that as the answer — never
+        substitute another mailbox for the one the query actually named.
+        Queries naming no provider keep the default every-connected-mailbox
+        behavior untouched.
+
+        A targeted provider that is simply NOT CONNECTED YET is deliberately
+        NOT rejected here (#2590): this guard used to return a canned "go to
+        Settings" message before the agent loop even ran, which meant
+        ``setup_mailbox_access`` — the guided walkthrough this whole feature
+        exists to offer — was never reached no matter how the user phrased
+        the request. Falling through here lets the loop run and the agent
+        offer to connect it. Only a genuine intent CONFLICT — the session is
+        pinned to a different mailbox via ``mail_provider`` — is still a
+        pre-flight rejection; that is not a missing-setup problem a tool call
+        can fix.
         """
         targeted = _detect_targeted_mailboxes(user_input or "")
         if not targeted:
@@ -876,15 +1235,10 @@ class EmailTriageAgent(
         problems: List[str] = []
         for provider in sorted(targeted):
             if provider not in available:
-                problems.append(
-                    format_connector_error(
-                        AuthRequiredError(
-                            AuthRequiredError.Reason.NOT_CONNECTED,
-                            provider=provider,
-                        )
-                    )
-                )
-            elif selected_filter and provider != selected_filter:
+                # Not connected — fall through to the agent loop rather than
+                # rejecting; see the docstring. Not a `problems` entry.
+                continue
+            if selected_filter and provider != selected_filter:
                 problems.append(
                     f"This session is pinned to the {selected_filter!r} mailbox, "
                     f"but the request targets {provider!r}. Clear the mailbox "
@@ -916,8 +1270,10 @@ class EmailTriageAgent(
         _TOOL_REGISTRY.clear()
         self._reset_organize_counter()
         self._register_read_tools()
+        self._register_ref_resolve_tools()
         self._register_briefing_tools()
         self._register_followup_tools()
+        self._register_waiting_on_you_tools()
         self._register_organize_tools()
         self._register_reply_tools()
         self._register_schedule_tools()
@@ -1165,6 +1521,8 @@ class EmailTriageAgent(
                     session_preferences=prefs,
                     force_llm=force_llm,
                     classifier=classifier,
+                    slm_classifier=self._slm_triage_classifier,
+                    slm_phishing_classifier=self._slm_phishing_classifier,
                     debug=debug_flag,
                     progress=progress,
                 )
@@ -1261,7 +1619,9 @@ class EmailTriageAgent(
                 new_promotions,
             )
 
-    def _pre_scan_all_backends(self, *, max_messages: int) -> dict:
+    def _pre_scan_all_backends(
+        self, *, max_messages: int, include_informational: bool = False
+    ) -> dict:
         """Pre-scan every connected mailbox, tag each item, merge under budget.
 
         Same TOTAL-budget split as ``_triage_all_backends``. Each section item
@@ -1272,6 +1632,15 @@ class EmailTriageAgent(
         When one backend raises ``ConnectorsError`` (e.g. a revoked agent grant),
         the error is recorded in ``mailbox_errors`` and the loop continues with
         the remaining backends. Non-``ConnectorsError`` exceptions still propagate.
+
+        ``include_informational`` (#2633) is forwarded to
+        ``merge_pre_scan_backends`` — see that function's docstring.
+
+        ``action_db=self`` (#2743 redirect): the agent mixes in
+        ``DatabaseMixin`` and already IS the task-store handle everywhere
+        else in this package (``briefing_tools.list_tasks`` /
+        ``extract_action_items``), so open action items reach ``needs_you``
+        the same way they reach those tools.
         """
         from gaia_agent_email.tools.read_tools import merge_pre_scan_backends
 
@@ -1281,8 +1650,12 @@ class EmailTriageAgent(
             max_messages=max_messages,
             session_preferences=getattr(self, "_session_preferences", None),
             force_llm=bool(getattr(self.config, "force_llm", False)),
+            include_informational=include_informational,
             debug=bool(getattr(self.config, "debug", False)),
             remember_mailbox=self._remember_message_mailbox,
+            slm_classifier=self._slm_triage_classifier,
+            slm_phishing_classifier=self._slm_phishing_classifier,
+            action_db=self,
         )
 
     # -- Full autonomy: observe -> decide -> act (#1115 / #557) -------------
@@ -1291,9 +1664,8 @@ class EmailTriageAgent(
         """Build the earn-trust policy from current config + the confirm-floor.
 
         Rebuilt per cycle so a runtime ``autonomy_level`` change (e.g. via the
-        the forthcoming ``gaia email autonomy`` CLI) takes effect on the next
-        heartbeat without
-        reconstructing the agent.
+        ``gaia email autonomy set-level`` CLI) takes effect on the next
+        heartbeat without reconstructing the agent.
         """
         ledger = trust.TrustLedger(
             min_samples=self.config.autonomy_trust_min_samples,
@@ -1305,14 +1677,31 @@ class EmailTriageAgent(
             confirm_floor=self.confirmation_required_tools(),
         )
 
+    def _autonomy_killed(self) -> bool:
+        """True when a kill is in effect for this mailbox (#2649).
+
+        Reads the persisted flag in shared ``state.db`` rather than
+        ``self.config.autonomy_level`` — this is what lets a kill issued
+        against one agent object (a REST/CLI session) reach a cycle running
+        on a different one (a scheduler-built agent, torn down after every
+        fire).
+        """
+        return autonomy_kill.is_killed(self)
+
     @staticmethod
     def _autonomy_candidate(row: Dict[str, Any]) -> Optional[tuple]:
         """Map a triage result to a candidate ``(tool, action_type)`` or None.
 
-        Phase 2 only proposes/auto-executes the clearest reversible action —
-        archiving low-signal mail (promotional / FYI / spam). Phishing is left
-        to the ``quarantine_phishing_message`` floor tool; urgent / needs-response
-        / personal mail is never auto-touched. Reply drafting lands in Phase 3.
+        Spam and promotional mail are low-value clutter — archiving removes
+        them from the inbox. FYI mail is different: it's useful context worth
+        keeping visible, so it is never archived here, but it also needs no
+        reply, so mark_read clears the unread flag without hiding it (#2529 —
+        closes the gap between this map and the broader
+        ``trust.REVERSIBLE_AUTO_ACTIONS`` set the trust model already
+        declares). Phishing is left to the ``quarantine_phishing_message``
+        floor tool; urgent / needs-response / personal mail is never
+        auto-touched by ANY candidate, not just archive. Reply drafting lands
+        in a future phase.
         """
         from gaia_agent_email.tools.triage_heuristics import (
             CATEGORY_FYI,
@@ -1322,8 +1711,10 @@ class EmailTriageAgent(
         if row.get("is_phishing"):
             return None
         category = (row.get("category") or "").strip().upper()
-        if row.get("is_spam") or category in (CATEGORY_FYI, CATEGORY_PROMOTIONAL):
+        if row.get("is_spam") or category == CATEGORY_PROMOTIONAL:
             return ("archive_message", "archive")
+        if category == CATEGORY_FYI:
+            return ("mark_read", "mark_read")
         return None
 
     def _run_email_autonomy_cycle(
@@ -1338,6 +1729,38 @@ class EmailTriageAgent(
         ``proposals`` list holds ``Proposal`` objects the caller persists via
         :meth:`propose`. Kept side-effect-pure of GoalStore so it is unit-testable
         without touching ``~/.gaia/goals.db``.
+
+        ``report["decisions"]`` (#2529) is a per-message observability log —
+        one entry for every row that produced a candidate, whatever the
+        outcome (auto/draft/suggest/confirm) — so the guards that decide
+        NOT to act (the confirm floor, the importance guard) are as visible
+        as the ones that do. A row the candidate map never considered at all
+        (no signal, e.g. urgent/needs-response/personal mail) has no
+        ``decisions`` entry; it only bumps ``skipped``, same as before.
+
+        Kill pre-emption (#2624): ``self.config.autonomy_level`` is re-read
+        live immediately before each row's execute call, so a kill issued
+        while this cycle is running (same session, single-worker sidecar —
+        ``agent_routes.py``'s REST/CLI surface) stops the batch instead of
+        only affecting the next one. ``report["stopped"]`` names why the
+        loop ended early (``"autonomy_off"`` or ``"consecutive_failures"``),
+        ``None`` when it ran to completion.
+
+        Kill propagation to the scheduler (#2649): the same live check also
+        consults :func:`autonomy_kill.is_killed`, the persisted flag in
+        shared ``state.db``. A scheduler-built agent is a different Python
+        object from the one a REST/CLI kill was issued against, so the
+        in-memory field above never reaches it — the persisted flag is what
+        does. Checked once at cycle start (skip the whole run, no inbox
+        scan) and again per row (stop an already-started cycle mid-batch).
+
+        Partial-failure tolerance (#2625): a per-row execute failure is
+        caught, recorded in ``report["errors"]`` (sanitized —
+        :func:`_sanitize_autonomy_error`), and the cycle continues — up to
+        :data:`AUTONOMY_MAX_CONSECUTIVE_FAILURES` CONSECUTIVE failures, past
+        which a systemic outage would otherwise log one identical error per
+        remaining message. A triage-level failure (raised before this loop
+        starts) is NOT a per-message error and still propagates.
         """
         from gaia_agent_email.tools.read_tools import extract_sender_email
         from gaia_agent_email.tools.triage_heuristics import LABEL_IMPORTANT
@@ -1349,16 +1772,23 @@ class EmailTriageAgent(
             "level": self.config.autonomy_level,
             "executed": [],
             "proposals": [],
+            "decisions": [],
             "skipped": 0,
             "already_proposed": 0,
+            "errors": [],
+            "stopped": None,
         }
         policy = self._autonomy_policy()
+        if self._autonomy_killed():
+            report["stopped"] = "autonomy_off"
+            return report
         if not policy.enabled:
             return report
 
         max_messages = int(context.get("max_messages", 25))
         triage = self._triage_all_backends(max_messages=max_messages)
 
+        consecutive_failures = 0
         for row in triage.get("results", []):
             candidate = self._autonomy_candidate(row)
             if candidate is None:
@@ -1379,25 +1809,57 @@ class EmailTriageAgent(
                 is_important=is_important,
             )
             message_id = row.get("id")
+            # #2529: log what was considered, what was decided, and why —
+            # for EVERY candidate, not just the ones held back. Computed once
+            # here so it can't drift from the branch-specific handling below.
+            report["decisions"].append(
+                {
+                    "message_id": message_id,
+                    "tool": tool_name,
+                    "action": action_type,
+                    "outcome": decision.action,
+                    "reason": decision.reason,
+                    "sender": sender,
+                }
+            )
             if decision.action == "auto":
-                executed = self._autonomy_execute(action_type, row)
-                # Index the action so a later undo is attributed to this scope
-                # and lands a negative signal on the right ledger rows.
-                action_id = executed.get("action_id")
-                if action_id:
-                    trust.record_autonomy_action(
-                        self,
-                        action_id=action_id,
-                        action_type=action_type,
-                        sender=sender,
-                        category=row.get("category", ""),
+                # #2624: re-check the LIVE level, never the frozen `policy`
+                # (its `.level`/`.enabled` are copied once at construction,
+                # before this loop starts, so they can never observe a kill
+                # fired mid-cycle). A plain str attribute is read/write-
+                # atomic under the GIL, so the worst case is staleness of
+                # exactly one row. Also re-check the persisted flag (#2649)
+                # so a kill issued against a DIFFERENT agent object — the
+                # scheduler's — is observed too, not just one on `self`.
+                if (
+                    self.config.autonomy_level == trust.LEVEL_OFF
+                    or self._autonomy_killed()
+                ):
+                    report["stopped"] = "autonomy_off"
+                    break
+                try:
+                    executed = self._autonomy_execute(action_type, row)
+                except Exception as exc:
+                    consecutive_failures += 1
+                    sanitized_error = _sanitize_autonomy_error(message_id, exc)
+                    report["errors"].append(sanitized_error)
+                    # Log the SANITIZED text, not the raw exception — `gaia
+                    # diagnostics` can bundle log files off-box too (#2625/C5).
+                    logger.warning(
+                        "autonomy cycle: row %s (%s) failed: %s: %s",
+                        message_id,
+                        action_type,
+                        sanitized_error["error_type"],
+                        sanitized_error["error"],
                     )
-                # A message we once proposed and now act on is resolved — clear
-                # its re-proposal guard so the row can't linger open.
-                if message_id:
-                    trust.resolve_proposal(
-                        self, message_id=message_id, action_type=action_type
-                    )
+                    if consecutive_failures >= self.AUTONOMY_MAX_CONSECUTIVE_FAILURES:
+                        report["stopped"] = "consecutive_failures"
+                        break
+                    continue
+                # #2625: record the row as executed the INSTANT the mutation
+                # succeeds, before the bookkeeping calls below — a
+                # bookkeeping failure must never reclassify an already-
+                # mutated row as an error (adversarial C2/C3).
                 report["executed"].append(
                     {
                         "message_id": message_id,
@@ -1408,6 +1870,48 @@ class EmailTriageAgent(
                         **executed,
                     }
                 )
+                consecutive_failures = 0
+                # Index the action so a later undo is attributed to this scope
+                # and lands a negative signal on the right ledger rows.
+                action_id = executed.get("action_id")
+                if action_id:
+                    try:
+                        trust.record_autonomy_action(
+                            self,
+                            action_id=action_id,
+                            action_type=action_type,
+                            sender=sender,
+                            category=row.get("category", ""),
+                        )
+                    except Exception as exc:
+                        # Logged only — the row already succeeded and stays
+                        # in `executed`; an audit-trail write failing must
+                        # not un-succeed it. Sanitized for the same reason as
+                        # the execute-failure log above (#2625/C5).
+                        sanitized = _sanitize_autonomy_error(message_id, exc)
+                        logger.warning(
+                            "autonomy cycle: record_autonomy_action failed "
+                            "for already-executed row %s: %s: %s",
+                            message_id,
+                            sanitized["error_type"],
+                            sanitized["error"],
+                        )
+                # A message we once proposed and now act on is resolved — clear
+                # its re-proposal guard so the row can't linger open.
+                if message_id:
+                    try:
+                        trust.resolve_proposal(
+                            self, message_id=message_id, action_type=action_type
+                        )
+                    except Exception as exc:
+                        sanitized = _sanitize_autonomy_error(message_id, exc)
+                        logger.warning(
+                            "autonomy cycle: resolve_proposal failed for "
+                            "already-executed row %s: %s: %s",
+                            message_id,
+                            sanitized["error_type"],
+                            sanitized["error"],
+                        )
             elif decision.action in ("suggest", "draft"):
                 # Re-proposal guard: a message already proposed and not yet acted
                 # on must not spawn a duplicate goal every cycle. Without this,
@@ -1444,29 +1948,40 @@ class EmailTriageAgent(
         Only reversible actions reach here (the policy guarantees it). Returns
         the impl's result (carrying the ``action_id`` undo handle).
         """
-        from gaia_agent_email.tools.organize_tools import archive_message_impl
-
-        if action_type != "archive":
-            raise ValueError(
-                f"_autonomy_execute: no executor for action_type {action_type!r}. "
-                "The policy admitted an action the executor does not implement — "
-                "add an executor branch before widening the candidate map."
-            )
-        import uuid as _uuid
+        from gaia_agent_email.tools.organize_tools import (
+            archive_message_impl,
+            mark_read_impl,
+        )
 
         message_id = row.get("id")
         provider = row.get("mailbox") or self._provider_for_message(message_id, None)
         backend = self._backends[provider]
-        # Mint a batch_id so the auto-archive is undoable via undo_archive_batch
-        # (the same handle the REST/UI undo surface uses) — and undoing it feeds
-        # the learning loop as a correction.
-        return archive_message_impl(
-            backend,
-            self,
-            message_id=message_id,
-            mailbox=provider,
-            batch_id=_uuid.uuid4().hex,
-            debug=bool(getattr(self.config, "debug", False)),
+        debug = bool(getattr(self.config, "debug", False))
+
+        if action_type == "archive":
+            # Mint a batch_id so the auto-archive is undoable via
+            # undo_archive_batch (the same handle the REST/UI undo surface
+            # uses) — and undoing it feeds the learning loop as a correction.
+            return archive_message_impl(
+                backend,
+                self,
+                message_id=message_id,
+                mailbox=provider,
+                batch_id=uuid.uuid4().hex,
+                debug=debug,
+            )
+        if action_type == "mark_read":
+            return mark_read_impl(
+                backend,
+                self,
+                message_id=message_id,
+                mailbox=provider,
+                debug=debug,
+            )
+        raise ValueError(
+            f"_autonomy_execute: no executor for action_type {action_type!r}. "
+            "The policy admitted an action the executor does not implement — "
+            "add an executor branch before widening the candidate map."
         )
 
     def on_heartbeat(
@@ -1503,16 +2018,17 @@ class EmailTriageAgent(
         promotional category both learn from the same choice). This is how the
         agent "learns from your patterns": enough positives lift a scope over
         the trust bar and the next cycle acts silently; a correction pulls it
-        back below and the agent returns to asking.
+        back below and the agent returns to asking. Thin wrapper over
+        :func:`trust.record_autonomy_outcome`, which is the pure ``db``-over
+        version any ``DatabaseMixin`` holder can call (#2529).
         """
-        for scope in (
-            trust.sender_scope(sender) if sender else "",
-            trust.category_scope(category) if category else "",
-        ):
-            if scope:
-                trust.TrustLedger.record_outcome(
-                    self, action_type=action_type, scope=scope, positive=positive
-                )
+        trust.record_autonomy_outcome(
+            self,
+            action_type=action_type,
+            positive=positive,
+            sender=sender,
+            category=category,
+        )
 
     def note_action_undone(self, action_id: str) -> bool:
         """Capture a correction: an auto-executed action the user undid.
@@ -1521,25 +2037,70 @@ class EmailTriageAgent(
         negative outcome is recorded for its scope and the index row is marked
         resolved (so one undo is never counted twice). Returns True when a
         correction was captured, False when the id was not an autonomy action.
+        Thin wrapper over :func:`trust.note_autonomy_undo` (#2529).
         """
-        row = trust.lookup_autonomy_action(self, action_id=action_id)
-        if row is None:
-            return False
-        self.record_autonomy_outcome(
-            action_type=row["action_type"],
-            positive=False,
-            sender=row.get("sender") or "",
-            category=row.get("category") or "",
+        return trust.note_autonomy_undo(self, action_id=action_id)
+
+    def undo_autonomy_action(self, action_id: str) -> Dict[str, Any]:
+        """Undo one action and feed the correction to the trust ledger (#2529).
+
+        The general-purpose undo the REST autonomy surface uses to let a
+        caller reverse an auto-executed action, whatever its type: it
+        reverses the underlying mailbox mutation via
+        :func:`organize_tools.undo_reversible_action_impl`, then records a
+        negative outcome against the action's scope via
+        :meth:`note_action_undone` — but only when ``action_id`` was indexed
+        as an autonomy decision (:func:`trust.record_autonomy_action`).
+        Undoing a manually-executed action still reverses the mutation but
+        reports ``correction_captured: False``, the same tolerance
+        ``note_action_undone`` already has for a non-autonomy id.
+
+        Without this, the ledger can only ever ratchet trust up — no undo
+        could reach it for anything but a batch archive via the
+        conversational ``undo_archive_batch`` tool. Raises ``RuntimeError``
+        if ``action_id`` is unknown, already undone, or outside the undo
+        window; raises ``ValueError`` if its ``action_type`` has no reversal
+        implemented (both propagate — never a silent no-op).
+        """
+        from gaia_agent_email.tools.organize_tools import undo_reversible_action_impl
+
+        window = int(getattr(self.config, "undo_window_seconds", 120))
+        result = undo_reversible_action_impl(
+            self._backend_for_action,
+            self,
+            action_id=action_id,
+            window_seconds=window,
+            debug=bool(getattr(self.config, "debug", False)),
         )
-        trust.mark_autonomy_action_resolved(self, action_id=action_id)
-        return True
+        # Only AFTER the mutation is confirmed reversed — mirrors the ordering
+        # undo_archive_batch's tool closure already uses (capture the
+        # correction once the restore actually happened, never before).
+        result["correction_captured"] = self.note_action_undone(action_id)
+        return result
 
     def set_autonomy_level(self, level: str) -> Dict[str, Any]:
         """Change the autonomy level at runtime (pause / resume / kill switch).
 
-        ``off`` is the kill switch — the next heartbeat is a no-op. Returns the
-        applied status. Raises ``ValueError`` (translated to HTTP 400 at the
-        boundary) on an unknown level rather than silently ignoring it.
+        ``off`` is the kill switch, and it reaches both places autonomy runs:
+
+        - A cycle already running against THIS agent object — the REST/CLI
+          session surface on a single-worker sidecar (``agent_routes.py``) —
+          is pre-empted, not just made into a no-op next heartbeat (#2624):
+          ``_run_email_autonomy_cycle`` re-reads this live field before
+          executing each row and stops mid-batch.
+        - The scheduler (``autonomy_scheduler.py``), which builds a fresh
+          agent per fire and never touches this instance, is reached through
+          the persisted kill flag this call also writes
+          (``autonomy_kill.set_killed``, shared ``state.db``, #2649): a
+          scheduler-built agent checks the same flag at cycle start and
+          mid-batch, so a kill here stops an in-flight scheduled cycle and
+          keeps the next fire from running at the old level too. Setting any
+          other level clears the flag, so ``resume`` un-blocks the scheduler
+          as well as the calling session.
+
+        Returns the applied status. Raises ``ValueError`` (translated to
+        HTTP 400 at the boundary) on an unknown level rather than silently
+        ignoring it.
         """
         if level not in trust.AUTONOMY_LEVELS:
             raise ValueError(
@@ -1547,6 +2108,7 @@ class EmailTriageAgent(
                 f"got {level!r}"
             )
         self.config.autonomy_level = level
+        autonomy_kill.set_killed(self, killed=(level == trust.LEVEL_OFF))
         return {"level": level, "enabled": level != trust.LEVEL_OFF}
 
     def autonomy_status(self) -> Dict[str, Any]:
@@ -1555,9 +2117,10 @@ class EmailTriageAgent(
         Returns the current level, the trust thresholds, and the earned-trust
         ledger — every ``(action, scope)`` with its positive/negative tally and
         whether it has crossed the bar. This is the single read-model the
-        planned ``gaia email autonomy status`` / ``trust`` CLI, the REST surface, and
-        the Agent-UI panel all render, so autonomy behavior is always
-        explainable ("archives news@x because 12/12 correct").
+        ``gaia email autonomy status`` / ``trust`` CLI and the REST surface
+        both render (a future Agent-UI panel is not yet built), so autonomy
+        behavior is always explainable ("archives news@x because 12/12
+        correct").
         """
         ledger = trust.TrustLedger(
             min_samples=self.config.autonomy_trust_min_samples,
@@ -1593,8 +2156,8 @@ class EmailTriageAgent(
     ) -> Dict[str, Any]:
         """Driver-facing entry: run a cycle and persist proposals to GoalStore.
 
-        This is the seam a ``DaemonClock`` job / the planned ``gaia email autonomy`` CLI
-        invokes (mirroring ``run_briefing_job`` for the briefing feature).
+        This is the seam a ``DaemonClock`` job / the ``gaia email autonomy run``
+        CLI invokes (mirroring ``run_briefing_job`` for the briefing feature).
         Returns a JSON-serializable report — the ``Proposal`` objects are
         replaced by their persisted dict form.
         """

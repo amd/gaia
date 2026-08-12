@@ -69,6 +69,22 @@ class TestConnectorRequirement:
         req = ConnectorRequirement(connector_id="google", scopes=["a", "b"], reason="r")
         assert isinstance(req.scopes, tuple)
 
+    def test_required_scopes_defaults_to_scopes(self):
+        """#2730 D5 mitigation: every existing construction site (~14 of
+        them) builds a ConnectorRequirement without ``required_scopes`` —
+        this proves they keep today's all-required semantics unchanged
+        rather than assuming it."""
+        req = ConnectorRequirement(connector_id="google", scopes=["a", "b"])
+        assert req.required_scopes == ("a", "b")
+
+    def test_required_scopes_can_narrow_the_scopes(self):
+        req = ConnectorRequirement(
+            connector_id="google", scopes=["a", "b"], required_scopes=["a"]
+        )
+        assert req.scopes == ("a", "b")
+        assert req.required_scopes == ("a",)
+        assert isinstance(req.required_scopes, tuple)
+
 
 class TestRegistry:
     def test_get_unknown_provider_raises_keyerror(self):
@@ -76,6 +92,19 @@ class TestRegistry:
         # id that is genuinely absent from the registry's lazy-init branches.
         with pytest.raises(KeyError):
             providers.get("definitely-not-a-provider")
+
+    def test_unknown_provider_message_lists_microsoft_work_too(self):
+        # The known-ids list must be DERIVED from the catalog (every
+        # oauth_pkce spec id), not a hand-maintained set that drifts the
+        # moment a third Microsoft-audience connector lands — that would
+        # silently undercut the "no providers/__init__.py edit" property
+        # A1's dispatch mechanism is supposed to guarantee.
+        with pytest.raises(KeyError) as exc:
+            providers.get("definitely-not-a-provider")
+        msg = str(exc.value)
+        assert "google" in msg
+        assert "microsoft" in msg
+        assert "microsoft_work" in msg
 
     def test_register_then_get_round_trip(self):
         class FakeProvider:
@@ -251,6 +280,144 @@ class TestNoImportSideEffects:
         monkeypatch.delenv("GAIA_GOOGLE_CLIENT_ID", raising=False)
         importlib.reload(google_mod)
         assert "google" not in providers._registry  # type: ignore[attr-defined]
+
+
+class TestMicrosoftDispatch:
+    """A1 (CRITICAL): providers.get() dispatches on ConnectorSpec.oauth_impl,
+    never on the connector id — and the two Microsoft connectors, despite
+    sharing an implementation CLASS, must NEVER share stored state. This is
+    the test battery A1 requires: driven through OAuthPkceHandler (the real
+    production caller), not providers.get() alone, because a test that only
+    calls providers.get() never touches oauth_provider_ref and would pass
+    regardless of whether that field is set correctly.
+    """
+
+    def test_a_throwaway_third_spec_with_oauth_impl_microsoft_dispatches(
+        self, monkeypatch
+    ):
+        # AC3 structurally: a fourth Microsoft-audience connector needs no
+        # providers/__init__.py edit — only a catalog entry with the same
+        # oauth_impl.
+        import gaia.connectors.catalog  # noqa: F401
+        from gaia.connectors.registry import REGISTRY
+        from gaia.connectors.spec import ConnectorSpec
+
+        throwaway = ConnectorSpec(
+            id="microsoft_throwaway_test",
+            display_name="Microsoft Throwaway (test only)",
+            icon="",
+            category="productivity",
+            tier=9,
+            type="oauth_pkce",
+            description="test-only throwaway spec",
+            oauth_provider_ref="microsoft_throwaway_test",
+            oauth_tenant="organizations",
+            oauth_impl="microsoft",
+        )
+        try:
+            REGISTRY.register(throwaway)
+        except RuntimeError:
+            pytest.skip("registry frozen in this process; covered elsewhere")
+        try:
+            monkeypatch.setenv(
+                "GAIA_MICROSOFT_THROWAWAY_TEST_CLIENT_ID", "throwaway-id"
+            )
+            prov = providers.get("microsoft_throwaway_test")
+            from gaia.connectors.providers.microsoft import MicrosoftOAuthProvider
+
+            assert isinstance(prov, MicrosoftOAuthProvider)
+            assert prov.provider_id == "microsoft_throwaway_test"
+        finally:
+            REGISTRY._specs.pop("microsoft_throwaway_test", None)  # type: ignore[attr-defined]
+
+    @pytest.mark.asyncio
+    async def test_configure_stores_distinct_client_ids_per_connector(
+        self, monkeypatch
+    ):
+        # The A1-required battery, verbatim shape: configure both Microsoft
+        # connectors through OAuthPkceHandler (the real dispatcher every
+        # production caller goes through) and assert each provider's
+        # RESOLVED identity ("microsoft" vs "microsoft_work") sees only its
+        # own client id — never the other's.
+        import gaia.connectors.catalog  # noqa: F401
+        from gaia.connectors.oauth_pkce import OAuthPkceHandler
+        from gaia.connectors.registry import REGISTRY
+        from gaia.connectors.store import peek_provider_credentials
+
+        handler = OAuthPkceHandler()
+        microsoft_spec = REGISTRY.get("microsoft")
+        work_spec = REGISTRY.get("microsoft_work")
+
+        await handler.configure(microsoft_spec, {"client_id": "A", "save_only": True})
+        await handler.configure(work_spec, {"client_id": "B", "save_only": True})
+
+        assert peek_provider_credentials("microsoft")["client_id"] == "A"
+        assert peek_provider_credentials("microsoft_work")["client_id"] == "B"
+
+    @pytest.mark.asyncio
+    async def test_get_credential_disconnect_test_hit_distinct_store_keys(
+        self, monkeypatch
+    ):
+        # get_credential / disconnect / test for microsoft_work must hit the
+        # store with "microsoft_work", never "microsoft".
+        import gaia.connectors.catalog  # noqa: F401
+        from gaia.connectors.oauth_pkce import OAuthPkceHandler
+        from gaia.connectors.registry import REGISTRY
+
+        handler = OAuthPkceHandler()
+        work_spec = REGISTRY.get("microsoft_work")
+
+        calls: list[str] = []
+
+        async def _fake_get_or_refresh(provider_id, *, account_email=None):
+            calls.append(provider_id)
+            return "tok"
+
+        monkeypatch.setattr(
+            "gaia.connectors.oauth_pkce.get_or_refresh", _fake_get_or_refresh
+        )
+        await handler.get_credential(work_spec)
+        await handler.test(work_spec)
+        assert calls == ["microsoft_work", "microsoft_work"]
+
+        deleted: list[tuple] = []
+        monkeypatch.setattr(
+            "gaia.connectors.oauth_pkce.delete_connection",
+            lambda provider_id, **kw: deleted.append((provider_id, kw)),
+        )
+        monkeypatch.setattr(
+            "gaia.connectors.grants.revoke_all_grants_for", lambda cid: None
+        )
+        monkeypatch.setattr(
+            "gaia.connectors.activations.revoke_all_activations_for", lambda cid: None
+        )
+        await handler.disconnect(work_spec)
+        assert deleted[0][0] == "microsoft_work"
+
+    def test_resolved_provider_ids_are_never_equal(self):
+        from gaia.connectors.catalog.microsoft import (
+            MICROSOFT_SPEC,
+            MICROSOFT_WORK_SPEC,
+        )
+
+        personal_id = MICROSOFT_SPEC.oauth_provider_ref or MICROSOFT_SPEC.id
+        work_id = MICROSOFT_WORK_SPEC.oauth_provider_ref or MICROSOFT_WORK_SPEC.id
+        assert personal_id != work_id
+
+    def test_registry_ends_with_two_distinct_provider_entries(self, monkeypatch):
+        # A register() bug could clobber one entry while still producing a
+        # plausible client_id_hash — assert both survive as DISTINCT objects
+        # with distinct identities, not just "something is registered".
+        monkeypatch.setenv("GAIA_MICROSOFT_CLIENT_ID", "personal-id")
+        monkeypatch.setenv("GAIA_MICROSOFT_WORK_CLIENT_ID", "work-id")
+        personal = providers.get("microsoft")
+        work = providers.get("microsoft_work")
+        assert personal is not work
+        assert personal.provider_id != work.provider_id
+        assert personal.client_id != work.client_id
+        assert {"microsoft", "microsoft_work"}.issubset(
+            set(providers.list_provider_ids())
+        )
 
 
 class TestGoogleCatalogScopes:

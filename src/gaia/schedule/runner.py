@@ -16,14 +16,16 @@ log = get_logger(__name__)
 def resolve_input(schedule: Schedule) -> str:
     """Return the prompt text to send to the agent for this schedule.
 
-    ``--skill`` resolution depends on the agentskills.io skill format (#888),
-    which has not landed yet; fail loudly rather than guess.
+    The skills runtime (``gaia.skills``) ships, but the scheduler is not wired
+    to it — a scheduled skill has no agent to load into. Fail loudly rather
+    than guess at a prompt.
     """
     if schedule.prompt:
         return schedule.prompt
     raise NotImplementedError(
-        f"schedule {schedule.name!r} uses --skill {schedule.skill!r}, but skill-format "
-        f"resolution is not available yet (blocked on #888). Use --prompt for now."
+        f"schedule {schedule.name!r} uses --skill {schedule.skill!r}, but the "
+        "scheduler cannot run skills yet. Re-create it with --prompt: "
+        f"gaia schedule add --name {schedule.name} --cron '<expr>' --prompt '<text>'"
     )
 
 

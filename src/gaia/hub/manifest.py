@@ -29,6 +29,8 @@ from typing import Any, Dict, List, Optional, Union
 import yaml
 
 from gaia.agents.registry import _RESERVED_BUILTIN_IDS
+from gaia.skills.errors import SkillValidationError
+from gaia.skills.sets import SkillSets, parse_skill_sets
 
 # ---------------------------------------------------------------------------
 # Validation vocabulary
@@ -222,6 +224,14 @@ class AgentManifest:
     required_connections: List[str] = field(default_factory=list)
     interfaces: Interfaces = field(default_factory=Interfaces)
 
+    # Agent Skills declarations (#2466 + #2467 scope D): the always-on
+    # ``skills:`` list, the named ``skill_sets:`` bundles, and
+    # ``default_skill_set:``. Each entry carries a SemVer range and a
+    # ``required`` flag; ranges are matched against what is installed at agent
+    # construction by ``Agent.load_declared_skills()``. Empty (falsy) when the
+    # manifest declares none — the grammar is additive.
+    skill_sets: SkillSets = field(default_factory=SkillSets)
+
     # Provenance — set by :func:`parse`; not part of the YAML.
     source_path: Optional[Path] = None
 
@@ -298,6 +308,7 @@ class AgentManifest:
             _validate_semver(data["min_gaia_version"], "min_gaia_version", where)
 
         permissions = _validate_permissions(data.get("permissions"), where)
+        skill_sets = _parse_skill_sets(data, where)
         requirements = _parse_requirements(data.get("requirements"), where)
         interfaces = _parse_interfaces(data.get("interfaces"), where)
         python_cfg = _parse_python(data.get("python"), where)
@@ -342,6 +353,7 @@ class AgentManifest:
                 data.get("required_connections"), "required_connections", where
             ),
             interfaces=interfaces,
+            skill_sets=skill_sets,
             source_path=src,
         )
 
@@ -431,6 +443,19 @@ def _validate_semver(value: Any, field_name: str, where: str) -> None:
             f"Use MAJOR.MINOR.PATCH (e.g. '0.1.0' or '1.2.3-rc.1'). "
             f"See https://semver.org."
         )
+
+
+def _parse_skill_sets(data: Dict[str, Any], where: str) -> SkillSets:
+    """Parse ``skills:`` / ``skill_sets:`` / ``default_skill_set:`` (#2466).
+
+    The grammar lives in :mod:`gaia.skills.sets` so the runtime and the manifest
+    validator can never disagree; this only re-raises as :class:`ManifestError`
+    so a manifest author sees one error type.
+    """
+    try:
+        return parse_skill_sets(data, where=where)
+    except SkillValidationError as e:
+        raise ManifestError(f"gaia-agent.yaml{where}: {e}") from e
 
 
 def _validate_permissions(raw: Any, where: str) -> List[str]:

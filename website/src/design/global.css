@@ -1,0 +1,192 @@
+/* Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved. */
+/* SPDX-License-Identifier: MIT */
+
+/* GAIA global stylesheet — owns the Tailwind directives (astro.config sets
+   applyBaseStyles:false) so the component primitives below land in the
+   `components` layer and inline utilities still win over them.
+
+   These primitives are the shared vocabulary every page composes from. They
+   live here, not as ad-hoc Tailwind chains per page, so the landing, hub and
+   agent-detail pages cannot drift from each other.
+
+   Type sizes use clamp() so the 1200px design collapses sanely on small
+   screens: the design's stated value is always the upper bound. */
+
+@tailwind base;
+@tailwind components;
+
+@layer components {
+  /* ---------------------------------------------------------------- layout */
+
+  /* Content column: 1200px max, 28px gutter. */
+  .g-shell {
+    @apply mx-auto w-full max-w-g-content px-5 sm:px-7;
+  }
+
+  /* Section vertical rhythm: 80px standard. */
+  .g-section {
+    @apply py-14 sm:py-20;
+  }
+
+  /* Tinted alternating band, 72px rhythm, hairline top and bottom. */
+  .g-band {
+    @apply border-y border-g-border bg-g-bg2 py-14 sm:py-[72px];
+  }
+
+  /* ------------------------------------------------------------------ type */
+
+  .g-h-hero {
+    font-size: clamp(2.25rem, 1.3rem + 4.2vw, 58px);
+    @apply font-display font-semibold leading-[1.02] tracking-[-0.03em];
+  }
+  .g-h-page {
+    font-size: clamp(2rem, 1.3rem + 3.2vw, 52px);
+    @apply font-display font-semibold leading-[1.04] tracking-[-0.03em];
+  }
+  .g-h-agent {
+    font-size: clamp(1.75rem, 1.2rem + 2.4vw, 42px);
+    @apply font-display font-semibold leading-[1.06] tracking-[-0.03em];
+  }
+  .g-h-section {
+    font-size: clamp(1.75rem, 1.2rem + 2.2vw, 40px);
+    @apply font-display font-semibold leading-[1.08] tracking-[-0.025em];
+  }
+  .g-h-band {
+    font-size: clamp(1.625rem, 1.2rem + 1.8vw, 36px);
+    @apply font-display font-semibold leading-[1.1] tracking-[-0.025em];
+  }
+  .g-h-cta {
+    font-size: clamp(2rem, 1.3rem + 3vw, 48px);
+    @apply font-display font-semibold leading-[1.04] tracking-[-0.03em];
+  }
+  .g-h-card {
+    @apply font-display text-[20px] font-semibold tracking-[-0.01em] text-g-text;
+  }
+
+  /* Hero lede — 18.5px, capped at a 520px measure. */
+  .g-lede {
+    @apply max-w-[520px] text-[17px] leading-[1.6] text-g-muted sm:text-[18.5px];
+  }
+  /* Section lede — 15–17px. */
+  .g-lede-sm {
+    @apply text-[15px] leading-[1.6] text-g-muted sm:text-[17px];
+  }
+  .g-body {
+    @apply text-[14px] leading-[1.6] text-g-muted;
+  }
+
+  /* Mono furniture. Nothing on the site goes below 12.5px, metadata only. */
+  .mono {
+    @apply font-mono;
+  }
+  .g-eyebrow {
+    @apply font-mono text-[12px] uppercase tracking-[0.16em] text-g-gold-text;
+  }
+  .g-label {
+    @apply font-mono text-[11px] uppercase tracking-[0.12em] text-g-faint;
+  }
+  .g-meta {
+    @apply font-mono text-[12.5px] text-g-faint;
+  }
+
+  /* ----------------------------------------------------------------- cards */
+
+  /* Property list is explicit, not `all`: `all` sweeps up outline-color, which
+     fades the focus ring in over the transition instead of showing it at once. */
+  .g-card {
+    @apply rounded-g-card border border-g-border bg-g-surface transition-[background-color,border-color,box-shadow,transform] duration-[350ms] ease-g-out;
+  }
+  /* Interactive card: lifts and warms on hover. Applied to <a>/<button> cards. */
+  .g-card-hover {
+    @apply hover:-translate-y-1 hover:border-g-gold-dim hover:bg-g-surface2 hover:shadow-g-card;
+  }
+  /* The three "ways in" cards also scale a touch. */
+  .g-card-lift {
+    @apply hover:-translate-y-1.5 hover:scale-[1.015] hover:border-g-gold-dim hover:bg-g-surface2 hover:shadow-g-card;
+  }
+
+  /* Icon chip — the small bordered square that holds a 24px glyph. */
+  .g-chip {
+    @apply flex flex-none items-center justify-center rounded-g-chip border border-g-border bg-g-surface2 text-g-gold-text;
+  }
+
+  /* --------------------------------------------------------------- buttons */
+
+  .g-btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-g-btn px-5 py-2.5 text-[14px] font-semibold transition-[background-color,border-color,color,box-shadow,transform] duration-[250ms] ease-g-out;
+  }
+  .g-btn-primary {
+    @apply bg-g-gold text-g-on-gold hover:-translate-y-0.5 hover:bg-g-gold2 hover:shadow-g-btn;
+  }
+  .g-btn-secondary {
+    @apply border border-g-border2 text-g-text hover:-translate-y-0.5 hover:border-g-gold-dim hover:text-g-gold-text;
+  }
+
+  /* Text CTA whose arrow gap opens on hover. */
+  .g-cta-link {
+    @apply inline-flex items-center gap-1.5 text-[13px] font-medium text-g-gold-text transition-[gap,color] duration-[250ms] ease-g-out hover:gap-2.5 hover:text-g-gold2;
+  }
+
+  /* -------------------------------------------------------- pills & badges */
+
+  .g-pill {
+    @apply font-mono rounded-g-pill border border-g-border px-3.5 py-1.5 text-[11px] uppercase tracking-[0.08em] text-g-muted transition-colors hover:border-g-border2 hover:text-g-text;
+  }
+  .g-pill-active {
+    @apply border-g-gold bg-g-gold text-g-on-gold hover:text-g-on-gold;
+  }
+  /* Static descriptive pill (tags on the agent page). */
+  .g-pill-static {
+    @apply font-mono rounded-g-pill border border-g-border px-3 py-1 text-[11px] text-g-muted;
+  }
+  /* Eyebrow pill with a glowing gold dot. */
+  .g-pill-eyebrow {
+    @apply inline-flex items-center gap-2.5 rounded-g-pill border border-g-border bg-g-surface py-1.5 pl-3 pr-4;
+  }
+  .g-dot {
+    @apply h-1.5 w-1.5 flex-none rounded-full bg-g-gold;
+    box-shadow: 0 0 10px rgb(var(--g-gold));
+  }
+
+  .g-badge {
+    @apply font-mono rounded-g-badge border border-g-gold-dim px-1.5 py-0.5 text-[10px] uppercase tracking-[0.08em] text-g-gold-text;
+  }
+  .g-badge-muted {
+    @apply font-mono rounded-g-badge border border-g-border px-1.5 py-0.5 text-[10px] uppercase tracking-[0.08em] text-g-faint;
+  }
+
+  /* ------------------------------------------------------------ code panel */
+
+  .g-code-panel {
+    @apply overflow-hidden rounded-g-panel border border-g-border bg-g-code-bg;
+  }
+  /* Window chrome strip above a terminal / code panel. */
+  .g-code-chrome {
+    @apply flex items-center gap-2 border-b border-g-border px-3.5 py-2.5;
+  }
+  /* Inline `$ command` chip with a gold hairline. */
+  .g-cmd {
+    @apply font-mono flex items-center gap-2 rounded-g-panel border border-g-gold-dim bg-g-code-bg px-3.5 py-2.5 text-[12.5px] text-g-code-text;
+  }
+  /* Plain `$ command` block pinned to the bottom of a card. */
+  .g-cmd-plain {
+    @apply font-mono flex items-center gap-2 rounded-g-panel border border-g-border bg-g-code-bg px-3 py-2.5 text-[12.5px] text-g-code-text;
+  }
+
+  /* Syntax colors for hand-authored code panels (Terminal, CodePanel). Prism
+     handles rendered markdown separately in the agent detail page. */
+  .g-code-panel .tok-key { color: rgb(var(--g-gold)); }
+  .g-code-panel .tok-str { color: #9bd07a; }
+  .g-code-panel .tok-fn { color: #f4c46b; }
+  .g-code-panel .tok-num { color: #79b8ff; }
+  .g-code-panel .tok-com { color: rgb(var(--g-code-faint)); }
+
+  /* Terminal log severity colors — the email agent's real triage taxonomy. */
+  .g-code-panel .log-urgent { color: #e0824a; }
+  .g-code-panel .log-needs { color: #e7a33c; }
+  .g-code-panel .log-fyi { color: #79b8ff; }
+  .g-code-panel .log-dim { color: rgb(var(--g-code-faint)); }
+  .g-code-panel .log-ok { color: #9bd07a; }
+}
+
+@tailwind utilities;
