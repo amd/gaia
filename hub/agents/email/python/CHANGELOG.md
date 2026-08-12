@@ -9,14 +9,14 @@ contract version is tracked separately as
 
 ### Added
 
-- **Work Microsoft 365 mailboxes (#2629, schema 2.13).** A third mailbox
+- **Work Microsoft 365 mailboxes (#2629, schema 2.14).** A third mailbox
   provider, `microsoft_work` (work/school Entra ID, distinct from the personal
   `microsoft` Outlook.com connector), is now recognized wherever a provider
   string is accepted or returned — `REQUIRED_CONNECTORS`, the Graph token
   resolvers, onboarding, and mailbox selection all read it. Fixed alongside it:
   the daemon's OAuth token-forward path now forwards the work-mailbox
   connector's token to the agent, not just the personal one. `SCHEMA_VERSION`
-  bumped `2.12` -> `2.13` (additive; existing `microsoft`/`google` consumers are
+  bumped `2.13` -> `2.14` (additive; existing `microsoft`/`google` consumers are
   unaffected).
 - **A follow-up like "reply to number 1" can now resolve (#2829).** `POST
   /v1/email/query` accepts an optional `session_id`: send the same id on
@@ -28,6 +28,17 @@ contract version is tracked separately as
   rejected, `409`); a session id the sidecar has never seen arriving with
   prior conversation history (e.g. the sidecar restarted mid-conversation)
   gets a one-time notice instead of silently starting over.
+- **A scoped "anything suspicious in my inbox?" question no longer dumps the
+  full triage report (#2900).** New read-only tool `check_suspicious_mail`
+  surfaces only phishing/spam-flagged mail — precomputed and counted by the
+  same shared classifier every triage tool already uses, never re-classified.
+  `PreScanItem` gains `is_phishing`/`is_spam` (bool, default `false`) and
+  `EmailPreScanResult` gains `suspicious`/`suspicious_total` (schema 2.13) so
+  the flag, previously readable only inside a prose `why` string, is a real
+  field — captured before `actionable`'s own cap so a flagged message ranked
+  past it is never silently dropped from the count. A general (non-
+  question-parsing) request still gets the full four-bucket
+  `pre_scan_inbox` card unchanged.
 ### Changed
 
 - **`office365`/`o365`/`m365`/"microsoft 365"/`entra`/`exchange` now resolve

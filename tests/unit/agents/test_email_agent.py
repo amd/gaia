@@ -173,6 +173,10 @@ class TestToolRegistry:
         # user's reply (the opposite direction from check_followups);
         # pre-existing gap, this file never got it when it landed.
         "list_waiting_on_you",
+        # Suspicious-mail detection (#2900) — phishing/spam-flagged view
+        # over the same classifier pre_scan_inbox already runs, scoped so a
+        # "anything suspicious?" question doesn't dump the full triage card.
+        "check_suspicious_mail",
         # Organize
         "archive_message",
         "mark_read",

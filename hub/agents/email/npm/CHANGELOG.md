@@ -10,7 +10,7 @@ behind any entry — API shapes, endpoints, and version semantics — see
   Outlook.** A work/school Microsoft account (Entra ID) can now be connected and
   triaged the same way as Gmail or a personal Outlook.com mailbox — connecting,
   onboarding copy, and mailbox selection all recognize the new `microsoft_work`
-  connector (#2629, schema 2.13).
+  connector (#2629, schema 2.14).
 - **Compatibility note:** if your app or its users refer to a mailbox as
   "office365", "o365", "m365", "microsoft 365", "entra", or "exchange", that
   now names the new work connector instead of personal Outlook. Before this
@@ -26,6 +26,13 @@ behind any entry — API shapes, endpoints, and version semantics — see
   follow-up referring to something an earlier turn surfaced has something
   to resolve against. Leave it unset and nothing changes (#2829, schema
   2.12).
+- **A scoped "anything suspicious in my inbox?" question no longer dumps the
+  full triage report (#2900).** `PreScanItem` gains `is_phishing`/`is_spam`
+  (boolean, default `false`) — a flag previously readable only inside a
+  prose `why` string is now a real field — and `EmailPreScanResult` gains
+  `suspicious`/`suspicious_total` (schema 2.13): the phishing/spam-flagged
+  subset of `actionable`, captured before its own cap so a flagged message
+  ranked past it is never silently dropped from the count.
 - **The agent's built-in skills ship switched off, so the whole context window
   goes back to your mail.** The six skills below are still in the package, but
   no set is active and none of them loads: nothing yet shows they make triage
