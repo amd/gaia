@@ -380,14 +380,25 @@ def draft_reply_impl(
             attachments=attachments,
         )
         draft_id = result["id"]
-        action_store.record_draft(
-            db,
-            draft_id=draft_id,
-            to=to,
-            subject=subject,
-            body=body,
-            in_reply_to=threading.get("In-Reply-To"),
-        )
+        try:
+            action_store.record_draft(
+                db,
+                draft_id=draft_id,
+                to=to,
+                subject=subject,
+                body=body,
+                in_reply_to=threading.get("In-Reply-To"),
+            )
+        except sqlite3.Error as exc:
+            # Audit-write failures must NOT mask a successful draft. Log
+            # but don't raise — the draft already exists in the mailbox;
+            # the agent must not retry create_draft.
+            log.warning(
+                "draft_reply: audit write failed for draft_id=%s (%s) — "
+                "draft DID succeed but audit row missing",
+                draft_id,
+                exc,
+            )
         st["result_summary"] = {"draft_id": draft_id, "to": to}
         return {
             "draft_id": draft_id,
@@ -432,9 +443,20 @@ def draft_forward_impl(
             + (original.get("snippet", "") or ""),
         )
         draft_id = result["id"]
-        action_store.record_draft(
-            db, draft_id=draft_id, to=to, subject=subject, body=body
-        )
+        try:
+            action_store.record_draft(
+                db, draft_id=draft_id, to=to, subject=subject, body=body
+            )
+        except sqlite3.Error as exc:
+            # Audit-write failures must NOT mask a successful draft. Log
+            # but don't raise — the draft already exists in the mailbox;
+            # the agent must not retry create_draft.
+            log.warning(
+                "draft_forward: audit write failed for draft_id=%s (%s) — "
+                "draft DID succeed but audit row missing",
+                draft_id,
+                exc,
+            )
         st["result_summary"] = {"draft_id": draft_id, "to": to}
         return {"draft_id": draft_id, "to": to, "subject": subject}
 
@@ -442,7 +464,18 @@ def draft_forward_impl(
 def send_draft_impl(gmail, db, *, draft_id: str, debug: bool = False) -> Dict[str, Any]:
     with log_tool_call("send_draft", {"draft_id": draft_id}, debug=debug) as st:
         result = gmail.send_draft(draft_id)
-        action_store.mark_draft_sent(db, draft_id=draft_id)
+        try:
+            action_store.mark_draft_sent(db, draft_id=draft_id)
+        except sqlite3.Error as exc:
+            # Audit-write failures must NOT mask a successful send. Log
+            # but don't raise — the email already left the user's
+            # account; the agent must not retry.
+            log.warning(
+                "send_draft: audit write failed for draft_id=%s (%s) — "
+                "send DID succeed but audit row not marked sent",
+                draft_id,
+                exc,
+            )
         st["result_summary"] = {"sent_id": result.get("id")}
         return {"draft_id": draft_id, "sent_id": result.get("id"), "sent": True}
 
@@ -656,6 +689,16 @@ class ReplyToolsMixin:
                     send_draft_impl(backend, db, draft_id=draft_id, debug=debug_flag)
                 )
             except ConnectorsError as exc:
+                if _is_message_not_found(exc):
+                    # The same 404 covers a consumed draft and a deleted one —
+                    # report the observable fact, not an unverified delivery.
+                    return _envelope_err(
+                        f"Draft {draft_id!r} is no longer in the mailbox — "
+                        "most likely a prior send already consumed it "
+                        "(Gmail/Outlook delete a draft on send), though it "
+                        "may also have been deleted. Don't retry this id; "
+                        "check Sent Mail to confirm whether it went out."
+                    )
                 return _envelope_err(format_connector_error(exc))
             except Exception as exc:
                 log.exception("email tool error: %s", type(exc).__name__)
