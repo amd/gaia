@@ -5,13 +5,13 @@ description: "Install and run agents from the terminal, add capabilities by drop
 
 # GAIA v0.23.0 Release Notes
 
-GAIA v0.23.0 makes the agents easier to get, safer to run, and easier to extend. You can now browse, install, and run agents straight from the terminal with `gaia hub`, and add new capabilities to an agent by dropping a folder into a skills directory — no forking, no Python. Under the surface it's a security release: the local API and MCP bridge no longer expose themselves to the network by default, and the confirmation prompt that pauses an agent before it sends mail, writes a file, or runs a command now works from the terminal too, not just inside the graphical app. Connecting a Microsoft account is now an explicit Personal-or-Work/School choice with a zero-setup sign-in, and first-run discovery finally finds your apps and bookmarks on macOS and Linux.
+GAIA v0.23.0 makes the agents easier to get, safer to run, and easier to extend. You can now browse, install, and run agents straight from the terminal with `gaia hub`, and add new capabilities to an agent as signed, auditable skills. Under the surface it's a security release: the local API and MCP bridge no longer expose themselves to the network by default, the confirmation prompt that pauses an agent before it sends mail, writes a file, or runs a command now works from the terminal and over the local API and MCP — not just inside the graphical app — and an agent can no longer quietly reach into your `~/.gaia` config or slip crafted SQL into the database agent. Connecting a Microsoft account is now an explicit Personal-or-Work/School choice with a zero-setup sign-in, and first-run discovery finally finds your apps and bookmarks on macOS and Linux.
 
 **Why upgrade:**
 - **Get agents from the terminal** — `gaia hub` browses, installs (behind a trust prompt for unverified agents), runs, and removes agents without leaving the shell.
-- **Every agent asks before it acts** — the confirmation gate for sending mail, writing files, and running commands now works in the terminal, not only in the Agent UI.
-- **Safer by default** — the MCP bridge binds to localhost instead of every network interface, and the local API no longer allows credentialed cross-origin requests from arbitrary sites.
-- **Extend an agent with a folder** — `gaia skill` adds a capability from a dropped-in folder, with a declared permission it must be granted before it loads.
+- **Every agent asks before it acts** — the confirmation gate for sending mail, writing files, and running commands now works in the terminal, over the local API, and across MCP tools, not only in the Agent UI.
+- **Safer by default** — the MCP bridge binds to localhost, the local API refuses credentialed cross-origin requests from arbitrary sites, MCP servers launch without a shell, and an agent can't write into `~/.gaia` or reach the database with crafted SQL.
+- **Build and share skills safely** — `gaia skill` makes skills first-class: create, import, sign with trust tiers, and audit them before sharing. They're opt-in — you add the ones you want.
 - **Connect a Microsoft account without a secret** — Personal and Work/School are now separate connectors with device-code sign-in and no client secret required.
 
 <Note>
@@ -42,21 +42,21 @@ Getting an agent used to mean the graphical app or a manual pip install. Now the
 
 ---
 
-### Every agent asks before it acts — in the terminal too
+### Every agent asks before it acts — beyond the Agent UI
 
-The confirmation prompt that pauses an agent before a consequential action — sending or deleting mail, writing a file, running a shell command — used to work only inside the Agent UI; from a terminal or a script those actions could run unprompted. Now the gate works from a plain terminal: the agent stops and asks before the action, declining leaves nothing changed, and setting `GAIA_AUTO_APPROVE_TOOLS=1` in your environment is the explicit way to opt out (PRs [#2475](https://github.com/amd/gaia/pull/2475), [#2544](https://github.com/amd/gaia/pull/2544)).
-
----
-
-### Safer by default — localhost binding and stricter CORS
-
-Two local-network exposures are closed in this release. The MCP bridge now binds to `127.0.0.1` by default instead of every interface, so it isn't reachable from other machines on your network unless you explicitly ask for that with a bind-all host. And the local API server no longer echoes an arbitrary origin back with credentials allowed — a cross-origin request from a site that isn't allow-listed is refused rather than accepted (PRs [#2246](https://github.com/amd/gaia/pull/2246), [#2238](https://github.com/amd/gaia/pull/2238), [#2239](https://github.com/amd/gaia/pull/2239), [#2344](https://github.com/amd/gaia/pull/2344)).
+The confirmation prompt that pauses an agent before a consequential action — sending or deleting mail, writing a file, running a shell command — used to work only inside the Agent UI; from a terminal, the local API, or an MCP tool call those actions could run unprompted. This release closes those paths: the gate now fires from a plain terminal, through the `gaia api` server, and across MCP tool calls, classifying a tool as read-only or mutating and failing closed when unsure. The agent stops and asks before the action, declining leaves nothing changed, and setting `GAIA_AUTO_APPROVE_TOOLS=1` in your environment is the explicit way to opt out (PRs [#2475](https://github.com/amd/gaia/pull/2475), [#2544](https://github.com/amd/gaia/pull/2544), [#2846](https://github.com/amd/gaia/pull/2846), [#2854](https://github.com/amd/gaia/pull/2854)).
 
 ---
 
-### Add a capability from a folder — `gaia skill`
+### Safer by default — a security-focused release
 
-An agent can now gain a new capability from a dropped-in folder — no new Python, no forking the agent. `gaia skill create <name>` scaffolds one, `gaia skill list` shows what's discovered, and `gaia skill info <name>` prints its parsed manifest. A skill declares the local permissions it needs (filesystem, shell, and so on), and those are surfaced from the manifest rather than granted silently (PR [#2669](https://github.com/amd/gaia/pull/2669)). Try it: `gaia skill list`.
+Several local exposures are closed this release. The MCP bridge binds to `127.0.0.1` by default instead of every interface, so it isn't reachable from other machines on your network unless you pass a bind-all host, and it can now require an `--auth-token` that is actually enforced rather than ignored. The local API server no longer echoes an arbitrary origin back with credentials allowed — a cross-origin request from a site that isn't allow-listed is refused. MCP servers are launched without going through a shell, so a server name can't smuggle shell metacharacters; an agent can no longer write into your `~/.gaia` configuration; and SQL supplied by the model is blocked from reaching the database agent's statements rather than being executed (PRs [#2246](https://github.com/amd/gaia/pull/2246), [#2238](https://github.com/amd/gaia/pull/2238), [#2344](https://github.com/amd/gaia/pull/2344), [#2844](https://github.com/amd/gaia/pull/2844), [#2847](https://github.com/amd/gaia/pull/2847), [#2860](https://github.com/amd/gaia/pull/2860)).
+
+---
+
+### Build and share skills — `gaia skill`
+
+A skill gives an agent a new capability from a folder with a manifest — no new Python, no forking the agent. `gaia skill create <name>` scaffolds one, `gaia skill import` adds a skill so an agent can discover it, and `gaia skill list` / `info` show what's installed and the permissions each one declares. Sharing is guarded: skills carry signatures with trust tiers — an unsigned or untrusted skill is capped at the lowest tier, and tampering is caught by checksum — a pre-publish audit rejects a skill that attempts prompt injection or `shell=True`/`eval`, and `gaia skill migrate` converts skills authored in other formats. Skills are opt-in: no agent loads them automatically yet, so you add the ones you want (PRs [#2669](https://github.com/amd/gaia/pull/2669), [#2692](https://github.com/amd/gaia/pull/2692), [#2702](https://github.com/amd/gaia/pull/2702), [#2693](https://github.com/amd/gaia/pull/2693)). Try it: `gaia skill list`.
 
 ---
 
