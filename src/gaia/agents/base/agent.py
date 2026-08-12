@@ -329,7 +329,9 @@ def _sum_conversation_tokens(
                 total_input += _safe_number(stats.get("input_tokens"))
                 total_output += _safe_number(stats.get("output_tokens"))
     for usage in tool_usage_entries or []:
-        total_input += _safe_number(usage.get("prompt_tokens") or usage.get("input_tokens"))
+        total_input += _safe_number(
+            usage.get("prompt_tokens") or usage.get("input_tokens")
+        )
         total_output += _safe_number(
             usage.get("completion_tokens") or usage.get("output_tokens")
         )
@@ -367,7 +369,8 @@ def _extract_tool_usage(tool_result: Any) -> Optional[Dict[str, Any]]:
         if not isinstance(usage, dict):
             return None
         has_real_token_field = any(
-            isinstance(usage.get(f), (int, float)) and not isinstance(usage.get(f), bool)
+            isinstance(usage.get(f), (int, float))
+            and not isinstance(usage.get(f), bool)
             for f in _TOOL_USAGE_TOKEN_FIELDS
         )
         return usage if has_real_token_field else None
@@ -5663,7 +5666,9 @@ Do NOT wrap conversational replies in JSON.
                     conversation, self._tool_reported_usage
                 )
                 self.console.print_final_answer(
-                    final_answer, streaming=self.streaming, total_tokens=pre_output_tokens
+                    final_answer,
+                    streaming=self.streaming,
+                    total_tokens=pre_output_tokens,
                 )
                 break
 
