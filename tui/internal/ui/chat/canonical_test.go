@@ -148,13 +148,9 @@ func TestCanonicalRenderOmitsTokensWhenZero(t *testing.T) {
 	}
 }
 
-// TestCanonicalTTFTAnchorsOnFirstToken reproduces the WARM-query shape
-// measured against a live sidecar (#2899): the status frame arrives
-// essentially immediately, but real generation doesn't start for several
-// more seconds. Before the fix, ttft was set on the status frame and read
-// ~0s in this exact shape — a cold-load-only test (large gap before even the
-// status frame) would not catch that regression, since the old code happened
-// to look right by coincidence when the delay came before the first frame.
+// TestCanonicalTTFTAnchorsOnFirstToken covers the warm-query shape: the
+// status frame arrives immediately, but ttft must anchor on the first real
+// token, not the status frame.
 func TestCanonicalTTFTAnchorsOnFirstToken(t *testing.T) {
 	m, _ := newTestModel(t)
 	m.streaming = true
@@ -183,13 +179,8 @@ func TestCanonicalTTFTAnchorsOnFirstToken(t *testing.T) {
 	}
 }
 
-// TestCanonicalLegacyTransportNeverSetsTTFT locks in a deliberate decision:
-// the legacy subprocess transport's ChunkEvent is documented as "disabled in
-// v1 json-events mode" (types.go), so a legacy AnswerEvent with no preceding
-// ChunkEvent leaves ttft at 0 and the stats line omits it entirely — a
-// strict improvement over the old "any first frame" anchor, which showed a
-// wrong non-zero value there. This is not a bug to fix; this test exists so
-// a future reader doesn't mistake the omission for one.
+// TestCanonicalLegacyTransportNeverSetsTTFT: the legacy transport never
+// fires ChunkEvent, so ttft stays 0 and is omitted — intentional, not a bug.
 func TestCanonicalLegacyTransportNeverSetsTTFT(t *testing.T) {
 	m, _ := newTestModel(t)
 	m.streaming = true
@@ -203,21 +194,9 @@ func TestCanonicalLegacyTransportNeverSetsTTFT(t *testing.T) {
 	}
 }
 
-// TestCanonicalTTFTFallsBackToServerReportedValue reproduces the gap a live
-// run against a real mailbox exposed as a follow-up to #2899: every one of
-// the four real queries got real token counts (the #2899 fix) but ttft never
-// rendered at all — not a wrong value, an absent one. Root cause: native
-// tool-calling models attach the full tool schema on every step, and
-// Lemonade forces every such request non-streaming (lemonade.py's
-// `effective_stream = stream and not (tool_capable and tools)`), so no
-// CanonicalTokenEvent is ever emitted to anchor ttft client-side — this is
-// the daemon/TUI path's NORMAL case, not an edge one. The agent-side fix
-// computes the turn's FIRST LLM call's own real time_to_first_token
-// (Lemonade's /stats, already polled every step for the token count — a
-// last-step reading was tried first and rejected, since it silently drops
-// every earlier step's tool-decision latency) and rides it on usage.ttft;
-// this test locks in the client using it when no token ever streamed this
-// turn.
+// TestCanonicalTTFTFallsBackToServerReportedValue: when no token ever
+// streamed this turn (the normal non-streaming tool-calling path), the
+// client must use the server-reported usage.ttft instead of leaving it at 0.
 func TestCanonicalTTFTFallsBackToServerReportedValue(t *testing.T) {
 	m, _ := newTestModel(t)
 	m.streaming = true

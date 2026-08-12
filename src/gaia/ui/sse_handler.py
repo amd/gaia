@@ -571,15 +571,11 @@ class SSEOutputHandler(OutputHandler):
             "steps": self._step_count,
             "tools_used": self._tool_count,
         }
-        # Omit entirely when no real count exists — never emit "tokens": 0 as
-        # if it were a measured zero (#2899, fail-loud: no silent fake data).
+        # Omit entirely when no real count exists — never emit a fake zero.
         if total_tokens is not None:
             event["tokens"] = total_tokens
-        # Same omit-don't-fake rule for ttft (#2899 follow-up): a non-streaming
-        # turn (every native tool-calling model, every step) never fires a
-        # `chunk` event to anchor a client-side ttft, so this is the only value
-        # that reaches the wire at all — real, from Lemonade's own generation
-        # timing (see agent.py's _query_ttft_seconds), never a guess.
+        # Same omit-don't-fake rule for ttft: real value from Lemonade's own
+        # generation timing, or nothing.
         if (
             ttft_seconds is not None
             and math.isfinite(ttft_seconds)

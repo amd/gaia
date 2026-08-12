@@ -54,10 +54,6 @@ def _make_agent(**kwargs) -> _TokenUsageAgent:
     """Construct a real Agent without touching Lemonade or the network."""
     with patch("gaia.agents.base.agent.AgentSDK"):
         agent = _TokenUsageAgent(skip_lemonade=True, silent_mode=True, **kwargs)
-    # A bare MagicMock is truthy, which would make _fold_tool_usage's
-    # "does self.chat look like it just made a call" heuristic fire on every
-    # test. Tests that care about that heuristic override this explicitly.
-    agent.chat.get_stats.return_value = None
     return agent
 
 
@@ -154,30 +150,9 @@ class TestSumConversationTokens:
 
 # ─────────────────────── _query_ttft_seconds (#2899 follow-up) ────────────
 #
-# A live run against a real mailbox showed the token half of #2899 working
-# but ttft never rendering at all on any of 4 real queries — not a wrong
-# value, an absent one. Root cause: EmailAgentConfig.streaming defaults False
-# and nothing overrides it on the daemon/TUI path, so the agent never calls
-# send_messages_stream() and no `chunk` event ever fires to anchor a
-# client-side ttft. Even flipping that default would not reliably fix it:
-# native tool-calling models attach their full tool schema on every step, and
-# Lemonade forces a request non-streaming whenever `tools` is attached
-# (lemonade.py's `effective_stream = stream and not (tool_capable and
-# tools)`) — so the non-streaming path is not an edge case for this agent,
-# it is the only path. This reads the one real per-request timing value
-# Lemonade already reports (via /stats, already polled every step for the
-# token count) off the same per-step 'stats' conversation entries.
-#
-# The FIRST step's value is read, not the last: a last-step reading times
-# only the final LLM call, dropping every earlier step's tool-decision
-# latency — on the #2899 baseline's own warm-query shape (~8s tool-call
-# decision, more steps, ~69s total) that reproduces the exact "implausibly
-# small ttft on a minute-long query" defect #2899 opened to fix, just with a
-# different number (see review discussion on this PR). Step 1's own
-# time_to_first_token is the closest available proxy for "query submit to
-# first inference token" because nothing but cheap in-process work (message
-# assembly, no I/O) happens between process_query's start_time and the first
-# LLM call.
+# Reads the real per-request ttft Lemonade's /stats already reports off the
+# turn's FIRST step, not the last — a last-step reading drops every earlier
+# step's tool-decision latency.
 class TestQueryTTFTSeconds:
     def test_reads_ttft_off_the_first_stats_entry(self):
         conversation = [
@@ -207,11 +182,7 @@ class TestQueryTTFTSeconds:
         assert _query_ttft_seconds([{"role": "user", "content": "hi"}]) is None
 
     def test_missing_field_on_first_step_returns_none_not_a_later_steps_value(self):
-        # Step 1 reported stats but no ttft; step 2 has one. Falling through
-        # to step 2 would mislabel a later (typically much smaller, warmer)
-        # request's latency as "time to first token from submit" — the same
-        # misrepresentation this function exists to avoid, just shifted by
-        # one step. Must omit, not substitute.
+        # Step 1 has no ttft; step 2 does. Must omit, not fall through to step 2.
         conversation = [
             {
                 "role": "system",
@@ -233,14 +204,9 @@ class TestQueryTTFTSeconds:
         assert _query_ttft_seconds(conversation) is None
 
     def test_step_1_entry_entirely_missing_returns_none_not_step_2s_value(self):
-        # The real (not hypothetical) failure mode caught in review: a failed
-        # /stats poll returns {} (falsy), so the caller's `if perf_stats:`
-        # skips appending a stats entry for step 1 at all — the EARLIEST
-        # entry actually present in conversation is step 2's. Trusting
-        # "first entry found" instead of the entry's own step number would
-        # silently misattribute step 2's (typically much smaller, warmer)
-        # latency as the turn's ttft — reproducing the exact bug this
-        # function exists to prevent, one step later.
+        # A failed /stats poll can skip step 1's entry entirely, leaving
+        # step 2's as the earliest present — must check the step number,
+        # not just take the first entry found.
         conversation = [
             {
                 "role": "system",
