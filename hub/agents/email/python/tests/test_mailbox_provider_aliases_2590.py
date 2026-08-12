@@ -32,7 +32,7 @@ from onboarding_fakes import FakeAgent as _FakeAgent
         # Canonical ids still resolve.
         ("google", "google"),
         ("microsoft", "microsoft"),
-        # Microsoft's real-world vocabulary.
+        # Microsoft's real-world vocabulary — personal connector.
         ("outlook", "microsoft"),
         ("Outlook", "microsoft"),
         ("  outlook  ", "microsoft"),
@@ -40,11 +40,12 @@ from onboarding_fakes import FakeAgent as _FakeAgent
         ("outlook.com", "microsoft"),
         ("hotmail", "microsoft"),
         ("live", "microsoft"),
-        ("office365", "microsoft"),
-        ("o365", "microsoft"),
-        ("microsoft 365", "microsoft"),
-        ("entra", "microsoft"),
-        ("exchange", "microsoft"),
+        # Microsoft's real-world vocabulary — work/school connector (#2629).
+        ("office365", "microsoft_work"),
+        ("o365", "microsoft_work"),
+        ("microsoft 365", "microsoft_work"),
+        ("entra", "microsoft_work"),
+        ("exchange", "microsoft_work"),
         # Google's real-world vocabulary.
         ("gmail", "google"),
         ("Gmail", "google"),

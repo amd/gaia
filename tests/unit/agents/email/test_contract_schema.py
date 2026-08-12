@@ -332,7 +332,7 @@ def test_result_summary_required():
 
 
 def test_schema_version_unchanged_by_multi_inbox():
-    """Schema 2.12 is the current frozen contract version.
+    """Schema 2.13 is the current frozen contract version.
 
     2.1 was additive over the 2.0 5-bucket taxonomy (no triage shape change):
     it added inbox search (#1781), mailbox actions (#1779), the calendar
@@ -367,11 +367,15 @@ def test_schema_version_unchanged_by_multi_inbox():
     /v1/email/query gains an optional session_id — when the host sends it,
     the run resolves the SAME agent every other turn on that id used
     (instead of a throwaway per-turn agent), so a reference to something an
-    earlier turn surfaced can resolve — no existing field changed. If this
-    fails, someone changed the version unexpectedly; that requires an
-    explicit version negotiation, not a drive-by edit.
+    earlier turn surfaced can resolve — no existing field changed. 2.13 is
+    additive over 2.12 (#2629): microsoft_work becomes a third valid provider
+    value (work Microsoft 365 / Entra, distinct from the personal microsoft
+    Outlook.com connector) wherever a provider string is accepted or
+    returned — no existing field or value changed. If this fails, someone
+    changed the version unexpectedly; that requires an explicit version
+    negotiation, not a drive-by edit.
     """
-    assert SCHEMA_VERSION == "2.12"
+    assert SCHEMA_VERSION == "2.13"
 
 
 def test_triage_result_gained_no_new_required_field():

@@ -45,12 +45,12 @@ from gaia_agent_email.contract import (  # noqa: E402
 
 
 class TestSchemaVersionBump:
-    def test_schema_version_is_2_12(self):
-        # Bumped again by #2829 (POST /v1/email/query gains optional
-        # session_id) since this file's #2582 attention-view bump to 2.8 --
+    def test_schema_version_is_2_13(self):
+        # Bumped again by #2629 (microsoft_work becomes a third valid
+        # provider value) since this file's #2829 session_id bump to 2.12 --
         # additive like every bump before it, so this is a routine
         # version-pin update, not a contract regression.
-        assert SCHEMA_VERSION == "2.12"
+        assert SCHEMA_VERSION == "2.13"
 
 
 class TestAttentionItemKind:
