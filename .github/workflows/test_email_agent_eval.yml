@@ -117,10 +117,11 @@
 # FORKS. The job does not run for fork PRs — pointing a self-hosted runner at
 # unreviewed fork code is not acceptable, and a fork PR carries no
 # ANTHROPIC_API_KEY, so it could only ever produce an un-judged result.
-# test_eval_agent_gemma_consolidation.yml reaches the same end by having no
-# `pull_request` trigger at all; this workflow needs one, so the guard is explicit
-# in the job's `if:`. A fork PR touching the email agent needs a maintainer to
-# push the branch into this repo and re-run.
+# test_eval_agent_gemma_consolidation.yml now triggers on `pull_request` too (a
+# `push` filter re-fired it on every main-merge, gating PRs that touched no
+# Python), so it carries the same fork and draft clauses in its job `if:` —
+# without this workflow's `skip-email-eval` clause. A fork PR touching the email
+# agent needs a maintainer to push the branch into this repo and re-run.
 
 name: Email Agent Eval (offline, report mode)
 

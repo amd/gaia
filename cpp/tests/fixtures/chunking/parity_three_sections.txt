@@ -1,0 +1,11 @@
+# Alpha
+
+The first section body is one line that ends with a period.
+
+# Beta
+
+The second section body is also a single line ending in a period.
+
+# Gamma
+
+The third section body closes this fixture out with one more line.

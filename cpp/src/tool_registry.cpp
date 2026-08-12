@@ -133,6 +133,67 @@ std::string ToolRegistry::formatForPrompt() const {
     return oss.str();
 }
 
+namespace {
+/// OpenAI requires function names to match ^[a-zA-Z0-9_-]{1,64}$. MCP tools are
+/// named mcp_<server>_<tool> from user-supplied server names, so a dot, space,
+/// or a long pair can silently produce a name the server rejects — 400-ing the
+/// whole request, not just that tool.
+bool isValidOpenAiFunctionName(const std::string& name) {
+    if (name.empty() || name.size() > 64) return false;
+    for (char c : name) {
+        const bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                        (c >= '0' && c <= '9') || c == '_' || c == '-';
+        if (!ok) return false;
+    }
+    return true;
+}
+} // namespace
+
+json ToolRegistry::buildOpenAiToolSchemas() const {
+    json schemas = json::array();
+    for (const auto& [name, tool] : tools_) {
+        if (!tool.enabled) continue;
+
+        if (!isValidOpenAiFunctionName(name)) {
+            throw std::invalid_argument(
+                "Tool '" + name + "' cannot be sent as an OpenAI function: names must "
+                "match ^[a-zA-Z0-9_-]{1,64}$ (got " + std::to_string(name.size()) +
+                " chars). Rename the tool — or, for an MCP tool, the MCP server whose "
+                "name is prefixed onto it. To keep this tool on the prompt-JSON path "
+                "instead, set AgentConfig::nativeToolCalls = NativeToolCalls::Never.");
+        }
+
+        json properties = json::object();
+        json required = json::array();
+        for (const auto& param : tool.parameters) {
+            json prop;
+            // UNKNOWN maps to "string" — the same coercion Python's
+            // _python_to_json_type applies to an unrecognized annotation.
+            prop["type"] = (param.type == ToolParamType::UNKNOWN)
+                               ? "string"
+                               : paramTypeToString(param.type);
+            if (!param.description.empty()) {
+                prop["description"] = param.description;
+            }
+            properties[param.name] = prop;
+            if (param.required) {
+                required.push_back(param.name);
+            }
+        }
+
+        schemas.push_back(json{
+            {"type", "function"},
+            {"function",
+             {{"name", name},
+              {"description", tool.description},
+              {"parameters",
+               {{"type", "object"},
+                {"properties", properties},
+                {"required", required}}}}}});
+    }
+    return schemas;
+}
+
 json ToolRegistry::executeTool(const std::string& name, const json& args) {
     const ToolInfo* tool = findTool(name);
     if (!tool) {

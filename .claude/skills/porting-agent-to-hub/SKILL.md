@@ -95,8 +95,10 @@ Two halves, and the expensive one is not the code:
 
 - **The oracle (not automatable):** a labelled, human-curated ground-truth corpus
   plus a deterministic fixture harness so the eval needs no live service and no
-  LLM judge. Email's is `tests/fixtures/email/ground_truth.json` +
-  `FakeGmailBackend`.
+  LLM judge. Email's lives in `tests/fixtures/email/` — `_stub_inbox.mbox` plus a
+  **per-task** ground truth (`action_items_`, `briefing_`, `drafting_`, `followups_`,
+  `longthread_`) driven through `FakeGmailBackend`. `ls` it; there is no single
+  `ground_truth.json`.
 - **The mechanism:** the adapter, `SCORECARD.md`, the `scorecard_gate.py` wiring
   and a refresh workflow → **use `adding-eval-scorecard`**.
 
@@ -164,6 +166,13 @@ present.
 - Checking a capability claim in `gaia-agent.yaml` only — the same claims are
   duplicated, unguarded, in `build_registration()`
 - Concluding "it works" from a dev box that already has the extras installed
+
+## Reporting the port
+
+The docs you write (README/SPEC/SKILL/CHANGELOG) and your report back to the user both
+follow [CLAUDE.md → How You Communicate](../../../CLAUDE.md#how-you-communicate): lead with
+what the agent now does for a user and what still doesn't work, then the phase-by-phase
+evidence underneath. Name any gate you skipped — an unstated skip reads as a pass.
 
 ## Reference
 

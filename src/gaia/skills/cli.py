@@ -1,11 +1,20 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 """
-CLI for ``gaia skill {list|info|create|import|export}``.
+CLI for ``gaia skill
+{list|info|create|import|export|migrate|search|install|remove|publish|keygen|trust}``.
 
-``install`` / ``search`` / ``publish`` belong to the marketplace phase
-(issue #2467) and are deliberately absent — not even as stubs, so a user never
-discovers a verb that cannot work.
+Two groups of verbs, both real:
+
+* **Local authoring** — ``list`` / ``info`` / ``create`` / ``import`` / ``export``
+  (#888), plus ``migrate`` for converting OpenClaw / Hermes skills. No network,
+  no registry.
+* **Marketplace** (#2467) — ``search`` / ``install`` / ``remove`` / ``publish``,
+  plus the ``keygen`` / ``trust`` key management the tier ladder rests on. These
+  talk to the Agent Hub's skills lane.
+
+Exit codes are shared by both: ``0`` ok, ``2`` usage, ``3`` not found, ``4``
+invalid (a malformed skill, a refused install, a rejected publish).
 """
 
 from __future__ import annotations
@@ -39,6 +48,8 @@ from gaia.skills.migrate import (
     install_migrated,
     migrate_skill_dir,
 )
+from gaia.skills.signing import ROLE_AMD, ROLE_PUBLISHER
+from gaia.skills.tiers import LOWEST_TIER
 
 log = get_logger(__name__)
 
@@ -59,7 +70,8 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
         "skill",
         help="Author and manage agent skills (SKILL.md capabilities)",
         description=(
-            "Discover, inspect, scaffold, import, and export SKILL.md skills. "
+            "Discover, inspect, scaffold, import, and export SKILL.md skills, and "
+            "search / install / publish them through the Agent Hub's skills lane. "
             "Skills are discovered from agent-bundled skills/, ~/.gaia/skills/, "
             "and (read-only) .claude/skills/."
         ),
@@ -179,6 +191,119 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
         help="Emit the migration report as JSON",
     )
 
+    _add_marketplace_subparsers(sub)
+
+
+def _add_marketplace_subparsers(sub: argparse._SubParsersAction) -> None:
+    """Register the marketplace verbs: search / install / remove / publish / keys.
+
+    Kept in its own function so the marketplace lane (#2467) stays a localized,
+    additive block rather than edits threaded through every parser above.
+    """
+    p_search = sub.add_parser(
+        "search", help="Search the Agent Hub's skills lane for a published skill"
+    )
+    p_search.add_argument(
+        "query", nargs="?", default="", help="Substring to match (omit to list all)"
+    )
+    p_search.add_argument(
+        "--json",
+        action="store_true",
+        dest="as_json",
+        help="Emit JSON instead of a table",
+    )
+    p_search.add_argument("--hub-url", default=None, help="Hub origin override")
+
+    p_install = sub.add_parser(
+        "install", help="Install a published skill into ~/.gaia/skills/"
+    )
+    p_install.add_argument(
+        "reference", help="Skill to install: <name> or <name>@<version-range>"
+    )
+    p_install.add_argument(
+        "--allow-experimental",
+        action="store_true",
+        help="Required to install a skill whose signature attests only 'experimental'",
+    )
+    p_install.add_argument(
+        "--force", action="store_true", help="Replace an already-installed copy"
+    )
+    p_install.add_argument(
+        "--yes",
+        action="store_true",
+        dest="assume_yes",
+        help="Grant dangerous permissions without prompting (for CI)",
+    )
+    p_install.add_argument("--hub-url", default=None, help="Hub origin override")
+    p_install.add_argument(
+        "--json", action="store_true", dest="as_json", help="Emit JSON instead of text"
+    )
+
+    p_remove = sub.add_parser("remove", help="Remove an installed skill")
+    p_remove.add_argument("name", help="Skill name to remove")
+
+    p_publish = sub.add_parser(
+        "publish", help="Validate, audit, sign, and publish a skill to the Agent Hub"
+    )
+    p_publish.add_argument("directory", help="Skill folder to publish")
+    p_publish.add_argument(
+        "--hub-url", default=None, help="Hub origin override (default: GAIA_HUB_URL)"
+    )
+    p_publish.add_argument(
+        "--key-name",
+        default="publisher",
+        help="Signing key to use (default: publisher)",
+    )
+    p_publish.add_argument(
+        "--publisher", default="", help="Publisher identity recorded in the signature"
+    )
+    p_publish.add_argument(
+        "--unsigned",
+        action="store_true",
+        help=f"Publish without a signature (only valid for '{LOWEST_TIER}')",
+    )
+    p_publish.add_argument(
+        "--audit-report",
+        default=None,
+        help="Use this security-audit report JSON instead of running the audit engine",
+    )
+    p_publish.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Run every gate and build the upload, but do not send it",
+    )
+
+    p_keygen = sub.add_parser(
+        "keygen", help="Generate an Ed25519 publisher key for signing skills"
+    )
+    p_keygen.add_argument(
+        "--key-name", default="publisher", help="Key name (default: publisher)"
+    )
+    p_keygen.add_argument(
+        "--force", action="store_true", help="Overwrite an existing key of that name"
+    )
+
+    p_trust = sub.add_parser(
+        "trust", help="Manage the public keys whose signatures this machine trusts"
+    )
+    trust_sub = p_trust.add_subparsers(dest="trust_action", metavar="<action>")
+    trust_sub.add_parser("list", help="List trusted signing keys")
+    p_trust_add = trust_sub.add_parser("add", help="Trust a public key")
+    p_trust_add.add_argument(
+        "public_key", help="Base64 Ed25519 public key, or a path to a .pub file"
+    )
+    p_trust_add.add_argument(
+        "--publisher", default="", help="Publisher name shown for this key"
+    )
+    p_trust_add.add_argument(
+        "--role",
+        default=ROLE_PUBLISHER,
+        choices=[ROLE_PUBLISHER, ROLE_AMD],
+        help=f"'{ROLE_PUBLISHER}' attests 'community'; '{ROLE_AMD}' attests 'verified'",
+    )
+    p_trust_remove = trust_sub.add_parser("remove", help="Stop trusting a key")
+    p_trust_remove.add_argument("key_id", help="Key id to remove (see 'trust list')")
+
 
 def handle(args: argparse.Namespace) -> int:
     """Dispatch a parsed ``gaia skill ...`` command. Returns an exit code."""
@@ -194,6 +319,13 @@ def handle(args: argparse.Namespace) -> int:
         "import": _handle_import,
         "export": _handle_export,
         "migrate": _handle_migrate,
+        # Marketplace lane (#2467)
+        "search": _handle_search,
+        "install": _handle_install,
+        "remove": _handle_remove,
+        "publish": _handle_publish,
+        "keygen": _handle_keygen,
+        "trust": _handle_trust,
     }
     handler = handlers.get(action)
     if handler is None:
@@ -515,6 +647,238 @@ def _handle_migrate(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return EXIT_INVALID
+    return EXIT_OK
+
+
+# ----------------------------------------------------------------------
+# Marketplace verbs (#2467)
+# ----------------------------------------------------------------------
+
+
+def _handle_search(args: argparse.Namespace) -> int:
+    from gaia.skills.hub import search_skills
+
+    found = search_skills(args.query, base_url=args.hub_url)
+    results = found.entries
+
+    if getattr(args, "as_json", False):
+        print(
+            json.dumps(
+                {
+                    "query": args.query,
+                    "offline": found.offline,
+                    "generated_at": found.generated_at,
+                    "skills": results,
+                },
+                indent=2,
+            )
+        )
+        return EXIT_OK
+
+    # Say so before the results, not after: a stale list read as current is how a
+    # user ends up installing something that was unpublished.
+    if found.offline:
+        print(
+            f"⚠ The hub was unreachable — showing the offline catalog cache "
+            f"(generated {found.generated_at or 'unknown'}). It may be stale.",
+            file=sys.stderr,
+        )
+
+    if not results:
+        target = f" matching {args.query!r}" if args.query else ""
+        print(f"No published skills{target}.")
+        print("  The hub's skills lane may be empty, or try a broader query.")
+        return EXIT_OK
+
+    print(f"{'NAME':<28} {'VERSION':<10} {'TIER':<13} {'TOOLS':<6} DESCRIPTION")
+    for entry in results:
+        metadata = entry.get("skill_metadata") or {}
+        tools = len(metadata.get("tools") or [])
+        description = (entry.get("description") or "").replace("\n", " ")
+        if len(description) > 48:
+            description = description[:45] + "..."
+        print(
+            f"{entry.get('id', '?'):<28} {entry.get('latest_version', '-'):<10} "
+            f"{entry.get('security_tier', '-'):<13} {tools:<6} {description}"
+        )
+    print("\nInstall one with: gaia skill install <name>")
+    return EXIT_OK
+
+
+def _handle_install(args: argparse.Namespace) -> int:
+    from gaia.skills.install import install_skill
+
+    result = install_skill(
+        args.reference,
+        manager=_manager(),
+        base_url=args.hub_url,
+        allow_experimental=args.allow_experimental,
+        force=args.force,
+        assume_yes=args.assume_yes,
+    )
+
+    if getattr(args, "as_json", False):
+        print(
+            json.dumps(
+                {
+                    "name": result.name,
+                    "version": result.version,
+                    "path": str(result.path),
+                    "requested": result.requested,
+                    "claimed_tier": result.claimed_tier,
+                    "attested_tier": result.attested_tier,
+                    "installed_tier": result.installed_tier,
+                    "signature": (
+                        result.signature.describe() if result.signature else "unsigned"
+                    ),
+                    "permissions": result.permissions,
+                },
+                indent=2,
+            )
+        )
+        return EXIT_OK
+
+    print(f"✅ Installed skill '{result.name}' {result.version} → {result.path}")
+    print(f"   requested   : {result.requested}")
+    print(
+        f"   provenance  : {result.signature.describe() if result.signature else 'unsigned'}"
+    )
+    print(f"   tier        : {result.installed_tier}")
+    if result.downgraded:
+        print(
+            f"   ⚠ tier reduced: claimed '{result.claimed_tier}', but its signature "
+            f"attests only '{result.attested_tier}'."
+        )
+    if result.permissions:
+        print(f"   permissions : {', '.join(result.permissions)}")
+    if result.replaced_version:
+        print(f"   replaced    : {result.replaced_version}")
+    print(f"   Inspect it with: gaia skill info {result.name}")
+    return EXIT_OK
+
+
+def _handle_remove(args: argparse.Namespace) -> int:
+    from gaia.skills.install import remove_skill
+
+    result = remove_skill(args.name, manager=_manager())
+    version = f" {result.version}" if result.version else ""
+    print(f"✅ Removed skill '{result.name}'{version} from {result.path}")
+    if not result.was_locked:
+        print("   (it was not hub-installed, so no lock entry was tracked)")
+    return EXIT_OK
+
+
+def _handle_publish(args: argparse.Namespace) -> int:
+    from gaia.hub.publisher import get_hub_token
+    from gaia.skills.publish import publish_skill
+
+    token = get_hub_token() or ""
+    result = publish_skill(
+        Path(args.directory),
+        token=token,
+        hub_url=args.hub_url,
+        key_name=args.key_name,
+        publisher=args.publisher,
+        unsigned=args.unsigned,
+        audit_report=Path(args.audit_report) if args.audit_report else None,
+        dry_run=args.dry_run,
+    )
+
+    verb = "Would publish" if args.dry_run else "Published"
+    print(f"✅ {verb} skill '{result.name}' {result.version}")
+    print(f"   artifact    : {result.artifact_filename}")
+    print(f"   tier        : {result.security_tier}")
+    provenance = f"signed with key {result.key_id}" if result.signed else "unsigned"
+    print(f"   signature   : {provenance}")
+    if result.audit is not None:
+        print(
+            f"   audit       : {result.audit.verdict} "
+            f"({result.audit.engine}, {len(result.audit.findings)} finding(s))"
+        )
+    published = (result.response or {}).get("published") or {}
+    if published.get("latest_version"):
+        print(f"   latest      : {published['latest_version']}")
+    if args.dry_run:
+        print("   Nothing was uploaded (--dry-run).")
+    else:
+        print(f"   Find it with: gaia skill search {result.name}")
+    return EXIT_OK
+
+
+def _handle_keygen(args: argparse.Namespace) -> int:
+    from gaia.skills.signing import generate_key, keys_dir
+
+    root = _manager().user_root
+    key = generate_key(root, name=args.key_name, force=args.force)
+    directory = keys_dir(root)
+    print(f"✅ Generated signing key '{args.key_name}' ({key.key_id})")
+    print(f"   private : {directory / f'{args.key_name}.key'}  (keep this secret)")
+    print(f"   public  : {directory / f'{args.key_name}.pub'}")
+    print(
+        "\n   Share the PUBLIC key with anyone who should trust your skills; they "
+        "run:\n"
+        "     gaia skill trust add <public-key> --publisher <you>"
+    )
+    return EXIT_OK
+
+
+def _handle_trust(args: argparse.Namespace) -> int:
+    from gaia.skills.signing import TrustStore
+
+    action = getattr(args, "trust_action", None)
+    if action is None:
+        sys.stderr.write(
+            "gaia skill trust: missing action. Try 'gaia skill trust --help'.\n"
+        )
+        return EXIT_USAGE
+
+    root = _manager().user_root
+    store = TrustStore.load(root)
+
+    if action == "list":
+        if not store.entries:
+            print("No trusted signing keys.")
+            print(
+                f"  Every skill therefore installs at '{LOWEST_TIER}'. Trust a "
+                "publisher's public key with: gaia skill trust add <key>"
+            )
+            return EXIT_OK
+        print(f"{'KEY ID':<34} {'ROLE':<11} {'ATTESTS':<13} PUBLISHER")
+        for entry in store.entries.values():
+            attests = "verified" if entry["role"] == ROLE_AMD else "community"
+            print(
+                f"{entry['key_id']:<34} {entry['role']:<11} {attests:<13} "
+                f"{entry.get('publisher') or '-'}"
+            )
+        return EXIT_OK
+
+    if action == "add":
+        material = args.public_key
+        candidate = Path(material).expanduser()
+        if candidate.is_file():
+            material = candidate.read_text(encoding="utf-8").strip()
+        identifier = store.add(
+            public_key_b64=material, publisher=args.publisher, role=args.role
+        )
+        store.save()
+        attests = "verified" if args.role == ROLE_AMD else "community"
+        print(f"✅ Trusting key {identifier} (role={args.role}, attests '{attests}')")
+        print(f"   Trust store: {store.path}")
+        return EXIT_OK
+
+    if not store.remove(args.key_id):
+        sys.stderr.write(
+            f"❌ Key {args.key_id} is not in the trust store at {store.path}. List "
+            "trusted keys with 'gaia skill trust list'.\n"
+        )
+        return EXIT_NOT_FOUND
+    store.save()
+    print(f"✅ Removed key {args.key_id} from the trust store")
+    print(
+        "   Skills signed by it now attest only "
+        f"'{LOWEST_TIER}'; already-installed copies keep the tier they were "
+        "installed at (see skill-lock.json)."
+    )
     return EXIT_OK
 
 

@@ -7,6 +7,8 @@
 #include <gaia/session.h>
 
 #include <filesystem>
+#include <iostream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -339,4 +341,66 @@ TEST_F(ReplRunnerTest, MultipleCustomCommands) {
     EXPECT_EQ(lintCalls, 2);
     EXPECT_EQ(reviewCalls, 1);
     EXPECT_EQ(deployCalls, 1);
+}
+
+// ---------------------------------------------------------------------------
+// 21. Built-in command output is routable — the TUI cannot let commands write
+//     to std::cout over the fullscreen screen.
+// ---------------------------------------------------------------------------
+
+TEST_F(ReplRunnerTest, BuiltinCommandOutputGoesToTheSink) {
+    std::vector<std::string> captured;
+    repl->setOutputSink([&captured](const std::string& text) { captured.push_back(text); });
+
+    // Capture std::cout so a regression writing there is visible, not silent.
+    std::ostringstream cout_capture;
+    std::streambuf* previous = std::cout.rdbuf(cout_capture.rdbuf());
+
+    repl->tryDispatchCommand("/help");
+    repl->tryDispatchCommand("/model");
+    repl->tryDispatchCommand("/clear");
+    repl->tryDispatchCommand("/history");
+    repl->tryDispatchCommand("/nope");
+
+    std::cout.rdbuf(previous);
+
+    EXPECT_EQ(captured.size(), 5u);
+    EXPECT_EQ(cout_capture.str(), "") << "a built-in command wrote to std::cout";
+
+    const std::string joined = [&captured] {
+        std::string all;
+        for (const auto& line : captured) all += line + "\n";
+        return all;
+    }();
+    EXPECT_NE(joined.find("/model"), std::string::npos);       // /help lists commands
+    EXPECT_NE(joined.find("Current model:"), std::string::npos);
+    EXPECT_NE(joined.find("history cleared"), std::string::npos);
+    EXPECT_NE(joined.find("No session store"), std::string::npos);
+    EXPECT_NE(joined.find("Unknown command: /nope"), std::string::npos);
+}
+
+TEST_F(ReplRunnerTest, ClearingTheSinkRestoresStdout) {
+    repl->setOutputSink([](const std::string&) {});
+    repl->setOutputSink(nullptr);
+
+    std::ostringstream cout_capture;
+    std::streambuf* previous = std::cout.rdbuf(cout_capture.rdbuf());
+    repl->tryDispatchCommand("/model");
+    std::cout.rdbuf(previous);
+
+    EXPECT_NE(cout_capture.str().find("Current model:"), std::string::npos);
+}
+
+// ---------------------------------------------------------------------------
+// 22. TUI selection — a piped/redirected stdout never gets a fullscreen screen
+// ---------------------------------------------------------------------------
+
+TEST_F(ReplRunnerTest, TuiIsDisabledWhenForcedOff) {
+    repl->setUseTui(false);
+    EXPECT_FALSE(repl->willUseTui());
+}
+
+TEST_F(ReplRunnerTest, TuiIsDisabledWhenStdoutIsNotATerminal) {
+    // ctest redirects stdout, so auto-detection must decline the TUI here.
+    EXPECT_FALSE(repl->willUseTui());
 }

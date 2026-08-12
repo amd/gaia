@@ -2,6 +2,19 @@
 # SPDX-License-Identifier: MIT
 """Bundled skills + account-keyed skill-set selection (#2466).
 
+Two layers, deliberately separated:
+
+* **What this agent ships today** — ``gaia-agent.yaml`` has its ``skill_sets:``
+  and ``default_skill_set:`` blocks commented out, so no skill loads at launch.
+  ``test_shipped_*`` below pins that: zero skills, no active set, the envelope
+  budget back at its pre-skills 6144, and a loud failure for ``--skill-set``.
+* **How the machinery behaves when a set IS declared** — generic framework
+  behaviour (selection, overrides, runtime switching, budget arithmetic) that
+  the product decision above does not change. Those tests run against the
+  ``declared_sets`` fixture: the shipped manifest with the two blocks switched
+  back on. Keeping them means re-enabling stays a one-line manifest edit with
+  full coverage already behind it, instead of a rewrite of this file.
+
 Cold-state discipline: every agent here is built with ``tmp_path``-scoped
 databases and a ``SkillManager`` whose user and Claude-import roots point at
 empty tmp directories. Nothing reads the developer's ``~/.gaia/skills`` or the
@@ -64,6 +77,40 @@ def _isolated_manager(tmp_path: Path) -> SkillManager:
     )
 
 
+# The sets the shipped manifest carries, commented out. Mirrored here so the
+# framework tests below keep exercising the real bundled skills, and so
+# re-enabling the manifest blocks lands on coverage that already passes.
+_FIXTURE_SKILL_SETS = {
+    "personal": ["inbox-triage", "newsletter-digest", "travel-itinerary"],
+    "work": [
+        "inbox-triage",
+        "meeting-scheduling",
+        "action-item-extraction",
+        "escalation-routing",
+    ],
+}
+_FIXTURE_DEFAULT_SET = "personal"
+
+
+@pytest.fixture
+def declared_sets(tmp_path, monkeypatch) -> Path:
+    """Point the agent at a manifest that DOES declare skill sets.
+
+    The shipped manifest declares none (skills are off pending eval
+    validation), so the generic set machinery would have nothing to resolve.
+    This writes the shipped manifest with the two blocks switched back on and
+    repoints ``SKILL_MANIFEST`` at it — every consumer reads that attribute at
+    call time, including ``server._read_declared_skill_sets``.
+    """
+    data = yaml.safe_load(_MANIFEST.read_text(encoding="utf-8"))
+    data["skill_sets"] = _FIXTURE_SKILL_SETS
+    data["default_skill_set"] = _FIXTURE_DEFAULT_SET
+    path = tmp_path / "declared-sets-gaia-agent.yaml"
+    path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
+    monkeypatch.setattr(EmailTriageAgent, "SKILL_MANIFEST", str(path))
+    return path
+
+
 def _build_agent(tmp_path, monkeypatch, **config_kwargs) -> EmailTriageAgent:
     monkeypatch.setenv("GAIA_MEMORY_DISABLED", "1")
     monkeypatch.delenv(SKILL_SET_ENV, raising=False)
@@ -93,26 +140,53 @@ def _build_agent(tmp_path, monkeypatch, **config_kwargs) -> EmailTriageAgent:
 
 
 def test_every_declared_skill_is_actually_bundled():
-    """A set naming a skill this package does not ship would fail at launch."""
-    declared = yaml.safe_load(_MANIFEST.read_text(encoding="utf-8"))
-    names = {
-        name for entries in declared["skill_sets"].values() for name in entries
-    } | set(declared.get("skills") or [])
+    """A set naming a skill this package does not ship would fail at launch.
+
+    Checked against the sets the manifest would declare once re-enabled, so
+    deleting a SKILL.md while the blocks are commented out still fails here
+    rather than at the first launch after someone uncomments them.
+    """
+    names = {name for entries in _FIXTURE_SKILL_SETS.values() for name in entries}
 
     for name in sorted(names):
         assert (
             _SKILLS_DIR / name / "SKILL.md"
-        ).is_file(), f"skill_sets names {name!r} but gaia_agent_email/skills/{name}/SKILL.md is missing"
+        ).is_file(), f"skill set names {name!r} but gaia_agent_email/skills/{name}/SKILL.md is missing"
 
 
 def test_no_bundled_skill_is_orphaned():
     """A shipped skill no set references is dead weight in the package."""
-    declared = yaml.safe_load(_MANIFEST.read_text(encoding="utf-8"))
-    referenced = {
-        name for entries in declared["skill_sets"].values() for name in entries
-    } | set(declared.get("skills") or [])
+    referenced = {name for entries in _FIXTURE_SKILL_SETS.values() for name in entries}
     on_disk = {p.parent.name for p in _SKILLS_DIR.glob("*/SKILL.md")}
     assert on_disk == referenced
+
+
+def test_the_fixture_sets_match_the_commented_out_manifest_blocks():
+    """``_FIXTURE_SKILL_SETS`` is the manifest's commented-out text, mirrored.
+
+    If the two drift, the framework tests below stop covering what re-enabling
+    would actually switch on — which is the whole reason they use a fixture.
+    Parsed from the commented block so this cannot rot silently.
+    """
+    lines = _MANIFEST.read_text(encoding="utf-8").splitlines()
+    start = next(
+        (i for i, line in enumerate(lines) if line.strip() == "# skill_sets:"), None
+    )
+    assert start is not None, (
+        "the commented-out '# skill_sets:' block is gone from gaia-agent.yaml — "
+        "if skills were re-enabled, update this file's shipped-state tests"
+    )
+    # From that anchor on, every comment line is the commented YAML block.
+    block = yaml.safe_load(
+        "\n".join(
+            line[2:] if line.startswith("# ") else ""
+            for line in lines[start:]
+            if line.startswith("#")
+        )
+    )
+
+    assert block["skill_sets"] == _FIXTURE_SKILL_SETS
+    assert block["default_skill_set"] == _FIXTURE_DEFAULT_SET
 
 
 def test_bundled_skills_are_instruction_only(tmp_path):
@@ -237,6 +311,98 @@ def test_the_frozen_binary_bundles_the_skills_and_the_manifest():
 
 
 # ----------------------------------------------------------------------
+# What this agent actually ships: Agent Skills OFF
+#
+# The manifest's skill_sets:/default_skill_set: blocks are commented out
+# pending eval validation. These tests pin that shipped state — they are the
+# ones that must fail if someone re-enables the blocks without an eval behind
+# them. Everything below this section uses the ``declared_sets`` fixture and
+# covers the generic machinery, which the product decision does not change.
+# ----------------------------------------------------------------------
+
+
+def test_shipped_manifest_declares_no_skill_sets():
+    from gaia.hub.manifest import parse as parse_manifest
+
+    sets = parse_manifest(EmailTriageAgent.SKILL_MANIFEST).skill_sets
+
+    assert not sets, "the shipped manifest re-enabled skill sets"
+    assert sets.set_names == []
+    assert sets.default_set is None
+
+
+def test_shipped_agent_loads_zero_skills(tmp_path, monkeypatch):
+    """The behavioural claim: nothing reaches the prompt.
+
+    Built with a work mailbox — the account type that WOULD select the 'work'
+    set — so this fails if selection is still wired through to a load.
+    """
+    agent = _build_agent(tmp_path, monkeypatch, account_type=ACCOUNT_TYPE_WORK)
+
+    assert agent.loaded_skills == {}
+    assert agent.active_skill_set is None
+    assert not agent.get_skills_system_prompt()
+    for name in ("inbox-triage", "meeting-scheduling", "newsletter-digest"):
+        assert name not in agent.system_prompt
+
+
+def test_shipped_agent_envelope_budget_is_the_pre_skills_6144(tmp_path, monkeypatch):
+    """The regression this change exists to undo.
+
+    The personal set cost ~1,334 prompt tokens, cutting this envelope from 6144
+    to 4810 (the work set, to 4070). With no skills loaded the skill cost is 0
+    and the budget is byte-identical to its pre-#2466 value.
+    """
+    from gaia_agent_email.context_budget import (
+        envelope_budget_tokens,
+        skill_prompt_tokens,
+    )
+
+    agent = _build_agent(tmp_path, monkeypatch, account_type=ACCOUNT_TYPE_WORK)
+
+    assert skill_prompt_tokens(agent) == 0
+    assert envelope_budget_tokens() == 6144
+    assert envelope_budget_tokens(extra_fixed_tokens=skill_prompt_tokens(agent)) == 6144
+
+
+def test_shipped_agent_rejects_an_explicit_skill_set(tmp_path, monkeypatch):
+    """``--skill-set personal`` must fail loudly, not silently load nothing.
+
+    No sets are declared, so there is nothing to honour. Quietly ignoring the
+    request would leave the caller believing a set is active (CLAUDE.md's
+    no-silent-fallbacks rule).
+    """
+    with pytest.raises(SkillSetError) as excinfo:
+        _build_agent(tmp_path, monkeypatch, skill_set="personal")
+
+    message = str(excinfo.value)
+    assert "declares no 'skill_sets:' block" in message
+    assert "gaia-agent.yaml" in message
+
+
+def test_shipped_sidecar_rejects_a_pinned_skill_set_with_an_actionable_error(capsys):
+    """The same refusal at the CLI boundary, where the empty list would
+    otherwise render as a contentless "Valid sets: "."""
+    from gaia_agent_email import server
+
+    with pytest.raises(SystemExit):
+        server.main(["serve", "--skill-set", "personal"])
+
+    err = capsys.readouterr().err
+    assert "declares no skill sets" in err
+    assert "uncomment" in err
+
+
+def test_the_skills_are_still_bundled_even_though_none_load(tmp_path):
+    """Off, not removed — re-enabling is a manifest edit, not a re-add."""
+    manager = _isolated_manager(tmp_path)
+
+    assert {s.name for s in manager.list_skills()} == {
+        name for entries in _FIXTURE_SKILL_SETS.values() for name in entries
+    }
+
+
+# ----------------------------------------------------------------------
 # Selection
 # ----------------------------------------------------------------------
 
@@ -248,7 +414,7 @@ def _declared_sets():
     return parse_manifest(EmailTriageAgent.SKILL_MANIFEST).skill_sets
 
 
-def test_manifest_declarations():
+def test_manifest_declarations(declared_sets):
     sets = _declared_sets()
     assert sets.set_names == ["personal", "work"]
     assert sets.default_set == "personal"
@@ -265,13 +431,13 @@ def test_manifest_declarations():
     assert set(personal) & set(work) == {"inbox-triage"}
 
 
-def test_account_type_map_only_names_declared_sets():
+def test_account_type_map_only_names_declared_sets(declared_sets):
     sets = _declared_sets()
     assert set(ACCOUNT_TYPE_SKILL_SETS) == {ACCOUNT_TYPE_PERSONAL, ACCOUNT_TYPE_WORK}
     for account_type, set_name in ACCOUNT_TYPE_SKILL_SETS.items():
         assert set_name in sets.set_names, (
             f"account type {account_type!r} maps to skill set {set_name!r}, "
-            "which gaia-agent.yaml does not declare"
+            "which the manifest does not declare"
         )
 
 
@@ -296,7 +462,7 @@ def test_account_type_map_only_names_declared_sets():
     ],
 )
 def test_account_type_selects_its_set_and_nothing_else(
-    tmp_path, monkeypatch, account_type, expected_set, expected_skills
+    tmp_path, monkeypatch, declared_sets, account_type, expected_set, expected_skills
 ):
     agent = _build_agent(tmp_path, monkeypatch, account_type=account_type)
 
@@ -305,7 +471,9 @@ def test_account_type_selects_its_set_and_nothing_else(
     assert set(agent.loaded_skills) == expected_skills
 
 
-def test_the_other_sets_skills_are_absent_from_the_prompt(tmp_path, monkeypatch):
+def test_the_other_sets_skills_are_absent_from_the_prompt(
+    tmp_path, monkeypatch, declared_sets
+):
     agent = _build_agent(tmp_path, monkeypatch, account_type=ACCOUNT_TYPE_WORK)
     prompt = agent.system_prompt
 
@@ -314,7 +482,9 @@ def test_the_other_sets_skills_are_absent_from_the_prompt(tmp_path, monkeypatch)
     assert "travel-itinerary" not in prompt
 
 
-def test_explicit_skill_set_overrides_the_account_type(tmp_path, monkeypatch):
+def test_explicit_skill_set_overrides_the_account_type(
+    tmp_path, monkeypatch, declared_sets
+):
     agent = _build_agent(
         tmp_path, monkeypatch, account_type=ACCOUNT_TYPE_WORK, skill_set="personal"
     )
@@ -322,13 +492,17 @@ def test_explicit_skill_set_overrides_the_account_type(tmp_path, monkeypatch):
     assert "meeting-scheduling" not in agent.loaded_skills
 
 
-def test_unknown_skill_set_fails_loudly_listing_the_valid_ones(tmp_path, monkeypatch):
+def test_unknown_skill_set_fails_loudly_listing_the_valid_ones(
+    tmp_path, monkeypatch, declared_sets
+):
     with pytest.raises(SkillSetError) as excinfo:
         _build_agent(tmp_path, monkeypatch, skill_set="buisness")
     assert "Valid sets: personal, work" in str(excinfo.value)
 
 
-def test_a_gmail_only_mailbox_resolves_the_default_set(tmp_path, monkeypatch):
+def test_a_gmail_only_mailbox_resolves_the_default_set(
+    tmp_path, monkeypatch, declared_sets
+):
     """Gmail carries no Microsoft tenant, so the kind is genuinely unknown.
 
     The default set must then apply *explicitly* — a work mailbox must never be
@@ -344,7 +518,7 @@ def test_a_gmail_only_mailbox_resolves_the_default_set(tmp_path, monkeypatch):
     assert agent.active_skill_set == "personal"  # the manifest's default_skill_set
 
 
-def test_a_derived_account_type_drives_the_set(tmp_path, monkeypatch):
+def test_a_derived_account_type_drives_the_set(tmp_path, monkeypatch, declared_sets):
     """With nothing pinned, the kind recorded on the connection decides."""
     monkeypatch.setattr(
         "gaia_agent_email.config.get_connection",
@@ -378,7 +552,9 @@ def test_an_unreadable_connection_store_reports_unknown(monkeypatch):
     assert EmailAgentConfig().resolve_account_type() is None
 
 
-def test_switching_sets_at_runtime_replaces_the_previous_one(tmp_path, monkeypatch):
+def test_switching_sets_at_runtime_replaces_the_previous_one(
+    tmp_path, monkeypatch, declared_sets
+):
     agent = _build_agent(tmp_path, monkeypatch, account_type=ACCOUNT_TYPE_PERSONAL)
     assert agent.active_skill_set == "personal"
 
@@ -394,7 +570,9 @@ def test_switching_sets_at_runtime_replaces_the_previous_one(tmp_path, monkeypat
 # ----------------------------------------------------------------------
 
 
-def test_loaded_skills_shrink_the_triage_envelope_budget(tmp_path, monkeypatch):
+def test_loaded_skills_shrink_the_triage_envelope_budget(
+    tmp_path, monkeypatch, declared_sets
+):
     """A skill body is prompt text the post-tool turn re-reads.
 
     Regression guard: at the pinned 16,384-token envelope, adding the personal
@@ -418,7 +596,7 @@ def test_loaded_skills_shrink_the_triage_envelope_budget(tmp_path, monkeypatch):
 
 
 def test_the_whole_post_tool_turn_fits_the_window_with_skills_loaded(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, declared_sets
 ):
     """The behavioural claim, not the arithmetic identity.
 
@@ -480,7 +658,7 @@ def test_the_whole_post_tool_turn_fits_the_window_with_skills_loaded(
     )
 
 
-def test_the_skill_cost_estimate_is_pessimistic(tmp_path, monkeypatch):
+def test_the_skill_cost_estimate_is_pessimistic(tmp_path, monkeypatch, declared_sets):
     """A budget SUBTRACTION must never under-count.
 
     ``estimate_tokens``' chars//4 prose ratio under-counts real Markdown by
@@ -497,7 +675,9 @@ def test_the_skill_cost_estimate_is_pessimistic(tmp_path, monkeypatch):
     assert skill_prompt_tokens(agent) >= int(len(fragment) / 2.1)
 
 
-def test_the_bundled_skill_bodies_stay_within_their_prompt_budget(tmp_path):
+def test_the_bundled_skill_bodies_stay_within_their_prompt_budget(
+    tmp_path, declared_sets
+):
     """Cap the per-set prompt cost so a future edit can't quietly refill the ctx.
 
     The envelope the triage tool has left is ``6144 - <set cost>``; a set costing
@@ -554,7 +734,7 @@ def test_a_malformed_account_type_field_fails_validation():
 # ----------------------------------------------------------------------
 
 
-def test_skill_set_flag_exports_the_env_var(monkeypatch):
+def test_skill_set_flag_exports_the_env_var(monkeypatch, declared_sets):
     """The flag has to survive into the per-request agent sessions.
 
     The app is built at import time and sessions are constructed per request, so
@@ -574,7 +754,7 @@ def test_skill_set_flag_exports_the_env_var(monkeypatch):
     assert EmailAgentConfig().skill_set == "work"
 
 
-def test_skill_set_flag_rejects_an_undeclared_name(capsys):
+def test_skill_set_flag_rejects_an_undeclared_name(capsys, declared_sets):
     from gaia_agent_email import server
 
     with pytest.raises(SystemExit):
@@ -582,13 +762,15 @@ def test_skill_set_flag_rejects_an_undeclared_name(capsys):
     assert "Valid sets: personal, work" in capsys.readouterr().err
 
 
-def test_skill_set_flag_help_lists_the_declared_sets():
+def test_skill_set_flag_help_lists_the_declared_sets(declared_sets):
     from gaia_agent_email.server import _declared_skill_sets
 
     assert _declared_skill_sets() == ["personal", "work"]
 
 
-def test_an_invalid_env_var_is_rejected_at_startup_like_the_flag(monkeypatch, capsys):
+def test_an_invalid_env_var_is_rejected_at_startup_like_the_flag(
+    monkeypatch, capsys, declared_sets
+):
     """The docs call the env var equivalent to the flag — so it must validate.
 
     Left unchecked, ``GAIA_EMAIL_SKILL_SET=buisness`` started a healthy-looking
@@ -602,7 +784,7 @@ def test_an_invalid_env_var_is_rejected_at_startup_like_the_flag(monkeypatch, ca
     assert "Valid sets: personal, work" in capsys.readouterr().err
 
 
-def test_a_valid_env_var_is_accepted_at_startup(monkeypatch):
+def test_a_valid_env_var_is_accepted_at_startup(monkeypatch, declared_sets):
     from gaia_agent_email import server
 
     monkeypatch.setenv(SKILL_SET_ENV, "work")
@@ -611,7 +793,9 @@ def test_a_valid_env_var_is_accepted_at_startup(monkeypatch):
     assert run.called
 
 
-def test_an_unreadable_manifest_cannot_wave_a_requested_set_through(monkeypatch, capsys):
+def test_an_unreadable_manifest_cannot_wave_a_requested_set_through(
+    monkeypatch, capsys
+):
     """Validation must fail loudly, not degrade to "accept anything".
 
     The help-text helper swallows read errors by design; using it to validate

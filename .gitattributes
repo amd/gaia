@@ -2,6 +2,17 @@
 cpp/tests/fixtures/*.png binary
 cpp/tests/fixtures/*.jpg binary
 
+# Chunk-boundary fixtures are a byte-exact cross-runtime contract; a CRLF
+# checkout rewrites the documents the committed chunks were generated from.
+cpp/tests/fixtures/chunking/* -text
+
+# Vendored third-party sources — never ours to reformat, lint, or review.
+# linguist-vendored keeps them out of language stats; -diff keeps a 9 MB
+# amalgamation out of every diff that touches the directory.
+cpp/third_party/** linguist-vendored
+cpp/third_party/sqlite/sqlite3.c -diff
+cpp/third_party/sqlite/sqlite3.h -diff
+
 # Every email-agent PR appends an [Unreleased] bullet to this changelog;
 # without a union merge, sibling PRs merged close together conflict on the
 # same insertion point.

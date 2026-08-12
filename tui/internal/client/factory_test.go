@@ -1,6 +1,7 @@
 package client
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -18,7 +19,15 @@ func TestForAgentBuildsTheDeclaredTransport(t *testing.T) {
 		t.Errorf("daemon transport built %T, want *SSEClient", c)
 	}
 
-	subAgent := catalog.Agent{ID: "bash", BinaryPath: "/usr/bin/true", BinaryArgs: []string{"--json-events"}}
+	// ResolveExecutable only checks that the path exists and is executable —
+	// NewSubprocessClient does not spawn it — so the test binary itself is the
+	// one path guaranteed to satisfy that on every OS. /usr/bin/true does not
+	// exist on Windows, which only surfaced once this suite ran there.
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+	subAgent := catalog.Agent{ID: "bash", BinaryPath: self, BinaryArgs: []string{"--json-events"}}
 	c2, err := ForAgent(subAgent, ForAgentOptions{})
 	if err != nil {
 		t.Fatalf("ForAgent(subprocess): %v", err)

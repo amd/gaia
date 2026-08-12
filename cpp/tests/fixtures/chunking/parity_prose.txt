@@ -1,0 +1,5 @@
+Retrieval quality is decided long before the embedding model runs. It is decided by where the text was cut. A chunk that ends mid-argument gives the reranker two halves that each look irrelevant, and the answer that comes back is confidently wrong. Dr. Ada Lovelace would have called that a machine doing exactly what it was told. The splitter therefore prefers sentence boundaries over word boundaries, e.g. it will overshoot the token budget slightly rather than cut a clause in half. Mr. Babbage, vs. the alternative, would probably agree. That preference costs a little index size and buys a lot of answer quality, i.e. it is the trade every retrieval system eventually makes. Overlap is the second half of the same idea, etc. Without it, a fact that straddles two chunks is retrievable from neither.
+
+The second paragraph is short.
+
+A third paragraph, also short, closes the fixture out.

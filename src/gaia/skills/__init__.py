@@ -29,6 +29,14 @@ declaring a local-capability permission (``filesystem``, ``shell``,
 :mod:`gaia.skills.permissions`.
 """
 
+from gaia.skills.consume import (
+    AGENT_MANIFEST_FILENAME,
+    ResolvedSkills,
+    SkillRequirement,
+    find_agent_manifest,
+    requirements_from_refs,
+    resolve_requirements,
+)
 from gaia.skills.errors import (
     SkillError,
     SkillNotFoundError,
@@ -96,6 +104,20 @@ from gaia.skills.sets import (
     SkillSets,
     parse_skill_sets,
 )
+from gaia.skills.tiers import (
+    DANGEROUS_GRANTS,
+    LOWEST_TIER,
+    TIER_ORDER,
+    effective_tier,
+    enforce_tier_ceiling,
+    tier_rank,
+)
+
+# NOTE: the marketplace modules (``gaia.skills.hub``, ``install``, ``publish``,
+# ``signing``, ``lock``, ``audit_gate``) are deliberately NOT re-exported here.
+# They pull in ``requests``, ``cryptography``, and the hub catalog; importing
+# ``gaia.skills`` is on the hot path for every agent that composes a skill, and
+# it should not pay for a publish-time dependency. Import them by module.
 
 __all__ = [
     # Format
@@ -155,6 +177,20 @@ __all__ = [
     "refuse_unbridged_permissions",
     "CONNECTOR_BRIDGED_DOMAINS",
     "LOCAL_CAPABILITY_DOMAINS",
+    # Security tiers (#2467)
+    "TIER_ORDER",
+    "LOWEST_TIER",
+    "DANGEROUS_GRANTS",
+    "tier_rank",
+    "effective_tier",
+    "enforce_tier_ceiling",
+    # Declarative consumption (#2467 scope D)
+    "SkillRequirement",
+    "ResolvedSkills",
+    "AGENT_MANIFEST_FILENAME",
+    "find_agent_manifest",
+    "resolve_requirements",
+    "requirements_from_refs",
     # Errors
     "SkillError",
     "SkillValidationError",

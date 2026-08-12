@@ -735,7 +735,7 @@ grep -iq 'methodology' "$E" && { echo "FAIL: methodology in executive"; exit 1; 
 test "$(grep -c 'https\?://' "$E")" -eq 0 || { echo "FAIL: external ref"; exit 1; }
 echo PASS
 ```
-Expected: `technical=N executive=M` with M<N, then `PASS`.
+Expected: `technical=N executive=M` with `M<N`, then `PASS`.
 
 - [ ] **Step 3: Export PDF and confirm one slide per page**
 

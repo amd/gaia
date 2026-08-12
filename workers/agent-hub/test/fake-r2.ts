@@ -189,6 +189,103 @@ export function publishRequest(opts: {
   });
 }
 
+/** Build a POST /publish/skill multipart request (#2467). */
+export function skillPublishRequest(opts: {
+  token?: string;
+  skillMarkdown: string;
+  artifact: Uint8Array | string;
+  filename: string;
+  contentType?: string;
+  changelog?: string;
+  /** The security-audit report JSON (#2468); omit to publish un-audited. */
+  audit?: string;
+  /** Omit the artifact part entirely (to exercise the missing-part guard). */
+  omitArtifact?: boolean;
+}): Request {
+  const form = new FormData();
+  form.set("skill", opts.skillMarkdown);
+  if (opts.changelog !== undefined) form.set("changelog", opts.changelog);
+  if (opts.audit !== undefined) form.set("audit", opts.audit);
+  if (!opts.omitArtifact) {
+    const bytes =
+      typeof opts.artifact === "string" ? new TextEncoder().encode(opts.artifact) : opts.artifact;
+    form.set(
+      "artifact",
+      new Blob([bytes], { type: opts.contentType ?? "application/zip" }),
+      opts.filename
+    );
+  }
+  const headers = new Headers();
+  if (opts.token) headers.set("authorization", `Bearer ${opts.token}`);
+  return new Request("https://hub.amd-gaia.ai/publish/skill", {
+    method: "POST",
+    headers,
+    body: form,
+  });
+}
+
+/**
+ * A valid sample SKILL.md for tests: the Agent Skills base plus the
+ * `metadata.gaia` namespace. Pass `frontMatter` to replace the whole front
+ * matter block (for malformed-manifest cases), or override individual fields.
+ */
+export function sampleSkill(
+  overrides: {
+    name?: string;
+    version?: string;
+    description?: string;
+    security_tier?: string;
+    /** Replace the entire front matter (raw YAML text). */
+    frontMatter?: string;
+    /** Drop the `version:` line entirely. */
+    omitVersion?: boolean;
+    /** Emit no `metadata.gaia` block at all (instruction-only skill). */
+    omitGaia?: boolean;
+    body?: string;
+  } = {}
+): string {
+  const body = overrides.body ?? "# Web Research\n\nSearch the web, then summarise.\n";
+  if (overrides.frontMatter !== undefined) {
+    return `---\n${overrides.frontMatter}\n---\n\n${body}`;
+  }
+  const lines = [
+    `name: ${overrides.name ?? "web-research"}`,
+    `description: ${overrides.description ?? '"Search the web for current information"'}`,
+    "license: MIT",
+  ];
+  if (!overrides.omitVersion) lines.push(`version: ${overrides.version ?? "0.1.0"}`);
+  if (!overrides.omitGaia) {
+    lines.push(
+      "metadata:",
+      "  gaia:",
+      `    security_tier: ${overrides.security_tier ?? "experimental"}`,
+      "    permissions:",
+      "      - network:read:*.brave.com",
+      "    requirements:",
+      '      model: ">=7B"',
+      '      python: ">=3.10"',
+      "      dependencies: [requests>=2.31]",
+      "      env_vars: [BRAVE_API_KEY]",
+      "      hardware: { npu: optional }",
+      "    tools:",
+      "      - name: search_web",
+      "        description: Search the web for current information",
+      "    tools_required: [query_documents]"
+    );
+  }
+  return `---\n${lines.join("\n")}\n---\n\n${body}`;
+}
+
+/** A cleared audit report (#2468) for tests that publish a gated tier. */
+export function allowAudit(findings: number = 0): string {
+  return JSON.stringify({
+    verdict: "ALLOW",
+    engine: "gaia-skill-audit/0.1.0",
+    audited_at: "2026-07-29T00:00:00.000Z",
+    findings: Array.from({ length: findings }, (_, i) => ({ id: `f${i}` })),
+  });
+}
+
 /** A valid sample gaia-agent.yaml for tests. */
 export function sampleManifest(overrides: Partial<Record<string, string>> = {}): string {
   const id = overrides.id ?? "chat";

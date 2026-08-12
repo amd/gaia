@@ -66,6 +66,12 @@ public:
     /// Mirrors Python Agent._format_tools_for_prompt().
     std::string formatForPrompt() const;
 
+    /// Build OpenAI function-calling schemas for every *enabled* tool.
+    /// Mirrors Python Agent._build_openai_tool_schemas(). Returns a JSON array
+    /// suitable for the ``tools`` field of a /chat/completions request; the
+    /// array is empty when no tool is enabled.
+    json buildOpenAiToolSchemas() const;
+
     /// Execute a tool by name.
     /// Resolves the name if not found directly.
     /// Enforces policy, argument validation, and confirmation before invoking.

@@ -77,6 +77,11 @@ void SseParser::processData(const std::string& payload) {
         if (!choice.contains("delta")) return;
 
         const auto& delta = choice["delta"];
+
+        if (delta.contains("tool_calls") && delta["tool_calls"].is_array()) {
+            accumulateToolCalls(delta["tool_calls"]);
+        }
+
         if (!delta.contains("content") || delta["content"].is_null()) return;
 
         const std::string token = delta["content"].get<std::string>();
@@ -87,6 +92,58 @@ void SseParser::processData(const std::string& payload) {
     } catch (...) {
         // Silently skip malformed JSON — servers occasionally send partial events
     }
+}
+
+void SseParser::accumulateToolCalls(const json& deltaToolCalls) {
+    int positional = 0;
+    for (const auto& entry : deltaToolCalls) {
+        if (!entry.is_object()) continue;
+
+        // `index` is how parallel calls stay apart across deltas. When a server
+        // omits it, fall back to the entry's position within THIS delta —
+        // servers that drop `index` send the whole array in one delta, so
+        // slotting everything at 0 would merge N calls into one mangled call.
+        int index = positional;
+        if (entry.contains("index") && entry["index"].is_number_integer()) {
+            index = entry["index"].get<int>();
+        }
+        ++positional;
+        ToolCall& tc = toolCallsByIndex_[index];
+
+        // A delta carrying an `id` is a first-or-restated call; one without is a
+        // continuation fragment. That distinction is what keeps a repeated
+        // `{"id":..,"name":"echo"}` from accumulating into "echoecho" while
+        // still reassembling a genuinely split name.
+        const bool hasId = entry.contains("id") && entry["id"].is_string() &&
+                           !entry["id"].get<std::string>().empty();
+        if (tc.id.empty() && hasId) {
+            tc.id = entry["id"].get<std::string>();
+        }
+
+        if (!entry.contains("function") || !entry["function"].is_object()) continue;
+        const auto& fn = entry["function"];
+
+        if (fn.contains("name") && fn["name"].is_string()) {
+            if (hasId) {
+                tc.name = fn["name"].get<std::string>();   // (re)statement
+            } else {
+                tc.name += fn["name"].get<std::string>();  // continuation
+            }
+        }
+        if (fn.contains("arguments") && fn["arguments"].is_string()) {
+            tc.arguments += fn["arguments"].get<std::string>();
+        }
+    }
+}
+
+std::vector<ToolCall> SseParser::toolCalls() const {
+    std::vector<ToolCall> out;
+    out.reserve(toolCallsByIndex_.size());
+    for (const auto& [index, tc] : toolCallsByIndex_) {
+        (void)index;
+        out.push_back(tc);
+    }
+    return out;
 }
 
 } // namespace gaia
