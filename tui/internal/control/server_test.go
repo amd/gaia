@@ -404,6 +404,49 @@ func TestResize(t *testing.T) {
 	}
 }
 
+// A synthetic WindowSizeMsg cannot make the real terminal bigger. Laying out
+// wider than it is makes the model emit lines the terminal hard-wraps, which
+// shreds the visible screen (blank frame, duplicated status line, lost
+// scrollback) while /screen still reports the clean logical frame — so the
+// corruption is invisible to the very API you would test with.
+func TestResizeRefusesToExceedTheTerminal(t *testing.T) {
+	prev := attachedToTerminal
+	attachedToTerminal = func() bool { return true }
+	t.Cleanup(func() { attachedToTerminal = prev })
+
+	srv, _ := newTestServer(t)
+	if status, body := request(t, srv, http.MethodPost, "/resize",
+		map[string]any{"cols": 120, "rows": 40}, srv.Token()); status != http.StatusOK {
+		t.Fatalf("seed resize: status = %d (%v)", status, body)
+	}
+
+	for _, tc := range []struct {
+		name       string
+		cols, rows int
+	}{
+		{"wider", 200, 40},
+		{"taller", 120, 55},
+		{"both", 200, 55},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			status, body := request(t, srv, http.MethodPost, "/resize",
+				map[string]any{"cols": tc.cols, "rows": tc.rows}, srv.Token())
+			if status != http.StatusConflict {
+				t.Fatalf("status = %d, want 409 (%v)", status, body)
+			}
+			if code := errorField(t, body, "code"); code != "resize_exceeds_terminal" {
+				t.Errorf("code = %q, want resize_exceeds_terminal", code)
+			}
+		})
+	}
+
+	// Shrinking stays allowed — it cannot overflow the terminal.
+	if status, body := request(t, srv, http.MethodPost, "/resize",
+		map[string]any{"cols": 80, "rows": 24}, srv.Token()); status != http.StatusOK {
+		t.Errorf("shrink: status = %d (%v), want 200", status, body)
+	}
+}
+
 // ── wait ────────────────────────────────────────────────────────────
 
 func TestWaitResolvesImmediately(t *testing.T) {

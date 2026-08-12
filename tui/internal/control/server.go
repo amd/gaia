@@ -16,9 +16,16 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"golang.org/x/term"
 
 	"github.com/amd/gaia/tui/internal/daemon"
 )
+
+// attachedToTerminal reports whether stdout is a real terminal, i.e. whether
+// there is a physical viewport a resize could overflow. Swappable for tests.
+var attachedToTerminal = func() bool {
+	return term.IsTerminal(int(os.Stdout.Fd()))
+}
 
 // Sender is the subset of *tea.Program the control server needs. Program.Send
 // is safe to call from another goroutine — that is the whole injection
@@ -727,6 +734,28 @@ func (s *Server) handleResize(w http.ResponseWriter, r *http.Request) {
 			Code:    "bad_size",
 			Message: fmt.Sprintf("%dx%d is out of range", req.Cols, req.Rows),
 			Hint:    "cols must be 20-500 and rows 5-200",
+		})
+		return
+	}
+	// Never lay out WIDER or TALLER than the terminal currently is. A synthetic
+	// WindowSizeMsg only tells the model a size; it cannot make the real
+	// terminal bigger. Asking for 200x55 on a 120x42 terminal makes the model
+	// emit 200-column lines that the terminal hard-wraps, which shreds the
+	// visible frame (blank screen, duplicated status line, lost scrollback)
+	// while /screen still reports the clean logical frame — so the damage is
+	// invisible to the very API you would test with.
+	// Only when a physical viewport exists: headless runs (tests, CI) have no
+	// terminal to overflow, and must stay free to lay out any size they like.
+	if curCols, curRows := s.state.Size(); attachedToTerminal() &&
+		curCols > 0 && curRows > 0 &&
+		(req.Cols > curCols || req.Rows > curRows) {
+		writeErr(w, http.StatusConflict, apiError{
+			Code: "resize_exceeds_terminal",
+			Message: fmt.Sprintf(
+				"asked for %dx%d but the terminal is %dx%d; enlarging past it would corrupt the visible screen",
+				req.Cols, req.Rows, curCols, curRows),
+			Hint: "resize the real terminal window first, or request a size within " +
+				fmt.Sprintf("%dx%d", curCols, curRows),
 		})
 		return
 	}
