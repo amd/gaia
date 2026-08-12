@@ -27,7 +27,7 @@ type Message struct {
 	ToolName  string
 	Success   *bool
 	Duration  time.Duration // time from query to answer
-	TTFT      time.Duration // time to first event (model load + first inference)
+	TTFT      time.Duration // time from query submit to first inference token — not model-load or a tool/status event
 	Steps     int           // agent steps taken
 	ToolsUsed int           // tools invoked
 

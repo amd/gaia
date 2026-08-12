@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/amd/gaia/tui/internal/event"
 )
@@ -86,6 +87,61 @@ func TestCanonicalFinalWithoutTokens(t *testing.T) {
 	last := m.messages[len(m.messages)-1]
 	if last.Role != RoleAssistant || last.Content != "no streaming here" {
 		t.Fatalf("unexpected message: %+v", last)
+	}
+}
+
+// TestCanonicalTTFTAnchorsOnFirstToken reproduces the WARM-query shape
+// measured against a live sidecar (#2899): the status frame arrives
+// essentially immediately, but real generation doesn't start for several
+// more seconds. Before the fix, ttft was set on the status frame and read
+// ~0s in this exact shape — a cold-load-only test (large gap before even the
+// status frame) would not catch that regression, since the old code happened
+// to look right by coincidence when the delay came before the first frame.
+func TestCanonicalTTFTAnchorsOnFirstToken(t *testing.T) {
+	m, _ := newTestModel(t)
+	m.streaming = true
+	m.queryStart = time.Now()
+
+	m = feed(t, m, event.CanonicalStatusEvent{Type: "status", Message: "Scanning inbox"})
+	if m.ttft != 0 {
+		t.Fatalf("status frame must not set ttft, got %v", m.ttft)
+	}
+
+	// Simulate 8s of real elapsed time between the status frame and the
+	// first token, matching the live-baseline warm-query gap.
+	m.queryStart = m.queryStart.Add(-8 * time.Second)
+
+	m = feed(t, m, event.CanonicalTokenEvent{Type: "token", Delta: "Hi"})
+	if m.ttft < 7500*time.Millisecond || m.ttft > 8500*time.Millisecond {
+		t.Errorf("ttft = %v, want ~8s (anchored on the token, not the earlier status frame)", m.ttft)
+	}
+
+	// A second token must not move ttft again.
+	firstTTFT := m.ttft
+	m.queryStart = m.queryStart.Add(-100 * time.Second) // would blow up ttft if re-anchored
+	m = feed(t, m, event.CanonicalTokenEvent{Type: "token", Delta: " there"})
+	if m.ttft != firstTTFT {
+		t.Errorf("ttft changed on a second token: got %v, want unchanged %v", m.ttft, firstTTFT)
+	}
+}
+
+// TestCanonicalLegacyTransportNeverSetsTTFT locks in a deliberate decision:
+// the legacy subprocess transport's ChunkEvent is documented as "disabled in
+// v1 json-events mode" (types.go), so a legacy AnswerEvent with no preceding
+// ChunkEvent leaves ttft at 0 and the stats line omits it entirely — a
+// strict improvement over the old "any first frame" anchor, which showed a
+// wrong non-zero value there. This is not a bug to fix; this test exists so
+// a future reader doesn't mistake the omission for one.
+func TestCanonicalLegacyTransportNeverSetsTTFT(t *testing.T) {
+	m, _ := newTestModel(t)
+	m.streaming = true
+	m.queryStart = time.Now().Add(-5 * time.Second)
+
+	m = feed(t, m, event.AnswerEvent{Type: "answer", Content: "no chunk events here", Steps: 1, ToolsUsed: 0})
+
+	last := m.messages[len(m.messages)-1]
+	if last.TTFT != 0 {
+		t.Errorf("legacy transport with no ChunkEvent must leave TTFT at 0, got %v", last.TTFT)
 	}
 }
 

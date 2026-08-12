@@ -46,6 +46,10 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		}
 
 	case event.CanonicalTokenEvent:
+		if !m.firstToken {
+			m.firstToken = true
+			m.ttft = time.Since(m.queryStart)
+		}
 		m.buffer += e.Delta
 
 	case event.CanonicalToolCallEvent:
