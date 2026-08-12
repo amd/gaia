@@ -79,7 +79,7 @@ func TestLiveRegionNarratesToolsInPlainLanguage(t *testing.T) {
 			t.Errorf("live region never said %q:\n%s", want, out)
 		}
 	}
-	// Harness internals stay out of the user's way unless --debug asked for them.
+	// Harness internals stay out of the user's way unless --dev asked for them.
 	for _, noise := range []string{"Step 1/50", "Gemma-4-E4B-it-GGUF", "list_skills", "load_skill"} {
 		if strings.Contains(out, noise) {
 			t.Errorf("live region leaked harness internals %q:\n%s", noise, out)
@@ -141,11 +141,11 @@ func TestSidecarNarrationAndPreviewWin(t *testing.T) {
 // wire has to be able to see them.
 func TestDebugShowsTheHarnessStatusesUsersDoNotSee(t *testing.T) {
 	m := newTestChat(t)
-	m.debug = true
+	m.dev = true
 	m = feed(t, m, event.CanonicalStatusEvent{Type: "status", Message: "Step 3/50"})
 
 	if out := ansi.Strip(m.renderLiveRegion()); !strings.Contains(out, "Step 3/50") {
-		t.Errorf("--debug must still surface agent-loop mechanics:\n%s", out)
+		t.Errorf("--dev must still surface agent-loop mechanics:\n%s", out)
 	}
 }
 

@@ -47,7 +47,7 @@ type HubModel struct {
 	confirm   *components.ConfirmModel
 	trust     *trustModel
 	install   *installState
-	debug     bool
+	dev     bool
 	width     int
 	height    int
 	status    string // ephemeral status messages
@@ -56,7 +56,7 @@ type HubModel struct {
 	catalogNote  string
 }
 
-func NewHubModel(cat *catalog.Catalog, hc *catalog.HubClient, debug bool) HubModel {
+func NewHubModel(cat *catalog.Catalog, hc *catalog.HubClient, dev bool) HubModel {
 	tabs := catalog.AllSections()
 
 	delegate := newAgentDelegate()
@@ -73,7 +73,7 @@ func NewHubModel(cat *catalog.Catalog, hc *catalog.HubClient, debug bool) HubMod
 		hub:          hc,
 		list:         l,
 		tabs:         tabs,
-		debug:        debug,
+		dev:        dev,
 		catalogState: catalogLoading,
 	}
 	// A fresh machine has an empty Installed tab. Opening on it shows a new

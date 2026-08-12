@@ -161,7 +161,7 @@ type ChatModel struct {
 	cancelFn  context.CancelFunc
 	agentName string
 	agentID   string
-	debug     bool
+	dev     bool
 	fromHub   bool
 
 	width  int
@@ -204,7 +204,7 @@ type ChatModel struct {
 	preScanRenderedThisTurn bool
 }
 
-func NewChatModel(c client.AgentClient, agentName string, initialQuery string, debug bool) ChatModel {
+func NewChatModel(c client.AgentClient, agentName string, initialQuery string, dev bool) ChatModel {
 	ti := textarea.New()
 	ti.Placeholder = "Ask anything — Enter to send, Alt+Enter for a new line"
 	ti.Focus()
@@ -224,7 +224,7 @@ func NewChatModel(c client.AgentClient, agentName string, initialQuery string, d
 		agentName:    agentName,
 		agentID:      agentName,
 		initialQuery: initialQuery,
-		debug:        debug,
+		dev:        dev,
 		input:        ti,
 		spinner:      sp,
 		viewport:     vp,
@@ -234,8 +234,8 @@ func NewChatModel(c client.AgentClient, agentName string, initialQuery string, d
 }
 
 // NewChatModelFromHub creates a ChatModel launched from the hub, enabling Esc-to-return behavior.
-func NewChatModelFromHub(c client.AgentClient, agentID, agentName string, debug bool) ChatModel {
-	m := NewChatModel(c, agentName, "", debug)
+func NewChatModelFromHub(c client.AgentClient, agentID, agentName string, dev bool) ChatModel {
+	m := NewChatModel(c, agentName, "", dev)
 	m.agentID = agentID
 	m.fromHub = true
 	return m
@@ -244,8 +244,8 @@ func NewChatModelFromHub(c client.AgentClient, agentID, agentName string, debug 
 // NewChatModelForCatalogAgent creates a standalone ChatModel (esc quits -- see
 // CanReturnToHub) for a real catalog agent, so agentID is the catalog id
 // rather than NewChatModel's default of the display name.
-func NewChatModelForCatalogAgent(c client.AgentClient, agentID, agentName string, debug bool) ChatModel {
-	m := NewChatModel(c, agentName, "", debug)
+func NewChatModelForCatalogAgent(c client.AgentClient, agentID, agentName string, dev bool) ChatModel {
+	m := NewChatModel(c, agentName, "", dev)
 	m.agentID = agentID
 	return m
 }
@@ -275,7 +275,7 @@ func (m ChatModel) Init() tea.Cmd {
 		// before the user asked for anything, and showed a shallower version
 		// of what "triage my inbox" answers properly a moment later. The
 		// card still renders when a turn's own pre_scan_inbox result arrives.
-	} else if m.debug && m.preScanGateMismatch() {
+	} else if m.dev && m.preScanGateMismatch() {
 		// A client that could serve the pre-scan view but an agentID that
 		// doesn't match must not fail with no signal at all.
 		fmt.Fprintf(os.Stderr,
@@ -1449,14 +1449,14 @@ func spacedAfter(role MessageRole) bool {
 // time-to-first-token, token count, tokens/sec, agent-loop step count, tool
 // count — is harness telemetry. It measures the machinery, not the answer, and
 // printing six metrics under every reply trains the eye to skip the whole line,
-// including the one figure a person actually reads. --debug turns the full
+// including the one figure a person actually reads. --dev turns the full
 // breakdown back on for the people tuning the machinery.
 func (m ChatModel) answerStats(msg *Message) string {
 	if msg.Duration <= 0 {
 		return ""
 	}
 	stats := []string{fmt.Sprintf("%.1fs", msg.Duration.Seconds())}
-	if !m.debug {
+	if !m.dev {
 		return stats[0]
 	}
 

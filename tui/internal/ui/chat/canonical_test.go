@@ -98,9 +98,9 @@ func TestCanonicalFinalWithoutTokens(t *testing.T) {
 // "~" prefix, since this is a real count, not the old char-length guess.
 func TestCanonicalFinalCarriesRealTokenCount(t *testing.T) {
 	m, _ := newTestModel(t)
-	// The token count is a --debug figure; this test is about the plumbing
-	// that carries it, so it asks for the debug breakdown explicitly.
-	m.debug = true
+	// The token count is a --dev figure; this test is about the plumbing
+	// that carries it, so it asks for the dev breakdown explicitly.
+	m.dev = true
 	m.streaming = true
 	m.queryStart = time.Now().Add(-5 * time.Second)
 	m.ttft = 1 * time.Second
@@ -130,7 +130,7 @@ func TestCanonicalFinalCarriesRealTokenCount(t *testing.T) {
 // this is a fix, not a removal, and there is no fallback to the old guess.
 func TestCanonicalRenderOmitsTokensWhenZero(t *testing.T) {
 	m, _ := newTestModel(t)
-	m.debug = true
+	m.dev = true
 	msg := &Message{
 		Role:      RoleAssistant,
 		Duration:  3200 * time.Millisecond,
@@ -203,7 +203,7 @@ func TestCanonicalLegacyTransportNeverSetsTTFT(t *testing.T) {
 // client must use the server-reported usage.ttft instead of leaving it at 0.
 func TestCanonicalTTFTFallsBackToServerReportedValue(t *testing.T) {
 	m, _ := newTestModel(t)
-	m.debug = true
+	m.dev = true
 	m.streaming = true
 	m.queryStart = time.Now().Add(-82 * time.Second)
 

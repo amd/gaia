@@ -39,21 +39,21 @@ func prepareTerminal() {
 // RunHub launches the Agent Hub TUI — the main entry point for browsing and launching agents.
 // If mockAgent is non-empty, all agent binary paths are overridden with it for testing.
 // A non-nil ctrl starts the loopback control API against this very program.
-func RunHub(debug bool, mockAgent string, ctrl *control.Options) error {
+func RunHub(dev bool, mockAgent string, ctrl *control.Options) error {
 	cat := catalog.NewCatalog()
 	if mockAgent != "" {
 		cat.SetMockBinary(mockAgent)
 	} else {
 		cat.DiscoverBinaries()
 	}
-	return run(root.NewRootModel(cat, debug), debug, ctrl)
+	return run(root.NewRootModel(cat, dev), dev, ctrl)
 }
 
 // RunChat launches the chat TUI directly with a subprocess agent (standalone mode).
 //
 // subprocess is a command line, so it is split with quoting honoured — a binary
 // path containing a space must be quoted, not silently torn in two.
-func RunChat(subprocess string, query string, debug bool, ctrl *control.Options) error {
+func RunChat(subprocess string, query string, dev bool, ctrl *control.Options) error {
 	argv, err := client.SplitCommandLine(subprocess)
 	if err != nil {
 		return fmt.Errorf("invalid --subprocess command: %w", err)
@@ -65,10 +65,10 @@ func RunChat(subprocess string, query string, debug bool, ctrl *control.Options)
 		return fmt.Errorf("cannot start --subprocess %q: %w", argv[0], err)
 	}
 
-	c := client.NewSubprocessClient(bin, argv[1:], debug)
+	c := client.NewSubprocessClient(bin, argv[1:], dev)
 	defer c.Close()
 
-	return run(chat.NewChatModel(c, agentNameFromPath(argv[0]), query, debug), debug, ctrl)
+	return run(chat.NewChatModel(c, agentNameFromPath(argv[0]), query, dev), dev, ctrl)
 }
 
 // teaOptions are the terminal capabilities every GAIA TUI program asks for.
@@ -87,14 +87,14 @@ func teaOptions() []tea.ProgramOption {
 
 // run boots the Bubble Tea program, optionally wrapping it with the control
 // recorder so the live session can be driven over HTTP.
-func run(model tea.Model, debug bool, ctrl *control.Options) error {
+func run(model tea.Model, dev bool, ctrl *control.Options) error {
 	prepareTerminal()
 
 	// Swept whether or not this run publishes one of its own: a session started
 	// WITHOUT --control used to leave a dead predecessor's file in place.
 	if removed, err := control.ClearStale(daemon.PIDAlive); err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
-	} else if removed && debug {
+	} else if removed && dev {
 		fmt.Fprintln(os.Stderr, "[DEBUG] removed a stale control discovery file")
 	}
 
@@ -106,10 +106,10 @@ func run(model tea.Model, debug bool, ctrl *control.Options) error {
 		return nil
 	}
 
-	// One debug switch for both halves: --debug on the TUI implies control
+	// One dev switch for both halves: --dev on the TUI implies control
 	// logging, and the server must not end up quieter than the recorder.
 	opts := *ctrl
-	opts.Debug = opts.Debug || debug
+	opts.Debug = opts.Debug || dev
 	state := control.NewState(control.Debugf(opts.Debug))
 	p := tea.NewProgram(control.NewRecorder(model, state), teaOptions()...)
 
@@ -167,7 +167,7 @@ func run(model tea.Model, debug bool, ctrl *control.Options) error {
 // already refused that combination (see cli.agentControlOptions) rather than
 // pass a non-nil ctrl through here.
 // Returns the process exit code.
-func RunAgent(agentID, query, model string, debug bool, timeout time.Duration, ctrl *control.Options) (int, error) {
+func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctrl *control.Options) (int, error) {
 	cat := catalog.NewCatalog()
 	cat.DiscoverBinaries()
 
@@ -195,14 +195,14 @@ func RunAgent(agentID, query, model string, debug bool, timeout time.Duration, c
 	}
 
 	logf := func(string, ...any) {}
-	if debug {
+	if dev {
 		logf = func(format string, args ...any) {
 			fmt.Fprintf(os.Stderr, "[DEBUG] "+format+"\n", args...)
 		}
 	}
 
 	c, err := client.ForAgent(*agent, client.ForAgentOptions{
-		Debug: debug,
+		Dev:   dev,
 		Model: model,
 		Logf:  logf,
 		// A one-shot has nobody at the keyboard; only the interactive chat can
@@ -246,8 +246,8 @@ func RunAgent(agentID, query, model string, debug bool, timeout time.Duration, c
 		return res.ExitCode, nil
 	}
 
-	model_ := chat.NewChatModelForCatalogAgent(c, agent.ID, agent.Name, debug)
-	if err := run(model_, debug, ctrl); err != nil {
+	model_ := chat.NewChatModelForCatalogAgent(c, agent.ID, agent.Name, dev)
+	if err := run(model_, dev, ctrl); err != nil {
 		return 1, err
 	}
 	return 0, nil
@@ -299,7 +299,7 @@ func canStart(a catalog.Agent) bool {
 }
 
 // orDefault names what will actually be used when a flag was left unset, so a
-// debug line never reads "model=\"\"".
+// diagnostic line never reads "model=\"\"".
 func orDefault(value, fallback string) string {
 	if value == "" {
 		return fallback

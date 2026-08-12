@@ -280,7 +280,7 @@ func TestLegacyToolArgsTruncateOnRunesNotBytes(t *testing.T) {
 }
 
 // Six metrics under every answer trains the eye to skip the line entirely.
-// The default keeps the one figure a person reads; --debug keeps the rest.
+// The default keeps the one figure a person reads; --dev keeps the rest.
 func TestAnswerTelemetryIsQuietByDefaultAndFullUnderDebug(t *testing.T) {
 	msg := &Message{
 		Role:      RoleAssistant,
@@ -302,7 +302,7 @@ func TestAnswerTelemetryIsQuietByDefaultAndFullUnderDebug(t *testing.T) {
 	full := dev.answerStats(msg)
 	for _, want := range []string{"12.4s", "ttft 0.9s", "420 tokens", "tok/s", "4 steps", "3 tools"} {
 		if !strings.Contains(full, want) {
-			t.Errorf("--debug footnote lost %q: %q", want, full)
+			t.Errorf("--dev footnote lost %q: %q", want, full)
 		}
 	}
 }

@@ -104,3 +104,72 @@ func TestForAgentPlumbsModelAndMaxSteps(t *testing.T) {
 		t.Errorf("options not plumbed: %+v", sse.opts)
 	}
 }
+
+// One --dev has to reach the child too: the TUI going verbose while the agent
+// it spawned keeps logging errors only is the half-state that sends people
+// looking in an empty log file.
+//
+// Opt-in per agent, because an agent that does not know the flag dies at exec
+// on an unknown argument — a verbosity switch must never become a launch
+// failure.
+func TestDevModeForwardsDevArgsToTheChild(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name    string
+		devArgs []string
+		dev     bool
+		want    []string
+	}{
+		{"off, so the child argv is untouched", []string{"--dev"}, false, []string{"--json-events"}},
+		{"on, so the child goes verbose too", []string{"--dev"}, true, []string{"--json-events", "--dev"}},
+		{"on but the agent has no dev mode", nil, true, []string{"--json-events"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			agent := catalog.Agent{
+				ID: "gaia", BinaryPath: self,
+				BinaryArgs: []string{"--json-events"}, DevArgs: tc.devArgs,
+			}
+			c, err := ForAgent(agent, ForAgentOptions{Dev: tc.dev})
+			if err != nil {
+				t.Fatalf("ForAgent: %v", err)
+			}
+			defer c.Close()
+
+			sub, ok := c.(*SubprocessClient)
+			if !ok {
+				t.Fatalf("built %T, want *SubprocessClient", c)
+			}
+			if got := strings.Join(sub.args, " "); got != strings.Join(tc.want, " ") {
+				t.Errorf("child argv = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// The catalog entry outlives the launch. Appending straight onto BinaryArgs
+// would let a slice with spare capacity alias the catalog's backing array, so
+// one --dev launch would leave --dev on the entry for every later one.
+func TestForwardingDevArgsDoesNotMutateTheCatalogEntry(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+
+	agent := catalog.Agent{
+		ID: "gaia", BinaryPath: self,
+		BinaryArgs: []string{"--json-events"}, DevArgs: []string{"--dev"},
+	}
+	c, err := ForAgent(agent, ForAgentOptions{Dev: true})
+	if err != nil {
+		t.Fatalf("ForAgent: %v", err)
+	}
+	defer c.Close()
+
+	if got := strings.Join(agent.BinaryArgs, " "); got != "--json-events" {
+		t.Errorf("the catalog entry now carries %q; --dev leaked into it", got)
+	}
+}
