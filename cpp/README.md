@@ -321,7 +321,12 @@ toolRegistry().registerTool(
 );
 ```
 
-When the LLM returns `{"tool": "check_adapter", "tool_args": {...}}`, the agent looks up the callback and invokes it. The return value (JSON) is fed back to the LLM as the next message.
+When the LLM asks for a tool, the agent looks up the callback and invokes it, then feeds the JSON return value back to the LLM as the next message. How the model asks depends on the model:
+
+- **Native OpenAI tool calling** — the registry is sent as a `tools` array and the model replies with `tool_calls`; results go back as `role: tool` messages carrying `tool_call_id`. Parallel calls in one response all execute. Used automatically for models known to support it (`AgentConfig::nativeToolCalls`).
+- **Prompt-JSON fallback** — the model returns `{"tool": "check_adapter", "tool_args": {...}}` in its reply text and results go back as `[Result from check_adapter]:` user turns. Used for every other model.
+
+See the [API Reference](../docs/cpp/api-reference.mdx) for what each protocol sends on the wire.
 
 ### Shell Execution (`runShell`)
 

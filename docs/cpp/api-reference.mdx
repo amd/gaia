@@ -37,7 +37,64 @@ The return value on LLM failure:
 
 Your application should check the `result` field — there is no exception to catch. HTTP timeouts: 30s connection, 120s read.
 
+## Tool Calling Protocols
+
+The agent drives tools two ways. Which one it uses is decided per model.
+
+### Native OpenAI tool calling
+
+For models known to support it, the request carries an OpenAI `tools` array built
+from the tool registry plus a `tool_choice`, the response-format template is left
+out of the system prompt entirely, and the model replies with
+`choices[0].message.tool_calls`. Results go back as spec-correct `role: tool`
+messages carrying `tool_call_id`, so the model sees a well-formed tool exchange.
+Parallel calls — several `tool_calls` in one response — all execute, each with its
+own reply. Streaming works too: `tool_calls` deltas are reassembled across SSE
+chunks.
+
+### Prompt-JSON fallback
+
+For every other model the agent appends a response-format template asking for a
+JSON envelope (`{"thought": ..., "tool": ..., "tool_args": {...}}`) and recovers
+the call from the reply text. Tool results become `[Result from <tool>]:` user
+turns. This is the path every C++ agent used before native tool calling landed,
+and it is unchanged.
+
+### Choosing a protocol
+
+```cpp
+gaia::AgentConfig cfg;
+cfg.modelId = "Gemma-4-E4B-it-GGUF";
+
+cfg.nativeToolCalls = gaia::NativeToolCalls::Auto;    // default — decide per model
+cfg.nativeToolCalls = gaia::NativeToolCalls::Always;  // force native
+cfg.nativeToolCalls = gaia::NativeToolCalls::Never;   // force prompt-JSON
+
+cfg.toolChoice = "auto";  // or "required"
+```
+
+`Auto` consults `gaia::isToolCallingModel(modelId)`, a mirror of the `MODELS`
+table in `src/gaia/llm/lemonade_client.py`. **An unrecognised model id resolves to
+`false`** — the C++ framework targets any OpenAI-compatible server, where an
+unknown id says nothing about tool-calling support, so it keeps the fallback that
+works everywhere. Running a tool-calling model this build does not know? Set
+`NativeToolCalls::Always`.
+
+### Response modes
+
+`responseMode` picks the template used on the prompt-JSON path. It is ignored
+under native tool calling, which sends no template at all.
+
+| Mode | Behavior |
+|------|----------|
+| `ResponseMode::Planning` (default) | JSON-only replies with `thought` / `goal` / `plan` / `tool` structure |
+| `ResponseMode::Conversational` | Plain text for conversation, a bare `{"tool": ..., "tool_args": {...}}` object only when calling a tool |
+
 ### Malformed JSON Recovery
+
+This applies to the prompt-JSON path only — native tool calls arrive as structured
+JSON and are parsed strictly (a malformed `tool_calls` entry raises rather than
+falling back to prose parsing).
 
 Local LLMs often return imperfect JSON. The parser applies **six extraction strategies** in sequence:
 
