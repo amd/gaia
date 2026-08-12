@@ -199,6 +199,7 @@ add_library(gaia_core
     src/console.cpp
     src/clean_console.cpp
     src/json_utils.cpp
+    src/http_client.cpp
     src/lemonade_client.cpp
     src/agent.cpp
     src/mcp_client.cpp
@@ -385,6 +386,7 @@ if(GAIA_BUILD_TESTS)
         tests/test_mcp_client.cpp
         tests/test_mcp_registry.cpp
         tests/test_console.cpp
+        tests/test_http_client.cpp
         tests/test_lemonade_client.cpp
         tests/test_clean_console.cpp
         tests/test_tool_integration.cpp
