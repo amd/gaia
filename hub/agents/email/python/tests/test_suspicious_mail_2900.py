@@ -1160,7 +1160,7 @@ class TestRewriteSuspiciousMailAnswerZeroFindingsCoverageGap:
 
 class TestContractAdditivity:
     def test_schema_version_bumped(self):
-        assert SCHEMA_VERSION == "2.13"
+        assert SCHEMA_VERSION == "2.14"
 
     def test_pre_scan_item_accepts_phishing_and_spam_flags(self):
         item = PreScanItem(

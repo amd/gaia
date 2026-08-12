@@ -2,9 +2,9 @@
 
 [![npm version](https://img.shields.io/npm/v/@amd-gaia/agent-email?label=version)](https://www.npmjs.com/package/@amd-gaia/agent-email)
 
-Sorts your Gmail or Outlook inbox into urgent / needs-reply / FYI, pulls out
-action items, and drafts replies — all running **locally on your machine**, so no
-email content ever leaves it.
+Sorts your Gmail or Outlook (personal or work Microsoft 365) inbox into
+urgent / needs-reply / FYI, pulls out action items, and drafts replies — all
+running **locally on your machine**, so no email content ever leaves it.
 
 You embed it in a JavaScript or TypeScript app. Every email is analyzed on-device
 by a local AI model (via AMD's Lemonade runtime); message content is never sent to
@@ -114,7 +114,7 @@ for await (const ev of sidecar.client.query({
 
 Triage classifies and drafts using only the local model — no mailbox connection
 needed. Reading or acting on a live inbox (search, send, archive, calendar) uses
-the **Google or Microsoft connector** you set up in GAIA under
+the **Google or Microsoft connector** (personal or work Microsoft 365) you set up in GAIA under
 *Settings → Connectors* — or, from 2.6, that the agent sets up **with you, in the
 conversation**: if it has no usable mailbox it works out which of the four
 problems it has and offers to fix that one, asking through `needs_input` rather

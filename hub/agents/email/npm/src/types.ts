@@ -61,10 +61,15 @@
  * `actionable`, captured before `actionable`'s own cap so a flagged message
  * ranked past it is never silently dropped from the count. No existing
  * field changed (additive).
+ * Schema 2.14 (additive over 2.13, #2629): a third mailbox provider value,
+ * `microsoft_work` (work Microsoft 365 / Entra, distinct from the personal
+ * `microsoft` Outlook.com connector), is now valid wherever a provider
+ * string is accepted or returned. No existing field or value changed
+ * (additive).
  */
 
 /** Frozen contract version echoed by the server's `/version` endpoint. */
-export const SCHEMA_VERSION = "2.13" as const;
+export const SCHEMA_VERSION = "2.14" as const;
 
 /**
  * The five-bucket triage taxonomy (schema 2.0 — contract.py: EmailCategory).

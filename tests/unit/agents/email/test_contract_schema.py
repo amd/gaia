@@ -332,7 +332,7 @@ def test_result_summary_required():
 
 
 def test_schema_version_unchanged_by_multi_inbox():
-    """Schema 2.13 is the current frozen contract version.
+    """Schema 2.14 is the current frozen contract version.
 
     2.1 was additive over the 2.0 5-bucket taxonomy (no triage shape change):
     it added inbox search (#1781), mailbox actions (#1779), the calendar
@@ -374,11 +374,14 @@ def test_schema_version_unchanged_by_multi_inbox():
     PreScanItem]) and suspicious_total (int) — the phishing/spam-flagged
     subset of actionable, captured before actionable's own cap so a flagged
     message ranked past it is never silently dropped from the count — no
-    existing field changed. If this fails, someone changed the version
-    unexpectedly; that requires an explicit version negotiation, not a
-    drive-by edit.
+    existing field changed. 2.14 is additive over 2.13 (#2629): microsoft_work
+    becomes a third valid provider value (work Microsoft 365 / Entra,
+    distinct from the personal microsoft Outlook.com connector) wherever a
+    provider string is accepted or returned — no existing field or value
+    changed. If this fails, someone changed the version unexpectedly; that
+    requires an explicit version negotiation, not a drive-by edit.
     """
-    assert SCHEMA_VERSION == "2.13"
+    assert SCHEMA_VERSION == "2.14"
 
 
 def test_triage_result_gained_no_new_required_field():

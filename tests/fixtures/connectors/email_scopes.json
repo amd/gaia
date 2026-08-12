@@ -45,5 +45,27 @@
       "https://graph.microsoft.com/Mail.Send",
       "https://graph.microsoft.com/Calendars.ReadWrite"
     ]
+  },
+  "microsoft_work": {
+    "_note": "Work Microsoft 365 / Entra (#2628) — identical Graph scopes to personal Outlook; only the connector id (token/grant/keyring slot) differs.",
+    "agent_scopes": {
+      "required": [
+        "https://graph.microsoft.com/Mail.ReadWrite",
+        "https://graph.microsoft.com/Mail.Send"
+      ],
+      "optional": ["https://graph.microsoft.com/Calendars.ReadWrite"]
+    },
+    "identity_scopes": {
+      "catalog": ["openid", "offline_access", "https://graph.microsoft.com/User.Read"],
+      "provider": ["openid", "offline_access", "https://graph.microsoft.com/User.Read"]
+    },
+    "connect_union": [
+      "openid",
+      "offline_access",
+      "https://graph.microsoft.com/User.Read",
+      "https://graph.microsoft.com/Mail.ReadWrite",
+      "https://graph.microsoft.com/Mail.Send",
+      "https://graph.microsoft.com/Calendars.ReadWrite"
+    ]
   }
 }

@@ -16,9 +16,11 @@
  * mount this component conditionally on assistant content.
  *
  * Provider detection: when the error message mentions "microsoft" the CTA
- * offers a Microsoft connect button; when it mentions "google" (or the
- * ``installed:email`` upgrade message) it offers Google; when the provider
- * is ambiguous both buttons are shown so the user can pick.
+ * offers a personal Outlook connect button; when it mentions "microsoft
+ * 365"/"microsoft_work" it offers a work Microsoft 365 button instead; when
+ * it mentions "google" (or the ``installed:email`` upgrade message) it
+ * offers Google; when the provider is ambiguous all three buttons are shown
+ * so the user can pick.
  */
 
 import { useCallback, useState } from 'react';
@@ -88,37 +90,57 @@ export function isAuthRequiredMessage(content: string): boolean {
     ) {
         return true;
     }
-    // Microsoft-side error messages from format_connector_error
+    // Microsoft-side error messages from format_connector_error. Each
+    // connector id needs its own phrase check below — "microsoft_work is not
+    // currently connected" does NOT contain "microsoft is not currently
+    // connected" as a substring.
     if (
         lower.includes('connectors → microsoft') ||
         lower.includes('connections → microsoft') ||
-        lower.includes('microsoft is not currently connected')
+        lower.includes('microsoft is not currently connected') ||
+        lower.includes('microsoft_work is not currently connected')
     ) {
         return true;
     }
     return false;
 }
 
+/** The three mailbox connectors the email agent can grant-check (#2629):
+ *  ``google`` (Gmail), ``microsoft`` (personal Outlook), and
+ *  ``microsoft_work`` (work Microsoft 365 / Entra). */
+export type EmailProvider = 'google' | 'microsoft' | 'microsoft_work';
+
 /**
  * Detect which provider(s) an error message references.
  *
  * Returns:
- * - ``'google'``    — only Google connector mentioned
- * - ``'microsoft'`` — only Microsoft connector mentioned
- * - ``'both'``      — ambiguous / no specific provider found → show both
+ * - ``'google'``         — only Google connector mentioned
+ * - ``'microsoft'``      — only the personal Outlook connector mentioned
+ * - ``'microsoft_work'`` — only the work Microsoft 365 connector mentioned
+ * - ``'all'``            — ambiguous / no specific provider found → show all three
+ *
+ * The work connector must be checked BEFORE the generic Microsoft check:
+ * ``format_connector_error`` embeds the literal connector id, and
+ * "microsoft_work" contains "microsoft" as a substring, so checking in the
+ * wrong order would always classify a work-mailbox error as personal.
  */
-export function detectProvider(content: string): 'google' | 'microsoft' | 'both' {
-    if (!content) return 'both';
+export function detectProvider(content: string): EmailProvider | 'all' {
+    if (!content) return 'all';
     const lower = content.toLowerCase();
-    const mentionsGoogle =
-        lower.includes('google') ||
-        lower.includes('gmail');
-    const mentionsMicrosoft =
-        lower.includes('microsoft') ||
-        lower.includes('outlook');
-    if (mentionsGoogle && !mentionsMicrosoft) return 'google';
-    if (mentionsMicrosoft && !mentionsGoogle) return 'microsoft';
-    return 'both';
+    const mentionsGoogle = lower.includes('google') || lower.includes('gmail');
+    const mentionsWork =
+        lower.includes('microsoft_work') ||
+        lower.includes('microsoft 365') ||
+        lower.includes('office365') ||
+        lower.includes('o365');
+    const mentionsPersonal =
+        !mentionsWork && (lower.includes('microsoft') || lower.includes('outlook'));
+
+    const hits = [mentionsGoogle, mentionsPersonal, mentionsWork].filter(Boolean).length;
+    if (hits !== 1) return 'all';
+    if (mentionsGoogle) return 'google';
+    if (mentionsWork) return 'microsoft_work';
+    return 'microsoft';
 }
 
 // ── OAuth helpers (mirror ConnectorsSection.openAuthUrl) ─────────────────────
@@ -215,6 +237,7 @@ export function EmailConnectCta({
 }) {
     const [googleDone, setGoogleDone] = useState(false);
     const [microsoftDone, setMicrosoftDone] = useState(false);
+    const [microsoftWorkDone, setMicrosoftWorkDone] = useState(false);
 
     // #2117 — this CTA is email-initiated, so connecting grants ONLY the email
     // agent the moment consent completes (no follow-up CLI grant, no "no grant
@@ -227,18 +250,19 @@ export function EmailConnectCta({
         [agents],
     );
 
-    // Resolve which provider(s) to surface. Honor an explicit google/microsoft
+    // Resolve which provider(s) to surface. Honor an explicit connector
     // override; any other value (or none) falls back to content detection so we
     // never render zero connect buttons (no silent dead-end).
-    const provider =
-        connectorId === 'google' || connectorId === 'microsoft'
+    const provider: EmailProvider | 'all' =
+        connectorId === 'google' || connectorId === 'microsoft' || connectorId === 'microsoft_work'
             ? connectorId
             : detectProvider(content);
 
-    const showGoogle = provider === 'google' || provider === 'both';
-    const showMicrosoft = provider === 'microsoft' || provider === 'both';
+    const showGoogle = provider === 'google' || provider === 'all';
+    const showMicrosoft = provider === 'microsoft' || provider === 'all';
+    const showMicrosoftWork = provider === 'microsoft_work' || provider === 'all';
 
-    const anyDone = googleDone || microsoftDone;
+    const anyDone = googleDone || microsoftDone || microsoftWorkDone;
 
     return (
         <div
@@ -271,6 +295,15 @@ export function EmailConnectCta({
                         grantAgents={grantAgentsFor('microsoft')}
                         done={microsoftDone}
                         onDone={() => setMicrosoftDone(true)}
+                    />
+                )}
+                {showMicrosoftWork && (
+                    <ProviderButton
+                        connectorId="microsoft_work"
+                        label="Microsoft 365"
+                        grantAgents={grantAgentsFor('microsoft_work')}
+                        done={microsoftWorkDone}
+                        onDone={() => setMicrosoftWorkDone(true)}
                     />
                 )}
             </div>

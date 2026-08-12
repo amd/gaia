@@ -34,7 +34,7 @@ _SPEC = AgentSidecarSpec(
     mode_env_var="GAIA_EMAIL_AGENT_MODE",
     cache_dir_name="email",
     grant_agent_id="installed:email",
-    forward_providers=("google", "microsoft"),
+    forward_providers=("google", "microsoft", "microsoft_work"),
     forwarded_mode_env_var="GAIA_EMAIL_FORWARDED_CREDENTIALS",
 )
 
@@ -64,7 +64,7 @@ _SPEC_WITH_REQUIRED_CONNECTIONS = AgentSidecarSpec(
     mode_env_var="GAIA_EMAIL_AGENT_MODE",
     cache_dir_name="email",
     grant_agent_id="installed:email",
-    forward_providers=("google", "microsoft"),
+    forward_providers=("google", "microsoft", "microsoft_work"),
     forwarded_mode_env_var="GAIA_EMAIL_FORWARDED_CREDENTIALS",
     required_connections=(
         ConnectorRequirement(

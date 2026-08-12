@@ -196,24 +196,45 @@ class _UnavailableMailBackend:
 # ("the email from Microsoft").
 _PROVIDER_TERMS = {
     "google": r"(?:gmail|google)",
-    "microsoft": r"(?:outlook|hotmail|microsoft)",
+    # Excludes a bare "microsoft" immediately followed by "365" or "work"
+    # (underscore- or space-joined) — those name the work connector below,
+    # never the personal one.
+    "microsoft": r"(?:microsoft(?!\s*_?work\b|\s*365)|outlook|hotmail)",
+    # office365/o365/m365/"microsoft 365"/entra name the work Microsoft 365
+    # connector (mailbox_state.PROVIDER_ALIASES, #2629 Decision 1 — this
+    # remap is deliberately BREAKING: these words used to mean the personal
+    # connector). "exchange" is in that same alias table but, unlike the
+    # others, collides with ordinary English ("in exchange for..."), so it
+    # is handled separately below rather than here.
+    "microsoft_work": r"(?:microsoft\s*365|office\s*365|o365|m365|entra)",
+}
+# Vocabulary that only counts as mailbox targeting when directly paired with
+# a mailbox noun ("exchange inbox") — never via the "my <term>" / "<verb>
+# <term>" shapes the rest of _PROVIDER_TERMS uses, which "exchange" would
+# false-positive on ("in exchange for...", "let's exchange notes").
+_NOUN_QUALIFIED_TERMS = {
+    "microsoft_work": r"exchange",
 }
 # "in google drive" / "in microsoft teams" name another product, not a mailbox.
 _NON_MAILBOX_PRODUCTS = r"(?!\s+(?:drive|docs|sheets|maps|teams|word|excel|office))"
 _MAILBOX_NOUNS = r"(?:inbox|mail(?:box)?|e-?mails?|messages?|account|folders?)"
 _MAILBOX_VERBS = r"(?:in|via|check|open|scan|triage|search)"
 
+
+def _compile_mailbox_pattern(provider: str, term: str) -> "re.Pattern[str]":
+    alternatives = [
+        rf"\bmy\s+{term}{_NON_MAILBOX_PRODUCTS}\b",
+        rf"(?<![@.\w-]){term}\s+{_MAILBOX_NOUNS}\b",
+        rf"\b{_MAILBOX_VERBS}\s+{term}{_NON_MAILBOX_PRODUCTS}\b",
+    ]
+    noun_qualified = _NOUN_QUALIFIED_TERMS.get(provider)
+    if noun_qualified:
+        alternatives.append(rf"(?<![@.\w-]){noun_qualified}\s+{_MAILBOX_NOUNS}\b")
+    return re.compile("|".join(alternatives), re.IGNORECASE)
+
+
 _MAILBOX_TARGET_PATTERNS: Dict[str, "re.Pattern[str]"] = {
-    provider: re.compile(
-        "|".join(
-            (
-                rf"\bmy\s+{term}{_NON_MAILBOX_PRODUCTS}\b",
-                rf"(?<![@.\w-]){term}\s+{_MAILBOX_NOUNS}\b",
-                rf"\b{_MAILBOX_VERBS}\s+{term}{_NON_MAILBOX_PRODUCTS}\b",
-            )
-        ),
-        re.IGNORECASE,
-    )
+    provider: _compile_mailbox_pattern(provider, term)
     for provider, term in _PROVIDER_TERMS.items()
 }
 
@@ -717,12 +738,13 @@ class EmailTriageAgent(
         }
     )
 
-    # Declares BOTH mailbox providers so the user can connect either Google or
-    # a personal Microsoft account and have the agent grant-checked correctly.
-    # ``mail_provider`` (config) selects which one the live backend talks to;
-    # the requirements list is provider-superset so the AgentUI offers both
-    # tiles. Gmail (#962) and Outlook (#1275) coexist — neither breaks the
-    # other.
+    # Declares all THREE mailbox connectors (#2629) so the user can connect
+    # Google, a personal Microsoft account, or a work Microsoft 365 account
+    # and have the agent grant-checked correctly. ``mail_provider`` (config)
+    # selects which one the live backend talks to; the requirements list is
+    # provider-superset so the AgentUI offers all three tiles. Gmail (#962),
+    # personal Outlook (#1275) and work Microsoft 365 (#2628) coexist — none
+    # breaks the others.
     REQUIRED_CONNECTORS: ClassVar[List[ConnectorRequirement]] = [
         ConnectorRequirement(
             connector_id="google",
@@ -736,10 +758,19 @@ class EmailTriageAgent(
             connector_id="microsoft",
             scopes=OUTLOOK_MAIL_SCOPES + OUTLOOK_CALENDAR_SCOPES,
             reason=(
-                "Read and organize your Outlook mailbox — personal "
-                "(Outlook.com) or work/school (Microsoft 365) — send messages "
-                "on your behalf, and read/respond to your Outlook calendar via "
+                "Read and organize your personal Outlook mailbox "
+                "(Outlook.com / Hotmail / Live), send messages on your "
+                "behalf, and read/respond to your Outlook calendar via "
                 "Microsoft Graph."
+            ),
+        ),
+        ConnectorRequirement(
+            connector_id="microsoft_work",
+            scopes=OUTLOOK_MAIL_SCOPES + OUTLOOK_CALENDAR_SCOPES,
+            reason=(
+                "Read and organize your work Microsoft 365 mailbox, send "
+                "messages on your behalf, and read/respond to your work "
+                "calendar via Microsoft Graph."
             ),
         ),
     ]
