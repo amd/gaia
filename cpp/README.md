@@ -69,7 +69,7 @@ The first run will automatically download and cache `windows-mcp` via `uvx windo
 
 ## Building
 
-All dependencies (nlohmann/json, cpp-httplib, Google Test) are fetched automatically by CMake at configure time — no manual installs required.
+All dependencies (nlohmann/json, cpp-httplib, yaml-cpp, Google Test) are fetched automatically by CMake at configure time — no manual installs required.
 
 ### Windows (Visual Studio / MSVC)
 
@@ -128,6 +128,8 @@ The agent will:
 4. Paste the report with `ctrl+v` (through `mcp_windows_Shortcut`)
 
 Type `quit`, `exit`, or `q` to stop.
+
+> The Windows MCP tools (`mcp_windows_Shell`, `mcp_windows_Shortcut`, …) run PowerShell and drive the desktop, so the agent asks for confirmation before each call. Choose **[2] Always allow** at the prompt to approve a tool for good — the decision persists in `~/.gaia/security/allowed_tools.json`.
 
 > If the Windows MCP server fails to connect, verify that `uvx` is on your PATH and that `uvx windows-mcp` runs without errors in a separate terminal.
 
@@ -233,19 +235,25 @@ gaia/                           # repo root
     │   ├── tool_registry.h     # Tool registration and execution
     │   ├── mcp_client.h        # MCP JSON-RPC client (stdio transport)
     │   ├── json_utils.h        # JSON extraction with multi-strategy fallback
-    │   ├── lemonade_client.h   # HTTP client for the Lemonade inference server
+    │   ├── http_client.h       # General HTTP/HTTPS client (GET/POST/streaming)
+    │   ├── lemonade_client.h   # Lemonade inference server client (built on HttpClient)
     │   ├── sse_parser.h        # SSE parser for streaming chat completions
     │   ├── console.h           # TerminalConsole / SilentConsole output handlers
-    │   └── clean_console.h     # CleanConsole — polished TUI with colors and word-wrap
+    │   ├── clean_console.h     # CleanConsole — polished TUI with colors and word-wrap
+    │   └── database.h          # SQLite: Database, Statement, Transaction, Migration
+    ├── third_party/
+    │   └── sqlite/             # Vendored SQLite amalgamation (see its README)
     ├── src/
     │   ├── agent.cpp           # Agent loop state machine
     │   ├── tool_registry.cpp
-    │   ├── lemonade_client.cpp # HTTP client (blocking + SSE streaming)
+    │   ├── http_client.cpp     # HTTP transport (cpp-httplib behind a pimpl)
+    │   ├── lemonade_client.cpp # Lemonade client (blocking + SSE streaming)
     │   ├── sse_parser.cpp      # SSE token stream parser
     │   ├── mcp_client.cpp      # Cross-platform subprocess + pipes (Win32 / POSIX)
     │   ├── json_utils.cpp
     │   ├── console.cpp
-    │   └── clean_console.cpp
+    │   ├── clean_console.cpp
+    │   └── database.cpp
     ├── examples/
     │   ├── health_agent.cpp    # Windows System Health Agent (MCP/CUA demo)
     │   └── wifi_agent.cpp      # Wi-Fi Troubleshooter (registered-tool demo)
@@ -253,6 +261,7 @@ gaia/                           # repo root
     │   ├── test_agent.cpp
     │   ├── test_tool_registry.cpp
     │   ├── test_json_utils.cpp
+    │   ├── test_http_client.cpp
     │   ├── test_lemonade_client.cpp
     │   ├── test_sse_parser.cpp
     │   ├── test_mcp_client.cpp
@@ -260,6 +269,7 @@ gaia/                           # repo root
     │   ├── test_clean_console.cpp
     │   ├── test_tool_integration.cpp
     │   ├── test_types.cpp
+    │   ├── test_database.cpp
     │   └── integration/
     │       ├── test_main.cpp
     │       ├── test_integration_llm.cpp
@@ -314,7 +324,12 @@ toolRegistry().registerTool(
 );
 ```
 
-When the LLM returns `{"tool": "check_adapter", "tool_args": {...}}`, the agent looks up the callback and invokes it. The return value (JSON) is fed back to the LLM as the next message.
+When the LLM asks for a tool, the agent looks up the callback and invokes it, then feeds the JSON return value back to the LLM as the next message. How the model asks depends on the model:
+
+- **Native OpenAI tool calling** — the registry is sent as a `tools` array and the model replies with `tool_calls`; results go back as `role: tool` messages carrying `tool_call_id`. Parallel calls in one response all execute. Used automatically for models known to support it (`AgentConfig::nativeToolCalls`).
+- **Prompt-JSON fallback** — the model returns `{"tool": "check_adapter", "tool_args": {...}}` in its reply text and results go back as `[Result from check_adapter]:` user turns. Used for every other model.
+
+See the [API Reference](../docs/cpp/api-reference.mdx) for what each protocol sends on the wire.
 
 ### Shell Execution (`runShell`)
 
@@ -400,17 +415,76 @@ agent.connectMcpServer("my_server", {
 
 All tools exposed by the MCP server are automatically registered under the naming convention `mcp_<server_name>_<tool_name>`.
 
+Each discovered tool is registered with `ToolPolicy::CONFIRM` — the user is asked before it runs — **unless the server proves it read-only** (`annotations.readOnlyHint == true` *and* no state-changing verb in the tool name). MCP tool names are chosen by the server, so a static allowlist can never gate them; this classifier is what stops injected content from driving an `mcp_*_delete_file` call. A headless agent (`silentMode = true`) has no confirmation callback and is therefore denied every gated MCP tool; see the [Security Guide](../docs/cpp/security.mdx) for how to opt in deliberately.
+
+---
+
+## Text Extraction and Chunking
+
+`gaia/chunking.h` turns a file on disk into retrieval-ready chunks:
+
+```cpp
+#include <gaia/chunking.h>
+
+// Extract + split in one call (500-token chunks, 100-token overlap by default).
+for (const auto& chunk : gaia::chunkFile("notes.md")) {
+    index.add(embed(chunk), chunk);
+}
+
+// Or split text you already have, with explicit sizes.
+gaia::ChunkingConfig config{256, 32};
+auto chunks = gaia::splitTextIntoChunks(document, config);
+```
+
+The splitter is sentence-aware: it cuts on section headers and paragraph breaks
+first, falls back to sentence boundaries for oversized paragraphs, and carries
+`chunkOverlap` tokens of context into the next chunk so a fact spanning a
+boundary is still retrievable.
+
+**Chunk boundaries match the Python runtime.** The algorithm is a port of
+`RAGSDK._split_text_into_chunks` (`src/gaia/rag/sdk.py`), pinned by a parity
+test against chunks generated by the Python implementation
+(`tests/fixtures/chunking/parity_expected.json`). An index built by one runtime
+is directly comparable to one built by the other.
+
+**PDF, DOCX, XLSX and PPTX are out of scope** — they need a document-parsing
+backend the native binary deliberately does not link. `extractFile()` refuses
+them by name rather than returning empty text, and `registerExtractor()` is the
+hook for linking your own parser:
+
+```cpp
+gaia::registerExtractor(".pdf", [](const std::string& path) {
+    return myPdfBackend::toText(path);
+});
+```
+
+Supported out of the box: `.txt`, `.md`, `.markdown`, `.rst`, `.log`, and
+common source/markup/config types — `gaia::supportedExtensions()` lists them.
+
 ---
 
 ## Dependencies
 
-All fetched automatically by CMake — no manual installation needed.
+No manual installation needed — CMake fetches these at configure time.
 
 | Library | Version | License | Purpose |
 |---------|---------|---------|---------|
 | [nlohmann/json](https://github.com/nlohmann/json) | 3.11.3 | MIT | JSON parsing |
 | [cpp-httplib](https://github.com/yhirose/cpp-httplib) | 0.15.3 | MIT | HTTP client (LLM API calls) |
+| [yaml-cpp](https://github.com/jbeder/yaml-cpp) | 0.8.0 | MIT | `SKILL.md` frontmatter parsing |
+| [FTXUI](https://github.com/ArthurSonzogni/FTXUI) | 6.1.9 | MIT | TUI console (optional, `GAIA_BUILD_TUI`) |
 | [Google Test](https://github.com/google/googletest) | 1.14.0 | BSD-3 | Unit testing |
+
+**Vendored in-tree** — checked in rather than fetched, so all three platform
+builds compile byte-identical sources with the same feature flags:
+
+| Library | Version | License | Purpose |
+|---------|---------|---------|---------|
+| [SQLite](https://sqlite.org) | 3.53.4 | public domain | Structured persistence (`gaia::Database`), FTS5 full-text search |
+
+SQLite lives in [`third_party/sqlite/`](third_party/sqlite/) and is compiled
+directly into `gaia_core`; there is deliberately no `find_package` fallback. See
+that directory's README for the compile flags, the upgrade procedure, and why.
 
 ---
 

@@ -1,0 +1,152 @@
+{
+  "_note": "Expected chunk boundaries produced by RAGSDK._split_text_into_chunks (src/gaia/rag/sdk.py) for the documents in this directory. file_has_crlf records the line endings each case was generated from; see README.md.",
+  "cases": [
+    {
+      "file": "parity_sections.md",
+      "chunk_size": 60,
+      "chunk_overlap": 15,
+      "file_has_crlf": false,
+      "chunks": [
+        "# GAIA Retrieval Notes The retrieval stack indexes documents locally so a question can be answered\nwithout sending the source text to a hosted model. Everything below is a\ndescription of that pipeline as it exists in the Python runtime today.",
+        "of that pipeline as it exists in the Python runtime today. ## Extraction\n\nText files are read as UTF-8, with a latin-1 fallback for legacy encodings.\nMarkdown is treated as text; the headers are what the splitter later uses to\nfind section boundaries. Source files go down the same path.",
+        "section boundaries. Source files go down the same path. ## Chunking Chunks are sized in estimated tokens, where one token is approximated as four\ncharacters.",
+        "tokens, where one token is approximated as four characters. A paragraph that fits inside the budget is kept whole so a single\nidea does not straddle two chunks. A paragraph that does not fit is split on\nsentence boundaries instead of on words. ---",
+        "is split on sentence boundaries instead of on words. --- ## Overlap",
+        "on sentence boundaries instead of on words. --- ## Overlap Each chunk carries the tail of its predecessor. Without that overlap a question\nwhose answer spans a boundary retrieves half an answer, which reads as a\nconfident but incomplete response. The overlap is trimmed to a word boundary.",
+        "response. The overlap is trimmed to a word boundary. ## Encoding Notes",
+        "overlap is trimmed to a word boundary. ## Encoding Notes A café menu, a naïve reader, and a résumé with accents all round-trip through\nthe extractor unchanged. Counting is done in code points, not bytes, so\nmulti-byte text does not shift chunk boundaries between the two runtimes.",
+        "does not shift chunk boundaries between the two runtimes. ## Limits",
+        "shift chunk boundaries between the two runtimes. ## Limits The index is bounded by a maximum file count and a maximum chunk count. When\neither limit is reached the SDK refuses to index more rather than silently\nevicting content a user still expects to be searchable."
+      ]
+    },
+    {
+      "file": "parity_sections.md",
+      "chunk_size": 500,
+      "chunk_overlap": 100,
+      "file_has_crlf": false,
+      "chunks": [
+        "# GAIA Retrieval Notes The retrieval stack indexes documents locally so a question can be answered\nwithout sending the source text to a hosted model. Everything below is a\ndescription of that pipeline as it exists in the Python runtime today. ## Extraction\n\nText files are read as UTF-8, with a latin-1 fallback for legacy encodings.\nMarkdown is treated as text; the headers are what the splitter later uses to\nfind section boundaries. Source files go down the same path. ## Chunking Chunks are sized in estimated tokens, where one token is approximated as four\ncharacters. A paragraph that fits inside the budget is kept whole so a single\nidea does not straddle two chunks. A paragraph that does not fit is split on\nsentence boundaries instead of on words. --- ## Overlap Each chunk carries the tail of its predecessor. Without that overlap a question\nwhose answer spans a boundary retrieves half an answer, which reads as a\nconfident but incomplete response. The overlap is trimmed to a word boundary. ## Encoding Notes A café menu, a naïve reader, and a résumé with accents all round-trip through\nthe extractor unchanged. Counting is done in code points, not bytes, so\nmulti-byte text does not shift chunk boundaries between the two runtimes. ## Limits The index is bounded by a maximum file count and a maximum chunk count. When\neither limit is reached the SDK refuses to index more rather than silently\nevicting content a user still expects to be searchable."
+      ]
+    },
+    {
+      "file": "parity_prose.txt",
+      "chunk_size": 40,
+      "chunk_overlap": 10,
+      "file_has_crlf": false,
+      "chunks": [
+        "Retrieval quality is decided long before the embedding model runs. It is decided by where the text was cut.",
+        "is decided by where the text was cut. A chunk that ends mid-argument gives the reranker two halves that each look irrelevant, and the answer that comes back is confidently wrong.",
+        "that comes back is confidently wrong. Dr. Ada Lovelace would have called that a machine doing exactly what it was told.",
+        "machine doing exactly what it was told. The splitter therefore prefers sentence boundaries over word boundaries, e.g. it will overshoot the token budget slightly rather than cut a clause in half.",
+        "rather than cut a clause in half. Mr. Babbage, vs. the alternative, would probably agree.",
+        "the alternative, would probably agree. That preference costs a little index size and buys a lot of answer quality, i.e. it is the trade every retrieval system eventually makes.",
+        "retrieval system eventually makes. Overlap is the second half of the same idea, etc. Without it, a fact that straddles two chunks is retrievable from neither.",
+        "two chunks is retrievable from neither. The second paragraph is short. A third paragraph, also short, closes the fixture out."
+      ]
+    },
+    {
+      "file": "parity_prose.txt",
+      "chunk_size": 120,
+      "chunk_overlap": 30,
+      "file_has_crlf": false,
+      "chunks": [
+        "Retrieval quality is decided long before the embedding model runs. It is decided by where the text was cut. A chunk that ends mid-argument gives the reranker two halves that each look irrelevant, and the answer that comes back is confidently wrong. Dr. Ada Lovelace would have called that a machine doing exactly what it was told. The splitter therefore prefers sentence boundaries over word boundaries, e.g. it will overshoot the token budget slightly rather than cut a clause in half.",
+        "boundaries over word boundaries, e.g. it will overshoot the token budget slightly rather than cut a clause in half. Mr. Babbage, vs. the alternative, would probably agree. That preference costs a little index size and buys a lot of answer quality, i.e. it is the trade every retrieval system eventually makes. Overlap is the second half of the same idea, etc. Without it, a fact that straddles two chunks is retrievable from neither. The second paragraph is short.",
+        "idea, etc. Without it, a fact that straddles two chunks is retrievable from neither. The second paragraph is short. A third paragraph, also short, closes the fixture out."
+      ]
+    },
+    {
+      "file": "parity_mixed.txt",
+      "chunk_size": 45,
+      "chunk_overlap": 12,
+      "file_has_crlf": false,
+      "chunks": [
+        "Release Checklist",
+        "Release Checklist This file exercises the title-line heuristic: a short capitalized line with no\ntrailing punctuation, surrounded by blank lines, is treated as a section break.\n\nBuild The Wheel",
+        "is treated as a section break. Build The Wheel Run the packaging job and confirm the artifact hash matches the one recorded in\nthe release notes. If it does not, stop and investigate before tagging.",
+        "does not, stop and investigate before tagging. ===\n\nlowercase heading is not a boundary",
+        "=== lowercase heading is not a boundary A line that starts lowercase is left inside the previous section, and so is a\nline that ends with punctuation, because the heuristic requires a capital start\nand no trailing period.",
+        "a capital start and no trailing period. This line is far too long to be treated as a section title because it runs well\npast the one hundred character limit the heuristic enforces on candidate lines.",
+        "the heuristic enforces on candidate lines. # Hash Marks Start A Section Any line beginning with a hash is a boundary regardless of length or case.",
+        "is a boundary regardless of length or case. That\ncovers Markdown headers and shell comments alike, which is why a source file\nfull of comments fragments into many sections.",
+        "of comments fragments into many sections. Final Notes Dr. Knuth wrote about literate programming.",
+        "Dr. Knuth wrote about literate programming. He argued that a program should be\nwritten for a human reader first, e.g. as an essay, and only incidentally for\nthe machine.",
+        "essay, and only incidentally for the machine. That argument applies to chunking too: the cut points should fall\nwhere a human would pause, not where a byte counter happens to land."
+      ]
+    },
+    {
+      "file": "parity_mixed.txt",
+      "chunk_size": 200,
+      "chunk_overlap": 40,
+      "file_has_crlf": false,
+      "chunks": [
+        "Release Checklist This file exercises the title-line heuristic: a short capitalized line with no\ntrailing punctuation, surrounded by blank lines, is treated as a section break.\n\nBuild The Wheel Run the packaging job and confirm the artifact hash matches the one recorded in\nthe release notes. If it does not, stop and investigate before tagging. ===\n\nlowercase heading is not a boundary A line that starts lowercase is left inside the previous section, and so is a\nline that ends with punctuation, because the heuristic requires a capital start\nand no trailing period. This line is far too long to be treated as a section title because it runs well\npast the one hundred character limit the heuristic enforces on candidate lines. # Hash Marks Start A Section",
+        "be treated as a section title because it runs well past the one hundred character limit the heuristic enforces on candidate lines. # Hash Marks Start A Section Any line beginning with a hash is a boundary regardless of length or case. That\ncovers Markdown headers and shell comments alike, which is why a source file\nfull of comments fragments into many sections.\n\nFinal Notes Dr. Knuth wrote about literate programming. He argued that a program should be\nwritten for a human reader first, e.g. as an essay, and only incidentally for\nthe machine. That argument applies to chunking too: the cut points should fall\nwhere a human would pause, not where a byte counter happens to land."
+      ]
+    },
+    {
+      "file": "parity_unicode.md",
+      "chunk_size": 35,
+      "chunk_overlap": 8,
+      "file_has_crlf": true,
+      "chunks": [
+        "# Überblick Über die Chunking-Strategie",
+        "Über die Chunking-Strategie Die Zeile darüber beginnt mit einem Großbuchstaben und endet ohne Satzzeichen, also behandelt die Heuristik sie als Abschnittstitel.",
+        "sie als Abschnittstitel. Ελληνικά κείμενα",
+        "Ελληνικά κείμενα Greek and Cyrillic headings must start a section too, exactly as they do in the Python runtime. Привет is a heading below.",
+        "Привет is a heading below. Привет мир A paragraph separated by a non-breaking space line follows this one.",
+        "space line follows this one. That line held only a non-breaking space, which Python treats as whitespace, so the two paragraphs are separated rather than joined.",
+        "separated rather than joined. Đường dẫn tài liệu",
+        "than joined. Đường dẫn tài liệu Vietnamese capitals are also cased, so this heading opens its own section and the chunk boundaries stay identical between the two runtimes."
+      ]
+    },
+    {
+      "file": "parity_unicode.md",
+      "chunk_size": 150,
+      "chunk_overlap": 25,
+      "file_has_crlf": true,
+      "chunks": [
+        "# Überblick Über die Chunking-Strategie Die Zeile darüber beginnt mit einem Großbuchstaben und endet ohne Satzzeichen, also behandelt die Heuristik sie als Abschnittstitel. Ελληνικά κείμενα Greek and Cyrillic headings must start a section too, exactly as they do in the Python runtime. Привет is a heading below. Привет мир A paragraph separated by a non-breaking space line follows this one. That line held only a non-breaking space, which Python treats as whitespace, so the two paragraphs are separated rather than joined. Đường dẫn tài liệu",
+        "treats as whitespace, so the two paragraphs are separated rather than joined. Đường dẫn tài liệu Vietnamese capitals are also cased, so this heading opens its own section and the chunk boundaries stay identical between the two runtimes."
+      ]
+    },
+    {
+      "file": "parity_sections.md",
+      "chunk_size": 40,
+      "chunk_overlap": 0,
+      "file_has_crlf": false,
+      "chunks": [
+        "# GAIA Retrieval Notes The retrieval stack indexes documents locally so a question can be answered\nwithout sending the source text to a hosted model.",
+        "GAIA Retrieval Notes The retrieval stack indexes documents locally so a question can be answered without sending the source text to a hosted model. Everything below is a\ndescription of that pipeline as it exists in the Python runtime today.",
+        "Retrieval Notes The retrieval stack indexes documents locally so a question can be answered without sending the source text to a hosted model. Everything below is a description of that pipeline as it exists in the Python runtime today. ## Extraction\n\nText files are read as UTF-8, with a latin-1 fallback for legacy encodings.",
+        "Notes The retrieval stack indexes documents locally so a question can be answered without sending the source text to a hosted model. Everything below is a description of that pipeline as it exists in the Python runtime today. ## Extraction Text files are read as UTF-8, with a latin-1 fallback for legacy encodings. Markdown is treated as text; the headers are what the splitter later uses to\nfind section boundaries. Source files go down the same path. ## Chunking",
+        "The retrieval stack indexes documents locally so a question can be answered without sending the source text to a hosted model. Everything below is a description of that pipeline as it exists in the Python runtime today. ## Extraction Text files are read as UTF-8, with a latin-1 fallback for legacy encodings. Markdown is treated as text; the headers are what the splitter later uses to find section boundaries. Source files go down the same path. ## Chunking Chunks are sized in estimated tokens, where one token is approximated as four\ncharacters.",
+        "retrieval stack indexes documents locally so a question can be answered without sending the source text to a hosted model. Everything below is a description of that pipeline as it exists in the Python runtime today. ## Extraction Text files are read as UTF-8, with a latin-1 fallback for legacy encodings. Markdown is treated as text; the headers are what the splitter later uses to find section boundaries. Source files go down the same path. ## Chunking Chunks are sized in estimated tokens, where one token is approximated as four characters. A paragraph that fits inside the budget is kept whole so a single\nidea does not straddle two chunks.",
+        "stack indexes documents locally so a question can be answered without sending the source text to a hosted model. Everything below is a description of that pipeline as it exists in the Python runtime today. ## Extraction Text files are read as UTF-8, with a latin-1 fallback for legacy encodings. Markdown is treated as text; the headers are what the splitter later uses to find section boundaries. Source files go down the same path. ## Chunking Chunks are sized in estimated tokens, where one token is approximated as four characters. A paragraph that fits inside the budget is kept whole so a single idea does not straddle two chunks. A paragraph that does not fit is split on\nsentence boundaries instead of on words. --- ## Overlap Each chunk carries the tail of its predecessor.",
+        "indexes documents locally so a question can be answered without sending the source text to a hosted model. Everything below is a description of that pipeline as it exists in the Python runtime today. ## Extraction Text files are read as UTF-8, with a latin-1 fallback for legacy encodings. Markdown is treated as text; the headers are what the splitter later uses to find section boundaries. Source files go down the same path. ## Chunking Chunks are sized in estimated tokens, where one token is approximated as four characters. A paragraph that fits inside the budget is kept whole so a single idea does not straddle two chunks. A paragraph that does not fit is split on sentence boundaries instead of on words. --- ## Overlap Each chunk carries the tail of its predecessor. Without that overlap a question\nwhose answer spans a boundary retrieves half an answer, which reads as a\nconfident but incomplete response.",
+        "documents locally so a question can be answered without sending the source text to a hosted model. Everything below is a description of that pipeline as it exists in the Python runtime today. ## Extraction Text files are read as UTF-8, with a latin-1 fallback for legacy encodings. Markdown is treated as text; the headers are what the splitter later uses to find section boundaries. Source files go down the same path. ## Chunking Chunks are sized in estimated tokens, where one token is approximated as four characters. A paragraph that fits inside the budget is kept whole so a single idea does not straddle two chunks. A paragraph that does not fit is split on sentence boundaries instead of on words. --- ## Overlap Each chunk carries the tail of its predecessor. Without that overlap a question whose answer spans a boundary retrieves half an answer, which reads as a confident but incomplete response. The overlap is trimmed to a word boundary. ## Encoding Notes A café menu, a naïve reader, and a résumé with accents all round-trip through\nthe extractor unchanged.",
+        "locally so a question can be answered without sending the source text to a hosted model. Everything below is a description of that pipeline as it exists in the Python runtime today. ## Extraction Text files are read as UTF-8, with a latin-1 fallback for legacy encodings. Markdown is treated as text; the headers are what the splitter later uses to find section boundaries. Source files go down the same path. ## Chunking Chunks are sized in estimated tokens, where one token is approximated as four characters. A paragraph that fits inside the budget is kept whole so a single idea does not straddle two chunks. A paragraph that does not fit is split on sentence boundaries instead of on words. --- ## Overlap Each chunk carries the tail of its predecessor. Without that overlap a question whose answer spans a boundary retrieves half an answer, which reads as a confident but incomplete response. The overlap is trimmed to a word boundary. ## Encoding Notes A café menu, a naïve reader, and a résumé with accents all round-trip through the extractor unchanged. Counting is done in code points, not bytes, so\nmulti-byte text does not shift chunk boundaries between the two runtimes. ## Limits",
+        "so a question can be answered without sending the source text to a hosted model. Everything below is a description of that pipeline as it exists in the Python runtime today. ## Extraction Text files are read as UTF-8, with a latin-1 fallback for legacy encodings. Markdown is treated as text; the headers are what the splitter later uses to find section boundaries. Source files go down the same path. ## Chunking Chunks are sized in estimated tokens, where one token is approximated as four characters. A paragraph that fits inside the budget is kept whole so a single idea does not straddle two chunks. A paragraph that does not fit is split on sentence boundaries instead of on words. --- ## Overlap Each chunk carries the tail of its predecessor. Without that overlap a question whose answer spans a boundary retrieves half an answer, which reads as a confident but incomplete response. The overlap is trimmed to a word boundary. ## Encoding Notes A café menu, a naïve reader, and a résumé with accents all round-trip through the extractor unchanged. Counting is done in code points, not bytes, so multi-byte text does not shift chunk boundaries between the two runtimes. ## Limits The index is bounded by a maximum file count and a maximum chunk count.",
+        "a question can be answered without sending the source text to a hosted model. Everything below is a description of that pipeline as it exists in the Python runtime today. ## Extraction Text files are read as UTF-8, with a latin-1 fallback for legacy encodings. Markdown is treated as text; the headers are what the splitter later uses to find section boundaries. Source files go down the same path. ## Chunking Chunks are sized in estimated tokens, where one token is approximated as four characters. A paragraph that fits inside the budget is kept whole so a single idea does not straddle two chunks. A paragraph that does not fit is split on sentence boundaries instead of on words. --- ## Overlap Each chunk carries the tail of its predecessor. Without that overlap a question whose answer spans a boundary retrieves half an answer, which reads as a confident but incomplete response. The overlap is trimmed to a word boundary. ## Encoding Notes A café menu, a naïve reader, and a résumé with accents all round-trip through the extractor unchanged. Counting is done in code points, not bytes, so multi-byte text does not shift chunk boundaries between the two runtimes. ## Limits The index is bounded by a maximum file count and a maximum chunk count. When\neither limit is reached the SDK refuses to index more rather than silently\nevicting content a user still expects to be searchable."
+      ]
+    },
+    {
+      "file": "parity_three_sections.txt",
+      "chunk_size": 200,
+      "chunk_overlap": 40,
+      "file_has_crlf": false,
+      "chunks": [
+        "# Alpha The first section body is one line that ends with a period. # Beta The second section body is also a single line ending in a period. # Gamma The third section body closes this fixture out with one more line."
+      ]
+    },
+    {
+      "file": "parity_four_sections.txt",
+      "chunk_size": 200,
+      "chunk_overlap": 40,
+      "file_has_crlf": false,
+      "chunks": [
+        "# Alpha\n\nThe first section body is one line that ends with a period. # Beta\n\nThe second section body is also a single line ending in a period. # Gamma\n\nThe third section body closes this fixture out with one more line. # Delta\n\nThe fourth section body only exists in the four-section fixture."
+      ]
+    }
+  ]
+}

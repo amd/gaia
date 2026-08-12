@@ -13,12 +13,14 @@ import datetime
 import inspect
 import json
 import logging
+import math
 import os
 import re
 import subprocess
 import threading
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -29,6 +31,7 @@ from typing import (
     Literal,
     Optional,
     Tuple,
+    Union,
 )
 
 from gaia.agents.base.console import AgentConsole, SilentConsole
@@ -52,6 +55,19 @@ if TYPE_CHECKING:
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def _skill_validation_error(message: str) -> Exception:
+    """Build a ``SkillValidationError`` without importing skills at module load.
+
+    ``gaia.skills`` is imported lazily throughout this module so an agent that
+    composes no skills never pays for it; the error type has to follow the same
+    rule or the lazy import is defeated by the raise site.
+    """
+    from gaia.skills.errors import SkillValidationError
+
+    return SkillValidationError(message)
+
 
 # Content truncation thresholds
 CHUNK_TRUNCATION_THRESHOLD = 5000
@@ -151,6 +167,10 @@ class ToolExecutionTimeout(Exception):
 # Adding a tool name here (or to a subclass's ``CONFIRMATION_REQUIRED_TOOLS``)
 # causes _execute_tool() to call console.confirm_tool_execution() and block
 # until the user responds.
+#
+# This set only covers tools whose names GAIA controls. Tools registered at
+# runtime under a third-party name (MCP) carry a ``requires_confirmation`` flag
+# on their registry entry instead — see ``Agent._tool_requires_confirmation``.
 TOOLS_REQUIRING_CONFIRMATION = {
     "run_shell_command",
     "run_cli_command",
@@ -281,6 +301,113 @@ def _find_matching_close_paren(text: str, open_pos: int) -> Optional[int]:
     return None
 
 
+def _safe_number(value: Any) -> int:
+    """Coerce a usage-stat value to a non-negative int; anything else
+    (string, None, nested structure, bool) is untrusted input and yields 0
+    rather than raising — a malformed stat must never break the run that
+    carries it."""
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, (int, float)) and value >= 0:
+        return int(value)
+    return 0
+
+
+def _sum_conversation_tokens(
+    conversation: List[Dict[str, Any]],
+    tool_usage_entries: Optional[List[Dict[str, Any]]] = None,
+) -> Tuple[int, int]:
+    """Sum input/output tokens from per-step 'stats' entries already appended
+    to conversation, plus any tool-reported usage folded in separately (see
+    ``_extract_tool_usage``). Returns (total_input, total_output)."""
+    total_input = 0
+    total_output = 0
+    for entry in conversation:
+        if entry.get("role") == "system" and isinstance(entry.get("content"), dict):
+            content = entry["content"]
+            if content.get("type") == "stats" and "performance_stats" in content:
+                stats = content["performance_stats"]
+                total_input += _safe_number(stats.get("input_tokens"))
+                total_output += _safe_number(stats.get("output_tokens"))
+    for usage in tool_usage_entries or []:
+        total_input += _safe_number(
+            usage.get("prompt_tokens") or usage.get("input_tokens")
+        )
+        total_output += _safe_number(
+            usage.get("completion_tokens") or usage.get("output_tokens")
+        )
+    return total_input, total_output
+
+
+def _query_ttft_seconds(conversation: List[Dict[str, Any]]) -> Optional[float]:
+    """Turn's ttft = the FIRST step's own time_to_first_token; a later step's
+    value would drop all earlier tool-decision latency. None when step 1 has
+    no positive value — never a fabricated 0.0."""
+    for entry in conversation:
+        if entry.get("role") == "system" and isinstance(entry.get("content"), dict):
+            content = entry["content"]
+            if content.get("type") == "stats" and "performance_stats" in content:
+                if content.get("step") != 1:
+                    # Step 1's own poll failed/was skipped — never misattribute
+                    # a later step's latency as the turn's ttft.
+                    return None
+                stats = content["performance_stats"]
+                ttft = (
+                    stats.get("time_to_first_token")
+                    if isinstance(stats, dict)
+                    else None
+                )
+                if (
+                    isinstance(ttft, (int, float))
+                    and not isinstance(ttft, bool)
+                    and math.isfinite(ttft)
+                    and ttft > 0
+                ):
+                    return float(ttft)
+                return None
+    return None
+
+
+# Only these field names are ever accepted from a tool's self-reported
+# ``usage`` dict — deliberately narrower than "any dict under a `usage` key",
+# so a tool with an unrelated `usage` value (rate-limit/quota/disk usage, not
+# LLM tokens) is never misread as token accounting (#2899).
+_TOOL_USAGE_TOKEN_FIELDS = (
+    "prompt_tokens",
+    "completion_tokens",
+    "input_tokens",
+    "output_tokens",
+)
+
+
+def _extract_tool_usage(tool_result: Any) -> Optional[Dict[str, Any]]:
+    """Pull a tool-reported usage dict off a tool's own return payload, if
+    present and shaped like real token accounting. Some tools make their own
+    internal LLM calls outside the normal per-step chat-completion accounting
+    (e.g. a triage tool that classifies many items with its own client calls)
+    and report the aggregate on their own return value instead of through the
+    per-step stats path. Never raises — a malformed payload (bad JSON, wrong
+    shape, non-numeric fields) yields ``None``, the same as "no usage to
+    report"."""
+    try:
+        payload = tool_result
+        if isinstance(payload, str):
+            payload = json.loads(payload)
+        if not isinstance(payload, dict):
+            return None
+        usage = payload.get("usage")
+        if not isinstance(usage, dict):
+            return None
+        has_real_token_field = any(
+            isinstance(usage.get(f), (int, float))
+            and not isinstance(usage.get(f), bool)
+            for f in _TOOL_USAGE_TOKEN_FIELDS
+        )
+        return usage if has_real_token_field else None
+    except (ValueError, TypeError):
+        return None
+
+
 # Suffix appended to the last tool-result message when ``single_tool_per_turn``
 # agents have completed their one tool call. The model sees this and emits a
 # short final reply instead of calling another tool. Greppable for fixtures
@@ -367,11 +494,18 @@ class Agent(abc.ABC):
     # copy. Empty = the agent bundles no skills.
     SKILL_DIRS: ClassVar[List[str]] = []
 
-    # Path to this agent's ``gaia-agent.yaml`` (issue #2466). When set, the base
-    # ``__init__`` reads its ``skills:`` / ``skill_sets:`` blocks and loads the
-    # resolved set at startup. ``None`` = no declarative skills; the agent may
-    # still call ``load_skill`` directly.
+    # Path to the ``gaia-agent.yaml`` whose ``skills:`` / ``skill_sets:`` blocks
+    # this agent composes (#2466, #2467 scope D). The base ``__init__`` reads it
+    # and loads the resolved set at startup. ``None`` auto-detects the manifest
+    # beside the agent's own module — which is why a custom harness needs no code
+    # change to consume an installed hub skill. Relative paths resolve against
+    # the agent's module dir.
     SKILL_MANIFEST: ClassVar[Optional[str]] = None
+
+    # Set False to skip the automatic ``load_declared_skills()`` in ``__init__``.
+    # For an agent that must decide its skill set at run time (e.g. from user
+    # input) and calls ``load_skill`` itself.
+    AUTOLOAD_DECLARED_SKILLS: ClassVar[bool] = True
 
     # Agent-specific tools that must be gated behind explicit user confirmation
     # (#1440). Subclasses override this to declare their own destructive/external
@@ -507,6 +641,10 @@ Do NOT wrap conversational replies in JSON.
         # post-registration skill-set load both see the explicit request.
         self._requested_skill_set = skill_set
         self.error_history = []  # Store error history for learning
+        # Safe default so _execute_tool -> _fold_tool_usage never AttributeErrors
+        # if called outside the normal process_query loop (e.g. directly in a
+        # test); _process_query_impl resets this per-turn (#2899).
+        self._tool_reported_usage: List[Dict[str, Any]] = []
         self.conversation_history = (
             []
         )  # Store conversation history for session persistence
@@ -597,10 +735,14 @@ Do NOT wrap conversational replies in JSON.
         # _response_format_template must be set above before this call).
         self._register_tools()
 
-        # Declarative skills (#2466). After _register_tools so a skill's tools
-        # land on top of the agent's own registry (and survive a subclass's
-        # ``_snapshot_tools()``), and so a skill body can reference them.
-        self.load_skill_set()
+        # Declarative skills (#2466, #2467 scope D): compose whatever this
+        # agent's gaia-agent.yaml declares. After _register_tools so a skill's
+        # tools land on top of the agent's own registry (and survive a subclass's
+        # ``_snapshot_tools()``), and before the system prompt is first composed
+        # so the skill bodies are in it. A no-op for an agent with no manifest,
+        # which is every agent today.
+        if self.AUTOLOAD_DECLARED_SKILLS:
+            self.load_declared_skills()
 
         # Note: system_prompt is now a lazy @property that composes on first access.
         # Tool descriptions and response format are added in _compose_system_prompt().
@@ -959,13 +1101,57 @@ Do NOT wrap conversational replies in JSON.
         """This agent's :class:`~gaia.skills.manager.SkillManager`.
 
         Built lazily over the v1 discovery roots, with the agent's own
-        ``SKILL_DIRS`` as the highest-precedence root.
+        ``SKILL_DIRS`` — plus the ``skills/`` folder its package ships, see
+        :meth:`_bundled_skill_dirs` — as the highest-precedence roots.
         """
         if getattr(self, "_skill_manager", None) is None:
             from gaia.skills import SkillManager
 
-            self._skill_manager = SkillManager(agent_skill_dirs=self.SKILL_DIRS)
+            self._skill_manager = SkillManager(
+                agent_skill_dirs=[*self.SKILL_DIRS, *self._bundled_skill_dirs()]
+            )
         return self._skill_manager
+
+    #: Folder name an agent package ships its own skills in.
+    _BUNDLED_SKILLS_DIRNAME: ClassVar[str] = "skills"
+
+    def _bundled_skill_dirs(self) -> List[str]:
+        """The ``skills/`` folders this agent ships, found the way its manifest is.
+
+        Declaration and discovery have to come from the same place. The manifest
+        is auto-detected beside the agent's module, so the skills that manifest
+        declares are auto-detected beside it too — otherwise a class that
+        inherits its package's ``gaia-agent.yaml`` without repeating the
+        package's ``SKILL_DIRS`` (a second entry point in the same package, e.g.
+        an MCP wrapper) declares skills GAIA then refuses to find.
+
+        Explicit ``SKILL_DIRS`` still take precedence; this only adds roots.
+        Skills that genuinely are not on disk stay missing, and still raise.
+        """
+        candidates: List[Path] = []
+        try:
+            module_dir = Path(inspect.getfile(type(self))).resolve().parent
+        except TypeError:
+            # A class defined in a REPL/exec has no source file to search from.
+            module_dir = None
+        if module_dir is not None:
+            candidates.append(module_dir / self._BUNDLED_SKILLS_DIRNAME)
+        manifest = self._resolve_skill_manifest()
+        if manifest is not None:
+            candidates.append(manifest.parent / self._BUNDLED_SKILLS_DIRNAME)
+
+        # Compare resolved paths so a folder already named by SKILL_DIRS is not
+        # registered a second time under a different spelling — two roots over
+        # one directory would report every skill in it as shadowing itself.
+        seen = {Path(d).resolve() for d in self.SKILL_DIRS}
+        found: List[str] = []
+        for candidate in candidates:
+            resolved = candidate.resolve()
+            if resolved in seen or not resolved.is_dir():
+                continue
+            seen.add(resolved)
+            found.append(str(candidate))
+        return found
 
     @property
     def loaded_skills(self) -> Dict[str, "Skill"]:
@@ -1070,6 +1256,101 @@ Do NOT wrap conversational replies in JSON.
         )
         return skill
 
+    def load_declared_skills(
+        self,
+        manifest_path: Optional[Union[str, Path]] = None,
+        *,
+        manager: Optional["SkillManager"] = None,
+    ) -> Dict[str, "Skill"]:
+        """Load every skill this agent's ``gaia-agent.yaml`` declares (#2467).
+
+        Runs automatically at the end of ``__init__``, so an agent composes hub
+        skills by *declaring* them rather than by calling :meth:`load_skill` —
+        and a custom harness under ``~/.gaia/agents/<id>/`` gets the identical
+        path by dropping a ``gaia-agent.yaml`` beside its ``agent.py``. No
+        per-agent code change, bundled or not.
+
+        Args:
+            manifest_path: Explicit manifest. Defaults to :attr:`SKILL_MANIFEST`,
+                then to the manifest found beside this agent's own module.
+            manager: Resolve against this manager instead of :attr:`skill_manager`.
+
+        Returns:
+            ``{name: Skill}`` for the skills loaded by this call (empty when the
+            agent declares none, which is the common case).
+
+        Raises:
+            SkillNotFoundError: a **required** declared skill is not installed.
+            SkillValidationError: a required skill is installed at a version the
+                pin excludes, or the manifest's skill blocks are malformed.
+            SkillSetError: an explicitly requested skill set is not declared.
+        """
+        # Locate the manifest with plain path checks first. This runs in every
+        # Agent.__init__, and importing gaia.skills would pull in the connector
+        # base module for the overwhelming majority of agents that declare no
+        # skills at all — so the import waits until there is a manifest to read.
+        path = self._resolve_skill_manifest(manifest_path)
+        if path is None and not (self._requested_skill_set or "").strip():
+            return {}
+
+        if manifest_path is not None:
+            # An explicit manifest replaces whatever SKILL_MANIFEST cached.
+            self._skill_sets = self._parse_skill_declarations(path)
+        return self.load_skill_set(manager=manager)
+
+    #: Manifest filename searched for beside an agent's module. Duplicated from
+    #: ``gaia.skills.consume.AGENT_MANIFEST_FILENAME`` so the hot path in
+    #: ``__init__`` can look for it without importing the skills package; the two
+    #: are asserted equal by ``tests/unit/test_skills_consume.py``.
+    _SKILL_MANIFEST_FILENAME: ClassVar[str] = "gaia-agent.yaml"
+
+    def _resolve_skill_manifest(
+        self, explicit: Optional[Union[str, Path]] = None
+    ) -> Optional[Path]:
+        """Locate the manifest whose ``skills:`` block applies to this agent.
+
+        Searches the agent module's own directory then its parent — the two
+        layouts GAIA ships (a hub package keeps the manifest one level above the
+        Python package; a custom agent keeps it beside ``agent.py``). It stops
+        there deliberately: walking further up would eventually claim an unrelated
+        manifest from a site-packages sibling or the repo root.
+        """
+        if explicit is not None:
+            path = Path(explicit)
+            if not path.is_file():
+                raise _skill_validation_error(
+                    f"Agent {type(self).__name__} points at a skills manifest that "
+                    f"does not exist: {path}. Fix SKILL_MANIFEST (or the path passed "
+                    "to load_declared_skills), or unset it to auto-detect."
+                )
+            return path
+
+        if self.SKILL_MANIFEST:
+            path = Path(self.SKILL_MANIFEST)
+            if not path.is_absolute():
+                module_file = inspect.getfile(type(self))
+                path = (Path(module_file).resolve().parent / path).resolve()
+            if not path.is_file():
+                raise _skill_validation_error(
+                    f"Agent {type(self).__name__} sets SKILL_MANIFEST="
+                    f"{self.SKILL_MANIFEST!r}, which resolves to {path} — no such "
+                    "file. Point it at the agent's gaia-agent.yaml, or unset it to "
+                    "auto-detect."
+                )
+            return path
+
+        try:
+            module_file = inspect.getfile(type(self))
+        except TypeError:
+            # A class defined in a REPL/exec has no source file to search from.
+            return None
+        module_dir = Path(module_file).resolve().parent
+        for candidate in (module_dir, module_dir.parent):
+            manifest = candidate / self._SKILL_MANIFEST_FILENAME
+            if manifest.is_file():
+                return manifest
+        return None
+
     def unload_skill(self, name: str) -> bool:
         """Remove a loaded skill's tools and body. Returns True if it was loaded."""
         from gaia.skills.loader import unregister_skill_tools
@@ -1094,26 +1375,48 @@ Do NOT wrap conversational replies in JSON.
     def skill_sets(self) -> "SkillSets":
         """This agent's parsed ``skills:`` / ``skill_sets:`` declarations.
 
-        Read once from :attr:`SKILL_MANIFEST` and cached. Falsy (and empty) when
-        the agent declares no manifest — so nothing changes for an agent that
-        does not use skills.
+        Read once from :attr:`SKILL_MANIFEST` — or from the manifest found beside
+        the agent's own module — and cached. Falsy (and empty) when the agent has
+        no manifest, so nothing changes for an agent that does not use skills.
 
         Raises:
-            ManifestError: ``SKILL_MANIFEST`` is set but missing or malformed.
-                A packaged agent whose own manifest cannot be read is broken,
-                not degraded.
+            SkillValidationError: the manifest is unreadable, or its skill blocks
+                are malformed. An agent whose own manifest cannot be read is
+                broken, not degraded.
         """
         if getattr(self, "_skill_sets", None) is None:
-            from gaia.skills.sets import SkillSets
-
-            manifest_path = self.SKILL_MANIFEST
-            if not manifest_path:
-                self._skill_sets = SkillSets()
-            else:
-                from gaia.hub.manifest import parse as parse_manifest
-
-                self._skill_sets = parse_manifest(manifest_path).skill_sets
+            self._skill_sets = self._parse_skill_declarations(
+                self._resolve_skill_manifest()
+            )
         return self._skill_sets
+
+    def _parse_skill_declarations(self, path: Optional[Path]) -> "SkillSets":
+        """Parse the ``skills:`` / ``skill_sets:`` blocks of the manifest at *path*.
+
+        Reads the YAML directly rather than going through
+        :func:`gaia.hub.manifest.parse` so a custom agent under
+        ``~/.gaia/agents/<id>/`` — whose manifest need not carry the hub's
+        publishing fields — declares skills the same way a packaged agent does.
+        """
+        from gaia.skills.sets import SkillSets, parse_skill_sets
+
+        if path is None:
+            return SkillSets()
+
+        import yaml
+
+        try:
+            data = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+        except (OSError, yaml.YAMLError) as exc:
+            raise _skill_validation_error(
+                f"Could not read the agent manifest at {path}: {exc}. Fix the "
+                "YAML — an unreadable manifest may be hiding a 'skills:' block, "
+                "so GAIA will not assume the agent declares none."
+            ) from exc
+
+        if data is None:
+            return SkillSets()
+        return parse_skill_sets(data, where=f" in {path}")
 
     @property
     def active_skill_set(self) -> Optional[str]:
@@ -1151,15 +1454,22 @@ Do NOT wrap conversational replies in JSON.
         selected = None if (explicit or "").strip() else self.select_skill_set()
         return declarations.resolve(requested=explicit, selected=selected)
 
-    def load_skill_set(self, requested: Optional[str] = None) -> Dict[str, "Skill"]:
+    def load_skill_set(
+        self,
+        requested: Optional[str] = None,
+        *,
+        manager: Optional["SkillManager"] = None,
+    ) -> Dict[str, "Skill"]:
         """Resolve and load this agent's declared skills. Returns what loaded.
 
         A no-op returning ``{}`` when the agent declares no skills. Otherwise it
-        loads the always-on ``skills:`` list plus the resolved set, in
-        declaration order. A skill declared ``required: false`` that is missing
-        from every discovery root is logged and skipped; every other failure
-        propagates, because an agent launched with the wrong capabilities is
-        worse than one that refuses to launch.
+        loads the always-on ``skills:`` list plus the resolved set: each entry's
+        SemVer range is matched against what is installed, and a skill whose
+        tools another declared skill consumes loads first (declaration order
+        breaks every remaining tie). A skill declared ``required: false`` that is
+        missing or version-incompatible is logged and skipped; every other
+        failure propagates, because an agent launched with the wrong
+        capabilities is worse than one that refuses to launch.
 
         Called automatically at the end of ``Agent.__init__``. Call it again with
         a different name to switch sets mid-session; the previous set's skills are
@@ -1175,7 +1485,7 @@ Do NOT wrap conversational replies in JSON.
         ``skill_set`` passed to ``__init__``, else the hook, else the default).
         Pass the name again to stay on it.
         """
-        from gaia.skills.errors import SkillNotFoundError
+        from gaia.skills.consume import requirements_from_refs, resolve_requirements
 
         declarations = self.skill_sets
         explicit = requested if requested is not None else self._requested_skill_set
@@ -1189,28 +1499,40 @@ Do NOT wrap conversational replies in JSON.
         resolution = self.resolve_skill_set(requested)
         wanted = {ref.name for ref in resolution.skills}
         previously_loaded = list(self._skill_set_loaded or [])
+        resolver = manager if manager is not None else self.skill_manager
+
+        # Match the declared version ranges against what is installed and order
+        # by intra-set tool dependencies BEFORE loading anything. A missing or
+        # incompatible *required* skill raises here, so the agent is untouched.
+        resolved = resolve_requirements(
+            requirements_from_refs(
+                resolution.skills,
+                origin=(
+                    f"skill set '{resolution.name}'"
+                    if resolution.name
+                    else self._SKILL_MANIFEST_FILENAME
+                ),
+            ),
+            manager=resolver,
+        )
+        for name, reason in resolved.skipped.items():
+            logger.warning(
+                "Agent %s: optional skill '%s' not loaded — %s",
+                type(self).__name__,
+                name,
+                reason,
+            )
 
         # Load the new set BEFORE dropping the old one, and track what this call
         # actually brought in, so a failure can be undone completely.
         loaded: Dict[str, "Skill"] = {}
         newly_loaded: List[str] = []
         try:
-            for ref in resolution.skills:
-                already_present = ref.name in self.loaded_skills
-                try:
-                    loaded[ref.name] = self.load_skill(ref.name)
-                except SkillNotFoundError:
-                    if ref.required:
-                        raise
-                    logger.warning(
-                        "Optional skill '%s' (skill set '%s') was not found in "
-                        "any discovery root — continuing without it.",
-                        ref.name,
-                        resolution.name,
-                    )
-                    continue
+            for skill in resolved.order:
+                already_present = skill.name in self.loaded_skills
+                loaded[skill.name] = self.load_skill(skill.name, manager=resolver)
                 if not already_present:
-                    newly_loaded.append(ref.name)
+                    newly_loaded.append(skill.name)
         except Exception:
             # Roll back to the pre-call state: drop only what this call added,
             # and leave _active_skill_set / _skill_set_loaded untouched so the
@@ -2393,9 +2715,13 @@ Do NOT wrap conversational replies in JSON.
         """The full set of tool names gated behind explicit user confirmation
         for this agent (#1440): the generic dangerous base set
         (``TOOLS_REQUIRING_CONFIRMATION``) unioned with the agent's own
-        ``CONFIRMATION_REQUIRED_TOOLS``. ``_execute_tool`` consults this so
-        subclasses declare only their agent-specific tools without re-listing
-        the shared shell/file-mutation ones.
+        ``CONFIRMATION_REQUIRED_TOOLS``. Subclasses declare only their
+        agent-specific tools without re-listing the shared shell/file-mutation
+        ones.
+
+        This is the *static* half of the gate; ``_tool_requires_confirmation``
+        combines it with the per-entry flag that covers runtime-registered
+        (MCP) tools, and is what ``_execute_tool`` actually calls.
         """
         return frozenset(TOOLS_REQUIRING_CONFIRMATION) | frozenset(
             cls.CONFIRMATION_REQUIRED_TOOLS
@@ -2414,6 +2740,46 @@ Do NOT wrap conversational replies in JSON.
             if reason:
                 return str(reason)
         return f"Tool '{tool_name}' was denied by the user."
+
+    def _tool_requires_confirmation(self, tool_name: str) -> bool:
+        """Whether ``tool_name`` must be user-confirmed before it executes.
+
+        Unions two independent sources so tools registered at runtime are
+        covered as well as ones named at import time:
+
+        * ``confirmation_required_tools()`` — the static name set, for native
+          tools whose names GAIA controls.
+        * ``requires_confirmation`` on the registry entry — for dynamically
+          registered tools (MCP) whose names are chosen by a third party and so
+          can never be enumerated in a static set.
+
+        ``mcp_``-prefixed tools fail closed: an entry that carries no explicit
+        flag is treated as requiring confirmation, so a registration path that
+        forgets to classify its tools cannot silently leave the gate open.
+        """
+        if tool_name in self.confirmation_required_tools():
+            return True
+        entry = self._tools_registry.get(tool_name) or {}
+        flag = entry.get("requires_confirmation")
+        if flag is not None:
+            return bool(flag)
+        return tool_name.startswith("mcp_")
+
+    def _fold_tool_usage(self, tool_name: str, tool_result: Any) -> None:
+        """Record a tool's self-reported LLM usage (see ``_extract_tool_usage``)
+        against this turn's running total. Called from the single success path
+        inside ``_execute_tool`` so every caller is covered uniformly. Never
+        raises — extraction failures are already swallowed by
+        ``_extract_tool_usage``; this method only appends.
+
+        A tool whose internal LLM calls already route through ``self.chat``
+        would double-count here — a constraint on future tools, not a live one.
+        """
+        usage = _extract_tool_usage(tool_result)
+        if usage is None:
+            return
+        logger.debug("Tool '%s' reported its own LLM usage: %s", tool_name, usage)
+        self._tool_reported_usage.append(usage)
 
     def _execute_tool(self, tool_name: str, tool_args: Dict[str, Any]) -> Any:
         """
@@ -2488,7 +2854,7 @@ Do NOT wrap conversational replies in JSON.
         # Consoles that cannot reach a human deny rather than answer for them
         # (#2210): AgentConsole prompts on a TTY, SSEOutputHandler blocks on the
         # frontend modal, everything else denies with an actionable message.
-        if tool_name in self.confirmation_required_tools():
+        if self._tool_requires_confirmation(tool_name):
             if not self.console.confirm_tool_execution(tool_name, tool_args):
                 return {
                     "status": "denied",
@@ -2558,6 +2924,7 @@ Do NOT wrap conversational replies in JSON.
         try:
             result = self._call_tool_bounded(tool, tool_args, tool_name)
             logger.debug(f"Tool execution result: {result}")
+            self._fold_tool_usage(tool_name, result)
             return result
         except ToolExecutionTimeout as e:
             # Bounded-execution guard fired: the tool body blocked past its
@@ -3428,6 +3795,10 @@ Do NOT wrap conversational replies in JSON.
         self.current_step = 0
         self.total_plan_steps = 0
         self.plan_iterations = 0  # Reset plan iteration counter
+        # Tool-reported LLM usage this turn (see _fold_tool_usage / #2899) —
+        # reset per-turn since an Agent instance persists across queries in
+        # an interactive session.
+        self._tool_reported_usage: List[Dict[str, Any]] = []
 
         # Add user query to the conversation history
         conversation.append({"role": "user", "content": user_input})
@@ -5300,7 +5671,20 @@ Do NOT wrap conversational replies in JSON.
 
                 final_answer = self.finalize_answer(answer_candidate, conversation)
                 self.execution_state = self.STATE_COMPLETION
-                self.console.print_final_answer(final_answer, streaming=self.streaming)
+                # Compute the real token total BEFORE printing the answer so it
+                # can ride the same event, instead of the post-loop aggregation
+                # below which runs after print_final_answer already fired
+                # (#2899). Output tokens only — "tokens actually generated",
+                # matching the tok/s calc downstream which is also output-only.
+                _pre_input_tokens, pre_output_tokens = _sum_conversation_tokens(
+                    conversation, self._tool_reported_usage
+                )
+                self.console.print_final_answer(
+                    final_answer,
+                    streaming=self.streaming,
+                    total_tokens=pre_output_tokens,
+                    ttft_seconds=_query_ttft_seconds(conversation),
+                )
                 break
 
             # Check if we're at the limit and ask user if they want to continue
@@ -5365,18 +5749,14 @@ Do NOT wrap conversational replies in JSON.
         # Calculate total duration
         total_duration = time.time() - start_time
 
-        # Aggregate token counts from conversation stats
-        total_input_tokens = 0
-        total_output_tokens = 0
-        for entry in conversation:
-            if entry.get("role") == "system" and isinstance(entry.get("content"), dict):
-                content = entry["content"]
-                if content.get("type") == "stats" and "performance_stats" in content:
-                    stats = content["performance_stats"]
-                    if stats.get("input_tokens") is not None:
-                        total_input_tokens += stats["input_tokens"]
-                    if stats.get("output_tokens") is not None:
-                        total_output_tokens += stats["output_tokens"]
+        # Aggregate token counts from conversation stats, plus any usage a
+        # tool self-reported (e.g. a triage tool's internal per-message LLM
+        # calls, #2899) — same helper the pre-answer computation above uses,
+        # reading identical inputs since nothing mutates conversation or
+        # self._tool_reported_usage between the two calls.
+        total_input_tokens, total_output_tokens = _sum_conversation_tokens(
+            conversation, self._tool_reported_usage
+        )
 
         # Return the result
         has_errors = len(self.error_history) > 0

@@ -193,6 +193,10 @@ public:
 
 All tools from `weather_data` are automatically prefixed as `mcp_weather_data_<tool_name>` and injected into the LLM system prompt alongside your native tools.
 
+<Warning>
+MCP tools are registered with `ToolPolicy::CONFIRM` unless the server proves them read-only (`annotations.readOnlyHint == true` and no state-changing verb in the name), so the user is asked before each call. A `silentMode` agent has no confirmation callback and will be denied every gated tool — see [MCP tools are CONFIRM-gated by default](/cpp/security#mcp-tools-are-confirm-gated-by-default).
+</Warning>
+
 ### Connecting a Local Script
 
 ```cpp
@@ -337,6 +341,10 @@ static gaia::AgentConfig makeConfig() {
     // Output suppression (see Step 6)
     cfg.silentMode  = false;  // set true to suppress all console output
 
+    // Tool-calling protocol
+    cfg.nativeToolCalls = gaia::NativeToolCalls::Auto;   // per-model (default)
+    cfg.responseMode    = gaia::ResponseMode::Planning;  // prompt-JSON reply shape
+
     return cfg;
 }
 ```
@@ -348,6 +356,11 @@ static gaia::AgentConfig makeConfig() {
 | `debug = true` | During development to trace every LLM call and tool result |
 | `showPrompts = true` | To inspect the exact system prompt sent to the model |
 | `silentMode = true` | For library/service use where you only want the JSON result |
+| `nativeToolCalls = Always` | Your server's model supports OpenAI `tools` but this build's model table doesn't list it |
+| `nativeToolCalls = Never` | Pin a tool-calling model to the prompt-JSON path |
+| `responseMode = Conversational` | Chat-shaped agents that should answer in prose, not a JSON envelope |
+
+See [Tool Calling Protocols](/cpp/api-reference#tool-calling-protocols) for what each protocol sends on the wire.
 
 ---
 

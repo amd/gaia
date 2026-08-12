@@ -17,6 +17,12 @@ import { makeVersionEntry, rebuildIndex, upsertVersion } from "./catalog";
 import { HttpError, json } from "./http";
 import { parseManifest } from "./manifest";
 import {
+  ARTIFACT_FILENAME_RE,
+  maxBytes,
+  optionalTextPart,
+  sha256Hex,
+} from "./multipart";
+import {
   artifactKey,
   capabilityMatrixKey,
   changelogKey,
@@ -27,61 +33,11 @@ import {
   readAgentManifest,
   readmeKey,
   skillKey,
+  skillManifestKey,
   specKey,
   writeAgentManifest,
 } from "./storage";
 import type { ArtifactInfo, Env } from "./types";
-
-const DEFAULT_MAX_BYTES = 262_144_000; // 250 MiB
-// Artifact filename: a single safe path segment (no traversal, no separators).
-const FILENAME_RE = /^[A-Za-z0-9][A-Za-z0-9._+-]*$/;
-
-/** Lowercase hex SHA-256 of the given bytes, computed in the Worker. */
-export async function sha256Hex(bytes: ArrayBuffer | Uint8Array): Promise<string> {
-  const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-  const digest = await crypto.subtle.digest("SHA-256", data);
-  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-function maxBytes(env: Env): number {
-  if (!env.MAX_ARTIFACT_BYTES) return DEFAULT_MAX_BYTES;
-  const n = Number(env.MAX_ARTIFACT_BYTES);
-  if (!Number.isFinite(n) || n <= 0) {
-    throw new HttpError(
-      500,
-      "server_misconfigured",
-      `MAX_ARTIFACT_BYTES is not a positive number: ${env.MAX_ARTIFACT_BYTES}.`
-    );
-  }
-  return n;
-}
-
-/**
- * Read an optional markdown form part (readme/changelog). Returns null when the
- * part is absent (the documented "" catalog default downstream), the LF-
- * normalized text when present, and fails loudly on a present-but-empty part —
- * an empty file is a mistake, so reject it rather than store a blank doc.
- */
-async function optionalMarkdownPart(
-  form: FormData,
-  field: string,
-  label: string
-): Promise<string | null> {
-  const part = form.get(field);
-  if (part == null) return null;
-  // Multipart string fields are CRLF-normalized by the form encoding —
-  // canonicalize to LF so stored markdown is byte-stable either way.
-  const text = (typeof part === "string" ? part : await (part as Blob).text()).replace(/\r\n/g, "\n");
-  if (text.trim() === "") {
-    throw new HttpError(
-      400,
-      "invalid_request",
-      `The '${field}' part is empty. Send the ${label} markdown text, or omit the ` +
-        `part entirely if the agent has none.`
-    );
-  }
-  return text;
-}
 
 /**
  * Read + validate the optional `package_files` part: the listing of files inside
@@ -170,27 +126,27 @@ export async function handlePublish(
 
   // Optional README + CHANGELOG markdown for this version (rendered on the Hub
   // pages). Both are optional; an empty part is rejected (omit it instead).
-  const readmeText = await optionalMarkdownPart(form, "readme", "README.md");
-  const changelogText = await optionalMarkdownPart(form, "changelog", "CHANGELOG.md");
+  const readmeText = await optionalTextPart(form, "readme", "README.md");
+  const changelogText = await optionalTextPart(form, "changelog", "CHANGELOG.md");
   // Optional SPEC.md (technical reference) + SKILL.md (AI-integration playbook),
   // rendered as their own doc tabs on the hub page. Same per-version, first-POST
   // semantics as README/CHANGELOG.
-  const specText = await optionalMarkdownPart(form, "spec", "SPEC.md");
-  const skillText = await optionalMarkdownPart(form, "skill", "SKILL.md");
+  const specText = await optionalTextPart(form, "spec", "SPEC.md");
+  const skillText = await optionalTextPart(form, "skill", "SKILL.md");
   // Optional EVALUATION.md (evaluation guide), rendered as its own doc tab on the
   // hub page. Same per-version, first-POST semantics as SPEC/SKILL.
-  const evaluationText = await optionalMarkdownPart(form, "evaluation", "EVALUATION.md");
+  const evaluationText = await optionalTextPart(form, "evaluation", "EVALUATION.md");
   // Optional CAPABILITY_MATRIX.md (tool-level capability matrix), rendered as its
   // own doc tab on the hub page. Same per-version, first-POST semantics as
   // SPEC/SKILL/EVALUATION.
-  const capabilityMatrixText = await optionalMarkdownPart(
+  const capabilityMatrixText = await optionalTextPart(
     form,
     "capability_matrix",
     "CAPABILITY_MATRIX.md"
   );
   // Optional eval scorecard markdown (the agent's benchmark results, rendered on
   // the hub listing as an aggregate score + link). Per-version, first-POST semantics.
-  const evalScorecardText = await optionalMarkdownPart(form, "eval_scorecard", "SCORECARD.md");
+  const evalScorecardText = await optionalTextPart(form, "eval_scorecard", "SCORECARD.md");
   // Optional whole-package file listing (the zip's contents, for the hub's file
   // list). The zip itself rides in as a normal `artifact`; this is just the
   // manifest of what's inside it.
@@ -200,12 +156,24 @@ export async function handlePublish(
   assertAuthorAllowed(publisher, manifest.author);
 
   const filename = artifactFile.name;
-  if (!FILENAME_RE.test(filename)) {
+  if (!ARTIFACT_FILENAME_RE.test(filename)) {
     throw new HttpError(
       400,
       "invalid_artifact",
       `Artifact filename ${JSON.stringify(filename)} is invalid. Use a single path ` +
         `segment of letters, digits, '.', '_', '+', '-' (e.g. 'gaia_agent_chat-0.1.0-py3-none-any.whl').`
+    );
+  }
+
+  // One id namespace across every catalog lane (#2467): hub URLs, install
+  // commands, and the catalog are keyed by id, so an agent may not shadow a
+  // published skill of the same name (nor the reverse — see skill-publish.ts).
+  if (await env.BUCKET.head(skillManifestKey(manifest.id))) {
+    throw new HttpError(
+      409,
+      "id_conflict",
+      `'${manifest.id}' is already published as a skill. Agent ids share one ` +
+        `namespace with skill names — rename the agent.`
     );
   }
 

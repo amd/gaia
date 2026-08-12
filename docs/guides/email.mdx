@@ -443,42 +443,45 @@ When the calendar tools run (`list_calendar_events`, `accept_invite`, `decline_i
 (Google calendar scope was skipped during consent). Without an explicit provider setting the
 agent used to pick Google and fail. It now picks Outlook correctly.
 
-## Skill sets: personal vs work mailbox
+## Skill sets: disabled
 
-The agent bundles six **Agent Skills** — short playbooks it loads into its own
-prompt — and activates one **set** of them per launch, so the same agent behaves
-appropriately for the mailbox in front of it:
+<Warning>
+**Agent Skills are switched off for the email agent.** The `skill_sets:` and
+`default_skill_set:` blocks in `hub/agents/email/python/gaia-agent.yaml` are
+commented out, so the agent loads **zero** skills: `active_skill_set` is `None`
+and `loaded_skills` is empty. They were turned on by default with no eval run
+behind them, and an active `personal` set cost ~1,334 prompt tokens — cutting
+the bulk-triage result envelope from 6144 to 4810 (`work`, to 4070). The agent
+is back to its full 6144-token envelope.
+</Warning>
 
-| Set | Skills |
-|---|---|
-| `personal` (default) | `inbox-triage`, `newsletter-digest`, `travel-itinerary` |
-| `work` | `inbox-triage`, `meeting-scheduling`, `action-item-extraction`, `escalation-routing` |
+The agent still *bundles* six instruction-only skills at
+`gaia_agent_email/skills/<name>/SKILL.md` — `inbox-triage`, `newsletter-digest`,
+`travel-itinerary`, `meeting-scheduling`, `action-item-extraction`,
+`escalation-routing` — and the selection machinery
+(`EmailTriageAgent.select_skill_set()`, the account-type mapping,
+`GAIA_EMAIL_SKILL_SET`, `--skill-set`) is all still there. It is simply inert
+while no sets are declared.
 
-`inbox-triage` is in both — sets overlap rather than partition.
+Pinning a set is therefore a startup error, not a silent no-op:
 
-The set is chosen in this order:
+```console
+$ gaia-agent-email serve --skill-set personal
+gaia-agent-email: error: --skill-set requested skill set 'personal', but this
+agent declares no skill sets — Agent Skills are switched off in this build. Drop
+the option, or uncomment the 'skill_sets:' and 'default_skill_set:' blocks in
+gaia-agent.yaml.
+```
 
-1. **Explicit** — `gaia-agent-email serve --skill-set work`, or
-   `GAIA_EMAIL_SKILL_SET=work`. An undeclared name fails at startup naming the
-   valid sets; it never falls back.
-2. **Mailbox account type** — a personal Microsoft account (`microsoft`)
-   activates `personal`, a work/school account (`microsoft_work`) activates
-   `work`. The kind is derived from the id_token `tid` claim when the mailbox
-   is connected and stored with the connection, so nothing is re-derived per
-   run. Pin it with `GAIA_EMAIL_ACCOUNT_TYPE=work`.
-3. **`default_skill_set`** (`personal`) — applies when the kind is unknown.
+The account-type mapping behind that machinery is three-way: a personal
+Microsoft account (`microsoft`) resolves to `personal`, a work/school account
+(`microsoft_work`) resolves to `work`, and a Gmail-only mailbox has no
+equivalent tenant claim to inspect and falls through to `default_skill_set`.
 
-**Gmail resolves to the default.** Google has no equivalent of the Microsoft
-tenant claim, so a Gmail mailbox's kind is genuinely unknown and the declared
-default applies. In practice that means a *work* Gmail mailbox gets the
-`personal` set — by declared default, and logged, rather than by anything
-inferring the kind from your mail. **If you drive a work Gmail account, set
-`GAIA_EMAIL_ACCOUNT_TYPE=work` or pass `--skill-set work`.** The same holds for a
-Microsoft mailbox connected before this shipped: it carries no recorded kind
-until you reconnect it.
-
-Inspect what loaded with `gaia skill list`, or read the startup log line naming
-the active set and the rule that chose it. Full mechanism:
+To re-enable, uncomment **both** blocks together — a non-empty `skill_sets:`
+with no `default_skill_set:` fails validation — and run the eval before
+shipping it on. `gaia skill list` shows what is discoverable; the startup log
+names what actually loaded. Full mechanism:
 [Composing skills and skill sets](/guides/composing-skills).
 
 ## Dev mode: run the email agent from source

@@ -135,34 +135,21 @@ for a local page to test triage, drafting, and a live send.
 
 ## Personal mailbox vs work mailbox
 
-The agent behaves differently depending on the kind of mailbox it's connected to.
-It ships six built-in **skills** — short playbooks it loads into its own thinking —
-and turns on one **set** of them per run:
+The package ships six built-in **skills** — short playbooks the agent can load into
+its own thinking — grouped into a `personal` set (inbox triage, newsletter digests,
+trip itineraries) and a `work` set (inbox triage, meeting scheduling, action items,
+escalation).
 
-- **Personal** (the default): inbox triage, newsletter digests, and building a trip
-  itinerary out of scattered booking confirmations.
-- **Work**: inbox triage, meeting scheduling, pulling action items out of threads,
-  and deciding what needs escalating.
+**They are switched off in this release.** Nothing is loaded at launch and a
+personal and a work mailbox get identical behaviour, because there is no eval
+evidence yet that the skills improve triage. The skill files stay in the package,
+inert, and the agent's full context window goes to your mail instead of to skill
+text.
 
-It picks the set automatically for an Outlook mailbox — a personal Microsoft
-account gets the personal set, a work or school account gets the work set. Two
-mailboxes need you to say which you want: Gmail, which doesn't expose the kind at
-all, and a work or school Microsoft account, whose connector the agent doesn't
-offer yet ([#2629](https://github.com/amd/gaia/issues/2629)). Both fall back to
-the personal set until you pin one.
-
-To pin it yourself, start the sidecar with the set you want:
-
-```ts
-const sidecar = await startSidecar({
-  binaryPath,
-  port: 8131,
-  extraArgs: ["--skill-set", "work"], // or env: { GAIA_EMAIL_SKILL_SET: "work" }
-});
-```
-
-This changes how the agent *approaches* your mail, not what it's allowed to do —
-the tools, permissions, and API are identical either way. Full detail in
+Nothing for you to do or change: there is no set to pin, and passing
+`--skill-set` / `GAIA_EMAIL_SKILL_SET` fails at startup saying so rather than
+quietly doing nothing. Re-enabling is a change inside the agent, not in your
+integration. Full detail in
 [`SPEC.md`](https://github.com/amd/gaia/blob/agent-pkg-email-v0.5.0/hub/agents/email/npm/SPEC.md).
 
 ## How it works
