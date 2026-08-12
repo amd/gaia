@@ -518,6 +518,27 @@ _SINK_MODULE_ROOTS = frozenset(
 #: Builtin sinks — matched by bare name only when not shadowed locally.
 _BUILTIN_SINKS = frozenset({"eval", "exec", "compile", "__import__", "open", "getattr"})
 
+#: Attributes that are not calls but still carry meaning (``os.environ``).
+_NON_CALL_SINK_NAMES = ("os.environ",)
+
+
+def _module_members() -> dict[str, dict[str, str]]:
+    """``module -> {leaf: dotted}`` for every tracked name a module owns.
+
+    Lets ``from os import *`` bind ``system`` to ``os.system`` instead of leaving
+    it unresolvable.
+    """
+    members: dict[str, dict[str, str]] = {}
+    for dotted in list(SINKS) + list(_NON_CALL_SINK_NAMES):
+        module, _, leaf = dotted.rpartition(".")
+        if module:
+            members.setdefault(module, {})[leaf] = dotted
+    return members
+
+
+#: Tracked names each sink-owning module exports, keyed by the full module path.
+_MODULE_MEMBERS: dict[str, dict[str, str]] = _module_members()
+
 #: Paths whose mere mention means credential access.
 _CREDENTIAL_PATTERNS: tuple[tuple[str, str], ...] = (
     (r"\.ssh/", "an SSH key directory"),
@@ -574,11 +595,16 @@ class _Analyzer(ast.NodeVisitor):
         self.filename = filename
         #: local symbol -> dotted origin (``sh`` -> ``os.system``)
         self.aliases: dict[str, str] = {}
-        #: names bound locally, so a shadowed builtin is not a sink
-        self.shadowed: set[str] = set()
+        #: One name set per enclosing scope, innermost last. A name bound in a
+        #: scope that has been popped no longer shadows anything, so a decoy
+        #: ``def eval`` nested in an unrelated function cannot disable the rule.
+        self.scopes: list[set[str]] = [set()]
         self.findings: list[Finding] = []
         self.domain_uses: list[DomainUse] = []
         self.imports: list[ImportRef] = []
+        #: (rule_id, line) already reported for a string literal, so folding a
+        #: concatenation does not report the same path twice.
+        self._literals_seen: set[tuple[str, int]] = set()
 
     # -- import tracking ------------------------------------------------
 
@@ -600,6 +626,9 @@ class _Analyzer(ast.NodeVisitor):
             return
         module = node.module or ""
         for alias in node.names:
+            if alias.name == "*":
+                self._handle_star_import(module, node)
+                continue
             local = alias.asname or alias.name
             self.aliases[local] = f"{module}.{alias.name}" if module else alias.name
         if module:
@@ -608,19 +637,52 @@ class _Analyzer(ast.NodeVisitor):
             )
         self.generic_visit(node)
 
+    def _handle_star_import(self, module: str, node: ast.ImportFrom) -> None:
+        """Bind what ``from <module> import *`` brings in, and say it happened.
+
+        A star-import from a module the gate tracks is unauditable by
+        construction — the bound names exist nowhere in the source — so the
+        tracked ones are bound explicitly and the import itself is a finding.
+        """
+        members = _MODULE_MEMBERS.get(module, {})
+        if not members and module.split(".")[0] not in MODULE_PREFIX_SINKS:
+            return  # owns nothing the audit tracks
+        for leaf, dotted in members.items():
+            self.aliases[leaf] = dotted
+        self._add_finding(
+            "code.exec.star_import",
+            "high",
+            f"Star-imports '{module}', a module whose calls this audit tracks, "
+            "so which of them the skill uses cannot be read from the source.",
+            node.lineno,
+            f"Import the names you use ('from {module} import <name>') or the "
+            f"module itself ('import {module}'). A star-import binds names that "
+            "appear nowhere in the file, which is what makes it unreviewable.",
+        )
+
     # -- shadow tracking ------------------------------------------------
 
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-        self.shadowed.add(node.name)
+    def _bind(self, name: str) -> None:
+        self.scopes[-1].add(name)
+
+    def _is_shadowed(self, name: str) -> bool:
+        return any(name in scope for scope in self.scopes)
+
+    def _visit_scoped(self, node: ast.AST, name: str) -> None:
+        """Bind ``name`` in the enclosing scope, then visit the body in a new one."""
+        self._bind(name)
+        self.scopes.append(set())
         self.generic_visit(node)
+        self.scopes.pop()
+
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        self._visit_scoped(node, node.name)
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
-        self.shadowed.add(node.name)
-        self.generic_visit(node)
+        self._visit_scoped(node, node.name)
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
-        self.shadowed.add(node.name)
-        self.generic_visit(node)
+        self._visit_scoped(node, node.name)
 
     # -- the interesting bit --------------------------------------------
 
@@ -676,15 +738,19 @@ class _Analyzer(ast.NodeVisitor):
         )
 
     def visit_Name(self, node: ast.Name) -> None:
-        if isinstance(node.ctx, ast.Load) and node.id in {"builtins", "__builtins__"}:
-            self._add_finding(
-                "code.exec.builtins_access",
-                "high",
-                "Reaches into the builtins namespace, which can retrieve "
-                "eval/exec/__import__ by a computed name.",
-                node.lineno,
-                "Call the functions you need directly so the audit can see them.",
-            )
+        if isinstance(node.ctx, ast.Load):
+            if node.id in {"builtins", "__builtins__"}:
+                self._add_finding(
+                    "code.exec.builtins_access",
+                    "high",
+                    "Reaches into the builtins namespace, which can retrieve "
+                    "eval/exec/__import__ by a computed name.",
+                    node.lineno,
+                    "Call the functions you need directly so the audit can see them.",
+                )
+            elif self.aliases.get(node.id) == "os.environ":
+                # ``from os import environ`` — the same read, one name shorter.
+                self._handle_environ(node)
         self.generic_visit(node)
 
     def visit_Attribute(self, node: ast.Attribute) -> None:
@@ -696,6 +762,17 @@ class _Analyzer(ast.NodeVisitor):
     def visit_Constant(self, node: ast.Constant) -> None:
         if isinstance(node.value, str):
             self._check_string_literal(node.value, node.lineno)
+        self.generic_visit(node)
+
+    def visit_BinOp(self, node: ast.BinOp) -> None:
+        """Check ``"~/.ss" + "h/id_" + "rsa"`` as the path it builds.
+
+        Splitting a literal across ``+`` changes nothing at runtime, so it must
+        not change what the credential and blob rules see.
+        """
+        folded = _fold_string_concat(node)
+        if folded is not None:
+            self._check_string_literal(folded, node.lineno)
         self.generic_visit(node)
 
     # -- resolution -----------------------------------------------------
@@ -716,7 +793,7 @@ class _Analyzer(ast.NodeVisitor):
         if base in self.aliases:
             resolved = self.aliases[base]
             return ".".join([resolved] + parts[1:])
-        if len(parts) == 1 and base in _BUILTIN_SINKS and base not in self.shadowed:
+        if len(parts) == 1 and base in _BUILTIN_SINKS and not self._is_shadowed(base):
             return base
         return ".".join(parts) if len(parts) > 1 else None
 
@@ -812,7 +889,7 @@ class _Analyzer(ast.NodeVisitor):
                 )
                 return
 
-    def _handle_environ(self, node: ast.Attribute) -> None:
+    def _handle_environ(self, node: ast.expr) -> None:
         """Distinguish a named lookup from harvesting the whole environment."""
         parent = getattr(node, "parent", None)
         if isinstance(parent, ast.Subscript):
@@ -850,6 +927,10 @@ class _Analyzer(ast.NodeVisitor):
     def _check_string_literal(self, value: str, line: int) -> None:
         for pattern, description in _CREDENTIAL_PATTERNS:
             if re.search(pattern, value):
+                if not self._first_literal_finding(
+                    "code.credentials.file_access", line
+                ):
+                    return
                 # The path itself goes in the snippet, never the message: a
                 # message is safe to post publicly, a snippet is not.
                 self._add_finding(
@@ -873,6 +954,7 @@ class _Analyzer(ast.NodeVisitor):
             len(compact) >= _BLOB_MIN_LENGTH
             and " " not in value
             and (_BASE64_RE.match(compact) or _HEX_RE.match(compact))
+            and self._first_literal_finding("code.obfuscation.blob", line)
         ):
             self._add_finding(
                 "code.obfuscation.blob",
@@ -883,6 +965,18 @@ class _Analyzer(ast.NodeVisitor):
                 "it. If it is code, it must not be encoded.",
                 snippet=compact[:120],
             )
+
+    def _first_literal_finding(self, rule_id: str, line: int) -> bool:
+        """True the first time ``rule_id`` fires on ``line``.
+
+        A folded concatenation and its own fragments describe one literal; the
+        report should say so once.
+        """
+        key = (rule_id, line)
+        if key in self._literals_seen:
+            return False
+        self._literals_seen.add(key)
+        return True
 
     def _add_finding(
         self,
@@ -911,6 +1005,19 @@ class _Analyzer(ast.NodeVisitor):
 # ----------------------------------------------------------------------
 # Helpers
 # ----------------------------------------------------------------------
+
+
+def _fold_string_concat(node: ast.expr) -> Optional[str]:
+    """The string a ``+`` chain builds, or ``None`` if any operand is computed."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if not isinstance(node, ast.BinOp) or not isinstance(node.op, ast.Add):
+        return None
+    left = _fold_string_concat(node.left)
+    right = _fold_string_concat(node.right)
+    if left is None or right is None:
+        return None
+    return left + right
 
 
 def _has_shell_true(node: ast.Call) -> bool:

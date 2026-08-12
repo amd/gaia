@@ -12,7 +12,13 @@ Two rules turn findings into an ``ALLOW`` / ``REVIEW`` / ``BLOCK`` verdict:
    to pass and sends dangerous (``high``) findings to review. ``verified`` is
    strictest: ``high`` blocks and ``medium`` reviews.
 
-2. **A human-audit hook for ``verified``.** The automated gate is a
+2. **Unread code never passes.** A file the analyzers could not parse or decode
+   was not scanned, and an unscanned file is not evidence of safety. The
+   severity gate alone would ALLOW one at ``experimental``, so
+   ``code.unparseable`` / ``code.unreadable`` force at least ``REVIEW`` at every
+   tier — matching what :mod:`gaia.skills.audit.code` tells the author.
+
+3. **A human-audit hook for ``verified``.** The automated gate is a
    *prerequisite* for the top tier, never a grant of it (issue #2468 delivers
    the gate, not the AMD-Verified audit policy). So a clean skill claiming
    ``verified`` earns ``REVIEW`` — "cleared the robot, awaiting the human" —
@@ -55,6 +61,11 @@ TIER_REVIEW_THRESHOLD: dict[str, Optional[Severity]] = {
     "verified": "medium",
 }
 
+#: Findings that mean an analyzer could not read a file at all. Unread code is
+#: not evidence of safety, so it never earns ``ALLOW`` — the severity gate alone
+#: would pass it at ``experimental``, which is the fail-open this closes.
+UNAUDITABLE_RULE_IDS = frozenset({"code.unparseable", "code.unreadable"})
+
 #: Tiers the hub refuses to publish without an audit report (mirrors
 #: ``TIERS_REQUIRING_AUDIT`` in ``workers/agent-hub/src/audit.ts``).
 TIERS_REQUIRING_AUDIT = frozenset({"community", "verified"})
@@ -76,6 +87,11 @@ def _validate_tier(tier: str) -> None:
         )
 
 
+def has_unauditable_finding(findings: Sequence[Finding]) -> bool:
+    """True when a file could not be parsed or read, so it was never scanned."""
+    return any(f.rule_id in UNAUDITABLE_RULE_IDS for f in findings)
+
+
 def severity_verdict(findings: Sequence[Finding], tier: str) -> DecisionType:
     """Apply only the severity gate for ``tier`` (no human-audit hook).
 
@@ -95,6 +111,9 @@ def severity_verdict(findings: Sequence[Finding], tier: str) -> DecisionType:
     if review_threshold is not None and _rank(worst) >= _rank(review_threshold):
         return "REVIEW"
 
+    if has_unauditable_finding(findings):
+        return "REVIEW"
+
     return "ALLOW"
 
 
@@ -110,6 +129,13 @@ def verdict_for_tier(
         return verdict, (
             f"Blocked at the '{tier}' tier: {counted} finding(s), worst severity "
             f"{worst}. Fix the findings below and re-run the audit."
+        )
+
+    if verdict == "REVIEW" and has_unauditable_finding(findings):
+        return verdict, (
+            f"Held for review at the '{tier}' tier: a file could not be parsed "
+            "or read, so it was never scanned. The gate does not pass code it "
+            "could not read, at any tier."
         )
 
     if verdict == "REVIEW":

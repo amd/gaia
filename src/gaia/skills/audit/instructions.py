@@ -207,6 +207,17 @@ _HTML_HIDDEN_RE = re.compile(
 
 _HTML_COMMENT_RE = re.compile(r"<!--(.*?)-->", re.DOTALL)
 
+#: ``[//]: # (text)`` — a link-reference definition used as a Markdown comment.
+#: It renders to nothing and reaches the model exactly like an HTML comment, so
+#: it is the same technique and earns the same severity. The target must be a
+#: bare ``#`` / ``<>``: ``[docs]: #install "Title"`` is an ordinary anchor link.
+_MARKDOWN_COMMENT_RE = re.compile(
+    r"^[ \t]*\[[^\]\n]*\]:[ \t]*(?:#|<>)[ \t]+"
+    r"(?:\((?P<paren>[^)\n]*)\)|\"(?P<double>[^\"\n]*)\"|'(?P<single>[^'\n]*)')"
+    r"[ \t]*$",
+    re.MULTILINE,
+)
+
 #: Imperatives that turn an HTML comment into a hidden directive.
 _COMMENT_IMPERATIVE_RE = re.compile(
     r"\b(?:always|never|must|ignore|disregard|call|execute|run|send|post|"
@@ -238,6 +249,90 @@ _PROHIBITION_RE = re.compile(
 _FENCE_RE = re.compile(r"^\s*(?:```|~~~)")
 _BLOCKQUOTE_RE = re.compile(r"^\s*>")
 _BASE64_RE = re.compile(r"[A-Za-z0-9+/=]{200,}")
+
+#: Non-Latin letters that read as Latin ones. NFKC does not fold these — a
+#: Cyrillic 'о' is a different letter, not a compatibility variant — so the map
+#: is what stops "Ignоre all previous instructions" reading as clean prose.
+_CONFUSABLES: dict[str, str] = {
+    # Cyrillic
+    "А": "A",
+    "В": "B",
+    "Е": "E",
+    "К": "K",
+    "М": "M",
+    "Н": "H",
+    "О": "O",
+    "Р": "P",
+    "С": "C",
+    "Т": "T",
+    "У": "Y",
+    "Х": "X",
+    "Ѕ": "S",
+    "І": "I",
+    "Ј": "J",
+    "Ԁ": "D",
+    "Һ": "H",
+    "Ԛ": "Q",
+    "Ԝ": "W",
+    "а": "a",
+    "е": "e",
+    "о": "o",
+    "р": "p",
+    "с": "c",
+    "у": "y",
+    "х": "x",
+    "і": "i",
+    "ј": "j",
+    "ѕ": "s",
+    "ԁ": "d",
+    "һ": "h",
+    "ԛ": "q",
+    "ԝ": "w",
+    # Greek
+    "Α": "A",
+    "Β": "B",
+    "Ε": "E",
+    "Ζ": "Z",
+    "Η": "H",
+    "Ι": "I",
+    "Κ": "K",
+    "Μ": "M",
+    "Ν": "N",
+    "Ο": "O",
+    "Ρ": "P",
+    "Τ": "T",
+    "Υ": "Y",
+    "Χ": "X",
+    "α": "a",
+    "ε": "e",
+    "ι": "i",
+    "κ": "k",
+    "ν": "v",
+    "ο": "o",
+    "ρ": "p",
+    "τ": "t",
+    "υ": "u",
+    "χ": "x",
+    "γ": "y",
+}
+
+#: Ranges whose Latin letters are lookalikes by construction: fullwidth forms
+#: and the mathematical alphanumeric planes.
+_LOOKALIKE_RANGES: tuple[tuple[int, int], ...] = (
+    (0xFF21, 0xFF3A),
+    (0xFF41, 0xFF5A),
+    (0x1D400, 0x1D7FF),
+)
+
+#: Markdown inline markers dropped before matching. ``_`` is deliberately absent:
+#: it is not intra-word emphasis in Markdown, and the rules match on ``api_key``.
+_MARKUP_CHARS = frozenset("*`~")
+
+#: Words shorter than this are not accused of being homoglyph attacks — a
+#: two-character mix like "μm" is a unit, not an evasion.
+_MIN_CONFUSABLE_WORD = 3
+
+_WORD_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
 
 
 def _downgrade(severity: Severity) -> Severity:
@@ -281,6 +376,45 @@ def _logical_blocks(body: str) -> list[tuple[str, list[tuple[int, int]]]]:
         current.append((number, line))
     flush()
     return blocks
+
+
+def _fold_character(character: str) -> str:
+    """One character as its Latin lookalike, or unchanged.
+
+    Length-preserving on purpose: :func:`_canonical` needs a 1:1 index map back
+    to the author's text, so a multi-character NFKC expansion is left alone.
+    """
+    mapped = _CONFUSABLES.get(character)
+    if mapped is not None:
+        return mapped
+    normalized = unicodedata.normalize("NFKC", character)
+    return normalized if len(normalized) == 1 else character
+
+
+def _canonical(text: str) -> tuple[str, list[int]]:
+    """Return ``(matchable text, index -> offset in text)``.
+
+    Markdown emphasis markers and invisible characters are dropped and Latin
+    lookalikes folded to ASCII, so ``Ig*nore*`` and ``Ignоre`` reach the rules
+    spelled the way the model will read them. The index map is what keeps a
+    finding pointing at the line and the characters the author actually wrote.
+    """
+    characters: list[str] = []
+    offsets: list[int] = []
+    for index, character in enumerate(text):
+        if character in _MARKUP_CHARS or _hidden_char_label(ord(character)):
+            continue
+        characters.append(_fold_character(character))
+        offsets.append(index)
+    return "".join(characters), offsets
+
+
+def _is_lookalike(character: str) -> bool:
+    """True for a character whose only purpose is to pass for a Latin letter."""
+    if character in _CONFUSABLES:
+        return True
+    code_point = ord(character)
+    return any(start <= code_point <= end for start, end in _LOOKALIKE_RANGES)
 
 
 def _matches(pattern: "re.Pattern[str]", text: str):
@@ -372,6 +506,52 @@ def _hidden_unicode_findings(body: str, filename: str) -> list[Finding]:
     return findings
 
 
+def _confusable_findings(body: str, filename: str) -> list[Finding]:
+    """Flag a Latin lookalike inside an otherwise-Latin word.
+
+    Foreign-language prose is ordinary and is not touched: the rule fires only
+    when one word mixes ASCII letters with characters from another script that
+    are drawn to pass for them. That mix has no honest use — it is the visible
+    cousin of the zero-width trick, aimed at a human reviewer rather than a
+    parser.
+    """
+    findings: list[Finding] = []
+    for number, line in enumerate(body.splitlines(), start=1):
+        for word in _WORD_RE.findall(line):
+            if len(word) < _MIN_CONFUSABLE_WORD:
+                continue
+            lookalikes = [c for c in word if _is_lookalike(c)]
+            if not lookalikes or not any(c.isascii() and c.isalpha() for c in word):
+                continue
+            character = lookalikes[0]
+            try:
+                name = unicodedata.name(character)
+            except ValueError:  # pragma: no cover - named in every live range
+                name = "unnamed"
+            findings.append(
+                Finding(
+                    rule_id="body.injection.homoglyph",
+                    severity="high",
+                    category=CATEGORY_PROMPT_INJECTION,
+                    message=(
+                        f"Spells a word with U+{ord(character):04X} ({name}), a "
+                        "character from another script drawn to pass for a Latin "
+                        "letter."
+                    ),
+                    file=filename,
+                    line=number,
+                    remediation=(
+                        "Rewrite the word in plain ASCII. Mixing scripts inside "
+                        "one word hides the word from a reviewer reading the "
+                        "source while the model still receives it."
+                    ),
+                    snippet=word[:200],
+                )
+            )
+            break  # one per line is enough to send the author to the line
+    return findings
+
+
 def _html_findings(body: str, filename: str) -> list[Finding]:
     """Flag CSS-hidden text and HTML comments that carry directives."""
     findings: list[Finding] = []
@@ -413,6 +593,31 @@ def _html_findings(body: str, filename: str) -> list[Finding]:
                 ),
                 file=filename,
                 line=line,
+                remediation=(
+                    "Move genuine notes-to-maintainers out of the skill body, "
+                    "and delete anything addressed to the model — instructions "
+                    "belong in the visible text."
+                ),
+                snippet=comment.strip()[:200],
+            )
+        )
+
+    for match in _MARKDOWN_COMMENT_RE.finditer(body):
+        comment = next(g for g in match.groups() if g is not None)
+        if not _COMMENT_IMPERATIVE_RE.search(comment):
+            continue
+        findings.append(
+            Finding(
+                rule_id="body.injection.hidden_html",
+                severity="high",
+                category=CATEGORY_PROMPT_INJECTION,
+                message=(
+                    "Contains a Markdown link-label comment carrying an "
+                    "instruction. It renders to nothing, exactly like an HTML "
+                    "comment, but is still sent to the model."
+                ),
+                file=filename,
+                line=body.count("\n", 0, match.start()) + 1,
                 remediation=(
                     "Move genuine notes-to-maintainers out of the skill body, "
                     "and delete anything addressed to the model — instructions "
@@ -473,12 +678,15 @@ def analyze_instructions(
     seen: set[tuple[str, int]] = set()
 
     for text, offsets in _logical_blocks(body):
+        canonical, index_map = _canonical(text)
         for rule in INJECTION_RULES:
-            for start, match in _matches(rule.pattern, text):
-                if _PROHIBITION_RE.search(text[:start]):
+            for start, match in _matches(rule.pattern, canonical):
+                if _PROHIBITION_RE.search(canonical[:start]):
                     # "NEVER dump the environment" forbids the behaviour.
                     continue
-                number = _line_for_offset(offsets, start)
+                span = match.end() - match.start()
+                origin = index_map[start]
+                number = _line_for_offset(offsets, origin)
                 key = (rule.rule_id, number)
                 if key in seen:
                     continue
@@ -502,11 +710,16 @@ def analyze_instructions(
                         file=filename,
                         line=number,
                         remediation=rule.remediation,
-                        snippet=match.group(0).strip()[:200],
+                        # Sliced from the author's text, not the folded copy, so
+                        # the report shows the characters actually shipped.
+                        snippet=text[origin : index_map[start + span - 1] + 1].strip()[
+                            :200
+                        ],
                     )
                 )
 
     findings.extend(_hidden_unicode_findings(body, filename))
+    findings.extend(_confusable_findings(body, filename))
     findings.extend(_html_findings(body, filename))
     findings.extend(_encoded_payload_findings(body, filename))
 
