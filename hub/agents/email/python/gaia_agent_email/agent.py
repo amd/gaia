@@ -196,24 +196,45 @@ class _UnavailableMailBackend:
 # ("the email from Microsoft").
 _PROVIDER_TERMS = {
     "google": r"(?:gmail|google)",
-    "microsoft": r"(?:outlook|hotmail|microsoft)",
+    # Excludes a bare "microsoft" immediately followed by "365" or "work"
+    # (underscore- or space-joined) — those name the work connector below,
+    # never the personal one.
+    "microsoft": r"(?:microsoft(?!\s*_?work\b|\s*365)|outlook|hotmail)",
+    # office365/o365/m365/"microsoft 365"/entra name the work Microsoft 365
+    # connector (mailbox_state.PROVIDER_ALIASES, #2629 Decision 1 — this
+    # remap is deliberately BREAKING: these words used to mean the personal
+    # connector). "exchange" is in that same alias table but, unlike the
+    # others, collides with ordinary English ("in exchange for..."), so it
+    # is handled separately below rather than here.
+    "microsoft_work": r"(?:microsoft\s*365|office\s*365|o365|m365|entra)",
+}
+# Vocabulary that only counts as mailbox targeting when directly paired with
+# a mailbox noun ("exchange inbox") — never via the "my <term>" / "<verb>
+# <term>" shapes the rest of _PROVIDER_TERMS uses, which "exchange" would
+# false-positive on ("in exchange for...", "let's exchange notes").
+_NOUN_QUALIFIED_TERMS = {
+    "microsoft_work": r"exchange",
 }
 # "in google drive" / "in microsoft teams" name another product, not a mailbox.
 _NON_MAILBOX_PRODUCTS = r"(?!\s+(?:drive|docs|sheets|maps|teams|word|excel|office))"
 _MAILBOX_NOUNS = r"(?:inbox|mail(?:box)?|e-?mails?|messages?|account|folders?)"
 _MAILBOX_VERBS = r"(?:in|via|check|open|scan|triage|search)"
 
+
+def _compile_mailbox_pattern(provider: str, term: str) -> "re.Pattern[str]":
+    alternatives = [
+        rf"\bmy\s+{term}{_NON_MAILBOX_PRODUCTS}\b",
+        rf"(?<![@.\w-]){term}\s+{_MAILBOX_NOUNS}\b",
+        rf"\b{_MAILBOX_VERBS}\s+{term}{_NON_MAILBOX_PRODUCTS}\b",
+    ]
+    noun_qualified = _NOUN_QUALIFIED_TERMS.get(provider)
+    if noun_qualified:
+        alternatives.append(rf"(?<![@.\w-]){noun_qualified}\s+{_MAILBOX_NOUNS}\b")
+    return re.compile("|".join(alternatives), re.IGNORECASE)
+
+
 _MAILBOX_TARGET_PATTERNS: Dict[str, "re.Pattern[str]"] = {
-    provider: re.compile(
-        "|".join(
-            (
-                rf"\bmy\s+{term}{_NON_MAILBOX_PRODUCTS}\b",
-                rf"(?<![@.\w-]){term}\s+{_MAILBOX_NOUNS}\b",
-                rf"\b{_MAILBOX_VERBS}\s+{term}{_NON_MAILBOX_PRODUCTS}\b",
-            )
-        ),
-        re.IGNORECASE,
-    )
+    provider: _compile_mailbox_pattern(provider, term)
     for provider, term in _PROVIDER_TERMS.items()
 }
 
