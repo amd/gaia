@@ -46,7 +46,7 @@ Unit tests are built by default and run without an LLM server. They cover all tw
 | REPL | `test_repl.cpp` | Interactive REPL loop and slash-command parsing |
 
 <Note>
-  One additional module, `test_tui_console.cpp` (FTXUI TUI console), is compiled into `tests_mock` only when `GAIA_BUILD_TUI=ON` (the default).
+  Three additional modules — `test_tui_markdown.cpp` (markdown renderer), `test_tui_transcript.cpp` (transcript model), and `test_tui_app.cpp` (event loop, streaming, confirmation modal) — are compiled into `tests_mock` only when `GAIA_BUILD_TUI=ON` (the default). They assert against real rendered frames via `ftxui::Screen::Create()` + `Render()` + `ToString()`, so a change that stops output reaching the screen fails the suite.
 </Note>
 
 ### Building Unit Tests

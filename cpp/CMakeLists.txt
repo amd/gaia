@@ -227,8 +227,9 @@ target_compile_definitions(gaia_core PRIVATE ${GAIA_SQLITE_DEFINITIONS})
 # TUI sources (conditional on FTXUI availability)
 if(GAIA_BUILD_TUI)
     target_sources(gaia_core PRIVATE
-        src/tui_console.cpp
         src/tui_markdown.cpp
+        src/tui_transcript.cpp
+        src/tui_app.cpp
     )
     target_compile_definitions(gaia_core PUBLIC GAIA_HAS_TUI=1)
 endif()
@@ -427,7 +428,11 @@ if(GAIA_BUILD_TESTS)
 
     # TUI tests (conditional -- requires FTXUI)
     if(GAIA_BUILD_TUI)
-        target_sources(tests_mock PRIVATE tests/test_tui_console.cpp)
+        target_sources(tests_mock PRIVATE
+            tests/test_tui_markdown.cpp
+            tests/test_tui_transcript.cpp
+            tests/test_tui_app.cpp
+        )
         target_link_libraries(tests_mock PRIVATE
             ftxui::component ftxui::dom ftxui::screen
         )
