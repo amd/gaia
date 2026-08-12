@@ -52,6 +52,15 @@ type fakeRelay struct {
 	// prescanBody is the raw JSON body POST /v1/<agent>/prescan returns on
 	// success (prescanStatus == 0, defaulting to 200).
 	prescanBody string
+	// lockSession, when true, makes /query behave like the real daemon's
+	// per-session run_lock (query_routes.py): a second concurrent /query
+	// while one is already "in flight" (sessionBusy) gets 409 with the same
+	// detail text the real server sends. Released only by releaseSession —
+	// never by the client dropping its connection — modelling that the
+	// worker thread's own finally, not the client's read, is what frees the
+	// lock (#2901).
+	lockSession bool
+	sessionBusy bool
 
 	mu          sync.Mutex
 	token       string
@@ -260,6 +269,19 @@ func (f *fakeRelay) handle(w http.ResponseWriter, r *http.Request) {
 			_, _ = w.Write([]byte(`{"detail":"the email sidecar is not running"}`))
 			return
 		}
+		if f.lockSession {
+			f.mu.Lock()
+			busy := f.sessionBusy
+			if !busy {
+				f.sessionBusy = true
+			}
+			f.mu.Unlock()
+			if busy {
+				w.WriteHeader(http.StatusConflict)
+				_, _ = w.Write([]byte(`{"detail":"A turn is already in progress for this session."}`))
+				return
+			}
+		}
 		if accept := r.Header.Get("Accept"); accept != "text/event-stream" {
 			f.t.Errorf("Accept = %q, want text/event-stream", accept)
 		}
@@ -275,6 +297,16 @@ func (f *fakeRelay) handle(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 		_, _ = w.Write([]byte(`{"detail":"no route"}`))
 	}
+}
+
+// releaseSession frees a lockSession-held slot. Standing in for the daemon
+// worker thread's own `finally: session.run_lock.release()`, which runs on
+// its own schedule — never as a side effect of the client dropping its
+// connection.
+func (f *fakeRelay) releaseSession() {
+	f.mu.Lock()
+	f.sessionBusy = false
+	f.mu.Unlock()
 }
 
 // versionProbes counts GET /v1/<agent>/version calls, so the probe can be
@@ -774,6 +806,88 @@ func TestSSEClientSurfacesRelayRefusal(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "gaia daemon status") {
 		t.Errorf("the error must be actionable: %v", err)
+	}
+}
+
+// Send() must give a 409 (session still busy) its own actionable message
+// naming the busy resource, not the generic "check gaia daemon status" copy
+// meant for an unreachable relay (#2901 AC#2). Respond and Confirm already
+// have this branch (TestSSEClient{Respond,Confirm}Surfaces409...); Send() did
+// not.
+func TestSendSurfacesActionableConflictOnBusySession(t *testing.T) {
+	f := newFakeRelay(t)
+	f.lockSession = true
+	f.sessionBusy = true // pretend a prior turn is already holding the lock
+	f.stream = func(http.ResponseWriter, func(), queryRequest) {}
+
+	c := f.client(t)
+	defer c.Close()
+
+	_, err := c.Send(context.Background(), "second query")
+	if err == nil {
+		t.Fatal("expected an error when the session's run_lock is still held")
+	}
+	if !strings.Contains(err.Error(), "session") {
+		t.Errorf("the message must name the busy resource (the session), not a bare 409: %v", err)
+	}
+	if strings.Contains(err.Error(), "gaia daemon status") {
+		t.Errorf("a 409 must not fall back to the generic relay-refused message: %v", err)
+	}
+}
+
+// The field scenario (#2901): cancel a turn mid-step, then immediately send a
+// new one on the SAME session. Esc/cancelFn only tears down the CLIENT's own
+// read — the daemon's session lock is released by the sidecar's worker
+// thread's own finally, on its own schedule, not by the client dropping the
+// connection. This test holds the fake's session lock open (via lockSession +
+// a stream that blocks on `release`) past the point where the first Send's
+// channel has already closed, to prove that scenario is real and that when
+// it happens, Send() surfaces an actionable error rather than a bare 409 or a
+// silent success.
+func TestSendAfterCancelStillRacingServerLockSurfacesActionableError(t *testing.T) {
+	f := newFakeRelay(t)
+	f.lockSession = true
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	f.stream = func(w http.ResponseWriter, flush func(), _ queryRequest) {
+		flush() // push the response headers now -- nothing is written until this
+		close(started)
+		<-release // the server keeps "working" (and the lock held) after the client disconnects
+	}
+
+	c := f.client(t)
+	defer c.Close()
+	defer close(release)
+
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	ch1, err := c.Send(ctx1, "first query")
+	if err != nil {
+		t.Fatalf("first Send: %v", err)
+	}
+	<-started // the run is genuinely mid-step server-side
+
+	// Esc: cancel the caller's context. This is what ChatModel.requestCancel
+	// does — it aborts THIS client's read, nothing more.
+	cancel1()
+	for range ch1 {
+		// Drain until consume() tears down and closes the channel — the same
+		// settlement signal the reconciled TUI now waits on before allowing
+		// Enter again.
+	}
+
+	// Immediately resend on the same client/session. The fake's lock is still
+	// held (release has not fired), reproducing the daemon not yet having
+	// gotten to session.run_lock.release() in its own worker thread.
+	_, err = c.Send(context.Background(), "second query")
+	if err == nil {
+		t.Fatal("expected the still-busy session to surface an error, not silently succeed")
+	}
+	if !strings.Contains(err.Error(), "session") {
+		t.Errorf("no bare 409 may reach the caller — the message must name the busy session: %v", err)
+	}
+	if strings.Contains(err.Error(), "gaia daemon status") {
+		t.Errorf("a 409 must not fall back to the generic relay-refused message: %v", err)
 	}
 }
 

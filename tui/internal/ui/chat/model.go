@@ -113,6 +113,12 @@ type ChatModel struct {
 	messages  []Message
 	activity  []ActivityItem
 	streaming bool
+	// cancelPending is true from the moment Esc/Ctrl+C requests a cancel until
+	// doneMsg confirms the run's channel actually closed. It exists only to
+	// let the doneMsg handler distinguish "this settlement was a cancel" (so
+	// it can append the confirmed "cancelled" line) from any other doneMsg
+	// delivery — it plays no part in gating Enter, which is m.streaming's job.
+	cancelPending bool
 	// buffer accumulates streamed answer text. A plain string, not a
 	// strings.Builder: Bubble Tea copies the model on every update, and a
 	// Builder panics the moment a copied non-zero one is written to again.
@@ -406,6 +412,17 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.confirmation = nil
 		m.flushBuffer()
 		m.activity = nil
+		// The channel closing is the settlement signal a cancel was waiting
+		// on (#2901) — the "cancelling…" line posted at request time becomes
+		// "cancelled" only now, once it is actually confirmed rather than
+		// merely requested.
+		if m.cancelPending {
+			m.cancelPending = false
+			m.messages = append(m.messages, Message{
+				Role:    RoleStatus,
+				Content: "cancelled",
+			})
+		}
 		m.updateViewport()
 		return m, nil
 
@@ -531,39 +548,13 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyCtrlC:
 		if m.streaming && m.cancelFn != nil {
-			m.cancelFn()
-			m.streaming = false
-			m.events = nil
-			m.cancelFn = nil
-			m.activity = nil
-			m.question = nil
-			m.confirmation = nil
-			m.messages = append(m.messages, Message{
-				Role:    RoleStatus,
-				Content: "cancelled",
-			})
-			m.drainPendingPreScan()
-			m.updateViewport()
-			return m, nil
+			return m.requestCancel()
 		}
 		return m, tea.Quit
 
 	case tea.KeyEsc:
 		if m.streaming && m.cancelFn != nil {
-			m.cancelFn()
-			m.streaming = false
-			m.events = nil
-			m.cancelFn = nil
-			m.activity = nil
-			m.question = nil
-			m.confirmation = nil
-			m.messages = append(m.messages, Message{
-				Role:    RoleStatus,
-				Content: "cancelled",
-			})
-			m.drainPendingPreScan()
-			m.updateViewport()
-			return m, nil
+			return m.requestCancel()
 		}
 		if m.fromHub {
 			return m, func() tea.Msg {
@@ -630,6 +621,34 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	return m, nil
+}
+
+// requestCancel begins cancelling the in-flight turn (Esc / Ctrl+C).
+// cancelFn only tears down THIS client's own read of the SSE stream — the
+// daemon's session run_lock is released by the sidecar's worker thread on its
+// own schedule (cooperative cancellation, checked once per agent-loop step;
+// see hub/agents/email/python/gaia_agent_email/query_routes.py), not by the
+// client dropping its connection. Flipping m.streaming here — before that
+// settles — is exactly the window that let Enter fire a second query on the
+// same session and race the still-held lock into a 409 (#2901). So
+// m.streaming stays true (Enter stays blocked) and m.events keeps pointing at
+// the run: the eventual doneMsg for THIS channel is the one locally-
+// observable settlement signal, and only it flips streaming back off (see the
+// doneMsg case in Update).
+func (m ChatModel) requestCancel() (tea.Model, tea.Cmd) {
+	m.cancelFn()
+	m.cancelFn = nil
+	m.cancelPending = true
+	m.activity = nil
+	m.question = nil
+	m.confirmation = nil
+	m.messages = append(m.messages, Message{
+		Role:    RoleStatus,
+		Content: "cancelling…",
+	})
+	m.drainPendingPreScan()
+	m.updateViewport()
 	return m, nil
 }
 

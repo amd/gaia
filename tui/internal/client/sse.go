@@ -236,7 +236,8 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 		status := resp.StatusCode
 		resp.Body.Close()
 		cancel()
-		if status == http.StatusNotFound {
+		switch status {
+		case http.StatusNotFound:
 			// A 404 on the query path is specifically "this route does not exist
 			// there" — most often a sidecar predating the canonical /query
 			// endpoint. Saying so beats making the user decode a bare 404.
@@ -246,10 +247,22 @@ func (s *SSEClient) Send(ctx context.Context, query string) (<-chan interface{},
 					"`gaia daemon agents` and reinstall/update the agent — or no agent with "+
 					"that id is registered with the daemon",
 				s.agentID, detail)
+		case http.StatusConflict:
+			// The session's run_lock is still held by a previous turn (#2901) —
+			// most often the tail of a just-cancelled one the daemon has not
+			// finished unwinding yet. Name the busy resource, like Respond and
+			// Confirm already do for their own 409s, instead of the generic
+			// relay-refused copy below (which points at a daemon that is down,
+			// not one that is merely still finishing).
+			return nil, fmt.Errorf(
+				"the '%s' agent is still finishing the previous turn on this session (%s). "+
+					"Wait a moment and try again",
+				s.agentID, detail)
+		default:
+			return nil, fmt.Errorf(
+				"the daemon relay refused the '%s' query (%s). Check `gaia daemon status`",
+				s.agentID, detail)
 		}
-		return nil, fmt.Errorf(
-			"the daemon relay refused the '%s' query (%s). Check `gaia daemon status`",
-			s.agentID, detail)
 	}
 
 	handle := &runHandle{runID: runID, cancel: cancel}
