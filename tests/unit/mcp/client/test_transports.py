@@ -3,6 +3,7 @@
 """Unit tests for MCP transport implementations."""
 
 import json
+import os
 import sys
 from io import StringIO
 from unittest.mock import Mock, patch
@@ -235,9 +236,10 @@ class TestStdioTransport:
         # Config env should be merged
         assert passed_env["API_KEY"] == "secret123"
 
+    @patch("gaia.mcp.client.transports.stdio.shutil.which", side_effect=lambda cmd: cmd)
     @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")
-    def test_stdio_transport_legacy_command_string_still_works(self, mock_popen):
-        """Test backward compat: command string without args uses shell=True."""
+    def test_stdio_transport_legacy_command_string_still_works(self, mock_popen, _):
+        """Test backward compat: a command string is tokenized, not shelled out."""
         mock_process = Mock()
         mock_process.poll.return_value = None
         mock_popen.return_value = mock_process
@@ -246,13 +248,13 @@ class TestStdioTransport:
         transport.connect()
 
         call_args = mock_popen.call_args
-        # Legacy string command uses shell=True
-        assert call_args[0][0] == "npx -y @modelcontextprotocol/server-github"
-        assert call_args[1]["shell"] is True
+        assert call_args[0][0] == ["npx", "-y", "@modelcontextprotocol/server-github"]
+        assert call_args[1]["shell"] is False
 
+    @patch("gaia.mcp.client.transports.stdio.shutil.which", side_effect=lambda cmd: cmd)
     @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")
-    def test_stdio_transport_empty_args_treated_as_none(self, mock_popen):
-        """Test that empty args list is treated same as None."""
+    def test_stdio_transport_empty_args_treated_as_none(self, mock_popen, _):
+        """Test that empty args list is tokenized like a legacy command string."""
         mock_process = Mock()
         mock_process.poll.return_value = None
         mock_popen.return_value = mock_process
@@ -261,8 +263,193 @@ class TestStdioTransport:
         transport.connect()
 
         call_args = mock_popen.call_args
-        # Empty args should use shell mode like legacy
-        assert call_args[1]["shell"] is True
+        assert call_args[0][0] == ["echo", "test"]
+        assert call_args[1]["shell"] is False
+
+    @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")
+    def test_stdio_transport_never_uses_shell(self, mock_popen):
+        """Every launch path must pass shell=False to Popen."""
+        mock_process = Mock()
+        mock_process.poll.return_value = None
+        mock_popen.return_value = mock_process
+
+        for transport in (
+            StdioTransport("echo"),
+            StdioTransport("echo", args=["hello"]),
+            StdioTransport("echo hello"),
+        ):
+            mock_popen.reset_mock()
+            transport.connect()
+            assert mock_popen.call_args[1]["shell"] is False
+            assert isinstance(mock_popen.call_args[0][0], list)
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "echo hi; echo bye",
+            "echo hi && echo bye",
+            "echo hi | tee out.txt",
+            "echo hi > out.txt",
+            "echo `id`",
+            "echo $(id)",
+        ],
+    )
+    @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")
+    def test_stdio_transport_rejects_shell_syntax(self, mock_popen, command):
+        """A command string with shell syntax is rejected, not silently mangled."""
+        transport = StdioTransport(command)
+
+        with pytest.raises(ValueError, match="shell syntax"):
+            transport.connect()
+
+        mock_popen.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "command,expected",
+        [
+            # Shell metacharacters inside a quoted argument are inert under
+            # shell=False, so they must not be rejected.
+            (
+                'uvx mcp-postgres --dsn "postgres://u:p@h/db?ssl=1&x=2"',
+                ["uvx", "mcp-postgres", "--dsn", "postgres://u:p@h/db?ssl=1&x=2"],
+            ),
+            (
+                'python -c "import srv; srv.main()"',
+                ["python", "-c", "import srv; srv.main()"],
+            ),
+            ('srv --filter "a<b"', ["srv", "--filter", "a<b"]),
+        ],
+    )
+    @patch("gaia.mcp.client.transports.stdio.shutil.which", side_effect=lambda cmd: cmd)
+    @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")
+    def test_stdio_transport_allows_quoted_metacharacters(
+        self, mock_popen, _, command, expected
+    ):
+        """Quoted shell characters are ordinary argument text, not syntax."""
+        mock_process = Mock()
+        mock_process.poll.return_value = None
+        mock_popen.return_value = mock_process
+
+        StdioTransport(command).connect()
+
+        assert mock_popen.call_args[0][0] == expected
+
+    @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")
+    def test_stdio_transport_rejects_backtick_even_when_quoted(self, mock_popen):
+        """Backticks are refused everywhere — tokenizing loses their quote state."""
+        transport = StdioTransport('srv --arg "a`b"')
+
+        with pytest.raises(ValueError, match="shell syntax"):
+            transport.connect()
+
+        mock_popen.assert_not_called()
+
+    @patch("gaia.mcp.client.transports.stdio.shutil.which", return_value=None)
+    @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")
+    def test_stdio_transport_keeps_quoted_value_with_spaces(self, mock_popen, _):
+        """A quoted --flag=value with spaces stays a single argv token."""
+        mock_process = Mock()
+        mock_process.poll.return_value = None
+        mock_popen.return_value = mock_process
+
+        transport = StdioTransport(r'python --root="C:\Program Files\data"')
+        transport.connect()
+
+        assert mock_popen.call_args[0][0] == [
+            "python",
+            r"--root=C:\Program Files\data",
+        ]
+
+    @patch("gaia.mcp.client.transports.stdio.os.name", "nt")
+    @patch("gaia.mcp.client.transports.stdio.shutil.which", return_value=None)
+    @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")
+    def test_stdio_transport_preserves_backslash_paths_on_windows(self, mock_popen, _):
+        """On Windows a backslash is a path separator, not an escape."""
+        mock_process = Mock()
+        mock_process.poll.return_value = None
+        mock_popen.return_value = mock_process
+
+        transport = StdioTransport(r"python C:\tools\srv.py")
+        transport.connect()
+
+        assert mock_popen.call_args[0][0] == ["python", r"C:\tools\srv.py"]
+
+    @patch("gaia.mcp.client.transports.stdio.os.name", "posix")
+    @patch("gaia.mcp.client.transports.stdio.shutil.which", return_value=None)
+    @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")
+    def test_stdio_transport_honours_backslash_escapes_on_posix(self, mock_popen, _):
+        """On POSIX a backslash escapes the next character, as the shell did."""
+        mock_process = Mock()
+        mock_process.poll.return_value = None
+        mock_popen.return_value = mock_process
+
+        transport = StdioTransport(r"srv /opt/my\ server/run.py")
+        transport.connect()
+
+        assert mock_popen.call_args[0][0] == ["srv", "/opt/my server/run.py"]
+
+    @patch("gaia.mcp.client.transports.stdio.shutil.which", side_effect=lambda cmd: cmd)
+    @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")
+    def test_stdio_transport_expands_home_and_env_vars(self, mock_popen, _):
+        """~ and $VAR still resolve, as they did when a shell ran the command."""
+        mock_process = Mock()
+        mock_process.poll.return_value = None
+        mock_popen.return_value = mock_process
+
+        with patch.dict(os.environ, {"MCP_TEST_ROOT": "/srv/mcp"}):
+            transport = StdioTransport("python ~/mcp/server.py $MCP_TEST_ROOT")
+            transport.connect()
+
+        argv = mock_popen.call_args[0][0]
+        assert argv[1] == os.path.expanduser("~/mcp/server.py")
+        assert "~" not in argv[1]
+        assert argv[2] == "/srv/mcp"
+
+    @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")
+    def test_stdio_transport_rejects_empty_command(self, mock_popen):
+        """A blank command is an actionable error, not a launch attempt."""
+        transport = StdioTransport("   ")
+
+        with pytest.raises(ValueError, match="empty"):
+            transport.connect()
+
+        mock_popen.assert_not_called()
+
+    @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")
+    def test_stdio_transport_rejects_unbalanced_quotes(self, mock_popen):
+        """An unparseable command string reports why instead of failing opaquely."""
+        transport = StdioTransport('npx "unterminated')
+
+        with pytest.raises(ValueError, match="could not be parsed"):
+            transport.connect()
+
+        mock_popen.assert_not_called()
+
+    @patch("gaia.mcp.client.transports.stdio.shutil.which", return_value=None)
+    @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")
+    def test_stdio_transport_keeps_quoted_path_intact(self, mock_popen, _):
+        """A quoted path with spaces stays one argv token."""
+        mock_process = Mock()
+        mock_process.poll.return_value = None
+        mock_popen.return_value = mock_process
+
+        transport = StdioTransport('"/opt/my servers/mcp" --stdio')
+        transport.connect()
+
+        assert mock_popen.call_args[0][0] == ["/opt/my servers/mcp", "--stdio"]
+
+    @patch("gaia.mcp.client.transports.stdio.shutil.which", side_effect=lambda cmd: cmd)
+    @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")
+    def test_stdio_transport_args_list_is_not_tokenized(self, mock_popen, _):
+        """An explicit args entry is passed through verbatim, spaces and all."""
+        mock_process = Mock()
+        mock_process.poll.return_value = None
+        mock_popen.return_value = mock_process
+
+        transport = StdioTransport("python", args=["-c", "print('a b')"])
+        transport.connect()
+
+        assert mock_popen.call_args[0][0] == ["python", "-c", "print('a b')"]
 
     @patch("gaia.mcp.client.transports.stdio.subprocess.Popen")
     def test_read_stderr_from_dead_process(self, mock_popen):

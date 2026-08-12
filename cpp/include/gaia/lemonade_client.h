@@ -210,6 +210,17 @@ public:
                                          StreamCallback onToken,
                                          int timeoutSec = LEMONADE_REQUEST_TIMEOUT);
 
+    /// Same as above, additionally reporting native ``tool_calls`` reassembled
+    /// from the stream. A tool-calling model answers with tool_calls deltas and
+    /// no content tokens at all, so callers that support native tool calling
+    /// must use this overload or they will see an apparently empty stream.
+    /// @param outToolCalls  Filled with the accumulated calls (cleared first);
+    ///                      empty when the model replied with prose only.
+    std::string chatCompletionsStreaming(const json& requestBody,
+                                         StreamCallback onToken,
+                                         std::vector<ToolCall>& outToolCalls,
+                                         int timeoutSec = LEMONADE_REQUEST_TIMEOUT);
+
     // ---- Configuration ----
 
     const std::string& baseUrl() const { return baseUrl_; }

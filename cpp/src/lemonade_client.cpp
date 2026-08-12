@@ -355,6 +355,16 @@ void LemonadeClient::httpPostStreaming(const std::string& path, const std::strin
 std::string LemonadeClient::chatCompletionsStreaming(const json& requestBody,
                                                       StreamCallback onToken,
                                                       int timeoutSec) {
+    std::vector<ToolCall> ignored;
+    return chatCompletionsStreaming(requestBody, std::move(onToken), ignored, timeoutSec);
+}
+
+std::string LemonadeClient::chatCompletionsStreaming(const json& requestBody,
+                                                      StreamCallback onToken,
+                                                      std::vector<ToolCall>& outToolCalls,
+                                                      int timeoutSec) {
+    outToolCalls.clear();
+
     json body = requestBody;
     body["stream"] = true;
 
@@ -373,7 +383,7 @@ std::string LemonadeClient::chatCompletionsStreaming(const json& requestBody,
 
     // If no tokens were extracted, the server may have returned an error or a
     // non-streaming response. Apply the same embedded-error check as chatCompletions().
-    if (!parser.hasTokens() && !rawBytes.empty()) {
+    if (!parser.hasTokens() && !parser.hasToolCalls() && !rawBytes.empty()) {
         try {
             const json responseJson = json::parse(rawBytes);
             if (responseJson.contains("error")) {
@@ -406,6 +416,18 @@ std::string LemonadeClient::chatCompletionsStreaming(const json& requestBody,
         }
     }
 
+    // Only a completed stream yields complete argument strings. A connection
+    // dropped mid-tool_call can leave arguments that still parse (a balanced
+    // brace lands by luck) but mean something else entirely — executing that
+    // is worse than failing. Deliberately fires for the tool-less overload
+    // too: a truncated stream is a failed request whoever asked for it.
+    if (parser.hasToolCalls() && !parser.done()) {
+        throw std::runtime_error(
+            "Stream ended before [DONE] while assembling tool_calls — the "
+            "arguments are incomplete and must not be executed. Check the "
+            "server connection and retry.");
+    }
+    outToolCalls = parser.toolCalls();
     return rawBytes;
 }
 
