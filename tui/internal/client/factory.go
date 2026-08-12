@@ -9,8 +9,10 @@ import (
 
 // ForAgentOptions configures the transport built by ForAgent.
 type ForAgentOptions struct {
-	// Debug enables the subprocess transport's stderr diagnostics.
-	Debug bool
+	// Dev is developer mode (the TUI's --dev). It turns on the subprocess
+	// transport's stderr diagnostics and appends the agent's DevArgs to its
+	// argv, so the child logs verbosely too.
+	Dev bool
 	// Model / MaxSteps override the sidecar defaults on the daemon transport.
 	// Ignored by the subprocess transport, which takes its model via BinaryArgs.
 	Model    string
@@ -52,10 +54,17 @@ func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
 		if err != nil {
 			return nil, fmt.Errorf("cannot start agent %q: %w", agent.ID, err)
 		}
-		if agent.CanonicalEvents {
-			return NewCanonicalSubprocessClient(bin, agent.BinaryArgs, opts.Debug), nil
+		// Appended, never mutated in place: BinaryArgs belongs to the catalog
+		// entry, and appending to it directly would let a full slice alias the
+		// catalog's backing array and leak --dev into the next launch.
+		args := agent.BinaryArgs
+		if opts.Dev && len(agent.DevArgs) > 0 {
+			args = append(append([]string{}, args...), agent.DevArgs...)
 		}
-		return NewSubprocessClient(bin, agent.BinaryArgs, opts.Debug), nil
+		if agent.CanonicalEvents {
+			return NewCanonicalSubprocessClient(bin, args, opts.Dev), nil
+		}
+		return NewSubprocessClient(bin, args, opts.Dev), nil
 
 	default:
 		return nil, fmt.Errorf(

@@ -11,7 +11,16 @@ import (
 	"github.com/amd/gaia/tui/internal/ui"
 )
 
-var debug bool
+// dev is developer mode: rich in-TUI output (per-turn timings, step and turn
+// boundaries, tool arguments and truncated tool output, raw harness statuses)
+// and DEBUG-level file logging in the agent it spawns.
+//
+// One flag, not two. `--debug` already meant exactly this in the TUI, and the
+// agent half of the same feature shipped as `--dev`; keeping both names as
+// separate switches would give one idea two spellings that could disagree. So
+// `--dev` is the name and `--debug` is a hidden alias onto this same variable
+// (see init) — old scripts and docs keep working, help lists one flag.
+var dev bool
 
 const defaultBinaryName = "gaia-tui"
 
@@ -47,12 +56,20 @@ var rootCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		return ui.RunHub(debug, mockAgent, ctrl)
+		return ui.RunHub(dev, mockAgent, ctrl)
 	},
 }
 
 func init() {
-	rootCmd.PersistentFlags().BoolVar(&debug, "debug", false, "enable debug logging to stderr")
+	rootCmd.PersistentFlags().BoolVar(&dev, "dev", false,
+		"developer mode: show per-turn timings, steps, tool arguments and output, and log the agent at DEBUG to ~/.gaia/logs/gaia-agent.log")
+	// Same variable as --dev, hidden: the previous name for this mode. Kept so
+	// existing scripts and docs do not break, out of --help so the two spellings
+	// never read as two features.
+	rootCmd.PersistentFlags().BoolVar(&dev, "debug", false, "deprecated alias for --dev")
+	if err := rootCmd.PersistentFlags().MarkHidden("debug"); err != nil {
+		panic(err) // only fails on a flag name that was never registered
+	}
 	rootCmd.PersistentFlags().BoolVar(&controlEnabled, "control", false,
 		"expose the loopback control API so an assistant can drive this session (auto-assigned port)")
 	rootCmd.PersistentFlags().IntVar(&controlPort, "control-port", 0,
@@ -78,7 +95,7 @@ func Execute() error {
 }
 
 func debugLog(format string, args ...interface{}) {
-	if debug {
+	if dev {
 		fmt.Fprintf(os.Stderr, "[DEBUG] "+format+"\n", args...)
 	}
 }

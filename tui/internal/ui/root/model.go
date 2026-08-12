@@ -35,7 +35,7 @@ type RootModel struct {
 	helpCtx    components.HelpContext
 	width      int
 	height     int
-	debug      bool
+	dev      bool
 
 	// preflight is the gate currently on screen, nil when there is none.
 	preflight *preflight.Model
@@ -74,32 +74,32 @@ func (m RootModel) WithPreflight(t preflight.Transport, opts preflight.Options) 
 	return m
 }
 
-func NewRootModel(cat *catalog.Catalog, debug bool) RootModel {
+func NewRootModel(cat *catalog.Catalog, dev bool) RootModel {
 	m := RootModel{
 		activeView: viewHub,
 		catalog:    cat,
-		debug:      debug,
+		dev:      dev,
 		suppressed: map[string]bool{},
 		listeners:  []Listener{haltOnDisposition},
 	}
 	// One hub client for the session: it caches the daemon instance whose token
 	// authorized the last call, and that token rotates on every daemon restart.
-	m.hub = hub.NewHubModel(cat, catalog.NewHubClient(m.logf), debug)
+	m.hub = hub.NewHubModel(cat, catalog.NewHubClient(m.logf), dev)
 	return m
 }
 
 // NewRootModelWithHub builds a root model against a specific hub client. Tests
 // point it at a fake daemon; a nil client disables install/uninstall, which
 // then fail loudly instead of silently doing nothing.
-func NewRootModelWithHub(cat *catalog.Catalog, hc *catalog.HubClient, debug bool) RootModel {
+func NewRootModelWithHub(cat *catalog.Catalog, hc *catalog.HubClient, dev bool) RootModel {
 	m := RootModel{
 		activeView: viewHub,
 		catalog:    cat,
-		debug:      debug,
+		dev:      dev,
 		suppressed: map[string]bool{},
 		listeners:  []Listener{haltOnDisposition},
 	}
-	m.hub = hub.NewHubModel(cat, hc, debug)
+	m.hub = hub.NewHubModel(cat, hc, dev)
 	return m
 }
 
@@ -236,10 +236,10 @@ func (m RootModel) View() string {
 	return base
 }
 
-// logf writes transport diagnostics to stderr in debug mode. It must never be
+// logf writes transport diagnostics to stderr in dev mode. It must never be
 // given a daemon token — daemon.Instance redacts its own token when formatted.
 func (m RootModel) logf(format string, args ...any) {
-	if !m.debug {
+	if !m.dev {
 		return
 	}
 	fmt.Fprintf(os.Stderr, "[DEBUG] "+format+"\n", args...)
@@ -249,7 +249,7 @@ func (m RootModel) launchAgent(agent catalog.Agent) (tea.Model, tea.Cmd) {
 	// Interactive: this launch opens the chat view, which renders a mid-run
 	// question and answers it.
 	c, err := client.ForAgent(agent, client.ForAgentOptions{
-		Debug: m.debug, Logf: m.logf, Interactive: true,
+		Dev: m.dev, Logf: m.logf, Interactive: true,
 	})
 	if err != nil {
 		// Stay in the hub and say why, rather than opening a chat that cannot talk.
@@ -260,7 +260,7 @@ func (m RootModel) launchAgent(agent catalog.Agent) (tea.Model, tea.Cmd) {
 
 	m.catalog.SetStatus(agent.ID, catalog.StatusActive)
 
-	chatModel := chat.NewChatModelFromHub(c, agent.ID, agent.Name, m.debug)
+	chatModel := chat.NewChatModelFromHub(c, agent.ID, agent.Name, m.dev)
 	m.chat = &chatModel
 	m.activeView = viewChat
 

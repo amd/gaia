@@ -43,8 +43,8 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		// call that actually says what the agent is doing.
 		if msg := userFacingStatus(e.Message); msg != "" {
 			m.setLiveStatus(msg)
-		} else if m.debug {
-			// --debug is where harness internals belong: suppressing them for
+		} else if m.dev {
+			// --dev is where harness internals belong: suppressing them for
 			// everyone would make a wire-level bug invisible to whoever has to
 			// fix it.
 			m.setLiveStatus("[harness] " + clean(e.Message))

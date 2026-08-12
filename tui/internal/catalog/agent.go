@@ -101,7 +101,15 @@ type Agent struct {
 	// events carry tool narration and result previews, so an agent that emits
 	// them and is parsed as legacy loses its progress reporting silently.
 	CanonicalEvents bool
-	Votes           int // for coming-soon agents
+	// DevArgs are appended to BinaryArgs when the TUI runs in developer mode, so
+	// one `--dev` turns on rich output here AND verbose logging in the child.
+	//
+	// Opt-in per agent rather than a blanket "--dev": an agent that does not know
+	// the flag dies at exec on an unknown argument, which would turn a verbosity
+	// switch into a launch failure. Empty means "no developer mode", the safe
+	// default for every entry that has not declared one.
+	DevArgs []string
+	Votes   int // for coming-soon agents
 
 	// --- Agent Hub fields, populated from GET /daemon/v1/catalog ---
 

@@ -26,7 +26,7 @@ var (
 	runTimeout        time.Duration
 )
 
-// hubClient builds a client over the real daemon, logging through --debug.
+// hubClient builds a client over the real daemon, logging through --dev.
 func hubClient() *catalog.HubClient {
 	return catalog.NewHubClient(func(format string, args ...interface{}) {
 		debugLog(format, args...)
@@ -307,7 +307,7 @@ var runCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		code, err := ui.RunAgent(args[0], runQuery, runModel, debug, runTimeout, ctrl)
+		code, err := ui.RunAgent(args[0], runQuery, runModel, dev, runTimeout, ctrl)
 		if err != nil {
 			return err
 		}
