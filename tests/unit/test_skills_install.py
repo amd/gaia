@@ -839,3 +839,121 @@ def test_installed_provenance_reads_from_the_lock(marketplace, tmp_path):
     provenance = installed_provenance(marketplace.manager)
     assert provenance["web-research"]["requested"] == "^1.0"
     assert provenance["web-research"]["installed_tier"] == "community"
+
+
+# ---------------------------------------------------------------------------
+# A hostile bundle: the client unpacks whatever the hub served
+# ---------------------------------------------------------------------------
+
+
+def _seed_raw_bundle(
+    marketplace, payload: bytes, *, name="web-research", version="1.0.0"
+):
+    """Publish arbitrary bytes as *name*'s artifact, with a matching checksum.
+
+    The checksum is computed over the hostile payload, so the download gate
+    passes and the unpack gate is the one under test.
+    """
+    import hashlib
+
+    filename = f"{name}-{version}.zip"
+    marketplace.hub.put_artifact(name, version, filename, payload)
+    marketplace.hub.put_skill_doc(name, version, f"---\nname: {name}\n---\nbody\n")
+    marketplace.hub.put_manifest(
+        name,
+        version,
+        filename=filename,
+        sha256=hashlib.sha256(payload).hexdigest(),
+        size_bytes=len(payload),
+    )
+    marketplace.hub.rebuild_index()
+
+
+def _zip_bytes(entries: dict) -> bytes:
+    import io
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as bundle:
+        for arcname, text in entries.items():
+            bundle.writestr(arcname, text)
+    return buffer.getvalue()
+
+
+def test_install_refuses_a_bundle_that_escapes_the_destination(marketplace):
+    """Zip traversal on the install path.
+
+    ``gaia skill import`` has its own traversal guard and its own test; this is
+    the separate implementation in ``install.py``, which a hostile hub reaches
+    without any local file being involved.
+    """
+    payload = _zip_bytes(
+        {
+            "web-research/SKILL.md": "---\nname: web-research\n---\nbody\n",
+            "../escaped.py": "import os\n",
+        }
+    )
+    _seed_raw_bundle(marketplace, payload)
+
+    with pytest.raises(SkillValidationError, match="escapes the destination"):
+        marketplace.install("web-research", allow_experimental=True)
+    assert not (marketplace.skills_root / "web-research").exists()
+    assert not (marketplace.skills_root.parent / "escaped.py").exists()
+
+
+def test_install_refuses_a_bundle_that_is_not_a_zip(marketplace):
+    _seed_raw_bundle(marketplace, b"this is not a zip file")
+
+    with pytest.raises(SkillValidationError, match="not a valid .zip"):
+        marketplace.install("web-research", allow_experimental=True)
+    assert not (marketplace.skills_root / "web-research").exists()
+
+
+def test_install_refuses_a_bundle_with_no_skill_md(marketplace):
+    _seed_raw_bundle(marketplace, _zip_bytes({"web-research/tools.py": "# tools\n"}))
+
+    with pytest.raises(SkillValidationError, match="No SKILL.md in the bundle"):
+        marketplace.install("web-research", allow_experimental=True)
+    assert not (marketplace.skills_root / "web-research").exists()
+
+
+def test_install_refuses_a_bundle_holding_more_than_one_skill(marketplace):
+    """Two skills in one bundle means one of them was never named or gated."""
+    _seed_raw_bundle(
+        marketplace,
+        _zip_bytes(
+            {
+                "web-research/SKILL.md": "---\nname: web-research\n---\nbody\n",
+                "stowaway/SKILL.md": "---\nname: stowaway\n---\nbody\n",
+            }
+        ),
+    )
+
+    with pytest.raises(SkillValidationError, match="more than one skill"):
+        marketplace.install("web-research", allow_experimental=True)
+    assert not (marketplace.skills_root / "stowaway").exists()
+
+
+def test_the_lock_records_the_default_hub_when_no_base_url_is_given(
+    marketplace, tmp_path, monkeypatch
+):
+    """Provenance must name the hub actually fetched from, not an empty string.
+
+    Every other install test passes ``base_url`` explicitly, so the default-origin
+    half of the expression that writes ``hub_url`` is never exercised.
+    """
+    key = marketplace.keygen()
+    marketplace.trust(key)
+    marketplace.publish(_write_source(tmp_path))
+    # How a user actually retargets the hub, so this exercises the same
+    # resolution the lock is supposed to record.
+    monkeypatch.setenv("GAIA_HUB_URL", marketplace.hub.BASE_URL)
+
+    install_skill(
+        "web-research",
+        manager=marketplace.manager,
+        base_url=None,
+        fetcher=marketplace.hub.fetcher,
+    )
+
+    entry = SkillLock.load(marketplace.skills_root).get("web-research")
+    assert entry.hub_url == marketplace.hub.BASE_URL

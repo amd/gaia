@@ -374,3 +374,101 @@ def test_build_catalog_keeps_skills_out_of_the_unified_agent_list(tmp_path):
     assert [s["id"] for s in payload["skills"]] == ["web-research"]
     # `total` stays the agent count — the number the Hub page has always shown.
     assert payload["total"] == 1
+
+
+def test_older_hub_index_without_a_skills_lane_yields_no_skills(tmp_path):
+    # Backward compat: an index.json served by a hub deployed before #2467 has
+    # no skill entries and no `type` key at all. Every entry must stay an
+    # agent, and the skills lane must be empty rather than absent or None.
+    payload = json.dumps(_index(_entry("demo"), _entry("chat"))).encode()
+
+    unified = build_catalog(
+        _FakeReg([]),
+        base_url="https://hub.test",
+        fetcher=lambda url: payload,
+        cache_path=tmp_path / "c.json",
+        force=True,
+    )
+    assert [a["id"] for a in unified.agents] == ["chat", "demo"]
+    assert unified.skills == []
+    assert unified.to_dict()["skills"] == []
+    # Pre-discriminator entries are agents, not an unknown lane.
+    assert {a["type"] for a in unified.agents} == {"agent"}
+
+
+@pytest.mark.parametrize(
+    "bad_type", [None, "", 0, False, 123, ["skill"], {"kind": "skill"}]
+)
+def test_a_malformed_type_never_becomes_a_skill(bad_type):
+    # A hand-edited or partially-written entry must fall back to the agent lane,
+    # never be promoted into the skills lane on a truthy-but-wrong value.
+    entry = _entry("weird", type=bad_type)
+    assert catalog.is_skill_entry(entry) is False
+    assert catalog.skill_entries([entry]) == []
+    assert [e["id"] for e in catalog.agent_entries([entry])] == ["weird"]
+
+
+def test_a_partial_skill_entry_is_still_kept_out_of_the_agent_lane():
+    # The lane decision must rest on `type` alone. A skill entry that lost its
+    # skill_metadata (truncated write, older Worker) is still a skill — it must
+    # not fall back into the agent lane, where it would render an install
+    # button wired to the agent installer.
+    no_metadata = _skill("web-research")
+    del no_metadata["skill_metadata"]
+    junk_metadata = _skill("incident-review", skill_metadata="not-a-dict")
+
+    entries = [_entry("chat"), no_metadata, junk_metadata]
+    assert [e["id"] for e in catalog.skill_entries(entries)] == [
+        "web-research",
+        "incident-review",
+    ]
+    assert [a["id"] for a in merge_with_registry(entries, _FakeReg([]), {})] == ["chat"]
+
+
+def test_a_skill_missing_optional_display_fields_does_not_break_the_split():
+    # Only `id` is guaranteed by _validate_index; the reader must not require
+    # any other key to classify an entry.
+    minimal = {"id": "bare-skill", "type": "skill"}
+    entries = [_entry("chat"), minimal]
+    assert [e["id"] for e in catalog.skill_entries(entries)] == ["bare-skill"]
+    assert [a["id"] for a in merge_with_registry(entries, _FakeReg([]), {})] == ["chat"]
+
+
+def test_offline_with_no_cache_degrades_to_an_empty_skills_lane(tmp_path):
+    def _boom(url):
+        raise OSError("network down")
+
+    unified = build_catalog(
+        _FakeReg([_Reg("chat")]),
+        base_url="https://hub.test",
+        fetcher=_boom,
+        cache_path=tmp_path / "missing.json",
+        force=True,
+    )
+    assert unified.offline is True
+    # The local registry still renders; the skills lane is empty, not absent.
+    assert [a["id"] for a in unified.agents] == ["chat"]
+    assert unified.skills == []
+
+
+def test_the_offline_disk_cache_still_splits_the_lanes(tmp_path):
+    # A cached catalog goes through the same reader, so a skill cached before
+    # the network dropped must not resurface as an installable agent.
+    cache = tmp_path / "catalog-cache.json"
+    cache.write_text(
+        json.dumps(_index(_entry("demo"), _skill("web-research"))), encoding="utf-8"
+    )
+
+    def _boom(url):
+        raise OSError("network down")
+
+    unified = build_catalog(
+        _FakeReg([]),
+        base_url="https://hub.test",
+        fetcher=_boom,
+        cache_path=cache,
+        force=True,
+    )
+    assert unified.offline is True
+    assert [a["id"] for a in unified.agents] == ["demo"]
+    assert [s["id"] for s in unified.skills] == ["web-research"]
