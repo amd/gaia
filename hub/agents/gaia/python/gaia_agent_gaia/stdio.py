@@ -28,6 +28,7 @@ Exactly one terminal event (``final`` or ``error``) ends every turn.
 from __future__ import annotations
 
 import json
+import os
 import queue
 import sys
 import threading
@@ -257,7 +258,15 @@ def main(argv: Optional[list] = None) -> int:
         except Exception as exc:  # never let one bad turn kill the process
             logger.exception("stdio turn crashed outside the run loop")
             _write(_terminal_error(exc), out)
-    return 0
+
+    # stdin closed: the parent is done with us. The agent leaves non-daemon
+    # threads behind (memory extraction, the filesystem watcher), so a plain
+    # return would hang the interpreter at shutdown waiting on them — a one-shot
+    # `run --query` sat for 400s until its caller killed it. Nothing here owns
+    # unflushed state: events are flushed per line and the DBs commit per write.
+    out.flush()
+    sys.stderr.flush()
+    os._exit(0)
 
 
 if __name__ == "__main__":
