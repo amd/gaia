@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { describe, it, expect } from 'vitest';
-import { referencedProviderConnected } from '../ConnectorRetryBanner';
+import { referencedProviderConnected, connectedProviderLabel } from '../ConnectorRetryBanner';
 import type { ConnectorRow } from '../../types';
 
 function connector(id: string, configured: boolean): ConnectorRow {
@@ -33,6 +33,8 @@ function connector(id: string, configured: boolean): ConnectorRow {
 
 const GOOGLE_ERR = 'NOT_CONNECTED: google is not currently connected. Connect it in Settings → Connectors → Google.';
 const MS_ERR = 'NOT_CONNECTED: microsoft is not currently connected.';
+const MS_WORK_ERR = 'NOT_CONNECTED: microsoft_work is not currently connected.';
+const AMBIGUOUS_ERR = 'AUTH_REQUIRED: connect an email account to continue.';
 
 describe('referencedProviderConnected', () => {
     it('is false when the referenced Google account is still not connected', () => {
@@ -53,10 +55,73 @@ describe('referencedProviderConnected', () => {
         expect(referencedProviderConnected(MS_ERR, [connector('microsoft', true)])).toBe(true);
     });
 
-    it('for an ambiguous error, either provider connecting is enough', () => {
-        const ambiguous = 'AUTH_REQUIRED: connect an email account to continue.';
-        expect(referencedProviderConnected(ambiguous, [connector('google', true)])).toBe(true);
-        expect(referencedProviderConnected(ambiguous, [connector('microsoft', true)])).toBe(true);
-        expect(referencedProviderConnected(ambiguous, [connector('google', false)])).toBe(false);
+    it('fires for a work Microsoft 365 error once microsoft_work is connected', () => {
+        expect(referencedProviderConnected(MS_WORK_ERR, [connector('microsoft_work', true)])).toBe(true);
+    });
+
+    it('does not fire for a work Microsoft 365 error when only personal Microsoft got connected', () => {
+        expect(
+            referencedProviderConnected(MS_WORK_ERR, [
+                connector('microsoft', true),
+                connector('microsoft_work', false),
+            ])
+        ).toBe(false);
+    });
+
+    it('does not fire for a work Microsoft 365 error when only Google got connected', () => {
+        expect(
+            referencedProviderConnected(MS_WORK_ERR, [connector('google', true), connector('microsoft_work', false)])
+        ).toBe(false);
+    });
+
+    it('for an ambiguous error, any of the three providers connecting is enough', () => {
+        expect(referencedProviderConnected(AMBIGUOUS_ERR, [connector('google', true)])).toBe(true);
+        expect(referencedProviderConnected(AMBIGUOUS_ERR, [connector('microsoft', true)])).toBe(true);
+        expect(referencedProviderConnected(AMBIGUOUS_ERR, [connector('microsoft_work', true)])).toBe(true);
+        expect(referencedProviderConnected(AMBIGUOUS_ERR, [connector('google', false)])).toBe(false);
+    });
+});
+
+describe('connectedProviderLabel', () => {
+    it('labels an unambiguous Google message', () => {
+        expect(connectedProviderLabel(GOOGLE_ERR, [connector('google', true)])).toBe('Google');
+    });
+
+    it('labels an unambiguous personal Microsoft message', () => {
+        expect(connectedProviderLabel(MS_ERR, [connector('microsoft', true)])).toBe('Microsoft');
+    });
+
+    it('labels an unambiguous work Microsoft 365 message', () => {
+        expect(connectedProviderLabel(MS_WORK_ERR, [connector('microsoft_work', true)])).toBe('Microsoft 365');
+    });
+
+    it('for an ambiguous message, prefers Google when Google is configured', () => {
+        expect(
+            connectedProviderLabel(AMBIGUOUS_ERR, [
+                connector('google', true),
+                connector('microsoft', true),
+                connector('microsoft_work', true),
+            ])
+        ).toBe('Google');
+    });
+
+    it('for an ambiguous message, falls back to Microsoft when only Microsoft is configured', () => {
+        expect(
+            connectedProviderLabel(AMBIGUOUS_ERR, [
+                connector('google', false),
+                connector('microsoft', true),
+                connector('microsoft_work', true),
+            ])
+        ).toBe('Microsoft');
+    });
+
+    it('for an ambiguous message, falls back to Microsoft 365 when only microsoft_work is configured', () => {
+        expect(
+            connectedProviderLabel(AMBIGUOUS_ERR, [
+                connector('google', false),
+                connector('microsoft', false),
+                connector('microsoft_work', true),
+            ])
+        ).toBe('Microsoft 365');
     });
 });
