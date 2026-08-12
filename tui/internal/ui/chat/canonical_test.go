@@ -391,8 +391,19 @@ func TestRoleErrorProducersSanitizeControlBytesPreserveNewlines(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m, _ := newTestModel(t)
-			switch tt.event.(type) {
-			case errMsg, questionFailedMsg, confirmActionResultMsg:
+			switch v := tt.event.(type) {
+			case errMsg:
+				// errMsg{} as written above has turnSeq's zero value, which
+				// only matches a fresh model's own zero-valued turnSeq by
+				// coincidence — not what a real errMsg looks like (a live
+				// turn's turnSeq is always >= 1, see its doc comment). Drive
+				// a real turn first so this exercises turnSeq scoping
+				// honestly, matching production (#2912 review).
+				updated, _ := m.Update(sendQueryMsg{query: "x"})
+				m = updated.(ChatModel)
+				updated, _ = m.Update(errMsg{err: v.err, turnSeq: m.turnSeq})
+				m = updated.(ChatModel)
+			case questionFailedMsg, confirmActionResultMsg:
 				updated, _ := m.Update(tt.event)
 				m = updated.(ChatModel)
 			default:
