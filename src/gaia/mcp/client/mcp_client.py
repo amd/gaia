@@ -4,8 +4,8 @@
 
 import json
 import re
-from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, List, Optional, Set
 
 from gaia.logger import get_logger
 
@@ -137,6 +137,134 @@ def _resolve_keyring_refs(env: Optional[Dict[str, Any]]) -> Dict[str, str]:
     return resolved
 
 
+# Verb tokens that mark a tool name as state-changing. Used only to OVERRIDE a
+# server's ``readOnlyHint: true`` claim — a server that advertises
+# ``delete_file`` as read-only is buggy, and its annotation must not be allowed
+# to open the confirmation gate. This defends against honest-but-wrong servers;
+# it is NOT a defence against a hostile one, which would simply name its tool
+# something innocuous. Drawn from the tool vocabularies of the servers GAIA
+# catalogues (github, filesystem, git, desktop-commander) plus common
+# slack/postgres/container verbs. Over-inclusion is cheap — the only cost of a
+# false positive is one extra confirmation prompt.
+_MUTATING_NAME_TOKENS = frozenset(
+    {
+        "add",
+        "alter",
+        "append",
+        "apply",
+        "approve",
+        "archive",
+        "assign",
+        "cancel",
+        "checkout",
+        "chmod",
+        "chown",
+        "clear",
+        "clone",
+        "close",
+        "commit",
+        "copy",
+        "create",
+        "delete",
+        "deploy",
+        "destroy",
+        "disable",
+        "dismiss",
+        "dispatch",
+        "drop",
+        "edit",
+        "enable",
+        "erase",
+        "exec",
+        "execute",
+        "flush",
+        "fork",
+        "grant",
+        "import",
+        "insert",
+        "install",
+        "interact",
+        "invite",
+        "invoke",
+        "kill",
+        "launch",
+        "lock",
+        "mark",
+        "merge",
+        "mkdir",
+        "modify",
+        "move",
+        "overwrite",
+        "patch",
+        "pay",
+        "post",
+        "provision",
+        "publish",
+        "purge",
+        "push",
+        "put",
+        "reject",
+        "remove",
+        "rename",
+        "reset",
+        "restart",
+        "restore",
+        "revoke",
+        "run",
+        "save",
+        "schedule",
+        "send",
+        "set",
+        "share",
+        "sign",
+        "spawn",
+        "start",
+        "stop",
+        "submit",
+        "sync",
+        "terminate",
+        "transfer",
+        "trigger",
+        "truncate",
+        "unlink",
+        "unlock",
+        "update",
+        "upload",
+        "upsert",
+        "write",
+    }
+)
+
+# Splits ``writeFile`` and also screaming-camel ``WRITEFile`` (-> WRITE File),
+# which a single lower-to-upper boundary would collapse into one token.
+_CAMEL_BOUNDARY_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])")
+
+
+def _name_tokens(name: str) -> Set[str]:
+    """Split a tool name into lowercase word tokens (snake_case and camelCase)."""
+    spaced = _CAMEL_BOUNDARY_RE.sub(" ", name or "")
+    return {t for t in re.split(r"[^A-Za-z0-9]+", spaced.lower()) if t}
+
+
+def mcp_tool_requires_confirmation(name: str, annotations: Dict[str, Any]) -> bool:
+    """Whether an MCP tool must be user-confirmed before GAIA executes it.
+
+    Fails closed. A tool is exempt only when the server *proves* it is
+    read-only: it sets the MCP-spec ``annotations.readOnlyHint`` to exactly
+    ``True`` **and** its name carries no state-changing verb. Everything else —
+    no annotations at all, ``readOnlyHint: false``, a non-boolean value, or a
+    read-only claim contradicted by a name like ``delete_file`` — requires
+    confirmation.
+
+    The gate is GAIA's backstop against prompt injection driving a write, so
+    "the server did not tell us" must never mean "safe".
+    """
+    read_only_hint = (annotations or {}).get("readOnlyHint")
+    if read_only_hint is not True:
+        return True
+    return bool(_name_tokens(name) & _MUTATING_NAME_TOKENS)
+
+
 @dataclass
 class MCPTool:
     """Represents an MCP tool with its schema.
@@ -145,11 +273,15 @@ class MCPTool:
         name: Tool name from MCP server
         description: Tool description
         input_schema: MCP inputSchema (JSON Schema format)
+        annotations: MCP tool annotations (``readOnlyHint``, ``destructiveHint``,
+            …). Server-supplied and therefore advisory — see
+            :func:`mcp_tool_requires_confirmation` for how far they are trusted.
     """
 
     name: str
     description: str
     input_schema: Dict[str, Any]
+    annotations: Dict[str, Any] = field(default_factory=dict)
 
     def to_gaia_format(
         self, prefix: str, raw_server_name: Optional[str] = None
@@ -187,6 +319,13 @@ class MCPTool:
             "description": f"[MCP:{prefix}] {self.description}",
             "parameters": gaia_params,
             "atomic": True,
+            # Read by Agent._tool_requires_confirmation. MCP tool names are
+            # server-defined, so they can never appear in the static
+            # TOOLS_REQUIRING_CONFIRMATION set — the risk classification has to
+            # travel with the registry entry instead.
+            "requires_confirmation": mcp_tool_requires_confirmation(
+                self.name, self.annotations
+            ),
             # Metadata for debugging/routing — raw name preserves the
             # mcp_servers.json key so routing back to a client still
             # works after sanitisation changes the prefix.
@@ -224,12 +363,18 @@ class MCPClient:
 
         Args:
             name: Friendly name for this server
-            command: Shell command to start the server
+            command: Command line to start the server, e.g. ``"npx -y server"``.
+                Tokenized into an argv list, never run through a shell — prefer
+                :meth:`from_config` with an explicit ``args`` list.
             timeout: Request timeout in seconds
             debug: Enable debug logging
 
         Returns:
             MCPClient: Configured client instance
+
+        Raises:
+            ValueError: If ``command`` contains shell syntax, which would not be
+                interpreted. Pass the program and its arguments separately.
         """
         transport = StdioTransport(command, timeout=timeout, debug=debug)
         return cls(name, transport, debug=debug)
@@ -373,6 +518,13 @@ class MCPClient:
                 name=tool["name"],
                 description=tool.get("description", ""),
                 input_schema=tool.get("inputSchema", {}),
+                # Only a dict is accepted — a server sending a scalar or list
+                # here must not degrade into "no annotations, but trusted".
+                annotations=(
+                    tool["annotations"]
+                    if isinstance(tool.get("annotations"), dict)
+                    else {}
+                ),
             )
             for tool in tools_data
         ]

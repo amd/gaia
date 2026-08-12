@@ -390,3 +390,217 @@ def test_execute_inside_transaction_raises():
             db.execute("CREATE TABLE other (id INTEGER)")  # Should raise
 
     db.close_db()
+
+
+# --- Identifier Validation ---
+
+
+def _seeded_db():
+    db = DB()
+    db.init_db()
+    db.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT, qty INTEGER)")
+    for i, n in enumerate(("a", "b", "c"), 1):
+        db.insert("items", {"name": n, "qty": i * 10})
+    return db
+
+
+@pytest.mark.parametrize(
+    "table",
+    ["items WHERE 1=1 --", "items; DROP TABLE items", "1items", "", '"items"'],
+)
+def test_insert_rejects_bad_table(table):
+    """Table names are interpolated, so they must be bare identifiers."""
+    db = _seeded_db()
+    with pytest.raises(ValueError, match="invalid table name"):
+        db.insert(table, {"name": "x"})
+    assert len(db.query("SELECT * FROM items")) == 3
+    db.close_db()
+
+
+def test_insert_rejects_bad_column():
+    """Dict keys become column names in the SQL, so they are validated too."""
+    db = _seeded_db()
+    with pytest.raises(ValueError, match="invalid column name"):
+        db.insert("items", {"name) VALUES (1); --": "x"})
+    assert len(db.query("SELECT * FROM items")) == 3
+    db.close_db()
+
+
+def test_insert_rejects_empty_data():
+    db = _seeded_db()
+    with pytest.raises(ValueError, match="'data' is empty"):
+        db.insert("items", {})
+    db.close_db()
+
+
+def test_update_rejects_bad_table():
+    db = _seeded_db()
+    with pytest.raises(ValueError, match="invalid table name"):
+        db.update("items WHERE 1=1 --", {"qty": 0}, "id = :id", {"id": 1})
+    assert db.query("SELECT qty FROM items WHERE id = 1", one=True)["qty"] == 10
+    db.close_db()
+
+
+def test_update_rejects_bad_column():
+    db = _seeded_db()
+    with pytest.raises(ValueError, match="invalid column name"):
+        db.update("items", {"qty = 0, name": "x"}, "id = :id", {"id": 1})
+    db.close_db()
+
+
+def test_update_rejects_empty_data():
+    db = _seeded_db()
+    with pytest.raises(ValueError, match="'data' is empty"):
+        db.update("items", {}, "id = :id", {"id": 1})
+    db.close_db()
+
+
+def test_delete_rejects_bad_table():
+    db = _seeded_db()
+    with pytest.raises(ValueError, match="invalid table name"):
+        db.delete("items WHERE 1=1 --", "id = :id", {"id": 1})
+    assert len(db.query("SELECT * FROM items")) == 3
+    db.close_db()
+
+
+@pytest.mark.parametrize("where", ["", "   "])
+def test_delete_rejects_blank_where(where):
+    db = _seeded_db()
+    with pytest.raises(ValueError, match="'where' is empty"):
+        db.delete("items", where, {})
+    assert len(db.query("SELECT * FROM items")) == 3
+    db.close_db()
+
+
+@pytest.mark.parametrize(
+    "where,params",
+    [
+        ("1 = 1", {}),
+        ("name IS NULL", {}),
+        ("qty < :threshold", {"threshold": 25}),
+        ("id = :id", {"id": 1}),
+        ("id = :id OR qty > :q", {"id": 1, "q": 25}),
+    ],
+)
+def test_delete_still_accepts_trusted_where_fragments(where, params):
+    """The mixin's `where` stays a trusted SQL fragment for Python callers.
+
+    These are the literal shapes used across the codebase; the LLM trust
+    boundary is DatabaseAgent's tools, not this method. Do not tighten this
+    without auditing every internal caller.
+    """
+    db = _seeded_db()
+    db.delete("items", where, params)
+    db.close_db()
+
+
+# --- Read-Only Query ---
+
+
+def test_query_readonly_allows_select():
+    db = _seeded_db()
+    assert len(db.query_readonly("SELECT * FROM items")) == 3
+    assert (
+        db.query_readonly("SELECT * FROM items WHERE id = :id", {"id": 1}, one=True)[
+            "name"
+        ]
+        == "a"
+    )
+    db.close_db()
+
+
+@pytest.mark.parametrize(
+    "sql",
+    [
+        "DELETE FROM items",
+        "UPDATE items SET qty = 0",
+        "INSERT INTO items (name) VALUES ('x')",
+        "DROP TABLE items",
+        "CREATE TABLE other (id INTEGER)",
+        "ATTACH DATABASE ':memory:' AS side",
+        "PRAGMA writable_schema=ON",
+    ],
+)
+def test_query_readonly_blocks_writes(sql):
+    db = _seeded_db()
+    with pytest.raises(PermissionError, match="Read-only query blocked"):
+        db.query_readonly(sql)
+    assert len(db.query("SELECT * FROM items")) == 3
+    db.close_db()
+
+
+def test_query_readonly_restores_authorizer():
+    """A leaked authorizer would break every later write in the process."""
+    db = _seeded_db()
+    with pytest.raises(PermissionError):
+        db.query_readonly("DELETE FROM items")
+    db.insert("items", {"name": "d", "qty": 40})
+    assert len(db.query("SELECT * FROM items")) == 4
+    db.close_db()
+
+
+def test_query_readonly_propagates_real_errors():
+    """A genuine SQL error must not be relabelled as a permission problem."""
+    import sqlite3
+
+    db = _seeded_db()
+    with pytest.raises(sqlite3.OperationalError, match="no such table"):
+        db.query_readonly("SELECT * FROM nope")
+    db.close_db()
+
+
+def test_query_readonly_allows_schema_pragma():
+    db = _seeded_db()
+    assert db.query_readonly("PRAGMA table_info(items)")
+    db.close_db()
+
+
+def test_query_readonly_denies_vacuum():
+    """VACUUM's denial message differs; classification must not depend on it."""
+    db = _seeded_db()
+    with pytest.raises(PermissionError):
+        db.query_readonly("VACUUM")
+    db.close_db()
+
+
+def test_query_readonly_does_not_mislabel_table_named_like_denial():
+    """A real SQL error must survive even when its text mentions authorization."""
+    import sqlite3
+
+    db = _seeded_db()
+    with pytest.raises(sqlite3.OperationalError, match="no such table"):
+        db.query_readonly('SELECT * FROM "not authorized"')
+    db.close_db()
+
+
+def test_query_readonly_works_inside_transaction():
+    db = _seeded_db()
+    with db.transaction():
+        db.insert("items", {"name": "d", "qty": 40})
+        assert len(db.query_readonly("SELECT * FROM items")) == 4
+    db.close_db()
+
+
+@pytest.mark.parametrize("data", ['{"name": "x"}', "abc", ["name"], None, 5])
+def test_insert_rejects_non_dict_data(data):
+    db = _seeded_db()
+    with pytest.raises(ValueError, match="must be a dict"):
+        db.insert("items", data)
+    db.close_db()
+
+
+@pytest.mark.parametrize("where", [None, 123, ["id = :id"], {"id": 1}])
+def test_delete_rejects_non_string_where(where):
+    db = _seeded_db()
+    with pytest.raises(ValueError, match="must be a SQL fragment string"):
+        db.delete("items", where, {})
+    db.close_db()
+
+
+def test_update_rejects_params_colliding_with_set_prefix():
+    """The __set_ prefix is only a guarantee if a caller can't overwrite it."""
+    db = _seeded_db()
+    with pytest.raises(ValueError, match="collide with the reserved"):
+        db.update("items", {"qty": 99}, "id = :id", {"id": 1, "__set_qty": 0})
+    assert db.query("SELECT qty FROM items WHERE id = 1", one=True)["qty"] == 10
+    db.close_db()

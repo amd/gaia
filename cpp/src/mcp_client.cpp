@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstring>
 #include <iostream>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <thread>
@@ -23,7 +24,175 @@
 
 namespace gaia {
 
+// ---- MCP tool confirmation classifier ----
+
+namespace {
+
+// Verb tokens that indicate a tool changes state (filesystem, git/GitHub,
+// process execution, Slack, SQL, containers). A tool whose name contains any
+// of these is gated behind confirmation even if the server claims it is
+// read-only — a server-supplied `readOnlyHint` is a claim, not a proof.
+//
+// Sibling gate in the Python SDK: TOOLS_REQUIRING_CONFIRMATION in
+// src/gaia/agents/base/agent.py — keep the two vocabularies aligned.
+//
+// `start` and `interact` are here because desktop-commander's remote-code-
+// execution tools are named `start_process` / `interact_with_process`; `bash`,
+// `powershell`, `click` and `type` because shell and desktop-driving tools
+// often carry no conventional verb at all.
+const std::set<std::string>& mutatingVerbs() {
+    static const std::set<std::string> kVerbs = {
+        "add",        "alter",      "append",    "apply",       "approve",
+        "archive",    "assign",     "bash",      "build",       "cancel",
+        "checkout",   "chmod",      "chown",     "clear",       "click",
+        "clone",      "close",      "cmd",       "commit",      "compress",
+        "copy",       "create",     "decrypt",   "delete",      "deploy",
+        "destroy",    "disable",    "dismiss",   "downgrade",   "download",
+        "drag",       "drop",       "edit",      "enable",      "encrypt",
+        "erase",      "eval",       "exec",      "execute",     "export",
+        "extract",    "flush",      "fork",      "format",      "forward",
+        "goto",       "grant",      "import",    "insert",      "install",
+        "interact",   "invite",     "invoke",    "join",        "keystroke",
+        "kick",       "kill",       "launch",    "leave",       "merge",
+        "migrate",    "mkdir",      "modify",    "mount",       "move",
+        "navigate",   "notify",     "open",      "paste",       "patch",
+        "pin",        "post",       "powershell", "press",      "prune",
+        "publish",    "pull",       "purge",     "push",        "put",
+        "reboot",     "rebase",     "remove",    "rename",      "reopen",
+        "replace",    "reply",      "reset",     "restart",     "restore",
+        "revert",     "revoke",     "rmdir",     "rollback",    "rotate",
+        "run",        "save",       "scale",     "scroll",      "send",
+        "set",        "share",      "shell",     "shortcut",    "shutdown",
+        "spawn",      "start",      "stop",      "submit",      "subscribe",
+        "sudo",       "symlink",    "sync",      "terminate",   "touch",
+        "transfer",   "trigger",    "truncate",  "type",        "uninstall",
+        "unlink",     "unmount",    "unpin",     "unset",       "unsubscribe",
+        "update",     "upgrade",    "upload",    "upsert",      "wipe",
+        "write",
+    };
+    return kVerbs;
+}
+
+// A verb this long or longer also matches as a *prefix* ("writefile",
+// "deletes"). Shorter verbs are exact-match only — "add"/"set"/"run" as
+// prefixes would gate read-only names like `get_address` or `get_settings`.
+constexpr size_t kMinPrefixVerbLength = 4;
+
+// ASCII-only classification: gaia_core is embeddable and std::is* are
+// locale-sensitive, so a host that calls setlocale must not shift tokenization.
+bool isAsciiAlnum(char c) {
+    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
+bool isAsciiUpper(char c) { return c >= 'A' && c <= 'Z'; }
+bool isAsciiLower(char c) { return c >= 'a' && c <= 'z'; }
+bool isAsciiDigit(char c) { return c >= '0' && c <= '9'; }
+char toAsciiLower(char c) { return isAsciiUpper(c) ? static_cast<char>(c - 'A' + 'a') : c; }
+
+/// Lowercase candidate substrings of a tool name to match verbs against:
+/// each separator-delimited segment AND its camelCase sub-words.
+///
+/// Both are needed. The sub-words catch `writeFile` / `WRITEFile`; the whole
+/// segment catches `WRITEfile` and `write2file`, where no local rule can tell
+/// where the verb ends ("WRITEfile" splits as "writ" + "efile").
+std::vector<std::string> nameCandidates(const std::string& name) {
+    std::vector<std::string> candidates;
+    std::string segment;   // separator-delimited, e.g. "writefile"
+    std::string subToken;  // camelCase sub-word, e.g. "write"
+
+    auto flushSubToken = [&]() {
+        if (!subToken.empty()) {
+            candidates.push_back(subToken);
+            subToken.clear();
+        }
+    };
+    auto flushSegment = [&]() {
+        flushSubToken();
+        if (!segment.empty()) {
+            candidates.push_back(segment);
+            segment.clear();
+        }
+    };
+
+    for (size_t i = 0; i < name.size(); ++i) {
+        const char ch = name[i];
+
+        if (!isAsciiAlnum(ch)) { // separator: _, -, ., /, space, non-ASCII byte …
+            flushSegment();
+            continue;
+        }
+
+        if (!subToken.empty()) {
+            const char prev = name[i - 1];
+            const bool caseBoundary =
+                isAsciiUpper(ch) && (isAsciiLower(prev) ||
+                                     (isAsciiUpper(prev) && i + 1 < name.size() &&
+                                      isAsciiLower(name[i + 1])));
+            // A digit boundary splits too, so "write2file" also yields "write".
+            const bool digitBoundary = isAsciiDigit(ch) != isAsciiDigit(prev);
+            if (caseBoundary || digitBoundary) {
+                flushSubToken();
+            }
+        }
+
+        subToken.push_back(toAsciiLower(ch));
+        segment.push_back(toAsciiLower(ch));
+    }
+    flushSegment();
+
+    return candidates;
+}
+
+bool namePromisesMutation(const std::string& name) {
+    const std::vector<std::string> candidates = nameCandidates(name);
+
+    // Nothing classifiable (punctuation-only, or an all-non-ASCII name) —
+    // the name can't corroborate the server's read-only claim, so distrust it.
+    if (candidates.empty()) {
+        return true;
+    }
+
+    for (const auto& candidate : candidates) {
+        for (const auto& verb : mutatingVerbs()) {
+            if (candidate == verb) {
+                return true;
+            }
+            if (verb.size() >= kMinPrefixVerbLength && candidate.size() > verb.size() &&
+                candidate.compare(0, verb.size(), verb) == 0) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+} // namespace
+
+bool mcpToolRequiresConfirmation(const std::string& toolName, const json& annotations) {
+    // An unnamed tool can't be classified — treat it as unproven.
+    if (toolName.empty()) {
+        return true;
+    }
+
+    // No annotations object at all -> the server proved nothing -> confirm.
+    if (!annotations.is_object()) {
+        return true;
+    }
+
+    const auto it = annotations.find("readOnlyHint");
+    // A non-boolean readOnlyHint (e.g. the string "true") is not a proof.
+    if (it == annotations.end() || !it->is_boolean() || !it->get<bool>()) {
+        return true;
+    }
+
+    // Read-only claim present — reject it if the name says otherwise.
+    return namePromisesMutation(toolName);
+}
+
 // ---- MCPToolSchema ----
+
+bool MCPToolSchema::requiresConfirmation() const {
+    return mcpToolRequiresConfirmation(name, annotations);
+}
 
 ToolInfo MCPToolSchema::toToolInfo(const std::string& serverName) const {
     ToolInfo info;
@@ -32,6 +201,11 @@ ToolInfo MCPToolSchema::toToolInfo(const std::string& serverName) const {
     info.atomic = true;
     info.mcpServer = serverName;
     info.mcpToolName = name;
+
+    // MCP names are server-chosen, so they can never be gated by a static
+    // allowlist. Gate here, at the source, so every consumer of toToolInfo()
+    // inherits the fail-closed verdict.
+    info.policy = requiresConfirmation() ? ToolPolicy::CONFIRM : ToolPolicy::ALLOW;
 
     // Convert JSON Schema properties to ToolParameter list
     if (inputSchema.contains("properties")) {
@@ -583,6 +757,14 @@ std::vector<MCPToolSchema> MCPClient::listTools(bool refresh) {
         tool.name = toolJson.value("name", "");
         tool.description = toolJson.value("description", "");
         tool.inputSchema = toolJson.value("inputSchema", json::object());
+
+        // A missing or non-object `annotations` degrades to {} — which the
+        // classifier reads as "unproven", not as "trusted".
+        json rawAnnotations = toolJson.value("annotations", json::object());
+        if (rawAnnotations.is_object()) {
+            tool.annotations = std::move(rawAnnotations);
+        }
+
         tools.push_back(std::move(tool));
     }
 

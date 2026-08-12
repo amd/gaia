@@ -221,7 +221,7 @@ _KNOWN_PERSONAS = frozenset(
     }
 )
 
-DEFAULT_MODEL = "claude-sonnet-4-6"
+DEFAULT_MODEL = "claude-opus-5"
 DEFAULT_BACKEND = "http://localhost:4200"
 DEFAULT_BUDGET = "2.00"
 DEFAULT_TIMEOUT = 900  # seconds per scenario (base)
@@ -1413,6 +1413,29 @@ def run_fix_iteration(scorecard, run_dir, iteration):
         return {"iteration": iteration, "error": str(e), "fixes": []}
 
 
+def _warn_on_judge_mismatch(baseline, current):
+    """Print a loud banner when two scorecards were scored by different judges.
+
+    Scores are the judge's opinion, so a baseline scored by one model and a run
+    scored by another are not comparable — every per-scenario delta below is
+    partly the judge changing its mind. Without this the diff reads as a clean
+    regression/improvement report and quietly misleads.
+    """
+    baseline_judge = (baseline.get("config") or {}).get("model")
+    current_judge = (current.get("config") or {}).get("model")
+    if not baseline_judge or not current_judge or baseline_judge == current_judge:
+        return
+
+    print("=" * 78)
+    print("WARNING: judge mismatch — these scorecards are not directly comparable.")
+    print(f"  baseline scored by: {baseline_judge}")
+    print(f"  current  scored by: {current_judge}")
+    print("Deltas below mix real behavior changes with the judge change. Regenerate")
+    print("the baseline under the current judge (`gaia eval agent --save-baseline`)")
+    print("before treating any of them as a regression.")
+    print("=" * 78)
+
+
 def compare_scorecards(baseline_path, current_path):
     """Compare two scorecard.json files and print a regression/improvement report.
 
@@ -1433,6 +1456,8 @@ def compare_scorecards(baseline_path, current_path):
 
     baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
     current = json.loads(current_path.read_text(encoding="utf-8"))
+
+    _warn_on_judge_mismatch(baseline, current)
 
     # Build per-scenario maps
     def scenario_map(sc):

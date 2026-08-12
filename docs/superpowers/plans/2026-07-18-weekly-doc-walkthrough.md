@@ -446,7 +446,7 @@ git commit -m "feat(ci): scaffold the weekly doc walkthrough workflow"
 
 - [ ] **Step 2: Add the judge step**
 
-```yaml
+````yaml
       - name: "Judge (Opus): verify ${{ matrix.doc.path }} against its transcript"
         id: judge
         if: always()
@@ -508,7 +508,7 @@ git commit -m "feat(ci): scaffold the weekly doc walkthrough workflow"
             --max-turns 25
             --model ${{ env.WALKTHROUGH_JUDGE_MODEL }}
             --allowedTools Read,Grep,Glob,Bash
-```
+````
 
 - [ ] **Step 3: Add cleanup + upload steps**
 

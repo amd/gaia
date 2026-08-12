@@ -13,7 +13,8 @@ discovery roots with auditable precedence, progressive disclosure,
 `gaia skill list|info|create|import|export`. Plus the declarative
 `skills:` / `skill_sets:` manifest blocks and per-launch
 [skill-set selection](#skill-sets) ([#2466](https://github.com/amd/gaia/issues/2466)),
-whose reference consumer is the email agent.
+whose reference implementation is the email agent (which currently ships with its
+sets commented out — see [below](#reference-implementation-the-email-agent)).
 
 Also shipped ([#2467](https://github.com/amd/gaia/issues/2467)): the marketplace
 verbs `search`/`install`/`remove`/`publish`, bundle signing + install-time tier
@@ -423,17 +424,26 @@ adopted the blocks, whose behaviour is unchanged.
 into the system prompt, which is prompt budget the agent's own tool results no
 longer have. An agent with a tight context envelope must account for the loaded
 set's cost, not assume it is free — the email agent's bulk-triage path subtracts
-it from its result-envelope budget for exactly this reason. Budget the set, and
-keep bodies short.
+it from its result-envelope budget for exactly this reason — and its three-skill
+`personal` set still cut that envelope from 6,144 tokens to 4,810 (the four-skill
+`work` set, to 4,070). Budget the set, and keep bodies short.
 </Note>
 
-### Reference consumer: the email agent
+### Reference implementation: the email agent
 
 The email agent ([`hub/agents/email/`](https://github.com/amd/gaia/tree/main/hub/agents/email))
-is the shipped worked example. It bundles six instruction-only skills and declares
-two sets — `personal` (triage, newsletter digests, travel itineraries) and `work`
-(triage, meeting scheduling, action-item extraction, escalation routing) — with
-`inbox-triage` deliberately in both.
+is the worked example in the tree. It bundles six instruction-only skills and its
+manifest carries two sets — `personal` (triage, newsletter digests, travel
+itineraries) and `work` (triage, meeting scheduling, action-item extraction,
+escalation routing) — with `inbox-triage` deliberately in both.
+
+<Warning>
+**It ships with those blocks commented out**, pending an eval that shows the
+skills improve triage, so the released agent resolves no set and loads no skills
+— `active_skill_set is None`, `loaded_skills == {}`, and a `--skill-set` request
+is a startup error. Treat it as a wiring reference, not as evidence that a
+shipped agent has a set active.
+</Warning>
 
 Its selector maps the connected mailbox's account type onto a set: a personal
 Microsoft account gets `personal`, a work/school account gets `work`. The kind is
