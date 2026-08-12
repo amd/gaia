@@ -147,6 +147,14 @@ type ChatModel struct {
 	// Builder panics the moment a copied non-zero one is written to again.
 	buffer string
 
+	// queued holds one follow-up typed while the agent was still working, sent
+	// the moment the turn settles (see Update's drain). A local model routinely
+	// takes 60-120s per turn; freezing the composer for that long forced the
+	// user to hold their next thought in their head, or cancel to type it.
+	// One slot, not a queue: a second Enter replaces it, which is what a person
+	// who retypes actually means.
+	queued string
+
 	input    textarea.Model
 	viewport viewport.Model
 	spinner  spinner.Model
@@ -201,7 +209,7 @@ type ChatModel struct {
 
 func NewChatModel(c client.AgentClient, agentName string, initialQuery string, debug bool) ChatModel {
 	ti := textarea.New()
-	ti.Placeholder = "Ask anything... (Enter to send, Ctrl+C to quit)"
+	ti.Placeholder = "Ask anything — Enter to send, Alt+Enter for a new line"
 	ti.Focus()
 	ti.CharLimit = 4096
 	ti.SetHeight(1)
@@ -372,7 +380,37 @@ func (m *ChatModel) drainPendingPreScan() {
 	m.upsertPreScanCard(data)
 }
 
+// Update dispatches the message, then releases a queued follow-up if that
+// dispatch happened to end the turn.
+//
+// The drain lives here rather than in settleTurn because a turn can end down
+// any of nine paths — doneMsg, errMsg, the canonical final/error events, and
+// five legacy ones — and each returns its own Cmd directly. Draining in one
+// place after the fact is the only version that cannot be forgotten when a
+// tenth terminal path is added. settleTurn is *ChatModel and returns nothing,
+// so it cannot hand back the send Cmd this needs.
 func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	updated, cmd := m.update(msg)
+
+	next, ok := updated.(ChatModel)
+	if !ok || next.queued == "" || next.streaming {
+		return updated, cmd
+	}
+	// A question or confirmation still on screen owns the conversation; the
+	// queued message waits for the user to deal with it. (Both imply streaming
+	// today, so this is belt-and-braces against a future path that clears
+	// streaming while leaving a modal up.)
+	if next.question != nil || next.confirmation != nil {
+		return updated, cmd
+	}
+
+	query := next.queued
+	next.queued = ""
+	sent, sendCmd := next.submit(query)
+	return sent, tea.Batch(cmd, sendCmd)
+}
+
+func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg := msg.(type) {
@@ -578,11 +616,11 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(cmds...)
 	}
 
-	if !m.streaming {
-		var cmd tea.Cmd
-		m.input, cmd = m.input.Update(msg)
-		cmds = append(cmds, cmd)
-	}
+	// Not gated on !m.streaming: the cursor has to keep blinking while the agent
+	// works, or a composer the user CAN type into looks dead.
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(msg)
+	cmds = append(cmds, cmd)
 
 	return m, tea.Batch(cmds...)
 }
@@ -644,11 +682,20 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, tea.Quit
 
+	case tea.KeyCtrlJ:
+		// Ctrl+J is the portable newline. Most terminals send a bare CR for
+		// Shift+Enter, indistinguishable from Enter, so the only reliable
+		// multi-line keys are this and Alt+Enter below.
+		m.input.InsertString("\n")
+		m.syncComposerHeight()
+		return m, nil
+
 	case tea.KeyEnter:
-		if m.streaming {
-			return m, nil
-		}
 		if msg.Alt {
+			// Alt+Enter used to be swallowed outright — the one key a user is
+			// most likely to try for a second line did nothing at all.
+			m.input.InsertString("\n")
+			m.syncComposerHeight()
 			return m, nil
 		}
 		query := strings.TrimSpace(m.input.Value())
@@ -656,36 +703,19 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.input.Reset()
+		m.syncComposerHeight()
 
-		// Handle slash commands
-		switch {
-		case query == "/help":
-			return m, func() tea.Msg { return ToggleHelpMsg{} }
-		case query == "/hub":
-			if m.fromHub {
-				return m, func() tea.Msg {
-					return ReturnToHubMsg{AgentID: m.agentID}
-				}
-			}
-			m.messages = append(m.messages, Message{
-				Role:    RoleStatus,
-				Content: "Not launched from hub. Use Ctrl+C to quit.",
-			})
-			m.updateViewport()
-			return m, nil
-		case query == "/clear":
-			m.messages = nil
-			// Daemon-transport agents are stateless per turn: the host pushes the
-			// transcript back as `context`, so clearing the view must clear that
-			// too or the "cleared" history keeps being sent.
-			if r, ok := m.client.(client.TranscriptResetter); ok {
-				r.ResetTranscript()
-			}
+		// The agent is still working: hold this one rather than dropping the
+		// keystroke on the floor. Update sends it the moment the turn settles.
+		// Slash commands queue too — /clear typed mid-turn should clear once
+		// the turn it belongs to is actually over, not silently do nothing.
+		if m.streaming {
+			m.queued = query
 			m.updateViewport()
 			return m, nil
 		}
 
-		return m.sendQuery(query)
+		return m.submit(query)
 
 	case tea.KeyPgUp:
 		m.viewport.HalfViewUp()
@@ -720,13 +750,13 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.afterScroll(), nil
 	}
 
-	if !m.streaming {
-		var cmd tea.Cmd
-		m.input, cmd = m.input.Update(msg)
-		return m, cmd
-	}
-
-	return m, nil
+	// Typing is allowed while the agent works — see ChatModel.queued. Enter is
+	// intercepted above; everything else composes as normal.
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(msg)
+	// Backspacing away a line has to give the row back, not just adding one.
+	m.syncComposerHeight()
+	return m, cmd
 }
 
 // requestCancel begins cancelling the in-flight turn (Esc / Ctrl+C).
@@ -766,9 +796,14 @@ func (m ChatModel) requestCancel() (tea.Model, tea.Cmd) {
 	m.activity = nil
 	m.question = nil
 	m.confirmation = nil
+	// A follow-up queued behind this turn was written on the assumption the
+	// turn would finish. Stopping the turn stops what was waiting on it —
+	// firing it anyway is the opposite of what Esc means. It stays in the
+	// composer so nothing typed is lost.
+	m.restoreQueuedToComposer()
 	m.messages = append(m.messages, Message{
 		Role:    RoleStatus,
-		Content: "cancelling… (the agent stops at its next step — press again to stop waiting)",
+		Content: cancellingNotice + " (the agent stops at its next step — press again to stop waiting)",
 	})
 	m.drainPendingPreScan()
 	m.updateViewport()
@@ -811,6 +846,9 @@ func (m ChatModel) forceLocalAbort() (tea.Model, tea.Cmd) {
 	m.question = nil
 	m.confirmation = nil
 	m.activity = nil
+	// Same reasoning as requestCancel: what was queued behind this turn was
+	// written expecting it to finish. Give it back rather than sending it.
+	m.restoreQueuedToComposer()
 	m.messages = append(m.messages, Message{
 		Role: RoleStatus,
 		Content: "gave up waiting locally — the run may still be finishing on the server; " +
@@ -818,6 +856,58 @@ func (m ChatModel) forceLocalAbort() (tea.Model, tea.Cmd) {
 	})
 	m.updateViewport()
 	return m, nil
+}
+
+// restoreQueuedToComposer puts a queued follow-up back where the user typed it,
+// so abandoning a turn never silently eats the sentence they were holding.
+// Anything already half-typed in the composer wins — that is the newer thought.
+func (m *ChatModel) restoreQueuedToComposer() {
+	if m.queued == "" {
+		return
+	}
+	if strings.TrimSpace(m.input.Value()) == "" {
+		m.input.SetValue(m.queued)
+		m.input.CursorEnd()
+		m.syncComposerHeight()
+	}
+	m.queued = ""
+}
+
+// submit routes one composed line: a slash command runs locally, anything else
+// becomes a turn. Both the composer and the queue drain go through here, so a
+// "/clear" typed mid-turn still clears when it finally lands instead of being
+// sent to the agent as a literal question.
+func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
+	switch query {
+	case "/help":
+		return m, func() tea.Msg { return ToggleHelpMsg{} }
+
+	case "/hub":
+		if m.fromHub {
+			return m, func() tea.Msg {
+				return ReturnToHubMsg{AgentID: m.agentID}
+			}
+		}
+		m.messages = append(m.messages, Message{
+			Role:    RoleStatus,
+			Content: "Not launched from hub. Use Ctrl+C to quit.",
+		})
+		m.updateViewport()
+		return m, nil
+
+	case "/clear":
+		m.messages = nil
+		// Daemon-transport agents are stateless per turn: the host pushes the
+		// transcript back as `context`, so clearing the view must clear that
+		// too or the "cleared" history keeps being sent.
+		if r, ok := m.client.(client.TranscriptResetter); ok {
+			r.ResetTranscript()
+		}
+		m.updateViewport()
+		return m, nil
+	}
+
+	return m.sendQuery(query)
 }
 
 func (m ChatModel) sendQuery(query string) (tea.Model, tea.Cmd) {
@@ -896,12 +986,37 @@ func (m ChatModel) supersededTurn(ch <-chan interface{}) bool {
 func (m *ChatModel) settleTurn() {
 	m.events = nil
 	m.cancelFn = nil
+	// "cancelling…" describes a request that is in flight, so it must not
+	// outlive it. Left in place it became a permanent claim in the scrollback —
+	// and when the cancel lost the race it sat directly above the answer that
+	// did arrive, contradicting it.
+	m.dropCancellingNotice()
 	if m.cancelPending {
 		m.cancelPending = false
 		m.messages = append(m.messages, Message{
 			Role:    RoleStatus,
 			Content: "cancelled",
 		})
+	}
+}
+
+// cancellingNotice is the transient line requestCancel shows while a cancel is
+// in flight. Matched by prefix so its parenthetical can be reworded freely.
+const cancellingNotice = "cancelling…"
+
+// dropCancellingNotice removes that transient line from the transcript.
+//
+// Scanned from the end rather than assuming it is last: an answer, tool result
+// or error can land after the cancel was requested but before the turn settles
+// — which is precisely the case where leaving it in reads as the transcript
+// contradicting itself.
+func (m *ChatModel) dropCancellingNotice() {
+	for i := len(m.messages) - 1; i >= 0; i-- {
+		msg := m.messages[i]
+		if msg.Role == RoleStatus && strings.HasPrefix(msg.Content, cancellingNotice) {
+			m.messages = append(m.messages[:i], m.messages[i+1:]...)
+			return
+		}
 	}
 }
 
@@ -961,12 +1076,11 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 		if summary == "" {
 			summary = e.Title
 		}
-		// Truncate long summaries (stdout can be very long)
-		if len(summary) > 60 {
-			summary = summary[:60] + "..."
-		}
-		// Clean up newlines in summary
-		summary = strings.ReplaceAll(summary, "\n", " ")
+		// clean before truncateRunes, not strings.ReplaceAll after: stdout
+		// arrives with tabs, CRs and occasionally ANSI colour, and the old
+		// byte slice at [:60] cut mid-rune on any non-ASCII output — a path
+		// with an accent or a box-drawing character rendered as mojibake.
+		summary = truncateRunes(clean(summary), 60)
 		if len(m.activity) > 0 {
 			last := &m.activity[len(m.activity)-1]
 			if last.Kind == "tool" {
@@ -1089,10 +1203,40 @@ func (m *ChatModel) flushBuffer() {
 	m.buffer = ""
 }
 
+// composerMaxRows caps how tall the composer grows. Past this it scrolls
+// internally: a composer that can eat the whole window hides the conversation
+// the user is writing about.
+const composerMaxRows = 6
+
+// composerRows is the height the composer wants right now — one row per line
+// the user has actually written.
+func (m ChatModel) composerRows() int {
+	rows := m.input.LineCount()
+	if rows < 1 {
+		rows = 1
+	}
+	if rows > composerMaxRows {
+		rows = composerMaxRows
+	}
+	return rows
+}
+
+// syncComposerHeight grows or shrinks the composer to fit what has been typed,
+// re-laying out the pane above it when the height actually changes. Called
+// after every keystroke, so it must be cheap when nothing moved.
+func (m *ChatModel) syncComposerHeight() {
+	want := m.composerRows()
+	if m.input.Height() == want {
+		return
+	}
+	m.input.SetHeight(want)
+	m.resize()
+}
+
 func (m *ChatModel) resize() {
 	headerH := 1
 	statusH := 1
-	inputH := 3
+	inputH := m.composerRows() + 2
 	padding := 2
 
 	vpHeight := m.height - headerH - statusH - inputH - padding
@@ -1256,6 +1400,15 @@ func (m ChatModel) wrapForPane(s string) string {
 	return components.WrapText(s, m.cardWidth())
 }
 
+// wrapProse wraps to the same measure an answer lays out at, so prose from
+// either side of the conversation shares one column.
+func (m ChatModel) wrapProse(s string) string {
+	if m.width <= 0 {
+		return s
+	}
+	return components.WrapText(s, m.answerWidth())
+}
+
 // spacedAfter reports whether a message gets a blank line under it. Substantial
 // blocks — a question, an answer, a card, an error — get air; consecutive status
 // notes stay tight, since spreading a run of one-liners apart makes them read as
@@ -1266,6 +1419,45 @@ func spacedAfter(role MessageRole) bool {
 		return true
 	}
 	return false
+}
+
+// answerStats is the footnote under a finished answer.
+//
+// By default it is one number: how long that took. Everything else —
+// time-to-first-token, token count, tokens/sec, agent-loop step count, tool
+// count — is harness telemetry. It measures the machinery, not the answer, and
+// printing six metrics under every reply trains the eye to skip the whole line,
+// including the one figure a person actually reads. --debug turns the full
+// breakdown back on for the people tuning the machinery.
+func (m ChatModel) answerStats(msg *Message) string {
+	if msg.Duration <= 0 {
+		return ""
+	}
+	stats := []string{fmt.Sprintf("%.1fs", msg.Duration.Seconds())}
+	if !m.debug {
+		return stats[0]
+	}
+
+	if msg.TTFT > 0 {
+		stats = append(stats, fmt.Sprintf("ttft %.1fs", msg.TTFT.Seconds()))
+	}
+	// Real generated-token count (#2899) — no longer a char-count guess. Zero
+	// means the sidecar didn't report usage.tokens (the legacy transport, or an
+	// older agent); omit rather than fall back to the old estimate, which would
+	// silently reintroduce the exact bug that replaced.
+	if msg.Tokens > 0 {
+		stats = append(stats, fmt.Sprintf("%d tokens", msg.Tokens))
+		if inferTime := msg.Duration - msg.TTFT; inferTime > 0 {
+			stats = append(stats, fmt.Sprintf("%.1f tok/s", float64(msg.Tokens)/inferTime.Seconds()))
+		}
+	}
+	if msg.Steps > 0 {
+		stats = append(stats, fmt.Sprintf("%d steps", msg.Steps))
+	}
+	if msg.ToolsUsed > 0 {
+		stats = append(stats, fmt.Sprintf("%d tools", msg.ToolsUsed))
+	}
+	return strings.Join(stats, " · ")
 }
 
 // renderMessage draws one message. seen threads cross-card dedup for the
@@ -1279,7 +1471,13 @@ func (m ChatModel) renderMessage(msg *Message, seen map[string]bool) string {
 		// foreground — the brightest thing on screen, competing with the answer
 		// it was asking for. A free-text answer to a mid-run question lands here
 		// too and can be long, so it wraps.
-		return userStyle.Render(m.wrapForPane("▶ You: " + msg.Content))
+		//
+		// Wrapped to the ANSWER's measure, not the pane's: a question and its
+		// answer read as one exchange only if they share a left AND a right
+		// edge. On a 200-column terminal the pane measure ran the question out
+		// to 196 columns above an answer capped at 88, so the pair looked like
+		// two unrelated blocks.
+		return userStyle.Render(m.wrapProse("▶ You: " + msg.Content))
 
 	case RoleAssistant:
 		content := msg.Content
@@ -1288,35 +1486,8 @@ func (m ChatModel) renderMessage(msg *Message, seen map[string]bool) string {
 		}
 		panel := answerPanelStyle.Width(m.answerWidth()).Render(content)
 
-		// Perf stats line below the panel
-		if msg.Duration > 0 {
-			var stats []string
-			stats = append(stats, fmt.Sprintf("%.1fs", msg.Duration.Seconds()))
-			if msg.TTFT > 0 {
-				stats = append(stats, fmt.Sprintf("ttft %.1fs", msg.TTFT.Seconds()))
-			}
-			// Real generated-token count (#2899) — no longer a char-count
-			// guess. Zero means the sidecar didn't report usage.tokens (e.g.
-			// the legacy transport, or an older agent); omit rather than
-			// fall back to the old estimate, which would silently
-			// reintroduce the exact bug this replaced.
-			if msg.Tokens > 0 {
-				stats = append(stats, fmt.Sprintf("%d tokens", msg.Tokens))
-				// Tokens per second (output only)
-				inferTime := msg.Duration - msg.TTFT
-				if inferTime > 0 {
-					tps := float64(msg.Tokens) / inferTime.Seconds()
-					stats = append(stats, fmt.Sprintf("%.1f tok/s", tps))
-				}
-			}
-			if msg.Steps > 0 {
-				stats = append(stats, fmt.Sprintf("%d steps", msg.Steps))
-			}
-			if msg.ToolsUsed > 0 {
-				stats = append(stats, fmt.Sprintf("%d tools", msg.ToolsUsed))
-			}
-			statsLine := activityStyle.Render("  " + strings.Join(stats, " · "))
-			panel += "\n" + statsLine
+		if stats := m.answerStats(msg); stats != "" {
+			panel += "\n" + activityStyle.Render("  "+stats)
 		}
 		return panel
 
@@ -1636,13 +1807,24 @@ func (m ChatModel) View() string {
 
 	inputView := m.input.View()
 	if m.streaming {
-		elapsed := time.Since(m.queryStart)
-		elapsedStr := fmt.Sprintf("%.0fs", elapsed.Seconds())
-
-		// The same phrase the live region's last line carries — the composer
-		// row is the one thing always on screen, so "Waiting for agent..."
-		// there wasted the most visible line in the app (#2804).
-		inputView = m.spinner.View() + " ◆ " + m.currentActivityLabel() + "  " + activityStyle.Render(elapsedStr)
+		// While the agent works this row is shared. Whatever the user is doing
+		// with it wins: mid-sentence they need to see their own text, and a
+		// queued line needs to be visible or they cannot tell it was accepted.
+		// Only when they are doing neither does it report on the agent — the
+		// live region above is already saying that, and this is the one row
+		// always on screen (#2804).
+		switch {
+		case strings.TrimSpace(m.input.Value()) != "":
+			inputView = m.input.View() + "  " + activityStyle.Render("⏎ queues")
+		case m.queued != "":
+			inputView = activityStyle.Render("⏎ queued · ") +
+				statusMsgStyle.Render(truncateRunes(m.queued, m.answerWidth())) +
+				activityStyle.Render("  Esc to take it back")
+		default:
+			elapsed := time.Since(m.queryStart)
+			inputView = m.spinner.View() + " ◆ " + m.currentActivityLabel() + "  " +
+				activityStyle.Render(fmt.Sprintf("%.0fs", elapsed.Seconds()))
+		}
 	}
 
 	// Scrolling is discoverable only if it is advertised: in an alt-screen app
@@ -1651,7 +1833,9 @@ func (m ChatModel) View() string {
 	hint := "↑↓ scroll · Ctrl+C quit"
 	switch {
 	case m.streaming:
-		hint = "↑↓ scroll · Esc cancel"
+		// Type-ahead is worth advertising exactly when it applies: a user who
+		// believes the composer is frozen never tries it.
+		hint = "↑↓ scroll · keep typing · Esc cancel"
 	case m.fromHub:
 		hint = "↑↓ scroll · Esc back · Ctrl+C quit"
 	}
@@ -1677,33 +1861,26 @@ func (m ChatModel) View() string {
 	)
 }
 
-// extractCommandFromArgs tries to extract a clean command string from tool args JSON.
+// extractCommandFromArgs pulls the one argument worth showing out of a legacy
+// tool_args payload. Every truncation goes through truncateRunes: the previous
+// byte slice at [:60] split multi-byte runes, so a command touching a path with
+// any non-ASCII character rendered a replacement glyph mid-word.
 func extractCommandFromArgs(raw json.RawMessage) string {
+	const argWidth = 60
+
 	var args map[string]interface{}
 	if err := json.Unmarshal(raw, &args); err != nil {
-		s := string(raw)
-		if len(s) > 60 {
-			s = s[:60] + "..."
-		}
-		return s
+		return truncateRunes(clean(string(raw)), argWidth)
 	}
 	// Look for common command fields
 	for _, key := range []string{"command", "cmd", "query", "path", "file"} {
 		if v, ok := args[key]; ok {
-			s := fmt.Sprintf("%v", v)
-			if len(s) > 60 {
-				s = s[:60] + "..."
-			}
-			return s
+			return truncateRunes(clean(fmt.Sprintf("%v", v)), argWidth)
 		}
 	}
 	// Fallback: show first value
 	for _, v := range args {
-		s := fmt.Sprintf("%v", v)
-		if len(s) > 60 {
-			s = s[:60] + "..."
-		}
-		return s
+		return truncateRunes(clean(fmt.Sprintf("%v", v)), argWidth)
 	}
 	return ""
 }
