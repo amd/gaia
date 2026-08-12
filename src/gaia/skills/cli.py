@@ -33,9 +33,6 @@ import zipfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
-if TYPE_CHECKING:  # pragma: no cover - typing only
-    from gaia.skills.drift import RelockResult
-
 from gaia.logger import get_logger
 from gaia.skills.errors import SkillError, SkillNotFoundError, SkillValidationError
 from gaia.skills.format import (
@@ -59,6 +56,11 @@ from gaia.skills.migrate import (
 )
 from gaia.skills.signing import ROLE_AMD, ROLE_PUBLISHER
 from gaia.skills.tiers import LOWEST_TIER
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    # Runtime imports of drift stay inside the two verbs that need it, to keep
+    # its cost off every other `gaia skill` invocation.
+    from gaia.skills.drift import RelockResult
 
 log = get_logger(__name__)
 
