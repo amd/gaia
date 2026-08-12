@@ -42,6 +42,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import re
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -58,6 +59,7 @@ pytest.importorskip("gaia_agent_email")
 
 from gaia_agent_email.agent import _SYSTEM_PROMPT  # noqa: E402
 from gaia_agent_email.answer_grounding import (  # noqa: E402
+    _honest_suspicious_summary,
     last_tool_payload,
     render_suspicious_list,
     rewrite_suspicious_mail_answer,
@@ -474,6 +476,26 @@ class TestCheckSuspiciousMailTool:
             f"— got {tool_result_names}"
         )
 
+    def test_docstring_does_not_promise_more_than_the_cap_can_deliver(self):
+        """Review follow-up on #2910's count/cap item: the docstring told
+        the model to 'list EVERY entry individually ... never drop entries'
+        with no qualifier, while ``suspicious`` is capped at
+        ``PRE_SCAN_SUSPICIOUS_CAP`` and ``suspicious_total`` is captured
+        pre-cap — an unfulfillable promise once more than the cap is
+        flagged. The docstring must instead tell the model to disclose the
+        gap between the two, mirroring what ``_honest_suspicious_summary``
+        now renders."""
+        host = _Host({"google": FakeGmailBackend()})
+        fn = _tool(host, "check_suspicious_mail")
+        doc = (fn.__doc__ or "").lower()
+        # "own cap", not bare "cap" — the latter also matches "captured",
+        # which says nothing about acknowledging a cap exists.
+        assert "own cap" in doc, "docstring must acknowledge suspicious has a cap"
+        assert "showing" in doc, (
+            "docstring must tell the model how to disclose a truncated list "
+            "(e.g. 'showing 10'), not just claim completeness"
+        )
+
 
 # ---------------------------------------------------------------------------
 # check_suspicious_mail — long-lived-session refresh (review follow-up on
@@ -764,7 +786,7 @@ class TestRewriteSuspiciousMailAnswer:
         out = rewrite_suspicious_mail_answer(already_rendered_card, conversation)
         assert out == already_rendered_card
 
-    def test_render_suspicious_list_numbers_every_row_with_no_summarizing(self):
+    def test_render_suspicious_list_renders_every_row_with_no_summarizing(self):
         envelope = {
             "suspicious": [
                 {
@@ -786,11 +808,142 @@ class TestRewriteSuspiciousMailAnswer:
             ]
         }
         out = render_suspicious_list(envelope)
-        assert "1. " in out and "Sub A" in out and "phishing" in out
-        assert "2. " in out and "Sub B" in out and "spam" in out
+        assert "Sub A" in out and "phishing" in out
+        assert "Sub B" in out and "spam" in out
+        # Each row is its own bullet line, not merged onto one line — a
+        # substring check alone can't distinguish "one line, two entries"
+        # from "two lines, two entries".
+        bullet_lines = [
+            line for line in out.splitlines() if line.strip().startswith("- ")
+        ]
+        assert len(bullet_lines) == 2
+
+    def test_render_suspicious_list_rows_carry_no_positional_number(self):
+        """Review follow-up on #2910: these rows have no card ``ref`` (see
+        ``check_suspicious_mail``'s docstring — it never touches
+        ``agent._last_needs_you_card``), so a positional number here would
+        contradict agent.py's own NUMBERING ITEMS IN YOUR REPLY rule and let
+        a follow-up like "archive 1" resolve against a stale needs_you card
+        instead of this list, acting on the wrong message. Fails against the
+        pre-fix ``enumerate(items, start=1)`` rendering."""
+        envelope = {
+            "suspicious": [
+                {
+                    "message_id": "m1",
+                    "sender": "a@example.com",
+                    "subject": "Sub A",
+                    "is_phishing": True,
+                    "is_spam": False,
+                    "why": "flagged as phishing",
+                },
+                {
+                    "message_id": "m2",
+                    "sender": "b@example.com",
+                    "subject": "Sub B",
+                    "is_phishing": False,
+                    "is_spam": True,
+                    "why": "flagged as spam",
+                },
+            ]
+        }
+        out = render_suspicious_list(envelope)
+        for line in out.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            assert not re.match(r"^\d+\.", stripped), (
+                f"row starts with a positional number the card doesn't "
+                f"carry: {line!r}"
+            )
+            assert stripped.startswith("- "), f"expected a bullet row, got: {line!r}"
 
     def test_render_suspicious_list_empty_returns_empty_string(self):
         assert render_suspicious_list({"suspicious": []}) == ""
+
+
+# ---------------------------------------------------------------------------
+# _honest_suspicious_summary / rewrite_suspicious_mail_answer — the lead's
+# quoted count must agree with what the list underneath actually shows
+# (review follow-up on #2910: PRE_SCAN_SUSPICIOUS_CAP=10 caps the rendered
+# list, but suspicious_total is captured pre-cap, so a scan with >10 flagged
+# messages quoted a total the list never displayed).
+# ---------------------------------------------------------------------------
+
+
+class TestSuspiciousSummaryCapDisclosure:
+    def test_summary_matches_list_when_under_the_cap(self):
+        envelope = {
+            "suspicious": [{"message_id": "m1"}],
+            "suspicious_total": 1,
+            "scanned": 25,
+        }
+        summary = _honest_suspicious_summary(envelope)
+        assert summary == "1 flagged message this scan. 25 messages scanned."
+
+    def test_summary_discloses_the_cap_when_total_exceeds_the_rendered_list(self):
+        """The regression this test pins: quoting the pre-cap total while
+        rendering only the capped list, with no indication the two differ."""
+        envelope = {
+            "suspicious": [{"message_id": f"m{i}"} for i in range(10)],
+            "suspicious_total": 15,
+            "scanned": 80,
+        }
+        summary = _honest_suspicious_summary(envelope)
+        assert "15" in summary, "must not silently drop the true pre-cap total"
+        assert "showing 10" in summary, (
+            "must disclose the cap rather than silently disagreeing with "
+            f"what render_suspicious_list actually renders — got: {summary!r}"
+        )
+
+    def test_malformed_suspicious_total_logs_a_warning_not_a_silent_fallback(
+        self, caplog
+    ):
+        """``suspicious_total`` is a required contract field (default 0,
+        always an int) — a missing/non-int value means a broken envelope,
+        not a normal case. Falling back to the shown count is still the
+        most honest number available, but doing so without a trace would
+        be exactly the silent-fallback pattern CLAUDE.md forbids."""
+        envelope = {
+            "suspicious": [{"message_id": f"m{i}"} for i in range(10)],
+            "suspicious_total": None,
+            "scanned": 80,
+        }
+        with caplog.at_level(logging.WARNING, logger="gaia_agent_email"):
+            summary = _honest_suspicious_summary(envelope)
+        assert summary == "10 flagged messages this scan. 80 messages scanned."
+        assert "suspicious_total" in caplog.text, (
+            "malformed suspicious_total must be logged, not silently "
+            f"substituted — got log output: {caplog.text!r}"
+        )
+
+    def test_rewrite_suspicious_mail_answer_lead_discloses_cap(self):
+        """End-to-end: the lead line the user actually sees must agree with
+        the list rendered beneath it, not just the underlying helper."""
+        items = [
+            {
+                "message_id": f"m{i}",
+                "sender": f"sender{i}@example.com",
+                "subject": f"Sub {i}",
+                "is_phishing": True,
+                "is_spam": False,
+            }
+            for i in range(10)
+        ]
+        envelope = {
+            "kind": "email_suspicious_scan",
+            "suspicious": items,
+            "suspicious_total": 15,
+            "scanned": 80,
+        }
+        conversation = [_tool_entry("check_suspicious_mail", envelope)]
+        out = rewrite_suspicious_mail_answer("Nothing flagged this scan.", conversation)
+        assert out.startswith("15 flagged messages this scan — showing 10.")
+        # The list beneath must actually contain exactly the 10 it claims.
+        assert out.count("### Flagged this scan") == 1
+        rendered_rows = [
+            line for line in out.splitlines() if line.strip().startswith("- ")
+        ]
+        assert len(rendered_rows) == 10
 
 
 # ---------------------------------------------------------------------------

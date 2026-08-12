@@ -3168,13 +3168,18 @@ class ReadToolsMixin:
             Returns ``{"suspicious": [...], "suspicious_total": N, "scanned":
             M, "total_inbox": ..., ...}``. Each row carries ``message_id``,
             ``sender``, ``subject``, ``why``, ``is_phishing``, ``is_spam``,
-            ``mailbox``. ``suspicious_total`` is the exact count — state it
-            verbatim and list EVERY entry individually; never summarize,
-            merge, or drop entries, and never report a count you arrived at
-            by counting the list yourself. When it is zero, say so plainly
-            (e.g. "nothing flagged this scan") rather than describing
-            unrelated mail — a zero count here means nothing was flagged in
-            what was scanned, not that the inbox is otherwise clear.
+            ``mailbox``. ``suspicious_total`` is the exact count, captured
+            before ``suspicious``'s own cap — state it verbatim and never
+            report a count you arrived at by counting the list yourself.
+            List every entry ``suspicious`` actually carries, individually,
+            never summarized or merged; if ``suspicious_total`` is larger
+            than the list you were given, say so explicitly (e.g. "14
+            flagged messages this scan — showing 10") instead of implying
+            those are the only ones found. When the count is zero, say so
+            plainly (e.g.
+            "nothing flagged this scan") rather than describing unrelated
+            mail — a zero count here means nothing was flagged in what was
+            scanned, not that the inbox is otherwise clear.
 
             Args:
                 max_messages: How many INBOX messages (read + unread) to

@@ -469,26 +469,35 @@ def rewrite_triage_answer(
 
 
 def render_suspicious_list(envelope: Dict[str, Any]) -> str:
-    """Build the numbered flagged-mail list straight from ``suspicious``.
+    """Build the flagged-mail list straight from ``suspicious``, as bullets.
 
     The narrow-tool counterpart to ``render_needs_you_list`` — same
     rationale: the list is entirely determined by the tool's own output, so
     composing it is not a judgement the model should be making. A
     phishing/spam list is higher-stakes to get wrong (drop, merge, or
     invent an entry) than a general triage list, not lower.
+
+    Deliberately NOT numbered. ``check_suspicious_mail``'s rows carry no
+    ``ref`` — they are never placed on the positional-reference card
+    (``agent._last_needs_you_card`` stays untouched, see
+    ``check_suspicious_mail``'s own docstring) — so a number here would be
+    exactly the "number the card doesn't carry" case ``agent.py``'s
+    NUMBERING ITEMS IN YOUR REPLY rule forbids: a follow-up like "archive 1"
+    would resolve against whatever ``needs_you`` card is still cached from
+    an earlier turn, not against this list, and act on the wrong message.
     """
     items = envelope.get("suspicious") or []
     if not items:
         return ""
     lines = ["### Flagged this scan", ""]
-    for i, row in enumerate(items, start=1):
+    for row in items:
         who = _sender_label(row.get("sender"))
         what = str(row.get("subject") or "").strip() or "(no subject)"
         tags = [t for t, flag in (("phishing", row.get("is_phishing")), ("spam", row.get("is_spam"))) if flag]
         why = str(row.get("why") or "").strip()
         notes = [n for n in (", ".join(tags), why) if n]
         suffix = f" ({' · '.join(notes)})" if notes else ""
-        lines.append(f"{i}. {who} — {what}{suffix}")
+        lines.append(f"- {who} — {what}{suffix}")
     return "\n".join(lines)
 
 
@@ -541,12 +550,35 @@ def _honest_suspicious_summary(envelope: Dict[str, Any]) -> str:
     envelope's own counts — the unconditional lead for
     ``rewrite_suspicious_mail_answer`` once the scan has flagged rows,
     since the model's own framing sentence cannot be trusted not to
-    contradict that same envelope."""
+    contradict that same envelope.
+
+    ``suspicious_total`` is captured pre-cap (#2900) so a flagged message
+    ranked past ``PRE_SCAN_SUSPICIOUS_CAP`` is never silently dropped from
+    the count — but ``render_suspicious_list`` only ever renders the capped
+    ``suspicious`` list beneath this lead. When the two diverge, say so
+    ("showing N") instead of quoting a total the list underneath never
+    displays.
+    """
+    shown = len(envelope.get("suspicious") or [])
     total = envelope.get("suspicious_total")
     if not isinstance(total, int):
-        total = len(envelope.get("suspicious") or [])
+        # The contract (``EmailPreScanResult.suspicious_total``) defaults
+        # this to 0, always present — a missing/non-int value means the
+        # envelope itself is malformed, not a normal case. Falling back to
+        # ``shown`` is the most honest number we CAN state (we have no
+        # other candidate total), but doing so silently would hide a
+        # truncation this same function exists to disclose — log it.
+        logger.warning(
+            "email agent: check_suspicious_mail envelope missing a valid "
+            "suspicious_total (got %r) — summary falls back to the shown "
+            "count, which may under-report a truncated list",
+            total,
+        )
+        total = shown
     noun = "message" if total == 1 else "messages"
     coverage = f"{envelope.get('scanned', 0)} messages scanned"
+    if shown < total:
+        return f"{total} flagged {noun} this scan — showing {shown}. {coverage}."
     return f"{total} flagged {noun} this scan. {coverage}."
 
 
