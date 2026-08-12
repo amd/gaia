@@ -4,32 +4,6 @@
 # This workflow builds and tests the Go TUI binary in tui/
 # Produces cross-compiled binaries for 6 platform targets:
 #   linux/amd64, linux/arm64, darwin/amd64, darwin/arm64, windows/amd64, windows/arm64
-#
-# PUBLISHING (issue: flagship `gaia` hub package)
-# -----------------------------------------------
-# PR/push runs upload the 6 binaries as CI artifacts with retention-days: 14,
-# so they expire and are never distributed. To make them publishable WITHOUT
-# duplicating the build, this workflow is also `workflow_call`-able:
-# release_agent_gaia.yml invokes it as a reusable workflow with
-# `hub_artifacts: true`, which adds a staging step that renames each binary to
-# its Agent Hub artifact name (gaia-tui-<platform>[.exe]) and emits a
-# {component:"tui", platform, filename, executable, sha256, size} meta JSON.
-# The release's `publish` job then downloads those, POSTs them to the hub, and
-# records their hashes in binaries.lock.json.
-#
-# WHY a reusable workflow rather than a tag-triggered publish job here, or a
-# duplicated build inside the release workflow:
-#   * One build definition. A tag-triggered publish job inside this file would
-#     need its own hub/npm/OIDC plumbing and a second approval gate, splitting
-#     the release across two workflows for one package. Copying the 6-target
-#     matrix into release_agent_gaia.yml would let the two drift (ldflags, Go
-#     version, CGO settings) with nothing to catch it.
-#   * The release gets the Go `test` + `vet` gate for free — calling this
-#     workflow runs test → build → size-check, so a failing Go test blocks the
-#     release exactly like it blocks a PR.
-#   * Zero change to PR-time behaviour: every hub-specific step is guarded on
-#     `inputs.hub_artifacts`, which is null (falsy) for push / pull_request /
-#     merge_group / workflow_dispatch.
 
 name: TUI Build & Test
 
@@ -81,25 +55,10 @@ on:
       - '.github/workflows/build_tui.yml'
   merge_group:
   workflow_dispatch:
-  # Consumed by release_agent_gaia.yml — see the header comment.
-  workflow_call:
-    inputs:
-      version:
-        description: 'Version string stamped into the binaries via -ldflags (defaults to github.ref_name).'
-        type: string
-        default: ''
-      hub_artifacts:
-        description: 'Also stage Agent Hub artifacts (gaia-tui-<platform>[.exe]) + SHA-256/size metas for the release pipeline.'
-        type: boolean
-        default: false
 
 concurrency:
-  group: ${{ github.workflow }}-tui-${{ github.head_ref || github.ref }}
-  # PR/push runs still cancel superseded builds. A release call must NOT be
-  # cancellable — a half-done release has to finish. `inputs` is null for
-  # push/pull_request/merge_group/workflow_dispatch, so this evaluates to true
-  # everywhere except a `hub_artifacts: true` workflow_call.
-  cancel-in-progress: ${{ !inputs.hub_artifacts }}
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -253,29 +212,19 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        # `platform` is the Agent Hub platform key for the same target:
-        # windows→win32, amd64→x64 (everything else passes through). Declared
-        # per-row rather than derived in shell so the mapping is greppable and
-        # can't silently drift from binaries.lock.json's key set.
         include:
           - goos: linux
             goarch: amd64
-            platform: linux-x64
           - goos: linux
             goarch: arm64
-            platform: linux-arm64
           - goos: darwin
             goarch: amd64
-            platform: darwin-x64
           - goos: darwin
             goarch: arm64
-            platform: darwin-arm64
           - goos: windows
             goarch: amd64
-            platform: win32-x64
           - goos: windows
             goarch: arm64
-            platform: win32-arm64
     defaults:
       run:
         working-directory: tui
@@ -296,10 +245,7 @@ jobs:
           EXT=""
           if [ "${{ matrix.goos }}" = "windows" ]; then EXT=".exe"; fi
           PKG=github.com/amd/gaia/tui/internal/cli
-          # inputs.version is set by release_agent_gaia.yml (the resolved
-          # semver); null/empty for every other trigger → fall back to the ref.
-          VERSION="${{ inputs.version || github.ref_name }}"
-          go build -ldflags="-s -w -X ${PKG}.version=${VERSION} -X ${PKG}.commit=${{ github.sha }} -X ${PKG}.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          go build -ldflags="-s -w -X ${PKG}.version=${{ github.ref_name }} -X ${PKG}.commit=${{ github.sha }} -X ${PKG}.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             -o ../bin/gaia-${{ matrix.goos }}-${{ matrix.goarch }}${EXT} \
             ./cmd/gaia
 
@@ -309,52 +255,6 @@ jobs:
           name: gaia-${{ matrix.goos }}-${{ matrix.goarch }}
           path: bin/gaia-*
           retention-days: 14
-
-      # ── Agent Hub staging (release calls only) ───────────────────────
-      # Rename to the hub artifact name and emit the meta record the release's
-      # gen_binaries_lock.py consumes. Skipped entirely on PR/push.
-      - name: Stage hub artifact + compute SHA-256 / size
-        if: inputs.hub_artifacts
-        working-directory: ${{ github.workspace }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          EXT=""
-          if [ "${{ matrix.goos }}" = "windows" ]; then EXT=".exe"; fi
-          mkdir -p staging
-          SRC="bin/gaia-${{ matrix.goos }}-${{ matrix.goarch }}${EXT}"
-          DEST="staging/gaia-tui-${{ matrix.platform }}${EXT}"
-          if [ ! -f "$SRC" ]; then
-            echo "::error::TUI build produced no binary at ${SRC} — cannot stage the hub artifact for ${{ matrix.platform }}."
-            exit 1
-          fi
-          cp "$SRC" "$DEST"
-          python3 - "$DEST" "${{ matrix.platform }}" "$EXT" <<'PY'
-          import hashlib, json, os, sys
-          path, platform, ext = sys.argv[1:4]
-          data = open(path, "rb").read()
-          meta = {
-              "component": "tui",
-              "platform": platform,
-              "filename": os.path.basename(path),
-              "executable": "gaia-tui.exe" if ext == ".exe" else "gaia-tui",
-              "sha256": hashlib.sha256(data).hexdigest(),
-              "size": len(data),
-          }
-          with open(f"staging/tui-{platform}.meta.json", "w") as fh:
-              fh.write(json.dumps([meta], indent=2))
-          print(json.dumps(meta, indent=2))
-          PY
-
-      - name: Upload hub artifact
-        if: inputs.hub_artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          name: gaia-tui-${{ matrix.platform }}
-          path: |
-            staging/gaia-tui-${{ matrix.platform }}*
-            staging/tui-${{ matrix.platform }}.meta.json
-          if-no-files-found: error
 
   size-check:
     name: Binary size check

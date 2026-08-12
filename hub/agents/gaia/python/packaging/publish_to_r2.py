@@ -9,12 +9,14 @@ computes the SHA-256 server-side and stores the object immutably at
 ``agents/<id>/<version>/<filename>``. A single ``<id>/<version>`` accepts many
 per-platform binaries (each a distinct filename).
 
-This package ships TWO components per platform -- the frozen Python ``sidecar``
-(``gaia-agent-<platform>[.exe]``) and the Go ``tui`` front-end
-(``gaia-tui-<platform>[.exe]``). Both are published into the same
-``<id>/<version>`` directory; the summary JSON records which component each
-artifact belongs to so ``gen_binaries_lock.py`` can write the dual-component
-lock without guessing.
+ONLY the frozen Python ``sidecar`` (``gaia-agent-<platform>[.exe]``) is published
+here. The package's other component -- the Go terminal UI -- is the separately
+published ``terminal-hub`` component (``agents/terminal-hub/<version>/``), which
+this package consumes rather than rebuilds; republishing it under
+``agents/gaia/`` would put the same bytes at a second version under a third
+name. ``tui`` is therefore NOT an accepted component here. The summary JSON
+still records the component per artifact so ``gen_binaries_lock.py`` can write
+the two-lane lock without guessing.
 
 Idempotency (re-running a published release is a no-op):
   * 201 -> published. We assert the Worker-returned SHA-256 equals the SHA-256
@@ -36,7 +38,6 @@ Usage::
         --base-url https://hub.amd-gaia.ai \\
         --manifest hub/agents/gaia/python/gaia-agent.yaml \\
         --artifact dist/gaia-agent-win32-x64.exe \\
-        --artifact dist/gaia-tui-win32-x64.exe \\
         [--summary-out published.json]
 
 Each ``--artifact`` is ``<path>[=<component>:<platform>]``. Both halves are
@@ -57,10 +58,11 @@ import yaml
 PUBLISH_PATH = "/publish"
 TOKEN_ENV = "AGENT_HUB_PUBLISH_TOKEN"
 
-# filename prefix -> (component, installed executable stem)
+# filename prefix -> (component, installed executable stem). Sidecar only: the
+# terminal UI ships from the terminal-hub lane and must never be published into
+# agents/gaia/, so no prefix routes it here.
 COMPONENT_PREFIXES = {
     "gaia-agent-": ("sidecar", "gaia-agent"),
-    "gaia-tui-": ("tui", "gaia-tui"),
 }
 COMPONENTS = {c for c, _ in COMPONENT_PREFIXES.values()}
 EXECUTABLE_STEMS = dict(COMPONENT_PREFIXES.values())

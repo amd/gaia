@@ -19,7 +19,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { IntegrityError, PlatformError } from "../src/errors.js";
 import { fetchAll, fetchBinary, verifySha256 } from "../src/fetch.js";
-import { makeLock, writeLockFile } from "./helpers.js";
+import { SIDECAR_BASE, TUI_BASE, makeLock, writeLockFile } from "./helpers.js";
 
 const SIDECAR_BYTES = Buffer.from("#!/fake-frozen-gaia-agent\n");
 const TUI_BYTES = Buffer.from("#!/fake-gaia-tui\n");
@@ -49,14 +49,16 @@ function recordingFetch(
 /** A lock whose per-component SHAs are the real hashes of the fake artifacts. */
 async function realShaLock(): Promise<string> {
   const lock = makeLock();
-  for (const e of Object.values(lock.components["sidecar"]!)) e.sha256 = SIDECAR_SHA;
-  for (const e of Object.values(lock.components["tui"]!)) e.sha256 = TUI_SHA;
+  for (const e of Object.values(lock.components["sidecar"]!.platforms)) e.sha256 = SIDECAR_SHA;
+  for (const e of Object.values(lock.components["tui"]!.platforms)) e.sha256 = TUI_SHA;
   return writeLockFile(tmp, lock);
 }
 
+// Keyed by the artifact name each LANE publishes: ours for the sidecar,
+// terminal-hub's (`gaia-<platform>`) for the TUI.
 const BODIES = {
   "gaia-agent-linux-x64": SIDECAR_BYTES,
-  "gaia-tui-linux-x64": TUI_BYTES,
+  "gaia-linux-x64": TUI_BYTES,
 };
 
 beforeEach(async () => {
@@ -108,7 +110,7 @@ describe("fetchBinary", () => {
     }
   });
 
-  it("requests exactly baseUrl + '/' + filename", async () => {
+  it("requests exactly the component's own baseUrl + '/' + filename", async () => {
     const lockPath = await realShaLock();
     await fetchBinary({
       component: "tui",
@@ -118,8 +120,22 @@ describe("fetchBinary", () => {
       fetchImpl: recordingFetch(BODIES),
     });
     // The call SHAPE, not just that fetch happened: a wrong join (double slash,
-    // missing segment, wrong artifact name) is a 404 against the real hub.
-    expect(urls).toEqual(["https://example.test/agents/gaia/0.1.0/gaia-tui-linux-x64"]);
+    // missing segment, wrong artifact name) is a 404 against the real hub. The
+    // TUI must come from the terminal-hub lane at ITS version, never ours.
+    expect(urls).toEqual([`${TUI_BASE}/gaia-linux-x64`]);
+    expect(urls[0]).not.toContain("/agents/gaia/");
+  });
+
+  it("still fetches the sidecar from the gaia lane", async () => {
+    const lockPath = await realShaLock();
+    await fetchBinary({
+      component: "sidecar",
+      outDir: path.join(tmp, "sidecar"),
+      platformKey: "linux-x64",
+      lockPath,
+      fetchImpl: recordingFetch(BODIES),
+    });
+    expect(urls).toEqual([`${SIDECAR_BASE}/gaia-agent-linux-x64`]);
   });
 
   it("honours a --base-url override with a trailing slash without doubling it", async () => {
@@ -132,22 +148,24 @@ describe("fetchBinary", () => {
       baseUrl: "https://mirror.test/gaia/0.1.0/",
       fetchImpl: recordingFetch(BODIES),
     });
-    expect(urls).toEqual(["https://mirror.test/gaia/0.1.0/gaia-tui-linux-x64"]);
+    expect(urls).toEqual(["https://mirror.test/gaia/0.1.0/gaia-linux-x64"]);
   });
 
-  it("names the win32 artifact with its .exe extension", async () => {
+  it("resolves the TUI to terminal-hub's win-x64 artifact on a win32-x64 host", async () => {
     const lockPath = await realShaLock();
-    const bodies = { "gaia-tui-win32-x64.exe": TUI_BYTES };
+    // The win32↔win rename is the one thing that 404s if it is wrong, on the
+    // most common host we ship to. Serving ONLY the terminal-hub name proves the
+    // request used it — the old `gaia-tui-win32-x64.exe` would 404 here.
     const res = await fetchBinary({
       component: "tui",
       outDir: path.join(tmp, "tui"),
       platformKey: "win32-x64",
       lockPath,
-      fetchImpl: recordingFetch(bodies),
+      fetchImpl: recordingFetch({ "gaia-win-x64.exe": TUI_BYTES }),
     });
-    expect(urls).toEqual([
-      "https://example.test/agents/gaia/0.1.0/gaia-tui-win32-x64.exe",
-    ]);
+    expect(urls).toEqual([`${TUI_BASE}/gaia-win-x64.exe`]);
+    expect(res.sha256).toBe(TUI_SHA);
+    // Installed under OUR name: a cached file called `gaia` would shadow the shim.
     expect(path.basename(res.binaryPath)).toBe("gaia-tui.exe");
   });
 
@@ -207,7 +225,7 @@ describe("fetchBinary", () => {
         outDir: path.join(tmp, "tui"),
         platformKey: "linux-arm64",
         lockPath,
-        fetchImpl: recordingFetch({ "gaia-tui-linux-arm64": TUI_BYTES }),
+        fetchImpl: recordingFetch({ "gaia-linux-arm64": TUI_BYTES }),
       }),
     ).resolves.toMatchObject({ platformKey: "linux-arm64" });
     // ... the sidecar does not, and must say so by name.
@@ -301,9 +319,11 @@ describe("fetchAll", () => {
     });
     expect(sidecar.sha256).toBe(SIDECAR_SHA);
     expect(tui.sha256).toBe(TUI_SHA);
+    // Two different lanes, in order — the sidecar from ours, the TUI from
+    // terminal-hub's. A single shared baseUrl could not produce this.
     expect(urls).toEqual([
-      "https://example.test/agents/gaia/0.1.0/gaia-agent-linux-x64",
-      "https://example.test/agents/gaia/0.1.0/gaia-tui-linux-x64",
+      `${SIDECAR_BASE}/gaia-agent-linux-x64`,
+      `${TUI_BASE}/gaia-linux-x64`,
     ]);
     expect(fs.existsSync(sidecar.binaryPath)).toBe(true);
     expect(fs.existsSync(tui.binaryPath)).toBe(true);
@@ -320,7 +340,7 @@ describe("fetchAll", () => {
         tuiDir,
         fetchImpl: recordingFetch({
           "gaia-agent-linux-x64": Buffer.from("tampered"),
-          "gaia-tui-linux-x64": TUI_BYTES,
+          "gaia-linux-x64": TUI_BYTES,
         }),
       }),
     ).rejects.toBeInstanceOf(IntegrityError);

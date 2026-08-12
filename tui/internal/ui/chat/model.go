@@ -86,9 +86,10 @@ var (
 			Foreground(theme.AccentBright).
 			Padding(0, 1)
 
+	// The user already knows what they typed. Their turn is a quiet landmark for
+	// finding your place in the scrollback — never competition for the answer.
 	userStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(theme.Info)
+			Foreground(theme.Dim)
 
 	assistantStyle = lipgloss.NewStyle().
 			Foreground(theme.Text)
@@ -123,10 +124,12 @@ var (
 			Foreground(theme.Dim).
 			Italic(true)
 
+	// No border. A green box round every answer drew the eye to the frame
+	// instead of the words, and cost four columns and two rows per turn. The
+	// answer is the brightest text on screen — that is what marks it.
 	answerPanelStyle = lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(theme.Success).
-				Padding(0, 1)
+				Foreground(theme.Text).
+				PaddingLeft(2)
 
 	errorPanelStyle = lipgloss.NewStyle().
 			Border(lipgloss.RoundedBorder()).
@@ -188,6 +191,12 @@ type ChatModel struct {
 	firstToken   bool      // whether the first real inference token has arrived this turn (not just any SSE frame)
 	ttft         time.Duration
 
+	// followTail is true while the view should stay pinned to the newest
+	// content. Scrolling up clears it, so a streaming answer stops yanking the
+	// reader back to the bottom mid-sentence; returning to the bottom (or
+	// sending a new message) restores it.
+	followTail bool
+
 	// pendingPreScan buffers a fetch resolved mid-turn until that turn ends, so it never lands between a question and its reply.
 	pendingPreScan json.RawMessage
 	// preScanRenderedThisTurn is true once the CURRENT turn's own typed
@@ -225,6 +234,7 @@ func NewChatModel(c client.AgentClient, agentName string, initialQuery string, d
 		spinner:      sp,
 		viewport:     vp,
 		connected:    true,
+		followTail:   true,
 	}
 }
 
@@ -559,6 +569,14 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewport()
 		return m, nil
 
+	case tea.MouseMsg:
+		// The wheel scrolls the transcript. In an alt-screen app the terminal's
+		// own scrollback does not exist, so this and the arrow keys are the only
+		// way back to what already happened.
+		var cmd tea.Cmd
+		m.viewport, cmd = m.viewport.Update(msg)
+		return m.afterScroll(), cmd
+
 	case spinner.TickMsg:
 		if m.streaming {
 			var cmd tea.Cmd
@@ -681,11 +699,29 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyPgUp:
 		m.viewport.HalfViewUp()
-		return m, nil
+		return m.afterScroll(), nil
 
 	case tea.KeyPgDown:
 		m.viewport.HalfViewDown()
-		return m, nil
+		return m.afterScroll(), nil
+
+	case tea.KeyUp:
+		// The composer is one line high, so the arrows have no job there and
+		// belong to the transcript — which is where a reader reaches first.
+		m.viewport.LineUp(1)
+		return m.afterScroll(), nil
+
+	case tea.KeyDown:
+		m.viewport.LineDown(1)
+		return m.afterScroll(), nil
+
+	case tea.KeyHome:
+		m.viewport.GotoTop()
+		return m.afterScroll(), nil
+
+	case tea.KeyEnd:
+		m.viewport.GotoBottom()
+		return m.afterScroll(), nil
 	}
 
 	if !m.streaming {
@@ -796,6 +832,9 @@ func (m ChatModel) sendQuery(query string) (tea.Model, tea.Cmd) {
 	m.streaming = true
 	m.activity = nil
 	m.buffer = ""
+	// Asking a new question means you want to see its answer, wherever the
+	// scroll happened to be left.
+	m.followTail = true
 	m.queryStart = time.Now()
 	m.firstToken = false
 	m.ttft = 0
@@ -1073,7 +1112,10 @@ func (m *ChatModel) resize() {
 	m.viewport.Height = vpHeight
 	m.input.SetWidth(vpWidth - 2)
 
-	components.SetWordWrap(vpWidth - 4)
+	// Markdown wraps to the same measure the answer is laid out at, or glamour
+	// hard-wraps at a different column than the panel and the block develops a
+	// ragged second edge.
+	components.SetWordWrap(m.answerWidth() - 2)
 	if m.question != nil {
 		m.question.SetWidth(m.cardWidth())
 	}
@@ -1081,6 +1123,14 @@ func (m *ChatModel) resize() {
 		m.confirmation.SetWidth(m.cardWidth())
 	}
 	m.updateViewport()
+}
+
+// afterScroll records whether the reader is still at the newest content. Once
+// they scroll away, streamed tokens stop dragging the view back down; landing on
+// the bottom again re-arms the follow.
+func (m ChatModel) afterScroll() ChatModel {
+	m.followTail = m.viewport.AtBottom()
+	return m
 }
 
 func (m *ChatModel) updateViewport() {
@@ -1101,10 +1151,19 @@ func (m *ChatModel) updateViewport() {
 	for i := range m.messages {
 		if m.messages[i].Role == RoleUser {
 			seen = make(map[string]bool)
+			// A blank line ahead of every turn but the first. Without it the
+			// transcript is one unbroken block and the eye has nothing to
+			// anchor on when scrolling back for "where did I ask that?".
+			if sb.Len() > 0 {
+				sb.WriteString("\n")
+			}
 		}
 		// By index, not by value: rendering a card memoizes onto the message.
 		sb.WriteString(m.renderMessage(&m.messages[i], seen))
 		sb.WriteString("\n")
+		if spacedAfter(m.messages[i].Role) {
+			sb.WriteString("\n")
+		}
 	}
 
 	// The live region appears the moment a turn starts, not once the first tool
@@ -1125,14 +1184,18 @@ func (m *ChatModel) updateViewport() {
 		sb.WriteString("\n")
 	}
 
-	buf := m.buffer
-	if m.streaming && buf != "" {
-		sb.WriteString(assistantStyle.Render(buf))
+	// The answer as it arrives, laid out exactly where the finished one will be
+	// — same indent, same wrap — so the text does not jump when `final` replaces
+	// the streamed tokens with the authoritative copy.
+	if buf := m.buffer; m.streaming && buf != "" {
+		sb.WriteString(answerPanelStyle.Width(m.answerWidth()).Render(buf))
 		sb.WriteString("\n")
 	}
 
 	m.viewport.SetContent(sb.String())
-	m.viewport.GotoBottom()
+	if m.followTail {
+		m.viewport.GotoBottom()
+	}
 }
 
 func (m ChatModel) renderWelcome() string {
@@ -1141,12 +1204,16 @@ func (m ChatModel) renderWelcome() string {
 		Foreground(theme.AccentBright).
 		Render("Welcome to GAIA")
 
+	hint := activityStyle.Render("Ask a question, or type /help for what else this can do.")
+
+	// "Connected to: GAIA" under "Welcome to GAIA" is the same word twice; the
+	// line only earns its place when a DIFFERENT agent is on the other end.
+	if isBrandName(m.agentName) {
+		return title + "\n\n" + hint
+	}
 	agent := lipgloss.NewStyle().
 		Foreground(theme.Text).
 		Render("Connected to: " + m.agentName)
-
-	hint := activityStyle.Render("Type a message and press Enter to start chatting.\nType /help for available commands.")
-
 	return title + "\n" + agent + "\n\n" + hint
 }
 
@@ -1165,6 +1232,25 @@ func (m ChatModel) cardWidth() int {
 	return w
 }
 
+// answerMeasure caps how wide a line of prose gets. A 200-column terminal will
+// happily lay an answer out as 200-character lines, and the eye loses the start
+// of the next one on the way back — the reason newspapers set narrow columns.
+// Tables and cards are not prose and are not capped by this.
+const answerMeasure = 88
+
+// answerWidth is the width an answer lays out to — the same for the streaming
+// copy and the finished one, so text never reflows when `final` lands.
+func (m ChatModel) answerWidth() int {
+	w := m.width - 4
+	if w > answerMeasure {
+		w = answerMeasure
+	}
+	if w < 20 {
+		w = 20
+	}
+	return w
+}
+
 // wrapForPane wraps text to the visible pane, leaving it untouched before the
 // first WindowSizeMsg (when no width is known yet).
 func (m ChatModel) wrapForPane(s string) string {
@@ -1174,25 +1260,37 @@ func (m ChatModel) wrapForPane(s string) string {
 	return components.WrapText(s, m.cardWidth())
 }
 
+// spacedAfter reports whether a message gets a blank line under it. Substantial
+// blocks — a question, an answer, a card, an error — get air; consecutive status
+// notes stay tight, since spreading a run of one-liners apart makes them read as
+// separate events rather than one aside.
+func spacedAfter(role MessageRole) bool {
+	switch role {
+	case RoleUser, RoleAssistant, RoleCard, RoleError:
+		return true
+	}
+	return false
+}
+
 // renderMessage draws one message. seen threads cross-card dedup for the
 // RoleCard case (see Message.renderCardDeduped); pass nil for a standalone
 // render with no dedup.
 func (m ChatModel) renderMessage(msg *Message, seen map[string]bool) string {
 	switch msg.Role {
 	case RoleUser:
-		// A free-text answer to a mid-run question lands here and can be long.
-		return m.wrapForPane(userStyle.Render("▶ You: ") + msg.Content)
+		// The WHOLE line is dimmed, prefix and text alike. Styling only the
+		// "You:" label left the question itself at the terminal's default
+		// foreground — the brightest thing on screen, competing with the answer
+		// it was asking for. A free-text answer to a mid-run question lands here
+		// too and can be long, so it wraps.
+		return userStyle.Render(m.wrapForPane("▶ You: " + msg.Content))
 
 	case RoleAssistant:
 		content := msg.Content
 		if msg.Rendered != "" {
 			content = msg.Rendered
 		}
-		panelWidth := m.width - 4
-		if panelWidth < 20 {
-			panelWidth = 20
-		}
-		panel := answerPanelStyle.Width(panelWidth).Render(content)
+		panel := answerPanelStyle.Width(m.answerWidth()).Render(content)
 
 		// Perf stats line below the panel
 		if msg.Duration > 0 {
@@ -1249,49 +1347,99 @@ func (m ChatModel) renderMessage(msg *Message, seen map[string]bool) string {
 
 // workLogLines caps the live work log. Bounded so a long turn cannot push the
 // transcript off screen, deep enough that repeated tool calls read as progress.
-const workLogLines = 5
+const workLogLines = 6
 
 // stillWorkingAfter is when the live region starts saying the wait is expected.
 // A local 4B model routinely takes 60-90s on an inbox triage; without this line
 // the user's next move is ctrl+c.
 const stillWorkingAfter = 20 * time.Second
 
-// renderLiveRegion draws a bounded work log for the running turn: a header with
-// the current step and elapsed time, then the last few activity lines with
-// consecutive repeats folded into a counter.
-//
-// Bounded, not two lines: on a turn touching dozens of messages, two static
-// lines are indistinguishable from a hang.
-func (m ChatModel) renderLiveRegion() string {
-	var lines []string
+// Work-log glyphs. Deliberately symbols, not emoji: the braille spinner already
+// on this line proves the terminal handles wide Unicode, but an emoji font is a
+// separate bet. State is never carried by a glyph or a colour alone — a failed
+// call says "failed" in words on its own outcome line.
+const (
+	glyphTool   = "⚒"
+	glyphStatus = "✻"
+	glyphDetail = "└"
+)
 
+// renderLiveRegion draws the rolling activity log for the running turn: one line
+// per meaningful action, newest last, each closed action followed by a single
+// indented outcome line.
+//
+// The spinner and the elapsed clock ride on the LAST line — the thing happening
+// right now — rather than sitting in a header of their own. A timer with no
+// description next to it is the "Working 0:29 / connecting..." screen this
+// replaced: it proves the process is alive and says nothing about what it is
+// doing (#2804).
+func (m ChatModel) renderLiveRegion() string {
 	elapsed := time.Since(m.queryStart)
-	header := "Working"
-	for i := len(m.activity) - 1; i >= 0; i-- {
-		if m.activity[i].Kind == "step" {
-			header = m.activity[i].Content
-			break
-		}
-	}
-	lines = append(lines, "  "+stepStyle.Render(m.spinner.View()+" "+header)+"  "+
-		activityStyle.Render(formatElapsed(elapsed)))
 
 	log := collapseActivity(m.activity)
 	if len(log) > workLogLines {
 		log = log[len(log)-workLogLines:]
 	}
-	for _, item := range log {
-		lines = append(lines, m.renderActivityItem(item))
-	}
-	if len(log) == 0 {
-		lines = append(lines, "  "+activityStyle.Render("connecting..."))
+
+	// The live slot is the last still-open action. A finished one cannot be it:
+	// the agent has moved on to something this client has no event for yet.
+	live := -1
+	if n := len(log); n > 0 && !log[n-1].Done {
+		live = n - 1
 	}
 
-	if elapsed >= stillWorkingAfter {
-		lines = append(lines, "  "+activityStyle.Render("└ still working — local model, usually 60-90s"))
+	var lines []string
+	for i, item := range log {
+		lines = append(lines, m.renderActivityItem(item, i == live, elapsed)...)
+	}
+	if live < 0 {
+		lines = append(lines, m.renderLiveLine(m.idlePhrase(len(log)), elapsed))
+	}
+
+	// Shown until something has actually COMPLETED. A stage line alone does not
+	// count: a turn that sits on "Working out how to answer" for 1:47 with no
+	// tool result under it is precisely the wait that needs saying is normal.
+	// Once a result has landed the log itself is the reassurance, and the line
+	// would only cost the newest entry its screen row.
+	if !anyCompleted(log) && elapsed >= stillWorkingAfter {
+		lines = append(lines, "     "+activityStyle.Render(glyphDetail+" still working — local model, usually 60-90s"))
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+// anyCompleted reports whether anything in the log has actually finished — the
+// difference between "the agent says it is thinking" and "the agent has done
+// something".
+func anyCompleted(log []ActivityItem) bool {
+	for _, item := range log {
+		if item.Done {
+			return true
+		}
+	}
+	return false
+}
+
+// idlePhrase describes the turn when no tool call is open — the model is either
+// working out what to do or writing the answer. Both are real states worth
+// naming; "Waiting for agent" names neither.
+// Deliberately not phrased like the sidecar's own status text: this line sits
+// directly under it, and two lines saying the same thing read as a stuck loop.
+func (m ChatModel) idlePhrase(logLen int) string {
+	switch {
+	case m.buffer != "":
+		return "Writing your answer"
+	case logLen == 0:
+		return "Getting started"
+	default:
+		return "Thinking about the next step"
+	}
+}
+
+// renderLiveLine draws the one line that owns the spinner and the clock.
+func (m ChatModel) renderLiveLine(content string, elapsed time.Duration) string {
+	return "  " + m.spinner.View() + " " + thinkingStyle.Render(content) + "  " +
+		activityStyle.Render(formatElapsed(elapsed))
 }
 
 // collapseActivity drops step markers (the header carries the current one) and
@@ -1309,6 +1457,9 @@ func collapseActivity(items []ActivityItem) []ActivityItem {
 				last.Repeat++
 				last.Done = item.Done
 				last.Success = item.Success
+				// The newest call's outcome is the one worth showing; an older
+				// repeat's `└` line describes work already superseded.
+				last.Detail = item.Detail
 				continue
 			}
 		}
@@ -1317,11 +1468,18 @@ func collapseActivity(items []ActivityItem) []ActivityItem {
 	return out
 }
 
-// activityKey is what "the same activity twice" means: for a tool, the tool name
-// without its arguments, so `send_email: a@x` and `send_email: b@y` fold together.
+// activityKey is what "the same activity twice" means: for a tool, the tool
+// itself, so "Triaging message m1" and "Triaging message m2" fold together.
+// Keyed off the raw tool name rather than the narrated prose — the prose is
+// SUPPOSED to differ per call, which is exactly why it cannot be the key. The
+// ":" split is the fallback for the legacy transport, whose activity items
+// carry no Tool.
 func activityKey(item ActivityItem) string {
 	if item.Kind != "tool" {
 		return item.Content
+	}
+	if item.Tool != "" {
+		return item.Tool
 	}
 	if i := strings.Index(item.Content, ":"); i >= 0 {
 		return item.Content[:i]
@@ -1334,46 +1492,61 @@ func formatElapsed(d time.Duration) string {
 	return fmt.Sprintf("%d:%02d", total/60, total%60)
 }
 
-// renderActivityItem renders a single work-log line. Markers are ASCII words and
-// punctuation, never emoji or colour alone — the state has to survive a terminal
-// with no colour and no emoji font.
-func (m ChatModel) renderActivityItem(item ActivityItem) string {
+// renderActivityItem renders one work-log entry: the action, then at most one
+// indented outcome line under it. Returns the lines so a caller can budget the
+// live region's height.
+//
+// live marks the entry that is happening RIGHT NOW — it gets the spinner and
+// the elapsed clock instead of a static marker, so the timer is always attached
+// to a description of what it is timing.
+//
+// Failure is never signalled by colour or a glyph alone: a failed call's outcome
+// line begins with the word "failed" (see toolResultDetail / failureDetail), so
+// the state survives a terminal with no colour.
+func (m ChatModel) renderActivityItem(item ActivityItem, live bool, elapsed time.Duration) []string {
 	content := item.Content
 	if item.Repeat > 0 {
 		content += fmt.Sprintf(" x%d", item.Repeat+1)
 	}
+	content = truncateRunes(content, narrationWidth)
 
-	switch item.Kind {
-	case "thinking":
-		if len(content) > 72 {
-			content = content[:72] + "..."
-		}
-		return "       " + thinkingStyle.Render(content)
-
-	case "tool":
-		if item.Done {
-			if item.Success != nil && !*item.Success {
-				return "  " + failStyle.Render("[x] ") + toolNameStyle.Render(content)
-			}
-			return "  " + successStyle.Render("[ok] ") + toolNameStyle.Render(content)
-		}
-		return "  " + activityStyle.Render("[..] ") + toolNameStyle.Render(content)
-
-	case "confirm":
-		// Always added already-resolved (see resolveConfirmationDecision) — a
-		// confirmation has no separate "in progress" activity line, since the
-		// modal itself is the in-progress view.
+	var head string
+	switch {
+	case live:
+		head = m.renderLiveLine(content, elapsed)
+	case item.Kind == "tool" || item.Kind == "confirm":
+		style := toolNameStyle
 		if item.Success != nil && !*item.Success {
-			return "  " + failStyle.Render("[x] ") + toolNameStyle.Render(content)
+			style = failStyle
 		}
-		return "  " + successStyle.Render("[ok] ") + toolNameStyle.Render(content)
-
-	case "status":
-		return "       " + lipgloss.NewStyle().Foreground(theme.Warning).Render(content)
-
+		head = "  " + activityStyle.Render(glyphTool) + " " + style.Render(content)
+	case item.Kind == "status" || item.Kind == "thinking":
+		head = "  " + activityStyle.Render(glyphStatus) + " " +
+			lipgloss.NewStyle().Foreground(theme.Warning).Render(content)
 	default:
-		return "       " + activityStyle.Render(content)
+		head = "    " + activityStyle.Render(content)
 	}
+
+	lines := []string{head}
+	if detail := truncateRunes(clean(item.Detail), detailWidth); detail != "" {
+		style := activityStyle
+		if item.Success != nil && !*item.Success {
+			style = failStyle
+		}
+		lines = append(lines, "    "+style.Render(glyphDetail+" "+detail))
+	}
+	return lines
+}
+
+// currentActivityLabel is what the agent is doing right now, in one phrase.
+// Falls back to the same honest description the live region uses rather than to
+// "Waiting for agent" — the agent is not being waited on, it is working.
+func (m ChatModel) currentActivityLabel() string {
+	log := collapseActivity(m.activity)
+	if n := len(log); n > 0 && !log[n-1].Done {
+		return truncateRunes(log[n-1].Content, narrationWidth)
+	}
+	return m.idlePhrase(len(log))
 }
 
 func (m ChatModel) View() string {
@@ -1390,29 +1563,24 @@ func (m ChatModel) View() string {
 		elapsed := time.Since(m.queryStart)
 		elapsedStr := fmt.Sprintf("%.0fs", elapsed.Seconds())
 
-		label := "Waiting for agent..."
-		if len(m.activity) > 0 {
-			last := m.activity[len(m.activity)-1]
-			switch last.Kind {
-			case "tool":
-				parts := strings.SplitN(last.Content, ":", 2)
-				label = "Using " + parts[0] + "..."
-			case "thinking":
-				label = "Thinking..."
-			case "step":
-				label = last.Content
-			case "status":
-				label = last.Content
-			}
-		}
-		inputView = m.spinner.View() + " ◆ " + label + "  " + activityStyle.Render(elapsedStr)
+		// The same phrase the live region's last line carries — the composer
+		// row is the one thing always on screen, so "Waiting for agent..."
+		// there wasted the most visible line in the app (#2804).
+		inputView = m.spinner.View() + " ◆ " + m.currentActivityLabel() + "  " + activityStyle.Render(elapsedStr)
 	}
 
-	hint := "Ctrl+C quit"
-	if m.streaming {
-		hint = "Esc cancel"
-	} else if m.fromHub {
-		hint = "Esc back · Ctrl+C quit"
+	// Scrolling is discoverable only if it is advertised: in an alt-screen app
+	// the wheel and the arrows are the ONLY way back to earlier turns, and a
+	// user who doesn't know that concludes the history is gone.
+	hint := "↑↓ scroll · Ctrl+C quit"
+	switch {
+	case m.streaming:
+		hint = "↑↓ scroll · Esc cancel"
+	case m.fromHub:
+		hint = "↑↓ scroll · Esc back · Ctrl+C quit"
+	}
+	if !m.followTail {
+		hint = "End to jump to latest · " + hint
 	}
 
 	statusBar := components.RenderStatusBar(components.StatusBarState{
@@ -1464,8 +1632,19 @@ func extractCommandFromArgs(raw json.RawMessage) string {
 	return ""
 }
 
+// renderHeader draws the product name, and the agent's name only when it adds
+// something. The flagship agent is itself called GAIA, so the generic form
+// rendered "GAIA │ GAIA" — a divider separating a word from itself.
 func (m ChatModel) renderHeader() string {
 	title := headerStyle.Render("GAIA")
-	name := lipgloss.NewStyle().Foreground(theme.Text).Render(" │ " + m.agentName)
-	return title + name
+	if isBrandName(m.agentName) {
+		return title
+	}
+	return title + lipgloss.NewStyle().Foreground(theme.Text).Render(" │ "+m.agentName)
+}
+
+// isBrandName reports whether an agent's display name is just the product name,
+// so callers can drop the duplicate rather than print it twice.
+func isBrandName(agent string) bool {
+	return strings.EqualFold(strings.TrimSpace(agent), "gaia")
 }

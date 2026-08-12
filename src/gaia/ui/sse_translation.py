@@ -19,9 +19,10 @@ event types —
     status | token | tool_call | tool_result | needs_confirmation
           | needs_input | final | error
 
-— terminated by exactly one ``final`` or ``error``. It is dependency-light
-(stdlib only) so it unit-tests without Lemonade, a mailbox, or ``gaia.ui``
-imports, and so the OpenAPI export stays cheap.
+— terminated by exactly one ``final`` or ``error``. It is dependency-light (this
+module plus the stdlib-only :mod:`gaia.ui.event_narration`) so it unit-tests
+without Lemonade, a mailbox, or a live agent, and so the OpenAPI export stays
+cheap.
 
 Per-agent shape is injected, not hardcoded: ``agent_id`` (drives ``respond_url``),
 ``render_tool_map`` (which tool draws which card), ``action_labels`` +
@@ -35,6 +36,15 @@ Design commitments
 - **Buffer ``tool_start`` + ``tool_args`` into one ``tool_call``** (spec §6.3): the
   handler emits the name first and the arguments separately; the canonical
   ``tool_call`` carries ``{tool, args}`` together.
+- **Describe the work, not the harness** (#2804). ``tool_call`` carries an
+  additive ``narration`` ("Running command: git status") and ``tool_result`` an
+  additive one-line ``preview`` ("18 skills · 21ms"), both from
+  :mod:`gaia.ui.event_narration`. Conversely the loop's own bookkeeping —
+  ``Step 3/50``, ``Processing with <model>...``, a bare ``Thinking`` — is
+  tagged ``channel="debug"`` at the source and dropped here unless the
+  translator is constructed with ``debug=True`` (or ``GAIA_SSE_DEBUG_EVENTS``
+  is set). Those lines stay available for harness development; they just stop
+  being the only thing a user sees during a two-minute turn.
 - **Fail loudly, never silently.** A fatal top-level ``agent_error`` and a
   governance ``policy_alert`` map to a terminal ``error`` with an actionable
   ``detail`` — never a placeholder. A **recoverable** ``agent_error`` (the
@@ -56,11 +66,29 @@ Spec open questions surfaced in this file:
 
 from __future__ import annotations
 
+import os
 from typing import Any, Callable, Dict, List, Optional
+
+from gaia.ui.event_narration import (
+    DEBUG_CHANNEL,
+    derive_narration,
+    derive_preview,
+)
 
 # HTTP-style status codes for the canonical ``error`` event's ``status`` field.
 _ERROR_STATUS_AGENT = 500  # an agent-loop failure
 _ERROR_STATUS_POLICY = 403  # a governance BLOCK (forbidden by policy)
+
+#: Opt-in switch for the harness-internal debug channel (``Step 3/50``,
+#: ``Processing with <model>...``, bare ``Thinking``). Off by default: those
+#: lines describe the agent loop, not the user's work.
+_DEBUG_ENV_VAR = "GAIA_SSE_DEBUG_EVENTS"
+_DEBUG_ENV_TRUE = frozenset({"1", "true", "yes", "on"})
+
+
+def _debug_enabled_by_env() -> bool:
+    return os.environ.get(_DEBUG_ENV_VAR, "").strip().lower() in _DEBUG_ENV_TRUE
+
 
 #: Canonical terminal event types — exactly one ends a run (spec §3).
 #: ``needs_input`` is deliberately NOT here: the run pauses on it and resumes on
@@ -92,6 +120,11 @@ class CanonicalTranslator:
         summary_renderer: ``(tool, args) -> str`` override for the whole
             confirmation summary, when an agent wants domain detail (recipients,
             paths) beyond the generic label.
+        debug: Forward harness-internal progress (``Step 3/50``, ``Processing
+            with <model>...``, bare ``Thinking``) as ``status`` events marked
+            ``channel="debug"``. Default ``None`` reads the
+            ``GAIA_SSE_DEBUG_EVENTS`` environment variable, which is off unless
+            a developer sets it.
     """
 
     def __init__(
@@ -102,9 +135,11 @@ class CanonicalTranslator:
         render_tool_map: Optional[Dict[str, str]] = None,
         action_labels: Optional[Dict[str, str]] = None,
         summary_renderer: Optional[Callable[[str, Dict[str, Any]], str]] = None,
+        debug: Optional[bool] = None,
     ) -> None:
         self._run_id = run_id
         self._agent_id = agent_id
+        self._debug = _debug_enabled_by_env() if debug is None else bool(debug)
         self._render_tool_map = dict(render_tool_map or {})
         self._action_labels = dict(action_labels or {})
         self._summary_renderer = summary_renderer
@@ -117,11 +152,29 @@ class CanonicalTranslator:
         # Whether a tool_result was seen since the last tool_call, so a bare
         # tool_end can synthesize a minimal tool_result only when one is missing.
         self._result_seen_since_call = False
+        # Last user-facing status message, cleared as soon as any other event
+        # is emitted — see ``_user_status``.
+        self._last_status: Optional[str] = None
 
     # -- public API --------------------------------------------------------
 
     def translate(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Map one source event to zero or more canonical events."""
+        return self._track_status(self._translate(event))
+
+    def _track_status(self, out: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Forget the last status once anything else reaches the wire.
+
+        Keeps ``_user_status``'s de-duplication scoped to *consecutive* status
+        events. Re-announcing a phase after a tool ran is real progress and
+        must still emit — it is what fills the long silence while a local model
+        composes its answer.
+        """
+        if any(e.get("type") != "status" for e in out):
+            self._last_status = None
+        return out
+
+    def _translate(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
         etype = event.get("type")
 
         # tool_args merges into the buffered tool_call; every other event first
@@ -154,7 +207,7 @@ class CanonicalTranslator:
 
     def flush(self) -> List[Dict[str, Any]]:
         """Release any buffered ``tool_call`` at stream close."""
-        return self._flush_pending()
+        return self._track_status(self._flush_pending())
 
     # -- tool_call buffering (spec §6.3) -----------------------------------
 
@@ -168,7 +221,14 @@ class CanonicalTranslator:
     def _emit_tool_call(self, tool: str, args: Dict[str, Any]) -> Dict[str, Any]:
         self._last_tool = tool
         self._result_seen_since_call = False
-        return {"type": "tool_call", "tool": tool, "args": args}
+        # ``narration`` is additive — ``tool`` and ``args`` keep their shape for
+        # clients that predate it (spec §4.1, additive-MINOR).
+        return {
+            "type": "tool_call",
+            "tool": tool,
+            "args": args,
+            "narration": derive_narration(tool, args),
+        }
 
     def _on_tool_start(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
         # Flush a previous, arg-less pending tool_call before buffering this one.
@@ -190,16 +250,45 @@ class CanonicalTranslator:
 
     # -- individual maps ---------------------------------------------------
 
+    def _debug_status(self, message: str) -> List[Dict[str, Any]]:
+        """Route a harness-internal line to the debug channel, or drop it.
+
+        Not deleted — agent-harness development depends on seeing the step
+        counter and the model banner. It just does not belong on the surface a
+        user watches to understand what the agent is doing (#2804).
+        """
+        if not self._debug:
+            return []
+        return [{"type": "status", "message": message, "channel": DEBUG_CHANNEL}]
+
+    def _user_status(self, message: str) -> List[Dict[str, Any]]:
+        """Emit a user-facing status, skipping an immediate repeat.
+
+        The loop re-announces its phase on every step, so a three-step turn
+        emitted "Working out how to answer" three times. A consecutive
+        duplicate carries no new information — it is the noise half of the
+        high-signal/low-noise ask (#2804). A repeat that is *not* consecutive
+        still emits: coming back to a phase is real progress.
+        """
+        if message == self._last_status:
+            return []
+        self._last_status = message
+        return [{"type": "status", "message": message}]
+
     def _on_status(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
         # Already the canonical shape; keep only ``message`` (drop the
         # progress-only status/steps/elapsed sub-fields).
-        return [{"type": "status", "message": str(event.get("message", ""))}]
+        message = str(event.get("message", ""))
+        if event.get("channel") == DEBUG_CHANNEL:
+            return self._debug_status(message)
+        return self._user_status(message)
 
     def _on_step(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
         step = event.get("step")
         total = event.get("total")
         msg = f"Step {step}/{total}" if step and total else "Step"
-        return [{"type": "status", "message": msg}]
+        # The step counter measures the harness, never the work.
+        return self._debug_status(msg)
 
     def _on_thinking(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
         # Reasoning narration folds to status, NOT token (token is answer text the
@@ -207,12 +296,12 @@ class CanonicalTranslator:
         content = str(event.get("content", "")).strip()
         if not content:
             return []
-        return [{"type": "status", "message": content}]
+        return self._user_status(content)
 
     def _on_plan(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
         steps = event.get("steps") or []
         joined = " → ".join(str(s) for s in steps)
-        return [{"type": "status", "message": f"Plan: {joined}" if joined else "Plan"}]
+        return self._user_status(f"Plan: {joined}" if joined else "Plan")
 
     def _on_chunk(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
         delta = event.get("content", "")
@@ -230,10 +319,15 @@ class CanonicalTranslator:
             for key in ("summary", "success", "command_output", "latency_ms"):
                 if key in event:
                     data[key] = event[key]
+        tool = self._last_tool or "unknown"
         canonical: Dict[str, Any] = {
             "type": "tool_result",
-            "tool": self._last_tool or "unknown",
+            "tool": tool,
             "data": data,
+            # Derived from the SOURCE event, not from ``data``: for a render-map
+            # tool ``data`` is the card payload and carries neither the summary
+            # nor the latency the preview line is made of.
+            "preview": derive_preview(tool, event),
         }
         render = self._render_tool_map.get(self._last_tool or "")
         if render:
@@ -247,8 +341,14 @@ class CanonicalTranslator:
         if self._result_seen_since_call:
             return []
         self._result_seen_since_call = True
+        tool = self._last_tool or "unknown"
         return [
-            {"type": "tool_result", "tool": self._last_tool or "unknown", "data": {}}
+            {
+                "type": "tool_result",
+                "tool": tool,
+                "data": {},
+                "preview": derive_preview(tool, event),
+            }
         ]
 
     def _on_answer(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -443,7 +543,9 @@ def render_labelled_summary(
         if len(text) > max_field_chars:
             text = text[:max_field_chars] + "…"
         # A quoted field reads as a title; a bare one reads as an identifier.
-        detail.append(f'{prefix} "{text}"' if prefix.startswith("—") else f"{prefix} {text}")
+        detail.append(
+            f'{prefix} "{text}"' if prefix.startswith("—") else f"{prefix} {text}"
+        )
     if detail:
         return f"{label} " + " ".join(detail) + "?"
     return f"{label}?"

@@ -7,7 +7,10 @@ description: Use when integrating the @amd-gaia/gaia npm package — running GAI
 
 `@amd-gaia/gaia` delivers **two binaries** and owns their process lifecycle: the
 frozen **agent sidecar** (`gaia-agent`) and the Go **terminal UI** (`gaia-tui`).
-It ships no agent logic of its own. Everything runs on the local machine against
+It ships no agent logic of its own, and it **builds neither binary at install
+time** — both are published artifacts it downloads and verifies. The terminal UI
+is the published `terminal-hub` component, the same binary a full GAIA install
+runs as `gaia tui`, so its behaviour cannot differ from that one. Everything runs on the local machine against
 a local model server — nothing you type or index leaves it.
 
 Two ways in:
@@ -42,8 +45,10 @@ built-in `fetch`. Use `import`, not `require`; from CommonJS use
 
 1. Resolves the host platform key (`` `${process.platform}-${process.arch}` ``).
 2. Reads `binaries.lock.json`, the checksum manifest published with this exact
-   package version.
-3. Downloads **both** binaries and **SHA-256 verifies each against the lock**.
+   package version. Each component records its own hub lane, version, artifact
+   name and hash — they do not share a base URL.
+3. Downloads **both** binaries, each from its own lane, and **SHA-256 verifies
+   each against the lock**.
 4. Installs the sidecar into `~/.gaia/agents/gaia/` and the TUI into
    `~/.gaia/npm-cache/gaia-<version>/`.
 5. Execs the TUI, whose exit code becomes ours.
@@ -55,8 +60,25 @@ A second sidecar started here would only fight the daemon's own for port 8141. U
 `gaia serve` when you want to own the process.
 
 Other commands: `gaia fetch` (download + verify, print JSON, exit),
-`gaia serve` (sidecar alone), `gaia version` (lock manifest + this host's
-platform matrix). Anything after a bare `--` goes to the TUI verbatim.
+`gaia serve` (sidecar alone), `gaia version` (per-component version, source URL,
+and platform matrix). Anything after a bare `--` goes to the TUI verbatim.
+
+### Where each binary comes from
+
+| Component | Hub lane                                  | Artifact names            |
+| --------- | ----------------------------------------- | ------------------------- |
+| `sidecar` | `agents/gaia/<agentVersion>/`             | `gaia-agent-<platformKey>[.exe]` |
+| `tui`     | `agents/terminal-hub/<componentVersion>/` | `gaia-<goPlatform>[.exe]` |
+
+Two things follow from that, and both bite if you assume otherwise:
+
+- **The two components version independently.** `lock.agentVersion` is this
+  package's version; `components.tui.componentVersion` is the terminal-hub release
+  it consumes. They will not match.
+- **The TUI's artifact names use `win-x64` / `win-arm64`, not `win32-*`.** Platform
+  *keys* stay in Node's namespace (`process.platform` says `win32`); only the
+  `filename` crosses over. Never build a TUI URL by interpolating a platform key —
+  read `filename` from the lock entry.
 
 ## 3. The integrity gate — it will stop you, by design
 
@@ -78,8 +100,8 @@ If you need to run against a locally built binary, build it and point
 
 ## 4. Platform coverage — the sidecar has two gaps
 
-The TUI is Go and cross-compiles everywhere. The sidecar is a PyInstaller freeze
-built on the platform it targets, and there is **no arm64 Linux and no arm64
+`terminal-hub` publishes the TUI for all six targets. The sidecar is a PyInstaller
+freeze built on the platform it targets, and there is **no arm64 Linux and no arm64
 Windows sidecar build**.
 
 | Platform key   | Sidecar | TUI |
@@ -392,8 +414,13 @@ There is no silent null.
   it to start the daemon. The package deliberately strips its own npm bin
   directory from the child's `PATH` so the TUI doesn't re-invoke the npm shim; if
   the Python CLI isn't installed, the daemon never comes up.
-- **The TUI is installed as `gaia-tui`, never `gaia`** — a file named `gaia` in a
-  cache directory would shadow the npm bin shim. Don't rename it.
+- **The TUI is installed as `gaia-tui`, never `gaia`** — the terminal-hub artifact
+  *is* called `gaia-<platform>`, and a file named `gaia` in a cache directory would
+  shadow the npm bin shim. The lock's `filename` and `executable` differ for that
+  reason. Don't rename it back.
+- **The TUI comes from a lane this package doesn't publish.** If a fetch 404s on
+  the TUI but not the sidecar, the pinned `terminal-hub` version is the thing to
+  check — `gaia version` prints it and its base URL.
 - **ESM-only.** `require("@amd-gaia/gaia")` fails; use `import` or dynamic
   `import()`.
 
@@ -402,7 +429,7 @@ There is no silent null.
 Green path, in order:
 
 ```bash
-npx @amd-gaia/gaia version          # platform matrix + lock manifest, exit 0
+npx @amd-gaia/gaia version          # per-component version + source URL + matrix
 npx @amd-gaia/gaia fetch            # JSON: one entry per binary with its sha256
 npx @amd-gaia/gaia serve --port 8141
 ```

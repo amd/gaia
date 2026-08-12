@@ -21,13 +21,15 @@ The point of shipping ten of them is not that GAIA does ten things. It is that
 example of a different platform primitive, and each is meant to be copied and
 edited rather than used verbatim.
 
-The pack lives in [`skills/starter/`](https://github.com/amd/gaia/tree/main/skills/starter).
+The pack lives in the hub's skills lane,
+[`hub/skills/`](https://github.com/amd/gaia/tree/main/hub/skills) — one directory
+per skill, alongside `hub/agents/` and `hub/components/`.
 
 ## Install one
 
 ```bash
 # From a GAIA checkout
-gaia skill import skills/starter/research-report
+gaia skill import hub/skills/research-report
 
 gaia skill list                       # see what's installed, and from which root
 gaia skill info research-report       # the manifest: permissions, tools, tier
@@ -202,7 +204,7 @@ This is the part that matters. Copying a skill and editing it is the whole
 workflow:
 
 ```bash
-cp -r skills/starter/source-watch ~/my-skills/gpu-restock-watch
+cp -r hub/skills/source-watch ~/my-skills/gpu-restock-watch
 ```
 
 Then, in `gpu-restock-watch/SKILL.md`:

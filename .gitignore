@@ -262,10 +262,10 @@ tests/unit/eval/test_mcp_tool_reliability_scenarios.py
 # Internal skill-marketplace installs (slai-marketplace). AMD-internal skills
 # copied into per-tool dirs; never ship them to the public repo. The repo's own
 # committed skills under .claude/skills/* stay tracked — only marketplace-installed
-# skill dirs (e.g. m365-*) are ignored. skills/starter/ is the shipped starter skill
-# pack (#893) and skills/community/ is the curated contribution lane; both stay tracked.
+# skill dirs (e.g. m365-*) are ignored. skills/community/ is the curated contribution
+# lane and stays tracked. The shipped starter pack (#893) now lives in the hub's skills
+# lane at hub/skills/, which this rule never covered.
 /skills/*
-!/skills/starter/
 !/skills/community/
 /.cline/
 /.codex/

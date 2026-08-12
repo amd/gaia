@@ -84,8 +84,17 @@ func (m *Message) renderCardDeduped(w int, seen map[string]bool) string {
 }
 
 type ActivityItem struct {
-	Kind    string // "thinking", "tool", "step", "status"
+	Kind string // "thinking", "tool", "step", "status", "confirm"
+	// Content is the user-facing line — for a tool, the narrated phrase
+	// ("Loading the github-triage skill"), never the bare tool name.
 	Content string
+	// Tool is the raw tool name behind a "tool" item. Kept alongside the
+	// narration so repeat-folding groups by the tool that ran rather than by
+	// the prose, which legitimately differs per call.
+	Tool string
+	// Detail is the one-line outcome drawn under the item once its result
+	// lands ("18 skills · 21ms"). Empty until then.
+	Detail  string
 	Done    bool
 	Success *bool
 	// Repeat counts additional consecutive occurrences folded into this item by

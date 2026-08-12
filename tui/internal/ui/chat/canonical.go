@@ -43,6 +43,11 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		// call that actually says what the agent is doing.
 		if msg := userFacingStatus(e.Message); msg != "" {
 			m.setLiveStatus(msg)
+		} else if m.debug {
+			// --debug is where harness internals belong: suppressing them for
+			// everyone would make a wire-level bug invisible to whoever has to
+			// fix it.
+			m.setLiveStatus("[harness] " + clean(e.Message))
 		}
 
 	case event.CanonicalTokenEvent:
@@ -53,11 +58,11 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		m.buffer += e.Delta
 
 	case event.CanonicalToolCallEvent:
-		label := e.Tool
-		if arg := extractCommandFromArgs(e.Args); arg != "" {
-			label += ": " + arg
-		}
-		m.activity = append(m.activity, ActivityItem{Kind: "tool", Content: label})
+		m.activity = append(m.activity, ActivityItem{
+			Kind:    "tool",
+			Tool:    e.Tool,
+			Content: toolNarration(e.Tool, e.Args, e.Narration),
+		})
 
 	case event.CanonicalToolResultEvent:
 		// Only trust the failure classifier where a card was declared. Outside
@@ -74,7 +79,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			// ToolOutcome's "Unknown is never a pass" doc comment, but only for
 			// this two-state presentation mapping (S3): Succeeded and Unknown
 			// both still tick green via markToolDone below.
-			m.setOpenToolOutcome(e.Tool, false)
+			m.setOpenToolOutcome(e.Tool, false, failureDetail(e, toolErr))
 			m.messages = append(m.messages, Message{
 				Role:    RoleError,
 				Content: sanitizeErrorText(composeToolErrorText(e.Tool, toolErr)),
@@ -359,22 +364,42 @@ func (m ChatModel) confirmAction(runID, action string, approved bool) tea.Cmd {
 	}
 }
 
-// markToolDone closes out the activity line opened by the matching tool_call.
+// markToolDone closes out the activity line opened by the matching tool_call,
+// and hangs one `└` outcome line under it.
 //
 // The canonical tool_result carries no success flag, so the agent's own
 // {"ok": bool} / {"success": bool} convention is read out of `data` when present;
-// absent that, a delivered result counts as completed. Per-tool detail belongs
-// to the render card drawn in the transcript, not to this one-line summary.
+// absent that, a delivered result counts as completed. The FULL result belongs
+// to the render card in the transcript — this line only says it came back, how
+// much of it, and how long it took.
 func (m *ChatModel) markToolDone(e event.CanonicalToolResultEvent) {
-	m.setOpenToolOutcome(e.Tool, toolResultSucceeded(e.Data))
+	m.setOpenToolOutcome(e.Tool, toolResultSucceeded(e.Data), toolResultDetail(e))
+}
+
+// failureDetail is the `└` line for a tool the render-domain classifier judged
+// failed. The tool's own error message is the most actionable thing available,
+// so it wins over anything composed from the payload.
+func failureDetail(e event.CanonicalToolResultEvent, te event.ToolError) string {
+	head := "failed"
+	if te.Code != "" {
+		head += " — " + te.Code
+	}
+	if msg := firstLine(te.Message); msg != "" {
+		return truncateRunes(head+": "+msg, detailWidth)
+	}
+	if detail := toolResultDetail(e); detail != "" && !isBareStatusWord(detail) {
+		return truncateRunes(head+": "+detail, detailWidth)
+	}
+	return head
 }
 
 // setOpenToolOutcome closes out the activity line opened by the matching
-// tool_call with an explicit success value. Shared by markToolDone (which
-// derives success from toolResultSucceeded) and the failed-render path in
-// handleCanonicalEvent (which must not: that classifier trusts the sidecar's
-// `success: true` even when the tool's own nested result says otherwise).
-func (m *ChatModel) setOpenToolOutcome(tool string, success bool) {
+// tool_call with an explicit success value and its outcome line. Shared by
+// markToolDone (which derives success from toolResultSucceeded) and the
+// failed-render path in handleCanonicalEvent (which must not: that classifier
+// trusts the sidecar's `success: true` even when the tool's own nested result
+// says otherwise).
+func (m *ChatModel) setOpenToolOutcome(tool string, success bool, detail string) {
 	for i := len(m.activity) - 1; i >= 0; i-- {
 		item := &m.activity[i]
 		if item.Kind != "tool" || item.Done {
@@ -382,13 +407,16 @@ func (m *ChatModel) setOpenToolOutcome(tool string, success bool) {
 		}
 		item.Done = true
 		item.Success = &success
+		item.Detail = detail
 		return
 	}
 
 	// A result with no matching call still has to be visible.
 	m.activity = append(m.activity, ActivityItem{
 		Kind:    "tool",
-		Content: tool,
+		Tool:    tool,
+		Content: toolNarration(tool, nil, ""),
+		Detail:  detail,
 		Done:    true,
 		Success: &success,
 	})
@@ -454,18 +482,33 @@ func userFacingStatus(raw string) string {
 	return msg
 }
 
-// setLiveStatus replaces the current status line instead of appending one, so
-// the activity area shows the latest stage rather than a transcript of stages.
+// setLiveStatus places a stage line in the work log without letting stages pile
+// up. Three cases, in the order the loop meets them:
+//
+//   - The same words as the stage already showing: nothing happened that the
+//     user can see, so nothing is added. The gaia sidecar re-sends "Working out
+//     how to answer" once per agent-loop step; unfiltered, one turn spent three
+//     of its six log lines saying it.
+//   - A new stage with no completed work since the last one: replaces it. Two
+//     stages back to back are one stage changing, not two things done.
+//   - A new stage after a tool ran: its own line. The tool is evidence of work,
+//     and this is genuinely the next thing.
 func (m *ChatModel) setLiveStatus(msg string) {
+	sawWork := false
 	for i := len(m.activity) - 1; i >= 0; i-- {
-		if m.activity[i].Kind == "status" {
-			m.activity[i].Content = msg
+		switch m.activity[i].Kind {
+		case "tool", "confirm":
+			sawWork = true
+		case "status":
+			if m.activity[i].Content == msg {
+				return
+			}
+			if !sawWork {
+				m.activity[i].Content = msg
+				return
+			}
+			m.activity = append(m.activity, ActivityItem{Kind: "status", Content: msg})
 			return
-		}
-		// A completed tool call is evidence of work and stays; a status line
-		// after it is a NEW stage, so stop looking and add one.
-		if m.activity[i].Kind == "tool" {
-			break
 		}
 	}
 	m.activity = append(m.activity, ActivityItem{Kind: "status", Content: msg})

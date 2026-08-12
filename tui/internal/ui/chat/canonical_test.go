@@ -277,8 +277,14 @@ func TestCanonicalToolCallAndResult(t *testing.T) {
 	if item.Success == nil || !*item.Success {
 		t.Errorf("expected success from {\"ok\":true}, got %v", item.Success)
 	}
-	if !strings.Contains(item.Content, "search_email") || !strings.Contains(item.Content, "invoice") {
-		t.Errorf("tool line lost its detail: %q", item.Content)
+	// The line names the work in words, plus the one argument that says what the
+	// work is ABOUT. The raw tool name stays on the item for repeat-folding, but
+	// it is not what the user reads.
+	if !strings.Contains(item.Content, "invoice") {
+		t.Errorf("tool line lost the argument that says what it is doing: %q", item.Content)
+	}
+	if item.Tool != "search_email" {
+		t.Errorf("tool line lost the raw tool name it folds on: %q", item.Tool)
 	}
 	// The render key is no longer echoed onto the activity line — it now draws a
 	// real card in the transcript, which is where the detail belongs.
