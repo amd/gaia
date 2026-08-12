@@ -54,13 +54,14 @@ jobs:
     # always() so this runs even though the needed job failed; then gate on the
     # result being anything other than a clean pass.
     #
-    # `!= 'success'` rather than `== 'failure'`: the callee's job now shares the
-    # `lemonade-eval` group with PR-triggered runs (test_email_agent_eval.yml
-    # gained a `pull_request` trigger), and that group holds one running plus one
-    # pending run — a newly-queued run cancels the pending one. An evicted weekly
-    # eval reports 'cancelled', not 'failure', so the old condition filed nothing
-    # and the week's eval vanished with zero signal. A week with no eval is a week
-    # with no evidence; say so out loud.
+    # `!= 'success'` rather than `== 'failure'`: a callee that never ran reports
+    # 'cancelled' or 'skipped', not 'failure', so `== 'failure'` would file nothing
+    # and the week's eval would vanish with zero signal. The callee shares the
+    # `lemonade-eval` slot with PR-triggered runs (test_email_agent_eval.yml gained
+    # a `pull_request` trigger); that slot now queues FIFO (`queue: max`) instead
+    # of evicting the pending run, but a manual cancel or GitHub's 24h job-queue
+    # limit still produces 'cancelled'. A week with no eval is a week with no
+    # evidence; say so out loud.
     if: ${{ always() && needs.email-eval.result != 'success' }}
     runs-on: ubuntu-latest
     permissions:
@@ -97,9 +98,10 @@ jobs:
           (\`enforce: true\`) gate breach. Open the run log above to see which stage failed (triage / drafting /
           action-item) and why.
 
-          If the result is \`cancelled\`: the run was most likely evicted from the shared \`lemonade-eval\` concurrency
-          slot — it holds one running plus one pending run, and a newly-queued run cancels the pending one (PR-triggered
-          email evals now queue there too). No eval ran this week; re-dispatch \`weekly_eval.yml\` when the slot is free.
+          If the result is \`cancelled\`: check for a manual cancel, or a run that waited out GitHub's 24h job-queue
+          limit behind a long occupant of the shared \`lemonade-eval\` slot. That slot now queues pending runs FIFO
+          (\`queue: max\`) instead of evicting them, so slot eviction is no longer the routine cause it once was.
+          No eval ran this week; re-dispatch \`weekly_eval.yml\`.
           EOF
           )"
           # One rolling issue: comment on the open one if it exists, else open it.
