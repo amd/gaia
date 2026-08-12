@@ -1148,6 +1148,9 @@ def test_prescan_returns_card_envelope_shape(prescan_client):
         "needs_you",
         "needs_you_total",
         "bulk",
+        # #2900: the phishing/spam-flagged subset of actionable.
+        "suspicious",
+        "suspicious_total",
     }
     for section in ("urgent", "actionable", "suggested_archives"):
         assert isinstance(result[section], list)

@@ -349,7 +349,7 @@
             "type": "array"
           },
           "schema_version": {
-            "default": "2.12",
+            "default": "2.13",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -374,7 +374,7 @@
             "type": "array"
           },
           "schema_version": {
-            "default": "2.12",
+            "default": "2.13",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -473,7 +473,7 @@
             "title": "Provider"
           },
           "schema_version": {
-            "default": "2.12",
+            "default": "2.13",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -660,7 +660,7 @@
             "title": "Location"
           },
           "schema_version": {
-            "default": "2.12",
+            "default": "2.13",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -700,7 +700,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.12",
+            "default": "2.13",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -731,7 +731,7 @@
             "type": "array"
           },
           "schema_version": {
-            "default": "2.12",
+            "default": "2.13",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -767,7 +767,7 @@
             "title": "Provider"
           },
           "schema_version": {
-            "default": "2.12",
+            "default": "2.13",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -807,7 +807,7 @@
             "type": "boolean"
           },
           "schema_version": {
-            "default": "2.12",
+            "default": "2.13",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -958,7 +958,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.12",
+            "default": "2.13",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1071,7 +1071,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.12",
+            "default": "2.13",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1101,7 +1101,7 @@
             "description": "The attention-view envelope."
           },
           "schema_version": {
-            "default": "2.12",
+            "default": "2.13",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1176,7 +1176,7 @@
             "type": "string"
           },
           "schema_version": {
-            "default": "2.12",
+            "default": "2.13",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1376,7 +1376,7 @@
             "type": "integer"
           },
           "schema_version": {
-            "default": "2.12",
+            "default": "2.13",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -1394,7 +1394,7 @@
             "description": "The pre-scan envelope."
           },
           "schema_version": {
-            "default": "2.12",
+            "default": "2.13",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1524,6 +1524,20 @@
             "title": "Suggested Drafts",
             "type": "array"
           },
+          "suspicious": {
+            "description": "(#2900) Messages flagged ``is_phishing``/``is_spam`` this scan — a VIEW over the same rows already present in ``actionable`` above, captured BEFORE ``actionable``'s 5-item cap so a flagged message ranked past that cap is never silently dropped from this list. Never a second classification pass.",
+            "items": {
+              "$ref": "#/components/schemas/PreScanItem"
+            },
+            "title": "Suspicious",
+            "type": "array"
+          },
+          "suspicious_total": {
+            "default": 0,
+            "description": "(#2900) The true count of flagged messages before ``suspicious``'s own cap — lets a caller state the count verbatim rather than counting the (possibly capped) list.",
+            "title": "Suspicious Total",
+            "type": "integer"
+          },
           "total_inbox": {
             "anyOf": [
               {
@@ -1651,7 +1665,7 @@
             "type": "boolean"
           },
           "schema_version": {
-            "default": "2.12",
+            "default": "2.13",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1723,7 +1737,7 @@
             "title": "Query"
           },
           "schema_version": {
-            "default": "2.12",
+            "default": "2.13",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -1774,7 +1788,7 @@
             "title": "Query"
           },
           "schema_version": {
-            "default": "2.12",
+            "default": "2.13",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -1995,7 +2009,7 @@
             "title": "Payload"
           },
           "schema_version": {
-            "default": "2.12",
+            "default": "2.13",
             "description": "Contract version. Mismatch lets a consumer fail loudly.",
             "title": "Schema Version",
             "type": "string"
@@ -2025,7 +2039,7 @@
             "description": "The structured analysis."
           },
           "schema_version": {
-            "default": "2.12",
+            "default": "2.13",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -2191,7 +2205,7 @@
             "type": "integer"
           },
           "schema_version": {
-            "default": "2.12",
+            "default": "2.13",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -2259,7 +2273,7 @@
             "type": "boolean"
           },
           "schema_version": {
-            "default": "2.12",
+            "default": "2.13",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -2399,7 +2413,7 @@
             "type": "array"
           },
           "schema_version": {
-            "default": "2.12",
+            "default": "2.13",
             "description": "Echoes the contract version.",
             "title": "Schema Version",
             "type": "string"
@@ -2768,6 +2782,18 @@
             "default": false,
             "description": "True when the heuristic confidently detected a meeting/scheduling request in this message's subject/snippet (#2583). Read-only signal — detection makes no calendar changes.",
             "title": "Is Meeting Request",
+            "type": "boolean"
+          },
+          "is_phishing": {
+            "default": false,
+            "description": "True when the shared phishing detector (``detect_phishing``) flagged this message (#2900). Previously readable only as a fragment inside ``why`` ('flagged as phishing — ...'); now a real field so a caller can act on it without re-parsing prose.",
+            "title": "Is Phishing",
+            "type": "boolean"
+          },
+          "is_spam": {
+            "default": false,
+            "description": "True when the shared spam heuristic flagged this message (#2900). Same rationale as ``is_phishing`` above — a real field instead of a ``why``-string fragment.",
+            "title": "Is Spam",
             "type": "boolean"
           },
           "message_id": {
@@ -3350,7 +3376,7 @@
   "info": {
     "description": "REST surface for the GAIA Email Triage agent (/v1/email/*). Cross-implementation contract for the npm client and native builds.",
     "title": "GAIA Email Agent API",
-    "version": "2.12"
+    "version": "2.13"
   },
   "openapi": "3.1.0",
   "paths": {

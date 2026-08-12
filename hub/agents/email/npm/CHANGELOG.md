@@ -13,6 +13,13 @@ behind any entry — API shapes, endpoints, and version semantics — see
   follow-up referring to something an earlier turn surfaced has something
   to resolve against. Leave it unset and nothing changes (#2829, schema
   2.12).
+- **A scoped "anything suspicious in my inbox?" question no longer dumps the
+  full triage report (#2900).** `PreScanItem` gains `is_phishing`/`is_spam`
+  (boolean, default `false`) — a flag previously readable only inside a
+  prose `why` string is now a real field — and `EmailPreScanResult` gains
+  `suspicious`/`suspicious_total` (schema 2.13): the phishing/spam-flagged
+  subset of `actionable`, captured before its own cap so a flagged message
+  ranked past it is never silently dropped from the count.
 - **The agent's built-in skills ship switched off, so the whole context window
   goes back to your mail.** The six skills below are still in the package, but
   no set is active and none of them loads: nothing yet shows they make triage
