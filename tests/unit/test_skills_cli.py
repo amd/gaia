@@ -491,6 +491,7 @@ def test_real_cli_help_lists_the_authoring_and_marketplace_verbs(tmp_path):
         "search",
         "install",
         "remove",
+        "lock",
         "publish",
         "keygen",
         "trust",

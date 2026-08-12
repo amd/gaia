@@ -25,6 +25,7 @@ wherever ``GAIA_CONFIG_DIR`` points)::
           "hub_url": "https://hub.amd-gaia.ai",
           "artifact_sha256": "…",
           "artifact_filename": "web-research-1.2.0.zip",
+          "content_digest": "sha256:…",
           "claimed_tier": "community",
           "installed_tier": "community",
           "attested_tier": "community",
@@ -37,13 +38,21 @@ wherever ``GAIA_CONFIG_DIR`` points)::
       }
     }
 
-Only hub-installed skills are tracked. A skill created with ``gaia skill create``
-or copied in with ``gaia skill import`` has no hub provenance to record, so
-inventing a lock entry for it would assert a source it does not have.
+``gaia skill install`` writes ``source: "hub"`` entries. A skill created with
+``gaia skill create`` or copied in with ``gaia skill import`` has no hub
+provenance, so install never invents one; ``gaia skill lock --relock``
+(:mod:`gaia.skills.drift`) may record it as ``source: "local"``, which asserts
+exactly the origin it has and nothing more. Only a ``hub`` entry's tier is an
+enforcement decision; a ``local`` entry's is the author's own claim.
 
 A missing lock file is an **empty** lock, not an error — that is a machine with no
 hub-installed skills. A *corrupt* one raises: silently starting over would drop
 the provenance of skills that are still installed.
+
+The lock is only useful if something reads it back: :mod:`gaia.skills.drift`
+compares it against what is actually on disk, and
+:meth:`gaia.skills.manager.SkillManager.load` refuses a signature-backed skill
+whose bytes no longer match.
 """
 
 from __future__ import annotations
@@ -68,6 +77,12 @@ LOCK_SCHEMA_VERSION = 1
 #: ``source`` value for a skill pulled from the Agent Hub.
 SOURCE_HUB = "hub"
 
+#: ``source`` value for a skill that lives in the user root without hub
+#: provenance — authored with ``gaia skill create``, copied in with
+#: ``gaia skill import``, or converted by ``gaia skill migrate``. Recorded only
+#: by ``gaia skill lock --relock``, so drift detection covers it too.
+SOURCE_LOCAL = "local"
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
@@ -85,6 +100,12 @@ class LockEntry:
     hub_url: str = ""
     artifact_sha256: str = ""
     artifact_filename: str = ""
+    #: ``sha256:<hex>`` over the *installed* directory
+    #: (:func:`gaia.skills.audit.findings.content_digest`), recorded after the
+    #: tier re-stamp so it describes the bytes that actually landed. This is what
+    #: makes post-install tampering detectable — ``artifact_sha256`` only covers
+    #: the downloaded archive, which nobody re-reads once it is unpacked.
+    content_digest: str = ""
     #: Tier the skill's own front matter claimed.
     claimed_tier: str = ""
     #: Highest tier its signature earned (see :func:`gaia.skills.signing.attested_tier`).
@@ -209,3 +230,24 @@ class SkillLock:
 def lock_path(skills_root: Path) -> Path:
     """Path of the lock file for a skills root."""
     return Path(skills_root) / LOCK_FILENAME
+
+
+def forget_skill(skills_root: Path, name: str) -> bool:
+    """Drop *name* from the lock under *skills_root*; True if it was tracked.
+
+    Every path that **replaces** a skill directory without hub provenance —
+    ``import``, ``create --force``, ``migrate --force`` — must call this. The
+    hub copy those bytes described is gone, so leaving its entry behind would
+    have the lock asserting a version, tier, and signature over a different
+    skill, which :mod:`gaia.skills.drift` would then (correctly) refuse to load.
+
+    A root with no lock file is a no-op: nothing is created.
+    """
+    if not lock_path(skills_root).is_file():
+        return False
+    lock = SkillLock.load(skills_root)
+    if not lock.forget(name):
+        return False
+    lock.save()
+    log.info("Dropped lock entry for '%s': it was replaced by a local copy", name)
+    return True
