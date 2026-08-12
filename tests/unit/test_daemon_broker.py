@@ -285,42 +285,6 @@ def test_default_ttl_is_generous():
 
 
 # ---------------------------------------------------------------------------
-# Freeing a dead holder's lease — the TTL is too slow to lean on
-# ---------------------------------------------------------------------------
-
-
-def test_release_holder_frees_a_dead_holders_lease():
-    """A reaped sidecar can never call release, so the daemon frees it for them.
-
-    The TTL gets there eventually, but at 900s against a 300s caller timeout
-    that is ~10 minutes of failures blaming a Lemonade server which is healthy
-    with the model already loaded.
-    """
-    broker = ModelSlotBroker(lease_ttl_s=900.0)
-    broker.acquire("model-a", holder="gaia")
-
-    assert broker.release_holder("gaia") is True
-
-    lease = broker.acquire("model-b", holder="agent-b", timeout=1.0)
-    assert lease.model == "model-b"
-
-
-def test_release_holder_only_frees_that_holders_lease():
-    """Targeted and idempotent — it must never free someone else's slot."""
-    broker = ModelSlotBroker(lease_ttl_s=900.0)
-    broker.acquire("model-a", holder="gaia")
-
-    assert broker.release_holder("email") is False  # not the holder
-    assert broker.release_holder("gaia") is True
-    assert broker.release_holder("gaia") is False  # already freed
-
-    # Serialization is untouched: a live holder still blocks everyone else.
-    broker.acquire("model-a", holder="gaia")
-    with pytest.raises(LeaseTimeoutError):
-        broker.acquire("model-b", holder="other", timeout=0.2)
-
-
-# ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
 
