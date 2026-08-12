@@ -92,9 +92,8 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			// ToolOutcome's "Unknown is never a pass" doc comment, but only for
 			// this two-state presentation mapping (S3): Succeeded and Unknown
 			// both still tick green via markToolDone below.
-			m.setOpenToolOutcome(e.Tool, false, failureDetail(e, toolErr))
 			// A failed call is the one whose payload a developer most wants.
-			m.setOpenToolOutput(e)
+			m.setToolOutputAt(m.setOpenToolOutcome(e.Tool, false, failureDetail(e, toolErr)), e)
 			m.messages = append(m.messages, Message{
 				Role:    RoleError,
 				Content: sanitizeErrorText(composeToolErrorText(e.Tool, toolErr)),
@@ -388,31 +387,25 @@ func (m ChatModel) confirmAction(runID, action string, approved bool) tea.Cmd {
 // to the render card in the transcript — this line only says it came back, how
 // much of it, and how long it took.
 func (m *ChatModel) markToolDone(e event.CanonicalToolResultEvent) {
-	m.setOpenToolOutcome(e.Tool, toolResultSucceeded(e.Data), toolResultDetail(e))
-	m.setOpenToolOutput(e)
+	at := m.setOpenToolOutcome(e.Tool, toolResultSucceeded(e.Data), toolResultDetail(e))
+	m.setToolOutputAt(at, e)
 }
 
-// setOpenToolOutput attaches the raw result payload to the tool line just
-// closed. Developer mode only, and a no-op otherwise.
+// setToolOutputAt attaches the raw result payload to one specific tool line.
+// Developer mode only, and a no-op otherwise.
 //
-// Separate from setOpenToolOutcome because it runs AFTER the item is marked
-// done, so it deliberately matches the most recent completed call rather than
-// an open one.
-func (m *ChatModel) setOpenToolOutput(e event.CanonicalToolResultEvent) {
-	if !m.dev {
+// Indexed rather than searched. Searching back for "the last tool line without
+// output" looked equivalent but is a different predicate from the one that
+// closed the line, and the two disagree exactly when it matters: two calls open
+// at once, or a payload that compacts to nothing, and the next result's payload
+// lands under the wrong call — which in the one view meant for verifying what
+// happened is worse than showing nothing.
+func (m *ChatModel) setToolOutputAt(at int, e event.CanonicalToolResultEvent) {
+	if !m.dev || at < 0 || at >= len(m.activity) {
 		return
 	}
-	payload := devPayload(e.Data, devPayloadWidth)
-	if payload == "" {
-		return
-	}
-	for i := len(m.activity) - 1; i >= 0; i-- {
-		item := &m.activity[i]
-		if item.Kind != "tool" || item.Output != "" {
-			continue
-		}
-		item.Output = payload
-		return
+	if payload := devPayload(e.Data, devPayloadWidth); payload != "" {
+		m.activity[at].Output = payload
 	}
 }
 
@@ -439,7 +432,10 @@ func failureDetail(e event.CanonicalToolResultEvent, te event.ToolError) string 
 // failed-render path in handleCanonicalEvent (which must not: that classifier
 // trusts the sidecar's `success: true` even when the tool's own nested result
 // says otherwise).
-func (m *ChatModel) setOpenToolOutcome(tool string, success bool, detail string) {
+//
+// Returns the index of the item it closed, so a caller with more to attach to
+// the SAME line does not have to re-derive which one that was.
+func (m *ChatModel) setOpenToolOutcome(tool string, success bool, detail string) int {
 	for i := len(m.activity) - 1; i >= 0; i-- {
 		item := &m.activity[i]
 		if item.Kind != "tool" || item.Done {
@@ -448,7 +444,7 @@ func (m *ChatModel) setOpenToolOutcome(tool string, success bool, detail string)
 		item.Done = true
 		item.Success = &success
 		item.Detail = detail
-		return
+		return i
 	}
 
 	// A result with no matching call still has to be visible.
@@ -460,6 +456,7 @@ func (m *ChatModel) setOpenToolOutcome(tool string, success bool, detail string)
 		Done:    true,
 		Success: &success,
 	})
+	return len(m.activity) - 1
 }
 
 // composeToolErrorText builds the RoleError text for a failed render tool:

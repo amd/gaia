@@ -192,3 +192,117 @@ func TestTheStepCountDoesNotSurviveIntoTheNextTurn(t *testing.T) {
 		t.Errorf("the new turn opened at step %d; the previous turn's count leaked into it", got)
 	}
 }
+
+// The dev payload renders RAW tool output — whatever a web page, a file or an
+// email put in front of the tool. clean() drops C0 and ESC-introduced ANSI but
+// not these two classes, and both reach the terminal.
+func TestDevPayloadDropsControlsThatSurviveClean(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		bad  string
+	}{
+		{"C1 CSI", ""},
+		{"C1 NEL", ""},
+		{"bidi override", "‮"},
+		{"bidi isolate", "⁦"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in, err := json.Marshal(map[string]string{"x": "a" + tc.bad + "b"})
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			got := devPayload(json.RawMessage(in), devPayloadWidth)
+			if strings.Contains(got, tc.bad) {
+				t.Errorf("devPayload passed %q through to the frame: %q", tc.bad, got)
+			}
+			// The surrounding data must survive — this is a scrub, not a drop.
+			if !strings.Contains(got, "ab") {
+				t.Errorf("devPayload lost the payload around the control: %q", got)
+			}
+		})
+	}
+}
+
+// An empty payload arrives in several shapes. "out {}" under every result is
+// the noise that makes a developer stop reading the log.
+func TestDevPayloadTreatsEveryEmptyShapeAsNothing(t *testing.T) {
+	for _, in := range []string{"null", "{}", "[]", `""`, "  {}  "} {
+		if got := devPayload(json.RawMessage(in), devPayloadWidth); got != "" {
+			t.Errorf("devPayload(%q) = %q, want empty", in, got)
+		}
+	}
+}
+
+// Two calls open at once: each payload must land under the call it came from.
+// Searching back for "the last tool line without output" gets this wrong the
+// moment the two predicates disagree.
+func TestOverlappingToolCallsKeepTheirOwnPayloads(t *testing.T) {
+	m := NewChatModel(&nullClient{}, "GAIA", "", true)
+
+	m, _, _ = m.handleCanonicalEvent(event.CanonicalToolCallEvent{
+		Type: "tool_call", Tool: "search", Narration: "Searching",
+		Args: json.RawMessage(`{"q":"first"}`),
+	})
+	m, _, _ = m.handleCanonicalEvent(event.CanonicalToolCallEvent{
+		Type: "tool_call", Tool: "fetch", Narration: "Fetching",
+		Args: json.RawMessage(`{"url":"second"}`),
+	})
+
+	// Results arrive in the order the calls close: setOpenToolOutcome closes
+	// the newest still-open line, so "fetch" resolves first here.
+	m, _, _ = m.handleCanonicalEvent(event.CanonicalToolResultEvent{
+		Type: "tool_result", Tool: "fetch", Data: json.RawMessage(`{"got":"SECOND"}`),
+	})
+	m, _, _ = m.handleCanonicalEvent(event.CanonicalToolResultEvent{
+		Type: "tool_result", Tool: "search", Data: json.RawMessage(`{"got":"FIRST"}`),
+	})
+
+	if len(m.activity) != 2 {
+		t.Fatalf("got %d activity items, want 2", len(m.activity))
+	}
+	for _, tc := range []struct {
+		idx          int
+		args, output string
+	}{
+		{0, "first", "FIRST"},
+		{1, "second", "SECOND"},
+	} {
+		item := m.activity[tc.idx]
+		if !strings.Contains(item.Args, tc.args) {
+			t.Errorf("item %d args = %q, want it to contain %q", tc.idx, item.Args, tc.args)
+		}
+		if !strings.Contains(item.Output, tc.output) {
+			t.Errorf("item %d output = %q, want it to contain %q — payloads crossed over",
+				tc.idx, item.Output, tc.output)
+		}
+	}
+}
+
+// The case where "last line without output" and "the line just closed" come
+// apart: an earlier call whose payload compacts to nothing leaves a tool line
+// with an empty Output forever, so a search-backwards attach hands the NEXT
+// call's payload to it.
+func TestAnEmptyPayloadDoesNotStealTheNextCallsOutput(t *testing.T) {
+	m := NewChatModel(&nullClient{}, "GAIA", "", true)
+
+	m, _, _ = m.handleCanonicalEvent(event.CanonicalToolCallEvent{
+		Type: "tool_call", Tool: "search", Narration: "Searching",
+	})
+	m, _, _ = m.handleCanonicalEvent(event.CanonicalToolCallEvent{
+		Type: "tool_call", Tool: "ping", Narration: "Pinging",
+	})
+	// "ping" closes first and returns an empty object, which renders as nothing.
+	m, _, _ = m.handleCanonicalEvent(event.CanonicalToolResultEvent{
+		Type: "tool_result", Tool: "ping", Data: json.RawMessage(`{}`),
+	})
+	m, _, _ = m.handleCanonicalEvent(event.CanonicalToolResultEvent{
+		Type: "tool_result", Tool: "search", Data: json.RawMessage(`{"hits":7}`),
+	})
+
+	if got := m.activity[1].Output; got != "" {
+		t.Errorf("the empty-payload call now shows %q — it stole the other call's output", got)
+	}
+	if got := m.activity[0].Output; !strings.Contains(got, "7") {
+		t.Errorf("the call that returned data shows %q; want its own payload", got)
+	}
+}

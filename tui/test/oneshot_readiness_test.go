@@ -413,7 +413,7 @@ func TestOneShotAgainstAStallingDaemonHitsTheDeadline(t *testing.T) {
 	var out, errW bytes.Buffer
 	done := make(chan ui.OneShotResult, 1)
 	started := time.Now()
-	go func() { done <- ui.RunOneShot(ctx, c, "triage my inbox", &out, &errW, nil) }()
+	go func() { done <- ui.RunOneShot(ctx, c, "triage my inbox", &out, &errW, false, nil) }()
 
 	select {
 	case res := <-done:

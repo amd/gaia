@@ -23,6 +23,38 @@ import (
 // explain; the full text belongs in ~/.gaia/logs/gaia-agent.log, which --dev
 // also switches to DEBUG. These lines are the pointer, not the record.
 
+// scrubDisplayControls drops the control characters that survive clean().
+//
+// clean() strips ESC-introduced ANSI and the C0/DEL range, which is the right
+// scrub for the narration prose it was written for. This path is wider: it
+// renders RAW tool output, so whatever a tool returns — including whatever a
+// web page, a file, or an email put in front of that tool — reaches the frame.
+// Two classes matter and neither is C0:
+//
+//   - C1 (U+0080–U+009F). U+009B is CSI. A terminal honouring 8-bit controls
+//     reads it as the start of a real escape sequence.
+//   - Bidi overrides (U+202A–U+202E, U+2066–U+2069). Zero width, and they
+//     reorder everything after them — so a payload can display as text it does
+//     not contain, which is a lie told in the one view meant for verifying what
+//     actually happened.
+//
+// Dropped rather than escaped: this line is a truncated pointer to the full
+// record in the log file, so losing an exotic character costs nothing, while
+// widening the line to escape it would push out the payload.
+func scrubDisplayControls(s string) string {
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r >= 0x80 && r <= 0x9f:
+			return -1
+		case r >= 0x202a && r <= 0x202e:
+			return -1
+		case r >= 0x2066 && r <= 0x2069:
+			return -1
+		}
+		return r
+	}, s)
+}
+
 // stepNumberOf reads the current step out of a harness status line
 // ("Step 3/50" -> 3). The second return distinguishes "not a step line" from a
 // step line that genuinely said zero.
@@ -73,12 +105,14 @@ func devPayload(raw json.RawMessage, width int) string {
 		text = buf.String()
 	}
 
-	if text = clean(text); text == "" {
+	if text = clean(scrubDisplayControls(text)); text == "" {
 		return ""
 	}
-	// "null" is what an absent payload marshals to; it says nothing a blank
-	// line would not.
-	if strings.TrimSpace(text) == "null" {
+	// An absent payload arrives as any of these depending on the tool. None of
+	// them says anything a blank line would not, and `out {}` on every result
+	// is the kind of noise that makes a developer stop reading the log.
+	switch strings.TrimSpace(text) {
+	case "null", "{}", "[]", `""`:
 		return ""
 	}
 	if width < 8 {
