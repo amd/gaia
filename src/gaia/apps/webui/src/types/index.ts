@@ -75,10 +75,11 @@ export interface AgentInfo {
     /** Agent Hub metadata — used to render rich discovery cards. */
     category?: string;
     /**
-     * Package kind (#1716): ``agent`` | ``app`` | ``component``. Drives the Hub
-     * page's Apps · Components · Agents lanes. Undefined = treated as ``agent``.
+     * Catalog lane: ``agent`` | ``app`` | ``component`` (#1716) | ``skill``
+     * (#2467). Drives the Hub page's Apps · Components · Agents · Skills lanes.
+     * Undefined = treated as ``agent``.
      */
-    type?: 'agent' | 'app' | 'component';
+    type?: 'agent' | 'app' | 'component' | 'skill';
     tags?: string[];
     icon?: string;
     tools_count?: number;

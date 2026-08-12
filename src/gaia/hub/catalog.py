@@ -350,6 +350,42 @@ STATUS_UPDATE_AVAILABLE = "update_available"
 # entry predates the field and for registry-only agents.
 DEFAULT_PACKAGE_TYPE = "agent"
 
+# The marketplace skills lane (#2467). Skills share ``index.json`` with agents,
+# apps, and components but are NOT agent packages: they install into
+# ``~/.gaia/skills/`` via ``gaia skill install`` and are composed by an agent at
+# runtime. Any reader that treats every catalog entry as an installable agent
+# must filter this out.
+SKILL_PACKAGE_TYPE = "skill"
+
+
+def entry_package_type(entry: Dict[str, Any]) -> str:
+    """Catalog lane of one ``index.json`` entry.
+
+    Defaults to ``agent`` for entries published before the discriminator existed
+    (#1716) — that is what they were.
+    """
+    return entry.get("type") or DEFAULT_PACKAGE_TYPE
+
+
+def is_skill_entry(entry: Dict[str, Any]) -> bool:
+    """Whether a catalog entry belongs to the skills lane (#2467)."""
+    return entry_package_type(entry) == SKILL_PACKAGE_TYPE
+
+
+def skill_entries(index_agents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The skills lane of a catalog, in catalog order.
+
+    The reader-side counterpart of :func:`merge_with_registry`, which serves the
+    agent lanes. ``gaia skill search`` / ``list`` and the Agent UI's Skills panel
+    consume this.
+    """
+    return [entry for entry in index_agents if is_skill_entry(entry)]
+
+
+def agent_entries(index_agents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Every catalog entry that is an installable package, i.e. not a skill."""
+    return [entry for entry in index_agents if not is_skill_entry(entry)]
+
 
 def _requires_trust(security_tier: str) -> bool:
     """Whether a catalog entry needs an explicit trust opt-in to install.
@@ -384,7 +420,9 @@ def merge_with_registry(
     Returns:
         One dict per agent (union of registry + catalog), each carrying a
         ``status``, ``installed_version`` / ``latest_version``, and a
-        ``requires_trust`` flag.
+        ``requires_trust`` flag. Skills-lane entries (#2467) are excluded — they
+        are not agent packages and install through ``gaia skill install``; read
+        them with :func:`skill_entries`.
     """
     installed_versions = installed_versions or {}
 
@@ -395,8 +433,10 @@ def merge_with_registry(
 
     by_id: Dict[str, Dict[str, Any]] = {}
 
-    # 1. Catalog entries (remote source of truth for latest_version).
-    for entry in index_agents:
+    # 1. Catalog entries (remote source of truth for latest_version). Skills are
+    #    dropped here rather than in every caller: the agent install/update path
+    #    cannot act on one, so surfacing it would offer a broken install button.
+    for entry in agent_entries(index_agents):
         agent_id = entry["id"]
         latest = entry.get("latest_version")
         reg = registered.get(agent_id)
@@ -419,10 +459,10 @@ def merge_with_registry(
             "name": entry.get("name", agent_id),
             "description": entry.get("description", ""),
             "category": entry.get("category", "general"),
-            # Package kind (#1716): agent | app | component. Drives the Hub
-            # page's Apps · Components · Agents lanes; defaults to "agent" for
-            # older catalog entries that predate the discriminator.
-            "type": entry.get("type", DEFAULT_PACKAGE_TYPE),
+            # Package kind (#1716): agent | app | component — never "skill",
+            # which the loop above already filtered out. Drives the Hub page's
+            # lanes; defaults to "agent" for entries predating the discriminator.
+            "type": entry_package_type(entry),
             "icon": entry.get("icon", ""),
             "language": language,
             "author": entry.get("author", ""),
@@ -492,12 +532,18 @@ class UnifiedCatalog:
     """The merged catalog returned by :func:`build_catalog`."""
 
     agents: List[Dict[str, Any]] = field(default_factory=list)
+    #: The skills lane (#2467), straight from ``index.json`` — skills have no
+    #: local registry to merge against and install through
+    #: ``gaia skill install``, so they are a sibling list rather than entries in
+    #: ``agents``. Empty until the hub has published skills.
+    skills: List[Dict[str, Any]] = field(default_factory=list)
     offline: bool = False
     generated_at: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "agents": self.agents,
+            "skills": self.skills,
             "offline": self.offline,
             "generated_at": self.generated_at,
             "total": len(self.agents),
@@ -546,6 +592,7 @@ def build_catalog(
     )
     return UnifiedCatalog(
         agents=merged,
+        skills=skill_entries(index_agents),
         offline=offline,
         generated_at=generated_at,
     )
