@@ -10,7 +10,7 @@ telling the user the skill is still loaded.
 import threading
 
 import pytest
-from gaia_agent_gaia import session_registry as sr
+from gaia_agent import session_registry as sr
 
 
 class _FakeAgent:

@@ -34,7 +34,7 @@ root) and declared in ``gaia-agent.yaml``. Following the email agent's precedent
 (#2848), **no skill set loads by default** — the manifest ships its
 ``default_skill_set`` commented out until an eval measures the prompt-token cost.
 Skills are opt-in via ``--skill-set``, ``GAIA_SKILL_SET``, or — mid-session — the
-skill-library tools in :mod:`gaia_agent_gaia.skill_tools`, which let the model
+skill-library tools in :mod:`gaia_agent.skill_tools`, which let the model
 discover, install, load, and unload skills on demand without a restart. Those
 tools never load anything on their own, so the out-of-the-box prompt budget is
 unchanged.
@@ -47,8 +47,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar, List, Optional
 
+from gaia_agent.skill_tools import SkillLibraryToolsMixin
 from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
-from gaia_agent_gaia.skill_tools import SkillLibraryToolsMixin
 
 #: Bundled skills ship inside the package so they survive both the wheel and the
 #: frozen sidecar; as ``SKILL_DIRS`` they outrank a same-named user or Claude Code copy.

@@ -16,7 +16,7 @@ icon: sparkles
 # no skill set loaded). Drift-guarded by tests/test_gaia_agent.py, which builds
 # the agent and compares — a hand-edit that disagrees with the registry fails CI.
 # 55 from ChatAgent's "full" profile + 7 skill-library tools
-# (gaia_agent_gaia.skill_tools.SKILL_LIBRARY_TOOL_NAMES).
+# (gaia_agent.skill_tools.SKILL_LIBRARY_TOOL_NAMES).
 tools_count: 62
 
 language: python
@@ -24,7 +24,7 @@ min_gaia_version: "0.22.0"
 models: [Gemma-4-E4B-it-GGUF]
 
 python:
-  entry_module: gaia_agent_gaia
+  entry_module: gaia_agent
   entry_class: GaiaAgent
 
 interfaces:
@@ -45,7 +45,7 @@ dependencies:
 # ---------------------------------------------------------------------------
 # Skills
 # ---------------------------------------------------------------------------
-# The bundled library under gaia_agent_gaia/skills/ is the highest-precedence
+# The bundled library under gaia_agent/skills/ is the highest-precedence
 # discovery root, so a skill shipped here wins over a same-named user copy.
 #
 # `default_skill_set` is deliberately COMMENTED OUT, following the email agent's

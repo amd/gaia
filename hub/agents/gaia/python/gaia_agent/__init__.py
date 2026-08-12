@@ -21,7 +21,7 @@ def __getattr__(name):
     if name in _LAZY:
         import importlib
 
-        module = importlib.import_module(f"gaia_agent_gaia.{_LAZY[name]}")
+        module = importlib.import_module(f"gaia_agent.{_LAZY[name]}")
         return getattr(module, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
@@ -38,7 +38,7 @@ def _factory(**kwargs):
         if preset:
             kwargs.setdefault("model_id", preset)
 
-    from gaia_agent_gaia.agent import GaiaAgent, GaiaAgentConfig
+    from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
 
     valid = {f.name for f in dataclasses.fields(GaiaAgentConfig)}
     return GaiaAgent(

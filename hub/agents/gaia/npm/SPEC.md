@@ -205,7 +205,7 @@ Both defaults are overridable (`--sidecar-dir`, `--cache-dir`).
 
 ## 5. Sidecar HTTP surface
 
-Served by `gaia_agent_gaia.server`. Bound to `127.0.0.1` only.
+Served by `gaia_agent.server`. Bound to `127.0.0.1` only.
 
 | Property           | Value                                   |
 | ------------------ | --------------------------------------- |
@@ -239,7 +239,7 @@ backward-compatible addition and is accepted.
 ### 5.3 No caller-auth token
 
 The email sidecar authenticates callers with a per-session bearer minted into
-`GAIA_EMAIL_SIDECAR_TOKEN`. `gaia_agent_gaia` has **no equivalent** at 0.1.0, so
+`GAIA_EMAIL_SIDECAR_TOKEN`. `gaia_agent` has **no equivalent** at 0.1.0, so
 this package mints and sends nothing. When the sidecar grows one, it lands here as
 a spawn-time env var and a request header — a change to this section, not a new
 subsystem.

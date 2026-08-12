@@ -31,8 +31,8 @@ from pathlib import Path
 
 import pytest
 import yaml
-from gaia_agent_gaia import build_gaia
-from gaia_agent_gaia.agent import GaiaAgent, GaiaAgentConfig
+from gaia_agent import build_gaia
+from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
 
 # The canonical name set for the memory surface — hand-copying it here is
 # exactly the drift these tests exist to catch.
