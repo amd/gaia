@@ -77,6 +77,30 @@ rows = self.query("SELECT * FROM users")
 user = self.query("SELECT * FROM users WHERE id = :id", {"id": 42}, one=True)
 ```
 
+`query()` is a bare `execute()` — it does **not** verify the statement is a
+SELECT, so it will happily run a `DELETE`. It is for SQL you wrote yourself.
+
+```python
+def query_readonly(
+    self,
+    sql: str,
+    params: Optional[Dict[str, Any]] = None,
+    one: bool = False,
+) -> Union[List[Dict[str, Any]], Optional[Dict[str, Any]]]
+```
+
+Same signature and return contract as `query()`, but installs a SQLite
+authorizer for the duration of the call. Permitted actions are `SQLITE_SELECT`,
+`SQLITE_READ`, `SQLITE_FUNCTION`, `SQLITE_RECURSIVE`, and `SQLITE_PRAGMA`
+restricted to `table_info`, `table_xinfo`, `index_list`, `index_info`, and
+`foreign_key_list`. Everything else — writes, DDL, `ATTACH`, any other pragma —
+is denied by SQLite at statement-prepare time and re-raised as
+`PermissionError`. A genuine SQL error (missing table, corrupt file) propagates
+as its original `sqlite3` exception rather than being relabelled.
+
+Use this for any SQL that originates outside trusted Python code; `db_query` on
+`DatabaseAgent` is built on it.
+
 ### Writes
 
 ```python
@@ -89,12 +113,27 @@ def delete(self, table: str, where: str, params: Dict[str, Any]) -> int
 - `insert(table, data)` — builds `INSERT INTO table (...) VALUES (...)` from
   the data dict and returns the new row's `lastrowid`.
 - `update(table, data, where, params)` — the implementation prefixes the data
-  keys with `__set_` internally so they can't collide with the `params` used
-  in the `WHERE` clause. Returns the affected row count.
+  keys with `__set_` internally to keep them distinct from the `params` used
+  in the `WHERE` clause; a `params` key that collides with that prefix raises
+  `ValueError` rather than silently overriding the column value. Returns the
+  affected row count.
 - `delete(table, where, params)` — returns the deleted row count.
 
 Every mutation auto-commits **unless** the call is inside a `transaction()`
 block.
+
+**Validation contract.** The table name, and for `insert`/`update` every key of
+`data`, are interpolated into the statement rather than bound, so each must be
+a bare identifier matching `[A-Za-z_][A-Za-z0-9_]*`. Quoted or non-ASCII
+identifiers that SQLite would otherwise accept are rejected. `ValueError` is
+raised for an invalid identifier, empty `data`, or an empty/whitespace `where`.
+
+`where` is **not** parsed — beyond a non-blank-string check it is a trusted SQL
+fragment, interpolated verbatim so callers keep access to the full grammar
+(`expires_at < :now`, `mailbox IS NULL`, `1 = 1`). It must therefore be a
+literal written by the developer; never assemble it from LLM output or
+end-user input. Bind untrusted values through `:name` placeholders inside a
+literal fragment, or use the structured-condition tools on `DatabaseAgent`.
 
 ```python
 user_id = self.insert("users", {"name": "Alice", "email": "alice@example.com"})
@@ -209,6 +248,15 @@ class TodoAgent(Agent, DatabaseMixin):
   single coordinator agent.
 - There is no ORM layer. You work directly with SQL and dict results, which is
   intentional — it keeps the surface small and LLM-friendly.
+- Identifiers must be bare — see the validation contract under
+  [Writes](#writes). Table or column names that need quoting are not supported.
+- `query_readonly()`'s authorizer is **connection-scoped**, not call-scoped.
+  Concurrent and nested read-only calls are reference-counted, so one finishing
+  never disarms another still in flight. But the window applies to the whole
+  connection: because `init_db()` opens it with `check_same_thread=False`, a
+  *writer* on another thread sharing that connection is denied for as long as
+  any read-only call is open. Don't share one mixin instance between a
+  read-only caller and a background writer.
 
 ## Related
 

@@ -541,6 +541,9 @@ class TestContractAdditivity:
             "needs_you",
             "needs_you_total",
             "bulk",
+            # #2900: the phishing/spam-flagged subset of actionable.
+            "suspicious",
+            "suspicious_total",
         }
 
 

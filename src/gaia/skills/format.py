@@ -446,16 +446,17 @@ class Skill:
 # ----------------------------------------------------------------------
 
 
-def parse_skill(text: str, *, source: str = "<string>") -> Skill:
-    """Parse ``SKILL.md`` text into a :class:`Skill`.
+def split_frontmatter(text: str, *, source: str = "<string>") -> tuple[dict, str]:
+    """Split ``SKILL.md`` text into its frontmatter mapping and Markdown body.
 
-    Args:
-        text: The full file contents (frontmatter + Markdown body).
-        source: Where the text came from, quoted in error messages.
+    The structural half of :func:`parse_skill` — it proves the file *is* a
+    frontmatter document without asserting anything about GAIA's schema. That
+    split is what lets :mod:`gaia.skills.migrate` read a foreign skill whose
+    ``name`` or ``version`` GAIA would reject; the migrated output still goes
+    through :func:`parse_skill` before it is written.
 
     Raises:
-        SkillValidationError: on missing/malformed frontmatter or a field that
-            violates the schema. Nothing partial is ever returned.
+        SkillValidationError: if the frontmatter is missing or is not a mapping.
     """
     if not isinstance(text, str):
         raise SkillValidationError(
@@ -472,11 +473,10 @@ def parse_skill(text: str, *, source: str = "<string>") -> Skill:
             f"  ---\nSee {FORMAT_DOCS_URL}#adopted-base-agent-skills-standard"
         )
 
-    raw_yaml = match.group(1)
     body = stripped[match.end() :]
 
     try:
-        frontmatter = yaml.safe_load(raw_yaml)
+        frontmatter = yaml.safe_load(match.group(1))
     except yaml.YAMLError as exc:
         raise SkillValidationError(
             f"{source}: the YAML frontmatter is invalid: {exc}. Fix the YAML syntax "
@@ -490,6 +490,34 @@ def parse_skill(text: str, *, source: str = "<string>") -> Skill:
             f"{source}: the frontmatter must be a YAML mapping of fields, got "
             f"{type(frontmatter).__name__}. See {FORMAT_DOCS_URL}"
         )
+
+    return frontmatter, body
+
+
+def reset_security_tier(skill: Skill) -> str:
+    """Stamp the safe default tier on a skill, returning the tier it replaced.
+
+    The one trust-reset shared by every path that brings a skill in from outside
+    (``gaia skill import``, ``gaia skill migrate``): a tier claimed somewhere
+    else carries no weight here, so it is re-earned rather than believed.
+    """
+    previous = skill.gaia.security_tier
+    skill.gaia.security_tier = DEFAULT_SECURITY_TIER
+    return previous
+
+
+def parse_skill(text: str, *, source: str = "<string>") -> Skill:
+    """Parse ``SKILL.md`` text into a :class:`Skill`.
+
+    Args:
+        text: The full file contents (frontmatter + Markdown body).
+        source: Where the text came from, quoted in error messages.
+
+    Raises:
+        SkillValidationError: on missing/malformed frontmatter or a field that
+            violates the schema. Nothing partial is ever returned.
+    """
+    frontmatter, body = split_frontmatter(text, source=source)
 
     name = frontmatter.get("name")
     if not name or not isinstance(name, str):

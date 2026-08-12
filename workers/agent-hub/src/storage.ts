@@ -15,12 +15,22 @@
  *   agents/<id>/<version>/EVALUATION.md     evaluation guide markdown, per version (optional)
  *   agents/<id>/<version>/CAPABILITY_MATRIX.md  capability matrix markdown, per version (optional)
  *   agents/<id>/<version>/<filename>        the artifact (wheel or binary)
+ *
+ * Skills (#2467) get their own top-level prefix rather than sharing agents/ —
+ * they are a separate lane with a separate publish contract, and a shared prefix
+ * would make `listAgentIds` return them as agents:
+ *   skills/<name>/manifest.json             per-skill aggregate manifest
+ *   skills/<name>/<version>/SKILL.md        raw uploaded SKILL.md, per version
+ *   skills/<name>/<version>/CHANGELOG.md    changelog markdown, per version (optional)
+ *   skills/<name>/<version>/audit.json      security-audit report (#2468), when supplied
+ *   skills/<name>/<version>/<filename>      the skill bundle artifact
  */
 
-import type { AgentManifest, CatalogIndex } from "./types";
+import type { AgentManifest, CatalogIndex, SkillManifest } from "./types";
 
 export const INDEX_KEY = "index.json";
 export const AGENTS_PREFIX = "agents/";
+export const SKILLS_PREFIX = "skills/";
 
 export function agentManifestKey(id: string): string {
   return `${AGENTS_PREFIX}${id}/manifest.json`;
@@ -212,6 +222,97 @@ export async function writeIndex(bucket: R2Bucket, index: CatalogIndex): Promise
   await bucket.put(INDEX_KEY, JSON.stringify(index, null, 2), {
     httpMetadata: { contentType: "application/json; charset=utf-8" },
   });
+}
+
+// ── Skills lane (#2467) ─────────────────────────────────────────────────────
+
+export function skillManifestKey(name: string): string {
+  return `${SKILLS_PREFIX}${name}/manifest.json`;
+}
+
+export function skillVersionDir(name: string, version: string): string {
+  return `${SKILLS_PREFIX}${name}/${version}/`;
+}
+
+export function skillArtifactKey(name: string, version: string, filename: string): string {
+  return `${skillVersionDir(name, version)}${filename}`;
+}
+
+/** The raw uploaded SKILL.md (front matter + body) for one published version. */
+export function skillDocKey(name: string, version: string): string {
+  return `${skillVersionDir(name, version)}SKILL.md`;
+}
+
+export function skillChangelogKey(name: string, version: string): string {
+  return `${skillVersionDir(name, version)}CHANGELOG.md`;
+}
+
+/** The security-audit report (#2468) recorded against one published version. */
+export function skillAuditKey(name: string, version: string): string {
+  return `${skillVersionDir(name, version)}audit.json`;
+}
+
+/** Read and parse the per-skill manifest, or null if the skill doesn't exist. */
+export async function readSkillManifest(
+  bucket: R2Bucket,
+  name: string
+): Promise<SkillManifest | null> {
+  const obj = await bucket.get(skillManifestKey(name));
+  if (!obj) return null;
+  return (await obj.json()) as SkillManifest;
+}
+
+/** Write the per-skill manifest as pretty JSON. */
+export async function writeSkillManifest(
+  bucket: R2Bucket,
+  manifest: SkillManifest
+): Promise<void> {
+  await bucket.put(skillManifestKey(manifest.name), JSON.stringify(manifest, null, 2), {
+    httpMetadata: { contentType: "application/json; charset=utf-8" },
+  });
+}
+
+/**
+ * Read the SKILL.md markdown body for one published version. Returns "" when
+ * none is stored — a catalog rebuild must not fail on a partially-written skill.
+ */
+export async function readSkillDoc(
+  bucket: R2Bucket,
+  name: string,
+  version: string
+): Promise<string> {
+  const obj = await bucket.get(skillDocKey(name, version));
+  if (!obj) return "";
+  return obj.text();
+}
+
+/**
+ * Read the CHANGELOG markdown for one published skill version. Returns "" when
+ * none was published — the `changelog` part is optional, as in the agent lane.
+ */
+export async function readSkillChangelog(
+  bucket: R2Bucket,
+  name: string,
+  version: string
+): Promise<string> {
+  const obj = await bucket.get(skillChangelogKey(name, version));
+  if (!obj) return "";
+  return obj.text();
+}
+
+/** List every skill name present under `skills/` (same paging as agents). */
+export async function listSkillNames(bucket: R2Bucket): Promise<string[]> {
+  const names: string[] = [];
+  let cursor: string | undefined;
+  do {
+    const res = await bucket.list({ prefix: SKILLS_PREFIX, delimiter: "/", cursor });
+    for (const prefix of res.delimitedPrefixes) {
+      const name = prefix.slice(SKILLS_PREFIX.length, -1);
+      if (name) names.push(name);
+    }
+    cursor = res.truncated ? res.cursor : undefined;
+  } while (cursor);
+  return names;
 }
 
 /**

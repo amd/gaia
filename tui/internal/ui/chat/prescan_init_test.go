@@ -367,7 +367,9 @@ func TestPendingPreScanDrainedOnErrMsg(t *testing.T) {
 	m = updated.(ChatModel)
 	m.pendingPreScan = json.RawMessage(samplePreScanJSON)
 
-	updated2, _ := m.Update(errMsg{err: errors.New("transport dropped")})
+	// turnSeq must match the live turn's (see errMsg's doc comment) or this
+	// delivery is (correctly) dropped as stale.
+	updated2, _ := m.Update(errMsg{err: errors.New("transport dropped"), turnSeq: m.turnSeq})
 	m = updated2.(ChatModel)
 
 	if !hasPreScanCard(m) {

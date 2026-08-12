@@ -35,7 +35,11 @@ ToolInfo BashTools::bashExecute() {
     info.description =
         "Execute a shell command and return its output. "
         "The command runs in the detected shell (bash preferred, sh fallback). "
-        "Output is truncated at 32 KB. Use timeout_ms to control the deadline.";
+        "The shell is persistent: a 'cd' or an exported variable stays in "
+        "effect for later commands, and the current directory is returned as "
+        "cwd. On Windows without a POSIX shell, commands run as a cmd.exe "
+        "script, so write a for-loop variable as %%i rather than %i. Output is "
+        "truncated at 32 KB. Use timeout_ms to control the deadline.";
     info.parameters = {
         {"command", ToolParamType::STRING, /*required=*/true,
          "The shell command to execute"},
@@ -59,52 +63,11 @@ json BashTools::doBashExecute(const json& args) {
         timeoutMs = DEFAULT_TIMEOUT_MS;
     }
 
-    // Detect the shell and build the full command
-    std::string shell = detectShell();
-    std::string fullCommand;
+    // One session per process, so cwd and exported variables survive between
+    // calls. The CONFIRM policy and the output cap below are unchanged.
+    static ShellSession session("", detectShell());
 
-#ifdef _WIN32
-    if (!shell.empty()) {
-        // Use detected bash/sh: wrap the command in shell -c "..."
-        // Escape double quotes in the command for the outer shell
-        std::string escaped = command;
-        // Replace \ with \\ and " with \" for the bash -c wrapper
-        std::string safeCmd;
-        safeCmd.reserve(escaped.size() + 16);
-        for (char c : escaped) {
-            if (c == '\\') {
-                safeCmd += "\\\\";
-            } else if (c == '"') {
-                safeCmd += "\\\"";
-            } else {
-                safeCmd += c;
-            }
-        }
-        fullCommand = shell + " -c \"" + safeCmd + "\"";
-    } else {
-        // No bash/sh available — run via cmd.exe directly
-        fullCommand = "cmd.exe /C " + command;
-    }
-#else
-    // POSIX: always use bash -c (or sh -c as fallback)
-    if (shell.empty()) {
-        shell = "sh";
-    }
-    // Escape single quotes for POSIX shell: replace ' with '\''
-    std::string safeCmd;
-    safeCmd.reserve(command.size() + 16);
-    for (char c : command) {
-        if (c == '\'') {
-            safeCmd += "'\\''";
-        } else {
-            safeCmd += c;
-        }
-    }
-    fullCommand = shell + " -c '" + safeCmd + "'";
-#endif
-
-    // Execute via ProcessRunner
-    ProcessResult result = ProcessRunner::run(fullCommand, timeoutMs, "", {}, MAX_OUTPUT_BYTES);
+    ProcessResult result = session.run(command, timeoutMs, MAX_OUTPUT_BYTES);
 
     // Truncate stdout/stderr if needed
     std::string stdoutStr = result.stdout_output;
@@ -126,6 +89,7 @@ json BashTools::doBashExecute(const json& args) {
         {"stderr", stderrStr},
         {"exit_code", result.exitCode},
         {"timed_out", result.timedOut},
+        {"cwd", session.cwd()},
     };
 }
 

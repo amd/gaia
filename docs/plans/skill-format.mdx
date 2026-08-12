@@ -5,9 +5,13 @@ icon: "puzzle-piece"
 ---
 
 <Info>
-  **Grounds on (exists today):** [`src/gaia/skills/`](https://github.com/amd/gaia/tree/main/src/gaia/skills) — the shipped runtime: `format.py` (parser/writer/validator), `manager.py` (`SkillManager`, discovery + precedence), `loader.py` (`<skill>/<tool>` registration), `permissions.py` (grammar + connector bridge), `cli.py` (`gaia skill`), `sets.py` (the `skills:` / `skill_sets:` grammar) · [`src/gaia/agents/base/agent.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/agent.py) (`Agent.load_skill`, `unload_skill`, `SKILL_DIRS`, `skill_manager`, `loaded_skills`, `SKILL_MANIFEST`, `load_skill_set`, `select_skill_set`) · [`src/gaia/agents/base/tools.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tools.py) (`@tool`, `_TOOL_REGISTRY`) · [`src/gaia/agents/registry.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/registry.py) (`KNOWN_TOOLS`, `namespaced_agent_id`) · [`src/gaia/connectors/providers/base.py`](https://github.com/amd/gaia/blob/main/src/gaia/connectors/providers/base.py) (`ConnectorRequirement`) · [`src/gaia/ui/routers/agents.py`](https://github.com/amd/gaia/blob/main/src/gaia/ui/routers/agents.py) (`/api/agents`, the panel to mirror)
+  **Grounds on (exists today):** [`src/gaia/skills/`](https://github.com/amd/gaia/tree/main/src/gaia/skills) — the shipped runtime: `format.py` (parser/writer/validator), `manager.py` (`SkillManager`, discovery + precedence), `loader.py` (`<skill>/<tool>` registration), `permissions.py` (grammar + connector bridge), `cli.py` (`gaia skill`), `sets.py` (the `skills:` / `skill_sets:` grammar), `migrate.py` (OpenClaw/Hermes → GAIA, [#692](https://github.com/amd/gaia/issues/692)) · [`src/gaia/agents/base/agent.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/agent.py) (`Agent.load_skill`, `unload_skill`, `SKILL_DIRS`, `skill_manager`, `loaded_skills`, `SKILL_MANIFEST`, `load_skill_set`, `select_skill_set`) · [`src/gaia/agents/base/tools.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/tools.py) (`@tool`, `_TOOL_REGISTRY`) · [`src/gaia/agents/registry.py`](https://github.com/amd/gaia/blob/main/src/gaia/agents/registry.py) (`KNOWN_TOOLS`, `namespaced_agent_id`) · [`src/gaia/connectors/providers/base.py`](https://github.com/amd/gaia/blob/main/src/gaia/connectors/providers/base.py) (`ConnectorRequirement`) · [`src/gaia/ui/routers/agents.py`](https://github.com/amd/gaia/blob/main/src/gaia/ui/routers/agents.py) (`/api/agents`, the panel to mirror)
 
-  **Still proposed (not written yet):** the `/api/skills` router and Agent UI panel, `gaia skill install|remove|search|publish|update` (marketplace, [#2467](https://github.com/amd/gaia/issues/2467)), `gaia skill migrate` (Phase 3), the permission sandbox for local-capability domains, and tier-ceiling enforcement ([#1019](https://github.com/amd/gaia/issues/1019)). Every such symbol is marked **PROPOSED** where it appears.
+  **Also exists (hub side):** [`workers/agent-hub/src/`](https://github.com/amd/gaia/tree/main/workers/agent-hub/src) — the `skill` catalog lane, the `skills/` R2 namespace, `POST /publish/skill` validating this grammar server-side, and the pre-publish audit gate ([#2467](https://github.com/amd/gaia/issues/2467)).
+
+  **Still proposed (not written yet):** the `/api/skills` router and Agent UI panel, `gaia skill update`, and the permission sandbox for local-capability domains ([#1019](https://github.com/amd/gaia/issues/1019)). Every such symbol is marked **PROPOSED** where it appears.
+
+  **Shipped since:** the marketplace verbs `gaia skill search|install|remove|publish` plus `keygen`/`trust`, install-time tier-ceiling enforcement, and the declarative `skills:` block ([#2467](https://github.com/amd/gaia/issues/2467)); plus `gaia skill migrate` ([#692](https://github.com/amd/gaia/issues/692)).
 </Info>
 
 <Note>
@@ -15,7 +19,7 @@ icon: "puzzle-piece"
 
 **Module:** `gaia.skills` — **shipped** ([#888](https://github.com/amd/gaia/issues/888)). The parser, validator, discovery, tool loader, permission grammar, and `gaia skill list|info|create|import|export` all exist. The contract is grounded on the live tool registry in `gaia.agents.base.tools`.
 
-**Status:** **Format = decided.** **Runtime = Phase 1 shipped**; enforcement (sandbox, tier ceilings), the REST/UI surface, and the marketplace verbs remain proposed. The companion [Agent Skills](/spec/agent-skills) spec owns the *integration surface* (discovery, scoping, progressive disclosure); this document is authoritative for the *field grammar*.
+**Status:** **Format = decided.** **Runtime = Phase 1 + the marketplace shipped** (loader, CLI, publish/install, signature verification, install-time tier ceilings, declarative `skills:` / `skill_sets:`); the local-capability **sandbox** and the REST/UI surface remain proposed. The companion [Agent Skills](/spec/agent-skills) spec owns the *integration surface* (discovery, scoping, progressive disclosure); this document is authoritative for the *field grammar*.
 
 **Target consumers:** [#887](https://github.com/amd/gaia/issues/887) (skill auto-synthesis), [#553](https://github.com/amd/gaia/issues/553) (self-improving agent), [#1451](https://github.com/amd/gaia/issues/1451) (tool-loader Part 3), [#647](https://github.com/amd/gaia/issues/647) (skill marketplace), [#648](https://github.com/amd/gaia/issues/648) (OEM bundling), [#462](https://github.com/amd/gaia/issues/462) (Agent Manifest).
 </Note>
@@ -191,8 +195,8 @@ Each entry in `skills` or a set's list is either a **skill name** or a mapping:
 | Key | Type | Required | Description |
 |---|---|---|---|
 | `name` | string | yes | A skill name per [naming](#naming). |
-| `version` | string | no | SemVer or range. **Recorded, not resolved** in this phase — see below. |
-| `required` | bool | no | Default `true`. A missing `required: false` skill is logged and skipped; a missing required one fails the launch. |
+| `version` | string | no | SemVer or range, **enforced at load** against the installed skill's version — see below. |
+| `required` | bool | no | Default `true`. A `required: false` skill that is missing *or version-incompatible* is logged and skipped; either failure on a required one fails the launch. |
 
 **Set names** use the same slug shape as skill names, capped at 32 chars — a
 lowercase alphanumeric start and end with internal hyphens:
@@ -214,12 +218,18 @@ undeclared set, an unrecognized key in a reference mapping, a non-boolean
 set of skills or does not load.
 
 <Note>
-**`version:` is a declaration surface only in this phase.** It is parsed,
-validated as a non-empty string, and surfaced — but no constraint solving
-happens until [#2467](https://github.com/amd/gaia/issues/2467) can install
-versioned skills from the marketplace. Until then, a bundled skill's version is
-whatever the agent package ships. This mirrors how `network:` permissions are
-recorded but not enforced in Phase 1.
+**`version:` is enforced at load.** The range is matched against the installed
+skill's frontmatter `version`, and a mismatch is fail-loud: a `required` entry
+raises and the agent does not launch, an optional one is skipped with the reason
+logged. A skill with no `version` in its frontmatter cannot satisfy a pin —
+otherwise a local edit would silently shadow a pinned hub install. A range that
+names no version (`>=v2`, `1.2.x`) is rejected at manifest-parse time with the
+shapes above, rather than treated as "any" — so the verdict never depends on
+which skills happen to be installed on the machine doing the parsing.
+
+What [#2467](https://github.com/amd/gaia/issues/2467) still owns is resolution
+*across installable versions* — choosing which version to fetch from the
+marketplace. Checking the one version actually installed happens today.
 </Note>
 
 Selection semantics — the order a set is chosen in, the selector hook, and the
@@ -289,7 +299,8 @@ inventing a second grant system:
 - `filesystem:*`, `shell:*`, `database:*`, `desktop:*`, `env:*` are **new
   local-capability domains** with no connector equivalent. Until the skill sandbox
   lands (PROPOSED — see [Phased build](#phased-build)) a skill declaring one is
-  refused outright.
+  refused outright — at **every** security tier, `verified` included. A tier is a
+  provenance claim, not a sandbox.
 
 Per-agent scoping reuses the `namespaced_agent_id` keying
 (`builtin:` / `custom:sha256:` / `installed:`,
@@ -327,15 +338,29 @@ code can reach any host its process can. Do not treat a
 
 Three tiers set the **install-time permission ceiling** and grant behavior.
 
-| Tier | Signing | At install | Ceiling |
+| Tier | Signing | At install | Ceiling (enforced) |
 |---|---|---|---|
 | `verified` | AMD-signed, audited | Auto-grant, no prompt | All declared permissions pre-approved. |
-| `community` | Publisher-signed, automated scans | Dangerous grants (`shell:execute`, `desktop:control`, `database:write`) prompt | Below verified. |
-| `experimental` | None | Sandboxed; explicit opt-in (`--allow-experimental`) | Most restrictive; cannot auto-install as a dependency. |
+| `community` | Publisher-signed, automated scans | Dangerous grants prompt | `network:read`, `network:write`, `mcp:connect`. |
+| `experimental` | None | Explicit opt-in (`--allow-experimental`) | `network:read` only. |
 
 **Promotion path:** `experimental → community → verified`. A publisher signs to
 reach `community`; an AMD audit request reaches `verified`. Re-audit on every
 version bump.
+
+**A claim is not a tier.** `gaia skill install` computes
+`min(claimed tier, tier the signature earned)` and enforces the ceiling against
+that, so an unsigned skill can never install as `verified` no matter what its front
+matter says. A key's trust-store role decides what it attests: `publisher` →
+`community`, `amd` → `verified`. The trust store ships empty and **no AMD key is
+bundled**, so out of the box every skill installs `experimental` — the honest floor
+rather than a placeholder that makes the top tier look anchored. See
+[`gaia skill install`](/reference/cli#skills).
+
+The dangerous set the spec names — `shell:execute`, `desktop:control`,
+`database:write` — is retained as authoritative, but all three are local-capability
+domains, so in v1 they are **refused before any tier check**: the prompt is
+currently reachable only for `network:write`.
 
 <Note>
 **Tiers are NOT the governance decision system.** The governance layer's
@@ -344,11 +369,99 @@ version bump.
 is a **run-time, per-action** verdict. Security tiers are an **install-time trust
 ladder** that sets the *ceiling* a skill's permissions may reach. They are
 complementary, not the same axis: a `verified` skill still has each action
-adjudicated at run time by governance. The tier **field** ships (parsed, defaulted
-to `experimental`, surfaced by `gaia skill info`, and reset to `experimental` on
-`gaia skill import`), but the **ceiling it implies is not yet enforced** — see
-[Phase 2](#phased-build).
+adjudicated at run time by governance.
+
+The **install-time ceiling now ships** ([#2467](https://github.com/amd/gaia/issues/2467)):
+signatures are verified, the claimed tier is collapsed to the attested one, and a
+permission above the resulting ceiling refuses the install. What remains deferred to
+[Phase 2](#phased-build) is the **run-time sandbox** for local-capability domains —
+which is why those domains are refused outright rather than granted at any tier.
 </Note>
+
+<Warning>
+**A `verified` stamp is provenance, not containment.** v1 skills are instruction +
+connector-bridged only. Do not read a tier as evidence that a sandbox is policing
+what the skill's code does at run time — no such sandbox exists yet
+([#1019](https://github.com/amd/gaia/issues/1019)).
+</Warning>
+
+### Pre-publish security audit
+
+Every skill passes an automated audit before it can enter the hub catalog
+([#2468](https://github.com/amd/gaia/issues/2468)).
+
+Skills are contributed **by pull request** — there is no self-serve publish path
+(the hub's publish endpoint is gated on a maintainer-held token secret), so the
+PR check *is* the gate: `BLOCK` fails it, `REVIEW` holds the PR for maintainer
+sign-off, `ALLOW` passes. Submit under `skills/community/<name>/`; see
+[Publishing to the Hub → Publishing a skill](/guides/hub-publishing#publishing-a-skill-instead-of-an-agent).
+
+Authors run the same engine locally, so a clean local audit is the whole
+requirement:
+
+```bash
+gaia skill audit ./my-skill/                    # ALLOW / REVIEW / BLOCK + file:line findings
+gaia skill audit ./my-skill/ --tier community   # would it clear the tier I want to claim?
+gaia skill audit ./my-skill/ --json             # the payload the publish path attaches
+```
+
+Exit codes are distinct so CI can branch: `0` allow, `5` review, `6` block, `4`
+the skill could not be parsed. **A skill the audit cannot read is never passed** —
+there is nothing to audit and nothing to publish.
+
+Four analyzers run over the directory. Nothing imports the skill, runs its code,
+or touches the network, so auditing a hostile skill is itself safe — this is a
+static gate, and the runtime sandbox remains [Phase 2](#phased-build).
+
+| Analyzer | What it looks for |
+|---|---|
+| **Code** (`tools.py`, `scripts/`, any `*.py`) | Dangerous constructs regardless of what was declared: `eval`/`exec`, `shell=True`, dynamic import, `pickle.loads`, native libraries, credential-file reads, bulk `os.environ` harvesting, encoded payloads fed to `exec`. AST-based, so `os.system` in a docstring is not a finding and `from os import system as sh` is. |
+| **Permission truth** | Diffs the domains the code actually touches against `metadata.gaia.permissions`. An undeclared domain, an insufficient level (declared `read`, performs a write), use despite an explicit `<domain>:none`, or a write outside a declared scope are all **hard findings** — the declaration is what the consent prompt and the Phase 2 sandbox are built on. Over-declaration is advisory: asking for less than you declared cannot hurt the user. |
+| **Supply chain** | Imports of packages the manifest never declares, dependencies fetched from outside a package index (`git+`, a URL, a path), and unpinned versions — an unpinned dependency means the code audited today is not the code that runs tomorrow. |
+| **Instruction body** | Prompt-injection and jailbreak patterns in the Markdown body *and* the `description`. Both reach the model: the description from discovery onward, the body once the skill triggers. |
+
+**Tier-scaled rigor.** The same findings produce different verdicts depending on
+the tier a skill claims, which is what makes the tiers above mean something at
+publish time:
+
+| Claimed tier | Verdict |
+|---|---|
+| `experimental` | Advisory — findings are surfaced but do not gate. `critical` still blocks: there is no tier at which shipping known-malicious code is acceptable. |
+| `community` | `high` forces `REVIEW`, `critical` blocks. |
+| `verified` | `medium` forces `REVIEW`, `high` blocks — **and the automated gate never grants it.** A spotless skill claiming `verified` earns `REVIEW`: "cleared the robot, awaiting the human." |
+
+**A skill cannot be stamped a tier whose gate it did not clear.** The report lists
+the tiers its findings actually cleared, and the hub compares the claimed tier
+against that list — so an unearned claim is *refused*, not recorded. `verified`
+never appears in that list, which is what stops a publisher self-stamping the top
+tier; the AMD audit is what adds it.
+
+**A new version re-earns its verdict.** The report is bound to the skill name, the
+version, and a digest of the audited bytes, so a report cannot be replayed onto a
+different publish. CI re-runs the full audit on every PR touching a skill, with no
+"already audited" short-circuit.
+
+<Warning>
+**The gate proves consistency, not trustworthiness.** The audit report is a
+publisher-supplied form part with no attestation, so the binding checks close
+*replay and accident* — stale reports, forgotten re-audits, careless tier bumps —
+but not *forgery*. A hostile publisher can fabricate a report whose every field
+agrees, including the digest over their own files.
+
+That is why a recorded verdict says `attestation: "publisher-asserted"`. Read it
+as "self-consistent", never as "AMD vouches for this". Making a verdict
+unforgeable needs an attestation the publisher cannot mint — report signing with
+a CI-held key ([#1710](https://github.com/amd/gaia/issues/1710)), or the hub
+running the audit itself — not a stricter parse.
+</Warning>
+
+**Disclosure.** Findings name `file:line` and the fix, but the offending source
+text is withheld from every report unless a caller passes `--show-snippets`
+locally. In CI the per-finding detail goes to the repo's private Security → Code
+scanning tab as SARIF; the PR comment carries verdicts, tiers, and counts only.
+`REVIEW` currently refuses the publish rather than admitting it — the quarantine
+lane and its maintainer sign-off workflow are
+[#2675](https://github.com/amd/gaia/issues/2675).
 
 ### Tool registration
 
@@ -399,33 +512,106 @@ gaia skill info <name> [--json] [--body]
 gaia skill create <name> [--dir DIR] [--description TEXT] [--with-tools] [--force]
 gaia skill import <folder|zip|https-url> [--name NAME] [--force]
 gaia skill export <name> [--output FILE.zip]
+gaia skill audit <dir> [--json] [--output FILE] [--sarif FILE] [--path-prefix DIR]
+                       [--tier TIER] [--fail-on SEVERITY] [--show-snippets]
+gaia skill migrate <source> [--from openclaw|hermes|auto] [--out DIR] [--name NAME]
+                            [--force] [--dry-run] [--json]
 ```
 
 Exit codes are distinct so scripts can branch: `0` ok, `2` usage, `3` not found,
-`4` invalid (including a discovery root containing a malformed skill).
+`4` invalid (including a discovery root containing a malformed skill), and — for
+`audit` — `5` review, `6` block. `REVIEW` and `BLOCK` are separate codes so CI can
+hold a skill for sign-off without reporting it as rejected.
 
-**Still PROPOSED** — the registry/marketplace verbs belong to
-[#2467](https://github.com/amd/gaia/issues/2467) /
-[#647](https://github.com/amd/gaia/issues/647), and `migrate` to Phase 3:
+**Marketplace verbs** ([#2467](https://github.com/amd/gaia/issues/2467) /
+[#647](https://github.com/amd/gaia/issues/647)) — these talk to the Agent Hub's
+skills lane:
 
 ```bash
-gaia skill install web-research        # PROPOSED — marketplace
-gaia skill install some-skill --allow-experimental   # PROPOSED
-gaia skill remove web-research         # PROPOSED — marketplace
-gaia skill search "web search"         # PROPOSED — marketplace
-gaia skill update web-research         # PROPOSED — marketplace
-gaia skill publish ./my-skill/         # PROPOSED — marketplace
-gaia skill migrate ./hermes-skill/ --from auto   # PROPOSED — Phase 3
+gaia skill search "web search" [--json] [--hub-url URL]
+gaia skill install <name[@semver-range]> [--allow-experimental] [--force] [--yes]
+gaia skill remove <name>
+gaia skill publish ./my-skill/ [--unsigned] [--audit-report FILE] [--dry-run]
+gaia skill keygen [--key-name NAME] [--force]
+gaia skill trust {list|add <key> [--role publisher|amd]|remove <key-id>}
+```
+
+`install` accepts a SemVer range and takes the highest published version
+satisfying it — the same rule agent `dependencies:` use. Installs are recorded in
+`~/.gaia/skills/skill-lock.json` with the requested range, the resolved version,
+the artifact SHA-256, the signing key, and the tier actually installed at.
+
+**Still PROPOSED** — `update` (marketplace):
+
+```bash
+gaia skill update web-research                   # PROPOSED
 ```
 
 <Note>
-**The proposed verbs are absent, not stubbed.** `gaia skill install` is not a
+**The proposed verbs are absent, not stubbed.** `gaia skill update` is not a
 command that prints "not implemented" — it does not parse, so a user cannot
 discover a verb that cannot work. [#691](https://github.com/amd/gaia/issues/691)'s
-acceptance asked for `list`/`install`/`remove`: `list` shipped, and
-`import`/`export` cover the local half of install/remove without a registry. The
-registry-backed pair lands with the marketplace.
+acceptance asked for `list`/`install`/`remove`: all three now ship.
 </Note>
+
+### What the hub enforces at publish
+
+The Agent Hub Worker serves `POST /publish/skill` and a `skill` catalog lane
+([#2467](https://github.com/amd/gaia/issues/2467)), and `gaia skill publish` is
+the client that calls it.
+
+That endpoint re-validates this grammar server-side before a skill may enter the
+catalog. It is a gatekeeper, not a replacement for the loader's validation above:
+a skill can be locally valid and still be refused publication. Rejections name
+the offending field.
+
+- `name` and `description` are **required**; `name` matches
+  `^[a-z0-9]+(-[a-z0-9]+)*$` and is ≤64 chars, `description` is ≤1024.
+- `version` is **required to publish** (optional in the format itself, where a
+  skill may be unversioned) and must be SemVer. `0.0.0` is refused — the
+  unversioned sentinel can never become an immutable release.
+- `metadata.gaia.security_tier` must be one of `verified` / `community` /
+  `experimental`, and the tier is gated by the pre-publish security audit
+  ([#2468](https://github.com/amd/gaia/issues/2468)) — `community` and `verified`
+  cannot publish without a cleared report, and a skill cannot claim a tier whose
+  gate it did not clear.
+- `permissions`, `tools`, `tools_required`, and `requirements` must match the
+  shapes above; the catalog entry carries them so an installer can show the
+  permission preview before anything is written to disk.
+
+Skill names share one namespace with agent ids, so a name already taken by a
+published agent is refused (and vice versa).
+
+See [Agent Skills → Agent Hub integration](/spec/agent-skills#agent-hub-integration)
+for the catalog shape and the storage/route layout.
+
+### Declarative consumption — the `skills:` block
+
+An agent names the skills it composes in its `gaia-agent.yaml`, and any `Agent`
+subclass resolves that block at construction — so a **custom agent** under
+`~/.gaia/agents/<id>/` consumes an installed hub skill with no code change:
+
+```yaml
+skills:
+  - name: web-research
+    version: ">=1.0.0"
+    required: true
+  - name: incident-review
+    version: ">=0.1.0"
+    required: false      # optional enhancement; the agent runs without it
+```
+
+Resolution is **local** — `gaia skill install` puts the skill in a discovery root
+and this reads what is there; an agent never pulls code from the network at
+startup. Ordering mirrors agent `dependencies:`: a skill providing a tool another
+declares in `tools_required` loads first, declaration order breaks ties, and a
+cycle raises rather than picking a winner. A missing `required: true` skill raises
+with the `gaia skill install` command that fixes it; a missing optional one is
+logged and skipped.
+
+The `skill_sets:` grammar is [#2466](https://github.com/amd/gaia/issues/2466). It
+expands a set into `SkillRequirement` values and resolves them through the same
+path, so there is one resolver and one place that enforces conflicts.
 
 ### Agent UI dashboard support
 
@@ -460,10 +646,77 @@ treats Hermes/OpenClaw as **migration sources**, not runtime targets.
 | **Hermes** (Nous Research) | `metadata.hermes` | Migrate via `gaia skill migrate --from hermes`. |
 | **OpenClaw / ClawHub** | `metadata.openclaw` | Migrate via `gaia skill migrate --from openclaw`. |
 
-A single tool — `gaia skill migrate --from {hermes,openclaw,auto}` (auto-detect
-keys on the `metadata.<vendor>` map) — reads the foreign namespace and writes a
-`metadata.gaia` block. **Every migrated skill lands `experimental`**, re-earning
-trust. Migration emits a report of fields needing manual review.
+A single **shipped** tool — `gaia skill migrate --from {hermes,openclaw,auto}`
+([`migrate.py`](https://github.com/amd/gaia/blob/main/src/gaia/skills/migrate.py),
+[#692](https://github.com/amd/gaia/issues/692)) — reads the foreign namespace and
+writes a `metadata.gaia` block. **Every migrated skill lands `experimental`**,
+re-earning trust via the same `reset_security_tier()` `gaia skill import` uses.
+Migration emits a report of fields needing manual review, and the output is
+round-tripped through `parse_skill()` before install, so a migration can never
+emit a `SKILL.md` the parser rejects.
+
+#### Field-by-field: OpenClaw → GAIA
+
+Fields GAIA models **fully** are *consumed* — they move into `metadata.gaia` and
+leave the vendor block. Anything partially or un-modeled is *preserved* under
+`metadata.<vendor>` and named in the report, which is what makes the
+vendor-namespace pattern lossless in practice rather than in principle.
+
+| OpenClaw field | GAIA target | Disposition |
+|---|---|---|
+| `requires.env: [VAR]` | `requirements.env_vars` | Consumed |
+| `primaryEnv: VAR` | `requirements.env_vars` | Consumed |
+| `envVars: [{name\|key, …}]` | `requirements.env_vars` (names) | Preserved — per-variable descriptions are not modeled |
+| `requires.tools: [t]` | `tools_required` | Consumed |
+| `requires.bins: [git]` | `permissions: [shell:execute:git]` | **Refused** — local capability |
+| `requires.anyBins: [a, b]` | `permissions: [shell:execute:a, …]` | **Refused** — and GAIA has no any-of form, so each is declared |
+| `requires.config: [path]` | `permissions: [filesystem:read:path]` | **Refused** — local capability |
+| `install: [{node\|uv\|pip: pkg}]` | `requirements.{node_,}dependencies` | Preserved — GAIA never runs install steps |
+| `install: [{brew\|go\|shell: …}]` | — | Preserved + reported |
+| `emoji`, `homepage`, `os`, `always`, `skillKey`, `nix`, `config` | — | Preserved + reported |
+| `name` (any case/underscores) | `name` (lowercase-with-hyphens) | Coerced + reported |
+| `version: v2.1` | `version: 2.1.0` | Coerced to SemVer + reported |
+
+<Note>
+**`requires.env` is a requirement, not a permission.** It declares which
+variables must *exist*; it grants no access, so it maps to the advisory
+`requirements.env_vars` rather than the `env:read` domain. Treating it as a
+permission would make nearly every real OpenClaw skill unmigratable for a field
+GAIA already has a home for.
+</Note>
+
+#### Field-by-field: Hermes → GAIA
+
+| Hermes field | GAIA target | Disposition |
+|---|---|---|
+| `requires.tools: [t]` | `tools_required` | Consumed |
+| `requires.env: [VAR]` | `requirements.env_vars` | Consumed |
+| `requires.bins` / `requires.config` | `shell` / `filesystem` permissions | **Refused** — local capability |
+| `category`, `tags`, `author` | — | Preserved + reported |
+
+#### The shapes published skills actually use
+
+Validated against **26 real published ClawHub skills** (each commit-pinned, with
+its source URL, license, and digest recorded in
+[`tests/fixtures/openclaw_skills/PROVENANCE.md`](https://github.com/amd/gaia/blob/main/tests/fixtures/openclaw_skills/PROVENANCE.md)).
+The documented schema is not what the registry contains, so the migrator reads
+all of these:
+
+| Divergence seen in the wild | How migration handles it |
+|---|---|
+| Vendor fields directly under `metadata`, no namespace key | Detected by field shape and migrated from where they are |
+| Vendor fields at the top level of the frontmatter | Same |
+| The namespace hoisted to a top-level `clawdis:` key | Same |
+| Aliases `metadata.clawdbot` / `metadata.clawdis` | Treated as `openclaw` |
+| The *same* payload duplicated under two aliases | **First-wins**, with a note — merging would double-count every requirement |
+| No frontmatter at all (~5% of the registry) | A per-skill blocker; the rest of the batch still migrates |
+| `envVars` entries keyed `key` rather than `name` | Both read |
+| `name` disagreeing with its directory | The migrated skill installs under its (coerced) `name`, satisfying GAIA's name-==-directory rule |
+
+Of the 26, **13 migrate cleanly and 13 are refused** — 10 for a local capability
+(they shell out) and 3 for having no frontmatter. That ratio is the honest shape
+of the corpus, not a shortfall: a skill whose whole purpose is running `git` or
+`tmux` cannot be bridged until the sandbox lands.
 
 <Warning>
 **No runtime adapter in v1.** The prior draft promised an `OpenClawAdapter` that
@@ -726,8 +979,10 @@ whole file with `write_file`.
 <Accordion title="5. Hermes skill + its metadata.gaia migration">
 
 A Hermes skill (left) and what `gaia skill migrate --from hermes` produces
-(right) — the `metadata.hermes` fields become `metadata.gaia`, and the result
-lands `experimental`.
+(right) — the modeled `metadata.hermes` fields become `metadata.gaia`, and the
+result lands `experimental`. Unmodeled ones (`category`) stay under
+`metadata.hermes`; `experimental` being the omitted default, the emitted file
+need not restate it (`gaia skill info` always shows the effective tier).
 
 ```yaml
 # BEFORE — Hermes
@@ -766,8 +1021,19 @@ metadata:
 </Accordion>
 <Accordion title="6. OpenClaw skill + its migration">
 
-An OpenClaw skill and its migrated form. `metadata.openclaw` requirements map to
-`metadata.gaia.requirements`; trust resets to `experimental`.
+An OpenClaw skill and the mapping `migrate` computes for it.
+`metadata.openclaw` requirements map to `metadata.gaia` fields and trust resets
+to `experimental`.
+
+<Warning>
+**This particular skill does not install in v1.** `bins: [git]` maps to
+`shell:execute:git`, a local-capability permission with no enforcement until the
+sandbox lands, so `gaia skill migrate` reports `git-status` as **unmigratable
+with that reason** rather than writing it. The AFTER block below is the mapping —
+the target state once the sandbox ships — not a file v1 produces. A skill needing
+local access is never silently stripped of the permission to make the migration
+succeed.
+</Warning>
 
 ```yaml
 # BEFORE — OpenClaw
@@ -821,8 +1087,8 @@ breaks because a GAIA feature is absent.
 | **Skill directory fails to parse** | Skipped from discovery **and surfaced** — logged at ERROR, listed in `SkillManager.discovery_errors`, printed by `gaia skill list`, which exits `4`. Never quietly missing. |
 | **Two roots ship the same skill `name`** | The higher-precedence copy wins and the loser stays visible via `SkillManager.shadowed()` / `gaia skill info`. Precedence is auditable, not silent. |
 | **A skill body references a file outside its own directory** | Rejected — `SkillManager.resource_path` refuses traversal, as does `.zip` import. |
-| **Enforcement layers not yet shipped** | `/api/skills`, the registry, `migrate`, tier ceilings, and the sandbox degrade to **absent**, not permissive: an unenforceable permission refuses the load rather than loading unguarded. |
-| **Tier signal unavailable** | Falls to `experimental` — the most-restrictive tier — never to a more-permissive default. Imported skills are re-stamped `experimental` regardless of the tier they claim. |
+| **Enforcement layers not yet shipped** | `/api/skills` and the sandbox degrade to **absent**, not permissive: an unenforceable permission refuses the load rather than loading unguarded. Install-time tier ceilings now ship. |
+| **Tier signal unavailable** | Falls to `experimental` — the most-restrictive tier — never to a more-permissive default. Imported and migrated skills are re-stamped `experimental` regardless of the tier they claim, and an unsigned or untrusted-key install is collapsed to `experimental` however high it claims. |
 
 **Future-gated phases are additive with precedence.** The `tools_required`
 signal that #1451 consumes returns `[]` cleanly until #887 lands
@@ -856,7 +1122,9 @@ OpenClaw `metadata.openclaw`).
 **Retractions — do not build against these:**
 
 - **`OpenClawAdapter` runtime adapter is dropped from v1.** Compatibility is
-  migration-only (`gaia skill migrate`); the runtime adapter is deferred.
+  migration-only — via `gaia skill migrate`, which **ships**
+  ([#692](https://github.com/amd/gaia/issues/692)); it is the *runtime* adapter
+  that is deferred, not the migration path.
 - **The flat top-level schema is superseded.** `permissions`, `security_tier`,
   `requirements`, and `tools` are now under `metadata.gaia`. Top-level `version`
   is the *only* GAIA superset key outside `metadata`.
@@ -864,17 +1132,25 @@ OpenClaw `metadata.openclaw`).
   reliance on `allowed-tools` for permission scoping is removed; permissions come
   from `metadata.gaia.permissions`.
 - **The five-root discovery list is superseded by three.** Project-local
-  `./.gaia/skills/` and the registry-lock root are deferred — see
-  [Agent Skills → Discovery](/spec/agent-skills#discovery-locations).
-- **Still greenfield, still PROPOSED:** the permission sandbox and tier-ceiling
-  enforcement, `/api/skills` and the UI panel, and
-  `gaia skill install|remove|search|publish|update|migrate`. Do not build against
-  these.
+  `./.gaia/skills/` is deferred — see
+  [Agent Skills → Discovery](/spec/agent-skills#discovery-locations). The
+  registry-lock root is **not** a fourth root: `gaia skill install` writes
+  `~/.gaia/skills/skill-lock.json` beside the skills it installs, so the lock is
+  provenance over the existing user root, not a new discovery location.
+- **Still greenfield, still PROPOSED:** the local-capability permission sandbox
+  and run-time enforcement, `/api/skills` and the UI panel, and
+  `gaia skill update`. Do not build against these.
 
-**No longer a retraction — these now exist** ([#888](https://github.com/amd/gaia/issues/888)):
-`gaia.skills`, `SkillManager`, `Agent.load_skill`, `~/.gaia/skills/`, and
-`gaia skill list|info|create|import|export`. An earlier revision of this document
-said they were "verified absent on `main`"; that is no longer true.
+**No longer a retraction — these now exist.** From
+[#888](https://github.com/amd/gaia/issues/888): `gaia.skills`, `SkillManager`,
+`Agent.load_skill`, `~/.gaia/skills/`, and
+`gaia skill list|info|create|import|export`. From
+[#2467](https://github.com/amd/gaia/issues/2467):
+`gaia skill search|install|remove|publish` (plus `keygen`/`trust`), bundle
+signing, install-time tier-ceiling enforcement, and `skill-lock.json`. From
+[#692](https://github.com/amd/gaia/issues/692): `gaia skill migrate` and
+`gaia.skills.migrate`. An earlier revision of this document said the #888 symbols
+were "verified absent on `main`"; that is no longer true of any of these sets.
 </Warning>
 
 ---
@@ -888,7 +1164,7 @@ speed. The bar:
 |---|---|---|
 | **Cross-spec field-name match** | Headline (contract) | `tools_required` (and every other emitted field) is byte-identical across #887, #1451, and this spec — zero drift. |
 | **Lossless round-trip** | Correctness | A bare agentskills.io skill loads in GAIA unchanged; a GAIA skill's standard fields parse in a standard runtime with `metadata.gaia` ignored, no parse break. |
-| **Migration fidelity** | Correctness | `gaia skill migrate` output validates against this schema and lands `experimental`. |
+| **Migration fidelity** | Correctness | `gaia skill migrate` output validates against this schema and lands `experimental`. (Met — verified against 26 real published ClawHub skills.) |
 | **No hallucinated runtime** | Grounding | Every cited symbol resolves on `main` or is marked PROPOSED. (Met — the Phase 1 symbols now resolve in `src/gaia/skills/`.) |
 | **Example validity** | Grounding | Every example parses as YAML; each tool skill's `tools` block round-trips against its `tools.py`. |
 | **Acceptance coverage** | Completeness | 100% of #691's acceptance criteria map to a section (see [Traceability](#acceptance-criteria-traceability)). |
@@ -955,40 +1231,61 @@ phases are additive. Each phase holds the prior floor until it lands.
   undeclared extra, parameter-name mismatch, required/optional flip, or type
   contradiction — with no partial load.
 
-**Deliberately deferred out of Phase 1:** tier-ceiling enforcement (a permission
-above its tier still loads if its domain is bridged), the project-local
-`./.gaia/skills/` root, the registry-lock root, and network-egress enforcement.
+**Deliberately deferred out of Phase 1:** tier-ceiling enforcement, the
+project-local `./.gaia/skills/` root, and network-egress enforcement. (The
+install-time half of the tier ceiling has since shipped with the marketplace —
+see Phase 4.)
 
-### Phase 2 — Permission enforcement + tier ceilings + sandbox (PROPOSED, [#1019](https://github.com/amd/gaia/issues/1019))
+### Phase 2 — Permission enforcement + load-time tier ceilings + sandbox (PROPOSED, [#1019](https://github.com/amd/gaia/issues/1019))
 
 The **connector bridge shipped early**, in Phase 1: `network:*` / `mcp:connect`
-already resolve to `ConnectorRequirement` at load-time. What remains is
-*enforcement* — the sandbox that makes local-capability domains loadable at all,
-tier ceilings, and network-egress policy over the declared `network` requirements.
+already resolve to `ConnectorRequirement` at load-time. The **install-time tier
+ceiling shipped with the marketplace** (Phase 4). What remains is the sandbox that
+makes local-capability domains loadable at all, the *load-time* ceiling — which
+covers a skill that never passed through install, e.g. one from `gaia skill
+create`/`import` or copied into a root by hand — and network-egress policy over
+the declared `network` requirements.
 
 **Success criteria:**
-- A skill requesting a permission above its tier ceiling fails to load.
+- A hand-placed skill requesting a permission above its tier ceiling fails to
+  **load** (installing one already fails).
 - `filesystem`/`shell`/`database`/`desktop`/`env` route to the sandbox and **load**
   instead of being refused.
 - A declared `network:<level>:<scope>` actually constrains egress.
 
-### Phase 3 — Agent UI dashboard + migration (PROPOSED)
+### Phase 3 — Agent UI dashboard (PROPOSED; [#701](https://github.com/amd/gaia/issues/701))
 
-`/api/skills` mirroring `/api/agents`; the skills management panel; `gaia skill
-migrate --from {hermes,openclaw,auto}`.
+`/api/skills` mirroring `/api/agents`, plus the skills management panel.
+
+`gaia skill migrate --from {hermes,openclaw,auto}` was slated for this phase and
+**shipped ahead of it** ([#692](https://github.com/amd/gaia/issues/692)) — it needs
+no UI surface, so it did not wait for one. Visual import remains part of this
+phase: it is the same migrator behind a panel that does not exist yet.
 
 **Success criteria:**
 - The panel lists installed skills with tier + version and supports
   install/remove (acceptance #4).
-- `migrate` output validates and lands `experimental` for Hermes and OpenClaw
-  inputs.
+- The panel offers OpenClaw import over `gaia.skills.migrate`, reusing the
+  shipped mapper rather than a second implementation.
 
-### Phase 4 — Marketplace + consumer wiring (PROPOSED; #647 / #887 / #1451)
+### Phase 4 — Marketplace (SHIPPED, [#2467](https://github.com/amd/gaia/issues/2467)) + consumer wiring (PROPOSED; #887 / #1451)
 
-Publish/registry REST; #887 emits conformant `SKILL.md`; #1451 unions
+**Shipped:** the hub's skills lane (`POST /publish/skill`, the `skills/` R2
+namespace, `GET /index.json` filtered by `type: "skill"`), `gaia skill
+search|install|remove|publish`, Ed25519 bundle signing with a trust store,
+install-time tier ceilings, `skill-lock.json`, and the declarative `skills:`
+block. The pre-publish security audit gate is
+[#2468](https://github.com/amd/gaia/issues/2468) — publish calls it and **fails
+loudly** when its engine is absent rather than publishing un-audited.
+
+**Still proposed:** `gaia skill update`; #887 emits conformant `SKILL.md`; #1451 unions
 `tools_required`.
 
 **Success criteria:**
+- A published skill installs by `name@<range>`, lock-tracked, and loads into an
+  agent — including a non-bundled one. (Met.)
+- An unsigned skill cannot install as `verified`; `experimental` needs
+  `--allow-experimental`; the per-tier permission ceiling is honored. (Met.)
 - #887-synthesized files validate against this schema unchanged.
 - #1451 unions a matched skill's `tools_required` **ahead of** semantic results
   (the contract in [`tool-loader.mdx`](/plans/tool-loader#part-3-skill-driven-signal-gated-on-887)).
@@ -1016,11 +1313,30 @@ implementation-level questions for whoever builds the runtime:
    marketplace (#647)?
 3. **`/api/skills` install sources.** Registry-only, or also local path / URL?
    The latter widens the install-time security surface.
-4. **Body-injection scanning.** Static scanning of instruction bodies for
-   injection patterns at import — required for `community`+, advisory for
-   `experimental`? (Also open in
-   [Agent Skills → Open questions](/spec/agent-skills#open-questions); resolve in
-   one place.)
+4. ~~**Body-injection scanning.**~~ **Resolved by
+   [#2468](https://github.com/amd/gaia/issues/2468): every skill's body is
+   scanned, and the tier decides the consequence.** The "required for
+   `community`+, advisory for `experimental`" split was the right instinct, but it
+   does not need to be its own policy — body findings feed the same tier gate as
+   code findings, so the split falls out for free: at `experimental` a body
+   finding is surfaced and does not gate, at `community` it forces `REVIEW`, at
+   `verified` a `medium` is already enough to hold it. See
+   [Pre-publish security audit](#pre-publish-security-audit) for the scan itself.
+
+   Two decisions inside it are worth recording, because both trade precision
+   against evasion:
+
+   - **Fenced and quoted text is downgraded one step, never ignored.** A skill
+     that documents injection patterns so the model can *refuse* them is the good
+     case, so blocking it would punish the careful author. But fenced text still
+     reaches the model — models do not reliably treat it as inert data — so a
+     code block buys a severity step, not a pass. Otherwise "put the directive in
+     a fence" would be the standing bypass.
+   - **Prohibitions are not directives.** "NEVER dump the environment" is the
+     security instruction, not a request for one, so a prohibition immediately
+     before a match suppresses it. Rules whose own pattern opens with a negation
+     (concealment's "do not tell the user") are unaffected, because the check
+     looks only at text *before* the match.
 5. ~~**`docs/spec/` relocation.**~~ **Settled with Phase 1: this document stays in
    `docs/plans/`.** [Agent Skills](/spec/agent-skills) is the spec surface — it
    already lives in `docs/spec/` and satisfies #691's "documented in `docs/spec/`"
@@ -1037,7 +1353,7 @@ implementation-level questions for whoever builds the runtime:
 ## Current state of the code
 
 The format is grounded on real primitives, and the Phase 1 runtime now **exists**.
-Only the enforcement, REST/UI, and marketplace layers are greenfield.
+Only the sandbox/run-time-enforcement and REST/UI layers are greenfield; the marketplace shipped in #2467.
 
 | Area | Symbol / fact | `file:line` | State |
 |---|---|---|---|
@@ -1063,11 +1379,18 @@ Only the enforcement, REST/UI, and marketplace layers are greenfield.
 | Manifest wiring | `AgentManifest.skill_sets` | `hub/manifest.py` | **Exists** (#2466) — malformed blocks raise `ManifestError` |
 | Skill-set selection | `SKILL_MANIFEST`, `skill_sets`, `select_skill_set`, `resolve_skill_set`, `load_skill_set`, `active_skill_set` | `agents/base/agent.py` | **Exists** (#2466) — one set per launch |
 | CLI | `gaia skill list\|info\|create\|import\|export` | `skills/cli.py` | **Exists** (#888) |
+| Migration | `migrate_text`, `migrate_skill_dir`, `install_migrated`, `detect_vendor`; `gaia skill migrate` | `skills/migrate.py` | **Exists** (#692) — OpenClaw/Hermes → GAIA |
+| Trust reset | `reset_security_tier()` — one path shared by `import` and `migrate` | `skills/format.py` | **Exists** (#692) |
 | Errors | `SkillError`, `SkillValidationError`, `SkillNotFoundError`, `SkillPermissionError`, `SkillSetError` | `skills/errors.py` | **Exists** (#888, #2466) |
-| **Permission sandbox / tier-ceiling enforcement** | — | **NOT FOUND** | **Greenfield — PROPOSED** (#1019) |
+| **Local-capability permission sandbox** | — | **NOT FOUND** | **Greenfield — PROPOSED** (#1019) |
+| **Install-time tier ceiling** | `enforce_tier_ceiling()`, `effective_tier()` | `skills/tiers.py` | **Exists** (#2467) |
+| **Bundle signing / trust store** | `sign_bundle()`, `verify_bundle()`, `TrustStore` | `skills/signing.py` | **Exists** (#2467) |
 | **`/api/skills` router + UI panel** | — | **NOT FOUND** | **Greenfield — PROPOSED** |
-| **`gaia skill install\|remove\|search\|publish\|update\|migrate`** | — | **NOT FOUND** | **Greenfield — PROPOSED** (#2467 / Phase 3) |
-| **Project-local `./.gaia/skills/` + registry-lock root** | — | **NOT FOUND** | **Deferred — PROPOSED** |
+| **`gaia skill install\|remove\|search\|publish`** | `_handle_install`, `_handle_publish`, … | `skills/cli.py` | **Exists** (#2467) |
+| **`gaia skill update`** | — | **NOT FOUND** | **Greenfield — PROPOSED** (marketplace) |
+| Hub catalog lane (server side) | `skill` catalog `type`, `POST /publish/skill`, `skills/` R2 prefix, SKILL.md publish validation, audit gate | `workers/agent-hub/src/` | **Exists** (#2467) |
+| **Project-local `./.gaia/skills/` root** | — | **NOT FOUND** | **Deferred — PROPOSED** |
+| **Registry lock (`skill-lock.json`)** | `SkillLock`, `LockEntry` | `skills/lock.py` | **Exists** (#2467) |
 
 ---
 
@@ -1106,7 +1429,7 @@ verbatim, mapped to its section and what it guarantees a consumer.
 |---|---|---|
 | ☑ SKILL.md spec documented in `docs/spec/` | [Agent Skills](/spec/agent-skills) is the `docs/spec/` surface; this doc stays in `docs/plans/` as the field grammar — settled, see [Open question 5](#open-questions) | A single authoritative field grammar. |
 | ☑ Permission model defined with granular `domain:level` syntax | [Permission model](#permission-model) | `<domain>:<level>:scope` grammar + the `ConnectorRequirement` bridge — no parallel grant ledger. Grammar and bridge **implemented**; enforcement of local-capability domains deferred (they refuse). |
-| ☑ Security tiers defined with promotion path | [Security tiers](#security-tiers) | Three install-time tiers + `experimental→community→verified`, distinct from run-time governance. Field **implemented**; ceilings deferred to Phase 2. |
-| ☐ Agent UI configuration dashboard has skills management panel | [Agent UI dashboard support](#agent-ui-dashboard-support) | A `/api/skills` shape mirroring the live `/api/agents` panel (**PROPOSED** — Phase 3). |
-| ◐ CLI: `gaia skill list`, `install`, `remove` | [CLI](#cli) | `list` **shipped**, alongside `info`/`create`/`import`/`export`. `install`/`remove` need the registry and land with the marketplace ([#2467](https://github.com/amd/gaia/issues/2467)). |
+| ☑ Security tiers defined + enforced with promotion path | [Security tiers](#security-tiers) | Three install-time tiers + `experimental→community→verified`, distinct from run-time governance. Field **implemented**; ceilings deferred to Phase 2. |
+| ☐ Agent UI configuration dashboard has skills management panel | [Agent UI dashboard support](#agent-ui-dashboard-support) | A `/api/skills` shape mirroring the live `/api/agents` panel (**PROPOSED** — Phase 3). The CLI half (`install`/`remove`) it would call now ships. |
+| ☑ CLI: `gaia skill list`, `install`, `remove` | [CLI](#cli) | All three **shipped**, alongside `info`/`create`/`import`/`export`/`migrate`/`search`/`publish`/`keygen`/`trust` ([#2467](https://github.com/amd/gaia/issues/2467), [#692](https://github.com/amd/gaia/issues/692)). |
 | ☑ Example skills written for 3 existing agents | [Example skills](#example-skills) 4a–4c | `rag-search`, `web-research`, `file-operations` — each using only real registry tool names. |

@@ -153,7 +153,9 @@ Before any release ships, run the consumer journey end-to-end (see issue A4 / co
 - **Project conventions:** `CLAUDE.md`
 - **Roadmap:** [`docs/roadmap.mdx`](docs/roadmap.mdx)
 - **Agent definitions:** `.claude/agents/*.md`
-- **Orchestration playbook:** `docs/playbooks/agent-orchestration.mdx` (see issue #A1)
+- **Orchestration playbook:** not written yet (tracked by issue #A1). The nearest existing
+  reference is [`docs/spec/orchestrator.mdx`](docs/spec/orchestrator.mdx) — the GAIA
+  orchestrator spec, not an agent-coordination playbook.
 - **Mobile design-system spec:** `docs/spec/mobile-design-system.md` (see issue #A3)
 - **Currently active stop-the-line PRs:** `gh pr list --repo amd/gaia --label stop-the-line`
 - **Consumer-critical issue tracker:** `gh issue list --repo amd/gaia --label consumer-critical`

@@ -106,6 +106,10 @@ public:
         responseQueue_.push_back(std::move(qr));
     }
 
+    /// Serve /api/v1/chat/completions as a real SSE stream when the request
+    /// body asks for one. Off by default so non-streaming tests are unaffected.
+    void enableSseStreaming(bool enabled) { sseStreaming_ = enabled; }
+
     void clearQueue() {
         std::lock_guard<std::mutex> lk(mu_);
         responseQueue_.clear();
@@ -154,6 +158,13 @@ private:
                               receivedBodies_.push_back(req.body);
                           }
                           ++requestCount_;
+
+                          if (sseStreaming_ &&
+                              req.body.find("\"stream\":true") != std::string::npos) {
+                              sendSseChatStream(res);
+                              return;
+                          }
+
                           QueuedResponse qr;
                           {
                               std::lock_guard<std::mutex> lk(mu_);
@@ -170,6 +181,84 @@ private:
                           }
                           res.status = qr.status;
                           res.set_content(qr.body, "application/json");
+                      });
+
+        registerGenericHttpRoutes();
+    }
+
+    /// OpenAI-style token stream terminated by the [DONE] sentinel.
+    static void sendSseChatStream(httplib::Response& res) {
+        auto index = std::make_shared<size_t>(0);
+        res.set_chunked_content_provider(
+            "text/event-stream", [index](size_t /*offset*/, httplib::DataSink& sink) {
+                static const std::vector<std::string> events = {
+                    R"(data: {"choices":[{"delta":{"content":"Hello"}}]})"
+                    "\n\n",
+                    R"(data: {"choices":[{"delta":{"content":" world"}}]})"
+                    "\n\n",
+                    "data: [DONE]\n\n"};
+                if (*index < events.size()) {
+                    const std::string& event = events[(*index)++];
+                    sink.write(event.data(), event.size());
+                } else {
+                    sink.done();
+                }
+                return true;
+            });
+    }
+
+    /// Transport-level routes under /test/… used by the gaia::HttpClient tests.
+    /// They carry no Lemonade semantics — they exercise headers, bodies,
+    /// streaming, slow responses, and error statuses.
+    void registerGenericHttpRoutes() {
+        // Echoes the X-Gaia-Test request header back as the body.
+        server_->Get("/test/echo", [](const httplib::Request& req, httplib::Response& res) {
+            res.set_header("X-Gaia-Echo", "pong");
+            res.set_content(req.get_header_value("X-Gaia-Test"), "text/plain");
+        });
+
+        // Echoes the request body back; reports the received Content-Type.
+        server_->Post("/test/echo", [](const httplib::Request& req, httplib::Response& res) {
+            res.set_header("X-Gaia-Content-Type", req.get_header_value("Content-Type"));
+            res.set_header("X-Gaia-Test-Seen", req.get_header_value("X-Gaia-Test"));
+            res.set_content(req.body, "text/plain");
+        });
+
+        // Responds after a delay — drives read-timeout tests.
+        server_->Get("/test/slow", [](const httplib::Request&, httplib::Response& res) {
+            std::this_thread::sleep_for(std::chrono::seconds(2));
+            res.set_content("late", "text/plain");
+        });
+
+        // Non-2xx with a body — drives error-status tests.
+        server_->Get("/test/boom", [](const httplib::Request&, httplib::Response& res) {
+            res.status = 500;
+            res.set_content("boom: upstream exploded", "text/plain");
+        });
+
+        // Chunked SSE-shaped stream ending in a [DONE] sentinel.
+        server_->Post("/test/stream", [](const httplib::Request&, httplib::Response& res) {
+            auto index = std::make_shared<size_t>(0);
+            res.set_chunked_content_provider(
+                "text/event-stream",
+                [index](size_t /*offset*/, httplib::DataSink& sink) {
+                    static const std::vector<std::string> chunks = {
+                        "data: alpha\n\n", "data: beta\n\n", "data: [DONE]\n\n"};
+                    if (*index < chunks.size()) {
+                        const std::string& chunk = chunks[(*index)++];
+                        sink.write(chunk.data(), chunk.size());
+                    } else {
+                        sink.done();
+                    }
+                    return true;
+                });
+        });
+
+        // Streaming request that fails before any stream body is produced.
+        server_->Post("/test/stream-error",
+                      [](const httplib::Request&, httplib::Response& res) {
+                          res.status = 503;
+                          res.set_content("stream unavailable", "text/plain");
                       });
     }
 
@@ -197,6 +286,7 @@ private:
     std::vector<std::string> receivedBodies_;
     std::atomic<int> requestCount_{0};
     std::atomic<int> loadCount_{0};
+    std::atomic<bool> sseStreaming_{false};
 };
 
 } // namespace bench

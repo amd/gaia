@@ -46,6 +46,10 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		}
 
 	case event.CanonicalTokenEvent:
+		if !m.firstToken {
+			m.firstToken = true
+			m.ttft = time.Since(m.queryStart)
+		}
 		m.buffer += e.Delta
 
 	case event.CanonicalToolCallEvent:
@@ -125,6 +129,11 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 
 	case event.CanonicalFinalEvent:
 		usage := event.CanonicalUsageOf(e)
+		// Server-reported ttft fallback for turns where no token ever
+		// streamed client-side (e.g. non-streaming tool-calling requests).
+		if !m.firstToken && usage.TTFT > 0 {
+			m.ttft = time.Duration(usage.TTFT * float64(time.Second))
+		}
 		// `answer` is the contract's authoritative field (§4), so it wins over the
 		// streamed tokens rather than the other way round — otherwise the view and
 		// the transcript pushed back as `context` could disagree. The buffered
@@ -143,6 +152,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			TTFT:      m.ttft,
 			Steps:     usage.Steps,
 			ToolsUsed: usage.ToolsUsed,
+			Tokens:    usage.Tokens,
 		})
 		// Drain here, not on doneMsg: streaming flips false in THIS handler, and doneMsg fires later, after a second query could already be in flight.
 		m.drainPendingPreScan()
@@ -160,6 +170,14 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		if usage.Steps > 0 {
 			m.totalSteps = usage.Steps
 		}
+		// This — not doneMsg — is the real settlement point for a daemon-relay
+		// turn: nothing below reschedules waitForEvent, so the channel's
+		// eventual close is never observed here. A cancelled turn that ends
+		// this way (the server's cooperative cancel just produces an ordinary
+		// `final` with the "stopped" text) must still clear cancelPending here,
+		// or the next Esc/Ctrl+C's guard is stuck failing for the rest of the
+		// session (#2901 second-cycle crash).
+		m.settleTurn()
 		m.updateViewport()
 		return m, nil, true
 
@@ -171,6 +189,9 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		m.streaming = false
 		m.activity = nil
 		m.question = nil
+		// See the matching comment on CanonicalFinalEvent above — this is the
+		// real settlement point, not doneMsg.
+		m.settleTurn()
 		m.updateViewport()
 		return m, nil, true
 
