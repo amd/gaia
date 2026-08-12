@@ -252,6 +252,7 @@ add_library(gaia_core
     src/vector_index.cpp
     src/repl.cpp
     src/json_event_handler.cpp
+    src/chunking.cpp
     src/skill.cpp
     src/database.cpp
 )
@@ -448,6 +449,7 @@ if(GAIA_BUILD_TESTS)
         tests/test_vector_index.cpp
         tests/test_repl.cpp
         tests/test_json_event_handler.cpp
+        tests/test_chunking.cpp
         tests/test_skill.cpp
         tests/test_database.cpp
     )
