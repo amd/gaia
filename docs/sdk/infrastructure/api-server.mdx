@@ -57,6 +57,47 @@ credentialed requests — wildcard origins combined with credentials are
 forbidden by the Fetch spec and would let any website the user visits call
 the local API.
 
+### High-risk tools are refused
+
+Tools that mutate the machine — `run_shell_command`, `write_file`, `edit_file`
+and the rest of
+[`TOOLS_REQUIRING_CONFIRMATION`](https://github.com/amd/gaia/blob/main/src/gaia/agents/base/agent.py),
+plus anything an agent adds via `CONFIRMATION_REQUIRED_TOOLS` — require explicit
+user approval. That approval is GAIA's backstop against prompt injection: a
+document, email, or web page the agent reads can talk the model into a
+destructive tool call the user never asked for.
+
+The OpenAI-compatible API is a one-shot request/response surface with no channel
+to ask the caller "allow this?", so **it refuses those tools rather than
+auto-approving them** — the tool returns
+`{"status": "denied", "error": "…requires explicit user approval…"}` instead of
+executing. The refusal is not silent to the caller either: streaming clients get
+a `tool_confirm_denied` event and non-streaming responses are prefixed with the
+same message, naming the tool and what to do instead:
+
+```
+Permission denied: Refused to run 'write_file': it requires explicit user
+approval, and the OpenAI-compatible API has no channel to ask for it. …
+```
+
+Run requests that need these tools through the **Agent UI** (`gaia chat --ui`),
+which is the surface with a real confirmation handshake
+(`permission_request` + `POST /api/chat/confirm-tool`).
+
+<Warning>
+For a trusted, single-user, localhost-only server you can opt out:
+
+```bash
+GAIA_AUTO_APPROVE_TOOLS=1 gaia api start
+```
+
+This disables the approval requirement for **every** high-risk tool, so any
+prompt injection that reaches the agent can run shell commands and write files.
+`gaia api start` prints a warning when it is set, and every approval taken this
+way is logged with the tool name. Never set it on a shared or network-exposed
+host. See [Output Handlers](../core/console#confirming-dangerous-tools).
+</Warning>
+
 ---
 
 ## 7.2 Custom API Agent
@@ -174,15 +215,10 @@ both surfaces.
 
 This stream is one-way — the client has no channel to answer a permission
 request — so tools in the agent's `confirmation_required_tools()` set (shell,
-file mutation, email send/delete) return
-`{"status": "denied", "error": "…requires explicit user approval…"}` instead of
-executing. The Agent UI handler is the surface with a real confirmation
-handshake (`permission_request` + `POST /api/chat/confirm-tool`).
-
-If you are deliberately running an unattended agent through this server and
-accept that the model can write files and run shell commands unprompted, set
-`GAIA_AUTO_APPROVE_TOOLS=1` in the server's environment; every approval is logged
-with the tool name. See [Output Handlers](../core/console#confirming-dangerous-tools).
+file mutation, email send/delete) are denied rather than executed, and the
+reason is streamed as a `tool_confirm_denied` event. See
+[High-risk tools are refused](#high-risk-tools-are-refused) above for the full
+contract and the unattended-approval opt-out.
 
 ---
 
