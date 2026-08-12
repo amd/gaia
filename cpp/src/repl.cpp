@@ -7,7 +7,7 @@
 #include "gaia/session.h"
 
 #ifdef GAIA_HAS_TUI
-#include "gaia/tui_console.h"
+#include "gaia/tui_app.h"
 #endif
 
 #include <atomic>
@@ -95,49 +95,48 @@ void ReplRunner::registerBuiltinCommands() {
 
 void ReplRunner::cmdClear(const std::string& /*args*/, Agent& agent) {
     agent.clearHistory();
-    std::cout << "Conversation history cleared." << std::endl;
+    emit("Conversation history cleared.");
 }
 
 void ReplRunner::cmdHelp(const std::string& /*args*/, Agent& /*agent*/) {
-    std::cout << "\nAvailable commands:\n";
+    std::string out = "Available commands:";
     for (const auto& [name, entry] : commands_) {
-        std::cout << "  " << name << "  -  " << entry.description << "\n";
+        out += "\n  " + name + "  -  " + entry.description;
     }
-    std::cout << std::endl;
+    emit(out);
 }
 
 void ReplRunner::cmdModel(const std::string& args, Agent& agent) {
     std::string modelName = trim(args);
     if (modelName.empty()) {
-        std::cout << "Current model: " << agent.config().modelId << std::endl;
+        emit("Current model: " + agent.config().modelId);
     } else {
         agent.setModel(modelName);
-        std::cout << "Model set to: " << modelName << std::endl;
+        emit("Model set to: " + modelName);
     }
 }
 
 void ReplRunner::cmdHistory(const std::string& /*args*/, Agent& /*agent*/) {
     if (!sessionStore_) {
-        std::cout << "No session store configured." << std::endl;
+        emit("No session store configured.");
         return;
     }
 
     auto sessions = sessionStore_->list();
     if (sessions.empty()) {
-        std::cout << "No saved sessions." << std::endl;
+        emit("No saved sessions.");
         return;
     }
 
-    std::cout << "\nSaved sessions:\n";
+    std::string out = "Saved sessions:";
     for (const auto& info : sessions) {
-        std::cout << "  " << info.id
-                  << "  (" << info.messageCount << " messages";
+        out += "\n  " + info.id + "  (" + std::to_string(info.messageCount) + " messages";
         if (!info.preview.empty()) {
-            std::cout << ", \"" << info.preview << "\"";
+            out += ", \"" + info.preview + "\"";
         }
-        std::cout << ")\n";
+        out += ")";
     }
-    std::cout << std::endl;
+    emit(out);
 }
 
 void ReplRunner::cmdExit(const std::string& /*args*/, Agent& /*agent*/) {
@@ -167,8 +166,7 @@ bool ReplRunner::tryDispatchCommand(const std::string& input) {
 
     auto it = commands_.find(cmdName);
     if (it == commands_.end()) {
-        std::cout << "Unknown command: " << cmdName
-                  << ". Type /help for available commands." << std::endl;
+        emit("Unknown command: " + cmdName + ". Type /help for available commands.");
         return true; // It was a command attempt, just unknown
     }
 
@@ -220,18 +218,30 @@ bool ReplRunner::isInteractiveTerminal() {
     return GAIA_ISATTY(GAIA_FILENO(stdout)) != 0;
 }
 
-void ReplRunner::configureOutputHandler() {
-    bool shouldUseTui = tuiOverride_ ? useTui_ : isInteractiveTerminal();
+void ReplRunner::setOutputSink(ReplOutputSink sink) {
+    outputSink_ = std::move(sink);
+}
 
-#ifdef GAIA_HAS_TUI
-    if (shouldUseTui) {
-        agent_.setOutputHandler(std::make_unique<TuiConsole>());
+void ReplRunner::emit(const std::string& text) {
+    if (outputSink_) {
+        outputSink_(text);
         return;
     }
+    std::cout << text << std::endl;
+}
+
+bool ReplRunner::willUseTui() const {
+#ifdef GAIA_HAS_TUI
+    if (tuiOverride_) return useTui_;
+    // FTXUI drives the terminal from both ends: it needs a real tty on stdin
+    // as well as stdout.
+    return isInteractiveTerminal() && GAIA_ISATTY(GAIA_FILENO(stdin)) != 0;
 #else
-    (void)shouldUseTui; // suppress unused warning
+    return false;
 #endif
-    // Fallback: CleanConsole for piped output or --no-tui
+}
+
+void ReplRunner::configureOutputHandler() {
     agent_.setOutputHandler(std::make_unique<CleanConsole>());
 }
 
@@ -253,8 +263,101 @@ void ReplRunner::printBanner() {
 void ReplRunner::run() {
     exitRequested_ = false;
 
-    // Configure output handler (TuiConsole vs CleanConsole)
+#ifdef GAIA_HAS_TUI
+    if (willUseTui()) {
+        runTui();
+        return;
+    }
+#endif
+    runPlain();
+}
+
+// ---------------------------------------------------------------------------
+// runTui() — fullscreen interactive TUI (FTXUI owns the screen)
+// ---------------------------------------------------------------------------
+
+#ifdef GAIA_HAS_TUI
+void ReplRunner::runTui() {
+    // Constructing the app installs the transcript as the agent's output
+    // handler and swaps the stdin confirm callback for the modal-backed one.
+    TuiAppOptions options;
+    options.title = "GAIA Agent";
+    options.prompt = prompt_;
+
+    // The sink outlives the app only through this guard: an exception out of
+    // the loop must not leave outputSink_ pointing at a destroyed TuiApp.
+    struct SinkGuard {
+        ReplRunner* runner;
+        ~SinkGuard() { runner->setOutputSink(nullptr); }
+    } sinkGuard{this};
+
+    // Scoped so the app (and with it the worker thread that may still be
+    // calling emit()) is torn down before the sink is cleared.
+    {
+        TuiApp app(agent_, options);
+
+        // Built-in slash commands print with std::cout, which would be written
+        // over the screen; route them into the transcript instead.
+        setOutputSink([&app](const std::string& text) { app.transcript().addSystemLine(text); });
+
+        app.setCommandDispatcher([this, &app](const std::string& input) {
+            bool handled = tryDispatchCommand(input);
+            if (exitRequested_) app.requestExit();
+            return handled;
+        });
+
+        if (showBanner_) {
+            app.transcript().addSystemLine("[--] GAIA Agent  |  model: " + agent_.config().modelId);
+            app.transcript().addSystemLine("[--] /help for commands, /exit to quit");
+        }
+
+        if (!resumeId_.empty() && sessionStore_) {
+            try {
+                auto history = sessionStore_->load(resumeId_);
+                agent_.setHistory(std::move(history));
+                sessionId_ = resumeId_;
+                app.transcript().addSystemLine("[ok] resumed session: " + resumeId_);
+            } catch (const std::exception& e) {
+                app.transcript().printError(std::string("failed to resume session: ") + e.what() +
+                                            " - run with --list-sessions to see valid ids");
+            }
+        }
+
+        if (sessionId_.empty() && sessionStore_) {
+            sessionId_ = SessionStore::generateId();
+        }
+
+        // No std::signal(SIGINT) here: FTXUI installs its own terminal and signal
+        // handling, and Ctrl-C is delivered to the component tree as an event.
+        try {
+            app.run();
+        } catch (...) {
+            saveSession();  // never drop the conversation on the way out
+            throw;
+        }
+    }
+
+    saveSession();
+}
+#endif // GAIA_HAS_TUI
+
+// ---------------------------------------------------------------------------
+// runPlain() — line-oriented loop for pipes and --no-tui
+// ---------------------------------------------------------------------------
+
+void ReplRunner::runPlain() {
+    // Configure output handler (CleanConsole)
     configureOutputHandler();
+
+#ifdef GAIA_HAS_TUI
+    // Say why the TUI was skipped when the user is plainly sitting at a
+    // terminal (mintty/MSYS report stdin as a pipe) instead of degrading in
+    // silence.
+    if (!tuiOverride_ && isInteractiveTerminal()) {
+        std::cerr << "Note: stdin is not a terminal, so the interactive TUI is disabled. "
+                     "Force it with the agent's --tui flag.\n";
+    }
+#endif
 
     // Print welcome banner
     if (showBanner_) {
@@ -355,7 +458,7 @@ void ReplRunner::run() {
 // ---------------------------------------------------------------------------
 
 int ReplRunner::runOnce(const std::string& query) {
-    // Configure output handler before the query (TuiConsole vs CleanConsole)
+    // Single-query mode has no event loop, so it always uses CleanConsole.
     configureOutputHandler();
 
     try {

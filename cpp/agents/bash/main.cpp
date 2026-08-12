@@ -13,6 +13,7 @@
 //   gaia-bash --list-sessions     List saved sessions and exit
 //   gaia-bash --model <name>      Override the default model
 //   gaia-bash --no-tui            Force CleanConsole output
+//   gaia-bash --tui               Force the interactive TUI (MSYS/mintty)
 //   gaia-bash --json-events       Emit JSONL events to stdout (for TUI/WebUI)
 //   gaia-bash --query "text"      Non-interactive single query (pair with --json-events)
 //   gaia-bash --debug             Enable debug logging
@@ -53,6 +54,7 @@ static void printUsage(const char* progName) {
               << "  " << progName << " --list-sessions       List saved sessions\n"
               << "  " << progName << " --model <name>        Override model\n"
               << "  " << progName << " --no-tui              Force plain console output\n"
+              << "  " << progName << " --tui                 Force the interactive TUI\n"
               << "  " << progName << " --json-events         JSONL events to stdout (for TUI/WebUI)\n"
               << "  " << progName << " --query \"<text>\"       Non-interactive query (use with --json-events)\n"
               << "  " << progName << " --debug               Enable debug logging\n"
@@ -94,6 +96,7 @@ int main(int argc, char* argv[]) {
         bool serveMode = false;
         bool mcpMode = false;
         bool noTui = false;
+        bool forceTui = false;
         bool jsonEvents = false;
         std::string queryArg;
         bool debug = false;
@@ -145,6 +148,8 @@ int main(int argc, char* argv[]) {
                 }
             } else if (arg == "--no-tui") {
                 noTui = true;
+            } else if (arg == "--tui") {
+                forceTui = true;
             } else if (arg == "--json-events") {
                 jsonEvents = true;
             } else if (arg == "--query") {
@@ -302,76 +307,81 @@ int main(int argc, char* argv[]) {
 
         if (noTui) {
             repl.setUseTui(false);
+        } else if (forceTui) {
+            // Terminals that report stdin as a pipe (MSYS/mintty) need this.
+            repl.setUseTui(true);
         }
 
         // Register bash-specific slash commands
         repl.addCommand("/run", "Execute a bash command directly",
-            [](const std::string& args, gaia::Agent& a) {
+            [&repl](const std::string& args, gaia::Agent& a) {
                 if (args.empty()) {
-                    a.console().printWarning("Usage: /run <command>");
+                    repl.emit("Usage: /run <command>");
                     return;
                 }
                 // Execute directly via bash_execute tool
                 gaia::json toolArgs = {{"command", args}};
                 auto result = a.toolRegistry().executeTool("bash_execute", toolArgs);
                 if (result.contains("error")) {
-                    a.console().printError(result["error"].get<std::string>());
-                } else {
-                    std::string output;
-                    if (result.contains("stdout") && !result["stdout"].get<std::string>().empty()) {
-                        output = result["stdout"].get<std::string>();
-                    }
-                    if (result.contains("stderr") && !result["stderr"].get<std::string>().empty()) {
-                        if (!output.empty()) output += "\n";
-                        output += result["stderr"].get<std::string>();
-                    }
-                    if (!output.empty()) {
-                        a.console().printInfo(output);
-                    }
-                    int exitCode = result.value("exit_code", -1);
-                    if (exitCode != 0) {
-                        a.console().printWarning("Exit code: " + std::to_string(exitCode));
-                    }
+                    repl.emit("Error: " + result["error"].get<std::string>());
+                    return;
+                }
+                std::string output;
+                if (result.contains("stdout") && !result["stdout"].get<std::string>().empty()) {
+                    output = result["stdout"].get<std::string>();
+                }
+                if (result.contains("stderr") && !result["stderr"].get<std::string>().empty()) {
+                    if (!output.empty()) output += "\n";
+                    output += result["stderr"].get<std::string>();
+                }
+                int exitCode = result.value("exit_code", -1);
+                if (exitCode != 0) {
+                    if (!output.empty()) output += "\n";
+                    output += "Exit code: " + std::to_string(exitCode);
+                }
+                if (!output.empty()) {
+                    repl.emit(output);
                 }
             });
 
         repl.addCommand("/env", "Show environment info (shell, OS, tools)",
-            [](const std::string& /*args*/, gaia::Agent& a) {
+            [&repl](const std::string& /*args*/, gaia::Agent& a) {
                 auto result = a.toolRegistry().executeTool("env_inspect", gaia::json::object());
                 if (result.contains("error")) {
-                    a.console().printError(result["error"].get<std::string>());
+                    repl.emit("Error: " + result["error"].get<std::string>());
                 } else {
-                    // Print formatted environment info directly to stdout
-                    // (printInfo is a no-op in CleanConsole, so use cout)
+                    // Route through the console: raw std::cout would be drawn
+                    // over the TUI's fullscreen screen.
+                    std::string report;
                     if (result.contains("shell")) {
-                        std::cout << gaia::color::CYAN << "  Shell: "
-                                  << gaia::color::RESET << result["shell"].get<std::string>() << std::endl;
+                        report += "Shell: " + result["shell"].get<std::string>();
                     }
                     if (result.contains("os")) {
                         std::string os = result["os"].get<std::string>();
                         auto cr = os.find('\r');
                         if (cr != std::string::npos) os = os.substr(0, cr);
-                        std::cout << gaia::color::CYAN << "  OS:    "
-                                  << gaia::color::RESET << os << std::endl;
+                        if (!report.empty()) report += "\n";
+                        report += "OS:    " + os;
                     }
+                    std::string missing;
                     if (result.contains("tools") && result["tools"].is_object()) {
-                        std::string installed, missing;
+                        std::string installed;
                         for (auto& [name, avail] : result["tools"].items()) {
-                            if (avail.get<bool>()) {
-                                if (!installed.empty()) installed += ", ";
-                                installed += name;
-                            } else {
-                                if (!missing.empty()) missing += ", ";
-                                missing += name;
-                            }
+                            std::string& bucket = avail.get<bool>() ? installed : missing;
+                            if (!bucket.empty()) bucket += ", ";
+                            bucket += name;
                         }
                         if (!installed.empty()) {
-                            std::cout << gaia::color::GREEN << "  Tools: "
-                                      << gaia::color::RESET << installed << std::endl;
+                            if (!report.empty()) report += "\n";
+                            report += "Tools: " + installed;
                         }
-                        if (!missing.empty()) {
-                            a.console().printWarning("Not found: " + missing);
-                        }
+                    }
+                    if (!missing.empty()) {
+                        if (!report.empty()) report += "\n";
+                        report += "Not found: " + missing;
+                    }
+                    if (!report.empty()) {
+                        repl.emit(report);
                     }
                 }
             });
