@@ -26,7 +26,9 @@ tools). In order:
 8. **Enforce the permission ceiling** for the effective tier, then prompt for
    dangerous grants (``community``) or require ``--allow-experimental``.
 9. **Copy in and re-stamp** the effective tier into the installed ``SKILL.md``,
-   and record the whole decision in ``skill-lock.json``.
+   and record the whole decision in ``skill-lock.json`` — including a digest of
+   the bytes that landed, which is what lets :mod:`gaia.skills.drift` notice if
+   they change afterwards.
 
 Steps 4/9 reuse ``gaia skill import``'s materialize → parse → copy → re-stamp
 shape on purpose: one save path with one security behavior. Import always stamps
@@ -45,6 +47,7 @@ from typing import Any, Callable, Optional
 
 from gaia.hub.catalog import Fetcher, get_hub_base_url
 from gaia.logger import get_logger
+from gaia.skills.audit.findings import content_digest
 from gaia.skills.errors import SkillError, SkillNotFoundError, SkillValidationError
 from gaia.skills.format import (
     SKILL_FILENAME,
@@ -294,6 +297,10 @@ def install_skill(
                 SKILL_FILENAME,
             )
 
+    # Hashed after the re-stamp so the digest describes the bytes that landed,
+    # not the ones in the archive. `gaia skill lock` compares against this.
+    installed_digest = content_digest(target)
+
     lock.record(
         LockEntry(
             name=name,
@@ -306,6 +313,7 @@ def install_skill(
             hub_url=base_url or get_hub_base_url(),
             artifact_sha256=artifact.sha256,
             artifact_filename=artifact.filename,
+            content_digest=installed_digest,
             claimed_tier=claimed,
             attested_tier=attested,
             installed_tier=tier,
@@ -532,10 +540,13 @@ def remove_skill(name: str, *, manager: Optional[SkillManager] = None) -> Remove
 
 
 def installed_provenance(manager: Optional[SkillManager] = None) -> dict[str, Any]:
-    """``{name: lock-entry-dict}`` for every hub-installed skill.
+    """``{name: lock-entry-dict}`` for every skill the lock tracks.
 
     Feeds ``gaia skill list --json`` and the (future) ``/api/skills`` router, so
-    both read provenance from the lock rather than re-deriving it.
+    both read provenance from the lock rather than re-deriving it. Each entry
+    carries its own ``source`` — ``hub`` for an install, ``local`` for a skill
+    ``gaia skill lock --relock`` started tracking — so a caller that only wants
+    hub provenance filters on it rather than assuming it.
     """
     resolver = manager if manager is not None else SkillManager()
     lock = SkillLock.load(resolver.user_root)

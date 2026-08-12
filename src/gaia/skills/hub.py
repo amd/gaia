@@ -97,11 +97,26 @@ class SkillSearchResult:
     actionably different from a fresh one: a skill listed from cache may have been
     unpublished, and one published since will be missing. Presenting cached
     results as current is the quiet-wrong-answer failure mode.
+
+    ``offline`` alone does not say *how* stale, though — a cache from ten minutes
+    ago and one from three months ago look the same to a caller. ``age_seconds``
+    and ``stale`` answer that.
     """
 
     entries: list[dict[str, Any]]
     offline: bool = False
     generated_at: Optional[str] = None
+    #: Seconds since the catalog behind these results came off the network.
+    age_seconds: Optional[float] = None
+    #: True past :data:`gaia.hub.catalog.CACHE_STALE_AFTER_SECONDS`.
+    stale: bool = False
+
+    @property
+    def age_text(self) -> str:
+        """The catalog's age as a phrase ("3 days ago")."""
+        from gaia.hub.catalog import describe_age
+
+        return describe_age(self.age_seconds)
 
     def __iter__(self):
         return iter(self.entries)
@@ -179,13 +194,19 @@ def search_skills(
     )
     if index.offline:
         log.warning(
-            "Serving %d skill(s) from the offline catalog cache (generated %s) — "
-            "the hub was unreachable, so this list may be stale",
+            "Serving %d skill(s) from the offline catalog cache, last refreshed %s "
+            "(hub generated it %s) — the hub was unreachable, so this list may be "
+            "stale",
             len(matched),
+            index.age_text,
             index.generated_at or "unknown",
         )
     return SkillSearchResult(
-        entries=matched, offline=index.offline, generated_at=index.generated_at
+        entries=matched,
+        offline=index.offline,
+        generated_at=index.generated_at,
+        age_seconds=index.age_seconds,
+        stale=index.stale,
     )
 
 

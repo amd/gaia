@@ -23,6 +23,11 @@ what to try when it can produce no remote catalog at all. The unified
 stays usable offline — and every offline path is flagged (`offline=True`)
 rather than hidden. Installing from the hub still fails loudly (you cannot pull
 an artifact from an unreachable hub).
+
+Offline is supported; pretending offline data is current is not. The disk cache
+records when it was last refreshed, and every result carries ``age_seconds``
+plus a ``stale`` flag once :data:`CACHE_STALE_AFTER_SECONDS` has passed, so a
+caller can say "3 months old" instead of rendering it as today's catalog.
 """
 
 from __future__ import annotations
@@ -45,6 +50,16 @@ DEFAULT_HUB_URL = "https://hub.amd-gaia.ai"
 # In-memory cache TTL for index.json. The UI polls the catalog whenever the
 # discover panel opens; 5 minutes keeps it fresh without hammering R2.
 CACHE_TTL_SECONDS = 300
+
+# How old the on-disk cache may get before serving it is worth a warning. The
+# hub rewrites index.json on every publish, so a week without a successful fetch
+# means new skills are invisible, unpublished ones still listed, and a
+# security-tier change unseen. Offline still works — it just says how old it is.
+CACHE_STALE_AFTER_SECONDS = 7 * 24 * 60 * 60
+
+# When the disk cache was last refreshed from the network, stamped into the
+# cached document. Underscore-prefixed so it cannot collide with a hub field.
+CACHE_STAMP_KEY = "_gaia_cached_at"
 
 # HTTP timeout for catalog fetches (seconds). Short — the catalog is small and
 # the offline cache covers a slow/absent network.
@@ -166,7 +181,10 @@ def clear_cache() -> None:
 def _write_disk_cache(cache_path: Path, data: Dict[str, Any]) -> None:
     try:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
-        cache_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        # Stamp a copy: the caller keeps the hub's document, and the in-memory
+        # cache never picks up a field the hub did not send.
+        stamped = {**data, CACHE_STAMP_KEY: _utc_now_iso()}
+        cache_path.write_text(json.dumps(stamped, indent=2), encoding="utf-8")
     except OSError as exc:
         # Cache write failure must not break a successful live fetch; log it.
         logger.warning("catalog: could not write cache %s: %s", cache_path, exc)
@@ -182,6 +200,70 @@ def _read_disk_cache(cache_path: Path) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _utc_now_iso() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def _parse_stamp(value: Any) -> Optional[float]:
+    """Epoch seconds for an ISO-8601 stamp, or ``None`` if it is unusable."""
+    from datetime import datetime, timezone
+
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        logger.warning("catalog: cache stamp %r is not an ISO-8601 time", value)
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.timestamp()
+
+
+def cache_age_seconds(
+    cache_path: Optional[Path] = None,
+    cached: Optional[Dict[str, Any]] = None,
+) -> Optional[float]:
+    """How long ago the disk cache was last refreshed from the network.
+
+    Reads the stamp this module writes. A cache written by an older GAIA has no
+    stamp, so its file mtime is used instead — a real measurement of the same
+    fact, not a guess, and the only alternative is claiming an unknown age is
+    fresh. ``None`` means there is no cache at all.
+    """
+    path = Path(cache_path) if cache_path else default_cache_path()
+    document = cached if cached is not None else _read_disk_cache(path)
+    if document is None:
+        return None
+
+    stamped = _parse_stamp(document.get(CACHE_STAMP_KEY))
+    if stamped is not None:
+        return max(0.0, time.time() - stamped)
+
+    try:
+        return max(0.0, time.time() - path.stat().st_mtime)
+    except OSError as exc:
+        logger.warning("catalog: could not stat cache %s: %s", path, exc)
+        return None
+
+
+def describe_age(age_seconds: Optional[float]) -> str:
+    """``age_seconds`` as something a person reads ("3 days ago")."""
+    if age_seconds is None:
+        return "unknown"
+    if age_seconds < 90:
+        return "just now"
+    minutes = age_seconds / 60
+    if minutes < 90:
+        return f"{round(minutes)} minutes ago"
+    hours = minutes / 60
+    if hours < 36:
+        return f"{round(hours)} hours ago"
+    return f"{round(hours / 24)} days ago"
+
+
 # ---------------------------------------------------------------------------
 # Catalog fetch
 # ---------------------------------------------------------------------------
@@ -195,6 +277,17 @@ class CatalogResult:
     offline: bool
     source: str  # "memory" | "network" | "cache"
     generated_at: Optional[str] = None
+    #: Seconds since this data last came off the network. 0 for a live fetch,
+    #: ``None`` only when the age genuinely cannot be established.
+    age_seconds: Optional[float] = None
+    #: True once :data:`CACHE_STALE_AFTER_SECONDS` has passed. Offline still
+    #: works — the caller is told how old the answer is, not refused one.
+    stale: bool = False
+
+    @property
+    def age_text(self) -> str:
+        """The age as a phrase, for anything user-facing."""
+        return describe_age(self.age_seconds)
 
 
 def load_index(
@@ -212,6 +305,10 @@ def load_index(
     2. Live network fetch → refreshes both caches, ``offline=False``.
     3. On network/parse failure, the on-disk cache → ``offline=True``.
     4. If none of the above yield data, raises :class:`CatalogError`.
+
+    Every result carries ``age_seconds`` and ``stale``. Serving a cache past
+    :data:`CACHE_STALE_AFTER_SECONDS` logs a warning and sets ``stale`` — going
+    offline is supported, presenting months-old data as current is not.
     """
     base_url = (base_url or get_hub_base_url()).rstrip("/")
     fetcher = fetcher or fetch_bytes
@@ -230,6 +327,9 @@ def load_index(
             offline=False,
             source="memory",
             generated_at=data.get("generated_at"),
+            # Bounded by CACHE_TTL_SECONDS, so never stale by construction.
+            age_seconds=now - _MEM.fetched_at,
+            stale=False,
         )
 
     try:
@@ -246,11 +346,26 @@ def load_index(
                 f"available. Check your internet connection or GAIA_HUB_URL "
                 f"(currently {base_url}). Original error: {exc}"
             ) from exc
+        age = cache_age_seconds(cache_path, cached=cached)
+        stale = age is not None and age >= CACHE_STALE_AFTER_SECONDS
+        if stale:
+            logger.warning(
+                "catalog: serving the offline cache %s, last refreshed %s (%s). "
+                "Newly published packages are missing and unpublished ones are "
+                "still listed. Reconnect and re-run to refresh, or check "
+                "GAIA_HUB_URL (currently %s).",
+                cache_path,
+                describe_age(age),
+                cached.get(CACHE_STAMP_KEY) or "no timestamp; using the file mtime",
+                base_url,
+            )
         return CatalogResult(
             agents=_validate_index(cached),
             offline=True,
             source="cache",
             generated_at=cached.get("generated_at"),
+            age_seconds=age,
+            stale=stale,
         )
 
     # Live fetch succeeded — refresh both caches.
@@ -263,6 +378,8 @@ def load_index(
         offline=False,
         source="network",
         generated_at=data.get("generated_at"),
+        age_seconds=0.0,
+        stale=False,
     )
 
 
@@ -539,6 +656,11 @@ class UnifiedCatalog:
     skills: List[Dict[str, Any]] = field(default_factory=list)
     offline: bool = False
     generated_at: Optional[str] = None
+    #: Seconds since this data last came off the network (see
+    #: :class:`CatalogResult`). Surfaced so the UI can say how old the list is
+    #: instead of rendering a months-old catalog as the current one.
+    age_seconds: Optional[float] = None
+    stale: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -546,6 +668,9 @@ class UnifiedCatalog:
             "skills": self.skills,
             "offline": self.offline,
             "generated_at": self.generated_at,
+            "age_seconds": self.age_seconds,
+            "age_text": describe_age(self.age_seconds),
+            "stale": self.stale,
             "total": len(self.agents),
         }
 
@@ -574,6 +699,8 @@ def build_catalog(
         index_agents = result.agents
         offline = result.offline
         generated_at = result.generated_at
+        age_seconds = result.age_seconds
+        stale = result.stale
     except CatalogError as exc:
         # No remote catalog AND no cache: still show what's installed locally.
         logger.warning(
@@ -583,6 +710,8 @@ def build_catalog(
         index_agents = []
         offline = True
         generated_at = None
+        age_seconds = None
+        stale = False
 
     merged = merge_with_registry(
         index_agents,
@@ -595,4 +724,6 @@ def build_catalog(
         skills=skill_entries(index_agents),
         offline=offline,
         generated_at=generated_at,
+        age_seconds=age_seconds,
+        stale=stale,
     )

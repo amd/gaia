@@ -244,7 +244,10 @@ The user root is **also** the registry-lock root: `gaia skill install` writes
 `~/.gaia/skills/skill-lock.json` beside the skills it installs
 ([#2467](https://github.com/amd/gaia/issues/2467)). The lock is provenance, not a
 fourth discovery root — discovery still reads the directory, and a skill created
-or imported locally simply has no lock entry.
+or imported locally has no lock entry until `gaia skill lock --relock` records one
+as `source: local`. Loading a skill from the user root does check it against the
+lock: a `community` / `verified` install whose files changed since is refused,
+because those are not the bytes its signature covered.
 </Note>
 
 ### Progressive disclosure
@@ -566,7 +569,9 @@ immutability rules ([#2467](https://github.com/amd/gaia/issues/2467)).
   resolves a SemVer range against the catalog, verifies the artifact checksum and
   the bundle signature, enforces the tier ceiling, and records the outcome in
   `~/.gaia/skills/skill-lock.json` ([#2467](https://github.com/amd/gaia/issues/2467),
-  [#647](https://github.com/amd/gaia/issues/647)); publish the other direction with
+  [#647](https://github.com/amd/gaia/issues/647)) — including a digest of the
+  installed files, which `gaia skill lock` compares against later; publish the
+  other direction with
   `gaia skill publish`. Off-hub, `gaia skill import <folder|zip|url>` copies a
   skill in (always stamped `experimental` — no hub provenance to trust) and
   `gaia skill export <name>` produces the bundle. See
