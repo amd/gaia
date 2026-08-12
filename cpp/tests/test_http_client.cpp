@@ -318,6 +318,22 @@ TEST(HttpClientTest, NonPositiveConfiguredTimeoutIsRejected) {
     EXPECT_THROW(HttpClient{cfg}, std::invalid_argument);
 }
 
+TEST(HttpClientTest, HttpsNeverSilentlyDowngradesToPlaintext) {
+    // Point an https:// URL at a plaintext server. An HTTP-only build must raise
+    // "no TLS support"; an OpenSSL build must fail the handshake. Either way it
+    // throws — what must never happen is a quiet downgrade returning the
+    // plaintext 200, which would send Authorization headers in the clear.
+    bench::MockLlmServer server;
+    HttpClient http("https://127.0.0.1:" + std::to_string(server.port()));
+
+    try {
+        HttpResponse res = http.get("/api/v1/health");
+        FAIL() << "https:// downgraded to plaintext and returned HTTP " << res.status;
+    } catch (const HttpError& e) {
+        EXPECT_NE(e.url().find("https://"), std::string::npos);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Path joining and moves
 // ---------------------------------------------------------------------------
