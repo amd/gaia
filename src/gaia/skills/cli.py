@@ -436,7 +436,7 @@ def _handle_migrate(args: argparse.Namespace) -> int:
             outcomes.append(
                 migrate_skill_dir(source, vendor=args.vendor, name=args.name)
             )
-        except SkillValidationError as exc:
+        except SkillError as exc:
             # One undetectable skill must not hide the report for the rest of a
             # collection — the same treatment no-frontmatter sources already get.
             outcomes.append(

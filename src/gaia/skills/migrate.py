@@ -439,7 +439,9 @@ def _map_requires(
         )
         consumed.add("config")
 
-    leftover = sorted(set(requires) - consumed)
+    # str() every key: YAML 1.1 turns a bare `on:`/`no:` key into a bool, and
+    # sorting or joining a mixed-type key set raises.
+    leftover = sorted(str(key) for key in set(requires) - consumed)
     if leftover:
         outcome.notes.append(
             f"{prefix} keys {', '.join(leftover)} have no GAIA equivalent and were "
@@ -785,7 +787,8 @@ def migrate_text(
         extra_fields[key] = value
     if extra_fields:
         outcome.notes.append(
-            f"{source}: top-level key(s) {', '.join(sorted(extra_fields))} are not part "
+            f"{source}: top-level key(s) "
+            f"{', '.join(sorted(str(key) for key in extra_fields))} are not part "
             "of the Agent Skills base; preserved verbatim in the frontmatter."
         )
 
@@ -918,7 +921,20 @@ def install_migrated(
 
     skill = outcome.skill
     target = Path(destination_root) / skill.name
+    source_dir = outcome.source.parent if outcome.source.is_file() else None
     if target.exists():
+        if (
+            force
+            and source_dir is not None
+            and target.resolve() == source_dir.resolve()
+        ):
+            # --force replaces the directory; over the source that is a delete.
+            raise SkillValidationError(
+                f"Refusing to install '{skill.name}' on top of its own source at "
+                f"{target}: --force replaces the directory, which would destroy the "
+                "source skill and every support file beside it. Migrate to a "
+                "different directory with --out <dir>, then swap it in yourself."
+            )
         if not force:
             raise SkillValidationError(
                 f"Skill '{skill.name}' is already installed at {target}. Pass --force "
@@ -927,8 +943,7 @@ def install_migrated(
         shutil.rmtree(target)
     target.mkdir(parents=True)
 
-    if copy_support_files and outcome.source.is_file():
-        source_dir = outcome.source.parent
+    if copy_support_files and source_dir is not None:
         for entry in sorted(source_dir.iterdir()):
             if entry.name == SKILL_FILENAME:
                 continue

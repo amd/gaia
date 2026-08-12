@@ -738,6 +738,28 @@ def test_cli_migrate_rejects_name_for_a_batch(run_cli, tmp_path):
     assert "--name applies to a single skill" in err
 
 
+def _subprocess_env(tmp_path: Path) -> dict[str, str]:
+    """A minimal env for the real CLI, with a home directory on every platform.
+
+    Windows resolves ``Path.home()`` from ``USERPROFILE``, not ``HOME``; without
+    it ``import gaia`` dies before the CLI ever parses an argument.
+    """
+    import os
+
+    env = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin:/usr/sbin:/sbin"),
+        "HOME": str(tmp_path / "fake-home"),
+        "USERPROFILE": str(tmp_path / "fake-home"),
+        "GAIA_CONFIG_DIR": str(tmp_path / "gaia-home"),
+        "PYTHONPATH": str(Path(__file__).resolve().parents[2] / "src"),
+        "GAIA_MEMORY_DISABLED": "1",
+    }
+    for passthrough in ("SYSTEMROOT", "TEMP", "TMP", "PATHEXT"):
+        if passthrough in os.environ:
+            env[passthrough] = os.environ[passthrough]
+    return env
+
+
 def test_real_cli_migrate_end_to_end(tmp_path):
     """`gaia skill migrate` through the real entry point a user types."""
     import subprocess
@@ -748,19 +770,14 @@ def test_real_cli_migrate_end_to_end(tmp_path):
     workdir = tmp_path / "workdir"
     workdir.mkdir()
     source = write_source(tmp_path / "src", "release-notes", OPENCLAW_INSTRUCTION_ONLY)
+    env = _subprocess_env(tmp_path)
 
     result = subprocess.run(
         [sys.executable, "-m", "gaia.cli", "skill", "migrate", str(source)],
         capture_output=True,
         text=True,
         cwd=workdir,
-        env={
-            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
-            "HOME": str(tmp_path / "fake-home"),
-            "GAIA_CONFIG_DIR": str(tmp_path / "gaia-home"),
-            "PYTHONPATH": str(Path(__file__).resolve().parents[2] / "src"),
-            "GAIA_MEMORY_DISABLED": "1",
-        },
+        env=env,
         check=False,
     )
 
@@ -774,13 +791,7 @@ def test_real_cli_migrate_end_to_end(tmp_path):
         capture_output=True,
         text=True,
         cwd=workdir,
-        env={
-            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
-            "HOME": str(tmp_path / "fake-home"),
-            "GAIA_CONFIG_DIR": str(tmp_path / "gaia-home"),
-            "PYTHONPATH": str(Path(__file__).resolve().parents[2] / "src"),
-            "GAIA_MEMORY_DISABLED": "1",
-        },
+        env=env,
         check=False,
     )
     assert info.returncode == 0, info.stderr
@@ -803,3 +814,376 @@ def test_real_corpus_covers_both_verdicts():
     assert any(
         "deferred to a later phase" in b for o in refused for b in o.blockers
     ), "expected at least one real skill refused for a local capability"
+
+
+# ----------------------------------------------------------------------
+# Malformed input — every shape is a blocker, never a crash
+# ----------------------------------------------------------------------
+
+
+MALFORMED_SOURCES = [
+    pytest.param("", "no YAML frontmatter", id="empty-file"),
+    pytest.param("   \n\n\n", "no YAML frontmatter", id="whitespace-only"),
+    pytest.param("# Heading only\n", "no YAML frontmatter", id="no-frontmatter"),
+    pytest.param(
+        "---\nname: x\ndescription: y\n\n# Never closed\n",
+        "no YAML frontmatter",
+        id="unterminated-frontmatter",
+    ),
+    pytest.param("---\n---\n\n# Nothing\n", "no YAML frontmatter", id="empty-fences"),
+    pytest.param(
+        "---\nname: x\n\tdescription: tab-indented\n---\n\n# Tab\n",
+        "YAML frontmatter is invalid",
+        id="broken-yaml-tab",
+    ),
+    pytest.param(
+        "---\nname: x\ndescription: a: b: c\n---\n\n# Colons\n",
+        "YAML frontmatter is invalid",
+        id="broken-yaml-unquoted-colon",
+    ),
+    pytest.param(
+        "---\n- one\n- two\n---\n\n# List\n",
+        "frontmatter must be a YAML mapping",
+        id="frontmatter-is-a-list",
+    ),
+    pytest.param(
+        "---\njust a bare string\n---\n\n# Scalar\n",
+        "frontmatter must be a YAML mapping",
+        id="frontmatter-is-a-scalar",
+    ),
+]
+
+
+@pytest.mark.parametrize("text, expected", MALFORMED_SOURCES)
+@pytest.mark.parametrize("vendor", [VENDOR_OPENCLAW, "auto"])
+def test_malformed_source_is_a_blocker_never_a_crash(tmp_path, text, expected, vendor):
+    """Broken YAML never crashes and never half-migrates — it blocks, with a reason.
+
+    Both ``--from openclaw`` and ``--from auto`` must reach the same verdict: an
+    unparseable document has no vendor to detect either, so the auto path must
+    not fall through to its "nothing to migrate" raise.
+    """
+    source = write_source(tmp_path / "src", "bad", text)
+    outcome = migrate_skill_dir(source, vendor=vendor)
+
+    assert not outcome.migrated
+    assert outcome.skill is None, "a malformed source must not produce a half-skill"
+    assert outcome.blockers, "a refusal with no stated reason is a silent failure"
+    assert expected in outcome.blockers[0]
+    # Actionable, per the fail-loudly rule: says where to look next.
+    assert "skill-format" in outcome.blockers[0]
+    # Nothing was written anywhere.
+    assert not (tmp_path / "dest").exists()
+
+
+def test_non_utf8_source_fails_loudly_naming_the_file(tmp_path):
+    """A latin-1 SKILL.md is unreadable, not silently decoded with replacements."""
+    directory = tmp_path / "src" / "latin1"
+    directory.mkdir(parents=True)
+    (directory / SKILL_FILENAME).write_bytes(
+        "---\nname: latin\ndescription: caf\xe9.\nmetadata:\n"
+        "  openclaw: {emoji: x}\n---\n\n# Body\n".encode("latin-1")
+    )
+
+    with pytest.raises(SkillValidationError) as excinfo:
+        migrate_skill_dir(directory, vendor=VENDOR_OPENCLAW)
+
+    message = str(excinfo.value)
+    assert SKILL_FILENAME in message
+    assert "UTF-8" in message
+
+
+@pytest.mark.parametrize(
+    "frontmatter_line",
+    [
+        pytest.param("on: push", id="bareword-key-parses-as-bool"),
+        pytest.param("1: one", id="numeric-key"),
+        pytest.param("2024-01-01: released", id="date-key"),
+    ],
+)
+def test_non_string_frontmatter_keys_do_not_crash_the_migrator(
+    tmp_path, frontmatter_line
+):
+    """YAML 1.1 turns a bare ``on:`` key into a bool; joining that set raised.
+
+    Regression: sorting/joining the leftover key set assumed every key was a
+    string, so one such key aborted the whole batch with a TypeError that no
+    handler caught — not a per-skill blocker, a traceback.
+    """
+    text = f"""---
+name: odd-keys
+description: Carries a frontmatter key YAML does not parse as a string.
+{frontmatter_line}
+metadata:
+  openclaw:
+    emoji: "x"
+---
+
+# Odd Keys
+"""
+    source = write_source(tmp_path / "src", "odd-keys", text)
+    outcome = migrate_skill_dir(source, vendor=VENDOR_OPENCLAW)
+
+    assert outcome.migrated, outcome.blockers
+    assert any("not part of the Agent Skills base" in n for n in outcome.notes)
+    # The preserved key survives the round-trip to disk.
+    target = install_migrated(outcome, tmp_path / "dest")
+    assert parse_skill_file(target) == outcome.skill
+
+
+def test_non_string_keys_inside_a_vendor_requires_block_do_not_crash(tmp_path):
+    """Same hazard one level down, in the leftover-``requires``-keys note."""
+    text = """---
+name: odd-requires
+description: A requires block with a bareword bool key.
+metadata:
+  openclaw:
+    requires:
+      env: [TOKEN]
+      on: push
+---
+
+# Odd Requires
+"""
+    source = write_source(tmp_path / "src", "odd-requires", text)
+    outcome = migrate_skill_dir(source, vendor=VENDOR_OPENCLAW)
+
+    assert outcome.migrated, outcome.blockers
+    assert outcome.skill.gaia.requirements.env_vars == ["TOKEN"]
+    assert any("have no GAIA equivalent" in n for n in outcome.notes)
+
+
+# ----------------------------------------------------------------------
+# Non-mapping vendor blocks
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        pytest.param("metadata:\n  openclaw:", id="vendor-block-is-null"),
+        pytest.param("metadata:\n  openclaw: [a, b]", id="vendor-block-is-a-list"),
+        pytest.param("metadata:\n  openclaw: []", id="vendor-block-is-an-empty-list"),
+        pytest.param("metadata:\n  openclaw: 42", id="vendor-block-is-an-int"),
+        pytest.param("metadata: nonsense", id="metadata-is-a-string"),
+        pytest.param("metadata: [a, b]", id="metadata-is-a-list"),
+        pytest.param(
+            "metadata:\n  gaia: nope\n  openclaw: {emoji: x}", id="gaia-is-a-string"
+        ),
+        pytest.param("openclaw: nonsense", id="top-level-namespace-is-a-string"),
+        pytest.param(
+            "metadata:\n  openclaw:\n    requires: everything",
+            id="requires-is-a-string",
+        ),
+        pytest.param(
+            "metadata:\n  openclaw:\n    envVars: TOKEN", id="envVars-is-a-string"
+        ),
+        pytest.param(
+            "metadata:\n  openclaw:\n    install: brew install thing",
+            id="install-is-a-string",
+        ),
+        pytest.param(
+            "metadata:\n  openclaw:\n    install: [brew, go]",
+            id="install-entries-are-strings",
+        ),
+    ],
+)
+def test_non_mapping_vendor_shapes_reach_a_verdict_without_raising(tmp_path, block):
+    """A vendor block of the wrong YAML type must not raise TypeError/AttributeError.
+
+    The mapper indexes these blocks as dicts everywhere; a published skill that
+    ships a string, list, or null where a mapping belongs must still reach a
+    defined verdict rather than a traceback.
+    """
+    text = f"""---
+name: odd-shape
+description: A vendor block whose YAML type is not a mapping.
+{block}
+---
+
+# Odd Shape
+"""
+    source = write_source(tmp_path / "src", "odd-shape", text)
+    outcome = migrate_skill_dir(source, vendor=VENDOR_OPENCLAW)
+
+    # Either verdict is acceptable; a crash and a half-migration are not.
+    assert outcome.migrated or outcome.blockers
+    if outcome.migrated:
+        validate_skill(outcome.skill, source=str(source))
+        target = install_migrated(outcome, tmp_path / "dest")
+        assert parse_skill_file(target) == outcome.skill
+    else:
+        assert outcome.skill is None
+
+
+# ----------------------------------------------------------------------
+# Collisions never clobber
+# ----------------------------------------------------------------------
+
+
+def test_a_refused_collision_leaves_the_installed_skill_byte_identical(tmp_path):
+    """The defined behavior is refuse-with-an-error; prove nothing was touched."""
+    destination = tmp_path / "dest"
+    existing = destination / "release-notes"
+    existing.mkdir(parents=True)
+    (existing / SKILL_FILENAME).write_text("PRECIOUS ORIGINAL\n", encoding="utf-8")
+    (existing / "keep-me.txt").write_text("hand-edited\n", encoding="utf-8")
+
+    source = write_source(tmp_path / "src", "release-notes", OPENCLAW_INSTRUCTION_ONLY)
+    outcome = migrate_skill_dir(source, vendor=VENDOR_OPENCLAW)
+
+    with pytest.raises(SkillValidationError, match="already installed"):
+        install_migrated(outcome, destination)
+
+    # Not a partial overwrite, not an empty directory — untouched.
+    assert (existing / SKILL_FILENAME).read_text() == "PRECIOUS ORIGINAL\n"
+    assert (existing / "keep-me.txt").read_text() == "hand-edited\n"
+    assert sorted(p.name for p in existing.iterdir()) == [SKILL_FILENAME, "keep-me.txt"]
+
+    # ...and --force is the documented escape hatch, which does replace it.
+    install_migrated(outcome, destination, force=True)
+    assert parse_skill_file(existing).name == "release-notes"
+    assert not (existing / "keep-me.txt").exists()
+
+
+def test_force_install_over_the_source_is_refused_not_destructive(tmp_path):
+    """--force replaces a directory; over the source that would delete the source.
+
+    Reachable as `gaia skill migrate <dir-inside-the-destination> --force`, where
+    the target resolves to the source's own directory.
+    """
+    sources = tmp_path / "src"
+    source = write_source(sources, "release-notes", OPENCLAW_INSTRUCTION_ONLY)
+    (source / "helper.py").write_text("print('important')\n", encoding="utf-8")
+
+    outcome = migrate_skill_dir(source, vendor=VENDOR_OPENCLAW)
+    with pytest.raises(SkillValidationError, match="on top of its own source"):
+        install_migrated(outcome, sources, force=True)
+
+    assert (source / "helper.py").read_text(encoding="utf-8") == "print('important')\n"
+    assert (source / SKILL_FILENAME).read_text(
+        encoding="utf-8"
+    ) == OPENCLAW_INSTRUCTION_ONLY
+
+
+def test_cli_migrate_collision_does_not_rewrite_the_installed_skill(run_cli, tmp_path):
+    """End of the same guarantee, through the verb a user actually types."""
+    source = write_source(tmp_path / "src", "release-notes", OPENCLAW_INSTRUCTION_ONLY)
+    installed = tmp_path / "gaia-home" / "skills" / "release-notes"
+
+    assert run_cli(str(source), "--from", "openclaw")[0] == 0
+    (installed / "hand-edit.txt").write_text("mine\n", encoding="utf-8")
+    before = (installed / SKILL_FILENAME).read_bytes()
+
+    rc, _, err = run_cli(str(source), "--from", "openclaw")
+
+    assert rc == 4
+    assert "could not be written" in err
+    assert (installed / SKILL_FILENAME).read_bytes() == before
+    assert (installed / "hand-edit.txt").read_text() == "mine\n"
+
+
+# ----------------------------------------------------------------------
+# Batch partial failure — one bad skill never takes the batch down
+# ----------------------------------------------------------------------
+
+
+def test_cli_migrate_batch_survives_every_kind_of_bad_skill(run_cli, tmp_path):
+    """The headline batch guarantee, against one source of each failure mode.
+
+    A collection cloned off ClawHub really does mix all of these together. Each
+    bad one must be reported against its own name and the good ones must still
+    install — never an abort that reports nothing for anybody.
+    """
+    sources = tmp_path / "src"
+    # Good.
+    write_source(sources, "release-notes", OPENCLAW_INSTRUCTION_ONLY)
+    write_source(sources, "pdf-extract", HERMES_PDF_EXTRACT)
+    write_source(
+        sources,
+        "odd-keys",
+        "---\nname: odd-keys\ndescription: Bareword key parses as a bool.\n"
+        'on: push\nmetadata:\n  openclaw:\n    emoji: "x"\n---\n\n# Odd Keys\n',
+    )
+    # Bad, one of each kind.
+    write_source(sources, "git-status", OPENCLAW_GIT_STATUS)  # refused permission
+    write_source(sources, "bare", "# No frontmatter at all\n")
+    write_source(sources, "broken", "---\nname: x\n\tdescription: tab\n---\n\n# B\n")
+    write_source(
+        sources,
+        "plain",
+        "---\nname: plain\ndescription: A plain standard skill.\n---\n\n# Plain\n",
+    )
+    latin1 = sources / "latin1"
+    latin1.mkdir(parents=True)
+    (latin1 / SKILL_FILENAME).write_bytes(
+        "---\nname: latin\ndescription: caf\xe9.\nmetadata:\n"
+        "  openclaw: {emoji: x}\n---\n\n# Body\n".encode("latin-1")
+    )
+
+    rc, out, err = run_cli(str(sources))
+
+    assert rc == 4
+    # Every source reached a verdict — none was skipped by an abort.
+    assert "Migrated 3/8" in out
+    # The good ones are on disk.
+    skills_root = tmp_path / "gaia-home" / "skills"
+    assert (skills_root / "release-notes").is_dir()
+    assert (skills_root / "pdf-extract").is_dir()
+    assert (skills_root / "odd-keys").is_dir()
+    # The bad ones are not, and each is named in the report.
+    for name in ("git-status", "bare", "broken", "plain", "latin1"):
+        assert not (skills_root / name).exists()
+        assert name in out, f"{name} was not reported"
+    assert "could not be migrated" in err
+
+
+def test_cli_migrate_json_attributes_each_failure_to_its_own_skill(run_cli, tmp_path):
+    """Per-skill reporting, not one aggregate error for the batch."""
+    import json
+
+    sources = tmp_path / "src"
+    write_source(sources, "release-notes", OPENCLAW_INSTRUCTION_ONLY)
+    write_source(sources, "bare", "# No frontmatter\n")
+    write_source(sources, "broken", "---\nname: x\n\tdescription: tab\n---\n\n# B\n")
+
+    rc, out, _ = run_cli(str(sources), "--json")
+
+    assert rc == 4
+    payload = json.loads(out)
+    assert (payload["total"], payload["migrated"], payload["unmigratable"]) == (3, 1, 2)
+
+    by_name = {entry["name"]: entry for entry in payload["skills"]}
+    assert by_name["release-notes"]["migrated"] is True
+    # Each failure carries its own distinct reason, keyed to its own source.
+    assert "no YAML frontmatter" in by_name["bare"]["blockers"][0]
+    assert "YAML frontmatter is invalid" in by_name["broken"]["blockers"][0]
+    assert by_name["bare"]["source"] != by_name["broken"]["source"]
+
+
+def test_cli_migrate_the_whole_real_corpus_in_one_batch(run_cli):
+    """The documented whole-collection command, over all 26 real published skills.
+
+    This is the only test that runs auto-detection across the real corpus in a
+    single batch — the exact shape of the primary use case, and the one that
+    would catch a regression where one undetectable source aborts the rest.
+    """
+    import json
+
+    rc, out, _ = run_cli(str(REAL_FIXTURES), "--dry-run", "--json")
+
+    payload = json.loads(out)
+    assert payload["dry_run"] is True
+    assert payload["total"] == len(_real_fixture_dirs()) >= 10
+    assert rc in (0, 4)
+
+    # Every real skill reached a verdict; none was lost to an abort.
+    for entry in payload["skills"]:
+        assert entry["migrated"] or entry["blockers"], entry["name"]
+        assert all(b.strip() for b in entry["blockers"])
+    assert payload["migrated"] >= 1, "auto-detection migrated nothing from real data"
+    # The corpus really does contain sources auto-detection cannot place; they
+    # must be per-skill blockers, not an exception that hides the batch.
+    assert any(
+        "nothing to migrate" in b for e in payload["skills"] for b in e["blockers"]
+    ), "corpus no longer exercises the auto-detect miss — re-pin a fixture"

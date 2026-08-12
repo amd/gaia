@@ -2179,7 +2179,7 @@ Skills are discovered from three roots, highest precedence first:
     | `--from` | Source format: `openclaw` \| `hermes` \| `auto` (default — detect from `metadata.<vendor>`) |
     | `--out` | Write migrated skills here instead of installing into `~/.gaia/skills/` |
     | `--name` | Migrate under this name (single-skill sources only) |
-    | `--force` | Replace an existing skill of the same name |
+    | `--force` | Replace an existing skill of the same name (refused when the target resolves to the source's own directory — replacing it there would delete the source) |
     | `--dry-run` | Report what would be migrated without writing anything |
     | `--json` | Emit the migration report as JSON |
 
