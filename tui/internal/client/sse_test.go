@@ -61,6 +61,12 @@ type fakeRelay struct {
 	// lock (#2901).
 	lockSession bool
 	sessionBusy bool
+	// onCancelPost runs synchronously when a POST .../cancel lands, after it
+	// is recorded in f.cancelled. Standing in for the daemon setting
+	// run.cancel_event — the signal a fake "worker" goroutine in f.stream can
+	// wait on to know it has been asked to stop, without the client tearing
+	// down its own read (#2901).
+	onCancelPost func()
 
 	mu          sync.Mutex
 	token       string
@@ -188,6 +194,13 @@ func (f *fakeRelay) handle(w http.ResponseWriter, r *http.Request) {
 		f.cancelled = append(f.cancelled, parts[len(parts)-2])
 		f.mu.Unlock()
 		w.WriteHeader(http.StatusOK)
+		if f.onCancelPost != nil {
+			// Real /cancel returns before the worker thread notices anything
+			// (query_routes.py: it only sets run.cancel_event and returns) —
+			// so this fires after the response is already written, matching
+			// that the ask-to-stop and its eventual effect are decoupled.
+			f.onCancelPost()
+		}
 
 	case strings.HasSuffix(r.URL.Path, "/confirm"):
 		// No shipped sidecar has this route (the resume model is unimplemented
@@ -835,15 +848,21 @@ func TestSendSurfacesActionableConflictOnBusySession(t *testing.T) {
 	}
 }
 
-// The field scenario (#2901): cancel a turn mid-step, then immediately send a
-// new one on the SAME session. Esc/cancelFn only tears down the CLIENT's own
-// read — the daemon's session lock is released by the sidecar's worker
-// thread's own finally, on its own schedule, not by the client dropping the
-// connection. This test holds the fake's session lock open (via lockSession +
-// a stream that blocks on `release`) past the point where the first Send's
-// channel has already closed, to prove that scenario is real and that when
-// it happens, Send() surfaces an actionable error rather than a bare 409 or a
-// silent success.
+// A client-initiated disconnect (Close(), the read-idle watchdog — anything
+// that aborts THIS client's own read via ctx, not client.AgentCanceler.Cancel)
+// tears down the local read without the daemon's session lock being released:
+// that lock is released by the sidecar's worker thread's own finally, on its
+// own schedule, not by the client dropping the connection.
+//
+// This is NOT the Esc/resend path any more (see
+// TestCancelThenResendNeverRacesServerLock below for that fix — #2901
+// AC#1) — ChatModel.requestCancel no longer aborts the local read on cancel.
+// It is the residual case a client-side fix cannot fully close (a forced
+// disconnect while the server is still busy), and for THAT case Send() must
+// still surface an actionable error rather than a bare 409 or a silent
+// success (#2901 AC#2). This test holds the fake's session lock open (via
+// lockSession + a stream that blocks on `release`) past the point where the
+// first Send's channel has already closed, to prove that scenario is real.
 func TestSendAfterCancelStillRacingServerLockSurfacesActionableError(t *testing.T) {
 	f := newFakeRelay(t)
 	f.lockSession = true
@@ -888,6 +907,84 @@ func TestSendAfterCancelStillRacingServerLockSurfacesActionableError(t *testing.
 	}
 	if strings.Contains(err.Error(), "gaia daemon status") {
 		t.Errorf("a 409 must not fall back to the generic relay-refused message: %v", err)
+	}
+}
+
+// TestCancelThenResendNeverRacesServerLock is the real fix for #2901 AC#1:
+// client.AgentCanceler.Cancel() asks the server to stop the active run
+// WITHOUT aborting this client's own read (unlike the ctx-cancel path the
+// test above covers). The fake "worker" goroutine below only releases the
+// session lock once it has actually been asked to stop and has finished,
+// THEN writes the real terminal event that closes the channel — reproducing
+// the ordering query_routes.py's _run_agent guarantees in production
+// (handler.signal_done(), then session.run_lock.release(), same thread, no
+// I/O between them, so by the time a generator polling on a coarser interval
+// sees the sentinel and closes the stream, the lock is already free).
+//
+// A prior version of this fix gated the resend on doneMsg (the run's channel
+// closing) but reached that "done" by aborting the local read via ctx.Cancel
+// — which is exactly what TestSendAfterCancelStillRacingServerLockSurfacesActionableError
+// above proves races the lock. Live evidence against the real daemon found a
+// 409 on 5 of 5 cancel-then-resend attempts under that version. This test
+// drains to the run's REAL close (driven by the fake worker's own
+// completion, never by this client tearing down its own read) and asserts
+// the resend that follows sees no error at all — not even one with an
+// actionable message.
+func TestCancelThenResendNeverRacesServerLock(t *testing.T) {
+	f := newFakeRelay(t)
+	f.lockSession = true
+
+	started := make(chan struct{})
+	cancelRequested := make(chan struct{})
+	var closeCancelRequestedOnce sync.Once
+	// Guarded: Close()'s own best-effort cleanup POSTs /cancel for the SECOND
+	// run too (consume()'s abnormal-exit path, unrelated to this test), which
+	// would otherwise double-close this channel.
+	f.onCancelPost = func() { closeCancelRequestedOnce.Do(func() { close(cancelRequested) }) }
+	f.stream = func(w http.ResponseWriter, flush func(), _ queryRequest) {
+		flush() // push the response headers now -- nothing is written until this
+		close(started)
+		<-cancelRequested // the fake "worker" keeps the step running until asked to stop
+		// Mirrors _run_agent's finally: release the lock, THEN let the stream
+		// observe completion -- same goroutine, no I/O between the two.
+		f.releaseSession()
+		frame(w, `{"type":"final","answer":"stopped"}`)
+		flush()
+	}
+
+	c := f.client(t)
+	defer c.Close()
+
+	ch1, err := c.Send(context.Background(), "first query")
+	if err != nil {
+		t.Fatalf("first Send: %v", err)
+	}
+	<-started // the run is genuinely mid-step server-side
+
+	// Esc, under the fix: ask the server to stop; do NOT touch the local read.
+	if err := c.Cancel(context.Background()); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+
+	// Drain to the run's REAL close.
+	collect(t, ch1)
+
+	// The resend gets its own trivial stream — reusing the first run's
+	// closures would double-close `started`/`cancelRequested` the moment the
+	// fake relay routes the second /query through the same f.stream.
+	f.stream = func(w http.ResponseWriter, flush func(), _ queryRequest) {
+		frame(w, `{"type":"final","answer":"ok"}`)
+		flush()
+	}
+
+	// Resend immediately. ch1's close is a true settlement signal (it only
+	// happens after releaseSession, above), so the lock must already be free.
+	ch2, err := c.Send(context.Background(), "second query")
+	if err != nil {
+		t.Errorf("resend after a genuinely settled cancel must succeed with no 409, got: %v", err)
+	}
+	if ch2 != nil {
+		collect(t, ch2) // drain so Close() has nothing left active to best-effort cancel
 	}
 }
 

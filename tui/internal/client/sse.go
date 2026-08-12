@@ -601,6 +601,21 @@ type confirmRequest struct {
 	Approved bool `json:"approved"`
 }
 
+// postCancel POSTs /v1/<agent>/query/{runID}/cancel and returns the response,
+// or an error if the request itself could not be delivered. Shared by
+// cancelRun (best-effort, fire-and-forget) and Cancel (the caller-facing,
+// error-reporting seam — #2901).
+func (s *SSEClient) postCancel(ctx context.Context, inst *daemon.Instance, runID string) (*http.Response, error) {
+	resp, _, err := s.daemon.Do(ctx, inst, daemon.Request{
+		Method: http.MethodPost,
+		Path: fmt.Sprintf("/v1/%s/query/%s/cancel",
+			url.PathEscape(s.agentID), url.PathEscape(runID)),
+		HTTPClient: s.cancelHTTP,
+		Op:         fmt.Sprintf("cancel the '%s' run", s.agentID),
+	})
+	return resp, err
+}
+
 // cancelRun asks the relay to drop a run we are abandoning.
 //
 // Best-effort: the sidecar may already be gone. It owns its own background
@@ -618,13 +633,7 @@ func (s *SSEClient) cancelRun(handle *runHandle) {
 	ctx, cancel := context.WithTimeout(context.Background(), cancelTimeout)
 	defer cancel()
 
-	resp, _, err := s.daemon.Do(ctx, inst, daemon.Request{
-		Method: http.MethodPost,
-		Path: fmt.Sprintf("/v1/%s/query/%s/cancel",
-			url.PathEscape(s.agentID), url.PathEscape(handle.runID)),
-		HTTPClient: s.cancelHTTP,
-		Op:         fmt.Sprintf("cancel the '%s' run", s.agentID),
-	})
+	resp, err := s.postCancel(ctx, inst, handle.runID)
 	if err != nil {
 		s.opts.Logf("sse: best-effort cancel for '%s' run_id=%s failed: %v",
 			s.agentID, handle.runID, err)
@@ -642,6 +651,51 @@ func (s *SSEClient) cancelRun(handle *runHandle) {
 	if resp.StatusCode != http.StatusOK {
 		s.opts.Logf("sse: cancel for '%s' run_id=%s answered HTTP %d",
 			s.agentID, handle.runID, resp.StatusCode)
+	}
+}
+
+// Cancel implements client.AgentCanceler (#2901). It asks the server to stop
+// the active run WITHOUT touching this client's own read of the run's SSE
+// stream — unlike the caller's context.CancelFunc, which tears that read
+// down immediately and is exactly what let a resend beat the daemon's
+// session run_lock (cooperative cancellation, released by the sidecar's
+// worker thread's own `finally`, checked once per agent-loop step; see
+// hub/agents/email/python/gaia_agent_email/query_routes.py).
+//
+// Leaving the read running is what makes the eventual channel close a true
+// settlement signal: the sidecar's stream generator only sees its
+// signal_done sentinel — and therefore only closes the HTTP response — after
+// the SAME worker-thread `finally` has already released run_lock (signal_done
+// runs, then release runs next, same thread, no I/O between them; the
+// generator polls for the sentinel on a coarser interval than that gap). A
+// client that aborts its own read instead observes a "done" that raced ahead
+// of that release, which is the bug this method exists to avoid reintroducing.
+func (s *SSEClient) Cancel(ctx context.Context) error {
+	s.mu.Lock()
+	inst := s.inst
+	active := s.active
+	s.mu.Unlock()
+	if inst == nil || active == nil {
+		// Nothing live to cancel — most often the run already reached its own
+		// terminal event between the keypress and this call. Not an error: the
+		// caller's read will observe that completion on its own.
+		return nil
+	}
+
+	resp, err := s.postCancel(ctx, inst, active.runID)
+	if err != nil {
+		return fmt.Errorf("could not deliver the cancel request for the '%s' agent: %w", s.agentID, err)
+	}
+	defer resp.Body.Close()
+
+	switch resp.StatusCode {
+	case http.StatusOK, http.StatusNotFound:
+		// 404 means the run had already ended by the time this landed — the
+		// caller's read will see that completion on its own; nothing failed.
+		return nil
+	default:
+		return fmt.Errorf("cancelling the '%s' run failed (%s)",
+			s.agentID, daemon.ErrorDetail(resp))
 	}
 }
 
@@ -795,5 +849,6 @@ var (
 	_ AgentClient        = (*SSEClient)(nil)
 	_ AgentResponder     = (*SSEClient)(nil)
 	_ AgentConfirmer     = (*SSEClient)(nil)
+	_ AgentCanceler      = (*SSEClient)(nil)
 	_ TranscriptResetter = (*SSEClient)(nil)
 )

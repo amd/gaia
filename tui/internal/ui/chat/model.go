@@ -35,6 +35,14 @@ type doneMsg struct{ ch <-chan interface{} }
 type sendQueryMsg struct{ query string }
 type channelReadyMsg struct{ ch <-chan interface{} }
 
+// cancelRequestFailedMsg carries a failure of the out-of-band Cancel() call
+// (client.AgentCanceler, #2901) — asking the server to stop the run, not the
+// run itself. The run may still be live and settle on its own; this only
+// reports that the ASK to stop it could not be delivered, so it never touches
+// m.streaming/m.cancelPending — only the eventual doneMsg (or errMsg) for the
+// run's own channel does that.
+type cancelRequestFailedMsg struct{ err error }
+
 // preScanFetchedMsg / preScanFetchFailedMsg / preScanDegradedMsg deliver the
 // result of the on-open inbox pre-scan fetch (#2743, replacing the #2582
 // attention fetch) — a side-channel read, never a chat turn, so it carries
@@ -362,6 +370,21 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.events = msg.ch
 		return m, waitForEvent(m.events)
 
+	case cancelRequestFailedMsg:
+		// The ASK to stop the run (client.AgentCanceler.Cancel) could not be
+		// delivered — the run itself may still be live and settling on its
+		// own. Report it without touching m.streaming/m.cancelPending: only
+		// the run's own doneMsg/errMsg gets to decide the composer is free
+		// again (#2901) — this failure alone must not silently re-enable
+		// Enter into a run that is, for all this client knows, still there.
+		m.messages = append(m.messages, Message{
+			Role: RoleStatus,
+			Content: fmt.Sprintf("[!] could not deliver the cancel request: %v. "+
+				"Waiting for the run to finish on its own.", msg.err),
+		})
+		m.updateViewport()
+		return m, nil
+
 	case preScanFetchedMsg:
 		if m.streaming {
 			// Buffer -- appending now would land the card between this turn's question and its reply.
@@ -430,6 +453,12 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.streaming = false
 		m.events = nil
 		m.cancelFn = nil
+		// A pending cancel settles here too — the run ended in an error
+		// instead of the clean close doneMsg handles, but either way the
+		// composer must not stay hostage to a cancel that will never see its
+		// happy-path settlement message (the guards in handleKey key off
+		// this alongside m.streaming).
+		m.cancelPending = false
 		m.question = nil
 		m.confirmation = nil
 		m.err = msg.err
@@ -547,13 +576,13 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.Type {
 	case tea.KeyCtrlC:
-		if m.streaming && m.cancelFn != nil {
+		if m.streaming && m.cancelFn != nil && !m.cancelPending {
 			return m.requestCancel()
 		}
 		return m, tea.Quit
 
 	case tea.KeyEsc:
-		if m.streaming && m.cancelFn != nil {
+		if m.streaming && m.cancelFn != nil && !m.cancelPending {
 			return m.requestCancel()
 		}
 		if m.fromHub {
@@ -625,20 +654,33 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // requestCancel begins cancelling the in-flight turn (Esc / Ctrl+C).
-// cancelFn only tears down THIS client's own read of the SSE stream — the
-// daemon's session run_lock is released by the sidecar's worker thread on its
-// own schedule (cooperative cancellation, checked once per agent-loop step;
-// see hub/agents/email/python/gaia_agent_email/query_routes.py), not by the
-// client dropping its connection. Flipping m.streaming here — before that
-// settles — is exactly the window that let Enter fire a second query on the
-// same session and race the still-held lock into a 409 (#2901). So
-// m.streaming stays true (Enter stays blocked) and m.events keeps pointing at
-// the run: the eventual doneMsg for THIS channel is the one locally-
-// observable settlement signal, and only it flips streaming back off (see the
-// doneMsg case in Update).
+//
+// The first version of this fix (#2901) blocked Enter on doneMsg — the run's
+// event channel closing — reasoning that was the one locally-observable
+// settlement signal. A live run against the real daemon proved that wrong:
+// cancelFn (the caller's own context.CancelFunc) tears down THIS client's
+// read of the SSE stream, and that local abort is what closed the channel —
+// well before the daemon's session run_lock was actually released by the
+// sidecar's worker thread, which notices a cancel only cooperatively, at the
+// next agent-loop step boundary (see
+// hub/agents/email/python/gaia_agent_email/query_routes.py). Calling
+// cancelFn() here reproduced the exact race it was meant to close: 5/5
+// cancel-then-resend attempts still hit a bare-lock 409 downstream.
+//
+// The fix is to stop manufacturing that local "done" at all. For a transport
+// that implements client.AgentCanceler (the daemon relay), Cancel() asks the
+// SERVER to stop the run out of band, while THIS call leaves m.cancelFn /
+// m.events untouched — the existing read keeps running, and the channel only
+// closes when the server's own stream generator does, which is proven (see
+// SSEClient.Cancel's doc comment) to happen strictly after run_lock.release().
+// That real close is what the doneMsg case in Update waits on before flipping
+// m.streaming back off and re-enabling Enter.
+//
+// A transport with no such server-side lock (e.g. a local subprocess) does
+// not implement AgentCanceler; for it, tearing down the local connection IS
+// the whole cancellation, so the old immediate cancelFn() behavior is exactly
+// right and unchanged below.
 func (m ChatModel) requestCancel() (tea.Model, tea.Cmd) {
-	m.cancelFn()
-	m.cancelFn = nil
 	m.cancelPending = true
 	m.activity = nil
 	m.question = nil
@@ -649,6 +691,20 @@ func (m ChatModel) requestCancel() (tea.Model, tea.Cmd) {
 	})
 	m.drainPendingPreScan()
 	m.updateViewport()
+
+	if canceler, ok := m.client.(client.AgentCanceler); ok {
+		return m, func() tea.Msg {
+			ctx, cancel := context.WithTimeout(context.Background(), answerTimeout)
+			defer cancel()
+			if err := canceler.Cancel(ctx); err != nil {
+				return cancelRequestFailedMsg{err: err}
+			}
+			return nil
+		}
+	}
+
+	m.cancelFn()
+	m.cancelFn = nil
 	return m, nil
 }
 
