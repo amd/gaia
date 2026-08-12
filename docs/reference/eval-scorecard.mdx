@@ -43,6 +43,8 @@ The secondaries are recorded with **weight 0**, so they are displayed but exclud
 
 The corpus + greedy decoding (`temperature=0.0`) are fixed, and the `needs_llm` routing is a deterministic heuristic, so the only run-to-run noise is GPU floating-point non-determinism (not seedable — measured, not removed). `gaia eval benchmark --experiments N` runs N times over the same corpus and the adapter records an additive `acceptance_variance` block (mean / stdev / CV% / 95% CI / `n_runs`) in `recipe.config`. It never affects `aggregate.value` (the mean); it lets the gate tell a real regression from noise.
 
+**`--experiments` defaults to 1.** Measured run-to-run stdev on the email corpus is 0.0023 (CV 0.27%), so repeats cost hours of serial-slot time to tighten the CI by ~0.26pp. A single run records `stdev: 0.0`, and the gate's `--regression-floor-pp` supplies the noise tolerance instead. Raise `--experiments` only when you are specifically characterising variance.
+
 ## File format
 
 Scorecard files are **Markdown with YAML front matter** (`.md`). The front matter holds all machine-readable fields; the body is a human-readable summary with a worked recomputation and a Reproduction section.
@@ -63,7 +65,7 @@ recipe:
     harness: gaia eval benchmark
     model: Gemma-4-E4B-it-GGUF
     limit: 220
-    n_runs: 3
+    n_runs: 1
     # acceptance_variance: { ... } — additive mean/stdev/CI per metric (omitted here)
 results:
   test_cases_run: 100
@@ -294,7 +296,7 @@ python -m gaia.eval.scorecard_gate \
    - `--baseline-file`: read the given file directly (no git access; suitable for unit tests).
    - `--baseline-ref`: resolve via `git show <ref>:<scorecard-path>`. If the file does not exist at that ref → **first adoption**, exit 0.
    - Neither specified: **first adoption**, exit 0 (presence-only pass).
-4. **Regression check** (variance-aware, #1894): if the baseline records a within-one stdev, a regression is flagged only when `candidate < baseline − k·stdev` (`--regression-k`, default 1; stdev is on the [0,1] scale, scaled ×100 to match `aggregate.value`). With no recorded stdev, a strict `<` is used.
+4. **Regression check** (variance-aware, #1894): a regression is flagged only when `candidate < baseline − band`, where the band is the **wider** of `k·stdev` (`--regression-k`, default 1; stdev is on the [0,1] scale, scaled ×100 to match `aggregate.value`) and an absolute floor (`--regression-floor-pp`, default 1.5). Single-run cards record a stdev of `0.0`, so the floor is what gives them tolerance — without it the band would collapse to a strict `<` and trip on sub-noise wobble. Pass `--regression-floor-pp 0` for the strict behaviour.
 5. Equal or above the threshold → exit 0.
 
 ### Exit codes
@@ -326,7 +328,7 @@ The scorecard must move with the agent: when LLM-affecting code changes, the eva
 Two enforcement points work together:
 
 1. **Reject-on-worse (always on, GitHub-hosted).** The `scorecard-gate` job in `release_agent_<id>.yml` runs on every release. It only parses committed files (no eval), so it runs on a standard runner and **fails the build** if the committed scorecard regressed below the prior version or is missing. This is the hard gate.
-2. **Run-and-refresh (self-hosted AMD, manual dispatch).** `gaia eval benchmark` needs Lemonade on AMD hardware, so it cannot run on GitHub-hosted runners — it runs on the `[self-hosted, Windows, stx]` pool, serialized against the other evals by the shared `lemonade-eval` concurrency group. The `Email Agent Eval — scorecard refresh` workflow (`.github/workflows/email_scorecard_refresh.yml`) is **`workflow_dispatch`-only** (#2094 — it previously also ran on pushes touching the email agent, but a full eval costs ~10.5h and that trigger never once completed a run), and takes two profiles:
+2. **Run-and-refresh (self-hosted AMD, manual dispatch).** `gaia eval benchmark` needs Lemonade on AMD hardware, so it cannot run on GitHub-hosted runners — it runs on the `[self-hosted, Windows, stx]` pool, serialized against the other evals by the shared `lemonade-eval` concurrency group. The `Email Agent Eval — scorecard refresh` workflow (`.github/workflows/email_scorecard_refresh.yml`) is **`workflow_dispatch`-only** (#2094 — it previously also ran on pushes touching the email agent, but a full eval costs hours and that trigger never once completed a run), and takes two profiles:
    - **full** (`limit ≥ 249` **and** `experiments ≥` the committed card's `n_runs`) — reproduces the committed card's methodology and is the **only** profile allowed to commit a refreshed card;
    - **subset** (`limit < 249`) — an end-to-end smoke run that exercises every step and then **never commits** (a small-sample number is not a valid stand-in for the published figure).
 

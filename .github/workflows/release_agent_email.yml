@@ -296,6 +296,15 @@ jobs:
           fi
 
   # ── Stage 1b: scorecard presence + regression gate ─────────────────
+  # REGRESSION TOLERANCE. scorecard_gate flags a release-over-release drop only
+  # beyond max(--regression-k x recorded stdev, --regression-floor-pp). Neither is
+  # passed below, so the defaults apply: k=1 and a 1.5pp floor. Cards are now cut
+  # at experiments=1, which records stdev 0.0, so the FLOOR is the live tolerance
+  # -- a drop of up to 1.5pp passes. Deliberate (one run is noisier than the old
+  # 3-run mean), but it does not catch slow decay: three successive 1.4pp drops
+  # each pass individually. The absolute bars (acceptance_target /
+  # urgent_recall_floor, resolved in the `bars` step) are the real anchor and are
+  # enforced independently of the band.
   scorecard-gate:
     name: Scorecard gate
     runs-on: ubuntu-latest

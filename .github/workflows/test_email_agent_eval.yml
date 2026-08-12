@@ -402,6 +402,17 @@ jobs:
             --output-dir eval-out
           if ($LASTEXITCODE -ne 0) { throw "gaia eval benchmark failed" }
 
+      - name: Assert the eval actually reached the LLM
+        run: |
+          # Blocks the heuristic-only path from passing as a green triage result:
+          # no LLM call means no usage block, so `llm_classified_count` is absent
+          # and the accuracy numbers measure rules, not the model. Unlike the
+          # eval_*_report.py gates (advisory under enforce:false), this one is
+          # always blocking -- a run that never invoked the model is not a
+          # "breached bar", it is an absent measurement.
+          python hub/agents/email/python/packaging/assert_llm_coverage.py eval-out
+          if ($LASTEXITCODE -ne 0) { throw "email triage eval never reached the LLM" }
+
       - name: Evaluate committed gates (report mode — reads the threshold manifests)
         run: |
           # Gate-reader: reads the gate bars ONLY through the harness loaders
