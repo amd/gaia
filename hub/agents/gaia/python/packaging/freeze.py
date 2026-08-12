@@ -26,7 +26,7 @@ Design notes / gotchas baked in (mirrors the email sidecar's freeze):
 - ``gaia.connectors`` discovers providers dynamically; collect it explicitly.
 - ``gaia-agent.yaml`` and the bundled skills directory are DATA, invisible to the
   import analyzer -> ``--add-data``. Both resolve relative to ``__file__`` at
-  runtime (see ``gaia_agent_gaia/agent.py``).
+  runtime (see ``gaia_agent/agent.py``).
 - We deliberately do NOT ``--collect-submodules gaia``: the whole core package
   pulls every agent + RAG + torch and explodes the binary. Static analysis from
   the sidecar entry pulls only the reachable core modules.
@@ -60,7 +60,7 @@ PATHEX = [
 ]
 
 MANIFEST_SRC = PKG_ROOT / "gaia-agent.yaml"
-SKILLS_SRC = PKG_ROOT / "gaia_agent_gaia" / "skills"
+SKILLS_SRC = PKG_ROOT / "gaia_agent" / "skills"
 
 # Heavy ML stack reached only through the lazily-imported chat/SDK graph. All
 # inference goes to Lemonade over HTTP, so excluding these keeps the binary at
@@ -102,7 +102,7 @@ def _resolve_add_data() -> list[tuple[Path, str]]:
             "sets could be declared and the hub metadata would be absent. "
             "Restore hub/agents/gaia/python/gaia-agent.yaml and re-run."
         )
-    add_data: list[tuple[Path, str]] = [(MANIFEST_SRC, "gaia_agent_gaia")]
+    add_data: list[tuple[Path, str]] = [(MANIFEST_SRC, "gaia_agent")]
 
     skill_files = (
         sorted(p for p in SKILLS_SRC.rglob("*") if p.is_file() and p.name != ".gitkeep")
@@ -114,7 +114,7 @@ def _resolve_add_data() -> list[tuple[Path, str]]:
             f"freeze: bundling {len(skill_files)} skill file(s) from {SKILLS_SRC}",
             flush=True,
         )
-        add_data.append((SKILLS_SRC, "gaia_agent_gaia/skills"))
+        add_data.append((SKILLS_SRC, "gaia_agent/skills"))
     else:
         reason = "absent" if not SKILLS_SRC.is_dir() else "empty"
         print("=" * 78, flush=True)
@@ -171,7 +171,7 @@ def build(onefile: bool = False, clean: bool = True) -> Path:
         "keyring",
         # Both agent packages register tools lazily inside functions.
         "--collect-submodules",
-        "gaia_agent_gaia",
+        "gaia_agent",
         "--collect-submodules",
         "gaia_agent_chat",
         # connector provider discovery is dynamic.

@@ -9,7 +9,7 @@ ends with exactly one terminal event.
 import io
 import json
 
-from gaia_agent_gaia import stdio
+from gaia_agent import stdio
 
 
 class _FakeHandler:

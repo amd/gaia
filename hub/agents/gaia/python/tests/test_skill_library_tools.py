@@ -40,10 +40,10 @@ _REPO_ROOT = Path(__file__).resolve().parents[5]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-pytest.importorskip("gaia_agent_gaia")
+pytest.importorskip("gaia_agent")
 
-from gaia_agent_gaia.agent import GaiaAgent, GaiaAgentConfig  # noqa: E402
-from gaia_agent_gaia.skill_tools import SKILL_LIBRARY_TOOL_NAMES  # noqa: E402
+from gaia_agent.agent import GaiaAgent, GaiaAgentConfig  # noqa: E402
+from gaia_agent.skill_tools import SKILL_LIBRARY_TOOL_NAMES  # noqa: E402
 
 from gaia.skills.manager import SkillManager  # noqa: E402
 from gaia.skills.signing import TrustStore  # noqa: E402

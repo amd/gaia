@@ -31,7 +31,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, FastAPI, HTTPException
-from gaia_agent_gaia.session_registry import registry as session_registry
+from gaia_agent.session_registry import registry as session_registry
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.responses import StreamingResponse
 
@@ -249,7 +249,7 @@ def build_query_agent(**config_kwargs: Any):
 
     A seam, so tests can inject a scripted agent without a model server.
     """
-    from gaia_agent_gaia.agent import GaiaAgent, GaiaAgentConfig
+    from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
 
     return GaiaAgent(config=GaiaAgentConfig(silent_mode=True, **config_kwargs))
 
@@ -282,7 +282,7 @@ def _probe_lemonade() -> Dict[str, Any]:
     import os
 
     import requests
-    from gaia_agent_gaia.agent import GaiaAgentConfig
+    from gaia_agent.agent import GaiaAgentConfig
 
     from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 
@@ -612,7 +612,7 @@ def build_app() -> FastAPI:
     - ``GET /v1/gaia/version`` — the TUI's ``negotiate.go`` probe, which gates
       optional request fields on ``apiVersion``.
     """
-    from gaia_agent_gaia import __version__
+    from gaia_agent import __version__
 
     app = FastAPI(title="GAIA Agent", version=__version__)
 

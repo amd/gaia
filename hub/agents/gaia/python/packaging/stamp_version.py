@@ -7,7 +7,7 @@ Single-source version stamping for the GAIA flagship agent package.
 The package version lives in files of several types (Python, YAML, TOML, JSON,
 Markdown) with no sync tool, so references drift -- a lock ``baseUrl`` can
 statically point at a stale deployment long after the package moved on. This
-script makes ``__version__`` in ``gaia_agent_gaia/__init__.py`` the ONE source of
+script makes ``__version__`` in ``gaia_agent/__init__.py`` the ONE source of
 truth and stamps every other file from it.
 
 Unlike the email agent's equivalent, the CORE targets are REQUIRED: an absent
@@ -25,7 +25,7 @@ Usage::
   python hub/agents/gaia/python/packaging/stamp_version.py --check
       # verify only; print each mismatch and exit non-zero (the CI / publish gate)
 
-``API_VERSION`` in ``gaia_agent_gaia/server.py`` is intentionally NOT touched --
+``API_VERSION`` in ``gaia_agent/server.py`` is intentionally NOT touched --
 it is the wire-contract version, independent of the package build version.
 """
 
@@ -43,7 +43,7 @@ GAIA_ROOT = Path(__file__).resolve().parent.parent
 REPO_ROOT = GAIA_ROOT.parents[3]  # hub/agents/gaia/python -> repo root
 NPM_ROOT = REPO_ROOT / "hub" / "agents" / "gaia" / "npm"
 
-INIT_PY = GAIA_ROOT / "gaia_agent_gaia" / "__init__.py"
+INIT_PY = GAIA_ROOT / "gaia_agent" / "__init__.py"
 
 _VERSION_RE = re.compile(r'(?m)^__version__\s*=\s*"([^"]+)"')
 _SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+")

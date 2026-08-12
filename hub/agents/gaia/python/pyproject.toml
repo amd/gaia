@@ -33,19 +33,19 @@ dependencies = [
 [project.scripts]
 # The collapsed transport: the TUI spawns this once and trades newline-delimited
 # JSON over the pipe. No daemon, no HTTP port, no bearer token, no model lease.
-gaia-agent = "gaia_agent_gaia.stdio:main"
+gaia-agent = "gaia_agent.stdio:main"
 
 [project.entry-points."gaia.agent"]
-gaia = "gaia_agent_gaia:build_gaia"
+gaia = "gaia_agent:build_gaia"
 
 [project.optional-dependencies]
 test = ["pytest"]
 
 [tool.setuptools.packages.find]
-include = ["gaia_agent_gaia*"]
+include = ["gaia_agent*"]
 
 [tool.setuptools.package-data]
 # The manifest and bundled skills must land inside the package so they survive
 # both the wheel and the frozen sidecar (SKILL_DIRS / SKILL_MANIFEST resolve
 # relative to __file__).
-gaia_agent_gaia = ["gaia-agent.yaml", "skills/**/*"]
+gaia_agent = ["gaia-agent.yaml", "skills/**/*"]

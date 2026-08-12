@@ -238,7 +238,7 @@ def main(argv: Optional[list] = None) -> int:
     # A failure here is fatal and must say so on the turn the user actually
     # sent, not vanish into a dead pipe.
     try:
-        from gaia_agent_gaia.agent import GaiaAgent, GaiaAgentConfig
+        from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
 
         config_kwargs: Dict[str, Any] = {"silent_mode": True}
         if args.model:

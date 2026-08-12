@@ -33,7 +33,7 @@ def build_session_agent(**config_kwargs: Any):
     Imported lazily so this module stays dependency-light until a session is
     actually created. Tests monkeypatch this attribute to inject a fake agent.
     """
-    from gaia_agent_gaia.agent import GaiaAgent, GaiaAgentConfig
+    from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
 
     return GaiaAgent(config=GaiaAgentConfig(silent_mode=True, **config_kwargs))
 

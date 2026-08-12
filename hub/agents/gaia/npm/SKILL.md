@@ -22,7 +22,7 @@ Two ways in:
 > **This file is NOT one of the agent's own skills.** It is the integration
 > playbook: how *you* wire this package into an app. The agent separately loads
 > **Agent Skills** into its own prompt at runtime from
-> `gaia_agent_gaia/skills/<name>/SKILL.md`. Same filename, different artifact —
+> `gaia_agent/skills/<name>/SKILL.md`. Same filename, different artifact —
 > don't ship this one as an agent skill. See [Skills](#10-skills--opt-in-and-empty-in-010).
 
 ## 1. Install
@@ -334,7 +334,7 @@ sidecar exposes no flag or env var for `allowed_paths` (its CLI accepts only
 your own Python process:
 
 ```python
-from gaia_agent_gaia.agent import GaiaAgent, GaiaAgentConfig
+from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
 
 agent = GaiaAgent(config=GaiaAgentConfig(allowed_paths=["/home/me/Documents"]))
 ```

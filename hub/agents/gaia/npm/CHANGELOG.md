@@ -77,7 +77,7 @@ terminal UI meant building it from source.
 - The sidecar has no arm64 Linux or arm64 Windows build. On those platforms the
   run stops with an error naming the platform and the supported set rather than
   launching a UI with no agent behind it.
-- `gaia_agent_gaia` 0.1.0 has no caller-auth token, so unlike
+- `gaia_agent` 0.1.0 has no caller-auth token, so unlike
   `@amd-gaia/agent-email` this package mints and sends none.
 - Tracks sidecar contract `apiVersion` **2.12**; a differing major raises
   `VersionMismatchError`.
