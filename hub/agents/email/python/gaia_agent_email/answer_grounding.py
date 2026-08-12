@@ -510,6 +510,19 @@ def rewrite_suspicious_mail_answer(
     its own docstring and the pinned #2900 residual-risk test); rendering a
     narrower list here on top would silently discard that card instead of
     leaving it as the documented residual risk.
+
+    The lead sentence is always the grounded summary, never the model's own
+    framing, once the scan actually flagged something. A model that opens
+    with "Nothing flagged this scan" while ``scan`` carries rows is not a
+    formatting slip like a dropped item or bad numbering — it is a clean
+    bill of health printed directly above the phishing list this function
+    renders, which is worse than the verbosity this rewrite otherwise fixes.
+    Unlike ``rewrite_triage_answer``, this has no downstream contradiction
+    check to catch a wrong opener (guard 2 only reconciles against
+    ``pre_scan_inbox``), so the lead cannot be allowed through unchecked —
+    unconditionally preferring the grounded summary is simpler than pattern-
+    matching every way a model could phrase a false all-clear, and strictly
+    safer.
     """
     if last_tool_payload(conversation, "pre_scan_inbox") is not None:
         return final_answer
@@ -519,14 +532,16 @@ def rewrite_suspicious_mail_answer(
     rendered = render_suspicious_list(scan)
     if not rendered:
         return final_answer
-    lead = _lead_paragraph(final_answer) or _honest_suspicious_summary(scan)
+    lead = _honest_suspicious_summary(scan)
     return f"{lead}\n\n{rendered}"
 
 
 def _honest_suspicious_summary(envelope: Dict[str, Any]) -> str:
     """A minimal, always-grounded summary sentence built straight from the
-    envelope's own counts — the fallback used when the model's own framing
-    sentence contradicts that same envelope."""
+    envelope's own counts — the unconditional lead for
+    ``rewrite_suspicious_mail_answer`` once the scan has flagged rows,
+    since the model's own framing sentence cannot be trusted not to
+    contradict that same envelope."""
     total = envelope.get("suspicious_total")
     if not isinstance(total, int):
         total = len(envelope.get("suspicious") or [])

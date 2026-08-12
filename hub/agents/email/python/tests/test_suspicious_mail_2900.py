@@ -711,6 +711,18 @@ class TestRewriteSuspiciousMailAnswer:
         assert "security@paypa1-alerts.example" in out or "paypa1-alerts" in out
         assert _PHISHING_SUBJECT in out
         assert "phishing" in out.lower()
+        # The bug this test was supposed to catch and didn't: a correct list
+        # is worthless if a false all-clear still sits right above it. The
+        # wrong opener must be GONE, not just outnumbered by a correct list
+        # appended underneath it.
+        assert model_answer not in out, (
+            "the model's contradicting 'Nothing flagged' opener survived "
+            "into the answer, sitting directly above the flagged-mail list"
+        )
+        assert out.startswith("1 flagged"), (
+            "expected the grounded summary (_honest_suspicious_summary) to "
+            f"lead the answer, got: {out!r}"
+        )
 
     def test_zero_findings_is_a_noop_model_prose_stands(self):
         """A clean negative carries no list to render, so the model's own
