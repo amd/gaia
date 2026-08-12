@@ -2968,7 +2968,7 @@ Examples:
     )
     daemon_stop_agent_parser.add_argument("agent_id", help="Agent to stop")
     daemon_logs_parser = daemon_subparsers.add_parser(
-        "logs", help="Show the daemon log"
+        "logs", help="Show the daemon log (or a sidecar's log with --agent)"
     )
     daemon_logs_parser.add_argument(
         "-n",
@@ -2982,6 +2982,16 @@ Examples:
         "--follow",
         action="store_true",
         help="Follow the log (like tail -f); Ctrl-C to stop",
+    )
+    daemon_logs_parser.add_argument(
+        "--agent",
+        metavar="AGENT_ID",
+        default=None,
+        help=(
+            "Show the named sidecar agent's log (the rich agent-loop activity — "
+            "tool calls, triage decisions) instead of the host daemon log. "
+            "E.g. `gaia daemon logs --agent email -f`."
+        ),
     )
     daemon_parser.set_defaults(action="daemon")
 
@@ -7886,19 +7896,44 @@ def _handle_daemon_restart():
     _handle_daemon_start()
 
 
-def _handle_daemon_logs(args):
-    from gaia.daemon import paths
+def _resolve_sidecar_log(agent_id: str):
+    """Return the Path to the given sidecar's current (or most recent) log.
 
-    log_file = paths.log_path()
-    if not log_file.exists():
-        print(f"No daemon log at {log_file} (the daemon has not started yet).")
-        return
-    lines = getattr(args, "lines", 100)
-    if getattr(args, "follow", False):
-        # Simple follow loop: print the tail, then stream appended bytes.
+    Prefers the log of the running sidecar (its live port, learned from the
+    daemon) so ``-f`` follows the active process; falls back to the newest
+    ``sidecar-*.log`` on disk when the daemon is down or the agent is stopped
+    (so ``logs`` still works post-mortem). Returns ``None`` if no log exists.
+    """
+    log_dir = Path.home() / ".gaia" / "agents" / agent_id / "logs"
+
+    # Best-effort: ask the daemon for the running port so we follow the live
+    # process. Never fatal — a down daemon just means we use the newest file.
+    try:
+        from gaia.daemon import client
+
+        inst = client.attach()
+        if inst is not None:
+            for entry in _fetch_daemon_agents(inst):
+                if entry.get("agent_id") == agent_id and entry.get("port"):
+                    candidate = log_dir / f"sidecar-{entry['port']}.log"
+                    if candidate.exists():
+                        return candidate
+    except SystemExit:
+        raise
+    except Exception:
+        pass  # fall through to the newest-file heuristic
+
+    if not log_dir.is_dir():
+        return None
+    logs = sorted(log_dir.glob("sidecar-*.log"), key=lambda p: p.stat().st_mtime)
+    return logs[-1] if logs else None
+
+
+def _tail_file(log_file, lines: int, follow: bool) -> None:
+    """Print the last ``lines`` of ``log_file``, optionally following it."""
+    if follow:
         with open(log_file, "r", encoding="utf-8", errors="replace") as f:
-            existing = f.readlines()
-            for line in existing[-lines:]:
+            for line in f.readlines()[-lines:]:
                 print(line, end="")
             try:
                 while True:
@@ -7911,9 +7946,36 @@ def _handle_daemon_logs(args):
                 return
         return
     with open(log_file, "r", encoding="utf-8", errors="replace") as f:
-        tail = f.readlines()[-lines:]
-    for line in tail:
-        print(line, end="")
+        for line in f.readlines()[-lines:]:
+            print(line, end="")
+
+
+def _handle_daemon_logs(args):
+    from gaia.daemon import paths
+
+    lines = getattr(args, "lines", 100)
+    follow = getattr(args, "follow", False)
+    agent_id = getattr(args, "agent", None)
+
+    if agent_id:
+        log_file = _resolve_sidecar_log(agent_id)
+        if log_file is None:
+            print(
+                f"No log for sidecar '{agent_id}' at "
+                f"{Path.home() / '.gaia' / 'agents' / agent_id / 'logs'} "
+                f"(it has not run yet). Start it with `gaia daemon start-agent "
+                f"{agent_id}` or run the agent once."
+            )
+            return
+        print(f"# {log_file}")
+        _tail_file(log_file, lines, follow)
+        return
+
+    log_file = paths.log_path()
+    if not log_file.exists():
+        print(f"No daemon log at {log_file} (the daemon has not started yet).")
+        return
+    _tail_file(log_file, lines, follow)
 
 
 # ---------------------------------------------------------------------------

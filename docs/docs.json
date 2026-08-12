@@ -455,6 +455,7 @@
               "plans/connectors",
               "plans/email-calendar-integration",
               "plans/email-triage-agent",
+              "plans/email-inbox-cleanup",
               "plans/messaging-integrations-plan",
               "plans/autonomy-engine"
             ]
