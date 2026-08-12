@@ -27,6 +27,7 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from gaia_agent_email.attention_cache import ATTENTION_CACHE_TTL_SECONDS
 from gaia_agent_email.attention_cache import peek as _peek_attention_cache
+from gaia_agent_email.mailbox_state import provider_label
 from gaia_agent_email.tools.calendar_tools import (
     _listed_event_count_from_conversation,
     append_conflict_grounding_correction,
@@ -545,6 +546,37 @@ def rewrite_suspicious_mail_answer(
     return f"{lead}\n\n{rendered}"
 
 
+def _mailbox_failure_caveat(mailbox_errors: Any) -> str:
+    """One clause naming which mailbox(es) a degraded scan could not read,
+    so a partial scan is never mistaken for whole-account coverage (#2900
+    follow-up — a failed mailbox is the same false-all-clear this rewrite
+    exists to prevent, one layer up).
+
+    Mirrors the phrasing the system prompt already asks the model for
+    (``agent.py``: "Outlook couldn't be scanned (token expired); results
+    below are Gmail only.") so the deterministic fallback and the model's
+    own honest framing read the same way.
+    """
+    clauses = []
+    for entry in mailbox_errors or []:
+        if not isinstance(entry, dict) or not entry.get("mailbox"):
+            # ``degraded`` promised at least one entry here — a malformed
+            # one is a broken envelope, not a normal case worth hiding.
+            logger.warning(
+                "email agent: degraded check_suspicious_mail envelope has a "
+                "malformed mailbox_errors entry (%r) — omitting it from the "
+                "coverage caveat",
+                entry,
+            )
+            continue
+        label = provider_label(entry["mailbox"])
+        error = str(entry.get("error") or "").strip()
+        clauses.append(f"{label} couldn't be scanned ({error})" if error else f"{label} couldn't be scanned")
+    if not clauses:
+        return "Part of your mail could not be scanned this time."
+    return "; ".join(clauses) + "; results below are from the rest of your mailboxes only."
+
+
 def _honest_suspicious_summary(envelope: Dict[str, Any]) -> str:
     """A minimal, always-grounded summary sentence built straight from the
     envelope's own counts — the unconditional lead for
@@ -558,6 +590,12 @@ def _honest_suspicious_summary(envelope: Dict[str, Any]) -> str:
     ``suspicious`` list beneath this lead. When the two diverge, say so
     ("showing N") instead of quoting a total the list underneath never
     displays.
+
+    Two coverage caveats the replaced model sentence could have carried,
+    and the replacement must not silently drop (#2900 follow-up): a failed
+    mailbox (``degraded``/``mailbox_errors``, ``check_suspicious_mail``
+    passes both through from ``pre_scan_inbox``'s own envelope), and a
+    partial inbox scan (``scanned`` under ``total_inbox``).
     """
     shown = len(envelope.get("suspicious") or [])
     total = envelope.get("suspicious_total")
@@ -576,10 +614,22 @@ def _honest_suspicious_summary(envelope: Dict[str, Any]) -> str:
         )
         total = shown
     noun = "message" if total == 1 else "messages"
-    coverage = f"{envelope.get('scanned', 0)} messages scanned"
+
+    scanned = envelope.get("scanned", 0)
+    total_inbox = envelope.get("total_inbox")
+    if isinstance(scanned, int) and isinstance(total_inbox, int) and scanned < total_inbox:
+        coverage = f"{scanned} of {total_inbox} in the inbox scanned"
+    else:
+        coverage = f"{scanned} messages scanned"
+
     if shown < total:
-        return f"{total} flagged {noun} this scan — showing {shown}. {coverage}."
-    return f"{total} flagged {noun} this scan. {coverage}."
+        lead = f"{total} flagged {noun} this scan — showing {shown}. {coverage}."
+    else:
+        lead = f"{total} flagged {noun} this scan. {coverage}."
+
+    if envelope.get("degraded"):
+        lead += " " + _mailbox_failure_caveat(envelope.get("mailbox_errors"))
+    return lead
 
 
 def _honest_prescan_summary(envelope: Dict[str, Any]) -> str:

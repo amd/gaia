@@ -947,6 +947,133 @@ class TestSuspiciousSummaryCapDisclosure:
 
 
 # ---------------------------------------------------------------------------
+# _honest_suspicious_summary — coverage caveats the replaced model sentence
+# could have carried (a failed mailbox, a partial inbox scan) must survive
+# the unconditional lead-sentence replacement, not just its counts (review
+# follow-up on #2910).
+# ---------------------------------------------------------------------------
+
+
+class TestSuspiciousSummaryCoverageCaveats:
+    def test_degraded_scan_names_the_failed_mailbox(self):
+        envelope = {
+            "suspicious": [{"message_id": "m1"}],
+            "suspicious_total": 1,
+            "scanned": 25,
+            "degraded": True,
+            "mailbox_errors": [{"mailbox": "microsoft", "error": "token expired"}],
+        }
+        summary = _honest_suspicious_summary(envelope)
+        assert "Outlook" in summary, (
+            f"must name the mailbox that failed (provider_label('microsoft') "
+            f"== 'Outlook'), got: {summary!r}"
+        )
+        assert "couldn't be scanned" in summary
+        # A user must not be able to read this as whole-account coverage.
+        assert "only" in summary
+
+    def test_degraded_scan_names_multiple_failed_mailboxes(self):
+        envelope = {
+            "suspicious": [],
+            "suspicious_total": 0,
+            "scanned": 10,
+            "degraded": True,
+            "mailbox_errors": [
+                {"mailbox": "microsoft", "error": "token expired"},
+                {"mailbox": "google", "error": "rate limited"},
+            ],
+        }
+        summary = _honest_suspicious_summary(envelope)
+        assert "Outlook" in summary
+        assert "Gmail" in summary
+
+    def test_non_degraded_scan_carries_no_failure_caveat(self):
+        envelope = {
+            "suspicious": [{"message_id": "m1"}],
+            "suspicious_total": 1,
+            "scanned": 25,
+        }
+        summary = _honest_suspicious_summary(envelope)
+        assert "couldn't be scanned" not in summary
+        assert summary == "1 flagged message this scan. 25 messages scanned."
+
+    def test_malformed_mailbox_errors_entry_logs_a_warning_not_a_silent_drop(
+        self, caplog
+    ):
+        envelope = {
+            "suspicious": [],
+            "suspicious_total": 0,
+            "scanned": 10,
+            "degraded": True,
+            "mailbox_errors": [{"error": "no mailbox name"}],
+        }
+        with caplog.at_level(logging.WARNING, logger="gaia_agent_email"):
+            summary = _honest_suspicious_summary(envelope)
+        assert "could not be scanned" in summary
+        assert "mailbox_errors" in caplog.text
+
+    def test_partial_inbox_scan_states_the_denominator(self):
+        envelope = {
+            "suspicious": [],
+            "suspicious_total": 0,
+            "scanned": 50,
+            "total_inbox": 812,
+        }
+        summary = _honest_suspicious_summary(envelope)
+        assert "50 of 812 in the inbox scanned" in summary, summary
+        assert "50 messages scanned" not in summary
+
+    def test_full_inbox_scan_does_not_fabricate_a_denominator(self):
+        envelope = {
+            "suspicious": [],
+            "suspicious_total": 0,
+            "scanned": 812,
+            "total_inbox": 812,
+        }
+        summary = _honest_suspicious_summary(envelope)
+        assert "of 812" not in summary
+        assert summary == "0 flagged messages this scan. 812 messages scanned."
+
+    def test_unknown_total_inbox_does_not_fabricate_a_denominator(self):
+        envelope = {
+            "suspicious": [],
+            "suspicious_total": 0,
+            "scanned": 50,
+            "total_inbox": None,
+        }
+        summary = _honest_suspicious_summary(envelope)
+        assert "of" not in summary
+        assert summary == "0 flagged messages this scan. 50 messages scanned."
+
+    def test_rewrite_suspicious_mail_answer_lead_carries_both_caveats(self):
+        """End-to-end: a degraded, partial scan's lead sentence — the one the
+        user actually sees — must carry both caveats, not just the counts."""
+        items = [
+            {
+                "message_id": "m1",
+                "sender": "a@example.com",
+                "subject": "Sub",
+                "is_phishing": True,
+                "is_spam": False,
+            }
+        ]
+        envelope = {
+            "kind": "email_suspicious_scan",
+            "suspicious": items,
+            "suspicious_total": 1,
+            "scanned": 50,
+            "total_inbox": 812,
+            "degraded": True,
+            "mailbox_errors": [{"mailbox": "microsoft", "error": "token expired"}],
+        }
+        conversation = [_tool_entry("check_suspicious_mail", envelope)]
+        out = rewrite_suspicious_mail_answer("Nothing flagged this scan.", conversation)
+        assert "50 of 812 in the inbox scanned" in out
+        assert "Outlook" in out
+        assert "couldn't be scanned" in out
+
+
+# ---------------------------------------------------------------------------
 # Contract additivity (schema 2.13)
 # ---------------------------------------------------------------------------
 
