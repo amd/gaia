@@ -119,7 +119,7 @@ describe('getAgentPackages / getSkills — the rendered lane split', () => {
     vi.resetModules();
     process.env.HUB_CATALOG_URL = HUB;
     const fetchMock = vi.fn(
-      async () =>
+      async (_input: string | URL | Request, _init?: RequestInit) =>
         new Response(
           JSON.stringify({
             schema_version: 1,
