@@ -740,6 +740,23 @@ func seedAgents() []Agent {
 			Icon: "📧", Version: "0.1.0", Status: StatusAvailable,
 			Transport: TransportDaemon,
 		},
+		// The flagship. Like email, an HTTP sidecar the daemon supervises and
+		// the TUI reaches through the relay — not a binary the TUI can spawn.
+		//
+		// Seeded ComingSoon on purpose: it is not on the Agent Hub yet, and the
+		// seed list is the pre-hub-load fallback, so shipping it Available would
+		// offer an install the daemon cannot fetch — the same row-that-fails
+		// bug gaia-bash caused. A hub row promotes it once it publishes. The
+		// daemon can still start it from source (`--mode dev`), and `run`
+		// resolves on catalog presence rather than status, so local development
+		// works without over-claiming to users.
+		{
+			ID: "gaia", Name: "GAIA", Description: "Chat, documents, data, and web research — with memory and skills",
+			Category: "General", Tags: []string{"general", "chat", "rag", "memory", "skills"},
+			Icon: "✨", Version: "0.1.0", Status: StatusComingSoon,
+			NotOfferedReason: NotPublishedReason,
+			Transport:        TransportDaemon,
+		},
 
 		// --- Coming Soon ---
 		{

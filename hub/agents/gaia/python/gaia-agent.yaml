@@ -1,0 +1,71 @@
+id: gaia
+name: GAIA
+version: 0.1.0
+description: "The flagship GAIA agent — conversation, document Q&A, data analysis, and web research, with persistent memory and add-on skills"
+author: AMD
+license: MIT
+
+category: general
+# Must stay declared: an omitted tier defaults to `experimental`, which makes
+# `gaia hub install gaia` refuse without an explicit `--trust` opt-in.
+security_tier: verified
+tags: [general, chat, rag, memory, skills, research]
+icon: sparkles
+
+# The real registered size for the default construction (prompt_profile="full",
+# no skill set loaded). Drift-guarded by tests/test_gaia_agent.py, which builds
+# the agent and compares — a hand-edit that disagrees with the registry fails CI.
+tools_count: 55
+
+language: python
+min_gaia_version: "0.22.0"
+models: [Gemma-4-E4B-it-GGUF]
+
+python:
+  entry_module: gaia_agent_gaia
+  entry_class: GaiaAgent
+
+interfaces:
+  tui: true
+  cli: true
+  pipe: true
+  api_server: true
+  mcp_server: false
+
+requirements:
+  min_memory_gb: 8
+  platforms: [win-x64, linux-x64, darwin-arm64]
+
+dependencies:
+  - amd-gaia>=0.22.0
+  - gaia-agent-chat>=0.1.0
+
+# ---------------------------------------------------------------------------
+# Skills
+# ---------------------------------------------------------------------------
+# The bundled library under gaia_agent_gaia/skills/ is the highest-precedence
+# discovery root, so a skill shipped here wins over a same-named user copy.
+#
+# `default_skill_set` is deliberately COMMENTED OUT, following the email agent's
+# precedent (#2848): loading skill bodies costs prompt tokens and shrinks the
+# result envelope, and no eval has yet measured that trade for this agent. Until
+# one has, skills are opt-in via `--skill-set` or GAIA_SKILL_SET, and the
+# out-of-the-box prompt budget is identical to plain ChatAgent doc.
+#
+# Re-enabling is uncommenting the two blocks below — no code change.
+
+# skills: []
+
+# skill_sets:
+#   research:
+#     - research-report
+#     - daily-brief
+#     - source-watch
+#   documents:
+#     - document-brief
+#     - data-explore
+#   personal:
+#     - check-in
+#     - recommendations
+
+# default_skill_set: documents

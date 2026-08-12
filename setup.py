@@ -43,6 +43,7 @@ AGENT_WHEEL_PACKAGES = [
     "gaia-agent-routing",
     "gaia-agent-email",
     "gaia-agent-chat",
+    "gaia-agent-gaia",
 ]
 
 setup(
