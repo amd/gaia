@@ -841,6 +841,73 @@ See [`cpp/examples/vlm_agent.cpp`](https://github.com/amd/gaia/blob/main/cpp/exa
 
 ---
 
+## Skills (`SKILL.md`)
+
+`<gaia/skill.h>` reads the same `SKILL.md` files the Python runtime does — same
+schema, same constants, same refusal messages — so a skill written once loads in
+either runtime. The C++ side is **read-only**: it parses, validates, and renders
+skills; publishing, signing, and installing stay in the `gaia skill` CLI.
+
+```cpp
+#include <gaia/skill.h>
+
+// Parse a skill directory (or its SKILL.md directly).
+gaia::Skill skill = gaia::parseSkillFile("~/.gaia/skills/web-search");
+
+// Level 1 of progressive disclosure: frontmatter only, body dropped.
+gaia::Skill listing = gaia::parseSkillMetadata("~/.gaia/skills/web-search");
+
+// Render back to SKILL.md text. Round-trip is identity.
+std::string text = gaia::toMarkdown(skill);
+```
+
+### Types
+
+```cpp
+struct Skill {
+    std::string name;                      // ^[a-z0-9]+(-[a-z0-9]+)*$, <= 64 chars
+    std::string description;               // <= 1024 chars — the trigger signal
+    std::string body;                      // the Markdown instructions
+    std::optional<std::string> license;
+    std::optional<std::string> version;    // SemVer 2.0.0; 0.0.0 = unversioned
+    GaiaMetadata gaia;                     // the metadata.gaia namespace
+    nlohmann::json otherMetadata;          // metadata.<vendor> — preserved verbatim
+    nlohmann::json extraFields;            // unknown top-level keys — preserved
+
+    std::string path, root;                // provenance — not part of equality
+    bool readOnly;
+};
+
+struct GaiaMetadata {
+    std::string securityTier;              // verified | community | experimental
+    std::vector<std::string> permissions;  // <domain>:<level>[:scope]
+    SkillRequirements requirements;        // advisory
+    std::vector<SkillTool> tools;          // tools the skill provides
+    std::vector<std::string> toolsRequired;// registry tools it consumes
+    nlohmann::json extra;                  // unknown metadata.gaia keys — preserved
+};
+```
+
+### Guarantees
+
+- **Round-trip is identity.** `parseSkill(toMarkdown(parseSkill(t))) == parseSkill(t)`,
+  including foreign `metadata.<vendor>` namespaces, keys GAIA does not model, and the
+  author's key order. Nothing is lost by passing a third-party skill through GAIA.
+- **Scalars resolve exactly as PyYAML does**, because the Python runtime reads the
+  same files with `yaml.safe_load`. `flag: yes` is a bool and `mode: 0755` is 493 in
+  both runtimes. A value PyYAML types as something JSON cannot hold — a timestamp,
+  an infinity, the `=`/`<<` control tags — is kept as its literal text and written
+  back unquoted, so Python still reads the value it read before.
+- **`compatibility`, `allowed-tools`, and `disallowed-tools` are parsed, preserved,
+  and ignored.** They overlap `metadata.gaia` and are never a permission mechanism —
+  permissions come only from `metadata.gaia.permissions`.
+- **Failures are loud.** Every violation throws `gaia::SkillValidationError` naming
+  the field, the rule, and a doc link, and nothing partial is returned. Name must
+  equal the directory name; a mismatch is refused.
+- **BOM and CRLF tolerant**, so a skill authored on Windows parses unchanged.
+
+---
+
 ## Next Steps
 
 <CardGroup cols={2}>

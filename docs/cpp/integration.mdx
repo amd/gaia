@@ -16,7 +16,7 @@ icon: "puzzle-piece"
 
 ## Overview
 
-`gaia_core` is designed to drop into any C++ project with minimal friction. The library is self-contained — all dependencies (nlohmann/json, cpp-httplib) are resolved automatically, so you never install or manage them by hand. Your project only needs **CMake 3.14+** and a **C++17 compiler**.
+`gaia_core` is designed to drop into any C++ project with minimal friction. The library is self-contained — all dependencies (nlohmann/json, cpp-httplib, yaml-cpp) are resolved automatically, so you never install or manage them by hand. Your project only needs **CMake 3.14+** and a **C++17 compiler**.
 
 **The shortest path** — add three lines to your `CMakeLists.txt`:
 
@@ -71,7 +71,7 @@ That gives you `#include <gaia/agent.h>`, the full agent loop, tool registry, MC
     When consumed as a sub-project, `GAIA_BUILD_TESTS` and `GAIA_BUILD_EXAMPLES` default to `OFF`, so you only get the library -- no test binaries or demo executables in your build tree.
     </Note>
 
-    **That is it.** All transitive dependencies (nlohmann/json, cpp-httplib) are fetched automatically. Your `main.cpp` can `#include <gaia/agent.h>` and subclass `gaia::Agent` immediately.
+    **That is it.** All transitive dependencies (nlohmann/json, cpp-httplib, yaml-cpp) are fetched automatically. Your `main.cpp` can `#include <gaia/agent.h>` and subclass `gaia::Agent` immediately.
   </Tab>
 
   <Tab title="Git Submodule">
@@ -444,7 +444,7 @@ No manual annotation is needed in consumer code. Linking against the `gaia::gaia
 
 <AccordionGroup>
   <Accordion title="FetchContent is slow on first build">
-    The first configure downloads nlohmann/json, cpp-httplib, and (if tests are on) Google Test from GitHub. Subsequent builds use the CMake cache. To speed up repeated clean builds, consider using a local clone or a CMake dependency cache.
+    The first configure downloads nlohmann/json, cpp-httplib, yaml-cpp, and (if tests are on) Google Test from GitHub. Subsequent builds use the CMake cache. To speed up repeated clean builds, consider using a local clone or a CMake dependency cache.
   </Accordion>
 
   <Accordion title="find_package cannot find gaia_core">

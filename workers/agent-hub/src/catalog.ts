@@ -11,6 +11,7 @@ import { compareSemver } from "./manifest";
 import {
   evalScorecardKey,
   listAgentIds,
+  listSkillNames,
   readAgentManifest,
   readCapabilityMatrix,
   readChangelog,
@@ -19,6 +20,9 @@ import {
   readPackageFiles,
   readReadme,
   readSkill,
+  readSkillChangelog,
+  readSkillDoc,
+  readSkillManifest,
   readSpec,
   writeIndex,
 } from "./storage";
@@ -27,7 +31,11 @@ import type {
   ArtifactInfo,
   CatalogIndex,
   IndexEntry,
+  PackageType,
   ParsedManifest,
+  ParsedSkillManifest,
+  SkillAuditRecord,
+  SkillManifest,
   VersionEntry,
 } from "./types";
 
@@ -201,7 +209,9 @@ export function toIndexEntry(
     latest_version: agent.latest_version,
     icon: agent.icon,
     language: agent.language,
-    type: agent.type ?? "agent",
+    // Stored manifests type this loosely (it comes back off R2 as JSON); the
+    // publish path validated it against VALID_TYPES, so the narrowing is safe.
+    type: (agent.type as PackageType) ?? "agent",
     author: agent.author,
     security_tier: agent.security_tier,
     download_size_bytes: latest?.artifact.size_bytes ?? 0,
@@ -240,9 +250,131 @@ export function toIndexEntry(
   };
 }
 
+// ── Skills lane (#2467) ─────────────────────────────────────────────────────
+
+/** Catalog category every skill lands in, so the lane is filterable by category too. */
+export const SKILL_CATEGORY = "skills";
+
+/** Fallback hub icon for a skill (an existing glyph — see AgentIcon.astro). */
+const SKILL_ICON = "wrench";
+
 /**
- * Rebuild `index.json` from every per-agent manifest currently in the bucket.
- * Returns the catalog that was written (handy for tests/responses).
+ * Produce an updated per-skill manifest with `newVersion` added. Mirrors
+ * {@link upsertVersion}: append-only artifacts per version, display metadata
+ * tracking whichever version becomes `latest_version`.
+ */
+export function upsertSkillVersion(
+  existing: SkillManifest | null,
+  manifest: ParsedSkillManifest,
+  author: string,
+  audit: SkillAuditRecord,
+  version: VersionEntry
+): SkillManifest {
+  const prior = existing?.versions?.[version.version];
+  const priorArtifacts = prior ? (prior.artifacts ?? [prior.artifact]) : [];
+  const merged: VersionEntry = prior
+    ? { ...prior, artifacts: [...priorArtifacts, ...version.artifacts] }
+    : version;
+
+  const versions: Record<string, VersionEntry> = {
+    ...(existing?.versions ?? {}),
+    [version.version]: merged,
+  };
+  const latest = latestVersion(Object.keys(versions));
+  // Display metadata tracks the latest version: an older backfill publish must
+  // not overwrite the newest release's description/permissions/tier.
+  const useNew = latest === manifest.version;
+
+  return {
+    name: manifest.name,
+    description: useNew ? manifest.description : (existing?.description ?? manifest.description),
+    author: existing?.author ?? author,
+    license: useNew ? manifest.license : (existing?.license ?? manifest.license),
+    security_tier: useNew
+      ? manifest.security_tier
+      : (existing?.security_tier ?? manifest.security_tier),
+    permissions: useNew ? manifest.permissions : (existing?.permissions ?? manifest.permissions),
+    tools: useNew ? manifest.tools : (existing?.tools ?? manifest.tools),
+    tools_required: useNew
+      ? manifest.tools_required
+      : (existing?.tools_required ?? manifest.tools_required),
+    requirements: useNew ? manifest.requirements : (existing?.requirements ?? manifest.requirements),
+    // The audit verdict belongs to the version that is currently `latest` —
+    // publishing an older backfill must not overwrite the newest one's record.
+    audit: useNew ? audit : (existing?.audit ?? audit),
+    latest_version: latest,
+    versions,
+  };
+}
+
+/**
+ * Build the catalog entry for one skill.
+ *
+ * Skill entries share the agent-lane keys wherever the meaning is identical
+ * (`name`, `description`, `security_tier`, `permissions`, `latest_version`), so
+ * a reader that already understands the catalog needs no new field handling to
+ * list them. Everything skill-specific is nested under `skill_metadata`, and the
+ * agent-shaped `requirements` block is emitted zeroed so the shape stays stable
+ * for consumers that read it unconditionally.
+ *
+ * `readme` carries the SKILL.md BODY — for a skill that markdown *is* the
+ * package's primary doc, so the hub page's main tab renders it with no
+ * per-lane special-casing.
+ */
+export function toSkillIndexEntry(
+  skill: SkillManifest,
+  body: string,
+  changelog: string
+): IndexEntry {
+  const latest = skill.versions[skill.latest_version];
+  return {
+    id: skill.name,
+    name: skill.name,
+    description: skill.description,
+    category: SKILL_CATEGORY,
+    latest_version: skill.latest_version,
+    icon: SKILL_ICON,
+    // A skill that declares `metadata.gaia.tools` ships a `tools.py`; one that
+    // declares none is instruction-only, i.e. pure Markdown. Derived from the
+    // declaration, not guessed.
+    language: skill.tools.length > 0 ? "python" : "markdown",
+    type: "skill",
+    author: skill.author,
+    security_tier: skill.security_tier,
+    download_size_bytes: latest?.artifact.size_bytes ?? 0,
+    tags: [],
+    tools_count: skill.tools.length,
+    models: [],
+    min_gaia_version: "",
+    permissions: skill.permissions,
+    deprecated: false,
+    requirements: {
+      min_memory_gb: 0,
+      min_disk_gb: 0,
+      min_context_size: 0,
+      platforms: [],
+      npu: "optional",
+      gpu_vram_gb: 0,
+    },
+    readme: body,
+    changelog,
+    spec: "",
+    skill: "",
+    evaluation: "",
+    capability_matrix: "",
+    scorecard: "",
+    skill_metadata: {
+      tools: skill.tools,
+      tools_required: skill.tools_required,
+      requirements: skill.requirements,
+      audit: skill.audit,
+    },
+  };
+}
+
+/**
+ * Rebuild `index.json` from every per-agent and per-skill manifest currently in
+ * the bucket. Returns the catalog that was written (handy for tests/responses).
  */
 export async function rebuildIndex(
   bucket: R2Bucket,
@@ -273,6 +405,18 @@ export async function rebuildIndex(
       })
     );
   }
+
+  // Skills join the same array, discriminated by `type` (#2467). The publish
+  // path enforces a single id namespace across lanes, so no skill name can
+  // collide with an agent id here.
+  for (const name of await listSkillNames(bucket)) {
+    const skill = await readSkillManifest(bucket, name);
+    if (!skill) continue;
+    const body = await readSkillDoc(bucket, name, skill.latest_version);
+    const changelog = await readSkillChangelog(bucket, name, skill.latest_version);
+    entries.push(toSkillIndexEntry(skill, stripFrontMatter(body), changelog));
+  }
+
   entries.sort((a, b) => a.id.localeCompare(b.id));
 
   const index: CatalogIndex = {

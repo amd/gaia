@@ -12,6 +12,7 @@ place that happens, so the guarantee can be audited in one file.
 import json
 import re
 import sqlite3
+import sys
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -307,6 +308,21 @@ class _Window:
 _OPEN_WINDOWS: Dict[int, _Window] = {}
 _WINDOWS_LOCK = threading.Lock()
 
+# set_authorizer(None) only detaches the authorizer from 3.11 on (bpo-44491).
+# Before that it installs None as the callback, and the C trampoline turns the
+# resulting TypeError into SQLITE_DENY — bricking the connection for good.
+_SET_AUTHORIZER_NONE_DETACHES = sys.version_info >= (3, 11)
+
+
+def _allow_all(_action, _arg1, _arg2, _db_name, _trigger):
+    """Authorizer that permits everything — a stand-in for having none."""
+    return sqlite3.SQLITE_OK
+
+
+def _disarm(conn: sqlite3.Connection) -> None:
+    """Stop enforcing the read-only window on *conn*."""
+    conn.set_authorizer(None if _SET_AUTHORIZER_NONE_DETACHES else _allow_all)
+
 
 @contextmanager
 def readonly(conn: sqlite3.Connection) -> Iterator[List[str]]:
@@ -359,4 +375,4 @@ def readonly(conn: sqlite3.Connection) -> Iterator[List[str]]:
             entry.depth -= 1
             if entry.depth == 0:
                 del _OPEN_WINDOWS[key]
-                conn.set_authorizer(None)
+                _disarm(conn)
