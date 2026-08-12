@@ -412,7 +412,7 @@ The manifest also defines adversarial documents (`empty.txt`, `unicode_test.txt`
 | `--audit-only` | `false` | Check architecture constraints without running LLM calls |
 | `--generate-corpus` | `false` | Regenerate corpus documents and validate `manifest.json` |
 | `--backend URL` | `http://localhost:4200` | Agent UI backend URL |
-| `--model MODEL` | `claude-sonnet-4-6` | Judge model |
+| `--model MODEL` | `claude-opus-5` | Driver **and** judge — it runs each scenario as well as scoring it, so it must match the baseline you compare against |
 | `--budget USD` | `2.00` | Max spend per scenario |
 | `--timeout SECS` | `900` | Per-scenario timeout (auto-scaled for large-doc and multi-turn scenarios) |
 | `--fix` | `false` | Auto-invoke Claude Code to repair failures, then re-eval |

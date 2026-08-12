@@ -15,6 +15,10 @@ Usage:
     python tests/ci_lemonade_check.py --model user.embeddinggemma-300m-GGUF \
         --checkpoint ggml-org/embeddinggemma-300M-GGUF:Q8_0 --recipe llamacpp \
         --register-embedding --embeddings
+    # Reproduce RAG's own embedder load, flags included:
+    python tests/ci_lemonade_check.py --model user.embeddinggemma-300m-GGUF \
+        --checkpoint ggml-org/embeddinggemma-300M-GGUF:Q8_0 --recipe llamacpp \
+        --register-embedding --embeddings --llamacpp-args "--ubatch-size 2048"
 """
 
 import argparse
@@ -33,6 +37,20 @@ def main() -> int:
         "--chat", action="store_true", help="verify a chat-completion round-trip"
     )
     parser.add_argument("--ctx-size", type=int, default=None, dest="ctx_size")
+    # Load-time llama.cpp flags, so a caller can reproduce the load its
+    # production path actually performs. ``gaia.rag.sdk._load_embedder`` loads
+    # the embedder with ``--ubatch-size 2048``; a probe that omits it proves the
+    # model can be served, not that RAG's load of it succeeds.
+    parser.add_argument(
+        "--llamacpp-args",
+        default=None,
+        dest="llamacpp_args",
+        help=(
+            "llama.cpp args to pass at load time (e.g. '--ubatch-size 2048'). "
+            "A single dash-led flag with no space is consumed by argparse as an "
+            "option, so write those as --llamacpp-args=--flash-attn."
+        ),
+    )
     parser.add_argument(
         "--pull-only",
         action="store_true",
@@ -99,9 +117,17 @@ def main() -> int:
         print("[ci] pulled %s" % args.model, flush=True)
         return 0
 
-    print("[ci] load %s via LemonadeClient (with retry)..." % args.model, flush=True)
+    print(
+        "[ci] load %s via LemonadeClient (with retry, llamacpp_args=%r)..."
+        % (args.model, args.llamacpp_args),
+        flush=True,
+    )
     client.load_model(
-        args.model, prompt=False, auto_download=True, ctx_size=args.ctx_size
+        args.model,
+        prompt=False,
+        auto_download=True,
+        ctx_size=args.ctx_size,
+        llamacpp_args=args.llamacpp_args,
     )
     print("[ci] loaded %s" % args.model, flush=True)
 
