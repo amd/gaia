@@ -238,7 +238,10 @@ gaia/                           # repo root
     │   ├── lemonade_client.h   # HTTP client for the Lemonade inference server
     │   ├── sse_parser.h        # SSE parser for streaming chat completions
     │   ├── console.h           # TerminalConsole / SilentConsole output handlers
-    │   └── clean_console.h     # CleanConsole — polished TUI with colors and word-wrap
+    │   ├── clean_console.h     # CleanConsole — polished TUI with colors and word-wrap
+    │   └── database.h          # SQLite: Database, Statement, Transaction, Migration
+    ├── third_party/
+    │   └── sqlite/             # Vendored SQLite amalgamation (see its README)
     ├── src/
     │   ├── agent.cpp           # Agent loop state machine
     │   ├── tool_registry.cpp
@@ -247,7 +250,8 @@ gaia/                           # repo root
     │   ├── mcp_client.cpp      # Cross-platform subprocess + pipes (Win32 / POSIX)
     │   ├── json_utils.cpp
     │   ├── console.cpp
-    │   └── clean_console.cpp
+    │   ├── clean_console.cpp
+    │   └── database.cpp
     ├── examples/
     │   ├── health_agent.cpp    # Windows System Health Agent (MCP/CUA demo)
     │   └── wifi_agent.cpp      # Wi-Fi Troubleshooter (registered-tool demo)
@@ -262,6 +266,7 @@ gaia/                           # repo root
     │   ├── test_clean_console.cpp
     │   ├── test_tool_integration.cpp
     │   ├── test_types.cpp
+    │   ├── test_database.cpp
     │   └── integration/
     │       ├── test_main.cpp
     │       ├── test_integration_llm.cpp
@@ -408,13 +413,25 @@ Each discovered tool is registered with `ToolPolicy::CONFIRM` — the user is as
 
 ## Dependencies
 
-All fetched automatically by CMake — no manual installation needed.
+No manual installation needed — CMake fetches these at configure time.
 
 | Library | Version | License | Purpose |
 |---------|---------|---------|---------|
 | [nlohmann/json](https://github.com/nlohmann/json) | 3.11.3 | MIT | JSON parsing |
 | [cpp-httplib](https://github.com/yhirose/cpp-httplib) | 0.15.3 | MIT | HTTP client (LLM API calls) |
+| [FTXUI](https://github.com/ArthurSonzogni/FTXUI) | 6.1.9 | MIT | TUI console (optional, `GAIA_BUILD_TUI`) |
 | [Google Test](https://github.com/google/googletest) | 1.14.0 | BSD-3 | Unit testing |
+
+**Vendored in-tree** — checked in rather than fetched, so all three platform
+builds compile byte-identical sources with the same feature flags:
+
+| Library | Version | License | Purpose |
+|---------|---------|---------|---------|
+| [SQLite](https://sqlite.org) | 3.53.4 | public domain | Structured persistence (`gaia::Database`), FTS5 full-text search |
+
+SQLite lives in [`third_party/sqlite/`](third_party/sqlite/) and is compiled
+directly into `gaia_core`; there is deliberately no `find_package` fallback. See
+that directory's README for the compile flags, the upgrade procedure, and why.
 
 ---
 
