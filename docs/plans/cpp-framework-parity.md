@@ -431,15 +431,21 @@ checked against `ToolRegistry::hasTool` and warned about; a skill declaring
 `metadata.gaia.tools` is refused.
 
 **P3.4 — Skill sets and `gaia-agent.yaml` wiring**
-**Gated on PR #2695**, which introduces `src/gaia/skills/sets.py` — it is not on `main` yet, and
-porting a module still in review produces two divergent implementations. Do not start until it
-merges. Port `SkillRef`, `SkillSets`, `SkillSetResolution`, and the
-resolution order explicit → selector hook → default, where an undeclared set name **always**
-raises naming the valid sets rather than falling back. On `Agent`: `skillSets()`,
-`selectSkillSet()` virtual hook, `resolveSkillSet()`, `loadSkillSet()`, `activeSkillSet()`, and a
-`skillSet` field on `AgentConfig`. Read `skills:` / `skill_sets:` / `default_skill_set` from the
-agent's `gaia-agent.yaml`. Switching sets unloads only what the previous set added.
-*Depends on P3.1–P3.3.*
+PR #2695 has merged, so `src/gaia/skills/sets.py` is the port source. New
+`cpp/include/gaia/skill_sets.h`: `SkillRef`, `SkillSets`, `SkillSetResolution`, `SkillSetError`,
+and the resolution order explicit → selector hook → default, where an undeclared set name
+**always** raises naming the valid sets rather than falling back. On `Agent`: `skillSets()`,
+`selectSkillSet()` virtual hook, `resolveSkillSet()`, `loadSkillSet()`, `activeSkillSet()`, and
+`skillSet` / `skillManifest` fields on `AgentConfig`. Read `skills:` / `skill_sets:` /
+`default_skill_set` from the agent's `gaia-agent.yaml`. Switching sets unloads only what the
+previous set added, tracked in `skillSetLoaded()`.
+
+**Ordering note:** P3.4 landed ahead of P3.3. Because no `SkillManager` exists yet, the actual
+load/unload is delegated to a `SkillLoader` abstract interface installed via
+`Agent::setSkillLoader()`; resolution, ownership tracking, and rollback are complete and tested
+against a fake loader. **P3.3 implements `SkillLoader` over `SkillManager` and installs it** —
+that is the whole remaining integration. Until it does, `loadSkillSet()` resolves the set and
+warns that nothing was registered.
 
 ### Phase 4 — MCP completeness (3 issues)
 

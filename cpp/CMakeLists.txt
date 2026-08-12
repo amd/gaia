@@ -254,6 +254,8 @@ add_library(gaia_core
     src/json_event_handler.cpp
     src/chunking.cpp
     src/skill.cpp
+    src/skill_yaml.cpp
+    src/skill_sets.cpp
     src/database.cpp
 )
 
@@ -451,6 +453,7 @@ if(GAIA_BUILD_TESTS)
         tests/test_json_event_handler.cpp
         tests/test_chunking.cpp
         tests/test_skill.cpp
+        tests/test_skill_sets.cpp
         tests/test_database.cpp
     )
 
@@ -479,6 +482,9 @@ if(GAIA_BUILD_TESTS)
         # directory, so new corpora (e.g. openclaw_skills/) are picked up
         # automatically instead of needing a hardcoded list here.
         GAIA_REPO_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../tests/fixtures"
+        # test_skill_sets.cpp parses cpp/agents/bash/gaia-agent.yaml to prove a
+        # real shipped manifest that declares no skills stays empty and falsy.
+        GAIA_CPP_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
     )
     target_include_directories(tests_mock PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
 
