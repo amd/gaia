@@ -91,10 +91,17 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Deliberately above the Agent UI's `engines.node` build floor: this job
+      # runs the *test* toolchain, and jsdom 30 (#2750) pulls undici 8, which
+      # needs Node >= 22.19 for worker_threads `markAsUncloneable`. On Node 20
+      # every Vitest worker dies at import with "webidl.util.markAsUncloneable
+      # is not a function" and the suite silently reports zero tests. Don't
+      # lower this to match `engines.node` — that floor covers building the
+      # app, which has no jsdom.
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '22'
           cache: 'npm'
           cache-dependency-path: src/gaia/apps/webui/package-lock.json
 

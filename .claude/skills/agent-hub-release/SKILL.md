@@ -209,6 +209,10 @@ Per the workflow header (`release_agent_email.yml`), these are **maintainer setu
   auto-redeploy is still being wired — see the guide's Verify step.)
 - **Manual fallback:** `hub/agents/<id>/python/packaging/HUB-UPLOAD.md` documents the
   by-hand rclone path to the `gaia-hub` bucket — identical objects + lock as CI.
+- **Write the CHANGELOG entry, PR body, and your status reports** per [CLAUDE.md → How You
+  Communicate](../../../CLAUDE.md#how-you-communicate): lead with what changes for someone
+  installing the agent, put versions, hashes, and workflow mechanics underneath. Always say
+  which platforms actually shipped — a dropped Intel build is the headline, not a footnote.
 
 ## Reference files
 

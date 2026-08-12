@@ -13,7 +13,8 @@ endif()
 # Must be included before project() so the toolchain is set in time.
 include(${CMAKE_CURRENT_LIST_DIR}/cmake/vcpkg-auto-setup.cmake)
 
-project(gaia-cpp VERSION 0.1.0 LANGUAGES CXX)
+# C is required for the vendored SQLite amalgamation (third_party/sqlite).
+project(gaia-cpp VERSION 0.1.0 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -112,6 +113,66 @@ if(GAIA_BUILD_TUI)
     endif()
 endif()
 
+# ---------------------------------------------------------------------------
+# SQLite — vendored amalgamation (third_party/sqlite), NOT find_package
+# ---------------------------------------------------------------------------
+# Deliberately no system-SQLite fallback: a distro build may lack FTS5 or use
+# different compile-time defaults, and that only surfaces at query time on one
+# platform. Compiling the amalgamation gives all three platforms identical
+# semantics. See cpp/third_party/sqlite/README.md.
+#
+# An OBJECT library keeps SQLite's own warnings out of gaia_core's -Wall/-W4
+# without loosening them for our code, and its objects are baked straight into
+# gaia_core, so nothing extra ends up in the install export set.
+add_library(gaia_sqlite3 OBJECT third_party/sqlite/sqlite3.c)
+
+set(GAIA_SQLITE_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/third_party/sqlite)
+
+target_include_directories(gaia_sqlite3 PRIVATE ${GAIA_SQLITE_INCLUDE_DIR})
+
+set_target_properties(gaia_sqlite3 PROPERTIES
+    POSITION_INDEPENDENT_CODE ON
+    C_STANDARD 99
+)
+
+# Applied to both the amalgamation and to src/database.cpp, which includes
+# sqlite3.h — the two must agree or the header describes a different build than
+# the one linked in.
+set(GAIA_SQLITE_DEFINITIONS
+    # Full-text search. A missing flag fails at *query* time, not build time —
+    # tests/test_database.cpp has an FTS5 smoke test that catches a silent drop.
+    SQLITE_ENABLE_FTS5
+    # Serialized mode: a gaia::Database may be shared across threads.
+    SQLITE_THREADSAFE=1
+    # Reject double-quoted string literals, so a typo'd column name is an error
+    # instead of silently becoming a string constant.
+    SQLITE_DQS=0
+    # Foreign-key constraints enforced unless a caller opts out.
+    SQLITE_DEFAULT_FOREIGN_KEYS=1
+    # Reject LIKE against BLOBs rather than coercing.
+    SQLITE_LIKE_DOESNT_MATCH_BLOBS
+    # WAL commits sync the WAL, not the whole database — the standard WAL default.
+    SQLITE_DEFAULT_WAL_SYNCHRONOUS=1
+    # Views/triggers/indexes can't invoke non-SQLITE_INNOCUOUS functions.
+    SQLITE_TRUSTED_SCHEMA=0
+    # Drop the global allocation counters we never read.
+    SQLITE_DEFAULT_MEMSTATUS=0
+    # Depth of the expression tree is bounded by SQLITE_MAX_SQL_LENGTH instead
+    # of a separate, lower limit that rejects legitimate generated SQL.
+    SQLITE_MAX_EXPR_DEPTH=0
+)
+# Note: no SQLITE_OMIT_* flags — upstream documents those as unsupported with
+# the amalgamation. Loadable extensions are instead disabled per-connection via
+# sqlite3_db_config() in src/database.cpp, which is a runtime guarantee.
+
+target_compile_definitions(gaia_sqlite3 PRIVATE ${GAIA_SQLITE_DEFINITIONS})
+
+# Third-party source: never our warnings to fix.
+target_compile_options(gaia_sqlite3 PRIVATE
+    $<$<C_COMPILER_ID:MSVC>:/W0>
+    $<$<NOT:$<C_COMPILER_ID:MSVC>>:-w>
+)
+
 # Google Test (unit tests and/or integration tests)
 if(GAIA_BUILD_TESTS OR GAIA_BUILD_INTEGRATION_TESTS)
     find_package(GTest QUIET)
@@ -132,6 +193,7 @@ endif()
 # ---------------------------------------------------------------------------
 add_library(gaia_core
     src/types.cpp
+    src/model_registry.cpp
     src/image.cpp
     src/tool_registry.cpp
     src/console.cpp
@@ -145,17 +207,29 @@ add_library(gaia_core
     src/sse_parser.cpp
     src/process.cpp
     src/file_tools.cpp
+    src/ignore.cpp
     src/git_tools.cpp
     src/session.cpp
+    src/vector_index.cpp
     src/repl.cpp
     src/json_event_handler.cpp
+    src/database.cpp
 )
+
+# SQLite is compiled straight into gaia_core. Consuming the OBJECT library via
+# $<TARGET_OBJECTS:> rather than target_link_libraries keeps gaia_sqlite3 out of
+# gaia_core's link interface, so install(EXPORT) has nothing extra to resolve —
+# the same approach this file already takes for the fetched httplib/json.
+target_sources(gaia_core PRIVATE $<TARGET_OBJECTS:gaia_sqlite3>)
+target_include_directories(gaia_core PRIVATE ${GAIA_SQLITE_INCLUDE_DIR})
+target_compile_definitions(gaia_core PRIVATE ${GAIA_SQLITE_DEFINITIONS})
 
 # TUI sources (conditional on FTXUI availability)
 if(GAIA_BUILD_TUI)
     target_sources(gaia_core PRIVATE
-        src/tui_console.cpp
         src/tui_markdown.cpp
+        src/tui_transcript.cpp
+        src/tui_app.cpp
     )
     target_compile_definitions(gaia_core PUBLIC GAIA_HAS_TUI=1)
 endif()
@@ -213,6 +287,9 @@ endif()
 # Platform-specific libraries
 if(UNIX)
     target_link_libraries(gaia_core PUBLIC pthread)
+    # SQLite references dlopen/dlsym on Unix even with extension loading
+    # disabled at runtime; the symbols must resolve at link time.
+    target_link_libraries(gaia_core PRIVATE ${CMAKE_DL_LIBS})
 endif()
 if(WIN32)
     target_link_libraries(gaia_core PRIVATE ws2_32)
@@ -311,15 +388,19 @@ if(GAIA_BUILD_TESTS)
         tests/test_lemonade_client.cpp
         tests/test_clean_console.cpp
         tests/test_tool_integration.cpp
+        tests/test_native_tool_calls.cpp
         tests/test_decision.cpp
         tests/test_security.cpp
         tests/test_sse_parser.cpp
         tests/test_process.cpp
         tests/test_file_tools.cpp
+        tests/test_ignore.cpp
         tests/test_git_tools.cpp
         tests/test_session.cpp
+        tests/test_vector_index.cpp
         tests/test_repl.cpp
         tests/test_json_event_handler.cpp
+        tests/test_database.cpp
     )
 
     target_link_libraries(tests_mock PRIVATE
@@ -347,7 +428,11 @@ if(GAIA_BUILD_TESTS)
 
     # TUI tests (conditional -- requires FTXUI)
     if(GAIA_BUILD_TUI)
-        target_sources(tests_mock PRIVATE tests/test_tui_console.cpp)
+        target_sources(tests_mock PRIVATE
+            tests/test_tui_markdown.cpp
+            tests/test_tui_transcript.cpp
+            tests/test_tui_app.cpp
+        )
         target_link_libraries(tests_mock PRIVATE
             ftxui::component ftxui::dom ftxui::screen
         )
@@ -371,6 +456,7 @@ if(GAIA_BUILD_INTEGRATION_TESTS)
         tests/integration/test_integration_wifi.cpp
         tests/integration/test_integration_health.cpp
         tests/integration/test_integration_vlm.cpp
+        tests/integration/test_integration_tool_calls.cpp
     )
 
     target_link_libraries(tests_integration PRIVATE
