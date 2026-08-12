@@ -96,7 +96,12 @@ type Agent struct {
 	Transport   Transport
 	BinaryPath  string   // e.g. "gaia-bash" (subprocess transport only)
 	BinaryArgs  []string // e.g. ["--json-events"] (subprocess transport only)
-	Votes       int      // for coming-soon agents
+	// CanonicalEvents marks a subprocess agent that writes the CANONICAL event
+	// vocabulary over the pipe rather than the frozen legacy one. Only canonical
+	// events carry tool narration and result previews, so an agent that emits
+	// them and is parsed as legacy loses its progress reporting silently.
+	CanonicalEvents bool
+	Votes           int // for coming-soon agents
 
 	// --- Agent Hub fields, populated from GET /daemon/v1/catalog ---
 

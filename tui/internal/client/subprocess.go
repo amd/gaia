@@ -72,6 +72,9 @@ type SubprocessClient struct {
 	path  string
 	args  []string
 	debug bool
+	// canonical selects the event dialect read off the pipe: the frozen legacy
+	// vocabulary (false) or the canonical one (true).
+	canonical bool
 
 	mu      sync.Mutex
 	proc    *procHandle
@@ -96,6 +99,19 @@ func NewSubprocessClient(path string, args []string, debug bool) *SubprocessClie
 		args:  args,
 		debug: debug,
 	}
+}
+
+// NewCanonicalSubprocessClient is NewSubprocessClient for an agent that speaks
+// the CANONICAL event vocabulary over the pipe rather than the frozen legacy one.
+//
+// Same transport, different dialect. Canonical events carry the tool narration
+// and result previews the activity log renders; the legacy vocabulary has
+// nowhere to put them, so an agent moved onto this transport and parsed as
+// legacy would silently lose its progress reporting.
+func NewCanonicalSubprocessClient(path string, args []string, debug bool) *SubprocessClient {
+	c := NewSubprocessClient(path, args, debug)
+	c.canonical = true
+	return c
 }
 
 // turnState is everything one turn needs, captured under a single lock so it can
@@ -224,7 +240,13 @@ func (s *SubprocessClient) Send(ctx context.Context, query string) (<-chan inter
 				continue
 			}
 
-			evt, perr := event.ParseEvent(line)
+			var evt interface{}
+			var perr error
+			if s.canonical {
+				evt = event.ParseCanonicalEvent(line)
+			} else {
+				evt, perr = event.ParseEvent(line)
+			}
 			if perr != nil {
 				// Visible, not dropped: a status warning keeps the turn alive
 				// while making a bad producer obvious.

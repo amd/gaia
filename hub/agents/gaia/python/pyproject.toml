@@ -30,6 +30,11 @@ dependencies = [
   "gaia-agent-chat>=0.1.0",
 ]
 
+[project.scripts]
+# The collapsed transport: the TUI spawns this once and trades newline-delimited
+# JSON over the pipe. No daemon, no HTTP port, no bearer token, no model lease.
+gaia-agent = "gaia_agent_gaia.stdio:main"
+
 [project.entry-points."gaia.agent"]
 gaia = "gaia_agent_gaia:build_gaia"
 

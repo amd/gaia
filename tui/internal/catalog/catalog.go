@@ -740,14 +740,20 @@ func seedAgents() []Agent {
 			Icon: "📧", Version: "0.1.0", Status: StatusAvailable,
 			Transport: TransportDaemon,
 		},
-		// The flagship. Like email, an HTTP sidecar the daemon supervises and
-		// the TUI reaches through the relay — not a binary the TUI can spawn.
+		// The flagship, spawned directly as a child process: TUI -> agent ->
+		// Lemonade, with no daemon, HTTP port, bearer token or model-slot lease
+		// in the path. The child is started once and kept, which is what makes a
+		// turn cost ~2.5s instead of ~44.6s (the agent is built once, not per
+		// request) and what makes a skill loaded in one turn still loaded in the
+		// next — no session id, no session registry, no contract version.
+		//
+		// CanonicalEvents because it writes the canonical vocabulary, the only
+		// one with somewhere to put tool narration and result previews.
 		//
 		// Seeded ComingSoon on purpose: it is not on the Agent Hub yet, and the
 		// seed list is the pre-hub-load fallback, so shipping it Available would
-		// offer an install the daemon cannot fetch — the same row-that-fails
-		// bug gaia-bash caused. A hub row promotes it once it publishes. The
-		// daemon can still start it from source (`--mode dev`), and `run`
+		// offer an install that cannot be fetched — the same row-that-fails bug
+		// gaia-bash caused. A hub row promotes it once it publishes; `run`
 		// resolves on catalog presence rather than status, so local development
 		// works without over-claiming to users.
 		{
@@ -755,7 +761,9 @@ func seedAgents() []Agent {
 			Category: "General", Tags: []string{"general", "chat", "rag", "memory", "skills"},
 			Icon: "✨", Version: "0.1.0", Status: StatusComingSoon,
 			NotOfferedReason: NotPublishedReason,
-			Transport:        TransportDaemon,
+			Transport:        TransportSubprocess,
+			BinaryPath:       "gaia-agent",
+			CanonicalEvents:  true,
 		},
 
 		// --- Coming Soon ---

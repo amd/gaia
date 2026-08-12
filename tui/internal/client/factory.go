@@ -52,6 +52,9 @@ func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
 		if err != nil {
 			return nil, fmt.Errorf("cannot start agent %q: %w", agent.ID, err)
 		}
+		if agent.CanonicalEvents {
+			return NewCanonicalSubprocessClient(bin, agent.BinaryArgs, opts.Debug), nil
+		}
 		return NewSubprocessClient(bin, agent.BinaryArgs, opts.Debug), nil
 
 	default:
