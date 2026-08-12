@@ -105,9 +105,9 @@ describe('isAuthRequiredMessage', () => {
         ).toBe(true);
     });
 
-    // Work Microsoft 365 detection (#2629) — format_connector_error embeds the
-    // literal connector id "microsoft_work", which the generic "microsoft"
-    // substring check already matches.
+    // Work Microsoft 365 detection (#2629) — isAuthRequiredMessage checks for
+    // "microsoft_work is not currently connected" explicitly; it is not a
+    // substring of the personal-connector phrase.
     it('returns true for NOT_CONNECTED: microsoft_work prefix', () => {
         expect(
             isAuthRequiredMessage('NOT_CONNECTED: microsoft_work is not currently connected.')

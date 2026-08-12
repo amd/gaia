@@ -90,10 +90,10 @@ export function isAuthRequiredMessage(content: string): boolean {
     ) {
         return true;
     }
-    // Microsoft-side error messages from format_connector_error. Matches
-    // both connector ids: the message embeds the literal connector id
-    // (``microsoft`` or ``microsoft_work``), and "microsoft_work" contains
-    // "microsoft" as a substring, so this one check covers both.
+    // Microsoft-side error messages from format_connector_error. Each
+    // connector id needs its own phrase check below — "microsoft_work is not
+    // currently connected" does NOT contain "microsoft is not currently
+    // connected" as a substring.
     if (
         lower.includes('connectors → microsoft') ||
         lower.includes('connections → microsoft') ||
