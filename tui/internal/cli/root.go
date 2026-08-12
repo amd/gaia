@@ -62,7 +62,8 @@ var rootCmd = &cobra.Command{
 
 func init() {
 	rootCmd.PersistentFlags().BoolVar(&dev, "dev", false,
-		"developer mode: show per-turn timings, steps, tool arguments and output, and log the agent at DEBUG to ~/.gaia/logs/gaia-agent.log")
+		"developer mode: show per-turn timings, steps, and tool arguments and output "+
+			"(agents the TUI spawns itself also log at DEBUG to ~/.gaia/logs/)")
 	// Same variable as --dev, hidden: the previous name for this mode. Kept so
 	// existing scripts and docs do not break, out of --help so the two spellings
 	// never read as two features.

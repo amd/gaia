@@ -294,7 +294,11 @@ func RunOneShot(
 		case event.ToolStartEvent:
 			fmt.Fprintf(errW, "  🔧 %s\n", e.Tool)
 		case event.StepEvent:
-			fmt.Fprintf(errW, "  … Step %d/%d\n", e.Step, e.Total)
+			// The agent loop's bound, not progress on the work — same reason the
+			// chat view drops it. Only --dev has a use for it.
+			if dev {
+				fmt.Fprintf(errW, "  … Step %d/%d\n", e.Step, e.Total)
+			}
 		case event.ThinkingEvent:
 			// Reasoning is not progress a script needs; --debug keeps it.
 			debugf("thinking: %s", e.Content)

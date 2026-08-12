@@ -139,18 +139,23 @@ def _terminal_error(exc: BaseException) -> Dict[str, Any]:
     return {"type": "error", "detail": text}
 
 
-def run_turn(agent: Any, query: str, out) -> None:
+def run_turn(agent: Any, query: str, out, dev: bool = False) -> None:
     """Run one query to completion, streaming canonical events to *out*.
 
     Guarantees exactly one terminal event, whatever the agent does — a turn that
     ends without one leaves the reader waiting forever on a pipe that will never
     produce another byte.
+
+    *dev* opens the translator's debug channel, which is what carries the
+    harness-internal lines: the step counter and the model banner. Without it
+    they are dropped before they reach the wire, so a front-end that asks for
+    developer output gets an empty developer view.
     """
     from gaia.ui.sse_handler import SSEOutputHandler
 
     handler = SSEOutputHandler()
     agent.console = handler
-    translator = CanonicalTranslator(run_id=None, agent_id=AGENT_ID)
+    translator = CanonicalTranslator(run_id=None, agent_id=AGENT_ID, debug=dev)
     result: Dict[str, Any] = {}
 
     def _run() -> None:
@@ -254,7 +259,7 @@ def main(argv: Optional[list] = None) -> int:
         if not query:
             continue
         try:
-            run_turn(agent, query, out)
+            run_turn(agent, query, out, dev=args.dev)
         except Exception as exc:  # never let one bad turn kill the process
             logger.exception("stdio turn crashed outside the run loop")
             _write(_terminal_error(exc), out)

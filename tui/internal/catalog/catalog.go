@@ -249,7 +249,11 @@ func (c *Catalog) SetMockBinary(binaryPath string) {
 			continue
 		}
 		c.agents[i].BinaryPath = binaryPath
+		// All three describe how to invoke ONE binary, so they are replaced as
+		// a unit — a mock inheriting the real agent's --dev would be handed an
+		// argument it never declared.
 		c.agents[i].BinaryArgs = nil
+		c.agents[i].DevArgs = nil
 		if !c.agents[i].Status.IsLaunchable() {
 			c.agents[i].Status = StatusInstalled
 			c.agents[i].NotOfferedReason = ""
@@ -604,6 +608,7 @@ func (c *Catalog) Remove(id string) {
 		a := &c.agents[i]
 		a.BinaryPath = ""
 		a.BinaryArgs = nil
+		a.DevArgs = nil
 		a.InstalledVersion = ""
 		a.UpdateAvailable = false
 		if a.LatestVersion != "" {
