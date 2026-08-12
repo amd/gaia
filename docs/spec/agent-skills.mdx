@@ -20,13 +20,18 @@ sets commented out — see [below](#reference-implementation-the-email-agent)); 
 skill to GAIA format at the `experimental` tier.
 
 **Also shipped (hub side):** the `skill` catalog lane — `POST /publish/skill`,
-the `skills/` R2 namespace, server-side validation of the SKILL.md grammar, and
-the pre-publish audit gate ([#2467](https://github.com/amd/gaia/issues/2467)).
+the `skills/` R2 namespace, server-side validation of the SKILL.md grammar
+([#2467](https://github.com/amd/gaia/issues/2467)), and the pre-publish audit
+gate, which binds a verdict to the skill, version, tier, and bytes it audited
+([#2468](https://github.com/amd/gaia/issues/2468)).
 
-**Also shipped (client side, [#2467](https://github.com/amd/gaia/issues/2467)):**
-the marketplace verbs `search`/`install`/`remove`/`publish`, bundle signing +
-install-time tier ceilings, `skill-lock.json`, and the local resolver that turns
-a declared `skills:` / `skill_sets:` block into loaded skills at construction.
+**Also shipped (client side):** the marketplace verbs
+`search`/`install`/`remove`/`publish`, bundle signing + install-time tier
+ceilings, `skill-lock.json`, and the local resolver that turns a declared
+`skills:` / `skill_sets:` block into loaded skills at construction
+([#2467](https://github.com/amd/gaia/issues/2467)); plus `gaia skill audit`, the
+engine that produces the verdict the hub gate checks
+([#2468](https://github.com/amd/gaia/issues/2468)).
 
 **Still proposed:** the local-capability permission **sandbox**
 ([#1019](https://github.com/amd/gaia/issues/1019)), plus the `/api/skills` router
@@ -583,7 +588,7 @@ existing consumer.
 | Publish | `POST /publish` | `POST /publish/skill` |
 | R2 prefix | `agents/<id>/…` | `skills/<name>/…` |
 | Read back | `GET /agents/<id>/manifest.json` | `GET /skills/<name>/manifest.json` |
-| Install | `gaia agent install <id>` | `gaia skill install <name>` (**PROPOSED** — the verb does not exist yet) |
+| Install | `gaia agent install <id>` | `gaia skill install <name>` |
 
 A skill entry reuses the shared catalog keys where the meaning is identical —
 `name`, `description`, `latest_version`, `security_tier`, `permissions` — and
@@ -605,6 +610,11 @@ agent id (the hub rejects the publish).
 - A SemVer `version` is **required** to publish, and `0.0.0` — the format's
   "unversioned" sentinel — is rejected, so it can never become an immutable
   release.
+- **Skills enter the catalog by pull request.** Publishing is not open to the
+  public — the Worker authenticates against a maintainer-held `PUBLISH_TOKENS`
+  secret, the same curation model agents use. A contributor opens a PR against
+  `skills/community/<name>/`, the audit runs as a required check, and a maintainer
+  publishes after merge. Merging is not itself a tier promotion.
 - The **pre-publish security audit**
   ([#2468](https://github.com/amd/gaia/issues/2468)) gates the tier a skill may
   claim. `community` and `verified` are refused without a cleared report, and a
@@ -615,20 +625,26 @@ agent id (the hub rejects the publish).
   report and is recorded as `unaudited` rather than stamped as having passed, so
   the catalog never implies an audit that did not happen.
 
+  The verdict is **bound to what it audited** — skill, version, claimed tier, and
+  a digest of the `SKILL.md` — so a report cannot be replayed onto a different
+  publish, and a new version re-earns its verdict. The claimed tier must appear in
+  the report's `cleared_tiers`, which is what makes "cannot claim a tier it did
+  not clear" enforced rather than recorded. See
+  [Skill Format → Pre-publish security audit](/plans/skill-format#pre-publish-security-audit).
+
 <Note>
 **The gate resists replay, not forgery.** The audit report is attached by the
 publisher and is not yet signed, so nothing proves it was produced by a trusted
-engine. Binding it to the skill, version, and audited bytes is
-[#2468](https://github.com/amd/gaia/issues/2468); making it unforgeable needs a
+engine. Binding it to the skill, version, and audited bytes closes replay
+([#2468](https://github.com/amd/gaia/issues/2468)); making it unforgeable needs a
 signing key the publisher cannot mint
-([#1710](https://github.com/amd/gaia/issues/1710)). Until then a recorded tier
-means *consistent*, not *vouched for*.
+([#1710](https://github.com/amd/gaia/issues/1710)). Until then a recorded verdict
+is marked `publisher-asserted` — it means *self-consistent*, not *vouched for*.
 </Note>
 
-**Verification.** Every published artifact's Worker-computed SHA-256 is recorded
-in the per-skill `manifest.json`, the same way the agent lane does it, so an
-installer can verify the bytes it downloaded. The installer that will check it is
-part of the marketplace client and is still proposed.
+**Verification.** Install-time integrity uses the same mechanism as agents: the
+per-skill `manifest.json` records the Worker-computed SHA-256 of every published
+artifact, and the installer checks the bytes it downloaded against it.
 
 **Versioning.** Skills are SemVer'd independently of the framework and of the
 agents that use them. Major = breaking tool-signature or permission change;
@@ -735,8 +751,15 @@ standard intentionally leaves open.
 
 - **Tool-skill execution in foreign runtimes.** How much of a GAIA tool skill
   should degrade vs. fail when run by a host that can't enforce its permissions?
-- **Body-injection trust.** Static scanning of instruction bodies for injection
-  patterns at import — required for `community`+, advisory for `experimental`?
+- ~~**Body-injection trust.**~~ **Resolved by
+  [#2468](https://github.com/amd/gaia/issues/2468).** Every skill's body is
+  scanned for injection patterns at publish, and the claimed tier decides the
+  consequence rather than a separate policy: advisory at `experimental`, forcing
+  `REVIEW` at `community`, and gated on a `medium` at `verified`. Run it yourself
+  with `gaia skill audit ./<skill>/`. The precision trade-offs (fenced text is
+  downgraded one step rather than ignored; a prohibition is not a directive) are
+  recorded in
+  [Skill Format → Open questions](/plans/skill-format#open-questions).
 - **Versioning of bundled vs standalone.** Reconciling an agent-pinned bundled
   skill with a newer standalone install of the same `name`.
 

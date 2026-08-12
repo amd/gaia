@@ -5,9 +5,9 @@ The pre-publish security-audit gate — the client half of #2468.
 
 ``gaia skill publish`` must not put a skill in the catalog that nobody scanned.
 The **analysis engine** — the scanner that reads ``tools.py``/``scripts/`` for
-dangerous code and the instruction body for prompt injection — is issue #2468 and
-does **not** live here. This module is the call site: it locates that engine,
-invokes it, and turns its verdict into a publish decision.
+dangerous code and the instruction body for prompt injection — lives in
+:mod:`gaia.skills.audit`, not here. This module is the call site: it locates that
+engine, invokes it, and turns its verdict into a publish decision.
 
 **When the engine is absent, publish fails.** It does not proceed "unaudited", and
 it does not stamp a synthetic ALLOW. That would be precisely the silent fallback
@@ -16,15 +16,15 @@ CLAUDE.md prohibits: the report is what the hub Worker gates ``community`` and
 launder an unscanned skill past a gate designed to stop it. The error names the
 issue, the expected symbol, and the two legitimate ways forward.
 
-**The contract this module expects from #2468**::
+**The contract this module expects of the engine**::
 
     from gaia.skills.audit import audit_skill
     report = audit_skill(directory)   # -> object/dict with .verdict/.engine/.findings
 
 ``verdict`` is the governance vocabulary (``ALLOW``/``REVIEW``/``BLOCK``,
-``DecisionType`` in ``gaia/governance/schemas.py``) that ``audit.ts`` already
-consumes. If #2468 lands a different symbol name, this module's lookup is the one
-place to adapt — and until then every publish attempt says so out loud.
+``DecisionType`` in ``gaia/governance/schemas.py``) that ``audit.ts`` also
+consumes. The lookup is by name, so if that symbol is ever renamed this module is
+the one place to adapt — and until it is, every publish attempt says so out loud.
 
 A CI job that already produced a report can pass it through with
 ``--audit-report <path>`` and never touch the engine at all.
@@ -55,6 +55,18 @@ VERDICT_REVIEW = "REVIEW"
 VERDICT_BLOCK = "BLOCK"
 VALID_VERDICTS = frozenset({VERDICT_ALLOW, VERDICT_REVIEW, VERDICT_BLOCK})
 
+#: Keys that tie a verdict to the skill, version, tier, and bytes it was earned
+#: on. The Worker refuses a gated tier whose report omits them, so they must be
+#: forwarded verbatim rather than normalized away.
+BINDING_FIELDS = (
+    "skill",
+    "version",
+    "security_tier",
+    "cleared_tiers",
+    "content_digest",
+    "manifest_digest",
+)
+
 
 class SkillAuditUnavailableError(SkillError):
     """The audit engine (#2468) is not installed, so publish cannot be gated.
@@ -72,26 +84,33 @@ class SkillAuditFailedError(SkillError):
 class AuditReport:
     """A normalized audit result, in the shape ``POST /publish/skill`` accepts.
 
-    Serialized by :meth:`to_json` and sent verbatim as the ``audit`` form part;
-    ``workers/agent-hub/src/audit.ts`` parses exactly these four keys.
+    Serialized by :meth:`to_json` and sent verbatim as the ``audit`` form part.
+    ``workers/agent-hub/src/audit.ts`` parses the four verdict keys below and,
+    for any tier whose gate demands an audit, additionally requires the
+    :data:`BINDING_FIELDS` carried in :attr:`binding` — dropping them here would
+    turn every ``community``/``verified`` publish into a 428.
     """
 
     verdict: str
     engine: str
     audited_at: str
     findings: list[Any] = field(default_factory=list)
+    #: Engine-supplied keys that bind the verdict to what it audited.
+    binding: dict[str, Any] = field(default_factory=dict)
 
     @property
     def allowed(self) -> bool:
         return self.verdict == VERDICT_ALLOW
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "verdict": self.verdict,
             "engine": self.engine,
             "audited_at": self.audited_at,
             "findings": list(self.findings),
         }
+        payload.update(self.binding)
+        return payload
 
     def to_json(self) -> str:
         return json.dumps(self.to_dict(), indent=2)
@@ -104,7 +123,7 @@ class AuditReport:
         but every required field is still validated — a report GAIA cannot read is
         an error, never an implied pass.
         """
-        data = raw if isinstance(raw, dict) else _attrs_of(raw)
+        data = _wire_dict(raw)
 
         verdict = str(data.get("verdict") or "").upper()
         if verdict not in VALID_VERDICTS:
@@ -144,14 +163,36 @@ class AuditReport:
             verdict=verdict,
             engine=engine,
             audited_at=audited_at,
-            findings=list(findings),
+            findings=[_finding_dict(f) for f in findings],
+            binding={
+                key: data[key] for key in BINDING_FIELDS if data.get(key) is not None
+            },
         )
+
+
+def _wire_dict(raw: Any) -> dict[str, Any]:
+    """The engine's own ``to_dict()`` is already the wire payload — prefer it.
+
+    Falling back to attribute-scraping would leave `Finding` dataclasses in
+    ``findings``, which :meth:`AuditReport.to_json` cannot serialize.
+    """
+    if isinstance(raw, dict):
+        return raw
+    to_dict = getattr(raw, "to_dict", None)
+    if callable(to_dict):
+        return to_dict()
+    return _attrs_of(raw)
+
+
+def _finding_dict(finding: Any) -> Any:
+    to_dict = getattr(finding, "to_dict", None)
+    return to_dict() if callable(to_dict) else finding
 
 
 def _attrs_of(raw: Any) -> dict[str, Any]:
     return {
         key: getattr(raw, key, None)
-        for key in ("verdict", "engine", "audited_at", "findings")
+        for key in ("verdict", "engine", "audited_at", "findings") + BINDING_FIELDS
     }
 
 

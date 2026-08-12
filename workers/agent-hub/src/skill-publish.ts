@@ -17,7 +17,7 @@
  */
 
 import { authenticate } from "./auth";
-import { assertAuditGate, parseAuditReport } from "./audit";
+import { assertAuditGate, manifestDigest, parseAuditReport } from "./audit";
 import { rebuildIndex, upsertSkillVersion } from "./catalog";
 import { HttpError, json } from "./http";
 import {
@@ -93,7 +93,18 @@ export async function handleSkillPublish(
   // Runs BEFORE anything is written, so a BLOCKed or REVIEW-held skill leaves no
   // trace in R2. `assertAuditGate` refuses a tier that requires a cleared audit
   // and arrives without one — there is no permissive default. See `audit.ts`.
-  const auditRecord = assertAuditGate(parseAuditReport(auditText), manifest.security_tier);
+  // The binding argument is what lets the gate CHECK the report instead of
+  // trusting it: the report must name this skill, this version, and the bytes of
+  // the SKILL.md actually uploaded (#2468).
+  const auditRecord = assertAuditGate(
+    parseAuditReport(auditText),
+    manifest.security_tier,
+    {
+      skill: manifest.name,
+      version: manifest.version,
+      manifestDigest: await manifestDigest(skillMarkdown),
+    }
+  );
 
   const filename = artifactFile.name;
   if (!ARTIFACT_FILENAME_RE.test(filename)) {

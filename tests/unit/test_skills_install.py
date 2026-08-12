@@ -149,7 +149,8 @@ def test_publish_uploads_a_signed_bundle_and_lands_a_catalog_entry(
     assert "name: web-research" in sent.skill_markdown
     assert "version: 1.0.0" in sent.skill_markdown
     assert SKILL_BODY.splitlines()[0] in sent.skill_markdown
-    # 'audit' must carry the four keys audit.ts reads.
+    # A supplied report is forwarded verbatim: these four keys in, these four
+    # out. (The engine adds binding fields on top — see the bound-report test.)
     assert set(json.loads(sent.audit_json)) == {
         "verdict",
         "engine",
@@ -240,9 +241,18 @@ def test_publish_refuses_a_local_capability_permission(marketplace, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_publish_fails_loudly_when_the_audit_engine_is_absent(marketplace, tmp_path):
+def test_publish_fails_loudly_when_the_audit_engine_is_absent(
+    marketplace, tmp_path, monkeypatch
+):
     """No engine and no report => refuse. Never 'proceed un-audited'."""
+    from gaia.skills import audit_gate
     from gaia.skills.audit_gate import SkillAuditUnavailableError
+
+    # The engine ships now (#2468), so absence has to be simulated: aim the
+    # lookup at a module that does not exist.
+    monkeypatch.setattr(
+        audit_gate, "AUDIT_MODULE", "gaia.skills.audit_absent_in_this_build"
+    )
 
     marketplace.keygen()
     source = _write_source(tmp_path)
@@ -255,6 +265,28 @@ def test_publish_fails_loudly_when_the_audit_engine_is_absent(marketplace, tmp_p
     assert "2468" in message
     assert "--audit-report" in message
     assert marketplace.hub.publishes == []
+
+
+def test_publish_attaches_a_report_bound_to_what_it_audited(marketplace, tmp_path):
+    """The hub refuses a gated tier whose report drops the binding fields.
+
+    ``assertReportBinding`` in ``workers/agent-hub/src/audit.ts`` 428s on a
+    missing ``skill`` / ``version`` / ``cleared_tiers`` / ``manifest_digest``,
+    so normalizing them away here would break every community publish.
+    """
+    marketplace.keygen()
+    source = _write_source(tmp_path, tier="community", version="1.0.0")
+
+    marketplace.publish(source, audit_report=None)
+
+    sent = json.loads(marketplace.hub.publishes[-1].audit_json)
+    assert sent["verdict"] == "ALLOW"
+    assert sent["skill"] == "web-research"
+    assert sent["version"] == "1.0.0"
+    assert "community" in sent["cleared_tiers"]
+    assert sent["manifest_digest"].startswith("sha256:")
+    # Findings must survive as JSON, not as engine dataclasses.
+    assert isinstance(sent["findings"], list)
 
 
 @pytest.mark.parametrize("verdict", ["BLOCK", "REVIEW"])

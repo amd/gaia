@@ -231,6 +231,28 @@ export interface SkillAuditRecord {
   audited_at: string;
   /** Number of non-blocking findings the report surfaced. */
   findings: number;
+  /**
+   * How much the verdict is worth (#2468).
+   *
+   * `publisher-asserted` — the publisher supplied the report and the Worker
+   * checked it is self-consistent (right skill, version, tier, manifest bytes).
+   * It is NOT proof the audit ran: the report carries no attestation a publisher
+   * could not mint, so a consumer must not read it as "AMD vouches for this".
+   *
+   * `unaudited` — no report was attached (only the advisory `experimental` tier
+   * permits this).
+   *
+   * A future `signer-attested` value belongs here once report signing lands
+   * (#1710); the field exists now so consumers can already tell the cases apart
+   * instead of having to assume the strongest one.
+   */
+  attestation?: "publisher-asserted" | "unaudited";
+  /** Tiers the audit reported as cleared; "" / [] when unaudited. */
+  cleared_tiers?: string[];
+  /** sha256 over the audited skill tree, as reported. Recorded, not recomputed. */
+  content_digest?: string;
+  /** sha256 over the audited SKILL.md, verified against the uploaded manifest. */
+  manifest_digest?: string;
 }
 
 /**

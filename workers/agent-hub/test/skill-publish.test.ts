@@ -266,11 +266,12 @@ describe("POST /publish/skill — SKILL.md grammar validation", () => {
     "accepts security_tier %s",
     async (tier) => {
       const env = makeEnv();
+      const markdown = sampleSkill({ security_tier: tier });
       const res = await publishSkill(env, {
         ...VALID,
-        skillMarkdown: sampleSkill({ security_tier: tier }),
-        // verified/community require a cleared audit (#2468).
-        audit: tier === "experimental" ? undefined : allowAudit(),
+        skillMarkdown: markdown,
+        // verified/community require a cleared audit, bound to this skill (#2468).
+        audit: tier === "experimental" ? undefined : await allowAudit(markdown),
       });
       expect(res.status).toBe(201);
     }
@@ -405,25 +406,36 @@ describe("POST /publish/skill — security-audit gate (#2468)", () => {
       engine: "",
       audited_at: "",
       findings: 0,
+      // A consumer must be able to tell "no audit ran" from "an audit passed"
+      // without inferring it from empty strings (#2468).
+      attestation: "unaudited",
+      cleared_tiers: [],
+      content_digest: "",
+      manifest_digest: "",
     });
   });
 
   it("records the cleared verdict + engine when an ALLOW report is attached", async () => {
     const env = makeEnv();
+    const verifiedSkill = sampleSkill({ security_tier: "verified" });
     const res = await publishSkill(env, {
       ...VALID,
-      skillMarkdown: sampleSkill({ security_tier: "verified" }),
-      audit: allowAudit(2),
+      skillMarkdown: verifiedSkill,
+      audit: await allowAudit(verifiedSkill, { findings: 2 }),
     });
     expect(res.status).toBe(201);
 
     const entry = (await readIndex(env)).agents[0];
     expect(entry.security_tier).toBe("verified");
-    expect(entry.skill_metadata!.audit).toEqual({
+    expect(entry.skill_metadata!.audit).toMatchObject({
       verdict: "ALLOW",
       engine: "gaia-skill-audit/0.1.0",
       audited_at: "2026-07-29T00:00:00.000Z",
       findings: 2,
+      // "self-consistent", not "AMD vouches for this" — the report is
+      // publisher-supplied and unsigned (#2468, #1710).
+      attestation: "publisher-asserted",
+      cleared_tiers: ["verified"],
     });
     // The report itself is kept as the per-version evidence of what was cleared.
     const stored = await env.bucket.get("skills/web-research/0.1.0/audit.json");
