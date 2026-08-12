@@ -372,6 +372,14 @@ class _Host(ReadToolsMixin):
             include_informational=include_informational,
         )
 
+    def _refresh_mail_backends(self) -> None:
+        # No-op stand-in — this fixture has no config to re-resolve from,
+        # so it leaves ``_backends`` exactly as the test set it. The real
+        # agent's refresh behavior (construction-time state going stale in
+        # a long-lived session) is covered against the REAL agent by
+        # TestCheckSuspiciousMailLongLivedSession below, not here.
+        pass
+
 
 def _tool(host, name):
     _TOOL_REGISTRY.clear()
@@ -465,6 +473,85 @@ class TestCheckSuspiciousMailTool:
             "check_suspicious_mail must emit its own tool_result log entry "
             f"— got {tool_result_names}"
         )
+
+
+# ---------------------------------------------------------------------------
+# check_suspicious_mail — long-lived-session refresh (review follow-up on
+# #2900/#2910). The ``_Host`` stand-in above sets ``_backends`` once in
+# ``__init__`` and never calls ``_refresh_mail_backends`` — every other
+# pre-scan-derived tool re-resolves per call via
+# ``_pre_scan_all_backends`` -> ``_refresh_mail_backends`` (agent.py), so a
+# stand-in that skips that method can't catch a guard that short-circuits
+# before it. This exercises the REAL ``EmailTriageAgent`` and its REAL
+# registered tool instead.
+# ---------------------------------------------------------------------------
+
+
+def _build_zero_connector_agent(tmp_path, monkeypatch):
+    """Construct with the real #2418 zero-connector path: no injected
+    backend, nothing connected — ``agent._backends`` starts truly empty
+    from ``__init__``'s own ``ConfigurationError`` branch, not a hand-set
+    dict (mirrors ``test_zero_connector_construction_2418.py``)."""
+    from unittest.mock import MagicMock, patch
+
+    from gaia_agent_email.agent import EmailTriageAgent
+    from gaia_agent_email.config import EmailAgentConfig
+
+    monkeypatch.setattr(
+        "gaia_agent_email.config.connected_mailbox_providers", lambda: []
+    )
+    cfg = EmailAgentConfig(
+        model_id="test-model",
+        db_path=str(tmp_path / "state.db"),
+        memory_db_path=str(tmp_path / "memory.db"),
+        silent_mode=True,
+        debug=False,
+    )
+    monkeypatch.setenv("GAIA_MEMORY_DISABLED", "1")
+    with patch("gaia.agents.base.agent.AgentSDK") as mock_sdk:
+        mock_sdk.return_value = MagicMock()
+        return EmailTriageAgent(config=cfg)
+
+
+class TestCheckSuspiciousMailLongLivedSession:
+    def test_no_backends_at_construction_then_mailbox_connects_mid_session(
+        self, tmp_path, monkeypatch
+    ):
+        """A mailbox that becomes resolvable AFTER ``__init__`` (a connector
+        grant completing mid-session, or startup recovering from a
+        ``ConfigurationError``) must be picked up by ``check_suspicious_mail``
+        — it must NOT keep reporting "no mailbox connected" off
+        construction-time state. Fails against the pre-fix code, where the
+        tool's ``if not agent._backends`` guard reads the stale empty dict
+        from ``__init__`` and returns before ``_pre_scan_all_backends`` ever
+        gets a chance to refresh it."""
+        agent = _build_zero_connector_agent(tmp_path, monkeypatch)
+        assert agent._backends == {}, "must start truly empty, mirroring #2418"
+
+        # Mailbox becomes resolvable mid-session — same seam #2418's own
+        # test suite uses to simulate the connected set changing, here
+        # exercised through the REAL agent's REAL registered tool.
+        fake_gmail = FakeGmailBackend()
+        fake_gmail.add_message(
+            _msg(
+                "clean-1",
+                subject="Q3 roadmap review",
+                sender="colleague@example.com",
+                body="Can you take a look before Friday?",
+            )
+        )
+        agent.config.gmail_backend = fake_gmail
+
+        check_suspicious_mail = agent._tools_registry["check_suspicious_mail"][
+            "function"
+        ]
+        envelope = json.loads(check_suspicious_mail(max_messages=25))
+
+        assert envelope["ok"] is True, (
+            "check_suspicious_mail must see the newly-connected mailbox "
+            f"instead of reporting the stale construction-time state, got {envelope}"
+        )
+        assert envelope["data"]["suspicious_total"] == 0
 
 
 # ---------------------------------------------------------------------------

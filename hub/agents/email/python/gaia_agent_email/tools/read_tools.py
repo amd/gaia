@@ -32,6 +32,7 @@ from gaia_agent_email.body_normalize import (
 )
 from gaia_agent_email.config import (
     DEFAULT_INBOX_SCAN_MESSAGES,
+    ConfigurationError,
     default_inbox_scan_ceiling,
 )
 from gaia_agent_email.context_budget import (
@@ -3190,6 +3191,12 @@ class ReadToolsMixin:
                 "check_suspicious_mail", {"max_messages": max_messages}, debug=debug_flag
             ) as st:
                 try:
+                    # Re-resolve first — ``_backends`` is stale on a
+                    # long-lived agent whose mailbox connected after __init__.
+                    try:
+                        agent._refresh_mail_backends()
+                    except (ConfigurationError, ConnectorsError):
+                        pass
                     if not agent._backends:
                         st["ok"] = False
                         st["error"] = NO_MAILBOX_CONNECTED_MESSAGE
