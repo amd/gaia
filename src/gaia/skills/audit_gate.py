@@ -5,9 +5,9 @@ The pre-publish security-audit gate — the client half of #2468.
 
 ``gaia skill publish`` must not put a skill in the catalog that nobody scanned.
 The **analysis engine** — the scanner that reads ``tools.py``/``scripts/`` for
-dangerous code and the instruction body for prompt injection — is issue #2468 and
-does **not** live here. This module is the call site: it locates that engine,
-invokes it, and turns its verdict into a publish decision.
+dangerous code and the instruction body for prompt injection — lives in
+:mod:`gaia.skills.audit`, not here. This module is the call site: it locates that
+engine, invokes it, and turns its verdict into a publish decision.
 
 **When the engine is absent, publish fails.** It does not proceed "unaudited", and
 it does not stamp a synthetic ALLOW. That would be precisely the silent fallback
@@ -16,15 +16,15 @@ CLAUDE.md prohibits: the report is what the hub Worker gates ``community`` and
 launder an unscanned skill past a gate designed to stop it. The error names the
 issue, the expected symbol, and the two legitimate ways forward.
 
-**The contract this module expects from #2468**::
+**The contract this module expects of the engine**::
 
     from gaia.skills.audit import audit_skill
     report = audit_skill(directory)   # -> object/dict with .verdict/.engine/.findings
 
 ``verdict`` is the governance vocabulary (``ALLOW``/``REVIEW``/``BLOCK``,
-``DecisionType`` in ``gaia/governance/schemas.py``) that ``audit.ts`` already
-consumes. If #2468 lands a different symbol name, this module's lookup is the one
-place to adapt — and until then every publish attempt says so out loud.
+``DecisionType`` in ``gaia/governance/schemas.py``) that ``audit.ts`` also
+consumes. The lookup is by name, so if that symbol is ever renamed this module is
+the one place to adapt — and until it is, every publish attempt says so out loud.
 
 A CI job that already produced a report can pass it through with
 ``--audit-report <path>`` and never touch the engine at all.
