@@ -210,6 +210,30 @@ class ModelSlotBroker:
                         )
                     self._cv.wait(remaining)
 
+    def release_holder(self, holder: str) -> bool:
+        """Drop the active lease if *holder* owns it. Returns whether it did.
+
+        For when a holder's process is confirmed gone: it can never call
+        ``release``, so its lease is leaked the moment it dies. The TTL would
+        eventually reclaim it, but at 900s against a 300s caller timeout that is
+        ~10 minutes of failures blaming a Lemonade server that is healthy with
+        the model already loaded. Idempotent, and a no-op if someone else holds
+        the slot.
+        """
+        with self._cv:
+            if self._active is None or self._active.holder != holder:
+                return False
+            logger.warning(
+                "broker: releasing lease %s (model '%s') — holder '%s' is gone "
+                "and cannot release it itself.",
+                self._active.lease_id,
+                self._active.model,
+                holder,
+            )
+            self._active = None
+            self._cv.notify_all()
+            return True
+
     def release(self, lease_id: str) -> None:
         """Release the slot held by *lease_id* and wake the next waiter.
 
