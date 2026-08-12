@@ -3142,10 +3142,13 @@ class ReadToolsMixin:
 
         @tool
         def check_suspicious_mail(max_messages: int = DEFAULT_INBOX_SCAN_MESSAGES) -> str:
-            """Scan for mail flagged phishing or spam by the shared classifier.
+            """Check the inbox for anything suspicious: mail flagged phishing
+            or spam by the shared classifier.
 
-            Use this — NOT ``pre_scan_inbox`` — when the question is scoped
-            to flagged/risky mail specifically rather than a general triage.
+            Use this — NOT ``pre_scan_inbox`` — when the user asks if
+            anything in the inbox looks suspicious, whether there's
+            anything to worry about or watch out for, or otherwise wants
+            flagged/risky mail specifically, rather than a general triage.
             ``pre_scan_inbox`` always renders its full four-section card
             (waiting on your reply, needs a response, meetings to decide,
             needs a manual look); this tool returns ONLY the flagged rows,

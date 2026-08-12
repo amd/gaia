@@ -611,7 +611,11 @@ class TestSystemPromptWording:
         assert "check_suspicious_mail" in _SYSTEM_PROMPT
 
     def test_general_routing_sentence_present(self):
-        assert "prefer the narrower tool" in _SYSTEM_PROMPT.lower()
+        # Reworded from "prefer the narrower tool" (#2900 gap fix) to a
+        # stronger imperative — check the substance (narrower tool wins
+        # over pre_scan_inbox for a scoped question), not the exact words.
+        assert "must be used instead" in _SYSTEM_PROMPT.lower()
+        assert "narrower tool" in _SYSTEM_PROMPT.lower()
 
     def test_no_scoped_question_phrasing_is_enumerated(self):
         """The design decision under test: the prompt names the TOOL
