@@ -123,7 +123,7 @@ Exercise cross-component behaviour through the **real CLI a user runs** — neve
 
 ## Phase 5 — Tier 3: Real-world (on the chosen machine)
 
-1. **Deploy + bring up.** First clear any partial state from a prior failed run on the target (stale processes, half-downloaded model caches, bound ports). Get the build onto the target (clone/checkout the ref, install, build any frontend) and run setup — locally if the target is local (the common case), else via its declared access method. **If the ref is an external fork/PR, honour the untrusted-code Hard rule.** Start services as detached/background processes (or under a terminal multiplexer) so they outlive the executor. (For Lemonade startup gotchas — port conflicts, model loading — see `lemonade-client-patterns.md` and CLAUDE.md rather than re-deriving them here.)
+1. **Deploy + bring up.** First clear any partial state from a prior failed run on the target (stale processes, half-downloaded model caches, bound ports). Get the build onto the target (clone/checkout the ref, install, build any frontend) and run setup — locally if the target is local (the common case), else via its declared access method. **If the ref is an external fork/PR, honour the untrusted-code Hard rule.** Start services as detached/background processes (or under a terminal multiplexer) so they outlive the executor. (For Lemonade startup gotchas — port conflicts, model loading — see the [`lemonade-client-patterns`](../lemonade-client-patterns/SKILL.md) skill and CLAUDE.md rather than re-deriving them here.)
 
    For a **packaged / hub / sidecar agent** (e.g. the email agent), test the **published-install path from a cold state** — a dev-mode run proves the code, never the install users actually hit (#1655/#2084):
    - **Install the published artifact fresh** — `gaia agent install <id>` — and confirm the expected version + binary landed.
@@ -144,7 +144,11 @@ The judge does not rubber-stamp the executor's report.
 2. **Cross-check claims against source** at the tested ref (`gh api .../contents/<path>?ref=<ref>` or the local checkout). For any **CLI or release-note behaviour claim** ("`gaia X` does Y", "command Z exists"), *run the command* and read it in `src/gaia/cli.py` at that ref — never accept it from the notes.
 3. **Verify planted facts in two places:** the screenshot (the UI rendered it) *and* the raw agent/CLI trace (`grep` the captured trace). A fact in the screenshot but absent from the trace can mean a cached/hallucinated response, not live retrieval.
 4. **Check timing** against the thresholds; surface outliers with their hardware context.
-5. **Deliver:** embed the decisive screenshots **in the PR description** as `![](raw.githubusercontent.com/…)` images (each captioned with what it proves) and confirm they render on the PR — verify the rendered `<img src>` is `raw.githubusercontent.com` (served directly), not `camo.githubusercontent.com` (proxied, unreliable for R2). Not a bare link, not comment-only. Also push them to the user via the file-send tool, plus a report table (`Tier | Verdict | Evidence`). State plainly any tier that **was not truly exercised** — a warm cache, a skipped login, a CPU fallback. "Not exercised" ≠ "passed". Lead with the finding.
+5. **Deliver:** embed the decisive screenshots **in the PR description** as `![](raw.githubusercontent.com/…)` images (each captioned with what it proves) and confirm they render on the PR — verify the rendered `<img src>` is `raw.githubusercontent.com` (served directly), not `camo.githubusercontent.com` (proxied, unreliable for R2). Not a bare link, not comment-only. Also push them to the user via the file-send tool, plus a report table (`Tier | Verdict | Evidence`). State plainly any tier that **was not truly exercised** — a warm cache, a skipped login, a CPU fallback. "Not exercised" ≠ "passed".
+
+   Write it per [CLAUDE.md → How You Communicate](../../../CLAUDE.md#how-you-communicate):
+   open with the verdict in one plain sentence ("the fix works on Strix Halo, but the NPU
+   path was never exercised"), then the table and `file:line` detail beneath it.
 
 ## Phase 7 — Cleanup
 

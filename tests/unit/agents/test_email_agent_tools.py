@@ -303,7 +303,13 @@ class TestPreScanInbox:
         )
         assert with_pref_decision.get("preference_applied") == "priority_sender"
 
-    def test_low_priority_sender_lands_in_archives(self, fake_gmail):
+    def test_low_priority_sender_does_not_change_category(self, fake_gmail):
+        """A sender flagged low-priority via session preference is tagged
+        for de-prioritization but never has its category overridden
+        (#2666, mirrors #2632's priority-sender direction) — content alone
+        decides severity, so the same message classifies identically with
+        and without the preference.
+        """
         first_msg = fake_gmail.get_message(list(fake_gmail._messages.keys())[0])
         first_sender = next(
             h["value"]
@@ -316,16 +322,23 @@ class TestPreScanInbox:
             "low_priority_senders": {addr},
             "category_defaults": {},
         }
-        out = pre_scan_inbox_impl(
+        baseline = triage_inbox_impl(fake_gmail, max_messages=50)
+        with_pref = triage_inbox_impl(
             fake_gmail, max_messages=50, session_preferences=prefs
         )
-        archive_senders = [
-            extract_sender_email(item["sender"]) for item in out["suggested_archives"]
-        ]
-        assert addr in archive_senders, (
-            f"low-priority sender {addr} should land in archives; "
-            f"saw archives={archive_senders}"
+        baseline_decision = next(
+            r for r in baseline["results"] if r["id"] == first_msg["id"]
         )
+        with_pref_decision = next(
+            r for r in with_pref["results"] if r["id"] == first_msg["id"]
+        )
+
+        assert with_pref_decision["category"] == baseline_decision["category"], (
+            "low-priority-sender preference must not change category; baseline="
+            f"{baseline_decision['category']!r} with_pref="
+            f"{with_pref_decision['category']!r}"
+        )
+        assert with_pref_decision.get("preference_applied") == "low_priority_sender"
 
     def test_category_default_archive_lifts_informational(self, fake_gmail):
         baseline = pre_scan_inbox_impl(fake_gmail, max_messages=50)

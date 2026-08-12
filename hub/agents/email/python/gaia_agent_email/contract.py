@@ -136,7 +136,14 @@ CATEGORY_PERSONAL = "PERSONAL"
 # that a renderer maps to a sentence, so a filter description can't
 # silently go stale when the underlying heuristic changes. No existing
 # field changed, so 2.10 consumers keep working (additive MINOR).
-SCHEMA_VERSION = "2.11"
+# 2.12 is additive over 2.11 (#2829): ``POST /v1/email/query`` gains an
+# optional ``session_id`` — when the host sends it, the run resolves the
+# SAME agent every other turn on that id used (via the session-scoped
+# registry `agent_routes._SessionRegistry`) instead of a throwaway
+# per-turn agent, so a reference to something an earlier turn surfaced can
+# resolve. Omitted -> byte-for-byte the old per-turn behaviour. No existing
+# field changed, so 2.11 consumers keep working (additive MINOR).
+SCHEMA_VERSION = "2.12"
 
 # Maximum number of items in a single batch request. Protects the single-tenant
 # local model slot from runaway batches. Enforced via Pydantic max_length.

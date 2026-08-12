@@ -29,7 +29,7 @@ Unit tests are built by default and run without an LLM server. They cover all tw
 | Tool integration | `test_tool_integration.cpp` | End-to-end tool calling with mocked LLM |
 | JSON utilities | `test_json_utils.cpp` | Multi-strategy JSON extraction, fallback parsing |
 | JSON event handler | `test_json_event_handler.cpp` | Structured JSONL event emission (thought/goal/answer) |
-| MCP client | `test_mcp_client.cpp` | JSON-RPC protocol, stdio transport, tool discovery |
+| MCP client | `test_mcp_client.cpp` | JSON-RPC protocol, stdio transport, tool discovery, MCP confirmation gate |
 | Console | `test_console.cpp` | TerminalConsole and SilentConsole output |
 | Clean console | `test_clean_console.cpp` | CleanConsole TUI, word-wrap, ANSI colors |
 | Types | `test_types.cpp` | AgentConfig, Message, ToolInfo, ParsedResponse |
@@ -38,14 +38,15 @@ Unit tests are built by default and run without an LLM server. They cover all tw
 | Security | `test_security.cpp` | `ToolPolicy`, `validatePath`, shell-arg sanitisation, `AllowedToolsStore` |
 | SSE parser | `test_sse_parser.cpp` | OpenAI-style streaming-event parsing and recovery |
 | Lemonade client | `test_lemonade_client.cpp` | Lemonade HTTP surface (health, models, chat completions) |
-| Process runner | `test_process.cpp` | Cross-platform subprocess execution and pipes |
-| File tools | `test_file_tools.cpp` | `file_read`/`file_write`/`file_edit`/`file_search` |
+| Process runner | `test_process.cpp` | Cross-platform subprocess execution and pipes; `ShellSession` cwd/environment persistence |
+| File tools | `test_file_tools.cpp` | `file_read`/`file_write`/`file_edit`/`file_search`, stale-write rejection, ignore-aware search |
+| Ignore rules | `test_ignore.cpp` | `globMatch` patterns and `.gitignore` evaluation |
 | Git tools | `test_git_tools.cpp` | `git_status`/`git_diff`/`git_log`/`git_show` |
 | Session store | `test_session.cpp` | Session persistence (save/list/resume) |
 | REPL | `test_repl.cpp` | Interactive REPL loop and slash-command parsing |
 
 <Note>
-  One additional module, `test_tui_console.cpp` (FTXUI TUI console), is compiled into `tests_mock` only when `GAIA_BUILD_TUI=ON` (the default).
+  Three additional modules — `test_tui_markdown.cpp` (markdown renderer), `test_tui_transcript.cpp` (transcript model), and `test_tui_app.cpp` (event loop, streaming, confirmation modal) — are compiled into `tests_mock` only when `GAIA_BUILD_TUI=ON` (the default). They assert against real rendered frames via `ftxui::Screen::Create()` + `Render()` + `ToString()`, so a change that stops output reaching the screen fails the suite.
 </Note>
 
 ### Building Unit Tests

@@ -7,8 +7,92 @@ contract version is tracked separately as
 
 ## [Unreleased]
 
+### Added
+
+- **A follow-up like "reply to number 1" can now resolve (#2829).** `POST
+  /v1/email/query` accepts an optional `session_id`: send the same id on
+  every turn of a conversation and the run resolves the SAME agent each
+  time instead of a throwaway one per call, so a reference to something an
+  earlier turn surfaced has something to resolve against. Omit it and
+  nothing changes — this is additive (schema 2.12). Two turns can never run
+  on the same session at once (a second call while one is in flight is
+  rejected, `409`); a session id the sidecar has never seen arriving with
+  prior conversation history (e.g. the sidecar restarted mid-conversation)
+  gets a one-time notice instead of silently starting over.
+### Changed
+
+- **Agent Skills ship disabled for this agent, pending eval evidence (#2695
+  follow-up).** The `skill_sets:` and `default_skill_set: personal` blocks in
+  `gaia-agent.yaml` are commented out, so `parse_manifest(...).skill_sets` is
+  empty, `load_skill_set()` early-returns, and the agent launches with
+  `loaded_skills == {}` / `active_skill_set is None`. Skills were turned on by
+  default with no eval run behind them, and an active `personal` set cost ~1,334
+  prompt tokens — shrinking the bulk-triage result envelope from 6144 to 4810
+  (the `work` set, to 4070). `envelope_budget_tokens()` is back to **6144**
+  (16384 − 9216 − 1024), byte-identical to pre-skills. Nothing was deleted: the six
+  `gaia_agent_email/skills/<name>/SKILL.md` bodies still ship in the wheel and
+  the frozen binary, and `SKILL_DIRS`, `select_skill_set()`,
+  `ACCOUNT_TYPE_SKILL_SETS`, `GAIA_EMAIL_SKILL_SET`, `--skill-set`, and the
+  `skill_prompt_tokens` accounting are all intact but inert. With no sets
+  declared, a pinned set is a startup error rather than a silent no-op —
+  `--skill-set personal` exits with "…requested skill set 'personal', but this
+  agent declares no skill sets — Agent Skills are switched off in this build.
+  Drop the option, or uncomment the 'skill_sets:' and 'default_skill_set:'
+  blocks in gaia-agent.yaml." Re-enabling is uncommenting those two blocks
+  **together**; a non-empty `skill_sets:` with no `default_skill_set:` is a
+  validation error. `tools_count` (65), the REST/MCP contract, the connector
+  surface, and `SCHEMA_VERSION` are unaffected.
+
 ### Fixed
 
+- **Asked about upcoming meetings or calendar invites, the agent could invent
+  attendee names and invite confirmations that exist nowhere in the mailbox
+  or the tool trace (#2766).** A calendar event's real `organizer` was
+  sometimes narrated as "sent you an invite" — a real field, misread — and a
+  question like "did anyone send me a meeting invite?" could draw a
+  confident "yes" with no mutation, message, or attachment behind it.
+  `list_calendar_events` and `detect_calendar_conflicts` now surface each
+  event's real `attendees` (Google omits the key entirely once an event has
+  no one beyond the organizer; that's now normalized to `[]` instead of
+  being discarded) so there is real data to ground an attendee claim
+  against. Two new deterministic checks — the same "tool computes, model
+  reports" pattern the calendar-conflict and attention-card checks already
+  use — catch an invite claimed as sent/received when nothing this turn
+  could have confirmed one, and an attendee named for an event the tool
+  result shows has none; both leave a correctly-reported organizer and an
+  honest "no attendees" alone.
+- **A pinned `GAIA_EMAIL_SKILL_SET` leaked across tests, failing suites that
+  never mention skills.** The variable was set process-wide by the skill-set
+  tests and never cleared, so every later agent construction requested a set
+  that no longer exists once skills ship disabled — surfacing as unrelated
+  trash/restore, undo, and zero-connector failures rather than as a skills
+  problem. The fixture now scopes and restores it, so the fail-loud
+  `SkillSetError` fires only where a set is genuinely requested.
+- **`get_thread` invented messages, senders, and timestamps that were never
+  in the mailbox (#2765).** Asked to catch up on a conversation, the agent
+  could hand back a duplicated message, another replaced by a repeat of an
+  earlier one, a misattributed sender, and a timestamp that existed nowhere
+  in the thread — even though `get_thread`'s own payload was already
+  ordered, numbered, and carried each message's real `from`/`date` (#2531).
+  The fabrication happened in the model's own free-composed prose, on top
+  of a correct payload, so no docstring instruction alone could fix it. The
+  registered `get_thread` tool now also returns a `kind: "table"` render
+  card — the Agent UI's pre-existing generic primitive, no new client code
+  — built directly from the same per-message fields the model reads, so
+  the chat surface draws every sender and timestamp straight from the
+  mailbox instead of from the model's reconstruction of it.
+- **A low-priority-sender match no longer forces a message to PROMOTIONAL
+  (#2666).** The mirror of #2632's priority-sender fix, for the direction
+  that fix explicitly left alone: `_apply_session_preferences` used to
+  override the heuristic/LLM/SLM's category outright the moment a sender
+  matched the muted list, so a genuinely urgent message from a muted sender
+  got buried as promotional — "I don't care about most of this sender's
+  mail" is not "this specific message is never urgent." The preference now
+  only tags `preference_applied` and updates the reason line for
+  salience/ordering; category is always decided by content, in both
+  directions. The `set_low_priority_sender` tool docstring (read by the
+  model) and the `pre_scan_inbox` docstring's "derived from the low-priority
+  bucket" claim are corrected to match.
 - **A meeting proposal in a confidently-classified message vanished from the
   view the TUI renders on open (#2580).** `is_meeting_request` was wired into
   the scan by #2589, but the `needs_you` worklist (#2743, which replaced the
@@ -478,6 +562,33 @@ contract version is tracked separately as
   `EmailTriageAgent`'s existing methods now delegate to. The confirm floor is unchanged and
   still inviolable at every level — broadening the candidate map cannot make a floor tool
   auto-executable.
+- **Bundled Agent Skills, and the active set keyed to the mailbox kind (#2466).**
+  **Ships disabled** — the manifest blocks are commented out, so none of the
+  behaviour below is active; see *Changed* above. The rest of this entry
+  describes what the machinery does once they are uncommented.
+  The agent brought identical instincts to every mailbox — the same triage
+  judgement for one full of newsletters and booking confirmations as for one full
+  of meeting invites and outstanding commitments. It now bundles six
+  instruction-only skills under `gaia_agent_email/skills/<name>/SKILL.md` —
+  `inbox-triage`, `newsletter-digest`, `travel-itinerary`, `meeting-scheduling`,
+  `action-item-extraction`, `escalation-routing` — and `gaia-agent.yaml` groups
+  them into two sets: `personal` (triage + newsletters + travel) and `work`
+  (triage + meetings + action items + escalation), with `inbox-triage` in both
+  because sets overlap rather than partition. Exactly one set is active per
+  launch. `EmailTriageAgent.select_skill_set()` maps the connected mailbox's
+  account type onto a set — the kind GAIA now derives from the Microsoft
+  `id_token` `tid` claim at connect time — and `--skill-set` /
+  `GAIA_EMAIL_SKILL_SET` (`EmailAgentConfig.skill_set`) override it outright,
+  while `GAIA_EMAIL_ACCOUNT_TYPE` (`EmailAgentConfig.account_type`) pins the kind
+  instead. A Gmail-only mailbox has no equivalent claim, so its kind is genuinely
+  unknown and the manifest's `default_skill_set: personal` applies — which does
+  mean a *work Gmail* mailbox lands on the personal set, by declared default and
+  with a log line, not by anything inferring the kind from the mailbox; pin
+  `GAIA_EMAIL_ACCOUNT_TYPE=work` for that case. An undeclared set name raises
+  naming the valid sets rather than falling back. The skills declare
+  no `tools:` and no `permissions:`, so `tools_count` stays 59 and the REST/MCP
+  contract, connector surface, and `SCHEMA_VERSION` are all unchanged; relocating
+  the agent's tool implementations into skills is separate work (#2672).
 - **On-device SLM classifiers for phishing and triage category (experimental,
   `use_slm=False` by default).** Two compact embedding classifiers
   (`specific-ai-tools`, served by the same local Lemonade server as the chat

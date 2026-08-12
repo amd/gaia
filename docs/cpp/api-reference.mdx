@@ -37,7 +37,64 @@ The return value on LLM failure:
 
 Your application should check the `result` field — there is no exception to catch. HTTP timeouts: 30s connection, 120s read.
 
+## Tool Calling Protocols
+
+The agent drives tools two ways. Which one it uses is decided per model.
+
+### Native OpenAI tool calling
+
+For models known to support it, the request carries an OpenAI `tools` array built
+from the tool registry plus a `tool_choice`, the response-format template is left
+out of the system prompt entirely, and the model replies with
+`choices[0].message.tool_calls`. Results go back as spec-correct `role: tool`
+messages carrying `tool_call_id`, so the model sees a well-formed tool exchange.
+Parallel calls — several `tool_calls` in one response — all execute, each with its
+own reply. Streaming works too: `tool_calls` deltas are reassembled across SSE
+chunks.
+
+### Prompt-JSON fallback
+
+For every other model the agent appends a response-format template asking for a
+JSON envelope (`{"thought": ..., "tool": ..., "tool_args": {...}}`) and recovers
+the call from the reply text. Tool results become `[Result from <tool>]:` user
+turns. This is the path every C++ agent used before native tool calling landed,
+and it is unchanged.
+
+### Choosing a protocol
+
+```cpp
+gaia::AgentConfig cfg;
+cfg.modelId = "Gemma-4-E4B-it-GGUF";
+
+cfg.nativeToolCalls = gaia::NativeToolCalls::Auto;    // default — decide per model
+cfg.nativeToolCalls = gaia::NativeToolCalls::Always;  // force native
+cfg.nativeToolCalls = gaia::NativeToolCalls::Never;   // force prompt-JSON
+
+cfg.toolChoice = "auto";  // or "required"
+```
+
+`Auto` consults `gaia::isToolCallingModel(modelId)`, a mirror of the `MODELS`
+table in `src/gaia/llm/lemonade_client.py`. **An unrecognised model id resolves to
+`false`** — the C++ framework targets any OpenAI-compatible server, where an
+unknown id says nothing about tool-calling support, so it keeps the fallback that
+works everywhere. Running a tool-calling model this build does not know? Set
+`NativeToolCalls::Always`.
+
+### Response modes
+
+`responseMode` picks the template used on the prompt-JSON path. It is ignored
+under native tool calling, which sends no template at all.
+
+| Mode | Behavior |
+|------|----------|
+| `ResponseMode::Planning` (default) | JSON-only replies with `thought` / `goal` / `plan` / `tool` structure |
+| `ResponseMode::Conversational` | Plain text for conversation, a bare `{"tool": ..., "tool_args": {...}}` object only when calling a tool |
+
 ### Malformed JSON Recovery
+
+This applies to the prompt-JSON path only — native tool calls arrive as structured
+JSON and are parsed strictly (a malformed `tool_calls` entry raises rather than
+falling back to prose parsing).
 
 Local LLMs often return imperfect JSON. The parser applies **six extraction strategies** in sequence:
 
@@ -282,7 +339,10 @@ public:
     json processQuery(const std::vector<Message>& messages, int maxSteps = 0);
 
     // MCP server management
+    // Discovered tools are registered with ToolPolicy::CONFIRM unless the
+    // server proves them read-only — see /cpp/security.
     bool connectMcpServer(const std::string& name, const json& config);
+    bool connectMcpServerById(const std::string& id);  // resolves via MCPRegistry
     void disconnectMcpServer(const std::string& name);
     void disconnectAllMcp();
 
@@ -368,6 +428,290 @@ public:
     json callTool(const std::string& toolName, const json& arguments);
 };
 ```
+
+### MCPRegistry
+
+Turns a configured server **id** into a launchable config, so an agent can connect
+to `github` without hardcoding how `github` is started.
+
+```cpp
+class MCPRegistry {
+public:
+    MCPRegistry();                                          // default search paths
+    explicit MCPRegistry(std::vector<std::string> paths);   // explicit files
+
+    static std::string configDir();                         // $GAIA_CONFIG_DIR, else ~/.gaia
+    static std::vector<std::string> defaultSearchPaths();
+
+    std::optional<json> resolve(const std::string& id) const;  // nullopt if absent
+    json require(const std::string& id) const;                 // throws if unresolvable
+    bool isDisabled(const std::string& id) const;
+    std::vector<std::string> listServers() const;
+    std::string configPath() const;
+    bool configExists() const;
+    void reload();
+};
+```
+
+It reads the same file and the same shape as the Python runtime, so a server configured
+once is reachable from both. Ids are whatever the file uses; `gaia connectors` keys
+entries by their catalog id (`mcp-github`, `mcp-tavily`, `mcp-memory`, `mcp-git`):
+
+```json
+{
+  "mcpServers": {
+    "mcp-memory": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"],
+      "env": {},
+      "disabled": false
+    }
+  }
+}
+```
+
+```cpp
+gaia::Agent agent;
+agent.connectMcpServerById("mcp-memory");   // throws MCPRegistryError if unconfigured
+```
+
+Search paths, lowest precedence first, under `$GAIA_CONFIG_DIR` (default `~/.gaia`):
+`mcp.json`, then `mcp_servers.json` — the file `gaia connectors` maintains and the
+Python runtime reads, which wins on conflicting ids. Unknown top-level keys are ignored,
+and `servers` is accepted as an alias for `mcpServers`.
+
+Everything that cannot produce a launchable config throws `MCPRegistryError` naming the
+id, the paths searched, and the ids that *are* available: a missing file, malformed JSON,
+an unknown id, an entry marked `"disabled": true`, or a non-stdio `type`. An agent
+silently losing its MCP tools is worse than one that refuses to start.
+
+<Warning>
+**Servers with secrets are Python-only today.** `gaia connectors configure <id>` stores
+secret env values in the OS keyring and writes a `$keyring` reference into the config.
+The C++ runtime has no keychain support, so those entries (`mcp-github`, `mcp-tavily`)
+throw rather than launching the server with the reference string as the credential.
+Servers whose env values are literal — or empty — work from both runtimes.
+</Warning>
+
+Two behaviours to know about, both of which split the runtimes if you rely on them:
+
+- The Python MCP path always reads `~/.gaia/mcp_servers.json` and does **not** honor
+  `GAIA_CONFIG_DIR`. Pointing it elsewhere makes the C++ registry read a file Python won't.
+- Python does not read `mcp.json` from the config directory, so an id that lives only
+  there is invisible to it. Put anything both runtimes need in `mcp_servers.json`.
+
+Unlike the Python runtime, the C++ registry does **not** read an `mcp_servers.json` from
+the current working directory: this config names commands to spawn, and a native binary
+that trusts whichever directory it was started from is an attack surface.
+
+### VectorIndex
+
+Flat (brute-force) vector search over `float32` embeddings, with save/load
+persistence. Exhaustive scan on every query — no approximate index — so it
+returns exactly what the Python SDK's `faiss.IndexFlatL2` / `IndexFlatIP` return,
+with no extra dependency to build.
+
+```cpp
+#include <gaia/vector_index.h>
+
+enum class Metric { L2, InnerProduct };
+
+struct VectorIndexOptions {
+    Metric metric = Metric::L2;
+    bool normalizeOnAdd = false;   // + InnerProduct = cosine similarity
+    std::string embeddingModel;    // persisted; load() rejects a mismatch
+    size_t dimension = 0;          // 0 = infer from the first add()/load()
+};
+
+class VectorIndex {
+public:
+    using Id = std::string;
+
+    explicit VectorIndex(VectorIndexOptions options = {});
+    VectorIndex(size_t dimension, Metric metric);
+
+    void add(const Id& id, const std::vector<float>& vector);
+    void upsert(const Id& id, const std::vector<float>& vector);
+    std::vector<std::pair<Id, float>> search(const std::vector<float>& query, size_t k) const;
+    bool remove(const Id& id);
+    bool contains(const Id& id) const;
+    std::vector<float> get(const Id& id) const;
+
+    size_t size() const;
+    size_t dimension() const;
+    void clear();
+
+    void save(const std::string& path) const;
+    void load(const std::string& path);
+};
+```
+
+Scores are the Python convention, higher-is-better, sorted best-first:
+
+| Metric | Score |
+|---|---|
+| `Metric::L2` | `1 / (1 + d²)`, where `d²` is the **squared** Euclidean distance (what FAISS reports) |
+| `Metric::InnerProduct` | the raw dot product — cosine similarity when `normalizeOnAdd` is set |
+
+Ties keep insertion order, so rankings are reproducible across runs and platforms.
+
+Mismatches raise instead of returning misleading results: a wrong-sized vector on
+`add()`/`search()` throws `std::invalid_argument` naming both dimensions, and
+loading a file built with a different embedding model throws `std::runtime_error`
+naming both models.
+
+```cpp
+VectorIndexOptions opts;
+opts.dimension = 768;
+opts.embeddingModel = "nomic-embed-text-v1-GGUF";
+
+gaia::VectorIndex index(opts);
+index.add("chunk-0", embedding);
+auto hits = index.search(queryEmbedding, 5);   // [(id, score), ...] best first
+index.save("cache/index.vec");
+```
+
+The `.vec` file is a documented little-endian binary format (magic, version,
+metric, dimension, count, then float32 payload) — see `cpp/include/gaia/vector_index.h`.
+It is **not** interchangeable with Python's `index.faiss`; the two runtimes use
+separate cache directories and share only `metadata.json`.
+
+---
+
+## Structured persistence (`gaia::Database`)
+
+`<gaia/database.h>` is a RAII wrapper over SQLite for anything an agent needs to
+persist as structured data rather than loose JSON files. SQLite is **vendored**
+into `gaia_core` ([`cpp/third_party/sqlite/`](https://github.com/amd/gaia/tree/main/cpp/third_party/sqlite))
+and compiled with `SQLITE_ENABLE_FTS5`, so full-text search is always available
+and every platform build behaves identically. You do **not** need `sqlite3.h` on
+your include path or a SQLite package on your system.
+
+### Connection
+
+```cpp
+#include <gaia/database.h>
+
+gaia::Database db("agent.db");          // WAL + 5 s busy_timeout + foreign keys
+auto mem = gaia::Database::inMemory();  // private in-memory database
+```
+
+`Database::Options` controls what is applied at open:
+
+| Option | Default | Meaning |
+|--------|---------|---------|
+| `walMode` | `true` | WAL journaling — readers don't block the writer. Ignored for in-memory. |
+| `busyTimeoutMs` | `5000` | How long a writer waits on a locked database before failing. |
+| `foreignKeys` | `true` | Enforce `FOREIGN KEY` constraints. |
+| `readOnly` | `false` | Open read-only; the file must exist. |
+| `createIfMissing` | `true` | Create the file and any missing parent directories. |
+
+Connections are opened in SQLite's serialized mode, so one `Database` can be
+shared across threads without external locking.
+
+### Statements
+
+Bind indices are 1-based; column indices are 0-based.
+
+```cpp
+auto stmt = db.prepare("SELECT id, body FROM notes WHERE score > ?");
+stmt.bindDouble(1, 0.5);
+while (stmt.step()) {
+    std::int64_t id  = stmt.columnInt64(0);
+    std::string body = stmt.columnText(1);
+}
+
+// Or bind everything positionally and run in one call:
+db.run("INSERT INTO notes (body, embedding) VALUES (?, ?)", "hello", blobBytes);
+```
+
+Typed accessors cover every storage class — `columnInt64`, `columnInt`,
+`columnBool`, `columnDouble`, `columnText`, `columnBlob` — plus `isNull()` and
+`columnType()` to tell a stored empty string apart from `NULL`.
+
+### Transactions
+
+`Transaction` is a scope guard: it rolls back unless you commit.
+
+```cpp
+{
+    gaia::Transaction txn(db);
+    db.run("INSERT INTO notes (body) VALUES (?)", "a");
+    db.run("INSERT INTO notes (body) VALUES (?)", "b");
+    txn.commit();          // omit this (or throw) and both inserts are discarded
+}
+```
+
+Constructing a `Transaction` while one is already open produces a **savepoint**
+instead of a second `BEGIN`, so nesting works.
+
+### Schema migrations
+
+Migrations mirror the Python `MemoryStore` approach — ordered steps, each
+advancing a stored version, chaining a database at any older version forward.
+The version lives in `PRAGMA user_version`, so no table is imposed on your
+schema; a fresh database reports `0`.
+
+```cpp
+std::vector<gaia::Migration> steps;
+
+steps.push_back(gaia::Migration::fromSql(
+    1, "initial schema",
+    "CREATE TABLE knowledge (id TEXT PRIMARY KEY, content TEXT NOT NULL);"));
+
+gaia::Migration v2;
+v2.version     = 2;
+v2.description = "add embedding column";
+v2.apply       = [](gaia::Database& d) {
+    d.addColumnIfMissing("knowledge", "embedding BLOB");
+};
+steps.push_back(std::move(v2));
+
+db.migrate(steps);   // runs only what's newer than the stored version
+```
+
+Each step runs inside a transaction that also stamps the new version, so a step
+that throws rolls back completely and the stored version does not advance —
+re-running `migrate()` retries that same step. `addColumnIfMissing()` is the
+idempotent `ALTER TABLE … ADD COLUMN`, which is what makes a step that died
+half-way safely re-runnable.
+
+`migrate()` **refuses to run against a database newer than the last step it
+knows about** rather than operating on a schema it doesn't understand.
+
+### Full-text search (FTS5)
+
+```cpp
+db.execute("CREATE VIRTUAL TABLE docs USING fts5(title, body)");
+db.run("INSERT INTO docs VALUES (?, ?)", "Ryzen AI", "NPU-accelerated inference");
+
+auto hits = db.prepare("SELECT title, bm25(docs) FROM docs WHERE docs MATCH ? ORDER BY rank");
+hits.bindText(1, "npu AND inference");
+while (hits.step()) { /* … */ }
+```
+
+`Database::hasFts5()` reports availability so you can assert it up front instead
+of discovering it from a failed query.
+
+### Errors
+
+Every failure raises `gaia::DatabaseError` — nothing is swallowed and no
+operation degrades to a placeholder value. The message carries the SQLite text
+plus the context needed to act on it:
+
+```
+cannot prepare statement: no such table: notes [code=1 SQL logic error]
+  database: /home/u/.gaia/agent.db
+  statement: SELECT * FROM notes
+```
+
+`code()`, `dbPath()`, and `sql()` expose the same fields programmatically.
+
+<Note>
+Double-quoted string literals are rejected (`SQLITE_DQS=0`): `WHERE name = "alice"`
+is an error, not a silently-matching string constant. Use single quotes for
+literals, or a bind parameter.
+</Note>
 
 ---
 

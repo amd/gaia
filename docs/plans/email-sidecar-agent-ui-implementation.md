@@ -1454,5 +1454,3 @@ found and fixed runtime issues the happy-path tests missed:
 - Node-free: only `requests`/`subprocess`/`hashlib`/`socket` — no npm, no `npx`.
 - Security boundary: `verify_sha256` tamper test + tampered-download-leaves-no-file
   test in Task 3.
-</content>
-</invoke>

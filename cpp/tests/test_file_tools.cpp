@@ -19,9 +19,13 @@ protected:
     void SetUp() override {
         tempDir_ = fs::temp_directory_path() / "gaia_file_tools_test";
         fs::create_directories(tempDir_);
+        // The read/write anchor table is process-wide; clear it so these
+        // cases are independent of each other and of run order.
+        FileStateTracker::instance().clear();
     }
 
     void TearDown() override {
+        FileStateTracker::instance().clear();
         std::error_code ec;
         fs::remove_all(tempDir_, ec);
     }
@@ -349,4 +353,456 @@ TEST_F(FileToolsTest, ToolInfo_FileSearchParams) {
     EXPECT_FALSE(info.parameters[2].required);
     EXPECT_EQ(info.parameters[3].name, "max_results");
     EXPECT_FALSE(info.parameters[3].required);
+}
+
+// ---------------------------------------------------------------------------
+// Hardening: stale-write rejection and ignore-aware search
+//
+// Separate fixture (and separate temp directory) so the process-wide
+// FileStateTracker can be cleared without touching the cases above.
+// ---------------------------------------------------------------------------
+
+class FileToolsHardeningTest : public ::testing::Test {
+protected:
+    fs::path tempDir_;
+
+    void SetUp() override {
+        tempDir_ = fs::temp_directory_path() / "gaia_file_tools_hardening";
+        std::error_code ec;
+        fs::remove_all(tempDir_, ec);
+        fs::create_directories(tempDir_);
+        FileStateTracker::instance().clear();
+    }
+
+    void TearDown() override {
+        FileStateTracker::instance().clear();
+        std::error_code ec;
+        fs::remove_all(tempDir_, ec);
+    }
+
+    std::string writeFile(const std::string& name, const std::string& content) {
+        fs::path p = tempDir_ / name;
+        if (p.has_parent_path()) {
+            fs::create_directories(p.parent_path());
+        }
+        std::ofstream f(p, std::ios::binary);
+        f << content;
+        f.close();
+        return p.string();
+    }
+
+    std::string readFile(const std::string& path) {
+        std::ifstream f(path, std::ios::binary);
+        std::ostringstream buf;
+        buf << f.rdbuf();
+        return buf.str();
+    }
+};
+
+// --- SHA-256 -----------------------------------------------------------------
+
+TEST_F(FileToolsHardeningTest, HashContent_MatchesKnownVectors) {
+    EXPECT_EQ(FileStateTracker::hashContent(""),
+              "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    EXPECT_EQ(FileStateTracker::hashContent("abc"),
+              "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    // Spans multiple 64-byte blocks and exercises the length-padding path.
+    EXPECT_EQ(FileStateTracker::hashContent(std::string(1000, 'a')),
+              "41edece42d63e8d9bf515a9ba6932e1c20cbc9f5a5d134645adb5db1b9737ea3");
+}
+
+TEST_F(FileToolsHardeningTest, HashFile_MatchesHashContent) {
+    const std::string body(200000, 'x');  // larger than the streaming buffer
+    std::string path = writeFile("big.bin", body);
+    EXPECT_EQ(FileStateTracker::hashFile(path),
+              FileStateTracker::hashContent(body));
+    EXPECT_EQ(FileStateTracker::hashFile((tempDir_ / "absent.bin").string()), "");
+}
+
+// --- Stale-write rejection ---------------------------------------------------
+
+TEST_F(FileToolsHardeningTest, FileRead_ReturnsContentHashAndTracksFile) {
+    std::string path = writeFile("tracked.txt", "original\n");
+
+    json read = FileIOTools::fileRead().callback({{"path", path}});
+    ASSERT_FALSE(read.contains("error"));
+    ASSERT_TRUE(read.contains("content_hash"));
+    EXPECT_FALSE(read["content_hash"].get<std::string>().empty());
+    EXPECT_TRUE(FileStateTracker::instance().hasRecord(path));
+
+    // The hash anchors the whole file, not just the returned slice.
+    json ranged = FileIOTools::fileRead().callback(
+        {{"path", path}, {"start_line", 1}, {"end_line", 1}});
+    EXPECT_EQ(ranged["content_hash"], read["content_hash"]);
+}
+
+TEST_F(FileToolsHardeningTest, FileEdit_RejectsEditAgainstDivergedFile) {
+    std::string path = writeFile("race.txt", "alpha beta\n");
+
+    json read = FileIOTools::fileRead().callback({{"path", path}});
+    ASSERT_FALSE(read.contains("error"));
+
+    // Something else changes the file between the read and the edit.
+    writeFile("race.txt", "alpha beta gamma delta\n");
+
+    json result = FileIOTools::fileEdit().callback(
+        {{"path", path}, {"old_string", "alpha"}, {"new_string", "ALPHA"}});
+
+    ASSERT_TRUE(result.contains("error"));
+    EXPECT_TRUE(result.value("stale", false));
+    const std::string message = result["error"].get<std::string>();
+    EXPECT_NE(message.find("changed on disk"), std::string::npos);
+    EXPECT_NE(message.find("Nothing was written"), std::string::npos);
+    EXPECT_NE(message.find("file_read"), std::string::npos);
+
+    // The divergence is named: both hashes are reported and differ.
+    ASSERT_TRUE(result.contains("hash_at_read"));
+    ASSERT_TRUE(result.contains("hash_now"));
+    EXPECT_NE(result["hash_at_read"], result["hash_now"]);
+    EXPECT_NE(message.find(result["hash_at_read"].get<std::string>()),
+              std::string::npos);
+    EXPECT_NE(message.find(result["hash_now"].get<std::string>()),
+              std::string::npos);
+
+    // Rejected means rejected — the file is untouched.
+    EXPECT_EQ(readFile(path), "alpha beta gamma delta\n");
+}
+
+TEST_F(FileToolsHardeningTest, FileWrite_RejectsWriteAgainstDivergedFile) {
+    std::string path = writeFile("doc.txt", "v1\n");
+
+    ASSERT_FALSE(FileIOTools::fileRead().callback({{"path", path}}).contains("error"));
+    writeFile("doc.txt", "v2 from someone else\n");
+
+    json result = FileIOTools::fileWrite().callback(
+        {{"path", path}, {"content", "v3 from the model\n"}});
+
+    ASSERT_TRUE(result.contains("error"));
+    EXPECT_TRUE(result.value("stale", false));
+    EXPECT_NE(result["error"].get<std::string>().find("changed on disk"),
+              std::string::npos);
+    EXPECT_EQ(readFile(path), "v2 from someone else\n");
+}
+
+TEST_F(FileToolsHardeningTest, FileEdit_SucceedsAfterReReading) {
+    std::string path = writeFile("recover.txt", "alpha\n");
+    FileIOTools::fileRead().callback({{"path", path}});
+    writeFile("recover.txt", "alpha beta\n");
+
+    ASSERT_TRUE(FileIOTools::fileEdit()
+                    .callback({{"path", path},
+                               {"old_string", "alpha"},
+                               {"new_string", "ALPHA"}})
+                    .contains("error"));
+
+    // Re-read, then the same edit lands.
+    FileIOTools::fileRead().callback({{"path", path}});
+    json result = FileIOTools::fileEdit().callback(
+        {{"path", path}, {"old_string", "alpha"}, {"new_string", "ALPHA"}});
+
+    ASSERT_FALSE(result.contains("error"));
+    EXPECT_EQ(result["replacements"], 1);
+    EXPECT_EQ(readFile(path), "ALPHA beta\n");
+}
+
+TEST_F(FileToolsHardeningTest, FileEdit_ConsecutiveEditsNeedNoReRead) {
+    std::string path = writeFile("chain.txt", "one two three\n");
+    FileIOTools::fileRead().callback({{"path", path}});
+
+    ASSERT_FALSE(FileIOTools::fileEdit()
+                     .callback({{"path", path},
+                                {"old_string", "one"},
+                                {"new_string", "1"}})
+                     .contains("error"));
+    json second = FileIOTools::fileEdit().callback(
+        {{"path", path}, {"old_string", "two"}, {"new_string", "2"}});
+
+    ASSERT_FALSE(second.contains("error"));
+    EXPECT_EQ(readFile(path), "1 2 three\n");
+}
+
+TEST_F(FileToolsHardeningTest, FileWrite_AfterWriteFollowUpEditIsAllowed) {
+    std::string path = (tempDir_ / "fresh.txt").string();
+
+    ASSERT_FALSE(FileIOTools::fileWrite()
+                     .callback({{"path", path}, {"content", "hello world\n"}})
+                     .contains("error"));
+    json edit = FileIOTools::fileEdit().callback(
+        {{"path", path}, {"old_string", "world"}, {"new_string", "there"}});
+
+    ASSERT_FALSE(edit.contains("error"));
+    EXPECT_EQ(readFile(path), "hello there\n");
+}
+
+TEST_F(FileToolsHardeningTest, FileEdit_NonMatchingOldStringIsActionable) {
+    std::string path = writeFile("nomatch.txt", "the quick brown fox\n");
+    const std::string before = readFile(path);
+
+    json result = FileIOTools::fileEdit().callback(
+        {{"path", path}, {"old_string", "lazy dog"}, {"new_string", "cat"}});
+
+    ASSERT_TRUE(result.contains("error"));
+    const std::string message = result["error"].get<std::string>();
+    EXPECT_NE(message.find("not found"), std::string::npos);
+    EXPECT_NE(message.find("no replacement was made"), std::string::npos);
+    EXPECT_NE(message.find("file_read"), std::string::npos);
+    EXPECT_EQ(result["replacements"], 0);
+    EXPECT_EQ(readFile(path), before);
+}
+
+TEST_F(FileToolsHardeningTest, FileEdit_WhitespaceMismatchIsNamed) {
+    std::string path = writeFile("indent.py", "def main():\n    return 1\n");
+
+    json result = FileIOTools::fileEdit().callback(
+        {{"path", path},
+         {"old_string", "def main():\n        return 1"},  // wrong indentation
+         {"new_string", "def main():\n    return 2"}});
+
+    ASSERT_TRUE(result.contains("error"));
+    EXPECT_NE(result["error"].get<std::string>().find("whitespace-insensitive"),
+              std::string::npos);
+}
+
+TEST_F(FileToolsHardeningTest, FileWrite_RecreatesADeletedFile) {
+    // Read, then the file goes away (git checkout, rm, a build clean). Writing
+    // it again is a create, not a conflict — a leftover anchor must not block
+    // it forever.
+    std::string path = writeFile("gone.txt", "v1\n");
+    FileIOTools::fileRead().callback({{"path", path}});
+    std::error_code ec;
+    fs::remove(path, ec);
+
+    json result = FileIOTools::fileWrite().callback(
+        {{"path", path}, {"content", "recreated\n"}});
+
+    ASSERT_FALSE(result.contains("error")) << result.dump();
+    EXPECT_EQ(readFile(path), "recreated\n");
+}
+
+TEST_F(FileToolsHardeningTest, FileEdit_ReportsAFileThatVanishedAfterRead) {
+    std::string path = writeFile("vanished.txt", "v1\n");
+    FileIOTools::fileRead().callback({{"path", path}});
+    std::error_code ec;
+    fs::remove(path, ec);
+
+    json result = FileIOTools::fileEdit().callback(
+        {{"path", path}, {"old_string", "v1"}, {"new_string", "v2"}});
+
+    ASSERT_TRUE(result.contains("error"));
+    EXPECT_NE(result["error"].get<std::string>().find("Cannot open"),
+              std::string::npos);
+}
+
+TEST_F(FileToolsHardeningTest, FileStateTracker_ForgetDropsTheAnchor) {
+    std::string path = writeFile("forget.txt", "v1\n");
+    FileIOTools::fileRead().callback({{"path", path}});
+    writeFile("forget.txt", "v2\n");
+
+    FileStateTracker::instance().forget(path);
+    EXPECT_FALSE(FileStateTracker::instance().hasRecord(path));
+
+    // With no anchor there is nothing to be stale about.
+    json result = FileIOTools::fileEdit().callback(
+        {{"path", path}, {"old_string", "v2"}, {"new_string", "v3"}});
+    EXPECT_FALSE(result.contains("error"));
+}
+
+TEST_F(FileToolsHardeningTest, FileStateTracker_RecordsAreKeyedCanonically) {
+    std::string path = writeFile("canon.txt", "data\n");
+    FileIOTools::fileRead().callback({{"path", path}});
+
+    // The same file reached through a redundant "." segment is one record.
+    const std::string viaDot = (tempDir_ / "." / "canon.txt").string();
+    EXPECT_TRUE(FileStateTracker::instance().hasRecord(viaDot));
+    EXPECT_EQ(FileStateTracker::instance().size(), 1u);
+}
+
+// --- Ignore-aware search -----------------------------------------------------
+
+TEST_F(FileToolsHardeningTest, FileSearch_SkipsGitignoredPaths) {
+    // A realistic repo: .git, a .gitignore, vendored deps and build output.
+    fs::create_directories(tempDir_ / ".git");
+    writeFile(".gitignore", "node_modules/\nbuild/\n*.log\n");
+    writeFile("src/index.js", "export const answer = 42;\n");
+    writeFile("src/util.js", "export const noop = () => {};\n");
+    writeFile("node_modules/left-pad/index.js", "module.exports = 1;\n");
+    writeFile("node_modules/react/react.js", "module.exports = 2;\n");
+    writeFile("build/bundle.js", "/* generated */\n");
+    writeFile("debug.log", "noise\n");
+    writeFile(".git/hooks/pre-commit.js", "#!/bin/sh\n");
+
+    json result = FileIOTools::fileSearch().callback(
+        {{"pattern", "*.js"}, {"path", tempDir_.string()}});
+
+    ASSERT_FALSE(result.contains("error"));
+    EXPECT_EQ(result["total"], 2);
+    for (const auto& match : result["matches"]) {
+        const std::string path = match["path"].get<std::string>();
+        EXPECT_EQ(path.find("node_modules"), std::string::npos) << path;
+        EXPECT_EQ(path.find("/build/"), std::string::npos) << path;
+        EXPECT_EQ(path.find("/.git/"), std::string::npos) << path;
+    }
+    // The skips are reported, so a thin result set is explained.
+    EXPECT_GT(result["ignored_skipped"].get<int>(), 0);
+}
+
+TEST_F(FileToolsHardeningTest, FileSearch_ContentSearchSkipsIgnoredFiles) {
+    fs::create_directories(tempDir_ / ".git");
+    writeFile(".gitignore", "vendor/\n");
+    writeFile("src/app.ts", "const needle = 1;\n");
+    writeFile("vendor/lib.ts", "const needle = 2;\n");
+
+    json result = FileIOTools::fileSearch().callback({
+        {"pattern", "*.ts"},
+        {"path", tempDir_.string()},
+        {"content_pattern", "needle"},
+    });
+
+    ASSERT_FALSE(result.contains("error"));
+    EXPECT_EQ(result["total"], 1);
+    EXPECT_NE(result["matches"][0]["path"].get<std::string>().find("src/app.ts"),
+              std::string::npos);
+}
+
+TEST_F(FileToolsHardeningTest, FileSearch_NegatedGitignoreRuleIsHonored) {
+    fs::create_directories(tempDir_ / ".git");
+    writeFile(".gitignore", "*.log\n!keep.log\n");
+    writeFile("drop.log", "x\n");
+    writeFile("keep.log", "y\n");
+
+    json result = FileIOTools::fileSearch().callback(
+        {{"pattern", "*.log"}, {"path", tempDir_.string()}});
+
+    ASSERT_FALSE(result.contains("error"));
+    EXPECT_EQ(result["total"], 1);
+    EXPECT_NE(result["matches"][0]["path"].get<std::string>().find("keep.log"),
+              std::string::npos);
+}
+
+TEST_F(FileToolsHardeningTest, FileSearch_PathPatternsAndCharacterClasses) {
+    writeFile("src/core/agent.h", "#pragma once\n");
+    writeFile("src/core/agent.cpp", "// impl\n");
+    writeFile("include/agent.h", "#pragma once\n");
+    writeFile("test_1.cpp", "// one\n");
+    writeFile("test_x.cpp", "// x\n");
+
+    json byPath = FileIOTools::fileSearch().callback(
+        {{"pattern", "src/**/*.h"}, {"path", tempDir_.string()}});
+    ASSERT_FALSE(byPath.contains("error"));
+    EXPECT_EQ(byPath["total"], 1);
+    EXPECT_NE(byPath["matches"][0]["path"].get<std::string>().find("src/core/agent.h"),
+              std::string::npos);
+
+    json byClass = FileIOTools::fileSearch().callback(
+        {{"pattern", "test_[0-9].cpp"}, {"path", tempDir_.string()}});
+    ASSERT_FALSE(byClass.contains("error"));
+    EXPECT_EQ(byClass["total"], 1);
+}
+
+// --- Regressions found in review --------------------------------------------
+
+TEST_F(FileToolsHardeningTest, FileRead_ReturnsRawBytesSoEditsMatch) {
+    // A CRLF file must read back with its CRLFs intact: the model copies
+    // old_string out of what file_read showed it, and file_edit searches the
+    // bytes on disk. If the two disagree the edit can never match.
+    std::string path = writeFile("crlf.txt", "alpha\r\nbeta\r\n");
+
+    json read = FileIOTools::fileRead().callback({{"path", path}});
+    ASSERT_FALSE(read.contains("error"));
+    const std::string shown = read["content"].get<std::string>();
+    EXPECT_NE(shown.find("alpha\r"), std::string::npos);
+    EXPECT_EQ(read["lines"], 2);
+
+    json edit = FileIOTools::fileEdit().callback(
+        {{"path", path}, {"old_string", "alpha\r\nbeta"}, {"new_string", "one\r\ntwo"}});
+    ASSERT_FALSE(edit.contains("error")) << edit.dump();
+    EXPECT_EQ(readFile(path), "one\r\ntwo\r\n");
+}
+
+TEST_F(FileToolsHardeningTest, FileRead_HashAnchorsTheBytesItShowed) {
+    // One pass over the file: the hash must be of exactly the content
+    // returned, never of a second, later read.
+    const std::string body = "alpha\nbeta\ngamma\n";
+    std::string path = writeFile("anchor.txt", body);
+
+    json read = FileIOTools::fileRead().callback({{"path", path}});
+    ASSERT_FALSE(read.contains("error"));
+    EXPECT_EQ(read["content_hash"].get<std::string>(),
+              FileStateTracker::hashContent(body).substr(0, 12));
+}
+
+TEST_F(FileToolsHardeningTest, FileRead_LineCountsAndRanges) {
+    EXPECT_EQ(FileIOTools::fileRead()
+                  .callback({{"path", writeFile("nl.txt", "a\nb\n")}})["lines"],
+              2);
+    EXPECT_EQ(FileIOTools::fileRead()
+                  .callback({{"path", writeFile("nonl.txt", "a\nb")}})["lines"],
+              2);
+    EXPECT_EQ(FileIOTools::fileRead()
+                  .callback({{"path", writeFile("empty.txt", "")}})["lines"],
+              0);
+
+    json blanks = FileIOTools::fileRead().callback(
+        {{"path", writeFile("blanks.txt", "AAA\n\nBBB\n")}});
+    EXPECT_EQ(blanks["content"].get<std::string>(), "AAA\n\nBBB");
+}
+
+TEST_F(FileToolsHardeningTest, FileWrite_RecreationIsReported) {
+    std::string path = writeFile("resurrect.txt", "v1\n");
+    FileIOTools::fileRead().callback({{"path", path}});
+    std::error_code ec;
+    fs::remove(path, ec);
+
+    json result = FileIOTools::fileWrite().callback(
+        {{"path", path}, {"content", "back\n"}});
+
+    ASSERT_FALSE(result.contains("error"));
+    EXPECT_TRUE(result.value("recreated", false));
+
+    // An ordinary create says nothing about recreation.
+    json plain = FileIOTools::fileWrite().callback(
+        {{"path", (tempDir_ / "brand_new.txt").string()}, {"content", "x\n"}});
+    EXPECT_FALSE(plain.contains("recreated"));
+}
+
+TEST_F(FileToolsHardeningTest, FileSearch_HonorsNestedGitignoreFiles) {
+    // .gitignore files below the search root govern their own subtree only.
+    fs::create_directories(tempDir_ / ".git");
+    writeFile(".gitignore", "*.log\n");
+    writeFile("pkg/.gitignore", "generated/\n");
+    writeFile("pkg/src/main.ts", "export {};\n");
+    writeFile("pkg/generated/api.ts", "// generated\n");
+    writeFile("other/generated/keep.ts", "// a sibling, not governed\n");
+
+    json result = FileIOTools::fileSearch().callback(
+        {{"pattern", "*.ts"}, {"path", tempDir_.string()}});
+
+    ASSERT_FALSE(result.contains("error"));
+    EXPECT_EQ(result["total"], 2);
+    for (const auto& match : result["matches"]) {
+        EXPECT_EQ(match["path"].get<std::string>().find("pkg/generated"),
+                  std::string::npos);
+    }
+}
+
+TEST_F(FileToolsHardeningTest, FileSearch_GitDirectoryIsNotCountedAsAnIgnoreSkip) {
+    // The counter exists to explain a thin result set; counting the always
+    // pruned .git would make it non-zero on every repository.
+    fs::create_directories(tempDir_ / ".git");
+    writeFile("src/a.ts", "x\n");
+
+    json result = FileIOTools::fileSearch().callback(
+        {{"pattern", "*.ts"}, {"path", tempDir_.string()}});
+
+    EXPECT_EQ(result["total"], 1);
+    EXPECT_EQ(result["ignored_skipped"], 0);
+}
+
+TEST_F(FileToolsHardeningTest, FileSearch_OversizedPatternIsRejected) {
+    json result = FileIOTools::fileSearch().callback(
+        {{"pattern", std::string(600, '*')}, {"path", tempDir_.string()}});
+
+    ASSERT_TRUE(result.contains("error"));
+    EXPECT_NE(result["error"].get<std::string>().find("limit is 512"),
+              std::string::npos);
 }
