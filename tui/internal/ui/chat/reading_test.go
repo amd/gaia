@@ -6,6 +6,7 @@ package chat
 import (
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -234,6 +235,75 @@ func TestTheLiveRegionHasABoundedHeight(t *testing.T) {
 	// nothing at the top.
 	if first := strings.TrimSpace(strings.Split(out, "\n")[0]); strings.HasPrefix(first, glyphDetail) {
 		t.Errorf("an outcome line was orphaned at the top: %q", first)
+	}
+}
+
+// A question and its answer read as one exchange only if they share a right
+// edge. Wrapping the question to the pane while capping the answer at 88 put a
+// 196-column question above an 88-column answer on a wide terminal.
+func TestAQuestionSharesTheAnswersMeasure(t *testing.T) {
+	m := NewChatModel(&nullClient{}, "GAIA", "", false)
+	m.width, m.height = 220, 50
+	m.resize()
+	m.messages = []Message{{Role: RoleUser, Content: strings.Repeat("a long question ", 30)}}
+
+	rendered := ansi.Strip(m.renderMessage(&m.messages[0], nil))
+	for _, line := range strings.Split(rendered, "\n") {
+		if w := ansi.StringWidth(line); w > m.answerWidth() {
+			t.Fatalf("a question line is %d columns wide; answers cap at %d", w, m.answerWidth())
+		}
+	}
+	if !strings.Contains(rendered, "\n") {
+		t.Error("the question did not wrap at all")
+	}
+}
+
+// Byte-slicing a summary at [:60] splits a multi-byte rune and renders U+FFFD.
+func TestLegacyToolSummariesTruncateOnRunesNotBytes(t *testing.T) {
+	// Each ✻ is 3 bytes, so a byte cut lands mid-rune with near-certainty.
+	m := feed(t, newTestChat(t),
+		event.ToolStartEvent{Tool: "shell"},
+		event.ToolResultEvent{Summary: strings.Repeat("✻", 80), Success: true},
+	)
+	for _, item := range m.activity {
+		if strings.ContainsRune(item.Content, '�') {
+			t.Errorf("summary was cut mid-rune: %q", item.Content)
+		}
+	}
+}
+
+func TestLegacyToolArgsTruncateOnRunesNotBytes(t *testing.T) {
+	raw := []byte(`{"command":"` + strings.Repeat("é", 80) + `"}`)
+	if got := extractCommandFromArgs(raw); strings.ContainsRune(got, '�') {
+		t.Errorf("args were cut mid-rune: %q", got)
+	}
+}
+
+// Six metrics under every answer trains the eye to skip the line entirely.
+// The default keeps the one figure a person reads; --debug keeps the rest.
+func TestAnswerTelemetryIsQuietByDefaultAndFullUnderDebug(t *testing.T) {
+	msg := &Message{
+		Role:      RoleAssistant,
+		Content:   "the answer",
+		Duration:  12400 * time.Millisecond,
+		TTFT:      900 * time.Millisecond,
+		Tokens:    420,
+		Steps:     4,
+		ToolsUsed: 3,
+	}
+
+	quiet := NewChatModel(&nullClient{}, "GAIA", "", false)
+	got := quiet.answerStats(msg)
+	if got != "12.4s" {
+		t.Errorf("default footnote is %q; want just the elapsed time", got)
+	}
+
+	dev := NewChatModel(&nullClient{}, "GAIA", "", true)
+	full := dev.answerStats(msg)
+	for _, want := range []string{"12.4s", "ttft 0.9s", "420 tokens", "tok/s", "4 steps", "3 tools"} {
+		if !strings.Contains(full, want) {
+			t.Errorf("--debug footnote lost %q: %q", want, full)
+		}
 	}
 }
 
