@@ -71,6 +71,20 @@ func RunChat(subprocess string, query string, debug bool, ctrl *control.Options)
 	return run(chat.NewChatModel(c, agentNameFromPath(argv[0]), query, debug), debug, ctrl)
 }
 
+// teaOptions are the terminal capabilities every GAIA TUI program asks for.
+//
+// Mouse cell motion is on so the wheel scrolls the transcript — in an alt-screen
+// app the terminal's own scrollback does not exist, so without this the history
+// above the fold is simply unreachable. The trade is that the terminal no longer
+// handles click-drag selection itself; hold Shift while dragging to select, which
+// is the standard override every terminal emulator honours.
+func teaOptions() []tea.ProgramOption {
+	return []tea.ProgramOption{
+		tea.WithAltScreen(),
+		tea.WithMouseCellMotion(),
+	}
+}
+
 // run boots the Bubble Tea program, optionally wrapping it with the control
 // recorder so the live session can be driven over HTTP.
 func run(model tea.Model, debug bool, ctrl *control.Options) error {
@@ -85,7 +99,7 @@ func run(model tea.Model, debug bool, ctrl *control.Options) error {
 	}
 
 	if ctrl == nil {
-		p := tea.NewProgram(model, tea.WithAltScreen())
+		p := tea.NewProgram(model, teaOptions()...)
 		if _, err := p.Run(); err != nil {
 			return fmt.Errorf("TUI error: %w", err)
 		}
@@ -97,7 +111,7 @@ func run(model tea.Model, debug bool, ctrl *control.Options) error {
 	opts := *ctrl
 	opts.Debug = opts.Debug || debug
 	state := control.NewState(control.Debugf(opts.Debug))
-	p := tea.NewProgram(control.NewRecorder(model, state), tea.WithAltScreen())
+	p := tea.NewProgram(control.NewRecorder(model, state), teaOptions()...)
 
 	srv, err := control.Start(p, state, opts)
 	if err != nil {

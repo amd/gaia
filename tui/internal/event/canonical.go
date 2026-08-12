@@ -39,10 +39,16 @@ type CanonicalTokenEvent struct {
 }
 
 // CanonicalToolCallEvent — a tool invocation with its arguments.
+//
+// Narration is the sidecar's own plain-language sentence for this call ("Reading
+// issue #2924"). Additive and optional: an agent that doesn't send one gets a
+// phrase derived from the tool name and its salient argument (see toolNarration
+// in ui/chat), because a bare tool name is not what the user asked about.
 type CanonicalToolCallEvent struct {
-	Type string          `json:"type"`
-	Tool string          `json:"tool"`
-	Args json.RawMessage `json:"args,omitempty"`
+	Type      string          `json:"type"`
+	Tool      string          `json:"tool"`
+	Args      json.RawMessage `json:"args,omitempty"`
+	Narration string          `json:"narration,omitempty"`
 }
 
 // CanonicalToolResultEvent — a tool's structured result.
@@ -51,11 +57,17 @@ type CanonicalToolCallEvent struct {
 // generic primitives "table" / "key_value" / "list" / "image" / "diff"). Data is
 // the render-specific payload. An unknown Render must degrade to a generic result
 // card — never to a blank.
+//
+// Preview is the sidecar's own one-line outcome for the work log ("18 skills ·
+// 21ms"). Additive and optional: absent, one is composed from Data (see
+// toolResultDetail in ui/chat). It is never a substitute for the card — the card
+// is the full result, this is the line under the tool call.
 type CanonicalToolResultEvent struct {
-	Type   string          `json:"type"`
-	Tool   string          `json:"tool"`
-	Render string          `json:"render,omitempty"`
-	Data   json.RawMessage `json:"data,omitempty"`
+	Type    string          `json:"type"`
+	Tool    string          `json:"tool"`
+	Render  string          `json:"render,omitempty"`
+	Data    json.RawMessage `json:"data,omitempty"`
+	Preview string          `json:"preview,omitempty"`
 }
 
 // CanonicalNeedsConfirmationEvent — the run pauses for a user decision.

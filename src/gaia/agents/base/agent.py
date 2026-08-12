@@ -472,6 +472,17 @@ class Agent(abc.ABC):
     STATE_ERROR_RECOVERY = "ERROR_RECOVERY"
     STATE_COMPLETION = "COMPLETION"
 
+    #: What to show while a non-streaming LLM call blocks. A local model can sit
+    #: here for a minute with nothing else on the wire, and the old label —
+    #: "Thinking" — described the harness rather than the work (#2804).
+    _STATE_PROGRESS_LABELS = {
+        STATE_PLANNING: "Working out how to answer",
+        STATE_EXECUTING_PLAN: "Working through the plan",
+        STATE_DIRECT_EXECUTION: "Figuring out what to do",
+        STATE_ERROR_RECOVERY: "Recovering from a failed step",
+        STATE_COMPLETION: "Putting the answer together",
+    }
+
     # When True, the agent stops after the first tool call per turn and treats
     # the model's next response as the final answer.  Designed for action-only
     # agents (e.g. the OEM MCP) that execute exactly one tool per user request.
@@ -3125,6 +3136,16 @@ Do NOT wrap conversational replies in JSON.
         conversation.append(tool_entry)
         return truncated_result
 
+    def _progress_label(self) -> str:
+        """Name the phase the loop is in, in the user's terms (#2804).
+
+        An unmapped state names the wait rather than inventing a phase — the
+        caller must never be handed an empty progress label.
+        """
+        return self._STATE_PROGRESS_LABELS.get(
+            self.execution_state, "Working on your request"
+        )
+
     def _is_loaded_ctx_too_small(self) -> bool:
         """Probe Lemonade's health endpoint to see whether the active LLM is
         loaded with a context size smaller than GAIA's expected 64K (the
@@ -4353,7 +4374,7 @@ Do NOT wrap conversational replies in JSON.
                     break
             else:
                 # Use progress indicator for non-streaming mode
-                self.console.start_progress("Thinking")
+                self.console.start_progress(self._progress_label())
 
                 # Debug logging before LLM call
                 if self.debug:

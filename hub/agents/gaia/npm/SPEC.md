@@ -12,7 +12,8 @@ depends on and the guarantees it makes.
 no agent logic. It owns:
 
 - resolving the host platform to a lock key,
-- downloading and **SHA-256 verifying** two published binaries,
+- downloading and **SHA-256 verifying** two published binaries — one from this
+  package's own hub lane, one from the `terminal-hub` component's,
 - caching them in stable, versioned locations,
 - launching the terminal UI, or the agent sidecar directly.
 
@@ -26,43 +27,104 @@ any agent behaviour. See §6 for where those boundaries sit.
 Ships inside the published package (`files` includes it). It is the single source
 of truth for what is downloaded and what it must hash to.
 
-### 2.1 Schema (`schemaVersion` `2.0`)
+### 2.1 Schema (`schemaVersion` `3.0`)
 
 ```jsonc
 {
-  "schemaVersion": "2.0",
+  "schemaVersion": "3.0",
   "agentVersion": "0.1.0",
-  "baseUrl": "https://hub.amd-gaia.ai/agents/gaia/0.1.0",
   "components": {
-    "sidecar": { "<platformKey>": { /* entry */ } },
-    "tui":     { "<platformKey>": { /* entry */ } }
+    "sidecar": {
+      "componentVersion": "0.1.0",
+      "baseUrl": "https://hub.amd-gaia.ai/agents/gaia/0.1.0",
+      "platforms": { "<platformKey>": { /* entry */ } }
+    },
+    "tui": {
+      "componentVersion": "0.23.0",
+      "baseUrl": "https://hub.amd-gaia.ai/agents/terminal-hub/0.23.0",
+      "platforms": { "<platformKey>": { /* entry */ } }
+    }
   }
 }
 ```
+
+A component lane:
+
+| Field              | Type     | Meaning                                                    |
+| ------------------ | -------- | ---------------------------------------------------------- |
+| `componentVersion` | `string` | That component's own released version                       |
+| `baseUrl`          | `string` | Where **that component's** artifacts are served from        |
+| `platforms`        | `object` | Platform key → entry                                        |
 
 An entry:
 
 | Field        | Type     | Meaning                                                     |
 | ------------ | -------- | ----------------------------------------------------------- |
-| `filename`   | `string` | Artifact name as published under `baseUrl`                   |
+| `filename`   | `string` | Artifact name as published under **its component's** `baseUrl` |
 | `executable` | `string` | Basename it is written as on disk (with the platform extension) |
 | `sha256`     | `string` | Lowercase hex SHA-256 the download must match                |
 | `size`       | `number` | Informational. **Not** enforced                              |
 
-**Deviation from the email agent's lock (`schemaVersion` `1.0`):** that one has a
-flat `binaries` map because it delivers one binary. This one is keyed by component
-first, because the two components have genuinely different platform coverage
-(§2.3) and a flat map cannot express that. A `1.x`-shaped lock is rejected at load
-with an error naming `components`.
+**Why per-component, and why `3.0`.** `2.0` had one top-level `baseUrl` shared by
+both components. That stopped being true once the TUI became the published
+`terminal-hub` component (§2.2): the two live in different hub lanes at different
+versions. A shared base URL cannot express that, so `2.x` is rejected at load with
+an error naming the schema — never read as `3.x` with a missing field.
 
-### 2.2 Platform keys
+The email agent's lock is `schemaVersion` `1.0`, a flat `binaries` map, because it
+delivers one binary from one lane. A `1.x`-shaped lock is likewise rejected.
+
+### 2.2 Where each component comes from
+
+| Component | Hub lane                              | Published by            |
+| --------- | ------------------------------------- | ----------------------- |
+| `sidecar` | `agents/gaia/<agentVersion>/`         | this package's release  |
+| `tui`     | `agents/terminal-hub/<componentVersion>/` | the core GAIA release |
+
+The TUI is **consumed, not built here**. It is the same `tui/cmd/gaia` binary the
+core release publishes as the `terminal-hub` component and a core install runs as
+`gaia tui` — so behaviour is identical by construction rather than by convention.
+Building a second copy under this package's lane would put the same bytes at a
+different version under a third naming convention, and the two would drift.
+
+The consequence is a real release dependency: this package cannot ship until
+`terminal-hub` is published at the version its lock pins. The release fails loudly
+naming that version; it never falls back to building its own TUI.
+
+The `tui` lane's origin is pinned in the lock rather than derived from the release
+pipeline's hub-origin variable, so the release verifies the exact URL the shipped
+lock will send users to. A release pointed at a non-default origin therefore moves
+the sidecar lane and **not** the TUI lane; re-point `components.tui.baseUrl` too if
+you need both.
+
+### 2.3 Platform keys
 
 `` `${process.platform}-${process.arch}` `` — e.g. `win32-x64`, `darwin-arm64`,
 `linux-x64`. This matches `gaia.daemon.sidecars.platform.current_platform_key()`,
 which normalises Python's `sys.platform` / `platform.machine()` into the same
 namespace so the daemon and this package agree on a cache key.
 
-### 2.3 Platform coverage
+**The `win32` ↔ `win` mapping.** The `terminal-hub` lane names its Windows
+artifacts `gaia-win-x64.exe` / `gaia-win-arm64.exe` (Go's `GOOS` vocabulary), while
+our keys come from `process.platform`, which says `win32`. The lock keeps the
+`win32-*` key and carries the hub's spelling in `filename`:
+
+| Platform key   | `tui` `filename`         |
+| -------------- | ------------------------ |
+| `win32-x64`    | `gaia-win-x64.exe`       |
+| `win32-arm64`  | `gaia-win-arm64.exe`     |
+| `darwin-x64`   | `gaia-darwin-x64`        |
+| `darwin-arm64` | `gaia-darwin-arm64`      |
+| `linux-x64`    | `gaia-linux-x64`         |
+| `linux-arm64`  | `gaia-linux-arm64`       |
+
+The mapping therefore lives in **data**, not in a code path — nothing branches on
+the platform to build a name. `TUI_ARTIFACT_NAMES` (in `src/platform.ts` and in
+`packaging/gen_binaries_lock.py`) is the authority both the shipped lock and the
+release pipeline are checked against, because a wrong name here is not a build
+failure anywhere: it is a 404 on a user's first run.
+
+### 2.4 Platform coverage
 
 | Platform key   | `sidecar` | `tui` |
 | -------------- | :-------: | :---: |
@@ -73,17 +135,21 @@ namespace so the daemon and this package agree on a cache key.
 | `linux-arm64`  |  **no**   |  yes  |
 | `win32-arm64`  |  **no**   |  yes  |
 
-The TUI is Go and cross-compiles from one runner (`make -C tui cross-compile`).
-The sidecar is a PyInstaller freeze, produced on the platform it targets, and
-there is no arm64 Linux or arm64 Windows freeze. Resolving `sidecar` on those two
-keys raises `PlatformError` naming the platform and the supported set — it is not
-silently skipped, and the TUI is not launched without an agent behind it.
+`terminal-hub` publishes all six. The sidecar is a PyInstaller freeze, produced on
+the platform it targets, and there is no arm64 Linux or arm64 Windows freeze.
+Resolving `sidecar` on those two keys raises `PlatformError` naming the platform
+and the supported set — it is not silently skipped, and the TUI is not launched
+without an agent behind it.
 
-### 2.4 Placeholder hashes
+### 2.5 Placeholder hashes
 
 Between releases every `sha256` is `PENDING-replace-with-real-sha256`. The release
-pipeline regenerates the file with real hashes computed from the artifacts it just
-published.
+pipeline regenerates the file with real hashes: for the sidecar, computed from the
+artifacts it just published; for the TUI, computed from the `terminal-hub`
+artifacts it downloaded and cross-checked against that lane's own recorded hashes
+(`agents/terminal-hub/manifest.json`, which the hub computes server-side at publish
+time). Both are then re-fetched from the public origin and re-hashed before the
+release is allowed to ship.
 
 `isPlaceholderSha()` treats a value as a placeholder when it is all zeros or
 contains `PENDING` (case-insensitive). A placeholder **blocks the fetch before any
@@ -124,12 +190,14 @@ supervises the sidecar and does its own SHA-256 check on the binary it finds
 there; installing an already-verified binary at that path turns the daemon's fetch
 into a cache hit instead of a second multi-hundred-megabyte download.
 
-The TUI directory is keyed by `agentVersion` so a version bump never reuses the
-previous release's executable.
+The TUI directory is keyed by `agentVersion` — this package's version, not the
+component's — so a bump of either never reuses the previous release's executable.
 
-The TUI executable is `gaia-tui`, **never** `gaia`: npm installs a `gaia` bin shim
-on `PATH`, and a same-named file in a cache directory would shadow it. This is
-asserted in `test/lock.test.ts`.
+The TUI executable is renamed to `gaia-tui` on install, **never** `gaia`: the
+`terminal-hub` artifact is `gaia-<platform>` and npm installs a `gaia` bin shim on
+`PATH`, so keeping the hub's name would shadow the shim. `filename` (what is
+downloaded) and `executable` (what is written) are separate fields for exactly this
+reason, and `test/lock.test.ts` asserts it for every platform.
 
 Both defaults are overridable (`--sidecar-dir`, `--cache-dir`).
 
@@ -278,8 +346,9 @@ Exported from the package root — see `src/index.ts`.
 `health`, `version`, `shutdown`, `runTui`, `resolveSidecarPath`, `resolveTuiPath`,
 `sidecarExecutableName`, `tuiExecutableName`.
 
-**Platform:** `currentPlatformKey`, `loadLock`, `resolveEntry`, `platformsFor`,
-`defaultLockPath`, `isPlaceholderSha`, `COMPONENTS`,
+**Platform:** `currentPlatformKey`, `loadLock`, `resolveEntry`, `componentLock`,
+`componentBaseUrl`, `platformsFor`, `defaultLockPath`, `isPlaceholderSha`,
+`COMPONENTS`, `SCHEMA_MAJOR`, `TUI_ARTIFACT_NAMES`,
 `SUPPORTED_SIDECAR_PLATFORMS`, `SUPPORTED_TUI_PLATFORMS`, `SUPPORTED_PLATFORMS`.
 
 **Constants:** `AGENT_ID`, `API_VERSION`, `DEFAULT_HOST`, `DEFAULT_PORT`,

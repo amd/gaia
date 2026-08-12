@@ -64,9 +64,13 @@ export type {
 
 export {
   COMPONENTS,
+  SCHEMA_MAJOR,
   SUPPORTED_PLATFORMS,
   SUPPORTED_SIDECAR_PLATFORMS,
   SUPPORTED_TUI_PLATFORMS,
+  TUI_ARTIFACT_NAMES,
+  componentBaseUrl,
+  componentLock,
   currentPlatformKey,
   defaultLockPath,
   isPlaceholderSha,
@@ -74,7 +78,12 @@ export {
   platformsFor,
   resolveEntry,
 } from "./platform.js";
-export type { BinaryLock, BinaryLockEntry, ComponentName } from "./platform.js";
+export type {
+  BinaryLock,
+  BinaryLockEntry,
+  ComponentLock,
+  ComponentName,
+} from "./platform.js";
 
 export {
   BinaryNotFoundError,

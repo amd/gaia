@@ -23,11 +23,24 @@ from typing import Any, ClassVar, Dict, List, Optional
 
 from gaia.agents.base.console import OutputHandler
 from gaia.agents.base.tools import get_tool_display_label, get_tool_metadata
+from gaia.ui.event_narration import DEBUG_CHANNEL, format_count
 
 logger = logging.getLogger(__name__)
 
 #: Seconds the agent thread waits for a tool-confirm response from the frontend.
 TOOL_CONFIRM_TIMEOUT_SECONDS = 60
+
+# ``DEBUG_CHANNEL`` marks an event as harness bookkeeping rather than a
+# description of the user's work (#2804). The emitter is the only layer that
+# knows which it is, so it tags at the source; downstream
+# (:mod:`gaia.ui.sse_translation`) decides whether to forward it.
+
+#: ``start_progress`` labels the agent loop uses to say "I am alive" rather than
+#: "here is what I am doing". Compared lower-cased and stripped of trailing
+#: punctuation. Anything else — a goal, a real narration — passes through.
+_HARNESS_PROGRESS_LABELS = frozenset(
+    {"thinking", "working", "processing", "generating", "generating response"}
+)
 
 # ── Shared LLM output cleaning patterns ─────────────────────────────────
 # These regexes are the canonical definitions for filtering LLM noise.
@@ -226,6 +239,7 @@ class SSEOutputHandler(OutputHandler):
                 "type": "status",
                 "status": "working",
                 "message": f"Processing with {model_label}...",
+                "channel": DEBUG_CHANNEL,
             }
         )
 
@@ -237,6 +251,7 @@ class SSEOutputHandler(OutputHandler):
                 "step": step_num,
                 "total": step_limit,
                 "status": "started",
+                "channel": DEBUG_CHANNEL,
             }
         )
 
@@ -482,13 +497,15 @@ class SSEOutputHandler(OutputHandler):
         if message and message.lower().startswith("executing "):
             return
         # Emit as status (not thinking — thinking is reserved for LLM reasoning)
-        self._emit(
-            {
-                "type": "status",
-                "status": "working",
-                "message": message or "Working",
-            }
-        )
+        text = message or "Working"
+        event: Dict[str, Any] = {
+            "type": "status",
+            "status": "working",
+            "message": text,
+        }
+        if text.strip().lower().rstrip(".…") in _HARNESS_PROGRESS_LABELS:
+            event["channel"] = DEBUG_CHANNEL
+        self._emit(event)
 
     def stop_progress(self):
         pass  # No-op for SSE - frontend manages its own spinners
@@ -1184,6 +1201,19 @@ def _format_tool_args(  # pylint: disable=unused-argument
     return "\n".join(parts) if len(parts) > 2 else ", ".join(parts)
 
 
+def _count_summary(data: Dict[str, Any]) -> Optional[str]:
+    """``{"status": "success", "skills": [...]}`` -> ``"18 skills"``.
+
+    Returns ``None`` when nothing countable is present, so the caller keeps its
+    own wording rather than inventing a number.
+    """
+    for key, value in data.items():
+        if key == "status" or not isinstance(value, list) or not value:
+            continue
+        return format_count(len(value), key)
+    return None
+
+
 def _summarize_tool_result(data: Dict[str, Any]) -> str:
     """Create a detailed human-readable summary of a tool result."""
     if not isinstance(data, dict):
@@ -1294,7 +1324,9 @@ def _summarize_tool_result(data: Dict[str, Any]) -> str:
         msg = data.get("message", data.get("error", data.get("display_message", "")))
         if msg:
             return f"{status}: {str(msg)[:200]}"
-        return str(status)
+        # A bare "success" tells the user nothing. Report what came back
+        # instead, when the payload carries a countable collection (#2804).
+        return _count_summary(data) or str(status)
 
     # Generic fallback - show more useful info
     keys = list(data.keys())[:6]

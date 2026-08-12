@@ -35,6 +35,8 @@ import {
 import {
   COMPONENTS,
   type ComponentName,
+  componentBaseUrl,
+  componentLock,
   currentPlatformKey,
   loadLock,
   platformsFor,
@@ -112,7 +114,8 @@ Usage:
   gaia help                              Show this help
 
 run options:
-  --base-url <url>     Override the download base URL from binaries.lock.json
+  --base-url <url>     Override the per-component download base URL from
+                       binaries.lock.json (applies to every component fetched)
   --cache-dir <dir>    Where to cache the TUI binary
   --sidecar-dir <dir>  Where to install the agent sidecar
                        (default ~/.gaia/agents/gaia — the daemon's own cache)
@@ -134,6 +137,8 @@ Notes:
     binary can never be trusted.
   * The agent sidecar has no arm64 Linux or arm64 Windows build; the TUI does.
     \`gaia version\` prints the exact per-component platform matrix.
+  * The TUI is the published \`terminal-hub\` component — byte-identical to the
+    \`gaia tui\` a core install runs, so its behaviour cannot drift from it.
   * Set DEBUG=gaia for download, spawn, and sidecar output on stderr.
 `;
 
@@ -340,11 +345,17 @@ function cmdVersion(): number {
         agentVersion: lock.agentVersion,
         schemaVersion: lock.schemaVersion,
         currentPlatform: currentPlatformKey(),
-        baseUrl: lock.baseUrl,
-        platforms: {
-          sidecar: platformsFor(lock, "sidecar"),
-          tui: platformsFor(lock, "tui"),
-        },
+        // Per component: each ships from its own hub lane at its own version.
+        components: Object.fromEntries(
+          COMPONENTS.map((c) => [
+            c,
+            {
+              componentVersion: componentLock(lock, c).componentVersion,
+              baseUrl: componentBaseUrl(lock, c),
+              platforms: platformsFor(lock, c),
+            },
+          ]),
+        ),
       },
       null,
       2,

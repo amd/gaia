@@ -13,13 +13,14 @@ import {
   COMPONENTS,
   SUPPORTED_SIDECAR_PLATFORMS,
   SUPPORTED_TUI_PLATFORMS,
+  componentBaseUrl,
   currentPlatformKey,
   isPlaceholderSha,
   loadLock,
   platformsFor,
   resolveEntry,
 } from "../src/platform.js";
-import { makeLock, writeLockFile } from "./helpers.js";
+import { SIDECAR_BASE, TUI_BASE, makeLock, writeLockFile } from "./helpers.js";
 
 let tmp: string;
 beforeEach(async () => {
@@ -61,7 +62,39 @@ describe("loadLock", () => {
       JSON.stringify({ schemaVersion: "1.0", binaries: { "linux-x64": {} } }),
     );
     expect(() => loadLock(p)).toThrow(PlatformError);
-    expect(() => loadLock(p)).toThrow(/components/);
+    expect(() => loadLock(p)).toThrow(/schemaVersion/);
+  });
+
+  it("rejects the 2.0 shape (shared baseUrl, bare platform maps)", async () => {
+    // 2.0 put one baseUrl at the top and hung platforms directly off each
+    // component. Reading it as 3.0 would silently look for a baseUrl that is not
+    // there — so it must be refused by version, before any field access.
+    const p = path.join(tmp, "v2.json");
+    await fsp.writeFile(
+      p,
+      JSON.stringify({
+        schemaVersion: "2.0",
+        agentVersion: "0.1.0",
+        baseUrl: "https://example.test/agents/gaia/0.1.0",
+        components: { sidecar: { "linux-x64": {} }, tui: { "linux-x64": {} } },
+      }),
+    );
+    expect(() => loadLock(p)).toThrow(PlatformError);
+    expect(() => loadLock(p)).toThrow(/schemaVersion '2\.0'/);
+  });
+
+  it("rejects a component with no baseUrl of its own", async () => {
+    const lock = makeLock();
+    delete (lock.components["tui"] as unknown as Record<string, unknown>)["baseUrl"];
+    const p = await writeLockFile(tmp, lock);
+    expect(() => loadLock(p)).toThrow(/"tui" has no\s+"baseUrl"|no\s+"baseUrl"/);
+  });
+
+  it("rejects a component with no platforms map", async () => {
+    const lock = makeLock();
+    delete (lock.components["sidecar"] as unknown as Record<string, unknown>)["platforms"];
+    const p = await writeLockFile(tmp, lock);
+    expect(() => loadLock(p)).toThrow(/"platforms"/);
   });
 
   it("rejects a lock missing one of the two components", async () => {
@@ -79,11 +112,36 @@ describe("loadLock", () => {
   });
 });
 
+describe("componentBaseUrl", () => {
+  it("gives each component its own lane", () => {
+    const lock = makeLock();
+    expect(componentBaseUrl(lock, "sidecar")).toBe(SIDECAR_BASE);
+    expect(componentBaseUrl(lock, "tui")).toBe(TUI_BASE);
+  });
+
+  it("fails loudly for a component the lock does not declare", () => {
+    const lock = makeLock();
+    delete (lock.components as Record<string, unknown>)["tui"];
+    expect(() => componentBaseUrl(lock, "tui")).toThrow(PlatformError);
+  });
+});
+
 describe("resolveEntry", () => {
   it("resolves each component independently", () => {
     const lock = makeLock();
     expect(resolveEntry(lock, "sidecar", "linux-x64").executable).toBe("gaia-agent");
     expect(resolveEntry(lock, "tui", "linux-x64").executable).toBe("gaia-tui");
+  });
+
+  it("maps the win32 platform key onto terminal-hub's win-* artifact name", () => {
+    const lock = makeLock();
+    const entry = resolveEntry(lock, "tui", "win32-x64");
+    expect(entry.filename).toBe("gaia-win-x64.exe");
+    expect(entry.executable).toBe("gaia-tui.exe");
+    // Our own lane keeps the process.platform spelling — only the TUI crosses over.
+    expect(resolveEntry(lock, "sidecar", "win32-x64").filename).toBe(
+      "gaia-agent-win32-x64.exe",
+    );
   });
 
   it("throws for an unsupported platform on both components", () => {
@@ -117,12 +175,22 @@ describe("resolveEntry", () => {
 
   it("throws on an incomplete entry", () => {
     const lock = makeLock();
-    lock.components["sidecar"]!["linux-x64"] = {
+    lock.components["sidecar"]!.platforms["linux-x64"] = {
       filename: "",
       executable: "gaia-agent",
       sha256: "abc",
     };
     expect(() => resolveEntry(lock, "sidecar", "linux-x64")).toThrow(/incomplete/);
+  });
+
+  it("rejects a filename that would escape the cache dir or the base URL", () => {
+    const lock = makeLock();
+    lock.components["tui"]!.platforms["linux-x64"] = {
+      filename: "../../etc/passwd",
+      executable: "gaia-tui",
+      sha256: "c".repeat(64),
+    };
+    expect(() => resolveEntry(lock, "tui", "linux-x64")).toThrow(/unsafe filename/);
   });
 });
 

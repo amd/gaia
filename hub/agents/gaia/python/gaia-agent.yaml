@@ -15,7 +15,9 @@ icon: sparkles
 # The real registered size for the default construction (prompt_profile="full",
 # no skill set loaded). Drift-guarded by tests/test_gaia_agent.py, which builds
 # the agent and compares — a hand-edit that disagrees with the registry fails CI.
-tools_count: 55
+# 55 from ChatAgent's "full" profile + 7 skill-library tools
+# (gaia_agent_gaia.skill_tools.SKILL_LIBRARY_TOOL_NAMES).
+tools_count: 62
 
 language: python
 min_gaia_version: "0.22.0"

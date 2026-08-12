@@ -9,8 +9,13 @@ Phase 1 contract, declare only permissions this phase can honor, and name only
 tools that actually exist in the registry. A skill that parses but cannot run is
 worse than a missing one.
 
-Every test that can be parametrized iterates ``skills/starter/`` rather than a
-hardcoded list, so a newly added skill is covered automatically.
+Every test that can be parametrized iterates the hub's skills lane
+(``hub/skills/``) rather than a hardcoded list, so a newly added skill is covered
+automatically. The lane is currently the starter pack exactly, so these guards
+apply to all of it — including
+:func:`test_starter_skill_declares_starter_pack_provenance`. A skill added to the
+lane from some other source needs that assertion narrowed first; it will fail
+loudly rather than skip.
 
 All roots are ``tmp_path``-scoped and every CLI subprocess runs with ``HOME``
 and ``GAIA_CONFIG_DIR`` redirected, so nothing here reads or writes the
@@ -20,6 +25,7 @@ developer's real ``~/.gaia/skills`` or ``~/.claude/skills``.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -37,7 +43,7 @@ from gaia.skills.permissions import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-STARTER_ROOT = REPO_ROOT / "skills" / "starter"
+STARTER_ROOT = REPO_ROOT / "hub" / "skills"
 
 #: Marks every skill in the pack, so consumers can group them (issue #893).
 PROVENANCE_SOURCE = "starter-pack"
@@ -670,6 +676,11 @@ def _gaia(*args: str, home: Path) -> subprocess.CompletedProcess:
         "PYTHONPATH": str(REPO_ROOT / "src"),
         "GAIA_MEMORY_DISABLED": "1",
     }
+    # Windows loads winsock via SystemRoot, and `import asyncio` needs it — a
+    # fully hermetic env kills every subprocess here with WinError 10106.
+    for name in ("SystemRoot", "SystemDrive"):
+        if name in os.environ:
+            env[name] = os.environ[name]
     return subprocess.run(
         [sys.executable, "-m", "gaia.cli", *args],
         capture_output=True,

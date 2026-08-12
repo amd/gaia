@@ -4,9 +4,14 @@
  * Binary fetcher for both components (`sidecar` and `tui`).
  *
  * Resolves the current platform → looks the component up in
- * `binaries.lock.json` → downloads it from the lock's base URL (overridable) →
- * **verifies its SHA-256 against the lock and fails loudly on any mismatch** →
- * writes it into a cache dir → `chmod +x` on POSIX.
+ * `binaries.lock.json` → downloads it from THAT COMPONENT's base URL
+ * (overridable) → **verifies its SHA-256 against the lock and fails loudly on
+ * any mismatch** → writes it into a cache dir → `chmod +x` on POSIX.
+ *
+ * The two components come from different hub lanes: the sidecar from
+ * `agents/gaia/<agentVersion>/`, the TUI from `agents/terminal-hub/<tuiVersion>/`
+ * (the same binary a core install runs as `gaia tui`). Each entry's base URL
+ * comes from its own component, never from a shared top-level one.
  *
  * The SHA verify is the security boundary: a tampered, truncated, or
  * not-yet-published artifact is rejected before it can ever be spawned. There is
@@ -27,6 +32,7 @@ import {
   type BinaryLock,
   type BinaryLockEntry,
   type ComponentName,
+  componentBaseUrl,
   currentPlatformKey,
   defaultLockPath,
   isPlaceholderSha,
@@ -59,7 +65,11 @@ export interface FetchOptions {
   component: ComponentName;
   /** Directory the verified binary is written into. Required. */
   outDir: string;
-  /** Override the lock's `baseUrl` (e.g. a local mirror). Trailing slash optional. */
+  /**
+   * Override this component's `baseUrl` (e.g. a local mirror). Trailing slash
+   * optional. Applies to whichever component is being fetched — the two lanes'
+   * filenames never collide, so one flat mirror directory can serve both.
+   */
   baseUrl?: string;
   /** Override the platform key (defaults to the current host). */
   platformKey?: string;
@@ -159,14 +169,10 @@ export async function fetchBinary(opts: FetchOptions): Promise<FetchResult> {
   const lock: BinaryLock = opts.lock ?? loadLock(opts.lockPath ?? defaultLockPath());
   const platformKey = opts.platformKey ?? currentPlatformKey();
   const entry: BinaryLockEntry = resolveEntry(lock, opts.component, platformKey);
-  const baseUrl = opts.baseUrl ?? lock.baseUrl;
+  // Per-component: the sidecar and the TUI live in different hub lanes at
+  // different versions, so there is no single base URL to fall back to.
+  const baseUrl = opts.baseUrl ?? componentBaseUrl(lock, opts.component);
 
-  if (!baseUrl) {
-    throw new PlatformError(
-      "no download base URL: binaries.lock.json has no baseUrl and none was " +
-        "passed. Pass { baseUrl } to point at where the binaries are hosted.",
-    );
-  }
   if (isPlaceholderSha(entry.sha256)) {
     throw new PlatformError(
       `binaries.lock.json has a placeholder sha256 for ${opts.component}/'${platformKey}' ` +

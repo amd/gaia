@@ -3,7 +3,10 @@
 #
 # Fork PR Support:
 # - pr-review (pull_request_target): ✅ Works on fork PRs - full review when PR opened / marked ready
-# - pr-rereview (pull_request_target): ✅ Works on fork PRs - lightweight re-review on each push (synchronize); flags only new regressions, silent otherwise
+# - pr-rereview (pull_request_target): ✅ Works on fork PRs - lightweight Sonnet re-review on each push (synchronize); flags only new regressions, silent otherwise.
+#   ESCALATION: if it finds NO prior Claude review on the PR (the full pr-review was skipped because
+#   the fork-PR approval gate landed after a push, so only this synchronize run ever fired) it does a
+#   FULL first review instead of staying silent — see the job's STEP 0 / FULL-REVIEW MODE prompt.
 # - issue-handler (issue_comment): ✅ Works on fork PRs - responds to @claude in PR conversations
 # - issue-triage (issues: opened): ✅ Labels / dedupes / chases repro on new issues. No-ops when the
 #   issue already carries a type label (the bug/feature templates apply one), so it mainly affects
@@ -98,7 +101,9 @@
 # COST: Fork PRs consume your Anthropic quota — the Max subscription pool when
 # CLAUDE_CODE_OAUTH_TOKEN is set, otherwise per-token API billing. The full pr-review runs
 # only on open / reopen / ready; each subsequent push gets the lightweight pr-rereview
-# (Sonnet, flags only new regressions). Both groups cancel in-progress runs on rapid pushes.
+# (Sonnet, flags only new regressions) — UNLESS no prior review exists, in which case
+# pr-rereview escalates to a full first review (still Sonnet). Both groups cancel
+# in-progress runs on rapid pushes.
 # On the API-key fallback path (OAuth token expired), the Opus jobs bill per-token at up to
 # --max-turns 100 each until the monthly auth canary (claude-auth-canary.yml) flags the outage.
 
@@ -429,6 +434,13 @@ jobs:
   # (A true per-push delta isn't available — the pull_request event carries no before/after
   # SHA — so it scans the full diff but is told to flag only what's new, not repeat the
   # first review. cancel-in-progress collapses rapid pushes to the latest.)
+  #
+  # ESCALATION (STEP 0 in the prompt): fork/external PRs are held for maintainer approval,
+  # so if approval lands after a push the `opened` full pr-review never runs and this
+  # synchronize job is the FIRST to fire. To avoid a PR silently never getting reviewed, the
+  # job checks for a prior Claude review and, finding none, does a full first review instead
+  # of the silent lightweight pass. --max-turns is raised to 80 for that path (a ceiling, so
+  # it costs nothing extra on ordinary re-reviews).
   pr-rereview:
     if: |
       github.repository == 'amd/gaia' &&
@@ -452,13 +464,47 @@ jobs:
       comment_file: /tmp/rereview.md
       require_comment: false
       prompt: |
-        You are doing a LIGHTWEIGHT re-review of a push to an already-reviewed GAIA pull
-        request — NOT a full review. The first pr-review already covered this PR in depth.
+        You are re-reviewing a push to a GAIA pull request. You run in ONE of two modes
+        depending on whether Claude has already reviewed this PR — decide which FIRST.
 
         REPO: ${{ github.repository }}
         PR NUMBER: ${{ github.event.pull_request.number }}
 
-        ## Scope — flag only what's NEW
+        ## STEP 0 (MANDATORY, do this FIRST) — has this PR been reviewed yet?
+        External/fork PRs need maintainer approval before any Claude job runs, so the full
+        `pr-review` on the `opened` event is often NEVER executed — the first run that
+        actually fires is this push-triggered job. Never assume a prior review exists; verify:
+
+          `gh pr view ${{ github.event.pull_request.number }} --json comments --jq '.comments[].author.login'`
+          `gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews --jq '.[].user.login'`
+
+        A prior Claude review is a comment/review by `github-actions[bot]` that contains a
+        review (a Verdict line, severity emojis 🔴/🟡/🟢, or a "🔍 Technical details" block).
+        - Found one  → RE-REVIEW MODE (below).
+        - Found NONE → this PR has never been reviewed → FULL-REVIEW MODE (below). Do NOT
+          fall through to silence — the whole point of this branch is that the first review
+          was skipped by the approval gate and must still be delivered.
+
+        ═════════════════════════════════════════════════════════════════════
+        ## FULL-REVIEW MODE (no prior Claude review found) — you MUST post
+        Treat this as the FIRST review of the PR.
+        - Read `/tmp/review-rubric.md` (your severity/nit/skip policy; if absent or empty,
+          note that at the top of your review and use inline judgement), then `pr-diff.txt`,
+          `pr-files.txt`, and `CLAUDE.md`. Run `gh pr view ${{ github.event.pull_request.number }}`
+          for author intent, then selectively open changed files.
+        - Review correctness first, then security, tests, docs, and architecture / CLAUDE.md
+          compliance — the full GAIA review checklist.
+        - Post exactly ONE review in the TWO-part format below, leading with a Verdict
+          (Approve / Approve with suggestions / Request changes) and honouring the rubric's
+          nit cap. Even a clean PR gets a posted "Approve" — silence is NOT allowed here.
+        - Write it to /tmp/rereview.md first, then
+          `gh pr comment ${{ github.event.pull_request.number }} --body-file /tmp/rereview.md`.
+        Then STOP — the rest of this prompt is RE-REVIEW MODE and does not apply.
+        ═════════════════════════════════════════════════════════════════════
+
+        ## RE-REVIEW MODE (a prior Claude review exists) — flag only what's NEW
+        This is a LIGHTWEIGHT re-review, NOT a full review. The first pr-review already
+        covered this PR in depth.
         pr-diff.txt is the full PR diff (base..head); pr-files.txt lists changed files. Do
         NOT redo the full review or repeat its earlier points. Scan the diff for regressions
         and newly-introduced problems only; if nothing new is wrong, stay silent. (You can't
@@ -479,7 +525,8 @@ jobs:
         (if it is absent, fall back to inline judgement and say so); read CLAUDE.md and open
         any file you need to judge a specific change.
 
-        ## When to comment — DEFAULT IS SILENCE
+        ## When to comment — DEFAULT IS SILENCE (RE-REVIEW MODE only)
+        (In FULL-REVIEW MODE you always post — this section does not apply there.)
         Comment ONLY if you find a 🔴 critical or 🟡 important problem. If the diff looks fine
         or has only trivial nits, post NOTHING and exit — routine fix-up pushes must not spam
         the PR. This is intentionally STRICTER than the full review's nit cap: a re-review
@@ -508,8 +555,8 @@ jobs:
         - Write for the human: plain language, only the detail they need to act.
         - ~150 words max. No Summary / Strengths / Verdict scaffolding — this is a re-review, not a full review.
       claude_args: |
-        --max-turns 40
-        --model claude-opus-5
+        --max-turns 80
+        --model claude-sonnet-4-6
         --allowedTools Edit,Read,Write,Grep,Glob,Bash
 
   # Respond to @claude in PR review comments (non-fork PRs only - secrets unavailable on forks)

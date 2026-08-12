@@ -33,7 +33,11 @@ Skills are discovered from the bundled ``skills/`` directory (highest-precedence
 root) and declared in ``gaia-agent.yaml``. Following the email agent's precedent
 (#2848), **no skill set loads by default** — the manifest ships its
 ``default_skill_set`` commented out until an eval measures the prompt-token cost.
-Skills are opt-in via ``--skill-set`` or ``GAIA_SKILL_SET``.
+Skills are opt-in via ``--skill-set``, ``GAIA_SKILL_SET``, or — mid-session — the
+skill-library tools in :mod:`gaia_agent_gaia.skill_tools`, which let the model
+discover, install, load, and unload skills on demand without a restart. Those
+tools never load anything on their own, so the out-of-the-box prompt budget is
+unchanged.
 """
 
 from __future__ import annotations
@@ -44,6 +48,7 @@ from pathlib import Path
 from typing import ClassVar, List, Optional
 
 from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+from gaia_agent_gaia.skill_tools import SkillLibraryToolsMixin
 
 #: Bundled skills ship inside the package so they survive both the wheel and the
 #: frozen sidecar; as ``SKILL_DIRS`` they outrank a same-named user or Claude Code copy.
@@ -123,14 +128,30 @@ class GaiaAgentConfig(ChatAgentConfig):
     )
 
 
-class GaiaAgent(ChatAgent):
+class GaiaAgent(SkillLibraryToolsMixin, ChatAgent):
     """The flagship GAIA agent — conversation, documents, data, web, and skills."""
 
     SKILL_DIRS: ClassVar[List[str]] = [str(_SKILLS_DIR)]
     SKILL_MANIFEST: ClassVar[Optional[str]] = _locate_agent_manifest()
 
+    # Installing a skill writes third-party code under ~/.gaia/skills and
+    # removing one deletes it, so both are gated the way file mutation is.
+    CONFIRMATION_REQUIRED_TOOLS: ClassVar[frozenset] = frozenset(
+        {"install_skill", "remove_skill"}
+    )
+
     def __init__(self, config: Optional[GaiaAgentConfig] = None, **kwargs):
         super().__init__(config=config or GaiaAgentConfig(**kwargs))
+
+    def _register_tools(self) -> None:
+        """ChatAgent's profile tools, plus runtime access to the skill library.
+
+        Skill-library tools go first: ChatAgent's registration ends with
+        ``_snapshot_tools()``, and anything registered after that snapshot is
+        absent from this instance's registry.
+        """
+        self.register_skill_library_tools()
+        super()._register_tools()
 
     def select_skill_set(self) -> Optional[str]:
         """Resolve which declared skill set to load at startup.
