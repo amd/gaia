@@ -55,6 +55,18 @@ VERDICT_REVIEW = "REVIEW"
 VERDICT_BLOCK = "BLOCK"
 VALID_VERDICTS = frozenset({VERDICT_ALLOW, VERDICT_REVIEW, VERDICT_BLOCK})
 
+#: Keys that tie a verdict to the skill, version, tier, and bytes it was earned
+#: on. The Worker refuses a gated tier whose report omits them, so they must be
+#: forwarded verbatim rather than normalized away.
+BINDING_FIELDS = (
+    "skill",
+    "version",
+    "security_tier",
+    "cleared_tiers",
+    "content_digest",
+    "manifest_digest",
+)
+
 
 class SkillAuditUnavailableError(SkillError):
     """The audit engine (#2468) is not installed, so publish cannot be gated.
@@ -72,26 +84,33 @@ class SkillAuditFailedError(SkillError):
 class AuditReport:
     """A normalized audit result, in the shape ``POST /publish/skill`` accepts.
 
-    Serialized by :meth:`to_json` and sent verbatim as the ``audit`` form part;
-    ``workers/agent-hub/src/audit.ts`` parses exactly these four keys.
+    Serialized by :meth:`to_json` and sent verbatim as the ``audit`` form part.
+    ``workers/agent-hub/src/audit.ts`` parses the four verdict keys below and,
+    for any tier whose gate demands an audit, additionally requires the
+    :data:`BINDING_FIELDS` carried in :attr:`binding` — dropping them here would
+    turn every ``community``/``verified`` publish into a 428.
     """
 
     verdict: str
     engine: str
     audited_at: str
     findings: list[Any] = field(default_factory=list)
+    #: Engine-supplied keys that bind the verdict to what it audited.
+    binding: dict[str, Any] = field(default_factory=dict)
 
     @property
     def allowed(self) -> bool:
         return self.verdict == VERDICT_ALLOW
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "verdict": self.verdict,
             "engine": self.engine,
             "audited_at": self.audited_at,
             "findings": list(self.findings),
         }
+        payload.update(self.binding)
+        return payload
 
     def to_json(self) -> str:
         return json.dumps(self.to_dict(), indent=2)
@@ -104,7 +123,7 @@ class AuditReport:
         but every required field is still validated — a report GAIA cannot read is
         an error, never an implied pass.
         """
-        data = raw if isinstance(raw, dict) else _attrs_of(raw)
+        data = _wire_dict(raw)
 
         verdict = str(data.get("verdict") or "").upper()
         if verdict not in VALID_VERDICTS:
@@ -144,14 +163,36 @@ class AuditReport:
             verdict=verdict,
             engine=engine,
             audited_at=audited_at,
-            findings=list(findings),
+            findings=[_finding_dict(f) for f in findings],
+            binding={
+                key: data[key] for key in BINDING_FIELDS if data.get(key) is not None
+            },
         )
+
+
+def _wire_dict(raw: Any) -> dict[str, Any]:
+    """The engine's own ``to_dict()`` is already the wire payload — prefer it.
+
+    Falling back to attribute-scraping would leave `Finding` dataclasses in
+    ``findings``, which :meth:`AuditReport.to_json` cannot serialize.
+    """
+    if isinstance(raw, dict):
+        return raw
+    to_dict = getattr(raw, "to_dict", None)
+    if callable(to_dict):
+        return to_dict()
+    return _attrs_of(raw)
+
+
+def _finding_dict(finding: Any) -> Any:
+    to_dict = getattr(finding, "to_dict", None)
+    return to_dict() if callable(to_dict) else finding
 
 
 def _attrs_of(raw: Any) -> dict[str, Any]:
     return {
         key: getattr(raw, key, None)
-        for key in ("verdict", "engine", "audited_at", "findings")
+        for key in ("verdict", "engine", "audited_at", "findings") + BINDING_FIELDS
     }
 
 
