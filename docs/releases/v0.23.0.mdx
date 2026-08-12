@@ -102,11 +102,53 @@ A selection of the user-visible fixes this release — the full list is in the c
 
 ## Full Changelog
 
-**288 commits** since v0.22.0:
+**331 commits** since v0.22.0:
 
 <details>
-<summary>Expand full changelog (288 commits)</summary>
+<summary>Expand full changelog (331 commits)</summary>
 
+- `96ce0d1e` — feat(email): recognize the third mailbox connector — Gmail, Outlook personal, Microsoft work (#2896)
+- `88ecc18e` — fix(email): scoped 'anything suspicious?' query no longer dumps the full triage report (#2910)
+- `1c75ccee` — fix(skills): reject version pins GAIA cannot read instead of matching them (#2928)
+- `29a5c364` — docs(plans): assess readiness for the generic gaia-agent (#2926)
+- `e3b28653` — fix(tui): stop cancel-then-resend from racing the daemon's session lock (#2912)
+- `b38f5e60` — fix(tui): anchor TTFT on first inference token, use real token counts (#2911)
+- `779d7b00` — fix(email): reply/draft/send actions no longer report failure after they already succeeded (#2908)
+- `f8d4610c` — ci(eval): queue eval runs instead of cancelling the pending one (#2921)
+- `611b1928` — feat(hub,skills): pre-publish security audit gate for marketplace skills (#2702)
+- `c83047b9` — feat(skills): gaia skill migrate — OpenClaw/Hermes skills to GAIA format (#2693)
+- `ca17067a` — test(skills,hub): cover the signing and lane checks #2668/#2692 shipped untested (#2907)
+- `a951567a` — fix(eval): drop the judge temperature pin the model now rejects (#2905)
+- `236f8a58` — feat(skills): gaia skill publish/install with signature-backed security tiers (#2692)
+- `d26b15da` — ci(eval): trigger the Gemma eval on the PR diff, not the push (#2897)
+- `be15258a` — fix(cpp): normalize CRLF so Windows-authored skills parse identically (#2906)
+- `84415b06` — feat(cpp): text extraction and chunking (#2822)
+- `6352f264` — fix(database): make the SQL read-only authorizer disarm on Python 3.10 (#2904)
+- `4709a728` — feat(hub,skills): publish and serve skills as a first-class hub catalog lane (#2668)
+- `245cb72e` — fix(api): refuse approval-gated tools instead of auto-approving them (#2854)
+- `e803103a` — fix(mcp): enforce --auth-token on the MCP bridge instead of ignoring it (#2844)
+- `a6dc1fa3` — fix(ci): run the Gemma-4-E4B agent eval in PowerShell on its Windows pool (#2773)
+- `75b61f4f` — feat(cpp): SKILL.md format parser and validation (#2824)
+- `b89c6414` — feat(cpp): gaia::HttpClient — a general HTTP client abstraction (#2809)
+- `5e6b1d43` — fix(security): launch MCP servers without a shell, protect ~/.gaia from agent writes (#2847)
+- `768be2e2` — feat(skills): ship a ten-skill starter pack with a guide and honesty guards (#2697)
+- `340bf2c2` — feat(cpp): interactive TUI — event loop, streaming render, modals (#2825)
+- `acaad161` — feat(cpp): native OpenAI tool calling and conversational response mode (#2821)
+- `23ae5d63` — feat(cpp): SQLite integration and gaia::Database (#2816)
+- `4f2a6686` — feat(cpp): gaia::VectorIndex — flat vector index with persistence (#2807)
+- `b1a7e8df` — fix(email): ship with Agent Skills off until the eval gate covers them (#2848)
+- `34c26577` — ci(webui): run the Agent UI Vitest job on Node 22 so the suite executes (#2898)
+- `20036474` — docs: escape MDX-breaking literals so Mintlify validation passes (#2903)
+- `07b0858e` — ci(tui): run on stacked PRs, add -race, lint, and a per-OS test matrix (#2696)
+- `e19d46be` — feat(cpp): harden the coding toolbelt — stale-write rejection, ignore-aware search, persistent shell (#2823)
+- `7621b223` — ci(claude): move every Claude workflow to Opus 5 and run the audits nightly (#2859)
+- `d086faa4` — fix(claude): correct the agent/skill prompts and make plain language the default (#2862)
+- `990d19ff` — fix(cpp): gate MCP tools behind user confirmation in the C++ SDK (#2851)
+- `878d473f` — fix(mcp): gate MCP write tools behind the user confirmation prompt (#2846)
+- `c2c68064` — fix(security): stop LLM-supplied SQL reaching DatabaseAgent statements (CWE-89) (#2860)
+- `e936d3d9` — docs(release): rebuild v0.23.0 notes to hardware-verified features only
+- `be03c7c8` — fix(init): stop reporting success gaia init did not deliver (#2889)
+- `75804a15` — docs(dev): require --extra-index-url for every uv pip install on Linux (#2878)
 - `4a24d663` — ci(email): run the triage eval on PRs that touch the email agent (#2849)
 - `c3d9ec11` — fix(code): route orchestrated tool calls through the confirmation gate (#2853)
 - `c59e5d8a` — fix(hub): stop the terminal hub publishing against a core that cannot serve it (#2712)
