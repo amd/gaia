@@ -175,7 +175,7 @@ second toy agent (fixture) registers and spawns without touching manager code.
 *Deps:* V2-5.
 *Status:* landed via #2142 — spec-driven `AgentSidecarManager` + registry + crash-reap ledger in `gaia.daemon.sidecars`, `/daemon/v1/agents` control plane, UI backend cut over to `daemon_client`, per-agent CLI (`agents`/`start-agent`/`stop-agent`); idle reaper deliberately deferred to V2-15.
 
-**V2-7 · `feat(daemon): streaming SSE reverse-proxy (`ANY /v1/<agent>/*`) with cancel + crash semantics`** — **M**
+**V2-7 · `feat(daemon): streaming SSE reverse-proxy (ANY /v1/<agent>/*) with cancel + crash semantics`** — **M**
 *Why:* §0.23 names this net-new: today's `EmailSidecarProxy` is synchronous
 `requests` ending in `resp.json()` — it buffers, so `/query` streaming is
 impossible through it.
