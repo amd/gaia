@@ -11,11 +11,20 @@
 #
 # Runner-only by construction. `gaia eval agent` drives the real GAIA UI backend
 # against a real Lemonade Server on AMD hardware; a GitHub-hosted runner has
-# neither. Hence [self-hosted, lemonade-eval], the same pool as
-# email_scorecard_refresh.yml and test_email_agent_eval.yml, and the same shared
-# `lemonade-eval` concurrency group so this queues BEHIND them instead of
-# race-evicting their loaded model (CLAUDE.md: at most one `gaia eval agent`
-# process at a time, period).
+# neither. Hence the self-hosted pool, and the same shared `lemonade-eval`
+# concurrency group as email_scorecard_refresh.yml / test_email_agent_eval.yml so
+# this queues BEHIND them instead of race-evicting their loaded model (CLAUDE.md:
+# at most one `gaia eval agent` process at a time, period).
+#
+# THIS POOL IS WINDOWS. Every inline `run:` step below is PowerShell, and Python
+# setup goes through ./.github/actions/setup-venv (uv, Windows-aware) — the
+# lab-runner convention shared by test_email_agent_eval.yml,
+# email_scorecard_refresh.yml and test_agent_behavior_e2e.yml. Do NOT reintroduce
+# bash here: this workflow's first-ever execution died instantly on
+# `source .venv/bin/activate` because GitHub ran it through powershell.EXE, and
+# every other bash step in the job hit the same parser. Windows also breaks the
+# text-processing assumptions bash invites — the eval prints an `Output:` line
+# containing a backslash path, which bash test/`[ -f ]` cannot consume.
 #
 # WHY THIS REPORTS BY DEFAULT INSTEAD OF HARD-FAILING (`enforce`, default false)
 # ---------------------------------------------------------------------------
@@ -64,14 +73,33 @@
 # compared against the committed Gemma baseline. Never glob by mtime — a fresh
 # clone stamps every file with the checkout time.
 #
-# PREREQUISITES ON THE RUNNER. Lemonade Server is expected to be already running
-# on the lemonade-eval pool as a persistent service (email_scorecard_refresh.yml
-# and test_email_agent_eval.yml both assume this and neither starts it). The GAIA
-# UI backend is NOT persistent, so this workflow starts it itself — in the SAME
-# shell session as the evals, because a backgrounded child does not survive a
-# GitHub Actions step boundary (see the single-session note in
-# test_agent_behavior_e2e.yml). Both are preflight-checked and fail loudly with
-# an actionable message rather than degrading into a misleading skip.
+# PREREQUISITES ON THE RUNNER. Lemonade is NOT assumed to be already running:
+# install-lemonade pins the runner to the expected LEMONADE_VERSION and
+# ensure-lemonade-running.ps1 starts it as a persistent Scheduled Task and warms
+# the model — exactly what test_email_agent_eval.yml and
+# email_scorecard_refresh.yml do. (An earlier revision of this file claimed those
+# two workflows assume a persistent server and start nothing; they do not, and
+# that claim is what left this job with no way to bring Lemonade up.) The GAIA UI
+# backend is separate and NOT persistent, so this workflow starts it itself — in
+# the SAME shell session as the evals, because a backgrounded child does not
+# survive a GitHub Actions step boundary (see the single-session note in
+# test_agent_behavior_e2e.yml).
+#
+# Lemonade must serve TWO models, not one. ensure-lemonade-running.ps1 warms
+# only the chat model, but rag_quality and context_retention answer out of RAG
+# chunks, so the embedder is just as load-bearing — and when it cannot start,
+# those categories collapse to ~2/10 non-answers that read as a model
+# regression. The preflight therefore re-registers, re-pulls and then makes a
+# real /embeddings call through tests/ci_lemonade_check.py — repairing the one
+# cause CI can repair (a stale registration missing the embeddings label) and
+# failing in seconds on the ones it cannot, instead of spending three and a half
+# hours measuring nothing.
+#
+# The third prerequisite is the Claude Code CLI, which is easy to miss because
+# ANTHROPIC_API_KEY looks like the whole story: `gaia eval agent` DRIVES each
+# scenario by shelling out to `claude -p` with an MCP config, and its preflight
+# refuses to start without it on PATH. Installed below via npm, as
+# docs/guides/eval-ci.mdx prescribes.
 #
 # WHAT TRIGGERS IT. A `pull_request` path filter, so the gate fires on the PR's
 # own base..head diff and only when that diff touches an LLM-affecting path. It
@@ -105,9 +133,9 @@ on:
         type: boolean
         default: false
       eval_model:
-        description: 'Judge model for the eval harness'
+        description: 'Driver + judge model for the eval harness (must match the baseline)'
         required: false
-        default: 'claude-opus-5'
+        default: 'claude-sonnet-4-6'
   # `pull_request`, NOT `push`. A `push` path filter matches the files in the
   # PUSH, so merging main into a branch replays all of main's churn through the
   # filter — which is how #2807 and #2809, both pure C++ PRs with no Python in
@@ -165,9 +193,32 @@ env:
   # be able to launch a multi-hour run on the shared slot. So retitling alone
   # does not re-run the gate: add the tag, then push (or close/reopen).
   ENFORCE: ${{ github.event.inputs.enforce || (contains(github.event.pull_request.title, '[eval-enforce]') && 'true') || 'false' }}
-  EVAL_MODEL: ${{ github.event.inputs.eval_model || 'claude-opus-5' }}
-  # Loopback services — bypass any runner proxy so curl/httpx reach them.
+  # PINNED TO THE BASELINE'S JUDGE, and that is not a stale value to bump.
+  # `--model` is not a judge-only knob: runner.py passes it to `claude -p`, which
+  # DRIVES every scenario as well as scoring it. The committed baselines record
+  # `eval_model: claude-sonnet-4-6` (meta.json), so driving with anything else
+  # compares two different agents-under-test and folds the new driver's wall
+  # clock into the same >2x time verdict. #2859 moved every Claude workflow to
+  # Opus 5; this one value is exempt until the baselines are regenerated with
+  # that driver. Override per-run via the dispatch input above.
+  EVAL_MODEL: ${{ github.event.inputs.eval_model || 'claude-sonnet-4-6' }}
+  # Loopback services — bypass any runner proxy. This covers the PYTHON side
+  # (httpx/requests in the eval, the agents and the backend); PowerShell's
+  # Invoke-RestMethod ignores NO_PROXY and uses the system proxy instead.
   NO_PROXY: 'localhost,127.0.0.1'
+  # Bare host (no /api/v1): LemonadeClient normalizes the suffix itself. Mirrors
+  # test_email_agent_eval.yml so the preflight probe and the agents agree.
+  LEMONADE_BASE_URL: 'http://127.0.0.1:13305'
+  # The eval prints box-drawing characters and em dashes; the runner's default
+  # console codepage is cp1252 and Python dies on the first one without this.
+  PYTHONIOENCODING: 'utf-8'
+  # Connector resolution blocks on the OS keyring in a headless runner, which
+  # hangs agent construction. Same guard as test_email_agent_eval.yml.
+  PYTHON_KEYRING_BACKEND: keyring.backends.null.Keyring
+  # Persistent runner — keep long-term memory out of the loop so state cannot
+  # bleed between the three chained categories or across runs. Established
+  # convention (test_chat_agent.yml, test_email_agent_eval.yml).
+  GAIA_MEMORY_DISABLED: '1'
 
 jobs:
   agent-eval:
@@ -188,314 +239,618 @@ jobs:
       (github.event.pull_request.head.repo.full_name == github.repository &&
       (github.event.pull_request.draft == false ||
       contains(github.event.pull_request.labels.*.name, 'ready_for_ci')))
-    runs-on: [self-hosted, lemonade-eval]
-    # NOT 90 like its siblings, deliberately. Summing elapsed_s across the three
-    # committed baselines is already ~55 min of pure scenario time (22.4 + 18.4 +
-    # 14.4), before install, backend boot and judge latency, on hardware that is
-    # not the baseline's. A timeout CANCELS the job, which can lose the artifact
-    # upload too — so an overrun costs an hour of runner time AND the evidence.
-    # 150 buys real headroom; drop it once a few runs establish the true wall time.
-    timeout-minutes: 150
+    # `Windows` is load-bearing, not decoration: self-hosted pool labels here also
+    # match a Linux box (xsj-aimlab-stxp-04), and every step below is PowerShell +
+    # LemonadeServer.exe. Landing on Linux dies with 'powershell: command not
+    # found'. Same guard as test_email_agent_eval.yml.
+    #
+    # `lemonade-eval` — as opposed to the `stx` label the sibling evals use — is
+    # currently carried by exactly one runner (sjlab-stx-halo-18, itself an stx
+    # box). Serialisation comes from the concurrency group above, NOT from this
+    # label; the label only narrows WHICH box. Widen to `stx` if this job should
+    # be schedulable across the whole pool.
+    runs-on: [self-hosted, Windows, lemonade-eval]
+    defaults:
+      run:
+        # Pinned to Windows PowerShell 5.1, not left to the runner default (pwsh
+        # when installed, powershell otherwise). Everything below is written to
+        # 5.1's rules — the Tee-Object/`2>&1` and $LASTEXITCODE notes are
+        # 5.1-specific — and this file's first run died because nothing declared
+        # a shell at all and the steps were bash.
+        shell: powershell
+    # BUDGET DERIVATION — measured on this runner, not guessed.
+    #
+    # The first clean run (30869194618) was CANCELLED by a hand-picked
+    # `timeout-minutes: 150` after 148 min, having finished exactly ONE of three
+    # categories. It produced the only real numbers this pool has:
+    #
+    #   setup (checkout -> preflight, inclusive)                    0:01:18
+    #   rag_quality        8 scenarios                            2:04:07  measured
+    #   context_retention  1 of 4 scenarios before the cancel      0:23:06  partial
+    #   tool_selection     never reached                                 —
+    #
+    # rag_quality alone ran 124 min against a 22.4-min committed baseline — 5.5x,
+    # because that baseline was captured on different hardware over a remote
+    # Lemonade (see meta.json). The old 150 was sized off the ~55-min baseline sum
+    # and never had a chance. Per-category CEILINGS from the measured rates:
+    #
+    #   rag_quality        measured 124                                 -> 150
+    #   context_retention  4 x the 23.1-min scenario measured above = 92 -> 110
+    #   tool_selection     4 scenarios, same shape as context_retention  -> 110
+    #   eval step ceiling  150+110+110 = 370                            -> 400
+    #   setup (the Lemonade start step already carries its own 15-min cap) -> 20
+    #   collect + integrity + compare + upload                          -> 15
+    #   job: 400+20+15 = 435                                            -> 450
+    #
+    # These are CEILINGS, not expectations — expected wall clock is ~5h. Sizing
+    # generously is close to free here: the pool is self-hosted (no per-minute
+    # billing, and the 6h job cap is a GitHub-HOSTED limit; self-hosted is 5 days),
+    # and the shared `lemonade-eval` concurrency group already serialises the pool,
+    # so a high ceiling cannot let this job trample another eval. The asymmetry is
+    # what matters: too low costs hours of runner time AND the evidence, too high
+    # costs nothing. email_scorecard_refresh.yml sits at 840 on this same pool for
+    # exactly this reason (#2094: a hand-typed 90 against a measured 2h workload
+    # burned 100 consecutive dispatches without one completing).
+    #
+    # The eval step carries its OWN timeout-minutes below so an overrun fails at a
+    # NAMED step instead of a silent job-level `cancelled` — a job-level timeout
+    # skips the `!cancelled()` collect/integrity/compare steps, which is precisely
+    # how run 30869194618 threw away the 124 min of rag_quality data it had already
+    # produced. Re-tighten both once a few complete runs establish the true wall
+    # time; the per-category [TIMING] lines in the eval step exist to supply it.
+    timeout-minutes: 450
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Set up Python
-        uses: actions/setup-python@v7
+      - name: Setup Python Environment
+        uses: ./.github/actions/setup-venv
         with:
-          python-version: '3.10'
-          cache: 'pip'
-
-      - name: Install dependencies in isolated venv
-        run: |
-          python -m venv .venv-agent-eval
-          source .venv-agent-eval/bin/activate
-          python -m pip install --upgrade pip
+          python-version: '3.12'
           # [dev] + [eval] for the eval harness and the Anthropic judge deps;
           # [ui] for fastapi/uvicorn + the RAG deps gaia.ui.server imports at boot
           # ([dev] alone fails at import), [api] for the connectors layer.
-          pip install -e ".[dev,eval,ui,api]"
-          # Make the venv bin available to subsequent workflow steps.
-          echo "$PWD/.venv-agent-eval/bin" >> "$GITHUB_PATH"
+          # ChatAgent ships as the standalone gaia-agent-chat wheel (#1102) and is
+          # NOT pulled by those extras — gaia.ui.server imports gaia_agent_chat to
+          # build the backend-default agent these scenarios run against, so install
+          # the LOCAL editable hub package or every scenario dies at session
+          # creation. Core gaia stays editable so eval fixtures resolve in-repo.
+          install-package: '-e .[dev,eval,ui,api] -e hub/agents/chat/python'
+
+      # `gaia eval agent` does not merely call the Anthropic API - it shells out
+      # to `claude -p` with an MCP config to DRIVE each scenario (runner.py:937),
+      # and its own preflight hard-fails with "'claude' CLI not found on PATH"
+      # before running anything. ANTHROPIC_API_KEY is necessary but not
+      # sufficient; the CLI has to be installed too. Same prerequisite the
+      # eval-CI recipe documents (docs/guides/eval-ci.mdx).
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Install Claude Code CLI (the eval's scenario driver)
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          if ($LASTEXITCODE -ne 0) { throw "Claude Code CLI install failed" }
+          # Fail here, not after the backend has booted.
+          claude --version
+          if ($LASTEXITCODE -ne 0) { throw "claude installed but not runnable on PATH" }
+
+      - name: Install Lemonade Server
+        uses: ./.github/actions/install-lemonade
+
+      - name: Start Lemonade Server (version-matched, warmed)
+        timeout-minutes: 15
+        env:
+          HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+          HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+        run: |
+          # Launches the version-matched server as a persistent Scheduled Task
+          # (survives across CI jobs), reuses it if healthy, and warms the model.
+          # Default -WarmModel is already Gemma-4-E4B-it-GGUF, the model under test.
+          powershell -ExecutionPolicy Bypass -File installer\scripts\ensure-lemonade-running.ps1
+          if ($LASTEXITCODE -ne 0) { throw "Lemonade server not ready" }
 
       - name: Preflight — judge key, baselines, Lemonade
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          set -euo pipefail
+          $ErrorActionPreference = "Stop"
+          $ProgressPreference = "SilentlyContinue"
 
-          if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
-            echo "::error::ANTHROPIC_API_KEY is not set. The eval judge (src/gaia/eval/claude.py) reads it from the environment; without it every scenario scores as an infra error and the scorecard is meaningless. Add the ANTHROPIC_API_KEY repository secret, or run the eval locally on AMD hardware."
+          if (-not $env:ANTHROPIC_API_KEY) {
+            Write-Host "::error::ANTHROPIC_API_KEY is not set. The eval judge (src/gaia/eval/claude.py) reads it from the environment; without it every scenario scores as an infra error and the scorecard is meaningless. Add the ANTHROPIC_API_KEY repository secret, or run the eval locally on AMD hardware."
             exit 1
-          fi
+          }
 
-          for CATEGORY in rag_quality context_retention tool_selection; do
-            BASELINE="${BASELINE_DIR}/scorecard_${CATEGORY}.json"
-            if [ ! -f "${BASELINE}" ]; then
-              echo "::error::Missing baseline ${BASELINE}. Pick the baseline matching the model under test; do not substitute another directory."
+          foreach ($category in @("rag_quality", "context_retention", "tool_selection")) {
+            $baseline = Join-Path $env:BASELINE_DIR "scorecard_$category.json"
+            if (-not (Test-Path $baseline)) {
+              Write-Host "::error::Missing baseline $baseline. Pick the baseline matching the model under test; do not substitute another directory."
               exit 1
-            fi
-            echo "baseline ok: ${BASELINE}"
-          done
+            }
+            Write-Host "baseline ok: $baseline"
+          }
 
-          # Lemonade is a persistent service on this pool — verify, don't start.
-          # Resolve the URL through the client's own config helper rather than
-          # hardcoding a port here: the default already moved once (8000 -> 13305
-          # in Lemonade v10.1.0) and a stale literal would fail a healthy runner.
-          LEMONADE_URL="$(python -c 'from gaia.llm.lemonade_client import _get_lemonade_config; print(_get_lemonade_config()[2])')"
-          if ! curl -sf --max-time 10 "${LEMONADE_URL}/health" > /dev/null; then
-            echo "::error::Lemonade Server not reachable at ${LEMONADE_URL}. The lemonade-eval runner is expected to keep it running; start it on the runner (lemonade-server serve) or set LEMONADE_BASE_URL to a reachable instance."
+          # Resolve the URL and the model under test through the client's own
+          # constants rather than hardcoding them here: the default port already
+          # moved once (8000 -> 13305 in Lemonade v10.1.0) and a stale literal
+          # would fail a healthy runner.
+          # The embedder's checkpoint/recipe come from the same MODELS entry
+          # gaia.rag.sdk registers it from, so the probe below cannot drift from
+          # what RAG will actually ask Lemonade for.
+          $global:LASTEXITCODE = 0
+          $probe = @(python -c "from gaia.llm.lemonade_client import DEFAULT_EMBEDDING_MODEL, DEFAULT_MODEL_NAME, MODELS, _get_lemonade_config; m = next(x for x in MODELS.values() if x.model_id == DEFAULT_EMBEDDING_MODEL); print(_get_lemonade_config()[2]); print(DEFAULT_MODEL_NAME); print(DEFAULT_EMBEDDING_MODEL); print(m.checkpoint); print(m.recipe)")
+          if ($LASTEXITCODE -ne 0 -or $probe.Count -lt 5) {
+            Write-Host "::error::Could not resolve the Lemonade URL / models under test - the venv install is broken."
             exit 1
-          fi
-          echo "Lemonade reachable at ${LEMONADE_URL}"
+          }
+          $lemonadeUrl = $probe[-5]
+          $modelUnderTest = $probe[-4]
+          $embeddingModel = $probe[-3]
+          $embeddingCheckpoint = $probe[-2]
+          $embeddingRecipe = $probe[-1]
+
+          try {
+            Invoke-RestMethod -Uri "$lemonadeUrl/health" -TimeoutSec 10 | Out-Null
+          } catch {
+            Write-Host "::error::Lemonade Server not reachable at $lemonadeUrl. The previous step should have started it; check its log, start it on the runner (installer\scripts\ensure-lemonade-running.ps1), or set LEMONADE_BASE_URL to a reachable instance."
+            exit 1
+          }
+          Write-Host "Lemonade reachable at $lemonadeUrl"
+
+          # ensure-lemonade-running.ps1 SWALLOWS a failed warm pull ("WARN: warm
+          # pull failed") and still exits 0, so a healthy server proves nothing
+          # about the model this job exists to measure. `/models` (no show_all)
+          # lists DOWNLOADED models only, so this is the assertion that the model
+          # is actually on disk. Without it a run can score every scenario against
+          # whatever was resident and compare it to the Gemma baseline.
+          try {
+            $downloaded = @((Invoke-RestMethod -Uri "$lemonadeUrl/models" -TimeoutSec 60).data | ForEach-Object { $_.id })
+          } catch {
+            Write-Host "::error::Could not list downloaded models at $lemonadeUrl/models. Lemonade answered /health but not /models - check the server log on the runner."
+            exit 1
+          }
+          if ($downloaded -notcontains $modelUnderTest) {
+            Write-Host "::error::$modelUnderTest is not downloaded on this runner (Lemonade has: $($downloaded -join ', ')). The warm-pull step failed silently. Pull it on the runner (POST $lemonadeUrl/pull with model_name=$modelUnderTest) and re-run; do NOT let this eval score a different model against the Gemma baseline."
+            exit 1
+          }
+          Write-Host "Model under test present: $modelUnderTest"
+
+          # THE RAG CATEGORIES RUN ON A SECOND MODEL. rag_quality and
+          # context_retention answer entirely out of chunks the EMBEDDER
+          # produced, so an embedder that cannot start turns every doc-grounded
+          # scenario into a ~2/10 non-answer that reads exactly like a model
+          # regression. ensure-lemonade-running.ps1 warms only the chat model
+          # and nothing asserted the embedder, so run 31051933420 spent 3h31m
+          # proving it: llama-server returned model_load_error on every index,
+          # RAG got 0 chunks, and rag_quality scored 3.1 against a 9.4 baseline
+          # captured with the SAME chat model. Probe it here, in seconds.
+          #
+          # Probed AFTER the chat model is warm on purpose: the embedder is
+          # co-resident with it (#1544), so probing an idle server would not
+          # reproduce the condition the eval actually runs under.
+          #
+          # Presence in /models is not enough - it proves the GGUF is on disk,
+          # not that llama-server can serve it, and "on disk but unservable" is
+          # the exact failure above. tests/ci_lemonade_check.py is the shared CI
+          # helper for precisely this (test_embeddings.yml, test_rag.yml,
+          # test_api.yml all use it, and it is green on the sibling stx runners),
+          # so this reuses it rather than hand-rolling a weaker probe:
+          #
+          #   --register-embedding  DELETES any prior registration and re-registers
+          #     with the embeddings label before pulling. That is the one failure
+          #     in this class CI can actually REPAIR: a stale registration left by
+          #     an earlier job (wrong recipe, missing label - #1745) makes every
+          #     subsequent load fail forever, and ensure_model_downloaded alone
+          #     short-circuits on "already downloaded" and never re-applies it.
+          #   --llamacpp-args       loads with the SAME flag gaia.rag.sdk passes
+          #     (_load_embedder: --ubatch-size 2048). Without it the probe proves
+          #     the embedder can be served, not that RAG's load of it succeeds -
+          #     which is the difference between a green preflight and a green run.
+          #   the client's load retry absorbs the known transient AMD-Vulkan
+          #     "llama-server failed to start" fault instead of tripping on it.
+          #
+          # Continue, not Stop: under Stop the helper's first stderr line becomes
+          # a terminating NativeCommandError and the step dies before the
+          # ::error:: below. Same reasoning as the eval step's own note.
+          $ErrorActionPreference = "Continue"
+          $global:LASTEXITCODE = 0
+          $embedOut = & python tests/ci_lemonade_check.py `
+            --model $embeddingModel `
+            --checkpoint $embeddingCheckpoint `
+            --recipe $embeddingRecipe `
+            --register-embedding `
+            --embeddings `
+            --llamacpp-args "--ubatch-size 2048" 2>&1
+          $embedCode = $LASTEXITCODE
+          $ErrorActionPreference = "Stop"
+          $embedOut | ForEach-Object { Write-Host "$_" }
+          # Assert the EMBEDDINGS line, not the helper's terminal `[ci] OK` - that
+          # one prints whether or not --embeddings was passed, so a dropped flag
+          # would take this preflight green having verified nothing. `dim=` only
+          # prints after a real vector came back. Exit 0 alone is not enough
+          # either: a command that fails to LAUNCH leaves $LASTEXITCODE at the
+          # reset 0 and would read as a pass.
+          if ($embedCode -ne 0 -or -not ($embedOut -match '\[ci\] embeddings OK \(dim=')) {
+            # Why llama-server refused to start is in Lemonade's own log, which
+            # the probe cannot see. Print it so the fix does not need an RDP
+            # session onto the box. The server runs as the SYSTEM scheduled task
+            # (ensure-lemonade-running.ps1), so the log is in the SYSTEM
+            # profile's ~/.cache/lemonade - server.log per lemonade_client.py,
+            # but glob both that dir and a logs/ subdir since the layout has
+            # moved before.
+            Write-Host "=== Lemonade server log (tail) ==="
+            $logGlobs = @(
+              "$env:SystemRoot\System32\config\systemprofile\.cache\lemonade\*.log",
+              "$env:SystemRoot\System32\config\systemprofile\.cache\lemonade\logs\*.log",
+              "$env:USERPROFILE\.cache\lemonade\*.log",
+              "$env:USERPROFILE\.cache\lemonade\logs\*.log"
+            )
+            $logged = $false
+            Get-ChildItem $logGlobs -ErrorAction SilentlyContinue |
+              Sort-Object LastWriteTime -Descending | Select-Object -First 1 |
+              ForEach-Object {
+                Write-Host "--- $($_.FullName) ---"
+                Get-Content $_.FullName -Tail 120 -ErrorAction SilentlyContinue
+                $logged = $true
+              }
+            $logHint = if ($logged) { "the llama-server error is in the Lemonade log tail above" } else { "no Lemonade log was found on this runner (looked in: $($logGlobs -join ', ')) - read llama-server's failure from the Lemonade console instead" }
+            if (-not $logged) { Write-Host "(none found)" }
+            Write-Host "::error::The RAG embedder $embeddingModel cannot serve embeddings on this runner (probe exit $embedCode; its output is above). rag_quality and context_retention would score ~2/10 as non-answers against a ~9/10 baseline and look like a model regression. The probe already re-registered and re-pulled the model, so a load that still fails is the RUNNER, not the registration: $logHint, then on sjlab-stx-halo-18 run ``powershell -File installer\scripts\ensure-lemonade-running.ps1 -ForceRestart`` and re-run this probe by hand (``python tests/ci_lemonade_check.py --model $embeddingModel --checkpoint $embeddingCheckpoint --recipe $embeddingRecipe --register-embedding --embeddings --llamacpp-args '--ubatch-size 2048'``). Do NOT re-run the eval until it passes - it costs 3.5h and measures nothing."
+            exit 1
+          }
 
       - name: Run the three eval categories serially
+        # Own timeout so an overrun fails HERE, by name, with the collect /
+        # integrity / compare / upload steps still running on the partial results.
+        # A job-level timeout instead CANCELS, which skips every `!cancelled()`
+        # step and discards the categories that did finish. See the budget
+        # derivation on the job above. Same convention as email_scorecard_refresh.yml.
+        timeout-minutes: 400
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          # Persistent runner — keep long-term memory out of the loop so state
-          # cannot bleed between the three chained categories or across runs.
-          # Established convention (test_chat_agent.yml, test_email_agent_eval.yml).
-          GAIA_MEMORY_DISABLED: '1'
         run: |
-          set -euo pipefail
-          mkdir -p eval-out
+          # Deliberately NOT "Stop": the eval's stderr is piped through `2>&1`
+          # below, and under Stop the first stderr line from a native command
+          # becomes a terminating NativeCommandError. Every failure here is
+          # checked explicitly instead.
+          $ErrorActionPreference = "Continue"
+          $ProgressPreference = "SilentlyContinue"
+          # PYTHONIOENCODING makes the eval emit UTF-8; without this PowerShell
+          # decodes it as the OEM codepage and the logs come back as mojibake.
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          New-Item -ItemType Directory -Force -Path eval-out | Out-Null
+
+          function Test-Backend {
+            try { Invoke-RestMethod -Uri "$env:BACKEND_URL/api/health" -TimeoutSec 5 | Out-Null; return $true }
+            catch { return $false }
+          }
 
           # A leftover backend from a cancelled run still holds :4200 on this
-          # persistent runner, and the trap below does not fire on job cancellation.
-          # Without this check the wait loop can get 200 from that STALE server and
-          # evaluate the previous checkout while reporting green.
-          if curl -sf --max-time 3 "${BACKEND_URL}/api/health" > /dev/null; then
-            echo "::error::${BACKEND_URL} is already serving — a stale GAIA backend is running on this runner. Kill it (gaia kill) and re-run; otherwise this eval measures the previous checkout, not this one."
+          # persistent runner, and the cleanup below does not fire on job
+          # cancellation. Without this check the wait loop can get 200 from that
+          # STALE server and evaluate the previous checkout while reporting green.
+          if (Test-Backend) {
+            Write-Host "::error::$env:BACKEND_URL is already serving - a stale GAIA backend is running on this runner. Kill it (gaia kill) and re-run; otherwise this eval measures the previous checkout, not this one."
             exit 1
-          fi
+          }
 
           # The GAIA UI backend must live in the SAME shell session as the evals:
           # a backgrounded child does not survive a step boundary, which is why
           # test_agent_behavior_e2e.yml starts its server and runs its harness in
           # one session. Hence backend start + all three categories in one step.
-          python -m gaia.ui.server --port 4200 --host 127.0.0.1 > eval-out/backend.log 2>&1 &
-          BACKEND_PID=$!
-          trap 'kill "${BACKEND_PID}" 2>/dev/null || true' EXIT
-
-          echo "Waiting up to ~10 min for the GAIA UI backend on ${BACKEND_URL} (pid ${BACKEND_PID})..."
-          READY=0
-          for _ in $(seq 1 60); do
-            if ! kill -0 "${BACKEND_PID}" 2>/dev/null; then
-              echo "::error::gaia.ui.server exited during startup. Backend log follows."
-              cat eval-out/backend.log
-              exit 1
-            fi
-            if curl -sf --max-time 5 "${BACKEND_URL}/api/health" > /dev/null; then
-              READY=1
-              break
-            fi
-            sleep 5
-          done
-          if [ "${READY}" -ne 1 ]; then
-            echo "::error::GAIA UI backend did not become healthy at ${BACKEND_URL}/api/health in time. Backend log follows."
-            cat eval-out/backend.log
+          # Start-Process resolves relative paths against the .NET process CWD,
+          # which is not guaranteed to track the PowerShell location. Pin the
+          # child's working directory AND give it absolute redirect targets, so
+          # the backend and its logs both land in the workspace.
+          $outLog = Join-Path $PWD "eval-out\backend.out.log"
+          $errLog = Join-Path $PWD "eval-out\backend.err.log"
+          $backend = Start-Process -FilePath "python" `
+            -ArgumentList "-m","gaia.ui.server","--port","4200","--host","127.0.0.1" `
+            -WorkingDirectory $PWD `
+            -RedirectStandardOutput $outLog `
+            -RedirectStandardError $errLog `
+            -NoNewWindow -PassThru
+          if (-not $backend) {
+            Write-Host "::error::Could not start gaia.ui.server - the venv install is broken or python is not on PATH."
             exit 1
-          fi
-          echo "Backend healthy."
-
-          # Serial by construction: chained with && in a single step, never
-          # backgrounded with &. Two concurrent `gaia eval agent` runs race-evict
-          # each other's model out of the single Lemonade slot (CLAUDE.md).
-          #
-          # `gaia eval agent --category X` exits 0 whatever the scenarios score —
-          # it writes the scorecard and returns. So the && chain only short-
-          # circuits on a real harness crash, never on a regression; the
-          # regression verdict comes from the --compare step below.
-          #
-          # No --agent-type: the committed baselines were produced against the
-          # backend default (their `config` records only backend_url/model/budget),
-          # so passing one here would compare against a different agent.
-          run_category() {
-            CATEGORY="$1"
-            echo "=================================================================="
-            echo "  gaia eval agent --category ${CATEGORY}"
-            echo "=================================================================="
-            gaia eval agent \
-              --category "${CATEGORY}" \
-              --backend "${BACKEND_URL}" \
-              --model "${EVAL_MODEL}" \
-              2>&1 | tee "eval-out/${CATEGORY}.log"
           }
 
-          run_category rag_quality \
-            && run_category context_retention \
-            && run_category tool_selection
+          try {
+            # 120 x 5s sleeps = ~10 min of waiting, more when a probe itself
+            # times out. The job timeout is the real backstop.
+            Write-Host "Waiting ~10 min for the GAIA UI backend on $env:BACKEND_URL (pid $($backend.Id))..."
+            $ready = $false
+            foreach ($attempt in 1..120) {
+              if ($backend.HasExited) {
+                Write-Host "::error::gaia.ui.server exited during startup (exit $($backend.ExitCode)). Backend log follows."
+                Get-Content $outLog, $errLog -ErrorAction SilentlyContinue
+                exit 1
+              }
+              if (Test-Backend) { $ready = $true; break }
+              Start-Sleep -Seconds 5
+            }
+            if (-not $ready) {
+              Write-Host "::error::GAIA UI backend did not become healthy at $env:BACKEND_URL/api/health in time. Backend log follows."
+              Get-Content $outLog, $errLog -ErrorAction SilentlyContinue
+              exit 1
+            }
+            Write-Host "Backend healthy."
+
+            # Per-category wall clock. The job timeout was guessed once and cost a
+            # 148-min run (30869194618) that produced one category out of three;
+            # these lines are what replaces the guess with a measurement. Each is
+            # written the moment its category ends - appended to the step summary,
+            # not buffered to the end - so a run that overruns or crashes still
+            # leaves behind the timings of whatever DID finish.
+            #
+            # Not `Out-File -Encoding utf8`: on Windows PowerShell 5.1 that
+            # prepends a BOM, and a BOM ahead of the leading `##` stops GitHub
+            # rendering it as a heading. AppendAllText with UTF8Encoding($false)
+            # has an empty preamble, so no BOM on create or append.
+            $summaryEnc = New-Object System.Text.UTF8Encoding($false)
+            function Add-Summary($line) {
+              if ($env:GITHUB_STEP_SUMMARY) {
+                [System.IO.File]::AppendAllText($env:GITHUB_STEP_SUMMARY, "$line`r`n", $summaryEnc)
+              }
+            }
+            $swTotal = [Diagnostics.Stopwatch]::StartNew()
+            Add-Summary "## Eval wall clock (sjlab-stx-halo-18)"
+            Add-Summary ""
+            Add-Summary "| category | minutes |"
+            Add-Summary "| --- | ---: |"
+
+            # Serial by construction: a plain foreach in one session, never
+            # backgrounded. Two concurrent `gaia eval agent` runs race-evict each
+            # other's model out of the single Lemonade slot (CLAUDE.md).
+            #
+            # `gaia eval agent --category X` exits 0 whatever the scenarios score -
+            # it writes the scorecard and returns. So a non-zero exit here is a real
+            # harness crash, never a regression; the regression verdict comes from
+            # the --compare step below.
+            #
+            # No --agent-type: the committed baselines were produced against the
+            # backend default (their `config` records only backend_url/model/budget),
+            # so passing one here would compare against a different agent.
+            foreach ($category in @("rag_quality", "context_retention", "tool_selection")) {
+              Write-Host "=================================================================="
+              Write-Host "  gaia eval agent --category $category"
+              Write-Host "=================================================================="
+              $swCat = [Diagnostics.Stopwatch]::StartNew()
+              # Reset first: a command that fails to LAUNCH leaves $LASTEXITCODE
+              # at its previous value, so an unset/stale 0 would read as success.
+              $global:LASTEXITCODE = 0
+              # Not Tee-Object: on Windows PowerShell 5.1 it has no -Encoding and
+              # writes UTF-16, which the `Output:` parse in the next step then has
+              # to guess at. Echo + Out-File keeps the log UTF-8 and greppable.
+              gaia eval agent --category $category --backend "$env:BACKEND_URL" --model "$env:EVAL_MODEL" 2>&1 |
+                ForEach-Object { Write-Host "$_"; "$_" } |
+                Out-File -FilePath "eval-out\$category.log" -Encoding utf8
+              # Capture BEFORE anything else can clobber it. .NET calls and
+              # Write-Host leave $LASTEXITCODE alone, but reading it first keeps
+              # that from being a thing a later edit has to remember.
+              $code = $LASTEXITCODE
+              $swCat.Stop()
+
+              $mins = [math]::Round($swCat.Elapsed.TotalMinutes, 1)
+              Write-Host "[TIMING] ${category}: $mins min (running total $([math]::Round($swTotal.Elapsed.TotalMinutes, 1)) min of the 400-min step budget)"
+              Add-Summary "| ``$category`` | $mins |"
+
+              if ($code -ne 0) {
+                # Never `exit $LASTEXITCODE` - on a launch failure it can be $null,
+                # which PowerShell turns into exit 0 and the step passes GREEN
+                # having measured nothing.
+                Write-Host "::error::gaia eval agent --category $category crashed with exit $code (a harness failure, not a regression verdict)."
+                exit 1
+              }
+            }
+
+            $swTotal.Stop()
+            $totalMins = [math]::Round($swTotal.Elapsed.TotalMinutes, 1)
+            Write-Host "[TIMING] all three categories: $totalMins min"
+            Add-Summary "| **total** | **$totalMins** |"
+          }
+          finally {
+            if ($backend -and -not $backend.HasExited) {
+              Write-Host "Stopping GAIA UI backend (pid $($backend.Id))..."
+              Stop-Process -Id $backend.Id -Force -ErrorAction SilentlyContinue
+            }
+          }
 
       - name: Collect scorecards from the printed run directories
-        # Not always(): on a timeout or concurrency cancel this would pile
-        # misleading "missing scorecard" errors on top of the cancellation.
+        # Not always(): on a concurrency cancel or a job-level timeout this would
+        # pile misleading "missing scorecard" errors on top of the cancellation.
+        # An eval STEP timeout is deliberately not in that bucket - it fails
+        # rather than cancels, so this runs and names exactly which categories
+        # went unmeasured, which is the diagnostic you want.
         if: ${{ !cancelled() }}
         run: |
-          set -euo pipefail
-          MISSING=0
-          for CATEGORY in rag_quality context_retention tool_selection; do
-            LOG="eval-out/${CATEGORY}.log"
-            if [ ! -f "${LOG}" ]; then
-              echo "::error::No log for ${CATEGORY} — the chain stopped before it ran."
-              MISSING=1
+          $ErrorActionPreference = "Stop"
+          $missing = $false
+
+          foreach ($category in @("rag_quality", "context_retention", "tool_selection")) {
+            $log = "eval-out\$category.log"
+            if (-not (Test-Path $log)) {
+              Write-Host "::error::No log for $category - the chain stopped before it ran."
+              $missing = $true
               continue
-            fi
+            }
             # The runner prints an ABSOLUTE `Output: <run-dir>` line
-            # (src/gaia/eval/runner.py::_print_summary). Parse it; take the last
-            # match so a re-run inside one invocation wins. Never glob by mtime.
-            RUN_DIR="$(sed -n 's/^Output:[[:space:]]*//p' "${LOG}" | tail -n 1 | sed 's#/*[[:space:]]*$##')"
-            if [ -z "${RUN_DIR}" ] || [ ! -f "${RUN_DIR}/scorecard.json" ]; then
-              echo "::error::Could not resolve a scorecard for ${CATEGORY} (parsed run dir: '${RUN_DIR:-<none>}'). The eval did not print an 'Output:' line, or it did not write scorecard.json — see eval-out/${CATEGORY}.log."
-              MISSING=1
+            # (src/gaia/eval/runner.py::_print_summary) - a Windows path with
+            # backslashes. Take the last match so a re-run inside one invocation
+            # wins. Never glob by mtime.
+            $hit = Select-String -Path $log -Encoding UTF8 -Pattern '^Output:\s*(.+?)\s*$' | Select-Object -Last 1
+            $runDir = if ($hit) { $hit.Matches[0].Groups[1].Value } else { $null }
+            $scorecard = if ($runDir) { Join-Path $runDir "scorecard.json" } else { $null }
+            if (-not $runDir -or -not (Test-Path $scorecard)) {
+              $shown = if ($runDir) { $runDir } else { "<none>" }
+              Write-Host "::error::Could not resolve a scorecard for $category (parsed run dir: '$shown'). The eval did not print an 'Output:' line, or it did not write scorecard.json - see eval-out\$category.log."
+              $missing = $true
               continue
-            fi
-            mkdir -p "eval-out/${CATEGORY}"
-            cp "${RUN_DIR}/scorecard.json" "eval-out/${CATEGORY}/scorecard.json"
-            # Traces are what you actually read to triage a regression — a bare
-            # scorecard tells you a score moved, not why.
-            if [ -d "${RUN_DIR}/traces" ]; then
-              cp -R "${RUN_DIR}/traces" "eval-out/${CATEGORY}/traces"
-            fi
-            echo "${CATEGORY}: ${RUN_DIR}"
-          done
-          exit "${MISSING}"
+            }
+            New-Item -ItemType Directory -Force -Path "eval-out\$category" | Out-Null
+            Copy-Item $scorecard "eval-out\$category\scorecard.json"
+            # Traces are what you actually read to triage a regression - a bare
+            # scorecard tells you a score moved, not why. Best-effort though: a
+            # deep trace tree can blow MAX_PATH, and losing the triage material
+            # must not red a job whose scorecard was already collected.
+            $traces = Join-Path $runDir "traces"
+            if (Test-Path $traces) {
+              try {
+                Copy-Item $traces "eval-out\$category\traces" -Recurse
+              } catch {
+                Write-Host "::warning::${category}: could not copy traces from $traces ($($_.Exception.Message)). The scorecard was collected; only the triage detail is missing."
+              }
+            }
+            Write-Host "${category}: $runDir"
+          }
+
+          if ($missing) { exit 1 }
 
       - name: Integrity gate — did we actually measure? (ignores `enforce`)
         if: ${{ !cancelled() }}
         run: |
-          set -euo pipefail
+          $ErrorActionPreference = "Stop"
           # UNCONDITIONAL. `--compare` only scores scenarios present on both sides,
           # so a run whose scenarios vanished exits 0 and would pass as "no
           # regression" (verified: 6 of 7 dropped -> exit 0). `enforce` decides
           # whether a WORSE result blocks; it must never decide whether a
           # NON-EXISTENT result blocks.
-          python - <<'PY'
-          import json
-          import sys
-          from pathlib import Path
-
-          BASELINE_DIR = Path("tests/fixtures/eval_baselines/gemma-4-e4b-d71cd914")
+          #
           # Statuses that mean "no measurement was produced", as distinct from
           # "measured and failed" (FAIL is a legitimate, comparable outcome).
-          NO_MEASUREMENT = (
-              "infra_error",
-              "errored",
-              "timeout",
-              "blocked",
-              "budget_exceeded",
-          )
+          #
+          # `skipped` (SKIPPED_NO_DOCUMENT, corpus file absent from disk) is the
+          # subtlest of these and the reason this list is not just the obvious
+          # errors: those scenarios KEEP their ids, so the missing-scenario check
+          # below stays clean, and compare_scorecards files them under
+          # `corpus_changed` = "not a quality signal" -> exit 0. A runner whose
+          # corpus never materialised would otherwise go green having measured
+          # nothing. All three committed baselines have skipped=0.
+          $noMeasurement = @("infra_error", "errored", "timeout", "blocked", "budget_exceeded", "skipped")
+          $problems = @()
 
-          problems = []
-          for category in ("rag_quality", "context_retention", "tool_selection"):
-              current = Path(f"eval-out/{category}/scorecard.json")
-              if not current.is_file():
-                  problems.append(f"{category}: no scorecard produced")
-                  continue
+          foreach ($category in @("rag_quality", "context_retention", "tool_selection")) {
+            $current = "eval-out\$category\scorecard.json"
+            if (-not (Test-Path $current)) {
+              $problems += "${category}: no scorecard produced"
+              continue
+            }
 
-              card = json.loads(current.read_text(encoding="utf-8"))
-              baseline = json.loads(
-                  (BASELINE_DIR / f"scorecard_{category}.json").read_text(encoding="utf-8")
-              )
+            $card = Get-Content $current -Raw -Encoding UTF8 | ConvertFrom-Json
+            $baseline = Get-Content (Join-Path $env:BASELINE_DIR "scorecard_$category.json") -Raw -Encoding UTF8 | ConvertFrom-Json
 
-              got = {s["scenario_id"] for s in card.get("scenarios", [])}
-              want = {s["scenario_id"] for s in baseline.get("scenarios", [])}
-              if want - got:
-                  problems.append(
-                      f"{category}: {len(want - got)} baseline scenario(s) missing "
-                      f"from the run: {sorted(want - got)}"
-                  )
+            $got = @(@($card.scenarios) | ForEach-Object { $_.scenario_id })
+            $want = @(@($baseline.scenarios) | ForEach-Object { $_.scenario_id })
+            $absent = @($want | Where-Object { $got -notcontains $_ })
+            if ($absent.Count -gt 0) {
+              $problems += "${category}: $($absent.Count) baseline scenario(s) missing from the run: $(($absent | Sort-Object) -join ', ')"
+            }
 
-              summary = card.get("summary", {})
-              unmeasured = {k: summary.get(k, 0) for k in NO_MEASUREMENT if summary.get(k)}
-              if unmeasured:
-                  problems.append(f"{category}: scenarios without a measurement: {unmeasured}")
+            $unmeasured = @()
+            foreach ($status in $noMeasurement) {
+              $count = $card.summary.$status
+              if ($count) { $unmeasured += "${status}=$count" }
+            }
+            if ($unmeasured.Count -gt 0) {
+              $problems += "${category}: scenarios without a measurement: $($unmeasured -join ', ')"
+            }
 
-              print(
-                  f"{category}: {len(got)} scenario(s) run, "
-                  f"{len(want)} in baseline, unmeasured={unmeasured or 'none'}"
-              )
+            $shown = if ($unmeasured.Count -gt 0) { $unmeasured -join ', ' } else { "none" }
+            Write-Host "${category}: $($got.Count) scenario(s) run, $($want.Count) in baseline, unmeasured=$shown"
+          }
 
-          if problems:
-              for p in problems:
-                  print(f"::error::Integrity: {p}")
-              print(
-                  "\nThe eval did not produce a complete set of measurements, so the "
-                  "baseline comparison below is not trustworthy. This fails regardless "
-                  "of `enforce` — report mode softens a WORSE score, never a MISSING "
-                  "one. Check the backend/Lemonade logs in the artifact, then re-run."
-              )
-              sys.exit(1)
-          print("\nIntegrity OK — every baseline scenario ran and produced a measurement.")
-          PY
+          if ($problems.Count -gt 0) {
+            foreach ($p in $problems) { Write-Host "::error::Integrity: $p" }
+            Write-Host ""
+            Write-Host "The eval did not produce a complete set of measurements, so the baseline comparison below is not trustworthy. This fails regardless of ``enforce`` - report mode softens a WORSE score, never a MISSING one. Check the backend/Lemonade logs in the artifact, then re-run."
+            exit 1
+          }
+          Write-Host ""
+          Write-Host "Integrity OK - every baseline scenario ran and produced a measurement."
 
       - name: Compare each category against its committed Gemma baseline
         if: ${{ !cancelled() }}
         run: |
-          set -uo pipefail
-          REGRESSED=""
-          FAILED_COMPARE=0
+          $regressed = @()
+          $failedCompare = $false
 
-          for CATEGORY in rag_quality context_retention tool_selection; do
-            CURRENT="eval-out/${CATEGORY}/scorecard.json"
-            BASELINE="${BASELINE_DIR}/scorecard_${CATEGORY}.json"
-            echo ""
-            echo "=================================================================="
-            echo "  ${CATEGORY}: ${BASELINE}  ->  ${CURRENT}"
-            echo "=================================================================="
-            if [ ! -f "${CURRENT}" ]; then
-              echo "::warning::${CATEGORY}: no scorecard produced — nothing to compare."
-              FAILED_COMPARE=1
+          foreach ($category in @("rag_quality", "context_retention", "tool_selection")) {
+            $current = "eval-out\$category\scorecard.json"
+            $baseline = Join-Path $env:BASELINE_DIR "scorecard_$category.json"
+            Write-Host ""
+            Write-Host "=================================================================="
+            Write-Host "  ${category}: $baseline  ->  $current"
+            Write-Host "=================================================================="
+            if (-not (Test-Path $current)) {
+              Write-Host "::warning::${category}: no scorecard produced - nothing to compare."
+              $failedCompare = $true
               continue
-            fi
+            }
             # `--compare` exits 2 on status/score/time regressions, 0 otherwise
-            # (src/gaia/cli.py). It only DIFFS — the eval above already ran.
-            gaia eval agent --compare "${BASELINE}" "${CURRENT}"
-            RC=$?
-            case "${RC}" in
-              0) echo "${CATEGORY}: no regression vs baseline." ;;
-              2) echo "::warning::${CATEGORY}: regression detected vs ${BASELINE} (see the diff above)."
-                 REGRESSED="${REGRESSED} ${CATEGORY}" ;;
-              *) echo "::error::${CATEGORY}: compare failed with exit ${RC} (not a regression verdict — a harness/IO error)."
-                 FAILED_COMPARE=1 ;;
-            esac
-          done
+            # (src/gaia/cli.py). It only DIFFS - the eval above already ran.
+            # Reset first: a launch failure would otherwise inherit the PREVIOUS
+            # category's 2 and be misreported as this category regressing.
+            $global:LASTEXITCODE = 0
+            gaia eval agent --compare "$baseline" "$current"
+            switch ($LASTEXITCODE) {
+              0 { Write-Host "${category}: no regression vs baseline." }
+              2 {
+                Write-Host "::warning::${category}: regression detected vs $baseline (see the diff above)."
+                $regressed += $category
+              }
+              default {
+                Write-Host "::error::${category}: compare failed with exit $LASTEXITCODE (not a regression verdict - a harness/IO error)."
+                $failedCompare = $true
+              }
+            }
+          }
 
-          echo ""
-          echo "=================================================================="
-          echo "  SUMMARY — enforce=${ENFORCE}"
-          echo "=================================================================="
-          if [ -n "${REGRESSED}" ]; then
-            echo "Regressed categories:${REGRESSED}"
-          else
-            echo "Regressed categories: none"
-          fi
-          echo "Baselines: ${BASELINE_DIR}"
-          echo "Scorecards uploaded as the 'agent-eval-gemma-consolidation' artifact."
-          echo ""
-          echo "Code-generation and data-analysis scenarios are EXPECTED to regress on"
-          echo "this consolidation (35B MoE -> ~4B dense) and that tradeoff is accepted."
-          echo "Read the per-scenario diff above before treating a regression as a bug."
-          echo ""
-          echo "TIME regressions (>2x per-scenario wall clock) count toward the same"
-          echo "verdict but are NOT comparable to this baseline: it was captured against"
-          echo "a remote Lemonade over ngrok on different hardware. Treat a time-only"
-          echo "regression as a hardware artifact until the baselines are regenerated"
-          echo "on this runner."
-          echo "=================================================================="
+          Write-Host ""
+          Write-Host "=================================================================="
+          Write-Host "  SUMMARY - enforce=$env:ENFORCE"
+          Write-Host "=================================================================="
+          if ($regressed.Count -gt 0) {
+            Write-Host "Regressed categories: $($regressed -join ' ')"
+          } else {
+            Write-Host "Regressed categories: none"
+          }
+          Write-Host "Baselines: $env:BASELINE_DIR"
+          Write-Host "Scorecards uploaded as the 'agent-eval-gemma-consolidation' artifact."
+          Write-Host ""
+          Write-Host "Code-generation and data-analysis scenarios are EXPECTED to regress on"
+          Write-Host "this consolidation (35B MoE -> ~4B dense) and that tradeoff is accepted."
+          Write-Host "Read the per-scenario diff above before treating a regression as a bug."
+          Write-Host ""
+          Write-Host "TIME regressions (>2x per-scenario wall clock) count toward the same"
+          Write-Host "verdict but are NOT comparable to this baseline: it was captured against"
+          Write-Host "a remote Lemonade over ngrok on different hardware. Treat a time-only"
+          Write-Host "regression as a hardware artifact until the baselines are regenerated"
+          Write-Host "on this runner."
+          Write-Host "=================================================================="
 
-          # A harness/IO error is never tolerated — it means we did not actually measure.
-          if [ "${FAILED_COMPARE}" -ne 0 ]; then
-            echo "::error::One or more comparisons could not be performed. Failing regardless of enforce."
+          # A harness/IO error is never tolerated - it means we did not actually measure.
+          if ($failedCompare) {
+            Write-Host "::error::One or more comparisons could not be performed. Failing regardless of enforce."
             exit 1
-          fi
-          if [ -n "${REGRESSED}" ]; then
-            if [ "${ENFORCE}" = "true" ]; then
-              echo "::error::Regressions in:${REGRESSED}. enforce=true — failing the build. Fix the prompt/tooling and re-run, or (if the regression is intentional) regenerate the baseline with --save-baseline and call it out in the PR description."
+          }
+          if ($regressed.Count -gt 0) {
+            if ($env:ENFORCE -eq "true") {
+              Write-Host "::error::Regressions in: $($regressed -join ' '). enforce=true - failing the build. Fix the prompt/tooling and re-run, or (if the regression is intentional) regenerate the baseline with --save-baseline and call it out in the PR description."
               exit 1
-            fi
-            echo "Report mode (enforce=false): regressions logged as warnings, build stays green."
-            echo "Re-dispatch this workflow with enforce=true to make them blocking."
-          fi
+            }
+            Write-Host "Report mode (enforce=false): regressions logged as warnings, build stays green."
+            Write-Host "Re-dispatch this workflow with enforce=true to make them blocking."
+          }
+
+          # THIS LINE IS THE REPORT MODE. GitHub appends
+          # `if (Test-Path variable:\LASTEXITCODE) { exit $LASTEXITCODE }` to every
+          # PowerShell step, so falling off the end here would re-export the LAST
+          # `--compare` exit code: a report-mode regression in the final category
+          # would fail the build anyway, and whether it did would depend on which
+          # category regressed. Same guard as install-lemonade/action.yml.
+          $global:LASTEXITCODE = 0
 
       - name: Upload scorecards + eval logs
         if: always()

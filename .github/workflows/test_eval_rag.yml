@@ -9,6 +9,16 @@ name: Eval RAG Quality
 # (null on dispatch) and the job body is still broken. The working
 # reference config lives on branch `ci/eval-rag-dryrun`; rebuild and
 # re-enable (job conditions + `pull_request` trigger) are tracked in #1315.
+#
+# ONE of those "several more blocking bugs" is now removed, because its twin
+# actually fired: the `lemonade-eval` pool is WINDOWS, so the bash install step
+# this file used to carry (`source .venv-eval/bin/activate`) died in
+# powershell.EXE the first time a labelled runner picked up the sibling
+# workflow test_eval_agent_gemma_consolidation.yml. Setup now goes through
+# ./.github/actions/setup-venv (uv, Windows-aware) and the pool label pins
+# Windows. Everything else here -- the never-true job `if:`, the `--compare`
+# invocation that diffs instead of running an eval, the 90-min budget -- is
+# still #1315's to rebuild. Do not read this edit as "the gate works now".
 on:
   workflow_dispatch:
 
@@ -36,31 +46,27 @@ jobs:
   run-eval:
     name: Run RAG Quality Eval
     if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
-    runs-on: [self-hosted, lemonade-eval]
+    runs-on: [self-hosted, Windows, lemonade-eval]
+    defaults:
+      run:
+        shell: powershell
     env:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
 
-      - name: Set up Python
-        uses: actions/setup-python@v7
+      - name: Setup Python Environment
+        uses: ./.github/actions/setup-venv
         with:
-          python-version: '3.10'
-
-      - name: Install dependencies in isolated venv
-        run: |
-          python -m venv .venv-eval
-          source .venv-eval/bin/activate
-          python -m pip install --upgrade pip
-          pip install -e .[dev]
-          # Make venv bin available to subsequent workflow steps
-          echo "$PWD/.venv-eval/bin" >> "$GITHUB_PATH"
+          python-version: '3.12'
+          install-package: '-e .[dev,eval,ui,api] -e hub/agents/chat/python'
 
       - name: Run eval rag_quality compare
         # This runner must have a running Lemonade Server with the Gemma model loaded
         # and ANTHROPIC_API_KEY set in the job environment so the Anthropic judge can be used.
+        # GitHub appends `exit $LASTEXITCODE` to every PowerShell step, so a
+        # non-zero exit here already fails the step; no explicit check needed.
         run: |
-          set -e
           gaia eval agent --category rag_quality --compare tests/fixtures/eval_baselines/gemma-4-e4b-d71cd914/scorecard_rag_quality.json
         timeout-minutes: 90

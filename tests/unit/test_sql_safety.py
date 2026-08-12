@@ -9,6 +9,7 @@ import time
 
 import pytest
 
+from gaia.database import sql_safety
 from gaia.database.sql_safety import (
     _OPEN_WINDOWS,
     build_where,
@@ -358,6 +359,52 @@ def test_readonly_restores_authorizer_after_unrelated_exception(conn):
     conn.execute("INSERT INTO t VALUES (5,'e')")
     conn.commit()
     assert conn.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 4
+
+
+def test_readonly_disarms_without_set_authorizer_none(conn, monkeypatch):
+    """The pre-3.11 disarm path must free the connection, on every version.
+
+    set_authorizer(None) is a no-op before 3.11 — it installs None as the
+    callback and every later statement is denied. Only the 3.10 lane exercises
+    that branch naturally, so force it here.
+    """
+    monkeypatch.setattr(sql_safety, "_SET_AUTHORIZER_NONE_DETACHES", False)
+
+    with pytest.raises(sqlite3.DatabaseError):
+        with readonly(conn):
+            conn.execute("DELETE FROM t")
+
+    conn.execute("INSERT INTO t VALUES (4,'d')")
+    conn.commit()
+    assert conn.execute("SELECT COUNT(*) FROM t").fetchone()[0] == 4
+
+    # Re-arming after the shim disarm must still deny.
+    with pytest.raises(sqlite3.DatabaseError):
+        with readonly(conn):
+            conn.execute("DELETE FROM t")
+
+
+def test_disarm_installs_a_permissive_callback_on_legacy_pythons(monkeypatch):
+    """Pin the contract: <3.11 must get a callable that permits writes.
+
+    Guards the refactor where the version flag stops being read at call time —
+    the window test above would then pass while exercising the 3.11 path.
+    """
+
+    class _RecordingConn:
+        installed = "unset"
+
+        def set_authorizer(self, callback):
+            self.installed = callback
+
+    monkeypatch.setattr(sql_safety, "_SET_AUTHORIZER_NONE_DETACHES", False)
+    conn = _RecordingConn()
+    sql_safety._disarm(conn)
+
+    assert callable(conn.installed)
+    assert conn.installed(sqlite3.SQLITE_DELETE, "t", None, "main", None) == (
+        sqlite3.SQLITE_OK
+    )
 
 
 def test_validate_identifier_rejects_trailing_newline():

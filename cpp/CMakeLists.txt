@@ -92,6 +92,44 @@ if(NOT httplib_FOUND)
     FetchContent_MakeAvailable(httplib)
 endif()
 
+# yaml-cpp (private dependency -- SKILL.md frontmatter parsing).
+# Kept out of the public headers: skill.h exposes nlohmann::json blobs, never
+# YAML::Node, so consumers never need yaml-cpp on their include path.
+find_package(yaml-cpp 0.8 QUIET)
+if(NOT yaml-cpp_FOUND)
+    message(STATUS "yaml-cpp not found -- fetching via FetchContent")
+    set(_GAIA_SAVE_BSL_YAML ${BUILD_SHARED_LIBS})
+    set(BUILD_SHARED_LIBS OFF)
+    set(YAML_CPP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(YAML_CPP_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+    set(YAML_CPP_BUILD_CONTRIB OFF CACHE BOOL "" FORCE)
+    # Installed alongside gaia_core: it is linked into the static library, so
+    # the install prefix must carry it (and its config package) for a consumer
+    # to link the result.
+    set(YAML_CPP_INSTALL ON CACHE BOOL "" FORCE)
+    set(YAML_CPP_FORMAT_SOURCE OFF CACHE BOOL "" FORCE)
+    # yaml-cpp 0.8.0 asks for cmake_minimum_required(3.4), which CMake 4.x
+    # rejects outright. Floor it for this subproject only.
+    set(_GAIA_SAVE_POLICY_MIN ${CMAKE_POLICY_VERSION_MINIMUM})
+    set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+    FetchContent_Declare(
+        yaml-cpp
+        GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
+        GIT_TAG        0.8.0
+    )
+    FetchContent_MakeAvailable(yaml-cpp)
+    set(CMAKE_POLICY_VERSION_MINIMUM ${_GAIA_SAVE_POLICY_MIN})
+    set(BUILD_SHARED_LIBS ${_GAIA_SAVE_BSL_YAML})
+
+    # yaml-cpp 0.8.0 predates the libstdc++ 13 header cleanup: its
+    # emitterutils.cpp uses uint16_t without including <cstdint>, so it fails to
+    # compile on GCC 13+ (the STX runner ships GCC 15). Upstream fixed this after
+    # the tag; force the include rather than drift off the pinned 0.8.0.
+    if(TARGET yaml-cpp AND NOT MSVC)
+        target_compile_options(yaml-cpp PRIVATE -include cstdint)
+    endif()
+endif()
+
 # FTXUI — reactive TUI framework (optional, gated behind GAIA_BUILD_TUI)
 # FTXUI must always be built static — it doesn't export symbols for DLL builds,
 # so BUILD_SHARED_LIBS=ON causes LNK1181 on Windows.
@@ -199,6 +237,7 @@ add_library(gaia_core
     src/console.cpp
     src/clean_console.cpp
     src/json_utils.cpp
+    src/http_client.cpp
     src/lemonade_client.cpp
     src/agent.cpp
     src/mcp_client.cpp
@@ -213,6 +252,8 @@ add_library(gaia_core
     src/vector_index.cpp
     src/repl.cpp
     src/json_event_handler.cpp
+    src/chunking.cpp
+    src/skill.cpp
     src/database.cpp
 )
 
@@ -283,6 +324,13 @@ else()
         $<TARGET_PROPERTY:httplib::httplib,INTERFACE_INCLUDE_DIRECTORIES>
     )
 endif()
+
+# yaml-cpp is PRIVATE (SKILL.md parsing detail — never in a public header), but
+# gaia_core is static, so it still reaches the exported link interface and a
+# consumer of the installed package must resolve it. Whether it came from the
+# system or from FetchContent, it installs its own config package into the same
+# prefix, so find_dependency() finds it either way.
+target_link_libraries(gaia_core PRIVATE yaml-cpp::yaml-cpp)
 
 # Platform-specific libraries
 if(UNIX)
@@ -385,6 +433,7 @@ if(GAIA_BUILD_TESTS)
         tests/test_mcp_client.cpp
         tests/test_mcp_registry.cpp
         tests/test_console.cpp
+        tests/test_http_client.cpp
         tests/test_lemonade_client.cpp
         tests/test_clean_console.cpp
         tests/test_tool_integration.cpp
@@ -400,6 +449,8 @@ if(GAIA_BUILD_TESTS)
         tests/test_vector_index.cpp
         tests/test_repl.cpp
         tests/test_json_event_handler.cpp
+        tests/test_chunking.cpp
+        tests/test_skill.cpp
         tests/test_database.cpp
     )
 
@@ -423,6 +474,11 @@ if(GAIA_BUILD_TESTS)
 
     target_compile_definitions(tests_mock PRIVATE
         GAIA_TEST_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures"
+        # The SKILL.md conformance corpus is shared with the Python runtime and
+        # lives at the repo root. test_skill.cpp discovers the skills from the
+        # directory, so new corpora (e.g. openclaw_skills/) are picked up
+        # automatically instead of needing a hardcoded list here.
+        GAIA_REPO_FIXTURES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../tests/fixtures"
     )
     target_include_directories(tests_mock PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
 
