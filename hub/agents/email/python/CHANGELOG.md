@@ -19,6 +19,17 @@ contract version is tracked separately as
   rejected, `409`); a session id the sidecar has never seen arriving with
   prior conversation history (e.g. the sidecar restarted mid-conversation)
   gets a one-time notice instead of silently starting over.
+- **A scoped "anything suspicious in my inbox?" question no longer dumps the
+  full triage report (#2900).** New read-only tool `check_suspicious_mail`
+  surfaces only phishing/spam-flagged mail — precomputed and counted by the
+  same shared classifier every triage tool already uses, never re-classified.
+  `PreScanItem` gains `is_phishing`/`is_spam` (bool, default `false`) and
+  `EmailPreScanResult` gains `suspicious`/`suspicious_total` (schema 2.13) so
+  the flag, previously readable only inside a prose `why` string, is a real
+  field — captured before `actionable`'s own cap so a flagged message ranked
+  past it is never silently dropped from the count. A general (non-
+  question-parsing) request still gets the full four-bucket
+  `pre_scan_inbox` card unchanged.
 ### Changed
 
 - **Agent Skills ship disabled for this agent, pending eval evidence (#2695

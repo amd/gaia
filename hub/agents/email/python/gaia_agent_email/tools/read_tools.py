@@ -3,7 +3,8 @@
 """Read tools mixin for ``EmailTriageAgent``.
 
 Tools: ``list_inbox``, ``get_message``, ``get_thread``, ``summarize_thread``,
-``search_messages``, ``list_labels``, ``triage_inbox``, ``pre_scan_inbox``.
+``search_messages``, ``list_labels``, ``triage_inbox``, ``pre_scan_inbox``,
+``check_suspicious_mail``.
 
 Each tool returns a JSON string with the canonical envelope::
 
@@ -1587,6 +1588,11 @@ PRE_SCAN_ARCHIVE_CAP = 10
 # reaches the caller via ``totals["needs_review"]``.
 PRE_SCAN_NEEDS_REVIEW_CAP = 5
 
+# #2900 — messages flagged is_phishing/is_spam, captured BEFORE
+# PRE_SCAN_ACTIONABLE_CAP is applied (see pre_scan_inbox_impl) so a flagged
+# message ranked past that cap is never silently dropped from the count.
+PRE_SCAN_SUSPICIOUS_CAP = 10
+
 # #2743 — the "one card" worklist. Still capped well below the inbox: a
 # worklist of 30 rows is a report nobody acts on. Raised from 5 so the
 # needs-a-look bucket carries a ``ref`` too — an item the user can see but
@@ -1982,6 +1988,7 @@ def pre_scan_inbox_impl(
     actionable_cap: int = PRE_SCAN_ACTIONABLE_CAP,
     archive_cap: int = PRE_SCAN_ARCHIVE_CAP,
     needs_review_cap: int = PRE_SCAN_NEEDS_REVIEW_CAP,
+    suspicious_cap: int = PRE_SCAN_SUSPICIOUS_CAP,
     session_preferences: Optional[Mapping[str, Any]] = None,
     force_llm: bool = False,
     slm_classifier: Optional[Callable[..., Optional[Mapping[str, Any]]]] = None,
@@ -2050,6 +2057,13 @@ def pre_scan_inbox_impl(
     handle (see ``gaia_agent_email.task_store``) whose open tasks are folded
     in too; omit it and the action_item signal is simply absent — this
     function never fails because the task store wasn't wired in.
+
+    ``suspicious``/``suspicious_total`` (#2900) is a VIEW over the rows in
+    ``actionable`` that carry ``is_phishing``/``is_spam`` — captured before
+    ``actionable_cap`` is applied, so a flagged message ranked past that cap
+    is never silently dropped from ``suspicious_total``. Lets a narrow
+    "anything suspicious?" caller (``check_suspicious_mail``) get an honest
+    count without receiving the other, unrelated pre-scan sections.
     """
     prefs = session_preferences or {}
     category_defaults = prefs.get("category_defaults") or {}
@@ -2074,6 +2088,12 @@ def pre_scan_inbox_impl(
         informational: List[Dict[str, Any]] = []
         suggested_archives: List[Dict[str, Any]] = []
         needs_review_ranked: List[tuple] = []
+        # #2900 — the is_phishing/is_spam subset of actionable, captured
+        # HERE (before actionable's own cap is applied below) so a flagged
+        # message ranked past PRE_SCAN_ACTIONABLE_CAP is never silently
+        # dropped from the count. Never a second classification pass —
+        # every row here is also, unchanged, in actionable.
+        suspicious: List[Dict[str, Any]] = []
         # Ids of the filter tests actually applied this run (#2743) — feeds
         # ``bulk.filter_tests``. A set, not a list: the same routing branch
         # firing on 50 messages names its test once, not 50 times.
@@ -2086,6 +2106,14 @@ def pre_scan_inbox_impl(
                 "sender": r.get("from", ""),
                 "subject": r.get("subject", ""),
                 "is_meeting_request": bool(r.get("is_meeting_request", False)),
+                # #2900 — structural flags, threaded through so a caller
+                # never has to re-parse them out of the ``why`` prose
+                # below. Always False outside the spam/phishing branch:
+                # that branch is the only place either can be True (the
+                # single shared classifier's own safety override runs
+                # first and always wins — see its own docstring).
+                "is_phishing": bool(r.get("is_phishing", False)),
+                "is_spam": bool(r.get("is_spam", False)),
                 # Epoch-millis string, carried through so #2743's needs_you
                 # view can order oldest-first and compute age_seconds —
                 # never part of the public PreScanItem shape.
@@ -2099,21 +2127,23 @@ def pre_scan_inbox_impl(
                 # pre-scan suggestion. The user must see them. Surface as
                 # actionable with a strong reason so the user reviews
                 # before any automated action.
-                actionable.append(
-                    {
-                        **base,
-                        "why": (
-                            (
-                                "flagged as phishing"
-                                if r.get("is_phishing")
-                                else "flagged as spam"
-                            )
-                            + f" — {why}"
-                            if why
-                            else ""
-                        ),
-                    }
-                )
+                flagged_item = {
+                    **base,
+                    "why": (
+                        (
+                            "flagged as phishing"
+                            if r.get("is_phishing")
+                            else "flagged as spam"
+                        )
+                        + f" — {why}"
+                        if why
+                        else ""
+                    ),
+                }
+                actionable.append(flagged_item)
+                # #2900 — same row, own accumulator, captured pre-cap (see
+                # comment on the ``suspicious`` declaration above).
+                suspicious.append(flagged_item)
                 continue
 
             # confident=False only overrides routing into the two LOW-SIGNAL
@@ -2286,6 +2316,12 @@ def pre_scan_inbox_impl(
             "needs_you": needs_you_view["needs_you"],
             "needs_you_total": needs_you_view["needs_you_total"],
             "bulk": bulk_view,
+            # #2900 — captured pre-cap above; suspicious_total is NOT folded
+            # into ``scanned`` (every flagged row is already counted once
+            # via ``actionable``'s own total — adding it again here would
+            # double-count the same message in the coverage figure).
+            "suspicious": _drop_internal_date(suspicious[: max(0, suspicious_cap)]),
+            "suspicious_total": len(suspicious),
         }
         st["result_summary"] = {
             "urgent": out["totals"]["urgent"],
@@ -2342,6 +2378,14 @@ def merge_pre_scan_backends(
     mailbox-scoped, so passing it to every backend would fold the SAME open
     tasks into the merge N times. It is queried exactly once, after the
     loop, mirroring ``build_attention_view_impl``'s own post-loop union.
+
+    ``suspicious``/``suspicious_total`` (#2900) merge the same way as every
+    other section, tagged with ``mailbox`` in the same loop — never a
+    separate pass — and re-capped post-merge (unlike ``informational``,
+    which stays uncapped) since each backend already capped its own
+    contribution. ``suspicious_total`` is NOT folded into the merged
+    ``scanned`` figure: every flagged row is already counted once via
+    ``actionable``'s own total.
     """
     prefs = session_preferences
     provider_backends = list(backends.items())
@@ -2352,6 +2396,11 @@ def merge_pre_scan_backends(
     needs_review: List[Dict[str, Any]] = []
     informational: List[Dict[str, Any]] = []
     informational_count = 0
+    # #2900 — merged across backends like every other section; NOT summed
+    # into ``scanned`` below (each flagged row is already counted once via
+    # ``actionable``'s own total, so adding it again would double-count).
+    suspicious: List[Dict[str, Any]] = []
+    suspicious_total = 0
     scanned = 0
     total_unread = 0
     total_unread_unknown = False
@@ -2408,6 +2457,7 @@ def merge_pre_scan_backends(
             ("suggested_archives", suggested_archives),
             ("needs_review", needs_review),
             ("informational", informational),
+            ("suspicious", suspicious),
         ):
             for item in out.get(section, []):
                 item["mailbox"] = provider
@@ -2415,6 +2465,10 @@ def merge_pre_scan_backends(
                     remember_mailbox(item.get("message_id"), provider)
                     remember_mailbox(item.get("thread_id"), provider)
                 dest.append(item)
+        # #2900 — the TRUE pre-cap count from this backend, not
+        # len(out["suspicious"]) (which is already capped per-backend) —
+        # mirrors needs_you_total just below.
+        suspicious_total += int(out.get("suspicious_total", 0))
         for item in out.get("needs_you", []):
             item["mailbox"] = provider
             needs_you_candidates.append(item)
@@ -2489,6 +2543,12 @@ def merge_pre_scan_backends(
         "needs_you": _merge_needs_you_candidates(needs_you_candidates),
         "needs_you_total": needs_you_total,
         "bulk": {"count": bulk_count, "filter_tests": sorted(bulk_filter_test_ids)},
+        # #2900 — re-capped post-merge like urgent/actionable/etc above (NOT
+        # left uncapped like informational): each backend already capped its
+        # own contribution to PRE_SCAN_SUSPICIOUS_CAP, so an uncapped merge
+        # here could still return up to N-backends x that cap.
+        "suspicious": suspicious[: max(0, PRE_SCAN_SUSPICIOUS_CAP)],
+        "suspicious_total": suspicious_total,
     }
     if mailbox_errors and len(mailbox_errors) == len(backends):
         # Every connected mailbox failed — surface it loudly rather than
@@ -3074,6 +3134,80 @@ class ReadToolsMixin:
                 # reference ("reply to 1") against whatever is stored here.
                 agent._last_needs_you_card = envelope.get("needs_you", [])
                 return _envelope_ok(envelope)
+            except ConnectorsError as exc:
+                return _envelope_err(format_connector_error(exc))
+            except Exception as exc:
+                log.exception("email tool error: %s", type(exc).__name__)
+                return _envelope_err(f"{type(exc).__name__}: {exc}")
+
+        @tool
+        def check_suspicious_mail(max_messages: int = DEFAULT_INBOX_SCAN_MESSAGES) -> str:
+            """Scan for mail flagged phishing or spam by the shared classifier.
+
+            Use this — NOT ``pre_scan_inbox`` — when the question is scoped
+            to flagged/risky mail specifically rather than a general triage.
+            ``pre_scan_inbox`` always renders its full four-section card
+            (waiting on your reply, needs a response, meetings to decide,
+            needs a manual look); this tool returns ONLY the flagged rows,
+            so there is nothing else to describe.
+
+            Read-only — reports only, never quarantines or archives
+            anything. To quarantine a flagged message, call
+            ``quarantine_phishing_message(message_id)`` (requires user
+            confirmation).
+
+            Detection itself is unchanged — the SAME phishing/spam
+            classifier every triage tool already uses; this tool never
+            re-classifies anything, it only surfaces what that classifier
+            already flagged, precomputed and counted.
+
+            Returns ``{"suspicious": [...], "suspicious_total": N, "scanned":
+            M, "total_inbox": ..., ...}``. Each row carries ``message_id``,
+            ``sender``, ``subject``, ``why``, ``is_phishing``, ``is_spam``,
+            ``mailbox``. ``suspicious_total`` is the exact count — state it
+            verbatim and list EVERY entry individually; never summarize,
+            merge, or drop entries, and never report a count you arrived at
+            by counting the list yourself. When it is zero, say so plainly
+            (e.g. "nothing flagged this scan") rather than describing
+            unrelated mail — a zero count here means nothing was flagged in
+            what was scanned, not that the inbox is otherwise clear.
+
+            Args:
+                max_messages: How many INBOX messages (read + unread) to
+                    scan (default 50, max 100).
+            """
+            try:
+                if not agent._backends:
+                    return _envelope_err(NO_MAILBOX_CONNECTED_MESSAGE)
+                max_messages = max(
+                    1,
+                    min(int(max_messages or DEFAULT_INBOX_SCAN_MESSAGES), scan_ceiling),
+                )
+                # Reuses the exact same shared pre-scan pass every other
+                # pre-scan-derived tool uses (mailbox fan-out, SLM wiring,
+                # budget split) — no new classification code, no new
+                # mailbox plumbing. Deliberately NOT named "pre_scan_inbox":
+                # rewrite_triage_answer (answer_grounding.py) keys its
+                # four-bucket rewrite on that literal tool name, so a call
+                # to THIS tool can never trigger it.
+                envelope = agent._pre_scan_all_backends(
+                    max_messages=max_messages, include_informational=False
+                )
+                out: Dict[str, Any] = {
+                    "kind": "email_suspicious_scan",
+                    "suspicious": envelope.get("suspicious", []),
+                    "suspicious_total": envelope.get("suspicious_total", 0),
+                    "scanned": envelope.get("scanned", 0),
+                    "total_inbox": envelope.get("total_inbox"),
+                }
+                if envelope.get("degraded"):
+                    out["degraded"] = True
+                    out["mailbox_errors"] = envelope.get("mailbox_errors", [])
+                # Deliberately never touches agent._last_needs_you_card
+                # (#2745) — that positional-reference card is exclusive to
+                # pre_scan_inbox; this tool's rows carry no ``ref`` and must
+                # never be resolved by number.
+                return _envelope_ok(out)
             except ConnectorsError as exc:
                 return _envelope_err(format_connector_error(exc))
             except Exception as exc:

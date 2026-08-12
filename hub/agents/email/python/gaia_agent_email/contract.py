@@ -143,7 +143,15 @@ CATEGORY_PERSONAL = "PERSONAL"
 # per-turn agent, so a reference to something an earlier turn surfaced can
 # resolve. Omitted -> byte-for-byte the old per-turn behaviour. No existing
 # field changed, so 2.11 consumers keep working (additive MINOR).
-SCHEMA_VERSION = "2.12"
+#
+# 2.13 (#2900): ``PreScanItem`` gains ``is_phishing``/``is_spam`` (bool,
+# default False) so the flag that was previously only readable inside a
+# prose ``why`` string is now a real field. ``EmailPreScanResult`` gains
+# ``suspicious`` (List[PreScanItem]) and ``suspicious_total`` (int) — a
+# view over the already-classified actionable bucket, captured BEFORE its
+# 5-item cap, mirroring the needs_you/needs_you_total pattern (#2743). No
+# existing field changed, so 2.12 consumers keep working (additive MINOR).
+SCHEMA_VERSION = "2.13"
 
 # Maximum number of items in a single batch request. Protects the single-tenant
 # local model slot from runaway batches. Enforced via Pydantic max_length.
@@ -1321,6 +1329,23 @@ class PreScanItem(_Strict):
             "Read-only signal — detection makes no calendar changes."
         ),
     )
+    is_phishing: bool = Field(
+        default=False,
+        description=(
+            "True when the shared phishing detector (``detect_phishing``) "
+            "flagged this message (#2900). Previously readable only as a "
+            "fragment inside ``why`` ('flagged as phishing — ...'); now a "
+            "real field so a caller can act on it without re-parsing prose."
+        ),
+    )
+    is_spam: bool = Field(
+        default=False,
+        description=(
+            "True when the shared spam heuristic flagged this message "
+            "(#2900). Same rationale as ``is_phishing`` above — a real "
+            "field instead of a ``why``-string fragment."
+        ),
+    )
 
 
 class PreScanPreferencesApplied(_Strict):
@@ -1672,6 +1697,24 @@ class EmailPreScanResult(_Strict):
         description=(
             "(#2743) The filtered informational/promotional remainder — a "
             "count plus the filter test(s) that produced it."
+        ),
+    )
+    suspicious: List[PreScanItem] = Field(
+        default_factory=list,
+        description=(
+            "(#2900) Messages flagged ``is_phishing``/``is_spam`` this scan "
+            "— a VIEW over the same rows already present in ``actionable`` "
+            "above, captured BEFORE ``actionable``'s 5-item cap so a "
+            "flagged message ranked past that cap is never silently "
+            "dropped from this list. Never a second classification pass."
+        ),
+    )
+    suspicious_total: int = Field(
+        default=0,
+        description=(
+            "(#2900) The true count of flagged messages before "
+            "``suspicious``'s own cap — lets a caller state the count "
+            "verbatim rather than counting the (possibly capped) list."
         ),
     )
 
