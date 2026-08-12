@@ -30,6 +30,7 @@ type Message struct {
 	TTFT      time.Duration // time from query submit to first inference token — not model-load or a tool/status event
 	Steps     int           // agent steps taken
 	ToolsUsed int           // tools invoked
+	Tokens    int           // real generated-token count from usage.tokens; 0 => not reported, omit from display
 
 	// Render / Data carry a RoleCard message's payload straight off the wire;
 	// the cards package decides how (and whether) it can be drawn.

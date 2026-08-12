@@ -106,10 +106,13 @@ type CanonicalFinalEvent struct {
 
 // CanonicalUsage is the shape the TUI reads out of CanonicalFinalEvent.Usage.
 // Fields absent from the payload stay zero and are simply not displayed.
+// Tokens is the real generated-token count (#2899) — the TUI no longer
+// guesses from the answer string's character length.
 type CanonicalUsage struct {
 	Steps     int     `json:"steps"`
 	ToolsUsed int     `json:"tools_used"`
 	Elapsed   float64 `json:"elapsed"`
+	Tokens    int     `json:"tokens"`
 }
 
 // CanonicalErrorEvent — terminal failure. Detail is actionable and surfaced
