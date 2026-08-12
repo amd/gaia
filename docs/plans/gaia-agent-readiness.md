@@ -129,9 +129,9 @@ unpick.
 - **`ToolRegistry` snapshot/restore** for #2800's rollback guarantee. Implied by #2800's acceptance
   criteria but not in its scope text.
 - **The naming decision.** #2804 says "settle the name in this issue, not at package time," and it
-  is still unsettled. `gaia-agent` collides conceptually with the existing `gaia agent
-  {export|import}` subcommand; `gaia-native` is the stated fallback. This is free to decide now
-  and expensive to change after packaging, signing, and eval baselines exist.
+  is still unsettled. `gaia-agent` collides conceptually with the existing
+  `gaia agent {export|import}` subcommand; `gaia-native` is the stated fallback. This is free to
+  decide now and expensive to change after packaging, signing, and eval baselines exist.
 
 ---
 
