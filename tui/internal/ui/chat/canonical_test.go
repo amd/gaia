@@ -88,6 +88,64 @@ func TestCanonicalFinalWithoutTokens(t *testing.T) {
 	if last.Role != RoleAssistant || last.Content != "no streaming here" {
 		t.Fatalf("unexpected message: %+v", last)
 	}
+	if last.Tokens != 0 {
+		t.Errorf("no usage.tokens on the wire -> Message.Tokens must stay 0, got %d", last.Tokens)
+	}
+}
+
+// TestCanonicalFinalCarriesRealTokenCount is AC2(a): a real usage.tokens
+// value on the wire reaches Message.Tokens, and renders as "N tokens" — no
+// "~" prefix, since this is a real count, not the old char-length guess.
+func TestCanonicalFinalCarriesRealTokenCount(t *testing.T) {
+	m, _ := newTestModel(t)
+	m.streaming = true
+	m.queryStart = time.Now().Add(-5 * time.Second)
+	m.ttft = 1 * time.Second
+
+	m = feed(t, m, event.CanonicalFinalEvent{
+		Type:   "final",
+		Answer: "short",
+		Usage:  []byte(`{"steps":2,"tools_used":1,"tokens":42}`),
+	})
+
+	last := m.messages[len(m.messages)-1]
+	if last.Tokens != 42 {
+		t.Fatalf("Tokens = %d, want 42", last.Tokens)
+	}
+
+	rendered := m.renderMessage(&last, nil)
+	if !strings.Contains(rendered, "42 tokens") {
+		t.Errorf("rendered stats line missing \"42 tokens\":\n%s", rendered)
+	}
+	if strings.Contains(rendered, "~42") {
+		t.Errorf("rendered stats line still shows the old approximation marker:\n%s", rendered)
+	}
+}
+
+// TestCanonicalRenderOmitsTokensWhenZero is AC4: the stats line stays
+// present (duration/ttft/steps/tools) even when no real token count exists —
+// this is a fix, not a removal, and there is no fallback to the old guess.
+func TestCanonicalRenderOmitsTokensWhenZero(t *testing.T) {
+	m, _ := newTestModel(t)
+	msg := &Message{
+		Role:      RoleAssistant,
+		Duration:  3200 * time.Millisecond,
+		TTFT:      800 * time.Millisecond,
+		Steps:     2,
+		ToolsUsed: 1,
+		Tokens:    0,
+		Content:   "a reasonably long answer that would have guessed a nonzero token count under the old code",
+	}
+
+	rendered := m.renderMessage(msg, nil)
+	if strings.Contains(rendered, "tokens") || strings.Contains(rendered, "tok/s") {
+		t.Errorf("expected no tokens/tok-per-sec sub-line when Tokens == 0:\n%s", rendered)
+	}
+	for _, want := range []string{"3.2s", "ttft 0.8s", "2 steps", "1 tools"} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("expected stats line to still contain %q:\n%s", want, rendered)
+		}
+	}
 }
 
 // TestCanonicalTTFTAnchorsOnFirstToken reproduces the WARM-query shape

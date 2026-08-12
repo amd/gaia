@@ -1028,14 +1028,17 @@ func (m ChatModel) renderMessage(msg *Message, seen map[string]bool) string {
 			if msg.TTFT > 0 {
 				stats = append(stats, fmt.Sprintf("ttft %.1fs", msg.TTFT.Seconds()))
 			}
-			// Approximate output tokens (~4 chars per token for English)
-			outputTokens := len(msg.Content) / 4
-			if outputTokens > 0 {
-				stats = append(stats, fmt.Sprintf("~%d tokens", outputTokens))
+			// Real generated-token count (#2899) — no longer a char-count
+			// guess. Zero means the sidecar didn't report usage.tokens (e.g.
+			// the legacy transport, or an older agent); omit rather than
+			// fall back to the old estimate, which would silently
+			// reintroduce the exact bug this replaced.
+			if msg.Tokens > 0 {
+				stats = append(stats, fmt.Sprintf("%d tokens", msg.Tokens))
 				// Tokens per second (output only)
 				inferTime := msg.Duration - msg.TTFT
 				if inferTime > 0 {
-					tps := float64(outputTokens) / inferTime.Seconds()
+					tps := float64(msg.Tokens) / inferTime.Seconds()
 					stats = append(stats, fmt.Sprintf("%.1f tok/s", tps))
 				}
 			}

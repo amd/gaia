@@ -49,6 +49,29 @@ def test_answer_maps_to_final_with_usage():
     assert out[0]["usage"] == {"steps": 3, "tools_used": 2, "elapsed": 1.2}
 
 
+def test_answer_maps_tokens_into_usage():
+    # #2899: the real generated-token count, when the source event carries
+    # one, must reach usage.tokens — the TUI reads it in place of its old
+    # char-count guess.
+    out = _tr().translate(
+        {
+            "type": "answer",
+            "content": "Done.",
+            "elapsed": 1.2,
+            "steps": 3,
+            "tools_used": 2,
+            "tokens": 42,
+        }
+    )
+    assert out[0]["usage"]["tokens"] == 42
+
+
+def test_answer_omits_tokens_when_source_has_none():
+    # No real count available -> omitted entirely, never a fake 0 (#2899).
+    out = _tr().translate({"type": "answer", "content": "Done.", "steps": 1})
+    assert "tokens" not in out[0]["usage"]
+
+
 def test_answer_is_terminal():
     out = _tr().translate({"type": "answer", "content": "Done."})
     assert out[0]["type"] in TERMINAL_TYPES
