@@ -102,6 +102,23 @@ class TestAuditWriteFailureDoesNotMaskSuccess:
         create_calls = [c for c in backend.transport.calls if c[0] == "create_draft"]
         assert len(create_calls) == 1
 
+    def test_guard_catches_sqlite_error_only_and_does_not_over_catch(self):
+        """The guard exists to stop a *bookkeeping* failure masking a real
+        mailbox success — not to swallow arbitrary bugs. A non-sqlite error
+        from the audit write is a genuine defect and must still propagate,
+        or the guard becomes the silent fallback it was written to prevent."""
+        backend = FakeGmailBackend(user_email="me@example.com")
+        backend.add_message(_msg())
+
+        with patch(
+            "gaia_agent_email.tools.reply_tools.action_store.record_draft",
+            side_effect=TypeError("record_draft() got an unexpected keyword"),
+        ):
+            with pytest.raises(TypeError):
+                draft_reply_impl(
+                    backend, db=object(), message_id="m1", body="Sounds good."
+                )
+
     def test_draft_forward_succeeds_despite_locked_db(self):
         backend = FakeGmailBackend(user_email="me@example.com")
         backend.add_message(_msg())
@@ -199,20 +216,6 @@ class TestGenuineFailuresStillFailLoud:
             with pytest.raises(ConnectorsError):
                 send_draft_impl(backend, db=object(), draft_id="draft_0")
 
-    def test_send_draft_stale_id_gets_actionable_message_not_generic_dump(self):
-        """Retrying `send_draft` against a draft id that was already
-        consumed (Gmail/Outlook delete a draft on send) must not surface
-        the raw connector-error text — it should say plainly that the
-        draft was already sent, matching the `_is_message_not_found`
-        pattern `resolve_message_target` already uses for the same HTTP
-        shape."""
-        from gaia_agent_email.tools.reply_tools import _is_message_not_found
-
-        stale = ConnectorsError(
-            "Gmail API POST /drafts/send returned 404: draft not found"
-        )
-        assert _is_message_not_found(stale)
-
 
 # ---------------------------------------------------------------------------
 # End-to-end (tool-registry level): retrying send_draft against an
@@ -257,6 +260,17 @@ def _call_tool(name: str, *args, **kwargs) -> dict:
 
 
 class TestSendDraftStaleIdEndToEnd:
+    def test_is_message_not_found_matches_the_gone_draft_shape(self):
+        """The predicate the stale-id branch keys on. Both backends collapse
+        a gone draft into a ConnectorsError carrying the status code, so this
+        pins the shape the end-to-end test below depends on."""
+        from gaia_agent_email.tools.reply_tools import _is_message_not_found
+
+        stale = ConnectorsError(
+            "Gmail API POST /drafts/send returned 404: draft not found"
+        )
+        assert _is_message_not_found(stale)
+
     def test_retrying_already_sent_draft_gets_actionable_message(self, tmp_path):
         backend = FakeGmailBackend(user_email="me@example.com")
         backend.add_message(_msg())
@@ -283,6 +297,14 @@ class TestSendDraftStaleIdEndToEnd:
             retry = _call_tool("send_draft", draft_id)
 
         assert retry["ok"] is False
-        assert "already sent" in retry["error"].lower()
+        err = retry["error"].lower()
+        # Leads with what was actually observed — the draft is gone — and
+        # hedges the cause, because a hand-deleted draft raises the same 404
+        # and in that case the mail never went out. Asserting a delivery we
+        # cannot confirm is the failure this whole PR removes elsewhere.
+        assert "no longer in the mailbox" in err
+        assert "most likely" in err and "may also have been deleted" in err
+        # Still tells the user what to do.
+        assert "don't retry" in err and "sent mail" in err
         # Not the raw connector-error dump.
         assert "returned 404" not in retry["error"]

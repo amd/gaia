@@ -690,13 +690,14 @@ class ReplyToolsMixin:
                 )
             except ConnectorsError as exc:
                 if _is_message_not_found(exc):
-                    # A retry against a draft id already consumed by a prior
-                    # send (Gmail/Outlook delete the draft on send) — say so
-                    # plainly instead of surfacing the raw 404 dump.
+                    # The same 404 covers a consumed draft and a deleted one —
+                    # report the observable fact, not an unverified delivery.
                     return _envelope_err(
-                        f"Draft {draft_id!r} was already sent (or no longer "
-                        "exists) — no need to retry; check Sent Mail if you "
-                        "want to confirm it went out."
+                        f"Draft {draft_id!r} is no longer in the mailbox — "
+                        "most likely a prior send already consumed it "
+                        "(Gmail/Outlook delete a draft on send), though it "
+                        "may also have been deleted. Don't retry this id; "
+                        "check Sent Mail to confirm whether it went out."
                     )
                 return _envelope_err(format_connector_error(exc))
             except Exception as exc:
