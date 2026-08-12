@@ -35,6 +35,13 @@ std::vector<std::string> words(const std::string& s) {
     return out;
 }
 
+/// One paragraph estimating to exactly `tokens` tokens. The estimator is code
+/// points / 4, so the text is 4*tokens long; it ends in '.' and starts
+/// lower-case so the section splitter cannot mistake it for a title.
+std::string paragraphOfTokens(std::size_t tokens) {
+    return std::string(tokens * 4 - 1, 'a') + ".";
+}
+
 /// A fresh extension per call: registerExtractor() writes to a process-global
 /// registry with no removal hook, so reusing one breaks --gtest_repeat.
 std::string uniqueExtension() {
@@ -97,6 +104,27 @@ TEST_F(ChunkingTest, SingleChunkWhenTextFitsInBudget) {
     const auto chunks = splitTextIntoChunks(text, {500, 100});
     ASSERT_EQ(chunks.size(), 1u);
     EXPECT_EQ(chunks[0], text);
+}
+
+TEST_F(ChunkingTest, ExactBudgetStaysOneChunkAndOneTokenMoreSplits) {
+    // Both budget comparisons are strict (>), so landing exactly on the budget
+    // must not split. Pins the off-by-one in either direction.
+    const ChunkingConfig config{20, 4};
+
+    // Two paragraphs summing to exactly the budget.
+    EXPECT_EQ(splitTextIntoChunks(paragraphOfTokens(10) + "\n\n" + paragraphOfTokens(10),
+                                  config)
+                  .size(),
+              1u);
+
+    // One token more has to spill into a second chunk.
+    EXPECT_EQ(splitTextIntoChunks(paragraphOfTokens(10) + "\n\n" + paragraphOfTokens(11),
+                                  config)
+                  .size(),
+              2u);
+
+    // A lone paragraph exactly at the budget is not sentence-split either.
+    EXPECT_EQ(splitTextIntoChunks(paragraphOfTokens(20), config).size(), 1u);
 }
 
 TEST_F(ChunkingTest, BlankRunsNeverProduceEmptyChunks) {
