@@ -272,13 +272,22 @@ func (s *SubprocessClient) Send(ctx context.Context, query string) (<-chan inter
 				return
 			}
 
-			// Turn boundary — stop reading after terminal events.
+			// Turn boundary — stop reading after terminal events. Both dialects
+			// are listed because the check runs before we know which one this
+			// agent speaks: a canonical agent never sends AnswerEvent, so a
+			// legacy-only check reads past the end of the turn and blocks until
+			// something kills the child (a one-shot `run --query` sat for its
+			// whole timeout before being reaped).
 			switch evt.(type) {
 			case event.AnswerEvent:
 				return
 			case event.AgentErrorEvent:
 				return
 			case event.DoneEvent:
+				return
+			case event.CanonicalFinalEvent:
+				return
+			case event.CanonicalErrorEvent:
 				return
 			}
 		}
