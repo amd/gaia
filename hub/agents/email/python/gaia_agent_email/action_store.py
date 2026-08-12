@@ -21,7 +21,10 @@ Two tables:
 Ordering invariant (Adversarial B2): the calling tool MUST execute the
 Gmail API call FIRST and only ``record_action`` on success. Phantom rows
 in ``email_actions`` for actions that never happened are a state-corruption
-class — see ``test_email_agent_soft_delete.py``.
+class — see ``test_email_agent_soft_delete.py``. Conversely, an audit-write
+failure AFTER the external call already succeeded must never be reported as
+a failure — log and continue (``reply_tools.py``'s ``send_now_impl`` /
+``draft_reply_impl`` / ``draft_forward_impl`` / ``send_draft_impl``, #2902).
 
 All public helpers are pure functions taking a ``DatabaseMixin``-typed
 first argument. They never reach into the agent class.
