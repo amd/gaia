@@ -21,6 +21,8 @@
 
 #include <ftxui/dom/elements.hpp>
 
+#include "gaia/tui_markdown.h"
+
 namespace gaia {
 
 using namespace ftxui;
@@ -95,6 +97,65 @@ Element parseInline(const std::string& line) {
     return hbox(std::move(parts));
 }
 
+/// Parse inline formatting and lay the result out as wrapping words, so a
+/// paragraph longer than the terminal width breaks instead of being clipped.
+Element parseInlineWrapped(const std::string& line) {
+    Elements words;
+
+    auto pushWords = [&words](const std::string& chunk, const Decorator& style) {
+        std::string word;
+        auto flush = [&] {
+            if (word.empty()) return;
+            words.push_back(text(word) | style);
+            word.clear();
+        };
+        for (char c : chunk) {
+            if (c == ' ' || c == '\t') {
+                flush();
+            } else {
+                word += c;
+            }
+        }
+        flush();
+    };
+
+    std::string plain;
+    std::size_t i = 0;
+    while (i < line.size()) {
+        if (i + 1 < line.size() && line[i] == '*' && line[i + 1] == '*') {
+            const std::size_t end = line.find("**", i + 2);
+            if (end != std::string::npos) {
+                pushWords(plain, nothing);
+                plain.clear();
+                pushWords(line.substr(i + 2, end - (i + 2)), bold);
+                i = end + 2;
+                continue;
+            }
+        }
+        if (line[i] == '`') {
+            const std::size_t end = line.find('`', i + 1);
+            if (end != std::string::npos) {
+                pushWords(plain, nothing);
+                plain.clear();
+                pushWords(line.substr(i + 1, end - (i + 1)), [](Element e) {
+                    return e | dim | inverted;
+                });
+                i = end + 1;
+                continue;
+            }
+        }
+        plain += line[i];
+        ++i;
+    }
+    pushWords(plain, nothing);
+
+    if (words.empty()) {
+        return text("");
+    }
+    // Gap of 1 column between words: the same layout ftxui's paragraph() uses.
+    return flexbox(std::move(words), FlexboxConfig().SetGap(1, 0));
+}
+
 /// Split a string by a delimiter character.
 std::vector<std::string> splitLines(const std::string& s) {
     std::vector<std::string> result;
@@ -152,13 +213,17 @@ Element renderMarkdown(const std::string& markdown) {
             codeContent = vbox(std::move(codeLines));
         }
 
+        // ASCII rules rather than borderLight(): the TUI is ASCII by default
+        // (docs/plans/tui-user-journey.md R3).
         Elements codeBox;
+        codeBox.push_back(separatorCharacter("-"));
         if (!codeLang.empty()) {
             codeBox.push_back(text(" " + codeLang + " ") | dim | bold);
         }
         codeBox.push_back(codeContent | dim);
+        codeBox.push_back(separatorCharacter("-"));
 
-        blocks.push_back(vbox(std::move(codeBox)) | borderLight);
+        blocks.push_back(vbox(std::move(codeBox)));
         codeLines.clear();
         codeLang.clear();
     };
@@ -167,7 +232,7 @@ Element renderMarkdown(const std::string& markdown) {
         if (quoteLines.empty()) return;
         Element content = vbox(std::move(quoteLines));
         blocks.push_back(
-            hbox(text(" ") | dim, separatorLight(), text(" "), content) | dim
+            hbox(text(" ") | dim, separatorCharacter("|"), text(" "), content) | dim
         );
         quoteLines.clear();
     };
@@ -229,13 +294,13 @@ Element renderMarkdown(const std::string& markdown) {
         if (startsWith(trimmed, "- ")) {
             std::string item = trimmed.substr(2);
             blocks.push_back(
-                hbox(text("  * ") | bold, parseInline(item))
+                hbox(text("  * ") | bold, parseInlineWrapped(item) | flex)
             );
             return;
         }
 
         // Regular paragraph line with inline formatting
-        blocks.push_back(parseInline(trimmed));
+        blocks.push_back(parseInlineWrapped(trimmed));
     };
 
     for (const auto& rawLine : lines) {

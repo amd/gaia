@@ -946,7 +946,8 @@ class StdioTransport(MCPTransport):
     via stdin/stdout using JSON-RPC messages.
 
     Attributes:
-        command (str): Shell command to start server
+        command (str): Program to start the server
+        args (list[str] | None): Arguments passed to the program
         timeout (int): Request timeout in seconds
         debug (bool): Debug logging enabled
         _process (subprocess.Popen): Subprocess instance
@@ -957,14 +958,25 @@ class StdioTransport(MCPTransport):
 #### Constructor
 
 ```python
-def __init__(self, command: str, timeout: int = 30, debug: bool = False):
+def __init__(
+    self,
+    command: str,
+    args: list[str] | None = None,
+    env: dict[str, str] | None = None,
+    timeout: int = 30,
+    debug: bool = False,
+):
     """Create stdio transport.
 
     Args:
-        command (str): Shell command to start the MCP server
-            Examples:
-            - "npx @modelcontextprotocol/server-filesystem /tmp"
-            - "python -m my_mcp_server"
+        command (str): Program to start the MCP server, e.g. "npx".
+            A full command line ("npx -y @scope/server") is also accepted and
+            tokenized into an argv list — it is never run through a shell.
+            `~` and environment variables in that string are still expanded.
+        args (list[str] | None): Arguments for the program, e.g.
+            ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+        env (dict[str, str] | None): Extra environment variables, merged
+            over the current process environment
         timeout (int): Request timeout in seconds (default: 30)
         debug (bool): Enable debug logging (default: False)
     """
@@ -977,13 +989,24 @@ def connect(self) -> bool:
     """Launch the MCP server subprocess.
 
     Uses subprocess.Popen with:
-    - shell=True
+    - shell=False, always — the command is resolved to an argv list first
     - stdin/stdout/stderr pipes
     - text mode with UTF-8 encoding
     - Line buffering (bufsize=1)
 
     Returns:
         bool: True if process started successfully
+
+    Raises:
+        ValueError: If a single-string command is blank, has unbalanced
+            quotes, or carries unquoted shell syntax (";", "|", "&&", ">",
+            "$(", ...). Such syntax is rejected rather than passed through
+            as literal argv text — split the program from its arguments
+            using `args` instead. The same characters *inside a quoted
+            argument* are ordinary text and are accepted. A backtick is the
+            exception: it is rejected wherever it appears, because it never
+            forms a token of its own and quoting state cannot be recovered
+            after tokenizing. Pass such a value via `args`.
 
     Note:
         Returns True without starting new process if already connected.
@@ -1381,7 +1404,7 @@ The `env` field passes variables directly to the subprocess without shell expans
 ## CLI Commands
 
 ```bash
-# Add server (shell command string - converted to config format internally)
+# Add server (command line - tokenized into the config format internally)
 gaia mcp add <name> "<command>"
 
 # Examples
@@ -1401,7 +1424,7 @@ gaia mcp test-client <name>
 gaia mcp remove <name>
 ```
 
-The CLI accepts shell command strings for convenience and converts them to the config format internally.
+The CLI accepts a full command line for convenience and converts it to the config format internally. The command is tokenized, not run through a shell, so unquoted shell syntax (`;`, `|`, `&&`, `>`) — and a backtick anywhere in the string — is rejected rather than interpreted. Use the config format's `args` list for values that must contain those characters.
 
 See [CLI Reference](/reference/cli#mcp-client) for complete documentation.
 

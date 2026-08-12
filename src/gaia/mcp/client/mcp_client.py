@@ -363,12 +363,18 @@ class MCPClient:
 
         Args:
             name: Friendly name for this server
-            command: Shell command to start the server
+            command: Command line to start the server, e.g. ``"npx -y server"``.
+                Tokenized into an argv list, never run through a shell — prefer
+                :meth:`from_config` with an explicit ``args`` list.
             timeout: Request timeout in seconds
             debug: Enable debug logging
 
         Returns:
             MCPClient: Configured client instance
+
+        Raises:
+            ValueError: If ``command`` contains shell syntax, which would not be
+                interpreted. Pass the program and its arguments separately.
         """
         transport = StdioTransport(command, timeout=timeout, debug=debug)
         return cls(name, transport, debug=debug)
