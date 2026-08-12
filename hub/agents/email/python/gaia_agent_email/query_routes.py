@@ -527,7 +527,7 @@ async def query(request: QueryRequest) -> StreamingResponse:
     ``POST /v1/email/query/{run_id}/respond`` delivers the answer.
     """
     # Lazy imports: keep module import (and the OpenAPI export) dependency-light.
-    from gaia_agent_email.sse_translation import TERMINAL_TYPES, CanonicalTranslator
+    from gaia_agent_email.sse_translation import TERMINAL_TYPES, build_translator
 
     from gaia.ui.sse_handler import SSEOutputHandler
 
@@ -668,7 +668,7 @@ async def query(request: QueryRequest) -> StreamingResponse:
         ) from exc
 
     async def _stream():
-        translator = CanonicalTranslator(request.run_id)
+        translator = build_translator(request.run_id)
         terminated = False
         last_write = time.monotonic()
         try:

@@ -11,13 +11,19 @@ Dependency-light: no Lemonade, Gmail, or ``gaia.ui`` needed.
 from __future__ import annotations
 
 import pytest
-from gaia_agent_email.sse_translation import TERMINAL_TYPES, CanonicalTranslator
+from gaia_agent_email.sse_translation import (
+    TERMINAL_TYPES,
+    CanonicalTranslator,
+    build_translator,
+)
 
 RUN_ID = "0f9c2b6e-2c4a-4b1e-9d6a-1e2f3a4b5c6d"
 
 
 def _tr() -> CanonicalTranslator:
-    return CanonicalTranslator(RUN_ID)
+    # The email binding, not a bare translator: these cases assert email's own
+    # action labels and card map, which the shared translator takes as inputs.
+    return build_translator(RUN_ID)
 
 
 def _types(events):

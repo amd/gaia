@@ -1,0 +1,46 @@
+[build-system]
+# >=70.0 for SPDX `license = "..."` string-expression support (PEP 639) below
+# -- the classic `license = { text = "..." }` table form setuptools still
+# accepts is hard-deprecated for removal 2027-02.
+requires = ["setuptools>=70.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gaia-agent-gaia"
+version = "0.1.0"
+description = "The flagship GAIA agent — conversation, document Q&A, data analysis, and web research, with persistent memory and add-on skills"
+authors = [{ name = "AMD" }]
+license = "MIT"
+readme = "README.md"
+requires-python = ">=3.10"
+# Floors:
+# - amd-gaia>=0.22.0 matches gaia-agent-chat's floor (the registry helper this
+#   agent inherits through ChatAgent lands there, #2112).
+# - gaia-agent-chat is a HARD dependency, not an extra: GaiaAgent subclasses
+#   ChatAgent to inherit the doc prompt profile, RAG discovery, and session
+#   persistence rather than forking them. Importing this package without it is
+#   not a degraded mode, it is an ImportError.
+#
+# Intentionally bare `amd-gaia` (no `[rag]` marker), same reasoning as
+# gaia-agent-chat: a plain pip install must not drag faiss/pymupdf in just to
+# import the class. RAG's real dependencies come from `gaia init` into the
+# active interpreter (#2358).
+dependencies = [
+  "amd-gaia>=0.22.0",
+  "gaia-agent-chat>=0.1.0",
+]
+
+[project.entry-points."gaia.agent"]
+gaia = "gaia_agent_gaia:build_gaia"
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.setuptools.packages.find]
+include = ["gaia_agent_gaia*"]
+
+[tool.setuptools.package-data]
+# The manifest and bundled skills must land inside the package so they survive
+# both the wheel and the frozen sidecar (SKILL_DIRS / SKILL_MANIFEST resolve
+# relative to __file__).
+gaia_agent_gaia = ["gaia-agent.yaml", "skills/**/*"]
