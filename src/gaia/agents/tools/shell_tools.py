@@ -960,6 +960,27 @@ class ShellToolsMixin:
                         exec_cmd,
                         cwd=cwd,
                         capture_output=True,
+                        # stdin is DEVNULL, never inherited. capture_output
+                        # redirects stdout/stderr but leaves stdin alone, and
+                        # this process's stdin is the agent transport's pipe —
+                        # held open by the TUI and never written to. A child
+                        # that reads it (directly, or by probing whether it is
+                        # interactive) blocks forever on input that cannot
+                        # arrive, because there is no human on that pipe.
+                        #
+                        # The hang was not theoretical: `gh` spawned from the
+                        # agent never exited, while the identical command took
+                        # 0.07s from a shell. Worse, subprocess.run's own
+                        # timeout does not save it — on expiry it kills the
+                        # cmd.exe it launched, then calls communicate() again
+                        # with NO timeout, which waits on pipes the surviving
+                        # grandchild still holds. That is the 180s tool timeout
+                        # and the orphaned gh.exe left behind by every attempt.
+                        #
+                        # DEVNULL gives an immediate EOF, which is the honest
+                        # answer here: an agent's shell command is
+                        # non-interactive by construction.
+                        stdin=subprocess.DEVNULL,
                         encoding="utf-8",
                         errors="replace",
                         timeout=timeout,

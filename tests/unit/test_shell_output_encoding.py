@@ -96,6 +96,35 @@ def test_executor_decodes_utf8_not_the_locale(monkeypatch):
     assert seen.get("encoding") == "utf-8"
     assert seen.get("errors") == "replace"
     assert "text" not in seen, "text=True re-decodes with the locale codec"
+    assert seen.get("stdin") is subprocess.DEVNULL, "stdin must never be inherited"
+
+
+def test_child_never_inherits_the_agent_transport_stdin(monkeypatch):
+    """A shell command must not inherit this process's stdin.
+
+    capture_output redirects stdout/stderr but leaves stdin alone, and the
+    agent's stdin is the TUI's pipe — open, never written, with no human behind
+    it. A child that reads it blocks forever, and subprocess.run's timeout does
+    not rescue it: on expiry it kills the cmd.exe it launched, then calls
+    communicate() again with NO timeout, waiting on pipes the surviving
+    grandchild still holds.
+
+    Observed exactly that way: `gh` invoked from the agent never returned and
+    left an orphaned gh.exe behind on every attempt, while the same command ran
+    in 0.07s from a shell. The tool reported a 180s timeout and GitHub triage
+    was unusable.
+    """
+    seen = {}
+    real_run = subprocess.run
+
+    def spy(*args, **kwargs):
+        seen.update(kwargs)
+        return real_run(*args, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", spy)
+    _shell_tool()(command="echo hello")
+
+    assert seen["stdin"] is subprocess.DEVNULL
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="uses a Windows shell builtin")
