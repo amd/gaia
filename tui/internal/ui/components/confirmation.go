@@ -103,6 +103,34 @@ var confirmationRiskTiers = map[string]RiskTier{
 	"remove_skill":        RiskWrite,
 }
 
+// unboundedRiskActions are tiered Destructive because their name does not bound
+// what they do — NOT because the call in front of the user is destructive.
+var unboundedRiskActions = map[string]bool{
+	"run_shell_command": true,
+	"run_cli_command":   true,
+}
+
+// destructiveWarning is the sentence shown beneath a RiskDestructive summary.
+//
+// Two different claims were hiding under one tier. permanent_delete IS
+// destructive, by name. run_shell_command is not: it is *unbounded* — `pwd` on
+// one call and `rm -rf` on the next — which is exactly why it is tiered
+// cautiously (see confirmationRiskTiers). Telling someone that `pwd` "is a
+// destructive action and may not be reversible" is false, and a warning a user
+// has learned is false on the safe calls is the warning they will dismiss
+// without reading on the dangerous one.
+//
+// So the unbounded case says the true thing instead, and points at the one
+// piece of information that actually settles it: the command, already on screen
+// directly above this line.
+func destructiveWarning(action string) string {
+	if unboundedRiskActions[action] {
+		return "A shell command can read, change, or delete anything you can — " +
+			"check the command above before approving."
+	}
+	return "This is a destructive action and may not be reversible."
+}
+
 // ClassifyActionRisk returns the risk tier for a confirmation-gated action
 // name. An action this client has never heard of still made the sidecar ask
 // for confirmation, so it defaults to the MORE cautious tier — failing open to
@@ -386,7 +414,7 @@ func (m ConfirmationModel) View() string {
 	if m.tier == RiskDestructive {
 		lines = append(lines, "")
 		lines = append(lines, confirmationWarnStyle.Render(WrapText(
-			"This is a destructive action and may not be reversible.", inner)))
+			destructiveWarning(m.action), inner)))
 	}
 
 	lines = append(lines, "")
