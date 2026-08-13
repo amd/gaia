@@ -939,13 +939,29 @@ class ShellToolsMixin:
                             exec_cmd = win_cmd + exec_cmd[len(cmd_base) :]
 
                 # Execute command
+                #
+                # encoding/errors are explicit, and load-bearing. Bare
+                # ``text=True`` decodes with the locale codec — cp1252 on a
+                # default Windows box — and subprocess does that decode inside
+                # its pipe reader THREAD. A byte that codec cannot map raises
+                # UnicodeDecodeError in that thread, which dies, and
+                # subprocess.run then returns returncode 0 with EMPTY stdout.
+                # The command succeeded and its output was silently discarded.
+                #
+                # That is not an edge case: `gh issue list` on amd/gaia returns
+                # an issue title containing "⚠️", so GitHub triage got back
+                # nothing and the model reported an empty backlog it had never
+                # actually read. Any tool emitting UTF-8 (git, gh, npm, docker)
+                # hits it. errors="replace" keeps a stray undecodable byte from
+                # costing the whole output.
                 start_time = time.monotonic()
                 try:
                     result = subprocess.run(
                         exec_cmd,
                         cwd=cwd,
                         capture_output=True,
-                        text=True,
+                        encoding="utf-8",
+                        errors="replace",
                         timeout=timeout,
                         check=False,
                         env=os.environ.copy(),
