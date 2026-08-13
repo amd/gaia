@@ -199,6 +199,12 @@ type ChatModel struct {
 	// never gated.
 	bypassArmed bool
 
+	// claudeMode is true while the agent's inference runs on Anthropic's
+	// Claude API instead of the local Lemonade backend (--use-claude). Set
+	// once at launch from the transport's argv — see applyLaunchClaude — and
+	// stated in the header on every frame while it is on.
+	claudeMode bool
+
 	connected    bool
 	totalSteps   int
 	initialQuery string
@@ -252,9 +258,9 @@ func NewChatModel(c client.AgentClient, agentName string, initialQuery string, d
 		connected:    true,
 		followTail:   true,
 	}
-	// Reads the transport, never a saved preference: bypass is off on a fresh
-	// launch unless THIS launch asked for it on the command line.
-	return m.applyLaunchBypass()
+	// Reads the transport, never a saved preference: bypass and Claude mode
+	// are off on a fresh launch unless THIS launch asked on the command line.
+	return m.applyLaunchBypass().applyLaunchClaude()
 }
 
 // NewChatModelFromHub creates a ChatModel launched from the hub, enabling Esc-to-return behavior.
@@ -2013,6 +2019,9 @@ func (m ChatModel) renderHeader() string {
 	if m.dev {
 		title += activityStyle.Render(" │ dev")
 	}
+	// Claude mode means the conversation is NOT processed locally — worth a
+	// chip on every frame so the user can always tell where inference runs.
+	title += m.renderClaudeChip()
 	return title
 }
 

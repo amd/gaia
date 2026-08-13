@@ -40,14 +40,19 @@ func prepareTerminal() {
 // If mockAgent is non-empty, all agent binary paths are overridden with it for testing.
 // A non-nil ctrl starts the loopback control API against this very program.
 // bypassPermissions starts launched agents with confirmation prompts off.
-func RunHub(dev bool, mockAgent string, ctrl *control.Options, bypassPermissions bool) error {
+// useClaude/claudeModel start them against Anthropic's Claude API instead of
+// the local Lemonade backend.
+func RunHub(dev bool, mockAgent string, ctrl *control.Options, bypassPermissions bool, useClaude bool, claudeModel string) error {
 	cat := catalog.NewCatalog()
 	if mockAgent != "" {
 		cat.SetMockBinary(mockAgent)
 	} else {
 		cat.DiscoverBinaries()
 	}
-	return run(root.NewRootModel(cat, dev).WithBypassPermissions(bypassPermissions), dev, ctrl)
+	m := root.NewRootModel(cat, dev).
+		WithBypassPermissions(bypassPermissions).
+		WithClaude(useClaude, claudeModel)
+	return run(m, dev, ctrl)
 }
 
 // RunChat launches the chat TUI directly with a subprocess agent (standalone mode).
@@ -168,7 +173,7 @@ func run(model tea.Model, dev bool, ctrl *control.Options) error {
 // already refused that combination (see cli.agentControlOptions) rather than
 // pass a non-nil ctrl through here.
 // Returns the process exit code.
-func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctrl *control.Options, bypassPermissions bool) (int, error) {
+func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctrl *control.Options, bypassPermissions bool, useClaude bool, claudeModel string) (int, error) {
 	cat := catalog.NewCatalog()
 	cat.DiscoverBinaries()
 
@@ -201,6 +206,8 @@ func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctr
 		// answer a question, so it must not claim it can.
 		Interactive:       query == "",
 		BypassPermissions: bypassPermissions,
+		UseClaude:         useClaude,
+		ClaudeModel:       claudeModel,
 	})
 	if err != nil {
 		return 1, err

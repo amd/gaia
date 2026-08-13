@@ -40,6 +40,11 @@ type RootModel struct {
 	// confirmation prompts off (--bypass-permissions). Off unless the launch
 	// asked for it.
 	bypassPermissions bool
+	// useClaude starts agents launched from this session against Anthropic's
+	// Claude API instead of the local Lemonade backend (--use-claude).
+	// claudeModel optionally picks the Claude model.
+	useClaude   bool
+	claudeModel string
 
 	// preflight is the gate currently on screen, nil when there is none.
 	preflight *preflight.Model
@@ -87,6 +92,15 @@ func (m RootModel) WithPreflight(t preflight.Transport, opts preflight.Options) 
 // default path noisier than the feature.
 func (m RootModel) WithBypassPermissions(enabled bool) RootModel {
 	m.bypassPermissions = enabled
+	return m
+}
+
+// WithClaude starts agents launched from this session against Anthropic's
+// Claude API instead of the local Lemonade backend. A builder for the same
+// reason WithBypassPermissions is one: opt-in and rare.
+func (m RootModel) WithClaude(enabled bool, model string) RootModel {
+	m.useClaude = enabled
+	m.claudeModel = model
 	return m
 }
 
@@ -267,6 +281,8 @@ func (m RootModel) launchAgent(agent catalog.Agent) (tea.Model, tea.Cmd) {
 	c, err := client.ForAgent(agent, client.ForAgentOptions{
 		Dev: m.dev, Logf: m.logf, Interactive: true,
 		BypassPermissions: m.bypassPermissions,
+		UseClaude:         m.useClaude,
+		ClaudeModel:       m.claudeModel,
 	})
 	if err != nil {
 		// Stay in the hub and say why, rather than opening a chat that cannot talk.
