@@ -289,6 +289,80 @@ def test_plain_text_stream_emits_no_envelope():
     assert chunks == ["An NPU ", "is a chip."]
 
 
+def _reasoning_frame(reasoning, finish_reason=None):
+    return {
+        "choices": [
+            {
+                "delta": {"reasoning_content": reasoning},
+                "finish_reason": finish_reason,
+            }
+        ]
+    }
+
+
+def test_reasoning_is_released_a_line_at_a_time():
+    """Never a token at a time: a thought renders as ONE replaced line.
+
+    Per-token reasoning blanks the sentence before it, so the status line reads
+    as ". / just / `." churn instead of a sentence anyone can follow.
+    """
+
+    def _frames():
+        for piece in (
+            "Thinking",
+            " Process",
+            ":\n",
+            "1. Check",
+            " the hub\n",
+            "2. Cou",
+        ):
+            yield _reasoning_frame(piece)
+        yield {"choices": [{"delta": {"content": "Done."}, "finish_reason": "stop"}]}
+
+    with patch("gaia.llm.providers.lemonade.LemonadeClient") as MockBackend:
+        MockBackend.return_value.chat_completions.return_value = _frames()
+        provider = LemonadeProvider(model="Gemma-4-E4B-it-GGUF")
+        chunks = list(
+            provider.chat(
+                messages=[{"role": "user", "content": "q"}],
+                model="Gemma-4-E4B-it-GGUF",
+                stream=True,
+                tools=None,
+            )
+        )
+
+    assert chunks == [
+        "<think>",
+        "Thinking Process:\n",
+        "1. Check the hub\n",
+        # The half-line rides out with the closing tag rather than alone.
+        "2. Cou</think>",
+        "Done.",
+    ]
+
+
+def test_unterminated_reasoning_still_closes_its_block():
+    """A stream that ends mid-thought must not leave <think> hanging open —
+    the receiving parser would swallow the rest of the turn as reasoning."""
+
+    def _frames():
+        yield _reasoning_frame("half a thou", finish_reason="length")
+
+    with patch("gaia.llm.providers.lemonade.LemonadeClient") as MockBackend:
+        MockBackend.return_value.chat_completions.return_value = _frames()
+        provider = LemonadeProvider(model="Gemma-4-E4B-it-GGUF")
+        chunks = list(
+            provider.chat(
+                messages=[{"role": "user", "content": "q"}],
+                model="Gemma-4-E4B-it-GGUF",
+                stream=True,
+                tools=None,
+            )
+        )
+
+    assert chunks == ["<think>", "half a thou</think>"]
+
+
 def test_streaming_preserved_without_tools():
     """Without tools, stream=True from the caller is passed through."""
 

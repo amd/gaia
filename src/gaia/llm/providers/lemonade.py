@@ -532,9 +532,17 @@ class LemonadeProvider(LLMClient):
         yielded last, byte-identical to what the non-streaming branch returns.
         """
         in_thinking = False
+        thought = ""  # reasoning held back until a line is whole (see below)
         tool_calls: dict[int, dict] = {}
         finish_reason = ""
         text_seen: list[str] = []
+
+        def close_thinking():
+            nonlocal in_thinking, thought
+            out = (thought + "</think>") if thought else "</think>"
+            in_thinking, thought = False, ""
+            return out
+
         for chunk in response:
             if "choices" in chunk and chunk["choices"]:
                 choice = chunk["choices"][0]
@@ -545,8 +553,7 @@ class LemonadeProvider(LLMClient):
                 if content:
                     # Close thinking block before yielding actual content
                     if in_thinking:
-                        yield "</think>"
-                        in_thinking = False
+                        yield close_thinking()
                     text_seen.append(content)
                     yield content
                 else:
@@ -558,18 +565,25 @@ class LemonadeProvider(LLMClient):
                         if not in_thinking:
                             yield "<think>"
                             in_thinking = True
-                        yield reasoning
+                        # Released a line at a time, never a token at a time:
+                        # every surface renders a thought as ONE replaced line,
+                        # so per-token reasoning blanks the sentence before it
+                        # and the status line reads as ". / just / `." churn.
+                        thought += reasoning
+                        cut = thought.rfind("\n")
+                        if cut >= 0:
+                            yield thought[: cut + 1]
+                            thought = thought[cut + 1 :]
                     elif "text" in choice:
                         text = choice["text"]
                         if text:
                             if in_thinking:
-                                yield "</think>"
-                                in_thinking = False
+                                yield close_thinking()
                             text_seen.append(text)
                             yield text
         # Close any unclosed thinking block at end of stream
         if in_thinking:
-            yield "</think>"
+            yield close_thinking()
         if tool_calls:
             # Same envelope as the non-streaming branch, including any assistant
             # text emitted alongside the calls — Gemma-4 does that routinely and
