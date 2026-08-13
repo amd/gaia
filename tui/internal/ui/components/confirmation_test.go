@@ -236,12 +236,156 @@ func TestDestructiveTierShowsExtraWarning(t *testing.T) {
 	}
 }
 
+// An UNDELIVERABLE prompt keeps the auto-deny, and says so. There is nothing
+// to wait for: the run already ended, so expiring costs nothing and pretending
+// otherwise would be the lie.
 func TestConfirmationHintNamesTheKeysAndTimeout(t *testing.T) {
 	view := stripANSI(NewConfirmationModel("run-1", "send_draft", "x", "").View())
-	for _, want := range []string{"y approve", "n/esc deny", "30s"} {
+	for _, want := range []string{"y run once", "n/esc deny", "30s"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("hint missing %q:\n%s", want, view)
 		}
+	}
+	if strings.Contains(view, " a allow any ") {
+		t.Errorf("always must not be offered with no channel to grant it on:\n%s", view)
+	}
+}
+
+// A LIVE prompt offers all three outcomes and does not run a countdown under
+// the person reading it. This is the defect the whole change exists for: a
+// real question that silently answered itself after 30s.
+func TestLiveConfirmationOffersAlwaysAndDoesNotExpire(t *testing.T) {
+	m := NewConfirmationModel("run-1", "run_shell_command",
+		`Run 'run_shell_command' with command="pwd"?`, "").WithLiveChannel("cid-1")
+	view := stripANSI(m.View())
+
+	for _, want := range []string{
+		"y run once",
+		"a allow any run_shell_command this session",
+		"n/esc deny",
+		"waits for you",
+		`command="pwd"`, // the payload the old prompt hid
+	} {
+		if !strings.Contains(view, want) {
+			t.Errorf("live modal missing %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "30s") {
+		t.Errorf("a live prompt must not advertise a countdown it does not run:\n%s", view)
+	}
+	if !m.Deliverable() || m.ExpiresUnanswered() {
+		t.Error("a live prompt must be deliverable and must not expire")
+	}
+}
+
+// The three outcomes are distinct on the wire, and "always" implies approval.
+func TestEachOutcomeIsDistinct(t *testing.T) {
+	for _, tc := range []struct {
+		key          string
+		wantApproved bool
+		wantAlways   bool
+		wantState    ConfirmState
+	}{
+		{"y", true, false, ConfirmationApproved},
+		{"a", true, true, ConfirmationAlways},
+		{"n", false, false, ConfirmationDenied},
+	} {
+		t.Run(tc.key, func(t *testing.T) {
+			m := NewConfirmationModel("run-1", "run_shell_command", "x", "").
+				WithLiveChannel("cid-1")
+			updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(tc.key)})
+			if cmd == nil {
+				t.Fatalf("%q did not resolve the confirmation", tc.key)
+			}
+			msg := cmd().(ConfirmationDecidedMsg)
+			if msg.Approved != tc.wantApproved || msg.Always != tc.wantAlways {
+				t.Errorf("%q -> Approved=%v Always=%v, want %v/%v",
+					tc.key, msg.Approved, msg.Always, tc.wantApproved, tc.wantAlways)
+			}
+			if updated.State() != tc.wantState {
+				t.Errorf("%q -> state %v, want %v", tc.key, updated.State(), tc.wantState)
+			}
+			if msg.ConfirmID != "cid-1" {
+				t.Errorf("the decision lost the prompt id: %q", msg.ConfirmID)
+			}
+			if !msg.Deliverable {
+				t.Error("a live decision must be marked deliverable")
+			}
+		})
+	}
+}
+
+// "always" on a prompt with no channel would promise a suppression nobody
+// records, so the key does nothing at all rather than lying.
+func TestAlwaysIsInertWithoutALiveChannel(t *testing.T) {
+	m := NewConfirmationModel("run-1", "send_draft", "x", "")
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	if cmd != nil {
+		t.Error("'a' must not resolve an undeliverable confirmation")
+	}
+	if !updated.Pending() {
+		t.Error("the confirmation must still be pending")
+	}
+}
+
+// The timeout is the one thing that must never change meaning: where it still
+// applies, expiry denies; where it does not, it is not armed at all.
+func TestTimeoutNeverApproves(t *testing.T) {
+	t.Run("undeliverable expires to denied", func(t *testing.T) {
+		m := NewConfirmationModel("run-1", "send_draft", "x", "")
+		updated, cmd := m.ResolveTimeout(ConfirmationTimeoutMsg{RunID: "run-1"})
+		if cmd == nil {
+			t.Fatal("the timeout produced no decision")
+		}
+		msg := cmd().(ConfirmationDecidedMsg)
+		if msg.Approved || msg.Always || !msg.TimedOut {
+			t.Errorf("expiry must deny: %+v", msg)
+		}
+		if updated.State() != ConfirmationTimedOut {
+			t.Errorf("state = %v, want timed out", updated.State())
+		}
+	})
+
+	t.Run("live prompt ignores a timeout tick", func(t *testing.T) {
+		m := NewConfirmationModel("run-1", "run_shell_command", "x", "").
+			WithLiveChannel("cid-1")
+		updated, cmd := m.ResolveTimeout(ConfirmationTimeoutMsg{RunID: "run-1"})
+		if cmd != nil {
+			t.Error("a live prompt must not be resolved by a timeout")
+		}
+		if !updated.Pending() {
+			t.Error("a live prompt must stay pending until the human answers")
+		}
+	})
+}
+
+// A destructive tool still offers "always" — withholding it removed the option
+// from most prompts, since unrecognised tools default to that tier — but the
+// warning has to state that the grant is argument-blind.
+func TestDestructiveAlwaysStatesItsBreadth(t *testing.T) {
+	view := stripANSI(NewConfirmationModel("run-1", "run_shell_command", "x", "").
+		WithLiveChannel("cid-1").View())
+	if !strings.Contains(view, "any arguments") {
+		t.Errorf("a destructive always-grant must say it is argument-blind:\n%s", view)
+	}
+}
+
+// A `pwd` must not be badged the same as a permanent delete: a badge that
+// reads DESTRUCTIVE on everything stops carrying information.
+func TestKnownToolsAreClassifiedRatherThanAllDestructive(t *testing.T) {
+	for tool, want := range map[string]RiskTier{
+		"write_file":        RiskWrite,
+		"install_skill":     RiskWrite,
+		"run_shell_command": RiskDestructive,
+		"permanent_delete":  RiskDestructive,
+	} {
+		if got := ClassifyActionRisk(tool); got != want {
+			t.Errorf("ClassifyActionRisk(%q) = %v, want %v", tool, got, want)
+		}
+	}
+	// The cautious default for something this build has never heard of stands.
+	if got := ClassifyActionRisk("some_tool_from_the_future"); got != RiskDestructive {
+		t.Errorf("unknown tool tier = %v, want destructive", got)
 	}
 }
 

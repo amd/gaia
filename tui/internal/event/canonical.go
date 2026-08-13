@@ -73,10 +73,14 @@ type CanonicalToolResultEvent struct {
 // CanonicalNeedsConfirmationEvent — the run pauses for a user decision.
 // ConfirmURL is present only under the resume model; the stateless surface omits it.
 type CanonicalNeedsConfirmationEvent struct {
-	Type       string `json:"type"`
-	RunID      string `json:"run_id"`
-	Action     string `json:"action"`
-	Summary    string `json:"summary"`
+	Type    string `json:"type"`
+	RunID   string `json:"run_id"`
+	Action  string `json:"action"`
+	Summary string `json:"summary"`
+	// ConfirmID is the emitter's handle for THIS prompt, echoed back with the
+	// decision so a late answer cannot resolve the confirmation that replaced
+	// the one it was typed for. Absent on transports that do not mint one.
+	ConfirmID  string `json:"confirm_id,omitempty"`
 	ConfirmURL string `json:"confirm_url,omitempty"`
 }
 

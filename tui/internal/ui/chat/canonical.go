@@ -129,11 +129,10 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 
 	case event.CanonicalNeedsConfirmationEvent:
 		// The pause goes to the permanent transcript — never swallowed — AND to
-		// the interactive modal, which owns the keyboard until the user answers
-		// or the 30s client-side timeout auto-denies. The status line stays
-		// durable in scrollback even after the modal resolves and clears (see
-		// CanonicalFinalEvent below): the modal is the CURRENT decision surface,
-		// this line is the permanent record of it.
+		// the interactive modal, which owns the keyboard until the user answers.
+		// The status line stays durable in scrollback even after the modal
+		// resolves and clears (see CanonicalFinalEvent below): the modal is the
+		// CURRENT decision surface, this line is the permanent record of it.
 		line := "confirmation needed: " + e.Action
 		if summary := strings.TrimSpace(e.Summary); summary != "" {
 			line += " — " + summary
@@ -141,10 +140,22 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		m.messages = append(m.messages, Message{Role: RoleStatus, Content: "[!] " + line})
 
 		cm := components.NewConfirmationModel(e.RunID, e.Action, e.Summary, e.ConfirmURL)
+		if m.canRespondToPermission() {
+			cm = cm.WithLiveChannel(e.ConfirmID)
+		}
 		cm.SetWidth(m.cardWidth())
 		m.confirmation = &cm
 		m.updateViewport()
-		return m, tea.Batch(waitForEvent(m.events), components.StartConfirmationTimeout(e.RunID)), true
+
+		cmds := []tea.Cmd{waitForEvent(m.events)}
+		// The auto-deny is armed only where the answer has nowhere to go. On a
+		// live channel the agent is genuinely parked waiting, so expiring would
+		// deny work the user is in the middle of approving — which is the
+		// defect this modal used to produce. See components.ConfirmationTimeout.
+		if cm.ExpiresUnanswered() {
+			cmds = append(cmds, components.StartConfirmationTimeout(e.RunID))
+		}
+		return m, tea.Batch(cmds...), true
 
 	case event.CanonicalFinalEvent:
 		usage := event.CanonicalUsageOf(e)
@@ -307,10 +318,22 @@ func (m *ChatModel) resolveConfirmationOnTurnEnd() {
 	m.confirmation = nil
 }
 
+// canRespondToPermission reports whether this transport can carry a decision
+// back to an agent that is still parked on the prompt.
+func (m ChatModel) canRespondToPermission() bool {
+	_, ok := m.client.(client.ToolPermissionResponder)
+	return ok
+}
+
 // resolveConfirmationDecision records a confirmation's outcome — from a
-// keypress or the 30s timeout — in the activity log and the permanent
-// transcript, then attempts live delivery when (and only when) the triggering
-// event carried a confirm_url.
+// keypress or the auto-deny — in the activity log and the permanent
+// transcript, then delivers it on whichever seam the transport offers.
+//
+// Two seams exist and they are not interchangeable. The LIVE one
+// (ToolPermissionResponder) reaches an agent thread still blocked on the
+// prompt; the resume-model one (confirm_url) reaches a run that already
+// stopped. Neither present means the modal only ever recorded intent, and the
+// outcome line has to say so rather than imply the tool ran.
 func (m ChatModel) resolveConfirmationDecision(msg components.ConfirmationDecidedMsg) (tea.Model, tea.Cmd) {
 	outcome, success := confirmationOutcomeText(msg)
 	m.activity = append(m.activity, ActivityItem{
@@ -326,18 +349,44 @@ func (m ChatModel) resolveConfirmationDecision(msg components.ConfirmationDecide
 	m.confirmation = nil
 	m.updateViewport()
 
+	if msg.Deliverable {
+		return m, m.respondToolPermission(msg)
+	}
 	if msg.ConfirmURL == "" {
-		// The stateless model (what every shipped sidecar speaks today): there is
-		// no channel to deliver a decision to, so there is nothing further to do
-		// — recording the outcome above is the whole job.
+		// No channel to deliver a decision to, so there is nothing further to
+		// do — recording the outcome above is the whole job.
 		return m, nil
 	}
 	return m, m.confirmAction(msg.RunID, msg.Action, msg.Approved)
 }
 
+// respondToolPermission hands the decision to the live control channel. The
+// agent is blocked waiting for exactly this, so a failure here strands the run
+// — it is surfaced, never swallowed.
+func (m ChatModel) respondToolPermission(msg components.ConfirmationDecidedMsg) tea.Cmd {
+	responder, ok := m.client.(client.ToolPermissionResponder)
+	if !ok {
+		return func() tea.Msg {
+			return confirmActionResultMsg{Action: msg.Action, Approved: msg.Approved, err: fmt.Errorf(
+				"this agent connection cannot deliver a permission decision")}
+		}
+	}
+	decision := client.PermissionDeny
+	switch {
+	case msg.Always:
+		decision = client.PermissionAlways
+	case msg.Approved:
+		decision = client.PermissionAllow
+	}
+	return func() tea.Msg {
+		err := responder.RespondToolPermission(msg.ConfirmID, decision)
+		return confirmActionResultMsg{Action: msg.Action, Approved: msg.Approved, err: err}
+	}
+}
+
 // confirmationOutcomeText is the one-line outcome recorded for a resolved
 // confirmation. Never claims delivery that cannot happen: an approval with no
-// confirm_url is recorded as exactly that, not as "approved" — see
+// channel is recorded as exactly that, not as "approved" — see
 // ConfirmationModel's doc comment for why (ui/oneshot.go's writeWithheld
 // already draws this line for the one-shot surface; this is the same rule
 // applied here).
@@ -345,11 +394,15 @@ func confirmationOutcomeText(msg components.ConfirmationDecidedMsg) (text string
 	switch {
 	case msg.TimedOut:
 		return "denied (30s timeout — no response)", false
-	case msg.Approved && msg.ConfirmURL != "":
-		return "approved — delivering", true
+	case msg.Always:
+		return "approved — and '" + msg.Action + "' will not ask again this session", true
+	case msg.Approved && (msg.Deliverable || msg.ConfirmURL != ""):
+		return "approved — running it", true
 	case msg.Approved:
 		return "approved, but this transport has no live approval channel yet " +
 			"(no confirm_url on the event) — nothing was actually sent", false
+	case msg.Deliverable:
+		return "denied — the agent was told no", false
 	default:
 		return "denied — nothing sent", false
 	}

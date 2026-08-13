@@ -24,7 +24,16 @@ type ForAgentOptions struct {
 	// leaves it false so an agent that needs an answer says so and stops,
 	// instead of parking until the question times out.
 	Interactive bool
+	// BypassPermissions starts the agent with confirmation prompts OFF: every
+	// gated tool runs without asking. Off unless the launch explicitly asked
+	// for it, and the UI must say so on every frame while it is on.
+	BypassPermissions bool
 }
+
+// BypassPermissionsFlag is the argument that starts a subprocess agent with
+// prompts off. Must match the flag gaia_agent.stdio's parser declares, and
+// SubprocessClient.BypassAtLaunch scans argv for exactly this string.
+const BypassPermissionsFlag = "--bypass-permissions"
 
 // ForAgent builds the transport a catalog entry declares.
 //
@@ -60,6 +69,9 @@ func ForAgent(agent catalog.Agent, opts ForAgentOptions) (AgentClient, error) {
 		args := agent.BinaryArgs
 		if opts.Dev && len(agent.DevArgs) > 0 {
 			args = append(append([]string{}, args...), agent.DevArgs...)
+		}
+		if opts.BypassPermissions {
+			args = append(append([]string{}, args...), BypassPermissionsFlag)
 		}
 		if agent.CanonicalEvents {
 			return NewCanonicalSubprocessClient(bin, args, opts.Dev), nil

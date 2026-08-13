@@ -35,7 +35,11 @@ type RootModel struct {
 	helpCtx    components.HelpContext
 	width      int
 	height     int
-	dev      bool
+	dev        bool
+	// bypassPermissions starts agents launched from this session with
+	// confirmation prompts off (--bypass-permissions). Off unless the launch
+	// asked for it.
+	bypassPermissions bool
 
 	// preflight is the gate currently on screen, nil when there is none.
 	preflight *preflight.Model
@@ -74,11 +78,23 @@ func (m RootModel) WithPreflight(t preflight.Transport, opts preflight.Options) 
 	return m
 }
 
+// WithBypassPermissions starts agents launched from this session with
+// confirmation prompts off.
+//
+// A builder rather than a constructor parameter, for the same reason
+// WithPreflight is one: the flag is opt-in and rare, and threading it through
+// every caller — including a dozen tests that do not care — would make the
+// default path noisier than the feature.
+func (m RootModel) WithBypassPermissions(enabled bool) RootModel {
+	m.bypassPermissions = enabled
+	return m
+}
+
 func NewRootModel(cat *catalog.Catalog, dev bool) RootModel {
 	m := RootModel{
 		activeView: viewHub,
 		catalog:    cat,
-		dev:      dev,
+		dev:        dev,
 		suppressed: map[string]bool{},
 		listeners:  []Listener{haltOnDisposition},
 	}
@@ -95,7 +111,7 @@ func NewRootModelWithHub(cat *catalog.Catalog, hc *catalog.HubClient, dev bool) 
 	m := RootModel{
 		activeView: viewHub,
 		catalog:    cat,
-		dev:      dev,
+		dev:        dev,
 		suppressed: map[string]bool{},
 		listeners:  []Listener{haltOnDisposition},
 	}
@@ -250,6 +266,7 @@ func (m RootModel) launchAgent(agent catalog.Agent) (tea.Model, tea.Cmd) {
 	// question and answers it.
 	c, err := client.ForAgent(agent, client.ForAgentOptions{
 		Dev: m.dev, Logf: m.logf, Interactive: true,
+		BypassPermissions: m.bypassPermissions,
 	})
 	if err != nil {
 		// Stay in the hub and say why, rather than opening a chat that cannot talk.

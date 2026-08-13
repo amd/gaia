@@ -39,14 +39,15 @@ func prepareTerminal() {
 // RunHub launches the Agent Hub TUI — the main entry point for browsing and launching agents.
 // If mockAgent is non-empty, all agent binary paths are overridden with it for testing.
 // A non-nil ctrl starts the loopback control API against this very program.
-func RunHub(dev bool, mockAgent string, ctrl *control.Options) error {
+// bypassPermissions starts launched agents with confirmation prompts off.
+func RunHub(dev bool, mockAgent string, ctrl *control.Options, bypassPermissions bool) error {
 	cat := catalog.NewCatalog()
 	if mockAgent != "" {
 		cat.SetMockBinary(mockAgent)
 	} else {
 		cat.DiscoverBinaries()
 	}
-	return run(root.NewRootModel(cat, dev), dev, ctrl)
+	return run(root.NewRootModel(cat, dev).WithBypassPermissions(bypassPermissions), dev, ctrl)
 }
 
 // RunChat launches the chat TUI directly with a subprocess agent (standalone mode).

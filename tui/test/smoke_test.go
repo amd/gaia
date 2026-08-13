@@ -167,7 +167,10 @@ func TestChatModelWelcome(t *testing.T) {
 	if !contains(view, "test-agent") {
 		t.Error("chat view missing agent name")
 	}
-	if !contains(view, "Ctrl+C to quit") {
+	// The way out has to be on screen somewhere; it no longer has to be in the
+	// composer placeholder. That line now teaches Alt+Enter — the affordance
+	// nobody guesses — while the status bar carries quit on every frame.
+	if !contains(view, "Ctrl+C") {
 		t.Error("chat view missing quit hint")
 	}
 }
