@@ -23,6 +23,13 @@ The event vocabulary is the canonical one (``status`` / ``tool_call`` /
 ``tool_result`` / ``token`` / ``final`` / ``error``), identical to what the HTTP
 surface emits, so the renderer does not care which transport it is reading.
 Exactly one terminal event (``final`` or ``error``) ends every turn.
+
+stdin carries two kinds of line. A plain line is a query. A JSON object with a
+``gaia_control`` key is a **control message** — the back-channel a permission
+prompt needs: without one the agent can ask "may I run this?" and the answer has
+nowhere to travel, so every gated tool eventually auto-denies. Control messages
+are read by a dedicated thread so they still land *while* a turn is in flight,
+which is the only moment a confirmation decision is worth anything.
 """
 
 from __future__ import annotations
@@ -41,6 +48,152 @@ from gaia.ui.sse_translation import TERMINAL_TYPES, CanonicalTranslator
 logger = get_logger(__name__)
 
 AGENT_ID = "gaia"
+
+#: Key that marks a stdin line as a control message rather than a query.
+#:
+#: stdin carries free-text questions, so the discriminator has to be one a
+#: question cannot accidentally be. A line only counts as control if it parses
+#: as a JSON object AND carries this key — someone asking the agent to explain a
+#: JSON snippet still gets an answer, not a silently swallowed line.
+CONTROL_KEY = "gaia_control"
+
+#: Control verbs. ``tool_decision`` answers the confirmation currently on
+#: screen; ``bypass`` turns unattended approval on or off for the session.
+CONTROL_TOOL_DECISION = "tool_decision"
+CONTROL_BYPASS = "bypass"
+
+DECISION_ALLOW = "allow"
+DECISION_DENY = "deny"
+DECISION_ALWAYS = "always"
+
+
+class PermissionState:
+    """Permission state that outlives any single turn.
+
+    Two things have to survive a turn boundary, because a fresh
+    ``SSEOutputHandler`` is built for each one: whether bypass is on, and which
+    tools the user has granted "always". Losing either would re-prompt for a
+    tool the user already blanket-approved, which is the same defect as never
+    having offered "always" at all.
+
+    The lock matters: the stdin pump answers confirmations from its own thread
+    while the turn thread is swapping ``handler`` around it.
+    """
+
+    def __init__(self, bypass: bool = False) -> None:
+        self._lock = threading.Lock()
+        self._bypass = bypass
+        self._approved: set = set()
+        self._handler: Any = None
+
+    @property
+    def bypass(self) -> bool:
+        with self._lock:
+            return self._bypass
+
+    def set_bypass(self, enabled: bool) -> None:
+        """Turn bypass on or off, taking effect on the very next gated tool.
+
+        Applied to the live handler too, so a toggle mid-turn is not queued
+        behind the turn it was meant to change.
+        """
+        with self._lock:
+            self._bypass = enabled
+            if self._handler is not None:
+                self._handler.auto_approve_gated_tools = enabled
+        logger.warning("Bypass permissions %s", "ENABLED" if enabled else "disabled")
+
+    def attach(self, handler: Any) -> None:
+        """Hand a turn's handler the session's accumulated permission state."""
+        with self._lock:
+            handler.auto_approve_gated_tools = self._bypass
+            handler.session_approved_tools().update(self._approved)
+            # A human is on the other end of this pipe with a modal on screen,
+            # so the wait is theirs to end — see confirm_tool_execution.
+            handler.confirm_timeout_seconds = None
+            self._handler = handler
+
+    def detach(self, handler: Any) -> None:
+        """Take the turn's grants back into the session and drop the handler."""
+        with self._lock:
+            self._approved.update(handler.session_approved_tools())
+            if self._handler is handler:
+                self._handler = None
+
+    def resolve(self, decision: str, confirm_id: Optional[str]) -> None:
+        """Answer the confirmation the agent thread is parked on."""
+        with self._lock:
+            handler = self._handler
+        if handler is None:
+            logger.warning("Dropped a '%s' tool decision: no turn is running", decision)
+            return
+        handler.resolve_tool_confirmation(
+            approved=decision in (DECISION_ALLOW, DECISION_ALWAYS),
+            always=decision == DECISION_ALWAYS,
+            confirm_id=confirm_id,
+        )
+
+
+def parse_control(line: str) -> Optional[Dict[str, Any]]:
+    """Return the control message on this stdin line, or None if it is a query."""
+    if not line.startswith("{"):
+        return None
+    try:
+        parsed = json.loads(line)
+    except ValueError:
+        return None
+    if not isinstance(parsed, dict) or CONTROL_KEY not in parsed:
+        return None
+    return parsed
+
+
+def apply_control(message: Dict[str, Any], state: PermissionState) -> None:
+    """Act on one control message.
+
+    Nothing is written to stdout from here. The wire is turn-scoped — the reader
+    only listens between a query and its terminal event — so an acknowledgement
+    emitted outside a turn would be read as the first event of the NEXT turn and
+    desynchronise the stream. The sender already knows what it sent.
+    """
+    verb = message.get(CONTROL_KEY)
+    if verb == CONTROL_BYPASS:
+        state.set_bypass(bool(message.get("enabled")))
+    elif verb == CONTROL_TOOL_DECISION:
+        decision = str(message.get("decision") or DECISION_DENY)
+        if decision not in (DECISION_ALLOW, DECISION_DENY, DECISION_ALWAYS):
+            # Fail closed: an unreadable decision is not consent.
+            logger.warning("Unknown tool decision %r — denying", decision)
+            decision = DECISION_DENY
+        confirm_id = message.get("confirm_id")
+        state.resolve(decision, str(confirm_id) if confirm_id else None)
+    else:
+        logger.warning("Ignored unknown control verb %r", verb)
+
+
+def _pump_stdin(queries: "queue.Queue", state: PermissionState) -> None:
+    """Read stdin forever, routing control lines away from the query queue.
+
+    A dedicated thread is the whole point. The turn loop used to read stdin
+    itself, so while a turn ran nothing was reading — which is exactly when a
+    confirmation decision needs to arrive. Control messages are handled here,
+    inline, while the agent thread is still parked on the prompt.
+    """
+    for raw in sys.stdin:
+        line = raw.strip()
+        if not line:
+            continue
+        control = parse_control(line)
+        if control is None:
+            queries.put(line)
+            continue
+        try:
+            apply_control(control, state)
+        except Exception:  # pylint: disable=broad-exception-caught
+            # A malformed control line must never take the pump down: losing
+            # this thread means every later confirmation hangs with nothing
+            # able to answer it.
+            logger.exception("control message failed: %s", line)
+    queries.put(None)  # stdin closed
 
 
 def _write(event: Dict[str, Any], out) -> None:
@@ -139,7 +292,13 @@ def _terminal_error(exc: BaseException) -> Dict[str, Any]:
     return {"type": "error", "detail": text}
 
 
-def run_turn(agent: Any, query: str, out, dev: bool = False) -> None:
+def run_turn(
+    agent: Any,
+    query: str,
+    out,
+    dev: bool = False,
+    state: Optional[PermissionState] = None,
+) -> None:
     """Run one query to completion, streaming canonical events to *out*.
 
     Guarantees exactly one terminal event, whatever the agent does — a turn that
@@ -150,11 +309,18 @@ def run_turn(agent: Any, query: str, out, dev: bool = False) -> None:
     harness-internal lines: the step counter and the model banner. Without it
     they are dropped before they reach the wire, so a front-end that asks for
     developer output gets an empty developer view.
+
+    *state* carries bypass and "always allow" across turns, and is what the
+    stdin pump answers confirmations through. Omitted, the turn gets a fresh
+    permission slate and no way to answer — the safe default, not a convenient
+    one: no grant is ever inherited by accident.
     """
     from gaia.ui.sse_handler import SSEOutputHandler
 
     handler = SSEOutputHandler()
     agent.console = handler
+    if state is not None:
+        state.attach(handler)
     translator = CanonicalTranslator(run_id=None, agent_id=AGENT_ID, debug=dev)
     result: Dict[str, Any] = {}
 
@@ -170,47 +336,54 @@ def run_turn(agent: Any, query: str, out, dev: bool = False) -> None:
     worker = threading.Thread(target=_run, daemon=True)
     worker.start()
 
-    terminated = False
-    while True:
-        try:
-            event = handler.event_queue.get(timeout=0.05)
-        except queue.Empty:
-            if not worker.is_alive() and handler.event_queue.empty():
+    try:
+        terminated = False
+        while True:
+            try:
+                event = handler.event_queue.get(timeout=0.05)
+            except queue.Empty:
+                if not worker.is_alive() and handler.event_queue.empty():
+                    break
+                continue
+            if event is None:  # signal_done sentinel
                 break
-            continue
-        if event is None:  # signal_done sentinel
-            break
-        for canonical in translator.translate(event):
+            for canonical in translator.translate(event):
+                _write(canonical, out)
+                if canonical.get("type") in TERMINAL_TYPES:
+                    terminated = True
+
+        for canonical in translator.flush():
             _write(canonical, out)
             if canonical.get("type") in TERMINAL_TYPES:
                 terminated = True
 
-    for canonical in translator.flush():
-        _write(canonical, out)
-        if canonical.get("type") in TERMINAL_TYPES:
-            terminated = True
+        worker.join(timeout=5.0)
 
-    worker.join(timeout=5.0)
-
-    if terminated:
-        return
-    if "error" in result:
-        _write(_terminal_error(result["error"]), out)
-        return
-    # The loop can finish without emitting an answer (the base agent handles some
-    # failures internally and returns a message instead of raising). Surfacing
-    # that message beats inventing a generic error.
-    value = result.get("value")
-    answer = ""
-    if isinstance(value, dict):
-        for key in ("answer", "response", "result", "output"):
-            candidate = value.get(key)
-            if isinstance(candidate, str) and candidate.strip():
-                answer = candidate
-                break
-    elif isinstance(value, str):
-        answer = value
-    _write({"type": "final", "answer": answer}, out)
+        if terminated:
+            return
+        if "error" in result:
+            _write(_terminal_error(result["error"]), out)
+            return
+        # The loop can finish without emitting an answer (the base agent handles
+        # some failures internally and returns a message instead of raising).
+        # Surfacing that message beats inventing a generic error.
+        value = result.get("value")
+        answer = ""
+        if isinstance(value, dict):
+            for key in ("answer", "response", "result", "output"):
+                candidate = value.get(key)
+                if isinstance(candidate, str) and candidate.strip():
+                    answer = candidate
+                    break
+        elif isinstance(value, str):
+            answer = value
+        _write({"type": "final", "answer": answer}, out)
+    finally:
+        # Every exit path, including the early returns above: leaving a dead
+        # turn's handler attached would send the next decision to a thread that
+        # is no longer listening, and the prompt after it would hang.
+        if state is not None:
+            state.detach(handler)
 
 
 def main(argv: Optional[list] = None) -> int:
@@ -234,10 +407,19 @@ def main(argv: Optional[list] = None) -> int:
         help="Developer mode: DEBUG-level logging to the log file instead of "
         "errors only.",
     )
+    parser.add_argument(
+        "--bypass-permissions",
+        action="store_true",
+        help="Start with confirmation prompts OFF: every gated tool runs "
+        "without asking. Off unless passed, and the host can toggle it at any "
+        "time over the control channel.",
+    )
     args = parser.parse_args(argv)
 
     out = sys.stdout
     _configure_logging(out, dev=args.dev)
+
+    state = PermissionState(bypass=args.bypass_permissions)
 
     # Built ONCE, before the first query, and kept for the life of the process.
     # A failure here is fatal and must say so on the turn the user actually
@@ -258,12 +440,20 @@ def main(argv: Optional[list] = None) -> int:
         _write(_terminal_error(exc), out)
         return 1
 
-    for line in sys.stdin:
-        query = line.strip()
-        if not query:
-            continue
+    # stdin is read by its own thread so it keeps being read DURING a turn —
+    # which is the only time a confirmation decision can arrive. The turn loop
+    # takes queries off the queue the pump fills.
+    queries: "queue.Queue" = queue.Queue()
+    threading.Thread(
+        target=_pump_stdin, args=(queries, state), daemon=True, name="stdin-pump"
+    ).start()
+
+    while True:
+        query = queries.get()
+        if query is None:  # stdin closed
+            break
         try:
-            run_turn(agent, query, out, dev=args.dev)
+            run_turn(agent, query, out, dev=args.dev, state=state)
         except Exception as exc:  # never let one bad turn kill the process
             logger.exception("stdio turn crashed outside the run loop")
             _write(_terminal_error(exc), out)

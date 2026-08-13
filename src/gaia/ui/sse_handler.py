@@ -30,6 +30,10 @@ logger = logging.getLogger(__name__)
 #: Seconds the agent thread waits for a tool-confirm response from the frontend.
 TOOL_CONFIRM_TIMEOUT_SECONDS = 60
 
+#: Sentinel for "the caller did not pass a timeout". Distinct from ``None``,
+#: which is a caller explicitly asking to wait for the human indefinitely.
+_USE_HANDLER_TIMEOUT = object()
+
 # ``DEBUG_CHANNEL`` marks an event as harness bookkeeping rather than a
 # description of the user's work (#2804). The emitter is the only layer that
 # knows which it is, so it tags at the source; downstream
@@ -183,6 +187,19 @@ class SSEOutputHandler(OutputHandler):
 
     blocking_confirmation = True
 
+    #: How long to wait for a decision. A host that can actually deliver one
+    #: sets this to ``None`` (wait for the human); left bounded, an unattended
+    #: host still fails closed instead of parking the run forever.
+    #:
+    #: Class-level so a handler built with ``__new__`` — which callers that only
+    #: need the confirmation gate do, to skip the queue setup — still has a
+    #: usable value.
+    confirm_timeout_seconds: Optional[float] = TOOL_CONFIRM_TIMEOUT_SECONDS
+
+    #: The tool the live prompt is for, so an "always" answer grants the right
+    #: one without the responder having to name it.
+    _confirm_tool: Optional[str] = None
+
     def __init__(self, background_mode: bool = False):
         self.event_queue: queue.Queue = queue.Queue()
         self.cancelled = threading.Event()
@@ -198,6 +215,7 @@ class SSEOutputHandler(OutputHandler):
         self._confirm_event: Optional[threading.Event] = None
         self._confirm_result: bool = False
         self._confirm_id: Optional[str] = None
+        self._confirm_tool = None
         self._tool_start_time: Optional[float] = None
         # Autonomous loop support
         # background_mode=True: skip blocking user confirmation; immediately deny.
@@ -880,15 +898,51 @@ class SSEOutputHandler(OutputHandler):
         self,
         tool_name: str,
         tool_args: Dict[str, Any],
-        timeout: float = TOOL_CONFIRM_TIMEOUT_SECONDS,
+        timeout: Optional[float] = _USE_HANDLER_TIMEOUT,
     ) -> bool:
         """Block the agent thread until the user approves or denies a tool call.
 
-        Emits a ``permission_request`` SSE event so the frontend can show a modal.
-        Waits up to ``timeout`` seconds for ``resolve_tool_confirmation()``
-        to be called by the HTTP endpoint.  Returns ``True`` if the user allows,
-        ``False`` otherwise.
+        Emits a ``permission_request`` SSE event so the frontend can show a modal
+        and waits for ``resolve_tool_confirmation()``. Returns ``True`` if the
+        user allows, ``False`` otherwise.
+
+        *timeout* defaults to ``self.confirm_timeout_seconds``. ``None`` waits
+        indefinitely, which is what a host with a live decision channel and a
+        modal on screen wants: a person reading a prompt routinely takes longer
+        than a minute, and expiring under them denies work they were in the
+        middle of approving. Waiting is safe because it is interruptible —
+        ``cancelled`` still breaks the loop, so Ctrl+C ends the run either way.
         """
+        if timeout is _USE_HANDLER_TIMEOUT:
+            timeout = self.confirm_timeout_seconds
+
+        # Bypass and prior "always" grants are checked before anything is
+        # emitted: neither has a question to ask, so putting a modal up would be
+        # theatre. Checked per call, so toggling bypass mid-run takes effect on
+        # the very next gated tool.
+        if self.auto_approve_confirmations_enabled():
+            self.log_auto_approval(tool_name)
+            self._emit(
+                {
+                    "type": "status",
+                    "status": "warning",
+                    "message": (
+                        f"Bypass permissions is ON — ran '{tool_name}' without "
+                        "asking."
+                    ),
+                }
+            )
+            return True
+
+        if self.tool_approved_for_session(tool_name):
+            self._last_denial = None
+            logger.info(
+                "Confirmation-gated tool '%s' pre-approved for this session by "
+                "the user",
+                tool_name,
+            )
+            return True
+
         # Background mode: immediately deny — no semaphore hold, no waiting.
         if self.background_mode:
             unattended_message = (
@@ -914,25 +968,29 @@ class SSEOutputHandler(OutputHandler):
         with self._confirm_lock:
             self._confirm_event = threading.Event()
             self._confirm_result = False
-        self._confirm_id = confirm_id
+            self._confirm_id = confirm_id
+            self._confirm_tool = tool_name
         self._last_denial = None
 
-        self._emit(
-            {
-                "type": "permission_request",
-                "tool": tool_name,
-                "args": tool_args,
-                "confirm_id": confirm_id,
-                "timeout_seconds": timeout,
-            }
-        )
+        request: Dict[str, Any] = {
+            "type": "permission_request",
+            "tool": tool_name,
+            "args": tool_args,
+            "confirm_id": confirm_id,
+        }
+        # Advertised only when it is real. A front-end told "60 s" that then
+        # never expires runs a countdown to nothing; one told nothing correctly
+        # renders a prompt that waits.
+        if timeout is not None:
+            request["timeout_seconds"] = timeout
+        self._emit(request)
 
         # Poll in short intervals so cancellation is detected promptly.
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
+        deadline = None if timeout is None else time.monotonic() + timeout
+        answered = False
+        while deadline is None or time.monotonic() < deadline:
             if self.cancelled.is_set():
-                self._confirm_id = None
-                self._confirm_event = None
+                self._clear_pending_confirmation()
                 self._last_denial = (
                     tool_name,
                     f"Confirmation for '{tool_name}' was abandoned: the run was "
@@ -940,36 +998,42 @@ class SSEOutputHandler(OutputHandler):
                 )
                 return False
             if self._confirm_event.wait(timeout=0.5):
+                answered = True
                 break
-        else:
-            # Timeout reached
+
+        if not answered:
             self._emit(
                 {
                     "type": "status",
                     "status": "warning",
-                    "message": f"Confirmation for '{tool_name}' timed out ({TOOL_CONFIRM_TIMEOUT_SECONDS} s). Execution denied.",
+                    "message": f"Confirmation for '{tool_name}' timed out ({timeout:g} s). Execution denied.",
                 }
             )
             logger.warning("Tool confirmation timed out for '%s'", tool_name)
-            self._confirm_id = None
-            self._confirm_event = None
+            self._clear_pending_confirmation()
             self._last_denial = (
                 tool_name,
                 f"Confirmation for '{tool_name}' timed out after "
-                f"{TOOL_CONFIRM_TIMEOUT_SECONDS} s with no user response. "
+                f"{timeout:g} s with no user response. "
                 "Execution denied.",
             )
             return False
 
         result = self._confirm_result
-        self._confirm_id = None
-        self._confirm_event = None
+        self._clear_pending_confirmation()
         if not result:
             self._last_denial = (
                 tool_name,
                 f"Tool '{tool_name}' was denied by the user.",
             )
         return result
+
+    def _clear_pending_confirmation(self) -> None:
+        """Drop the live prompt's slot so a later answer cannot resolve it."""
+        with self._confirm_lock:
+            self._confirm_id = None
+            self._confirm_event = None
+            self._confirm_tool = None
 
     def print_policy_alert(
         self,
@@ -993,18 +1057,44 @@ class SSEOutputHandler(OutputHandler):
             event["receipt_id"] = receipt_id
         self._emit(event)
 
-    def resolve_tool_confirmation(self, approved: bool) -> bool:
+    def resolve_tool_confirmation(
+        self,
+        approved: bool,
+        always: bool = False,
+        confirm_id: Optional[str] = None,
+    ) -> bool:
         """Unblock the agent thread waiting in ``confirm_tool_execution()``.
 
-        Called by the ``POST /api/chat/confirm-tool`` HTTP endpoint.  Returns
-        ``False`` if there is no pending confirmation request.
+        Called by the ``POST /api/chat/confirm-tool`` HTTP endpoint and by the
+        TUI's stdio control channel. Returns ``False`` if there is no pending
+        confirmation request.
+
+        *always* grants the pending tool for the rest of the session, so this
+        prompt and every later one for the same tool are approved — the grant
+        the terminal prompt's ``[a]lways for this tool`` already makes.
+
+        *confirm_id*, when given, must match the live prompt. A decision typed
+        against a prompt that has since expired or been replaced is dropped
+        rather than applied to whatever is on screen now — the difference
+        between approving what you read and approving what arrived while you
+        were reading.
         """
         with self._confirm_lock:
+            if confirm_id is not None and confirm_id != self._confirm_id:
+                logger.warning(
+                    "Dropped a tool decision for confirm_id %s: the live prompt "
+                    "is %s",
+                    confirm_id,
+                    self._confirm_id,
+                )
+                return False
+            if always and self._confirm_tool:
+                self.approve_tool_for_session(self._confirm_tool)
             if self._confirm_event is None:
                 # No pending confirmation — initialise state anyway so callers can
                 # inspect _confirm_result and _confirm_event after the call.
                 self._confirm_event = threading.Event()
-            self._confirm_result = approved
+            self._confirm_result = approved or always
             self._confirm_event.set()
         return True
 

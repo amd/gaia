@@ -402,6 +402,49 @@ class OutputHandler(ABC):
         """True when this handler may approve gated tools without asking."""
         return bool(self.auto_approve_gated_tools) or auto_approve_env_enabled()
 
+    # -- "always allow" grants ---------------------------------------------
+    #
+    # Scoped to the TOOL NAME, for the life of this console. Not to the
+    # arguments: approving `run_shell_command` once with "always" approves every
+    # later `run_shell_command`, whatever it runs. Every surface that offers the
+    # choice must say so in those terms — a narrower promise than the grant is a
+    # lie the user acts on. ``reset_tool_approvals`` ends it early.
+
+    def session_approved_tools(self) -> Set[str]:
+        """Tool names the user granted "always allow" on this console."""
+        return self._lazy_tool_set("_session_approved_tools")
+
+    def tool_approved_for_session(self, tool_name: str) -> bool:
+        """True when the user already said "always" for this tool."""
+        return tool_name in self.session_approved_tools()
+
+    def approve_tool_for_session(self, tool_name: str) -> None:
+        """Record an "always allow" grant for this tool."""
+        self.session_approved_tools().add(tool_name)
+        self._last_denial = None
+        logger.info("User approved '%s' for the remainder of this session", tool_name)
+
+    def reset_tool_approvals(self) -> None:
+        """Forget every "always allow" answer.
+
+        Call when the conversation the approvals were given in ends (new session,
+        new user) so consent does not outlive its context.
+        """
+        self.session_approved_tools().clear()
+
+    def _lazy_tool_set(self, attribute: str) -> Set[str]:
+        """Per-instance set of tool names, created on first use.
+
+        Never a shared class-level set, which would leak one user's approval
+        into every other console in the process — so a subclass that skips
+        ``super().__init__()`` still behaves.
+        """
+        names = getattr(self, attribute, None)
+        if names is None:
+            names = set()
+            setattr(self, attribute, names)
+        return names
+
     def log_auto_approval(self, tool_name: str) -> None:
         """Record that a gated tool ran without a human decision."""
         self._last_denial = None
@@ -666,11 +709,7 @@ class TerminalConfirmationMixin:
             )
 
         if allow_always and answer in ("a", "always"):
-            self._always_allowed().add(tool_name)
-            logger.info(
-                "User approved '%s' for the remainder of this session", tool_name
-            )
-            self._last_denial = None
+            self.approve_tool_for_session(tool_name)
             return True
         if answer in ("y", "yes"):
             logger.info("User approved confirmation-gated tool '%s'", tool_name)
@@ -699,34 +738,22 @@ class TerminalConfirmationMixin:
             return False
 
     def reset_tool_approvals(self) -> None:
-        """Forget every "always allow" answer.
-
-        Call when the conversation the approvals were given in ends (new session,
-        new user) so consent does not outlive its context.
-        """
-        self._always_allowed().clear()
+        """Forget every "always allow" answer, and re-arm the denial notices."""
+        super().reset_tool_approvals()
         self._notified_denials().clear()
 
     def _always_allowed(self) -> Set[str]:
-        """The per-console "always allow" set, created on first use.
+        """The per-console "always allow" set.
 
-        Lazily instantiated per instance — never a shared class-level set, which
-        would leak one user's approval into every other console in the process —
-        so a subclass that skips ``super().__init__()`` still behaves.
+        The terminal prompt and the Agent UI / TUI modal answer the same
+        question, so they grant against the same set — see
+        ``OutputHandler.session_approved_tools``.
         """
-        return self._lazy_tool_set("_session_approved_tools")
+        return self.session_approved_tools()
 
     def _notified_denials(self) -> Set[str]:
         """Tools whose unattended-denial notice has already been shown."""
         return self._lazy_tool_set("_denial_notices_shown")
-
-    def _lazy_tool_set(self, attribute: str) -> Set[str]:
-        """Per-instance set of tool names, created on first use."""
-        names = getattr(self, attribute, None)
-        if names is None:
-            names = set()
-            setattr(self, attribute, names)
-        return names
 
     def _show_denial_notice(self, reason: str) -> None:
         """Tell the user why a gated tool was refused. Quiet consoles stay quiet
