@@ -593,7 +593,7 @@ Do NOT wrap conversational replies in JSON.
         self,
         use_claude: bool = False,
         use_chatgpt: bool = False,
-        claude_model: str = "claude-sonnet-4-20250514",
+        claude_model: str = "claude-sonnet-5",
         base_url: Optional[str] = None,
         model_id: str = None,
         max_steps: Optional[int] = None,
@@ -618,7 +618,7 @@ Do NOT wrap conversational replies in JSON.
         Args:
             use_claude: If True, uses Claude API (default: False)
             use_chatgpt: If True, uses ChatGPT/OpenAI API (default: False)
-            claude_model: Claude model to use when use_claude=True (default: "claude-sonnet-4-20250514")
+            claude_model: Claude model to use when use_claude=True (default: "claude-sonnet-5")
             base_url: Base URL for local LLM server (default: reads from LEMONADE_BASE_URL env var, falls back to http://localhost:13305/api/v1)
             model_id: The ID of the model to use with LLM server (default for local)
             max_steps: Maximum number of steps the agent can take before terminating.
@@ -739,6 +739,9 @@ Do NOT wrap conversational replies in JSON.
         # for tool-calling models — exactly what the suppression was meant
         # to prevent.
         self.model_id = model_id
+        # Claude always speaks native tool_calls, whatever model_id says — the
+        # two tool-capability gates below read this alongside model_id.
+        self._use_claude = use_claude
 
         # Initialised here (not lazy via getattr) so subclass tests that drive
         # the parsing helpers outside the standard query lifecycle don't see
@@ -894,7 +897,9 @@ Do NOT wrap conversational replies in JSON.
         if hasattr(self, "_response_format_template"):
             from gaia.llm.lemonade_client import is_tool_calling_model
 
-            if not is_tool_calling_model(getattr(self, "model_id", None)):
+            if not getattr(self, "_use_claude", False) and not is_tool_calling_model(
+                getattr(self, "model_id", None)
+            ):
                 parts.append(self._response_format_template)
 
         if tool_filter is not None and tools_block is not None:
@@ -1031,7 +1036,9 @@ Do NOT wrap conversational replies in JSON.
         """Return OpenAI function-calling schemas when the active model supports native tool_calls."""
         from gaia.llm.lemonade_client import is_tool_calling_model
 
-        if is_tool_calling_model(getattr(self, "model_id", None)):
+        if getattr(self, "_use_claude", False) or is_tool_calling_model(
+            getattr(self, "model_id", None)
+        ):
             return (
                 self._build_openai_tool_schemas(filter_to=self._active_tool_filter)
                 or None
