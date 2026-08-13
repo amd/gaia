@@ -2785,14 +2785,40 @@ Do NOT wrap conversational replies in JSON.
                 return str(reason)
         return f"Tool '{tool_name}' was denied by the user."
 
-    def _tool_requires_confirmation(self, tool_name: str) -> bool:
-        """Whether ``tool_name`` must be user-confirmed before it executes.
+    def _call_is_pre_authorized(
+        self, tool_name: str, tool_args: Optional[Dict[str, Any]]
+    ) -> bool:
+        """True when an explicit, scoped grant already covers this exact call.
+
+        A skill declaring ``shell:execute:gh`` *is* the user's consent for
+        read-only ``gh``: narrower than the tool, declared in the skill's front
+        matter, and auditable. Asking again per call would make any real use of
+        it — a triage is five to ten reads — a wall of modals attended, and a
+        guaranteed failure unattended.
+
+        Duck-typed on purpose. The host that owns a grant implements
+        ``skill_grant_covers_call``; an agent with no such mixin has no way to
+        answer yes, so its gate stays byte-identical.
+        """
+        if not tool_args:
+            return False
+        covers = getattr(self, "skill_grant_covers_call", None)
+        if not callable(covers):
+            return False
+        return bool(covers(tool_name, tool_args))  # pylint: disable=not-callable
+
+    def _tool_requires_confirmation(
+        self, tool_name: str, tool_args: Optional[Dict[str, Any]] = None
+    ) -> bool:
+        """Whether this call must be user-confirmed before it executes.
 
         Unions two independent sources so tools registered at runtime are
         covered as well as ones named at import time:
 
         * ``confirmation_required_tools()`` — the static name set, for native
-          tools whose names GAIA controls.
+          tools whose names GAIA controls. An individual call inside an active
+          skill grant is exempt (:meth:`_call_is_pre_authorized`); the tool is
+          not.
         * ``requires_confirmation`` on the registry entry — for dynamically
           registered tools (MCP) whose names are chosen by a third party and so
           can never be enumerated in a static set.
@@ -2800,9 +2826,14 @@ Do NOT wrap conversational replies in JSON.
         ``mcp_``-prefixed tools fail closed: an entry that carries no explicit
         flag is treated as requiring confirmation, so a registration path that
         forgets to classify its tools cannot silently leave the gate open.
+
+        Args:
+            tool_name: The tool about to run.
+            tool_args: Its arguments. Omitting them decides on the name alone —
+                what every caller did before grants existed, and still gets.
         """
         if tool_name in self.confirmation_required_tools():
-            return True
+            return not self._call_is_pre_authorized(tool_name, tool_args)
         entry = self._tools_registry.get(tool_name) or {}
         flag = entry.get("requires_confirmation")
         if flag is not None:
@@ -2898,7 +2929,7 @@ Do NOT wrap conversational replies in JSON.
         # Consoles that cannot reach a human deny rather than answer for them
         # (#2210): AgentConsole prompts on a TTY, SSEOutputHandler blocks on the
         # frontend modal, everything else denies with an actionable message.
-        if self._tool_requires_confirmation(tool_name):
+        if self._tool_requires_confirmation(tool_name, tool_args):
             if not self.console.confirm_tool_execution(tool_name, tool_args):
                 return {
                     "status": "denied",

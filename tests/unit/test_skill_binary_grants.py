@@ -505,3 +505,114 @@ def test_an_ungranted_command_in_a_pipeline_is_still_refused():
     result = _run(host, "gh issue list --repo amd/gaia | kubectl get pods")
     assert result["status"] == "error"
     assert "kubectl" in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# The confirmation gate — an explicit grant is the consent
+# ---------------------------------------------------------------------------
+
+
+class _Gated(ShellToolsMixin):
+    """A host wired to the real confirmation gate, with a recording console."""
+
+    from gaia.agents.base.agent import Agent as _Agent
+
+    CONFIRMATION_REQUIRED_TOOLS: tuple = ()
+    _tools_registry: dict = {}
+    confirmation_required_tools = _Agent.confirmation_required_tools
+    _call_is_pre_authorized = _Agent._call_is_pre_authorized
+    _tool_requires_confirmation = _Agent._tool_requires_confirmation
+
+    def __init__(self, *binaries: str):
+        super().__init__()
+        self._granted_binaries = BinaryGrants()
+        for binary in binaries:
+            self._granted_binaries.grant(binary, skill_name="github-triage")
+
+
+def _needs_modal(host, command: str) -> bool:
+    return host._tool_requires_confirmation("run_shell_command", {"command": command})
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "gh issue list --repo amd/gaia --limit 30 --json number,title",
+        "gh issue view 2932 --repo amd/gaia --json title,body,comments",
+        "gh pr diff 10 --repo amd/gaia",
+        "gh api repos/amd/gaia/issues",
+        "gh auth status",
+    ],
+)
+def test_a_granted_read_only_call_raises_no_confirmation_modal(command):
+    """The regression that would silently come back.
+
+    `run_shell_command` is confirmation-gated, and a modal per call means a
+    5-10 call triage is 5-10 modals — or, unattended, a 100% failure rate.
+    """
+    assert _needs_modal(_Gated("gh"), command) is False
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # Refused by the policy — must never be silently pre-authorized.
+        "gh issue create --title x --body y",
+        "gh auth token",
+        "gh api -XPOST repos/amd/gaia/issues",
+        # Not the granted binary.
+        "kubectl get pods",
+        "rm -rf /",
+        # A path spelling is not the granted binary either.
+        "./gh issue list",
+        # Consent was for `gh`, not for a pipeline.
+        "gh issue list --repo amd/gaia | head -5",
+        # Chaining is refused downstream; it must not skip the modal on the way.
+        "gh issue list && rm -rf /",
+        "gh issue list; whoami",
+    ],
+)
+def test_anything_outside_the_grant_still_asks(command):
+    assert _needs_modal(_Gated("gh"), command) is True
+
+
+def test_an_agent_with_no_grant_is_unchanged():
+    """The gate must behave byte-identically for every existing agent."""
+    host = _Gated()  # no binaries granted
+    assert _needs_modal(host, "gh issue list") is True
+    assert _needs_modal(host, "ls -la") is True
+    assert host._tool_requires_confirmation("run_shell_command") is True
+    assert host._tool_requires_confirmation("write_file") is True
+    assert host._tool_requires_confirmation("search_web") is False
+
+
+def test_the_exemption_is_dropped_when_the_skill_unloads():
+    host = _Gated("gh")
+    assert _needs_modal(host, "gh issue list --repo amd/gaia") is False
+    host._granted_binaries.revoke_skill("github-triage")
+    assert _needs_modal(host, "gh issue list --repo amd/gaia") is True
+
+
+def test_only_the_policy_enforcing_tool_can_be_exempt():
+    """A grant must not wave through a tool that never runs the policy gate."""
+    host = _Gated("gh")
+    for tool in ("run_cli_command", "write_file", "edit_file"):
+        assert host._tool_requires_confirmation(tool, {"command": "gh issue list"})
+
+
+def test_omitting_the_arguments_falls_back_to_the_tool_name():
+    """Every pre-grant caller passed a name only, and still gets the old answer."""
+    host = _Gated("gh")
+    assert host._tool_requires_confirmation("run_shell_command") is True
+
+
+def test_the_hook_is_duck_typed_not_an_override():
+    """`Agent` precedes `ShellToolsMixin` in ChatAgent's MRO.
+
+    A same-named method on the mixin would never be reached, so the hook must
+    carry a name `Agent` does not define.
+    """
+    from gaia.agents.base.agent import Agent
+
+    assert hasattr(ShellToolsMixin, "skill_grant_covers_call")
+    assert not hasattr(Agent, "skill_grant_covers_call")

@@ -183,7 +183,9 @@ duplicates, ranks by severity × reach, and drafts the reply without sending it.
 
   If `gh` is not on PATH the skill refuses to load and names the install command.
   Writes are refused by the runtime, not just by the instructions: `gh issue
-  create`, `gh api -X POST`, and `gh auth token` all come back as errors.
+  create`, `gh api -X POST`, and `gh auth token` all come back as errors. Reads
+  run without a per-call approval prompt — loading the skill is the consent — but
+  any command outside the grant still asks.
 
 ### rss-digest
 

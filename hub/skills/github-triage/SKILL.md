@@ -40,11 +40,15 @@ Read-only. `gh issue list|view|status`, `gh pr list|view|diff|checks|status`,
 `gh search issues|prs|repos|code|commits`, `gh auth status`, and `gh api` for GET
 requests.
 
+Those run without prompting: loading this skill is the consent, so a triage does
+not stop for a modal on every read.
+
 Everything else is refused by GAIA, including `gh issue create`, any `gh api`
 call with `-X POST` or a `-f`/`--field` body, `gh auth token`, `gh alias`,
 `gh extension`, and `gh config`. A refused command returns an error, not a silent
 no-op. That is the enforcement behind *Draft, do not send* below — do not try to
-work around it.
+work around it. Any *other* shell command still needs the user's per-call
+approval, so keep to `gh`; piping its output elsewhere will stop and ask.
 
 ## Procedure
 
