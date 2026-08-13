@@ -36,6 +36,8 @@ var chatCmd = &cobra.Command{
 			for _, f := range []struct{ name, why string }{
 				{"model", "a subprocess agent's model is fixed by the command you passed"},
 				{"timeout", "nothing bounds an interactive session; press ctrl+c to leave it"},
+				{"use-claude", "you own the command line here — append --use-claude to it yourself"},
+				{"claude-model", "you own the command line here — append --claude-model to it yourself"},
 			} {
 				if cmd.Flags().Changed(f.name) {
 					return fmt.Errorf(
@@ -50,7 +52,7 @@ var chatCmd = &cobra.Command{
 			if err != nil {
 				return err
 			}
-			code, err := ui.RunAgent(agentID, query, chatModel, dev, chatTimeout, ctrl, bypassPermissions)
+			code, err := ui.RunAgent(agentID, query, chatModel, dev, chatTimeout, ctrl, bypassPermissions, useClaude, claudeModelArg())
 			if err != nil {
 				return err
 			}

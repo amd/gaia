@@ -188,10 +188,10 @@ func TestChatModelFromHub(t *testing.T) {
 
 // A direct launch has no RootModel underneath it to handle ReturnToHubMsg.
 // Constructing it the way NewChatModelFromHub does (fromHub=true) would make
-// Esc dispatch that message into a program that never consumes it -- Esc
-// would silently stop quitting. This pins the direct launch's actual
-// contract: esc quits.
-func TestChatModelDirectCLILaunchQuitsOnEscInsteadOfReturningToHub(t *testing.T) {
+// Esc dispatch that message into a program that never consumes it. And since
+// #2932 an idle Esc no longer quits either — it clears the composer; Ctrl+C
+// is the advertised way out. This pins the direct launch's actual contract.
+func TestChatModelDirectCLILaunchEscIsSafe(t *testing.T) {
 	m := chat.NewChatModelForCatalogAgent(nil, "email", "Email", false)
 
 	if m.CanReturnToHub() {
@@ -201,12 +201,23 @@ func TestChatModelDirectCLILaunchQuitsOnEscInsteadOfReturningToHub(t *testing.T)
 	updated, _ := m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	m = updated.(chat.ChatModel)
 
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if _, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc}); cmd != nil {
+		switch msg := cmd().(type) {
+		case tea.QuitMsg:
+			t.Fatal("esc on a direct launch destroyed the session; Ctrl+C is the way out")
+		case chat.ReturnToHubMsg:
+			t.Fatal("esc dispatched ReturnToHubMsg into a program that never consumes it")
+		default:
+			_ = msg
+		}
+	}
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	if cmd == nil {
-		t.Fatal("esc produced no command on a direct launch")
+		t.Fatal("Ctrl+C produced no command on a direct launch")
 	}
 	if _, ok := cmd().(tea.QuitMsg); !ok {
-		t.Fatalf("esc on a direct launch produced %T, want tea.QuitMsg", cmd())
+		t.Fatalf("Ctrl+C on a direct launch produced %T, want tea.QuitMsg", cmd())
 	}
 }
 

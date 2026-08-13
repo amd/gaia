@@ -400,6 +400,18 @@ func (s *SubprocessClient) BypassAtLaunch() bool {
 	return false
 }
 
+// ClaudeAtLaunch reports whether the child was spawned with --use-claude, so
+// the UI's "claude" chip is driven by what actually reached the child's argv
+// rather than by a second bool that could disagree with it.
+func (s *SubprocessClient) ClaudeAtLaunch() bool {
+	for _, a := range s.args {
+		if a == UseClaudeFlag {
+			return true
+		}
+	}
+	return false
+}
+
 // discard clears the client's process state, but only if it still refers to
 // proc — a newer Send may already have respawned.
 func (s *SubprocessClient) discard(proc *procHandle) {

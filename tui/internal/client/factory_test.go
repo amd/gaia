@@ -150,6 +150,108 @@ func TestDevModeForwardsDevArgsToTheChild(t *testing.T) {
 	}
 }
 
+// --use-claude must reach the child's argv exactly as the Python side's parser
+// declares it — the flag string is the whole contract between the two.
+func TestUseClaudeForwardsTheFlagsToTheChild(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name        string
+		useClaude   bool
+		claudeModel string
+		want        string
+	}{
+		{"off, so the child argv is untouched", false, "", "--json-events"},
+		{"on, so the child switches backends", true, "", "--json-events --use-claude"},
+		{"on with an explicit model", true, "claude-sonnet-5",
+			"--json-events --use-claude --claude-model claude-sonnet-5"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			agent := catalog.Agent{
+				ID: "gaia", BinaryPath: self, BinaryArgs: []string{"--json-events"},
+			}
+			c, err := ForAgent(agent, ForAgentOptions{
+				UseClaude: tc.useClaude, ClaudeModel: tc.claudeModel,
+			})
+			if err != nil {
+				t.Fatalf("ForAgent: %v", err)
+			}
+			defer c.Close()
+
+			sub, ok := c.(*SubprocessClient)
+			if !ok {
+				t.Fatalf("built %T, want *SubprocessClient", c)
+			}
+			if got := strings.Join(sub.args, " "); got != tc.want {
+				t.Errorf("child argv = %q, want %q", got, tc.want)
+			}
+			if want := tc.useClaude; sub.ClaudeAtLaunch() != want {
+				t.Errorf("ClaudeAtLaunch() = %v, want %v", sub.ClaudeAtLaunch(), want)
+			}
+		})
+	}
+}
+
+// Same aliasing hazard as DevArgs: one --use-claude launch must not leave the
+// flag on the catalog entry for every later one.
+func TestForwardingUseClaudeDoesNotMutateTheCatalogEntry(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+
+	agent := catalog.Agent{
+		ID: "gaia", BinaryPath: self, BinaryArgs: []string{"--json-events"},
+	}
+	c, err := ForAgent(agent, ForAgentOptions{UseClaude: true, ClaudeModel: "claude-sonnet-5"})
+	if err != nil {
+		t.Fatalf("ForAgent: %v", err)
+	}
+	defer c.Close()
+
+	if got := strings.Join(agent.BinaryArgs, " "); got != "--json-events" {
+		t.Errorf("the catalog entry now carries %q; --use-claude leaked into it", got)
+	}
+}
+
+// The daemon transport has no backend switch, so accepting --use-claude there
+// would leave the user believing they run on Claude while the sidecar quietly
+// keeps using Lemonade.
+func TestUseClaudeOnTheDaemonTransportIsRefused(t *testing.T) {
+	_, err := ForAgent(
+		catalog.Agent{ID: "email", Transport: catalog.TransportDaemon},
+		ForAgentOptions{UseClaude: true},
+	)
+	if err == nil {
+		t.Fatal("--use-claude on the daemon transport was silently accepted")
+	}
+	if !strings.Contains(err.Error(), "daemon") {
+		t.Errorf("the error does not name the transport that cannot honour it: %v", err)
+	}
+}
+
+// A Claude model with no Claude mode would be accepted and then change
+// nothing — refused loudly on every transport.
+func TestClaudeModelWithoutUseClaudeIsRefused(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+	_, err = ForAgent(
+		catalog.Agent{ID: "gaia", BinaryPath: self},
+		ForAgentOptions{ClaudeModel: "claude-sonnet-5"},
+	)
+	if err == nil {
+		t.Fatal("a Claude model without --use-claude was silently accepted")
+	}
+	if !strings.Contains(err.Error(), "--use-claude") {
+		t.Errorf("the error does not name the missing flag: %v", err)
+	}
+}
+
 // The catalog entry outlives the launch. Appending straight onto BinaryArgs
 // would let a slice with spare capacity alias the catalog's backing array, so
 // one --dev launch would leave --dev on the entry for every later one.

@@ -307,7 +307,7 @@ var runCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		code, err := ui.RunAgent(args[0], runQuery, runModel, dev, runTimeout, ctrl, bypassPermissions)
+		code, err := ui.RunAgent(args[0], runQuery, runModel, dev, runTimeout, ctrl, bypassPermissions, useClaude, claudeModelArg())
 		if err != nil {
 			return err
 		}
