@@ -51,6 +51,7 @@ if TYPE_CHECKING:
     from gaia.agents.base.goal_store import Goal, Proposal
     from gaia.connectors.providers.base import ConnectorRequirement
     from gaia.skills import Skill, SkillManager, SkillSetResolution, SkillSets
+    from gaia.skills.binaries import BinaryGrants
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -455,6 +456,8 @@ class Agent(abc.ABC):
     # Instance-level once set, so one agent's skills never leak into a sibling.
     _skill_manager: Optional[Any] = None
     _loaded_skills: Optional[Dict[str, Any]] = None
+    # ``shell:execute:<binary>`` grants held by the currently loaded skills.
+    _granted_binaries: Optional[Any] = None
 
     # Skill sets (#2466): the parsed manifest declarations, the explicit
     # ``--skill-set`` request, and the set that actually resolved.
@@ -1171,6 +1174,19 @@ Do NOT wrap conversational replies in JSON.
             self._loaded_skills = {}
         return self._loaded_skills
 
+    @property
+    def granted_binaries(self) -> "BinaryGrants":
+        """CLIs this **instance's** loaded skills may run (``shell:execute:gh``).
+
+        Created lazily and held per instance: a module-level allowlist would let
+        one agent's skill widen every other agent's shell.
+        """
+        if getattr(self, "_granted_binaries", None) is None:
+            from gaia.skills.binaries import BinaryGrants
+
+            self._granted_binaries = BinaryGrants()
+        return self._granted_binaries
+
     def load_skill(
         self, name: str, *, manager: Optional["SkillManager"] = None
     ) -> "Skill":
@@ -1205,6 +1221,7 @@ Do NOT wrap conversational replies in JSON.
                     self.load_skill("web-research")
         """
         from gaia.skills import connector_requirements, refuse_unbridged_permissions
+        from gaia.skills.binaries import resolve_binary_policies
         from gaia.skills.loader import register_skill_tools, unregister_skill_tools
 
         resolver = manager if manager is not None else self.skill_manager
@@ -1220,6 +1237,10 @@ Do NOT wrap conversational replies in JSON.
         permissions = skill.parsed_permissions()
         refuse_unbridged_permissions(permissions, skill_name=skill.name)
         requirements = connector_requirements(permissions, skill_name=skill.name)
+        # Raises when a declared binary has no read-only policy or is not
+        # installed — a skill whose CLI is missing must not load and then
+        # improvise (#2932).
+        policies = resolve_binary_policies(permissions, skill_name=skill.name)
 
         registered = register_skill_tools(skill)
         try:
@@ -1235,10 +1256,14 @@ Do NOT wrap conversational replies in JSON.
                         existing.append(requirement)
                 self.REQUIRED_CONNECTORS = existing
 
+            for policy in policies:
+                self.granted_binaries.grant(policy.binary, skill_name=skill.name)
+
             self.loaded_skills[name] = skill
             self.rebuild_system_prompt()
         except Exception:
             unregister_skill_tools(skill.name)
+            self.granted_binaries.revoke_skill(skill.name)
             self.loaded_skills.pop(name, None)
             raise
 
@@ -1258,12 +1283,13 @@ Do NOT wrap conversational replies in JSON.
 
         logger.info(
             "Loaded skill '%s' (tier=%s, root=%s, %d tool(s), %d connector "
-            "requirement(s))",
+            "requirement(s), binaries=%s)",
             skill.name,
             skill.security_tier,
             skill.root,
             len(registered),
             len(requirements),
+            ", ".join(p.binary for p in policies) or "none",
         )
         return skill
 
@@ -1363,7 +1389,11 @@ Do NOT wrap conversational replies in JSON.
         return None
 
     def unload_skill(self, name: str) -> bool:
-        """Remove a loaded skill's tools and body. Returns True if it was loaded."""
+        """Remove a loaded skill's tools, binary grants, and body.
+
+        Returns True if it was loaded. A binary stays granted while another
+        loaded skill still declares it.
+        """
         from gaia.skills.loader import unregister_skill_tools
 
         if name not in self.loaded_skills:
@@ -1373,9 +1403,14 @@ Do NOT wrap conversational replies in JSON.
         if self._instance_tools is not None:
             for key in removed:
                 self._instance_tools.pop(key, None)
+        revoked = self.granted_binaries.revoke_skill(name)
         self.loaded_skills.pop(name, None)
         self.rebuild_system_prompt()
-        logger.info("Unloaded skill '%s'", name)
+        logger.info(
+            "Unloaded skill '%s'%s",
+            name,
+            f" (revoked {', '.join(revoked)})" if revoked else "",
+        )
         return True
 
     # ------------------------------------------------------------------

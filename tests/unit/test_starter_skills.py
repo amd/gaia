@@ -344,6 +344,7 @@ def test_starter_skill_loads_into_an_agent(pack_manager: SkillManager):
 
         skill_manager = Agent.skill_manager
         loaded_skills = Agent.loaded_skills
+        granted_binaries = Agent.granted_binaries
         _tools_registry = Agent._tools_registry
         _format_tools_for_prompt = Agent._format_tools_for_prompt
         load_skill = Agent.load_skill

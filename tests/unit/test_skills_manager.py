@@ -539,6 +539,7 @@ class _StubAgent:
 
     skill_manager = Agent.skill_manager
     loaded_skills = Agent.loaded_skills
+    granted_binaries = Agent.granted_binaries
     _tools_registry = Agent._tools_registry
     _format_tools_for_prompt = Agent._format_tools_for_prompt
     _bundled_skill_dirs = Agent._bundled_skill_dirs

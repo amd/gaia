@@ -1,68 +1,85 @@
 ---
 name: github-triage
-description: Triage GitHub issues through the GitHub connector — read the backlog, group duplicates, judge severity, and draft the reply. Use when the user asks to triage issues, review a backlog, or work out what to fix first in a repository.
+description: Triage GitHub issues with the gh CLI — read the backlog, group duplicates, judge severity, and draft the reply. Use when the user asks to triage issues, review a backlog, or work out what to fix first in a repository.
 license: MIT
-version: 1.0.0
+version: 2.0.0
 metadata:
   gaia:
     security_tier: community
     permissions:
-      - mcp:connect:mcp-github
-    requirements:
-      env_vars:
-        - GITHUB_TOKEN
+      - shell:execute:gh
+    tools_required:
+      - run_shell_command
     provenance:
       source: starter-pack
 ---
 
 # GitHub Triage
 
-The connector example. This skill declares one permission —
-`mcp:connect:mcp-github` — which GAIA resolves to a real connector requirement.
-Its tools do not come from the skill or from a mixin; they come from the GitHub
-MCP server the connector starts.
+The bring-your-own-CLI example. This skill declares one permission —
+`shell:execute:gh` — which grants the GitHub CLI to this skill's session on this
+agent only, restricted to read-only subcommands. There is no connector, no server
+to start, and no token to hand GAIA: `gh` owns its own auth.
+
+Run every GitHub command through `run_shell_command`.
 
 ## Setup
 
 ```bash
-gaia connectors configure mcp-github --set GITHUB_TOKEN=<your-token>
-gaia connectors list          # confirm mcp-github is configured
+gh auth login        # once, interactively
+gh auth status       # confirm: prints the account and its scopes
 ```
 
-The token needs `repo` scope for private repositories; a read-only token is
-enough for triage that stops short of commenting. GAIA stores it in the OS
-keyring — never put it in this file.
+If `gh` is not installed the skill refuses to load and says so — it never loads
+and then guesses. Install it from https://cli.github.com.
 
-Once configured, the GitHub MCP server's tools (issue search, issue read,
-comment, label) are registered into the agent's tool registry. Use the names the
-agent actually lists; they are defined by the MCP server, not by this skill.
+## What the grant allows
 
-In the Agent UI, MCP tools are additionally gated per agent by the activations
-ledger, so grant this connector to the agent you are using:
+Read-only. `gh issue list|view|status`, `gh pr list|view|diff|checks|status`,
+`gh repo list|view`, `gh release list|view`, `gh run list|view`, `gh label list`,
+`gh search issues|prs|repos|code|commits`, `gh auth status`, and `gh api` for GET
+requests.
 
-```bash
-gaia connectors activations activate mcp-github installed:chat
-```
-
-`gaia chat` does not apply that filter — a configured server's tools are visible
-there as soon as the connector is set up.
+Everything else is refused by GAIA, including `gh issue create`, any `gh api`
+call with `-X POST` or a `-f`/`--field` body, `gh auth token`, `gh alias`,
+`gh extension`, and `gh config`. A refused command returns an error, not a silent
+no-op. That is the enforcement behind *Draft, do not send* below — do not try to
+work around it.
 
 ## Procedure
 
-1. **Pull the backlog.** Fetch open issues for the repository the user named,
-   newest first. Ask for the repository if they did not say.
-2. **Group before judging.** Cluster issues that describe the same underlying
+1. **Pull the backlog.** Ask for the repository if the user did not name one.
+
+   ```bash
+   gh issue list --repo <owner>/<repo> --limit 30 --json number,title,labels,createdAt
+   ```
+
+   Narrow with `--label bug`, `--search`, or `--state`.
+
+2. **Read the ones that matter.**
+
+   ```bash
+   gh issue view <number> --repo <owner>/<repo> --json title,body,comments
+   ```
+
+   Read before judging — a one-line title is not enough to rank severity.
+
+3. **Group before judging.** Cluster issues that describe the same underlying
    problem. Report the cluster, not each issue — a backlog of 40 is usually 12
    real problems.
-3. **Judge each cluster on two axes:**
+
+4. **Judge each cluster on two axes:**
    - **Severity** — data loss > silent wrong answer > crash > annoyance.
    - **Reach** — everyone, one platform, or one reporter.
+
    Rank by the pair. A silent wrong answer affecting everyone outranks a crash
    affecting one person.
-4. **Say what is missing.** For anything you cannot reproduce from the issue
+
+5. **Say what is missing.** For anything you cannot reproduce from the issue
    text, list the specific facts needed — version, platform, exact command.
    "Please provide more information" is not triage.
-5. **Draft, do not send.** Produce the comment or label change and show it to the
+
+6. **Draft, do not send.** Produce the comment or label change and show it to the
    user. Never write to a repository without explicit confirmation for that
    specific action.
 
@@ -70,11 +87,15 @@ there as soon as the connector is set up.
 
 - Never close an issue on your own judgement.
 - Do not paste tokens, private URLs, or user emails into a public comment.
-- If the repository is one you cannot read, say so — do not guess from the name.
+- If `gh` reports the repository is not readable, say so — do not guess from the
+  name.
+- Report a refused command as a refusal. Never substitute an invented answer for
+  one you could not fetch.
 
 ## Fork this
 
 Point it at your own repo's labels and severity ladder. The same shape works for
-any MCP-server connector in `gaia connectors list`: declare
-`mcp:connect:<connector-id>`, document the setup command, and write the
-procedure against the tools that connector provides.
+any CLI in GAIA's read-only command policy: declare `shell:execute:<binary>`,
+document its login step, and write the procedure against real commands. Adding a
+new CLI — GitLab's `glab`, say — is an entry in `BINARY_POLICIES`
+(`gaia/skills/binaries.py`) plus a `SKILL.md` like this one.
