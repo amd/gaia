@@ -50,7 +50,7 @@ var chatCmd = &cobra.Command{
 			if err != nil {
 				return err
 			}
-			code, err := ui.RunAgent(agentID, query, chatModel, dev, chatTimeout, ctrl)
+			code, err := ui.RunAgent(agentID, query, chatModel, dev, chatTimeout, ctrl, bypassPermissions)
 			if err != nil {
 				return err
 			}

@@ -141,7 +141,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 
 		cm := components.NewConfirmationModel(e.RunID, e.Action, e.Summary, e.ConfirmURL)
 		if m.canRespondToPermission() {
-			cm = cm.WithLiveChannel(e.ConfirmID)
+			cm = cm.WithLiveChannel(e.ConfirmID, e.AlwaysScope)
 		}
 		cm.SetWidth(m.cardWidth())
 		m.confirmation = &cm
@@ -395,7 +395,7 @@ func confirmationOutcomeText(msg components.ConfirmationDecidedMsg) (text string
 	case msg.TimedOut:
 		return "denied (30s timeout — no response)", false
 	case msg.Always:
-		return "approved — and '" + msg.Action + "' will not ask again this session", true
+		return "approved — and '" + msg.AlwaysScope + "' will not ask again this session", true
 	case msg.Approved && (msg.Deliverable || msg.ConfirmURL != ""):
 		return "approved — running it", true
 	case msg.Approved:

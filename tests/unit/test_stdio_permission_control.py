@@ -116,22 +116,75 @@ class TestYesNoAlways:
         assert not events_of(second, "needs_confirmation")
         assert "decision=True" in final_answer(second)
 
-    def test_always_grants_only_the_tool_it_was_given_for(self):
-        """The grant is per tool name — no wider, and no narrower."""
-        state = PermissionState()
-        drive(state, ["always"], agent=GatedAgent(tool="run_shell_command"))
+    def test_always_does_not_leak_to_another_command(self):
+        """The whole point of the narrow scope, end to end.
 
-        other = drive(state, ["deny"], agent=GatedAgent(tool="write_file"))
+        Approving `gh issue list` for the session must not silently approve
+        `rm -rf build` — the prompt described one command, so the grant covers
+        one command.
+        """
+        state = PermissionState()
+        drive(
+            state,
+            ["always"],
+            agent=GatedAgent(args={"command": "gh issue list"}),
+        )
+
+        # The same command again: covered, no prompt.
+        again = drive(state, [], agent=GatedAgent(args={"command": "gh issue list"}))
+        assert not events_of(again, "needs_confirmation")
+        assert "decision=True" in final_answer(again)
+
+        # A different command on the SAME tool: must ask.
+        other = drive(
+            state, ["deny"], agent=GatedAgent(args={"command": "rm -rf build"})
+        )
+        assert events_of(other, "needs_confirmation"), "a different command must ask"
+        assert "decision=False" in final_answer(other)
+
+    def test_always_does_not_leak_to_another_tool(self):
+        state = PermissionState()
+        drive(state, ["always"], agent=GatedAgent(args={"command": "gh issue list"}))
+
+        other = drive(
+            state,
+            ["deny"],
+            agent=GatedAgent(tool="write_file", args={"file_path": "/tmp/x"}),
+        )
         assert events_of(other, "needs_confirmation"), "a different tool must ask"
 
-        # Same tool, different arguments: still covered, because the backend
-        # grant is by name. The UI must promise exactly this and no less.
-        same = drive(
-            state,
-            [],
-            agent=GatedAgent(tool="run_shell_command", args={"command": "rm -rf /"}),
+    def test_the_prompt_advertises_what_always_would_grant(self):
+        events = drive(PermissionState(), ["deny"])
+        prompt = events_of(events, "needs_confirmation")[0]
+        assert prompt.get("always_scope") == "pwd", prompt
+
+    def test_a_call_that_cannot_be_scoped_offers_no_always(self):
+        """A bare shell invocation bounds nothing, so nothing may be granted."""
+        events = drive(
+            PermissionState(),
+            ["deny"],
+            agent=GatedAgent(args={"command": "bash -c 'rm -rf /'"}),
         )
-        assert not events_of(same, "needs_confirmation")
+        prompt = events_of(events, "needs_confirmation")[0]
+        assert "always_scope" not in prompt, prompt
+
+    def test_always_on_an_unscopable_call_does_not_grant_anything(self):
+        """Answering "always" anyway approves this call only — never a grant."""
+        state = PermissionState()
+        first = drive(
+            state,
+            ["always"],
+            agent=GatedAgent(args={"command": "bash -c whoami"}),
+        )
+        assert "decision=True" in final_answer(first), "the one call is approved"
+
+        second = drive(
+            state,
+            ["deny"],
+            agent=GatedAgent(args={"command": "bash -c whoami"}),
+        )
+        assert events_of(second, "needs_confirmation"), "it must ask again"
+        assert "decision=False" in final_answer(second)
 
 
 class TestBypassMode:
@@ -242,15 +295,19 @@ class TestGrantsSurviveTheTurnBoundary:
     def test_detach_carries_grants_back_into_the_session(self):
         from gaia.ui.sse_handler import SSEOutputHandler
 
+        call = ("write_file", {"file_path": "/tmp/x"})
+
         state = PermissionState()
         handler = SSEOutputHandler()
         state.attach(handler)
-        handler.approve_tool_for_session("write_file")
+        handler.grant_call_for_session(*call)
         state.detach(handler)
 
         nxt = SSEOutputHandler()
         state.attach(nxt)
-        assert nxt.tool_approved_for_session("write_file")
+        assert nxt.call_is_granted(*call)
+        # And it is still only that call.
+        assert not nxt.call_is_granted("write_file", {"file_path": "/tmp/other"})
 
     def test_attach_hands_over_an_unbounded_wait(self):
         """A modal on screen must not expire under the person reading it."""

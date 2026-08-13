@@ -418,6 +418,13 @@ class CanonicalTranslator:
         confirm_id = event.get("confirm_id")
         if confirm_id:
             canonical["confirm_id"] = str(confirm_id)
+        # What an "always" answer would grant, e.g. ``gh issue list``. Absent
+        # means this call has no scope narrow enough to describe, so the
+        # front-end must not offer the choice at all — see
+        # :mod:`gaia.agents.base.tool_grants`.
+        always_scope = event.get("always_scope")
+        if always_scope:
+            canonical["always_scope"] = str(always_scope)
         return [canonical]
 
     def _on_user_input_request(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
