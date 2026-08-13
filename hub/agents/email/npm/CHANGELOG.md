@@ -2,9 +2,9 @@
 
 What's new in `@amd-gaia/agent-email`, in plain language. For the technical detail
 behind any entry — API shapes, endpoints, and version semantics — see
-[`SPEC.md`](https://github.com/amd/gaia/blob/agent-pkg-email-v0.5.0/hub/agents/email/npm/SPEC.md).
+[`SPEC.md`](https://github.com/amd/gaia/blob/agent-pkg-email-v0.6.0/hub/agents/email/npm/SPEC.md).
 
-## Unreleased
+## [0.6.0] - 2026-08-12
 
 - **Work Microsoft 365 mailboxes are now supported alongside Gmail and personal
   Outlook.** A work/school Microsoft account (Entra ID) can now be connected and
@@ -47,14 +47,15 @@ behind any entry — API shapes, endpoints, and version semantics — see
   five lines below, listed a message needing review. The card is now one
   worklist (`needs_you`, schema 2.11) built from a single scan: up to five
   things that genuinely need you, each tagged with what to do (reply, decide,
-  check, or a carried-over action item) and how old it is. Everything
-  filtered out is counted alongside the test that filtered it (`bulk`), so a
-  claim like "47 filtered" is something you can judge rather than take on
-  faith. `NeedsYouItem` / `BulkSummary` are new on `EmailPreScanResult`;
-  nothing existing was removed or renamed (#2743). `NeedsYouItem.detail` is
-  also new — reserved for a couple of lines of real substance per row (the
-  question actually asked, the meeting time actually proposed, the deadline
-  actually quoted) — but ships **always empty** in this release: the
+  check, or a carried-over action item) and how old it is. `NeedsYouItem` /
+  `BulkSummary` are new on `EmailPreScanResult` — `BulkSummary` carries a
+  count plus the id(s) of the test(s) that filtered it, for an app that
+  wants to render why a message didn't make the list, rather than a bare
+  unauditable number; nothing existing was removed or renamed (#2743).
+  `NeedsYouItem.detail` is also new — reserved for a couple of lines of
+  real substance per row (the question actually asked, the meeting time
+  actually proposed, the deadline actually quoted) — but ships **always
+  empty** in this release: the
   per-item extraction pass that would fill it was implemented and then
   withdrawn before merge so it could ship on a firm timing budget rather
   than risk a slow scan; a follow-up will populate it.
@@ -186,9 +187,77 @@ behind any entry — API shapes, endpoints, and version semantics — see
   request/response shape is unchanged). This is **daemon-managed** — a standalone
   integrator using this package is unaffected and keeps resolving the mailbox from
   the local GAIA connector store exactly as before (#2154).
-
-## 0.6.0
-
+- **The agent's autonomy commands now work against the shipped binary.** `gaia
+  email autonomy status/set-level/pause/resume/run/undo/kill/trust` call REST
+  routes (`/v1/email/agent/autonomy*`) that did not exist in any previously
+  published binary — a sidecar installed from 0.5.0 or earlier 404'd on every
+  one of them, with nothing telling the caller why. All eight subcommands now
+  reach a real route and get back a 200, or a correct 409 when autonomy is
+  off (#2894).
+- **Muting a sender no longer buries their genuinely urgent mail as
+  promotional.** The category override for a muted (low-priority) sender was
+  unconditional — every message from that sender was force-classified
+  PROMOTIONAL regardless of content, which also made it an autonomy
+  auto-archive candidate with no confirmation. "I don't care about most of
+  this sender's mail" is not "this specific message is never urgent" —
+  category is now always decided by content; muting only affects ordering
+  (#2774).
+- **Scanning a real Gmail inbox no longer fails outright on a rate limit.** A
+  scan batching 100 messages in one request reliably tripped Gmail's
+  per-user concurrency limit, and a single 429 discarded the other 99
+  already-successful results with the whole scan failing on
+  `CONNECTOR_ERROR`. Batches are now chunked to a measured-safe size, a 429
+  is retried with backoff, and a message still rate-limited after retrying
+  is dropped individually and reported — not thrown away with everything
+  else (#2727).
+- **A counting question about a long-bodied sender no longer overflows the
+  model's context and comes back empty.** Searching messages defaulted to
+  fetching full bodies, and a "how many emails from X in the last two
+  weeks?" question against a verbose sender could blow the context window
+  before the model produced an answer. The search now defaults to metadata
+  only (subject/from/date/snippet, no body) — a counting or listing question
+  never needed the body — cutting the result size by roughly an order of
+  magnitude (#2782).
+- **A fresh conversation's first inbox listing or search could overflow the
+  NPU profile's context window before you got a reply.** `listInbox` /
+  `searchMessages` capped each message's body independently but never
+  checked the COMBINED size of the result — a realistic 25-message inbox
+  built a response over the NPU profile's 32K-token budget on the very
+  first call, and the overflow sometimes surfaced as a silently truncated
+  count (10 requested, 8 returned) rather than an error. Both now shrink
+  every message's body together to fit the active device's budget; a
+  request too large even at the smallest usable body size fails with an
+  actionable error naming the limit instead of quietly returning less than
+  asked for (#2514).
+- **Calendar answers can no longer invent attendee names or invite
+  confirmations that aren't in the mailbox.** Asked "did anyone send me a
+  meeting invite?", the agent could answer "yes" with no message,
+  mutation, or attachment behind it — a real `organizer` field was
+  sometimes narrated as "sent you an invite." Calendar listing and
+  conflict checks now surface each event's real `attendees` (an event with
+  none normalizes to `[]` instead of the field being omitted), and two new
+  checks catch an invite or attendee claim the tool result doesn't support
+  before it reaches you. Scoped to calendar attendee/invite claims only —
+  not a general claim about hallucination elsewhere (#2766).
+- **A reply, draft, or send could report failure even after it actually
+  succeeded, and retrying made it worse.** A transient local bookkeeping
+  write, unrelated to the real Gmail/Outlook call, could fail right after
+  the message was actually sent or the draft actually created — and that
+  bookkeeping failure was surfaced as if the whole action had failed.
+  Retrying then hit an already-consumed draft id. `draft()`/`send()`/forward
+  now report success whenever the real mail action succeeded regardless of
+  that local write, and retrying an already-sent draft gets a plain "already
+  sent" instead of a generic error (#2908).
+- **The triage card is now assembled from the scan's own data, not retyped
+  by the model.** The categorized breakdown the model used to compose
+  freehand — numbering, message counts, addresses — could drift from the
+  scan that produced it: a number pointing at the wrong message, an item
+  repeated or dropped, or a bare item count with no list at all. The card is
+  now rendered directly from the same `needs_you` data the scan already
+  computed — a template fill, not a generation — so a reference like
+  `archive 3` always names the message actually shown as 3; the model still
+  writes the opening sentence and nothing else. On a 55-item real inbox this
+  completed in under a minute end to end (#2858).
 - **The launch secret no longer sits in the sidecar's environment.** The
   per-session auth token used to be handed to the sidecar as a bare environment
   variable, visible to any local process that can inspect process environments.
