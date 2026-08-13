@@ -23,6 +23,61 @@ gh issue list --repo amd/gaia --limit 3 --json number,title   # must match exact
 
 If you cannot independently verify a result, report it as unverified. Say so plainly.
 
+## Two rules about the machine — ignore these and you will measure noise
+
+Both of these cost real hours in the session this skill came from, and both produce
+symptoms that look like product bugs.
+
+### 1. Exactly ONE TUI at a time
+
+Kill every existing instance before launching, and never leave a second one running:
+
+```bash
+# Windows
+for p in $(tasklist //FI "IMAGENAME eq gaia-drive.exe" //FO CSV //NH | cut -d, -f2 | tr -d '"'); do
+  taskkill //PID $p //F
+done
+```
+
+Two TUIs is not merely wasteful:
+
+- They **overwrite each other's `~/.gaia/tui/control.json`** — same pid/port/token file —
+  so your driver silently attaches to whichever launched last. A query you never sent
+  appears in your transcript; keys you send land in someone else's session. This happened
+  in both directions in one day, and each time looked like a TUI bug.
+- Each spawns its own agent child, so they **compete for the model** and every turn slows.
+- The user is memory-constrained; two instances is a real cost, not a rounding error.
+
+`GAIA_TUI_HOME` isolates the *discovery file* so concurrent agents stop hijacking each
+other — it does **not** remove the model contention. One TUI, always.
+
+### 2. Never run an eval while testing the agent
+
+`gaia eval agent` and the TUI both drive the **single-slot** Lemonade backend. Running
+them together makes every turn 2-5x slower and the slowdown reads as "the agent is
+extremely slow" — a product complaint caused entirely by the harness. Measured on the
+same box, same build:
+
+| | with an eval running | box quiet |
+|---|---|---|
+| load a skill | 74s | **13.5s** |
+| real `gh` triage | (unusable) | **27s** |
+
+Worse, CLAUDE.md warns that concurrent runs race the model slot and can produce
+chaotic, meaningless failures (`BLOCKED_BY_ARCHITECTURE`, `INFRA_ERROR`, ctx-size
+errors) that get mistaken for regressions.
+
+**Check before you start, and check again when things feel slow:**
+
+```bash
+powershell.exe -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | Select-Object -ExpandProperty CommandLine" | grep -iE "eval agent|ui.server"
+```
+
+Evals are a **pre-merge gate, not a testing-session activity**. When a change requires
+one (CLAUDE.md lists the surfaces — prompts, tool schemas, tool-call parsing), record it
+as outstanding and run it when the box is quiet and nobody is driving the TUI. Never run
+two evals at once, either.
+
 ## Which surface you are testing
 
 One binary, two surfaces — always state which:
@@ -73,11 +128,10 @@ worktree, and the agent then dies at import with
 python -c "import gaia; print(gaia.__file__)"   # must be YOUR worktree
 ```
 
-**`GAIA_TUI_HOME` is mandatory when other agents may be running.** `~/.gaia/tui/control.json`
-is a single shared discovery path; two TUIs overwrite each other's pid/port/token and
-your driver silently drives someone else's session. This happened twice in one day —
-in both directions. `GAIA_TUI_HOME` (see `tui/internal/control/paths.go`) gives you a
-private one.
+**`GAIA_TUI_HOME` is mandatory when other agents may be running** — see machine rule 1
+above. It gives you a private `control.json` (`tui/internal/control/paths.go`) instead
+of the shared `~/.gaia/tui/control.json` that agents hijack from each other. It does not
+excuse running two TUIs.
 
 **Do not use `cmd //c start` from Git Bash** — MSYS mangles the arguments and no window
 opens. PowerShell `Start-Process` with a `.ps1` avoids the quoting entirely.
@@ -205,16 +259,16 @@ an unreadable series (`1301 … 1437, 991`) and proved nothing.
 | real `gh` triage | ~27s |
 | agent cold start | ~16–19s |
 
-**If everything is 2–5× slower, check for Lemonade contention first** — it is
-single-slot:
+**If everything is 2–5× slower, suspect the harness before the product** — a stray eval
+or a second TUI, per the two machine rules above. Confirm the backend is actually up
+and on the right port:
 
 ```bash
-# an eval or a second agent will starve your TUI
-powershell.exe -NoProfile -Command "Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | Select-Object -ExpandProperty CommandLine" | grep -iE "eval|ui.server"
 curl -s http://127.0.0.1:13305/api/v1/health    # note: 13305, NOT 8000
 ```
 
-Never run two `gaia eval agent` processes at once (see CLAUDE.md).
+Lemonade has died on its own mid-session more than once. Check it before blaming a
+change.
 
 ## Reporting
 
