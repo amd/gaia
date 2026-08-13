@@ -115,3 +115,31 @@ def test_unreachable_lemonade_gets_actionable_copy():
 
     assert "Lemonade" in detail
     assert "lemonade-server serve" in detail
+
+
+def test_log_path_defaults_to_the_shared_file(monkeypatch):
+    """No override: the historic shared location, unchanged."""
+    monkeypatch.delenv(stdio.LOG_PATH_ENV, raising=False)
+
+    assert stdio.log_path().name == "gaia-agent.log"
+    assert stdio.log_path().parent.name == "logs"
+
+
+def test_log_path_honours_the_env_override(tmp_path, monkeypatch):
+    """Several agents can run at once and they all append to one file.
+
+    Interleaved records from two sessions are worse than none: a timeout logged
+    by a neighbouring agent reads as a failure of the one being watched. A
+    harness driving a single TUI needs a private log to attribute anything.
+    """
+    private = tmp_path / "session" / "agent.log"
+    monkeypatch.setenv(stdio.LOG_PATH_ENV, str(private))
+
+    assert stdio.log_path() == private
+
+
+def test_log_path_ignores_a_blank_override(tmp_path, monkeypatch):
+    """An empty/whitespace value is an unset variable, not a request to log to ''."""
+    monkeypatch.setenv(stdio.LOG_PATH_ENV, "   ")
+
+    assert stdio.log_path().name == "gaia-agent.log"

@@ -207,10 +207,29 @@ def _write(event: Dict[str, Any], out) -> None:
     out.flush()
 
 
+#: Env override for the agent log file. Set it to give one session a private
+#: log; leave it unset for the shared default.
+LOG_PATH_ENV = "GAIA_AGENT_LOG"
+
+
 def log_path() -> "Path":
-    """Where the agent's log lands. One file, not a per-run directory."""
+    """Where the agent's log lands. One file, not a per-run directory.
+
+    ``GAIA_AGENT_LOG`` overrides it. The shared default is right for a single
+    agent, but several can run at once — a test harness driving one TUI while
+    other agents run beside it, most obviously — and they all append to this one
+    file. Interleaved records from two sessions are worse than no records: a
+    failure from one agent reads as a failure of the one you are watching, which
+    is how a timeout belonging to a neighbouring process becomes a bug report
+    against yours. Every line also carries its pid (see ``_configure_logging``)
+    so the shared default stays attributable when no override is set.
+    """
+    import os
     from pathlib import Path
 
+    override = os.environ.get(LOG_PATH_ENV, "").strip()
+    if override:
+        return Path(override).expanduser()
     return Path.home() / ".gaia" / "logs" / "gaia-agent.log"
 
 
@@ -253,8 +272,12 @@ def _configure_logging(real_stdout, *, dev: bool) -> "Path":
     level = logging.DEBUG if dev else logging.ERROR
     file_handler = logging.FileHandler(path, encoding="utf-8")
     file_handler.setLevel(level)
+    # The pid is not decoration: agents share the default log file, and without
+    # it two interleaved sessions are indistinguishable after the fact.
     file_handler.setFormatter(
-        logging.Formatter("%(asctime)s | %(levelname)s | %(name)s | %(message)s")
+        logging.Formatter(
+            "%(asctime)s | pid:%(process)d | %(levelname)s | %(name)s | %(message)s"
+        )
     )
     root.handlers = [file_handler]
     root.setLevel(level)
