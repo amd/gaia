@@ -692,7 +692,16 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return ReturnToHubMsg{AgentID: m.agentID}
 			}
 		}
-		return m, tea.Quit
+		// Idle, with nowhere to go back to. This used to quit, which made Esc
+		// an unadvertised one-keystroke way to destroy the session — on the key
+		// people press to mean "never mind", and most reachable in the seconds
+		// after a cancelled turn, when pressing it again is the documented
+		// escape hatch right up until the turn settles. It now means what it
+		// means everywhere else: discard what is in the composer. Ctrl+C is the
+		// way out, which is what the status bar has always promised (#2932).
+		m.input.Reset()
+		m.syncComposerHeight()
+		return m, nil
 
 	case tea.KeyCtrlJ:
 		// Ctrl+J is the portable newline. Most terminals send a bare CR for
