@@ -5,7 +5,7 @@ description: "Install and run agents from the terminal, add capabilities by drop
 
 # GAIA v0.23.0 Release Notes
 
-GAIA v0.23.0 makes the agents easier to get, safer to run, and easier to extend. You can now browse, install, and run agents straight from the terminal with `gaia hub`, and add new capabilities to an agent as signed, auditable skills. Under the surface it's a security release: the local API and MCP bridge no longer expose themselves to the network by default, the confirmation prompt that pauses an agent before it sends mail, writes a file, or runs a command now works from the terminal and over the local API and MCP — not just inside the graphical app — and an agent can no longer quietly reach into your `~/.gaia` config or slip crafted SQL into the database agent. Connecting a Microsoft account is now an explicit Personal-or-Work/School choice with a zero-setup sign-in, and first-run discovery finally finds your apps and bookmarks on macOS and Linux.
+GAIA v0.23.0 makes the agents easier to get, safer to run, and easier to extend. You can now browse, install, and run agents straight from the terminal with `gaia hub`, and add new capabilities to an agent as signed, auditable skills. Under the surface it's a security release: the local API and MCP bridge no longer expose themselves to the network by default, the confirmation prompt that pauses an agent before it sends mail, writes a file, or runs a command now works from the terminal and over the local API and MCP — not just inside the graphical app — and an agent can no longer quietly reach into your `~/.gaia` config or slip crafted SQL into the database agent. Connecting a Microsoft account is now an explicit Personal-or-Work/School choice with a zero-setup sign-in.
 
 **Why upgrade:**
 - **Get agents from the terminal** — `gaia hub` browses, installs (behind a trust prompt for unverified agents), runs, and removes agents without leaving the shell.
@@ -63,12 +63,6 @@ A skill gives an agent a new capability from a folder with a manifest — no new
 ### Microsoft accounts: Personal and Work/School, no secret required
 
 Connecting a Microsoft account is now two clear choices instead of one connector guessing your tenant. `gaia connectors list` shows Microsoft as two distinct connectors — Personal and Work/School — each with a zero-setup device-code sign-in (a code and a URL to visit) and no client secret required for a public app registration (PRs [#2718](https://github.com/amd/gaia/pull/2718), [#2364](https://github.com/amd/gaia/pull/2364)).
-
----
-
-### Onboarding finds your apps and bookmarks on macOS and Linux
-
-First-run discovery — the step that looks at your installed apps, browser bookmarks, and history to tailor onboarding — used to silently return nothing on macOS and Linux, indistinguishable from a genuinely empty machine. It now works on both: real installed apps, bookmarks across browser profiles, and history domains are found instead of zero (PR [#2747](https://github.com/amd/gaia/pull/2747)).
 
 ---
 
