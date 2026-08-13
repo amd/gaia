@@ -220,6 +220,32 @@ def _is_granted_binary(token: str, granted: frozenset) -> bool:
     return normalize_binary(token) in granted
 
 
+def _operator_check_text(command: str) -> str:
+    """The part of *command* the operator blocklist applies to.
+
+    A PowerShell ``-Command`` body is script, not outer shell, and is validated
+    separately by ``_validate_command`` (DANGEROUS_PS_PATTERNS + the cmdlet
+    prefix allowlist). Scanning it here would refuse legitimate cmdlets.
+    """
+    if not command.strip().lower().startswith(("powershell ", "powershell.exe ")):
+        return command
+    try:
+        parts = shlex.split(command)
+    except ValueError:
+        parts = command.split()
+    outer = []
+    skip_next = False
+    for part in parts:
+        if skip_next:
+            skip_next = False
+            continue
+        if part.lower() in ("-command", "-c"):
+            skip_next = True
+            continue
+        outer.append(part)
+    return " ".join(outer)
+
+
 def _split_pipeline(cmd_parts: list) -> list:
     """Split a shlex-split command on ``|`` into its non-empty segments."""
     segments: list = []
@@ -256,6 +282,90 @@ class ShellToolsMixin:
         self.shell_command_times = deque(maxlen=100)  # Track last 100 command times
         self.max_commands_per_minute = 10
         self.max_commands_per_10_seconds = 3
+
+    def _validate_shell_command(self, command: str) -> tuple:
+        """Every refusal ``command`` earns on its text alone, plus its segments.
+
+        Pure and side-effect free, so it can run twice: once as a pre-flight
+        before the confirmation prompt, once on the real execution path. Sharing
+        one implementation is what keeps those two from ever disagreeing.
+
+        Returns:
+            ``(error, segments)`` — ``error`` is None when nothing here refuses
+            the command. Refusals that need runtime context (rate limit, working
+            directory, path traversal) stay with the caller, so a command this
+            clears may still be refused later; one it rejects never runs.
+        """
+        if DANGEROUS_SHELL_OPERATORS.search(_operator_check_text(command)):
+            return (
+                {
+                    "status": "error",
+                    "error": "Shell operators (&, >, >>, <, &&, ||, ;, `, $()) are not allowed for security reasons.",
+                    "has_errors": True,
+                    "hint": "Pipe (|) is allowed. Use individual commands for other operations.",
+                },
+                [],
+            )
+
+        try:
+            cmd_parts = shlex.split(command)
+        except ValueError as exc:
+            return (
+                {
+                    "status": "error",
+                    "error": f"Invalid command syntax: {exc}",
+                    "has_errors": True,
+                },
+                [],
+            )
+
+        segments = _split_pipeline(cmd_parts)
+        if not segments:
+            return (
+                {"status": "error", "error": "Empty command", "has_errors": True},
+                [],
+            )
+
+        granted = skill_granted_binaries(self)
+        for segment in segments:
+            error = self._validate_command(
+                segment[0].lower(),
+                segment,
+                command if len(segments) == 1 else " ".join(segment),
+                granted_binaries=granted,
+            )
+            if error:
+                return error, segments
+
+        return None, segments
+
+    def policy_refusal_for_call(
+        self, tool_name: str, tool_args: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """The refusal this call has already earned, before anyone is asked.
+
+        Read by ``Agent._policy_refusal``. A command the guardrails will refuse
+        must never raise a confirmation prompt: asking someone to approve
+        ``gh auth token`` when the answer is already no trains them to click
+        through, and frames a blocked action as merely risky. Refuse it first
+        and say why.
+
+        Duck-typed rather than an override — ``Agent`` precedes this mixin in
+        ``ChatAgent``'s MRO, so a same-named method here would never be reached.
+        """
+        if tool_name != _POLICY_GATED_SHELL_TOOL:
+            return None
+        command = (tool_args or {}).get("command")
+        if not isinstance(command, str):
+            return None
+        error, _ = self._validate_shell_command(command)
+        if error is not None:
+            logger.info(
+                "Refusing %r before the confirmation prompt: %s",
+                command,
+                error.get("error"),
+            )
+        return error
 
     def skill_grant_covers_call(
         self, tool_name: str, tool_args: Dict[str, Any]
@@ -701,66 +811,15 @@ class ShellToolsMixin:
                 else:
                     cwd = str(Path.cwd())
 
-                # Block dangerous shell operators (redirects, chaining)
-                # Pipes (|) are allowed but each command is validated
-                # For PowerShell commands, only check operators in the outer
-                # shell portion — the PS script body is validated separately
-                # by _validate_command (DANGEROUS_PS_PATTERNS + cmdlet
-                # prefix checks).
-                shell_text_to_check = command
-                cmd_lower_stripped = command.strip().lower()
-                if cmd_lower_stripped.startswith(("powershell ", "powershell.exe ")):
-                    # Strip out the -Command argument content so we only
-                    # check the outer shell for dangerous operators.
-                    try:
-                        _ps_parts = shlex.split(command)
-                    except ValueError:
-                        _ps_parts = command.split()
-                    _ps_outer = []
-                    _skip_next = False
-                    for _p in _ps_parts:
-                        if _skip_next:
-                            _skip_next = False
-                            continue
-                        if _p.lower() in ("-command", "-c"):
-                            _skip_next = True
-                            continue
-                        _ps_outer.append(_p)
-                    shell_text_to_check = " ".join(_ps_outer)
-
-                if DANGEROUS_SHELL_OPERATORS.search(shell_text_to_check):
-                    return {
-                        "status": "error",
-                        "error": "Shell operators (&, >, >>, <, &&, ||, ;, `, $()) are not allowed for security reasons.",
-                        "has_errors": True,
-                        "hint": "Pipe (|) is allowed. Use individual commands for other operations.",
-                    }
-
-                # Parse command safely
-                try:
-                    cmd_parts = shlex.split(command)
-                except ValueError as e:
-                    return {
-                        "status": "error",
-                        "error": f"Invalid command syntax: {e}",
-                        "has_errors": True,
-                    }
-
-                if not cmd_parts:
-                    return {
-                        "status": "error",
-                        "error": "Empty command",
-                        "has_errors": True,
-                    }
+                # Operators, syntax, and the per-command whitelist. Shared with
+                # the pre-flight that runs before the confirmation prompt, so a
+                # command refused there is refused here for the same reason.
+                error, segments = self._validate_shell_command(command)
+                if error:
+                    return error
 
                 granted = skill_granted_binaries(self)
-                segments = _split_pipeline(cmd_parts)
-                if not segments:
-                    return {
-                        "status": "error",
-                        "error": "Empty command",
-                        "has_errors": True,
-                    }
+                cmd_parts = [part for segment in segments for part in segment]
 
                 # Validate arguments for path traversal
                 # This prevents "cat ../secret.txt" even if "cat" is allowed.

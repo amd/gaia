@@ -2785,6 +2785,27 @@ Do NOT wrap conversational replies in JSON.
                 return str(reason)
         return f"Tool '{tool_name}' was denied by the user."
 
+    def _policy_refusal(
+        self, tool_name: str, tool_args: Optional[Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        """The refusal this call has already earned, or None.
+
+        Checked *before* the confirmation prompt. Asking someone to approve an
+        action that is guaranteed to be refused a moment later teaches them to
+        approve prompts, and presents a blocked action — ``gh auth token`` — as
+        merely destructive rather than not permitted. Validate first, confirm
+        second; only a call that could actually run should ever ask.
+
+        Duck-typed like :meth:`_call_is_pre_authorized`: a host that can refuse
+        a call up front implements ``policy_refusal_for_call``.
+        """
+        if not tool_args:
+            return None
+        refuses = getattr(self, "policy_refusal_for_call", None)
+        if not callable(refuses):
+            return None
+        return refuses(tool_name, tool_args)  # pylint: disable=not-callable
+
     def _call_is_pre_authorized(
         self, tool_name: str, tool_args: Optional[Dict[str, Any]]
     ) -> bool:
@@ -2924,6 +2945,12 @@ Do NOT wrap conversational replies in JSON.
                     )
                 logger.error(err)
                 return {"status": "error", "error": err}
+
+        # Validate first, confirm second: a call the guardrails already refuse
+        # must never reach a prompt.
+        refusal = self._policy_refusal(tool_name, tool_args)
+        if refusal is not None:
+            return refusal
 
         # Guardrail: require explicit user confirmation for high-risk tools.
         # Consoles that cannot reach a human deny rather than answer for them

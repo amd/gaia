@@ -616,3 +616,136 @@ def test_the_hook_is_duck_typed_not_an_override():
 
     assert hasattr(ShellToolsMixin, "skill_grant_covers_call")
     assert not hasattr(Agent, "skill_grant_covers_call")
+
+
+# ---------------------------------------------------------------------------
+# Validate first, confirm second
+# ---------------------------------------------------------------------------
+
+
+class _RecordingConsole:
+    """Counts confirmation prompts and approves anything it is asked."""
+
+    def __init__(self):
+        self.asked: list = []
+
+    def confirm_tool_execution(self, tool_name, tool_args):
+        self.asked.append((tool_name, dict(tool_args)))
+        return True
+
+    def confirmation_denied_reason(self, tool_name):
+        return f"Tool '{tool_name}' was denied."
+
+
+def _refusal(host, command: str):
+    return host.policy_refusal_for_call("run_shell_command", {"command": command})
+
+
+@pytest.mark.parametrize(
+    "command,expected",
+    [
+        # The captured bug: a modal appeared for a command already refused.
+        ("gh auth token", "Allowed auth actions: status"),
+        ("gh issue create --title x", "Allowed issue actions"),
+        ("gh api -X POST repos/amd/gaia/issues", "-X may only be GET"),
+        ("gh alias set x", "is not allowed"),
+        # Ungranted and unknown commands are equally pre-decided.
+        ("kubectl get pods", "not in the allowed list"),
+        ("git push", "not allowed"),
+        ("gh issue list && rm -rf /", "Shell operators"),
+        ("gh issue list 'unterminated", "Invalid command syntax"),
+    ],
+)
+def test_a_call_the_policy_refuses_is_refused_before_any_prompt(command, expected):
+    error = _refusal(_Gated("gh"), command)
+    assert error is not None, f"{command!r} reached the confirmation prompt"
+    assert expected in error["error"]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "gh issue list --repo amd/gaia --limit 5",
+        "gh auth status",
+        "ls -la",
+        "pwd",
+    ],
+)
+def test_a_call_that_could_run_is_left_to_the_confirmation_gate(command):
+    """Pre-flight refuses; it never approves. Deciding to run stays downstream."""
+    assert _refusal(_Gated("gh"), command) is None
+
+
+def test_the_preflight_only_covers_the_policy_enforcing_tool():
+    host = _Gated("gh")
+    assert (
+        host.policy_refusal_for_call("write_file", {"command": "gh auth token"}) is None
+    )
+    assert host.policy_refusal_for_call("run_shell_command", {"path": "x"}) is None
+
+
+def test_a_powershell_command_body_is_not_scanned_for_operators():
+    """The -Command body is script, validated by the cmdlet allowlist instead.
+
+    Sharing one validator between the pre-flight and execution must not quietly
+    drop that exemption and start refusing legitimate cmdlets.
+    """
+    host = _Gated()
+    error, _ = host._validate_shell_command(
+        'powershell -Command "Get-CimInstance Win32_VideoController | Format-List Name"'
+    )
+    assert error is None
+
+
+class _ExecutingAgent(_Gated):
+    """Enough of `Agent` to run `_execute_tool` end to end, and nothing more."""
+
+    from gaia.agents.base.agent import Agent as _Base
+
+    _policy_refusal = _Base._policy_refusal
+    _execute_tool = _Base._execute_tool
+    _resolve_tool_name = _Base._resolve_tool_name
+    _on_tool_invoked = _Base._on_tool_invoked
+    _fold_tool_usage = _Base._fold_tool_usage
+    current_plan = None
+    current_step = 0
+    debug = False
+
+    def __init__(self, *binaries):
+        super().__init__(*binaries)
+        self.console = _RecordingConsole()
+        self.ran: list = []
+        self._tools_registry = {
+            "run_shell_command": {
+                "function": lambda command, **kw: self.ran.append(command)
+                or {"status": "ran"}
+            }
+        }
+
+    def _call_tool_bounded(self, tool, tool_args, tool_name):
+        return tool(**tool_args)
+
+
+def test_the_refused_call_emits_no_confirmation_event():
+    """End to end through `_execute_tool`: a refusal, and nothing was asked."""
+    agent = _ExecutingAgent("gh")
+    result = agent._execute_tool("run_shell_command", {"command": "gh auth token"})
+    assert agent.ran == [], "a pre-refused command still reached the tool"
+
+    assert result["status"] == "error"
+    assert "Allowed auth actions: status" in result["error"]
+    assert agent.console.asked == [], "a refused call raised a confirmation prompt"
+
+
+def test_a_permitted_ungranted_call_still_reaches_the_prompt():
+    """The reordering must not swallow the modal for calls that can run."""
+    agent = _ExecutingAgent()
+    agent._execute_tool("run_shell_command", {"command": "pwd"})
+    assert [name for name, _ in agent.console.asked] == ["run_shell_command"]
+
+
+def test_the_preflight_hook_is_duck_typed_not_an_override():
+    from gaia.agents.base.agent import Agent
+
+    assert hasattr(ShellToolsMixin, "policy_refusal_for_call")
+    assert not hasattr(Agent, "policy_refusal_for_call")
