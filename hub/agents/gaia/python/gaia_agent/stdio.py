@@ -72,9 +72,9 @@ class PermissionState:
 
     Two things have to survive a turn boundary, because a fresh
     ``SSEOutputHandler`` is built for each one: whether bypass is on, and which
-    tools the user has granted "always". Losing either would re-prompt for a
-    tool the user already blanket-approved, which is the same defect as never
-    having offered "always" at all.
+    calls the user has granted "always". Losing either would re-prompt for a
+    call the user already approved, which is the same defect as never having
+    offered "always" at all.
 
     The lock matters: the stdin pump answers confirmations from its own thread
     while the turn thread is swapping ``handler`` around it.
@@ -83,7 +83,7 @@ class PermissionState:
     def __init__(self, bypass: bool = False) -> None:
         self._lock = threading.Lock()
         self._bypass = bypass
-        self._approved: set = set()
+        self._grants: set = set()
         self._handler: Any = None
 
     @property
@@ -107,7 +107,7 @@ class PermissionState:
         """Hand a turn's handler the session's accumulated permission state."""
         with self._lock:
             handler.auto_approve_gated_tools = self._bypass
-            handler.session_approved_tools().update(self._approved)
+            handler.session_grants().update(self._grants)
             # A human is on the other end of this pipe with a modal on screen,
             # so the wait is theirs to end — see confirm_tool_execution.
             handler.confirm_timeout_seconds = None
@@ -116,7 +116,7 @@ class PermissionState:
     def detach(self, handler: Any) -> None:
         """Take the turn's grants back into the session and drop the handler."""
         with self._lock:
-            self._approved.update(handler.session_approved_tools())
+            self._grants.update(handler.session_grants())
             if self._handler is handler:
                 self._handler = None
 

@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, ClassVar, Dict, List, Optional
 
 from gaia.agents.base.console import OutputHandler
+from gaia.agents.base.tool_grants import grant_scope
 from gaia.agents.base.tools import get_tool_display_label, get_tool_metadata
 from gaia.ui.event_narration import DEBUG_CHANNEL, format_count
 
@@ -200,6 +201,10 @@ class SSEOutputHandler(OutputHandler):
     #: one without the responder having to name it.
     _confirm_tool: Optional[str] = None
 
+    #: The arguments of the live prompt, so an "always" answer grants the scope
+    #: the user was actually shown rather than the whole tool.
+    _confirm_args: Optional[Dict[str, Any]] = None
+
     def __init__(self, background_mode: bool = False):
         self.event_queue: queue.Queue = queue.Queue()
         self.cancelled = threading.Event()
@@ -216,6 +221,7 @@ class SSEOutputHandler(OutputHandler):
         self._confirm_result: bool = False
         self._confirm_id: Optional[str] = None
         self._confirm_tool = None
+        self._confirm_args = None
         self._tool_start_time: Optional[float] = None
         # Autonomous loop support
         # background_mode=True: skip blocking user confirmation; immediately deny.
@@ -934,11 +940,11 @@ class SSEOutputHandler(OutputHandler):
             )
             return True
 
-        if self.tool_approved_for_session(tool_name):
+        if self.call_is_granted(tool_name, tool_args):
             self._last_denial = None
             logger.info(
-                "Confirmation-gated tool '%s' pre-approved for this session by "
-                "the user",
+                "Confirmation-gated call to '%s' pre-approved for this session "
+                "by the user",
                 tool_name,
             )
             return True
@@ -970,6 +976,7 @@ class SSEOutputHandler(OutputHandler):
             self._confirm_result = False
             self._confirm_id = confirm_id
             self._confirm_tool = tool_name
+            self._confirm_args = tool_args if isinstance(tool_args, dict) else {}
         self._last_denial = None
 
         request: Dict[str, Any] = {
@@ -978,6 +985,13 @@ class SSEOutputHandler(OutputHandler):
             "args": tool_args,
             "confirm_id": confirm_id,
         }
+        # Present only when an "always" answer would create a grant, and it
+        # names exactly what that grant covers. A front-end must not offer the
+        # choice without it: an unqualified "always" is read as far broader
+        # than the invocation-scoped grant actually on offer.
+        scope = grant_scope(tool_name, tool_args)
+        if scope is not None:
+            request["always_scope"] = scope.label
         # Advertised only when it is real. A front-end told "60 s" that then
         # never expires runs a countdown to nothing; one told nothing correctly
         # renders a prompt that waits.
@@ -1034,6 +1048,7 @@ class SSEOutputHandler(OutputHandler):
             self._confirm_id = None
             self._confirm_event = None
             self._confirm_tool = None
+            self._confirm_args = None
 
     def print_policy_alert(
         self,
@@ -1089,7 +1104,7 @@ class SSEOutputHandler(OutputHandler):
                 )
                 return False
             if always and self._confirm_tool:
-                self.approve_tool_for_session(self._confirm_tool)
+                self.grant_call_for_session(self._confirm_tool, self._confirm_args)
             if self._confirm_event is None:
                 # No pending confirmation — initialise state anyway so callers can
                 # inspect _confirm_result and _confirm_event after the call.

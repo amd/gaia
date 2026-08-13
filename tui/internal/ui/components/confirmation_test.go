@@ -256,12 +256,13 @@ func TestConfirmationHintNamesTheKeysAndTimeout(t *testing.T) {
 // real question that silently answered itself after 30s.
 func TestLiveConfirmationOffersAlwaysAndDoesNotExpire(t *testing.T) {
 	m := NewConfirmationModel("run-1", "run_shell_command",
-		`Run 'run_shell_command' with command="pwd"?`, "").WithLiveChannel("cid-1")
+		`Run 'run_shell_command' with command="pwd"?`, "").
+		WithLiveChannel("cid-1", "pwd")
 	view := stripANSI(m.View())
 
 	for _, want := range []string{
 		"y run once",
-		"a allow any run_shell_command this session",
+		"a allow `pwd` this session",
 		"n/esc deny",
 		"waits for you",
 		`command="pwd"`, // the payload the old prompt hid
@@ -292,7 +293,7 @@ func TestEachOutcomeIsDistinct(t *testing.T) {
 	} {
 		t.Run(tc.key, func(t *testing.T) {
 			m := NewConfirmationModel("run-1", "run_shell_command", "x", "").
-				WithLiveChannel("cid-1")
+				WithLiveChannel("cid-1", "gh issue list")
 			updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(tc.key)})
 			if cmd == nil {
 				t.Fatalf("%q did not resolve the confirmation", tc.key)
@@ -348,7 +349,7 @@ func TestTimeoutNeverApproves(t *testing.T) {
 
 	t.Run("live prompt ignores a timeout tick", func(t *testing.T) {
 		m := NewConfirmationModel("run-1", "run_shell_command", "x", "").
-			WithLiveChannel("cid-1")
+			WithLiveChannel("cid-1", "gh issue list")
 		updated, cmd := m.ResolveTimeout(ConfirmationTimeoutMsg{RunID: "run-1"})
 		if cmd != nil {
 			t.Error("a live prompt must not be resolved by a timeout")
@@ -359,14 +360,45 @@ func TestTimeoutNeverApproves(t *testing.T) {
 	})
 }
 
-// A destructive tool still offers "always" — withholding it removed the option
-// from most prompts, since unrecognised tools default to that tier — but the
-// warning has to state that the grant is argument-blind.
-func TestDestructiveAlwaysStatesItsBreadth(t *testing.T) {
-	view := stripANSI(NewConfirmationModel("run-1", "run_shell_command", "x", "").
-		WithLiveChannel("cid-1").View())
-	if !strings.Contains(view, "any arguments") {
-		t.Errorf("a destructive always-grant must say it is argument-blind:\n%s", view)
+// "Always" is the agent's call, not the renderer's. No scope on the event means
+// no grant is on offer, however deliverable the decision is - a client that
+// invented one would promise something nothing enforces.
+func TestAlwaysNeedsAScopeFromTheAgent(t *testing.T) {
+	m := NewConfirmationModel("run-1", "run_shell_command", "x", "").
+		WithLiveChannel("cid-1", "")
+	view := stripANSI(m.View())
+	if strings.Contains(view, " a allow ") {
+		t.Errorf("always offered with no scope to grant:\n%s", view)
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	if cmd != nil || !updated.Pending() {
+		t.Error("'a' must be inert when the agent named no scope")
+	}
+}
+
+// The grant the modal promises is the one the agent will record - never widened
+// to the whole tool. One keypress on `gh issue list` must not read as, or
+// become, "any run_shell_command".
+func TestAlwaysPromisesOnlyTheScopeTheAgentNamed(t *testing.T) {
+	m := NewConfirmationModel("run-1", "run_shell_command",
+		`Run 'run_shell_command' with command="gh issue list"?`, "").
+		WithLiveChannel("cid-1", "gh issue list")
+
+	view := stripANSI(m.View())
+	if !strings.Contains(view, "a allow `gh issue list` this session") {
+		t.Errorf("the offer must name the scope:\n%s", view)
+	}
+	for _, forbidden := range []string{"any arguments", "any run_shell_command"} {
+		if strings.Contains(view, forbidden) {
+			t.Errorf("the offer must not read as tool-wide (%q):\n%s", forbidden, view)
+		}
+	}
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	msg := cmd().(ConfirmationDecidedMsg)
+	if msg.AlwaysScope != "gh issue list" {
+		t.Errorf("the decision carried scope %q, want the one shown", msg.AlwaysScope)
 	}
 }
 

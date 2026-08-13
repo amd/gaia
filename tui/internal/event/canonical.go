@@ -80,8 +80,12 @@ type CanonicalNeedsConfirmationEvent struct {
 	// ConfirmID is the emitter's handle for THIS prompt, echoed back with the
 	// decision so a late answer cannot resolve the confirmation that replaced
 	// the one it was typed for. Absent on transports that do not mint one.
-	ConfirmID  string `json:"confirm_id,omitempty"`
-	ConfirmURL string `json:"confirm_url,omitempty"`
+	ConfirmID string `json:"confirm_id,omitempty"`
+	// AlwaysScope is what an "always" answer would grant, e.g. `gh issue list`.
+	// Empty means this call has no scope narrow enough to grant, so the client
+	// must not offer the choice — the agent decides that, not the renderer.
+	AlwaysScope string `json:"always_scope,omitempty"`
+	ConfirmURL  string `json:"confirm_url,omitempty"`
 }
 
 // CanonicalNeedsInputEvent — the run pauses on a QUESTION and resumes on this

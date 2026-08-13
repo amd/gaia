@@ -168,7 +168,7 @@ func run(model tea.Model, dev bool, ctrl *control.Options) error {
 // already refused that combination (see cli.agentControlOptions) rather than
 // pass a non-nil ctrl through here.
 // Returns the process exit code.
-func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctrl *control.Options) (int, error) {
+func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctrl *control.Options, bypassPermissions bool) (int, error) {
 	cat := catalog.NewCatalog()
 	cat.DiscoverBinaries()
 
@@ -199,7 +199,8 @@ func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctr
 		Logf:  logf,
 		// A one-shot has nobody at the keyboard; only the interactive chat can
 		// answer a question, so it must not claim it can.
-		Interactive: query == "",
+		Interactive:       query == "",
+		BypassPermissions: bypassPermissions,
 	})
 	if err != nil {
 		return 1, err

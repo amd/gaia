@@ -174,10 +174,11 @@ type ConfirmationDecidedMsg struct {
 	// ConfirmationModel.
 	ConfirmURL string
 	Approved   bool
-	// Always is an approval that also stops the asking: every later call to
-	// this same TOOL runs without a prompt for the rest of the session. It
-	// implies Approved.
+	// Always is an approval that also stops the asking, for the scope named in
+	// AlwaysScope — never for the whole tool. It implies Approved.
 	Always bool
+	// AlwaysScope is what that grant covers, exactly as the agent described it.
+	AlwaysScope string
 	// TimedOut records that the decision came from the auto-deny rather than
 	// an explicit 'n'/Esc, so the caller can show the distinct warning the
 	// issue's acceptance criteria require.
@@ -213,6 +214,9 @@ type ConfirmationModel struct {
 	// real; neither makes the modal a record of intent.
 	confirmURL  string
 	deliverable bool
+	// alwaysScope is what an "always" answer grants, as the AGENT described it
+	// (e.g. `gh issue list`). Empty means no grant is on offer for this call.
+	alwaysScope string
 	tier        RiskTier
 	state       ConfirmState
 	width       int
@@ -237,9 +241,10 @@ func NewConfirmationModel(runID, action, summary, confirmURL string) Confirmatio
 // This is what turns the modal from a record of the user's intent into a real
 // question: a deliverable confirmation does not auto-deny, and it offers
 // "always" — a grant that means nothing if nobody is listening for it.
-func (m ConfirmationModel) WithLiveChannel(confirmID string) ConfirmationModel {
+func (m ConfirmationModel) WithLiveChannel(confirmID, alwaysScope string) ConfirmationModel {
 	m.deliverable = true
 	m.confirmID = confirmID
+	m.alwaysScope = alwaysScope
 	return m
 }
 
@@ -304,14 +309,14 @@ func (m ConfirmationModel) Update(msg tea.Msg) (ConfirmationModel, tea.Cmd) {
 
 // allowAlways reports whether this prompt may be answered with "always".
 //
-// Only the delivery channel gates it, not the risk tier. Withholding it from
-// the destructive tier was tempting and wrong: the tier's default for an
-// unrecognised tool IS destructive, so that rule quietly removed the option
-// from most prompts — and from `run_shell_command`, the one people hit most.
-// An affordance that disappears without explanation is worse than one that
-// states its cost, which is what keyHint and the destructive warning do.
+// Two conditions, and the second is the important one. The decision has to be
+// deliverable, AND the agent has to have said what a grant would cover. The
+// client never invents that scope: an "always" the renderer decided the shape
+// of would be a promise nothing enforces. No scope means no key — the user
+// answers y/n each time, which is the correct outcome for a call too open-
+// ended to describe (a bare `bash -c …`, say).
 func (m ConfirmationModel) allowAlways() bool {
-	return m.deliverable
+	return m.deliverable && m.alwaysScope != ""
 }
 
 // ResolveTimeout applies the auto-deny, but only if this confirmation can
@@ -338,6 +343,7 @@ func (m ConfirmationModel) decide(state ConfirmState, timedOut bool) (Confirmati
 		ConfirmURL:  m.confirmURL,
 		Approved:    state == ConfirmationApproved || always,
 		Always:      always,
+		AlwaysScope: m.alwaysScope,
 		TimedOut:    timedOut,
 		Deliverable: m.deliverable,
 	}
@@ -378,15 +384,9 @@ func (m ConfirmationModel) View() string {
 	lines = append(lines, confirmationBodyStyle.Render(WrapText(summary, inner)))
 
 	if m.tier == RiskDestructive {
-		warning := "This is a destructive action and may not be reversible."
-		if m.allowAlways() {
-			// The grant is by tool name, so "always" here covers calls whose
-			// arguments nobody has seen yet. Say that where the risk is.
-			warning += " Allowing it for the session covers future " +
-				m.action + " calls with any arguments."
-		}
 		lines = append(lines, "")
-		lines = append(lines, confirmationWarnStyle.Render(WrapText(warning, inner)))
+		lines = append(lines, confirmationWarnStyle.Render(WrapText(
+			"This is a destructive action and may not be reversible.", inner)))
 	}
 
 	lines = append(lines, "")
@@ -401,7 +401,7 @@ func (m ConfirmationModel) resultOrHint(inner int) string {
 		return confirmationOkStyle.Render("approved")
 	case ConfirmationAlways:
 		return confirmationOkStyle.Render(WrapText(
-			"approved — and "+m.action+" will not ask again this session", inner))
+			"approved — and `"+m.alwaysScope+"` will not ask again this session", inner))
 	case ConfirmationDenied:
 		return confirmationNoStyle.Render("denied")
 	case ConfirmationTimedOut:
@@ -421,7 +421,8 @@ func (m ConfirmationModel) resultOrHint(inner int) string {
 func (m ConfirmationModel) keyHint() string {
 	base := "y run once · n/esc deny"
 	if m.allowAlways() {
-		base = "y run once · a allow any " + m.action + " this session · n/esc deny"
+		base = "y run once · a allow `" + m.alwaysScope +
+			"` this session · n/esc deny"
 	}
 	if m.ExpiresUnanswered() {
 		return base + " · auto-denies in 30s if you do nothing"

@@ -56,6 +56,7 @@ func gatedShellCall() event.CanonicalNeedsConfirmationEvent {
 	return event.CanonicalNeedsConfirmationEvent{
 		Type: "needs_confirmation", RunID: "run-1", Action: "run_shell_command",
 		Summary: `Run 'run_shell_command' with command="pwd"?`, ConfirmID: "cid-1",
+		AlwaysScope: "pwd",
 	}
 }
 
@@ -72,7 +73,7 @@ func TestGatedCallShowsTheCommandAndAllThreeChoices(t *testing.T) {
 	for _, want := range []string{
 		`command="pwd"`,
 		"y run once",
-		"a allow any run_shell_command this session",
+		"a allow `pwd` this session",
 		"n/esc deny",
 	} {
 		if !strings.Contains(view, want) {
@@ -336,6 +337,55 @@ func TestBypassCommandsAreNeverSentAsQueries(t *testing.T) {
 	}
 	if isBypassCommand("what does /bypass do") {
 		t.Error("a question about bypass is still a question")
+	}
+}
+
+// A call the agent would not scope offers only y/n in the live chat view. This
+// is the guard against one keypress on a single `gh` command handing over the
+// shell for the session: the agent decides what is grantable, and a bare
+// `bash -c ...` is not.
+func TestChatDoesNotOfferAlwaysWithoutAScope(t *testing.T) {
+	m, c := liveModel(t)
+	m.streaming = true
+	evt := gatedShellCall()
+	evt.AlwaysScope = ""
+	m = feed(t, m, evt)
+
+	if strings.Contains(m.View(), " a allow ") {
+		t.Errorf("always offered for an unscopable call:\n%s", m.View())
+	}
+	updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	m = updated.(ChatModel)
+	if cmd != nil {
+		t.Error("'a' must not resolve a confirmation the agent would not scope")
+	}
+	if m.confirmation == nil || !m.confirmation.Pending() {
+		t.Fatal("the prompt must still be waiting")
+	}
+	if len(c.decisions) != 0 {
+		t.Errorf("nothing should have been delivered: %v", c.decisions)
+	}
+}
+
+// The transcript records the SCOPE that was granted, not the tool - so reading
+// back the session says what was actually handed over.
+func TestTranscriptRecordsTheGrantedScope(t *testing.T) {
+	m, _ := liveModel(t)
+	m.streaming = true
+	m = feed(t, m, gatedShellCall())
+
+	updated, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	m = updated.(ChatModel)
+	decided := cmd().(components.ConfirmationDecidedMsg)
+	updated2, _ := m.Update(decided)
+	m = updated2.(ChatModel)
+
+	last := m.messages[len(m.messages)-1].Content
+	if !strings.Contains(last, "'pwd'") {
+		t.Errorf("the record must name the granted scope, got: %q", last)
+	}
+	if strings.Contains(last, "run_shell_command' will not ask") {
+		t.Errorf("the record must not read as a tool-wide grant: %q", last)
 	}
 }
 
