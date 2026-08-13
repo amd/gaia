@@ -54,6 +54,33 @@ from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 #: frozen sidecar; as ``SKILL_DIRS`` they outrank a same-named user or Claude Code copy.
 _SKILLS_DIR = Path(__file__).resolve().parent / "skills"
 
+#: The starter pack's canonical home, for a source checkout only.
+#:
+#: Packaging stages the pack into ``_SKILLS_DIR``; in a checkout that directory
+#: holds just a ``.gitkeep``, so without this the agent discovers NO skills and
+#: "load the github-triage skill" fails on a tree that visibly contains it.
+#: hub/agents/gaia/python/gaia_agent/agent.py -> parents[4] is hub/.
+_HUB_SKILLS_DIR = Path(__file__).resolve().parents[4] / "skills"
+
+
+def _bundled_skill_roots() -> List[str]:
+    """Existing bundled-skill roots, highest precedence first.
+
+    Mirrors ``_MANIFEST_CANDIDATES``: the packaged location wins, and the
+    source-checkout location stands in when the package was never staged. Both
+    are returned when both exist, so a staged copy shadows the checkout rather
+    than the two disagreeing silently.
+
+    Discovery only. Bundling a skill makes it *loadable on request*; it does not
+    load it. The prompt-budget trade this agent has deliberately not taken is
+    ``default_skill_set`` (below in gaia-agent.yaml), which is what costs tokens
+    by loading skill bodies into every prompt. That stays commented out, so the
+    out-of-the-box prompt is byte-identical — this only means that when a user
+    asks for a skill by name, it is there to load.
+    """
+    return [str(d) for d in (_SKILLS_DIR, _HUB_SKILLS_DIR) if d.is_dir()]
+
+
 _MANIFEST_CANDIDATES = (
     # Packaged: staged into the package (frozen sidecar --add-data, wheel package-data).
     Path(__file__).resolve().parent / "gaia-agent.yaml",
@@ -131,7 +158,7 @@ class GaiaAgentConfig(ChatAgentConfig):
 class GaiaAgent(SkillLibraryToolsMixin, ChatAgent):
     """The flagship GAIA agent — conversation, documents, data, web, and skills."""
 
-    SKILL_DIRS: ClassVar[List[str]] = [str(_SKILLS_DIR)]
+    SKILL_DIRS: ClassVar[List[str]] = _bundled_skill_roots()
     SKILL_MANIFEST: ClassVar[Optional[str]] = _locate_agent_manifest()
 
     # Installing a skill writes third-party code under ~/.gaia/skills and
