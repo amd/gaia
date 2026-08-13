@@ -85,6 +85,14 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		// plan S1 / AC-5 / AC-7c for the harness that proved it.
 		if e.Render == "" {
 			m.markToolDone(e)
+			// A file-editing tool's result carries its own unified diff
+			// regardless of whether the sidecar declared a render card —
+			// see filediff.go. Detected structurally so every text-file
+			// edit gets the Claude-Code-style diff view, not just the
+			// tools this switch happens to know by name.
+			if diffData, ok := diffCardData(e.Data); ok {
+				m.upsertCard("", e.Tool, "diff", diffData)
+			}
 			break
 		}
 		if outcome, toolErr := event.ToolOutcomeOf(e); outcome == event.ToolOutcomeFailed {

@@ -80,6 +80,15 @@ func (b *box) inner() int {
 // point where agent-supplied text stops being able to move the cursor.
 func (b *box) add(line string) { b.lines = append(b.lines, clean(line)) }
 
+// addStyled appends a line that has ALREADY been through clean() and then
+// wrapped in terminal styling (e.g. the diff card's +/- coloring). Unlike
+// add, it does NOT re-run clean() -- clean() strips the very ANSI escapes
+// the styling just added, which would silently discard the color. Every
+// character of caller-supplied text in the line must already have gone
+// through clean() before it was styled; add() enforces that for callers,
+// addStyled trusts that its caller already did.
+func (b *box) addStyled(line string) { b.lines = append(b.lines, line) }
+
 func (b *box) blank() { b.lines = append(b.lines, "") }
 
 // addWrapped appends s wrapped to the interior width, each continuation line

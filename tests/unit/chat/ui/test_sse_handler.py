@@ -595,6 +595,60 @@ class TestPrettyPrintJsonToolResults:
         assert rd["count"] == 15
         assert len(rd["chunks"]) == 8
 
+    def test_diff_result_data(self, handler):
+        """A file-editing tool's result (status envelope, not ok/data/kind)
+        carries its diff-card fields through result_data (contract §4.3's
+        `diff` render primitive, drawn by tui/internal/ui/cards/diff.go)."""
+        data = {
+            "status": "success",
+            "file_path": "src/app.py",
+            "diff": "@@ -1 +1 @@\n-old\n+new\n",
+            "additions": 1,
+            "deletions": 1,
+            "summary": "+1 -1",
+        }
+        handler.pretty_print_json(data, title="Result")
+        events = _drain(handler)
+        event = events[0]
+        assert "result_data" in event
+        rd = event["result_data"]
+        assert rd["status"] == "success"
+        assert rd["file_path"] == "src/app.py"
+        assert rd["diff"] == "@@ -1 +1 @@\n-old\n+new\n"
+        assert rd["is_binary"] is False
+
+    def test_diff_result_data_carries_error_status(self, handler):
+        """A denied/failed edit must not be misread as success downstream —
+        the TUI's diff-card detection (filediff.go) relies on this status."""
+        data = {"status": "error", "error": "Access denied", "diff": ""}
+        handler.pretty_print_json(data, title="Result")
+        events = _drain(handler)
+        rd = events[0]["result_data"]
+        assert rd["status"] == "error"
+
+    def test_diff_result_data_carries_is_binary(self, handler):
+        data = {
+            "status": "success",
+            "file_path": "logo.png",
+            "diff": "",
+            "is_binary": True,
+            "size_bytes": 204800,
+            "summary": "binary file (200.0 KB) — diff skipped",
+        }
+        handler.pretty_print_json(data, title="Result")
+        events = _drain(handler)
+        rd = events[0]["result_data"]
+        assert rd["is_binary"] is True
+        assert rd["diff"] == ""
+
+    def test_no_diff_key_leaves_result_data_unset(self, handler):
+        """A tool result with no `diff` field (most tools) must not gain one —
+        result_data stays absent so the generic tool_result path is used."""
+        data = {"status": "success", "message": "Done"}
+        handler.pretty_print_json(data, title="Result")
+        events = _drain(handler)
+        assert "result_data" not in events[0]
+
     def test_no_title(self, handler):
         handler.pretty_print_json({"key": "val"})
         events = _drain(handler)

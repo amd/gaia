@@ -474,6 +474,23 @@ class SSEOutputHandler(OutputHandler):
                     "chunks": structured_chunks,
                 }
 
+        # For file-edit results (write_file / edit_file / write_python_file /
+        # edit_python_file / write_markdown_file / replace_function /
+        # generate_diff — all backed by the shared
+        # gaia.agents.tools.diff_utils helper), carry the diff-card fields
+        # through so the TUI's `diff` render card (contract §4.3,
+        # tui/internal/ui/cards/diff.go) can draw them. These tools return
+        # the ordinary status-based envelope every other file tool in this
+        # codebase uses, not the ok/data/kind envelope `_RENDER_TOOL_TO_LANG`
+        # below expects, so this reads straight off `data`.
+        if isinstance(data, dict) and "diff" in data:
+            event["result_data"] = {
+                "status": data.get("status", "success"),
+                "file_path": data.get("file_path", ""),
+                "diff": data.get("diff", ""),
+                "is_binary": bool(data.get("is_binary", False)),
+            }
+
         # The render-map card (if any) is authoritative for a registered tool —
         # set last so it always wins over the generic result_data shapes above.
         if render_card is not None:

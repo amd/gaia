@@ -9,9 +9,14 @@
 // payload that fails its schema says so. A card is never dropped and never
 // blanks the message.
 //
-// Of the five primitives this package draws three. `image` is base64 raster and
-// cannot be shown in a terminal, so it degrades to a caption line; `diff` has no
-// producer today and rides the unsupported-card fallback until one exists.
+// Of the five primitives this package draws four in full. `image` is base64
+// raster and cannot be shown in a terminal, so it degrades to a caption line.
+// `diff` (diff.go) draws a Claude-Code-style colored unified diff — the GAIA
+// agent's file-editing tools (gaia.agents.tools.diff_utils) are its producer,
+// wired through the chat package's own diff-field detection rather than
+// `tool_result.render` (see tui/internal/ui/chat/filediff.go): those tools
+// use the same status-based result envelope every other file tool in the
+// codebase does, not the ok/data/kind envelope `render` normally requires.
 package cards
 
 import (
@@ -54,6 +59,8 @@ func RenderDeduped(renderKey string, data json.RawMessage, width int, seen map[s
 		return renderList(data, width), nil
 	case "image":
 		return renderImage(data, width), nil
+	case "diff":
+		return renderDiff(data, width), nil
 	default:
 		return renderUnsupported(key, data, width), nil
 	}

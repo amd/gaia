@@ -9,11 +9,17 @@ inherited by agents that need file manipulation capabilities.
 """
 
 import ast
-import difflib
 import os
 from typing import Any, Dict, Optional
 
 from gaia.agents.base.tools import tool
+from gaia.agents.tools.diff_utils import (
+    binary_skip_result,
+    build_diff,
+    diff_fields_for_overwrite,
+    read_text_for_edit,
+    read_text_or_binary,
+)
 
 
 class FileIOToolsMixin:
@@ -242,6 +248,10 @@ class FileIOToolsMixin:
                     if os.path.exists(file_path):
                         backup_path = path_validator.create_backup(str(file_path))
 
+                # Diff the incoming content against whatever is on disk NOW,
+                # before that content is overwritten below.
+                diff_fields = diff_fields_for_overwrite(str(file_path), content)
+
                 # Create parent directories if needed
                 if create_dirs and os.path.dirname(file_path):
                     os.makedirs(os.path.dirname(file_path), exist_ok=True)
@@ -263,6 +273,7 @@ class FileIOToolsMixin:
                     "bytes_written": content_size,
                     "line_count": len(content.splitlines()),
                 }
+                result.update(diff_fields)
                 if path_validator is not None and backup_path:
                     result["backup_path"] = backup_path
                 return result
@@ -335,8 +346,9 @@ class FileIOToolsMixin:
                 if not os.path.exists(file_path):
                     return {"status": "error", "error": f"File not found: {file_path}"}
 
-                with open(file_path, "r", encoding="utf-8") as f:
-                    current_content = f.read()
+                current_content, binary_error = read_text_for_edit(str(file_path))
+                if binary_error is not None:
+                    return binary_error
 
                 # Check if old content exists
                 if old_content not in current_content:
@@ -365,21 +377,16 @@ class FileIOToolsMixin:
                     }
 
                 # Generate diff
-                diff = "\n".join(
-                    difflib.unified_diff(
-                        current_content.splitlines(keepends=True),
-                        modified_content.splitlines(keepends=True),
-                        fromfile=file_path,
-                        tofile=file_path,
-                    )
+                diff_fields = build_diff(
+                    str(file_path), current_content, modified_content
                 )
 
                 if dry_run:
                     return {
                         "status": "success",
                         "dry_run": True,
-                        "diff": diff,
-                        "would_change": current_content != modified_content,
+                        "would_change": diff_fields["has_changes"],
+                        **diff_fields,
                     }
 
                 # Create backup via path_validator if available, else manual
@@ -412,13 +419,14 @@ class FileIOToolsMixin:
                         detail,
                     )
 
-                return {
+                result = {
                     "status": "success",
                     "file_path": file_path,
-                    "diff": diff,
                     "backup_created": backup,
                     "backup_path": backup_path,
                 }
+                result.update(diff_fields)
+                return result
             except Exception as e:
                 path_validator = getattr(self, "path_validator", None)
                 if path_validator is not None:
@@ -527,44 +535,24 @@ class FileIOToolsMixin:
                         "error": f"Access denied: {file_path} is not in allowed paths",
                     }
 
-                # Read original content
-                if os.path.exists(file_path):
-                    with open(file_path, "r", encoding="utf-8") as f:
-                        original_content = f.read()
-                else:
-                    original_content = ""
+                # Read original content, if any — a nonexistent file previews
+                # as a brand-new one, exactly like write_file would create it.
+                original_content, binary_size = read_text_or_binary(file_path)
+                if binary_size is not None:
+                    result = {"status": "success", "file_path": file_path}
+                    result.update(binary_skip_result(binary_size))
+                    return result
 
-                # Generate unified diff
-                diff = list(
-                    difflib.unified_diff(
-                        original_content.splitlines(keepends=True),
-                        new_content.splitlines(keepends=True),
-                        fromfile=file_path,
-                        tofile=file_path,
-                        n=context_lines,
-                    )
+                diff_fields = build_diff(
+                    file_path,
+                    original_content,
+                    new_content,
+                    context_lines=context_lines,
                 )
 
-                # Count changes
-                additions = sum(
-                    1
-                    for line in diff
-                    if line.startswith("+") and not line.startswith("+++")
-                )
-                deletions = sum(
-                    1
-                    for line in diff
-                    if line.startswith("-") and not line.startswith("---")
-                )
-
-                return {
-                    "status": "success",
-                    "file_path": file_path,
-                    "diff": "".join(diff),
-                    "additions": additions,
-                    "deletions": deletions,
-                    "has_changes": bool(diff),
-                }
+                result = {"status": "success", "file_path": file_path}
+                result.update(diff_fields)
+                return result
             except Exception as e:
                 return {"status": "error", "error": str(e)}
 
@@ -605,6 +593,10 @@ class FileIOToolsMixin:
                     if os.path.exists(file_path):
                         backup_path = path_validator.create_backup(str(file_path))
 
+                # Diff the incoming content against whatever is on disk NOW,
+                # before that content is overwritten below.
+                diff_fields = diff_fields_for_overwrite(str(file_path), content)
+
                 # Create parent directories if needed
                 if create_dirs:
                     dir_name = os.path.dirname(file_path)
@@ -628,6 +620,7 @@ class FileIOToolsMixin:
                     "bytes_written": content_size,
                     "line_count": len(content.splitlines()),
                 }
+                result.update(diff_fields)
                 if path_validator is not None and backup_path:
                     result["backup_path"] = backup_path
                 return result
@@ -687,6 +680,10 @@ class FileIOToolsMixin:
                     if path.exists():
                         backup_path = path_validator.create_backup(str(path))
 
+                # Diff the incoming content against whatever is on disk NOW,
+                # before that content is overwritten below.
+                diff_fields = diff_fields_for_overwrite(str(path), content)
+
                 # Create parent directories if requested
                 if create_dirs and not path.parent.exists():
                     path.parent.mkdir(parents=True, exist_ok=True)
@@ -721,6 +718,7 @@ class FileIOToolsMixin:
                     "size_bytes": content_size,
                     "file_type": path.suffix[1:] if path.suffix else "unknown",
                 }
+                result.update(diff_fields)
                 if path_validator is not None and backup_path:
                     result["backup_path"] = backup_path
                 return result
@@ -804,7 +802,9 @@ class FileIOToolsMixin:
                     return {"status": "error", "error": f"File not found: {file_path}"}
 
                 # Read current content
-                current_content = path.read_text(encoding="utf-8")
+                current_content, binary_error = read_text_for_edit(str(path))
+                if binary_error is not None:
+                    return binary_error
 
                 # Check if old_content exists in file
                 if old_content not in current_content:
@@ -822,23 +822,17 @@ class FileIOToolsMixin:
                 updated_content = current_content.replace(old_content, new_content, 1)
 
                 # Generate diff before writing
-                diff = "\n".join(
-                    difflib.unified_diff(
-                        current_content.splitlines(keepends=True),
-                        updated_content.splitlines(keepends=True),
-                        fromfile=f"a/{os.path.basename(str(path))}",
-                        tofile=f"b/{os.path.basename(str(path))}",
-                        lineterm="",
-                    )
-                )
+                diff_fields = build_diff(str(path), current_content, updated_content)
 
                 # Write updated content
                 path.write_text(updated_content, encoding="utf-8")
 
                 console = getattr(self, "console", None)
                 if console:
-                    if diff.strip():
-                        console.print_diff(diff, os.path.basename(str(path)))
+                    if diff_fields["has_changes"]:
+                        console.print_diff(
+                            diff_fields["diff"], os.path.basename(str(path))
+                        )
                     else:
                         console.print_info(f"edit_file: No changes were made to {path}")
 
@@ -861,8 +855,8 @@ class FileIOToolsMixin:
                     "old_size": len(current_content),
                     "new_size": len(updated_content),
                     "file_type": path.suffix[1:] if path.suffix else "unknown",
-                    "diff": diff,
                 }
+                result.update(diff_fields)
                 if backup_path:
                     result["backup_path"] = backup_path
                 return result
@@ -1024,8 +1018,9 @@ class FileIOToolsMixin:
                 if not os.path.exists(file_path):
                     return {"status": "error", "error": f"File not found: {file_path}"}
 
-                with open(file_path, "r", encoding="utf-8") as f:
-                    content = f.read()
+                content, binary_error = read_text_for_edit(str(file_path))
+                if binary_error is not None:
+                    return binary_error
 
                 # Parse the file to find the function
                 try:
@@ -1103,14 +1098,7 @@ class FileIOToolsMixin:
                     f.write(modified_content)
 
                 # Generate diff
-                diff = "\n".join(
-                    difflib.unified_diff(
-                        content.splitlines(keepends=True),
-                        modified_content.splitlines(keepends=True),
-                        fromfile=file_path,
-                        tofile=file_path,
-                    )
-                )
+                diff_fields = build_diff(str(file_path), content, modified_content)
 
                 # Audit successful edit
                 if path_validator is not None:
@@ -1125,13 +1113,14 @@ class FileIOToolsMixin:
                         detail,
                     )
 
-                return {
+                result = {
                     "status": "success",
                     "file_path": file_path,
                     "function_replaced": function_name,
                     "backup_path": backup_path if backup else None,
-                    "diff": diff,
                 }
+                result.update(diff_fields)
+                return result
             except Exception as e:
                 path_validator = getattr(self, "path_validator", None)
                 if path_validator is not None:
