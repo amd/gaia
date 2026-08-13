@@ -1887,6 +1887,39 @@ func (m ChatModel) renderActivityItem(item ActivityItem, live bool, elapsed time
 	return lines
 }
 
+// queuedEchoFloor is the narrowest the echoed line may get before the key hint
+// beside it is dropped instead. Showing WHAT was accepted is the row's job; the
+// key is the part a user can find elsewhere.
+const queuedEchoFloor = 24
+
+// renderQueuedRow shows a follow-up that is waiting for the running turn.
+//
+// The hint names the whole consequence. Esc here does not just un-queue: it
+// runs the same cancel every other Esc runs, so the turn being waited on stops
+// too — the row used to promise only the half the reader would like.
+//
+// It is also measured against the terminal rather than the answer column. The
+// echo was truncated to answerWidth (capped at answerMeasure) with the prefix
+// and hint appended afterwards, so a long queued line ran past the last column
+// and wrapped onto a second row, shearing the status bar below it.
+func (m ChatModel) renderQueuedRow() string {
+	const (
+		prefix = "⏎ queued · "
+		hint   = "  Esc stops the turn and puts this back"
+	)
+
+	suffix := hint
+	budget := m.width - lipgloss.Width(prefix) - lipgloss.Width(hint)
+	if budget < queuedEchoFloor {
+		suffix = ""
+		budget = m.width - lipgloss.Width(prefix)
+	}
+
+	return activityStyle.Render(prefix) +
+		statusMsgStyle.Render(truncateRunes(m.queued, budget)) +
+		activityStyle.Render(suffix)
+}
+
 func (m ChatModel) View() string {
 	if m.width == 0 {
 		return m.renderWelcome()
@@ -1907,9 +1940,7 @@ func (m ChatModel) View() string {
 		case strings.TrimSpace(m.input.Value()) != "":
 			inputView = m.input.View() + "  " + activityStyle.Render("⏎ queues")
 		case m.queued != "":
-			inputView = activityStyle.Render("⏎ queued · ") +
-				statusMsgStyle.Render(truncateRunes(m.queued, m.answerWidth())) +
-				activityStyle.Render("  Esc to take it back")
+			inputView = m.renderQueuedRow()
 		default:
 			// Mid-turn Enter queues rather than sends, so the idle prompt is
 			// untrue while the agent works — an empty composer says it better.
