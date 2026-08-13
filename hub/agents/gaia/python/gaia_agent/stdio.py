@@ -245,7 +245,11 @@ def main(argv: Optional[list] = None) -> int:
     try:
         from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
 
-        config_kwargs: Dict[str, Any] = {"silent_mode": True}
+        # streaming=True is what turns the answer into ``token`` events. Without
+        # it the turn is silent for its whole length and the finished text lands
+        # in one frame — the transport could always carry tokens, the agent just
+        # never produced any.
+        config_kwargs: Dict[str, Any] = {"silent_mode": True, "streaming": True}
         if args.model:
             config_kwargs["model_id"] = args.model
         agent = GaiaAgent(config=GaiaAgentConfig(**config_kwargs))

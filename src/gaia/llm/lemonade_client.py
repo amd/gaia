@@ -520,6 +520,19 @@ def is_tool_calling_model(model_id: Optional[str]) -> bool:
     return True  # Unknown GGUF: optimistic default per Tier 0 findings
 
 
+def _tool_call_deltas(delta: Any) -> Optional[List[Dict[str, Any]]]:
+    """Plain-dict form of one streamed frame's ``tool_calls``, or ``None``.
+
+    Only a real sequence is unpacked — the OpenAI SDK hands back pydantic models
+    here, and a test double's auto-created attribute would otherwise reach the
+    accumulator as a fragment it cannot read.
+    """
+    raw = getattr(delta, "tool_calls", None)
+    if not isinstance(raw, (list, tuple)) or not raw:
+        return None
+    return [tc.model_dump() if hasattr(tc, "model_dump") else dict(tc) for tc in raw]
+
+
 def _validate_profile_model_registry() -> None:
     """Fail loudly at import time if AGENT_PROFILES references an undeclared model."""
     for agent_name, profile in AGENT_PROFILES.items():
@@ -1998,6 +2011,11 @@ class LemonadeClient:
                                     getattr(choice.delta, "reasoning_content", None)
                                     or None
                                 ),
+                                # Native tool_calls arrive as fragments (name in
+                                # the first frame, arguments split across the
+                                # rest). Dropping them here is what made a
+                                # tool-calling turn unstreamable.
+                                "tool_calls": _tool_call_deltas(choice.delta),
                             },
                             "finish_reason": choice.finish_reason,
                         }

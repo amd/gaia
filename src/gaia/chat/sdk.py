@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional
 from gaia.chat.prompts import Prompts
 from gaia.llm import create_client
 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+from gaia.llm.providers.lemonade import NATIVE_TOOL_CALLS_PREFIX
 from gaia.logger import get_logger
 
 
@@ -332,25 +333,25 @@ class AgentSDK:
             if "max_tokens" not in kwargs:
                 kwargs["max_tokens"] = self.config.max_tokens
 
+            # ``tools`` is forwarded only when present: the non-Lemonade
+            # providers take it through **kwargs straight to their own API,
+            # which rejects an OpenAI-shaped tools array.
             if tools:
-                # Tool-calling path: provider forces non-streaming and returns
-                # a sentinel JSON string. Yield as a single complete response.
-                response = self.llm_client.chat(
-                    messages=structured,
-                    model=self.config.model,
-                    stream=True,
-                    tools=tools,
-                    **kwargs,
-                )
-                stats = self.get_stats()
-                yield AgentResponse(text=response, stats=stats, is_complete=True)
-                return
+                kwargs["tools"] = tools
 
-            full_response = ""
             for chunk in self.llm_client.chat(
                 messages=structured, model=self.config.model, stream=True, **kwargs
             ):
-                full_response += chunk
+                # A tool-calling turn ends with the sentinel envelope rather than
+                # more prose. It is a control frame — surfacing it as answer text
+                # would print raw JSON at the user — so it terminates the stream
+                # as the complete response, which is the shape the agent loop's
+                # native tool_calls branch already parses.
+                if tools and chunk.startswith(NATIVE_TOOL_CALLS_PREFIX):
+                    yield AgentResponse(
+                        text=chunk, stats=self.get_stats(), is_complete=True
+                    )
+                    return
                 yield AgentResponse(text=chunk, is_complete=False)
 
             # Send final response with stats
