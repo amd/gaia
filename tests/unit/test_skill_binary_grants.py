@@ -12,11 +12,16 @@ Four properties, in order of how badly a regression would hurt:
 
 from __future__ import annotations
 
+import os
 import shlex
 
 import pytest
 
-from gaia.agents.tools.shell_tools import ALLOWED_COMMANDS, ShellToolsMixin
+from gaia.agents.tools.shell_tools import (
+    ALLOWED_COMMANDS,
+    ShellToolsMixin,
+    skill_granted_binaries,
+)
 from gaia.skills.binaries import (
     BINARY_POLICIES,
     BinaryGrants,
@@ -282,20 +287,43 @@ def test_revoking_an_unknown_skill_is_a_no_op():
     assert "gh" in grants
 
 
+@pytest.mark.parametrize("token", ["gh", "GH", '"gh"', " gh "])
+def test_a_bare_binary_name_matches_the_grant(token):
+    assert normalize_binary(token) == "gh"
+
+
 @pytest.mark.parametrize(
-    "token,expected",
+    "token",
     [
-        ("gh", "gh"),
-        ("GH", "gh"),
-        ("gh.exe", "gh"),
-        ("GH.EXE", "gh"),
-        ("C:\\Program Files\\GitHub CLI\\gh.exe", "gh"),
-        ("/usr/bin/gh", "gh"),
+        "./gh",
+        "gh/",
+        "/usr/bin/gh",
+        "C:\\Program Files\\GitHub CLI\\gh.exe",
+        "..\\gh.exe",
+        "~/bin/gh",
     ],
 )
-def test_binary_names_normalize_to_the_grant_key(token, expected):
-    """A path or .exe spelling must not slip past — or bypass — the gate."""
-    assert normalize_binary(token) == expected
+def test_a_path_spelled_binary_never_matches_the_grant(token):
+    """`./gh` is a file the caller chose, not the CLI the skill declared.
+
+    Matching it would let a granted skill run any executable it can name `gh`.
+    Returning "" drops the token to the ordinary whitelist, which refuses it.
+    """
+    assert normalize_binary(token) == ""
+    error = ShellToolsMixin._validate_command(
+        token.lower(),
+        [token, "issue", "list"],
+        f"{token} issue list",
+        granted_binaries=frozenset({"gh"}),
+    )
+    assert error is not None
+    assert "not in the allowed list" in error["error"]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="the .exe suffix is Windows-only")
+def test_the_exe_suffix_is_stripped_on_windows():
+    assert normalize_binary("gh.exe") == "gh"
+    assert normalize_binary("GH.EXE") == "gh"
 
 
 # ---------------------------------------------------------------------------
@@ -360,7 +388,7 @@ def test_granting_never_mutates_module_state():
     assert set(ALLOWED_COMMANDS) == before
     assert "gh" not in ALLOWED_COMMANDS
     # A second, ungranted host still refuses it.
-    assert _Shell().granted_binaries == frozenset()
+    assert skill_granted_binaries(_Shell()) == frozenset()
 
 
 def test_policy_binaries_never_shadow_a_builtin_whitelist_entry():
@@ -371,9 +399,109 @@ def test_policy_binaries_never_shadow_a_builtin_whitelist_entry():
 def test_the_ungranted_whitelist_is_unchanged():
     """An agent with no skill loaded behaves exactly as before."""
     host = _Shell()
-    assert host.granted_binaries == frozenset()
+    assert skill_granted_binaries(host) == frozenset()
     assert ShellToolsMixin._validate_command("ls", ["ls", "-la"], "ls -la") is None
     assert (
         ShellToolsMixin._validate_command("git", ["git", "push"], "git push")
         is not None
     )
+
+
+def test_the_grant_ledger_has_exactly_one_public_accessor():
+    """`ShellToolsMixin` must not define `granted_binaries`.
+
+    An agent composes both `Agent` and `ShellToolsMixin`; two same-named
+    accessors returning different types (a `BinaryGrants` vs a `frozenset`)
+    would resolve by MRO, and the loser would be silently unreachable. The
+    mixin reads the agent's ledger through `skill_granted_binaries` instead.
+    """
+    assert not hasattr(ShellToolsMixin, "granted_binaries")
+
+
+def test_the_agent_ledger_and_the_shell_view_agree():
+    from gaia.agents.base.agent import Agent
+
+    class _Host(ShellToolsMixin):
+        granted_binaries = Agent.granted_binaries  # the agent-side property
+
+    host = _Host()
+    assert skill_granted_binaries(host) == frozenset()
+    host.granted_binaries.grant("gh", skill_name="github-triage")
+    assert skill_granted_binaries(host) == frozenset({"gh"})
+
+
+# ---------------------------------------------------------------------------
+# Flag-parsing regressions — each of these was once a live bypass
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        # pflag accepts a short flag's value attached to the same token, so a
+        # rule that only splits on "=" is defeated by deleting one space.
+        "gh api -XDELETE repos/amd/gaia",
+        "gh api -XPOST repos/amd/gaia/issues",
+        "gh api -X=PATCH repos/amd/gaia",
+        "gh api -fbody=spam repos/amd/gaia/issues/1/comments",
+        "gh api -Fbody=@/etc/passwd repos/x/issues/1/comments",
+        "gh api -XPOST -fbody=spam repos/x/issues/1/comments",
+    ],
+)
+def test_an_attached_short_flag_value_cannot_smuggle_a_write(command):
+    assert check(command) is not None
+
+
+def test_a_leading_slash_does_not_dodge_the_graphql_denial():
+    assert check("gh api /graphql") is not None
+    assert check("gh api graphql") is not None
+
+
+def test_an_attached_value_is_not_read_as_the_action():
+    """`-L5` carries its value, so the next token is still the action."""
+    assert check("gh issue -L5 list") is None
+    assert check("gh issue -L5 create") is not None
+
+
+# ---------------------------------------------------------------------------
+# Pipelines
+# ---------------------------------------------------------------------------
+
+
+class _Validating(ShellToolsMixin):
+    """A host with a path validator that refuses everything outside cwd."""
+
+    class _Validator:
+        @staticmethod
+        def is_path_allowed(path: str) -> bool:
+            return False
+
+    path_validator = _Validator()
+
+
+def _run(host, command):
+    host.register_shell_tools()
+    from gaia.agents.base.tools import _TOOL_REGISTRY
+
+    return _TOOL_REGISTRY["run_shell_command"]["function"](command)
+
+
+def test_the_granted_binary_exemption_does_not_cover_the_rest_of_the_pipeline():
+    """`gh … | cat ../secret` must still be path-checked on the `cat` segment."""
+    host = _Validating()
+    host._granted_binaries = BinaryGrants()
+    host._granted_binaries.grant("gh", skill_name="github-triage")
+
+    result = _run(host, "gh issue list --repo amd/gaia | cat ../../secret.txt")
+    assert result["status"] == "error"
+    assert "Access denied" in result["error"]
+
+
+def test_an_ungranted_command_in_a_pipeline_is_still_refused():
+    host = _Validating()
+    host._granted_binaries = BinaryGrants()
+    host._granted_binaries.grant("gh", skill_name="github-triage")
+
+    result = _run(host, "gh issue list --repo amd/gaia | kubectl get pods")
+    assert result["status"] == "error"
+    assert "kubectl" in result["error"]

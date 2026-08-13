@@ -33,7 +33,11 @@ from typing import Iterable, Sequence
 
 from gaia.connectors.providers.base import ConnectorRequirement
 from gaia.logger import get_logger
-from gaia.skills.binaries import BINARY_POLICIES, refuse_unpoliced_binaries
+from gaia.skills.binaries import (
+    BINARY_NAME_RE,
+    BINARY_POLICIES,
+    refuse_unpoliced_binaries,
+)
 from gaia.skills.errors import (
     FORMAT_DOCS_URL,
     SkillPermissionError,
@@ -69,11 +73,6 @@ LOCAL_CAPABILITY_DOMAINS = (
 )
 
 _TOKEN_RE = re.compile(r"^[a-z][a-z0-9_]*$")
-
-#: A ``shell:execute`` scope is a bare executable name, never a path — the grant
-#: is resolved off ``PATH`` so a skill cannot smuggle in ``./evil`` or an
-#: absolute path to a binary that only looks like the one it declared.
-BINARY_NAME_RE = re.compile(r"^[a-z][a-z0-9._+-]*$")
 
 
 @dataclass(frozen=True)
