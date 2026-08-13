@@ -35,6 +35,10 @@ type hint struct {
 // Hint ranks. The gaps are deliberate — they leave room to slot something in
 // without renumbering.
 const (
+	// How to stop the agent acting on its own. Outranks even the way out:
+	// while bypass is on, every frame the user cannot see this is a frame in
+	// which tools are running unasked and they do not know how to stop it.
+	rankBypass = 110
 	// How to get out. Survives to the last column: a user who cannot see this
 	// closes the terminal window.
 	rankEscape = 100
@@ -53,6 +57,12 @@ const (
 // statusHints builds the hint list for the current state, in display order.
 func (m ChatModel) statusHints() []hint {
 	var hints []hint
+
+	// The banner is the primary indicator; this is the belt to its braces, on
+	// the one row that is always drawn.
+	if m.bypassPermissions {
+		hints = append(hints, hint{text: "/bypass off", rank: rankBypass})
+	}
 
 	if m.dev && m.totalSteps > 0 {
 		// The agent loop's step count is a loop bound, not user progress — it

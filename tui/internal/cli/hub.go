@@ -18,7 +18,7 @@ var hubCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		return ui.RunHub(dev, mockAgent, ctrl)
+		return ui.RunHub(dev, mockAgent, ctrl, bypassPermissions)
 	},
 }
 

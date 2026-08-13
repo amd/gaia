@@ -168,7 +168,7 @@ type ChatModel struct {
 	cancelFn  context.CancelFunc
 	agentName string
 	agentID   string
-	dev     bool
+	dev       bool
 	fromHub   bool
 
 	width  int
@@ -184,6 +184,20 @@ type ChatModel struct {
 	// key except Ctrl+C goes to it (including Esc, which means "deny" here,
 	// not "cancel the turn" — see handleKey).
 	confirmation *components.ConfirmationModel
+
+	// bypassPermissions is true while the agent runs every gated tool without
+	// asking. OFF on a fresh launch, always, and never restored from anywhere:
+	// the zero value is the safe value, so there is no code path that can turn
+	// it on without someone having asked for it in this session (or passed
+	// --bypass-permissions on this launch).
+	//
+	// While it is true the UI owes the user an unmissable, unscrollable
+	// statement of that fact — see renderBypassBanner.
+	bypassPermissions bool
+	// bypassArmed is set by /bypass and cleared by the next key. Turning
+	// autonomy ON is a two-step confirmation; turning it OFF is one key, and
+	// never gated.
+	bypassArmed bool
 
 	connected    bool
 	totalSteps   int
@@ -226,18 +240,21 @@ func NewChatModel(c client.AgentClient, agentName string, initialQuery string, d
 	vp := viewport.New(80, 20)
 	vp.SetContent("")
 
-	return ChatModel{
+	m := ChatModel{
 		client:       c,
 		agentName:    agentName,
 		agentID:      agentName,
 		initialQuery: initialQuery,
-		dev:        dev,
+		dev:          dev,
 		input:        ti,
 		spinner:      sp,
 		viewport:     vp,
 		connected:    true,
 		followTail:   true,
 	}
+	// Reads the transport, never a saved preference: bypass is off on a fresh
+	// launch unless THIS launch asked for it on the command line.
+	return m.applyLaunchBypass()
 }
 
 // NewChatModelFromHub creates a ChatModel launched from the hub, enabling Esc-to-return behavior.
@@ -943,6 +960,31 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 		}
 		m.updateViewport()
 		return m, nil
+
+	case "/bypass":
+		if m.bypassPermissions {
+			return m.setBypass(false)
+		}
+		return m.armBypass()
+
+	case "/bypass on":
+		if m.bypassPermissions {
+			return m.bypassNote("Bypass permissions is already ON."), nil
+		}
+		return m.armBypass()
+
+	case "/bypass confirm":
+		if !m.bypassArmed {
+			return m.bypassNote("Nothing to confirm. Type /bypass first — it " +
+				"explains what you would be turning on."), nil
+		}
+		return m.setBypass(true)
+
+	case "/bypass off":
+		if !m.bypassPermissions {
+			return m.bypassNote("Bypass permissions is already off."), nil
+		}
+		return m.setBypass(false)
 	}
 
 	return m.sendQuery(query)
@@ -1876,28 +1918,9 @@ func (m ChatModel) View() string {
 		}
 	}
 
-	// Scrolling is discoverable only if it is advertised: in an alt-screen app
-	// the wheel and the arrows are the ONLY way back to earlier turns, and a
-	// user who doesn't know that concludes the history is gone.
-	hint := "↑↓ scroll · Ctrl+C quit"
-	switch {
-	case m.streaming:
-		// Type-ahead is worth advertising exactly when it applies: a user who
-		// believes the composer is frozen never tries it.
-		hint = "↑↓ scroll · keep typing · Esc cancel"
-	case m.fromHub:
-		hint = "↑↓ scroll · Esc back · Ctrl+C quit"
-	}
-	if !m.followTail {
-		hint = "End to jump to latest · " + hint
-	}
-	// The agent loop's step count is a loop bound, not user progress — it says
-	// neither what is happening nor how far along the work is. For someone
-	// tuning the loop it is the number that matters, so it rides the one row
-	// that is always on screen, and only in --dev.
-	if m.dev && m.totalSteps > 0 {
-		hint = fmt.Sprintf("step %d · %s", m.totalSteps, hint)
-	}
+	// Built as ranked items and thinned by dropping whole ones, so a narrow
+	// terminal loses the wheel hint and keeps the way out — see hints.go.
+	hint := fitHints(m.statusHints(), m.hintBudget())
 
 	// Steps is deliberately not passed: the bar renders it only when the hint is
 	// empty, which it never is here, and the step count already rides the hint
@@ -1910,14 +1933,15 @@ func (m ChatModel) View() string {
 		Hint:      hint,
 	}, m.width)
 
-	return lipgloss.JoinVertical(lipgloss.Left,
-		header,
-		divider,
-		vpView,
-		divider,
-		inputView,
-		statusBar,
-	)
+	// The bypass banner sits OUTSIDE the viewport, directly under the header,
+	// so it is in every frame and cannot be scrolled away. When bypass is off
+	// it renders to "" and JoinVertical drops it, costing no row.
+	rows := []string{header}
+	if banner := m.renderBypassBanner(); banner != "" {
+		rows = append(rows, banner)
+	}
+	rows = append(rows, divider, vpView, divider, inputView, statusBar)
+	return lipgloss.JoinVertical(lipgloss.Left, rows...)
 }
 
 // extractCommandFromArgs pulls the one argument worth showing out of a legacy

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,11 @@ import (
 	"time"
 
 	"github.com/amd/gaia/tui/internal/event"
+)
+
+var (
+	_ ToolPermissionResponder = (*SubprocessClient)(nil)
+	_ PermissionBypasser      = (*SubprocessClient)(nil)
 )
 
 // closeGrace bounds how long Close() waits for an in-flight turn's reader to
@@ -325,6 +331,73 @@ func (s *SubprocessClient) Send(ctx context.Context, query string) (<-chan inter
 	}()
 
 	return ch, nil
+}
+
+// controlKey marks a stdin line as a control message rather than a query. Must
+// match gaia_agent.stdio.CONTROL_KEY — the agent only treats a line as control
+// if it parses as a JSON object carrying exactly this key, so a question that
+// merely looks like JSON is still a question.
+const controlKey = "gaia_control"
+
+// writeControl sends one control message to the child's stdin.
+//
+// Safe to call DURING a turn, which is the entire point: a permission decision
+// is worth nothing after the prompt it answers has expired. stdin and stdout
+// are independent directions of the pipe, and the agent reads stdin on its own
+// thread, so this does not contend with the turn's reader.
+//
+// A control message for a child that was never started is an error, not a
+// silent no-op: it means the caller thinks it is talking to an agent that does
+// not exist, and swallowing that produces a UI that looks like it worked.
+func (s *SubprocessClient) writeControl(fields map[string]interface{}) error {
+	s.mu.Lock()
+	stdin, started := s.stdin, s.started
+	s.mu.Unlock()
+
+	if !started || stdin == nil {
+		return fmt.Errorf("the agent process is not running, so it cannot be told %q", fields[controlKey])
+	}
+	line, err := json.Marshal(fields)
+	if err != nil {
+		return fmt.Errorf("could not encode the %q control message: %w", fields[controlKey], err)
+	}
+	if _, err := fmt.Fprintf(stdin, "%s\n", line); err != nil {
+		return fmt.Errorf("could not reach the agent to send %q: %w", fields[controlKey], err)
+	}
+	return nil
+}
+
+// RespondToolPermission delivers the user's yes/no/always decision to the
+// agent thread parked on the prompt.
+func (s *SubprocessClient) RespondToolPermission(confirmID string, decision PermissionDecision) error {
+	fields := map[string]interface{}{
+		controlKey: "tool_decision",
+		"decision": string(decision),
+	}
+	if confirmID != "" {
+		fields["confirm_id"] = confirmID
+	}
+	return s.writeControl(fields)
+}
+
+// SetBypassPermissions turns unattended approval on or off for the session.
+func (s *SubprocessClient) SetBypassPermissions(enabled bool) error {
+	return s.writeControl(map[string]interface{}{
+		controlKey: "bypass",
+		"enabled":  enabled,
+	})
+}
+
+// BypassAtLaunch reports whether the child was spawned with bypass already on,
+// so the UI can show the warning from the very first frame rather than only
+// after a toggle.
+func (s *SubprocessClient) BypassAtLaunch() bool {
+	for _, a := range s.args {
+		if a == "--bypass-permissions" {
+			return true
+		}
+	}
+	return false
 }
 
 // discard clears the client's process state, but only if it still refers to

@@ -22,6 +22,14 @@ import (
 // (see init) — old scripts and docs keep working, help lists one flag.
 var dev bool
 
+// bypassPermissions starts agents with confirmation prompts off: every gated
+// tool — shell commands, file writes — runs without asking.
+//
+// Off unless passed, and only for this launch. Nothing persists it, so there
+// is no way to land in this mode without having typed it, and the TUI carries
+// an unmissable banner for as long as it is on.
+var bypassPermissions bool
+
 const defaultBinaryName = "gaia-tui"
 
 // binaryName derives the command name from argv[0]. The installer ships this as
@@ -56,7 +64,7 @@ var rootCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		return ui.RunHub(dev, mockAgent, ctrl)
+		return ui.RunHub(dev, mockAgent, ctrl, bypassPermissions)
 	},
 }
 
@@ -71,6 +79,10 @@ func init() {
 	if err := rootCmd.PersistentFlags().MarkHidden("debug"); err != nil {
 		panic(err) // only fails on a flag name that was never registered
 	}
+	rootCmd.PersistentFlags().BoolVar(&bypassPermissions, "bypass-permissions", false,
+		"run every tool without asking for confirmation — the agent acts fully "+
+			"autonomously. Off by default; the TUI shows a persistent warning "+
+			"while it is on, and /bypass off turns it off mid-session")
 	rootCmd.PersistentFlags().BoolVar(&controlEnabled, "control", false,
 		"expose the loopback control API so an assistant can drive this session (auto-assigned port)")
 	rootCmd.PersistentFlags().IntVar(&controlPort, "control-port", 0,
