@@ -200,19 +200,32 @@ def session(library):
         claude_skill_dirs=[library.claude],
     )
     agent.rebuild_system_prompt()
+
+    from gaia_agent.skill_tools import estimate_prompt_tokens
+
     return SimpleNamespace(
         agent=agent,
         baseline_prompt=agent.system_prompt,
+        # The always-on set (gaia-voice, per gaia-agent.yaml) loads during
+        # construction, so "clean" is this set — not an empty one.
+        baseline_skills=frozenset(agent.loaded_skills),
+        baseline_skill_tokens=estimate_prompt_tokens(agent.get_skills_system_prompt()),
         library=library,
     )
 
 
 @pytest.fixture(autouse=True)
 def _unload_everything(session):
-    """Leave the session exactly as clean as it was found."""
+    """Leave the session exactly as clean as it was found.
+
+    Restores the BASELINE loaded set rather than an empty one: unloading the
+    always-on skill too would leave every later test running against a prompt
+    the real agent never has, and would silently invalidate baseline_prompt.
+    """
     yield
     for name in list(session.agent.loaded_skills):
-        session.agent.unload_skill(name)
+        if name not in session.baseline_skills:
+            session.agent.unload_skill(name)
 
 
 def call(session, tool_name: str, **kwargs):
@@ -316,16 +329,33 @@ def test_the_disk_mutating_tools_are_gated_behind_confirmation(session):
     assert not ({"list_skills", "skill_status", "search_skill_hub"} & gated)
 
 
-def test_nothing_loads_by_default(session):
-    """Registering the library tools must not cost a single prompt token.
+def test_no_task_skill_loads_by_default(session):
+    """Registering the library tools must not pull in a task skill.
 
-    Skill bodies are opt-in (#2848). If this fails, the agent is paying for
-    instructions nobody asked for on every turn.
+    Skill *bodies* are opt-in (#2848): if a recipe nobody asked for is in the
+    prompt, the agent is paying for it on every turn.
+
+    The one deliberate exception is gaia-voice, declared always-on in
+    gaia-agent.yaml. It is not a recipe — it is the honesty floor ("do not claim
+    work you did not do", "do not substitute a near-miss and report success"),
+    and those failures corrupt an answer whichever task is running, so it cannot
+    be opt-in the way a task skill can. test_only_the_voice_skill_is_always_on
+    below pins it to exactly that one skill.
     """
-    assert session.agent.loaded_skills == {}
-    assert SKILLS_PROMPT_HEADER not in session.baseline_prompt
+    loaded = set(session.agent.loaded_skills)
+
+    assert loaded <= {"gaia-voice"}, f"a task skill loaded itself: {loaded}"
     assert NOTE_TAKER_MARKER not in session.baseline_prompt
-    assert call(session, "skill_status")["loaded_count"] == 0
+    assert call(session, "skill_status")["loaded_count"] == len(loaded)
+
+
+def test_only_the_voice_skill_is_always_on(session):
+    """Guard the always-on list against quietly growing.
+
+    Every entry here is charged to every prompt of every turn, so this is the
+    one skill list that has to be argued for rather than added to.
+    """
+    assert set(session.agent.loaded_skills) == {"gaia-voice"}
 
 
 # ---------------------------------------------------------------------------
@@ -359,9 +389,12 @@ def test_unload_removes_the_body_from_the_system_prompt(session):
         "unload_skill reported success but the body is still in the prompt — the "
         "skill was un-flagged, not unloaded."
     )
-    assert SKILLS_PROMPT_HEADER not in prompt
+    # Back to baseline exactly — the strong claim, and the one that catches a
+    # partial unload. The skills header and a non-zero estimate legitimately
+    # remain: gaia-voice is always-on, so baseline_prompt already contains it.
     assert prompt == session.baseline_prompt
-    assert result["prompt_tokens_estimate"] == 0
+    assert SKILLS_PROMPT_HEADER in prompt, "the always-on voice skill vanished too"
+    assert result["prompt_tokens_estimate"] == session.baseline_skill_tokens
 
 
 def test_loading_twice_is_idempotent(session):
@@ -391,7 +424,8 @@ def test_load_unknown_skill_fails_loudly(session):
     # What to do next, and where the search happened.
     assert "gaia skill" in result["error"]
     assert str(session.library.bundled) in result["error"]
-    assert session.agent.loaded_skills == {}
+    # gaia-voice is always-on, so the claim is that no TASK skill loaded.
+    assert set(session.agent.loaded_skills) == session.baseline_skills
 
 
 # ---------------------------------------------------------------------------
@@ -410,7 +444,8 @@ def test_load_refuses_a_skill_that_asks_for_shell_execute(session):
     assert result["status"] == "error"
     assert result["error_type"] == "SkillPermissionError"
     assert "shell" in result["error"]
-    assert session.agent.loaded_skills == {}
+    # gaia-voice is always-on, so the claim is that no TASK skill loaded.
+    assert set(session.agent.loaded_skills) == session.baseline_skills
     assert SHELL_RUNNER_MARKER not in session.agent.system_prompt
 
 
@@ -468,7 +503,8 @@ def test_load_refuses_code_from_an_ungated_claude_import(session):
     assert result["error_type"] == "SkillPermissionError"
     assert "imported_probe" in result["error"]
     assert "gaia skill import" in result["error"]
-    assert session.agent.loaded_skills == {}
+    # gaia-voice is always-on, so the claim is that no TASK skill loaded.
+    assert set(session.agent.loaded_skills) == session.baseline_skills
     assert IMPORTED_CODE_MARKER not in session.agent.system_prompt
     assert "imported-code/imported_probe" not in session.agent._tools_registry
 
@@ -515,7 +551,8 @@ def test_the_gate_sees_a_tools_block_added_after_discovery_cached(session, libra
 
         assert result["status"] == "error"
         assert "late_probe" in result["error"]
-        assert session.agent.loaded_skills == {}
+        # gaia-voice is always-on, so the claim is that no TASK skill loaded.
+        assert set(session.agent.loaded_skills) == session.baseline_skills
     finally:
         target.write_text(original, encoding="utf-8")
         session.agent.skill_manager.reload()
@@ -720,17 +757,25 @@ def test_list_skills_surfaces_a_folder_that_failed_to_parse(session, library):
 
 
 def test_skill_status_prices_the_loaded_set(session):
+    """The price must track the loaded set, measured against the always-on floor.
+
+    gaia-voice loads at construction, so "before" is that baseline rather than
+    zero. Asserting the delta is the stronger claim anyway: it catches a status
+    that reports a constant, which a fixed-zero check never would.
+    """
     before = call(session, "skill_status")
-    assert before["loaded_count"] == 0
-    assert before["total_prompt_tokens_estimate"] == 0
+    assert before["loaded_count"] == len(session.baseline_skills)
+    assert before["total_prompt_tokens_estimate"] == session.baseline_skill_tokens
     assert "note-taker" in before["installed_not_loaded"]
 
     call(session, "load_skill", name="note-taker")
     after = call(session, "skill_status")
 
-    assert after["loaded_count"] == 1
-    assert after["loaded"][0]["name"] == "note-taker"
-    assert after["total_prompt_tokens_estimate"] > 0
+    assert after["loaded_count"] == len(session.baseline_skills) + 1
+    assert "note-taker" in {entry["name"] for entry in after["loaded"]}
+    assert (
+        after["total_prompt_tokens_estimate"] > before["total_prompt_tokens_estimate"]
+    )
     assert "note-taker" not in after["installed_not_loaded"]
 
 

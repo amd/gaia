@@ -56,7 +56,18 @@ dependencies:
 #
 # Re-enabling is uncommenting the two blocks below — no code change.
 
-# skills: []
+# `skills:` is the always-on list, and gaia-voice is the one entry that earns a
+# place in every prompt: it is not a task recipe but the agent's honesty floor —
+# do not claim work you did not do, do not present empty output as a result, do
+# not substitute a near-miss and report success. Those failures were observed in
+# the flagship and they corrupt an answer no matter which task is running, so
+# they cannot live in an opt-in bundle the way a task skill can.
+#
+# It is deliberately small (~900 tokens, measured) and declares no tools, so the concern
+# that kept `default_skill_set` commented out — loading several large skill
+# bodies into every prompt — does not apply. default_skill_set stays off.
+skills:
+  - gaia-voice
 
 # skill_sets:
 #   research:
