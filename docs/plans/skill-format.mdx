@@ -383,6 +383,19 @@ The existing shell guardrails still apply on top: command chaining and
 redirection (`&&`, `;`, `>`, backticks, `$()`) are rejected before the policy
 runs, and each segment of a pipeline is validated separately.
 
+**The grant replaces the per-call prompt, for the granted calls only.**
+`run_shell_command` is in `Agent.confirmation_required_tools()`, so every call
+normally raises a confirmation modal. A triage is five to ten reads — five to ten
+modals attended, and unattended a 100% failure rate, since a console with nobody
+to ask denies. So a call *fully covered* by an active grant skips the prompt: the
+user already consented, in front matter, to one binary and a read-only table.
+Everything else is unchanged — `Agent._call_is_pre_authorized` asks the host's
+`skill_grant_covers_call` hook, which answers False unless **every** segment of
+the command is a granted binary running an allowed subcommand. `pwd` still
+prompts. So does `gh issue list | head`: consent was for `gh`, not for a
+pipeline. An agent that has loaded no such skill has no way to answer yes, and
+its gate is byte-identical.
+
 **Adding a CLI is data plus a `SKILL.md`.** Supporting GitLab is a `"glab"` entry
 in `BINARY_POLICIES` and a skill that declares `shell:execute:glab` — no new
 branch in the shell tool, no change to the permission grammar.

@@ -194,6 +194,11 @@ DANGEROUS_SHELL_OPERATORS = re.compile(
 )
 
 
+#: The one tool whose executor enforces the read-only binary policy, and so the
+#: only one a ``shell:execute`` grant may exempt from confirmation.
+_POLICY_GATED_SHELL_TOOL = "run_shell_command"
+
+
 def skill_granted_binaries(host: Any) -> frozenset:
     """CLIs *host*'s loaded skills granted via ``shell:execute:<binary>``.
 
@@ -251,6 +256,69 @@ class ShellToolsMixin:
         self.shell_command_times = deque(maxlen=100)  # Track last 100 command times
         self.max_commands_per_minute = 10
         self.max_commands_per_10_seconds = 3
+
+    def skill_grant_covers_call(
+        self, tool_name: str, tool_args: Dict[str, Any]
+    ) -> bool:
+        """True when an active ``shell:execute:<binary>`` grant covers this call.
+
+        Read by ``Agent._call_is_pre_authorized`` to skip the per-call
+        confirmation modal. The grant *is* the consent: the user declared one
+        named binary, restricted to a read-only table, in a skill they chose to
+        load. Re-asking on every call is not a second safeguard — a triage runs
+        five to ten ``gh`` reads, so it is five to ten modals attended and a
+        100% failure rate unattended.
+
+        Deliberately narrow. It answers False unless **every** segment of the
+        command is a granted binary running a read-only subcommand, so
+        ``gh issue list | head`` still prompts even though ``head`` is
+        whitelisted: consent was given for ``gh``, not for a pipeline.
+
+        Duck-typed rather than an override — ``Agent`` precedes this mixin in
+        ``ChatAgent``'s MRO, so a same-named method here would never be reached.
+        """
+        if tool_name != _POLICY_GATED_SHELL_TOOL:
+            # Only the tool that actually runs _validate_command may be exempt;
+            # anything else would skip the modal without enforcing the policy.
+            return False
+
+        granted = skill_granted_binaries(self)
+        if not granted:
+            return False
+
+        command = (tool_args or {}).get("command")
+        if not isinstance(command, str) or DANGEROUS_SHELL_OPERATORS.search(command):
+            return False
+
+        try:
+            segments = _split_pipeline(shlex.split(command))
+        except ValueError:
+            return False
+        if not segments:
+            return False
+
+        from gaia.skills.binaries import (
+            BINARY_POLICIES,
+            normalize_binary,
+            validate_invocation,
+        )
+
+        for segment in segments:
+            binary = normalize_binary(segment[0])
+            if binary not in granted:
+                return False
+            policy = BINARY_POLICIES.get(binary)
+            if policy is None or validate_invocation(policy, segment) is not None:
+                return False
+
+        logger.info(
+            "Skipping the confirmation prompt for '%s': %r is covered by an active "
+            "skill grant (read-only %s).",
+            tool_name,
+            command,
+            ", ".join(sorted(granted)),
+        )
+        return True
 
     def _check_rate_limit(self) -> tuple:
         """
