@@ -4,8 +4,9 @@ The house format for the `#announcements` Discord post, cut at the end of Phase 
 [`gaia-release`](../SKILL.md) skill. This is the v0.22.0 shape — the format the maintainer
 actually posts.
 
-Populate the highlights from the just-shipped `docs/releases/v<version>.mdx`, in the same
-voice as the notes: value-prop first, plain, engaging, no fluff, no emoji.
+Populate the highlights from the just-shipped `docs/releases/v<version>.mdx` — reuse its
+`What's New` bullets near-verbatim. Same rules as the notes (*Notes format* in the skill):
+one bullet per highlight, plain, factual, no emoji, no pitch.
 
 ## Template (copy verbatim, fill the bracketed fields)
 
