@@ -19,6 +19,10 @@ Subsystems are still constructed eagerly by ``GaiaAgent.__init__`` — making th
 lazy is the remaining win, and it is what would let this process start instantly
 and survive Lemonade not being up yet.
 
+The chat model is Lemonade by default; ``--use-claude`` swaps it for the
+Anthropic API (``--claude-model`` picks the model). Embeddings (RAG, memory,
+code index) stay on Lemonade either way — Anthropic has no embeddings API.
+
 The event vocabulary is the canonical one (``status`` / ``tool_call`` /
 ``tool_result`` / ``token`` / ``final`` / ``error``), identical to what the HTTP
 surface emits, so the renderer does not care which transport it is reading.
@@ -273,7 +277,12 @@ def _terminal_error(exc: BaseException) -> Dict[str, Any]:
     """
     text = f"{type(exc).__name__}: {exc}"
     lowered = text.lower()
-    if any(
+    # An Anthropic outage also says "connection refused"/"max retries" — the
+    # Lemonade remediation would point at the wrong backend, so skip it.
+    is_anthropic = "anthropic" in lowered or type(exc).__module__.startswith(
+        "anthropic"
+    )
+    if not is_anthropic and any(
         s in lowered
         for s in (
             "connection refused",
@@ -386,8 +395,12 @@ def run_turn(
             state.detach(handler)
 
 
-def main(argv: Optional[list] = None) -> int:
-    """Read queries from stdin forever; one line in, one turn's events out."""
+def build_parser() -> "argparse.ArgumentParser":
+    """The stdio transport's argv contract.
+
+    The TUI appends ``--use-claude`` / ``--claude-model`` as literal strings to
+    the child argv, so these exact spellings are load-bearing.
+    """
     import argparse
 
     parser = argparse.ArgumentParser(
@@ -395,6 +408,17 @@ def main(argv: Optional[list] = None) -> int:
         description="Run the GAIA flagship agent over stdin/stdout JSONL.",
     )
     parser.add_argument("--model", default=None, help="model id override")
+    parser.add_argument(
+        "--use-claude",
+        action="store_true",
+        help="Chat via the Anthropic API instead of local Lemonade (needs "
+        "ANTHROPIC_API_KEY; embeddings stay on Lemonade).",
+    )
+    parser.add_argument(
+        "--claude-model",
+        default=None,
+        help="Claude model id when --use-claude is set (default: claude-sonnet-5).",
+    )
     parser.add_argument(
         "--json-events",
         action="store_true",
@@ -414,7 +438,12 @@ def main(argv: Optional[list] = None) -> int:
         "without asking. Off unless passed, and the host can toggle it at any "
         "time over the control channel.",
     )
-    args = parser.parse_args(argv)
+    return parser
+
+
+def main(argv: Optional[list] = None) -> int:
+    """Read queries from stdin forever; one line in, one turn's events out."""
+    args = build_parser().parse_args(argv)
 
     out = sys.stdout
     _configure_logging(out, dev=args.dev)
@@ -434,6 +463,10 @@ def main(argv: Optional[list] = None) -> int:
         config_kwargs: Dict[str, Any] = {"silent_mode": True, "streaming": True}
         if args.model:
             config_kwargs["model_id"] = args.model
+        if args.use_claude:
+            config_kwargs["use_claude"] = True
+            if args.claude_model:
+                config_kwargs["claude_model"] = args.claude_model
         agent = GaiaAgent(config=GaiaAgentConfig(**config_kwargs))
     except Exception as exc:
         print(traceback.format_exc(), file=sys.stderr)

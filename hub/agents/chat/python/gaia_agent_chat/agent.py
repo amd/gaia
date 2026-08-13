@@ -71,7 +71,7 @@ class ChatAgentConfig:
     # LLM settings
     use_claude: bool = False
     use_chatgpt: bool = False
-    claude_model: str = "claude-sonnet-4-20250514"
+    claude_model: str = "claude-sonnet-5"
     base_url: Optional[str] = None
     model_id: Optional[str] = None  # None = use default model (Gemma)
 

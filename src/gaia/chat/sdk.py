@@ -35,7 +35,7 @@ class AgentConfig:
     use_local_llm: bool = (
         True  # Use local LLM (computed as not use_claude and not use_chatgpt if not explicitly set)
     )
-    claude_model: str = "claude-sonnet-4-20250514"  # Claude model when use_claude=True
+    claude_model: str = "claude-sonnet-5"  # Claude model when use_claude=True
     base_url: Optional[str] = (
         None  # Lemonade server base URL (None = use LEMONADE_BASE_URL env var)
     )
@@ -118,6 +118,17 @@ class AgentSDK:
 
         self.log.debug("AgentSDK initialized")
 
+    @property
+    def effective_model(self) -> str:
+        """Model id actually sent to the provider.
+
+        With ``use_claude`` the configured local model id would 404 against
+        Anthropic, so the claude model wins.
+        """
+        if self.config.use_claude:
+            return self.config.claude_model
+        return self.config.model
+
     def _format_history_for_context(self) -> str:
         """Format chat history for inclusion in LLM context using model-specific formatting."""
         history_list = list(self.chat_history)
@@ -164,6 +175,19 @@ class AgentSDK:
             return []
 
         return list(messages)
+
+    def _flatten_tool_call_turn(self, msg: Dict[str, Any]) -> str:
+        """Textual stand-in for an assistant turn that only called tools.
+
+        Without it the flattened history shows ``None`` where the model called
+        a tool, so it can't correlate the tool results that follow.
+        """
+        calls = ", ".join(
+            f"{(tc.get('function') or {}).get('name', 'tool')}"
+            f"({(tc.get('function') or {}).get('arguments') or ''})"
+            for tc in msg.get("tool_calls", [])
+        )
+        return f"[Called tools: {calls}]"
 
     def send_messages(
         self,
@@ -216,6 +240,18 @@ class AgentSDK:
                             "content": f"[Tool result: {tool_name}] {content}",
                         }
                     )
+                elif (
+                    self.config.use_claude
+                    and role == "assistant"
+                    and not msg.get("content")
+                    and msg.get("tool_calls")
+                ):
+                    structured.append(
+                        {
+                            "role": "assistant",
+                            "content": self._flatten_tool_call_turn(msg),
+                        }
+                    )
                 else:
                     structured.append({"role": role, "content": content})
 
@@ -226,7 +262,7 @@ class AgentSDK:
             )
 
             # Set appropriate stop tokens based on model (safety net)
-            model_lower = self.config.model.lower() if self.config.model else ""
+            model_lower = self.effective_model.lower() if self.effective_model else ""
             if "qwen" in model_lower:
                 kwargs.setdefault("stop", ["<|im_end|>", "<|im_start|>"])
             elif "llama" in model_lower:
@@ -236,11 +272,16 @@ class AgentSDK:
                 kwargs["temperature"] = self.config.temperature
             if "max_tokens" not in kwargs:
                 kwargs["max_tokens"] = self.config.max_tokens
+
+            # ``tools`` only when present — ``tools: null`` in a request body is
+            # rejected by the non-Lemonade providers.
+            if tools:
+                kwargs["tools"] = tools
+
             response = self.llm_client.chat(
                 messages=structured,
-                model=self.config.model,
+                model=self.effective_model,
                 stream=False,
-                tools=tools,
                 **kwargs,
             )
 
@@ -312,6 +353,18 @@ class AgentSDK:
                             "content": f"[Tool result: {tool_name}] {content}",
                         }
                     )
+                elif (
+                    self.config.use_claude
+                    and role == "assistant"
+                    and not msg.get("content")
+                    and msg.get("tool_calls")
+                ):
+                    structured.append(
+                        {
+                            "role": "assistant",
+                            "content": self._flatten_tool_call_turn(msg),
+                        }
+                    )
                 else:
                     structured.append({"role": role, "content": content})
 
@@ -322,7 +375,7 @@ class AgentSDK:
             )
 
             # Set appropriate stop tokens based on model (safety net)
-            model_lower = self.config.model.lower() if self.config.model else ""
+            model_lower = self.effective_model.lower() if self.effective_model else ""
             if "qwen" in model_lower:
                 kwargs.setdefault("stop", ["<|im_end|>", "<|im_start|>"])
             elif "llama" in model_lower:
@@ -340,7 +393,7 @@ class AgentSDK:
                 kwargs["tools"] = tools
 
             for chunk in self.llm_client.chat(
-                messages=structured, model=self.config.model, stream=True, **kwargs
+                messages=structured, model=self.effective_model, stream=True, **kwargs
             ):
                 # A tool-calling turn ends with the sentinel envelope rather than
                 # more prose. It is a control frame — surfacing it as answer text
@@ -429,7 +482,7 @@ class AgentSDK:
             # Note: Retry logic is now handled at the LLM client level
             response = self.llm_client.generate(
                 full_prompt,
-                model=self.config.model,
+                model=self.effective_model,
                 **generate_kwargs,
             )
 
@@ -502,7 +555,7 @@ class AgentSDK:
 
             full_response = ""
             for chunk in self.llm_client.generate(
-                full_prompt, model=self.config.model, stream=True, **generate_kwargs
+                full_prompt, model=self.effective_model, stream=True, **generate_kwargs
             ):
                 full_response += chunk
                 yield AgentResponse(text=chunk, is_complete=False)
