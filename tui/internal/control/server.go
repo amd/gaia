@@ -96,7 +96,7 @@ func Debugf(debug bool) func(format string, args ...any) {
 		return func(string, ...any) {}
 	}
 	return func(format string, args ...any) {
-		fmt.Fprintf(os.Stderr, "[control] "+format+"\n", args...)
+		logf("[control] "+format, args...)
 	}
 }
 
@@ -184,10 +184,16 @@ func Start(sender Sender, state *State, opts Options) (*Server, error) {
 	// Whoever registers last owns the file. Say so when that displaces a live
 	// registration: the older TUI keeps running but becomes undiscoverable.
 	if prev, rerr := ReadInfo(); rerr == nil && prev != nil && prev.PID != s.pid && daemon.PIDAlive(prev.PID) {
-		fmt.Fprintf(os.Stderr,
+		takeover := fmt.Sprintf(
 			"control: taking over %s, which was registered to pid %d and that pid is still "+
 				"in use. If it is another TUI it can no longer be found by a client — quit it, "+
-				"or run only one TUI with --control at a time.\n", path, prev.PID)
+				"or run only one TUI with --control at a time.", path, prev.PID)
+		// Printed before p.Run() takes the alt screen, so it is safe on stderr —
+		// but the alt screen then wipes it, and this is the one warning that
+		// explains why a driver is talking to the wrong session. Mirror it into
+		// the log so it outlives the frame that erases it.
+		fmt.Fprintln(os.Stderr, takeover)
+		logf("%s", takeover)
 	}
 	if err := WriteInfo(info); err != nil {
 		listener.Close()
@@ -199,7 +205,7 @@ func Start(sender Sender, state *State, opts Options) (*Server, error) {
 		if err != nil && err != http.ErrServerClosed {
 			// The TUI keeps running, but nothing can drive it any more — say so
 			// rather than leaving the caller waiting on a dead socket.
-			fmt.Fprintf(os.Stderr, "control API stopped serving: %v — restart the TUI to re-enable it\n", err)
+			logf("control API stopped serving: %v — restart the TUI to re-enable it", err)
 		}
 	}()
 
@@ -264,7 +270,7 @@ func (s *Server) WatchTermination(sigs <-chan os.Signal, quit func()) {
 	}
 	s.debugf("received %v — removing %s before exiting", sig, s.discoveryPath)
 	if err := s.Stop(); err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
+		logf("%v", err)
 	}
 	if quit != nil {
 		quit()
@@ -305,7 +311,7 @@ func writeJSON(w http.ResponseWriter, status int, payload any) {
 	if err := json.NewEncoder(w).Encode(payload); err != nil {
 		// The response is already committed; nothing actionable remains but to
 		// leave a trace for whoever reads the log.
-		fmt.Fprintf(os.Stderr, "[control] failed to encode response: %v\n", err)
+		logf("[control] failed to encode response: %v", err)
 	}
 }
 
