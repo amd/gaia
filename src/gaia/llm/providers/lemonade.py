@@ -15,6 +15,39 @@ logger = logging.getLogger(__name__)
 # the response type stays `str` everywhere (no callers need updating).
 _NATIVE_TC_KEY = "__tool_calls__"
 
+#: A response string starting with this is the sentinel envelope, not prose.
+#: Public because the streaming seam has to tell a control frame from answer
+#: text before it shows anything to a user.
+NATIVE_TOOL_CALLS_PREFIX = '{"' + _NATIVE_TC_KEY + '":'
+
+
+def _accumulate_tool_calls(acc: dict, deltas: Optional[List[dict]]) -> None:
+    """Fold one frame's ``tool_calls`` fragments into ``acc``, keyed by index.
+
+    Streamed tool calls arrive split: the first frame carries ``id`` and the
+    function name, later frames carry one slice of the JSON arguments each. Only
+    the concatenation is a valid call, so nothing can be acted on until the
+    stream ends.
+    """
+    if not deltas:
+        return
+    for fragment in deltas:
+        if not isinstance(fragment, dict):
+            continue
+        slot = acc.setdefault(
+            fragment.get("index") or 0,
+            {"id": "", "type": "function", "function": {"name": "", "arguments": ""}},
+        )
+        if fragment.get("id"):
+            slot["id"] = fragment["id"]
+        if fragment.get("type"):
+            slot["type"] = fragment["type"]
+        function = fragment.get("function") or {}
+        if function.get("name"):
+            slot["function"]["name"] = function["name"]
+        if function.get("arguments"):
+            slot["function"]["arguments"] += function["arguments"]
+
 
 # ── Typed errors ────────────────────────────────────────────────────────
 #
@@ -349,10 +382,12 @@ class LemonadeProvider(LLMClient):
         kwargs.setdefault("repeat_penalty", 1.1)
         kwargs.setdefault("repeat_last_n", 256)
 
-        # For tool-calling models with tools, always use non-streaming so tool_calls
-        # are returned as a complete structured dict (not fragmented SSE chunks).
-        # Streaming of tool_call delta frames is deferred to a future release.
-        effective_stream = stream and not (tool_capable and tools)
+        # Tools no longer force non-streaming: ``_handle_stream`` reassembles the
+        # tool_call delta frames and emits the same sentinel envelope the
+        # non-streaming branch below returns, so the caller sees one shape either
+        # way. Without this a tool-capable agent could never stream its prose,
+        # because it always sends a tools array.
+        effective_stream = stream
         effective_tools = tools if tool_capable else None
 
         response = self._backend.chat_completions(
@@ -489,16 +524,30 @@ class LemonadeProvider(LLMClient):
         return response["choices"][0]["text"]
 
     def _handle_stream(self, response) -> Iterator[str]:
+        """Yield prose as it arrives; end with the tool_calls sentinel if any.
+
+        A tool-calling turn is only recognisable once the stream is over — the
+        model can emit reasoning, then prose, then decide to call a tool — so
+        the fragments are accumulated alongside the text and the envelope is
+        yielded last, byte-identical to what the non-streaming branch returns.
+        """
         in_thinking = False
+        tool_calls: dict[int, dict] = {}
+        finish_reason = ""
+        text_seen: list[str] = []
         for chunk in response:
             if "choices" in chunk and chunk["choices"]:
-                delta = chunk["choices"][0].get("delta", {})
+                choice = chunk["choices"][0]
+                finish_reason = choice.get("finish_reason") or finish_reason
+                delta = choice.get("delta", {})
+                _accumulate_tool_calls(tool_calls, delta.get("tool_calls"))
                 content = delta.get("content")
                 if content:
                     # Close thinking block before yielding actual content
                     if in_thinking:
                         yield "</think>"
                         in_thinking = False
+                    text_seen.append(content)
                     yield content
                 else:
                     # Thinking models (e.g. Qwen3.5) stream reasoning in a
@@ -510,13 +559,25 @@ class LemonadeProvider(LLMClient):
                             yield "<think>"
                             in_thinking = True
                         yield reasoning
-                    elif "text" in chunk["choices"][0]:
-                        text = chunk["choices"][0]["text"]
+                    elif "text" in choice:
+                        text = choice["text"]
                         if text:
                             if in_thinking:
                                 yield "</think>"
                                 in_thinking = False
+                            text_seen.append(text)
                             yield text
         # Close any unclosed thinking block at end of stream
         if in_thinking:
             yield "</think>"
+        if tool_calls:
+            # Same envelope as the non-streaming branch, including any assistant
+            # text emitted alongside the calls — Gemma-4 does that routinely and
+            # dropping it loses the model's own framing of why it called a tool.
+            yield json.dumps(
+                {
+                    _NATIVE_TC_KEY: [tool_calls[i] for i in sorted(tool_calls)],
+                    "finish_reason": finish_reason,
+                    "content": "".join(text_seen) or None,
+                }
+            )

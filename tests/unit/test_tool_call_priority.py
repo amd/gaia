@@ -30,7 +30,11 @@ from gaia.llm.lemonade_client import (
     _validate_profile_model_registry,
     is_tool_calling_model,
 )
-from gaia.llm.providers.lemonade import _NATIVE_TC_KEY, LemonadeProvider
+from gaia.llm.providers.lemonade import (
+    _NATIVE_TC_KEY,
+    NATIVE_TOOL_CALLS_PREFIX,
+    LemonadeProvider,
+)
 
 # =============================================================================
 # Helpers
@@ -164,26 +168,125 @@ def test_native_tool_calls_encoded_as_sentinel():
     assert envelope[_NATIVE_TC_KEY][0]["function"]["name"] == "search_docs"
 
 
-def test_streaming_disabled_when_tools_provided():
-    """When a tool-calling model is paired with tools, streaming is forced off."""
-    with patch("gaia.llm.providers.lemonade.LemonadeClient") as MockBackend:
-        backend = MockBackend.return_value
-        backend.chat_completions.return_value = _chat_response_with_tool_calls()
+def _tool_call_frame(fragment, finish_reason=None):
+    return {
+        "choices": [
+            {"delta": {"tool_calls": [fragment]}, "finish_reason": finish_reason}
+        ]
+    }
 
-        provider = LemonadeProvider(model="Gemma-4-E4B-it-GGUF")
-        provider.chat(
-            messages=[{"role": "user", "content": "q"}],
-            model="Gemma-4-E4B-it-GGUF",
-            stream=True,
-            tools=[{"type": "function", "function": {"name": "search_docs"}}],
+
+def _text_frame(content, finish_reason=None):
+    return {
+        "choices": [{"delta": {"content": content}, "finish_reason": finish_reason}]
+    }
+
+
+def test_streaming_stays_on_when_tools_provided():
+    """Tools no longer force the stream off — the fragments are reassembled.
+
+    Forcing stream=False here is what made a tool-capable agent unable to show
+    a single word before the whole turn finished: it always sends tools, so it
+    always took the non-streaming path.
+    """
+
+    def _frames():
+        # The real Lemonade shape: id and name arrive first, then the JSON
+        # arguments one slice per frame.
+        yield _tool_call_frame(
+            {
+                "index": 0,
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "search_docs", "arguments": "{"},
+            }
+        )
+        yield _tool_call_frame({"index": 0, "function": {"arguments": '"q": "np'}})
+        yield _tool_call_frame(
+            {"index": 0, "function": {"arguments": 'u"}'}}, finish_reason="tool_calls"
         )
 
-    assert backend.chat_completions.called
-    call_kwargs = backend.chat_completions.call_args.kwargs
-    assert call_kwargs["stream"] is False, (
-        "Provider must force stream=False when tools are supplied to a "
-        "tool-capable model so tool_calls come back as one structured dict."
-    )
+    with patch("gaia.llm.providers.lemonade.LemonadeClient") as MockBackend:
+        backend = MockBackend.return_value
+        backend.chat_completions.return_value = _frames()
+
+        provider = LemonadeProvider(model="Gemma-4-E4B-it-GGUF")
+        chunks = list(
+            provider.chat(
+                messages=[{"role": "user", "content": "q"}],
+                model="Gemma-4-E4B-it-GGUF",
+                stream=True,
+                tools=[{"type": "function", "function": {"name": "search_docs"}}],
+            )
+        )
+
+    assert backend.chat_completions.call_args.kwargs["stream"] is True
+    assert chunks[-1].startswith(NATIVE_TOOL_CALLS_PREFIX)
+    envelope = json.loads(chunks[-1])
+    call = envelope[_NATIVE_TC_KEY][0]
+    assert call["id"] == "call_1"
+    assert call["function"]["name"] == "search_docs"
+    assert json.loads(call["function"]["arguments"]) == {"q": "npu"}
+    assert envelope["finish_reason"] == "tool_calls"
+
+
+def test_streamed_text_before_a_tool_call_is_kept():
+    """Prose emitted alongside tool_calls streams AND rides the envelope.
+
+    Gemma-4 routinely writes a sentence before calling a tool. It has to reach
+    the user as it is typed and still be attached to the assistant message, or
+    the model's own framing of why it called the tool is lost.
+    """
+
+    def _frames():
+        yield _text_frame("Let me ")
+        yield _text_frame("look that up.")
+        yield _tool_call_frame(
+            {
+                "index": 0,
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "search_docs", "arguments": "{}"},
+            },
+            finish_reason="tool_calls",
+        )
+
+    with patch("gaia.llm.providers.lemonade.LemonadeClient") as MockBackend:
+        MockBackend.return_value.chat_completions.return_value = _frames()
+        provider = LemonadeProvider(model="Gemma-4-E4B-it-GGUF")
+        chunks = list(
+            provider.chat(
+                messages=[{"role": "user", "content": "q"}],
+                model="Gemma-4-E4B-it-GGUF",
+                stream=True,
+                tools=[{"type": "function", "function": {"name": "search_docs"}}],
+            )
+        )
+
+    assert chunks[:2] == ["Let me ", "look that up."]
+    assert json.loads(chunks[-1])["content"] == "Let me look that up."
+
+
+def test_plain_text_stream_emits_no_envelope():
+    """A turn that calls no tool ends with prose, never a trailing sentinel."""
+
+    def _frames():
+        yield _text_frame("An NPU ")
+        yield _text_frame("is a chip.", finish_reason="stop")
+
+    with patch("gaia.llm.providers.lemonade.LemonadeClient") as MockBackend:
+        MockBackend.return_value.chat_completions.return_value = _frames()
+        provider = LemonadeProvider(model="Gemma-4-E4B-it-GGUF")
+        chunks = list(
+            provider.chat(
+                messages=[{"role": "user", "content": "q"}],
+                model="Gemma-4-E4B-it-GGUF",
+                stream=True,
+                tools=[{"type": "function", "function": {"name": "search_docs"}}],
+            )
+        )
+
+    assert chunks == ["An NPU ", "is a chip."]
 
 
 def test_streaming_preserved_without_tools():
