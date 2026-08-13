@@ -28,11 +28,19 @@ be ``"glab": BinaryPolicy(...)`` and nothing else.
 
 from __future__ import annotations
 
+import os
+import re
 import shutil
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Iterable, Mapping, Sequence
 
 from gaia.skills.errors import FORMAT_DOCS_URL, SkillPermissionError
+
+#: A binary name is a bare executable, never a path — the grant resolves off
+#: ``PATH``, so neither a declared scope nor an invoked token may name a file the
+#: skill chose. Applied to both ends: ``Permission.parse`` and
+#: :func:`normalize_binary`.
+BINARY_NAME_RE = re.compile(r"^[a-z][a-z0-9._+-]*$")
 
 if TYPE_CHECKING:  # ``permissions`` imports this module — keep the edge one-way.
     from gaia.skills.permissions import Permission
@@ -77,7 +85,6 @@ class BinaryPolicy:
             binary is not on ``PATH``.
         subcommands: The read-only allowlist. Absent == refused.
         bare_flags: Flags accepted with no subcommand at all (``gh --version``).
-        denied_flags: Refused under every subcommand.
     """
 
     binary: str
@@ -85,7 +92,6 @@ class BinaryPolicy:
     install_hint: str
     subcommands: Mapping[str, Subcommand]
     bare_flags: frozenset[str] = frozenset({"--version", "--help", "-h"})
-    denied_flags: frozenset[str] = frozenset()
 
 
 # ---------------------------------------------------------------------------
@@ -223,10 +229,6 @@ class BinaryGrants:
         """Every currently granted binary."""
         return frozenset(self._holders)
 
-    def holders(self, binary: str) -> frozenset[str]:
-        """The skills keeping *binary* granted."""
-        return frozenset(self._holders.get(binary, ()))
-
     def __contains__(self, binary: object) -> bool:
         return binary in self._holders
 
@@ -318,18 +320,36 @@ def resolve_binary_policies(
 
 
 def normalize_binary(token: str) -> str:
-    """The bare binary name for *token* as typed (``GH.EXE`` -> ``gh``)."""
+    """The grant key for *token* as typed, or ``""`` when it is not a bare name.
+
+    A path spelling never matches a grant: ``./gh`` and ``C:\\evil\\gh.exe`` are
+    files the caller chose, not the CLI the skill declared, so they fall through
+    to the ordinary command whitelist (which refuses them).
+    """
     name = token.strip().strip('"').lower()
-    # A path spelling is never a grant match — see BINARY_NAME_RE.
-    name = name.replace("\\", "/").rsplit("/", 1)[-1]
-    if name.endswith(".exe"):
+    if os.name == "nt" and name.endswith(".exe"):
         name = name[: -len(".exe")]
-    return name
+    return name if BINARY_NAME_RE.match(name) else ""
+
+
+def _split_flag(token: str) -> tuple[str, str | None]:
+    """Split one flag token into ``(name, attached value)``.
+
+    Mirrors how Go's ``pflag`` — what ``gh`` uses — actually parses, including
+    the attached short form. ``-XDELETE``, ``-X=DELETE``, and ``--method=DELETE``
+    all carry their value in the token; missing that is how a method rule gets
+    bypassed by deleting one space.
+    """
+    if token.startswith("--"):
+        name, _, attached = token.partition("=")
+        return name, attached if attached else None
+    name, rest = token[:2], token[2:]
+    return name, rest.lstrip("=") or None
 
 
 def _flag_name(token: str) -> str:
-    """``--method=GET`` -> ``--method``; a positional returns itself."""
-    return token.split("=", 1)[0]
+    """The flag's name, without any value attached to the same token."""
+    return _split_flag(token)[0]
 
 
 def validate_invocation(policy: BinaryPolicy, argv: Sequence[str]) -> str | None:
@@ -367,7 +387,7 @@ def validate_invocation(policy: BinaryPolicy, argv: Sequence[str]) -> str | None
         )
 
     rest = tokens[index + 1 :]
-    denied_flags = set(rule.denied_flags) | set(policy.denied_flags)
+    denied_flags = rule.denied_flags
 
     action: str | None = None
     cursor = 0
@@ -379,7 +399,7 @@ def validate_invocation(policy: BinaryPolicy, argv: Sequence[str]) -> str | None
                 action = token
             continue
 
-        name = _flag_name(token)
+        name, inline = _split_flag(token)
         if name in denied_flags:
             return (
                 f"'{policy.binary} {subcommand} {name}' is not allowed: that flag "
@@ -387,7 +407,6 @@ def validate_invocation(policy: BinaryPolicy, argv: Sequence[str]) -> str | None
                 f"{policy.binary} {subcommand} calls only."
             )
 
-        inline = token.split("=", 1)[1] if "=" in token else None
         takes_value = name in rule.flag_values or name in rule.value_flags
         value = inline
         if takes_value and inline is None:
@@ -405,7 +424,7 @@ def validate_invocation(policy: BinaryPolicy, argv: Sequence[str]) -> str | None
                     "Other methods can modify the remote."
                 )
 
-    if action is not None and action.lower() in rule.denied_actions:
+    if action is not None and action.lower().strip("/") in rule.denied_actions:
         return (
             f"'{policy.binary} {subcommand} {action}' is not allowed: it can "
             "mutate the remote even through what looks like a read."

@@ -1237,9 +1237,7 @@ Do NOT wrap conversational replies in JSON.
         permissions = skill.parsed_permissions()
         refuse_unbridged_permissions(permissions, skill_name=skill.name)
         requirements = connector_requirements(permissions, skill_name=skill.name)
-        # Raises when a declared binary has no read-only policy or is not
-        # installed — a skill whose CLI is missing must not load and then
-        # improvise (#2932).
+        # A skill whose CLI is missing must not load and then improvise.
         policies = resolve_binary_policies(permissions, skill_name=skill.name)
 
         registered = register_skill_tools(skill)

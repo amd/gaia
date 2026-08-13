@@ -194,6 +194,18 @@ DANGEROUS_SHELL_OPERATORS = re.compile(
 )
 
 
+def skill_granted_binaries(host: Any) -> frozenset:
+    """CLIs *host*'s loaded skills granted via ``shell:execute:<binary>``.
+
+    Read off the agent instance, never a module global: the grant belongs to one
+    agent's session, so a skill loaded on one agent can never widen a sibling's
+    shell. Empty for a host that has loaded no such skill — the common case,
+    which leaves the whitelist behaviour byte-identical.
+    """
+    grants = getattr(host, "_granted_binaries", None)
+    return grants.binaries() if grants is not None else frozenset()
+
+
 def _is_granted_binary(token: str, granted: frozenset) -> bool:
     """True when *token* names a CLI this agent's skills granted."""
     if not granted:
@@ -201,6 +213,22 @@ def _is_granted_binary(token: str, granted: frozenset) -> bool:
     from gaia.skills.binaries import normalize_binary
 
     return normalize_binary(token) in granted
+
+
+def _split_pipeline(cmd_parts: list) -> list:
+    """Split a shlex-split command on ``|`` into its non-empty segments."""
+    segments: list = []
+    current: list = []
+    for part in cmd_parts:
+        if part == "|":
+            if current:
+                segments.append(current)
+            current = []
+        else:
+            current.append(part)
+    if current:
+        segments.append(current)
+    return segments
 
 
 class ShellToolsMixin:
@@ -281,18 +309,6 @@ class ShellToolsMixin:
         """Record command execution timestamp for rate limiting."""
         self.shell_command_times.append(time.time())
 
-    @property
-    def granted_binaries(self) -> frozenset:
-        """Binaries this agent's loaded skills granted (``shell:execute:gh``).
-
-        Read off the agent instance, never a module global — the grant belongs to
-        one agent's session, so a skill loaded here can never widen a sibling's
-        shell. Empty for an agent that has loaded no such skill, which is the
-        common case and leaves the whitelist behaviour byte-identical.
-        """
-        grants = getattr(self, "_granted_binaries", None)
-        return grants.binaries() if grants is not None else frozenset()
-
     @staticmethod
     def _validate_command(
         cmd_base: str,
@@ -313,12 +329,9 @@ class ShellToolsMixin:
 
         Returns None if the command is allowed, or an error dict if blocked.
         """
-        # Skill-granted CLIs (shell:execute:<binary>) are gated by their own
-        # read-only policy table instead of ALLOWED_COMMANDS. Deny-by-default:
-        # a policy binary nobody granted is refused, and a granted one is still
-        # held to its allowlist of read-only subcommands.
-        # Imported here, not at module scope: gaia.skills pulls in the connector
-        # stack, and every agent with shell tools would pay for it.
+        # Skill-granted CLIs are gated by their own read-only policy table
+        # instead of ALLOWED_COMMANDS; anything ungranted is still refused.
+        # Imported here — gaia.skills pulls in the connector stack.
         from gaia.skills.binaries import (
             BINARY_POLICIES,
             normalize_binary,
@@ -672,23 +685,20 @@ class ShellToolsMixin:
                         "has_errors": True,
                     }
 
-                granted = self.granted_binaries
+                granted = skill_granted_binaries(self)
+                segments = _split_pipeline(cmd_parts)
 
                 # Validate arguments for path traversal
                 # This prevents "cat ../secret.txt" even if "cat" is allowed.
-                # A skill-granted CLI is exempt: its operands are remote
-                # identifiers, not paths ('gh issue list --repo amd/gaia' would
-                # otherwise be read as a request for ./amd/gaia), and its own
-                # policy already refuses the flags that touch the filesystem.
-                is_granted_binary = bool(cmd_parts) and _is_granted_binary(
-                    cmd_parts[0], granted
-                )
-                if hasattr(self, "path_validator") and not is_granted_binary:
-                    for arg in cmd_parts[1:]:
-                        # Skip shell pipe operator
-                        if arg == "|":
-                            continue
-
+                # Exempt per SEGMENT, never for the whole line: a granted CLI's
+                # operands are remote identifiers, not paths ('gh issue list
+                # --repo amd/gaia' would otherwise read as a request for
+                # ./amd/gaia), but 'gh … | cat ../secret' must still be checked.
+                scanned = [
+                    seg for seg in segments if not _is_granted_binary(seg[0], granted)
+                ]
+                if hasattr(self, "path_validator"):
+                    for arg in [a for seg in scanned for a in seg[1:]]:
                         candidate_path = arg
                         if arg.startswith("-"):
                             if "=" in arg:
@@ -732,42 +742,25 @@ class ShellToolsMixin:
                                         "error": f"Access denied: Argument '{arg}' resolves to forbidden path '{resolved_path}'",
                                         "has_errors": True,
                                     }
-                            except Exception:
-                                pass
+                            except (OSError, ValueError) as exc:
+                                # Unresolvable is not a verdict — say so rather
+                                # than letting the argument through unnoticed.
+                                logger.warning(
+                                    "Could not resolve '%s' against the allowed "
+                                    "paths (%s); it was not path-checked.",
+                                    arg,
+                                    exc,
+                                )
 
                 cmd_base = cmd_parts[0].lower()
 
-                # If the command contains pipes, validate EACH command in the pipeline
-                if "|" in cmd_parts:
-                    # Split into pipeline segments
-                    segments = []
-                    current_segment = []
-                    for part in cmd_parts:
-                        if part == "|":
-                            if current_segment:
-                                segments.append(current_segment)
-                            current_segment = []
-                        else:
-                            current_segment.append(part)
-                    if current_segment:
-                        segments.append(current_segment)
-
-                    # Validate each command in the pipeline
-                    for seg in segments:
-                        if not seg:
-                            continue
-                        seg_base = seg[0].lower()
-                        # Reconstruct the segment command for subcommand validation
-                        seg_command = " ".join(seg)
-                        error = self._validate_command(
-                            seg_base, seg, seg_command, granted_binaries=granted
-                        )
-                        if error:
-                            return error
-                else:
-                    # Single command - validate normally
+                # Validate every command in the pipeline, not just the first.
+                for seg in segments:
                     error = self._validate_command(
-                        cmd_base, cmd_parts, command, granted_binaries=granted
+                        seg[0].lower(),
+                        seg,
+                        command if len(segments) == 1 else " ".join(seg),
+                        granted_binaries=granted,
                     )
                     if error:
                         return error
