@@ -221,10 +221,13 @@ setup(
             "bpy",
         ],
         "mcp": [
-            # Capped below 2.0: mcp 2.0.0 (released 2026-07-28) breaks
-            # MCPClient.connect() — the custom-agent harness went red with no
-            # code change. Lift the cap in a change that ports the client.
-            "mcp>=1.1.0,<3.0",
+            # Capped below 2.0: mcp 2.0.0 (released 2026-07-28) removed
+            # mcp.server.fastmcp (FastMCP -> MCPServer, moved to
+            # mcp.server.mcpserver), breaking every FastMCP-based server
+            # GAIA ships (agent_mcp_server.py, servers/agent_ui_mcp.py,
+            # servers/tui_mcp.py). Lift the cap only in a change that
+            # ports them.
+            "mcp>=1.1.0,<2.0",
             "starlette",
             "uvicorn",
         ],
