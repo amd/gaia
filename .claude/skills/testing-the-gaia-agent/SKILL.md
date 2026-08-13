@@ -78,6 +78,21 @@ one (CLAUDE.md lists the surfaces — prompts, tool schemas, tool-call parsing),
 as outstanding and run it when the box is quiet and nobody is driving the TUI. Never run
 two evals at once, either.
 
+### 3. Give your session a private agent log
+
+Every agent appends to `~/.gaia/logs/gaia-agent.log`. When anything else is running an
+agent — a parallel task, a second harness — the file interleaves, and **a neighbour's
+tool timeout reads as your session's failure**. Set `GAIA_AGENT_LOG` in the launcher:
+
+```powershell
+$env:GAIA_AGENT_LOG = 'C:\...\gaia-tui-test\logs\agent-session.log'
+```
+
+Lines also carry `pid:NNNN`, so the shared default is still attributable when you forget.
+This is not hypothetical: a 180s `run_shell_command` timeout was nearly filed as a shell
+bug here before the record turned out to belong to another process. Confirm the pid in
+the log matches the `gaia-agent.exe` your TUI spawned before believing anything.
+
 ## Which surface you are testing
 
 One binary, two surfaces — always state which:
@@ -100,6 +115,44 @@ cd tui && go build -o bin/gaia-drive.exe ./cmd/gaia
 
 Do not launch while a build is writing the binary — the file lock makes the launch
 silently fail. Build, *then* launch.
+
+Go must be on PATH (`export PATH="/c/Program Files/Go/bin:$PATH"` on Windows). Note that
+`gofmt -l` flags nearly every file on a Windows checkout — that is CRLF, not real
+formatting drift. Check `gofmt -d <file> | cat -A` for `^M` before you "fix" anything.
+
+### 1b. The agent binary the TUI spawns
+
+The TUI launches `gaia-agent` **from PATH** (`catalog.go`, `BinaryPath`). A source
+checkout does not have it — the console script only exists once the hub package is
+installed:
+
+```bash
+uv pip install --python <venv>/Scripts/python.exe \
+  -e hub/agents/gaia/python -e hub/agents/chat/python --no-deps
+```
+
+`--no-deps` is mandatory: without it pip pulls `amd-gaia` from PyPI and the agent
+imports THAT instead of your worktree. Put the venv's `Scripts/` on PATH in the launcher
+or the TUI cannot find `gaia-agent`.
+
+### 1c. The flagship ships with NO skills
+
+`gaia_agent/skills/` holds only `.gitkeep`, nothing stages `hub/skills/` into it, and
+every `skills:` / `skill_sets:` / `default_skill_set:` key in `gaia-agent.yaml` is
+commented out. So **L5–L7 cannot pass on a clean checkout** — not because the agent is
+broken, but because it has nothing to load.
+
+Install the one you are testing, and copy it rather than `gaia skill import` — import
+re-stamps the tier `experimental`, which is not what ships:
+
+```bash
+cp -r hub/skills/github-triage ~/.gaia/skills/
+gaia skill list      # expect: github-triage  2.0.0  community  user
+```
+
+Also note `gh` is refused until the skill that grants it is **loaded** — the grant is
+`shell:execute:gh`. Asking for `gh` first produces a confident refusal that looks like a
+missing-tool bug and is not one.
 
 ### 2. Launcher (adapt paths, keep the structure)
 
@@ -268,7 +321,42 @@ curl -s http://127.0.0.1:13305/api/v1/health    # note: 13305, NOT 8000
 ```
 
 Lemonade has died on its own mid-session more than once. Check it before blaming a
-change.
+change. Restarting it is **not** `lemonade-server serve` — that binary may not exist,
+and `lemonade.exe` is the *client* and rejects `serve`:
+
+```bash
+powershell.exe -NoProfile -Command "Start-Process 'C:\Users\<you>\AppData\Local\lemonade_server\bin\LemonadeServer.exe' -WindowStyle Minimized"
+curl -s -X POST http://127.0.0.1:13305/api/v1/load -H "Content-Type: application/json" \
+     -d '{"model_name":"Gemma-4-E4B-it-GGUF"}'      # pre-warm, or turn 1 pays ~3.5 min
+```
+
+A cold first turn is **~240s** (ttft ~228s) while both the LLM and the embedding model
+load; warm turns are ~6s. Pre-warm before timing anything, or the first number is a
+model load and you will report it as agent latency.
+
+## When a shell command hangs for exactly 180s
+
+Two real bugs produced this, both fixed — but the diagnostic pattern generalises to any
+tool the agent shells out to.
+
+1. **Check for orphans.** `Get-CimInstance Win32_Process -Filter "Name='gh.exe'"`. A
+   live child whose parent is gone means `subprocess.run` killed the `cmd.exe` at its
+   inner timeout, then blocked forever in a second `communicate()` on pipes the
+   grandchild still holds. The 180s you see is the OUTER tool timeout.
+2. **Compare against the same command from a shell.** 0.07s outside vs a hang inside
+   means the environment the agent spawns into, not the command.
+3. **Suspect stdin first.** `capture_output` redirects stdout/stderr and leaves stdin
+   inherited — the agent's stdin is the TUI's pipe, open and never written. Anything
+   that reads or probes it waits on input that cannot arrive.
+4. **Then suspect the decode.** Bare `text=True` decodes with the OS locale codec
+   (cp1252 on Windows) *inside subprocess's reader thread*. One unmappable byte kills
+   that thread and `run()` returns **returncode 0 with empty stdout** — a success with
+   the output silently discarded. `gh issue list` on amd/gaia hits it, because issue
+   #2962's title contains "⚠️".
+
+Both failures lie in the same direction: the agent reports a confident, wrong
+explanation ("a networking bottleneck", "no issues found") rather than an error. Always
+diff the agent's answer against `gh` directly.
 
 ## Reporting
 
