@@ -194,6 +194,15 @@ DANGEROUS_SHELL_OPERATORS = re.compile(
 )
 
 
+def _is_granted_binary(token: str, granted: frozenset) -> bool:
+    """True when *token* names a CLI this agent's skills granted."""
+    if not granted:
+        return False
+    from gaia.skills.binaries import normalize_binary
+
+    return normalize_binary(token) in granted
+
+
 class ShellToolsMixin:
     """
     Mixin providing shell command execution tools with rate limiting.
@@ -272,15 +281,78 @@ class ShellToolsMixin:
         """Record command execution timestamp for rate limiting."""
         self.shell_command_times.append(time.time())
 
+    @property
+    def granted_binaries(self) -> frozenset:
+        """Binaries this agent's loaded skills granted (``shell:execute:gh``).
+
+        Read off the agent instance, never a module global — the grant belongs to
+        one agent's session, so a skill loaded here can never widen a sibling's
+        shell. Empty for an agent that has loaded no such skill, which is the
+        common case and leaves the whitelist behaviour byte-identical.
+        """
+        grants = getattr(self, "_granted_binaries", None)
+        return grants.binaries() if grants is not None else frozenset()
+
     @staticmethod
     def _validate_command(
-        cmd_base: str, cmd_parts: list, command: str
+        cmd_base: str,
+        cmd_parts: list,
+        command: str,
+        granted_binaries: frozenset = frozenset(),
     ) -> Optional[Dict[str, Any]]:
         """
         Validate a command against the whitelist and subcommand rules.
 
+        Args:
+            cmd_base: The lowercased command name.
+            cmd_parts: The shlex-split command.
+            command: The raw command string.
+            granted_binaries: Skill-granted CLIs for *this* agent instance. Passed
+                in rather than read from module state so the grant can never be
+                global.
+
         Returns None if the command is allowed, or an error dict if blocked.
         """
+        # Skill-granted CLIs (shell:execute:<binary>) are gated by their own
+        # read-only policy table instead of ALLOWED_COMMANDS. Deny-by-default:
+        # a policy binary nobody granted is refused, and a granted one is still
+        # held to its allowlist of read-only subcommands.
+        # Imported here, not at module scope: gaia.skills pulls in the connector
+        # stack, and every agent with shell tools would pay for it.
+        from gaia.skills.binaries import (
+            BINARY_POLICIES,
+            normalize_binary,
+            validate_invocation,
+        )
+
+        binary = normalize_binary(cmd_base)
+        policy = BINARY_POLICIES.get(binary)
+        if policy is not None:
+            if binary not in granted_binaries:
+                return {
+                    "status": "error",
+                    "error": (
+                        f"Command '{binary}' is not available to this agent. It is "
+                        "granted only to a skill that declares "
+                        f"'shell:execute:{binary}' in its SKILL.md — load that skill "
+                        "first."
+                    ),
+                    "has_errors": True,
+                    "hint": f"{policy.summary} {policy.install_hint}",
+                }
+            error = validate_invocation(policy, cmd_parts)
+            if error:
+                return {
+                    "status": "error",
+                    "error": error,
+                    "has_errors": True,
+                    "hint": (
+                        f"The '{binary}' grant is read-only. Draft the change and "
+                        "show it to the user instead of performing it."
+                    ),
+                }
+            return None
+
         # Special handling for git - only allow read-only operations
         if cmd_base == "git":
             if len(cmd_parts) > 1:
@@ -600,9 +672,18 @@ class ShellToolsMixin:
                         "has_errors": True,
                     }
 
+                granted = self.granted_binaries
+
                 # Validate arguments for path traversal
-                # This prevents "cat ../secret.txt" even if "cat" is allowed
-                if hasattr(self, "path_validator"):
+                # This prevents "cat ../secret.txt" even if "cat" is allowed.
+                # A skill-granted CLI is exempt: its operands are remote
+                # identifiers, not paths ('gh issue list --repo amd/gaia' would
+                # otherwise be read as a request for ./amd/gaia), and its own
+                # policy already refuses the flags that touch the filesystem.
+                is_granted_binary = bool(cmd_parts) and _is_granted_binary(
+                    cmd_parts[0], granted
+                )
+                if hasattr(self, "path_validator") and not is_granted_binary:
                     for arg in cmd_parts[1:]:
                         # Skip shell pipe operator
                         if arg == "|":
@@ -678,12 +759,16 @@ class ShellToolsMixin:
                         seg_base = seg[0].lower()
                         # Reconstruct the segment command for subcommand validation
                         seg_command = " ".join(seg)
-                        error = self._validate_command(seg_base, seg, seg_command)
+                        error = self._validate_command(
+                            seg_base, seg, seg_command, granted_binaries=granted
+                        )
                         if error:
                             return error
                 else:
                     # Single command - validate normally
-                    error = self._validate_command(cmd_base, cmd_parts, command)
+                    error = self._validate_command(
+                        cmd_base, cmd_parts, command, granted_binaries=granted
+                    )
                     if error:
                         return error
 

@@ -3,15 +3,20 @@
 """
 The ``<domain>:<level>[:scope]`` permission grammar and its connector bridge.
 
-Phase 1 (issue #888) honors **connector-bridged domains only**:
+Two bridges resolve today; everything else is refused rather than loaded
+unenforced:
 
-- ``mcp:connect:<connector-id>`` and ``network:<level>[:scope]`` resolve to the
-  existing :class:`~gaia.connectors.providers.base.ConnectorRequirement` — the
-  same primitive agents already declare via ``REQUIRED_CONNECTORS``. There is no
-  second grant ledger.
-- ``filesystem`` / ``shell`` / ``database`` / ``desktop`` / ``env`` are
-  local-capability domains with no connector equivalent. They need the Phase 2
-  sandbox, so a skill declaring one is **refused** — never loaded unenforced.
+- **Connector-bridged** — ``mcp:connect:<connector-id>`` and
+  ``network:<level>[:scope]`` resolve to the existing
+  :class:`~gaia.connectors.providers.base.ConnectorRequirement`, the same
+  primitive agents already declare via ``REQUIRED_CONNECTORS``.
+- **Binary-bridged** — ``shell:execute:<binary>`` grants one named CLI, per
+  skill, per agent instance, restricted to the read-only subcommands in
+  :data:`gaia.skills.binaries.BINARY_POLICIES`. The scope is mandatory: an
+  unscoped ``shell:execute`` asks for the whole shell, which no bridge covers.
+- ``filesystem`` / ``database`` / ``desktop`` / ``env`` are local-capability
+  domains with no bridge. They need the Phase 2 sandbox, so a skill declaring
+  one is **refused**.
 
 ``network`` has no catalog connector in Phase 1 (nothing in the connector
 catalog represents raw outbound HTTP). Unless the permission scope names a real
@@ -28,6 +33,7 @@ from typing import Iterable, Sequence
 
 from gaia.connectors.providers.base import ConnectorRequirement
 from gaia.logger import get_logger
+from gaia.skills.binaries import BINARY_POLICIES, refuse_unpoliced_binaries
 from gaia.skills.errors import (
     FORMAT_DOCS_URL,
     SkillPermissionError,
@@ -50,13 +56,24 @@ DOMAIN_LEVELS: dict[str, frozenset[str]] = {
     "desktop": frozenset({"control", "none"}),
 }
 
-#: Domains that map onto the connector grant model — supported in Phase 1.
+#: Domains that map onto the connector grant model.
 CONNECTOR_BRIDGED_DOMAINS = frozenset({"network", "mcp"})
 
-#: Domains that need the Phase 2 sandbox — refused in Phase 1.
-LOCAL_CAPABILITY_DOMAINS = frozenset(DOMAIN_LEVELS) - CONNECTOR_BRIDGED_DOMAINS
+#: Domains bridged by a scoped, policy-gated binary grant (``shell:execute:gh``).
+#: Only meaningful *with* a scope — see :attr:`Permission.is_binary_bridged`.
+BINARY_BRIDGED_DOMAINS = frozenset({"shell"})
+
+#: Domains that need the Phase 2 sandbox — refused.
+LOCAL_CAPABILITY_DOMAINS = (
+    frozenset(DOMAIN_LEVELS) - CONNECTOR_BRIDGED_DOMAINS - BINARY_BRIDGED_DOMAINS
+)
 
 _TOKEN_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+
+#: A ``shell:execute`` scope is a bare executable name, never a path — the grant
+#: is resolved off ``PATH`` so a skill cannot smuggle in ``./evil`` or an
+#: absolute path to a binary that only looks like the one it declared.
+BINARY_NAME_RE = re.compile(r"^[a-z][a-z0-9._+-]*$")
 
 
 @dataclass(frozen=True)
@@ -77,6 +94,15 @@ class Permission:
         return self.domain in CONNECTOR_BRIDGED_DOMAINS
 
     @property
+    def is_binary_bridged(self) -> bool:
+        """True for ``shell:execute:<binary>`` — one named, policy-gated CLI."""
+        return (
+            self.domain in BINARY_BRIDGED_DOMAINS
+            and self.level == "execute"
+            and bool(self.scope)
+        )
+
+    @property
     def grants_nothing(self) -> bool:
         """True for an explicit ``<domain>:none`` denial — inert either way."""
         return self.level == "none"
@@ -87,8 +113,14 @@ class Permission:
 
         ``<domain>:none`` is excluded: an explicit denial asks for no capability,
         so refusing it would reject a skill for declaring *less* than the default.
+        A bare ``shell:execute`` counts: only a *scoped* binary grant is bridged,
+        and asking for the whole shell is asking for the sandbox.
         """
-        return self.domain in LOCAL_CAPABILITY_DOMAINS and not self.grants_nothing
+        if self.grants_nothing:
+            return False
+        if self.domain in BINARY_BRIDGED_DOMAINS:
+            return not self.is_binary_bridged
+        return self.domain in LOCAL_CAPABILITY_DOMAINS
 
     @classmethod
     def parse(cls, raw: str, *, skill_name: str = "<unknown>") -> "Permission":
@@ -126,7 +158,29 @@ class Permission:
                 f"Grammar: {FORMAT_DOCS_URL}#permission-model"
             )
 
+        if domain in BINARY_BRIDGED_DOMAINS and level == "execute":
+            _validate_binary_scope(scope, raw=raw, skill_name=skill_name)
+
         return cls(domain=domain, level=level, scope=scope)
+
+
+def _validate_binary_scope(scope: str | None, *, raw: str, skill_name: str) -> None:
+    """A ``shell:execute`` scope, when present, must name one bare binary.
+
+    A missing scope is not a *grammar* error — the grammar makes scope optional —
+    so it is refused later, by :func:`refuse_unbridged_permissions`, alongside the
+    other capabilities no bridge covers. A path-shaped scope is malformed here:
+    it would point the grant at something other than the binary it documents.
+    """
+    if not scope:
+        return
+    if not BINARY_NAME_RE.match(scope):
+        raise SkillValidationError(
+            f"Skill '{skill_name}' declares {raw!r}, whose scope {scope!r} is not a "
+            "bare executable name. Name the command as it is typed — 'gh', not a "
+            "path, a flag, or a full command line. "
+            f"Grammar: {FORMAT_DOCS_URL}#permission-model"
+        )
 
 
 def parse_permissions(
@@ -139,20 +193,38 @@ def parse_permissions(
 def refuse_unbridged_permissions(
     permissions: Sequence[Permission], *, skill_name: str
 ) -> None:
-    """Refuse a skill that needs a local capability Phase 1 cannot enforce.
+    """Refuse a skill that asks for a capability this runtime cannot enforce.
+
+    The single chokepoint: install, publish, migrate, ``register_skill_tools``,
+    and ``Agent.load_skill`` all funnel through here, so a capability refused
+    here is refused everywhere.
 
     Raises:
-        SkillPermissionError: if any permission is in a local-capability domain.
+        SkillPermissionError: for a local-capability domain, a bare
+            ``shell:execute``, or a binary grant with no read-only policy.
     """
+    refuse_unpoliced_binaries(permissions, skill_name=skill_name)
+
     unbridged = [p for p in permissions if p.is_local_capability]
     if not unbridged:
         return
 
     declared = ", ".join(str(p) for p in unbridged)
+    if any(p.domain in BINARY_BRIDGED_DOMAINS for p in unbridged):
+        raise SkillPermissionError(
+            f"Skill '{skill_name}' declares {declared}, which asks for the whole "
+            "shell. GAIA grants shell access one binary at a time: scope it to the "
+            "CLI the skill actually runs, e.g. 'shell:execute:gh'. Declarable "
+            f"binaries: {', '.join(sorted(BINARY_POLICIES)) or '(none)'}. The "
+            "sandbox that would contain unrestricted shell is deferred to a later "
+            f"phase. See {FORMAT_DOCS_URL}#permission-model and "
+            "https://github.com/amd/gaia/issues/1019 (Phase 2)."
+        )
     raise SkillPermissionError(
         f"Skill '{skill_name}' declares local-capability permission(s): {declared}. "
-        "GAIA's skills runtime bridges connector-backed permissions only "
-        f"({', '.join(sorted(CONNECTOR_BRIDGED_DOMAINS))}); the sandbox that enforces "
+        "GAIA's skills runtime bridges connector-backed permissions "
+        f"({', '.join(sorted(CONNECTOR_BRIDGED_DOMAINS))}) and scoped binary grants "
+        "(shell:execute:<binary>); the sandbox that enforces "
         f"{', '.join(sorted(LOCAL_CAPABILITY_DOMAINS))} is deferred to a later phase, "
         "so this skill is refused rather than loaded without enforcement. "
         "To load it now, drop those permissions and use the agent's own tools for "
