@@ -120,6 +120,10 @@ jobs:
     name: Publish terminal-hub
     needs: version
     runs-on: ubuntu-latest
+    # agent-publish gates on a deployment tag allowlist that lives in repo settings,
+    # not here: it must include v* or every release tag is rejected before any step
+    # runs (#2935). It also requires a reviewer, so admitted v* runs pause for approval,
+    # same as the agent-pkg-* tags the sibling release workflows already use.
     environment: agent-publish
     steps:
       - uses: actions/checkout@v7
@@ -223,6 +227,7 @@ jobs:
     name: Publish agent-ui
     needs: version
     runs-on: ubuntu-latest
+    # Same tag-allowlist requirement as terminal-hub above (#2935).
     environment: agent-publish
     steps:
       - uses: actions/checkout@v7
