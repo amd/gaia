@@ -87,7 +87,7 @@ describe.skipIf(!python)("query() against the real sidecar (dev mode)", () => {
 
   it("reports apiVersion 2.4 (the handshake already accepted it at startup)", async () => {
     const v = await sidecar.client.version();
-    expect(v.apiVersion).toBe("2.4");
+    expect(v.apiVersion).toBe("2.14");
   });
 
   it("streams the canonical status -> tool_call -> tool_result -> final sequence", async () => {

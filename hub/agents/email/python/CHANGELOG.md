@@ -5,7 +5,7 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/); the REST
 contract version is tracked separately as
 `gaia_agent_email.contract.SCHEMA_VERSION` (see `CONTRACT.md`).
 
-## [Unreleased]
+## [0.6.0] - 2026-08-12
 
 ### Added
 
@@ -201,9 +201,10 @@ contract version is tracked separately as
   buckets plus the waiting-on-you detector and persisted action items —
   never re-derived from raw scan results, so nothing those buckets already
   caught can go missing from it. `bulk.filter_tests` carries opaque ids (never
-  prose) a renderer maps to a sentence, so "47 filtered" always names the
-  test that filtered it. `NeedsYouItem.due_hint` (action items only) is
-  wrapped in the same untrusted-input delimiters that cover a raw message
+  prose) that a renderer can map to a sentence naming the test that filtered
+  a message, rather than a bare unauditable count. `NeedsYouItem.due_hint`
+  (action items only) is wrapped in the same untrusted-input delimiters
+  that cover a raw message
   body — it is regex-extracted verbatim from a message body and re-enters
   the calling agent's own tool-result context while that agent holds
   archive/send/delete authority. Nothing existing was removed, renamed, or
@@ -221,6 +222,22 @@ contract version is tracked separately as
   was never budgeted for. A follow-up will populate it, bounded to a
   deadline so a slow extraction degrades to partial detail rather than a
   stalled card.
+- **The triage card is now rendered from the scan's own data instead of
+  retyped by the model (#2858).** The chat model was previously asked to
+  transcribe a list the tools had already computed — categories, numbering,
+  addresses — and that transcription could drift from the underlying scan:
+  a number pointing at a different message than the one shown under it, an
+  item dropped or duplicated, or no list at all despite a populated scan.
+  Categorization is still model judgement (heuristic, then the
+  `specific-ai-triage` SLM, then an LLM fallback, all inside
+  `pre_scan_inbox`); the breakdown itself is now rendered directly from
+  `needs_you` via a `finalize_answer` hook on the base agent, so a
+  reference like `archive 3` always resolves to the message actually shown
+  as row 3, and the same deterministic corrections (calendar-conflict,
+  attention-card, invite-claim, fabricated-attendee) now reach the stream
+  and the console, not just an unread return value. On a 55-item real
+  inbox on the NPU profile this completed in under a minute, with no
+  timeout, on the CLI-to-daemon relay path.
 - **The inbox-scan default is now owned in one place (#2743, closing the loop
   #2643 started).** `config.DEFAULT_INBOX_SCAN_MESSAGES` (50) is now the
   single source every scan-default call site imports instead of restating a
@@ -327,6 +344,14 @@ contract version is tracked separately as
   every other `gaia email` command (no second auth scheme): `status`,
   `set-level`, `pause`, `resume`, `run`, `trust`, `kill`. Closes the gap where
   the code and the plan doc both described this command before it existed.
+- **The autonomy CLI now works against a real installed sidecar, not just
+  this checkout (#2894).** The `/v1/email/agent/autonomy*` routes above did
+  not exist in any binary published before this release, so `gaia email
+  autonomy status` (and every other subcommand) 404'd for anyone running an
+  installed sidecar rather than a source checkout, with nothing explaining
+  why. This release is the first where the shipped binary actually serves
+  those routes: every subcommand now reaches a real route and returns 200,
+  or a correct 409 when autonomy is off.
 
 ### Fixed
 
@@ -803,6 +828,20 @@ contract version is tracked separately as
   request too large even at the smallest usable body size fails with an
   actionable error naming the limit instead of silently returning less
   than was asked for.
+- **A counting question about a long-bodied sender no longer overflows the
+  model's context and comes back with an apology instead of an answer
+  (#2782).** Asking "how many emails from X in the last two weeks?" against
+  a verbose sender ran the search correctly, then blew the context window
+  re-reading the full body of every result and gave up — reproduced 8 of 8
+  times across two machines. `search_messages` now defaults to metadata
+  only (subject/from/date/snippet, no body): a counting or listing question
+  never needed the body, and metadata cuts the result size by roughly an
+  order of magnitude. A docstring instruction telling the model to pass
+  `include_bodies=False` for a counting question was tried first and
+  measured to fail live — the model didn't reliably do it — so the fix
+  flips the tool's *default* instead, which holds regardless of what the
+  model does. A turn that still can't fit now names the actual constraint
+  rather than a generic "had to trim the conversation" apology.
 - **Calendar listing and conflict checks no longer 400 on a date-only range,
   and never end a turn narrating a retry that didn't happen (#2517).**
   `list_calendar_events` and `detect_calendar_conflicts` forwarded a
@@ -964,7 +1003,7 @@ contract version is tracked separately as
     fully-trusted sender — a parity test locks the policy floor to the agent's
     real `CONFIRMATION_REQUIRED_TOOLS`. Only reversible actions auto-execute,
     each with undo via `action_store`.
-  - **It learns from your corrections.** `record_autonomy_outcome` is the single
+  - **A correction pulls trust back down.** `record_autonomy_outcome` is the single
     funnel every trust signal flows through; undoing an auto-archive (through the
     real `undo_archive_batch` tool) is captured automatically as a negative outcome
     and pulls trust back below the bar, updating both the sender and the category
