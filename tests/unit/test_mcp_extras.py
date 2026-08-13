@@ -5,11 +5,12 @@
 
 setup.py's ``extras_require["mcp"]`` block carries a comment saying the mcp
 dependency is "Capped below 2.0" because mcp 2.0.0 (released 2026-07-28)
-breaks ``MCPClient.connect()`` — the custom-agent harness went red with no
-code change on GAIA's side. But the pin itself reads ``mcp>=1.1.0,<3.0``,
-which does NOT enforce the cap the comment describes: the comment and the
-enforced version range contradict each other, so ``pip install`` can still
-resolve an mcp 2.x that breaks the client.
+removed ``mcp.server.fastmcp`` (``FastMCP`` was renamed to ``MCPServer`` and
+moved to ``mcp.server.mcpserver``), breaking every FastMCP-based server GAIA
+ships. But the pin itself reads ``mcp>=1.1.0,<3.0``, which does NOT enforce
+the cap the comment describes: the comment and the enforced version range
+contradict each other, so ``pip install`` can still resolve an mcp 2.x that
+breaks those servers.
 
 This file asserts two things, independently:
 
@@ -32,10 +33,19 @@ from pathlib import Path
 
 SETUP_PY = Path(__file__).resolve().parents[2] / "setup.py"
 
+# Single source of truth for the expected pin. If a future change legitimately
+# widens the cap (e.g. after porting the client to the mcp 2.x API), update
+# this one constant — and setup.py's pin and comment to match — rather than
+# editing the assertions below.
+EXPECTED_MCP_PIN = "mcp>=1.1.0,<2.0"
+EXPECTED_CAP_COMMENT_SUBSTRING = "capped below 2.0"
+
 _PORT_INSTRUCTION = (
-    "mcp 2.0.0 broke MCPClient.connect() — before widening the cap past "
-    "<2.0, port the MCP client in src/gaia/mcp/agent_mcp_server.py and "
-    "src/gaia/mcp/servers/agent_ui_mcp.py to the mcp 2.x API."
+    "mcp 2.0.0 removed mcp.server.fastmcp (FastMCP -> MCPServer) — before "
+    "widening the cap past <2.0, port GAIA's FastMCP-based MCP servers "
+    "(src/gaia/mcp/agent_mcp_server.py, src/gaia/mcp/servers/agent_ui_mcp.py, "
+    "src/gaia/mcp/servers/tui_mcp.py — docker_mcp.py is blocked transitively "
+    "via agent_mcp_server.py) to the mcp 2.x API."
 )
 
 
@@ -111,16 +121,16 @@ def _pin_and_preceding_comment(name: str, pin_prefix: str) -> tuple[str, str]:
 
 
 def test_mcp_extra_pin_is_capped_below_2_0() -> None:
-    """setup.py's mcp extra must pin ``mcp>=1.1.0,<2.0`` exactly — see #2885.
+    """setup.py's mcp extra must pin EXPECTED_MCP_PIN exactly — see #2885.
 
     This checks the enforced version range directly (not the comment that
     claims to describe it), so a contradiction between the two can't hide
     behind a comment nobody re-checked.
     """
     mcp_reqs = _parse_extra("mcp")
-    assert "mcp>=1.1.0,<2.0" in mcp_reqs, (
-        '#2885: setup.py\'s "mcp" extras_require block does not pin '
-        '"mcp>=1.1.0,<2.0". ' + _PORT_INSTRUCTION + "\n"
+    assert EXPECTED_MCP_PIN in mcp_reqs, (
+        f'#2885: setup.py\'s "mcp" extras_require block does not pin '
+        f'"{EXPECTED_MCP_PIN}". ' + _PORT_INSTRUCTION + "\n"
         f'Current "mcp" extra: {mcp_reqs}'
     )
 
@@ -129,22 +139,22 @@ def test_mcp_extra_capped_comment_matches_pin() -> None:
     """The "Capped below 2.0" comment above the mcp pin must match the pin — see #2885.
 
     setup.py documents the cap with a comment ("Capped below 2.0: mcp 2.0.0
-    ... breaks MCPClient.connect()"), but the pin itself can drift out of
+    ... removed mcp.server.fastmcp"), but the pin itself can drift out of
     sync with what the comment claims (it currently reads
     ``mcp>=1.1.0,<3.0``). This must fail whenever the comment still claims
     the dependency is capped below 2.0 but the pin's upper bound is anything
-    other than ``<2.0`` — the contradiction must not silently pass.
+    other than EXPECTED_MCP_PIN — the contradiction must not silently pass.
     """
     pin, comment = _pin_and_preceding_comment("mcp", "mcp>=")
-    assert "capped below 2.0" in comment.lower(), (
-        '#2885: expected the comment directly above the mcp pin in setup.py '
+    assert EXPECTED_CAP_COMMENT_SUBSTRING in comment.lower(), (
+        "#2885: expected the comment directly above the mcp pin in setup.py "
         'to still say "Capped below 2.0" (it documents why mcp is capped, '
-        f"following the mcp 2.0.0 MCPClient.connect() break); got: {comment!r}. "
+        f"following the mcp 2.0.0 mcp.server.fastmcp removal); got: {comment!r}. "
         "If the comment was intentionally reworded, update this test to match "
         "it; otherwise restore the comment."
     )
-    assert pin == "mcp>=1.1.0,<2.0", (
-        '#2885: setup.py\'s mcp extra comment says "Capped below 2.0" but the '
-        f'enforced pin is "{pin}", not "mcp>=1.1.0,<2.0" — the comment and the '
-        "enforced version range contradict each other. " + _PORT_INSTRUCTION
+    assert pin == EXPECTED_MCP_PIN, (
+        f'#2885: setup.py\'s mcp extra comment says "Capped below 2.0" but the '
+        f'enforced pin is "{pin}", not "{EXPECTED_MCP_PIN}" — the comment and '
+        "the enforced version range contradict each other. " + _PORT_INSTRUCTION
     )
