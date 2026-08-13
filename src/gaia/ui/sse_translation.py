@@ -66,6 +66,7 @@ Spec open questions surfaced in this file:
 
 from __future__ import annotations
 
+import json
 import os
 from typing import Any, Callable, Dict, List, Optional
 
@@ -405,14 +406,19 @@ class CanonicalTranslator:
             args = {}
         summary = self._render_args_summary(tool, args)
         # confirm_url omitted: stateless stop-and-hand-off (D1, spec §5 / Q4).
-        return [
-            {
-                "type": "needs_confirmation",
-                "run_id": self._run_id,
-                "action": tool,
-                "summary": summary,
-            }
-        ]
+        canonical: Dict[str, Any] = {
+            "type": "needs_confirmation",
+            "run_id": self._run_id,
+            "action": tool,
+            "summary": summary,
+        }
+        # The emitter's handle for THIS prompt. A front-end with a live decision
+        # channel echoes it back so a late answer cannot resolve the confirmation
+        # that replaced the one it was typed for.
+        confirm_id = event.get("confirm_id")
+        if confirm_id:
+            canonical["confirm_id"] = str(confirm_id)
+        return [canonical]
 
     def _on_user_input_request(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
         # Spec §9 Q3 resolved: a mid-run question is its OWN canonical type, not
@@ -460,7 +466,11 @@ class CanonicalTranslator:
         """
         if self._summary_renderer is not None:
             return self._summary_renderer(tool, args)
-        return f"{self._action_labels.get(tool, f'Run {tool!r}')}?"
+        label = self._action_labels.get(tool, f"Run {tool!r}")
+        detail = render_invocation(args)
+        if not detail:
+            return f"{label}?"
+        return f"{label} with {detail}?"
 
     # Dispatch table: every top-level source type sse_handler.py emits.
     _DISPATCH = {
@@ -551,4 +561,42 @@ def render_labelled_summary(
     return f"{label}?"
 
 
-__all__ = ["CanonicalTranslator", "TERMINAL_TYPES", "render_labelled_summary"]
+#: Longest a single argument value may be in a confirmation summary. Past this
+#: the value is elided: the prompt has to fit a modal, and a payload nobody can
+#: read is not disclosure.
+INVOCATION_VALUE_CHARS = 180
+
+#: Longest the whole rendered argument clause may be.
+INVOCATION_TOTAL_CHARS = 600
+
+
+def render_invocation(args: Dict[str, Any]) -> str:
+    """Render a tool call's arguments as one compact, readable clause.
+
+    A permission prompt that names only the tool ("Run 'run_shell_command'?")
+    hides the one thing the decision turns on, which trains people to approve
+    without looking. Every argument name is shown — a hidden key is a hidden
+    side effect — and only oversized values are elided.
+    """
+    if not isinstance(args, dict) or not args:
+        return ""
+    parts = []
+    for key in sorted(args):
+        value = args[key]
+        text = value if isinstance(value, str) else json.dumps(value, default=str)
+        text = " ".join(text.split())
+        if len(text) > INVOCATION_VALUE_CHARS:
+            text = text[:INVOCATION_VALUE_CHARS] + "…"
+        parts.append(f'{key}="{text}"')
+    clause = ", ".join(parts)
+    if len(clause) > INVOCATION_TOTAL_CHARS:
+        clause = clause[:INVOCATION_TOTAL_CHARS] + "…"
+    return clause
+
+
+__all__ = [
+    "CanonicalTranslator",
+    "TERMINAL_TYPES",
+    "render_invocation",
+    "render_labelled_summary",
+]
