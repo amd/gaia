@@ -687,13 +687,17 @@ class ShellToolsMixin:
 
                 granted = skill_granted_binaries(self)
                 segments = _split_pipeline(cmd_parts)
+                if not segments:
+                    return {
+                        "status": "error",
+                        "error": "Empty command",
+                        "has_errors": True,
+                    }
 
                 # Validate arguments for path traversal
                 # This prevents "cat ../secret.txt" even if "cat" is allowed.
-                # Exempt per SEGMENT, never for the whole line: a granted CLI's
-                # operands are remote identifiers, not paths ('gh issue list
-                # --repo amd/gaia' would otherwise read as a request for
-                # ./amd/gaia), but 'gh … | cat ../secret' must still be checked.
+                # Exempt per SEGMENT, never per line: a granted CLI's operands are
+                # remote ids, but 'gh … | cat ../secret' must still be checked.
                 scanned = [
                     seg for seg in segments if not _is_granted_binary(seg[0], granted)
                 ]
