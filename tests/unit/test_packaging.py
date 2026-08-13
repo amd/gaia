@@ -243,6 +243,18 @@ def _parse_extras_require_block():
     return match.group(1)
 
 
+class TestTalkExtra:
+    """The talk extra must carry the realtime transport dependencies (#382)."""
+
+    def test_realtime_dependencies_are_declared(self):
+        setup_source = SETUP_PY.read_text(encoding="utf-8")
+        talk_match = re.search(r'"talk"\s*:\s*\[(.*?)\n\s*\],', setup_source, re.DOTALL)
+
+        assert talk_match, 'Could not find "talk" extra in setup.py'
+        assert '"websockets"' in talk_match.group(1)
+        assert '"openai>=1.58.0"' in setup_source
+
+
 class TestAgentWheelExtras:
     """Regression guard for #2240.
 

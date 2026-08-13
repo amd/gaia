@@ -132,7 +132,7 @@ setup(
         ],
     },
     install_requires=[
-        "openai",
+        "openai>=1.58.0",
         "pydantic>=2.9.2",
         "transformers",
         "accelerate",
@@ -293,6 +293,7 @@ setup(
             "soundfile",
             "psutil",
             "pip",  # Required: spacy model download needs pip in venv (uv omits it)
+            "websockets",
         ],
         "youtube": [
             "llama-index-readers-youtube-transcript",
