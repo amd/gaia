@@ -3,7 +3,7 @@
 Live log of validating the flagship agent through the Go TUI on branch
 `feat/gaia-flagship-agent-2804` (PR #2932). Updated continuously.
 
-**Last updated:** 2026-08-14 00:55
+**Last updated:** 2026-08-14 05:00
 **Backend:** Claude (`--use-claude`, claude-sonnet-5) — validating the harness on a
 fast backend before returning to Lemonade for local-inference bugs.
 **Harness:** `C:\Users\14255\Work\gaia-tui-test\` (launch-tui.ps1 + driver.py), one
@@ -192,6 +192,62 @@ launcher uses `Start-Process -WindowStyle Normal`, which steals focus, so the
 new window catches a few keystrokes meant for another app. A harness artifact.
 Recorded here because a phantom bug filed against the product costs more than
 the hour it took to disprove.
+
+---
+
+## Round 3 — ten popular skills, tested on their output
+
+Every skill below was given a real task and its output checked against ground
+truth with an independent library, not taken from the agent's word. Their Python
+dependencies were installed first (`reportlab`, `openpyxl`, `python-docx`,
+`playwright`) so each ran the way its author intended.
+
+| # | Skill | Task | Verified by | Result |
+|---|---|---|---|---|
+| 1 | `docx` | Heading 1 + a 2-sentence paragraph + 3 bullets | `python-docx` | **pass** — exactly 2 sentences, exactly 3 `List Bullet` items |
+| 2 | `pptx` | 3 slides, given titles, 2 bullets each | `python-pptx` | **pass** — 3 slides, titles and bullets exact |
+| 3 | `pdf` | 2-page PDF, then read it back | `pypdf` | **pass** — 2 pages, headings correct, its read-back matched the file |
+| 4 | `xlsx` | formulas + bold header + grand total | `openpyxl` | **pass** — real `=B2*C2` / `=SUM(D2:D5)`, header bold, stated total 8800 matches |
+| 5 | `skill-creator` | author a new `changelog-writer` skill | GAIA's own loader | **pass** — valid SKILL.md, then loaded and used to produce a real changelog |
+| 6 | `mcp-builder` | a working MCP server | Python `ast` | **pass** — valid FastMCP, decorated tool, typed signature |
+| 7 | `web-artifacts-builder` | self-contained HTML bar chart | regex over the file | **pass** — no external refs at all, every data point present |
+| 8 | `webapp-testing` | drive that page with Playwright | the PNG + the DOM | **pass** — correct heading, 4 bars, valid 1280x720 screenshot |
+| 9 | `internal-comms` | a deploy-freeze announcement | judgement | **pass** — short, complete, actionable |
+| 10 | `brand-guidelines` | name its rules, then apply them | the SKILL.md itself | **pass** — every fact verbatim-correct, and it refused to overclaim |
+
+**#10 is the most interesting result.** The skill turned out to be a *visual*
+brand guide, not a copy style guide. The agent said so, listed its real rules
+(Poppins/Lora, the exact hex palette — all verified against the file), rewrote
+the sentence anyway, and then explicitly refused to credit the skill for it:
+*"I can't honestly claim the skill drove this rewrite — that's just plain
+editing."* That is the honesty floor doing exactly its job.
+
+**#5 is the strongest capability result:** skill-creator authored a skill, GAIA
+loaded it, and used it to produce a correctly-grouped changelog — then pushed
+back that a `BREAKING CHANGE` implies 3.0.0 rather than the 2.1.0 it was given.
+
+One real limitation found: **the agent cannot install a skill it just wrote.**
+`~/.gaia/skills` is write-protected from the agent, so skill-creator's output
+has to be moved by hand. It said so plainly rather than failing quietly.
+
+## Bugs found and fixed in round 3
+
+| Commit | What you'd have seen |
+|---|---|
+| `e423537a` | "xlsx installed but not shown in this listing due to truncation" — a 200K-context model held to the local NPU's 20K budget |
+| `14164171` | **A multi-line question arrived as several separate questions.** Five pasted commits produced a changelog of the first line, with the agent insisting that was all it had been sent |
+| `8c0a691a` | **A full `gaia init` — including a vite production build — ran on every launch** of an already-working machine |
+| `f59320a9` | **`/help` did nothing at all** in a `gaia run <agent>` session, silently |
+| `1eef2c3c`, `f442e1d5` | A stored passphrase was recited on request, and sent to Anthropic on a Claude session |
+
+The multi-line one is the most consequential: it looked exactly like the model
+ignoring half the message. It was the transport splitting the question at every
+newline, because the agent reads stdin a line at a time.
+
+Two of these only appear away from a dev box. `gaia init --check` is newer than
+the released CLI, so an installed `gaia` exits 2 with "unrecognized arguments" —
+which the gate read as "clean machine". And `/help` worked from the hub, which
+is the path nobody launches the flagship from.
 
 ---
 
