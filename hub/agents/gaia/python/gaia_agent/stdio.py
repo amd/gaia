@@ -20,20 +20,41 @@ lazy is the remaining win, and it is what would let this process start instantly
 and survive Lemonade not being up yet.
 
 The chat model is Lemonade by default; ``--use-claude`` swaps it for the
-Anthropic API (``--claude-model`` picks the model). Embeddings (RAG, memory,
-code index) stay on Lemonade either way — Anthropic has no embeddings API.
+Anthropic API (``--claude-model`` picks the model) at launch, and ``/model``
+(see ``run_model_command``) swaps it live, mid-session — the client is
+replaced in place on the same ``agent``/``agent.chat`` objects, so
+``conversation_history`` and ``loaded_skills`` survive a switch that a child
+respawn would destroy. Embeddings (RAG, memory, code index) stay on Lemonade
+either way — Anthropic has no embeddings API.
+
+A live switch is process-local: if the child ever respawns (the Go side kills
+and restarts it after a cancelled turn — see ``client.SubprocessClient``'s
+``discard``/respawn), the NEW process comes up from the ORIGINAL
+``--use-claude``/``--claude-model`` argv again, not from whatever ``/model``
+last set. This module cannot prevent that — there is no argv to persist a
+switch into short of the TUI re-issuing it — so the Go side instead detects
+the mismatch from this module's own startup ping and tells the user their
+model reverted (see ``handleCanonicalEvent`` in ``canonical.go``).
 
 The event vocabulary is the canonical one (``status`` / ``tool_call`` /
 ``tool_result`` / ``token`` / ``final`` / ``error``), identical to what the HTTP
 surface emits, so the renderer does not care which transport it is reading.
 Exactly one terminal event (``final`` or ``error``) ends every turn.
 
-stdin carries two kinds of line. A plain line is a query. A JSON object with a
-``gaia_control`` key is a **control message** — the back-channel a permission
-prompt needs: without one the agent can ask "may I run this?" and the answer has
-nowhere to travel, so every gated tool eventually auto-denies. Control messages
-are read by a dedicated thread so they still land *while* a turn is in flight,
-which is the only moment a confirmation decision is worth anything.
+stdin carries three kinds of line. A plain line is a query. ``/model`` and
+``/model <id>`` (see ``is_model_command``) are intercepted before the query
+ever reaches ``agent.process_query`` — the LLM never has to "answer" a slash
+command. A JSON object with a ``gaia_control`` key is a **control message** —
+the back-channel a permission prompt needs: without one the agent can ask "may
+I run this?" and the answer has nowhere to travel, so every gated tool
+eventually auto-denies. Control messages are read by a dedicated thread so
+they still land *while* a turn is in flight, which is the only moment a
+confirmation decision is worth anything. ``/model`` is deliberately NOT a
+control message: its response (the switched-to model, or why it was refused)
+has to reach the transport's reader, which only scans stdout *during* a turn
+(see ``client.SubprocessClient`` on the Go side) — so it rides the query
+channel like a real turn instead, guaranteeing the same one-terminal-event
+window a control ack could not.
 """
 
 from __future__ import annotations
@@ -44,10 +65,12 @@ import queue
 import sys
 import threading
 import traceback
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from gaia_agent.memory_dump import MEMORY_DUMP_QUERY, build_memory_dump
 
+from gaia.llm import create_client
+from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
 from gaia.logger import get_logger
 from gaia.ui.sse_translation import TERMINAL_TYPES, CanonicalTranslator
 
@@ -174,6 +197,342 @@ def apply_control(message: Dict[str, Any], state: PermissionState) -> None:
         state.resolve(decision, str(confirm_id) if confirm_id else None)
     else:
         logger.warning("Ignored unknown control verb %r", verb)
+
+
+#: Curated Claude 5-family ids the TUI's ``/model`` picker offers, mapped to a
+#: short display name for the header chip. Sourced from
+#: ``src/gaia/eval/config.py`` MODEL_PRICING's "Claude 5 family" — the current,
+#: non-deprecated generation. An older id (e.g. ``claude-opus-4-8``) still
+#: works if the caller knows it (ClaudeProvider accepts any ``claude-*``
+#: string), but ``/model`` only ever offers and validates against this list —
+#: an unlisted id is refused rather than silently accepted (see
+#: ``_apply_claude_switch``).
+CLAUDE_MODELS: Dict[str, str] = {
+    "claude-opus-5": "Opus 5",
+    "claude-sonnet-5": "Sonnet 5",
+    "claude-haiku-4-5": "Haiku 4.5",
+    "claude-fable-5": "Fable 5",
+}
+
+#: Prefix that dispatches a stdin line to ``run_model_command`` instead of
+#: ``agent.process_query`` — the LLM never sees this text as a question.
+MODEL_COMMAND_PREFIX = "/model"
+
+
+def is_model_command(query: str) -> bool:
+    """Whether *query* is ``/model`` or ``/model <id>``, not a real question."""
+    stripped = query.strip()
+    return stripped == MODEL_COMMAND_PREFIX or stripped.startswith(
+        MODEL_COMMAND_PREFIX + " "
+    )
+
+
+def _model_display_name(model_id: str, is_claude: bool) -> str:
+    """Friendly header name for *model_id* — falls back to the raw id."""
+    if is_claude:
+        return CLAUDE_MODELS.get(model_id, model_id)
+    return model_id
+
+
+def _model_state_event(agent: Any) -> Dict[str, Any]:
+    """Canonical ``status`` ping naming the model actually resolved for chat.
+
+    Additive fields on the existing ``status`` type, not a new top-level type
+    — deliberately scoped to THIS stdio transport, not a claim on the shared
+    ``/query`` HTTP contract other hub agents publish (docs/spec/agent-ui-
+    query-sse-contract.md governs that one; this agent has no such surface).
+    A consumer built against that contract simply never sees these fields —
+    Go's json.Unmarshal leaves unknown-to-it fields as their zero value,
+    which is exactly what an ordinary (blank) status line looks like.
+    Emitted once at startup and again after every successful ``/model``
+    switch, so the header always names what the agent actually resolved —
+    never what a launch flag merely requested.
+    """
+    chat = agent.chat
+    is_claude = bool(chat.config.use_claude)
+    model_id = chat.effective_model
+    return {
+        "type": "status",
+        "message": "",
+        "model_id": model_id,
+        "model_display": _model_display_name(model_id, is_claude),
+        "model_backend": "claude" if is_claude else "lemonade",
+        "model_remote": is_claude,
+    }
+
+
+#: Lemonade catalog labels that mark a model as NOT a chat target (embedders,
+#: image generators, rerankers, ...). Same filter as the auto-reload gate in
+#: lemonade_manager.py — offering one of these as a `/model` switch would
+#: report success and break silently on the NEXT turn, far from the mistake.
+_NON_CHAT_LABELS = frozenset({"embeddings", "image", "reranker"})
+
+
+def _lemonade_models(base_url: Optional[str]) -> List[str]:
+    """Downloaded, chat-capable local model ids Lemonade currently serves.
+
+    Goes through ``LemonadeClient`` (the one Lemonade HTTP client the rest of
+    the codebase uses) rather than a bespoke ``requests`` call, so base_url
+    resolution (env var, default host/port) and error shape match every other
+    caller. Raises RuntimeError (never a raw client exception) naming the URL
+    and the fix — the ``/model`` command surfaces this verbatim as its
+    terminal error, so it has to be actionable on its own.
+    """
+    client = LemonadeClient(base_url=base_url, verbose=False)
+    try:
+        # show_all=True is required to get `labels`/`downloaded` back at all
+        # (list_models's own docstring: those are "additional fields" only
+        # present in the full-catalog response) — filtered to downloaded
+        # entries below since this is a "what can I switch to RIGHT NOW" list.
+        catalog = client.list_models(show_all=True)
+    except LemonadeClientError as exc:
+        raise RuntimeError(
+            f"Lemonade Server is not reachable at {client.base_url} ({exc}). "
+            "Start it with `lemonade-server serve`, then retry."
+        ) from exc
+    return sorted(
+        {
+            m["id"]
+            for m in catalog.get("data", [])
+            if m.get("id")
+            and m.get("downloaded")
+            and not (_NON_CHAT_LABELS & set(m.get("labels") or []))
+        }
+    )
+
+
+#: Snapshot of everything a switch mutates, for an all-or-nothing apply.
+_SwitchState = Dict[str, Any]
+
+
+def _snapshot_switch_state(agent: Any) -> _SwitchState:
+    chat = agent.chat
+    cfg = getattr(agent, "config", None)
+    return {
+        "llm_client": chat.llm_client,
+        "chat_use_claude": chat.config.use_claude,
+        "chat_model": chat.config.model,
+        "chat_claude_model": chat.config.claude_model,
+        "use_claude": agent._use_claude,
+        "model_id": agent.model_id,
+        "cfg_use_claude": getattr(cfg, "use_claude", None) if cfg is not None else None,
+        "cfg_model_id": getattr(cfg, "model_id", None) if cfg is not None else None,
+        "cfg_claude_model": (
+            getattr(cfg, "claude_model", None) if cfg is not None else None
+        ),
+    }
+
+
+def _restore_switch_state(agent: Any, snapshot: _SwitchState) -> None:
+    chat = agent.chat
+    chat.llm_client = snapshot["llm_client"]
+    chat.config.use_claude = snapshot["chat_use_claude"]
+    chat.config.model = snapshot["chat_model"]
+    chat.config.claude_model = snapshot["chat_claude_model"]
+    agent._use_claude = snapshot["use_claude"]
+    agent.model_id = snapshot["model_id"]
+    cfg = getattr(agent, "config", None)
+    if cfg is not None:
+        cfg.use_claude = snapshot["cfg_use_claude"]
+        cfg.model_id = snapshot["cfg_model_id"]
+        cfg.claude_model = snapshot["cfg_claude_model"]
+
+
+def _apply_switch(
+    agent: Any,
+    *,
+    use_claude: bool,
+    model_id: Optional[str],
+    claude_model: Optional[str],
+    new_client: Any,
+) -> None:
+    """Move ``agent``/``agent.chat`` onto the already-built *new_client*, all
+    or nothing.
+
+    Snapshots everything first and restores it on ANY exception —
+    ``rebuild_system_prompt()`` runs inside this same guarded block, so a bug
+    in prompt composition rolls back the client swap too, instead of leaving
+    the session on a working new client with a half-composed prompt (the
+    original version of this function called rebuild AFTER mutating, which
+    could not roll back — caught in review).
+    """
+    snapshot = _snapshot_switch_state(agent)
+    chat = agent.chat
+    try:
+        chat.config.use_claude = use_claude
+        if model_id is not None:
+            chat.config.model = model_id
+        if claude_model is not None:
+            chat.config.claude_model = claude_model
+        chat.llm_client = new_client
+        agent._use_claude = use_claude
+        agent.model_id = model_id if model_id is not None else claude_model
+        cfg = getattr(agent, "config", None)
+        if cfg is not None:
+            cfg.use_claude = use_claude
+            if model_id is not None:
+                cfg.model_id = model_id
+            if claude_model is not None:
+                cfg.claude_model = claude_model
+        # Gemma-family prompts carry an embedded-JSON tool-call envelope
+        # Claude doesn't need (it speaks native tool_calls) — the cached
+        # system prompt must be recomposed under the new backend or the next
+        # turn ships stale instructions for a client that no longer needs
+        # them.
+        agent.rebuild_system_prompt()
+    except Exception as exc:
+        _restore_switch_state(agent, snapshot)
+        raise RuntimeError(
+            f"Model switch failed while finishing the change "
+            f"({type(exc).__name__}: {exc}) — rolled back to the previous model."
+        ) from exc
+
+
+def _apply_claude_switch(agent: Any, target: str) -> str:
+    """Swap the live client to Claude model *target*; raise on any failure.
+
+    Builds the new client BEFORE touching ``agent`` — a bad credential never
+    leaves the session half-swapped, only unchanged.
+    """
+    if target not in CLAUDE_MODELS:
+        raise RuntimeError(
+            f"Unknown Claude model '{target}'. Valid ids: "
+            f"{', '.join(CLAUDE_MODELS)}."
+        )
+    chat = agent.chat
+    try:
+        new_client = create_client(
+            use_claude=True,
+            model=target,
+            base_url=chat.config.base_url,
+            system_prompt=chat.config.system_prompt,
+        )
+    except (ValueError, ImportError) as exc:
+        # ValueError: ANTHROPIC_API_KEY missing (claude.py's own actionable
+        # copy). ImportError: the anthropic package itself isn't installed.
+        raise RuntimeError(f"{type(exc).__name__}: {exc}") from exc
+
+    _apply_switch(
+        agent,
+        use_claude=True,
+        model_id=None,
+        claude_model=target,
+        new_client=new_client,
+    )
+    return CLAUDE_MODELS[target]
+
+
+def _apply_local_switch(agent: Any, target: str) -> str:
+    """Swap the live client to local Lemonade model *target*; raise on failure."""
+    chat = agent.chat
+    available = _lemonade_models(chat.config.base_url)  # raises if unreachable
+    if target not in available:
+        raise RuntimeError(
+            f"Unknown local model '{target}'. Downloaded, chat-capable "
+            "Lemonade models: "
+            + (
+                ", ".join(available)
+                if available
+                else "(none — run `lemonade-server pull <model>` first)"
+            )
+            + "."
+        )
+    try:
+        new_client = create_client(
+            use_claude=False,
+            model=target,
+            base_url=chat.config.base_url,
+            system_prompt=chat.config.system_prompt,
+        )
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        # Reachability was already confirmed above — this covers whatever else
+        # LemonadeClient's constructor could still reject (a malformed
+        # base_url, mostly). Nothing on agent/chat has moved yet.
+        raise RuntimeError(f"{type(exc).__name__}: {exc}") from exc
+
+    _apply_switch(
+        agent,
+        use_claude=False,
+        model_id=target,
+        claude_model=None,
+        new_client=new_client,
+    )
+    return target
+
+
+def _switch_model(agent: Any, target: str) -> str:
+    """Swap the agent's live LLM client to *target*.
+
+    Returns the friendly display name on success; raises RuntimeError with an
+    actionable message on any failure. Never leaves ``agent`` half-swapped —
+    both branches build the new client (and, for local, confirm Lemonade is
+    reachable) before mutating anything, and the mutation itself is
+    snapshotted/rolled-back as a unit (see ``_apply_switch``).
+    """
+    if target.startswith("claude-"):
+        return _apply_claude_switch(agent, target)
+    return _apply_local_switch(agent, target)
+
+
+def _format_model_list(agent: Any) -> str:
+    """The ``/model`` (no-arg) answer: every switchable id, current one marked."""
+    chat = agent.chat
+    current = chat.effective_model
+    lines = ["**Claude (remote — sent to Anthropic):**"]
+    for model_id, label in CLAUDE_MODELS.items():
+        marker = " ← current" if model_id == current else ""
+        lines.append(f"- `{model_id}` — {label}{marker}")
+
+    lines.append("")
+    lines.append("**Local (Lemonade — downloaded, chat-capable models):**")
+    try:
+        local_models = _lemonade_models(chat.config.base_url)
+    except RuntimeError as exc:
+        lines.append(f"- {exc}")
+    else:
+        if not local_models:
+            lines.append("- (none downloaded — run `lemonade-server pull <model>`)")
+        for model_id in local_models:
+            marker = " ← current" if model_id == current else ""
+            lines.append(f"- `{model_id}`{marker}")
+
+    lines.append("")
+    lines.append(
+        f"Currently running: **{_model_display_name(current, bool(chat.config.use_claude))}**. "
+        "Switch with `/model <id>`."
+    )
+    return "\n".join(lines)
+
+
+def run_model_command(agent: Any, query: str, out) -> None:
+    """Handle ``/model`` and ``/model <id>`` — never reaches ``agent.process_query``.
+
+    Guarantees exactly one terminal event, same contract as ``run_turn``: the
+    transport's reader only stops scanning once it sees one.
+    """
+    arg = query.strip()[len(MODEL_COMMAND_PREFIX) :].strip()
+    if not arg:
+        _write({"type": "final", "answer": _format_model_list(agent)}, out)
+        return
+
+    try:
+        display = _switch_model(agent, arg)
+    except RuntimeError as exc:
+        logger.warning("model switch to %r refused: %s", arg, exc)
+        _write({"type": "error", "detail": str(exc)}, out)
+        return
+
+    logger.info("switched model to %s (%s)", arg, display)
+    _write(_model_state_event(agent), out)
+    where = (
+        "Claude API — this conversation is sent to Anthropic"
+        if agent._use_claude
+        else "the local Lemonade backend"
+    )
+    _write(
+        {"type": "final", "answer": f"Switched to **{display}**, running on {where}."},
+        out,
+    )
 
 
 def _pump_stdin(queries: "queue.Queue", state: PermissionState) -> None:
@@ -501,14 +860,17 @@ def dispatch_query(
     dev: bool = False,
     state: Optional[PermissionState] = None,
 ) -> None:
-    """Route one line off the query queue: a memory dump, or a real turn.
+    """Route one line off the query queue: a sentinel, or a real turn.
 
-    The memory-dump sentinel short-circuits before run_turn/process_query —
-    it never reaches the LLM and is never recorded as a chat turn (see
-    _record_turn's docstring on why a turn's own answer is what gets kept).
+    Sentinels short-circuit before run_turn/process_query — they never reach
+    the LLM and are never recorded as chat turns (see _record_turn's docstring
+    on why a turn's own answer is what gets kept).
     """
     if query == MEMORY_DUMP_QUERY:
         _write(_memory_dump_event(agent), out)
+        return
+    if is_model_command(query):
+        run_model_command(agent, query, out)
         return
     run_turn(agent, query, out, dev=dev, state=state)
 
@@ -590,6 +952,13 @@ def main(argv: Optional[list] = None) -> int:
         print(traceback.format_exc(), file=sys.stderr)
         _write(_terminal_error(exc), out)
         return 1
+
+    # The model chip needs the AGENT's resolved model, not the launch flags —
+    # flags can be defaulted/absent and would lie. This is the first line on
+    # the wire, read as part of whichever turn the child's first Send()
+    # triggers (the transport doesn't scan stdout until then), so it always
+    # lands before that turn's own events.
+    _write(_model_state_event(agent), out)
 
     # stdin is read by its own thread so it keeps being read DURING a turn —
     # which is the only time a confirmation decision can arrive. The turn loop

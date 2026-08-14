@@ -134,11 +134,11 @@ const chatHelpText = `  GAIA Chat
   Mouse wheel   Anywhere in the transcript
 
   Copy text out
-  ──────────────────
   Ctrl+T      Select with the mouse — your own
               terminal's copy and paste. Wheel
               stops scrolling; Esc turns it off.
   Ctrl+Y      Copy the whole answer
   Ctrl+B      Copy the last code block
 
-  Commands    /help · /hub · /clear · /setup · /memory`
+  Commands    /help · /hub · /clear
+              /setup · /memory · /model`
