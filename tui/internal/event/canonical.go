@@ -56,6 +56,14 @@ type CanonicalStatusEvent struct {
 	// the header chip's warning color is keyed on this, not on ModelBackend,
 	// so a future non-Claude remote backend still gets the warning.
 	ModelRemote bool `json:"model_remote,omitempty"`
+	// LemonadeReachable/LemonadeVersion/LemonadeBaseURL report the local model
+	// server, and are sent even for a remote chat model: embeddings (RAG,
+	// memory) still run on Lemonade, so "chat is remote" does not make Lemonade
+	// being down harmless. Reachable is a *bool so "not reported" (an older
+	// agent) stays distinguishable from "reported as down".
+	LemonadeReachable *bool  `json:"lemonade_reachable,omitempty"`
+	LemonadeVersion   string `json:"lemonade_version,omitempty"`
+	LemonadeBaseURL   string `json:"lemonade_base_url,omitempty"`
 }
 
 // CanonicalTokenEvent — one incremental chunk of assistant answer text.

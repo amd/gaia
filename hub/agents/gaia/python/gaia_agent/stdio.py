@@ -251,7 +251,7 @@ def _model_state_event(agent: Any) -> Dict[str, Any]:
     chat = agent.chat
     is_claude = bool(chat.config.use_claude)
     model_id = chat.effective_model
-    return {
+    event = {
         "type": "status",
         "message": "",
         "model_id": model_id,
@@ -259,6 +259,33 @@ def _model_state_event(agent: Any) -> Dict[str, Any]:
         "model_backend": "claude" if is_claude else "lemonade",
         "model_remote": is_claude,
     }
+    # Reported even on the Claude path: embeddings (RAG, memory) still run on
+    # Lemonade, so "chat is remote" does not mean Lemonade being down is fine.
+    event.update(_lemonade_health(getattr(chat.config, "base_url", None)))
+    return event
+
+
+def _lemonade_health(base_url: Optional[str]) -> Dict[str, Any]:
+    """Version and reachability of the local model server, for the dev header.
+
+    Never raises and never blocks startup for long: an unreachable Lemonade is a
+    normal state to *report*, not an error to propagate out of a status ping.
+    """
+    try:
+        client = LemonadeClient(base_url=base_url, verbose=False)
+    except Exception:  # pylint: disable=broad-exception-caught
+        return {"lemonade_reachable": False}
+    state: Dict[str, Any] = {"lemonade_base_url": client.base_url}
+    try:
+        health = client.health_check() or {}
+        state["lemonade_reachable"] = True
+        version = health.get("version")
+        if version:
+            state["lemonade_version"] = str(version)
+    except Exception as exc:  # pylint: disable=broad-exception-caught
+        logger.debug("[lemonade] health probe failed: %s", exc)
+        state["lemonade_reachable"] = False
+    return state
 
 
 #: Lemonade catalog labels that mark a model as NOT a chat target (embedders,

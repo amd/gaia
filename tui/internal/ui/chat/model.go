@@ -212,6 +212,15 @@ type ChatModel struct {
 	// click-drag selection (and with it copy and paste) — see selectmode.go.
 	selectMode bool
 
+	// lemonade* carry the local model server's state from the agent's
+	// model-state ping, shown in the --dev header. lemonadeKnown separates
+	// "the agent has not told us" from "it told us Lemonade is down": the
+	// first must render nothing, the second must render a warning.
+	lemonadeKnown   bool
+	lemonadeUp      bool
+	lemonadeVersion string
+	lemonadeBaseURL string
+
 	// modelID/modelDisplay/modelBackend/modelRemote come from the agent's own
 	// model-state ping (a CanonicalStatusEvent with ModelID set — see
 	// handleCanonicalEvent), never from the launch flags: a flag can be
@@ -2210,6 +2219,7 @@ func (m ChatModel) renderHeader() string {
 	// when inference is remote — worth stating on every frame so the user can
 	// always tell where inference runs and which model answered.
 	title += m.renderModelChip()
+	title += m.renderLemonadeChip()
 	return title
 }
 

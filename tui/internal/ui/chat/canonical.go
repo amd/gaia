@@ -59,6 +59,12 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			m.modelDisplay = e.ModelDisplay
 			m.modelBackend = e.ModelBackend
 			m.modelRemote = e.ModelRemote
+			if e.LemonadeReachable != nil {
+				m.lemonadeKnown = true
+				m.lemonadeUp = *e.LemonadeReachable
+				m.lemonadeVersion = e.LemonadeVersion
+				m.lemonadeBaseURL = e.LemonadeBaseURL
+			}
 			// Keep the legacy flag in sync — renderClaudeChip is still the
 			// pre-first-event fallback (see renderModelChip).
 			m.claudeMode = e.ModelRemote
