@@ -3,7 +3,7 @@
 Live log of validating the flagship agent through the Go TUI on branch
 `feat/gaia-flagship-agent-2804` (PR #2932). Updated continuously.
 
-**Last updated:** 2026-08-13 17:10
+**Last updated:** 2026-08-13 17:45
 **Backend:** Lemonade / Gemma-4-E4B-it-GGUF (GPU). `--use-claude` merged and built; blocked on `ANTHROPIC_API_KEY`
 **Harness:** `C:\Users\14255\Work\gaia-tui-test\` (launch-tui.ps1 + driver.py), single TUI on control port 8817
 
@@ -113,7 +113,20 @@ inventing causes for tool failures, narrating prompt-token counts at users,
 refusing work it never attempted. Verified live — asked for a skill that does
 not exist, it now says so and offers the ones that do.
 
-**11. Test playbook updated** — `d64b8b42`
+**11. Fixed bugs were replayed into every prompt forever** — `72cb3037`
+*(root cause of the intermittent skill-load failure)*
+Tool errors are auto-stored as knowledge and injected into every later system
+prompt under "Known errors to avoid". Nothing expired them. Long after the shell
+hang was fixed, the prompt still carried *"run_shell_command: did not return
+within 180s and was abandoned"* — so the model was told on every turn that shell
+access was broken, which is exactly the story it kept telling users while running
+those commands successfully. A session that recorded "No skill named
+'github-triage'" before the skill was discoverable carried that belief forward,
+which is the intermittent L5 failure. Transient errors are no longer persisted,
+and a tool that succeeds retires the errors stored against it — which also
+repairs databases already poisoned. 14 new tests.
+
+**12. Test playbook updated** — `d64b8b42`
 Six traps folded back into `.claude/skills/testing-the-gaia-agent/` so the harness
 can run unattended: private agent log, installing `gaia-agent` with `--no-deps`,
 the missing starter pack, `gh` needing the skill loaded, restarting Lemonade
@@ -123,25 +136,19 @@ correctly, and an ordered procedure for diagnosing the 180s shell hang.
 
 ## Open issues
 
-**A. Skill loading is occasionally flaky.** *(only remaining functional issue)*
-One `Load the github-triage skill` in a long-running session answered "there
-isn't a skill called github-triage available", then the same request in a fresh
-session loaded it in 98s. Discovery is correct when checked directly (26 skills,
-5 roots) and the skill has loaded reliably on every clean start since. Suspected
-stale state in a long-lived agent process rather than discovery.
+**A. `--use-claude` is merged and built but unverified.**
+Needs `ANTHROPIC_API_KEY`, absent in both User and Machine scope. The only
+untested surface left.
 
-**B. Cold start is ~100s with a spinner that undersells it.**
-First skill load in a fresh session took 98s; the same load warm is ~28s. The UI
-says "still working — local model, usually 60-90s", which is roughly honest for
-a skill load but was 3x optimistic for a cold first turn (~240s).
-
-**C. Lemonade is a single-slot single point of failure.**
+**B. Lemonade is a single-slot single point of failure.**
 It died outright twice mid-session (connection refused, no process). Restart is
 `LemonadeServer.exe` — `lemonade-server serve` does not exist and `lemonade.exe`
-is the client, which rejects `serve`.
+is the client, which rejects `serve`. Not a GAIA defect, but it shapes every
+timing measurement.
 
-**D. `--use-claude` is merged and built but unverified.**
-Needs `ANTHROPIC_API_KEY`, absent in both User and Machine scope.
+**C. Cold start is ~100s.**
+First skill load in a fresh session is ~98s; warm is 12-14s. Honest, but the
+spinner copy ("usually 60-90s") understates a cold first turn.
 
 ## Verified working
 
@@ -154,6 +161,11 @@ Needs `ANTHROPIC_API_KEY`, absent in both User and Machine scope.
   `github-triage` and running `gh` produced no confirmation modal, exactly as the
   skill documents.
 - **Memory across turns** — stored and recalled correctly.
+- **Skill loading** — 25/25 deterministic (in-process) and 6/6 live through the
+  TUI, after the memory fix. Warm loads 12-14s.
+- **Robustness sweep** — empty input is a no-op; idle Esc does not quit; cancel
+  mid-generation takes **1.0s** (the playbook warned 60-90s); killing the agent
+  mid-turn leaves the TUI alive and the next message respawns it.
 
 ---
 
@@ -175,12 +187,9 @@ Recording these because a wrong bug report costs more than a missing one.
 
 ## Next
 
-1. Chase the intermittent skill-load failure (open issue A) — the last known
-   functional gap.
-2. Robustness sweep: empty input, agent crash mid-turn, Esc cancel early and
-   mid-generation, idle Esc.
-3. `--use-claude` once `ANTHROPIC_API_KEY` is available, then re-validate on
+1. `--use-claude` once `ANTHROPIC_API_KEY` is available, then re-validate on
    Lemonade.
+2. Longer soak run now that the memory-poisoning cause is understood.
 
 ## Delivery note
 
