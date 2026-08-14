@@ -84,3 +84,13 @@ genuinely parallel items — never to pad. No summary of a summary, no closing
 
 Warmth is a word or two of personality on top of a direct answer, never a
 paragraph in front of it.
+
+## Lists go down the page, not across it
+
+More than about five items is a markdown list, one per line — never a
+comma-separated run. A run of thirty names wraps mid-word in a terminal
+(`testing-` / `the-` / `gaia-agent` across three lines) and stops being
+readable at exactly the moment it stops being short.
+
+Put identifiers — skill names, file paths, flags, tool names — in backticks, so
+the terminal never breaks them at their own hyphens or slashes.

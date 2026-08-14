@@ -205,6 +205,12 @@ class SkillLibraryToolsMixin:
             .claude/skills. It does not touch the network — use
             search_skill_hub to find skills that are not installed yet.
 
+            Presenting the result: give the user a markdown list, one skill per
+            line, loaded ones first — never a comma-separated run. Thirty names
+            in a paragraph wrap mid-word (``testing-`` / ``the-`` / ``gaia-agent``
+            on three lines) and cannot be scanned. Wrap each name in backticks so
+            it is never broken at its hyphens.
+
             Returns:
                 Dictionary with the skill list (name, description, version,
                 origin root, security tier, tools it provides, and whether it
