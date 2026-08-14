@@ -33,6 +33,10 @@ type RootModel struct {
 	catalog    *catalog.Catalog
 	showHelp   bool
 	helpCtx    components.HelpContext
+	// helpScroll is how many body lines are scrolled past while help is open.
+	// Reset to 0 whenever the panel opens or closes so it never reappears
+	// mid-scroll from a previous session with a shorter chunk of text.
+	helpScroll int
 	width      int
 	height     int
 	dev        bool
@@ -190,17 +194,32 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case chat.ToggleHelpMsg:
 		m.showHelp = !m.showHelp
 		m.helpCtx = components.HelpContextChat
+		m.helpScroll = 0
 		return m, nil
 
 	case components.HelpContext:
 		m.showHelp = !m.showHelp
 		m.helpCtx = msg
+		m.helpScroll = 0
 		return m, nil
 
 	case tea.KeyMsg:
 		if m.showHelp {
-			// Any key dismisses help overlay
+			// ↑/↓/PgUp/PgDn/Home/End navigate the open panel instead of
+			// closing it — the same keys the transcript itself uses, just
+			// aimed at whatever is on screen. Anything else still dismisses,
+			// exactly like before this panel could scroll at all.
+			if delta, jump, handled := helpScrollKey(msg, m.height); handled {
+				max := components.HelpMaxScroll(m.helpCtx, m.width, m.height)
+				if jump {
+					m.helpScroll = clampInt(delta, 0, max)
+				} else {
+					m.helpScroll = clampInt(m.helpScroll+delta, 0, max)
+				}
+				return m, nil
+			}
 			m.showHelp = false
+			m.helpScroll = 0
 			return m, nil
 		}
 		// The mailbox hand-off owns every key while it is up, the way the hub's
@@ -260,10 +279,57 @@ func (m RootModel) View() string {
 	}
 
 	if m.showHelp {
-		return components.RenderHelpOverlay(m.helpCtx, base, m.width, m.height)
+		return components.RenderHelpOverlay(m.helpCtx, base, m.width, m.height, m.helpScroll)
 	}
 
 	return base
+}
+
+// helpScrollToEnd is an intentionally-oversized jump target for the End key —
+// the caller always clamps it against components.HelpMaxScroll, so its only
+// job is to be bigger than any real scroll range.
+const helpScrollToEnd = 1 << 30
+
+// helpScrollKey reports how ↑/↓/PgUp/PgDn/Home/End should move the open help
+// panel's scroll offset. delta is a relative line count unless jump is true,
+// in which case delta is an absolute target the caller still has to clamp.
+// Any other key reports handled=false, which is the caller's cue to close
+// the panel instead — the behavior every other key has always had.
+func helpScrollKey(msg tea.KeyMsg, height int) (delta int, jump, handled bool) {
+	switch msg.Type {
+	case tea.KeyUp:
+		return -1, false, true
+	case tea.KeyDown:
+		return 1, false, true
+	case tea.KeyPgUp:
+		return -helpPageStep(height), false, true
+	case tea.KeyPgDown:
+		return helpPageStep(height), false, true
+	case tea.KeyHome:
+		return 0, true, true
+	case tea.KeyEnd:
+		return helpScrollToEnd, true, true
+	}
+	return 0, false, false
+}
+
+// helpPageStep mirrors the transcript's own PgUp/PgDn: half the window,
+// never less than one line.
+func helpPageStep(height int) int {
+	if step := height / 2; step > 0 {
+		return step
+	}
+	return 1
+}
+
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
 
 // logf writes transport diagnostics to stderr in dev mode. It must never be
