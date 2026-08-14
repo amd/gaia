@@ -28,8 +28,18 @@ func (m ChatModel) renderLemonadeChip() string {
 	if !m.dev || !m.lemonadeKnown {
 		return ""
 	}
+	// A DOWN server is worth saying on any backend, because embeddings still
+	// need it — a Claude session answers normally and then fails at the first
+	// document question.
 	if !m.lemonadeUp {
 		return lemonadeDownStyle.Render(" │ lemonade down")
+	}
+	// A healthy one is only worth a chip when it is doing the thinking. Beside
+	// a remote model it read as the backend — "GAIA │ dev │ Sonnet 5 │ lemonade
+	// 10.10.0" was reported as "you're still running Lemonade, not Sonnet",
+	// which is exactly the thing the model chip exists to make unambiguous.
+	if m.modelRemote {
+		return ""
 	}
 	if m.lemonadeVersion == "" {
 		// Reachable but unversioned — say reachable rather than invent a number.

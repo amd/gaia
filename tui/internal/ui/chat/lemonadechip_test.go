@@ -100,3 +100,41 @@ func TestADownReportFromThePingRendersDown(t *testing.T) {
 		t.Errorf("a Claude session hides that Lemonade is down: %q", got)
 	}
 }
+
+// "GAIA │ dev │ Sonnet 5 │ lemonade 10.10.0" was read as "you're still running
+// Lemonade, not Sonnet". A healthy local server is not worth a chip when a
+// remote model is doing the thinking — it sits right beside the model name and
+// reads as the backend, which is the one thing the model chip exists to settle.
+func TestAHealthyLocalServerIsHiddenOnARemoteModel(t *testing.T) {
+	m := ChatModel{
+		dev: true, modelRemote: true,
+		lemonadeKnown: true, lemonadeUp: true, lemonadeVersion: "10.10.0",
+	}
+	if got := chipFor(m); got != "" {
+		t.Errorf("a healthy Lemonade is advertised beside a remote model: %q", got)
+	}
+}
+
+// A DOWN server still shows on a remote model: embeddings for RAG and memory
+// go to Lemonade whatever the chat backend is, so the session answers normally
+// and then fails at the first document question.
+func TestADownLocalServerIsStillShownOnARemoteModel(t *testing.T) {
+	m := ChatModel{
+		dev: true, modelRemote: true,
+		lemonadeKnown: true, lemonadeUp: false,
+	}
+	if got := strings.ToLower(chipFor(m)); !strings.Contains(got, "down") {
+		t.Errorf("a Claude session hides that Lemonade is down: %q", got)
+	}
+}
+
+// On a local model the version is exactly what a developer wants in the header.
+func TestTheVersionStillShowsOnALocalModel(t *testing.T) {
+	m := ChatModel{
+		dev: true, modelRemote: false,
+		lemonadeKnown: true, lemonadeUp: true, lemonadeVersion: "10.10.0",
+	}
+	if got := chipFor(m); !strings.Contains(got, "10.10.0") {
+		t.Errorf("the local backend's version is missing from the header: %q", got)
+	}
+}
