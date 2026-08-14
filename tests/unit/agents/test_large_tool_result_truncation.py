@@ -437,3 +437,72 @@ class TestUnicodeReachesModelAsCharacters:
             f"json.dumps call(s) without ensure_ascii=False at line(s) "
             f"{offenders} -- model-visible text must never escape unicode"
         )
+
+
+# ---------------------------------------------------------------------------
+# The backstop must not be tighter than the gate it backs
+# ---------------------------------------------------------------------------
+
+
+class TestSecondGateDoesNotUndoTheFirst:
+    """A hardcoded 2,000-char cap made the device budget dead code.
+
+    Every call site runs a tool result through ``_handle_large_tool_result``
+    (device budget: 20,000 chars on NPU, 40,000 on GPU) and then hands the
+    fitted result to ``_create_tool_message``. That second call re-truncated
+    to a hardcoded 2,000 chars, so for any result over 2 KB the first budget
+    decided nothing and the model saw a twentieth of what was collected.
+
+    Observed live on the flagship: asked to list its skills, it answered
+    "the tool only surfaces 2 of the 30 skills per call and keeps truncating
+    the same way" -- 30 skills, 17,300 chars, well inside the budget, cut to
+    2. The same cap silently gutted issue lists, file reads and retrieval
+    results; a list tool simply could not return more than a couple of items.
+    """
+
+    def test_a_payload_inside_the_device_budget_reaches_the_model_whole(self):
+        agent = make_agent()
+        agent.device = "gpu"
+        threshold, _ = truncation_budget("gpu")
+        payload = _messages_payload(min_chars=threshold // 2)
+
+        fitted = agent._handle_large_tool_result("list_messages", payload, [], {})
+        text = agent._create_tool_message("list_messages", fitted)["content"][0]["text"]
+
+        assert json.loads(text) == payload, (
+            "a result already inside the device budget was truncated again on "
+            "its way into the message"
+        )
+
+    def test_items_surviving_the_budget_are_not_dropped_by_the_message(self):
+        agent = make_agent()
+        agent.device = "gpu"
+        payload = _messages_payload(min_chars=90000)
+
+        fitted = agent._handle_large_tool_result("list_messages", payload, [], {})
+        text = agent._create_tool_message("list_messages", fitted)["content"][0]["text"]
+
+        assert len(json.loads(text)["messages"]) == len(fitted["messages"])
+
+    @pytest.mark.parametrize("device", ["npu", "gpu", "cpu", None])
+    def test_the_backstop_tracks_the_device_profile(self, device):
+        agent = make_agent()
+        agent.device = device
+        _, target = truncation_budget(device)
+        payload = _messages_payload(min_chars=target * 3)
+
+        text = agent._create_tool_message("list_messages", payload)["content"][0][
+            "text"
+        ]
+
+        assert len(text) <= target, "the backstop stopped capping anything at all"
+        assert len(text) > 2000, (
+            f"device={device!r} still capped near the old hardcoded 2,000 chars"
+        )
+
+    def test_no_hardcoded_cap_left_in_create_tool_message(self):
+        src = inspect.getsource(Agent._create_tool_message)
+        assert "max_chars=2000" not in src
+        assert "truncation_budget" in src, (
+            "the cap must derive from the device profile, not a literal"
+        )

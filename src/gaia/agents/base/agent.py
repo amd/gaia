@@ -3418,10 +3418,14 @@ Do NOT wrap conversational replies in JSON.
         if isinstance(tool_output, str):
             text_content = tool_output
         else:
+            # Every call site hands this a result ``_handle_large_tool_result``
+            # already fitted to the device budget, so this is a backstop, not
+            # the real gate -- it must not be tighter than the gate it backs.
+            _, target = truncation_budget(getattr(self, "device", None))
             # Prose call site: text_content is spliced into a message's text
             # field, never json.loads'd -- stays on the default prose path,
             # not the JSON-safe envelope (#2620, reflection C2).
-            text_content = self._truncate_large_content(tool_output, max_chars=2000)
+            text_content = self._truncate_large_content(tool_output, max_chars=target)
 
         if not isinstance(text_content, str):
             text_content = json.dumps(
