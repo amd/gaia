@@ -3030,6 +3030,14 @@ Do NOT wrap conversational replies in JSON.
                 logger.error(error_msg)
                 return {"status": "error", "error": error_msg}
 
+        # Models routinely send numbers as JSON strings ("120" for timeout: int).
+        # Every tool body would otherwise have to defend itself, and the ones
+        # that don't fail deep inside a library with an unrecognisable message.
+        tool_args, coercion_error = self._coerce_tool_args(tool_name, sig, tool_args)
+        if coercion_error is not None:
+            logger.error(coercion_error)
+            return {"status": "error", "error": coercion_error}
+
         try:
             result = self._call_tool_bounded(tool, tool_args, tool_name)
             logger.debug(f"Tool execution result: {result}")
@@ -3164,6 +3172,98 @@ Do NOT wrap conversational replies in JSON.
             json.dump(data, f, indent=2)
 
         return os.path.abspath(file_path)
+
+    #: Scalar annotations worth coercing, by name as well as by type: a module
+    #: using postponed annotations hands us the string "int", not ``int``, and
+    #: silently skipping those would turn this into a no-op nobody notices.
+    #: Anything richer (a dict, a dataclass, an Optional[...]) is left exactly
+    #: as the model sent it.
+    _COERCIBLE = {"int": int, "float": float, "bool": bool, "str": str}
+
+    @staticmethod
+    def _coerce_scalar(value: Any, target: type) -> Any:
+        """Return *value* as *target*, or raise ValueError naming the problem."""
+        if target is bool:
+            if isinstance(value, bool):
+                return value
+            text = str(value).strip().lower()
+            if text in ("true", "yes", "1"):
+                return True
+            if text in ("false", "no", "0"):
+                return False
+            raise ValueError(f"{value!r} is not a boolean")
+        if target is str:
+            return value if isinstance(value, str) else str(value)
+        # bool is a subclass of int — coercing True to 1 silently would hide a
+        # model that confused a flag for a count.
+        if isinstance(value, bool):
+            raise ValueError(f"{value!r} is a boolean, not a number")
+        if target is int:
+            if isinstance(value, int):
+                return value
+            number = float(str(value).strip())
+            if number != int(number):
+                raise ValueError(f"{value!r} is not a whole number")
+            return int(number)
+        if isinstance(value, (int, float)):
+            return float(value)
+        return float(str(value).strip())
+
+    def _coerce_tool_args(
+        self,
+        tool_name: str,
+        sig: "inspect.Signature",
+        tool_args: Dict[str, Any],
+    ) -> tuple:
+        """Fit model-supplied arguments to each parameter's annotated type.
+
+        Returns ``(args, error)``; ``error`` is None when everything converted.
+
+        A model that sends ``timeout: "120"`` for ``timeout: int = 60`` used to
+        reach ``subprocess.run(timeout="120")``, which fails inside the stdlib
+        with ``unsupported operand type(s) for +: 'float' and 'str'``. The
+        agent read that as a bug in the *script* it was running and reported it
+        as such — so the real fault was invisible from the transcript.
+        """
+        converted = dict(tool_args)
+        problems = []
+        for name, value in tool_args.items():
+            param = sig.parameters.get(name)
+            if param is None or param.annotation is inspect.Parameter.empty:
+                continue
+            annotation = param.annotation
+            target = self._COERCIBLE.get(
+                annotation.strip() if isinstance(annotation, str) else None
+            ) or (annotation if annotation in self._COERCIBLE.values() else None)
+            if target is None or value is None:
+                continue
+            # bool passes isinstance(x, int), so an int parameter handed True
+            # would look correct and skip the check that rejects it.
+            already_right = isinstance(value, target) and not (
+                target is int and isinstance(value, bool)
+            )
+            if already_right:
+                continue
+            try:
+                converted[name] = self._coerce_scalar(value, target)
+            except (TypeError, ValueError) as exc:
+                problems.append(f"{name} expects {target.__name__} — {exc}")
+        if problems:
+            return tool_args, (
+                f"Invalid argument(s) for {tool_name}: {'; '.join(problems)}. "
+                f"Send each value as its declared type."
+            )
+        if converted != tool_args:
+            logger.debug(
+                "[coerce] %s: %s",
+                tool_name,
+                {
+                    k: f"{tool_args[k]!r}->{v!r}"
+                    for k, v in converted.items()
+                    if tool_args.get(k) != v or type(tool_args.get(k)) is not type(v)
+                },
+            )
+        return converted, None
 
     def _handle_large_tool_result(
         self,

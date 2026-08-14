@@ -1423,7 +1423,13 @@ No documents are currently indexed.
                         cmd,
                         cwd=str(p.parent.resolve()),
                         capture_output=True,
-                        text=True,
+                        # An inherited stdin leaves the child waiting on a pipe
+                        # nobody writes to, and the run only ends at the timeout.
+                        stdin=subprocess.DEVNULL,
+                        # text=True decodes with the locale codec — cp1252 here —
+                        # so one emoji in a print() raised instead of returning.
+                        encoding="utf-8",
+                        errors="replace",
                         timeout=timeout,
                         check=False,
                     )
@@ -1728,7 +1734,11 @@ No documents are currently indexed.
                     result = subprocess.run(
                         ["tasklist", "/fo", "csv", "/nh"],
                         capture_output=True,
+                        stdin=subprocess.DEVNULL,
                         text=True,
+                        # Locale codec, not utf-8: tasklist emits the OEM
+                        # codepage. errors= only stops it raising.
+                        errors="replace",
                         timeout=10,
                         check=False,
                     )
@@ -1758,7 +1768,11 @@ No documents are currently indexed.
                     result = subprocess.run(
                         ["osascript", "-e", script],
                         capture_output=True,
+                        stdin=subprocess.DEVNULL,
                         text=True,
+                        # Locale codec, not utf-8: tasklist emits the OEM
+                        # codepage. errors= only stops it raising.
+                        errors="replace",
                         timeout=10,
                         check=False,
                     )
@@ -1796,7 +1810,11 @@ No documents are currently indexed.
                     result = subprocess.run(
                         ["wmctrl", "-l"],
                         capture_output=True,
+                        stdin=subprocess.DEVNULL,
                         text=True,
+                        # Locale codec, not utf-8: tasklist emits the OEM
+                        # codepage. errors= only stops it raising.
+                        errors="replace",
                         timeout=5,
                         check=False,
                     )
