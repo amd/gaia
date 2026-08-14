@@ -227,7 +227,13 @@ of this system was built by other sessions I can't fully audit in the time avail
 - The built binary launches and its `--help` / `--use-claude` / `--claude-model`
   flags are real and wired (not documentation-only), producing a 25.4 MB binary.
 - The exit-code-1-vs-2 setup bug fix and its regression test exist in the current
-  tree (`setup_test.go:267-289`).
+  tree, and pass: `go test ./internal/ui/chat/...` — 7/7 setup-specific tests plus
+  the rest of the package, all green (`setup_test.go:267-289` is the exit-code case).
+- The npm client's test suite: `npm test` in `hub/agents/gaia/npm` — 101 passed, 3
+  skipped, 0 failed. That's real coverage of platform resolution, lock parsing,
+  SHA-256 verification (including a tampered-download case that confirms the file is
+  deleted, not just rejected), and lifecycle — against a mocked network layer (see
+  the caveat below).
 - `release_agent_gaia.yml` and `release_components.yml` exist, are internally
   consistent about the two-lane distribution model, and match what `docs/guides/gaia.mdx`
   and the npm `README.md` claim.
@@ -237,14 +243,19 @@ end-to-end:**
 - **macOS and Linux.** I have no access to either platform from this session. The
   CI matrix (`windows-latest`, `macos-14` for arm64, `ubuntu-latest`,
   `macos-26-intel` best-effort) is the only evidence either builds; I did not run it.
-- **The actual PyInstaller freeze of the gaia sidecar.** Producing a real binary
-  needs a `uv venv` with editable installs of core + chat + gaia + `pyinstaller`,
-  which is a multi-minute, environment-sensitive operation I chose not to run blind
-  in this session given how much of the pipeline is already CI-gated (the release
-  workflow smoke-tests the frozen binary itself before it can be published — see
-  `packaging/smoke_test.py`, invoked from `release_agent_gaia.yml`). The **~90–120 MB**
-  size estimate in §3 is therefore an estimate from the email agent's number, not a
-  measurement of gaia's actual binary.
+- **The actual PyInstaller freeze of the gaia sidecar.** I checked what setting up
+  the freezing venv itself would cost: core `amd-gaia`'s base `install_requires`
+  includes `transformers` and `accelerate`, and `accelerate` pulls in `torch`
+  transitively — so `uv pip install -e ".[api]" -e hub/agents/chat/python -e
+  hub/agents/gaia/python pyinstaller` downloads several GB before freezing even
+  starts, even though the *frozen binary* excludes all of it (that's what
+  `freeze.py`'s `EXCLUDES` list is for — it strips them from the bundle, not from the
+  dev venv). Given that cost and that the release workflow already smoke-tests the
+  frozen binary before it can publish (`packaging/smoke_test.py`, invoked from
+  `release_agent_gaia.yml`), I chose not to reproduce that multi-GB download locally
+  just to re-derive a number CI will produce for free on the next release attempt.
+  The **~90–120 MB** size estimate in §3 is therefore an estimate from the email
+  agent's number, not a measurement of gaia's actual binary.
 - **A live `npx @amd-gaia/gaia` run.** Can't — nothing is published yet (§9). The
   4,100+ lines of Go/Python/TypeScript unit and integration tests are real coverage
   of the logic (platform resolution, lock parsing, SHA-256 verification, lifecycle,
