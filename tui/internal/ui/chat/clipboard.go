@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/atotto/clipboard"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -103,4 +104,51 @@ func copyHint(label string, err error) string {
 		return fmt.Sprintf("could not copy the %s: %v", label, err)
 	}
 	return fmt.Sprintf("%s sent to the clipboard — if nothing pasted, this terminal does not support OSC 52", label)
+}
+
+// pasteClipboardMsg carries the result of a Ctrl+V clipboard read.
+type pasteClipboardMsg struct {
+	text string
+	err  error
+}
+
+// pasteFromClipboard reads the OS clipboard directly, for the terminals that
+// do not turn Ctrl+V into a bracketed paste themselves (handleKey's Paste
+// branch covers the ones that do).
+//
+// atotto/clipboard was already pulled in transitively — bubbles/textarea
+// binds its own Ctrl+V to it — so this adds nothing to the dependency tree.
+// It shells out on Linux/macOS (xclip/xsel, pbpaste) but calls the Win32
+// clipboard API directly on Windows, no subprocess. OSC 52 read was
+// considered and rejected: terminal support for the read direction is far
+// rarer than write, and many terminals refuse it outright for security, which
+// would make Ctrl+V a coin flip instead of a reliable key.
+//
+// bubbles/textarea has this exact binding built in already, but its result
+// lands in an m.Err field ChatModel never reads — a failed read is a true
+// silent no-op there. Reading it here instead keeps the failure visible.
+func pasteFromClipboard() tea.Cmd {
+	return func() tea.Msg {
+		text, err := clipboard.ReadAll()
+		return pasteClipboardMsg{text: text, err: err}
+	}
+}
+
+// pasteHint is what the status line says when Ctrl+V put nothing in the
+// composer — silence there would read as the key doing nothing at all.
+func pasteHint(err error) string {
+	if err != nil {
+		return fmt.Sprintf("could not read the clipboard: %v — try Ctrl+T to paste with your terminal's own paste instead", err)
+	}
+	return "clipboard is empty — nothing to paste"
+}
+
+// normalizePastedText collapses CRLF and lone CR to LF before pasted text
+// reaches the composer. The textarea's sanitizer treats \r and \n as two
+// independent newlines, so untouched Windows line endings (clipboard text
+// and some terminals' bracketed paste both use \r\n) would double every line
+// break into a blank line.
+func normalizePastedText(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	return strings.ReplaceAll(s, "\r", "\n")
 }

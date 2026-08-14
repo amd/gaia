@@ -133,10 +133,10 @@ const chatHelpText = `  GAIA Chat
   Home / End    Top / bottom, if the composer is empty
   Mouse wheel   Anywhere in the transcript
 
-  Copy text out
+  Copy & paste
   Ctrl+T      Select with the mouse — your own
-              terminal's copy and paste. Wheel
-              stops scrolling; Esc turns it off.
+              terminal's copy/paste. Esc turns it off.
+  Ctrl+V      Paste from the clipboard
   Ctrl+Y      Copy the whole answer
   Ctrl+B      Copy the last code block
 
