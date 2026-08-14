@@ -354,10 +354,15 @@ class CanonicalTranslator:
 
     def _on_answer(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
         usage: Dict[str, Any] = {}
+        # ``tokens`` and ``ttft`` are already omitted upstream when no real
+        # measurement exists (SSEOutputHandler.print_answer), so anything here
+        # is genuine — dropping them cost the TUI its tokens/sec readout.
         for src, dst in (
             ("steps", "steps"),
             ("tools_used", "tools_used"),
             ("elapsed", "elapsed"),
+            ("tokens", "tokens"),
+            ("ttft", "ttft"),
         ):
             if event.get(src) is not None:
                 usage[dst] = event[src]
