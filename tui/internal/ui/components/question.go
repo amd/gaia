@@ -58,8 +58,6 @@ type QuestionAnsweredMsg struct {
 
 var (
 	questionPanelStyle = lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(theme.Warning).
 				Padding(0, 1)
 
 	questionTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(theme.Warning)

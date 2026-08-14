@@ -124,11 +124,6 @@ var (
 	answerPanelStyle = lipgloss.NewStyle().
 				Foreground(theme.Text).
 				PaddingLeft(2)
-
-	errorPanelStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(theme.Danger).
-			Padding(0, 1)
 )
 
 type ChatModel struct {
@@ -1868,7 +1863,7 @@ func (m ChatModel) renderMessage(msg *Message, seen map[string]bool) string {
 		if panelWidth < 20 {
 			panelWidth = 20
 		}
-		return errorPanelStyle.Width(panelWidth).Render("[!] " + msg.Content)
+		return components.Panel(components.PanelError, "error", msg.Content, panelWidth)
 
 	case RoleStatus:
 		// Wrapped, not clipped: the viewport does not soft-wrap, so a status

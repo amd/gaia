@@ -208,11 +208,12 @@ func TestMemoryViewNeverExceedsThePaneWidth(t *testing.T) {
 func TestMemoryViewReportsUnavailablePlainly(t *testing.T) {
 	dump := client.MemoryDump{Available: false, Reason: "Lemonade is not reachable at 127.0.0.1:13305."}
 
-	out := ansi.Strip(renderMemoryView(dump, 80))
+	// Case-insensitive: the panel's band sets its title in caps.
+	out := strings.ToLower(ansi.Strip(renderMemoryView(dump, 80)))
 	if !strings.Contains(out, "unavailable") {
 		t.Errorf("does not say memory is unavailable: %q", out)
 	}
-	if !strings.Contains(out, "Lemonade is not reachable") {
+	if !strings.Contains(out, "lemonade is not reachable") {
 		t.Errorf("dropped the actionable reason: %q", out)
 	}
 }

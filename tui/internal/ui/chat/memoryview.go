@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/amd/gaia/tui/internal/client"
+	"github.com/amd/gaia/tui/internal/ui/components"
 	"github.com/amd/gaia/tui/internal/ui/theme"
 )
 
@@ -158,9 +159,7 @@ func renderMemoryView(dump client.MemoryDump, width int) string {
 		if reason == "" {
 			reason = "Memory is unavailable for this session."
 		}
-		body := lipgloss.NewStyle().Bold(true).Render("Memory unavailable") +
-			"\n\n" + reason
-		return errorPanelStyle.Width(width).Render(body)
+		return components.Panel(components.PanelError, "memory unavailable", reason, width)
 	}
 
 	var lines []string

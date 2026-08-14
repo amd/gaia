@@ -5,8 +5,6 @@ import (
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-
-	"github.com/amd/gaia/tui/internal/ui/theme"
 )
 
 type HelpContext int
@@ -16,21 +14,19 @@ const (
 	HelpContextChat
 )
 
-var helpBoxStyle = lipgloss.NewStyle().
-	Border(lipgloss.RoundedBorder()).
-	BorderForeground(theme.Accent).
-	Padding(1, 2)
+var helpBoxStyle = lipgloss.NewStyle().Padding(1, 2)
 
 const (
 	// helpBoxMaxWidth keeps the panel readable on a wide terminal: a help list
 	// stretched to 200 columns is one long scan line per binding.
 	helpBoxMaxWidth = 60
-	// helpChromeRows is what the box costs beyond its content — one border row
-	// and one padding row at each end.
-	helpChromeRows = 4
+	// helpChromeRows is what the panel costs beyond its content — one padding
+	// row at each end. The border it used to also count is gone; a frame drew
+	// the eye to the chrome instead of the bindings inside it.
+	helpChromeRows = 2
 	// helpTightChromeRows is the same with the vertical padding dropped, which
 	// is what a short window gets instead of a clipped panel.
-	helpTightChromeRows = 2
+	helpTightChromeRows = 0
 	// helpTightHeight is the window height below which the padding goes.
 	helpTightHeight = 14
 )
@@ -100,9 +96,8 @@ func helpBoxSize(width, height int) (boxWidth, inner, rows int, ok bool) {
 	if boxWidth > helpBoxMaxWidth {
 		boxWidth = helpBoxMaxWidth
 	}
-	// lipgloss draws the border outside Width, so the box occupies boxWidth+2
-	// columns and the horizontal padding (2 each side) leaves this much for the
-	// text. Any less and there is no panel to draw, so leave the view alone.
+	// The horizontal padding (2 each side) leaves this much for the text. Any
+	// less and there is no panel to draw, so leave the view alone.
 	inner = boxWidth - 4
 	if inner < 1 || height < 3 {
 		return 0, 0, 0, false

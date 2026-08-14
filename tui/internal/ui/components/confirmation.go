@@ -380,8 +380,6 @@ func (m ConfirmationModel) decide(state ConfirmState, timedOut bool) (Confirmati
 
 var (
 	confirmationPanelStyle = lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(theme.Danger).
 				Padding(0, 1)
 
 	confirmationTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(theme.Danger)
