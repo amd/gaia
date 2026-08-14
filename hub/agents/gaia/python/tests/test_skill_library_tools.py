@@ -28,6 +28,7 @@ developer's own ``~/.gaia``.
 
 from __future__ import annotations
 
+import pathlib
 import base64
 import sys
 from pathlib import Path
@@ -889,3 +890,37 @@ class TestTheListViewNeverLosesASkill:
             "the catalogue still overflows the smallest budget, so skills will "
             "be dropped from the end again"
         )
+
+
+class TestLoadTellsTheModelWhereTheSkillLives:
+    """Most skills ship helper files and name them by RELATIVE path.
+
+    The pdf skill ships eight working scripts under `scripts/`. Asked to build a
+    PDF, the agent tried to run `scripts/reportlab_creator.py`, which resolves
+    against the process's working directory and therefore not at all — then fell
+    back to hand-writing raw PDF, producing a 236-byte file with no EOF marker
+    that no reader could open. It had no way to find files it had just loaded.
+    """
+
+    def test_the_payload_carries_the_skill_directory(self, session):
+        result = call(session, "load_skill", name="note-taker")
+
+        assert result["status"] == "success"
+        assert "directory" in result, (
+            "load_skill does not say where the skill is, so its bundled files "
+            "cannot be reached"
+        )
+        directory = pathlib.Path(result["directory"])
+        assert directory.is_dir()
+        assert (directory / "SKILL.md").is_file(), (
+            f"{directory} is not the folder the skill was actually loaded from"
+        )
+
+    def test_it_says_what_the_directory_is_for(self, session):
+        result = call(session, "load_skill", name="note-taker")
+        hint = result.get("resolving_paths", "")
+
+        assert result["directory"] in hint, (
+            "the hint must name the directory it is talking about"
+        )
+        assert "relative" in hint.lower()

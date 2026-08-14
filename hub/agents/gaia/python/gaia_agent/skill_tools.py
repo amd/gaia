@@ -509,6 +509,17 @@ class SkillLibraryToolsMixin:
                 "name": skill.name,
                 "already_loaded": already_loaded,
                 "security_tier": skill.security_tier,
+                # Where the skill lives, because most skills ship helper files
+                # and refer to them by RELATIVE path. Without this the model
+                # cannot resolve them: asked for a PDF, it tried to run
+                # `scripts/reportlab_creator.py`, got nothing, and fell back to
+                # hand-writing raw PDF that no reader could open. The pdf skill
+                # ships eight working scripts in exactly that folder.
+                "directory": str(skill.directory),
+                "resolving_paths": (
+                    f"Paths in this skill's instructions are relative to "
+                    f"{skill.directory} — join them onto it before use."
+                ),
                 "registered_tools": [
                     skill.namespaced_tool_name(t) for t in skill.tool_names
                 ],
