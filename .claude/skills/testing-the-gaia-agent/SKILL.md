@@ -9,6 +9,41 @@ Companion to `driving-the-tui` (which covers the control API mechanics). This on
 covers **what to test and how to know it actually worked** — written from a full
 session of driving the live agent, including every trap that cost an hour.
 
+## The ladder tests capabilities. Users have conversations.
+
+Read this before trusting a green ladder. Every rung below is a **self-contained
+prompt** — it names its repo, its numbers, its subject. So the ladder ran green
+for a whole day while the TUI agent had **no conversation history at all**: every
+turn reached the model as system prompt + current question, nothing else. The
+bug surfaced the moment a real user typed a follow-up:
+
+> **triage amd/gaia** → three issues listed
+> **"cool, can you print issue 2975?"** → *"I need to know which repository it belongs to"*
+
+Three things hid it, and all three are worth knowing:
+
+1. **L3 looks like proof of continuity and is not.** "What is my favourite
+   colour?" passes across turns via the persistent *memory store*, a different
+   mechanism entirely. Its green tick actively masked the gap.
+2. **The stdio test asserting turn-to-turn state passes for the wrong reason.**
+   `test_the_agent_survives_between_turns` asserts OBJECT state
+   (`agent.loaded_skills`) survives — it does, the agent is the same object.
+   History is not accumulated object state; nobody was appending to it.
+3. **The HTTP surface populates history, so any test at that layer passes.** The
+   defect was transport-specific, and only the TUI used the broken transport.
+
+**So always finish with a follow-up that cannot stand alone.** Use a pronoun or
+a bare number and give it nothing else:
+
+| after | ask | pass condition |
+|---|---|---|
+| a triage of amd/gaia | `cool, can you print issue 2975?` | prints it, never asks which repo |
+| `My favourite fruit is mango. Just acknowledge.` | `What fruit did I just mention? One word.` | `Mango` |
+
+The second pair is the cheap canary — two short turns, no tools, no network. Run
+it first. If it answers "no fruit has been mentioned", stop: history is broken
+and every other result is measuring an agent with amnesia.
+
 ## The one rule
 
 **A plausible answer is not a passing test.** The flagship's worst failure mode is
