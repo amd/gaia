@@ -273,3 +273,19 @@ tests/unit/eval/test_mcp_tool_reliability_scenarios.py
 /.claude/skills/m365-email/
 # Claudia agent worktrees (local orchestration scratch)
 .claudia-worktrees/
+
+# Private working reports — analysis, competitive research, benchmark logs.
+# These are internal notes, not project documentation, and several were
+# published to a public fork and a public PR before this rule existed. They
+# live outside the repo now (../gaia-private-reports/). Project docs belong in
+# docs/ and are reviewed like any other change; anything matching these
+# patterns is assumed to be private working material.
+/BENCHMARK_ANALYSIS.md
+/GAIA_AGENT_V2_SCOPE.md
+/GAIA_CODEBASE_DEEPDIVE.md
+/GAIA_COMPETITIVE_ANALYSIS.md
+/GAIA_COMPETITIVE_GAP_ANALYSIS_HERMES_OPENCLAW.md
+/GAIA_MEASURED_BENCHMARKS.md
+/*_ANALYSIS.md
+/*_DEEPDIVE.md
+/GAIA_*_REPORT.md
