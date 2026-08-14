@@ -143,3 +143,93 @@ def test_log_path_ignores_a_blank_override(tmp_path, monkeypatch):
     monkeypatch.setenv(stdio.LOG_PATH_ENV, "   ")
 
     assert stdio.log_path().name == "gaia-agent.log"
+
+
+# ---------------------------------------------------------------------------
+# Conversation continuity
+# ---------------------------------------------------------------------------
+#
+# The bug these guard: Agent composes each request as
+# [system, *conversation_history, user], and nothing in the base class ever
+# appends to conversation_history. The HTTP surface fills it per request; this
+# transport did not, so every TUI turn reached the model as exactly two
+# messages — system + the current question — and the agent could not resolve a
+# reference to anything said one turn earlier.
+#
+# Observed: one turn after triaging amd/gaia, "cool, can you print issue 2975?"
+# got "I need to know which repository it belongs to".
+#
+# test_the_agent_survives_between_turns did NOT catch this. It asserts that
+# OBJECT state (agent.loaded_skills) survives, which it does — the agent is the
+# same object. History is not accumulated object state; nobody was appending.
+
+
+class _HistoryAgent(_FakeAgent):
+    """A fake carrying the base class's conversation_history attribute."""
+
+    def __init__(self):
+        super().__init__()
+        self.conversation_history = []
+
+
+def test_a_turn_is_recorded_for_the_next_prompt():
+    agent = _HistoryAgent()
+
+    stdio._record_turn(agent, "who owns amd/gaia?", "AMD does.")
+
+    assert agent.conversation_history == [
+        {"role": "user", "content": "who owns amd/gaia?"},
+        {"role": "assistant", "content": "AMD does."},
+    ]
+
+
+def test_history_accumulates_across_turns():
+    """The actual regression: turn 2 must be able to see turn 1."""
+    agent = _HistoryAgent()
+
+    stdio._record_turn(agent, "list issues in amd/gaia", "#2975, #2974, #2973")
+    stdio._record_turn(agent, "print issue 2975", "...")
+
+    contents = [m["content"] for m in agent.conversation_history]
+    assert "list issues in amd/gaia" in contents, "the repo turn was not carried"
+    assert len(agent.conversation_history) == 4
+
+
+def test_history_is_trimmed_in_whole_turns():
+    """A window opening on an answer whose question was dropped reads as the
+    model asserting something unprompted."""
+    agent = _HistoryAgent()
+
+    for i in range(stdio.MAX_HISTORY_TURNS + 6):
+        stdio._record_turn(agent, f"q{i}", f"a{i}")
+
+    assert len(agent.conversation_history) == stdio.MAX_HISTORY_TURNS * 2
+    assert agent.conversation_history[0]["role"] == "user"
+    assert agent.conversation_history[-1]["role"] == "assistant"
+
+
+def test_an_empty_query_is_not_recorded():
+    agent = _HistoryAgent()
+
+    stdio._record_turn(agent, "   ", "something")
+
+    assert agent.conversation_history == []
+
+
+def test_an_agent_without_history_is_left_alone():
+    """Never invent the attribute on an agent that does not define it."""
+    agent = _FakeAgent()
+
+    stdio._record_turn(agent, "hello", "hi")
+
+    assert not hasattr(agent, "conversation_history")
+
+
+def test_a_real_turn_lands_in_history():
+    """End to end through _run, not just the helper."""
+    agent = _HistoryAgent()
+
+    _run(agent, "first question")
+
+    assert [m["role"] for m in agent.conversation_history] == ["user", "assistant"]
+    assert agent.conversation_history[0]["content"] == "first question"

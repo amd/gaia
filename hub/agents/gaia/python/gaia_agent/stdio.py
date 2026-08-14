@@ -216,6 +216,48 @@ def _write(event: Dict[str, Any], out) -> None:
 LOG_PATH_ENV = "GAIA_AGENT_LOG"
 
 
+#: Turns (user+assistant pairs) carried into the next prompt. The base agent
+#: already caps its own session history at 20 messages; 12 pairs stays under
+#: that while covering far more back-reference than anyone types.
+MAX_HISTORY_TURNS = 12
+
+
+def _record_turn(agent: Any, query: str, answer: str) -> None:
+    """Append this turn to the history the next prompt is built from.
+
+    Without this the flagship is amnesiac over stdio. ``Agent`` composes each
+    request as ``[system, *conversation_history, user]`` (see
+    ``_build_messages``), and nothing in the base class ever appends to
+    ``conversation_history`` — the HTTP surface fills it in per request
+    (``gaia/ui/agent_loop.py``), and this transport did not. So every TUI turn
+    reached the model as exactly two messages, system + the current question.
+
+    The user-visible cost was not subtle: asked "print issue 2975" one turn
+    after a triage of amd/gaia, the agent replied "I need to know which
+    repository it belongs to". It was not being told.
+
+    Only the question and the final answer are kept. Tool calls and their
+    results belong to the turn that made them and the agent already threads
+    those through its own loop; replaying them here would re-feed stale tool
+    output into every later prompt.
+    """
+    if not query or not str(query).strip():
+        return
+    history = getattr(agent, "conversation_history", None)
+    if history is None:
+        logger.debug("[history] agent has no conversation_history attribute")
+        return
+    history.append({"role": "user", "content": str(query)})
+    history.append({"role": "assistant", "content": str(answer or "")})
+    # Trim in pairs so the window never opens on an assistant reply whose
+    # question has been dropped — a dangling answer reads as the model
+    # asserting something unprompted.
+    excess = len(history) - MAX_HISTORY_TURNS * 2
+    if excess > 0:
+        del history[:excess]
+    logger.debug("[history] recorded turn; %d message(s) carried", len(history))
+
+
 def log_path() -> "Path":
     """Where the agent's log lands. One file, not a per-run directory.
 
@@ -370,6 +412,11 @@ def run_turn(
 
     try:
         terminated = False
+        # The answer as it went out on the wire. Captured here because this is
+        # the path a normal turn takes: the translator emits the terminal event
+        # and the function returns below, never reaching the fallback that
+        # builds an answer from the return value.
+        streamed_answer: Optional[str] = None
         while True:
             try:
                 event = handler.event_queue.get(timeout=0.05)
@@ -381,17 +428,26 @@ def run_turn(
                 break
             for canonical in translator.translate(event):
                 _write(canonical, out)
+                if canonical.get("type") == "final":
+                    streamed_answer = str(canonical.get("answer") or "")
                 if canonical.get("type") in TERMINAL_TYPES:
                     terminated = True
 
         for canonical in translator.flush():
             _write(canonical, out)
+            if canonical.get("type") == "final":
+                streamed_answer = str(canonical.get("answer") or "")
             if canonical.get("type") in TERMINAL_TYPES:
                 terminated = True
 
         worker.join(timeout=5.0)
 
         if terminated:
+            # The normal exit. A turn that ended in an error event is not
+            # recorded: replaying a failure as if it were an answer teaches the
+            # model that the failure is what it said.
+            if streamed_answer is not None:
+                _record_turn(agent, query, streamed_answer)
             return
         if "error" in result:
             _write(_terminal_error(result["error"]), out)
@@ -409,6 +465,7 @@ def run_turn(
                     break
         elif isinstance(value, str):
             answer = value
+        _record_turn(agent, query, answer)
         _write({"type": "final", "answer": answer}, out)
     finally:
         # Every exit path, including the early returns above: leaving a dead
