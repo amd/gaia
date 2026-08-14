@@ -3,7 +3,7 @@
 Live log of validating the flagship agent through the Go TUI on branch
 `feat/gaia-flagship-agent-2804` (PR #2932). Updated continuously.
 
-**Last updated:** 2026-08-13 16:30
+**Last updated:** 2026-08-13 17:10
 **Backend:** Lemonade / Gemma-4-E4B-it-GGUF (GPU). `--use-claude` merged and built; blocked on `ANTHROPIC_API_KEY`
 **Harness:** `C:\Users\14255\Work\gaia-tui-test\` (launch-tui.ps1 + driver.py), single TUI on control port 8817
 
@@ -79,7 +79,41 @@ orphan-per-attempt. Now `stdin=subprocess.DEVNULL`. 2 new tests, 0 orphans after
 now kills any predecessor (process + host shell + discovery file) before
 starting, enforcing one TUI at a time.
 
-**6. Test playbook updated** — `d64b8b42`
+**6. The flagship could not find its own starter pack** — `db12be95`
+`SKILL_DIRS` named only `gaia_agent/skills/`, which packaging stages but a
+checkout leaves holding a lone `.gitkeep`. All nine starter skills were
+unreachable without hand-copying them into `~/.gaia/skills`. Now falls back to
+`hub/skills`, mirroring the `_MANIFEST_CANDIDATES` idiom beside it. Discovery
+only — `default_skill_set` stays off and a test fails if it is quietly enabled.
+5 new tests.
+
+**7. `pwd` was labelled irreversible** — `457b8293`
+The modal said "This is a destructive action and may not be reversible" for a
+read-only `pwd`. `run_shell_command` is tiered Destructive because its *name*
+does not bound it, not because the call is — so the unbounded case now says the
+true thing and points at the command on screen. 2 new tests.
+
+**8. One unmappable byte killed the system probes** — `f7ed527d`
+The five sibling `text=True` call sites. `cmdkey /list` did not even catch
+`UnicodeDecodeError`, so it took the whole credential-discovery pass down; the
+three GPU probes swallowed it and returned nothing. An AST sweep now backs the
+claim that none remain unguarded.
+
+**9. `search_web` failed with a bare errno** — `48e288ae`
+Node ships `npx` as `npx.cmd` on Windows, so the spawn failed with
+"[WinError 2]" — and the agent turned that into "a consistent environmental
+problem preventing external network requests". argv[0] now resolves through
+`shutil.which`; a missing program names itself and points at Node; a missing
+`PERPLEXITY_API_KEY` says so up front. 5 new tests.
+
+**10. The agent had no voice, and no honesty floor** — `f5ecbc36`
+New always-on `gaia-voice` skill (~900 tokens, no tools). Every rule is written
+against an observed failure: substituting a near-miss and reporting success,
+inventing causes for tool failures, narrating prompt-token counts at users,
+refusing work it never attempted. Verified live — asked for a skill that does
+not exist, it now says so and offers the ones that do.
+
+**11. Test playbook updated** — `d64b8b42`
 Six traps folded back into `.claude/skills/testing-the-gaia-agent/` so the harness
 can run unattended: private agent log, installing `gaia-agent` with `--no-deps`,
 the missing starter pack, `gh` needing the skill loaded, restarting Lemonade
@@ -89,43 +123,25 @@ correctly, and an ordered procedure for diagnosing the 180s shell hang.
 
 ## Open issues
 
-**A. The flagship agent ships with zero skills.** *(highest impact)*
-`hub/skills/` is described in its own test suite as *"the shipped starter skill
-pack… the product's first impression"* — 9 skills including `github-triage`. But
-`gaia_agent/skills/` contains only `.gitkeep`, **nothing stages `hub/skills/`
-into the package**, and every `skills:` / `skill_sets:` / `default_skill_set:`
-key in `gaia-agent.yaml` is commented out. So a user who installs the wheel gets
-an agent that can load nothing. Testing only worked after I hand-copied the skill
-into `~/.gaia/skills/`.
+**A. Skill loading is occasionally flaky.** *(only remaining functional issue)*
+One `Load the github-triage skill` in a long-running session answered "there
+isn't a skill called github-triage available", then the same request in a fresh
+session loaded it in 98s. Discovery is correct when checked directly (26 skills,
+5 roots) and the skill has loaded reliably on every clean start since. Suspected
+stale state in a long-lived agent process rather than discovery.
 
-**B. The agent substitutes a different skill and reports success.**
-Asked for `github-triage` (not yet installed), it called `load_skill` correctly,
-got a correct `SkillNotFoundError`, then loaded `github-issue-response` instead
-and replied *"Got it! The github-issue-response skill is now active."* The code
-is right; the model silently swapped the user's request and never said the
-requested skill did not exist. Response-quality defect — candidate for the
-personality skill.
+**B. Cold start is ~100s with a spinner that undersells it.**
+First skill load in a fresh session took 98s; the same load warm is ~28s. The UI
+says "still working — local model, usually 60-90s", which is roughly honest for
+a skill load but was 3x optimistic for a cold first turn (~240s).
 
-**C. `pwd` is labelled DESTRUCTIVE.**
-The confirmation modal says *"This is a destructive action and may not be
-reversible"* for a read-only `pwd`. False alarms train users to approve blindly.
+**C. Lemonade is a single-slot single point of failure.**
+It died outright twice mid-session (connection refused, no process). Restart is
+`LemonadeServer.exe` — `lemonade-server serve` does not exist and `lemonade.exe`
+is the client, which rejects `serve`.
 
-**D. Skill loading is flaky.**
-The same `Load the github-triage skill` failed with "isn't among your currently
-installed skills" and then succeeded ~2 minutes later, unchanged on disk, with
-the CLI discovering it correctly throughout.
-
-**E. Cold start is ~3.5 minutes with only a spinner.**
-First turn took 238s (ttft 228s) loading Gemma-4-E4B + nomic-embed. Warm turns
-are 6s. The UI shows only "still working — local model, usually 60-90s", which
-undersells it by 3×.
-
-**F. Lemonade is a single-slot single point of failure.**
-It died outright mid-test (connection refused, no process). Parallel agents
-contend for one slot. Restart is `LemonadeServer.exe` — note `lemonade.exe serve`
-is wrong (that binary is the client and rejects `serve`).
-
----
+**D. `--use-claude` is merged and built but unverified.**
+Needs `ANTHROPIC_API_KEY`, absent in both User and Machine scope.
 
 ## Verified working
 
@@ -147,9 +163,11 @@ Recording these because a wrong bug report costs more than a missing one.
 
 - Guessed external executables hang when the agent's stdin is a pipe. **Wrong** —
   a direct repro ran `gh --version` in 0.08s in a daemon thread with piped stdin.
-- Attributed 180s `run_shell_command` timeouts to a shell-tool bug. **Wrong** —
-  the tool returns in 0.07s standalone; the timeouts track Lemonade contention and
-  its eventual death.
+- Guessed the 180s timeouts were Lemonade contention and its eventual death.
+  **Also wrong** — and this one I had already published as a correction, which
+  made it worse. They reproduced with Lemonade healthy and warm. The process tree
+  settled it: orphaned `gh.exe` processes whose parent `cmd.exe` was gone, which
+  is a pipe deadlock, not contention. Two wrong theories before the evidence.
 - Read `gofmt -l` output as real formatting drift. **Wrong** — CRLF artifact of a
   Windows checkout, present on files never touched.
 
@@ -157,15 +175,16 @@ Recording these because a wrong bug report costs more than a missing one.
 
 ## Next
 
-1. Fix A — stage `hub/skills/` into the agent package so the product ships usable.
-2. Author the auto-loaded personality skill (targets B and response quality).
-3. `--use-claude` — merged and built; needs `ANTHROPIC_API_KEY` to run.
-4. Fix the 5 sibling `text=True` call sites in `agents/base/`.
-5. Robustness sweep: empty input, agent crash, Esc cancel early/mid-generation.
+1. Chase the intermittent skill-load failure (open issue A) — the last known
+   functional gap.
+2. Robustness sweep: empty input, agent crash mid-turn, Esc cancel early and
+   mid-generation, idle Esc.
+3. `--use-claude` once `ANTHROPIC_API_KEY` is available, then re-validate on
+   Lemonade.
 
 ## Delivery note
 
 Cannot push to `amd/gaia` — the authenticated account (`kovtcharov`) gets 403;
-the PR branch lives on `amd/gaia`, not a fork. Work is committed locally and
-mirrored to `origin` (`kovtcharov/gaia`). Landing it needs a PR from the fork
-into `feat/gaia-flagship-agent-2804`.
+the PR branch lives on `amd/gaia`, not a fork. Work is pushed to `origin`
+(`kovtcharov/gaia`) and raised as **draft PR amd/gaia#2964**, based on
+`feat/gaia-flagship-agent-2804`.
