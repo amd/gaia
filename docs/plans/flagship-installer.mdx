@@ -87,8 +87,14 @@ executable, one build per target platform (PyInstaller cannot cross-compile).
 | Option | Rejected because |
 |---|---|
 | **Nuitka** | No precedent in this codebase; PyInstaller already has a working, tested freeze for the email agent with the identical shape (REST sidecar, exclude the ML stack). Introducing a second freeze tool for the second agent would be needless divergence. |
+| **A separately-frozen "engine" binary** carrying the daemon, `gaia init`, the hub installer, and connectors | Not speculative — this was actually built and measured (`docs/superpowers/specs/2026-07-25-tui-packaging-design.md` §1.1/§9.1): a frozen Python engine came in at **73 MB** on darwin-arm64 with zero fatal module-level ML imports, so it was *feasible*. Rejected anyway, for architectural reasons: nothing that layer does (process supervision, credential storage, OAuth, HTTP calls) needs Python specifically — it's Python because that's where it was written first, not because it has to be. |
 | **Bundled interpreter / `uv`-based bootstrap on first run** | This is what the *Electron Agent UI installer* does (`installBackend()` in the desktop-installer plan) — downloads `uv`, creates a venv, `pip install amd-gaia[ui]`. It's the right call there because the Agent UI needs the *full* `gaia` package surface. The flagship's REST sidecar needs a narrow slice (no torch, no RAG's ML stack — inference goes over HTTP to Lemonade). A bootstrap-on-first-run adds a multi-minute pip resolve and a venv on disk for something a frozen binary does in one download. |
 | **`pip install amd-gaia[rag]` into the active interpreter** | This is still true and still supported — it's the "From source" tab in `docs/guides/gaia.mdx`. It's the developer path, not the one-command path this issue asks for; it also requires the user to already have Python. |
+
+That same design doc independently reaches the identical SignPath finding §9.2 below
+does — `.signpath/policies/gaia.policy` is scoped to `artifact_types: [nsis-installer]`
+and would reject a bare executable server-side — which is corroborating, not
+coincidental: both come from reading the same policy file, not from guessing.
 
 ### Why the freeze stays small
 
@@ -96,10 +102,23 @@ The freeze's `EXCLUDES` list drops `torch`, `transformers`, `sentence_transforme
 `scipy`, `pandas`, and the rest of the ML stack. This works **only because** the
 agent's triage/chat/RAG-embedding paths all go over HTTP to Lemonade — nothing in the
 sidecar's reachable import graph needs an in-process model. The email agent (the
-reference this was modeled on) documents its frozen size at **~90 MB** with the same
-exclusion list. `gaia`'s sidecar has a comparable import surface (ChatAgent + RAG +
-memory + skills, all HTTP-backed), so ~90–120 MB is the expected range — but I have
-not built it in this session to confirm a number for `gaia` specifically (§8 says why).
+reference this was modeled on) documents its frozen size at ~90 MB with the same
+exclusion list.
+
+**Measured, not estimated — updated after §8 below was first drafted:** a real
+`--onefile` freeze of `gaia`'s own sidecar was run in this session (`uv pip install`
+the freeze venv, then `python packaging/freeze.py --onefile`, Windows, ~82s build) and
+produced a **48.9 MB** `gaia-agent.exe` — smaller than the email agent's ~90 MB, not
+the ~90–120 MB this section originally guessed. `packaging/smoke_test.py` against that
+exact binary passes all three checks (`/health` → `{"status":"ok"}`, `/version` →
+`apiVersion 2.12` / `agentVersion 0.1.0`, `/openapi.json` → both `/v1/gaia/*` paths
+present) with a 2.6s cold start to first healthy response. This is a **Windows-only**
+number — the macOS/Linux freezes were not run here, and PyInstaller's per-platform
+packing (compression, DLL vs. dylib/so bundling) means the real number there can differ
+— so read 48.9 MB as "confirmed on Windows, right order of magnitude elsewhere," not a
+cross-platform guarantee. Worth recording the real per-platform numbers in the npm
+README's install-size expectations once a release actually cuts all four platforms.
+
 If a future change makes the sidecar import anything in `EXCLUDES` at module load
 time (not lazily, inside a function), the freeze will silently balloon toward the
 ~2 GB `torch` brings — `smoke_test.py`'s boot check would still pass; only the size
@@ -247,25 +266,24 @@ of this system was built by other sessions I can't fully audit in the time avail
   on the freeze-venv cost claim above: this install pulled far less than "several GB"
   — a warm `uv` cache on this machine from prior GAIA work likely explains the gap,
   not a correction to the underlying claim about what a genuinely cold cache costs.)
+- **The actual PyInstaller freeze of the gaia sidecar.** Run to completion in this
+  session: `uv pip install --python .venv/Scripts/python.exe -e ".[api]" -e
+  hub/agents/chat/python -e hub/agents/gaia/python pyinstaller` (fast here — a warm
+  `uv` cache from the installs above, not the "several GB, cold" case described below),
+  then `python packaging/freeze.py --onefile` — 81.6s, produced `gaia-agent.exe`.
+  `python packaging/smoke_test.py packaging/dist/gaia-agent.exe` then launched that
+  exact binary as a subprocess (no interpreter available to it) and passed all three
+  checks. Real, measured, not estimated — see §3's updated size section. This
+  supersedes the "not verified" framing this bullet originally had.
 
 **Not verified — taken on the strength of the code + its test suite, not run
 end-to-end:**
 - **macOS and Linux.** I have no access to either platform from this session. The
   CI matrix (`windows-latest`, `macos-14` for arm64, `ubuntu-latest`,
   `macos-26-intel` best-effort) is the only evidence either builds; I did not run it.
-- **The actual PyInstaller freeze of the gaia sidecar.** I checked what setting up
-  the freezing venv itself would cost: core `amd-gaia`'s base `install_requires`
-  includes `transformers` and `accelerate`, and `accelerate` pulls in `torch`
-  transitively — so `uv pip install -e ".[api]" -e hub/agents/chat/python -e
-  hub/agents/gaia/python pyinstaller` downloads several GB before freezing even
-  starts, even though the *frozen binary* excludes all of it (that's what
-  `freeze.py`'s `EXCLUDES` list is for — it strips them from the bundle, not from the
-  dev venv). Given that cost and that the release workflow already smoke-tests the
-  frozen binary before it can publish (`packaging/smoke_test.py`, invoked from
-  `release_agent_gaia.yml`), I chose not to reproduce that multi-GB download locally
-  just to re-derive a number CI will produce for free on the next release attempt.
-  The **~90–120 MB** size estimate in §3 is therefore an estimate from the email
-  agent's number, not a measurement of gaia's actual binary.
+  A cold-cache freeze venv on those platforms could still cost the "several GB" this
+  section originally warned about — the warm-cache result above is Windows-specific
+  and machine-specific, not proof the cost claim was wrong in general.
 - **A live `npx @amd-gaia/gaia` run.** Can't — nothing is published yet (§9). The
   4,100+ lines of Go/Python/TypeScript unit and integration tests are real coverage
   of the logic (platform resolution, lock parsing, SHA-256 verification, lifecycle,
@@ -298,10 +316,19 @@ Findings:
   Apple Developer ID + notarization for macOS (gated on `APPLE_ID` secrets), and it
   degrades gracefully to an ad-hoc-signed, unsigned build when secrets are absent —
   which is what every build produces today, since none of us has the certificates.
-- **`release_agent_gaia.yml` has no signing step of any kind.** The sidecar `.exe`
-  and the `terminal-hub` binaries ship as raw executables with no installer wrapper
-  and no code signature — not even the ad-hoc/degrade-gracefully pattern the Electron
-  path has. This is a real gap, not a "handled elsewhere" situation.
+  There's a real, committed SignPath policy backing this: `.signpath/policies/
+  gaia.policy` — OSS Foundation tier, `approval.mode: automatic`, certificate issued
+  by the SignPath Foundation CA at no cost. **But it's scoped narrowly:**
+  `artifact_types: [nsis-installer]`, and `trusted_build_systems` only accepts
+  requests from `build-installers.yml` on a `refs/tags/v*` push. A bare `.exe`
+  submitted from anywhere else — including `gaia-agent.exe` or `gaia-tui.exe` from
+  `release_agent_gaia.yml` — would be **rejected by this policy as written**, not
+  silently signed.
+- **`release_agent_gaia.yml` has no signing step of any kind**, and couldn't use the
+  existing policy even if it tried to (see above). The sidecar `.exe` and the
+  `terminal-hub` binaries ship as raw executables with no installer wrapper and no
+  code signature — not even the ad-hoc/degrade-gracefully pattern the Electron path
+  has. This is a real gap, not a "handled elsewhere" situation.
 
 **What this means for users:** Windows SmartScreen will flag `gaia-agent.exe` and
 `gaia-tui.exe` as from an unrecognized publisher on first run — a "Windows protected
@@ -312,13 +339,21 @@ a materially worse experience than a click-through warning.
 
 **What I'm not pretending:** this artifact is not ready for a general, non-technical
 audience while this is true. It's fine for developers and early adopters who
-understand what SmartScreen/Gatekeeper prompts mean. Fixing it needs:
-1. A Windows code-signing certificate (EV or OV) and either a SignPath account or an
-   Azure Trusted Signing setup — an org-level decision, not something a coding
-   session can provision.
+understand what SmartScreen/Gatekeeper prompts mean. Fixing it needs, in order of
+who can actually do it:
+1. **Windows is mostly wiring, not procurement** — AMD already has a working, free
+   SignPath OSS setup (`.signpath/policies/gaia.policy`); no certificate purchase or
+   new vendor relationship is needed. What's missing: either (a) extend that policy's
+   `artifact_types` (or add a second `.signpath/policies/*.policy`) to accept a bare
+   `.exe` from `release_agent_gaia.yml`'s tag pattern, or (b) wrap the sidecar/TUI in
+   an NSIS installer so it fits the *existing* `nsis-installer` scope. (a) is less
+   work and matches what these binaries actually are.
 2. An Apple Developer ID application certificate + notarization credentials
-   (`APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`) — same category.
-3. Once available, `release_agent_gaia.yml`'s freeze steps need a `codesign`/
+   (`APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`) — this one **is** an
+   org-level cost/ownership decision (Apple Developer Program membership), not
+   something a coding session can provision, and nothing in this repo has it yet for
+   either installer path.
+3. Once either is available, `release_agent_gaia.yml`'s freeze steps need a `codesign`/
    `signtool` step per platform before the SHA-256-and-publish step — the hash has
    to be computed on the *signed* binary, or the lock ships a hash for bytes nobody
    actually gets (the CI already computes SHA-256 after freeze, so this is an
@@ -402,9 +437,15 @@ and I'm naming it rather than starting it so it doesn't get lost.
    and `agent-publish`-environment access.
 3. **Cut `agent-pkg-gaia-v0.1.0`** once `terminal-hub` is live — same access
    requirement.
-4. **Get signing certificates provisioned** (§9.2) before recommending this to a
-   non-technical audience — an org decision, not an engineering task.
-5. **Measure the actual frozen sidecar size** once a real freeze runs in CI (it will,
-   automatically, on the next release attempt) — replace the §3 estimate with a real
-   number in the npm README's install-size expectations (not currently stated
-   anywhere, which is itself worth adding once known).
+4. **Signing** (§9.2), split by how much work remains:
+   - Windows: extend `.signpath/policies/gaia.policy`'s `artifact_types` (or add a
+     sibling policy) to accept the sidecar/TUI binaries and wire a signing step into
+     `release_agent_gaia.yml` — an engineering task against infrastructure that
+     already exists, not a procurement one.
+   - macOS: still needs an Apple Developer ID + notarization credentials provisioned
+     — that part is genuinely an org-level decision, not something to start from a
+     coding session.
+5. **Add the measured sizes to the npm README's install-size expectations** (not
+   currently stated anywhere). §3/§8 now have a real Windows number (48.9 MB); macOS
+   and Linux still need their own real freeze to confirm the same order of magnitude
+   holds — that will happen automatically on the next release attempt's freeze matrix.
