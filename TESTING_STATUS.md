@@ -3,9 +3,9 @@
 Live log of validating the flagship agent through the Go TUI on branch
 `feat/gaia-flagship-agent-2804` (PR #2932). Updated continuously.
 
-**Last updated:** 2026-08-14 05:00
-**Backend:** Claude (`--use-claude`, claude-sonnet-5) — validating the harness on a
-fast backend before returning to Lemonade for local-inference bugs.
+**Last updated:** 2026-08-14 09:30
+**Backend:** both. Claude (`--use-claude`, claude-sonnet-5) validated the harness;
+the suite has since been re-run on local Gemma-4-E4B via Lemonade.
 **Harness:** `C:\Users\14255\Work\gaia-tui-test\` (launch-tui.ps1 + driver.py), one
 TUI at a time on control port 8817, launched `--dev --bypass-permissions`.
 
@@ -248,6 +248,90 @@ Two of these only appear away from a dev box. `gaia init --check` is newer than
 the released CLI, so an installed `gaia` exits 2 with "unrecognized arguments" —
 which the gate read as "clean machine". And `/help` worked from the hub, which
 is the path nobody launches the flagship from.
+
+---
+
+## Round 4 — the same tests on local Gemma-4-E4B via Lemonade
+
+The point of this round: **every bug below was invisible on Claude.** The
+stronger model papered over gaps the local one falls straight into, and the local
+one is the product's actual target.
+
+### Ladder — 7/7, and the tokens/sec figure is finally real
+
+| Rung | Result | Time |
+|---|---|---|
+| L1 arithmetic | pass | 4.5s |
+| L2 store memory | pass | 18.0s |
+| L3 recall across turns | pass | 24.0s |
+| L4 shell tool | pass | 18.0s |
+| L5 load `github-triage` | pass | 57.0s |
+| L6 skill persists | pass | 7.5s |
+| **L7 real `gh` triage** | **pass — exact match** | **75.1s** |
+
+L7 reported `44.4 tok/s`, which is what this hardware actually does — the fix for
+the fabricated rate is confirmed against a real streaming turn, and correctly
+withheld on the turns that did not stream.
+
+### Documents — all three verified, after three separate fixes
+
+| Skill | Verified with | Result |
+|---|---|---|
+| `docx` | `python-docx` | Heading 1 + paragraph, 36KB, correct |
+| `xlsx` | `openpyxl` | headers, both rows, real `=SUM(B2:B3)` |
+| `pdf` | `pypdf` | valid 1-page PDF, correct heading |
+
+Each of those failed first, in a different way — see below.
+
+### Memory holds up locally
+
+Stored two facts, killed the agent, relaunched, and asked: *"The deployment
+target codename is FALCON, and you work out of the Sydney office."* Credential
+masking works here too — the stored passphrase came back as *"a flagged entry
+that appears to be a credential or key; please use /memory"*, with no value.
+
+### Switching backends works both ways
+
+`/model claude-sonnet-5` from a local session switched in 17.6s, updated the
+header to `Sonnet 5 │ lemonade 10.10.0`, and said plainly that the conversation
+now goes to Anthropic.
+
+---
+
+## Bugs found on the local model
+
+Every one of these produced a confident, well-formed answer.
+
+**It claimed to have written a file it never created.** Asked for a Word
+document: *"The .docx file has been created at …, containing your requested
+heading and paragraph."* No such file existed — it had written a Python script
+that *would* create it and stopped there. A plan reported as an outcome.
+
+**Before that, it refused outright** — *"the docx skill isn't currently available
+to me"* — with `docx` installed, one `load_skill` call away, in a library of 36.
+Not being loaded is not the same as not existing, and it cannot tell the
+difference from memory.
+
+**It produced a PDF no reader could open** — 236 bytes, no EOF marker — and
+reported success. The cause is the interesting part: it tried to run
+`scripts/reportlab_creator.py`, a path the `pdf` skill really does ship, which
+resolves against the process's working directory and therefore nowhere.
+`load_skill` never said where the skill lived. Having found nothing, it fell back
+to hand-writing raw PDF — **a fallback it had learned and stored in memory during
+an earlier session**, and which is now wrong because reportlab is installed.
+
+That last one is the clearest evidence yet for the memory-trust work: a stale
+procedural memory did not just mislead an answer, it caused a corrupt artifact.
+
+**And the tokens/sec guard was still too weak.** A 24.8s turn whose first token
+arrived at 23.6s cleared the one-second floor on its 1.2s remainder and published
+`556.6 tok/s` for a model that runs at about 44.
+
+| Commit | Fix |
+|---|---|
+| `e5ce4bbd` | "Writing the script is not doing the work" + check `list_skills` before claiming a skill is missing; tokens/sec now needs a real share of the turn |
+| `86b763f6` | `load_skill` returns the skill's directory, so bundled scripts resolve |
+| `7ffad5e4` | `openpyxl` and `reportlab` ship with the chat profile |
 
 ---
 
