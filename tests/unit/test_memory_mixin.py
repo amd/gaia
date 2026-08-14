@@ -21,6 +21,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
+from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.memory_store import MemoryStore
 
 # ---------------------------------------------------------------------------
@@ -4348,3 +4349,47 @@ class TestRecallReducesToolSteps:
         assert len(recall) < len(baseline)  # 3 < 5
         assert recall == needed  # follows the recipe exactly
         assert len(baseline) > len(needed)  # baseline pays a discovery cost
+
+
+class TestRecallRedactsCredentialsAlreadyOnDisk:
+    """The write gate only protects rows written after it existed.
+
+    A store built before it — or anything the detector missed on the way in —
+    still held the secret, and the prompt injection handed it straight back.
+    Observed live: asked what it remembered, the agent recited a stored
+    passphrase verbatim. On a remote backend that also sends it off-machine.
+    """
+
+    def test_a_credential_row_is_masked_on_the_way_out(self):
+        items = [
+            {"content": "File x.txt contains passphrase HALIBUT-4417-ZULU"},
+            {"content": "my api key is sk-ant-api03-abcdefghijklmnop"},
+        ]
+        out = MemoryMixin._redact_credentials(items)
+
+        for row in out:
+            assert "HALIBUT" not in row["content"]
+            assert "sk-ant" not in row["content"]
+            assert "redacted" in row["content"]
+            assert "/memory" in row["content"], (
+                "a masked row must say how to review or remove it"
+            )
+
+    def test_ordinary_memories_are_untouched(self):
+        items = [
+            {"content": "My favourite colour is teal."},
+            {"content": "Main project is Beacon."},
+        ]
+        assert MemoryMixin._redact_credentials(items) == items
+
+    def test_the_row_is_not_mutated_in_place(self):
+        """The stored row must survive so /memory can still show it."""
+        original = {"content": "the passphrase is HALIBUT-4417-ZULU"}
+        items = [original]
+
+        MemoryMixin._redact_credentials(items)
+
+        assert original["content"] == "the passphrase is HALIBUT-4417-ZULU"
+
+    def test_missing_content_does_not_explode(self):
+        assert MemoryMixin._redact_credentials([{}, {"content": None}])

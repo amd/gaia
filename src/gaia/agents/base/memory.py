@@ -2145,9 +2145,36 @@ class MemoryMixin(ProceduralMemoryMixin):
         Uses a single DB query (get_by_category_contexts) instead of two
         sequential get_by_category() calls, halving the DB round-trips.
         """
-        return self._memory_store.get_by_category_contexts(
-            category, context, limit=limit
+        return self._redact_credentials(
+            self._memory_store.get_by_category_contexts(category, context, limit=limit)
         )
+
+    @classmethod
+    def _redact_credentials(cls, items: List[Dict]) -> List[Dict]:
+        """Mask credential-shaped content on the way OUT of memory.
+
+        The write path already refuses to store a credential, but that only
+        protects rows written after it existed. A store built before it — or
+        anything the detector missed on the way in — still held the secret, and
+        recall handed it straight back: asked what it remembered, the agent
+        recited a stored passphrase verbatim.
+
+        This is the second gate, and the one that covers a memory that is
+        already poisoned. The row is left on disk so ``/memory`` can still show
+        the user they have something to delete; only what reaches the model is
+        masked.
+        """
+        safe = []
+        for item in items:
+            content = str(item.get("content") or "")
+            if cls._looks_like_credential(content):
+                item = dict(item)
+                item["content"] = (
+                    "[redacted: this memory looks like a credential. "
+                    "Use /memory to review or remove it.]"
+                )
+            safe.append(item)
+        return safe
 
     # ------------------------------------------------------------------
     # Hook 2: process_query Override (dynamic context injection)
