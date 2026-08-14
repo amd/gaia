@@ -151,13 +151,16 @@ type ChatModel struct {
 	// Builder panics the moment a copied non-zero one is written to again.
 	buffer string
 
-	// queued holds one follow-up typed while the agent was still working, sent
-	// the moment the turn settles (see Update's drain). A local model routinely
-	// takes 60-120s per turn; freezing the composer for that long forced the
-	// user to hold their next thought in their head, or cancel to type it.
-	// One slot, not a queue: a second Enter replaces it, which is what a person
-	// who retypes actually means.
-	queued string
+	// queued holds follow-ups typed while the agent was still working, sent one
+	// at a time as each turn settles (see Update's drain). A local model
+	// routinely takes 60-120s per turn; freezing the composer for that long
+	// forced the user to hold their next thought in their head, or cancel to
+	// type it.
+	//
+	// This was one slot, on the theory that a second Enter means "no, this
+	// instead". It does not: three thoughts during a two-minute turn is normal,
+	// and the single slot discarded the first two without saying so.
+	queued []string
 
 	input    textarea.Model
 	viewport viewport.Model
@@ -424,7 +427,7 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	updated, cmd := m.update(msg)
 
 	next, ok := updated.(ChatModel)
-	if !ok || next.queued == "" || next.streaming {
+	if !ok || len(next.queued) == 0 || next.streaming {
 		return updated, cmd
 	}
 	// A question or confirmation still on screen owns the conversation; the
@@ -435,8 +438,9 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return updated, cmd
 	}
 
-	query := next.queued
-	next.queued = ""
+	// Oldest first: the order they were typed is the order they were meant in.
+	query := next.queued[0]
+	next.queued = append([]string(nil), next.queued[1:]...)
 	sent, sendCmd := next.submit(query)
 	return sent, tea.Batch(cmd, sendCmd)
 }
@@ -764,7 +768,7 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// Slash commands queue too — /clear typed mid-turn should clear once
 		// the turn it belongs to is actually over, not silently do nothing.
 		if m.streaming {
-			m.queued = query
+			m.queued = append(m.queued, query)
 			m.updateViewport()
 			return m, nil
 		}
@@ -932,19 +936,22 @@ func (m ChatModel) forceLocalAbort() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// restoreQueuedToComposer puts a queued follow-up back where the user typed it,
-// so abandoning a turn never silently eats the sentence they were holding.
+// restoreQueuedToComposer puts queued follow-ups back where the user typed them,
+// so abandoning a turn never silently eats the sentences they were holding.
 // Anything already half-typed in the composer wins — that is the newer thought.
+//
+// Several queued lines come back as several lines: the composer is multi-line,
+// and joining them is the only version that loses nothing.
 func (m *ChatModel) restoreQueuedToComposer() {
-	if m.queued == "" {
+	if len(m.queued) == 0 {
 		return
 	}
 	if strings.TrimSpace(m.input.Value()) == "" {
-		m.input.SetValue(m.queued)
+		m.input.SetValue(strings.Join(m.queued, "\n"))
 		m.input.CursorEnd()
 		m.syncComposerHeight()
 	}
-	m.queued = ""
+	m.queued = nil
 }
 
 // submit routes one composed line: a slash command runs locally, anything else
@@ -1922,10 +1929,19 @@ const queuedEchoFloor = 24
 // and hint appended afterwards, so a long queued line ran past the last column
 // and wrapped onto a second row, shearing the status bar below it.
 func (m ChatModel) renderQueuedRow() string {
-	const (
-		prefix = "⏎ queued · "
-		hint   = "  Esc stops the turn and puts this back"
-	)
+	if len(m.queued) == 0 {
+		return ""
+	}
+	// The count is what tells the user nothing was dropped; the text is the one
+	// that runs next, since that is what they are about to see happen.
+	prefix := "⏎ queued · "
+	if n := len(m.queued); n > 1 {
+		prefix = fmt.Sprintf("⏎ %d queued · ", n)
+	}
+	hint := "  Esc stops the turn and puts this back"
+	if len(m.queued) > 1 {
+		hint = "  Esc stops the turn and puts these back"
+	}
 
 	suffix := hint
 	budget := m.width - lipgloss.Width(prefix) - lipgloss.Width(hint)
@@ -1935,7 +1951,7 @@ func (m ChatModel) renderQueuedRow() string {
 	}
 
 	return activityStyle.Render(prefix) +
-		statusMsgStyle.Render(truncateRunes(m.queued, budget)) +
+		statusMsgStyle.Render(truncateRunes(m.queued[0], budget)) +
 		activityStyle.Render(suffix)
 }
 
@@ -1958,7 +1974,7 @@ func (m ChatModel) View() string {
 		switch {
 		case strings.TrimSpace(m.input.Value()) != "":
 			inputView = m.input.View() + "  " + activityStyle.Render("⏎ queues")
-		case m.queued != "":
+		case len(m.queued) > 0:
 			inputView = m.renderQueuedRow()
 		default:
 			// Mid-turn Enter queues rather than sends, so the idle prompt is
