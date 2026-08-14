@@ -228,12 +228,31 @@ Design notes:
 - **Review is not a second draft.** The valuable form is a specific check —
   "does this claim follow from what I observed?" — not "make it better", which
   invites padding.
-- **It must be measured, not assumed.** Extra steps cost latency, and on Gemma-4
-  a second pass costs roughly a whole turn. I have not yet measured whether it
-  improves accuracy on this agent; that measurement belongs in
-  `TESTING_STATUS.md` before the state ships.
+**Measured, not assumed.** I ran the two arms against a question with known
+ground truth — "can you reliably run Python scripts on this machine?", where
+memory held a stale claim that it could not.
 
-**Size: M. Recommend prototyping behind a flag and measuring before committing.**
+| | Steps | Tools | Wall clock | ttft | Answer |
+|---|---|---|---|---|---|
+| No critique | 1 | 0 | 13.0s | 11.8s | "Not fully reliably… intermittently timed out" — **wrong**, recited from stale memory, nothing verified |
+| With critique | 4 | 3 | **11.2s** | **2.2s** | Ran a test script (0.09s), then "simple Python scripts run reliably here" — **right**, and corrected its own recollection out loud |
+
+The critique arm was **more accurate and not slower**. The step and tool counts
+tripled, but wall clock fell, because time-to-first-token dropped from 11.8s to
+2.2s: instead of composing a long hedged paragraph, it went and checked. That is
+a real effect and it argues the cost model for this state is not "one extra model
+call" but "trades generation for verification".
+
+Caveats: n=1, on Claude, and the critique was delivered in the *user's* prompt
+rather than as an agent state. A real implementation has to reproduce it from the
+loop, and must be re-measured on Gemma-4-E4B where a second pass is proportionally
+much more expensive. But it moves this from a plausible idea to one with evidence.
+
+The specific instruction that worked is worth keeping, because it is narrow: *is
+the claim you are about to make something you observed just now, or something you
+are recalling? If recalled, verify before asserting.* Not "review your answer".
+
+**Size: M. Prototype behind a flag, then measure on Lemonade before committing.**
 
 ### 4.7 GAIA as a super-agent — routing across models, hardware, and agents
 
@@ -268,6 +287,45 @@ a stale note and redact a secret without asking the agent to do it.
 **Size: S once the read view exists.**
 
 ---
+
+### 4.8b Environment discovery — the personalization that is free on day one
+
+The user's point, and it is the strongest cheap win in this document: GAIA runs on
+your machine, so it can become **personalized immediately** by learning about that
+machine and storing what it finds. Not "after you have taught it for a month" —
+on first boot.
+
+**The machinery exists and is switched off.** `init_system_context` writes
+`system`-category memories from `system_context.py`, but
+`_system_context_is_enabled()` defaults to `False` and the only documented opt-in
+is *"the Memory Dashboard settings panel"* — which the TUI does not have. Checked
+the live store: **zero `system` rows**, 19 knowledge rows total. So today the
+agent has no stored self-knowledge and **no reachable way for a user to consent to
+it**.
+
+That is the gap to close, and it is small:
+
+1. **Ask during `/setup` / first boot.** One clear opt-in, stating what will be
+   read and that it stays on the machine. Re-runnable, and revocable — the setup
+   task already being built is the natural home.
+2. **Then actually discover, and store it.** OS, hardware, GPU/NPU, shells and
+   runtimes available, project directories, the tools that are installed. This is
+   what makes the second session better than the first.
+3. **OS-dependent probes, reusing what is there.** `shell`, `filesystem`,
+   `file_search` and `system_context.py` already cover most of it; the missing
+   piece is a *discovery pass* that runs them deliberately and writes conclusions
+   to memory, rather than each tool answering one question and forgetting.
+4. **Tiered scope, opt-in per tier.** Machine specs and installed tooling are
+   uncontroversial. Project folders are a step further. Browser history and
+   personal documents are a different conversation and must be their own explicit
+   choice, defaulting off — see §6.2 on secrets, and the Recall backlash for why
+   this is the tier that decides whether users trust the product.
+5. **Show what it learned, and let it be deleted.** The read-only `/memory` view
+   is the start; discovery makes edit/delete (§4.8) a requirement rather than a
+   nicety.
+
+**Size: S–M, and the best value-per-line in this document.** It needs no new
+architecture — a consent surface, a discovery pass, and the existing store.
 
 ### 4.9 The stated aim: the most human agent there is — and why that is an architecture problem
 
@@ -314,6 +372,52 @@ machine and the memory model, not the model weights.** GAIA cannot win on raw
 capability against a frontier model, and does not need to — it can own
 continuity, initiative, and running on your own hardware. That is a design
 position, and it is the one every recommendation in §4 is pointed at.
+
+#### The main loop is the thing to redesign
+
+The user's sharpest point: the agent **should not be just a task executor** —
+unless a skill has deliberately programmed it to be one. Today's loop is
+literally receive-query → plan → execute → answer → wait. Everything human about
+an agent lives in states that loop does not have.
+
+Borrowing from how minds actually work, the loop needs at least four things it
+lacks. Each is a state, not a prompt:
+
+- **Curiosity / exploration.** A drive to reduce its own uncertainty. Concretely:
+  when the agent notices a gap in what it knows about you or your environment, it
+  investigates or asks — rather than proceeding on an assumption and being
+  confidently wrong. This is the same machinery as §4.6's self-critique pointed
+  outward instead of inward, which is a strong argument for building them
+  together.
+- **Self-generated goals.** §4.4's queue, but the *origin* matters as much as the
+  queue: goals derived from observation ("you have opened this file four times
+  today") not only from instruction.
+- **Challenging the user.** Disagreeing, asking the question behind the question,
+  saying "that is not what you actually want" — a *tool for pushing back* rather
+  than a politeness setting. Note the tension with the honesty rules already in
+  the gaia-voice skill: pushing back requires being *right*, so this depends on
+  §4.6 landing first. A sycophantic agent is annoying; a confidently wrong
+  contrarian is unusable.
+- **Volition about when to speak.** The hard one. A curious agent that narrates
+  every thought is exhausting. This needs an explicit model of the user's
+  attention — what is worth an interruption, what waits for the next turn, what is
+  never worth saying. Voice (§4.3) makes this sharper: an interruption you have to
+  listen to costs far more than a line you can skim.
+
+Two guardrails worth stating now, before any of this is built:
+
+1. **Personality must not be able to overwrite truth.** Curiosity, initiative and
+   pushback all increase the number of *unprompted assertions* the agent makes,
+   and this session shows its unprompted assertions are the unreliable ones. Every
+   one of these states needs to sit behind self-critique, not in front of it.
+2. **Human-like is not human-imitating.** Claiming feelings it does not have, or
+   inventing shared history, is the failure mode — and memory poisoning (§6.1)
+   plus the unexplained "Jordan" persona (§6.3) show the machinery already drifts
+   that way on its own. The honesty rules in gaia-voice are load-bearing here, not
+   decoration.
+
+This is the section to design against. Everything else in §4 is a component of
+it.
 
 ---
 
@@ -396,6 +500,14 @@ The problems are all about what *else* it holds.
    remembers returns a *summary*, subject to omission and embellishment — which
    is exactly how findings 1–3 nearly went unnoticed. Direct observability is not
    a nice-to-have for a system whose value proposition is accumulated state.
+
+5. **Stored procedures have never once been recalled.** The live store reports
+   `procedures: {total: 5, active: 4, last_recalled: None}`. So the write path
+   (`skill_synthesis.py` → `put_skill`) has run and produced four active
+   procedures, and `recall_skill` has never fired for any of them. Whatever the
+   flagship has learned about how to do things, it has not read back a single
+   time. This is a concrete, testable bug hiding inside §4.5, not just a design
+   gap — worth chasing before designing anything new on top of procedural memory.
 
 ### What memory has that nothing uses
 
