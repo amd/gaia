@@ -193,14 +193,15 @@ func (m ChatModel) handlePaletteKey(msg tea.KeyMsg) (ChatModel, tea.Cmd, bool) {
 }
 
 var (
-	paletteBoxStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(theme.Accent).
-			Padding(1, 2)
+	// No border and no fill. A bordered box centred in the window read as a
+	// dialog floating in nothing; a fill subtle enough to be tasteful degrades
+	// to invisible on several stock terminal themes (the theme package's
+	// contrast suite measures it). Position and colour carry it instead.
+	paletteBoxStyle = lipgloss.NewStyle().Padding(0, 2)
 
 	paletteTitleStyle = lipgloss.NewStyle().
 				Bold(true).
-				Foreground(theme.AccentBright)
+				Foreground(theme.Dim)
 
 	paletteQueryStyle = lipgloss.NewStyle().
 				Foreground(theme.Dim)
@@ -217,9 +218,9 @@ var (
 	// status-bar fixes this pairs with).
 	paletteSelectedNameStyle = lipgloss.NewStyle().
 					Bold(true).
-					Foreground(theme.AccentBright)
+					Foreground(theme.Selected)
 	paletteSelectedDescStyle = lipgloss.NewStyle().
-					Foreground(theme.AccentBright)
+					Foreground(theme.Selected)
 )
 
 // paletteBoxMaxWidth caps the panel on a wide terminal, matching the help
