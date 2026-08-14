@@ -704,6 +704,11 @@ class _ExecutingAgent(_Gated):
 
     _policy_refusal = _Base._policy_refusal
     _execute_tool = _Base._execute_tool
+    # _execute_tool fits arguments to their annotated types before dispatch, so
+    # the stub needs that too or it is not the real path any more.
+    _coerce_tool_args = _Base._coerce_tool_args
+    _coerce_scalar = _Base._coerce_scalar
+    _COERCIBLE = _Base._COERCIBLE
     _resolve_tool_name = _Base._resolve_tool_name
     _on_tool_invoked = _Base._on_tool_invoked
     _fold_tool_usage = _Base._fold_tool_usage
