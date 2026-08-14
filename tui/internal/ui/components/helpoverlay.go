@@ -33,9 +33,6 @@ const (
 	helpTightChromeRows = 2
 	// helpTightHeight is the window height below which the padding goes.
 	helpTightHeight = 14
-	// helpTruncated replaces the last visible line when the window cannot hold
-	// the whole panel, so a reader can tell the list was cut rather than ended.
-	helpTruncated = "  … (window too short for the rest)"
 )
 
 // RenderHelpOverlay renders a help panel centered over a background view.
@@ -44,44 +41,123 @@ const (
 // on a short terminal the box came out taller than the screen and lipgloss.Place
 // clipped it from both ends at once, so the reader lost the title AND the last
 // bindings with nothing on screen saying so. Now it drops its vertical padding
-// first, then cuts lines from the bottom and says it did.
-func RenderHelpOverlay(ctx HelpContext, background string, width, height int) string {
-	var content string
-	switch ctx {
-	case HelpContextHub:
-		content = hubHelpText
-	case HelpContextChat:
-		content = chatHelpText
+// first, then scrolls — see fitHelpLines.
+//
+// scroll is how many body lines are hidden above the visible window; 0 shows
+// the top. The caller (root model) owns and clamps this across key presses —
+// HelpMaxScroll reports the ceiling it should clamp to.
+func RenderHelpOverlay(ctx HelpContext, background string, width, height, scroll int) string {
+	content := helpTextFor(ctx)
+
+	boxWidth, inner, rows, ok := helpBoxSize(width, height)
+	if !ok {
+		return background
 	}
 
-	boxWidth := width - 4
+	style := helpBoxStyle
+	if height < helpTightHeight {
+		style = style.Padding(0, 2)
+	}
+
+	lines := fitHelpLines(content, inner, rows, scroll)
+	box := style.Width(boxWidth).Render(strings.Join(lines, "\n"))
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
+}
+
+// HelpMaxScroll reports the furthest a panel at this size can scroll before
+// it reaches its last line — 0 when the whole thing already fits, or when
+// there is no room to draw a panel at all. Root uses this to clamp the
+// scroll offset it drives on ↑/↓/PgUp/PgDn/Home/End while help is open; it
+// has to use EXACTLY the row math fitHelpLines uses below, or a Home jump on
+// one and a real line count on the other disagree.
+func HelpMaxScroll(ctx HelpContext, width, height int) int {
+	_, _, rows, ok := helpBoxSize(width, height)
+	if !ok {
+		return 0
+	}
+	lines := strings.Split(helpTextFor(ctx), "\n")
+	if len(lines) <= rows {
+		return 0
+	}
+	return maxScrollFor(len(lines), helpContentRows(rows))
+}
+
+func helpTextFor(ctx HelpContext) string {
+	switch ctx {
+	case HelpContextHub:
+		return hubHelpText
+	default:
+		return chatHelpText
+	}
+}
+
+// helpBoxSize returns the box's own width, the content columns inside its
+// padding, and the content row budget for a panel at width x height — the
+// same three numbers RenderHelpOverlay and HelpMaxScroll both need, computed
+// once so they cannot drift apart.
+func helpBoxSize(width, height int) (boxWidth, inner, rows int, ok bool) {
+	boxWidth = width - 4
 	if boxWidth > helpBoxMaxWidth {
 		boxWidth = helpBoxMaxWidth
 	}
 	// lipgloss draws the border outside Width, so the box occupies boxWidth+2
 	// columns and the horizontal padding (2 each side) leaves this much for the
 	// text. Any less and there is no panel to draw, so leave the view alone.
-	inner := boxWidth - 4
+	inner = boxWidth - 4
 	if inner < 1 || height < 3 {
-		return background
+		return 0, 0, 0, false
 	}
 
-	style := helpBoxStyle
 	chrome := helpChromeRows
 	if height < helpTightHeight {
-		style = style.Padding(0, 2)
 		chrome = helpTightChromeRows
 	}
+	rows = height - chrome
+	if rows < 1 {
+		rows = 1
+	}
+	return boxWidth, inner, rows, true
+}
 
-	lines := fitHelpLines(content, inner, height-chrome)
-	box := style.Width(boxWidth).Render(strings.Join(lines, "\n"))
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
+// helpContentRows is how many of the row budget go to real text once one row
+// is set aside for a scroll indicator — all of it, if there is only one row
+// to begin with and no room to spare.
+func helpContentRows(rows int) int {
+	if rows <= 1 {
+		return rows
+	}
+	return rows - 1
+}
+
+func maxScrollFor(totalLines, contentRows int) int {
+	m := totalLines - contentRows
+	if m < 0 {
+		return 0
+	}
+	return m
+}
+
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
 
 // fitHelpLines forces the panel body to a known number of rows and columns.
 // Row count has to be exact: a line that lipgloss soft-wraps adds a row nobody
 // counted, and the panel silently grows past the clamp it was just given.
-func fitHelpLines(content string, inner, rows int) []string {
+//
+// When the content is longer than the row budget, one row goes to a scroll
+// indicator instead of a content line — replacing the old hard truncation,
+// which just cut the list and said "too short for the rest" with no way to
+// see what got cut. scroll picks the window; the indicator always says
+// whether there is more above, below, or both, so cutting the list is never
+// silent.
+func fitHelpLines(content string, inner, rows, scroll int) []string {
 	lines := strings.Split(content, "\n")
 	for i, line := range lines {
 		if ansi.StringWidth(line) > inner {
@@ -94,14 +170,35 @@ func fitHelpLines(content string, inner, rows int) []string {
 	if len(lines) <= rows {
 		return lines
 	}
-	lines = lines[:rows]
-	lines[rows-1] = ansi.Truncate(helpTruncated, inner, "…")
-	return lines
+
+	contentRows := helpContentRows(rows)
+	maxScroll := maxScrollFor(len(lines), contentRows)
+	scroll = clampInt(scroll, 0, maxScroll)
+
+	visible := append([]string{}, lines[scroll:scroll+contentRows]...)
+	if contentRows < rows {
+		visible = append(visible, ansi.Truncate(helpScrollIndicator(scroll, maxScroll), inner, "…"))
+	}
+	return visible
 }
 
-// hubHelpText is kept to 20 lines: with the box's padding and border that is
-// exactly 24 rows, so the overlay still fits the minimum terminal. chatHelpText
-// owes the same budget.
+// helpScrollIndicator names which direction(s) still have hidden content.
+// Only called once maxScroll > 0 has already been established by the caller.
+func helpScrollIndicator(scroll, maxScroll int) string {
+	switch {
+	case scroll <= 0:
+		return "  ── ↓ more below · PgDn ──"
+	case scroll >= maxScroll:
+		return "  ── ↑ more above · PgUp ──"
+	default:
+		return "  ── ↑ more above · ↓ more below ──"
+	}
+}
+
+// hubHelpText and chatHelpText are no longer bounded to a fixed line count —
+// RenderHelpOverlay scrolls whatever does not fit (see fitHelpLines) — but
+// every line still has to fit helpBoxMaxWidth-4 columns, or it soft-wraps and
+// throws off the row count the box was told to draw.
 const hubHelpText = `  GAIA Agent Hub
   ──────────────────
   Enter       Run the selected agent
@@ -125,20 +222,19 @@ const hubHelpText = `  GAIA Agent Hub
 const chatHelpText = `  GAIA Chat
   ──────────────────
   Enter       Send (queues if the agent is busy)
+  Alt+Enter   New line in the composer (Ctrl+J too)
   Esc         Cancel the turn — or back to the hub
   Esc twice   Give up waiting on the cancel
   Ctrl+C      Quit
 
-  Scroll        ↑ / ↓ one line · PgUp/PgDn page
-  Home / End    Top / bottom, if the composer is empty
+  Scroll        ↑ / ↓ line · PgUp/PgDn page
+  Home / End    Top / bottom, if the composer is
+                empty — otherwise cursor keys
   Mouse wheel   Anywhere in the transcript
 
-  Copy & paste
-  Ctrl+T      Select with the mouse — your own
+  Ctrl+T      Select with the mouse for your
               terminal's copy/paste. Esc turns it off.
-  Ctrl+V      Paste from the clipboard
-  Ctrl+Y      Copy the whole answer
-  Ctrl+B      Copy the last code block
+  Ctrl+V      Paste · Ctrl+Y copy answer · Ctrl+B code
 
-  Commands    /help · /hub · /clear
-              /setup · /memory · /model`
+  Commands    /help /hub /clear /bypass
+              /setup /memory /model`

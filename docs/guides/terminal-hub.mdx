@@ -220,18 +220,27 @@ Type /help for available commands.
 
 | Key | What it does |
 |---|---|
-| `Enter` | Send message |
-| `Esc` | Cancel streaming, or return to the hub |
-| `PgUp` / `PgDn` | Scroll the conversation |
+| `Enter` | Send message (queues it if the agent is still working) |
+| `Alt+Enter`, `Ctrl+J` | New line in the composer |
+| `Esc` | Cancel streaming, or return to the hub; press again to give up waiting |
 | `Ctrl+C` | Quit |
+| `↑` / `↓`, `PgUp` / `PgDn` | Scroll the conversation one line / one page |
+| `Home` / `End` | Jump to the top / bottom, if the composer is empty |
+| Mouse wheel | Scroll the conversation |
+| `Ctrl+T` | Toggle mouse selection mode, for your terminal's own copy/paste |
+| `Ctrl+V` | Paste from the clipboard |
+| `Ctrl+Y` | Copy the whole answer |
+| `Ctrl+B` | Copy the last code block in the answer |
 
 | Command | What it does |
 |---|---|
-| `/help` | Show the shortcut overlay |
+| `/help` | Show the shortcut overlay (scrolls with `↑`/`↓`/`PgUp`/`PgDn` if it doesn't fit) |
 | `/hub` | Return to the Agent Hub |
 | `/clear` | Clear the conversation |
 | `/setup` | Re-run first-time setup (`gaia init`) for the flagship agent |
 | `/memory` | See what the agent has stored about you — read-only, `Esc` to dismiss |
+| `/model` | Switch the flagship agent's live model |
+| `/bypass` | Let the agent run tools without asking (off by default) |
 
 The flagship agent (the one spawned as a local subprocess, not through the
 background daemon) runs this same setup automatically on its first launch on a

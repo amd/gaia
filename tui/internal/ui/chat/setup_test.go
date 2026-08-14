@@ -47,7 +47,7 @@ func TestSetupCommandIsNeverSentAsAQuery(t *testing.T) {
 }
 
 func TestSetupIsListedInHelp(t *testing.T) {
-	view := components.RenderHelpOverlay(components.HelpContextChat, "", 100, 40)
+	view := components.RenderHelpOverlay(components.HelpContextChat, "", 100, 40, 0)
 	if !strings.Contains(view, "/setup") {
 		t.Errorf("the chat help overlay does not list /setup:\n%s", view)
 	}
