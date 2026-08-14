@@ -1711,8 +1711,8 @@ func (m ChatModel) answerStats(msg *Message) string {
 	// silently reintroduce the exact bug that replaced.
 	if msg.Tokens > 0 {
 		stats = append(stats, fmt.Sprintf("%d tokens", msg.Tokens))
-		if inferTime := msg.Duration - msg.TTFT; inferTime > 0 {
-			stats = append(stats, fmt.Sprintf("%.1f tok/s", float64(msg.Tokens)/inferTime.Seconds()))
+		if rate, ok := tokensPerSecond(msg.Tokens, msg.Duration, msg.TTFT); ok {
+			stats = append(stats, fmt.Sprintf("%.1f tok/s", rate))
 		}
 	}
 	if msg.Steps > 0 {
