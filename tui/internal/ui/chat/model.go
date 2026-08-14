@@ -212,6 +212,14 @@ type ChatModel struct {
 	// click-drag selection (and with it copy and paste) — see selectmode.go.
 	selectMode bool
 
+	// help is this view's OWN help panel, used when nothing is wrapping it.
+	// `gaia run <agent>` puts this model straight in front of Bubble Tea, so a
+	// panel implemented only in the root model is absent there — which is why
+	// /help did nothing at all on that path. Under the hub, root intercepts
+	// ToggleHelpMsg before it reaches here and this stays closed, so the two
+	// never both draw.
+	help components.HelpState
+
 	// lemonade* carry the local model server's state from the agent's
 	// model-state ping, shown in the --dev header. lemonadeKnown separates
 	// "the agent has not told us" from "it told us Lemonade is down": the
@@ -737,6 +745,12 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.syncComposerHeight()
 		return m, nil
 
+	case ToggleHelpMsg:
+		// Only ever seen when nothing wrapped this model: root consumes this
+		// message itself and never forwards it.
+		m.help.Toggle(components.HelpContextChat)
+		return m, nil
+
 	case tea.MouseMsg:
 		// The wheel scrolls the transcript. In an alt-screen app the terminal's
 		// own scrollback does not exist, so this and the arrow keys are the only
@@ -766,6 +780,12 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// An open help panel owns the keyboard: navigation scrolls it, anything
+	// else closes it. Never a trap, whatever the user reaches for.
+	if m.help.HandleKey(msg, m.width, m.height) {
+		return m, nil
+	}
+
 	// The first-boot/`/setup` gate owns the keyboard while a `gaia init` run
 	// is in flight -- there is no turn, question, or confirmation to route to
 	// yet. Esc/Ctrl+C must still get the user out rather than doing nothing
@@ -2218,7 +2238,10 @@ func (m ChatModel) View() string {
 		rows = append(rows, banner)
 	}
 	rows = append(rows, divider, vpView, divider, inputView, statusBar)
-	return lipgloss.JoinVertical(lipgloss.Left, rows...)
+	// Composited last so it sits over everything. Returns the base untouched
+	// when the panel is closed, and when a root model is drawing it instead.
+	return m.help.Render(
+		lipgloss.JoinVertical(lipgloss.Left, rows...), m.width, m.height)
 }
 
 // extractCommandFromArgs pulls the one argument worth showing out of a legacy
