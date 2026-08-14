@@ -43,6 +43,7 @@ from gaia.chat.sdk import AgentConfig, AgentSDK
 from gaia.llm.lemonade_client import (
     DEFAULT_MODEL_NAME,
     GPU_CTX_SIZE,
+    budget_for_ctx,
     is_context_overflow_error,
     truncation_budget,
 )
@@ -3173,6 +3174,26 @@ Do NOT wrap conversational replies in JSON.
 
         return os.path.abspath(file_path)
 
+    def _truncation_budget(self) -> tuple:
+        """(threshold, target) chars a tool result may occupy, for THIS model.
+
+        The local budget is derived from the device profile (NPU 32K / GPU 64K),
+        which is right for Lemonade and wrong for anything else. Running on
+        Claude the agent was still capping tool results at the NPU's 20,000
+        chars — with a 200,000-token window sitting unused — and silently
+        dropping list entries it had ample room for. Observed: a 36-skill
+        listing came back one short, and the agent said so.
+        """
+        if getattr(self, "_use_claude", False):
+            # Imported here, not at module scope: providers/claude.py guards an
+            # optional dependency, and the Lemonade-only path must not pay for it.
+            from gaia.llm.providers.claude import (  # pylint: disable=import-outside-toplevel
+                CLAUDE_CTX_SIZE,
+            )
+
+            return budget_for_ctx(CLAUDE_CTX_SIZE)
+        return truncation_budget(self.device)
+
     #: Scalar annotations worth coercing, by name as well as by type: a module
     #: using postponed annotations hands us the string "int", not ``int``, and
     #: silently skipping those would turn this into a no-op nobody notices.
@@ -3293,7 +3314,7 @@ Do NOT wrap conversational replies in JSON.
             result_str = json.dumps(
                 tool_result, default=self._json_serialize_fallback, ensure_ascii=False
             )
-            threshold, target = truncation_budget(self.device)
+            threshold, target = self._truncation_budget()
             if len(result_str) > threshold:
                 # Truncate large results to prevent overwhelming the LLM. The
                 # result is re-parsed just below, so this path must always
@@ -3521,7 +3542,7 @@ Do NOT wrap conversational replies in JSON.
             # Every call site hands this a result ``_handle_large_tool_result``
             # already fitted to the device budget, so this is a backstop, not
             # the real gate -- it must not be tighter than the gate it backs.
-            _, target = truncation_budget(getattr(self, "device", None))
+            _, target = self._truncation_budget()
             # Prose call site: text_content is spliced into a message's text
             # field, never json.loads'd -- stays on the default prose path,
             # not the JSON-safe envelope (#2620, reflection C2).

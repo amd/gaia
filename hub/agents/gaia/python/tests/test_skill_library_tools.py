@@ -827,3 +827,65 @@ def test_search_skill_hub_fails_loudly_when_the_hub_is_unreachable(
     assert result["status"] == "error"
     assert result["error_type"] == "SkillHubError"
     assert "GAIA_HUB_URL" in result["error"]
+
+
+class TestTheListViewNeverLosesASkill:
+    """A truncated sentence still identifies a skill; a missing one cannot be
+    chosen at all.
+
+    Skills written for other agents carry very long trigger descriptions — one
+    of Anthropic's document skills is over 1,000 characters. With 36 installed,
+    the catalogue overflowed the tool-result budget and whole skills were
+    dropped from the end. The agent noticed and said so: "xlsx installed but not
+    shown in this listing due to truncation".
+    """
+
+    def test_a_long_description_is_summarised(self):
+        from gaia_agent.skill_tools import _LIST_DESCRIPTION_CHARS, _summarize
+
+        summary = _summarize("x" * 5000)
+        assert len(summary) < 5000
+        assert summary.startswith("x" * _LIST_DESCRIPTION_CHARS)
+        assert "skill_status" in summary, (
+            "the summary must say where the full text is, or it reads as the "
+            "whole description"
+        )
+
+    def test_a_short_description_is_untouched(self):
+        from gaia_agent.skill_tools import _summarize
+
+        assert _summarize("Triage GitHub issues.") == "Triage GitHub issues."
+
+    def test_missing_description_does_not_explode(self):
+        from gaia_agent.skill_tools import _summarize
+
+        assert _summarize("") == ""
+        assert _summarize(None) == ""
+
+    def test_a_large_catalogue_fits_the_smallest_budget(self):
+        """36 skills with 1KB descriptions each must still fit the NPU."""
+        import json
+
+        from gaia.llm.lemonade_client import truncation_budget
+        from gaia_agent.skill_tools import _summarize
+
+        entries = [
+            {
+                "name": f"skill-{i:02d}",
+                "description": _summarize("y" * 1200),
+                "version": "1.0.0",
+                "root": "user",
+                "security_tier": "community",
+                "provides_tools": [],
+                "permissions": [],
+                "loaded": False,
+            }
+            for i in range(36)
+        ]
+        payload = {"status": "success", "count": len(entries), "skills": entries}
+        threshold, _ = truncation_budget("npu")
+
+        assert len(json.dumps(payload, ensure_ascii=False)) < threshold, (
+            "the catalogue still overflows the smallest budget, so skills will "
+            "be dropped from the end again"
+        )

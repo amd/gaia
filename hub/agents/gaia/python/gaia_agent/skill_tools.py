@@ -157,11 +157,27 @@ def _refuse_ungated_code(skill: Any) -> Dict[str, Any]:
     }
 
 
+#: How much of a skill's description the LIST view carries. Skills written for
+#: other agents can have very long trigger descriptions — one of Anthropic's is
+#: over 1,000 characters — and a catalogue of those overflows the tool-result
+#: budget, at which point whole skills are dropped from the end. A truncated
+#: sentence still identifies a skill; a missing skill cannot be chosen at all.
+#: The full text is always available from ``skill_status`` and on load.
+_LIST_DESCRIPTION_CHARS = 240
+
+
+def _summarize(description: str) -> str:
+    text = (description or "").strip()
+    if len(text) <= _LIST_DESCRIPTION_CHARS:
+        return text
+    return text[:_LIST_DESCRIPTION_CHARS].rstrip() + "… (full text via skill_status)"
+
+
 def _describe(skill: Any, *, loaded: bool) -> Dict[str, Any]:
     """One skill as the model sees it: what it is, where from, how trusted."""
     return {
         "name": skill.name,
-        "description": skill.description,
+        "description": _summarize(skill.description),
         "version": skill.version or "",
         "root": skill.root or "",
         "security_tier": skill.security_tier,

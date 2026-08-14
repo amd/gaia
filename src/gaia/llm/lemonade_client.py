@@ -192,6 +192,18 @@ _TRUNCATE_THRESHOLD_RATIO = 30000 / NPU_CTX_SIZE  # chars per ctx token
 _TRUNCATE_TARGET_FRACTION = 2 / 3  # 20000 / 30000
 
 
+def budget_for_ctx(ctx_size: int) -> Tuple[int, int]:
+    """(threshold, target) char budget for a model with *ctx_size* tokens.
+
+    The ratio is the NPU profile's tuned 30000/20000 for a 32768 window (#2620),
+    scaled — so a bigger context earns a proportionally bigger allowance instead
+    of a newly invented number.
+    """
+    threshold = round(ctx_size * _TRUNCATE_THRESHOLD_RATIO)
+    target = round(threshold * _TRUNCATE_TARGET_FRACTION)
+    return threshold, target
+
+
 def truncation_budget(device: Optional[str]) -> Tuple[int, int]:
     """(threshold, target) char budget for large tool-result truncation.
 
@@ -201,12 +213,14 @@ def truncation_budget(device: Optional[str]) -> Tuple[int, int]:
     the bigger budget would reopen the #1030 context-overflow class if the
     caller turns out to actually be running on NPU — only an explicit
     non-NPU device earns the larger allowance.
+
+    This is the LOCAL profile. A remote model has its own, much larger window and
+    must not be squeezed into local hardware's budget — see
+    ``Agent._truncation_budget``.
     """
     normalized = (device or "").strip().lower()
     ctx = NPU_CTX_SIZE if not normalized or normalized == "npu" else GPU_CTX_SIZE
-    threshold = round(ctx * _TRUNCATE_THRESHOLD_RATIO)
-    target = round(threshold * _TRUNCATE_TARGET_FRACTION)
-    return threshold, target
+    return budget_for_ctx(ctx)
 
 
 # =========================================================================

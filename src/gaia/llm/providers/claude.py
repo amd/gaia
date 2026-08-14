@@ -27,6 +27,12 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_CLAUDE_MODEL = "claude-sonnet-5"
 
+#: Context window every current Claude model provides, in tokens. Used to size
+#: tool-result truncation: without it the agent squeezes a 200K-context model
+#: into the local NPU's 32K budget and drops results it had ample room for.
+#: Deliberately the floor of the range rather than the largest on offer.
+CLAUDE_CTX_SIZE = 200_000
+
 #: kwargs the Anthropic Messages API accepts from GAIA's chat layer. Everything
 #: else (llama.cpp sampling knobs, ChatML ``stop`` token lists, temperature —
 #: rejected with a 400 on current Claude models) is dropped with a debug log.

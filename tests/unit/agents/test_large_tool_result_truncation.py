@@ -506,3 +506,62 @@ class TestSecondGateDoesNotUndoTheFirst:
         assert "truncation_budget" in src, (
             "the cap must derive from the device profile, not a literal"
         )
+
+
+# ---------------------------------------------------------------------------
+# The budget must follow the model, not the local hardware
+# ---------------------------------------------------------------------------
+
+
+class TestTheBudgetFollowsTheModelInUse:
+    """A 200K-context model was being squeezed into the local NPU's budget.
+
+    ``truncation_budget`` derives its allowance from the device profile — NPU
+    32K, GPU 64K — which is correct for Lemonade and meaningless for a remote
+    model. Running on Claude, the agent still capped tool results at the NPU's
+    20,000 chars with a 200,000-token window sitting unused.
+
+    Observed live: asked to list its skills with 36 installed, the agent
+    answered "xlsx installed but not shown in this listing due to truncation".
+    It was right, and it had room for all 36.
+    """
+
+    def _agent(self, *, claude: bool, device: str):
+        agent = make_agent()
+        agent.device = device
+        agent._use_claude = claude
+        return agent
+
+    def test_a_remote_model_is_not_capped_at_the_local_device_budget(self):
+        remote = self._agent(claude=True, device="npu")._truncation_budget()
+        local = self._agent(claude=False, device="npu")._truncation_budget()
+        assert remote[0] > local[0], (
+            "the remote model's budget is no larger than the NPU's, so its "
+            "context window is going unused"
+        )
+
+    def test_the_local_path_is_unchanged(self):
+        for device in ("npu", "gpu", "cpu", None):
+            assert (
+                self._agent(claude=False, device=device)._truncation_budget()
+                == truncation_budget(device)
+            ), f"device={device!r} no longer matches the local profile"
+
+    def test_a_payload_that_overflowed_the_npu_survives_on_the_remote_model(self):
+        agent = self._agent(claude=True, device="npu")
+        threshold, _ = truncation_budget("npu")
+        payload = _messages_payload(min_chars=threshold * 2)
+
+        fitted = agent._handle_large_tool_result("list_skills", payload, [], {})
+
+        assert len(fitted["messages"]) == len(payload["messages"]), (
+            "items were dropped from a payload the remote model had room for"
+        )
+
+    def test_both_gates_ask_the_agent_rather_than_the_device(self):
+        for method in (Agent._handle_large_tool_result, Agent._create_tool_message):
+            src = inspect.getsource(method)
+            assert "truncation_budget(self.device)" not in src, (
+                f"{method.__name__} still reads the device profile directly, so "
+                f"a remote model gets the local budget"
+            )
