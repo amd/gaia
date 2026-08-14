@@ -46,6 +46,8 @@ import threading
 import traceback
 from typing import Any, Dict, Optional
 
+from gaia_agent.memory_dump import MEMORY_DUMP_QUERY, build_memory_dump
+
 from gaia.logger import get_logger
 from gaia.ui.sse_translation import TERMINAL_TYPES, CanonicalTranslator
 
@@ -366,6 +368,23 @@ def _terminal_error(exc: BaseException) -> Dict[str, Any]:
     return {"type": "error", "detail": text}
 
 
+def _memory_dump_event(agent: Any) -> Dict[str, Any]:
+    """One terminal 'final' event carrying the /memory snapshot as JSON.
+
+    Reuses the canonical final-event shape (no new wire vocabulary) so the
+    TUI reads it with the exact same code path as a real turn's answer — see
+    FetchMemory in tui/internal/client/memory.go. A build failure here is a
+    real bug (a bad query), not "no memories", so it becomes a terminal error
+    rather than an empty dump.
+    """
+    try:
+        payload = build_memory_dump(agent)
+    except Exception as exc:  # surfaced as the turn's terminal error
+        logger.exception("memory dump failed")
+        return _terminal_error(exc)
+    return {"type": "final", "answer": json.dumps(payload)}
+
+
 def run_turn(
     agent: Any,
     query: str,
@@ -475,6 +494,25 @@ def run_turn(
             state.detach(handler)
 
 
+def dispatch_query(
+    agent: Any,
+    query: str,
+    out,
+    dev: bool = False,
+    state: Optional[PermissionState] = None,
+) -> None:
+    """Route one line off the query queue: a memory dump, or a real turn.
+
+    The memory-dump sentinel short-circuits before run_turn/process_query —
+    it never reaches the LLM and is never recorded as a chat turn (see
+    _record_turn's docstring on why a turn's own answer is what gets kept).
+    """
+    if query == MEMORY_DUMP_QUERY:
+        _write(_memory_dump_event(agent), out)
+        return
+    run_turn(agent, query, out, dev=dev, state=state)
+
+
 def build_parser() -> "argparse.ArgumentParser":
     """The stdio transport's argv contract.
 
@@ -566,7 +604,7 @@ def main(argv: Optional[list] = None) -> int:
         if query is None:  # stdin closed
             break
         try:
-            run_turn(agent, query, out, dev=args.dev, state=state)
+            dispatch_query(agent, query, out, dev=args.dev, state=state)
         except Exception as exc:  # never let one bad turn kill the process
             logger.exception("stdio turn crashed outside the run loop")
             _write(_terminal_error(exc), out)

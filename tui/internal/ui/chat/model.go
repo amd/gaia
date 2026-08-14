@@ -257,6 +257,16 @@ type ChatModel struct {
 	// m.events scopes a turn: a late event from an abandoned run (the user
 	// cancelled, then /setup again) must not land on whatever replaced it.
 	setupCh <-chan setupEvent
+	// memoryView is the last successfully fetched /memory snapshot, drawn
+	// inline in the transcript until dismissed with Esc. Non-nil means it is
+	// on screen. It is never part of m.messages: like question/confirmation,
+	// dismissing it must leave no permanent transcript entry behind.
+	memoryView *client.MemoryDump
+	// memoryLoading is true from /memory until its fetch resolves (or times
+	// out) — drives the spinner and lets Esc cancel a stuck fetch.
+	memoryLoading bool
+	// memoryCancelFn cancels an in-flight /memory fetch. nil when none is running.
+	memoryCancelFn context.CancelFunc
 }
 
 func NewChatModel(c client.AgentClient, agentName string, initialQuery string, dev bool) ChatModel {
@@ -550,6 +560,9 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewport()
 		return m, nil
 
+	case memoryDumpMsg:
+		return m.handleMemoryDump(msg)
+
 	case eventMsg:
 		if m.supersededTurn(msg.ch) {
 			return m, nil
@@ -686,7 +699,7 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.afterScroll(), cmd
 
 	case spinner.TickMsg:
-		if m.streaming {
+		if m.streaming || m.memoryLoading {
 			var cmd tea.Cmd
 			m.spinner, cmd = m.spinner.Update(msg)
 			cmds = append(cmds, cmd)
@@ -712,6 +725,13 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// while a multi-minute download runs.
 	if m.setupRunning && (msg.Type == tea.KeyEsc || msg.Type == tea.KeyCtrlC) {
 		return m.cancelSetup()
+	}
+
+	// /memory owns Esc while it is up or loading — dismiss (or cancel the
+	// fetch) without falling into the idle-Esc composer-reset below. Every
+	// other key passes through untouched so scrolling and typing still work.
+	if msg.Type == tea.KeyEsc && (m.memoryView != nil || m.memoryLoading) {
+		return m.dismissMemoryView(), nil
 	}
 
 	// A pending confirmation owns the keyboard too, but UNLIKE a question, Esc
@@ -1035,6 +1055,9 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 		m.updateViewport()
 		return m, nil
 
+	case "/memory":
+		return m.startMemoryFetch()
+
 	case "/bypass":
 		if m.bypassPermissions {
 			return m.setBypass(false)
@@ -1074,6 +1097,10 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 }
 
 func (m ChatModel) sendQuery(query string) (tea.Model, tea.Cmd) {
+	// A new turn moves past whatever /memory last showed — leaving it up would
+	// have it sitting stale below (or above, depending on scroll) the live
+	// answer with no way to tell it apart from current content.
+	m.memoryView = nil
 	m.messages = append(m.messages, Message{
 		Role:    RoleUser,
 		Content: query,
@@ -1443,7 +1470,7 @@ func (m *ChatModel) updateViewport() {
 	var sb strings.Builder
 
 	// Show welcome message if no messages yet
-	if len(m.messages) == 0 && !m.streaming {
+	if len(m.messages) == 0 && !m.streaming && !m.memoryLoading && m.memoryView == nil {
 		sb.WriteString(m.renderWelcome())
 		sb.WriteString("\n")
 	}
@@ -1487,6 +1514,15 @@ func (m *ChatModel) updateViewport() {
 
 	if m.question != nil {
 		sb.WriteString(m.question.View())
+		sb.WriteString("\n")
+	}
+
+	if m.memoryLoading {
+		sb.WriteString("  " + m.spinner.View() + " " + activityStyle.Render("Loading memory…"))
+		sb.WriteString("\n")
+	}
+	if m.memoryView != nil {
+		sb.WriteString(renderMemoryView(*m.memoryView, m.cardWidth()))
 		sb.WriteString("\n")
 	}
 
