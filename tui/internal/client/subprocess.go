@@ -319,7 +319,7 @@ func (s *SubprocessClient) Send(ctx context.Context, query string) (<-chan inter
 		s.discard(st.proc)
 		if state != nil && !state.Success() {
 			stderrContent := st.stderr.String()
-			msg := fmt.Sprintf("agent process exited with code %d", state.ExitCode())
+			msg := describeAgentExit(state.ExitCode())
 			if stderrContent != "" {
 				msg += "\n" + stderrContent
 			}
@@ -331,6 +331,29 @@ func (s *SubprocessClient) Send(ctx context.Context, query string) (<-chan inter
 	}()
 
 	return ch, nil
+}
+
+// windowsTerminated is what Windows reports for a force-terminated process:
+// 0xFFFFFFFF, which Go's ExitCode() hands back as this decimal.
+const windowsTerminated = 4294967295
+
+// describeAgentExit turns a raw exit status into a line a user can act on.
+//
+// The raw form was "agent process exited with code 4294967295" — observed after
+// killing the agent mid-turn. That number is 0xFFFFFFFF, it is not a code the
+// agent chose, and to a reader it looks like memory corruption rather than "it
+// was killed".
+//
+// Both branches end with what actually happens next. The transport respawns the
+// child on the following Send, so recovery needs no action — and a user staring
+// at an error box has no way to know that unless it says so.
+func describeAgentExit(code int) string {
+	if code == windowsTerminated || code == -1 {
+		return "The agent process was stopped. Your next message will start it again."
+	}
+	return fmt.Sprintf(
+		"The agent process exited unexpectedly (code %d). "+
+			"Your next message will start it again.", code)
 }
 
 // controlKey marks a stdin line as a control message rather than a query. Must
