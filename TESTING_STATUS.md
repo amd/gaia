@@ -3,7 +3,7 @@
 Live log of validating the flagship agent through the Go TUI on branch
 `feat/gaia-flagship-agent-2804` (PR #2932). Updated continuously.
 
-**Last updated:** 2026-08-14 00:30
+**Last updated:** 2026-08-14 00:55
 **Backend:** Claude (`--use-claude`, claude-sonnet-5) — validating the harness on a
 fast backend before returning to Lemonade for local-inference bugs.
 **Harness:** `C:\Users\14255\Work\gaia-tui-test\` (launch-tui.ps1 + driver.py), one
@@ -161,6 +161,28 @@ Run against a question with known ground truth, where memory held a stale claim.
 More accurate *and not slower*: it traded generation time for verification.
 Caveats and the exact wording that worked are in `GAIA_AGENT_V2_SCOPE.md` §4.6.
 
+### The merge broke Enter, and only the ladder caught it
+
+Merging the four feature branches took the ladder from 7/7 to **0/7**. Nothing
+errored: `go test ./...` was green, and every rung simply timed out at 20s with
+the startup banner as its captured output, because no turn ever started.
+
+One branch had added a heuristic treating an Enter arriving within 50ms of the
+last keystroke as a terminal typing out a paste rather than a person pressing
+send. Windows Terminal over ConPTY really does type pastes out that way, so the
+intent was sound — but the signal is not specific to pasting. It also fires for a
+fast typist, and for the control API, which delivers a line and its Enter back to
+back.
+
+Reverted to the authoritative signal (the message's own bracketed-paste flag).
+On terminals that do not bracket, a multi-line paste sends its first line — now
+pinned by a test that says so — and Ctrl+V reads the clipboard directly, which is
+the path that works there. Ladder back to 7/7.
+
+**The lesson is in the test skill now:** the ladder is the merge gate, not just
+the feature gate, and any input rule of the form "too fast to be a person" will
+find your harness.
+
 ### The stray characters were my harness, not GAIA
 
 I reported turns arriving with junk prepended (`life`, `t`, `e's`) and was
@@ -187,6 +209,8 @@ Every one of these was found by testing behaviour, and every one produced a
 | `58b6066a` | Thirty skill names as one comma-run that wrapped mid-word |
 | `96639846` | Typing three follow-ups during a turn kept the third and silently dropped two |
 | `396f41a7` | "2142.6 tok/s" on a local Gemma — a rate invented from a 0.1s window |
+| `a460a3af` | Dev header said nothing about Lemonade's version or health |
+| `9b203eb2` | **Enter stopped submitting entirely** after the merge — a paste heuristic read a fast Enter as a line break |
 
 ## Delegated and in flight
 
