@@ -3,7 +3,7 @@
 Live log of validating the flagship agent through the Go TUI on branch
 `feat/gaia-flagship-agent-2804` (PR #2932). Updated continuously.
 
-**Last updated:** 2026-08-13 23:40
+**Last updated:** 2026-08-14 00:30
 **Backend:** Claude (`--use-claude`, claude-sonnet-5) — validating the harness on a
 fast backend before returning to Lemonade for local-inference bugs.
 **Harness:** `C:\Users\14255\Work\gaia-tui-test\` (launch-tui.ps1 + driver.py), one
@@ -111,6 +111,68 @@ composer. Recorded here so it is not lost; not filed until it reproduces.
 
 ---
 
+## Final pass on the merged build
+
+Everything below ran against the branch with all four delegated features merged
+(`/model`, `/setup`, `/memory`, plus my own changes).
+
+### Capability ladder — 7/7, and about twice as fast as the pre-merge run
+
+| Rung | Result | Time |
+|---|---|---|
+| L1 arithmetic (`391`) | pass | 4.5s |
+| L2 store memory | pass | 7.5s |
+| L3 recall across turns (`Teal`) | pass | 4.5s |
+| L4 shell tool (`pwd`) | pass | 7.5s |
+| L5 load `github-triage` | pass | 9.0s |
+| L6 skill persists across turns | pass | 3.0s |
+| **L7 real `gh` triage** | **pass — exact match** | **10.5s** |
+
+L7 verified against ground truth rather than accepted:
+
+```
+$ gh issue list --repo amd/gaia --limit 3
+2975 — fix(ci): the README CI badge is permanently red and reports nothing
+2974 — docs(email): hub page tells users to run a nonexistent command
+2973 — perf(deps): amd-gaia pulls full NVIDIA CUDA stack on AMD hardware
+```
+
+### The header now names the model, and the local server
+
+```
+ GAIA  │ dev │ Sonnet 5 │ lemonade 10.10.0
+```
+
+`/model` lists Claude models and the real Lemonade catalog discovered at
+runtime, current one marked, remote and local visually distinct. Switching live
+from Sonnet 5 to `Gemma-4-E4B-it-GGUF` took ~1s and — the part that matters —
+**conversation history survived it**: a codename given to Claude was recalled by
+the local model on the next turn.
+
+### Self-critique: measured, and it helped
+
+Run against a question with known ground truth, where memory held a stale claim.
+
+| | Steps | Tools | Wall clock | ttft | Answer |
+|---|---|---|---|---|---|
+| No critique | 1 | 0 | 13.0s | 11.8s | **wrong** — recited stale memory, verified nothing |
+| With critique | 4 | 3 | **11.2s** | **2.2s** | **right** — ran a test, corrected itself out loud |
+
+More accurate *and not slower*: it traded generation time for verification.
+Caveats and the exact wording that worked are in `GAIA_AGENT_V2_SCOPE.md` §4.6.
+
+### The stray characters were my harness, not GAIA
+
+I reported turns arriving with junk prepended (`life`, `t`, `e's`) and was
+building a case for an input bug. It reproduced 2 of 4 launches, then 0 of 3 —
+and the fragments are pieces of text the user was typing at the time. The
+launcher uses `Start-Process -WindowStyle Normal`, which steals focus, so the
+new window catches a few keystrokes meant for another app. A harness artifact.
+Recorded here because a phantom bug filed against the product costs more than
+the hour it took to disprove.
+
+---
+
 ## Bugs fixed this session
 
 Every one of these was found by testing behaviour, and every one produced a
@@ -122,16 +184,20 @@ Every one of these was found by testing behaviour, and every one produced a
 | `05f5973e` | "Your script has a bug" — it didn't. A quoted `timeout: "120"` blew up inside `subprocess.run`; the same tool also had an stdin hang and a locale decode crash |
 | `90704983` | A stray grey block hanging off the end of every line containing wrapped inline code |
 | `9e66519d` | No tokens/sec in the dev footer — the token count was being dropped by the event translator |
+| `58b6066a` | Thirty skill names as one comma-run that wrapped mid-word |
+| `96639846` | Typing three follow-ups during a turn kept the third and silently dropped two |
+| `396f41a7` | "2142.6 tok/s" on a local Gemma — a rate invented from a 0.1s window |
 
 ## Delegated and in flight
 
 | Task | Scope |
 |---|---|
-| `/model` switcher | Name the specific model in the header; switch between Claude and local models live; Lemonade version + health in dev mode |
-| `/setup` | First-boot initialization via `gaia init`; re-runnable; skips model downloads under `--use-claude` |
-| `/memory` | Read-only view of what the agent has stored |
-| Competitive analysis | GAIA vs Hermes / OpenCLAW for long-horizon and autonomous work |
-| Code-diff display | Claude-Code-style diffs on file edits |
+| `/model` switcher | **merged** — header names the model, live switching works, history survives it |
+| `/setup` | **merged** — first-boot init, re-runnable, skips model downloads under `--use-claude` |
+| `/memory` | Read-only view of what the agent has stored — **merged** |
+| Competitive analysis | GAIA vs Hermes / OpenCLAW — **delivered** |
+| Clipboard paste | Diagnosing why Ctrl+V does not paste — in flight |
+| Code-diff display | Claude-Code-style diffs on file edits — separate PR |
 
 ---
 
