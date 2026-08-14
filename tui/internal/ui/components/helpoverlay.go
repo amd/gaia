@@ -226,6 +226,8 @@ const chatHelpText = `  GAIA Chat
   Home / End    Top / bottom, if the composer is
                 empty — otherwise cursor keys
   Mouse wheel   Only in wheel mode — see Ctrl+T
+  Click / hover Palette rows and question options
+                only — never text (see below)
 
   Copy and paste
   ──────────────────
@@ -234,9 +236,13 @@ const chatHelpText = `  GAIA Chat
   Cmd+C, whatever your terminal uses.
   Ctrl+T      Mouse wheel scrolling. Selection is
               off while it is on; Esc ends it.
-  Ctrl+V      Paste · Ctrl+Y copy answer · Ctrl+B code
+  Ctrl+V      Paste — a clipboard screenshot pastes
+              as a file path · Ctrl+Y copy answer ·
+              Ctrl+B code
+  Drag a file/folder in — pastes as its path
 
   Commands    /help /hub /clear /bypass
               /setup /memory /model
   /           On an empty line, browse commands —
-              ↑/↓ to pick, Enter to run, Esc to close`
+              hover/click or ↑/↓ to pick, Enter or
+              click to run, Esc or click out to close`

@@ -204,8 +204,13 @@ func TestPaletteEscClosesWithoutQuittingOrCancelling(t *testing.T) {
 	if m.palette.open {
 		t.Error("Esc must close the palette")
 	}
-	if cmd != nil {
-		t.Error("Esc on an open palette must not produce a Cmd (no quit, no cancel request)")
+	// Not "no Cmd at all": the palette closing legitimately releases the
+	// mouse it captured for its own clicks (mousecapture.go), and THAT is a
+	// Cmd too. What must never happen is a quit or a cancel request — the
+	// cancelPending/streaming checks below already cover the latter
+	// directly, regardless of what the returned Cmd resolves to.
+	if quits(cmd) {
+		t.Error("Esc on an open palette must not quit")
 	}
 	if !m.streaming || m.cancelPending {
 		t.Error("Esc on an open palette must not touch a running turn")

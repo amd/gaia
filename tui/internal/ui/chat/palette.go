@@ -4,6 +4,7 @@
 package chat
 
 import (
+	"math"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -156,24 +157,7 @@ func (m ChatModel) handlePaletteKey(msg tea.KeyMsg) (ChatModel, tea.Cmd, bool) {
 		if idx < 0 || idx >= len(filtered) {
 			idx = 0
 		}
-		name := filtered[idx].Name
-		m.palette.open = false
-		m.input.Reset()
-		m.syncComposerHeight()
-		// Mirrors the plain Enter path in handleKey exactly: a selection
-		// made mid-turn queues behind it, same as manually typing the
-		// command and pressing Enter would — see that path's own comment
-		// for why (queued slash commands run once the turn they were typed
-		// during is actually over, not immediately). Picking a row here is
-		// a shortcut for typing its name, so it has to behave like that in
-		// every other way too, including never posting as a chat message —
-		// submit() is the same dispatcher a typed command goes through.
-		if m.streaming || m.setupChecking || m.setupRunning {
-			m.queued = append(m.queued, name)
-			m.updateViewport()
-			return m, nil, true
-		}
-		updated, cmd := m.submit(name)
+		updated, cmd := m.runPaletteRow(filtered[idx].Name)
 		next, ok := updated.(ChatModel)
 		if !ok {
 			return m, cmd, true
@@ -190,6 +174,71 @@ func (m ChatModel) handlePaletteKey(msg tea.KeyMsg) (ChatModel, tea.Cmd, bool) {
 	// let that key go on to do whatever it already does.
 	m.palette.open = false
 	return m, nil, false
+}
+
+// runPaletteRow dispatches a command the way picking it is defined to behave —
+// shared by Enter (handlePaletteKey) and a mouse click on the already-selected
+// row (handlePaletteMouse), so the two can never disagree about what "run
+// this row" means.
+func (m ChatModel) runPaletteRow(name string) (tea.Model, tea.Cmd) {
+	m.palette.open = false
+	m.input.Reset()
+	m.syncComposerHeight()
+	// Mirrors the plain Enter path in handleKey: a selection made mid-turn
+	// queues behind it rather than running immediately, and submit() is the
+	// same dispatcher a typed command goes through — this must never post as
+	// a chat message (see TestPaletteEnterRunsTheSelectedCommandNotTheTypedText).
+	if m.streaming || m.setupChecking || m.setupRunning {
+		m.queued = append(m.queued, name)
+		m.updateViewport()
+		return m, nil
+	}
+	return m.submit(name)
+}
+
+// handlePaletteMouse routes one mouse event while the palette is open.
+// Hovering (or clicking) a row moves the selection to it, same as ↑/↓;
+// clicking the row that is ALREADY selected runs it, same as Enter — so
+// hover-then-click (the common case once motion tracking is on) reads as one
+// click, and a click with no prior hover just selects. A click outside the
+// box closes the palette without touching the composer, same as Esc. The
+// wheel is left to the transcript underneath rather than swallowed, since
+// the palette itself never scrolls (see paletteBodyLines' doc comment).
+func (m ChatModel) handlePaletteMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	if isWheelEvent(msg) {
+		var cmd tea.Cmd
+		m.viewport, cmd = m.viewport.Update(msg)
+		return m.afterScroll(), cmd
+	}
+
+	items := m.paletteFiltered()
+	row, insideBox := paletteHitTest(m.input.Value(), items, m.palette.selected, m.width, m.height, msg.X, msg.Y)
+
+	switch msg.Action {
+	case tea.MouseActionMotion:
+		if row >= 0 {
+			m.palette.selected = row
+		}
+		return m, nil
+
+	case tea.MouseActionPress:
+		if msg.Button != tea.MouseButtonLeft {
+			return m, nil
+		}
+		if !insideBox {
+			m.palette.open = false
+			return m, nil
+		}
+		if row < 0 {
+			return m, nil
+		}
+		if row == m.palette.selected {
+			return m.runPaletteRow(items[row].Name)
+		}
+		m.palette.selected = row
+		return m, nil
+	}
+	return m, nil
 }
 
 var (
@@ -250,8 +299,21 @@ const (
 // at all. query is the raw composer text, echoed at the top of the box so
 // the reader can still see what they typed once it takes over the screen.
 func renderCommandPalette(background, query string, items []paletteCommand, selected, width, height int) string {
-	if len(items) == 0 {
+	box, _, ok := buildPaletteBox(query, items, selected, width, height)
+	if !ok {
 		return background
+	}
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
+}
+
+// buildPaletteBox lays out the palette's box (border, padding and all) — the
+// one place that decides its size and content, shared by renderCommandPalette
+// (which places it on screen) and paletteHitTest (which has to know exactly
+// where it landed to map a click back to a row). ok is false when there is no
+// room to draw at all, mirroring renderCommandPalette's background fallback.
+func buildPaletteBox(query string, items []paletteCommand, selected, width, height int) (box string, tight, ok bool) {
+	if len(items) == 0 {
+		return "", false, false
 	}
 
 	boxWidth := width - 4
@@ -260,7 +322,7 @@ func renderCommandPalette(background, query string, items []paletteCommand, sele
 	}
 	inner := boxWidth - 4
 	if inner < 1 || height < 3 {
-		return background
+		return "", false, false
 	}
 
 	style := paletteBoxStyle
@@ -268,6 +330,7 @@ func renderCommandPalette(background, query string, items []paletteCommand, sele
 	if height < paletteTightHeight {
 		style = style.Padding(0, 2)
 		chrome = paletteTightChromeRows
+		tight = true
 	}
 
 	lines := paletteBodyLines(query, items, selected, inner)
@@ -275,11 +338,59 @@ func renderCommandPalette(background, query string, items []paletteCommand, sele
 		// No scrolling here (unlike help): the list is 7 commands long at
 		// most, so a window too short to hold it is too short for a usable
 		// palette at all — leave the composer visible instead of clipping.
-		return background
+		return "", false, false
 	}
 
-	box := style.Width(boxWidth).Render(strings.Join(lines, "\n"))
-	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, box)
+	return style.Width(boxWidth).Render(strings.Join(lines, "\n")), tight, true
+}
+
+// paletteBodyPrefixRows is how many rendered lines (title, divider, echoed
+// query, blank) come before the first item row in buildPaletteBox's content —
+// see paletteBodyLines. paletteHitTest needs this to translate a rendered row
+// back into an item index.
+const paletteBodyPrefixRows = 4
+
+// centerOffset replicates lipgloss.Place's centering math (position.go's
+// placeHorizontal/placeVertical: split := round(gap*0.5), offset := gap -
+// split) for one axis, so a click's screen coordinate can be mapped back onto
+// the box lipgloss.Place drew without lipgloss exposing where it put it.
+func centerOffset(outer, inner int) int {
+	gap := outer - inner
+	if gap <= 0 {
+		return 0
+	}
+	split := int(math.Round(float64(gap) * 0.5))
+	return gap - split
+}
+
+// paletteHitTest maps an absolute screen (x, y) — the coordinates a
+// tea.MouseMsg carries, since the palette is placed on the full window canvas
+// — to the item row it landed on. insideBox is false for anything outside the
+// box entirely (the click-outside-closes case); row is -1 when insideBox is
+// true but the row is chrome (title, divider, blank) rather than an item.
+func paletteHitTest(query string, items []paletteCommand, selected, width, height, x, y int) (row int, insideBox bool) {
+	box, tight, ok := buildPaletteBox(query, items, selected, width, height)
+	if !ok {
+		return -1, false
+	}
+
+	boxW, boxH := lipgloss.Width(box), lipgloss.Height(box)
+	left := centerOffset(width, boxW)
+	top := centerOffset(height, boxH)
+	if x < left || x >= left+boxW || y < top || y >= top+boxH {
+		return -1, false
+	}
+
+	topChrome := 2 // border + padding row
+	if tight {
+		topChrome = 1 // padding dropped on a short window — see buildPaletteBox
+	}
+	bodyLine := (y - top) - topChrome
+	item := bodyLine - paletteBodyPrefixRows
+	if item < 0 || item >= len(items) {
+		return -1, true
+	}
+	return item, true
 }
 
 // paletteBodyLines lays out the box's content: a title, a divider, the

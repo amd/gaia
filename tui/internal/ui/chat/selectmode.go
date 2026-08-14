@@ -36,10 +36,15 @@ const (
 
 var wheelBannerStyle = lipgloss.NewStyle().Foreground(theme.Dim)
 
-// renderSelectBanner draws the always-visible band while the app is holding the
-// mouse, or "" when the terminal has it (the default, which needs no notice).
+// renderSelectBanner draws the always-visible band while WHEEL MODE is on,
+// or "" otherwise. Keyed on mouseWheelOn rather than mouseCaptured on
+// purpose: an overlay (the palette, a question) also captures the mouse
+// while it is open, but that capture is scoped and silent — the overlay
+// itself is the visible signal there, and a banner claiming "the wheel
+// scrolls, drag-select is off" would be actively wrong while it is up (a
+// click there selects a row, not text).
 func (m ChatModel) renderSelectBanner() string {
-	if !m.mouseCaptured {
+	if !m.mouseWheelOn {
 		return ""
 	}
 	text := wheelBannerText
@@ -49,24 +54,31 @@ func (m ChatModel) renderSelectBanner() string {
 	return wheelBannerStyle.Width(m.width).Render(text)
 }
 
-// toggleSelectMode hands the mouse to the app or back to the terminal.
+// toggleSelectMode hands the mouse to the app or back to the terminal, for
+// wheel scrolling — Ctrl+T, or Esc while it is on (see handleKey).
+//
+// It only flips the user's OWN wish (mouseWheelOn); applyMouseCapture is what
+// actually reconciles that against whatever an overlay separately wants and
+// issues the real escape sequence, so toggling this while an overlay happens
+// to be open can never fight it — the mouse stays captured either way, and
+// releases only once neither reason still wants it.
 func (m ChatModel) toggleSelectMode() (tea.Model, tea.Cmd) {
-	m.mouseCaptured = !m.mouseCaptured
-	if m.mouseCaptured {
+	m.mouseWheelOn = !m.mouseWheelOn
+	cmd := m.applyMouseCapture()
+	if m.mouseWheelOn {
 		m.messages = append(m.messages, Message{
 			Role: RoleStatus,
 			Content: "Mouse wheel scrolling on — the wheel now scrolls the " +
 				"transcript, but you cannot drag to select text while it is. " +
 				"Ctrl+T or Esc gives selection back.",
 		})
-		m.updateViewport()
-		return m, tea.EnableMouseCellMotion
+	} else {
+		m.messages = append(m.messages, Message{
+			Role: RoleStatus,
+			Content: "Selection back — drag to select and use your terminal's own " +
+				"copy and paste. The arrow keys and PgUp/PgDn still scroll.",
+		})
 	}
-	m.messages = append(m.messages, Message{
-		Role: RoleStatus,
-		Content: "Selection back — drag to select and use your terminal's own " +
-			"copy and paste. The arrow keys and PgUp/PgDn still scroll.",
-	})
 	m.updateViewport()
-	return m, tea.DisableMouse
+	return m, cmd
 }

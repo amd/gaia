@@ -5,6 +5,8 @@ package chat
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -80,6 +82,12 @@ func TestNormalizePastedText(t *testing.T) {
 
 // Ctrl+V is wired to a real clipboard read, not left to the textarea's own
 // binding, whose failures land on a field ChatModel never reads.
+//
+// This reads the machine's ACTUAL clipboard (see pasteFromClipboardOrImage),
+// so either message type is a pass: an image happening to be on the
+// clipboard when this runs (a screenshot left over from testing Ctrl+V
+// itself, say) is Ctrl+V correctly doing its job, not a failure — the
+// image-vs-text tests below cover each path's own content deterministically.
 func TestCtrlVReadsTheClipboard(t *testing.T) {
 	m := newTestChat(t)
 	m.streaming = false
@@ -88,7 +96,9 @@ func TestCtrlVReadsTheClipboard(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("Ctrl+V issued no command")
 	}
-	if _, ok := cmd().(pasteClipboardMsg); !ok {
+	switch cmd().(type) {
+	case pasteClipboardMsg, pasteImageMsg:
+	default:
 		t.Error("Ctrl+V did not read the clipboard")
 	}
 }
@@ -223,5 +233,131 @@ func TestEmptyClipboardPasteSaysSo(t *testing.T) {
 	last := after.messages[len(after.messages)-1]
 	if !strings.Contains(last.Content, "empty") {
 		t.Errorf("nothing told the user the clipboard was empty: %q", last.Content)
+	}
+}
+
+// --- pasting an IMAGE (a screenshot) -------------------------------------------
+
+// A successful image paste inserts the file's PATH into the composer — the
+// agent is handed something it can read as a file, not raw image bytes — and
+// says so, with the path, so the user can tell it grabbed the right thing.
+func TestSuccessfulImagePasteInsertsThePath(t *testing.T) {
+	m := newTestChat(t)
+	m.streaming = false
+
+	path := filepath.Join(t.TempDir(), "gaia-paste-test.png")
+	if err := os.WriteFile(path, []byte{1, 2, 3, 4}, 0o600); err != nil {
+		t.Fatalf("test setup: %v", err)
+	}
+
+	updated, _ := m.Update(pasteImageMsg{path: path})
+	after := updated.(ChatModel)
+
+	if after.input.Value() != path {
+		t.Errorf("composer = %q, want the pasted image's path %q", after.input.Value(), path)
+	}
+	if len(after.messages) == 0 {
+		t.Fatal("a successful image paste was silent")
+	}
+	last := after.messages[len(after.messages)-1]
+	if !strings.Contains(last.Content, path) {
+		t.Errorf("status line does not name the file: %q", last.Content)
+	}
+}
+
+// A path with a space (the common case: %TEMP% usually contains the Windows
+// profile directory name) must be quoted the same way Windows Terminal
+// already quotes a dropped file's path — see quotePathForComposer and
+// docs/guides/terminal-hub.mdx's drag-and-drop section.
+func TestImagePasteQuotesAPathWithASpace(t *testing.T) {
+	m := newTestChat(t)
+	m.streaming = false
+
+	sub := filepath.Join(t.TempDir(), "with space")
+	if err := os.MkdirAll(sub, 0o700); err != nil {
+		t.Fatalf("test setup: %v", err)
+	}
+	path := filepath.Join(sub, "gaia-paste-test.png")
+	if err := os.WriteFile(path, []byte{1, 2, 3, 4}, 0o600); err != nil {
+		t.Fatalf("test setup: %v", err)
+	}
+
+	updated, _ := m.Update(pasteImageMsg{path: path})
+	after := updated.(ChatModel)
+
+	want := `"` + path + `"`
+	if after.input.Value() != want {
+		t.Errorf("composer = %q, want the quoted path %q", after.input.Value(), want)
+	}
+}
+
+// A failed image read/decode must say so — silence reads as Ctrl+V doing
+// nothing, same as the existing text-paste failure contract.
+func TestFailedImagePasteSaysSo(t *testing.T) {
+	m := newTestChat(t)
+	m.streaming = false
+
+	updated, _ := m.Update(pasteImageMsg{err: errors.New("clipboard image format unsupported")})
+	after := updated.(ChatModel)
+
+	if after.input.Value() != "" {
+		t.Error("a failed image read should not have put anything in the composer")
+	}
+	if len(after.messages) == 0 {
+		t.Fatal("a failed image paste was silent")
+	}
+	last := after.messages[len(after.messages)-1]
+	if !strings.Contains(last.Content, "clipboard image format unsupported") {
+		t.Errorf("the failure's cause was lost: %q", last.Content)
+	}
+}
+
+// --- pure helpers: writeClipboardImageToTemp, formatByteSize, quotePathForComposer --
+
+func TestWriteClipboardImageToTempWritesARealFile(t *testing.T) {
+	png := []byte{0x89, 'P', 'N', 'G', 1, 2, 3, 4}
+	path, err := writeClipboardImageToTemp(png)
+	if err != nil {
+		t.Fatalf("writeClipboardImageToTemp: %v", err)
+	}
+	defer os.Remove(path)
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("could not read back %s: %v", path, err)
+	}
+	if string(got) != string(png) {
+		t.Errorf("file contents = %v, want %v", got, png)
+	}
+	if !strings.HasSuffix(path, ".png") {
+		t.Errorf("temp path %q does not look like a .png file", path)
+	}
+}
+
+func TestQuotePathForComposer(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{`C:\Users\kalin\AppData\Local\Temp\gaia-paste-1.png`, `C:\Users\kalin\AppData\Local\Temp\gaia-paste-1.png`},
+		{`C:\Users\John Doe\AppData\Local\Temp\gaia-paste-1.png`, `"C:\Users\John Doe\AppData\Local\Temp\gaia-paste-1.png"`},
+	}
+	for _, c := range cases {
+		if got := quotePathForComposer(c.in); got != c.want {
+			t.Errorf("quotePathForComposer(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestFormatByteSize(t *testing.T) {
+	cases := []struct {
+		n    int
+		want string
+	}{
+		{500, "500 B"},
+		{2048, "2.0 KB"},
+		{5 * 1024 * 1024, "5.0 MB"},
+	}
+	for _, c := range cases {
+		if got := formatByteSize(c.n); got != c.want {
+			t.Errorf("formatByteSize(%d) = %q, want %q", c.n, got, c.want)
+		}
 	}
 }

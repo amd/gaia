@@ -174,6 +174,25 @@ func (m *QuestionModel) syncFocus() {
 	m.input.Blur()
 }
 
+// Cursor is the currently highlighted row — an option index, or
+// len(options) for the free-text row.
+func (m QuestionModel) Cursor() int { return m.cursor }
+
+// WithCursor moves the highlighted row to n (an option index, or
+// len(options) for free text). A n outside that range is a no-op, so a
+// stale mouse coordinate (SetWidth changed the row count under it, say)
+// cannot land the cursor somewhere Update's own key handling could never
+// put it. This is the mouse's entry point to the same cursor the keyboard
+// path (Update) drives — see handleQuestionMouse in the chat package.
+func (m QuestionModel) WithCursor(n int) QuestionModel {
+	if n < 0 || n >= m.rows() {
+		return m
+	}
+	m.cursor = n
+	m.syncFocus()
+	return m
+}
+
 func (m QuestionModel) commit() (QuestionModel, tea.Cmd) {
 	value := ""
 	if m.onFreeText() {
@@ -207,24 +226,30 @@ func (m QuestionModel) AnswerLabel(value string) string {
 	return value
 }
 
-// View renders the inline question panel.
-func (m QuestionModel) View() string {
-	// Wrapping is done here and ONLY here. Handing the result to a
-	// lipgloss.Width() style as well re-wraps the already-wrapped lines and
-	// shears the panel's right border by a column.
-	inner := m.width - 4
-	if inner < 16 {
-		inner = 16
+// questionLine is one rendered line of the panel's body (everything inside
+// the border), paired with which selectable row it belongs to — an option
+// index, len(options) for the free-text row, or -1 for chrome (the title, a
+// wrapped description continuation, the hint) that a click should not select.
+type questionLine struct {
+	text string
+	row  int
+}
+
+// layout builds the panel's body as View sees it, one questionLine per
+// rendered row. The single source both View (which only needs .text) and
+// RowAt (which only needs .row) draw from, so a click can never disagree with
+// what is actually on screen — a hand-maintained second copy of this
+// bookkeeping is exactly how that kind of drift happens.
+func (m QuestionModel) layout(inner int) []questionLine {
+	var lines []questionLine
+
+	// The "? " marker occupies two columns on the first line, so the text
+	// wraps two columns narrower and continuation lines hang under it.
+	for _, l := range strings.Split(hang(WrapText(m.question, inner-2), "? ", "  "), "\n") {
+		lines = append(lines, questionLine{questionTitleStyle.Render(l), -1})
 	}
 
-	var b strings.Builder
-	// The "? " marker occupies two columns on the first line, so the text wraps
-	// two columns narrower and continuation lines hang under it.
-	b.WriteString(questionTitleStyle.Render(
-		hang(WrapText(m.question, inner-2), "? ", "  ")))
-
 	for i, opt := range m.options {
-		b.WriteString("\n")
 		marker := "( )"
 		cursor := "  "
 		label := questionOptionStyle.Render(opt.Label)
@@ -233,35 +258,79 @@ func (m QuestionModel) View() string {
 			cursor = "> "
 			label = questionSelectedStyle.Render(opt.Label)
 		}
-		b.WriteString(fmt.Sprintf("%s%s [%d] %s", cursor, marker, i+1, label))
+		lines = append(lines, questionLine{
+			fmt.Sprintf("%s%s [%d] %s", cursor, marker, i+1, label), i,
+		})
 		if opt.Description != "" {
-			b.WriteString("\n")
-			b.WriteString(questionDescStyle.Render(
-				WrapText("      "+opt.Description, inner)))
+			for _, l := range strings.Split(WrapText("      "+opt.Description, inner), "\n") {
+				lines = append(lines, questionLine{questionDescStyle.Render(l), i})
+			}
 		}
 	}
 
 	if m.allowFreeText {
-		b.WriteString("\n")
 		cursor := "  "
 		if m.onFreeText() {
 			cursor = "> "
 		}
-		if len(m.options) > 0 {
-			b.WriteString(cursor + questionDescStyle.Render("or type an answer:") + "\n  ")
-		} else {
-			b.WriteString(cursor)
+		row := len(m.options)
+		switch {
+		case len(m.options) > 0:
+			lines = append(lines, questionLine{cursor + questionDescStyle.Render("or type an answer:"), row})
+			lines = append(lines, questionLine{"  " + m.input.View(), row})
+		default:
+			lines = append(lines, questionLine{cursor + m.input.View(), row})
 		}
-		b.WriteString(m.input.View())
 	}
 
 	hint := "up/down or tab move · enter answer · esc cancel the turn"
 	if len(m.options) > 0 {
 		hint = "1-" + fmt.Sprint(len(m.options)) + " pick · " + hint
 	}
-	b.WriteString("\n" + questionHintStyle.Render(WrapText(hint, inner)))
+	for _, l := range strings.Split(WrapText(hint, inner), "\n") {
+		lines = append(lines, questionLine{questionHintStyle.Render(l), -1})
+	}
 
-	return questionPanelStyle.Width(m.width).Render(b.String())
+	return lines
+}
+
+func (m QuestionModel) innerWidth() int {
+	inner := m.width - 4
+	if inner < 16 {
+		inner = 16
+	}
+	return inner
+}
+
+// View renders the inline question panel.
+//
+// Wrapping is done in layout, and ONLY there. Handing an already-wrapped
+// multi-line string to a lipgloss.Width() style AGAIN re-wraps it and shears
+// the panel's right border by a column.
+func (m QuestionModel) View() string {
+	lines := m.layout(m.innerWidth())
+	parts := make([]string, len(lines))
+	for i, l := range lines {
+		parts[i] = l.text
+	}
+	return questionPanelStyle.Width(m.width).Render(strings.Join(parts, "\n"))
+}
+
+// RowAt maps row — a screen row measured from the TOP OF View()'s rendered
+// output (0 is the panel's own top border) — to the selectable row it
+// belongs to: an option index, len(options) for the free-text row, or -1 for
+// a border/chrome row a click should not act on.
+//
+// questionPanelStyle pads only horizontally (Padding(0, 1)), so exactly one
+// row of chrome — the top border — sits above the body layout returns.
+func (m QuestionModel) RowAt(row int) int {
+	const topChrome = 1
+	body := row - topChrome
+	lines := m.layout(m.innerWidth())
+	if body < 0 || body >= len(lines) {
+		return -1
+	}
+	return lines[body].row
 }
 
 // hang prefixes the first line of s with first and every later line with rest,

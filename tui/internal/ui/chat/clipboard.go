@@ -134,6 +134,93 @@ func pasteFromClipboard() tea.Cmd {
 	}
 }
 
+// pasteImageMsg carries the result of a Ctrl+V clipboard read that found an
+// IMAGE rather than text — a screenshot (Win+Shift+S, Cmd+Shift+4, a Linux
+// screenshot tool) on the clipboard, written out to a temp file so the agent
+// can be handed a path to it, the same way a dropped file already is.
+type pasteImageMsg struct {
+	path string
+	err  error
+}
+
+// pasteFromClipboardOrImage is Ctrl+V's real entry point: an image on the
+// clipboard wins over text — a screenshot tool puts nothing useful in the
+// text slot anyway, and a person who just pressed Win+Shift+S wants the
+// image, not whatever text was on the clipboard before that.
+//
+// readClipboardImagePNG (one implementation per OS — clipboardimage_*.go) is
+// the only OS-specific part; everything after it (encode-to-temp-file,
+// insert-the-path) is shared, so a platform that cannot read clipboard images
+// at all (clipboardimage_other.go) still gets a correct, if narrower, Ctrl+V:
+// ok=false falls straight through to the existing text path below.
+func pasteFromClipboardOrImage() tea.Cmd {
+	return func() tea.Msg {
+		png, ok, err := readClipboardImagePNG()
+		if ok {
+			if err != nil {
+				return pasteImageMsg{err: err}
+			}
+			path, werr := writeClipboardImageToTemp(png)
+			return pasteImageMsg{path: path, err: werr}
+		}
+		text, terr := clipboard.ReadAll()
+		return pasteClipboardMsg{text: text, err: terr}
+	}
+}
+
+// writeClipboardImageToTemp saves PNG bytes the clipboard held to a fresh
+// file under the OS temp directory, so it can be handed to the agent as a
+// path — the same shape a dropped file already arrives in. Kept separate
+// from readClipboardImagePNG (which is OS-specific and not exercised by a
+// unit test — there is no way to put a real image on the clipboard in CI) so
+// this half, the part actually worth testing, is a pure function of bytes in,
+// a file on disk out.
+func writeClipboardImageToTemp(png []byte) (string, error) {
+	f, err := os.CreateTemp("", "gaia-paste-*.png")
+	if err != nil {
+		return "", fmt.Errorf("could not create a temp file for the pasted image: %w", err)
+	}
+	defer f.Close()
+	if _, err := f.Write(png); err != nil {
+		return "", fmt.Errorf("could not write the pasted image to %s: %w", f.Name(), err)
+	}
+	return f.Name(), nil
+}
+
+// pasteImageHint is what the status line says once a pasted screenshot has
+// been written out — the path alone in the composer doesn't say WHY it's
+// there, or how big the file is, for a person who just wanted to check it
+// grabbed the right one.
+func pasteImageHint(path string, size int, err error) string {
+	if err != nil {
+		return fmt.Sprintf("could not paste the clipboard image: %v", err)
+	}
+	return fmt.Sprintf("pasted image saved to %s (%s)", path, formatByteSize(size))
+}
+
+func formatByteSize(n int) string {
+	if n < 1024 {
+		return fmt.Sprintf("%d B", n)
+	}
+	if n < 1024*1024 {
+		return fmt.Sprintf("%.1f KB", float64(n)/1024)
+	}
+	return fmt.Sprintf("%.1f MB", float64(n)/(1024*1024))
+}
+
+// quotePathForComposer wraps path in double quotes when it contains
+// whitespace, matching how Windows Terminal already quotes a dropped file's
+// path before it ever reaches the composer (see docs/guides/terminal-hub.mdx)
+// — a pasted screenshot's temp path must parse the same way a dropped one
+// does, and %TEMP% commonly contains a space (the Windows profile directory
+// name).
+func quotePathForComposer(path string) string {
+	if strings.ContainsAny(path, " \t") {
+		return `"` + path + `"`
+	}
+	return path
+}
+
 // pasteHint is what the status line says when Ctrl+V put nothing in the
 // composer — silence there would read as the key doing nothing at all.
 func pasteHint(err error) string {

@@ -177,6 +177,17 @@ type ChatModel struct {
 	// not to the composer.
 	question *components.QuestionModel
 
+	// questionViewLine/questionViewLines/questionViewWidth locate m.question's
+	// rendered block within the viewport's CONTENT (not the screen) — the
+	// content-line it starts on, how many lines it spans, and how wide it
+	// rendered. Recorded by updateViewport, the only place that knows those
+	// numbers, and read back by questionRowAt (questionmouse.go) to map an
+	// absolute mouse click through the viewport's scroll offset onto a row of
+	// the question. Meaningless whenever m.question is nil.
+	questionViewLine  int
+	questionViewLines int
+	questionViewWidth int
+
 	// confirmation is the pending needs_confirmation modal, if any. Non-nil
 	// means a destructive/external tool call is asking for approval — every
 	// key except Ctrl+C goes to it (including Esc, which means "deny" here,
@@ -203,10 +214,25 @@ type ChatModel struct {
 	// kept in sync by every model-state ping thereafter (handleCanonicalEvent).
 	claudeMode bool
 
-	// mouseCaptured is true while the APP holds the mouse for wheel scrolling.
-	// False by default, so the terminal owns drag-select and the platform's own
-	// copy/paste — see selectmode.go.
+	// mouseCaptured is true while the APP holds the mouse, for either of the
+	// two independent reasons documented on overlayOpen (mousecapture.go):
+	// the user turned on wheel scrolling, or an overlay is open and needs
+	// clicks. False by default, so the terminal owns drag-select and the
+	// platform's own copy/paste — see selectmode.go.
 	mouseCaptured bool
+	// mouseWheelOn is true only while the USER has wheel mode on (Ctrl+T) —
+	// independent of mouseCaptured, which an overlay can also set. This is
+	// what the banner and the Esc "give selection back first" behaviour key
+	// off, so an overlay opening or closing never touches it, and it is not
+	// silently turned off just because an overlay happened to be open when
+	// it was toggled on.
+	mouseWheelOn bool
+	// mouseCaptureAllMotion records which mouse-tracking mode is currently
+	// active (All-Motion for an open overlay's hover, Cell-Motion for plain
+	// wheel scrolling) so applyMouseCapture can tell "already captured, but
+	// in the wrong mode" from "no change needed" and re-issue the right
+	// escape sequence instead of assuming the mode never needs to switch.
+	mouseCaptureAllMotion bool
 
 	// help is this view's OWN help panel, used when nothing is wrapping it.
 	// `gaia run <agent>` puts this model straight in front of Bubble Tea, so a
@@ -506,16 +532,28 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	updated, cmd := m.update(msg)
 
 	next, ok := updated.(ChatModel)
-	if !ok || len(next.queued) == 0 || next.streaming ||
-		next.setupChecking || next.setupRunning {
+	if !ok {
 		return updated, cmd
+	}
+
+	// Reconciled once per Update, here rather than at every call site that
+	// can open or close an overlay (a keystroke, a canonical needs_input
+	// event, the turn settling and clearing m.question) — see
+	// mousecapture.go's doc comment on overlayOpen.
+	if capCmd := next.applyMouseCapture(); capCmd != nil {
+		cmd = tea.Batch(cmd, capCmd)
+	}
+
+	if len(next.queued) == 0 || next.streaming ||
+		next.setupChecking || next.setupRunning {
+		return next, cmd
 	}
 	// A question or confirmation still on screen owns the conversation; the
 	// queued message waits for the user to deal with it. (Both imply streaming
 	// today, so this is belt-and-braces against a future path that clears
 	// streaming while leaving a modal up.)
 	if next.question != nil || next.confirmation != nil {
-		return updated, cmd
+		return next, cmd
 	}
 
 	// Oldest first: the order they were typed is the order they were meant in.
@@ -746,6 +784,28 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.syncComposerHeight()
 		return m, nil
 
+	case pasteImageMsg:
+		if msg.err != nil {
+			m.messages = append(m.messages, Message{
+				Role:    RoleStatus,
+				Content: pasteImageHint("", 0, msg.err),
+			})
+			m.updateViewport()
+			return m, nil
+		}
+		size := 0
+		if info, statErr := os.Stat(msg.path); statErr == nil {
+			size = int(info.Size())
+		}
+		m.input.InsertString(quotePathForComposer(msg.path))
+		m.syncComposerHeight()
+		m.messages = append(m.messages, Message{
+			Role:    RoleStatus,
+			Content: pasteImageHint(msg.path, size, nil),
+		})
+		m.updateViewport()
+		return m, nil
+
 	case ToggleHelpMsg:
 		// Only ever seen when nothing wrapped this model: root consumes this
 		// message itself and never forwards it.
@@ -753,9 +813,19 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseMsg:
-		// The wheel scrolls the transcript. In an alt-screen app the terminal's
-		// own scrollback does not exist, so this and the arrow keys are the only
-		// way back to what already happened.
+		// An open overlay owns clicks and hover while it is up — see
+		// handlePaletteMouse/handleQuestionMouse, both of which still let the
+		// wheel through to the transcript underneath (neither overlay
+		// scrolls itself). Otherwise the wheel scrolls the transcript: in an
+		// alt-screen app the terminal's own scrollback does not exist, so
+		// this and the arrow keys are the only way back to what already
+		// happened.
+		if m.palette.open {
+			return m.handlePaletteMouse(msg)
+		}
+		if m.question != nil {
+			return m.handleQuestionMouse(msg)
+		}
 		var cmd tea.Cmd
 		m.viewport, cmd = m.viewport.Update(msg)
 		return m.afterScroll(), cmd
@@ -879,10 +949,15 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case tea.KeyEsc:
-		// Hand the mouse back first: while the app holds it, selection is dead,
-		// so "never mind" most likely means "let me select text again". Leaving
-		// a turn running is fine — Esc pressed again cancels it.
-		if m.mouseCaptured {
+		// Hand the mouse back first: while WHEEL MODE is on, selection is
+		// dead, so "never mind" most likely means "let me select text
+		// again". Leaving a turn running is fine — Esc pressed again cancels
+		// it. Keyed on mouseWheelOn, not mouseCaptured: an overlay can also
+		// hold the mouse (for its own clicks), and Esc there means cancel
+		// the question/turn (below) or close the palette (handled earlier,
+		// in the m.palette.open branch) — not silently let go of a capture
+		// the user never asked for.
+		if m.mouseWheelOn {
 			return m.toggleSelectMode()
 		}
 		if m.streaming && m.cancelFn != nil && !m.cancelPending {
@@ -977,8 +1052,9 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// bracketed paste above — most terminals bind Ctrl+V to their own paste
 		// action and this key never arrives at all. A terminal that passes it
 		// through untranslated (or an SSH client with no local paste binding)
-		// is exactly the case this covers.
-		return m, pasteFromClipboard()
+		// is exactly the case this covers. An IMAGE on the clipboard (a
+		// screenshot) wins over text — see pasteFromClipboardOrImage.
+		return m, pasteFromClipboardOrImage()
 
 	case tea.KeyPgUp:
 		m.viewport.HalfViewUp()
@@ -1675,7 +1751,16 @@ func (m *ChatModel) updateViewport() {
 	}
 
 	if m.question != nil {
-		sb.WriteString(m.question.View())
+		// Recorded before writing it: questionRowAt (questionmouse.go) needs
+		// exactly where this block starts within the content, and that
+		// depends on everything already written above it in THIS render —
+		// recomputing it independently would drift the moment a message
+		// above the question changed height.
+		m.questionViewLine = strings.Count(sb.String(), "\n")
+		qv := m.question.View()
+		m.questionViewLines = strings.Count(qv, "\n") + 1
+		m.questionViewWidth = lipgloss.Width(qv)
+		sb.WriteString(qv)
 		sb.WriteString("\n")
 	}
 
@@ -2208,6 +2293,24 @@ func (m ChatModel) renderQueuedRow() string {
 	return activityStyle.Render(prefix) +
 		statusMsgStyle.Render(truncateRunes(m.queued[0], budget)) +
 		activityStyle.Render(suffix)
+}
+
+// contentHeaderRows is how many screen rows sit above the viewport in
+// View()'s own layout: the header, either banner when it is showing, and the
+// divider — the same rows list View() builds, kept in one place so
+// questionRowAt (questionmouse.go) can map an absolute mouse Y down into the
+// viewport's content without duplicating that layout by hand and drifting
+// from it the day a row is added or removed there.
+func (m ChatModel) contentHeaderRows() int {
+	n := 1 // header
+	if m.renderBypassBanner() != "" {
+		n++
+	}
+	if m.renderSelectBanner() != "" {
+		n++
+	}
+	n++ // divider immediately above the viewport
+	return n
 }
 
 func (m ChatModel) View() string {
