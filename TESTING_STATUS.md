@@ -3,13 +3,141 @@
 Live log of validating the flagship agent through the Go TUI on branch
 `feat/gaia-flagship-agent-2804` (PR #2932). Updated continuously.
 
-**Last updated:** 2026-08-13 17:45
-**Backend:** Lemonade / Gemma-4-E4B-it-GGUF (GPU). `--use-claude` merged and built; blocked on `ANTHROPIC_API_KEY`
-**Harness:** `C:\Users\14255\Work\gaia-tui-test\` (launch-tui.ps1 + driver.py), single TUI on control port 8817
+**Last updated:** 2026-08-13 23:40
+**Backend:** Claude (`--use-claude`, claude-sonnet-5) — validating the harness on a
+fast backend before returning to Lemonade for local-inference bugs.
+**Harness:** `C:\Users\14255\Work\gaia-tui-test\` (launch-tui.ps1 + driver.py), one
+TUI at a time on control port 8817, launched `--dev --bypass-permissions`.
+
+Architectural findings and v2 proposals live in
+[`GAIA_AGENT_V2_SCOPE.md`](GAIA_AGENT_V2_SCOPE.md). This file is the test log.
 
 ---
 
-## Where it stands
+## A correction I owe: the Claude backend was never blocked
+
+I reported twice that `--use-claude` was blocked on a missing
+`ANTHROPIC_API_KEY`. It was not. The key is in the repo's `.env` — which is
+exactly where `ClaudeProvider` looks, because it calls `load_dotenv()` itself
+(`src/gaia/llm/providers/claude.py`). I checked the User and Machine environment
+scopes, found nothing, and stopped without checking the one place the code
+actually reads. A 1.6s round trip to `claude-sonnet-5` settled it the moment I
+looked properly.
+
+---
+
+## Session 2 — Claude backend
+
+### Capability ladder — all seven rungs pass
+
+| Rung | Result | Time |
+|---|---|---|
+| L1 arithmetic (`391`) | pass | 9.0s |
+| L2 store memory | pass | 7.5s |
+| L3 recall across turns (`Teal`) | pass | 4.5s |
+| L4 shell tool (`pwd`) | pass | 67.5s with the permission prompt, ~8s bypassed |
+| L5 load `github-triage` | pass | 12.0s |
+| L6 skill persists across turns | pass | 3.0s |
+| **L7 real `gh` triage** | **pass — exact match to `gh`** | **13.5s** |
+
+Claude runs roughly 2x faster per turn than Gemma-4-E4B on this box, which is
+what makes it the right backend for validating the harness: a failure is the
+harness's, not the model running out of patience.
+
+### Skill stress test — find, load, unload, execute
+
+All four work now. Two of them did not when the session started.
+
+| Check | Result |
+|---|---|
+| Discover a skill by need ("I need to work with a PDF") | pass — names `pdf`, states it is not loaded |
+| Load a skill | pass |
+| Load two at once | pass |
+| Unload one, keep the other | pass |
+| Report the capability as lost after unload | pass — "xlsx is unloaded, so I don't have that guidance active" |
+| List every available skill | **was broken: 2 of 30. Fixed.** |
+| Execute a skill end to end (build a PDF) | **was broken: three separate bugs. Fixed.** |
+
+**Vanilla Claude Code skills load unmodified.** I installed Anthropic's `pdf`,
+`xlsx`, `skill-creator` and `webapp-testing` from `anthropics/skills` into
+`~/.gaia/skills/`. Their frontmatter carries only `name`/`description`/`license`
+— no `metadata.gaia` block at all — and GAIA discovered and loaded all four.
+That is the "can it load any SKILL" requirement met against skills GAIA has
+never seen.
+
+PDF execution verified against ground truth rather than the agent's word:
+
+```
+bytes: 602  header: b'%PDF-1.4'
+contains text: True
+```
+
+### Memory stress test
+
+Memory is the differentiator, so it got its own ladder. It **survives a process
+restart**, which is the property that actually matters.
+
+| Check | Result |
+|---|---|
+| M1 store four facts across categories in one turn | pass — four tool calls |
+| M2 recall a specific fact | pass |
+| M3 recall a different fact | pass |
+| M4 correct a stored fact ("Beacon, not Halyard") | pass |
+| M5 recall returns the correction, not the original | pass — no contradiction leak |
+| **M6 recall after killing and respawning the agent** | **pass** |
+| M7 recall across a different category (allergy) | pass |
+| M8 stored style preference honoured in an unrelated answer | borderline pass — needs a tighter probe |
+| M9 introspection: "what do you remember about me?" | pass, and **surfaced three problems** |
+
+M9 turned out to be the most valuable test in the suite. What it exposed:
+
+1. **The agent voluntarily remembers its own transient failures as durable
+   notes.** It had stored "`execute_python_file` times out intermittently on
+   reportlab PDF scripts" — true for about ten minutes, false now. The earlier
+   fix stops the *auto-store* path persisting transient errors; it does nothing
+   about the model calling `remember` on one itself.
+2. **Secrets are stored in clear text and recited on request.** A passphrase
+   from an earlier RAG probe came back verbatim in the list.
+3. **An unexplained persona leaked in** — the answer opened "here's what I've
+   got on you, Jordan-style rundown". Nothing in this session mentions Jordan.
+
+All three are written up in `GAIA_AGENT_V2_SCOPE.md`.
+
+### One oddity, not yet reproduced
+
+A turn arrived as `▶ You: life Load the xlsx and github-triage skills.` — the
+word "life" prepended to what the driver sent, on a fresh launch with an empty
+composer. Recorded here so it is not lost; not filed until it reproduces.
+
+---
+
+## Bugs fixed this session
+
+Every one of these was found by testing behaviour, and every one produced a
+*confident wrong answer* rather than an error.
+
+| Commit | What the user saw |
+|---|---|
+| `f6245a5b` | "The tool only surfaces 2 of the 30 skills per call" — a hardcoded 2 KB cap gutted every structured tool result |
+| `05f5973e` | "Your script has a bug" — it didn't. A quoted `timeout: "120"` blew up inside `subprocess.run`; the same tool also had an stdin hang and a locale decode crash |
+| `90704983` | A stray grey block hanging off the end of every line containing wrapped inline code |
+| `9e66519d` | No tokens/sec in the dev footer — the token count was being dropped by the event translator |
+
+## Delegated and in flight
+
+| Task | Scope |
+|---|---|
+| `/model` switcher | Name the specific model in the header; switch between Claude and local models live; Lemonade version + health in dev mode |
+| `/setup` | First-boot initialization via `gaia init`; re-runnable; skips model downloads under `--use-claude` |
+| `/memory` | Read-only view of what the agent has stored |
+| Competitive analysis | GAIA vs Hermes / OpenCLAW for long-horizon and autonomous work |
+| Code-diff display | Claude-Code-style diffs on file edits |
+
+---
+
+## Session 1 — Lemonade backend (earlier)
+
+### Where it stood
 
 **GitHub triage works end to end.** The agent loads the skill and returns the
 real backlog, matching `gh` exactly. Getting there took fixing two agent bugs
