@@ -97,3 +97,34 @@ func TestNonDevStillShowsOnlyTheDuration(t *testing.T) {
 		t.Errorf("harness telemetry leaked outside --dev: %q", stats)
 	}
 }
+
+// Two real turns from a local Gemma-4-E4B session, one of each kind. The
+// absolute floor alone passed the second one and published a rate about
+// thirteen times the hardware's real speed.
+func TestRealLocalTurns(t *testing.T) {
+	t.Run("streamed — reported", func(t *testing.T) {
+		// 74.6s turn, first token at 43.8s: 41% of the turn spent generating.
+		rate, ok := tokensPerSecond(1366, 74600*time.Millisecond, 43800*time.Millisecond)
+		if !ok {
+			t.Fatal("a genuinely streamed turn was withheld")
+		}
+		if rate < 30 || rate > 60 {
+			t.Errorf("rate %.1f tok/s is not the ~44 this turn actually ran at", rate)
+		}
+	})
+
+	t.Run("single frame — withheld", func(t *testing.T) {
+		// 24.8s turn, first token at 23.6s: 5% of the turn. Nothing streamed.
+		if rate, ok := tokensPerSecond(700, 24800*time.Millisecond, 23600*time.Millisecond); ok {
+			t.Errorf("published %.1f tok/s from a 1.2s sliver of a 24.8s turn", rate)
+		}
+	})
+}
+
+// A short turn that really did stream keeps its rate: the share test must not
+// throw away fast answers, only artifacts.
+func TestAFastStreamedTurnKeepsItsRate(t *testing.T) {
+	if _, ok := tokensPerSecond(120, 4*time.Second, 500*time.Millisecond); !ok {
+		t.Error("a 4s turn that streamed for 3.5s was withheld")
+	}
+}

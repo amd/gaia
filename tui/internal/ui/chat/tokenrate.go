@@ -19,6 +19,14 @@ import "time"
 // number is roughly twenty times the hardware's real rate.
 const minGenerationWindow = time.Second
 
+// minGenerationShare is the other half of the test, and the one that actually
+// discriminates. A turn that spends 23.6s of its 24.8s before the first token
+// did not stream — the 1.2s left over clears the absolute floor above while
+// still being scheduling noise, and published "556.6 tok/s" for a model that
+// really runs at about 44. Streaming turns spend a large fraction of the turn
+// generating; single-frame turns spend almost none.
+const minGenerationShare = 0.2
+
 // tokensPerSecond reports the generation rate, and whether one was measurable.
 //
 // Returning ok=false rather than a number is the point: a rate computed from a
@@ -30,6 +38,9 @@ func tokensPerSecond(tokens int, duration, ttft time.Duration) (float64, bool) {
 	}
 	window := duration - ttft
 	if window < minGenerationWindow {
+		return 0, false
+	}
+	if duration > 0 && window.Seconds()/duration.Seconds() < minGenerationShare {
 		return 0, false
 	}
 	return float64(tokens) / window.Seconds(), true
