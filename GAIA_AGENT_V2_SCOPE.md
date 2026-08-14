@@ -469,6 +469,50 @@ it.
 
 ---
 
+### 5b. What testing on the local model changed about this analysis
+
+Re-running the whole suite on Gemma-4-E4B instead of Claude found four bugs the
+stronger model had hidden, and two of them sharpen recommendations above.
+
+1. **Memory poisoning is not just misleading, it corrupts output.** A procedural
+   memory learned in an earlier session — *"hand-write raw PDF syntax when
+   reportlab isn't available"* — was still stored after reportlab was installed.
+   The agent acted on it, skipped the library, and produced a 236-byte PDF no
+   reader can open, reporting success. §6.1 previously argued this from a wrong
+   *answer*; this is a wrong *artifact*. It moves memory-trust from a quality
+   concern to a correctness one.
+
+2. **Prompt guidance is model-dependent, and that is an architectural problem.**
+   The gaia-voice rules that suffice for Claude do not for Gemma: it needed
+   *"writing the script is not doing the work"* and *"call `list_skills` before
+   saying a skill is unavailable"* spelled out before it behaved. Every such rule
+   is always-on tokens — the skill has grown from ~900 to ~2,100 — and a 32K
+   local context cannot absorb an unbounded list of them. Two implications:
+   - Rules earn their place by evidence, and the ones added here each came from
+     an observed failure. That discipline has to hold or the always-on prompt
+     becomes the context budget.
+   - **This is the strongest practical argument for the self-critique state
+     (§4.6).** "Did I actually observe what I am about to claim?" catches the
+     whole class — file-not-created, skill-not-checked, artifact-not-verified —
+     with one mechanism instead of one rule per failure mode. On the local model
+     the class is large enough that rule-per-failure does not scale.
+
+3. **Skills that bundle files were unusable, and nothing said so.** `load_skill`
+   returned the name, tier, tools and token estimate — everything except where
+   the skill lived — so a skill's own relative script paths resolved nowhere.
+   Fixed (`86b763f6`), but it points at the same gap as §5.6: a skill is a
+   package with runtime needs, and GAIA had no model of that. Dependencies are
+   now partly addressed by shipping the document libraries (`7ffad5e4`); the
+   general answer is still skill-declared requirements.
+
+4. **The local model is ~10x slower per turn, and that changes design.** A
+   document task runs 200-265s against 25-45s on Claude. Anything that adds a
+   model round-trip — self-critique, goal derivation (§4.4), routing decisions
+   (§4.7) — costs proportionally more here. Design those to use a *small* model
+   or a non-model check where possible; a second full pass on every turn is not
+   affordable locally.
+
+
 ## 6. Memory findings from the stress test
 
 Memory passed every functional check, including recall after a process restart.
