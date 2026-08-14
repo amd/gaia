@@ -230,10 +230,15 @@ const chatHelpText = `  GAIA Chat
   Scroll        ↑ / ↓ line · PgUp/PgDn page
   Home / End    Top / bottom, if the composer is
                 empty — otherwise cursor keys
-  Mouse wheel   Anywhere in the transcript
+  Mouse wheel   Only in wheel mode — see Ctrl+T
 
-  Ctrl+T      Select with the mouse for your
-              terminal's copy/paste. Esc turns it off.
+  Copy and paste
+  ──────────────────
+  Drag to select and use your terminal's own
+  copy and paste — right-click, Ctrl+Shift+C,
+  Cmd+C, whatever your terminal uses.
+  Ctrl+T      Mouse wheel scrolling. Selection is
+              off while it is on; Esc ends it.
   Ctrl+V      Paste · Ctrl+Y copy answer · Ctrl+B code
 
   Commands    /help /hub /clear /bypass

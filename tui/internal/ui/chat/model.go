@@ -208,9 +208,10 @@ type ChatModel struct {
 	// kept in sync by every model-state ping thereafter (handleCanonicalEvent).
 	claudeMode bool
 
-	// selectMode is true while mouse reporting is off so the terminal owns
-	// click-drag selection (and with it copy and paste) — see selectmode.go.
-	selectMode bool
+	// mouseCaptured is true while the APP holds the mouse for wheel scrolling.
+	// False by default, so the terminal owns drag-select and the platform's own
+	// copy/paste — see selectmode.go.
+	mouseCaptured bool
 
 	// help is this view's OWN help panel, used when nothing is wrapping it.
 	// `gaia run <agent>` puts this model straight in front of Bubble Tea, so a
@@ -883,10 +884,10 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case tea.KeyEsc:
-		// Selection mode first: it is the only state where the wheel is dead, so
-		// "never mind" most likely means "give me scrolling back". Leaving a
-		// turn running is fine — Esc pressed again cancels it.
-		if m.selectMode {
+		// Hand the mouse back first: while the app holds it, selection is dead,
+		// so "never mind" most likely means "let me select text again". Leaving
+		// a turn running is fine — Esc pressed again cancels it.
+		if m.mouseCaptured {
 			return m.toggleSelectMode()
 		}
 		if m.streaming && m.cancelFn != nil && !m.cancelPending {

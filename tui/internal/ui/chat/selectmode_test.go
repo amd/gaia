@@ -10,15 +10,12 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-// Mouse reporting is what lets the wheel scroll the transcript, and it is also
-// what takes click-drag selection away from the terminal. Ctrl+T trades one for
-// the other so arbitrary text can be selected, copied and pasted with whatever
-// the user's own terminal already does — the only mechanism that behaves the
-// same on Windows Terminal, iTerm2 and a Linux terminal.
+// The terminal owns the mouse by default, so drag-select and the platform's own
+// copy/paste (Ctrl+Shift+C, right-click, Cmd+C) work with nothing to discover.
+// Capturing it buys wheel-scrolling and costs selection, so it is opt-in.
 
 func selectModel() ChatModel {
-	m := ChatModel{width: 100}
-	return m
+	return ChatModel{width: 100}
 }
 
 func pressCtrlT(m ChatModel) (ChatModel, tea.Cmd) {
@@ -26,59 +23,67 @@ func pressCtrlT(m ChatModel) (ChatModel, tea.Cmd) {
 	return next.(ChatModel), cmd
 }
 
-func TestCtrlTTurnsMouseReportingOff(t *testing.T) {
-	m, cmd := pressCtrlT(selectModel())
-
-	if !m.selectMode {
-		t.Fatal("Ctrl+T did not enter selection mode")
-	}
-	if cmd == nil {
-		t.Fatal("no command issued; mouse reporting is still on and the " +
-			"terminal still cannot select")
-	}
-	if got := cmd(); got == nil {
-		t.Fatal("the mouse command produced no message")
+// The regression this whole inversion exists for: "I still can't drag my mouse
+// pointer over terminal text and copy it."
+func TestTheTerminalOwnsTheMouseByDefault(t *testing.T) {
+	if selectModel().mouseCaptured {
+		t.Fatal("the app grabs the mouse on launch, so drag-select is broken " +
+			"before the user does anything")
 	}
 }
 
-func TestCtrlTAgainRestoresScrolling(t *testing.T) {
+func TestNoBannerWhenTheTerminalHasTheMouse(t *testing.T) {
+	if got := selectModel().renderSelectBanner(); got != "" {
+		t.Errorf("the default state is announcing itself: %q", got)
+	}
+}
+
+func TestCtrlTGivesTheAppTheMouseForWheelScrolling(t *testing.T) {
+	m, cmd := pressCtrlT(selectModel())
+
+	if !m.mouseCaptured {
+		t.Fatal("Ctrl+T did not enable wheel scrolling")
+	}
+	if cmd == nil || cmd() == nil {
+		t.Fatal("no mouse command issued, so the wheel still will not scroll")
+	}
+}
+
+func TestCtrlTAgainGivesSelectionBack(t *testing.T) {
 	on, _ := pressCtrlT(selectModel())
 	off, cmd := pressCtrlT(on)
 
-	if off.selectMode {
-		t.Error("a second Ctrl+T did not leave selection mode")
+	if off.mouseCaptured {
+		t.Error("a second Ctrl+T did not release the mouse")
 	}
 	if cmd == nil {
-		t.Fatal("leaving selection mode issued no command, so the wheel stays dead")
+		t.Fatal("releasing the mouse issued no command, so selection stays broken")
 	}
 }
 
-func TestEscLeavesSelectionModeBeforeAnythingElse(t *testing.T) {
+func TestEscReleasesTheMouseBeforeAnythingElse(t *testing.T) {
 	on, _ := pressCtrlT(selectModel())
 	next, _ := on.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
 
-	if next.(ChatModel).selectMode {
-		t.Error("Esc did not leave selection mode")
+	if next.(ChatModel).mouseCaptured {
+		t.Error("Esc did not give selection back")
 	}
 }
 
-// Esc is the documented way out of selection mode, so it must not also quit —
-// the same guarantee idleesc_test.go makes for an idle session.
-func TestEscInSelectionModeDoesNotQuit(t *testing.T) {
+func TestEscWhileCapturedDoesNotQuit(t *testing.T) {
 	on, _ := pressCtrlT(selectModel())
 	_, cmd := on.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
-
 	if cmd == nil {
 		return
 	}
 	if msg := cmd(); msg != nil {
 		if _, quit := msg.(tea.QuitMsg); quit {
-			t.Fatal("Esc in selection mode quit the session")
+			t.Fatal("Esc quit the session instead of releasing the mouse")
 		}
 	}
 }
 
-func TestEscStillCancelsATurnWhenNotSelecting(t *testing.T) {
+func TestEscStillCancelsATurnWhenTheTerminalHasTheMouse(t *testing.T) {
 	m := selectModel()
 	m.streaming = true
 	called := false
@@ -92,21 +97,17 @@ func TestEscStillCancelsATurnWhenNotSelecting(t *testing.T) {
 	}
 }
 
-// The wheel dying is the whole cost of this mode, so the UI has to say it is on
-// somewhere that cannot be scrolled away — the rule the bypass banner follows.
+// Losing selection is the whole cost of capture, so the UI has to say it is on
+// somewhere that cannot be scrolled away.
 func TestTheBannerStatesTheModeAndItsCost(t *testing.T) {
-	if got := selectModel().renderSelectBanner(); got != "" {
-		t.Errorf("a banner appeared with selection mode off: %q", got)
-	}
-
 	on, _ := pressCtrlT(selectModel())
-	banner := on.renderSelectBanner()
+	banner := strings.ToLower(on.renderSelectBanner())
+
 	if banner == "" {
-		t.Fatal("selection mode is on with no banner; the dead wheel reads as a freeze")
+		t.Fatal("the mouse is captured with no banner; broken selection reads as a bug")
 	}
-	lower := strings.ToLower(banner)
 	for _, must := range []string{"select", "esc"} {
-		if !strings.Contains(lower, must) {
+		if !strings.Contains(banner, must) {
 			t.Errorf("banner never mentions %q: %q", must, banner)
 		}
 	}

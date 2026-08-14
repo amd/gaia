@@ -11,65 +11,62 @@ import (
 	"github.com/amd/gaia/tui/internal/ui/theme"
 )
 
-// Selection mode hands the mouse back to the terminal.
+// Who owns the mouse.
 //
-// The transcript needs mouse reporting so the wheel can scroll it — in an
-// alt-screen app the terminal's own scrollback does not exist. The same
-// reporting takes click-drag away from the terminal, which is what people use to
-// select text. Shift+drag overrides it in some terminals and not others, so it is
-// not an answer we can promise on every OS.
+// By DEFAULT the terminal does, so drag-select and the platform's own copy and
+// paste work exactly as they do everywhere else — no mode to discover, no
+// shortcut to learn, on Windows Terminal, iTerm2, GNOME Terminal and the rest.
 //
-// Ctrl+Y and Ctrl+B copy the whole answer or the last code block, which covers
-// the common cases but not "that one path in the middle of a paragraph". So this
-// turns mouse reporting off outright: selection, copy AND paste all become the
-// terminal's own, identically on Windows Terminal, iTerm2, kitty and the rest.
+// Capturing it (mode 1002) buys one thing: the wheel scrolling the transcript,
+// which an alt-screen app cannot get from the terminal's scrollback because it
+// has none. It costs selection entirely. That trade used to be made for every
+// user on every launch, and the report it produced was "I still can't drag my
+// mouse pointer over terminal text and copy it".
 //
-// The trade is real and immediate — the wheel stops scrolling — so it is stated
-// in a band that cannot be scrolled away, the same rule the bypass banner
-// follows. A mode that silently breaks scrolling reads as a freeze.
+// So capture is opt-in, via Ctrl+T. While it is on, selection is broken, and
+// that is stated in a band that cannot be scrolled away — the rule the bypass
+// banner follows. A mode that silently breaks selection reads as a bug.
 const (
-	selectBannerText = "SELECTION MODE — drag to select, your terminal's own " +
-		"copy and paste. Ctrl+T or Esc to scroll again."
+	wheelBannerText = "MOUSE WHEEL MODE — the wheel scrolls, but drag-select is " +
+		"off. Ctrl+T or Esc to select text again."
 	// For a terminal too narrow for the sentence. Still names the mode and the
 	// thing the user will notice is missing.
-	selectBannerShort = "SELECTION MODE — wheel off"
+	wheelBannerShort = "WHEEL MODE — selection off"
 )
 
-var selectBannerStyle = lipgloss.NewStyle().
-	Bold(true).
-	Foreground(theme.OnFill).
-	Background(theme.AccentFillBG)
+var wheelBannerStyle = lipgloss.NewStyle().Foreground(theme.Dim)
 
-// renderSelectBanner draws the always-visible band, or "" when the mode is off.
+// renderSelectBanner draws the always-visible band while the app is holding the
+// mouse, or "" when the terminal has it (the default, which needs no notice).
 func (m ChatModel) renderSelectBanner() string {
-	if !m.selectMode {
+	if !m.mouseCaptured {
 		return ""
 	}
-	text := selectBannerText
+	text := wheelBannerText
 	if lipgloss.Width(text) > m.width {
-		text = selectBannerShort
+		text = wheelBannerShort
 	}
-	return selectBannerStyle.Width(m.width).Render(text)
+	return wheelBannerStyle.Width(m.width).Render(text)
 }
 
-// toggleSelectMode turns mouse reporting off (or back on) and says so.
+// toggleSelectMode hands the mouse to the app or back to the terminal.
 func (m ChatModel) toggleSelectMode() (tea.Model, tea.Cmd) {
-	m.selectMode = !m.selectMode
-	if m.selectMode {
+	m.mouseCaptured = !m.mouseCaptured
+	if m.mouseCaptured {
 		m.messages = append(m.messages, Message{
 			Role: RoleStatus,
-			Content: "Selection mode on — drag to select and use your terminal's " +
-				"own copy and paste. The mouse wheel will not scroll until you " +
-				"turn it off with Ctrl+T or Esc; the arrow keys and PgUp/PgDn " +
-				"still work.",
+			Content: "Mouse wheel scrolling on — the wheel now scrolls the " +
+				"transcript, but you cannot drag to select text while it is. " +
+				"Ctrl+T or Esc gives selection back.",
 		})
 		m.updateViewport()
-		return m, tea.DisableMouse
+		return m, tea.EnableMouseCellMotion
 	}
 	m.messages = append(m.messages, Message{
-		Role:    RoleStatus,
-		Content: "Selection mode off — the mouse wheel scrolls the transcript again.",
+		Role: RoleStatus,
+		Content: "Selection back — drag to select and use your terminal's own " +
+			"copy and paste. The arrow keys and PgUp/PgDn still scroll.",
 	})
 	m.updateViewport()
-	return m, tea.EnableMouseCellMotion
+	return m, tea.DisableMouse
 }
