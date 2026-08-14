@@ -230,6 +230,15 @@ class ProceduralMemoryMixin:
             return []
         index = getattr(self, "_proc_faiss_index", None)
         if index is None or index.ntotal == 0:
+            # Distinct from a below-tau miss: there is nothing to even rank.
+            # Expected for a new user, but also the first thing to check when
+            # "recall never fires" is reported — it tells you immediately
+            # whether synthesis ever ran at all.
+            logger.info(
+                "[MemoryMixin] procedure recall: goal=%r — no candidates "
+                "(procedures index is empty)",
+                goal[:80],
+            )
             return []
 
         try:
@@ -244,6 +253,15 @@ class ProceduralMemoryMixin:
 
         matches = self._proc_faiss_search(query_vec, top_k)
         if not matches:
+            # Distinct from a below-tau miss (below): the index had nothing to
+            # even rank. Without this the "procedures exist but never recall"
+            # class of bug (#6.3) is invisible short of reading the DB by hand.
+            logger.info(
+                "[MemoryMixin] procedure recall: goal=%r — no candidates from "
+                "%d indexed procedure(s)",
+                goal[:80],
+                index.ntotal,
+            )
             return []
 
         tau = (
@@ -276,6 +294,30 @@ class ProceduralMemoryMixin:
                 )
             )
             recalled_ids.append(procedure_id)
+
+        # Log the outcome either way — the best score vs. tau is exactly what
+        # is needed to tell "never even close" from "just short", the question
+        # that was previously only answerable by reading the DB directly.
+        best_score = matches[0][1]
+        if skills:
+            logger.info(
+                "[MemoryMixin] procedure recall: goal=%r matched %d "
+                "procedure(s) (best score=%.3f >= tau=%.3f): %s",
+                goal[:80],
+                len(skills),
+                best_score,
+                tau,
+                [s.name for s in skills],
+            )
+        else:
+            logger.info(
+                "[MemoryMixin] procedure recall: goal=%r — no match cleared "
+                "tau (best score=%.3f < tau=%.3f among %d candidate(s))",
+                goal[:80],
+                best_score,
+                tau,
+                len(matches),
+            )
 
         # Stamp last_used_at so `gaia memory status` can report reuse. Telemetry
         # only — a write hiccup must not crash the turn or drop the recall.
