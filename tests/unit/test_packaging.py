@@ -244,15 +244,35 @@ def _parse_extras_require_block():
 
 
 class TestTalkExtra:
-    """The talk extra must carry the realtime transport dependencies (#382)."""
+    """#382 stages dependencies for the Realtime transport tracked in #372."""
 
     def test_realtime_dependencies_are_declared(self):
         setup_source = SETUP_PY.read_text(encoding="utf-8")
         talk_match = re.search(r'"talk"\s*:\s*\[(.*?)\n\s*\],', setup_source, re.DOTALL)
+        base_match = re.search(
+            r"install_requires\s*=\s*\[(.*?)\]", setup_source, re.DOTALL
+        )
 
         assert talk_match, 'Could not find "talk" extra in setup.py'
-        assert '"websockets"' in talk_match.group(1)
-        assert '"openai>=1.58.0"' in setup_source
+        talk_specs = re.findall(r'"([^"]+)"', talk_match.group(1))
+        talk_names = {
+            re.split(r"[<>=!~; ]", spec, maxsplit=1)[0].strip().lower()
+            for spec in talk_specs
+        }
+        assert "websockets" in talk_names
+
+        assert base_match, "Could not find install_requires=[] in setup.py"
+        base_specs = re.findall(r'"([^"]+)"', base_match.group(1))
+        openai_spec = next(
+            (spec for spec in base_specs if spec.lower().startswith("openai>=")), None
+        )
+        assert openai_spec, "base install_requires must pin an openai floor"
+
+        floor_match = re.match(r"openai>=([\d.]+)", openai_spec, re.IGNORECASE)
+        assert floor_match, f"Could not parse openai floor from {openai_spec!r}"
+        floor = tuple(int(part) for part in floor_match.group(1).split("."))
+        floor += (0,) * (3 - len(floor))
+        assert floor >= (1, 58, 0)
 
 
 class TestAgentWheelExtras:

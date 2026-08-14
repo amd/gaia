@@ -132,6 +132,8 @@ setup(
         ],
     },
     install_requires=[
+        # Staged by #382 for the Lemonade Realtime transcription work in #372.
+        # OpenAI 1.58.0 is the first release with Realtime API support.
         "openai>=1.58.0",
         "pydantic>=2.9.2",
         "transformers",
@@ -293,6 +295,8 @@ setup(
             "soundfile",
             "psutil",
             "pip",  # Required: spacy model download needs pip in venv (uv omits it)
+            # WebSocket transport for the Lemonade Realtime transcription work
+            # tracked in #372; #382 stages the packaging dependency first.
             "websockets",
         ],
         "youtube": [
