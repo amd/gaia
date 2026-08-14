@@ -42,7 +42,7 @@ import sys
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Dict, List, Optional
 from uuid import uuid4
 
 import numpy as np
@@ -2245,15 +2245,84 @@ class MemoryMixin(ProceduralMemoryMixin):
                 # Auto-store novel errors as knowledge
                 if is_error and error_msg:
                     self._auto_store_error(tool_name, error_msg)
+                elif not is_error:
+                    # It worked. Retire whatever this tool was once blamed for,
+                    # so a fixed bug stops being replayed into every prompt.
+                    self._forget_errors_for_tool(tool_name)
         except Exception as e:
             logger.debug("[MemoryMixin] tool logging failed: %s", e)
 
         return result
 
+    #: Substrings marking an error that describes a MOMENT, not a durable rule.
+    #:
+    #: Stored errors are replayed into every later system prompt under "Known
+    #: errors to avoid", so persisting one of these teaches the model that a
+    #: working tool is broken — permanently, and long after the cause is gone.
+    #: Observed: a `run_shell_command` hang (since fixed) stayed in the prompt
+    #: afterwards, and the agent kept telling users that shell commands and the
+    #: network were unavailable while running them successfully.
+    #:
+    #: A durable constraint is still stored. "Command 'foo' is not in the
+    #: allowed list" is a rule about this agent and worth remembering; "timed
+    #: out" is weather.
+    _TRANSIENT_ERROR_MARKERS: ClassVar[tuple] = (
+        "did not return within",
+        "timed out",
+        "timeout",
+        "was abandoned",
+        "connection refused",
+        "connection reset",
+        "connection aborted",
+        "max retries exceeded",
+        "temporarily unavailable",
+        "service unavailable",
+        "rate limit",
+        "cancelled",
+        "canceled",
+    )
+
+    @classmethod
+    def _is_transient_error(cls, error_msg: str) -> bool:
+        """True when *error_msg* describes a passing condition, not a rule."""
+        lowered = error_msg.lower()
+        return any(marker in lowered for marker in cls._TRANSIENT_ERROR_MARKERS)
+
+    def _forget_errors_for_tool(self, tool_name: str) -> None:
+        """Drop stored errors for *tool_name* once it has worked again.
+
+        The self-healing half. Without it a stored error is permanent doctrine:
+        nothing expires it, nothing lowers its confidence, and the model is told
+        to avoid the tool forever — including after the bug is fixed. A tool that
+        just returned successfully is, by direct evidence, not broken.
+        """
+        try:
+            prefix = f"{tool_name}: "
+            for entry in self._memory_store.get_by_category(
+                "error", context=self._memory_context, limit=50
+            ):
+                if str(entry.get("content", "")).startswith(prefix):
+                    self._memory_store.delete(entry["id"])
+                    logger.debug(
+                        "[MemoryMixin] dropped a stale error for '%s' — it worked",
+                        tool_name,
+                    )
+        except Exception as exc:  # never let bookkeeping break a good call
+            logger.debug(
+                "[MemoryMixin] could not clear errors for %s: %s", tool_name, exc
+            )
+
     def _auto_store_error(self, tool_name: str, error_msg: str) -> None:
         """Store a novel tool error as knowledge for future avoidance."""
         try:
             if not error_msg or not error_msg.strip():
+                return
+            if self._is_transient_error(error_msg):
+                logger.debug(
+                    "[MemoryMixin] not persisting a transient error for '%s': %s",
+                    tool_name,
+                    error_msg[:80],
+                )
                 return
             error_content = f"{tool_name}: {error_msg}"
             kid = self._memory_store.store(
