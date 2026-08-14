@@ -2669,6 +2669,49 @@ Examples:
         "but warned loudly.",
     )
 
+    # Replay real Claude Code sessions against the live agent: gaia eval sessions
+    sessions_eval_parser = eval_subparsers.add_parser(
+        "sessions",
+        help="Score the agent against real Claude Code sessions, via a live TUI",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Build a 10-case dataset and replay it through a running TUI
+  gaia eval sessions --control ~/.gaia/tui/control.json --limit 10
+
+  # Dataset only — no agent, no judge
+  gaia eval sessions --dataset-only --out eval/results/sessions
+
+A TUI must already be running with --control-port; this drives THAT session so
+the run is visible on screen. Judging needs ANTHROPIC_API_KEY (the repo .env is
+read automatically).
+""",
+    )
+    sessions_eval_parser.add_argument(
+        "--control",
+        default=None,
+        help="Path to the running TUI's control.json (default: "
+        "~/.gaia/tui/control.json, or $GAIA_TUI_HOME/control.json)",
+    )
+    sessions_eval_parser.add_argument(
+        "--limit", type=int, default=10, help="Number of cases (default: 10)"
+    )
+    sessions_eval_parser.add_argument(
+        "--project",
+        default="",
+        help="Only sessions from one project directory under ~/.claude/projects",
+    )
+    sessions_eval_parser.add_argument(
+        "--out",
+        default=None,
+        help="Output directory (default: eval/results/sessions-<timestamp>)",
+    )
+    sessions_eval_parser.add_argument(
+        "--dataset-only",
+        action="store_true",
+        help="Build the dataset and stop — no agent run, no judge",
+    )
+
     # Add new subparser for generating summary reports from evaluation directories
     report_parser = subparsers.add_parser(
         "report",
@@ -4689,6 +4732,66 @@ Let me know your answer!
                     encoding="utf-8",
                 )
                 print(f"[BASELINE] Saved baseline → {baseline_path}")
+            return
+
+        # Replay real Claude Code sessions: gaia eval sessions
+        if getattr(args, "eval_command", None) == "sessions":
+            import os
+            import time as _time
+            from pathlib import Path as _Path
+
+            from gaia.eval.session_dataset import build_dataset
+            from gaia.eval.session_eval import TUIDriver, run, save, scorecard
+
+            out_dir = _Path(
+                args.out or f"eval/results/sessions-{_time.strftime('%Y%m%d-%H%M%S')}"
+            )
+            dataset = build_dataset(project=args.project, limit=args.limit)
+            print(
+                f"[DATASET] {dataset['sessions_scanned']} session(s), "
+                f"{dataset['turns_extracted']} turn(s) -> {len(dataset['cases'])} case(s)"
+            )
+            if args.dataset_only:
+                out_dir.mkdir(parents=True, exist_ok=True)
+                path = out_dir / "dataset.json"
+                path.write_text(json.dumps(dataset, indent=2), encoding="utf-8")
+                print(f"[OUTPUT] {path.resolve()}")
+                return
+
+            control = args.control or os.path.join(
+                os.environ.get("GAIA_TUI_HOME")
+                or os.path.join(os.path.expanduser("~"), ".gaia", "tui"),
+                "control.json",
+            )
+            if not _Path(control).is_file():
+                raise FileNotFoundError(
+                    f"No running TUI found at {control}. Start one with "
+                    "`gaia-drive run gaia --control-port 8817`, or pass "
+                    "--control <path to its control.json>."
+                )
+
+            from gaia.eval.claude import ClaudeClient
+
+            driver = TUIDriver(_Path(control))
+            client = ClaudeClient()
+
+            def _progress(index, total, result):
+                mark = "OK " if result.passed else ("ERR" if result.error else "LOW")
+                print(
+                    f"  [{index}/{total}] {mark} {result.id} "
+                    f"score={result.score} ({result.elapsed_s}s) {result.verdict}"
+                )
+
+            print(f"[RUN] driving the TUI at {control}")
+            results = run(dataset, driver, client, on_progress=_progress)
+            card = scorecard(results)
+            report_path = save(out_dir, dataset, results, card, "live TUI")
+            print()
+            print(
+                f"[SCORE] mean {card['mean_score']}/5 · pass rate "
+                f"{card['pass_rate']}% · {card['errors']} error(s)"
+            )
+            print(f"[OUTPUT] {report_path.resolve()}")
             return
 
         # Email-triage throughput benchmark: gaia eval benchmark (#1233)
