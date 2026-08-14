@@ -135,10 +135,17 @@ import { fetchAll, startSidecar, shutdown } from "@amd-gaia/gaia";
 const { sidecar } = await fetchAll();               // both binaries, SHA-256 verified
 const proc = await startSidecar({ binaryPath: sidecar.binaryPath });
 
+const sessionId = randomUUID(); // reuse across the whole conversation, see below
+
 const res = await fetch(`${proc.baseUrl}/v1/gaia/query`, {
   method: "POST",
   headers: { "content-type": "application/json" },
-  body: JSON.stringify({ query: "summarize my notes", run_id: randomUUID(), context: [] }),
+  body: JSON.stringify({
+    query: "summarize my notes",
+    run_id: randomUUID(),
+    session_id: sessionId,
+    context: [],
+  }),
 });
 
 await shutdown(proc);
@@ -146,6 +153,13 @@ await shutdown(proc);
 
 `/v1/gaia/query` streams Server-Sent Events terminated by exactly one `final` or
 `error`. `fetchAll()` also returns the TUI's path if you would rather launch that.
+
+**Reuse the same `session_id` for every turn in a conversation.** It is what
+lets a document you had it index, or a skill you had it load, survive to the
+next question — drop it (or mint a new one per call) and the agent still
+answers, but it forgets everything from the previous turn. See
+[`SPEC.md` §5.2](./SPEC.md#52-session_id-and-agent-retention) for the retry
+and eviction behavior.
 
 Every failure throws a typed error (`IntegrityError`, `PlatformError`,
 `HealthTimeoutError`, `VersionMismatchError`, `BinaryNotFoundError`) with a message
