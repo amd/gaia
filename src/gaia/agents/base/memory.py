@@ -2806,8 +2806,12 @@ class MemoryMixin(ProceduralMemoryMixin):
                 domain,
             )
 
-            # Sensitive items ARE accessible via explicit recall tool calls
-            # (per spec). They are only excluded from the system prompt injection.
+            # Items the user explicitly MARKED sensitive stay accessible here
+            # (per spec) — but a credential nobody ever classified is not that
+            # case, and was coming back verbatim. Mask by shape as well as by
+            # flag, or "what do you remember about me?" recites a passphrase,
+            # and on a remote backend sends it off the machine.
+            results = self._redact_credentials(results)
 
             return {
                 "status": "found" if results else "empty",
@@ -3012,7 +3016,7 @@ class MemoryMixin(ProceduralMemoryMixin):
             return {
                 "status": "found" if results else "empty",
                 "count": len(results),
-                "results": results,
+                "results": self._redact_credentials(results),
             }
 
         logger.info("[MemoryMixin] registered 5 memory tools (v2)")
