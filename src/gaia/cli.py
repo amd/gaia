@@ -3312,6 +3312,22 @@ Examples:
         action="store_true",
         help="Use remote Lemonade Server (skip local install/start; downloads models via API). Auto-detected when LEMONADE_BASE_URL points to a non-localhost URL.",
     )
+    init_parser.add_argument(
+        "--skip-chat-model",
+        action="store_true",
+        help="Skip the profile's chat LLM (e.g. Gemma-4-E4B-it-GGUF) but still "
+        "install Lemonade and any embedding model the profile needs. For a "
+        "session backed by a remote LLM (e.g. the TUI's --use-claude) that "
+        "never calls the local chat model but still needs Lemonade for "
+        "RAG/memory embeddings.",
+    )
+    init_parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Report whether this profile is already set up and exit — no "
+        "install, no download, no side effects. Exit code 0 means ready, "
+        "1 means `gaia init` still has work to do.",
+    )
 
     # Install command (install specific components)
     install_parser = subparsers.add_parser(
@@ -4941,6 +4957,26 @@ Let me know your answer!
             )
             sys.exit(exit_code)
 
+        if args.check:
+            from gaia.installer.init_command import check_setup_status
+
+            try:
+                status = check_setup_status(
+                    profile=profile,
+                    skip_chat_model=getattr(args, "skip_chat_model", False),
+                    remote=getattr(args, "remote", False),
+                )
+            except ValueError as e:
+                print(f"Error: {e}", file=sys.stderr)
+                sys.exit(1)
+            if status.ready:
+                print(f"READY: profile '{profile}' is already set up")
+                sys.exit(0)
+            print(f"NOT READY: profile '{profile}' needs setup")
+            for reason in status.reasons:
+                print(f"  - {reason}")
+            sys.exit(1)
+
         from gaia.installer.init_command import run_init
 
         exit_code = run_init(
@@ -4952,6 +4988,7 @@ Let me know your answer!
             yes=args.yes,
             verbose=getattr(args, "verbose", False),
             remote=getattr(args, "remote", False),
+            skip_chat_model=getattr(args, "skip_chat_model", False),
         )
         sys.exit(exit_code)
 

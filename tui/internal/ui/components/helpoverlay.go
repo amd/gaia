@@ -141,4 +141,4 @@ const chatHelpText = `  GAIA Chat
   Ctrl+Y      Copy the whole answer
   Ctrl+B      Copy the last code block
 
-  Commands    /help · /hub · /clear`
+  Commands    /help · /hub · /clear · /setup`
