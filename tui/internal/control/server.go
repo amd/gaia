@@ -21,10 +21,23 @@ import (
 	"github.com/amd/gaia/tui/internal/daemon"
 )
 
-// attachedToTerminal reports whether stdout is a real terminal, i.e. whether
-// there is a physical viewport a resize could overflow. Swappable for tests.
-var attachedToTerminal = func() bool {
-	return term.IsTerminal(int(os.Stdout.Fd()))
+// realTerminalSize reports the OS-level size of the physical viewport stdout
+// is attached to — the actual bound a resize could overflow. ok is false when
+// stdout is not a terminal (headless runs: tests, CI), in which case there is
+// no viewport to overflow and cols/rows must not be trusted. Swappable for
+// tests.
+//
+// This is deliberately NOT s.state.Size(): that field also records every
+// synthetic WindowSizeMsg this same handler injects, so using it as the
+// boundary made the check a one-way ratchet — one legitimate shrink request
+// permanently lowered the ceiling until a real terminal resize happened to
+// come along and refresh it.
+var realTerminalSize = func() (cols, rows int, ok bool) {
+	c, r, err := term.GetSize(int(os.Stdout.Fd()))
+	if err != nil {
+		return 0, 0, false
+	}
+	return c, r, true
 }
 
 // Sender is the subset of *tea.Program the control server needs. Program.Send
@@ -752,8 +765,7 @@ func (s *Server) handleResize(w http.ResponseWriter, r *http.Request) {
 	// invisible to the very API you would test with.
 	// Only when a physical viewport exists: headless runs (tests, CI) have no
 	// terminal to overflow, and must stay free to lay out any size they like.
-	if curCols, curRows := s.state.Size(); attachedToTerminal() &&
-		curCols > 0 && curRows > 0 &&
+	if curCols, curRows, ok := realTerminalSize(); ok &&
 		(req.Cols > curCols || req.Rows > curRows) {
 		writeErr(w, http.StatusConflict, apiError{
 			Code: "resize_exceeds_terminal",
