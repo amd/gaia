@@ -209,6 +209,10 @@ type ChatModel struct {
 	// click-drag selection (and with it copy and paste) — see selectmode.go.
 	selectMode bool
 
+	// lastKeyAt is when handleKey last saw a key, paste or not — see the
+	// fast-Enter guard at the top of handleKey.
+	lastKeyAt time.Time
+
 	connected    bool
 	totalSteps   int
 	initialQuery string
@@ -636,6 +640,20 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewport()
 		return m, nil
 
+	case pasteClipboardMsg:
+		text := normalizePastedText(msg.text)
+		if msg.err != nil || strings.TrimSpace(text) == "" {
+			m.messages = append(m.messages, Message{
+				Role:    RoleStatus,
+				Content: pasteHint(msg.err),
+			})
+			m.updateViewport()
+			return m, nil
+		}
+		m.input.InsertString(text)
+		m.syncComposerHeight()
+		return m, nil
+
 	case tea.MouseMsg:
 		// The wheel scrolls the transcript. In an alt-screen app the terminal's
 		// own scrollback does not exist, so this and the arrow keys are the only
@@ -684,6 +702,31 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.updateViewport()
 		return m, cmd
 	}
+
+	// Bubble Tea v1.3.10 enables bracketed paste by default, so a terminal
+	// paste already arrives here as one KeyMsg — multi-line content and all —
+	// rather than a burst of keystrokes. Handled explicitly (not left to the
+	// default case below) so the CRLF normalization below always runs: the
+	// textarea's own sanitizer treats \r and \n as two separate newlines, and
+	// Windows clipboard text carries \r\n, which would otherwise double every
+	// line break into a blank one.
+	if msg.Paste {
+		m.input.InsertString(normalizePastedText(string(msg.Runes)))
+		m.syncComposerHeight()
+		return m, nil
+	}
+
+	// Confirmed live (not just in bubbletea's docs): Windows Terminal over
+	// ConPTY never wraps a paste in the markers above at all — it types the
+	// clipboard text a character at a time, newlines included, so a
+	// multi-line paste arrives as ordinary keystrokes with a real Enter
+	// between every line (microsoft/terminal#395, zellij-org/zellij#4885, the
+	// same failure independently reported against Git Bash on Windows).
+	// sinceLastKey is measured against the PREVIOUS key here, before this
+	// one updates the clock, so the Enter case below can tell "typed" from
+	// "typed by a machine faster than a human reacts".
+	sinceLastKey := time.Since(m.lastKeyAt)
+	m.lastKeyAt = time.Now()
 
 	switch msg.Type {
 	case tea.KeyCtrlC:
@@ -752,6 +795,16 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.syncComposerHeight()
 			return m, nil
 		}
+		if sinceLastKey < pasteBurstWindow {
+			// This Enter arrived faster than a human reacts to their own
+			// previous keystroke — on the terminals that type a paste out
+			// instead of bracketing it (see above), that is a pasted line
+			// break, not "send". Worst case on a genuine coincidence: one
+			// extra blank line, fixed by pressing Enter again.
+			m.input.InsertString("\n")
+			m.syncComposerHeight()
+			return m, nil
+		}
 		query := strings.TrimSpace(m.input.Value())
 		if query == "" {
 			return m, nil
@@ -790,6 +843,14 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		})
 		m.updateViewport()
 		return m, nil
+
+	case tea.KeyCtrlV:
+		// Reaches here only when the terminal did NOT already turn this into a
+		// bracketed paste above — most terminals bind Ctrl+V to their own paste
+		// action and this key never arrives at all. A terminal that passes it
+		// through untranslated (or an SSH client with no local paste binding)
+		// is exactly the case this covers.
+		return m, pasteFromClipboard()
 
 	case tea.KeyPgUp:
 		m.viewport.HalfViewUp()
@@ -1309,6 +1370,13 @@ func (m *ChatModel) flushBuffer() {
 // internally: a composer that can eat the whole window hides the conversation
 // the user is writing about.
 const composerMaxRows = 6
+
+// pasteBurstWindow is how fast is "too fast to be a person" for the Enter
+// guard above. A human's own reaction time between typing a character and
+// deliberately pressing Enter next runs well over 100ms; a terminal typing
+// out a paste delivers the next keystroke as fast as it can write to the
+// pty, reliably under this.
+const pasteBurstWindow = 50 * time.Millisecond
 
 // composerRows is the height the composer wants right now — one row per line
 // the user has actually written.
