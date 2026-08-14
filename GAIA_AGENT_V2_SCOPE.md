@@ -137,17 +137,48 @@ discipline and self-critique matter far more in voice than on screen.
 
 **Size: M.**
 
-### 4.4 Autonomy
-Today the agent waits for a query like every other agent. What is missing is not
-a loop but a *reason to run*: goals that outlive a turn, triggers (schedule,
-file watch, inbox, event), a notion of "work I owe you", and the judgement to
-know when to stop and when to interrupt you.
+### 4.4 Autonomy — a goal queue, not just a cron
 
-`gaia schedule` and `src/gaia/governance/` exist to build on, and there is an
-autonomy-engine plan in `docs/plans/`. The competitive analysis is tasked with
-reconciling its recommendations against that plan explicitly.
+Today the agent waits for a query like every other agent. Two mechanisms are
+needed, and they are not the same thing.
 
-**Size: L. This is the v2 headline feature.**
+**Scheduling is the easy half.** Hermes and OpenCLAW both have cron; GAIA has
+`gaia schedule` already. The agent should be able to schedule its *own* heartbeat
+or trigger, which is a small extension of what exists.
+
+**The state machine is the real feature.** The user's framing, which is the right
+one: after each execution step the agent should *derive its own next action* from
+what just happened, and keep going while it has next steps — including after it
+has completed the goal it was given. It should infer goals from the user and from
+its environment, and hold them as a **queue of goals in memory that it manages
+itself**.
+
+That is a change to the agent loop, not a scheduler feature:
+
+- **A next-action derivation step.** After a step completes, ask "what does this
+  imply I should do next?" — distinct from the existing plan/step machinery,
+  which executes a plan rather than revising the goal.
+- **A goal queue with real lifecycle** — proposed, accepted, active, blocked,
+  done, abandoned — persisted in memory so it survives a restart the way facts
+  already do. `MemoryStore` has the shape for this (`reminder` is already a
+  category, `get_upcoming` already exists and is unused by the flagship).
+- **Goal inference from interaction**, not just from an explicit request. The
+  memory store's `get_activity_timeline` and `get_tool_stats` are the raw
+  material and neither is currently read.
+- **A stopping rule, and a rule for interrupting the user.** An agent that always
+  finds a next step is a runaway; one that never speaks up is a background
+  process. This is the hard part, and it is a judgement problem, not a plumbing
+  problem.
+
+Local-inference note: derivation costs a model call per step, and on Gemma-4-E4B
+that roughly doubles a turn. The derivation prompt wants to be small and cheap —
+possibly a much smaller model than the one doing the work, which ties into §4.7.
+
+`src/gaia/governance/` and the autonomy-engine plan in `docs/plans/` are the
+existing groundwork; the competitive analysis is tasked with reconciling against
+that plan explicitly.
+
+**Size: L for the loop change, S for self-scheduling. The v2 headline feature.**
 
 ### 4.5 Self-extension — and a correction to my earlier note
 
@@ -238,6 +269,54 @@ a stale note and redact a secret without asking the agent to do it.
 
 ---
 
+### 4.9 The stated aim: the most human agent there is — and why that is an architecture problem
+
+The user's goal for GAIA is to be **the most human agent on the planet**, and to
+get there **by innovating at the architecture level** rather than by tuning
+prompts. That framing is worth taking literally, because it rules some things in
+and a lot of things out.
+
+Prompt work cannot produce it. A warmer system prompt makes a *pleasant*
+stateless agent, and this session shows why that is not enough: the flagship
+already answers warmly and it still told the user their script was broken when
+its own tool call was at fault, still could not see 28 of its 30 skills, and
+still recited a passphrase back when asked what it remembered. None of those are
+tone problems.
+
+What "human" decomposes into, mechanically — and every one is a structural
+change:
+
+| Human quality | The mechanism it actually needs | Where it lands here |
+|---|---|---|
+| Remembers you without being told | Memory that compounds and is trusted | §4.5, §6 |
+| Gets better at what you do together | Writes its own procedures from experience | §4.5 |
+| Notices, and brings things up | Goal derivation + a rule for interrupting | §4.4 |
+| Knows when it is wrong | Self-critique before asserting a cause | §4.6 |
+| Doesn't repeat what you just said | History owned by the agent, not the transport | §5.4 |
+| Admits a limit instead of guessing | Failure honesty (the gaia-voice skill starts this) | partly built |
+| Speaks and listens | Voice loop on local Whisper + Kokoro | §4.3 |
+| Keeps your secrets | Classification and redaction in memory | §6.2 — **currently absent** |
+
+Two observations from this session that bear directly on the aim:
+
+1. **Trust is the binding constraint, not warmth.** An agent that remembers is
+   only pleasant to use if what it remembers is *right*. Ours holds a stale rule
+   it invented about its own tooling and a plaintext passphrase it was never
+   asked to keep. Fix trust before adding charm; a confidently wrong companion is
+   worse than a blank one.
+2. **The self-critique state is the highest-leverage "human" feature available
+   cheaply.** Four of six bugs this session surfaced as confident wrong answers.
+   Knowing when you might be wrong is a recognisably human quality *and* the
+   thing that would have caught them.
+
+The architectural bet worth making explicit: **the differentiator is the state
+machine and the memory model, not the model weights.** GAIA cannot win on raw
+capability against a frontier model, and does not need to — it can own
+continuity, initiative, and running on your own hardware. That is a design
+position, and it is the one every recommendation in §4 is pointed at.
+
+---
+
 ## 5. Architectural limitations observed
 
 1. **Truncation budgets follow the local hardware, not the active model.**
@@ -260,10 +339,29 @@ a stale note and redact a secret without asking the agent to do it.
    — two copies of the event translator that disagreed about which measurements a
    finished turn reports. Worth auditing for other per-transport divergence.
 
-5. **Skill listing has no presentation layer.** The agent gets a JSON blob and
-   improvises prose, which is why 30 skills came out as a comma-run wrapping
-   mid-word. Structured results the user will read need a rendering contract, not
-   a model's best guess.
+5. **Structured results have no presentation layer.** The agent gets a JSON blob
+   and improvises prose, which is why 30 skills came out as a comma-run wrapping
+   mid-word. Patched for now with instructions in the tool docstring and the
+   gaia-voice skill, but instructing a model to format is a weaker contract than
+   rendering it. The TUI already has a `cards` package for exactly this.
+
+6. **A skill can ship scripts GAIA cannot provision.** Anthropic's `pdf` and
+   `xlsx` skills both expect their Python dependencies present. Neither
+   `reportlab` nor `openpyxl` is installed, and `pip` is blocked by the shell
+   allowlist — correctly, but with no alternative. The agent worked around it
+   both times by hand-writing raw PDF and raw OOXML, which is remarkable and
+   produced genuinely valid files (verified: `%PDF-1.4`, and a valid xlsx zip
+   with real `SUM(B2:C2)` formulas). It is not a strategy. A skill needs a
+   declared, reviewable way to state its runtime dependencies and get them
+   installed into a sandbox — otherwise "load any skill" holds for discovery and
+   quietly fails for execution.
+
+7. **The help overlay is at a hard 20-line budget and out of room.** Enforced by
+   `TestHelpTextFitsItsBudget`, and `chatHelpText` was exactly full — Ctrl+Y and
+   Ctrl+B were undocumented as a result, in a panel whose test claims it lists
+   every binding. I freed lines by compressing, but three delegated tasks are
+   each adding a command. The overlay needs paging or scrolling before the next
+   feature, not another compression pass.
 
 ---
 
