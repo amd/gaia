@@ -229,6 +229,27 @@ type ChatModel struct {
 	// clobbered by the shallower snapshot the on-open fetch buffered
 	// before the turn started.
 	preScanRenderedThisTurn bool
+
+	// setupChecking is true from construction (applyFirstBootGate) until the
+	// first-boot readiness probe (`gaia init --check`, fired by Init) answers.
+	// Enter queues rather than sends while true, same reasoning as m.streaming
+	// -- the flagship agent may have nothing to talk to yet.
+	setupChecking bool
+	// setupRunning is true while a real `gaia init` run is in flight, whether
+	// auto-started because the first-boot check said not ready, or started on
+	// demand by /setup.
+	setupRunning bool
+	// setupCancel tears down the in-flight `gaia init` subprocess. Nil unless
+	// setupRunning.
+	setupCancel context.CancelFunc
+	// setupCancelRequested distinguishes a deliberate Esc/Ctrl+C from any
+	// other reason a run ended, so the completion handler reports
+	// "cancelled" instead of misreading the killed child as a failure.
+	setupCancelRequested bool
+	// setupCh is the current setup run's event channel, scoped the same way
+	// m.events scopes a turn: a late event from an abandoned run (the user
+	// cancelled, then /setup again) must not land on whatever replaced it.
+	setupCh <-chan setupEvent
 }
 
 func NewChatModel(c client.AgentClient, agentName string, initialQuery string, dev bool) ChatModel {
@@ -268,7 +289,7 @@ func NewChatModelFromHub(c client.AgentClient, agentID, agentName string, dev bo
 	m := NewChatModel(c, agentName, "", dev)
 	m.agentID = agentID
 	m.fromHub = true
-	return m
+	return m.applyFirstBootGate()
 }
 
 // NewChatModelForCatalogAgent creates a standalone ChatModel (esc quits -- see
@@ -277,7 +298,7 @@ func NewChatModelFromHub(c client.AgentClient, agentID, agentName string, dev bo
 func NewChatModelForCatalogAgent(c client.AgentClient, agentID, agentName string, dev bool) ChatModel {
 	m := NewChatModel(c, agentName, "", dev)
 	m.agentID = agentID
-	return m
+	return m.applyFirstBootGate()
 }
 
 // preScanAgentID is the one agent this on-open fetch applies to today.
@@ -297,7 +318,13 @@ func (m ChatModel) Init() tea.Cmd {
 		m.spinner.Tick,
 		textarea.Blink,
 	}
-	if m.initialQuery != "" {
+	if m.setupChecking {
+		// The flagship agent's first-boot gate (see applyFirstBootGate):
+		// hold the initial query, if any, until the check -- and the setup
+		// run it may trigger -- resolves (setupCheckResultMsg / setupEvent
+		// handlers call releaseAfterSetupGate to send it then).
+		cmds = append(cmds, checkSetupCmd(m.claudeMode))
+	} else if m.initialQuery != "" {
 		cmds = append(cmds, func() tea.Msg {
 			return sendQueryMsg{query: m.initialQuery}
 		})
@@ -420,7 +447,7 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	updated, cmd := m.update(msg)
 
 	next, ok := updated.(ChatModel)
-	if !ok || next.queued == "" || next.streaming {
+	if !ok || next.queued == "" || next.streaming || next.setupChecking || next.setupRunning {
 		return updated, cmd
 	}
 	// A question or confirmation still on screen owns the conversation; the
@@ -456,6 +483,15 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case channelReadyMsg:
 		m.events = msg.ch
 		return m, waitForEvent(m.events)
+
+	case setupCheckResultMsg:
+		return m.handleSetupCheckResult(msg)
+
+	case setupStreamMsg:
+		if m.supersededSetup(msg.ch) {
+			return m, nil
+		}
+		return m.handleSetupEvent(msg.evt)
 
 	case cancelRequestFailedMsg:
 		// The ASK to stop the run (client.AgentCanceler.Cancel) could not be
@@ -661,6 +697,14 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// The first-boot/`/setup` gate owns the keyboard while a `gaia init` run
+	// is in flight -- there is no turn, question, or confirmation to route to
+	// yet. Esc/Ctrl+C must still get the user out rather than doing nothing
+	// while a multi-minute download runs.
+	if m.setupRunning && (msg.Type == tea.KeyEsc || msg.Type == tea.KeyCtrlC) {
+		return m.cancelSetup()
+	}
+
 	// A pending confirmation owns the keyboard too, but UNLIKE a question, Esc
 	// belongs to it: the issue's contract is "Esc denies", not "Esc cancels the
 	// turn". Ctrl+C is still the universal way out.
@@ -753,7 +797,10 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// keystroke on the floor. Update sends it the moment the turn settles.
 		// Slash commands queue too — /clear typed mid-turn should clear once
 		// the turn it belongs to is actually over, not silently do nothing.
-		if m.streaming {
+		// The first-boot gate (setupChecking) and a `gaia init` run
+		// (setupRunning) hold it the same way: there is nothing to send this
+		// to yet.
+		if m.streaming || m.setupChecking || m.setupRunning {
 			m.queued = query
 			m.updateViewport()
 			return m, nil
@@ -991,6 +1038,15 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 			return m.bypassNote("Bypass permissions is already off."), nil
 		}
 		return m.setBypass(false)
+
+	case "/setup":
+		if m.agentID != setupAgentID {
+			return m.statusNote(m.agentName + " does not have a local setup step."), nil
+		}
+		if m.setupRunning {
+			return m.statusNote("Setup is already running. Esc cancels it."), nil
+		}
+		return m.startSetupRun(false /* firstBoot */)
 	}
 
 	return m.sendQuery(query)
