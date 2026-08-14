@@ -749,3 +749,139 @@ def test_the_preflight_hook_is_duck_typed_not_an_override():
 
     assert hasattr(ShellToolsMixin, "policy_refusal_for_call")
     assert not hasattr(Agent, "policy_refusal_for_call")
+
+
+# ---------------------------------------------------------------------------
+# pytest: a positional (no-subcommand) binary — #2932 follow-up
+#
+# `gh`'s shape is `<binary> <subcommand> [action] [flags]`. pytest has no
+# subcommand at all: `pytest tests/unit -q -x -k foo` — the first positional
+# is a path, not an action. These tests cover the `BinaryPolicy.positional`
+# extension that shape needed, and pin down pytest's specific allow/refuse
+# matrix. `gh`'s own tests above are untouched by any of this.
+# ---------------------------------------------------------------------------
+
+PYTEST = BINARY_POLICIES["pytest"]
+
+
+def pcheck(command: str) -> str | None:
+    """Run one pytest command line through the policy gate."""
+    return validate_invocation(PYTEST, shlex.split(command))
+
+
+def test_pytest_is_declarable_like_gh():
+    """`refuse_unpoliced_binaries` accepts it; an unpoliced binary still isn't."""
+    permissions = parse_permissions(["shell:execute:pytest"], skill_name="t")
+    refuse_unbridged_permissions(permissions, skill_name="t")  # must not raise
+
+    permissions = parse_permissions(["shell:execute:kubectl"], skill_name="t")
+    with pytest.raises(SkillPermissionError, match="no read-only command policy"):
+        refuse_unbridged_permissions(permissions, skill_name="t")
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "pytest",
+        "pytest tests/unit",
+        "pytest tests/unit -q -x -k foo",
+        "pytest tests/unit/test_foo.py::TestClass::test_method",
+        "pytest -q -v --collect-only",
+        "pytest --co --no-header",
+        "pytest -m 'not slow'",
+        "pytest --maxfail 3 tests/unit",
+        "pytest --tb short tests/unit",
+        "pytest --tb=short tests/unit",
+        "pytest -p no:cacheprovider tests/unit",
+        "pytest --version",
+        "pytest --help",
+    ],
+)
+def test_a_realistic_pytest_run_is_allowed(command):
+    assert pcheck(command) is None
+
+
+@pytest.mark.parametrize(
+    "command,reason_substring",
+    [
+        ("pytest --pdb", "interactive debugger"),
+        ("pytest --trace", "interactive debugger"),
+        ("pytest --junitxml report.xml", "report file"),
+        ("pytest --result-log log.txt", "report file"),
+        ("pytest --basetemp /tmp/x", "temp directory"),
+        ("pytest -c /etc/pytest.ini", "outside the project"),
+        ("pytest --rootdir /etc", "outside the project"),
+        ("pytest -o addopts=--pdb", "ini options"),
+        ("pytest --override-ini addopts=--pdb", "ini options"),
+    ],
+)
+def test_dangerous_pytest_flags_are_refused_with_a_reason(command, reason_substring):
+    error = pcheck(command)
+    assert error is not None
+    assert reason_substring in error
+
+
+def test_pytest_plugin_injection_is_refused_but_a_disable_is_allowed():
+    """`-p <plugin>` auto-imports and runs arbitrary code at collection time."""
+    assert pcheck("pytest -p evil_plugin") is not None
+    assert pcheck("pytest -p randomly") is not None
+    assert pcheck("pytest -p no:cacheprovider") is None
+    assert pcheck("pytest -p no:randomly") is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "pytest ../../etc/passwd",
+        "pytest /etc/passwd",
+        "pytest tests/../../secret",
+        "pytest C:/Windows/System32",
+    ],
+)
+def test_pytest_operand_paths_cannot_escape_the_project(command):
+    """The shell tool's own path-traversal scan skips granted-binary segments
+
+    (a granted CLI's operands are assumed to be remote ids, not local paths —
+    true for `gh`, false for `pytest`), so this policy is the only check.
+
+    Backslash-separated Windows paths aren't covered here: `shlex.split` runs
+    in POSIX mode throughout this file (shared with the production code path
+    in `shell_tools.py`), which treats `\\` as an escape character and strips
+    it before this policy ever sees the token — a pre-existing quirk of the
+    whole shell tool, not something this policy can recover from.
+    """
+    assert pcheck(command) is not None
+
+
+def test_the_operand_safety_check_catches_backslash_forms_directly():
+    """Confirms the check itself is correct, independent of the shlex quirk above."""
+    from gaia.skills.binaries import _unsafe_operand
+
+    assert _unsafe_operand("\\windows\\system32")
+    assert _unsafe_operand("C:\\Windows\\System32")
+    assert not _unsafe_operand("tests/unit")
+    assert not _unsafe_operand("tests/unit/test_foo.py::TestClass::test_method")
+
+
+def test_pytest_unknown_flags_are_refused_because_the_flag_model_is_an_allowlist():
+    """Unlike `gh`'s denylist, an unreviewed pytest flag is refused, not passed."""
+    assert pcheck("pytest -s") is not None  # disables capture; not in the allowlist
+    assert pcheck("pytest -l") is not None  # showlocals; can leak secrets
+    assert pcheck("pytest --some-unreviewed-flag") is not None
+
+
+def test_pytest_bundled_short_flags_are_refused_not_silently_partial():
+    """`-xvs` must not be accepted as `-x` while silently dropping `vs`."""
+    assert pcheck("pytest -xvs") is not None
+
+
+def test_pytest_value_flags_still_need_their_value_not_the_next_operand():
+    """`-k` consumes the next token as its value, never mistaken for a path."""
+    assert pcheck("pytest -k foo tests/unit") is None
+    assert pcheck("pytest tests/unit -k foo") is None
+
+
+def test_gh_is_unaffected_by_the_positional_extension():
+    """`gh`'s subcommand-shaped policy is untouched by the new code path."""
+    assert check("gh issue list --repo amd/gaia") is None
+    assert check("gh auth token") is not None
