@@ -242,6 +242,25 @@ Type /help for available commands.
 | `/model` | Switch the flagship agent's live model |
 | `/bypass` | Let the agent run tools without asking (off by default) |
 
+Typing `/` as the first character of an empty composer opens a palette listing every
+command above with a one-line description, so there's no need to already know them or
+open `/help` first:
+
+```
+         ╭────────────────────────────────────────────────────────────╮
+         │  Slash Commands                                            │
+         │  ────────────────────────────────────────────────────────  │
+         │  /mo▏                                                      │
+         │                                                            │
+         │  ▸ /model   Switch the model this session runs on (gaia …  │
+         ╰────────────────────────────────────────────────────────────╯
+```
+
+Keep typing to narrow the list (`/mo` above narrows to `/model`), `↑`/`↓` to move the
+selection, `Enter` to run it, `Esc` to close the palette without touching the composer
+or cancelling a running turn. A `/` typed mid-sentence is just a slash — the palette
+only opens on an otherwise-empty line.
+
 The flagship agent (the one spawned as a local subprocess, not through the
 background daemon) runs this same setup automatically on its first launch on a
 clean machine — installing Lemonade and downloading the models it needs instead

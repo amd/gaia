@@ -237,4 +237,6 @@ const chatHelpText = `  GAIA Chat
   Ctrl+V      Paste · Ctrl+Y copy answer · Ctrl+B code
 
   Commands    /help /hub /clear /bypass
-              /setup /memory /model`
+              /setup /memory /model
+  /           On an empty line, browse commands —
+              ↑/↓ to pick, Enter to run, Esc to close`
