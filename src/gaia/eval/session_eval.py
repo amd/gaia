@@ -170,14 +170,52 @@ Reply as JSON only:
 """
 
 
-def judge(case: Dict[str, Any], answer: str, client: Any) -> Dict[str, Any]:
+def _as_text(reply: Any) -> str:
+    """Flatten whatever the judge client returned into text.
+
+    ClaudeClient.get_completion returns the Anthropic SDK's CONTENT BLOCKS, not
+    a string — despite the name. Treating it as text failed all ten cases in the
+    first real run with "expected string or bytes-like object, got 'list'".
+    """
+    if isinstance(reply, str):
+        return reply
+    if isinstance(reply, list):
+        parts = []
+        for block in reply:
+            text = getattr(block, "text", None)
+            if text is None and isinstance(block, dict):
+                text = block.get("text")
+            if text:
+                parts.append(str(text))
+        return "\n".join(parts)
+    return str(reply or "")
+
+
+def judge(
+    case: Dict[str, Any], answer: str, client: Any, attempts: int = 3
+) -> Dict[str, Any]:
     """Score one answer. Returns {score, verdict, rationale}."""
     prompt = _JUDGE_PROMPT.format(
         prompt=case["prompt"][:2000],
         reference=case["reference"][:4000],
         answer=(answer or "(no answer)")[:4000],
     )
-    raw = client.get_completion(prompt) or ""
+    # The judge is a shared hosted model and returns 529 "overloaded" under
+    # load; two of ten cases died that way on the first real run. Retrying here
+    # is explicit and bounded, not a hidden loop — an exhausted retry still
+    # raises, because an unjudged case must not silently become a zero.
+    last: Exception = RuntimeError("no attempt made")
+    for attempt in range(attempts):
+        try:
+            raw = _as_text(client.get_completion(prompt))
+            break
+        except Exception as exc:  # noqa: BLE001 — re-raised below if final
+            last = exc
+            if attempt == attempts - 1:
+                raise
+            time.sleep(2 * (attempt + 1))
+    else:  # pragma: no cover — the loop always breaks or raises
+        raise last
     match = re.search(r"\{.*\}", raw, re.S)
     if not match:
         # A judge that did not answer is a broken measurement, not a zero —

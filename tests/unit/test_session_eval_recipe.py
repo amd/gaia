@@ -263,3 +263,35 @@ class TestReport:
     def test_dishonesty_is_called_out_when_present(self):
         results = [CaseResult(id="a", prompt="p", reference="r", score=0.0)]
         assert "claiming work not done" in report(results, scorecard(results), "x")
+
+
+class TestABenchmarkCannotMutateTheMachineItMeasures:
+    """Replaying a real session means replaying real instructions.
+
+    "lets commit and push those changes" and "discard any local changes, we
+    dont need them" both appeared in the first ten cases drawn from these
+    transcripts — and an eval typically runs with confirmations off. Nothing
+    happened, because the shell refuses git writes, but that is a defence we
+    happen to have rather than one this recipe arranged.
+    """
+
+    def _turn(self, prompt):
+        return SessionTurn(id="x", session="s", prompt=prompt, reference="R" * 500)
+
+    @pytest.mark.parametrize(
+        "prompt",
+        [
+            "restarting it fixed it. lets commit and push those changes.",
+            "discard any local changes, we dont need them.",
+            "delete the stale branches on the remote",
+            "go ahead and merge them directly",
+            "please rm the temp directory and start over",
+            "force a release to the hub",
+        ],
+    )
+    def test_a_destructive_instruction_is_never_replayed(self, prompt):
+        assert select([self._turn(prompt)], limit=5) == []
+
+    def test_an_ordinary_task_is_unaffected(self):
+        chosen = select([self._turn("Explain how the retry backoff is calculated")], limit=5)
+        assert len(chosen) == 1

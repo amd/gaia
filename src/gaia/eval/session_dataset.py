@@ -222,6 +222,21 @@ _CONTEXT_DEPENDENT = re.compile(
     re.IGNORECASE,
 )
 
+#: Prompts that ask for a destructive or irreversible action. Replaying a real
+#: session means replaying real instructions, and an eval usually runs with
+#: confirmations off — "lets commit and push those changes" and "discard any
+#: local changes" both appeared in the first ten cases drawn from these
+#: transcripts. Nothing happened, because the shell refuses git writes
+#: (SAFE_GIT_COMMANDS), but that is a defence we happen to have rather than one
+#: this recipe arranged. A benchmark must not be able to mutate the machine it
+#: is measuring.
+_DESTRUCTIVE = re.compile(
+    r"\b(push|commit|merge|rebase|reset|revert|discard|delete|remove|rm|drop|"
+    r"uninstall|overwrite|force|publish|deploy|release)\b",
+    re.IGNORECASE,
+)
+
+
 #: Rough topic tags, used only to spread the sample across kinds of work.
 _TAGS = {
     "code": ("code", "function", "bug", "test", "refactor", "implement", "fix"),
@@ -255,6 +270,7 @@ def select(
         if min_prompt <= len(turn.prompt) <= MAX_PROMPT_CHARS
         and len(turn.reference) >= min_answer
         and not _CONTEXT_DEPENDENT.match(turn.prompt)
+        and not _DESTRUCTIVE.search(turn.prompt)
     ]
     for turn in candidates:
         turn.tags = _tags_for(turn.prompt)
