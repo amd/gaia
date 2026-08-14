@@ -15,11 +15,13 @@ cd tui && make build     # -> tui/bin/gaia
 ```
 
 <Warning>
-  The hub is a Go binary and is **not yet distributed** — no release carries a
-  `gaia-<os>-<arch>` asset, `pip install amd-gaia` does not provide it, and the
-  Python CLI has no `tui` subcommand (`gaia tui` exits 2 today). Building from
-  source is the only way to get it. Once it ships as a hub component, this page
-  will name the download instead.
+  The hub binary is **not yet published** — `release_components.yml` builds and
+  publishes it as the `terminal-hub` hub component (all six platform/arch targets,
+  cross-compiled from one Go toolchain), but no version has been tagged and released
+  yet. `pip install amd-gaia` does not provide it, and the Python CLI has no `tui`
+  subcommand (`gaia tui` exits 2 today). Building from source
+  (`cd tui && make build`) remains the only way to get it until the first tag lands.
+  Once a version is live, this page will name the download instead.
 </Warning>
 
 <Info>

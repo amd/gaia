@@ -1,0 +1,359 @@
+---
+title: Flagship Installer Plan
+description: One-command install for the flagship GAIA agent and its Go terminal UI — architecture, what already shipped, and what's still a gap (signing, hub generalization, release cut)
+---
+
+# Flagship Installer Plan
+
+<Note>
+**Status:** Mostly built, not yet released — this document was written *after* the
+architecture, so it's a record of what exists plus an honest gap list, not a
+from-scratch proposal.
+**Issue:** [#2804](https://github.com/amd/gaia/issues/2804)
+**Branch:** `feat/gaia-flagship-agent-2804`
+**Scope:** the flagship `gaia` agent (`hub/agents/gaia/python/`) + the Go terminal UI
+(`tui/`). Does **not** cover the Electron Agent UI installer — see
+[Desktop Installer Plan](/plans/desktop-installer) for that, and §7 below for why
+they're different artifacts with different install strategies.
+</Note>
+
+---
+
+## §0 What this document is
+
+The original ask was "design an installer, write the plan first, then build it." By
+the time that research pass finished, it turned out most of it was already built —
+across roughly 30 commits on this branch, by other agents working the same issue in
+parallel. `hub/agents/gaia/python/packaging/freeze.py`, the npm client
+(`hub/agents/gaia/npm/`), the two-lane release workflow
+(`.github/workflows/release_agent_gaia.yml`), and the TUI's first-run setup gate
+(`tui/internal/ui/chat/setup.go`) all exist, are tested (4,100+ lines of tests across
+Go/Python/TypeScript), and match the constraints this issue lays out — including ones
+I hadn't been told about yet, like refusing port 4001.
+
+So this plan does three things instead of one:
+
+1. **Documents the as-built architecture** and the reasoning behind it (§1–§5), so the
+   decisions are written down somewhere other than commit messages.
+2. **States explicitly where I agree and disagree** with the other plans that touch
+   this space — [Desktop Installer Plan](/plans/desktop-installer),
+   [Agent Hub Plan](/plans/agent-hub), and the [`hub-publishing`](/guides/hub-publishing)
+   guide (§7).
+3. **Names the real gaps** — signing, an unmeasured sidecar size, docs that drifted
+   out of sync with the code, and the fact that nothing has actually been released
+   yet (§8–§9).
+
+Building this a second time, differently, would have thrown away working, tested
+code for no reason. The remaining work is finishing what's here, not replacing it.
+
+---
+
+## §1 The goal, restated
+
+A user downloads one thing, runs it, and has a working `gaia` agent + terminal UI —
+no repo clone, no Python installed by hand, no venv. That's `npx @amd-gaia/gaia`
+today, once the release is cut (§9).
+
+---
+
+## §2 Why Python, not C++ — the pivot this branch represents
+
+Issue #2804 was originally scoped as a **native C++ agent** — see
+`docs/plans/gaia-agent-readiness.md`, a scoping review from
+2026-08-12 that returned a hard **"no-go to start today"**: four of six declared C++
+dependencies were unstarted (RAG tools, code-index tools, skill loading, skill
+permissions), one undeclared blocking dependency (embeddings) had no C++
+implementation at all, and the security spine the design rested on — refusing skills
+the C++ runtime can't honor — didn't exist in any form.
+
+The work on this branch since then pivoted to **Python**, subclassing the existing
+`ChatAgent` (`hub/agents/gaia/python/gaia_agent/agent.py` → `GaiaAgent`). That
+reuses RAG, memory, code-index, and skills wholesale instead of rebuilding them in
+C++ first. I agree with this pivot — the readiness doc's blockers were real and
+would have meant months of prerequisite C++ work before a flagship agent could exist
+at all. Packaging a Python agent as a standalone binary (this document) is the cost
+of that choice; it's a solved problem (§3), not a research problem.
+
+---
+
+## §3 Packaging the Python half: PyInstaller one-file freeze, not a venv bootstrap
+
+**Decision (already made, already shipped):** `hub/agents/gaia/python/packaging/freeze.py`
+freezes the agent's REST sidecar (`server.py`) into a single-file PyInstaller
+executable, one build per target platform (PyInstaller cannot cross-compile).
+
+### What was rejected, and why
+
+| Option | Rejected because |
+|---|---|
+| **Nuitka** | No precedent in this codebase; PyInstaller already has a working, tested freeze for the email agent with the identical shape (REST sidecar, exclude the ML stack). Introducing a second freeze tool for the second agent would be needless divergence. |
+| **Bundled interpreter / `uv`-based bootstrap on first run** | This is what the *Electron Agent UI installer* does (`installBackend()` in the desktop-installer plan) — downloads `uv`, creates a venv, `pip install amd-gaia[ui]`. It's the right call there because the Agent UI needs the *full* `gaia` package surface. The flagship's REST sidecar needs a narrow slice (no torch, no RAG's ML stack — inference goes over HTTP to Lemonade). A bootstrap-on-first-run adds a multi-minute pip resolve and a venv on disk for something a frozen binary does in one download. |
+| **`pip install amd-gaia[rag]` into the active interpreter** | This is still true and still supported — it's the "From source" tab in `docs/guides/gaia.mdx`. It's the developer path, not the one-command path this issue asks for; it also requires the user to already have Python. |
+
+### Why the freeze stays small
+
+The freeze's `EXCLUDES` list drops `torch`, `transformers`, `sentence_transformers`,
+`scipy`, `pandas`, and the rest of the ML stack. This works **only because** the
+agent's triage/chat/RAG-embedding paths all go over HTTP to Lemonade — nothing in the
+sidecar's reachable import graph needs an in-process model. The email agent (the
+reference this was modeled on) documents its frozen size at **~90 MB** with the same
+exclusion list. `gaia`'s sidecar has a comparable import surface (ChatAgent + RAG +
+memory + skills, all HTTP-backed), so ~90–120 MB is the expected range — but I have
+not built it in this session to confirm a number for `gaia` specifically (§8 says why).
+If a future change makes the sidecar import anything in `EXCLUDES` at module load
+time (not lazily, inside a function), the freeze will silently balloon toward the
+~2 GB `torch` brings — `smoke_test.py`'s boot check would still pass; only the size
+would regress. Worth a size assertion in CI if this becomes a real risk (not present
+today).
+
+---
+
+## §4 The Go TUI: cross-compiled once, consumed twice
+
+The TUI (`tui/cmd/gaia`) builds cleanly with `go build ./cmd/gaia` — verified in this
+session on Windows (see §8). Because it's pure Go with `CGO_ENABLED=0`, it
+cross-compiles all six targets (`win-x64`, `win-arm64`, `darwin-arm64`, `darwin-x64`,
+`linux-x64`, `linux-arm64`) from a **single `ubuntu-latest` runner** in
+`.github/workflows/release_components.yml`, publishing them as the **`terminal-hub`**
+hub component.
+
+The `@amd-gaia/gaia` npm package does **not** rebuild the TUI. It downloads the
+already-published `terminal-hub` binary for the user's platform. This is the
+"reuse it rather than inventing a parallel path" instruction taken literally: a
+second build under the gaia agent's own release lane would be the same bytes at a
+different version, and the two would eventually drift. `release_agent_gaia.yml`
+enforces this at release time — it fetches the pinned `terminal-hub` version, verifies
+its SHA-256 against the hub's own server-side hash (not just its own re-hash), and
+refuses to publish if `terminal-hub` isn't published yet at the pinned version. There
+is no fallback path that builds a TUI copy of its own.
+
+One consequence worth naming: **the gaia agent's release is now gated on a
+component it doesn't own.** If `terminal-hub` hasn't shipped a version yet, gaia's
+release fails loudly, naming the missing version — which is exactly what's happening
+today (§9).
+
+---
+
+## §5 First-run setup: reused, not reinvented
+
+The TUI's first-boot gate (`tui/internal/ui/chat/setup.go`) shells out to
+`gaia init --check --profile chat` (and `gaia init --profile chat --yes` if that
+comes back not-ready) instead of re-deriving GAIA's setup logic in Go.
+`src/gaia/installer/init_command.py`'s `INIT_PROFILES["chat"]` is the single source
+of truth for what "set up" means: the `Gemma-4-E4B-it-GGUF` chat model, the
+`user.embeddinggemma-300m-GGUF` embedder, and the `[rag]` pip extras.
+
+The bug this issue specifically flagged — an older, already-installed `gaia` that
+predates the `--check` flag exits 2 ("unrecognized arguments"), and that 2 used to
+get read as "clean machine, nothing to do" — is already fixed. `setup.go` pins exit
+code **1** as the only value meaning "not ready"; anything else (including 2) is
+treated as "the question wasn't answered," which surfaces an error instead of
+silently skipping setup. There's a dedicated regression test for this
+(`setup_test.go:267-289`).
+
+### The Mac / no-Lemonade decision
+
+The constraint as given ("a Mac has no Lemonade NPU/GPU path") is half right: Mac has
+no **NPU** path — the `npu` init profile is XDNA2-specific, Ryzen AI hardware that
+doesn't exist on Apple Silicon. But Lemonade itself **does** support macOS (the
+`chat` profile has no `required_device` and no NPU-specific `recipe`/`backend` keys;
+`LemonadeInstaller` has explicit `darwin` install/upgrade handling). So the actual
+decision already made and shipped is:
+
+- **Lemonade is required on every platform**, including Mac — for the RAG/memory
+  embedder at minimum, because Anthropic has no embeddings API.
+- **The chat model itself is optional**, via `--use-claude`. That flag maps onto
+  `gaia init --skip-chat-model`: the multi-GB `Gemma-4-E4B-it-GGUF` download is
+  skipped, but the small embedding model still downloads, and Lemonade still has to
+  be installed and running.
+- There is **no** "refuse entirely, Claude-only, no local component" mode. I agree
+  with this — memory and RAG are core to what makes this agent "the flagship," and
+  neither has a non-local equivalent today.
+
+This is fully implemented, not a gap: `setupCheckArgs`/`setupRunArgs` in `setup.go`
+already branch on `claudeMode`, and the npm README documents Lemonade + the `gaia`
+CLI on PATH as hard requirements regardless of backend.
+
+---
+
+## §6 Ports
+
+`4001` is refused by name in the npm client (`--port 4001` is a hard error, not a
+warning) — already covers the "never touch port 4001" constraint in this repo's
+instructions, independent of anything I added. The sidecar defaults to `8141` on
+loopback only; nothing here binds a LAN interface.
+
+---
+
+## §7 Where this disagrees with (or extends) the other plans
+
+**[Desktop Installer Plan](/plans/desktop-installer)** — covers the Electron Agent UI
+installer, a different artifact (a browser-based desktop app, not a terminal agent).
+I agree with its bootstrap-a-venv approach for *that* artifact, for the reason in §3:
+the Agent UI needs the full package surface, so freezing it would mean either an
+Agent-UI-sized PyInstaller binary (huge — the plan itself estimates the venv
+bootstrap route at "under 10 minutes, dominated by model download," implying the app
+itself is small) or re-deriving the same narrow-slice trick this document uses, which
+doesn't work when the whole point is running arbitrary agents. The two installers
+solving the same problem two different ways is correct here, not drift — flag it if
+a third distribution channel appears and picks a third approach without a reason.
+
+**[Agent Hub Plan](/plans/agent-hub)** — doesn't mention binary/sidecar distribution
+at all (grepped for "binary", "sidecar", "npm", "native" — zero matches). It predates
+the email agent's freeze pattern and hasn't been updated since gaia adopted the same
+pattern. This is a real doc gap (see §9) — not a design disagreement, just a plan
+that's fallen behind the code twice now.
+
+**`docs/guides/hub-publishing.mdx`** (the *guide*, current and accurate) — already
+documents the sidecar pattern correctly: *"The email agent goes one step further and
+ships a frozen native binary plus an npm package... That packaging is currently
+hand-built per agent; reusable tooling to make any agent an npm sidecar is on the
+roadmap."* Gaia is now the **second** hand-built instance of exactly this pattern
+(`freeze.py`, `gen_binaries_lock.py`, `publish_to_r2.py`, `stamp_version.py` all
+exist a second time, adapted per-agent rather than shared). I agree with the guide's
+own assessment: two instances is the signal to extract shared tooling, not a third
+hand-rolled copy. See §9 for the concrete shape that extraction should take.
+
+---
+
+## §8 What I verified vs. what I'm taking on faith
+
+Being explicit here because the instructions ask for it directly, and because most
+of this system was built by other sessions I can't fully audit in the time available.
+
+**Verified in this session, on Windows:**
+- `go build ./cmd/gaia` succeeds cleanly from a fresh clone of this branch (Go
+  1.26.5). No prior venv, no prior build state.
+- The built binary launches and its `--help` / `--use-claude` / `--claude-model`
+  flags are real and wired (not documentation-only), producing a 25.4 MB binary.
+- The exit-code-1-vs-2 setup bug fix and its regression test exist in the current
+  tree (`setup_test.go:267-289`).
+- `release_agent_gaia.yml` and `release_components.yml` exist, are internally
+  consistent about the two-lane distribution model, and match what `docs/guides/gaia.mdx`
+  and the npm `README.md` claim.
+
+**Not verified — taken on the strength of the code + its test suite, not run
+end-to-end:**
+- **macOS and Linux.** I have no access to either platform from this session. The
+  CI matrix (`windows-latest`, `macos-14` for arm64, `ubuntu-latest`,
+  `macos-26-intel` best-effort) is the only evidence either builds; I did not run it.
+- **The actual PyInstaller freeze of the gaia sidecar.** Producing a real binary
+  needs a `uv venv` with editable installs of core + chat + gaia + `pyinstaller`,
+  which is a multi-minute, environment-sensitive operation I chose not to run blind
+  in this session given how much of the pipeline is already CI-gated (the release
+  workflow smoke-tests the frozen binary itself before it can be published — see
+  `packaging/smoke_test.py`, invoked from `release_agent_gaia.yml`). The **~90–120 MB**
+  size estimate in §3 is therefore an estimate from the email agent's number, not a
+  measurement of gaia's actual binary.
+- **A live `npx @amd-gaia/gaia` run.** Can't — nothing is published yet (§9). The
+  4,100+ lines of Go/Python/TypeScript unit and integration tests are real coverage
+  of the logic (platform resolution, lock parsing, SHA-256 verification, lifecycle,
+  the exit-code bug), but they mock the network layer; nothing here has proven the
+  end-to-end download-and-launch path against the live hub.
+
+---
+
+## §9 Actual gaps
+
+### 9.1 Nothing is released yet
+
+`binaries.lock.json` still carries `PENDING-replace-with-real-sha256` placeholders
+for every platform — both the sidecar lane and the tui lane. The npm fetcher
+refuses to download against a placeholder (that's by design — an unverifiable binary
+should never be fetchable). Until someone with the `agent-publish` GitHub
+environment's approval rights tags `agent-pkg-gaia-v0.1.0` (which needs
+`terminal-hub` published first — §4), `npx @amd-gaia/gaia` doesn't work for anyone.
+`docs/guides/gaia.mdx` already says this plainly ("Coming Soon... Use the source path
+in the meantime") — that part of the docs is accurate, not a gap.
+
+### 9.2 Signing — real, unaddressed, and worse here than in the Electron path
+
+Grepped every workflow and installer asset directory for signing references.
+Findings:
+
+- **The Electron/NSIS/DMG path** (`.github/workflows/build-installers.yml`) has
+  actual signing *scaffolding* — SignPath for Windows (gated on
+  `SIGNPATH_API_TOKEN`, explicitly noted as landing in "Phase H," not yet wired),
+  Apple Developer ID + notarization for macOS (gated on `APPLE_ID` secrets), and it
+  degrades gracefully to an ad-hoc-signed, unsigned build when secrets are absent —
+  which is what every build produces today, since none of us has the certificates.
+- **`release_agent_gaia.yml` has no signing step of any kind.** The sidecar `.exe`
+  and the `terminal-hub` binaries ship as raw executables with no installer wrapper
+  and no code signature — not even the ad-hoc/degrade-gracefully pattern the Electron
+  path has. This is a real gap, not a "handled elsewhere" situation.
+
+**What this means for users:** Windows SmartScreen will flag `gaia-agent.exe` and
+`gaia-tui.exe` as from an unrecognized publisher on first run — a "Windows protected
+your PC" interstitial the user has to click through ("More info" → "Run anyway").
+macOS Gatekeeper will refuse to open an unsigned/unnotarized binary at all without an
+explicit right-click → Open, or a `xattr -d com.apple.quarantine` workaround, which is
+a materially worse experience than a click-through warning.
+
+**What I'm not pretending:** this artifact is not ready for a general, non-technical
+audience while this is true. It's fine for developers and early adopters who
+understand what SmartScreen/Gatekeeper prompts mean. Fixing it needs:
+1. A Windows code-signing certificate (EV or OV) and either a SignPath account or an
+   Azure Trusted Signing setup — an org-level decision, not something a coding
+   session can provision.
+2. An Apple Developer ID application certificate + notarization credentials
+   (`APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`) — same category.
+3. Once available, `release_agent_gaia.yml`'s freeze steps need a `codesign`/
+   `signtool` step per platform before the SHA-256-and-publish step — the hash has
+   to be computed on the *signed* binary, or the lock ships a hash for bytes nobody
+   actually gets (the CI already computes SHA-256 after freeze, so this is an
+   insertion point, not a redesign).
+
+I did not attempt to add unsigned scaffolding for this — the Electron path shows what
+that looks like, and duplicating unsigned scaffolding into a second workflow adds
+maintenance surface without solving anything until real certificates exist.
+
+### 9.3 Docs drift
+
+Two docs are stale relative to the code and are fixed as part of this change:
+
+- **`docs/guides/terminal-hub.mdx`** said *"The hub is a Go binary and is not yet
+  distributed — no release carries a `gaia-<os>-<arch>` asset... Building from
+  source is the only way to get it."* That's no longer accurate — `terminal-hub` is
+  a fully-built six-platform release lane in `release_components.yml`; it just
+  hasn't been *tagged* yet (§9.1), which is a different claim. Corrected to say that.
+- **`docs/guides/hub-publishing.mdx`**'s "Standalone sidecars" section named only the
+  email agent as the sidecar+npm precedent. Added gaia as the second instance,
+  matching §7's "extract shared tooling" note.
+
+### 9.4 The hub manifest doesn't need a schema change — the generalization gap is tooling, not schema
+
+Direct answer to "does the hub need a change to express a downloadable executable":
+**no schema change is the smallest fix, because the mechanism this issue asked for
+already exists twice** (email, now gaia) as a hand-built sibling to the standard
+Python-wheel hub manifest — a separate npm package with its own `binaries.lock.json`,
+outside `gaia-agent.yaml` entirely. `gaia-agent.yaml`'s `interfaces:` block
+(`tui`/`cli`/`pipe`/`api_server`) already tells a reader this agent runs as more than
+a plain importable Python package; that's sufficient today for the two agents that
+need it.
+
+What *is* missing, and what `hub-publishing.mdx` already names as "on the roadmap":
+shared tooling so a third agent doesn't hand-write a third copy of
+`freeze.py`/`gen_binaries_lock.json`-generator/`publish_to_r2.py`/`stamp_version.py`.
+With two real instances now built, the shape of that extraction is visible —
+a `gaia-agent-hub-sidecar-tools` (or similar) package providing the freeze harness,
+lock-file schema + validator, and publish/verify steps as library calls each agent's
+`packaging/` directory imports and configures (entry module, exclude-list, add-data),
+rather than forking the whole file. That's future work, out of scope for this issue,
+and I'm naming it rather than starting it so it doesn't get lost.
+
+---
+
+## §10 What's actually left to do (post-plan)
+
+1. **Fix the two doc-drift issues in §9.3** — done as part of this change.
+2. **Cut the `terminal-hub` release** (tag the core release; `release_components.yml`
+   publishes it) — not something this session can do; needs a maintainer with tag
+   and `agent-publish`-environment access.
+3. **Cut `agent-pkg-gaia-v0.1.0`** once `terminal-hub` is live — same access
+   requirement.
+4. **Get signing certificates provisioned** (§9.2) before recommending this to a
+   non-technical audience — an org decision, not an engineering task.
+5. **Measure the actual frozen sidecar size** once a real freeze runs in CI (it will,
+   automatically, on the next release attempt) — replace the §3 estimate with a real
+   number in the npm README's install-size expectations (not currently stated
+   anywhere, which is itself worth adding once known).
