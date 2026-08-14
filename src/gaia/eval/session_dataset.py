@@ -90,6 +90,26 @@ class SessionTurn:
     #: Set by the selector, not the extractor — see :func:`select`.
     tags: List[str] = field(default_factory=list)
 
+    @property
+    def query(self) -> str:
+        """The prompt as the agent under test should receive it.
+
+        The original prompt plus its context, folded into one self-contained
+        request. Replaying the bare prompt asks a question whose answer lived in
+        conversation the agent never had — "how many skills were tested?" is
+        unanswerable without knowing which were tried. Keeping the three fields
+        separate (prompt / context / query) means a reader can always see what
+        was actually asked, what was known, and what the agent was given.
+        """
+        if not self.context:
+            return self.prompt
+        return (
+            "Background from earlier in this session:\n"
+            + self.context
+            + "\n\nWith that in mind: "
+            + self.prompt
+        )
+
 
 def _text_of(content: Any) -> str:
     """Flatten an assistant message's content blocks to its visible answer.
@@ -193,6 +213,18 @@ def extract(path: Path) -> List[SessionTurn]:
             # A user record with block content is a tool RESULT being fed back,
             # not a person typing.
             if not text or _is_machinery(text):
+                # Machinery AFTER an answer ends the exchange; machinery before
+                # one is noise arriving mid-turn (a system reminder, a tool
+                # caveat) and must not discard the question it interrupts.
+                #
+                # Skipping unconditionally let a pending prompt keep collecting
+                # later assistant turns, so a case was paired with an answer to
+                # a different question — "how many skills were tested?" came out
+                # attached to a report written three turns later. Flushing
+                # unconditionally was worse: it threw the prompt away every time
+                # a reminder landed mid-turn, and a 14-case session yielded 4.
+                if answer_parts:
+                    flush()
                 continue
             flush()
             pending = {"prompt": text, "timestamp": record.get("timestamp", "")}
@@ -257,6 +289,7 @@ def select(
     limit: int = 10,
     min_prompt: int = MIN_PROMPT_CHARS,
     min_answer: int = MIN_ANSWER_CHARS,
+    focus: str = "",
 ) -> List[SessionTurn]:
     """Pick a spread of self-contained, substantive turns.
 
@@ -274,6 +307,11 @@ def select(
     ]
     for turn in candidates:
         turn.tags = _tags_for(turn.prompt)
+    if focus:
+        # A focused run is a different measurement, not a filtered one: ten
+        # coding tasks say something about coding, ten assorted ones say
+        # something about nothing in particular.
+        candidates = [t for t in candidates if focus in t.tags]
 
     # Round-robin across tags so ten questions are not ten of the same question.
     by_tag: Dict[str, List[SessionTurn]] = {}
@@ -294,16 +332,25 @@ def build_dataset(
     root: Path = DEFAULT_SESSION_ROOT,
     project: str = "",
     limit: int = 10,
+    focus: str = "",
 ) -> Dict[str, Any]:
     """Extract, select and package a dataset ready for the runner."""
     paths = discover(root, project)
     turns: List[SessionTurn] = []
     for path in paths:
         turns.extend(extract(path))
-    chosen = select(turns, limit=limit)
+    chosen = select(turns, limit=limit, focus=focus)
+    cases = []
+    for turn in chosen:
+        case = asdict(turn)
+        # asdict() drops properties. The saved dataset carries all three, so a
+        # reader can see what was asked, what was known, and what the agent got.
+        case["query"] = turn.query
+        cases.append(case)
     return {
         "source": "claude-code-sessions",
         "sessions_scanned": len(paths),
         "turns_extracted": len(turns),
-        "cases": [asdict(turn) for turn in chosen],
+        "focus": focus or "all",
+        "cases": cases,
     }
