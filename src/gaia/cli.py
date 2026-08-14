@@ -2712,6 +2712,32 @@ read automatically).
         help="Build the dataset and stop — no agent run, no judge",
     )
 
+    # Code generation + editing, scored by running the tests: gaia eval code
+    code_eval_parser = eval_subparsers.add_parser(
+        "code",
+        help="Code generation and editing benchmark, scored by running the tests",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  gaia eval code --control ~/.gaia/tui/control.json
+
+Each task ships a project and a test suite. The agent is asked to change it and
+the suite decides — no LLM judge. A TUI must already be running with
+--control-port; this drives THAT session so the run is visible.
+""",
+    )
+    code_eval_parser.add_argument(
+        "--control", default=None, help="Path to the running TUI's control.json"
+    )
+    code_eval_parser.add_argument(
+        "--out", default=None, help="Output directory (default: eval/results/code-<timestamp>)"
+    )
+    code_eval_parser.add_argument(
+        "--workspace",
+        default=None,
+        help="Where to materialize the task projects (default: a temp directory)",
+    )
+
     # Add new subparser for generating summary reports from evaluation directories
     report_parser = subparsers.add_parser(
         "report",
@@ -4732,6 +4758,55 @@ Let me know your answer!
                     encoding="utf-8",
                 )
                 print(f"[BASELINE] Saved baseline → {baseline_path}")
+            return
+
+        # Code generation + editing benchmark: gaia eval code
+        if getattr(args, "eval_command", None) == "code":
+            import os
+            import time as _time
+            from pathlib import Path as _Path
+
+            from gaia.eval.code_bench import run, save, scorecard
+            from gaia.eval.session_eval import TUIDriver
+
+            control = args.control or os.path.join(
+                os.environ.get("GAIA_TUI_HOME")
+                or os.path.join(os.path.expanduser("~"), ".gaia", "tui"),
+                "control.json",
+            )
+            if not _Path(control).is_file():
+                raise FileNotFoundError(
+                    f"No running TUI found at {control}. Start one with "
+                    "`gaia-drive run gaia --control-port 8817`, or pass --control."
+                )
+
+            out_dir = _Path(
+                args.out or f"eval/results/code-{_time.strftime('%Y%m%d-%H%M%S')}"
+            )
+            workspace = _Path(args.workspace) if args.workspace else None
+
+            def _progress(index, total, result):
+                mark = "OK " if result.solved else ("ERR" if result.error else "FAIL")
+                claim = " CLAIMED-SUCCESS" if result.dishonest else ""
+                print(
+                    f"  [{index}/{total}] {mark} {result.id} "
+                    f"{result.passed_after}P/{result.failed_after}F "
+                    f"({result.elapsed_s}s){claim}"
+                )
+
+            print(f"[RUN] driving the TUI at {control}")
+            results = run(TUIDriver(_Path(control)), root=workspace, on_progress=_progress)
+            card = scorecard(results)
+            report_path = save(out_dir, results, card, "live TUI")
+            print()
+            print(
+                f"[SCORE] solved {card['solved']}/{card['ran']} "
+                f"({card['solve_rate']}%) · generation "
+                f"{card['generation_solved']}/{card['generation_total']} · editing "
+                f"{card['editing_solved']}/{card['editing_total']} · "
+                f"{card['dishonest']} false success claim(s)"
+            )
+            print(f"[OUTPUT] {report_path.resolve()}")
             return
 
         # Replay real Claude Code sessions: gaia eval sessions
