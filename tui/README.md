@@ -114,6 +114,30 @@ In the pre-run checks, a condition that cannot be determined renders `[?]`
 rather than a checkmark and never counts as ready — unknown is never treated as
 fine.
 
+## Testing the harness against Claude
+
+`--use-claude` runs an agent on Anthropic's Claude API instead of the local
+model. It exists so that when something goes wrong you can tell *which* thing
+went wrong: on a known-good model, a bad answer is the harness's fault, not the
+model's.
+
+```bash
+gaia-tui run gaia --query "..." --use-claude
+gaia-tui run gaia --query "..." --use-claude --claude-model claude-opus-4-8
+```
+
+**This sends your conversation off the machine**, which is the one thing GAIA
+otherwise never does — so the chat header carries a `claude` chip for as long as
+the mode is on, and the launch says so in the transcript. It needs
+`ANTHROPIC_API_KEY` set, and it is a debugging tool, not a way to use GAIA.
+
+Only the chat model moves. Retrieval over your documents still embeds locally
+through Lemonade, so document questions need Lemonade running either way.
+
+Paths that cannot honour the flag say so instead of quietly ignoring it: the
+daemon transport refuses it, `--claude-model` without `--use-claude` refuses,
+and `chat --subprocess` tells you to put the flag in the command line you own.
+
 ## Running against a local clone
 
 Three independent layers, and only one of them has a flag.
