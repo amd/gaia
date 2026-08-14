@@ -5,6 +5,7 @@ package chat
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -52,6 +53,25 @@ const setupProfile = "chat"
 // normal; this only guards against a wedged network call hanging the gate
 // forever on an otherwise-idle launch.
 const setupCheckTimeout = 30 * time.Second
+
+// setupNotReadyExitCode is the ONLY exit code that means "not set up yet".
+// Anything else — notably 2, which an installed gaia older than `--check`
+// returns for "unrecognized arguments" — means the question was not answered,
+// and must not be mistaken for a clean machine.
+const setupNotReadyExitCode = 1
+
+// lastMeaningfulLine picks the line worth quoting back out of a failed child's
+// output. The LAST non-empty one, because a CLI that rejects its arguments
+// prints its whole usage banner first and the actual complaint at the end.
+func lastMeaningfulLine(s string) string {
+	lines := strings.Split(s, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if t := strings.TrimSpace(lines[i]); t != "" {
+			return t
+		}
+	}
+	return "(no output)"
+}
 
 // gaiaBinary resolves the `gaia` CLI on PATH. A package var, not a bare
 // exec.LookPath call, so tests can substitute a stub without spawning the
@@ -144,17 +164,28 @@ func checkSetupCmd(claudeMode bool) tea.Cmd {
 		ctx, cancel := context.WithTimeout(context.Background(), setupCheckTimeout)
 		defer cancel()
 		cmd := exec.CommandContext(ctx, bin, setupCheckArgs(claudeMode)...)
+		// Captured so a failure can quote what the tool actually said. Without
+		// it the only evidence is an exit code.
+		var out bytes.Buffer
+		cmd.Stdout = &out
+		cmd.Stderr = &out
 		runErr := cmd.Run()
 		if runErr == nil {
 			return setupCheckResultMsg{ready: true}
 		}
 		var exitErr *exec.ExitError
-		if errors.As(runErr, &exitErr) {
+		if errors.As(runErr, &exitErr) && exitErr.ExitCode() == setupNotReadyExitCode {
 			// Exit 1 is `gaia init --check`'s documented "not ready" answer
 			// -- the expected negative, not a failure to ask the question.
 			return setupCheckResultMsg{ready: false}
 		}
-		return setupCheckResultMsg{err: fmt.Errorf("could not check whether setup is needed: %w", runErr)}
+		// Anything else means the question was never answered. Treating that as
+		// "not ready" ran a full multi-minute `gaia init` on EVERY launch: an
+		// installed gaia older than `--check` exits 2 with "unrecognized
+		// arguments", which looked exactly like a clean machine.
+		return setupCheckResultMsg{err: fmt.Errorf(
+			"could not check whether setup is needed (%w). GAIA said: %s",
+			runErr, lastMeaningfulLine(out.String()))}
 	}
 }
 

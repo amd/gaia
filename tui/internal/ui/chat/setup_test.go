@@ -4,7 +4,10 @@
 package chat
 
 import (
+	"fmt"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -258,4 +261,79 @@ func TestClaudeModeSkipsTheChatModelInCheckArgs(t *testing.T) {
 	if !found {
 		t.Errorf("claude mode's check must pass --skip-chat-model, got: %v", args)
 	}
+}
+
+// An installed `gaia` older than `gaia init --check` rejects the flag and exits
+// 2 with "unrecognized arguments". That was read as "not set up yet", so the
+// TUI ran a full multi-minute `gaia init` — including a vite production build
+// of the web UI — on EVERY launch of an already-working machine.
+//
+// Only exit 1 means "not ready". Anything else means the question was never
+// answered, and must say so rather than silently reinstalling.
+func TestAnUnknownCheckFlagIsAnErrorNotACleanMachine(t *testing.T) {
+	script := writeExitScript(t, "old-gaia", 2,
+		"usage: gaia [-h] ...\ngaia: error: unrecognized arguments: --check")
+	stubGaiaBinary(t, script)
+
+	msg := checkSetupCmd(false)()
+	res, ok := msg.(setupCheckResultMsg)
+	if !ok {
+		t.Fatalf("unexpected message %T", msg)
+	}
+	if res.ready {
+		t.Fatal("an unusable check reported the machine as READY")
+	}
+	if res.err == nil {
+		t.Fatal("exit 2 was read as 'not set up yet' — this reinstalls on every launch")
+	}
+	if !strings.Contains(res.err.Error(), "unrecognized arguments") {
+		t.Errorf("the error does not quote what gaia actually said: %v", res.err)
+	}
+}
+
+// Exit 1 is the documented negative and must still mean "run setup".
+func TestExitOneStillMeansNotSetUp(t *testing.T) {
+	stubGaiaBinary(t, writeExitScript(t, "not-ready", 1, "NOT READY"))
+
+	res := checkSetupCmd(false)().(setupCheckResultMsg)
+	if res.err != nil {
+		t.Fatalf("the documented not-ready exit was treated as a failure: %v", res.err)
+	}
+	if res.ready {
+		t.Error("exit 1 reported as ready")
+	}
+}
+
+func TestExitZeroMeansReady(t *testing.T) {
+	stubGaiaBinary(t, writeExitScript(t, "ready", 0, "READY: profile 'chat' is already set up"))
+
+	res := checkSetupCmd(false)().(setupCheckResultMsg)
+	if res.err != nil || !res.ready {
+		t.Errorf("a ready machine was not reported ready: ready=%v err=%v", res.ready, res.err)
+	}
+}
+
+// writeExitScript builds a tiny executable that prints output and exits with a
+// chosen code, so the check can be driven without the real CLI.
+func writeExitScript(t *testing.T, name string, code int, output string) string {
+	t.Helper()
+	dir := t.TempDir()
+	if runtime.GOOS == "windows" {
+		path := filepath.Join(dir, name+".bat")
+		body := "@echo off\r\n"
+		for _, line := range strings.Split(output, "\n") {
+			body += "echo " + line + "\r\n"
+		}
+		body += fmt.Sprintf("exit /b %d\r\n", code)
+		if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+			t.Fatalf("write stub: %v", err)
+		}
+		return path
+	}
+	path := filepath.Join(dir, name+".sh")
+	body := fmt.Sprintf("#!/bin/sh\ncat <<'EOS'\n%s\nEOS\nexit %d\n", output, code)
+	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+		t.Fatalf("write stub: %v", err)
+	}
+	return path
 }
