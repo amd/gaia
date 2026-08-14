@@ -339,6 +339,55 @@ def _chunk_by_blocks(
 
 
 # ---------------------------------------------------------------------------
+# Oversized-chunk guard
+# ---------------------------------------------------------------------------
+
+# A single pathological chunk (one giant minified line, a generated file with
+# no blank lines for _chunk_by_blocks to split on) can otherwise become one
+# CodeChunk holding the entire file: unbounded metadata.json growth, and only
+# the first ~1200 chars are ever embedded (_chunk_to_embed_text truncates),
+# so the rest of the file is silently unsearchable. Hard-split on chars.
+_MAX_CHUNK_CHARS = 20_000
+
+
+def _split_oversized_chunk(
+    chunk: CodeChunk, max_chars: int = _MAX_CHUNK_CHARS
+) -> List[CodeChunk]:
+    """Split *chunk* into character-bounded pieces if it exceeds *max_chars*.
+
+    Line numbers are kept as the original chunk's full range on every piece
+    (an approximation — the original parser doesn't track per-character line
+    offsets) rather than computed exactly, since the goal is bounding size
+    and keeping every part embeddable, not precise line attribution.
+    """
+    text = chunk.content
+    if len(text) <= max_chars:
+        return [chunk]
+
+    n_parts = -(-len(text) // max_chars)  # ceil division
+    parts = []
+    for i in range(n_parts):
+        piece = text[i * max_chars : (i + 1) * max_chars]
+        symbol_name = chunk.symbol_name
+        if symbol_name:
+            symbol_name = f"{symbol_name} (part {i + 1}/{n_parts})"
+        parts.append(
+            CodeChunk(
+                content=piece,
+                file_path=chunk.file_path,
+                language=chunk.language,
+                start_line=chunk.start_line,
+                end_line=chunk.end_line,
+                symbol_name=symbol_name,
+                symbol_type=chunk.symbol_type,
+                docstring=chunk.docstring if i == 0 else None,
+                imports=chunk.imports,
+            )
+        )
+    return parts
+
+
+# ---------------------------------------------------------------------------
 # Public dispatcher
 # ---------------------------------------------------------------------------
 
@@ -364,6 +413,11 @@ def chunk_code_file(
     language = detect_language(file_path)
 
     if language == "python":
-        return parse_python_file(file_path, content)
+        chunks = parse_python_file(file_path, content)
+    else:
+        chunks = parse_generic_file(file_path, content, language)
 
-    return parse_generic_file(file_path, content, language)
+    result: List[CodeChunk] = []
+    for c in chunks:
+        result.extend(_split_oversized_chunk(c))
+    return result

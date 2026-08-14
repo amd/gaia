@@ -219,8 +219,13 @@ class CodeIndexSDK:
                 reused_chunks.extend(reused)
                 continue
 
-            # Parse changed/new file
-            parsed = chunk_code_file(rel_path, content)
+            # Parse changed/new file — honor the configured size cap, not the
+            # parser's hardcoded 1MB default (discovery already filtered by
+            # config, so a caller who raised max_file_size_mb shouldn't have
+            # the parser silently re-reject the same files it let through).
+            parsed = chunk_code_file(
+                rel_path, content, max_size_mb=self.config.max_file_size_mb
+            )
             new_chunks.extend(parsed)
             files_indexed += 1
 
@@ -698,8 +703,62 @@ class CodeIndexSDK:
 
         self._embedder = self._llm_client
 
+    def _embed_batch_call(self, batch: List[str]) -> List[list]:
+        """One HTTP call to the embeddings endpoint. Raises on transport failure."""
+        response = self._embedder.embeddings(
+            batch, model=self.config.embedding_model, timeout=180
+        )
+        return [item.get("embedding", []) for item in (response or {}).get("data", [])]
+
+    def _embed_batch_resilient(self, batch: List[str]) -> List[list]:
+        """Embed one batch, retrying transport errors and short/empty responses.
+
+        Lemonade occasionally answers HTTP 200 with fewer (or zero) vectors
+        than requested while the model is still warming up — no exception is
+        raised, so a naive caller can't distinguish that from "embeddings
+        legitimately came back empty". Retrying the *same batch* a couple of
+        times resolves the transient case without callers paying the ~25x
+        cost of a one-by-one fallback for what is usually a load race.
+
+        Returns whatever the backend produced — may be shorter than *batch*
+        if retries are exhausted. Callers decide whether that's fatal.
+        """
+        max_retries = 2
+        result: List[list] = []
+        for attempt in range(max_retries + 1):
+            try:
+                result = self._embed_batch_call(batch)
+            except Exception as e:
+                if attempt < max_retries:
+                    self.log.warning(
+                        f"Embedding batch attempt {attempt + 1} failed: {e}"
+                    )
+                    time.sleep(2)
+                    continue
+                raise
+
+            if len(result) == len(batch):
+                return result
+
+            if attempt < max_retries:
+                self.log.warning(
+                    f"Embedding batch returned {len(result)}/{len(batch)} vectors "
+                    f"(no error) — backend likely still loading "
+                    f"{self.config.embedding_model!r}, retrying batch "
+                    f"(attempt {attempt + 1}/{max_retries})"
+                )
+                time.sleep(2)
+
+        return result
+
     def _encode_texts(self, texts: List[str]):
-        """Encode texts using Lemonade embeddings. Returns numpy array."""
+        """Encode texts using Lemonade embeddings. Returns numpy array.
+
+        Fails loudly if the backend cannot produce a vector for every text
+        after retries — this is the query-encode path used by search(),
+        which must never silently hand back fewer vectors than requested
+        (that previously surfaced as "no matches" instead of a real error).
+        """
         import numpy as np
 
         self._load_embedder()
@@ -708,44 +767,18 @@ class CodeIndexSDK:
         MAX_EMBED_CHARS = 1200
         safe_texts = [t[:MAX_EMBED_CHARS] for t in texts]
 
-        all_embeddings = []
+        all_embeddings: List[list] = []
         for batch_start in range(0, len(safe_texts), BATCH_SIZE):
             batch = safe_texts[batch_start : batch_start + BATCH_SIZE]
-            max_retries = 2
-            response = None
-            for attempt in range(max_retries + 1):
-                try:
-                    response = self._embedder.embeddings(
-                        batch, model=self.config.embedding_model, timeout=180
-                    )
-                    break
-                except Exception as e:
-                    if attempt < max_retries:
-                        self.log.warning(
-                            f"Embedding batch attempt {attempt + 1} failed: {e}"
-                        )
-                        time.sleep(2)
-                    else:
-                        raise
-
-            batch_embeddings = [
-                item.get("embedding", []) for item in (response or {}).get("data", [])
-            ]
-
-            # Fallback: one-by-one if batch returned nothing
-            if not batch_embeddings and batch:
-                self.log.warning("Batch returned 0 embeddings, trying one-by-one")
-                for single in batch:
-                    try:
-                        resp = self._embedder.embeddings(
-                            [single], model=self.config.embedding_model, timeout=60
-                        )
-                        data = resp.get("data", [])
-                        if data:
-                            batch_embeddings.append(data[0].get("embedding", []))
-                    except Exception as e:
-                        self.log.warning(f"Single embedding failed: {e}")
-
+            batch_embeddings = self._embed_batch_resilient(batch)
+            if len(batch_embeddings) != len(batch):
+                raise RuntimeError(
+                    f"Embedding backend returned {len(batch_embeddings)}/"
+                    f"{len(batch)} vectors after retries against "
+                    f"{self.config.embedding_model!r}. Verify Lemonade "
+                    "Server is reachable and the model is fully loaded "
+                    "(not mid-warm-up)."
+                )
             all_embeddings.extend(batch_embeddings)
 
         return np.array(all_embeddings, dtype=np.float32)
@@ -770,36 +803,21 @@ class CodeIndexSDK:
             batch_chunks = chunks[batch_start : batch_start + BATCH_SIZE]
             safe_texts = [t[:MAX_EMBED_CHARS] for t in batch_texts]
 
-            max_retries = 2
-            response = None
-            for attempt in range(max_retries + 1):
-                try:
-                    response = self._embedder.embeddings(
-                        safe_texts, model=self.config.embedding_model, timeout=180
-                    )
-                    break
-                except Exception as e:
-                    if attempt < max_retries:
-                        self.log.warning(f"Batch attempt {attempt + 1} failed: {e}")
-                        time.sleep(2)
-                    else:
-                        self.log.error(f"Batch embedding failed after retries: {e}")
-                        # Fall through with empty response
-                        response = {}
-
-            batch_embeddings = [
-                item.get("embedding", []) for item in (response or {}).get("data", [])
-            ]
-
-            # One-by-one fallback if batch returned nothing or partial result
-            if len(batch_embeddings) != len(batch_chunks) and batch_embeddings:
-                self.log.warning(
-                    f"Partial batch: got {len(batch_embeddings)} embeddings "
-                    f"for {len(batch_chunks)} chunks — retrying one-by-one"
-                )
+            try:
+                batch_embeddings = self._embed_batch_resilient(safe_texts)
+            except Exception as e:
+                self.log.error(f"Batch embedding failed after retries: {e}")
                 batch_embeddings = []
-            if not batch_embeddings and safe_texts:
-                self.log.warning("Batch returned 0 embeddings, trying one-by-one")
+
+            # Last-resort one-by-one fallback — only reached once the whole-batch
+            # retries above (transient "still loading") are exhausted, so this
+            # is now the rare path instead of the common one.
+            if len(batch_embeddings) != len(batch_chunks):
+                self.log.warning(
+                    f"Batch embedding still short ({len(batch_embeddings)}/"
+                    f"{len(batch_chunks)}) after retries — falling back to "
+                    "one-by-one for this batch"
+                )
                 batch_embeddings = []
                 for single_text in safe_texts:
                     try:
@@ -859,8 +877,12 @@ class CodeIndexSDK:
             tmp_meta.write_text(json.dumps(meta, indent=2), encoding="utf-8")
             # Rename index first — if crash happens between renames,
             # _load_metadata will detect stale metadata via ntotal check.
-            tmp_index.rename(self._index_path)
-            tmp_meta.rename(self._meta_path)
+            # Path.replace (not .rename) — on Windows, rename() raises
+            # FileExistsError when the destination already exists, so every
+            # re-index after the first would crash here. replace() atomically
+            # overwrites on both Windows and POSIX.
+            tmp_index.replace(self._index_path)
+            tmp_meta.replace(self._meta_path)
             self.log.debug(f"Index saved to {self._cache_dir}")
         except Exception as e:
             self.log.error(f"Failed to save index: {e}")

@@ -148,3 +148,113 @@ class TestRegistryEntry:
         module_path, class_name = KNOWN_TOOLS["code_index"]
         assert class_name == "CodeIndexToolsMixin"
         assert module_path == "gaia.agents.tools.code_index_tools"
+
+
+# ---------------------------------------------------------------------------
+# Tests: index_codebase's repo_path traversal guard
+#
+# index_codebase(repo_path=...) lets the LLM redirect the tool to any
+# subdirectory it names, so the guard confining that redirect to the agent's
+# original root is a real security boundary, not just input validation. It
+# must survive `..`, an absolute path elsewhere, AND a symlink/junction
+# planted *inside* the allowed root that resolves to somewhere outside it —
+# the last one is easy to get wrong because CodeIndexSDK.__init__ calls
+# Path(repo_path).resolve(), which follows the link and would silently
+# re-root the whole SDK (and its own PathValidator) onto the link's target
+# if the guard compared unresolved strings.
+# ---------------------------------------------------------------------------
+
+
+def _make_link(link_path: str, target_path: str) -> bool:
+    """Best-effort symlink/junction creation. Returns False if unsupported
+    in this environment (e.g. no privilege on Windows without Dev Mode) so
+    the caller can skip rather than fail on an unrelated platform limitation.
+    """
+    try:
+        os.symlink(target_path, link_path, target_is_directory=True)
+        return True
+    except OSError:
+        pass
+    if os.name == "nt":
+        import subprocess
+
+        try:
+            subprocess.run(
+                ["cmd", "/c", "mklink", "/J", link_path, target_path],
+                capture_output=True,
+                check=True,
+            )
+            return True
+        except (subprocess.CalledProcessError, OSError):
+            return False
+    return False
+
+
+class TestTraversalGuard:
+    def test_within_root_is_allowed(self, tmp_path):
+        root = tmp_path / "repo"
+        sub = root / "sub"
+        sub.mkdir(parents=True)
+        h = make_harness(root)
+        fn = _TOOL_REGISTRY["index_codebase"]["function"]
+
+        with patch.object(h, "_get_code_index_sdk", return_value=None):
+            result = json.loads(fn(repo_path=str(sub)))
+
+        # Reaches the "SDK not initialised" branch — proves it passed the
+        # guard rather than being rejected as a traversal attempt.
+        assert result == {"error": "code_index SDK not initialised"}
+        assert h._repo_path == os.path.abspath(str(sub))
+
+    def test_dotdot_traversal_is_blocked(self, tmp_path):
+        root = tmp_path / "repo"
+        root.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        h = make_harness(root)
+        fn = _TOOL_REGISTRY["index_codebase"]["function"]
+
+        escape = str(root / ".." / "outside")
+        result = json.loads(fn(repo_path=escape))
+
+        assert "error" in result
+        assert "must be within" in result["error"]
+
+    def test_absolute_path_elsewhere_is_blocked(self, tmp_path):
+        root = tmp_path / "repo"
+        root.mkdir()
+        outside = tmp_path / "outside"
+        outside.mkdir()
+        h = make_harness(root)
+        fn = _TOOL_REGISTRY["index_codebase"]["function"]
+
+        result = json.loads(fn(repo_path=str(outside)))
+
+        assert "error" in result
+        assert "must be within" in result["error"]
+
+    def test_symlink_inside_root_escaping_outside_is_blocked(self, tmp_path):
+        """A link planted *inside* the allowed root but resolving outside
+        it must still be blocked — this is the case that a naive
+        os.path.abspath (no symlink resolution) prefix check misses.
+        """
+        root = tmp_path / "repo"
+        allowed_sub = root / "sub"
+        allowed_sub.mkdir(parents=True)
+        outside = tmp_path / "outside_secret"
+        outside.mkdir()
+        (outside / "secret.py").write_text("SECRET = 1\n", encoding="utf-8")
+
+        link = allowed_sub / "escape_link"
+        if not _make_link(str(link), str(outside)):
+            pytest.skip("symlink/junction creation not permitted in this environment")
+
+        h = make_harness(root)
+        fn = _TOOL_REGISTRY["index_codebase"]["function"]
+        result = json.loads(fn(repo_path=str(link)))
+
+        assert "error" in result
+        assert "must be within" in result["error"]
+        # The guard must reject *before* re-rooting mixin state onto the
+        # escaped path.
+        assert h._repo_path == os.path.abspath(str(root))

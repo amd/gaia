@@ -341,3 +341,117 @@ class TestChunkCodeFile:
         latin_content = "caf\xe9 = True\n"
         chunks = chunk_code_file("latin.py", latin_content)
         assert isinstance(chunks, list)
+
+    def test_single_giant_line_is_split_not_one_unbounded_chunk(self):
+        """A minified/generated file with no blank lines to split on must
+        not become a single chunk holding the whole file — only the first
+        ~1200 chars of a chunk are ever embedded, so the rest would be
+        permanently unsearchable, and metadata.json would grow unbounded.
+        """
+        skip_if_unavailable()
+        # One line, no newlines at all, ~250KB, well under the 1MB file cap.
+        huge_single_line = "x=1;" * 50_000
+        chunks = chunk_code_file("minified.js", huge_single_line)
+
+        assert len(chunks) > 1, "a giant single line must be split into pieces"
+        assert all(len(c.content) <= 20_000 for c in chunks)
+        # Reassembling the pieces must reproduce the original content exactly
+        # (no silent truncation or dropped bytes).
+        assert "".join(c.content for c in chunks) == huge_single_line
+
+    def test_oversized_symbol_chunk_is_split(self):
+        """A single AST-parsed symbol (one enormous function) must also be
+        split — the oversized-chunk guard isn't just for the no-symbols path.
+        """
+        skip_if_unavailable()
+        huge_body = "\n".join(f"    x{i} = {i}" for i in range(10_000))
+        source = f"def giant_function():\n{huge_body}\n    return x0\n"
+        chunks = chunk_code_file("giant.py", source)
+
+        assert len(chunks) > 1
+        assert all(c.symbol_type == "function" for c in chunks)
+        assert chunks[0].symbol_name.startswith("giant_function (part 1/")
+
+
+# ---------------------------------------------------------------------------
+# Chunking quality: symbol density, no-symbol files, deep nesting
+# ---------------------------------------------------------------------------
+
+
+MANY_SMALL_METHODS = """\
+class Config:
+    def get_a(self):
+        return self.a
+
+    def get_b(self):
+        return self.b
+
+    def get_c(self):
+        return self.c
+
+    def get_d(self):
+        return self.d
+
+    def get_e(self):
+        return self.e
+"""
+
+DEEPLY_NESTED = """\
+def outer():
+    def middle():
+        def inner():
+            if True:
+                for i in range(10):
+                    while i > 0:
+                        try:
+                            with open("f") as fh:
+                                return fh.read()
+                        except OSError:
+                            pass
+        return inner
+    return middle
+"""
+
+NO_FUNCTIONS_FILE = """\
+API_URL = "https://example.com"
+TIMEOUT = 30
+RETRIES = [1, 2, 3]
+CONFIG = {"key": "value"}
+"""
+
+
+class TestChunkingQuality:
+    def test_class_with_many_small_methods_gets_one_chunk_per_method(self):
+        """Each small method must be independently findable — a single
+        chunk covering the whole class would bury unrelated methods behind
+        each other in search results.
+        """
+        skip_if_unavailable()
+        chunks = chunk_code_file("config.py", MANY_SMALL_METHODS)
+        method_names = {c.symbol_name for c in chunks if c.symbol_type == "function"}
+        assert method_names == {"get_a", "get_b", "get_c", "get_d", "get_e"}
+        # Each chunk carries its own symbol name for context, not just body text.
+        for c in chunks:
+            assert c.symbol_name in c.content or c.symbol_name in method_names
+
+    def test_file_with_no_functions_is_still_indexed_as_one_chunk(self):
+        """A pure-constants/config file has no symbols to extract — it must
+        still produce a searchable chunk instead of being silently dropped.
+        """
+        skip_if_unavailable()
+        chunks = chunk_code_file("constants.py", NO_FUNCTIONS_FILE)
+        assert len(chunks) == 1
+        assert "API_URL" in chunks[0].content
+        assert "RETRIES" in chunks[0].content
+
+    def test_deeply_nested_function_captured_whole(self):
+        """A deeply nested function must be captured as one chunk (by its
+        outermost def), not truncated at the first nested block boundary.
+        """
+        skip_if_unavailable()
+        chunks = chunk_code_file("nested.py", DEEPLY_NESTED)
+        outer_chunks = [c for c in chunks if c.symbol_name == "outer"]
+        assert len(outer_chunks) == 1
+        # The whole nested body — down to the innermost except — is present.
+        assert "except OSError" in outer_chunks[0].content
+        assert "return fh.read()" in outer_chunks[0].content
