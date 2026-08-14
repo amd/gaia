@@ -89,3 +89,36 @@ def test_default_skill_set_stays_opt_in():
     ]
 
     assert not live, f"default_skill_set is now active: {live}"
+
+
+@pytest.fixture(scope="module")
+def flagship():
+    """One real flagship agent — constructing it is expensive, so share it."""
+    from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
+
+    return GaiaAgent(config=GaiaAgentConfig(silent_mode=True))
+
+
+class TestTheFlagshipCanSearchCode:
+    """Semantic code search is what makes this agent usable ON a codebase.
+
+    The mixin existed in `gaia.agents.tools.code_index_tools` and was composed
+    onto nothing: the flagship had `search_file_content` (grep — finds a string)
+    and no way to find the function that does the thing you described.
+    """
+
+    def test_the_code_index_tools_are_registered(self, flagship):
+        for name in (
+            "index_codebase",
+            "search_code_index",
+            "get_index_status",
+            "clear_code_index",
+        ):
+            assert name in flagship._tools_registry, (
+                f"{name} is missing — the flagship cannot index or search code"
+            )
+
+    def test_the_index_is_rooted_somewhere_real(self, flagship):
+        assert Path(flagship._repo_path).is_dir(), (
+            "the code index has no valid repository root, so indexing cannot start"
+        )

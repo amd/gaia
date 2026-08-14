@@ -121,5 +121,5 @@ func RenderMarkdown(content string) string {
 	if err != nil {
 		return content
 	}
-	return sealLineEnds(out)
+	return out
 }

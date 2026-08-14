@@ -19,9 +19,12 @@ type StatusBarState struct {
 }
 
 var (
+	// No background fill. A band of near-black across the bottom of a black
+	// terminal is a seam, not a surface — it reads as grubby rather than as
+	// structure. The divider above it already separates the status line from
+	// the transcript.
 	statusBarStyle = lipgloss.NewStyle().
-			Background(theme.SurfaceBG).
-			Foreground(theme.OnSurface).
+			Foreground(theme.Dim).
 			Padding(0, 1)
 
 	connectedDotStyle    = lipgloss.NewStyle().Foreground(theme.Success)

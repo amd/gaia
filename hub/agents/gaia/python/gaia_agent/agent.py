@@ -47,6 +47,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar, List, Optional
 
+from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
 from gaia_agent.skill_tools import SkillLibraryToolsMixin
 from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 
@@ -155,7 +156,7 @@ class GaiaAgentConfig(ChatAgentConfig):
     )
 
 
-class GaiaAgent(SkillLibraryToolsMixin, ChatAgent):
+class GaiaAgent(SkillLibraryToolsMixin, CodeIndexToolsMixin, ChatAgent):
     """The flagship GAIA agent — conversation, documents, data, web, and skills."""
 
     SKILL_DIRS: ClassVar[List[str]] = _bundled_skill_roots()
@@ -175,9 +176,16 @@ class GaiaAgent(SkillLibraryToolsMixin, ChatAgent):
 
         Skill-library tools go first: ChatAgent's registration ends with
         ``_snapshot_tools()``, and anything registered after that snapshot is
-        absent from this instance's registry.
+        absent from this instance's registry. Code-index tools join them for the
+        same reason.
+
+        Semantic code search is what makes this agent usable ON a codebase
+        rather than merely in one: grep finds a string, this finds the function
+        that does the thing you described.
         """
         self.register_skill_library_tools()
+        self._init_code_index_state(repo_path=os.getcwd())
+        self.register_code_index_tools()
         super()._register_tools()
 
     def select_skill_set(self) -> Optional[str]:
