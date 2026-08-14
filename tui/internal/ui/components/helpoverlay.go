@@ -140,4 +140,5 @@ const chatHelpText = `  GAIA Chat
   ──────────────────
   /help       Show this help
   /hub        Return to Agent Hub
-  /clear      Clear conversation`
+  /clear      Clear conversation
+  /model      Show/switch the running model`

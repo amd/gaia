@@ -202,8 +202,32 @@ type ChatModel struct {
 	// claudeMode is true while the agent's inference runs on Anthropic's
 	// Claude API instead of the local Lemonade backend (--use-claude). Set
 	// once at launch from the transport's argv — see applyLaunchClaude — and
-	// stated in the header on every frame while it is on.
+	// kept in sync by every model-state ping thereafter (handleCanonicalEvent).
 	claudeMode bool
+
+	// modelID/modelDisplay/modelBackend/modelRemote come from the agent's own
+	// model-state ping (a CanonicalStatusEvent with ModelID set — see
+	// handleCanonicalEvent), never from the launch flags: a flag can be
+	// defaulted or absent and would lie about what actually resolved. Empty
+	// until the first ping arrives, which is the first thing the agent writes
+	// after construction — see renderModelChip for the pre-ping fallback.
+	modelID      string
+	modelDisplay string
+	modelBackend string
+	modelRemote  bool
+
+	// awaitingModelSwitch is true for the duration of a `/model <id>` turn
+	// this session itself started. A model-state ping that disagrees with
+	// modelID while this is true is the expected confirmation of THAT
+	// switch — no warning. One that disagrees while this is false means the
+	// agent process was replaced without anyone here asking for it (a
+	// cancelled turn respawns the child from its ORIGINAL launch flags,
+	// silently reverting any live switch — see subprocess.go's discard/
+	// respawn) — see handleCanonicalEvent. Cleared on the turn's own
+	// terminal event, whichever way that turn ended, so a failed switch
+	// (Lemonade down, bad credential — no ping ever arrives) never leaves
+	// this stuck true.
+	awaitingModelSwitch bool
 
 	connected    bool
 	totalSteps   int
@@ -939,6 +963,32 @@ func (m *ChatModel) restoreQueuedToComposer() {
 // "/clear" typed mid-turn still clears when it finally lands instead of being
 // sent to the agent as a literal question.
 func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
+	// `/model` takes a free-form argument (a model id), so it can't join the
+	// exact-match switch below like /bypass's fixed variants — it's dispatched
+	// here instead, still before anything falls through to sendQuery.
+	if isModelCommand(query) {
+		if !m.supportsModelCommand() {
+			// Same shape as setBypass's capability check (bypass.go): refuse
+			// visibly rather than let the literal text ship as a chat
+			// question the agent has no way to understand.
+			m.messages = append(m.messages, Message{
+				Role: RoleError,
+				Content: m.agentName + " does not support live model switching " +
+					"(/model) — only the gaia flagship agent does.",
+			})
+			m.updateViewport()
+			return m, nil
+		}
+		// A control request, not a question — unlike sendQuery, this never
+		// posts a user chat bubble; the agent's own confirmation (or
+		// refusal) is the only line that belongs in the transcript. Still
+		// rides the real query channel (startTurn/Send), not the
+		// fire-and-forget control one /bypass uses — see
+		// gaia_agent.stdio.run_model_command for why.
+		m.awaitingModelSwitch = true
+		return m.startTurn(query)
+	}
+
 	switch query {
 	case "/help":
 		return m, func() tea.Msg { return ToggleHelpMsg{} }
@@ -1001,6 +1051,13 @@ func (m ChatModel) sendQuery(query string) (tea.Model, tea.Cmd) {
 		Role:    RoleUser,
 		Content: query,
 	})
+	return m.startTurn(query)
+}
+
+// startTurn is sendQuery's shared machinery: everything after "what goes in
+// the transcript" is identical whether the line is a real question or a
+// `/model` command.
+func (m ChatModel) startTurn(query string) (tea.Model, tea.Cmd) {
 	m.streaming = true
 	m.activity = nil
 	m.buffer = ""
@@ -1075,6 +1132,11 @@ func (m ChatModel) supersededTurn(ch <-chan interface{}) bool {
 func (m *ChatModel) settleTurn() {
 	m.events = nil
 	m.cancelFn = nil
+	// A failed `/model` switch (Lemonade down, bad credential) never sends a
+	// model-state ping — clearing here, not just on the ping itself, is what
+	// keeps a failure from leaving this stuck true and permanently
+	// suppressing the revert-warning in handleCanonicalEvent.
+	m.awaitingModelSwitch = false
 	// "cancelling…" describes a request that is in flight, so it must not
 	// outlive it. Left in place it became a permanent claim in the scrollback —
 	// and when the cancel lost the race it sat directly above the answer that
@@ -2019,9 +2081,10 @@ func (m ChatModel) renderHeader() string {
 	if m.dev {
 		title += activityStyle.Render(" │ dev")
 	}
-	// Claude mode means the conversation is NOT processed locally — worth a
-	// chip on every frame so the user can always tell where inference runs.
-	title += m.renderClaudeChip()
+	// Names the specific model in use (never a bare "claude") and colors it
+	// when inference is remote — worth stating on every frame so the user can
+	// always tell where inference runs and which model answered.
+	title += m.renderModelChip()
 	return title
 }
 

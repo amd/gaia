@@ -372,6 +372,20 @@ const controlKey = "gaia_control"
 // A control message for a child that was never started is an error, not a
 // silent no-op: it means the caller thinks it is talking to an agent that does
 // not exist, and swallowing that produces a UI that looks like it worked.
+//
+// IMPORTANT for anything built on this channel later: it is fire-and-forget
+// ONLY. Nothing reads stdout except the goroutine Send spawns below, and that
+// goroutine exists only for the duration of one turn — between turns nobody is
+// scanning the pipe at all. A control message answered by writing a reply
+// event (rather than resolving state already parked in-process, the way
+// RespondToolPermission/SetBypassPermissions do) would sit unread in the OS
+// pipe buffer until some LATER, unrelated Send() call started scanning again —
+// at which point it would be misread as the first event of THAT turn. This is
+// why live model switching (`/model`, gaia_agent.stdio.run_model_command) does
+// NOT use this channel despite looking like a natural fit: it needs an actual
+// response (the switched-to model, or why the switch was refused), so it rides
+// the ordinary query channel (Send) like a real turn instead, guaranteeing a
+// reader is actually listening when the answer comes back.
 func (s *SubprocessClient) writeControl(fields map[string]interface{}) error {
 	s.mu.Lock()
 	stdin, started := s.stdin, s.started

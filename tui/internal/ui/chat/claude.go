@@ -38,10 +38,37 @@ func (m ChatModel) applyLaunchClaude() ChatModel {
 }
 
 // renderClaudeChip is the header segment saying inference is remote, or ""
-// when the session runs locally.
+// when the session runs locally. This is the PRE-PING fallback only — see
+// renderModelChip — because it can only ever say "claude" (the launch flag
+// carries no specific model id), never which one.
 func (m ChatModel) renderClaudeChip() string {
 	if !m.claudeMode {
 		return ""
 	}
 	return claudeChipStyle.Render(" │ claude")
+}
+
+// modelChipStyle is the local-model header segment: the same slot
+// renderClaudeChip fills for a remote session, styled as ordinary text
+// because running locally is the default, not something to flag.
+var modelChipStyle = lipgloss.NewStyle().Foreground(theme.Text)
+
+// renderModelChip names the specific model actually running, colored to
+// match where inference happens: remote (Claude) gets the same warning color
+// as renderClaudeChip, local gets ordinary text — never a bare "claude" with
+// no model name attached.
+//
+// Before the agent's first model-state ping arrives (see
+// handleCanonicalEvent) modelDisplay is still empty, so this falls back to
+// renderClaudeChip: the launch flag is the only fact known that early, and it
+// can only say a launch REQUESTED Claude, not which model resolved.
+func (m ChatModel) renderModelChip() string {
+	if m.modelDisplay == "" {
+		return m.renderClaudeChip()
+	}
+	style := modelChipStyle
+	if m.modelRemote {
+		style = claudeChipStyle
+	}
+	return style.Render(" │ " + m.modelDisplay)
 }
