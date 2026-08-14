@@ -220,6 +220,11 @@ type ChatModel struct {
 	// never both draw.
 	help components.HelpState
 
+	// palette is the "/" command palette's open/selected state. Its filter
+	// text is never stored separately — it is always derived from m.input,
+	// the composer, so the two can never disagree (see syncPalette).
+	palette commandPalette
+
 	// lemonade* carry the local model server's state from the agent's
 	// model-state ping, shown in the --dev header. lemonadeKnown separates
 	// "the agent has not told us" from "it told us Lemonade is down": the
@@ -832,6 +837,25 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.input.InsertString(normalizePastedText(string(msg.Runes)))
 		m.syncComposerHeight()
 		return m, nil
+	}
+
+	// The "/" palette owns ↑/↓/Enter/Esc while it is open — everything else
+	// (typing, Backspace, the arrow keys within the line) falls through to
+	// the composer as usual and re-derives the palette's open/filtered state
+	// from the result (see syncPalette, folded into syncComposerHeight). Any
+	// key this doesn't recognize as part of editing a command name closes the
+	// palette but still does whatever it always did — Ctrl+C in particular
+	// must reach its own case below untouched, since it is the universal way
+	// out and must not be silently absorbed by a palette that happened to be
+	// open.
+	if m.palette.open {
+		if msg.Type == tea.KeyCtrlC {
+			m.palette.open = false
+		} else if updated, cmd, handled := m.handlePaletteKey(msg); handled {
+			return updated, cmd
+		} else {
+			m = updated
+		}
 	}
 
 	// Windows Terminal over ConPTY never wraps a paste in the markers above at
@@ -1552,7 +1576,14 @@ func (m ChatModel) composerRows() int {
 // syncComposerHeight grows or shrinks the composer to fit what has been typed,
 // re-laying out the pane above it when the height actually changes. Called
 // after every keystroke, so it must be cheap when nothing moved.
+//
+// It also re-derives the "/" palette's open/filtered state (syncPalette) —
+// folded in here rather than left to each call site, because the height
+// check below returns early the moment line count doesn't change, which is
+// true for almost every character typed while filtering a command. A
+// separate syncPalette() call after this one would silently never run.
 func (m *ChatModel) syncComposerHeight() {
+	m.syncPalette()
 	want := m.composerRows()
 	if m.input.Height() == want {
 		return
@@ -2238,10 +2269,21 @@ func (m ChatModel) View() string {
 		rows = append(rows, banner)
 	}
 	rows = append(rows, divider, vpView, divider, inputView, statusBar)
+	base := lipgloss.JoinVertical(lipgloss.Left, rows...)
+
+	// The "/" palette draws over everything the same way the help panel does
+	// (see renderCommandPalette) — before help, not after: the two are never
+	// open together in practice (selecting or Escaping out of the palette
+	// always closes it before anything could open help), but if that ever
+	// changed, help asking "what can I do" should win over a stale command
+	// list.
+	if m.palette.open {
+		base = renderCommandPalette(base, m.input.Value(), m.paletteFiltered(), m.palette.selected, m.width, m.height)
+	}
+
 	// Composited last so it sits over everything. Returns the base untouched
 	// when the panel is closed, and when a root model is drawing it instead.
-	return m.help.Render(
-		lipgloss.JoinVertical(lipgloss.Left, rows...), m.width, m.height)
+	return m.help.Render(base, m.width, m.height)
 }
 
 // extractCommandFromArgs pulls the one argument worth showing out of a legacy
