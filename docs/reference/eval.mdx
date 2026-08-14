@@ -562,6 +562,92 @@ No `-g` flag provided
 - Comparative evaluation pays for itself in model selection accuracy
 - Individual prompts (default) prioritize quality over cost for production reliability
 
+## Session Replay: scoring against real Claude Code sessions
+
+`gaia eval sessions` answers a question the other modes cannot: **is the agent
+as good as a strong reference on the work you actually do?**
+
+It reads Claude Code transcripts from `~/.claude/projects`, turns them into
+cases, replays each one through a **live TUI**, and has an LLM judge score GAIA's
+answer against what Claude Code actually said on the same request in the same
+repository.
+
+The reference is the point. A benchmark author guesses at what matters; a
+recorded session is real work, on your machine, with your codebase — and nobody
+had to hand-write the expected answers.
+
+### Running it
+
+A TUI must already be running with a control port. The eval drives *that*
+session, so the whole run is visible on screen as it happens.
+
+```bash
+# Terminal 1 — the agent under test
+gaia-drive run gaia --control-port 8817 --use-claude
+
+# Terminal 2 — the eval
+gaia eval sessions --control ~/.gaia/tui/control.json --limit 10
+```
+
+Build the dataset without running anything:
+
+```bash
+gaia eval sessions --dataset-only --out eval/results/sessions
+```
+
+| Flag | Meaning |
+|---|---|
+| `--control` | The running TUI's `control.json` (default: `~/.gaia/tui/control.json`, or `$GAIA_TUI_HOME/control.json`) |
+| `--limit` | How many cases (default: 10) |
+| `--project` | Only sessions from one project directory under `~/.claude/projects` |
+| `--out` | Output directory (default: `eval/results/sessions-<timestamp>`) |
+| `--dataset-only` | Build the dataset and stop — no agent, no judge |
+
+Judging uses Claude and needs `ANTHROPIC_API_KEY`; the repo's `.env` is read
+automatically.
+
+### What gets scored
+
+The judge scores **substance, not wording**. GAIA has a different toolset and
+its own voice, and rewarding mimicry would measure the wrong thing. Marks are
+lost for answering a different question, missing something the reference caught,
+or — weighted hardest — claiming work it did not do:
+
+| Score | Meaning |
+|---|---|
+| 5 | Matches or exceeds the reference |
+| 4 | Correct, missing a minor point |
+| 3 | Broadly right but thinner, or one real gap |
+| 2 | Partially addresses it |
+| 1 | Misses the point |
+| **0** | **Claims work it did not do**, refuses, or produces nothing usable |
+
+### What ends up in a case
+
+A transcript is mostly machinery, so extraction is deliberately picky. Hook
+feedback, task notifications, slash-command echoes and image attachments all
+arrive on the user channel and none of them are questions anyone asked — they
+are dropped, along with subagent transcripts, pasted dumps and bare
+acknowledgements.
+
+Follow-ups ("do the same for the other one") carry the previous exchange as
+`context`, and the runner replays it as its own turn before asking the question.
+Without that, most of a real session measures whether the harness supplied
+context rather than whether the agent is any good.
+
+### Output
+
+```
+eval/results/sessions-<timestamp>/
+├── dataset.json     the cases, with references and context
+├── results.json     every answer and its judgement
+├── scorecard.json   mean, median, pass rate, dishonest count
+└── report.md        the short version: score, then where it struggled
+```
+
+`report.md` leads with the number and lists the worst cases first, because the
+failures are the part worth reading.
+
 ## Command Reference
 
 ### Synthetic Data Generation
