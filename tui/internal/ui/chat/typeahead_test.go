@@ -6,7 +6,6 @@ package chat
 import (
 	"strings"
 	"testing"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -16,18 +15,12 @@ import (
 
 // typeInto drives real keystrokes through the model, the way the terminal
 // delivers them — not input.SetValue, which would skip the very gate under test.
-//
-// Resets lastKeyAt once done: a test's whole loop runs faster than the
-// pasteBurstWindow guard in handleKey, so without this a real Enter pressed
-// right after would be misread as a pasted line break. Typing a sentence and
-// then pressing Enter is what this simulates — the two are not simultaneous.
 func typeInto(t *testing.T, m ChatModel, s string) ChatModel {
 	t.Helper()
 	for _, r := range s {
 		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 		m = updated.(ChatModel)
 	}
-	m.lastKeyAt = time.Time{}
 	return m
 }
 
@@ -273,7 +266,6 @@ func TestTheComposerShrinksBackAfterSending(t *testing.T) {
 	// This Enter is the deliberate send that ends the test's simulated
 	// composing, not another rapid keystroke — same reasoning as typeInto's
 	// own reset, needed here because the loop above calls Update directly.
-	m.lastKeyAt = time.Time{}
 	m, _ = press(t, m, tea.KeyEnter)
 
 	if m.input.Height() != 1 {

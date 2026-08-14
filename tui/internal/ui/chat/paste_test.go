@@ -132,14 +132,23 @@ func TestFailedClipboardPasteSaysSo(t *testing.T) {
 	}
 }
 
-// Windows Terminal over ConPTY does not bracket its pastes at all — confirmed
-// live, not just in bubbletea's docs: it types the clipboard text out,
-// newlines included, as ordinary keystrokes with a real Enter between every
-// line (microsoft/terminal#395, the same failure independently reported
-// against zellij and Git Bash on Windows). Reproduced here as what that looks
-// like at the KeyMsg level: runes and a real Enter, back to back, with none
-// of the reaction time a human leaves between typing and sending.
-func TestUnbracketedPasteDoesNotFragmentIntoSeparateSends(t *testing.T) {
+// Windows Terminal over ConPTY does not bracket its pastes: it types the
+// clipboard text out, newlines included, as ordinary keystrokes with a real
+// Enter between the lines (microsoft/terminal#395, and the same failure reported
+// against zellij and Git Bash on Windows). So on those terminals a multi-line
+// paste into the composer DOES send the first line, and this test pins that as
+// the accepted behaviour rather than pretending otherwise.
+//
+// The alternative was inferring a paste from keystroke timing — "this Enter came
+// too fast to be a person". That was tried and reverted: it also swallows the
+// Enter of a fast typist and of every programmatic driver, including this TUI's
+// own control API, which took the capability ladder from 7/7 to 0/7 with no
+// error anywhere. An Enter key that sometimes does nothing is a worse defect
+// than a paste that needs a different key.
+//
+// Ctrl+V is that key: it reads the clipboard directly, so multi-line paste works
+// on these terminals without guessing.
+func TestAnUnbracketedPasteSendsItsFirstLine(t *testing.T) {
 	m := newTestChat(t)
 	m.streaming = false
 
@@ -149,16 +158,39 @@ func TestUnbracketedPasteDoesNotFragmentIntoSeparateSends(t *testing.T) {
 	}
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(ChatModel)
-	for _, r := range "line two" {
+
+	if len(m.messages) == 0 {
+		t.Fatal("Enter did not send — the timing heuristic is back, and with it a " +
+			"key that silently does nothing for fast typists and for the control API")
+	}
+	if m.input.Value() != "" {
+		t.Errorf("composer was not cleared by the send: %q", m.input.Value())
+	}
+}
+
+// The property that must never regress again: Enter sends, however fast it
+// arrives after the last keystroke. This is what the control API relies on.
+func TestEnterAlwaysSendsHoweverFastItArrives(t *testing.T) {
+	m := newTestChat(t)
+	m.streaming = false
+
+	// No pause anywhere — exactly how the control API and a paste-typing
+	// terminal both deliver keys.
+	for _, r := range "hello" {
 		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
 		m = updated.(ChatModel)
 	}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(ChatModel)
 
-	if len(m.messages) != 0 {
-		t.Fatalf("an unbracketed paste's newline was read as Enter and sent a turn: %+v", m.messages)
+	var sent bool
+	for _, msg := range m.messages {
+		if msg.Role == RoleUser && msg.Content == "hello" {
+			sent = true
+		}
 	}
-	if got := m.input.Value(); got != "line one\nline two" {
-		t.Errorf("composer holds %q, want both lines joined by the newline Enter should have inserted", got)
+	if !sent {
+		t.Fatalf("an immediate Enter did not send: %+v", m.messages)
 	}
 }
 
