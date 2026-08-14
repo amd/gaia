@@ -54,6 +54,9 @@ func TestChatHelpNamesEveryChatBinding(t *testing.T) {
 		"Home", "End", "composer", // only when the composer is empty
 		"Mouse wheel",
 		"/help", "/hub", "/clear",
+		// Getting text OUT of an alt-screen app is not obvious, and the mouse
+		// belongs to the transcript until Ctrl+T hands it back.
+		"Ctrl+T", "Ctrl+Y", "Ctrl+B",
 	} {
 		if !strings.Contains(chatHelpText, want) {
 			t.Errorf("chat help never mentions %q", want)

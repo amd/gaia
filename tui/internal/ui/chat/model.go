@@ -205,6 +205,10 @@ type ChatModel struct {
 	// stated in the header on every frame while it is on.
 	claudeMode bool
 
+	// selectMode is true while mouse reporting is off so the terminal owns
+	// click-drag selection (and with it copy and paste) — see selectmode.go.
+	selectMode bool
+
 	connected    bool
 	totalSteps   int
 	initialQuery string
@@ -697,6 +701,12 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case tea.KeyEsc:
+		// Selection mode first: it is the only state where the wheel is dead, so
+		// "never mind" most likely means "give me scrolling back". Leaving a
+		// turn running is fine — Esc pressed again cancels it.
+		if m.selectMode {
+			return m.toggleSelectMode()
+		}
 		if m.streaming && m.cancelFn != nil && !m.cancelPending {
 			return m.requestCancel()
 		}
@@ -760,6 +770,9 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 
 		return m.submit(query)
+
+	case tea.KeyCtrlT:
+		return m.toggleSelectMode()
 
 	case tea.KeyCtrlY:
 		// Mouse reporting is on so the wheel can scroll, which is exactly what
@@ -1975,6 +1988,9 @@ func (m ChatModel) View() string {
 	// it renders to "" and JoinVertical drops it, costing no row.
 	rows := []string{header}
 	if banner := m.renderBypassBanner(); banner != "" {
+		rows = append(rows, banner)
+	}
+	if banner := m.renderSelectBanner(); banner != "" {
 		rows = append(rows, banner)
 	}
 	rows = append(rows, divider, vpView, divider, inputView, statusBar)

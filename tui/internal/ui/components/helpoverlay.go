@@ -129,15 +129,16 @@ const chatHelpText = `  GAIA Chat
   Esc twice   Give up waiting on the cancel
   Ctrl+C      Quit
 
-  Scroll the transcript
-  ──────────────────
-  ↑ / ↓       One line
-  PgUp/PgDn   Half a page
-  Home / End  Top / bottom, if the composer is empty
-  Mouse wheel Anywhere in the transcript
+  Scroll        ↑ / ↓ one line · PgUp/PgDn page
+  Home / End    Top / bottom, if the composer is empty
+  Mouse wheel   Anywhere in the transcript
 
-  Commands
+  Copy text out
   ──────────────────
-  /help       Show this help
-  /hub        Return to Agent Hub
-  /clear      Clear conversation`
+  Ctrl+T      Select with the mouse — your own
+              terminal's copy and paste. Wheel
+              stops scrolling; Esc turns it off.
+  Ctrl+Y      Copy the whole answer
+  Ctrl+B      Copy the last code block
+
+  Commands    /help · /hub · /clear`
