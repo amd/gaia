@@ -9,6 +9,8 @@ ends with exactly one terminal event.
 import io
 import json
 
+import pytest
+
 from gaia_agent import stdio
 
 
@@ -608,3 +610,51 @@ def test_model_switch_rolls_back_when_rebuild_system_prompt_fails(monkeypatch):
     assert agent._use_claude is False
     assert agent.model_id == "Gemma-4-E4B-it-GGUF"
     assert agent.config.use_claude is False
+
+
+class TestAMultiLineQuestionArrivesWhole:
+    """stdin is read a line at a time, so a raw multi-line query is not one query.
+
+    Pasting five commit messages and asking for a changelog sent five separate
+    questions. The agent answered the first — "that's the only commit you sent"
+    — and the other four lines were never part of the question at all. Every
+    multi-line paste, every Alt+Enter composition, hit this.
+    """
+
+    def test_a_wrapped_query_keeps_its_newlines(self):
+        from gaia_agent.stdio import QUERY_KEY, parse_query
+
+        question = "line one\nline two\nline three"
+        wire = json.dumps({QUERY_KEY: question})
+
+        assert "\n" not in wire, "the wire form must be a single line"
+        assert parse_query(wire) == question
+
+    def test_a_bare_line_is_still_a_query(self):
+        """An older host sends the question verbatim; that must keep working."""
+        from gaia_agent.stdio import parse_query
+
+        assert parse_query("what is 17 times 23?") == "what is 17 times 23?"
+
+    @pytest.mark.parametrize(
+        "line",
+        [
+            '{"not_a_query": "x"}',
+            '{"gaia_query": 42}',
+            "{ this is not json",
+            '{"role": "user", "content": "explain this JSON to me"}',
+        ],
+    )
+    def test_a_question_that_looks_like_json_stays_a_question(self, line):
+        from gaia_agent.stdio import parse_query
+
+        assert parse_query(line) == line
+
+    def test_control_messages_are_still_routed_away_from_queries(self):
+        from gaia_agent.stdio import CONTROL_KEY, parse_control, parse_query
+
+        control = json.dumps({CONTROL_KEY: "bypass", "enabled": True})
+        assert parse_control(control) is not None
+        # And a query is never mistaken for control.
+        assert parse_control(json.dumps({"gaia_query": "hello"})) is None
+        assert parse_query(json.dumps({"gaia_query": "hello"})) == "hello"

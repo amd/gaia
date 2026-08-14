@@ -86,6 +86,15 @@ AGENT_ID = "gaia"
 #: JSON snippet still gets an answer, not a silently swallowed line.
 CONTROL_KEY = "gaia_control"
 
+#: Key that carries a query whose text contains newlines.
+#:
+#: stdin is read a LINE at a time, so a multi-line question written verbatim
+#: arrives as several unrelated lines and each becomes its own turn. Pasting five
+#: commit messages asked five questions, and the agent answered the first while
+#: insisting it was everything it had been sent. Wrapping the query in JSON keeps
+#: it one line on the wire and one question here.
+QUERY_KEY = "gaia_query"
+
 #: Control verbs. ``tool_decision`` answers the confirmation currently on
 #: screen; ``bypass`` turns unattended approval on or off for the session.
 CONTROL_TOOL_DECISION = "tool_decision"
@@ -174,6 +183,27 @@ def parse_control(line: str) -> Optional[Dict[str, Any]]:
     if not isinstance(parsed, dict) or CONTROL_KEY not in parsed:
         return None
     return parsed
+
+
+def parse_query(line: str) -> str:
+    """Unwrap a stdin line into the question it carries.
+
+    A host that wraps the query keeps its newlines intact; a bare line is still
+    accepted verbatim, so an older host paired with this build keeps working —
+    it just cannot send a multi-line question.
+
+    A question that merely *looks* like JSON stays a question: only an object
+    carrying exactly ``QUERY_KEY`` with a string value is unwrapped.
+    """
+    if not line.startswith("{"):
+        return line
+    try:
+        parsed = json.loads(line)
+    except ValueError:
+        return line
+    if isinstance(parsed, dict) and isinstance(parsed.get(QUERY_KEY), str):
+        return parsed[QUERY_KEY]
+    return line
 
 
 def apply_control(message: Dict[str, Any], state: PermissionState) -> None:
@@ -576,7 +606,7 @@ def _pump_stdin(queries: "queue.Queue", state: PermissionState) -> None:
             continue
         control = parse_control(line)
         if control is None:
-            queries.put(line)
+            queries.put(parse_query(line))
             continue
         try:
             apply_control(control, state)

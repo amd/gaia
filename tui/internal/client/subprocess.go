@@ -193,7 +193,15 @@ func (s *SubprocessClient) Send(ctx context.Context, query string) (<-chan inter
 		return nil, err
 	}
 
-	if _, err := fmt.Fprintln(st.stdin, query); err != nil {
+	// JSON-wrapped, never raw: the agent reads stdin a LINE at a time, so a
+	// query written verbatim is split at every newline and each fragment
+	// becomes its own turn. A five-line paste asked five questions, and the
+	// agent answered the first one insisting it was all it had been sent.
+	line, err := json.Marshal(map[string]string{queryKey: query})
+	if err != nil {
+		return nil, fmt.Errorf("failed to encode query: %w", err)
+	}
+	if _, err := fmt.Fprintf(st.stdin, "%s\n", line); err != nil {
 		return nil, fmt.Errorf("failed to write to agent stdin: %w", err)
 	}
 
@@ -361,6 +369,12 @@ func describeAgentExit(code int) string {
 // if it parses as a JSON object carrying exactly this key, so a question that
 // merely looks like JSON is still a question.
 const controlKey = "gaia_control"
+
+// queryKey wraps a user's question so its newlines survive the trip. Must match
+// gaia_agent.stdio.QUERY_KEY. The agent still accepts a bare line as a query, so
+// an older child paired with this build keeps working — it just cannot carry a
+// multi-line question.
+const queryKey = "gaia_query"
 
 // writeControl sends one control message to the child's stdin.
 //
