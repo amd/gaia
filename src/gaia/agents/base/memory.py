@@ -1471,6 +1471,19 @@ class MemoryMixin(ProceduralMemoryMixin):
             try:
                 op_type = op["op"]
 
+                # The auto-extraction path has even less oversight than the
+                # model-issued remember() tool (no explicit call to approve),
+                # so it gets the same credential refusal before ADD/UPDATE.
+                if op_type in ("add", "update") and self._looks_like_credential(
+                    op.get("content", "")
+                ):
+                    logger.info(
+                        "[MemoryMixin] auto-extraction: refusing to store "
+                        "credential-shaped content (op=%s)",
+                        op_type,
+                    )
+                    continue
+
                 if op_type == "add":
                     new_id = store.store(
                         category=op["category"],
@@ -2280,6 +2293,8 @@ class MemoryMixin(ProceduralMemoryMixin):
         "rate limit",
         "cancelled",
         "canceled",
+        "intermittent",
+        "intermittently",
     )
 
     @classmethod
@@ -2287,6 +2302,46 @@ class MemoryMixin(ProceduralMemoryMixin):
         """True when *error_msg* describes a passing condition, not a rule."""
         lowered = error_msg.lower()
         return any(marker in lowered for marker in cls._TRANSIENT_ERROR_MARKERS)
+
+    #: Patterns for credential-shaped content: known API-key/token prefixes,
+    #: and a keyword (password/secret/token/...) directly adjacent to a value.
+    #: Conservative and NOT exhaustive by design (#6.2) — it catches shapes we
+    #: know about, not every possible secret. A user should still not paste
+    #: secrets into chat; this is a backstop, not a guarantee.
+    _CREDENTIAL_PATTERNS: ClassVar[tuple] = tuple(
+        re.compile(p, re.IGNORECASE)
+        for p in (
+            r"\bsk-ant-[a-zA-Z0-9_-]{10,}",  # Anthropic API key
+            r"\bsk-[a-zA-Z0-9_-]{20,}",  # OpenAI-style API key
+            r"\bgh[pousr]_[a-zA-Z0-9]{20,}",  # GitHub token (ghp_/gho_/ghu_/ghs_/ghr_)
+            r"\bgithub_pat_[a-zA-Z0-9_]{20,}",  # GitHub fine-grained PAT
+            r"\bAKIA[0-9A-Z]{16}\b",  # AWS access key id
+            r"\bAIza[0-9A-Za-z_-]{20,}",  # Google API key
+            r"\bxox[baprs]-[a-zA-Z0-9-]{10,}",  # Slack token
+            r"\bglpat-[a-zA-Z0-9_-]{20,}",  # GitLab PAT
+            r"\bBearer\s+[a-zA-Z0-9._-]{20,}",  # raw Bearer token
+            # keyword directly adjacent to a value: "password is X", "secret: X"
+            r"\b(?:password|passphrase|api[_ -]?key|secret|access[_ -]?token"
+            r"|auth[_ -]?token|credential)s?\b\s*(?:is|:|=)\s*\S+",
+            # generic dash/underscore-joined high-entropy-looking token, e.g.
+            # HALIBUT-4417-ZULU: 2+ alnum groups with at least one numeric group.
+            r"\b[A-Z][A-Z0-9]{2,}[-_][0-9]{2,}[-_][A-Z][A-Z0-9]{2,}\b",
+        )
+    )
+
+    @classmethod
+    def _looks_like_credential(cls, text: str) -> bool:
+        """True when *text* looks like it carries a credential (conservative).
+
+        Pattern-based, not exhaustive: it catches known API-key shapes and
+        keyword-adjacent secrets, but a secret with no recognizable shape and
+        no adjacent keyword will slip through. Bias is toward not storing —
+        false positives just mean "ask the user to rephrase", false negatives
+        mean a leaked secret, so this errs conservative on what it flags.
+        """
+        if not text:
+            return False
+        return any(p.search(text) for p in cls._CREDENTIAL_PATTERNS)
 
     def _forget_errors_for_tool(self, tool_name: str) -> None:
         """Drop stored errors for *tool_name* once it has worked again.
@@ -2469,6 +2524,44 @@ class MemoryMixin(ProceduralMemoryMixin):
                 return {
                     "status": "error",
                     "message": f"Invalid category. Use: {sorted(VALID_CATEGORIES)}",
+                }
+
+            # A moment isn't a rule: an error observation about a tool's own
+            # reliability ("times out intermittently") must not outlive the
+            # moment it described, or it becomes permanent (false) doctrine —
+            # the same failure _auto_store_error already guards on the tool's
+            # own errors, extended to the model's own remember() calls.
+            if category == "error" and MemoryMixin._is_transient_error(fact):
+                logger.debug(
+                    "[MemoryMixin] remember(): refusing a transient "
+                    "self-observation: %s",
+                    fact[:80],
+                )
+                return {
+                    "status": "skipped",
+                    "message": (
+                        "Not stored — this describes a transient condition (a "
+                        "moment, not a durable rule), so it will not persist to "
+                        "mislead future turns. Re-test the tool directly if you "
+                        "need to confirm current behavior."
+                    ),
+                }
+
+            # Refuse credential-shaped content outright rather than store it —
+            # a local-first memory that quietly accumulates secrets is the
+            # Microsoft Recall failure mode. See _looks_like_credential for
+            # what this detector can and cannot catch.
+            if MemoryMixin._looks_like_credential(fact):
+                logger.info(
+                    "[MemoryMixin] remember(): refusing credential-shaped content"
+                )
+                return {
+                    "status": "skipped",
+                    "message": (
+                        "Not stored — this looks like a credential (API key, "
+                        "password, or similar secret). GAIA does not keep "
+                        "secrets in memory; use a password manager instead."
+                    ),
                 }
 
             if due_at:
@@ -2716,6 +2809,19 @@ class MemoryMixin(ProceduralMemoryMixin):
                     return {
                         "status": "error",
                         "message": "content must not be empty or whitespace-only.",
+                    }
+                if MemoryMixin._looks_like_credential(content):
+                    logger.info(
+                        "[MemoryMixin] update_memory(): refusing "
+                        "credential-shaped content"
+                    )
+                    return {
+                        "status": "skipped",
+                        "message": (
+                            "Not stored — this looks like a credential (API "
+                            "key, password, or similar secret). GAIA does not "
+                            "keep secrets in memory."
+                        ),
                     }
                 kwargs["content"] = content[:MAX_CONTENT_LENGTH]
             if category:
