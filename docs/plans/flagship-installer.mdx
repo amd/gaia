@@ -237,6 +237,16 @@ of this system was built by other sessions I can't fully audit in the time avail
 - `release_agent_gaia.yml` and `release_components.yml` exist, are internally
   consistent about the two-lane distribution model, and match what `docs/guides/gaia.mdx`
   and the npm `README.md` claim.
+- A fresh editable install of the flagship's own package —
+  `uv pip install -e ".[api]" -e hub/agents/chat/python -e hub/agents/gaia/python
+  pytest` — succeeds, produces a working `gaia-agent` console script with the
+  documented `--use-claude`/`--claude-model`/`--dev` CLI surface, and its full test
+  suite passes: `hub/agents/gaia/python/tests` — 146 passed. This is complementary
+  to the npm/Go coverage above — it's the Python side of the "from source" install
+  path in `docs/guides/gaia.mdx`, not previously exercised in this document. (Caveat
+  on the freeze-venv cost claim above: this install pulled far less than "several GB"
+  — a warm `uv` cache on this machine from prior GAIA work likely explains the gap,
+  not a correction to the underlying claim about what a genuinely cold cache costs.)
 
 **Not verified — taken on the strength of the code + its test suite, not run
 end-to-end:**
@@ -330,6 +340,35 @@ Two docs are stale relative to the code and are fixed as part of this change:
 - **`docs/guides/hub-publishing.mdx`**'s "Standalone sidecars" section named only the
   email agent as the sidecar+npm precedent. Added gaia as the second instance,
   matching §7's "extract shared tooling" note.
+- **`docs/reference/cli.mdx`**'s `gaia init` section never mentioned the flagship
+  agent or `gaia-tui` at all — a reader following the CLI reference alone would have
+  no path from `gaia init` to actually getting the flagship running. Added a short
+  cross-reference to `/guides/gaia` and this plan.
+
+### 9.3.1 `gaia-tui --version` was broken — fixed as part of this change
+
+Found while re-verifying §8's binary build: `rootCmd.Version` was never set in
+`tui/internal/cli/root.go`/`version.go`, so cobra never registered the `--version`
+flag at all (`gaia-tui --version` exited 1, `unknown flag: --version`, while the
+`version` subcommand worked fine). This is unrelated to anything else in this
+document — a pre-existing bug this session's own build-and-run verification (§8)
+happened to surface, not something introduced by the packaging work above.
+
+Fixed in `tui/internal/cli/version.go`: `rootCmd.Version` is now set from the same
+build-time-injected `version` variable `build_tui.yml` already stamps via
+`-ldflags -X`, with a matching version template so `--version` and `version` print
+byte-identical output. The `version` subcommand's `Run` now writes through
+`cmd.OutOrStdout()` instead of a bare `fmt.Print`, which was hiding its own output
+from anything that redirects `cmd.SetOut` — including the new test.
+
+Verified: rebuilt the TUI (`go build ./cmd/gaia`, then again with the same
+`-ldflags -X ...version=...` `build_tui.yml` uses), confirmed `gaia-tui --version`
+and `gaia-tui version` now print the same line, added
+`TestVersionFlagIsRegistered`/`TestVersionFlagPrintsVersion`/
+`TestVersionSubcommandMatchesFlag` to `tui/internal/cli/root_test.go` (alongside the
+pre-existing `TestBinaryName*` tests already in that file), and ran the full `tui/`
+suite — every package except `./test` (the slower integration suite that spawns real
+subprocesses) — all green, `go vet ./...` clean.
 
 ### 9.4 The hub manifest doesn't need a schema change — the generalization gap is tooling, not schema
 
@@ -356,7 +395,8 @@ and I'm naming it rather than starting it so it doesn't get lost.
 
 ## §10 What's actually left to do (post-plan)
 
-1. **Fix the two doc-drift issues in §9.3** — done as part of this change.
+1. **Fix the doc-drift issues in §9.3, and the `--version` bug in §9.3.1** — done as
+   part of this change.
 2. **Cut the `terminal-hub` release** (tag the core release; `release_components.yml`
    publishes it) — not something this session can do; needs a maintainer with tag
    and `agent-publish`-environment access.

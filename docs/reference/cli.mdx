@@ -218,6 +218,15 @@ canonical choices list):
 | `all` | All models | All models for all agents | ~26 GB |
 
 <Note>
+`gaia init` sets up Lemonade + models only — it does not install the flagship [GAIA
+agent](/guides/gaia) or its terminal UI (`gaia-tui`). Get both with
+`npx @amd-gaia/gaia` (fetches and verifies both binaries, no Python required) or, from a
+checkout, `uv pip install -e hub/agents/gaia/python`. See the
+[flagship installer plan](/plans/flagship-installer) for how the two pieces fit together
+and current release status.
+</Note>
+
+<Note>
 The `talk`, `blender`, `jira`, and `docker` agents all rely on the `chat` profile —
 there is no dedicated profile for each. Run `gaia init --profile chat` (or `all`)
 to prepare their dependencies.
