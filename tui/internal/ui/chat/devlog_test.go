@@ -203,8 +203,8 @@ func TestDevPayloadDropsControlsThatSurviveClean(t *testing.T) {
 	}{
 		{"C1 CSI", ""},
 		{"C1 NEL", ""},
-		{"bidi override", "‮"},
-		{"bidi isolate", "⁦"},
+		{"bidi override", "‮"}, //nolint:bidichk // test data: the exact Trojan-Source char clean() must scrub
+		{"bidi isolate", "⁦"},  //nolint:bidichk // test data: the exact Trojan-Source char clean() must scrub
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			in, err := json.Marshal(map[string]string{"x": "a" + tc.bad + "b"})

@@ -124,7 +124,10 @@ def test_a_missing_binary_fails_loudly_and_names_how_to_install_it(monkeypatch):
         resolve_binary_policies(permissions, skill_name="t")
     message = str(excinfo.value)
     assert "'gh' command, which is not on PATH" in message
-    assert "cli.github.com" in message
+    # Assert the real install hint verbatim rather than a bare domain
+    # substring — CodeQL's py/incomplete-url-substring-sanitization flags
+    # `"cli.github.com" in message` as if it were validating a URL's origin.
+    assert BINARY_POLICIES["gh"].install_hint in message
 
 
 def test_a_present_binary_resolves(monkeypatch):
