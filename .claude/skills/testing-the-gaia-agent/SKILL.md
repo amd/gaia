@@ -393,6 +393,39 @@ Both failures lie in the same direction: the agent reports a confident, wrong
 explanation ("a networking bottleneck", "no issues found") rather than an error. Always
 diff the agent's answer against `gh` directly.
 
+## Re-run the ladder after every merge — a merge can kill Enter
+
+Merging four feature branches took the ladder from 7/7 to **0/7**, and nothing
+anywhere reported an error. Every rung just timed out at 20s, because Enter had
+stopped submitting: one branch added a heuristic treating an Enter within 50ms of
+the last keystroke as a pasted line break, and the control API delivers a line
+and its Enter back to back.
+
+Two lessons, both cheap to act on:
+
+- **The ladder is the merge gate, not just the feature gate.** `go test ./...`
+  passed the whole time — the broken behaviour was covered by a test asserting
+  the *new* intent. Only driving the real TUI caught it.
+- **A timing heuristic on input will find your harness.** Anything of the form
+  "too fast to be a person" is also true of the control API, and of a fast
+  typist. Treat a change that infers intent from keystroke timing as a red flag.
+
+The signature to recognise: `driver.py ladder` returns rungs whose captured
+output is the *startup banner* rather than an answer, each taking exactly the
+idle-wait timeout. That means no turn ever started — look at input handling, not
+at the agent.
+
+## Watch out for a launcher that steals focus
+
+`Start-Process -WindowStyle Normal` puts the new window in front, so keystrokes
+the user is typing elsewhere land in the TUI. That produced turns arriving as
+`▶ You: life Load the xlsx skill` and `▶ You: tCan you reliably…` — fragments of
+the user's own typing, which read convincingly as an input bug in the product.
+
+It reproduced 2 of 4 launches and then 0 of 3. If you see junk prepended to a
+turn, check whether a human was typing before you write it up. A phantom bug
+filed against the product costs more than the hour spent disproving it.
+
 ## Reporting
 
 Per [CLAUDE.md → How You Communicate](../../../CLAUDE.md#how-you-communicate): open with
