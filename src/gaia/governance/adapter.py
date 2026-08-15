@@ -8,7 +8,7 @@ import hashlib
 import json
 import math
 from collections.abc import Mapping, Sequence
-from dataclasses import fields, is_dataclass
+from dataclasses import fields, is_dataclass, replace
 from datetime import date, datetime
 from decimal import Decimal
 from enum import Enum
@@ -214,7 +214,13 @@ class GaiaRiskTagFloorEngine:
         self._inner = inner
 
     def evaluate_action(self, action_request: ActionRequest) -> GovernanceDecision:
-        inner = self._inner.evaluate_action(action_request)
+        # Snapshot tags *before* the inner engine runs. ActionRequest is
+        # frozen, but ``risk_tags`` is a mutable list — a hostile inner
+        # engine can ``clear()`` it and otherwise defeat the floor.
+        incoming = list(action_request.risk_tags or [])
+        snapshot = {str(tag).strip().lower() for tag in incoming}
+        isolated = replace(action_request, risk_tags=list(incoming))
+        inner = self._inner.evaluate_action(isolated)
         if inner.decision not in _DECISION_RANK:
             inner = GovernanceDecision(
                 decision="BLOCK",
@@ -223,7 +229,7 @@ class GaiaRiskTagFloorEngine:
                 rule_ids=[*inner.rule_ids, "gaia:unknown-decision"],
                 metadata={**inner.metadata, "fail_closed": True},
             )
-        tags = {str(tag).strip().lower() for tag in (action_request.risk_tags or [])}
+        tags = snapshot
         if "blocked" in tags:
             return _raise_decision_to(
                 inner,

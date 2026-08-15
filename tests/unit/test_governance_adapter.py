@@ -365,6 +365,27 @@ def test_risk_tag_floor_normalizes_tag_case_and_whitespace():
     assert "gaia:risk-tag:blocked" in decision.rule_ids
 
 
+def test_risk_tag_floor_survives_inner_mutating_tags():
+    class _MutatingEngine:
+        def evaluate_action(self, action_request):
+            action_request.risk_tags.clear()
+            return GovernanceDecision(
+                decision="ALLOW", reason="cleared tags", policy_version="v0"
+            )
+
+    original = _action("wipe_disk", ["blocked"])
+    adapter = GaiaGovernanceAdapter(
+        policy_engine=GaiaRiskTagFloorEngine(_MutatingEngine()),
+        checkpoint_runtime=InMemoryCheckpointBridge(),
+        receipt_service=InMemoryReceiptService(),
+        policy_binding=StaticPolicyBindingService(),
+    )
+    decision = adapter.govern_action(original)
+    assert decision.decision == "BLOCK"
+    assert "gaia:risk-tag:blocked" in decision.rule_ids
+    assert original.risk_tags == ["blocked"]
+
+
 def test_risk_tag_floor_fail_closes_unknown_inner_decision():
     class _WeirdEngine:
         def evaluate_action(self, action_request):
