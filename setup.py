@@ -168,6 +168,12 @@ setup(
         'pywin32; sys_platform == "win32"',
     ],
     extras_require={
+        "acgs": [
+            # Optional PolicyEngine swap documented in gaia.governance.
+            # Not required to import GAIA; from_acgs_lite() fail-closes
+            # with an install hint if this extra is missing.
+            "acgs-lite>=2.11.0",
+        ],
         "image": [
             "term-image>=0.7.0,<0.8",
         ],

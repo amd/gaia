@@ -279,3 +279,57 @@ def test_resolve_checkpoint_approve_resumes_and_records_receipt():
     )
     assert outcome.status == "RESUMED"
     assert "receipt_id" in outcome.metadata
+
+
+def test_from_acgs_lite_fail_closes_when_package_missing(monkeypatch):
+    import builtins
+
+    real_import = builtins.__import__
+
+    def _blocked(name, *args, **kwargs):
+        if name == "acgs_lite.integrations.gaia" or name.startswith("acgs_lite"):
+            raise ImportError("simulated missing acgs-lite")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _blocked)
+    with pytest.raises(GaiaGovernanceError, match="ACGS-lite is not installed"):
+        GaiaGovernanceAdapter.from_acgs_lite(audit_log=None)
+
+
+def test_from_acgs_lite_honors_constitution_and_tag_floor():
+    pytest.importorskip("acgs_lite.integrations.gaia")
+    from acgs_lite import Constitution, Rule, Severity, ViolationAction
+
+    constitution = Constitution.from_rules(
+        [
+            Rule(
+                id="GAIA-SHELL-1",
+                text="Destructive shell is blocked",
+                keywords=["wipe-disk"],
+                severity=Severity.CRITICAL,
+                workflow_action=ViolationAction.BLOCK,
+            )
+        ]
+    )
+    adapter = GaiaGovernanceAdapter.from_acgs_lite(
+        constitution, audit_log=None, agent_id="test"
+    )
+    allowed = adapter.govern_action(_action("search", []))
+    assert allowed.decision == "ALLOW"
+
+    blocked = adapter.govern_action(
+        ActionRequest(
+            action_id="a2",
+            actor_id="actor",
+            tool_name="shell",
+            action_type="shell",
+            args={"cmd": "wipe-disk /"},
+            risk_tags=[],
+            workflow_id="wf_test",
+        )
+    )
+    assert blocked.decision == "BLOCK"
+
+    tagged = adapter.govern_action(_action("publish_post", ["blocked"]))
+    assert tagged.decision == "BLOCK"
+    assert adapter.policy_binding.current_version().constitution_hash == constitution.hash

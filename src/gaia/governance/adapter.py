@@ -212,6 +212,55 @@ class GaiaGovernanceAdapter:
             ),
         )
 
+    @classmethod
+    def from_acgs_lite(
+        cls,
+        constitution: Any | None = None,
+        *,
+        audit_log: str | None = "receipts.jsonl",
+        agent_id: str = "gaia-agent",
+    ) -> "GaiaGovernanceAdapter":
+        """Production-shaped adapter using ACGS-lite as the PolicyEngine.
+
+        The in-repo :meth:`default` stub remains for demos and tests. This
+        factory is the documented ACGS-lite swap: constitution decisions
+        become ALLOW / REVIEW / BLOCK, GAIA risk tags stay a floor, and
+        ``GAIA_AUTO_APPROVE_TOOLS`` is not treated as policy.
+
+        Requires ``pip install acgs-lite`` (or ``amd-gaia[acgs]``).
+        """
+        try:
+            from acgs_lite.constitution import Constitution
+            from acgs_lite.integrations.gaia import (
+                AcgsLitePolicyBinding,
+                AcgsLitePolicyEngine,
+            )
+        except ImportError as exc:
+            raise GaiaGovernanceError(
+                "ACGS-lite is not installed. Install it with "
+                "`pip install acgs-lite` (or `pip install 'amd-gaia[acgs]'`), "
+                "then call GaiaGovernanceAdapter.from_acgs_lite(). "
+                "GaiaGovernanceAdapter.default() remains available as the "
+                "in-repo stub for demos and tests."
+            ) from exc
+
+        from .checkpoint_bridge import InMemoryCheckpointBridge
+        from .receipt_service import InMemoryReceiptService, JsonlReceiptService
+
+        resolved = constitution if constitution is not None else Constitution.default()
+        engine = AcgsLitePolicyEngine(resolved, agent_id=agent_id)
+        receipts: ReceiptServiceProtocol = (
+            InMemoryReceiptService()
+            if audit_log is None
+            else JsonlReceiptService(audit_log)
+        )
+        return cls(
+            policy_engine=engine,
+            checkpoint_runtime=InMemoryCheckpointBridge(),
+            receipt_service=receipts,
+            policy_binding=AcgsLitePolicyBinding(engine.constitution),
+        )
+
     def govern_action(self, action_request: ActionRequest) -> GovernanceDecision:
         return self.policy_engine.evaluate_action(action_request)
 

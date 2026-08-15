@@ -28,6 +28,9 @@ That's it. When the model calls `wipe_disk`, governance short-circuits
 the call, issues a signed receipt to `receipts.jsonl`, and returns a
 denied result to the agent loop.
 
+`default()` is the in-repo risk-tag stub. For a constitution-backed engine,
+use `GaiaGovernanceAdapter.from_acgs_lite()` after `pip install acgs-lite`.
+
 ## How decisions work
 
 | Decision | Effect |
@@ -146,7 +149,7 @@ frontend can distinguish a policy refusal from a generic tool failure.
 
 | Interface                   | Shipped reference                                 | Swap with                                  |
 |-----------------------------|---------------------------------------------------|--------------------------------------------|
-| `PolicyEngine`              | `RuleBasedPolicyEngine`                           | ACGS-lite engine, LLM judge, OPA, etc.     |
+| `PolicyEngine`              | `RuleBasedPolicyEngine` (demo stub)               | `GaiaGovernanceAdapter.from_acgs_lite()`, LLM judge, OPA |
 | `CheckpointRuntime`         | `InMemoryCheckpointBridge`                        | constitutional-swarm checkpoint service    |
 | `ReceiptServiceProtocol`    | `InMemoryReceiptService` / `JsonlReceiptService`  | DB, log forwarder, chain anchor            |
 | `PolicyBindingProtocol`     | `StaticPolicyBindingService`                      | constitutional-swarm policy control plane  |

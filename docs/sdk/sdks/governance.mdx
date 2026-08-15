@@ -30,6 +30,14 @@ class MyAgent(GovernedAgentMixin, Agent):
 agent = MyAgent(governance_adapter=GaiaGovernanceAdapter.default())
 ```
 
+`default()` is the in-repo **stub** (risk tags only). For a constitution-backed
+engine, swap in ACGS-lite — the Protocol this layer was written for:
+
+```python
+# pip install acgs-lite   (or: pip install "amd-gaia[acgs]")
+agent = MyAgent(governance_adapter=GaiaGovernanceAdapter.from_acgs_lite())
+```
+
 When the model calls `wipe_disk`, governance short-circuits the call,
 issues a signed receipt to `receipts.jsonl`, and returns a denied result.
 
@@ -155,7 +163,7 @@ Callback exceptions are logged as warnings and never interrupt tool execution.
 
 | Interface | Shipped reference | Swap with |
 |---|---|---|
-| `PolicyEngine` | `RuleBasedPolicyEngine` | ACGS-lite, LLM judge, OPA |
+| `PolicyEngine` | `RuleBasedPolicyEngine` (stub) | `GaiaGovernanceAdapter.from_acgs_lite()`, LLM judge, OPA |
 | `CheckpointRuntime` | `InMemoryCheckpointBridge` | constitutional-swarm checkpoint service |
 | `ReceiptServiceProtocol` | `InMemoryReceiptService` / `JsonlReceiptService` | DB, log forwarder, chain anchor |
 | `PolicyBindingProtocol` | `StaticPolicyBindingService` | constitutional-swarm policy control plane |
