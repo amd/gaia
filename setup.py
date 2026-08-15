@@ -168,12 +168,13 @@ setup(
         'pywin32; sys_platform == "win32"',
     ],
     extras_require={
-        # No "acgs" extra yet. GaiaGovernanceAdapter.from_acgs_lite() is
-        # wired, but published acgs-lite 2.11.0 does not ship
-        # acgs_lite.integrations.gaia. Advertising `amd-gaia[acgs]` would
-        # send operators down a path that always fail-closes. Re-add the
-        # extra only after a wheel that includes that module is on PyPI
-        # (same discipline as the unpublished gaia-agent-* extras, #2240).
+        "acgs": [
+            # Optional PolicyEngine swap. acgs-lite 2.12.0 is on PyPI and
+            # ships acgs_lite.integrations.gaia (verified sdist). Capped
+            # below 3.0: this dependency is the policy decision point, so
+            # a major bump must be reviewed, not resolved into silently.
+            "acgs-lite>=2.12.0,<3.0",
+        ],
         "image": [
             "term-image>=0.7.0,<0.8",
         ],

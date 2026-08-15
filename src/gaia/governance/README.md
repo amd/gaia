@@ -28,15 +28,15 @@ That's it. When the model calls `wipe_disk`, governance short-circuits
 the call, issues a signed receipt to `receipts.jsonl`, and returns a
 denied result to the agent loop.
 
-`default()` is the supported, in-repo risk-tag stub.
+`default()` is the in-repo risk-tag stub. For a constitution-backed engine,
+use `GaiaGovernanceAdapter.from_acgs_lite()` after
+`pip install 'acgs-lite>=2.12.0,<3.0'` (or `amd-gaia[acgs]`). GAIA still
+owns the risk-tag floor: a `blocked` / `review` tag cannot be loosened
+by the inner engine, and `GAIA_AUTO_APPROVE_TOOLS` is not policy.
 
-`from_acgs_lite()` is the constitution-backed swap: GAIA still owns the
-risk-tag floor (`blocked` / `review` cannot be loosened), and
-`GAIA_AUTO_APPROVE_TOOLS` is not policy. It is wired and fail-closed,
-but it is **not a supported install path yet** — published acgs-lite
-2.11.0 does not ship `acgs_lite.integrations.gaia`. There is no
-`amd-gaia[acgs]` extra until a wheel that includes that module is on
-PyPI. Until then, keep using `default()`.
+`acgs-lite` 2.12.0 is the first published wheel that ships
+`acgs_lite.integrations.gaia`. A missing or too-old wheel fails closed
+with an install hint — the stub is never substituted silently.
 
 ## How decisions work
 

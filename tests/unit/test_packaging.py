@@ -284,14 +284,15 @@ class TestAgentWheelExtras:
             "silently backtrack-downgrade to an older release instead."
         )
 
-    def test_no_acgs_extra_until_adapter_module_is_published(self):
-        """Do not advertise amd-gaia[acgs] until the adapter is on PyPI.
+    def test_acgs_extra_pins_published_adapter_wheel(self):
+        """[acgs] names a live PyPI dist that ships the GAIA adapter.
 
-        acgs-lite 2.11.0 is published, but it does not ship
-        acgs_lite.integrations.gaia. A live extra would install a wheel
-        that cannot satisfy from_acgs_lite() — a dead-end path, and the
-        same class of extra-vs-unpublished-capability as #2240. Comments
-        may mention the future extra; a live extras_require key must not.
+        acgs-lite 2.12.0 is published and includes
+        acgs_lite.integrations.gaia, so this extra cannot trigger
+        #2240's unpublished-wheel silent downgrade. The upper bound
+        keeps a breaking policy-engine major from resolving silently.
+        Comments are stripped first so a commented pin cannot hide an
+        unbounded live spec.
         """
         extras_block = _parse_extras_require_block()
         live = "\n".join(
@@ -299,13 +300,12 @@ class TestAgentWheelExtras:
             for line in extras_block.splitlines()
             if not line.strip().startswith("#")
         )
-        extras_keys = re.findall(r'"([a-zA-Z0-9_-]+)"\s*:', live)
-        assert "acgs" not in extras_keys, (
-            "setup.py declares extras['acgs'] before a published "
-            "acgs-lite wheel ships acgs_lite.integrations.gaia. "
-            "Hold the extra until that module is on PyPI."
-        )
-        assert "acgs-lite" not in live, (
-            "A live extras_require value names acgs-lite before the "
-            "GAIA adapter module is published."
+        match = re.search(r'"acgs"\s*:\s*\[(.*?)\]', live, re.DOTALL)
+        assert match, "amd-gaia[acgs] extra is missing from extras_require"
+        specs = re.findall(r'"([^"]+)"', match.group(1))
+        assert specs == ["acgs-lite>=2.12.0,<3.0"], (
+            "amd-gaia[acgs] must pin acgs-lite to >=2.12.0,<3.0 so the "
+            "policy decision point cannot jump a major without review "
+            "and so the extra cannot resolve a wheel that lacks "
+            f"acgs_lite.integrations.gaia. Got {specs!r}."
         )
