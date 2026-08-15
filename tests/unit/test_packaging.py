@@ -283,3 +283,27 @@ class TestAgentWheelExtras:
             "makes amd-gaia unsatisfiable at that version and pip/uv "
             "silently backtrack-downgrade to an older release instead."
         )
+
+    def test_acgs_extra_pins_published_dist_below_major(self):
+        """[acgs] names a live PyPI dist and caps the major.
+
+        acgs-lite 2.11.0+ is published, so this extra cannot trigger
+        #2240's unpublished-wheel silent downgrade. The upper bound
+        keeps a breaking policy-engine major from resolving silently.
+        Comments are stripped first so a commented pin cannot hide an
+        unbounded live spec.
+        """
+        extras_block = _parse_extras_require_block()
+        live = "\n".join(
+            line
+            for line in extras_block.splitlines()
+            if not line.strip().startswith("#")
+        )
+        match = re.search(r'"acgs"\s*:\s*\[(.*?)\]', live, re.DOTALL)
+        assert match, "amd-gaia[acgs] extra is missing from extras_require"
+        specs = re.findall(r'"([^"]+)"', match.group(1))
+        assert specs == ["acgs-lite>=2.11.0,<3.0"], (
+            "amd-gaia[acgs] must pin acgs-lite to >=2.11.0,<3.0 so the "
+            f"policy decision point cannot jump a major without review. "
+            f"Got {specs!r}."
+        )

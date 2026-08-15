@@ -29,7 +29,16 @@ the call, issues a signed receipt to `receipts.jsonl`, and returns a
 denied result to the agent loop.
 
 `default()` is the in-repo risk-tag stub. For a constitution-backed engine,
-use `GaiaGovernanceAdapter.from_acgs_lite()` after `pip install acgs-lite`.
+use `GaiaGovernanceAdapter.from_acgs_lite()` after
+`pip install 'acgs-lite>=2.11.0,<3.0'` (or `amd-gaia[acgs]`). GAIA still
+owns the risk-tag floor: a `blocked` / `review` tag cannot be loosened
+by the inner engine, and `GAIA_AUTO_APPROVE_TOOLS` is not policy.
+
+The extra installs the published `acgs-lite` wheel (so it does not
+reproduce #2240). `from_acgs_lite()` also requires
+`acgs_lite.integrations.gaia`. If the installed wheel does not ship
+that module, the factory fails closed with an install hint — it does
+not fall back to `default()`.
 
 ## How decisions work
 

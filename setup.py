@@ -171,8 +171,12 @@ setup(
         "acgs": [
             # Optional PolicyEngine swap documented in gaia.governance.
             # Not required to import GAIA; from_acgs_lite() fail-closes
-            # with an install hint if this extra is missing.
-            "acgs-lite>=2.11.0",
+            # with an install hint if this extra is missing. Capped below
+            # 3.0: this dependency is the *policy decision point*, so a
+            # major bump must be reviewed, not resolved into silently.
+            # The named dist is published on PyPI (acgs-lite 2.11.0+);
+            # this is not a #2240 unpublished-wheel extra.
+            "acgs-lite>=2.11.0,<3.0",
         ],
         "image": [
             "term-image>=0.7.0,<0.8",

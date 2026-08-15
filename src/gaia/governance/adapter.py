@@ -163,6 +163,108 @@ def _canonical_hash(payload: dict) -> str:
     ).hexdigest()
 
 
+_DECISION_RANK = {"ALLOW": 0, "REVIEW": 1, "BLOCK": 2}
+
+_STUB_HINT = (
+    "GaiaGovernanceAdapter.default() remains available as the "
+    "in-repo stub for demos and tests."
+)
+
+
+def _classify_acgs_lite_import_error(exc: ModuleNotFoundError) -> GaiaGovernanceError:
+    """Map a missing-module error to an actionable, non-misleading hint.
+
+    Distinguishes: package absent, adapter module absent from an installed
+    wheel, and a broken transitive import inside an installed wheel.
+    """
+    missing = getattr(exc, "name", None) or ""
+    message = str(exc)
+    if str(missing).startswith("acgs_lite.integrations") or (
+        "acgs_lite.integrations.gaia" in message
+    ):
+        return GaiaGovernanceError(
+            f"acgs-lite is installed but does not ship "
+            f"acgs_lite.integrations.gaia ({exc}). Install a "
+            "build that includes the GAIA adapter, then retry "
+            f"GaiaGovernanceAdapter.from_acgs_lite(). {_STUB_HINT}"
+        )
+    if (not missing) or missing == "acgs_lite" or str(missing).startswith("acgs_lite."):
+        return GaiaGovernanceError(
+            f"ACGS-lite is not installed ({exc}). Install it with "
+            "`pip install 'acgs-lite>=2.11.0,<3.0'` "
+            "(or `pip install 'amd-gaia[acgs]'`), then call "
+            f"GaiaGovernanceAdapter.from_acgs_lite(). {_STUB_HINT}"
+        )
+    return GaiaGovernanceError(
+        f"ACGS-lite import failed on dependency {missing!r} ({exc}). "
+        "This is not a missing-package error; inspect the inner "
+        f"exception. {_STUB_HINT}"
+    )
+
+
+class GaiaRiskTagFloorEngine:
+    """GAIA-owned floor over any ``PolicyEngine``.
+
+    ``blocked`` tags force ``BLOCK``. ``review`` tags never allow (at least
+    ``REVIEW``). An inner engine — ACGS-lite or otherwise — may only
+    tighten a decision. ``GAIA_AUTO_APPROVE_TOOLS`` is not consulted.
+    """
+
+    def __init__(self, inner: PolicyEngine) -> None:
+        self._inner = inner
+
+    def evaluate_action(self, action_request: ActionRequest) -> GovernanceDecision:
+        inner = self._inner.evaluate_action(action_request)
+        if inner.decision not in _DECISION_RANK:
+            inner = GovernanceDecision(
+                decision="BLOCK",
+                reason=(f"unknown inner decision {inner.decision!r}; fail closed"),
+                policy_version=inner.policy_version,
+                rule_ids=[*inner.rule_ids, "gaia:unknown-decision"],
+                metadata={**inner.metadata, "fail_closed": True},
+            )
+        tags = {str(tag).strip().lower() for tag in (action_request.risk_tags or [])}
+        if "blocked" in tags:
+            return _raise_decision_to(
+                inner,
+                floor="BLOCK",
+                reason="blocked by GAIA risk tag",
+                rule_id="gaia:risk-tag:blocked",
+                tag="blocked",
+            )
+        if "review" in tags:
+            return _raise_decision_to(
+                inner,
+                floor="REVIEW",
+                reason="requires operator review (GAIA risk tag)",
+                rule_id="gaia:risk-tag:review",
+                tag="review",
+            )
+        return inner
+
+
+def _raise_decision_to(
+    decision: GovernanceDecision,
+    *,
+    floor: str,
+    reason: str,
+    rule_id: str,
+    tag: str,
+) -> GovernanceDecision:
+    if _DECISION_RANK.get(decision.decision, 0) >= _DECISION_RANK[floor]:
+        return decision
+    rule_ids = list(decision.rule_ids)
+    if rule_id not in rule_ids:
+        rule_ids.append(rule_id)
+    return GovernanceDecision(
+        decision=floor,  # type: ignore[arg-type]
+        reason=reason,
+        policy_version=decision.policy_version,
+        rule_ids=rule_ids,
+        metadata={**decision.metadata, "risk_tag_floor": tag},
+    )
+
+
 class GaiaGovernanceAdapter:
     """Compose a policy engine, checkpoint runtime, receipt service, and
     policy-version binding into a single entry point used by agents.
@@ -223,11 +325,16 @@ class GaiaGovernanceAdapter:
         """Production-shaped adapter using ACGS-lite as the PolicyEngine.
 
         The in-repo :meth:`default` stub remains for demos and tests. This
-        factory is the documented ACGS-lite swap: constitution decisions
-        become ALLOW / REVIEW / BLOCK, GAIA risk tags stay a floor, and
-        ``GAIA_AUTO_APPROVE_TOOLS`` is not treated as policy.
+        factory is the documented ACGS-lite swap. Constitution decisions
+        become ALLOW / REVIEW / BLOCK. A GAIA-owned
+        :class:`GaiaRiskTagFloorEngine` then enforces the risk-tag floor
+        (``blocked`` / ``review``) regardless of the inner verdict.
+        ``GAIA_AUTO_APPROVE_TOOLS`` is not consulted.
 
-        Requires ``pip install acgs-lite`` (or ``amd-gaia[acgs]``).
+        Requires ``pip install 'acgs-lite>=2.11.0,<3.0'`` (or
+        ``amd-gaia[acgs]``) *and* a wheel that ships
+        ``acgs_lite.integrations.gaia``. Missing either fails closed
+        with an install hint — the stub is never substituted silently.
         """
         try:
             from acgs_lite.constitution import Constitution
@@ -235,20 +342,25 @@ class GaiaGovernanceAdapter:
                 AcgsLitePolicyBinding,
                 AcgsLitePolicyEngine,
             )
+        except ModuleNotFoundError as exc:
+            raise _classify_acgs_lite_import_error(exc) from exc
         except ImportError as exc:
             raise GaiaGovernanceError(
-                "ACGS-lite is not installed. Install it with "
-                "`pip install acgs-lite` (or `pip install 'amd-gaia[acgs]'`), "
-                "then call GaiaGovernanceAdapter.from_acgs_lite(). "
-                "GaiaGovernanceAdapter.default() remains available as the "
-                "in-repo stub for demos and tests."
+                f"ACGS-lite could not be imported ({exc}). Install it "
+                "with `pip install 'acgs-lite>=2.11.0,<3.0'` "
+                "(or `pip install 'amd-gaia[acgs]'`), then call "
+                "GaiaGovernanceAdapter.from_acgs_lite(). "
+                "GaiaGovernanceAdapter.default() remains available as "
+                "the in-repo stub for demos and tests."
             ) from exc
 
         from .checkpoint_bridge import InMemoryCheckpointBridge
         from .receipt_service import InMemoryReceiptService, JsonlReceiptService
 
         resolved = constitution if constitution is not None else Constitution.default()
-        engine = AcgsLitePolicyEngine(resolved, agent_id=agent_id)
+        engine = GaiaRiskTagFloorEngine(
+            AcgsLitePolicyEngine(resolved, agent_id=agent_id)
+        )
         receipts: ReceiptServiceProtocol = (
             InMemoryReceiptService()
             if audit_log is None
@@ -258,7 +370,7 @@ class GaiaGovernanceAdapter:
             policy_engine=engine,
             checkpoint_runtime=InMemoryCheckpointBridge(),
             receipt_service=receipts,
-            policy_binding=AcgsLitePolicyBinding(engine.constitution),
+            policy_binding=AcgsLitePolicyBinding(resolved),
         )
 
     def govern_action(self, action_request: ActionRequest) -> GovernanceDecision:
