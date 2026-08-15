@@ -184,16 +184,17 @@ def _classify_acgs_lite_import_error(exc: ModuleNotFoundError) -> GaiaGovernance
     ):
         return GaiaGovernanceError(
             f"acgs-lite is installed but does not ship "
-            f"acgs_lite.integrations.gaia ({exc}). Install a "
-            "build that includes the GAIA adapter, then retry "
-            f"GaiaGovernanceAdapter.from_acgs_lite(). {_STUB_HINT}"
+            f"acgs_lite.integrations.gaia ({exc}). Published "
+            "acgs-lite 2.11.0 does not include that module, so "
+            "from_acgs_lite() is not a supported install path yet. "
+            f"{_STUB_HINT}"
         )
     if (not missing) or missing == "acgs_lite" or str(missing).startswith("acgs_lite."):
         return GaiaGovernanceError(
-            f"ACGS-lite is not installed ({exc}). Install it with "
-            "`pip install 'acgs-lite>=2.11.0,<3.0'` "
-            "(or `pip install 'amd-gaia[acgs]'`), then call "
-            f"GaiaGovernanceAdapter.from_acgs_lite(). {_STUB_HINT}"
+            f"ACGS-lite is not installed ({exc}). "
+            "from_acgs_lite() needs a wheel that ships "
+            "acgs_lite.integrations.gaia; published acgs-lite "
+            f"2.11.0 does not. {_STUB_HINT}"
         )
     return GaiaGovernanceError(
         f"ACGS-lite import failed on dependency {missing!r} ({exc}). "
@@ -337,10 +338,12 @@ class GaiaGovernanceAdapter:
         (``blocked`` / ``review``) regardless of the inner verdict.
         ``GAIA_AUTO_APPROVE_TOOLS`` is not consulted.
 
-        Requires ``pip install 'acgs-lite>=2.11.0,<3.0'`` (or
-        ``amd-gaia[acgs]``) *and* a wheel that ships
-        ``acgs_lite.integrations.gaia``. Missing either fails closed
-        with an install hint — the stub is never substituted silently.
+        Published acgs-lite 2.11.0 does not ship
+        ``acgs_lite.integrations.gaia``, so this factory is not a
+        supported install path yet. There is no ``amd-gaia[acgs]`` extra
+        until a wheel that includes that module is on PyPI. Missing the
+        package or the adapter module fails closed with a hint —
+        :meth:`default` is never substituted silently.
         """
         try:
             from acgs_lite.constitution import Constitution
@@ -352,12 +355,10 @@ class GaiaGovernanceAdapter:
             raise _classify_acgs_lite_import_error(exc) from exc
         except ImportError as exc:
             raise GaiaGovernanceError(
-                f"ACGS-lite could not be imported ({exc}). Install it "
-                "with `pip install 'acgs-lite>=2.11.0,<3.0'` "
-                "(or `pip install 'amd-gaia[acgs]'`), then call "
-                "GaiaGovernanceAdapter.from_acgs_lite(). "
-                "GaiaGovernanceAdapter.default() remains available as "
-                "the in-repo stub for demos and tests."
+                f"ACGS-lite could not be imported ({exc}). "
+                "from_acgs_lite() needs a wheel that ships "
+                "acgs_lite.integrations.gaia; published acgs-lite "
+                f"2.11.0 does not. {_STUB_HINT}"
             ) from exc
 
         from .checkpoint_bridge import InMemoryCheckpointBridge

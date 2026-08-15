@@ -30,21 +30,16 @@ class MyAgent(GovernedAgentMixin, Agent):
 agent = MyAgent(governance_adapter=GaiaGovernanceAdapter.default())
 ```
 
-`default()` is the in-repo **stub** (risk tags only). For a constitution-backed
-engine, swap in ACGS-lite — the Protocol this layer was written for:
+`default()` is the supported path today (in-repo **stub**, risk tags only).
 
-```python
-# pip install "acgs-lite>=2.11.0,<3.0"   (or: pip install "amd-gaia[acgs]")
-# from_acgs_lite() also needs acgs_lite.integrations.gaia in that wheel.
-agent = MyAgent(governance_adapter=GaiaGovernanceAdapter.from_acgs_lite())
-```
-
-`from_acgs_lite()` wraps the inner engine in a GAIA-owned risk-tag floor:
-`blocked` / `review` tags cannot be loosened, and `GAIA_AUTO_APPROVE_TOOLS`
-is not treated as policy. `[acgs]` installs the published `acgs-lite`
-distribution (not a #2240 unpublished wheel). A missing package, or a
-wheel that does not ship `acgs_lite.integrations.gaia`, fails closed
-with an install hint — the stub is never substituted silently.
+`from_acgs_lite()` is the constitution-backed swap this layer was written
+for. It wraps the inner engine in a GAIA-owned risk-tag floor (`blocked` /
+`review` cannot be loosened; `GAIA_AUTO_APPROVE_TOOLS` is not policy) and
+fail-closes if the adapter module is missing. It is **not a supported
+install path yet**: published acgs-lite 2.11.0 does not ship
+`acgs_lite.integrations.gaia`, and there is no `amd-gaia[acgs]` extra
+until a wheel that includes that module is on PyPI. Keep using `default()`
+until then.
 
 When the model calls `wipe_disk`, governance short-circuits the call,
 issues a signed receipt to `receipts.jsonl`, and returns a denied result.

@@ -548,7 +548,7 @@ def test_from_acgs_lite_wires_binding_and_gaia_owned_floor(monkeypatch):
 
 
 def test_from_acgs_lite_honors_constitution_when_installed():
-    """Opt-in live path. Default CI has no [acgs] extra; this is extra coverage."""
+    """Opt-in live path. No [acgs] extra until the adapter is on PyPI."""
     pytest.importorskip("acgs_lite.integrations.gaia")
     from acgs_lite import Constitution, Rule, Severity, ViolationAction
 
