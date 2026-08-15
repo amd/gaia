@@ -341,12 +341,14 @@ def test_starter_skill_loads_into_an_agent(pack_manager: SkillManager):
         _instance_tools = None
         _skill_manager = None
         _loaded_skills = None
+        _active_skill_filter = None
 
         skill_manager = Agent.skill_manager
         loaded_skills = Agent.loaded_skills
         granted_binaries = Agent.granted_binaries
         _tools_registry = Agent._tools_registry
         _format_tools_for_prompt = Agent._format_tools_for_prompt
+        _note_skill_active = Agent._note_skill_active
         load_skill = Agent.load_skill
         unload_skill = Agent.unload_skill
         get_skills_system_prompt = Agent.get_skills_system_prompt

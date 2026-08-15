@@ -48,6 +48,14 @@ Loading stays opt-in
 Registering these tools does not load anything. Skill bodies cost prompt tokens
 (#2848), so the agent still starts with no skill set active; the model — or the
 user through it — has to ask.
+
+Once loaded, a skill's body is not permanently resident either. GaiaAgent
+re-evaluates every loaded skill each turn (``gaia.agents.base.skill_loader``)
+and collapses an irrelevant one to a one-line menu entry instead of its full
+body — a loaded GitHub skill no longer costs 15KB on a turn about something
+else. ``load_skill`` is also the reactivation path: calling it again on a
+skill that is already loaded brings its body straight back, whether or not
+this turn's query matched it.
 """
 
 from __future__ import annotations
@@ -462,12 +470,14 @@ class SkillLibraryToolsMixin:
 
         @tool
         def load_skill(name: str) -> dict:
-            """Activate an installed skill for the rest of this session.
+            """Activate an installed skill and show you its full instructions now.
 
-            Adds the skill's instructions to your own instructions and
-            registers any tools it provides, so you can follow its recipe from
-            your next step onward. Loading costs prompt tokens — load what the
-            task needs, and call unload_skill when you are done with it.
+            Registers any tools it provides for the rest of the session. Its
+            instructions stay visible while your requests keep relating to
+            it; once the topic moves on they collapse to a one-line reminder
+            to save space — call load_skill on the same name again anytime to
+            bring them back, even though it is already loaded. unload_skill
+            fully deregisters it (tools included) when you are done with it.
 
             Args:
                 name: Skill name, as shown by list_skills. Install it first
@@ -549,10 +559,11 @@ class SkillLibraryToolsMixin:
 
         @tool
         def unload_skill(name: str) -> dict:
-            """Deactivate a loaded skill, removing its instructions and tools.
+            """Fully deregister a loaded skill — its tools and instructions.
 
-            Frees the prompt tokens the skill's instructions were using. The
-            skill stays installed — load_skill brings it back.
+            Stronger than the automatic per-turn hide: this removes the
+            skill's tools too, not just its body. The skill stays installed —
+            load_skill brings it all the way back.
 
             Args:
                 name: Skill name, as shown by skill_status.
@@ -586,24 +597,32 @@ class SkillLibraryToolsMixin:
 
         @tool(atomic=True)
         def skill_status() -> dict:
-            """Report which skills are active right now and what they cost.
+            """Report which skills are loaded right now and what they cost.
 
             Use this to decide whether to unload something before loading
             more, or to answer "what skills do you have loaded?".
 
             Returns:
-                Dictionary with each loaded skill's prompt-token estimate, the
-                total for the loaded set, the active skill set (if the agent
-                launched with one), and how many skills are installed but not
-                loaded.
+                Dictionary with each loaded skill's prompt-token estimate
+                (worst case, as if its body were showing this turn),
+                whether its body is actually showing this turn
+                ("active_this_turn" — a loaded-but-inactive skill collapses to
+                a one-line menu entry to save space; load_skill(name) again
+                brings it back), the real total for what is showing right
+                now, the active skill set (if the agent launched with one),
+                and how many skills are installed but not loaded.
             """
             loaded = agent.loaded_skills
+            skill_filter = getattr(agent, "_active_skill_filter", None)
+            always_on = agent._always_on_skill_names
+            showing = None if skill_filter is None else set(skill_filter) | always_on
             active = [
                 {
                     "name": skill.name,
                     "description": skill.description,
                     "security_tier": skill.security_tier,
                     "prompt_tokens_estimate": estimate_prompt_tokens(skill.body),
+                    "active_this_turn": showing is None or skill.name in showing,
                 }
                 for skill in sorted(loaded.values(), key=lambda s: s.name)
             ]

@@ -47,9 +47,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar, List, Optional
 
-from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
 from gaia_agent.skill_tools import SkillLibraryToolsMixin
 from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+
+from gaia.agents.base.skill_loader import (
+    DEFAULT_SKILL_THRESHOLD,
+    SkillLoader,
+    dynamic_skills_env_override,
+)
+from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
 
 #: Bundled skills ship inside the package so they survive both the wheel and the
 #: frozen sidecar; as ``SKILL_DIRS`` they outrank a same-named user or Claude Code copy.
@@ -135,6 +141,15 @@ class GaiaAgentConfig(ChatAgentConfig):
     # resolution order is explicit arg -> env -> manifest default.
     skill_set: Optional[str] = None
 
+    # Lazy skill-body activation (#2848 follow-up): per-turn semantic
+    # selection of which LOADED skill's body actually renders, instead of
+    # every loaded skill's body riding along on every turn for the life of
+    # the session. On by default for this agent specifically — it is the one
+    # that measurably bleeds prompt budget on this (64.8% of the prompt with
+    # two skills loaded, #2848). Overridable via GAIA_DYNAMIC_SKILLS.
+    dynamic_skills: bool = True
+    dynamic_skills_threshold: float = DEFAULT_SKILL_THRESHOLD
+
     # Image generation stays off: it pulls a second resident model, and evicting
     # the chat model to draw a picture is not a trade a document agent should
     # make silently.
@@ -182,11 +197,81 @@ class GaiaAgent(SkillLibraryToolsMixin, CodeIndexToolsMixin, ChatAgent):
         Semantic code search is what makes this agent usable ON a codebase
         rather than merely in one: grep finds a string, this finds the function
         that does the thing you described.
+
+        The skill loader is built here — before ``super()._register_tools()``,
+        which is what triggers ``load_declared_skills()`` at the end of
+        ``Agent.__init__`` — so ``_select_skills_for_turn`` never sees a
+        ``None`` loader while skills are already loading. ``self._embed_text``
+        (MemoryMixin) and ``self._embed_texts_batch`` (ChatAgent) are only
+        *referenced* here, not called, so this needs no embedder/Lemonade
+        access at construction time — only the first real turn does.
         """
+        self.skill_loader = self._maybe_build_skill_loader()
         self.register_skill_library_tools()
         self._init_code_index_state(repo_path=os.getcwd())
         self.register_code_index_tools()
         super()._register_tools()
+
+    # ── lazy skill-body loader (#2848 follow-up) ────────────────────────────
+
+    def _maybe_build_skill_loader(self) -> Optional[SkillLoader]:
+        """Construct the per-turn skill-body selector, or ``None`` when off."""
+        if not self._resolve_dynamic_skills_enabled():
+            return None
+        return SkillLoader(
+            embed_fn=self._embed_text,
+            embed_batch_fn=self._embed_texts_batch,
+            threshold=self._resolve_dynamic_skills_threshold(),
+        )
+
+    def _resolve_dynamic_skills_enabled(self) -> bool:
+        """Toggle: ``GAIA_DYNAMIC_SKILLS`` (truthy) wins over the config field."""
+        override = dynamic_skills_env_override()
+        if override is not None:
+            return override
+        return bool(getattr(self.config, "dynamic_skills", True))
+
+    def _resolve_dynamic_skills_threshold(self) -> float:
+        """Threshold: ``GAIA_DYNAMIC_SKILLS_TAU`` wins; malformed value fails loudly."""
+        raw = os.environ.get("GAIA_DYNAMIC_SKILLS_TAU")
+        if raw is None:
+            return float(
+                getattr(
+                    self.config, "dynamic_skills_threshold", DEFAULT_SKILL_THRESHOLD
+                )
+            )
+        try:
+            return float(raw)
+        except ValueError as e:
+            raise ValueError(
+                f"GAIA_DYNAMIC_SKILLS_TAU must be a float, got {raw!r}"
+            ) from e
+
+    def _dynamic_skills_active(self) -> bool:
+        """True when per-turn skill-body selection should run this turn.
+
+        Off (→ every loaded skill's body renders every turn, the legacy/base
+        behavior): loader not built (toggle off), the loader disabled itself
+        after an embedder failure, or memory is off (``GAIA_MEMORY_DISABLED``
+        tears down ``_memory_store``, and the same embedder backs both).
+        """
+        return (
+            self.skill_loader is not None
+            and not self.skill_loader.session_disabled
+            and getattr(self, "_memory_store", None) is not None
+        )
+
+    def _select_skills_for_turn(self, user_input: str) -> Optional[List[str]]:
+        """This turn's active skill-body subset, or ``None`` for "render all".
+
+        Reuses ChatAgent's ``_build_tool_selection_query`` (previous + current
+        user message) so a short follow-up ("also check the linked PR") still
+        matches on the prior turn's context, not just its own few words.
+        """
+        if not self._dynamic_skills_active():
+            return None
+        query = self._build_tool_selection_query(user_input)
+        return self.skill_loader.select(query, self.loaded_skills)
 
     def select_skill_set(self) -> Optional[str]:
         """Resolve which declared skill set to load at startup.
