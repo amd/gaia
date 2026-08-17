@@ -362,10 +362,10 @@ def _split_oversized_chunk(
 ) -> List[CodeChunk]:
     """Split *chunk* into character-bounded pieces if it exceeds *max_chars*.
 
-    Line numbers are kept as the original chunk's full range on every piece
-    (an approximation — the original parser doesn't track per-character line
-    offsets) rather than computed exactly, since the goal is bounding size
-    and keeping every part embeddable, not precise line attribution.
+    Each part carries its own line range, computed from the newlines that
+    precede and span it — with the split threshold at the embed window,
+    splitting is the common case, and every part sharing the whole block's
+    range would make search hits point at the block instead of the fragment.
     """
     text = chunk.content
     if len(text) <= max_chars:
@@ -374,7 +374,10 @@ def _split_oversized_chunk(
     n_parts = -(-len(text) // max_chars)  # ceil division
     parts = []
     for i in range(n_parts):
-        piece = text[i * max_chars : (i + 1) * max_chars]
+        lo = i * max_chars
+        piece = text[lo : lo + max_chars]
+        part_start = chunk.start_line + text.count("\n", 0, lo)
+        part_end = min(chunk.end_line, part_start + piece.count("\n"))
         symbol_name = chunk.symbol_name
         if symbol_name:
             symbol_name = f"{symbol_name} (part {i + 1}/{n_parts})"
@@ -383,8 +386,8 @@ def _split_oversized_chunk(
                 content=piece,
                 file_path=chunk.file_path,
                 language=chunk.language,
-                start_line=chunk.start_line,
-                end_line=chunk.end_line,
+                start_line=part_start,
+                end_line=part_end,
                 symbol_name=symbol_name,
                 symbol_type=chunk.symbol_type,
                 docstring=chunk.docstring if i == 0 else None,

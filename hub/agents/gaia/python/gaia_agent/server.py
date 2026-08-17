@@ -31,6 +31,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, FastAPI, HTTPException
+from gaia_agent.session_registry import SessionCapacityError
 from gaia_agent.session_registry import registry as session_registry
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.responses import StreamingResponse
@@ -478,6 +479,13 @@ async def query(request: QueryRequest):
         if session is not None:
             session.run_lock.release()
         raise
+    except SessionCapacityError as exc:
+        # Actionable and temporary ("N sessions are already active and none
+        # are idle enough to evict") — 503, not a bug-shaped 500.
+        _registry.remove(request.run_id)
+        if session is not None:
+            session.run_lock.release()
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         _registry.remove(request.run_id)
         if session is not None:

@@ -20,7 +20,7 @@ icon: sparkles
 tools_count: 66
 
 language: python
-min_gaia_version: "0.22.0"
+min_gaia_version: "0.23.0"
 models: [Gemma-4-E4B-it-GGUF]
 
 python:

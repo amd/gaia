@@ -202,7 +202,18 @@ func (s *SubprocessClient) Send(ctx context.Context, query string) (<-chan inter
 		return nil, fmt.Errorf("failed to encode query: %w", err)
 	}
 	if _, err := fmt.Fprintf(st.stdin, "%s\n", line); err != nil {
-		return nil, fmt.Errorf("failed to write to agent stdin: %w", err)
+		// The child is dead or its stdin is gone (the common case: agent
+		// construction failed — Lemonade down — it printed its error and
+		// exited, and the reader returned at that terminal event without
+		// resetting). Keeping the state marks the corpse as "started" and
+		// every later Send would fail exactly like this one, telling the
+		// user to retry the one thing that can never work.
+		st.proc.kill()
+		st.proc.reap()
+		s.discard(st.proc)
+		close(st.turnDone)
+		return nil, fmt.Errorf(
+			"failed to write to the agent (it will be restarted on your next message): %w", err)
 	}
 
 	ch := make(chan interface{}, 32)
@@ -318,6 +329,12 @@ func (s *SubprocessClient) Send(ctx context.Context, query string) (<-chan inter
 				Type:    "agent_error",
 				Content: fmt.Sprintf("agent stdout read error: %v", err),
 			})
+			// A scanner error (e.g. a line over the 1MB cap) is permanent on
+			// this scanner — without a reset, every later turn re-emits this
+			// same error without ever reading again.
+			st.proc.kill()
+			st.proc.reap()
+			s.discard(st.proc)
 			return
 		}
 

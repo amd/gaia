@@ -14,8 +14,10 @@ license = "MIT"
 readme = "README.md"
 requires-python = ">=3.10"
 # Floors:
-# - amd-gaia>=0.22.0 matches gaia-agent-chat's floor (the registry helper this
-#   agent inherits through ChatAgent lands there, #2112).
+# - amd-gaia>=0.23.0: SkillLibraryToolsMixin moved into the framework
+#   (gaia.agents.tools.skill_library_tools) and agent.py imports it from
+#   there — the released 0.22.0 wheel does not have the module, so an
+#   install resolving it dies at import.
 # - gaia-agent-chat is a HARD dependency, not an extra: GaiaAgent subclasses
 #   ChatAgent to inherit the doc prompt profile, RAG discovery, and session
 #   persistence rather than forking them. Importing this package without it is
@@ -26,7 +28,7 @@ requires-python = ">=3.10"
 # import the class. RAG's real dependencies come from `gaia init` into the
 # active interpreter (#2358).
 dependencies = [
-  "amd-gaia>=0.22.0",
+  "amd-gaia>=0.23.0",
   "gaia-agent-chat>=0.1.0",
 ]
 

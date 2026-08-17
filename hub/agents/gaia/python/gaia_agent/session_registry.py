@@ -44,6 +44,14 @@ def build_session_agent(**config_kwargs: Any):
     return GaiaAgent(config=GaiaAgentConfig(silent_mode=True, **config_kwargs))
 
 
+class SessionCapacityError(RuntimeError):
+    """Every session slot is busy and none is idle enough to evict.
+
+    A temporary, actionable condition — the HTTP layer maps it to 503 so a
+    client can distinguish "try again shortly" from a bug-shaped 500.
+    """
+
+
 class _AgentSession:
     """A retained agent instance plus its per-session state.
 
@@ -145,14 +153,13 @@ class _SessionRegistry:
             if len(self._sessions) >= self._max_sessions:
                 evicted = self._claim_lru_locked()
                 if evicted is None:
-                    raise RuntimeError(
+                    raise SessionCapacityError(
                         f"cannot start a new {AGENT_LABEL} session: "
                         f"{self._max_sessions} sessions are already active and "
                         "none are idle enough to evict. Close an idle "
                         "terminal/window, or wait for one to finish its current "
                         "turn, and retry."
                     )
-            reclaimed = self._evicted_ids.pop(session_id, _SENTINEL) is not _SENTINEL
         if evicted is not None:
             _close_agent(evicted.agent)
         # Build outside the lock — construction is slow and must not block other
@@ -165,6 +172,11 @@ class _SessionRegistry:
                 _close_agent(agent)
                 self._last_used[session_id] = time.monotonic()
                 return existing
+            # Consume the eviction tombstone HERE, on the branch that installs
+            # the session — popped any earlier, a racing creator for the same
+            # id could win the install with the flag already consumed, and the
+            # "your loaded skills were reset" warning would reach no one.
+            reclaimed = self._evicted_ids.pop(session_id, _SENTINEL) is not _SENTINEL
             session = _AgentSession(session_id, agent)
             session.reclaimed_after_eviction = reclaimed
             self._sessions[session_id] = session

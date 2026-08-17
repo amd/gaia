@@ -111,7 +111,11 @@ class IndexResult:
 # Cache metadata schema version — bump when structure changes
 # ---------------------------------------------------------------------------
 
-_CACHE_VERSION = 1
+# v2: chunk splitting moved to the embed window (parsers._MAX_CHUNK_CHARS)
+# with per-part line ranges. Old caches hold ~20K-char chunks that are ~94%
+# unembedded; reusing them would keep that content unsearchable forever, so
+# the version bump forces a one-time full re-index.
+_CACHE_VERSION = 2
 
 
 # ---------------------------------------------------------------------------

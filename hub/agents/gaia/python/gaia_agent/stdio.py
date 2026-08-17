@@ -634,9 +634,10 @@ def _write(event: Dict[str, Any], out) -> None:
 LOG_PATH_ENV = "GAIA_AGENT_LOG"
 
 
-#: Turns (user+assistant pairs) carried into the next prompt. The base agent
-#: already caps its own session history at 20 messages; 12 pairs stays under
-#: that while covering far more back-reference than anyone types.
+#: Turns (user+assistant pairs) carried into the next prompt — this trim is
+#: the ONLY cap on ``conversation_history`` for this transport (the base
+#: agent applies none). 12 pairs covers far more back-reference than anyone
+#: types while keeping the prompt bounded.
 MAX_HISTORY_TURNS = 12
 
 
@@ -746,7 +747,11 @@ def _configure_logging(real_stdout, *, dev: bool) -> "Path":
     root.handlers = [file_handler]
     root.setLevel(level)
     for lg in loggers:
-        lg.setLevel(logging.NOTSET)
+        if lg is not root:
+            # Leaving root at NOTSET makes isEnabledFor(DEBUG) true
+            # process-wide, so every debug call builds its LogRecord just for
+            # the handler to drop it.
+            lg.setLevel(logging.NOTSET)
     return Path(path)
 
 
@@ -867,13 +872,24 @@ def run_turn(
                     streamed_answer = str(canonical.get("answer") or "")
                 if canonical.get("type") in TERMINAL_TYPES:
                     terminated = True
+            if terminated:
+                # The reader stops at the FIRST terminal event. Anything
+                # written after it (a per-tool policy_alert mapped to
+                # ``error`` while the run continues, then the run's own
+                # ``final``) would sit unread in the pipe and be consumed as
+                # the opening events of the NEXT turn — every later turn then
+                # shows the previous turn's answer, for the life of the
+                # process. server.py returns at this point for the same
+                # reason.
+                break
 
-        for canonical in translator.flush():
-            _write(canonical, out)
-            if canonical.get("type") == "final":
-                streamed_answer = str(canonical.get("answer") or "")
-            if canonical.get("type") in TERMINAL_TYPES:
-                terminated = True
+        if not terminated:
+            for canonical in translator.flush():
+                _write(canonical, out)
+                if canonical.get("type") == "final":
+                    streamed_answer = str(canonical.get("answer") or "")
+                if canonical.get("type") in TERMINAL_TYPES:
+                    terminated = True
 
         worker.join(timeout=5.0)
 
@@ -900,7 +916,10 @@ def run_turn(
                     break
         elif isinstance(value, str):
             answer = value
-        _record_turn(agent, query, answer)
+        if answer:
+            # An empty answer is not a turn worth replaying into every later
+            # prompt — mirrors the terminated branch's None guard.
+            _record_turn(agent, query, answer)
         _write({"type": "final", "answer": answer}, out)
     finally:
         # Every exit path, including the early returns above: leaving a dead

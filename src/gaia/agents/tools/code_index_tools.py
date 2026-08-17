@@ -144,6 +144,23 @@ class CodeIndexToolsMixin:
                 self._code_index_config = None
                 self._code_index_sdk = None
 
+            # The sandbox ceiling may be the user's whole home directory (the
+            # flagship agent's default file scope). Indexing that is never
+            # what "index the codebase" means — it walks and embeds every
+            # repo, download, and cache the user owns, and blows the tool
+            # timeout doing it. Require an actual repo path instead.
+            effective = str(Path(self._repo_path).resolve())
+            if effective == str(Path.home().resolve()):
+                return json.dumps(
+                    {
+                        "error": (
+                            "refusing to index your entire home directory — "
+                            "call index_codebase with the repository's path, "
+                            "e.g. index_codebase(repo_path='~/projects/myrepo')"
+                        )
+                    }
+                )
+
             sdk = self._get_code_index_sdk()
             if sdk is None:
                 return json.dumps({"error": "code_index SDK not initialised"})

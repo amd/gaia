@@ -1377,12 +1377,15 @@ Do NOT wrap conversational replies in JSON.
         if name in self.loaded_skills:
             logger.debug("Skill '%s' is already loaded for this agent", name)
             # Explicit reactivation escape hatch: an already-loaded skill whose
-            # body the per-turn filter hid still comes back on request.
-            if self._active_skill_filter is not None and name not in (
-                self._active_skill_filter
-            ):
+            # body the per-turn filter hid still comes back on request — and
+            # the sticky pin is set even when the body is ALREADY active this
+            # turn, or an explicit ask made while selection happened to match
+            # would still collapse on the next low-scoring follow-up.
+            if self._active_skill_filter is not None:
+                filter_changed = name not in self._active_skill_filter
                 self._note_skill_active(name)
-                self.rebuild_system_prompt()
+                if filter_changed:
+                    self.rebuild_system_prompt()
             return self.loaded_skills[name]
 
         skill = resolver.load(name)

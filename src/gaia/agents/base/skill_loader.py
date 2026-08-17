@@ -32,6 +32,7 @@ import hashlib
 import json
 import logging
 import os
+import time
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Sequence
 
 import numpy as np
@@ -92,18 +93,19 @@ class SkillLoader:
         self._embed_cache: Dict[tuple, "np.ndarray"] = {}
 
         self._turn = 0
-        self._disabled_until_turn = 0
+        self._disabled_until = 0.0
 
-    #: Turns to wait before retrying after an embedder failure. A permanent
-    #: disable quietly reinstated the prompt-bloat this module exists to fix:
-    #: nothing in any host resets a *skill* loader mid-session, so one
-    #: warm-up hiccup on turn 1 used to cost every remaining turn.
-    RETRY_COOLDOWN_TURNS = 5
+    #: Seconds to wait before retrying after an embedder failure. Wall-clock,
+    #: not turns: the host checks ``session_disabled`` and skips ``select()``
+    #: entirely while disabled, so a turn-counted cooldown would never tick
+    #: down — a permanent disable in practice, quietly reinstating the
+    #: prompt-bloat this module exists to fix.
+    RETRY_COOLDOWN_SECONDS = 60.0
 
     @property
     def session_disabled(self) -> bool:
         """True while an embedding failure has selection on cooldown."""
-        return self._turn < self._disabled_until_turn
+        return time.monotonic() < self._disabled_until
 
     def reset_session(self) -> None:
         """Clear per-session state for a new conversation.
@@ -112,7 +114,7 @@ class SkillLoader:
         not the conversation.
         """
         self._turn = 0
-        self._disabled_until_turn = 0
+        self._disabled_until = 0.0
 
     def select(
         self, query: str, loaded_skills: Dict[str, "Skill"]
@@ -134,19 +136,19 @@ class SkillLoader:
             return []
 
         self._turn += 1
-        if self._turn <= self._disabled_until_turn:
+        if self.session_disabled:
             return None
 
         try:
             skill_vecs = self._ensure_skill_embeddings(loaded_skills)
             qvec = self._embed_fn(query)
         except Exception as exc:  # noqa: BLE001 — disabled + re-surfaced loudly
-            self._disabled_until_turn = self._turn + self.RETRY_COOLDOWN_TURNS
+            self._disabled_until = time.monotonic() + self.RETRY_COOLDOWN_SECONDS
             logger.warning(
                 "[SkillLoader] embedding service unreachable — lazy skill-body "
-                "selection disabled for the next %d turns (every loaded "
+                "selection disabled for the next %.0f seconds (every loaded "
                 "skill's body will render in full meanwhile). Reason: %s",
-                self.RETRY_COOLDOWN_TURNS,
+                self.RETRY_COOLDOWN_SECONDS,
                 exc,
             )
             return None

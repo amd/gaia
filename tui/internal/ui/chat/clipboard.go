@@ -145,12 +145,18 @@ type pasteImageMsg struct {
 	err  error
 }
 
-// pasteFromClipboardOrImage is Ctrl+V's real entry point: TEXT on the
-// clipboard wins over an image. A screenshot tool (Win+Shift+S,
-// Cmd+Shift+4) puts nothing in the text slot, so screenshots still paste as
-// images — but Excel, Word, and browsers put BOTH a text and a bitmap
-// rendering of the same copy on the clipboard, and image-first turned
-// "paste the cells I copied" into a PNG path of a picture of them.
+// pasteFromClipboardOrImage is Ctrl+V's real entry point. Which slot wins
+// when the clipboard holds both text and an image depends on what the copy
+// MEANT:
+//
+//   - a screenshot tool (Win+Shift+S, Cmd+Shift+4) puts only an image → image
+//   - Excel/Word cells put the cells as text plus a bitmap rendering of
+//     them → the text is the copy, image-first pasted a picture of it
+//   - a browser's "Copy image" puts the bitmap plus its source URL as
+//     text → the image is the copy, text-first pasted a URL
+//
+// So: substantial text wins; a lone URL alongside an image is treated as the
+// image's caption, not the payload.
 //
 // readClipboardImagePNG (one implementation per OS — clipboardimage_*.go) is
 // the only OS-specific part; everything after it (encode-to-temp-file,
@@ -159,16 +165,22 @@ type pasteImageMsg struct {
 func pasteFromClipboardOrImage() tea.Cmd {
 	return func() tea.Msg {
 		text, terr := clipboard.ReadAll()
-		if terr == nil && strings.TrimSpace(text) != "" {
+		hasText := terr == nil && strings.TrimSpace(text) != ""
+		if hasText && !looksLikeImageCaption(text) {
 			return pasteClipboardMsg{text: text, err: nil}
 		}
 		png, ok, err := readClipboardImagePNG()
-		if ok {
-			if err != nil {
-				return pasteImageMsg{err: err}
-			}
+		if ok && err == nil {
 			path, werr := writeClipboardImageToTemp(png)
 			return pasteImageMsg{path: path, err: werr}
+		}
+		if hasText {
+			// The text slot is all we can actually deliver — a caption-ish
+			// URL beats an image that failed to decode or isn't there.
+			return pasteClipboardMsg{text: text, err: nil}
+		}
+		if ok && err != nil {
+			return pasteImageMsg{err: err}
 		}
 		return pasteClipboardMsg{text: text, err: terr}
 	}
@@ -205,6 +217,20 @@ func writeClipboardImageToTemp(png []byte) (string, error) {
 		return "", fmt.Errorf("could not write the pasted image to %s: %w", f.Name(), err)
 	}
 	return f.Name(), nil
+}
+
+// looksLikeImageCaption reports whether clipboard text reads as the metadata
+// a "Copy image" action leaves beside the bitmap — a single URL (or data:
+// URI) — rather than content someone copied for its own sake.
+func looksLikeImageCaption(text string) bool {
+	t := strings.TrimSpace(text)
+	if t == "" || strings.ContainsAny(t, "\n\t") {
+		return false
+	}
+	return strings.HasPrefix(t, "http://") ||
+		strings.HasPrefix(t, "https://") ||
+		strings.HasPrefix(t, "data:image/") ||
+		strings.HasPrefix(t, "file://")
 }
 
 // sweepOldPastes deletes pasted images older than maxAge from dir. Best-effort

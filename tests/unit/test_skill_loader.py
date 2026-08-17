@@ -165,10 +165,14 @@ def test_embedder_failure_is_a_cooldown_not_a_death_sentence():
     loaded = _loaded(["a"])
 
     assert loader.select("q", loaded) is None  # failure starts the cooldown
-    for _ in range(SkillLoader.RETRY_COOLDOWN_TURNS):
-        assert loader.select("q", loaded) is None  # cooling down, no embed calls
+    assert loader.session_disabled is True
+    assert loader.select("q", loaded) is None  # still cooling down
     n_during_cooldown = calls["n"]
 
+    # The cooldown is WALL-CLOCK, not turn-counted: the host skips select()
+    # entirely while session_disabled, so turns would never tick it down.
+    loader._disabled_until = 0.0  # cooldown elapsed
+    assert loader.session_disabled is False
     assert loader.select("q", loaded) == ["a"]  # retried and recovered
     assert calls["n"] > n_during_cooldown
 
