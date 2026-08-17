@@ -2669,6 +2669,77 @@ Examples:
         "but warned loudly.",
     )
 
+    # Replay real Claude Code sessions against the live agent: gaia eval sessions
+    sessions_eval_parser = eval_subparsers.add_parser(
+        "sessions",
+        help="Score the agent against real Claude Code sessions, via a live TUI",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Build a 10-case dataset and replay it through a running TUI
+  gaia eval sessions --control ~/.gaia/tui/control.json --limit 10
+
+  # Dataset only — no agent, no judge
+  gaia eval sessions --dataset-only --out eval/results/sessions
+
+A TUI must already be running with --control-port; this drives THAT session so
+the run is visible on screen. Judging needs ANTHROPIC_API_KEY (the repo .env is
+read automatically).
+""",
+    )
+    sessions_eval_parser.add_argument(
+        "--control",
+        default=None,
+        help="Path to the running TUI's control.json (default: "
+        "~/.gaia/tui/control.json, or $GAIA_TUI_HOME/control.json)",
+    )
+    sessions_eval_parser.add_argument(
+        "--limit", type=int, default=10, help="Number of cases (default: 10)"
+    )
+    sessions_eval_parser.add_argument(
+        "--project",
+        default="",
+        help="Only sessions from one project directory under ~/.claude/projects",
+    )
+    sessions_eval_parser.add_argument(
+        "--out",
+        default=None,
+        help="Output directory (default: eval/results/sessions-<timestamp>)",
+    )
+    sessions_eval_parser.add_argument(
+        "--dataset-only",
+        action="store_true",
+        help="Build the dataset and stop — no agent run, no judge",
+    )
+
+    # Code generation + editing, scored by running the tests: gaia eval code
+    code_eval_parser = eval_subparsers.add_parser(
+        "code",
+        help="Code generation and editing benchmark, scored by running the tests",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  gaia eval code --control ~/.gaia/tui/control.json
+
+Each task ships a project and a test suite. The agent is asked to change it and
+the suite decides — no LLM judge. A TUI must already be running with
+--control-port; this drives THAT session so the run is visible.
+""",
+    )
+    code_eval_parser.add_argument(
+        "--control", default=None, help="Path to the running TUI's control.json"
+    )
+    code_eval_parser.add_argument(
+        "--out",
+        default=None,
+        help="Output directory (default: eval/results/code-<timestamp>)",
+    )
+    code_eval_parser.add_argument(
+        "--workspace",
+        default=None,
+        help="Where to materialize the task projects (default: a temp directory)",
+    )
+
     # Add new subparser for generating summary reports from evaluation directories
     report_parser = subparsers.add_parser(
         "report",
@@ -3311,6 +3382,22 @@ Examples:
         "--remote",
         action="store_true",
         help="Use remote Lemonade Server (skip local install/start; downloads models via API). Auto-detected when LEMONADE_BASE_URL points to a non-localhost URL.",
+    )
+    init_parser.add_argument(
+        "--skip-chat-model",
+        action="store_true",
+        help="Skip the profile's chat LLM (e.g. Gemma-4-E4B-it-GGUF) but still "
+        "install Lemonade and any embedding model the profile needs. For a "
+        "session backed by a remote LLM (e.g. the TUI's --use-claude) that "
+        "never calls the local chat model but still needs Lemonade for "
+        "RAG/memory embeddings.",
+    )
+    init_parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Report whether this profile is already set up and exit — no "
+        "install, no download, no side effects. Exit code 0 means ready, "
+        "1 means `gaia init` still has work to do.",
     )
 
     # Install command (install specific components)
@@ -4675,6 +4762,115 @@ Let me know your answer!
                 print(f"[BASELINE] Saved baseline → {baseline_path}")
             return
 
+        # Code generation + editing benchmark: gaia eval code
+        if getattr(args, "eval_command", None) == "code":
+            import time as _time
+            from pathlib import Path as _Path
+
+            from gaia.eval.code_bench import run, save, scorecard
+            from gaia.eval.session_eval import TUIDriver
+
+            control = args.control or os.path.join(
+                os.environ.get("GAIA_TUI_HOME")
+                or os.path.join(os.path.expanduser("~"), ".gaia", "tui"),
+                "control.json",
+            )
+            if not _Path(control).is_file():
+                raise FileNotFoundError(
+                    f"No running TUI found at {control}. Start one with "
+                    "`gaia-drive run gaia --control-port 8817`, or pass --control."
+                )
+
+            out_dir = _Path(
+                args.out or f"eval/results/code-{_time.strftime('%Y%m%d-%H%M%S')}"
+            )
+            workspace = _Path(args.workspace) if args.workspace else None
+
+            def _progress(index, total, result):
+                mark = "OK " if result.solved else ("ERR" if result.error else "FAIL")
+                claim = " CLAIMED-SUCCESS" if result.dishonest else ""
+                print(
+                    f"  [{index}/{total}] {mark} {result.id} "
+                    f"{result.passed_after}P/{result.failed_after}F "
+                    f"({result.elapsed_s}s){claim}"
+                )
+
+            print(f"[RUN] driving the TUI at {control}")
+            results = run(
+                TUIDriver(_Path(control)), root=workspace, on_progress=_progress
+            )
+            card = scorecard(results)
+            report_path = save(out_dir, results, card, "live TUI")
+            print()
+            print(
+                f"[SCORE] solved {card['solved']}/{card['ran']} "
+                f"({card['solve_rate']}%) · generation "
+                f"{card['generation_solved']}/{card['generation_total']} · editing "
+                f"{card['editing_solved']}/{card['editing_total']} · "
+                f"{card['dishonest']} false success claim(s)"
+            )
+            print(f"[OUTPUT] {report_path.resolve()}")
+            return
+
+        # Replay real Claude Code sessions: gaia eval sessions
+        if getattr(args, "eval_command", None) == "sessions":
+            import time as _time
+            from pathlib import Path as _Path
+
+            from gaia.eval.session_dataset import build_dataset
+            from gaia.eval.session_eval import TUIDriver, run, save, scorecard
+
+            out_dir = _Path(
+                args.out or f"eval/results/sessions-{_time.strftime('%Y%m%d-%H%M%S')}"
+            )
+            dataset = build_dataset(project=args.project, limit=args.limit)
+            print(
+                f"[DATASET] {dataset['sessions_scanned']} session(s), "
+                f"{dataset['turns_extracted']} turn(s) -> {len(dataset['cases'])} case(s)"
+            )
+            if args.dataset_only:
+                out_dir.mkdir(parents=True, exist_ok=True)
+                path = out_dir / "dataset.json"
+                path.write_text(json.dumps(dataset, indent=2), encoding="utf-8")
+                print(f"[OUTPUT] {path.resolve()}")
+                return
+
+            control = args.control or os.path.join(
+                os.environ.get("GAIA_TUI_HOME")
+                or os.path.join(os.path.expanduser("~"), ".gaia", "tui"),
+                "control.json",
+            )
+            if not _Path(control).is_file():
+                raise FileNotFoundError(
+                    f"No running TUI found at {control}. Start one with "
+                    "`gaia-drive run gaia --control-port 8817`, or pass "
+                    "--control <path to its control.json>."
+                )
+
+            from gaia.eval.claude import ClaudeClient
+
+            driver = TUIDriver(_Path(control))
+            client = ClaudeClient()
+
+            def _progress(index, total, result):
+                mark = "OK " if result.passed else ("ERR" if result.error else "LOW")
+                print(
+                    f"  [{index}/{total}] {mark} {result.id} "
+                    f"score={result.score} ({result.elapsed_s}s) {result.verdict}"
+                )
+
+            print(f"[RUN] driving the TUI at {control}")
+            results = run(dataset, driver, client, on_progress=_progress)
+            card = scorecard(results)
+            report_path = save(out_dir, dataset, results, card, "live TUI")
+            print()
+            print(
+                f"[SCORE] mean {card['mean_score']}/5 · pass rate "
+                f"{card['pass_rate']}% · {card['errors']} error(s)"
+            )
+            print(f"[OUTPUT] {report_path.resolve()}")
+            return
+
         # Email-triage throughput benchmark: gaia eval benchmark (#1233)
         if getattr(args, "eval_command", None) == "benchmark":
             import tempfile
@@ -4941,6 +5137,26 @@ Let me know your answer!
             )
             sys.exit(exit_code)
 
+        if args.check:
+            from gaia.installer.init_command import check_setup_status
+
+            try:
+                status = check_setup_status(
+                    profile=profile,
+                    skip_chat_model=getattr(args, "skip_chat_model", False),
+                    remote=getattr(args, "remote", False),
+                )
+            except ValueError as e:
+                print(f"Error: {e}", file=sys.stderr)
+                sys.exit(1)
+            if status.ready:
+                print(f"READY: profile '{profile}' is already set up")
+                sys.exit(0)
+            print(f"NOT READY: profile '{profile}' needs setup")
+            for reason in status.reasons:
+                print(f"  - {reason}")
+            sys.exit(1)
+
         from gaia.installer.init_command import run_init
 
         exit_code = run_init(
@@ -4952,6 +5168,7 @@ Let me know your answer!
             yes=args.yes,
             verbose=getattr(args, "verbose", False),
             remote=getattr(args, "remote", False),
+            skip_chat_model=getattr(args, "skip_chat_model", False),
         )
         sys.exit(exit_code)
 

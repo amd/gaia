@@ -18,7 +18,7 @@ import (
 // a user presses it expecting to tidy up their queue and loses the answer.
 func TestTheQueuedRowNamesWhatEscActuallyCosts(t *testing.T) {
 	m := newTestChat(t)
-	m.queued = "and check the calendar"
+	m.queued = []string{"and check the calendar"}
 
 	row := ansi.Strip(m.renderQueuedRow())
 	if !strings.Contains(row, "and check the calendar") {
@@ -39,7 +39,7 @@ func TestEscOnAQueuedLineDoesBothThingsTheRowPromises(t *testing.T) {
 	m.resize()
 	m.streaming = true
 	m.cancelFn = func() {}
-	m.queued = "and check the calendar"
+	m.queued = []string{"and check the calendar"}
 
 	updated, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
 	m = updated.(ChatModel)
@@ -47,7 +47,7 @@ func TestEscOnAQueuedLineDoesBothThingsTheRowPromises(t *testing.T) {
 	if !m.cancelPending {
 		t.Error("Esc did not stop the turn, which the row says it does")
 	}
-	if m.queued != "" {
+	if len(m.queued) != 0 {
 		t.Errorf("the line stayed queued behind a turn that is stopping: %q", m.queued)
 	}
 	if got := m.input.Value(); got != "and check the calendar" {
@@ -63,7 +63,7 @@ func TestTheQueuedRowFitsTheTerminal(t *testing.T) {
 		m := newTestChat(t)
 		m.width, m.height = width, 30
 		m.resize()
-		m.queued = strings.Repeat("a very long follow-up ", 20)
+		m.queued = []string{strings.Repeat("a very long follow-up ", 20)}
 
 		row := m.renderQueuedRow()
 		if got := lipgloss.Width(row); got > width {
@@ -79,7 +79,7 @@ func TestANarrowQueuedRowKeepsTheLineAndDropsTheHint(t *testing.T) {
 	m := newTestChat(t)
 	m.width, m.height = 40, 30
 	m.resize()
-	m.queued = "check the calendar too"
+	m.queued = []string{"check the calendar too"}
 
 	row := ansi.Strip(m.renderQueuedRow())
 	if strings.Contains(row, "stops the turn") {
@@ -88,4 +88,19 @@ func TestANarrowQueuedRowKeepsTheLineAndDropsTheHint(t *testing.T) {
 	if !strings.Contains(row, "check the") {
 		t.Errorf("the queued line itself was dropped: %q", row)
 	}
+}
+
+// queuedIs reports whether the queue holds exactly the given lines, in order.
+// The queue became a slice when a single slot turned out to discard everything
+// a user typed after their first follow-up.
+func queuedIs(queued []string, want ...string) bool {
+	if len(queued) != len(want) {
+		return false
+	}
+	for i := range want {
+		if queued[i] != want[i] {
+			return false
+		}
+	}
+	return true
 }

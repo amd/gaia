@@ -27,9 +27,43 @@ const (
 )
 
 // CanonicalStatusEvent — progress narration (spinner label / status line).
+//
+// The Model* fields are additive, riding the existing `status` type rather
+// than a new one — but unlike Narration/Preview they are NOT part of the
+// frozen `/query` HTTP contract other hub agents publish
+// (docs/spec/agent-ui-query-sse-contract.md governs that one; the gaia
+// flagship agent has no such surface). They are a stdio-transport-local
+// extension: a model-state ping gaia_agent/stdio.py sends at startup and
+// after a live `/model` switch. Safe to share this Go type with the
+// daemon-relay path anyway — an agent that never sets these fields leaves
+// them at their zero value, which decodes as an ordinary (blank) status
+// line. ModelID is empty on every ordinary progress status — that's the
+// field a receiver checks to tell the two apart (see
+// ChatModel.handleCanonicalEvent).
 type CanonicalStatusEvent struct {
 	Type    string `json:"type"`
 	Message string `json:"message"`
+	// ModelID is the model actually resolved for chat (e.g. "claude-sonnet-5"
+	// or "Gemma-4-E4B-it-GGUF") — empty means this is a plain status line, not
+	// a model banner.
+	ModelID string `json:"model_id,omitempty"`
+	// ModelDisplay is the short header name for ModelID (e.g. "Sonnet 5"),
+	// falling back to ModelID itself when there is no friendlier form.
+	ModelDisplay string `json:"model_display,omitempty"`
+	// ModelBackend is "claude" or "lemonade".
+	ModelBackend string `json:"model_backend,omitempty"`
+	// ModelRemote is true while inference runs off-machine (Anthropic) —
+	// the header chip's warning color is keyed on this, not on ModelBackend,
+	// so a future non-Claude remote backend still gets the warning.
+	ModelRemote bool `json:"model_remote,omitempty"`
+	// LemonadeReachable/LemonadeVersion/LemonadeBaseURL report the local model
+	// server, and are sent even for a remote chat model: embeddings (RAG,
+	// memory) still run on Lemonade, so "chat is remote" does not make Lemonade
+	// being down harmless. Reachable is a *bool so "not reported" (an older
+	// agent) stays distinguishable from "reported as down".
+	LemonadeReachable *bool  `json:"lemonade_reachable,omitempty"`
+	LemonadeVersion   string `json:"lemonade_version,omitempty"`
+	LemonadeBaseURL   string `json:"lemonade_base_url,omitempty"`
 }
 
 // CanonicalTokenEvent — one incremental chunk of assistant answer text.

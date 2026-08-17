@@ -536,6 +536,9 @@ class _StubAgent:
     _instance_tools = None
     _skill_manager = None
     _loaded_skills = None
+    # Lazy skill-body activation (#2848 follow-up): unset -> legacy full-body
+    # rendering, which is what this file's assertions check.
+    _active_skill_filter = None
 
     skill_manager = Agent.skill_manager
     loaded_skills = Agent.loaded_skills
@@ -544,6 +547,7 @@ class _StubAgent:
     _format_tools_for_prompt = Agent._format_tools_for_prompt
     _bundled_skill_dirs = Agent._bundled_skill_dirs
     _resolve_skill_manifest = Agent._resolve_skill_manifest
+    _note_skill_active = Agent._note_skill_active
     load_skill = Agent.load_skill
     unload_skill = Agent.unload_skill
     get_skills_system_prompt = Agent.get_skills_system_prompt

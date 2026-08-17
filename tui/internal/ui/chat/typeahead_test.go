@@ -48,7 +48,7 @@ func TestEnterDuringATurnQueuesAndThenSends(t *testing.T) {
 	m := typeInto(t, newTestChat(t), "summarise that")
 	m, _ = press(t, m, tea.KeyEnter)
 
-	if m.queued != "summarise that" {
+	if !queuedIs(m.queued, "summarise that") {
 		t.Fatalf("Enter during a turn did not queue the message: %q", m.queued)
 	}
 	if m.input.Value() != "" {
@@ -64,7 +64,7 @@ func TestEnterDuringATurnQueuesAndThenSends(t *testing.T) {
 	}})
 	after := updated.(ChatModel)
 
-	if after.queued != "" {
+	if len(after.queued) != 0 {
 		t.Error("the queue did not drain when the turn ended")
 	}
 	var sent bool
@@ -81,15 +81,58 @@ func TestEnterDuringATurnQueuesAndThenSends(t *testing.T) {
 	}
 }
 
-// Retyping replaces rather than stacking — a second Enter means "no, this one".
-func TestASecondQueuedMessageReplacesTheFirst(t *testing.T) {
+// Follow-ups stack, oldest first.
+//
+// This used to hold one slot, on the theory that a second Enter means "no, this
+// instead". It does not: during a two-minute local turn a user types two or
+// three thoughts, and the single slot discarded the earlier ones without a word.
+// Nothing typed may be silently dropped, and the order typed is the order meant.
+func TestEveryQueuedMessageIsKeptInTheOrderItWasTyped(t *testing.T) {
 	m := typeInto(t, newTestChat(t), "first")
 	m, _ = press(t, m, tea.KeyEnter)
 	m = typeInto(t, m, "second")
 	m, _ = press(t, m, tea.KeyEnter)
+	m = typeInto(t, m, "third")
+	m, _ = press(t, m, tea.KeyEnter)
 
-	if m.queued != "second" {
-		t.Errorf("queue holds %q; the newer message should win", m.queued)
+	if !queuedIs(m.queued, "first", "second", "third") {
+		t.Errorf("queue holds %q; every follow-up should be kept, in order", m.queued)
+	}
+}
+
+// The waiting row is the only evidence the user has that their typing landed, so
+// with several queued it must show the count — otherwise two of three look lost.
+func TestTheQueuedRowShowsHowManyAreWaiting(t *testing.T) {
+	m := newTestChat(t)
+	m.queued = []string{"first", "second", "third"}
+
+	row := ansi.Strip(m.renderQueuedRow())
+	if !strings.Contains(row, "3") {
+		t.Errorf("the row does not say how many are waiting: %q", row)
+	}
+	if !strings.Contains(row, "first") {
+		t.Errorf("the row should echo the one that runs next: %q", row)
+	}
+}
+
+// Cancelling gives back ALL of them, not just the last.
+func TestCancellingGivesEveryQueuedMessageBack(t *testing.T) {
+	m := newTestChat(t)
+	m.cancelFn = func() {}
+	m.streaming = true
+	m.queued = []string{"first", "second"}
+
+	updated, _ := m.handleKey(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(ChatModel)
+
+	if len(m.queued) != 0 {
+		t.Errorf("lines stayed queued behind a stopping turn: %q", m.queued)
+	}
+	got := m.input.Value()
+	for _, want := range []string{"first", "second"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("%q was lost on cancel; composer holds %q", want, got)
+		}
 	}
 }
 
@@ -100,13 +143,13 @@ func TestCancellingGivesTheQueuedMessageBack(t *testing.T) {
 	m.cancelFn = func() {}
 	m = typeInto(t, m, "never mind, do this instead")
 	m, _ = press(t, m, tea.KeyEnter)
-	if m.queued == "" {
+	if len(m.queued) == 0 {
 		t.Fatal("precondition: nothing queued")
 	}
 
 	m, _ = press(t, m, tea.KeyEsc)
 
-	if m.queued != "" {
+	if len(m.queued) != 0 {
 		t.Error("a cancelled turn still has a message queued behind it")
 	}
 	if got := m.input.Value(); got != "never mind, do this instead" {
@@ -220,6 +263,9 @@ func TestTheComposerShrinksBackAfterSending(t *testing.T) {
 	}
 	tall := m.viewport.Height
 
+	// This Enter is the deliberate send that ends the test's simulated
+	// composing, not another rapid keystroke — same reasoning as typeInto's
+	// own reset, needed here because the loop above calls Update directly.
 	m, _ = press(t, m, tea.KeyEnter)
 
 	if m.input.Height() != 1 {

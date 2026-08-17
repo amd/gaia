@@ -44,6 +44,17 @@ from gaia.version import LEMONADE_VERSION
 
 log = logging.getLogger(__name__)
 
+
+def is_embedding_model_id(model_id: str) -> bool:
+    """Whether a model id names an embedding model rather than a chat LLM.
+
+    Centralized so the Claude-backend skip (models required for RAG/memory
+    embeddings only) and the existing verify/test-inference branches agree
+    on the same rule instead of each re-deriving it.
+    """
+    return "embed" in model_id.lower()
+
+
 # Profile definitions mapping to agent profiles
 # Note: These define which agent profile to use for each init profile
 INIT_PROFILES = {
@@ -164,6 +175,105 @@ class InitProgress:
     message: str
 
 
+@dataclass
+class SetupStatus:
+    """Result of a read-only `gaia init --check` readiness probe.
+
+    ``reasons`` is empty exactly when ``ready`` is True — each entry names one
+    thing `gaia init` would still have to do, in plain language, so a caller
+    (the TUI's first-boot gate) can show it verbatim.
+    """
+
+    ready: bool
+    reasons: list
+
+
+def check_setup_status(
+    profile: str = "chat",
+    skip_chat_model: bool = False,
+    remote: bool = False,
+) -> SetupStatus:
+    """Check whether `gaia init --profile <profile>` still has work to do.
+
+    Read-only: never installs, starts a server, prompts, or downloads
+    anything. Checks the SAME real state `run()` itself acts on (Lemonade
+    installed + reachable, required models present) so this can never
+    disagree with what `gaia init` would actually do — the alternative, a
+    marker file recording "setup ran once", goes stale the moment a model is
+    deleted or Lemonade is uninstalled without GAIA's knowledge.
+
+    Args:
+        profile: Profile to check (minimal, chat, code, rag, all, ...)
+        skip_chat_model: Match run()'s --skip-chat-model filtering (Claude
+            backend): only the profile's embedding model(s) are required.
+        remote: Lemonade is expected on a remote machine (skip local-install
+            reasoning; a probe failure just means "not reachable").
+
+    Returns:
+        SetupStatus with ready=True iff nothing below would need to run.
+    """
+    profile = profile.lower()
+    if profile not in INIT_PROFILES:
+        valid = ", ".join(INIT_PROFILES.keys())
+        raise ValueError(f"Invalid profile '{profile}'. Valid profiles: {valid}")
+
+    from gaia.installer.lemonade_installer import LemonadeInstaller
+    from gaia.llm.lemonade_client import DEFAULT_LEMONADE_URL, LemonadeClient
+    from gaia.version import LEMONADE_VERSION
+
+    profile_config = INIT_PROFILES[profile]
+    base_url = os.environ.get("LEMONADE_BASE_URL") or DEFAULT_LEMONADE_URL
+    client = LemonadeClient(verbose=False)
+
+    server_reachable = False
+    try:
+        server_reachable = bool(client.health_check())
+    except Exception as e:
+        log.debug("check_setup_status: health probe failed: %s", e)
+
+    if not server_reachable:
+        if remote:
+            return SetupStatus(
+                ready=False,
+                reasons=[f"Remote Lemonade Server at {base_url} is not reachable"],
+            )
+        installer = LemonadeInstaller(target_version=LEMONADE_VERSION)
+        info = installer.check_installation()
+        if not (info.installed and info.version):
+            reason = "Lemonade Server is not installed"
+        else:
+            reason = f"Lemonade Server v{info.version} is installed but not running"
+        # Model availability can't be probed without a reachable server, so
+        # there is nothing more this check can say.
+        return SetupStatus(ready=False, reasons=[reason])
+
+    if profile_config["models"]:
+        model_ids = list(profile_config["models"])
+    else:
+        model_ids = client.get_required_models(profile_config["agent"])
+
+    if profile not in ("sd", "npu") and not skip_chat_model:
+        from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+
+        if DEFAULT_MODEL_NAME not in model_ids:
+            model_ids = list(model_ids) + [DEFAULT_MODEL_NAME]
+
+    if skip_chat_model:
+        model_ids = [m for m in model_ids if is_embedding_model_id(m)]
+
+    reasons = []
+    for model_id in model_ids:
+        try:
+            available = client.check_model_available(model_id)
+        except Exception as e:
+            log.debug("check_setup_status: model probe failed for %s: %s", model_id, e)
+            available = False
+        if not available:
+            reasons.append(f"Model '{model_id}' is not downloaded")
+
+    return SetupStatus(ready=not reasons, reasons=reasons)
+
+
 class InitCommand:
     """
     Main handler for the `gaia init` command.
@@ -191,6 +301,7 @@ class InitCommand:
         yes: bool = False,
         verbose: bool = False,
         remote: bool = False,
+        skip_chat_model: bool = False,
         progress_callback: Optional[Callable[[InitProgress], None]] = None,
     ):
         """
@@ -205,6 +316,13 @@ class InitCommand:
             yes: Skip confirmation prompts
             verbose: Enable verbose output
             remote: Lemonade is on a remote machine (skip local start, still check version)
+            skip_chat_model: Skip the profile's chat LLM (e.g. Gemma-4-E4B-it-GGUF)
+                while still downloading any embedding model it declares. For a
+                session whose inference runs on Anthropic's Claude API instead of
+                the local backend: the chat model would never be used, but
+                RAG/memory/code-index embeddings have no Claude equivalent and
+                still need Lemonade's embedder (see hub/agents/gaia/python/
+                gaia_agent/stdio.py). Ignored when skip_models is already set.
             progress_callback: Optional callback for progress updates
         """
         self.profile = profile.lower()
@@ -215,6 +333,7 @@ class InitCommand:
         self.yes = yes
         self.verbose = verbose
         self.remote = remote
+        self.skip_chat_model = skip_chat_model
         self.progress_callback = progress_callback
 
         # Auto-detect remote mode from LEMONADE_BASE_URL environment variable
@@ -1521,11 +1640,18 @@ class InitCommand:
             # Include default GPU model for profiles that use llamacpp.
             # SD profile has its own LLM and doesn't need the default model.
             # NPU profile uses FLM models exclusively — don't append GGUF model.
-            if self.profile not in ("sd", "npu"):
+            if self.profile not in ("sd", "npu") and not self.skip_chat_model:
                 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 
                 if DEFAULT_MODEL_NAME not in model_ids:
                     model_ids = list(model_ids) + [DEFAULT_MODEL_NAME]
+
+            # A Claude-backed session never calls the local chat LLM — only
+            # RAG/memory/code-index embeddings still need Lemonade (Anthropic has
+            # no embeddings API). Drop every non-embedding model rather than
+            # pulling several GB that will sit unused.
+            if self.skip_chat_model:
+                model_ids = [m for m in model_ids if is_embedding_model_id(m)]
 
             if not model_ids:
                 self._print_success("No models required for this profile")
@@ -1809,11 +1935,14 @@ class InitCommand:
 
             # Include default CPU model for profiles that need gaia llm
             # SD profile has its own LLM and doesn't need the 0.5B model
-            if self.profile != "sd":
+            if self.profile != "sd" and not self.skip_chat_model:
                 from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
 
                 if DEFAULT_MODEL_NAME not in model_ids:
                     model_ids = list(model_ids) + [DEFAULT_MODEL_NAME]
+
+            if self.skip_chat_model:
+                model_ids = [m for m in model_ids if is_embedding_model_id(m)]
 
             if not model_ids or self.skip_models:
                 return True
@@ -2249,6 +2378,7 @@ def run_init(
     yes: bool = False,
     verbose: bool = False,
     remote: bool = False,
+    skip_chat_model: bool = False,
 ) -> int:
     """
     Entry point for `gaia init` command.
@@ -2262,6 +2392,8 @@ def run_init(
         yes: Skip confirmation prompts
         verbose: Enable verbose output
         remote: Lemonade is on a remote machine (skip local start, still check version)
+        skip_chat_model: Skip the profile's chat LLM, keep any embedding model
+            (see InitCommand's docstring — for a Claude-backed session)
 
     Returns:
         Exit code (0 for success, non-zero for failure)
@@ -2276,6 +2408,7 @@ def run_init(
             yes=yes,
             verbose=verbose,
             remote=remote,
+            skip_chat_model=skip_chat_model,
         )
         return cmd.run()
     except ValueError as e:

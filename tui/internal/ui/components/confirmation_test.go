@@ -466,3 +466,44 @@ func TestConfirmationViewDoesNotPanicWhenResolved(t *testing.T) {
 		_ = m.View() // must not panic
 	}
 }
+
+// A warning users learn is false on the safe calls is the warning they dismiss
+// without reading on the dangerous one. `pwd` is tiered Destructive because
+// run_shell_command's NAME does not bound it — not because pwd is destructive.
+func TestDestructiveWarningDistinguishesUnboundedFromIrreversible(t *testing.T) {
+	shell := destructiveWarning("run_shell_command")
+	if strings.Contains(shell, "may not be reversible") {
+		t.Errorf("shell warning still claims irreversibility: %q", shell)
+	}
+	if !strings.Contains(shell, "check the command above") {
+		t.Errorf("shell warning must point at the command on screen: %q", shell)
+	}
+
+	if got := destructiveWarning("run_cli_command"); got != shell {
+		t.Errorf("both shell tools must share the wording, got %q", got)
+	}
+
+	// A genuinely irreversible action keeps the strong claim.
+	del := destructiveWarning("permanent_delete")
+	if !strings.Contains(del, "may not be reversible") {
+		t.Errorf("permanent_delete lost its warning: %q", del)
+	}
+}
+
+// The modal renders the wording the tier chose, not a hardcoded sentence.
+func TestConfirmationViewUsesTheUnboundedWording(t *testing.T) {
+	m := NewConfirmationModel(
+		"run-1",
+		"run_shell_command",
+		`Run 'run_shell_command' with command="pwd"?`,
+		"",
+	)
+
+	view := m.View()
+	if strings.Contains(view, "may not be reversible") {
+		t.Errorf("a pwd confirmation still reads as irreversible:\n%s", view)
+	}
+	if !strings.Contains(view, "DESTRUCTIVE") {
+		t.Errorf("the cautious badge should remain:\n%s", view)
+	}
+}

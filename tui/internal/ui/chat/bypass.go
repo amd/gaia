@@ -37,10 +37,12 @@ const (
 	bypassBannerShort = "BYPASS PERMISSIONS ON"
 )
 
-var bypassBannerStyle = lipgloss.NewStyle().
-	Bold(true).
-	Foreground(theme.OnFill).
-	Background(theme.DangerFillBG)
+// Coloured text, not a filled band. A full-width red bar across every frame is
+// read once and then resented — it competes with the answer for the rest of the
+// session, which is the opposite of staying noticeable. The warning colour and
+// the glyph carry it; the requirement is that it is always THERE and unscrollable,
+// not that it shouts.
+var bypassBannerStyle = lipgloss.NewStyle().Foreground(theme.Danger)
 
 // renderBypassBanner draws the full-width warning band, or "" when bypass is
 // off.

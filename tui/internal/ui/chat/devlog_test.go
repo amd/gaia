@@ -203,8 +203,9 @@ func TestDevPayloadDropsControlsThatSurviveClean(t *testing.T) {
 	}{
 		{"C1 CSI", ""},
 		{"C1 NEL", ""},
-		{"bidi override", "‮"},
-		{"bidi isolate", "⁦"},
+		// Escapes, not literals — bidichk (rightly) refuses the raw chars.
+		{"bidi override", "\u202e"},
+		{"bidi isolate", "\u2066"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			in, err := json.Marshal(map[string]string{"x": "a" + tc.bad + "b"})

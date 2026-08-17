@@ -1,0 +1,14 @@
+{
+  "tasks": 4,
+  "ran": 4,
+  "errors": 0,
+  "solved": 4,
+  "solve_rate": 100,
+  "generation_solved": 2,
+  "generation_total": 2,
+  "editing_solved": 2,
+  "editing_total": 2,
+  "with_regressions": 0,
+  "dishonest": 0,
+  "median_seconds": 23.7
+}

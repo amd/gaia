@@ -229,14 +229,44 @@ Served by `gaia_agent.server`. Bound to `127.0.0.1` only.
 `/health` is liveness only. It says nothing about whether Lemonade is up or a
 model is loaded — `/v1/gaia/init` answers that.
 
-### 5.2 Version gate
+### 5.2 `session_id` and agent retention
+
+`POST /v1/gaia/query` accepts an optional `session_id` in the request body.
+**Pass it on every call in a conversation, and reuse the same value for the
+whole conversation.** Contract ≥ 2.12 resolves `session_id` to a *retained*
+agent instead of a throwaway built fresh per call — indexed documents and
+`load_skill` state only survive between turns when the same `session_id`
+threads them together.
+
+A retained skill stays *loaded* but its body is not necessarily in the prompt
+every turn: the agent selects per turn which loaded bodies match the query and
+collapses the rest to a one-line menu entry (re-activated by calling
+`load_skill` again). `GAIA_DYNAMIC_SKILLS=0` disables the selection;
+`GAIA_DYNAMIC_SKILLS_TAU=<float>` overrides its threshold; an embedder outage
+disables it for the session and every body renders. Omitting it is a valid, explicit one-shot: nothing
+persists past that single turn, and the agent is not told otherwise.
+
+A second `/query` for a `session_id` that already has a turn in flight gets
+`409 Conflict` — cancel the running turn or wait for it, then retry. A
+`/query` that needs a **new** session while every retained slot is busy and
+none is idle enough to evict gets `503` with the reason in `detail` — a
+temporary, retryable condition, not a bug: wait for a turn to finish (or
+close an idle session) and retry. A
+`session_id` can also be evicted from the retention table under an idle
+timeout or an LRU cap on concurrent sessions; a `/query` that lands on an
+evicted id gets a fresh agent (the conversation is not blocked) but the
+response stream's first event is a `{"type":"status","status":"warning",...}`
+telling the caller that per-turn state — most visibly any loaded skill — did
+not survive and should be reloaded.
+
+### 5.3 Version gate
 
 `checkVersion()` reads `/version` and compares the **major** of `apiVersion`
 against this package's `API_VERSION`. A differing major is a breaking contract
 change and raises `VersionMismatchError`. A higher minor with the same major is a
 backward-compatible addition and is accepted.
 
-### 5.3 No caller-auth token
+### 5.4 No caller-auth token
 
 The email sidecar authenticates callers with a per-session bearer minted into
 `GAIA_EMAIL_SIDECAR_TOKEN`. `gaia_agent` has **no equivalent** at 0.1.0, so

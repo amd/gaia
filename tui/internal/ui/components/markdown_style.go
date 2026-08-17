@@ -71,20 +71,24 @@ func gaiaStyle(dark bool) ansi.StyleConfig {
 	base.Task.Unticked = "[ ] "
 
 	// Inline code is the single most common styled span in an agent answer —
-	// every file path, flag, and symbol. The builtin's red-on-grey reads as an
-	// error; this is a quiet tint that says "literal". It shares the fenced
-	// block's background so the two read as one family, and keeps its own
-	// foreground so a path in a sentence is never mistaken for a code block.
+	// every file path, flag, and symbol. Colour alone marks it: a tinted box
+	// around each one turns a paragraph about code into a patchwork of little
+	// rectangles, and an answer naming six symbols was mostly boxes.
 	base.Code.Color = strPtr(p.code)
-	base.Code.BackgroundColor = strPtr(p.codeBG)
+	// Explicit nil, not merely un-set: the glamour builtin sets one of its own,
+	// and dropping our override just let THAT through (the same reason H1 above
+	// clears its purple fill).
+	base.Code.BackgroundColor = nil
 
 	// One column of inset, so the block's tinted background starts clear of the
 	// prose margin. Glamour reflows code to the same measure as the rest of the
 	// document, so a long line inside a fence wraps rather than running past
 	// the width the caller set with SetWordWrap.
 	base.CodeBlock.Margin = uintPtr(1)
-	base.CodeBlock.Color = strPtr(p.syntax.text)
-	base.CodeBlock.BackgroundColor = strPtr(p.codeBG)
+	// Distinct from body on purpose: with no fill and no lexer, an unlabelled
+	// fence has nothing else left to say it is not a paragraph.
+	base.CodeBlock.Color = strPtr(p.syntax.punct)
+	base.CodeBlock.BackgroundColor = nil
 	base.CodeBlock.Chroma = gaiaChroma(p.syntax)
 
 	// Tables arrive from tool results often enough to be worth real rules.
@@ -198,7 +202,7 @@ var (
 var (
 	darkSyntax = syntax{
 		bg:       "#262626",
-		text:     "#DCDFE4",
+		text:     "#ABB2BF", // distinct from body — see TestAnUnlabelledFenceStillReadsAsCode
 		comment:  "#8C93A1",
 		keyword:  "#C678DD", // purple
 		typeName: "#E5C07B", // yellow
@@ -214,7 +218,7 @@ var (
 
 	lightSyntax = syntax{
 		bg:       "#E4E4E4",
-		text:     "#24292E",
+		text:     "#4B5563", // distinct from body — see TestAnUnlabelledFenceStillReadsAsCode
 		comment:  "#5F6369",
 		keyword:  "#8B208A",
 		typeName: "#6B4900",
@@ -243,8 +247,11 @@ var (
 // true of the TUI, which resolves light-or-dark once at startup — but not of a
 // test binary, where the first render wins and a later variant is ignored.
 func gaiaChroma(s syntax) *ansi.Chroma {
+	// Foreground only. Painting each token's own background tinted the block
+	// from the inside, so removing the block's fill alone would have left the
+	// slab behind — and the syntax colours are what mark this as code.
 	on := func(hex string) ansi.StylePrimitive {
-		return ansi.StylePrimitive{Color: strPtr(hex), BackgroundColor: strPtr(s.bg)}
+		return ansi.StylePrimitive{Color: strPtr(hex)}
 	}
 	bold := func(hex string) ansi.StylePrimitive {
 		e := on(hex)
@@ -252,7 +259,7 @@ func gaiaChroma(s syntax) *ansi.Chroma {
 		return e
 	}
 	return &ansi.Chroma{
-		Background: ansi.StylePrimitive{BackgroundColor: strPtr(s.bg)},
+		Background: ansi.StylePrimitive{},
 		Text:       on(s.text),
 		Error:      on(s.removed),
 
@@ -291,7 +298,7 @@ func gaiaChroma(s syntax) *ansi.Chroma {
 		// than decorating it, so red and green have to be unmistakable.
 		GenericDeleted:    on(s.removed),
 		GenericInserted:   on(s.added),
-		GenericEmph:       ansi.StylePrimitive{Color: strPtr(s.text), BackgroundColor: strPtr(s.bg), Italic: boolPtr(true)},
+		GenericEmph:       ansi.StylePrimitive{Color: strPtr(s.text), Italic: boolPtr(true)},
 		GenericStrong:     bold(s.text),
 		GenericSubheading: on(s.comment),
 	}

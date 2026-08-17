@@ -27,6 +27,7 @@ from typing import (
     Callable,
     ClassVar,
     Dict,
+    FrozenSet,
     List,
     Literal,
     Optional,
@@ -43,6 +44,7 @@ from gaia.chat.sdk import AgentConfig, AgentSDK
 from gaia.llm.lemonade_client import (
     DEFAULT_MODEL_NAME,
     GPU_CTX_SIZE,
+    budget_for_ctx,
     is_context_overflow_error,
     truncation_budget,
 )
@@ -68,6 +70,26 @@ def _skill_validation_error(message: str) -> Exception:
     from gaia.skills.errors import SkillValidationError
 
     return SkillValidationError(message)
+
+
+#: How much of a skill's description the always-on menu line carries (#2848
+#: follow-up). A loaded-but-inactive skill still needs to be discoverable
+#: without paying for its full body, and some skills (ported from other
+#: ecosystems) ship trigger descriptions over 1,000 characters — capped so the
+#: menu itself never becomes what it exists to avoid.
+_SKILL_MENU_DESCRIPTION_CHARS = 160
+
+
+def _skill_menu_description(description: str) -> str:
+    """First non-empty line of *description*, capped for the resident menu."""
+    text = ""
+    for line in (description or "").splitlines():
+        if line.strip():
+            text = line.strip()
+            break
+    if len(text) <= _SKILL_MENU_DESCRIPTION_CHARS:
+        return text
+    return text[:_SKILL_MENU_DESCRIPTION_CHARS].rstrip() + "…"
 
 
 # Content truncation thresholds
@@ -459,6 +481,28 @@ class Agent(abc.ABC):
     # ``shell:execute:<binary>`` grants held by the currently loaded skills.
     _granted_binaries: Optional[Any] = None
 
+    # Lazy skill-body activation (#2848 follow-up): the sorted subset of
+    # LOADED skill names whose full body renders this turn, or ``None`` to
+    # render every loaded skill's body unconditionally (legacy, byte-identical
+    # — the default for every agent that hasn't opted in). Set by
+    # ``_select_skills_for_turn`` at the top of each query; consulted by
+    # ``get_skills_system_prompt``. Unlike the tool filter this is NOT
+    # monotonic: a stale match has to be dropped, or lazy loading reproduces
+    # the exact bug it fixes (a skill body riding along on every turn once
+    # matched once). Always-on skills (the manifest's plain ``skills:`` list)
+    # are exempt and always render in full — see ``_always_on_skill_names``.
+    _active_skill_filter: Optional[List[str]] = None
+
+    #: Explicit re-activations (``load_skill`` on an already-loaded skill)
+    #: pinned active for this many upcoming turns. Without it the escape
+    #: hatch survived less than one exchange: the next turn's fresh selection
+    #: wiped it, and a follow-up like "yes, continue" collapsed the recipe
+    #: the model was mid-way through executing.
+    STICKY_SKILL_TURNS: ClassVar[int] = 3
+
+    #: name -> turns of pinning remaining; decremented each refresh.
+    _sticky_skill_turns: Optional[Dict[str, int]] = None
+
     # Skill sets (#2466): the parsed manifest declarations, the explicit
     # ``--skill-set`` request, and the set that actually resolved.
     _skill_sets: Optional[Any] = None
@@ -593,7 +637,7 @@ Do NOT wrap conversational replies in JSON.
         self,
         use_claude: bool = False,
         use_chatgpt: bool = False,
-        claude_model: str = "claude-sonnet-4-20250514",
+        claude_model: str = "claude-sonnet-5",
         base_url: Optional[str] = None,
         model_id: str = None,
         max_steps: Optional[int] = None,
@@ -618,7 +662,7 @@ Do NOT wrap conversational replies in JSON.
         Args:
             use_claude: If True, uses Claude API (default: False)
             use_chatgpt: If True, uses ChatGPT/OpenAI API (default: False)
-            claude_model: Claude model to use when use_claude=True (default: "claude-sonnet-4-20250514")
+            claude_model: Claude model to use when use_claude=True (default: "claude-sonnet-5")
             base_url: Base URL for local LLM server (default: reads from LEMONADE_BASE_URL env var, falls back to http://localhost:13305/api/v1)
             model_id: The ID of the model to use with LLM server (default for local)
             max_steps: Maximum number of steps the agent can take before terminating.
@@ -739,6 +783,9 @@ Do NOT wrap conversational replies in JSON.
         # for tool-calling models — exactly what the suppression was meant
         # to prevent.
         self.model_id = model_id
+        # Claude always speaks native tool_calls, whatever model_id says — the
+        # two tool-capability gates below read this alongside model_id.
+        self._use_claude = use_claude
 
         # Initialised here (not lazy via getattr) so subclass tests that drive
         # the parsing helpers outside the standard query lifecycle don't see
@@ -894,7 +941,9 @@ Do NOT wrap conversational replies in JSON.
         if hasattr(self, "_response_format_template"):
             from gaia.llm.lemonade_client import is_tool_calling_model
 
-            if not is_tool_calling_model(getattr(self, "model_id", None)):
+            if not getattr(self, "_use_claude", False) and not is_tool_calling_model(
+                getattr(self, "model_id", None)
+            ):
                 parts.append(self._response_format_template)
 
         if tool_filter is not None and tools_block is not None:
@@ -1031,7 +1080,9 @@ Do NOT wrap conversational replies in JSON.
         """Return OpenAI function-calling schemas when the active model supports native tool_calls."""
         from gaia.llm.lemonade_client import is_tool_calling_model
 
-        if is_tool_calling_model(getattr(self, "model_id", None)):
+        if getattr(self, "_use_claude", False) or is_tool_calling_model(
+            getattr(self, "model_id", None)
+        ):
             return (
                 self._build_openai_tool_schemas(filter_to=self._active_tool_filter)
                 or None
@@ -1085,6 +1136,103 @@ Do NOT wrap conversational replies in JSON.
         """
         self._active_tool_filter = new_filter
         self._system_prompt_cache = self._compose_system_prompt()
+
+    def _select_skills_for_turn(  # pylint: disable=unused-argument
+        self, user_input: str
+    ) -> Optional[List[str]]:
+        """Return the loaded-skill-name subset whose body renders this turn.
+
+        Default: ``None`` — render every loaded skill's full body every turn
+        (legacy behavior, unchanged for every agent that doesn't opt in).
+        GaiaAgent overrides this with a per-turn semantic selector so an
+        unrelated skill's body doesn't ride along on every subsequent turn
+        for the life of the session (#2848).
+        """
+        return None
+
+    def _refresh_active_skill_filter(self, user_input: str) -> None:
+        """Update the active skill-body filter for this turn, if it changed.
+
+        Mirrors :meth:`_refresh_active_tool_filter`. Recomputed fresh every
+        turn rather than accumulated: a skill body is large enough (measured
+        15-19KB, #2848) that letting a stale match stick around reproduces the
+        exact permanent-inlining bug this exists to fix.
+        """
+        # pylint: disable-next=assignment-from-none
+        new_filter = self._select_skills_for_turn(user_input)
+        new_filter = self._union_sticky_skills(new_filter)
+        if new_filter != self._active_skill_filter:
+            self._apply_skill_filter(new_filter)
+
+    def _union_sticky_skills(
+        self, new_filter: Optional[List[str]]
+    ) -> Optional[List[str]]:
+        """Fold explicitly re-activated skills into this turn's selection.
+
+        Each pinned name is kept active for ``STICKY_SKILL_TURNS`` refreshes
+        after its ``load_skill`` call, then expires back to pure semantic
+        selection. ``None`` (selection off / fallback) passes through — every
+        body renders anyway.
+        """
+        sticky = getattr(self, "_sticky_skill_turns", None)
+        if not sticky:
+            return new_filter
+        loaded = getattr(self, "_loaded_skills", None) or {}
+        for name in list(sticky):
+            if name not in loaded:
+                del sticky[name]
+        pinned = set(sticky)
+        # Decrement AFTER use, so a pin of N covers N refreshes, not N-1.
+        for name in list(sticky):
+            sticky[name] -= 1
+            if sticky[name] <= 0:
+                del sticky[name]
+        if new_filter is None or not pinned:
+            return new_filter
+        return sorted(set(new_filter) | pinned)
+
+    def _apply_skill_filter(self, new_filter: Optional[List[str]]) -> None:
+        """Swap the active skill-body filter and recompute the cached prompt."""
+        self._active_skill_filter = new_filter
+        self._system_prompt_cache = self._compose_system_prompt()
+
+    def _note_skill_active(self, name: str) -> None:
+        """Force *name*'s body active for the rest of this turn, if filtering is on.
+
+        No-op on the legacy path (``_active_skill_filter is None`` — every
+        loaded skill's body already renders unconditionally). This is the
+        explicit escape hatch: calling ``load_skill`` on an already-loaded
+        skill always brings its instructions back, even when the per-turn
+        selector missed it — mirrors the ``load_tools`` escape hatch for tools.
+        Callers still need to call :meth:`rebuild_system_prompt` themselves.
+        """
+        current = self._active_skill_filter
+        if current is None:
+            return
+        # Pin the explicit ask for the next few turns too — a follow-up like
+        # "yes, continue" scores nothing against the skill's description, and
+        # collapsing the body one turn after the user asked for it strands
+        # the model mid-recipe.
+        # getattr, not attribute access: test stubs copy this method without
+        # inheriting the class attributes.
+        sticky = getattr(self, "_sticky_skill_turns", None)
+        if sticky is None:
+            sticky = {}
+            self._sticky_skill_turns = sticky
+        sticky[name] = getattr(self, "STICKY_SKILL_TURNS", 3)
+        if name not in current:
+            self._active_skill_filter = sorted(set(current) | {name})
+
+    @property
+    def _always_on_skill_names(self) -> FrozenSet[str]:
+        """Names from the manifest's plain ``skills:`` (always-on) list.
+
+        Exempt from the per-turn skill-body filter for the same reason
+        ToolLoader's CORE tier is exempt from its cap: small and deliberately
+        resident every turn (e.g. an honesty-floor skill), not a per-topic
+        recipe. Empty for an agent with no manifest or no always-on entries.
+        """
+        return frozenset(ref.name for ref in self.skill_sets.always)
 
     def rebuild_system_prompt(self) -> None:
         """Rebuild system prompt with current tools from _TOOL_REGISTRY.
@@ -1228,6 +1376,16 @@ Do NOT wrap conversational replies in JSON.
 
         if name in self.loaded_skills:
             logger.debug("Skill '%s' is already loaded for this agent", name)
+            # Explicit reactivation escape hatch: an already-loaded skill whose
+            # body the per-turn filter hid still comes back on request — and
+            # the sticky pin is set even when the body is ALREADY active this
+            # turn, or an explicit ask made while selection happened to match
+            # would still collapse on the next low-scoring follow-up.
+            if self._active_skill_filter is not None:
+                filter_changed = name not in self._active_skill_filter
+                self._note_skill_active(name)
+                if filter_changed:
+                    self.rebuild_system_prompt()
             return self.loaded_skills[name]
 
         skill = resolver.load(name)
@@ -1258,6 +1416,7 @@ Do NOT wrap conversational replies in JSON.
                 self.granted_binaries.grant(policy.binary, skill_name=skill.name)
 
             self.loaded_skills[name] = skill
+            self._note_skill_active(name)
             self.rebuild_system_prompt()
         except Exception:
             unregister_skill_tools(skill.name)
@@ -1403,6 +1562,10 @@ Do NOT wrap conversational replies in JSON.
                 self._instance_tools.pop(key, None)
         revoked = self.granted_binaries.revoke_skill(name)
         self.loaded_skills.pop(name, None)
+        if self._active_skill_filter is not None:
+            self._active_skill_filter = [
+                n for n in self._active_skill_filter if n != name
+            ]
         self.rebuild_system_prompt()
         logger.info(
             "Unloaded skill '%s'%s",
@@ -1611,24 +1774,61 @@ Do NOT wrap conversational replies in JSON.
         return loaded
 
     def get_skills_system_prompt(self) -> str:
-        """Render the loaded skills' bodies as a system-prompt fragment.
+        """Render the loaded skills as a system-prompt fragment.
 
         Auto-discovered by ``_get_mixin_prompts()``, so a skill's instructions
         reach the model as soon as it is loaded. Returns "" when no skill is
         loaded, keeping every existing agent's prompt byte-identical.
+
+        ``_active_skill_filter is None`` (the default, every agent that hasn't
+        opted into per-turn selection) renders every loaded skill's full body
+        every turn — the original, byte-identical behavior. When a subclass
+        has set the filter (GaiaAgent, #2848 follow-up), a loaded skill whose
+        name is not in the filter — and is not in the manifest's always-on
+        ``skills:`` list — collapses to a one-line menu entry instead of its
+        full body, so a loaded-but-irrelevant skill costs a menu line, not a
+        multi-KB body, on the turns that don't need it.
         """
         skills = getattr(self, "_loaded_skills", None)
         if not skills:
             return ""
 
-        sections = []
-        for skill in skills.values():
-            if not skill.body:
-                continue
-            sections.append(f"--- SKILL: {skill.name} ---\n{skill.body}")
-        if not sections:
-            return ""
-        return "==== LOADED SKILLS ====\n" + "\n\n".join(sections)
+        active_filter = getattr(self, "_active_skill_filter", None)
+        if active_filter is None:
+            sections = []
+            for skill in skills.values():
+                if not skill.body:
+                    continue
+                sections.append(f"--- SKILL: {skill.name} ---\n{skill.body}")
+            if not sections:
+                return ""
+            return "==== LOADED SKILLS ====\n" + "\n\n".join(sections)
+
+        active = set(active_filter) | self._always_on_skill_names
+        body_sections = []
+        menu_lines = []
+        for skill in sorted(skills.values(), key=lambda s: s.name):
+            if skill.name in active:
+                if skill.body:
+                    body_sections.append(f"--- SKILL: {skill.name} ---\n{skill.body}")
+            else:
+                menu_lines.append(
+                    f"- {skill.name}: {_skill_menu_description(skill.description)}"
+                )
+
+        parts = []
+        if body_sections:
+            parts.append(
+                "==== LOADED SKILLS (active this turn) ====\n"
+                + "\n\n".join(body_sections)
+            )
+        if menu_lines:
+            parts.append(
+                "==== LOADED SKILLS (instructions hidden this turn to save "
+                "space — call load_skill('<name>') again to bring one back) "
+                "====\n" + "\n".join(menu_lines)
+            )
+        return "\n\n".join(parts)
 
     def list_tools(self, verbose: bool = True) -> None:
         """
@@ -3023,6 +3223,14 @@ Do NOT wrap conversational replies in JSON.
                 logger.error(error_msg)
                 return {"status": "error", "error": error_msg}
 
+        # Models routinely send numbers as JSON strings ("120" for timeout: int).
+        # Every tool body would otherwise have to defend itself, and the ones
+        # that don't fail deep inside a library with an unrecognisable message.
+        tool_args, coercion_error = self._coerce_tool_args(tool_name, sig, tool_args)
+        if coercion_error is not None:
+            logger.error(coercion_error)
+            return {"status": "error", "error": coercion_error}
+
         try:
             result = self._call_tool_bounded(tool, tool_args, tool_name)
             logger.debug(f"Tool execution result: {result}")
@@ -3158,6 +3366,118 @@ Do NOT wrap conversational replies in JSON.
 
         return os.path.abspath(file_path)
 
+    def _truncation_budget(self) -> tuple:
+        """(threshold, target) chars a tool result may occupy, for THIS model.
+
+        The local budget is derived from the device profile (NPU 32K / GPU 64K),
+        which is right for Lemonade and wrong for anything else. Running on
+        Claude the agent was still capping tool results at the NPU's 20,000
+        chars — with a 200,000-token window sitting unused — and silently
+        dropping list entries it had ample room for. Observed: a 36-skill
+        listing came back one short, and the agent said so.
+        """
+        if getattr(self, "_use_claude", False):
+            # Imported here, not at module scope: providers/claude.py guards an
+            # optional dependency, and the Lemonade-only path must not pay for it.
+            from gaia.llm.providers.claude import (  # pylint: disable=import-outside-toplevel
+                CLAUDE_CTX_SIZE,
+            )
+
+            return budget_for_ctx(CLAUDE_CTX_SIZE)
+        return truncation_budget(self.device)
+
+    #: Scalar annotations worth coercing, by name as well as by type: a module
+    #: using postponed annotations hands us the string "int", not ``int``, and
+    #: silently skipping those would turn this into a no-op nobody notices.
+    #: Anything richer (a dict, a dataclass, an Optional[...]) is left exactly
+    #: as the model sent it.
+    _COERCIBLE = {"int": int, "float": float, "bool": bool, "str": str}
+
+    @staticmethod
+    def _coerce_scalar(value: Any, target: type) -> Any:
+        """Return *value* as *target*, or raise ValueError naming the problem."""
+        if target is bool:
+            if isinstance(value, bool):
+                return value
+            text = str(value).strip().lower()
+            if text in ("true", "yes", "1"):
+                return True
+            if text in ("false", "no", "0"):
+                return False
+            raise ValueError(f"{value!r} is not a boolean")
+        if target is str:
+            return value if isinstance(value, str) else str(value)
+        # bool is a subclass of int — coercing True to 1 silently would hide a
+        # model that confused a flag for a count.
+        if isinstance(value, bool):
+            raise ValueError(f"{value!r} is a boolean, not a number")
+        if target is int:
+            if isinstance(value, int):
+                return value
+            number = float(str(value).strip())
+            if number != int(number):
+                raise ValueError(f"{value!r} is not a whole number")
+            return int(number)
+        if isinstance(value, (int, float)):
+            return float(value)
+        return float(str(value).strip())
+
+    def _coerce_tool_args(
+        self,
+        tool_name: str,
+        sig: "inspect.Signature",
+        tool_args: Dict[str, Any],
+    ) -> tuple:
+        """Fit model-supplied arguments to each parameter's annotated type.
+
+        Returns ``(args, error)``; ``error`` is None when everything converted.
+
+        A model that sends ``timeout: "120"`` for ``timeout: int = 60`` used to
+        reach ``subprocess.run(timeout="120")``, which fails inside the stdlib
+        with ``unsupported operand type(s) for +: 'float' and 'str'``. The
+        agent read that as a bug in the *script* it was running and reported it
+        as such — so the real fault was invisible from the transcript.
+        """
+        converted = dict(tool_args)
+        problems = []
+        for name, value in tool_args.items():
+            param = sig.parameters.get(name)
+            if param is None or param.annotation is inspect.Parameter.empty:
+                continue
+            annotation = param.annotation
+            target = self._COERCIBLE.get(
+                annotation.strip() if isinstance(annotation, str) else None
+            ) or (annotation if annotation in self._COERCIBLE.values() else None)
+            if target is None or value is None:
+                continue
+            # bool passes isinstance(x, int), so an int parameter handed True
+            # would look correct and skip the check that rejects it.
+            already_right = isinstance(value, target) and not (
+                target is int and isinstance(value, bool)
+            )
+            if already_right:
+                continue
+            try:
+                converted[name] = self._coerce_scalar(value, target)
+            except (TypeError, ValueError) as exc:
+                problems.append(f"{name} expects {target.__name__} — {exc}")
+        if problems:
+            return tool_args, (
+                f"Invalid argument(s) for {tool_name}: {'; '.join(problems)}. "
+                f"Send each value as its declared type."
+            )
+        if converted != tool_args:
+            logger.debug(
+                "[coerce] %s: %s",
+                tool_name,
+                {
+                    k: f"{tool_args[k]!r}->{v!r}"
+                    for k, v in converted.items()
+                    if tool_args.get(k) != v or type(tool_args.get(k)) is not type(v)
+                },
+            )
+        return converted, None
+
     def _handle_large_tool_result(
         self,
         tool_name: str,
@@ -3186,7 +3506,7 @@ Do NOT wrap conversational replies in JSON.
             result_str = json.dumps(
                 tool_result, default=self._json_serialize_fallback, ensure_ascii=False
             )
-            threshold, target = truncation_budget(self.device)
+            threshold, target = self._truncation_budget()
             if len(result_str) > threshold:
                 # Truncate large results to prevent overwhelming the LLM. The
                 # result is re-parsed just below, so this path must always
@@ -3411,10 +3731,14 @@ Do NOT wrap conversational replies in JSON.
         if isinstance(tool_output, str):
             text_content = tool_output
         else:
+            # Every call site hands this a result ``_handle_large_tool_result``
+            # already fitted to the device budget, so this is a backstop, not
+            # the real gate -- it must not be tighter than the gate it backs.
+            _, target = self._truncation_budget()
             # Prose call site: text_content is spliced into a message's text
             # field, never json.loads'd -- stays on the default prose path,
             # not the JSON-safe envelope (#2620, reflection C2).
-            text_content = self._truncate_large_content(tool_output, max_chars=2000)
+            text_content = self._truncate_large_content(tool_output, max_chars=target)
 
         if not isinstance(text_content, str):
             text_content = json.dumps(
@@ -3862,6 +4186,11 @@ Do NOT wrap conversational replies in JSON.
         # Dynamic tool selection (#1449): pick this turn's tool subset and
         # recompute the cached system prompt only when it changes.
         self._refresh_active_tool_filter(user_input)
+
+        # Lazy skill-body activation (#2848 follow-up): same per-turn timing
+        # as the tool filter above, so a stale skill match never survives
+        # into a turn that no longer needs it.
+        self._refresh_active_skill_filter(user_input)
 
         logger.debug(f"Processing query: {user_input}")
         conversation = []

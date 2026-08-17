@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/amd/gaia/tui/internal/client"
 	"github.com/amd/gaia/tui/internal/event"
@@ -124,11 +125,6 @@ var (
 	answerPanelStyle = lipgloss.NewStyle().
 				Foreground(theme.Text).
 				PaddingLeft(2)
-
-	errorPanelStyle = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(theme.Danger).
-			Padding(0, 1)
 )
 
 type ChatModel struct {
@@ -151,13 +147,16 @@ type ChatModel struct {
 	// Builder panics the moment a copied non-zero one is written to again.
 	buffer string
 
-	// queued holds one follow-up typed while the agent was still working, sent
-	// the moment the turn settles (see Update's drain). A local model routinely
-	// takes 60-120s per turn; freezing the composer for that long forced the
-	// user to hold their next thought in their head, or cancel to type it.
-	// One slot, not a queue: a second Enter replaces it, which is what a person
-	// who retypes actually means.
-	queued string
+	// queued holds follow-ups typed while the agent was still working, sent one
+	// at a time as each turn settles (see Update's drain). A local model
+	// routinely takes 60-120s per turn; freezing the composer for that long
+	// forced the user to hold their next thought in their head, or cancel to
+	// type it.
+	//
+	// This was one slot, on the theory that a second Enter means "no, this
+	// instead". It does not: three thoughts during a two-minute turn is normal,
+	// and the single slot discarded the first two without saying so.
+	queued []string
 
 	input    textarea.Model
 	viewport viewport.Model
@@ -179,6 +178,17 @@ type ChatModel struct {
 	// not to the composer.
 	question *components.QuestionModel
 
+	// questionViewLine/questionViewLines/questionViewWidth locate m.question's
+	// rendered block within the viewport's CONTENT (not the screen) — the
+	// content-line it starts on, how many lines it spans, and how wide it
+	// rendered. Recorded by updateViewport, the only place that knows those
+	// numbers, and read back by questionRowAt (questionmouse.go) to map an
+	// absolute mouse click through the viewport's scroll offset onto a row of
+	// the question. Meaningless whenever m.question is nil.
+	questionViewLine  int
+	questionViewLines int
+	questionViewWidth int
+
 	// confirmation is the pending needs_confirmation modal, if any. Non-nil
 	// means a destructive/external tool call is asking for approval — every
 	// key except Ctrl+C goes to it (including Esc, which means "deny" here,
@@ -198,6 +208,78 @@ type ChatModel struct {
 	// autonomy ON is a two-step confirmation; turning it OFF is one key, and
 	// never gated.
 	bypassArmed bool
+
+	// claudeMode is true while the agent's inference runs on Anthropic's
+	// Claude API instead of the local Lemonade backend (--use-claude). Set
+	// once at launch from the transport's argv — see applyLaunchClaude — and
+	// kept in sync by every model-state ping thereafter (handleCanonicalEvent).
+	claudeMode bool
+
+	// mouseCaptured is true while the APP holds the mouse, for either of the
+	// two independent reasons documented on overlayOpen (mousecapture.go):
+	// the user turned on wheel scrolling, or an overlay is open and needs
+	// clicks. False by default, so the terminal owns drag-select and the
+	// platform's own copy/paste — see selectmode.go.
+	mouseCaptured bool
+	// mouseWheelOn is true only while the USER has wheel mode on (Ctrl+T) —
+	// independent of mouseCaptured, which an overlay can also set. This is
+	// what the banner and the Esc "give selection back first" behaviour key
+	// off, so an overlay opening or closing never touches it, and it is not
+	// silently turned off just because an overlay happened to be open when
+	// it was toggled on.
+	mouseWheelOn bool
+	// mouseCaptureAllMotion records which mouse-tracking mode is currently
+	// active (All-Motion for an open overlay's hover, Cell-Motion for plain
+	// wheel scrolling) so applyMouseCapture can tell "already captured, but
+	// in the wrong mode" from "no change needed" and re-issue the right
+	// escape sequence instead of assuming the mode never needs to switch.
+	mouseCaptureAllMotion bool
+
+	// help is this view's OWN help panel, used when nothing is wrapping it.
+	// `gaia run <agent>` puts this model straight in front of Bubble Tea, so a
+	// panel implemented only in the root model is absent there — which is why
+	// /help did nothing at all on that path. Under the hub, root intercepts
+	// ToggleHelpMsg before it reaches here and this stays closed, so the two
+	// never both draw.
+	help components.HelpState
+
+	// palette is the "/" command palette's open/selected state. Its filter
+	// text is never stored separately — it is always derived from m.input,
+	// the composer, so the two can never disagree (see syncPalette).
+	palette commandPalette
+
+	// lemonade* carry the local model server's state from the agent's
+	// model-state ping, shown in the --dev header. lemonadeKnown separates
+	// "the agent has not told us" from "it told us Lemonade is down": the
+	// first must render nothing, the second must render a warning.
+	lemonadeKnown   bool
+	lemonadeUp      bool
+	lemonadeVersion string
+	lemonadeBaseURL string
+
+	// modelID/modelDisplay/modelBackend/modelRemote come from the agent's own
+	// model-state ping (a CanonicalStatusEvent with ModelID set — see
+	// handleCanonicalEvent), never from the launch flags: a flag can be
+	// defaulted or absent and would lie about what actually resolved. Empty
+	// until the first ping arrives, which is the first thing the agent writes
+	// after construction — see renderModelChip for the pre-ping fallback.
+	modelID      string
+	modelDisplay string
+	modelBackend string
+	modelRemote  bool
+
+	// awaitingModelSwitch is true for the duration of a `/model <id>` turn
+	// this session itself started. A model-state ping that disagrees with
+	// modelID while this is true is the expected confirmation of THAT
+	// switch — no warning. One that disagrees while this is false means the
+	// agent process was replaced without anyone here asking for it (a
+	// cancelled turn respawns the child from its ORIGINAL launch flags,
+	// silently reverting any live switch — see subprocess.go's discard/
+	// respawn) — see handleCanonicalEvent. Cleared on the turn's own
+	// terminal event, whichever way that turn ended, so a failed switch
+	// (Lemonade down, bad credential — no ping ever arrives) never leaves
+	// this stuck true.
+	awaitingModelSwitch bool
 
 	connected    bool
 	totalSteps   int
@@ -223,6 +305,37 @@ type ChatModel struct {
 	// clobbered by the shallower snapshot the on-open fetch buffered
 	// before the turn started.
 	preScanRenderedThisTurn bool
+
+	// setupChecking is true from construction (applyFirstBootGate) until the
+	// first-boot readiness probe (`gaia init --check`, fired by Init) answers.
+	// Enter queues rather than sends while true, same reasoning as m.streaming
+	// -- the flagship agent may have nothing to talk to yet.
+	setupChecking bool
+	// setupRunning is true while a real `gaia init` run is in flight, whether
+	// auto-started because the first-boot check said not ready, or started on
+	// demand by /setup.
+	setupRunning bool
+	// setupCancel tears down the in-flight `gaia init` subprocess. Nil unless
+	// setupRunning.
+	setupCancel context.CancelFunc
+	// setupCancelRequested distinguishes a deliberate Esc/Ctrl+C from any
+	// other reason a run ended, so the completion handler reports
+	// "cancelled" instead of misreading the killed child as a failure.
+	setupCancelRequested bool
+	// setupCh is the current setup run's event channel, scoped the same way
+	// m.events scopes a turn: a late event from an abandoned run (the user
+	// cancelled, then /setup again) must not land on whatever replaced it.
+	setupCh <-chan setupEvent
+	// memoryView is the last successfully fetched /memory snapshot, drawn
+	// inline in the transcript until dismissed with Esc. Non-nil means it is
+	// on screen. It is never part of m.messages: like question/confirmation,
+	// dismissing it must leave no permanent transcript entry behind.
+	memoryView *client.MemoryDump
+	// memoryLoading is true from /memory until its fetch resolves (or times
+	// out) — drives the spinner and lets Esc cancel a stuck fetch.
+	memoryLoading bool
+	// memoryCancelFn cancels an in-flight /memory fetch. nil when none is running.
+	memoryCancelFn context.CancelFunc
 }
 
 func NewChatModel(c client.AgentClient, agentName string, initialQuery string, dev bool) ChatModel {
@@ -252,9 +365,9 @@ func NewChatModel(c client.AgentClient, agentName string, initialQuery string, d
 		connected:    true,
 		followTail:   true,
 	}
-	// Reads the transport, never a saved preference: bypass is off on a fresh
-	// launch unless THIS launch asked for it on the command line.
-	return m.applyLaunchBypass()
+	// Reads the transport, never a saved preference: bypass and Claude mode
+	// are off on a fresh launch unless THIS launch asked on the command line.
+	return m.applyLaunchBypass().applyLaunchClaude()
 }
 
 // NewChatModelFromHub creates a ChatModel launched from the hub, enabling Esc-to-return behavior.
@@ -262,7 +375,7 @@ func NewChatModelFromHub(c client.AgentClient, agentID, agentName string, dev bo
 	m := NewChatModel(c, agentName, "", dev)
 	m.agentID = agentID
 	m.fromHub = true
-	return m
+	return m.applyFirstBootGate()
 }
 
 // NewChatModelForCatalogAgent creates a standalone ChatModel (esc quits -- see
@@ -271,7 +384,7 @@ func NewChatModelFromHub(c client.AgentClient, agentID, agentName string, dev bo
 func NewChatModelForCatalogAgent(c client.AgentClient, agentID, agentName string, dev bool) ChatModel {
 	m := NewChatModel(c, agentName, "", dev)
 	m.agentID = agentID
-	return m
+	return m.applyFirstBootGate()
 }
 
 // preScanAgentID is the one agent this on-open fetch applies to today.
@@ -291,7 +404,13 @@ func (m ChatModel) Init() tea.Cmd {
 		m.spinner.Tick,
 		textarea.Blink,
 	}
-	if m.initialQuery != "" {
+	if m.setupChecking {
+		// The flagship agent's first-boot gate (see applyFirstBootGate):
+		// hold the initial query, if any, until the check -- and the setup
+		// run it may trigger -- resolves (setupCheckResultMsg / setupEvent
+		// handlers call releaseAfterSetupGate to send it then).
+		cmds = append(cmds, checkSetupCmd(m.claudeMode))
+	} else if m.initialQuery != "" {
 		cmds = append(cmds, func() tea.Msg {
 			return sendQueryMsg{query: m.initialQuery}
 		})
@@ -414,19 +533,33 @@ func (m ChatModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	updated, cmd := m.update(msg)
 
 	next, ok := updated.(ChatModel)
-	if !ok || next.queued == "" || next.streaming {
+	if !ok {
 		return updated, cmd
+	}
+
+	// Reconciled once per Update, here rather than at every call site that
+	// can open or close an overlay (a keystroke, a canonical needs_input
+	// event, the turn settling and clearing m.question) — see
+	// mousecapture.go's doc comment on overlayOpen.
+	if capCmd := next.applyMouseCapture(); capCmd != nil {
+		cmd = tea.Batch(cmd, capCmd)
+	}
+
+	if len(next.queued) == 0 || next.streaming ||
+		next.setupChecking || next.setupRunning {
+		return next, cmd
 	}
 	// A question or confirmation still on screen owns the conversation; the
 	// queued message waits for the user to deal with it. (Both imply streaming
 	// today, so this is belt-and-braces against a future path that clears
 	// streaming while leaving a modal up.)
 	if next.question != nil || next.confirmation != nil {
-		return updated, cmd
+		return next, cmd
 	}
 
-	query := next.queued
-	next.queued = ""
+	// Oldest first: the order they were typed is the order they were meant in.
+	query := next.queued[0]
+	next.queued = append([]string(nil), next.queued[1:]...)
 	sent, sendCmd := next.submit(query)
 	return sent, tea.Batch(cmd, sendCmd)
 }
@@ -450,6 +583,15 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case channelReadyMsg:
 		m.events = msg.ch
 		return m, waitForEvent(m.events)
+
+	case setupCheckResultMsg:
+		return m.handleSetupCheckResult(msg)
+
+	case setupStreamMsg:
+		if m.supersededSetup(msg.ch) {
+			return m, nil
+		}
+		return m.handleSetupEvent(msg.evt)
 
 	case cancelRequestFailedMsg:
 		// The ASK to stop the run (client.AgentCanceler.Cancel) could not be
@@ -498,6 +640,9 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		})
 		m.updateViewport()
 		return m, nil
+
+	case memoryDumpMsg:
+		return m.handleMemoryDump(msg)
 
 	case eventMsg:
 		if m.supersededTurn(msg.ch) {
@@ -626,16 +771,68 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateViewport()
 		return m, nil
 
+	case pasteClipboardMsg:
+		text := normalizePastedText(msg.text)
+		if msg.err != nil || strings.TrimSpace(text) == "" {
+			m.messages = append(m.messages, Message{
+				Role:    RoleStatus,
+				Content: pasteHint(msg.err),
+			})
+			m.updateViewport()
+			return m, nil
+		}
+		m.input.InsertString(text)
+		m.syncComposerHeight()
+		return m, nil
+
+	case pasteImageMsg:
+		if msg.err != nil {
+			m.messages = append(m.messages, Message{
+				Role:    RoleStatus,
+				Content: pasteImageHint("", 0, msg.err),
+			})
+			m.updateViewport()
+			return m, nil
+		}
+		size := 0
+		if info, statErr := os.Stat(msg.path); statErr == nil {
+			size = int(info.Size())
+		}
+		m.input.InsertString(quotePathForComposer(msg.path))
+		m.syncComposerHeight()
+		m.messages = append(m.messages, Message{
+			Role:    RoleStatus,
+			Content: pasteImageHint(msg.path, size, nil),
+		})
+		m.updateViewport()
+		return m, nil
+
+	case ToggleHelpMsg:
+		// Only ever seen when nothing wrapped this model: root consumes this
+		// message itself and never forwards it.
+		m.help.Toggle(components.HelpContextChat)
+		return m, nil
+
 	case tea.MouseMsg:
-		// The wheel scrolls the transcript. In an alt-screen app the terminal's
-		// own scrollback does not exist, so this and the arrow keys are the only
-		// way back to what already happened.
+		// An open overlay owns clicks and hover while it is up — see
+		// handlePaletteMouse/handleQuestionMouse, both of which still let the
+		// wheel through to the transcript underneath (neither overlay
+		// scrolls itself). Otherwise the wheel scrolls the transcript: in an
+		// alt-screen app the terminal's own scrollback does not exist, so
+		// this and the arrow keys are the only way back to what already
+		// happened.
+		if m.palette.open {
+			return m.handlePaletteMouse(msg)
+		}
+		if m.question != nil {
+			return m.handleQuestionMouse(msg)
+		}
 		var cmd tea.Cmd
 		m.viewport, cmd = m.viewport.Update(msg)
 		return m.afterScroll(), cmd
 
 	case spinner.TickMsg:
-		if m.streaming {
+		if m.streaming || m.memoryLoading {
 			var cmd tea.Cmd
 			m.spinner, cmd = m.spinner.Update(msg)
 			cmds = append(cmds, cmd)
@@ -655,6 +852,27 @@ func (m ChatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// An open help panel owns the keyboard: navigation scrolls it, anything
+	// else closes it. Never a trap, whatever the user reaches for.
+	if m.help.HandleKey(msg, m.width, m.height) {
+		return m, nil
+	}
+
+	// The first-boot/`/setup` gate owns the keyboard while a `gaia init` run
+	// is in flight -- there is no turn, question, or confirmation to route to
+	// yet. Esc/Ctrl+C must still get the user out rather than doing nothing
+	// while a multi-minute download runs.
+	if m.setupRunning && (msg.Type == tea.KeyEsc || msg.Type == tea.KeyCtrlC) {
+		return m.cancelSetup()
+	}
+
+	// /memory owns Esc while it is up or loading — dismiss (or cancel the
+	// fetch) without falling into the idle-Esc composer-reset below. Every
+	// other key passes through untouched so scrolling and typing still work.
+	if msg.Type == tea.KeyEsc && (m.memoryView != nil || m.memoryLoading) {
+		return m.dismissMemoryView(), nil
+	}
+
 	// A pending confirmation owns the keyboard too, but UNLIKE a question, Esc
 	// belongs to it: the issue's contract is "Esc denies", not "Esc cancels the
 	// turn". Ctrl+C is still the universal way out.
@@ -675,6 +893,47 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	// Bubble Tea v1.3.10 enables bracketed paste by default, so a terminal
+	// paste already arrives here as one KeyMsg — multi-line content and all —
+	// rather than a burst of keystrokes. Handled explicitly (not left to the
+	// default case below) so the CRLF normalization below always runs: the
+	// textarea's own sanitizer treats \r and \n as two separate newlines, and
+	// Windows clipboard text carries \r\n, which would otherwise double every
+	// line break into a blank one.
+	if msg.Paste {
+		m.input.InsertString(normalizePastedText(string(msg.Runes)))
+		m.syncComposerHeight()
+		return m, nil
+	}
+
+	// The "/" palette owns ↑/↓/Enter/Esc while it is open — everything else
+	// (typing, Backspace, the arrow keys within the line) falls through to
+	// the composer as usual and re-derives the palette's open/filtered state
+	// from the result (see syncPalette, folded into syncComposerHeight). Any
+	// key this doesn't recognize as part of editing a command name closes the
+	// palette but still does whatever it always did — Ctrl+C in particular
+	// must reach its own case below untouched, since it is the universal way
+	// out and must not be silently absorbed by a palette that happened to be
+	// open.
+	if m.palette.open {
+		if msg.Type == tea.KeyCtrlC {
+			m.palette.open = false
+		} else if updated, cmd, handled := m.handlePaletteKey(msg); handled {
+			return updated, cmd
+		} else {
+			m = updated
+		}
+	}
+
+	// Windows Terminal over ConPTY never wraps a paste in the markers above at
+	// all — it types the clipboard text out a character at a time, newlines
+	// included, so a multi-line paste arrives as ordinary keystrokes with a real
+	// Enter between the lines (microsoft/terminal#395, zellij-org/zellij#4885).
+	// There is deliberately no timing heuristic to catch that: "this Enter came
+	// too fast to be a person" also fires for a fast typist and for every
+	// programmatic driver, including this TUI's own control API. Ctrl+V reads the
+	// clipboard directly and is the multi-line paste path on such terminals.
+
 	switch msg.Type {
 	case tea.KeyCtrlC:
 		if m.streaming && m.cancelFn != nil && !m.cancelPending {
@@ -691,6 +950,17 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 
 	case tea.KeyEsc:
+		// Hand the mouse back first: while WHEEL MODE is on, selection is
+		// dead, so "never mind" most likely means "let me select text
+		// again". Leaving a turn running is fine — Esc pressed again cancels
+		// it. Keyed on mouseWheelOn, not mouseCaptured: an overlay can also
+		// hold the mouse (for its own clicks), and Esc there means cancel
+		// the question/turn (below) or close the palette (handled earlier,
+		// in the m.palette.open branch) — not silently let go of a capture
+		// the user never asked for.
+		if m.mouseWheelOn {
+			return m.toggleSelectMode()
+		}
 		if m.streaming && m.cancelFn != nil && !m.cancelPending {
 			return m.requestCancel()
 		}
@@ -747,13 +1017,19 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		// keystroke on the floor. Update sends it the moment the turn settles.
 		// Slash commands queue too — /clear typed mid-turn should clear once
 		// the turn it belongs to is actually over, not silently do nothing.
-		if m.streaming {
-			m.queued = query
+		// The first-boot gate (setupChecking) and a `gaia init` run
+		// (setupRunning) hold it the same way: there is nothing to send this
+		// to yet.
+		if m.streaming || m.setupChecking || m.setupRunning {
+			m.queued = append(m.queued, query)
 			m.updateViewport()
 			return m, nil
 		}
 
 		return m.submit(query)
+
+	case tea.KeyCtrlT:
+		return m.toggleSelectMode()
 
 	case tea.KeyCtrlY:
 		// Mouse reporting is on so the wheel can scroll, which is exactly what
@@ -771,6 +1047,15 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		})
 		m.updateViewport()
 		return m, nil
+
+	case tea.KeyCtrlV:
+		// Reaches here only when the terminal did NOT already turn this into a
+		// bracketed paste above — most terminals bind Ctrl+V to their own paste
+		// action and this key never arrives at all. A terminal that passes it
+		// through untranslated (or an SSH client with no local paste binding)
+		// is exactly the case this covers. An IMAGE on the clipboard (a
+		// screenshot) wins over text — see pasteFromClipboardOrImage.
+		return m, pasteFromClipboardOrImage()
 
 	case tea.KeyPgUp:
 		m.viewport.HalfViewUp()
@@ -913,19 +1198,22 @@ func (m ChatModel) forceLocalAbort() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// restoreQueuedToComposer puts a queued follow-up back where the user typed it,
-// so abandoning a turn never silently eats the sentence they were holding.
+// restoreQueuedToComposer puts queued follow-ups back where the user typed them,
+// so abandoning a turn never silently eats the sentences they were holding.
 // Anything already half-typed in the composer wins — that is the newer thought.
+//
+// Several queued lines come back as several lines: the composer is multi-line,
+// and joining them is the only version that loses nothing.
 func (m *ChatModel) restoreQueuedToComposer() {
-	if m.queued == "" {
+	if len(m.queued) == 0 {
 		return
 	}
 	if strings.TrimSpace(m.input.Value()) == "" {
-		m.input.SetValue(m.queued)
+		m.input.SetValue(strings.Join(m.queued, "\n"))
 		m.input.CursorEnd()
 		m.syncComposerHeight()
 	}
-	m.queued = ""
+	m.queued = nil
 }
 
 // submit routes one composed line: a slash command runs locally, anything else
@@ -933,6 +1221,32 @@ func (m *ChatModel) restoreQueuedToComposer() {
 // "/clear" typed mid-turn still clears when it finally lands instead of being
 // sent to the agent as a literal question.
 func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
+	// `/model` takes a free-form argument (a model id), so it can't join the
+	// exact-match switch below like /bypass's fixed variants — it's dispatched
+	// here instead, still before anything falls through to sendQuery.
+	if isModelCommand(query) {
+		if !m.supportsModelCommand() {
+			// Same shape as setBypass's capability check (bypass.go): refuse
+			// visibly rather than let the literal text ship as a chat
+			// question the agent has no way to understand.
+			m.messages = append(m.messages, Message{
+				Role: RoleError,
+				Content: m.agentName + " does not support live model switching " +
+					"(/model) — only the gaia flagship agent does.",
+			})
+			m.updateViewport()
+			return m, nil
+		}
+		// A control request, not a question — unlike sendQuery, this never
+		// posts a user chat bubble; the agent's own confirmation (or
+		// refusal) is the only line that belongs in the transcript. Still
+		// rides the real query channel (startTurn/Send), not the
+		// fire-and-forget control one /bypass uses — see
+		// gaia_agent.stdio.run_model_command for why.
+		m.awaitingModelSwitch = true
+		return m.startTurn(query)
+	}
+
 	switch query {
 	case "/help":
 		return m, func() tea.Msg { return ToggleHelpMsg{} }
@@ -961,6 +1275,9 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 		m.updateViewport()
 		return m, nil
 
+	case "/memory":
+		return m.startMemoryFetch()
+
 	case "/bypass":
 		if m.bypassPermissions {
 			return m.setBypass(false)
@@ -985,16 +1302,36 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 			return m.bypassNote("Bypass permissions is already off."), nil
 		}
 		return m.setBypass(false)
+
+	case "/setup":
+		if m.agentID != setupAgentID {
+			return m.statusNote(m.agentName + " does not have a local setup step."), nil
+		}
+		if m.setupRunning {
+			return m.statusNote("Setup is already running. Esc cancels it."), nil
+		}
+		return m.startSetupRun(false /* firstBoot */)
 	}
 
 	return m.sendQuery(query)
 }
 
 func (m ChatModel) sendQuery(query string) (tea.Model, tea.Cmd) {
+	// A new turn moves past whatever /memory last showed — leaving it up would
+	// have it sitting stale below (or above, depending on scroll) the live
+	// answer with no way to tell it apart from current content.
+	m.memoryView = nil
 	m.messages = append(m.messages, Message{
 		Role:    RoleUser,
 		Content: query,
 	})
+	return m.startTurn(query)
+}
+
+// startTurn is sendQuery's shared machinery: everything after "what goes in
+// the transcript" is identical whether the line is a real question or a
+// `/model` command.
+func (m ChatModel) startTurn(query string) (tea.Model, tea.Cmd) {
 	m.streaming = true
 	m.activity = nil
 	m.buffer = ""
@@ -1069,6 +1406,11 @@ func (m ChatModel) supersededTurn(ch <-chan interface{}) bool {
 func (m *ChatModel) settleTurn() {
 	m.events = nil
 	m.cancelFn = nil
+	// A failed `/model` switch (Lemonade down, bad credential) never sends a
+	// model-state ping — clearing here, not just on the ping itself, is what
+	// keeps a failure from leaving this stuck true and permanently
+	// suppressing the revert-warning in handleCanonicalEvent.
+	m.awaitingModelSwitch = false
 	// "cancelling…" describes a request that is in flight, so it must not
 	// outlive it. Left in place it became a permanent claim in the scrollback —
 	// and when the cancel lost the race it sat directly above the answer that
@@ -1307,7 +1649,14 @@ func (m ChatModel) composerRows() int {
 // syncComposerHeight grows or shrinks the composer to fit what has been typed,
 // re-laying out the pane above it when the height actually changes. Called
 // after every keystroke, so it must be cheap when nothing moved.
+//
+// It also re-derives the "/" palette's open/filtered state (syncPalette) —
+// folded in here rather than left to each call site, because the height
+// check below returns early the moment line count doesn't change, which is
+// true for almost every character typed while filtering a command. A
+// separate syncPalette() call after this one would silently never run.
 func (m *ChatModel) syncComposerHeight() {
+	m.syncPalette()
 	want := m.composerRows()
 	if m.input.Height() == want {
 		return
@@ -1360,7 +1709,7 @@ func (m *ChatModel) updateViewport() {
 	var sb strings.Builder
 
 	// Show welcome message if no messages yet
-	if len(m.messages) == 0 && !m.streaming {
+	if len(m.messages) == 0 && !m.streaming && !m.memoryLoading && m.memoryView == nil {
 		sb.WriteString(m.renderWelcome())
 		sb.WriteString("\n")
 	}
@@ -1403,7 +1752,25 @@ func (m *ChatModel) updateViewport() {
 	}
 
 	if m.question != nil {
-		sb.WriteString(m.question.View())
+		// Recorded before writing it: questionRowAt (questionmouse.go) needs
+		// exactly where this block starts within the content, and that
+		// depends on everything already written above it in THIS render —
+		// recomputing it independently would drift the moment a message
+		// above the question changed height.
+		m.questionViewLine = strings.Count(sb.String(), "\n")
+		qv := m.question.View()
+		m.questionViewLines = strings.Count(qv, "\n") + 1
+		m.questionViewWidth = lipgloss.Width(qv)
+		sb.WriteString(qv)
+		sb.WriteString("\n")
+	}
+
+	if m.memoryLoading {
+		sb.WriteString("  " + m.spinner.View() + " " + activityStyle.Render("Loading memory…"))
+		sb.WriteString("\n")
+	}
+	if m.memoryView != nil {
+		sb.WriteString(renderMemoryView(*m.memoryView, m.cardWidth()))
 		sb.WriteString("\n")
 	}
 
@@ -1530,8 +1897,8 @@ func (m ChatModel) answerStats(msg *Message) string {
 	// silently reintroduce the exact bug that replaced.
 	if msg.Tokens > 0 {
 		stats = append(stats, fmt.Sprintf("%d tokens", msg.Tokens))
-		if inferTime := msg.Duration - msg.TTFT; inferTime > 0 {
-			stats = append(stats, fmt.Sprintf("%.1f tok/s", float64(msg.Tokens)/inferTime.Seconds()))
+		if rate, ok := tokensPerSecond(msg.Tokens, msg.Duration, msg.TTFT); ok {
+			stats = append(stats, fmt.Sprintf("%.1f tok/s", rate))
 		}
 	}
 	if msg.Steps > 0 {
@@ -1582,7 +1949,7 @@ func (m ChatModel) renderMessage(msg *Message, seen map[string]bool) string {
 		if panelWidth < 20 {
 			panelWidth = 20
 		}
-		return errorPanelStyle.Width(panelWidth).Render("[!] " + msg.Content)
+		return components.Panel(components.PanelError, "error", msg.Content, panelWidth)
 
 	case RoleStatus:
 		// Wrapped, not clipped: the viewport does not soft-wrap, so a status
@@ -1903,10 +2270,19 @@ const queuedEchoFloor = 24
 // and hint appended afterwards, so a long queued line ran past the last column
 // and wrapped onto a second row, shearing the status bar below it.
 func (m ChatModel) renderQueuedRow() string {
-	const (
-		prefix = "⏎ queued · "
-		hint   = "  Esc stops the turn and puts this back"
-	)
+	if len(m.queued) == 0 {
+		return ""
+	}
+	// The count is what tells the user nothing was dropped; the text is the one
+	// that runs next, since that is what they are about to see happen.
+	prefix := "⏎ queued · "
+	if n := len(m.queued); n > 1 {
+		prefix = fmt.Sprintf("⏎ %d queued · ", n)
+	}
+	hint := "  Esc stops the turn and puts this back"
+	if len(m.queued) > 1 {
+		hint = "  Esc stops the turn and puts these back"
+	}
 
 	suffix := hint
 	budget := m.width - lipgloss.Width(prefix) - lipgloss.Width(hint)
@@ -1916,8 +2292,26 @@ func (m ChatModel) renderQueuedRow() string {
 	}
 
 	return activityStyle.Render(prefix) +
-		statusMsgStyle.Render(truncateRunes(m.queued, budget)) +
+		statusMsgStyle.Render(truncateRunes(m.queued[0], budget)) +
 		activityStyle.Render(suffix)
+}
+
+// contentHeaderRows is how many screen rows sit above the viewport in
+// View()'s own layout: the header, either banner when it is showing, and the
+// divider — the same rows list View() builds, kept in one place so
+// questionRowAt (questionmouse.go) can map an absolute mouse Y down into the
+// viewport's content without duplicating that layout by hand and drifting
+// from it the day a row is added or removed there.
+func (m ChatModel) contentHeaderRows() int {
+	n := 1 // header
+	if m.renderBypassBanner() != "" {
+		n++
+	}
+	if m.renderSelectBanner() != "" {
+		n++
+	}
+	n++ // divider immediately above the viewport
+	return n
 }
 
 func (m ChatModel) View() string {
@@ -1939,7 +2333,7 @@ func (m ChatModel) View() string {
 		switch {
 		case strings.TrimSpace(m.input.Value()) != "":
 			inputView = m.input.View() + "  " + activityStyle.Render("⏎ queues")
-		case m.queued != "":
+		case len(m.queued) > 0:
 			inputView = m.renderQueuedRow()
 		default:
 			// Mid-turn Enter queues rather than sends, so the idle prompt is
@@ -1971,8 +2365,25 @@ func (m ChatModel) View() string {
 	if banner := m.renderBypassBanner(); banner != "" {
 		rows = append(rows, banner)
 	}
+	if banner := m.renderSelectBanner(); banner != "" {
+		rows = append(rows, banner)
+	}
 	rows = append(rows, divider, vpView, divider, inputView, statusBar)
-	return lipgloss.JoinVertical(lipgloss.Left, rows...)
+	base := lipgloss.JoinVertical(lipgloss.Left, rows...)
+
+	// The "/" palette draws over everything the same way the help panel does
+	// (see renderCommandPalette) — before help, not after: the two are never
+	// open together in practice (selecting or Escaping out of the palette
+	// always closes it before anything could open help), but if that ever
+	// changed, help asking "what can I do" should win over a stale command
+	// list.
+	if m.palette.open {
+		base = renderCommandPalette(base, m.input.Value(), m.paletteFiltered(), m.palette.selected, m.width, m.height)
+	}
+
+	// Composited last so it sits over everything. Returns the base untouched
+	// when the panel is closed, and when a root model is drawing it instead.
+	return m.help.Render(base, m.width, m.height)
 }
 
 // extractCommandFromArgs pulls the one argument worth showing out of a legacy
@@ -2012,6 +2423,16 @@ func (m ChatModel) renderHeader() string {
 	// or an empty one — needs to be able to see which mode produced it.
 	if m.dev {
 		title += activityStyle.Render(" │ dev")
+	}
+	// Names the specific model in use (never a bare "claude") and colors it
+	// when inference is remote — worth stating on every frame so the user can
+	// always tell where inference runs and which model answered.
+	title += m.renderModelChip()
+	title += m.renderLemonadeChip()
+	if m.width > 0 {
+		// Never let the header wrap: contentHeaderRows budgets it as exactly
+		// one row, and a wrapped header shifts every mouse hit-test below it.
+		title = ansi.Truncate(title, m.width, "…")
 	}
 	return title
 }

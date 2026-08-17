@@ -59,8 +59,10 @@ func TestAgentMarkdownIsActuallyStyled(t *testing.T) {
 	if strong := styledRun(out, "3 issues"); strong == body {
 		t.Errorf("bold text carries no colour shift, so it vanishes in a font with no real bold: %q", strong)
 	}
-	if code := styledRun(out, "lemonade_client.py"); !strings.Contains(code, "48;5;") {
-		t.Errorf("inline code has no background tint, so paths blend into prose: %q", code)
+	// Colour, not a tint: the background fill was removed because a paragraph
+	// naming six symbols came out as a patchwork of little rectangles.
+	if code := styledRun(out, "lemonade_client.py"); code == "" || code == body {
+		t.Errorf("inline code is coloured like prose, so paths blend into it: %q", code)
 	}
 	// Chroma must still colour fenced code — the builtin's syntax highlighting
 	// is good and the overrides must not have dropped it.

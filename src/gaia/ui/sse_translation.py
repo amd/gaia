@@ -156,12 +156,23 @@ class CanonicalTranslator:
         # Last user-facing status message, cleared as soon as any other event
         # is emitted — see ``_user_status``.
         self._last_status: Optional[str] = None
+        # Latched once a terminal event goes out — see ``translate``.
+        self._terminal_emitted = False
 
     # -- public API --------------------------------------------------------
 
     def translate(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Map one source event to zero or more canonical events."""
-        return self._track_status(self._translate(event))
+        """Map one source event to zero or more canonical events.
+
+        Nothing is emitted after the first terminal event: the contract is
+        "exactly one ``final`` or ``error`` ends every turn", and a reader
+        stops at it — anything written afterwards sits unread in the pipe and
+        gets consumed as the opening events of the NEXT turn. Clamping here
+        makes every consumer loop (stdio, HTTP, email) trivially correct.
+        """
+        if self._terminal_emitted:
+            return []
+        return self._clamp_terminal(self._track_status(self._translate(event)))
 
     def _track_status(self, out: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Forget the last status once anything else reaches the wire.
@@ -208,7 +219,17 @@ class CanonicalTranslator:
 
     def flush(self) -> List[Dict[str, Any]]:
         """Release any buffered ``tool_call`` at stream close."""
-        return self._track_status(self._flush_pending())
+        if self._terminal_emitted:
+            return []
+        return self._clamp_terminal(self._track_status(self._flush_pending()))
+
+    def _clamp_terminal(self, out: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Truncate a batch at its first terminal event and latch the clamp."""
+        for i, e in enumerate(out):
+            if e.get("type") in TERMINAL_TYPES:
+                self._terminal_emitted = True
+                return out[: i + 1]
+        return out
 
     # -- tool_call buffering (spec §6.3) -----------------------------------
 
@@ -354,10 +375,15 @@ class CanonicalTranslator:
 
     def _on_answer(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
         usage: Dict[str, Any] = {}
+        # ``tokens`` and ``ttft`` are already omitted upstream when no real
+        # measurement exists (SSEOutputHandler.print_answer), so anything here
+        # is genuine — dropping them cost the TUI its tokens/sec readout.
         for src, dst in (
             ("steps", "steps"),
             ("tools_used", "tools_used"),
             ("elapsed", "elapsed"),
+            ("tokens", "tokens"),
+            ("ttft", "ttft"),
         ):
             if event.get(src) is not None:
                 usage[dst] = event[src]

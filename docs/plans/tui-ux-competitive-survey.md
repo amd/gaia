@@ -273,10 +273,10 @@ high-priority ones unconditionally, drop the rest when the budget runs out, appe
   **unavailable items are omitted, not placeholdered, "so the line remains compact and
   stable."** Its collapse cascade is explicit about priority — in queue mode it drops the
   context indicator *before* the queue hint.
-- **Hermes** uses three width tiers (≥76 / 52–75 / <52 cols) and caches git branch on mtime
+- **Hermes** uses three width tiers (≥76 / 52–75 / \<52 cols) and caches git branch on mtime
   **so it updates when you checkout in another terminal**.
-- Colour-coded context fill is near-universal: Goose green <50 / yellow <85 / red ≥85;
-  Hermes green <50 / yellow <80 / orange <95 / red ≥95; Crush prepends a warning icon
+- Colour-coded context fill is near-universal: Goose green \<50 / yellow \<85 / red ≥85;
+  Hermes green \<50 / yellow \<80 / orange \<95 / red ≥95; Crush prepends a warning icon
   at >80 %.
 
 **Why for GAIA.** We have a status bar. The delta is the width cascade plus a context

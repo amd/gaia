@@ -9,6 +9,41 @@ Companion to `driving-the-tui` (which covers the control API mechanics). This on
 covers **what to test and how to know it actually worked** — written from a full
 session of driving the live agent, including every trap that cost an hour.
 
+## The ladder tests capabilities. Users have conversations.
+
+Read this before trusting a green ladder. Every rung below is a **self-contained
+prompt** — it names its repo, its numbers, its subject. So the ladder ran green
+for a whole day while the TUI agent had **no conversation history at all**: every
+turn reached the model as system prompt + current question, nothing else. The
+bug surfaced the moment a real user typed a follow-up:
+
+> **triage amd/gaia** → three issues listed
+> **"cool, can you print issue 2975?"** → *"I need to know which repository it belongs to"*
+
+Three things hid it, and all three are worth knowing:
+
+1. **L3 looks like proof of continuity and is not.** "What is my favourite
+   colour?" passes across turns via the persistent *memory store*, a different
+   mechanism entirely. Its green tick actively masked the gap.
+2. **The stdio test asserting turn-to-turn state passes for the wrong reason.**
+   `test_the_agent_survives_between_turns` asserts OBJECT state
+   (`agent.loaded_skills`) survives — it does, the agent is the same object.
+   History is not accumulated object state; nobody was appending to it.
+3. **The HTTP surface populates history, so any test at that layer passes.** The
+   defect was transport-specific, and only the TUI used the broken transport.
+
+**So always finish with a follow-up that cannot stand alone.** Use a pronoun or
+a bare number and give it nothing else:
+
+| after | ask | pass condition |
+|---|---|---|
+| a triage of amd/gaia | `cool, can you print issue 2975?` | prints it, never asks which repo |
+| `My favourite fruit is mango. Just acknowledge.` | `What fruit did I just mention? One word.` | `Mango` |
+
+The second pair is the cheap canary — two short turns, no tools, no network. Run
+it first. If it answers "no fruit has been mentioned", stop: history is broken
+and every other result is measuring an agent with amnesia.
+
 ## The one rule
 
 **A plausible answer is not a passing test.** The flagship's worst failure mode is
@@ -78,6 +113,21 @@ one (CLAUDE.md lists the surfaces — prompts, tool schemas, tool-call parsing),
 as outstanding and run it when the box is quiet and nobody is driving the TUI. Never run
 two evals at once, either.
 
+### 3. Give your session a private agent log
+
+Every agent appends to `~/.gaia/logs/gaia-agent.log`. When anything else is running an
+agent — a parallel task, a second harness — the file interleaves, and **a neighbour's
+tool timeout reads as your session's failure**. Set `GAIA_AGENT_LOG` in the launcher:
+
+```powershell
+$env:GAIA_AGENT_LOG = 'C:\...\gaia-tui-test\logs\agent-session.log'
+```
+
+Lines also carry `pid:NNNN`, so the shared default is still attributable when you forget.
+This is not hypothetical: a 180s `run_shell_command` timeout was nearly filed as a shell
+bug here before the record turned out to belong to another process. Confirm the pid in
+the log matches the `gaia-agent.exe` your TUI spawned before believing anything.
+
 ## Which surface you are testing
 
 One binary, two surfaces — always state which:
@@ -100,6 +150,44 @@ cd tui && go build -o bin/gaia-drive.exe ./cmd/gaia
 
 Do not launch while a build is writing the binary — the file lock makes the launch
 silently fail. Build, *then* launch.
+
+Go must be on PATH (`export PATH="/c/Program Files/Go/bin:$PATH"` on Windows). Note that
+`gofmt -l` flags nearly every file on a Windows checkout — that is CRLF, not real
+formatting drift. Check `gofmt -d <file> | cat -A` for `^M` before you "fix" anything.
+
+### 1b. The agent binary the TUI spawns
+
+The TUI launches `gaia-agent` **from PATH** (`catalog.go`, `BinaryPath`). A source
+checkout does not have it — the console script only exists once the hub package is
+installed:
+
+```bash
+uv pip install --python <venv>/Scripts/python.exe \
+  -e hub/agents/gaia/python -e hub/agents/chat/python --no-deps
+```
+
+`--no-deps` is mandatory: without it pip pulls `amd-gaia` from PyPI and the agent
+imports THAT instead of your worktree. Put the venv's `Scripts/` on PATH in the launcher
+or the TUI cannot find `gaia-agent`.
+
+### 1c. The flagship ships with NO skills
+
+`gaia_agent/skills/` holds only `.gitkeep`, nothing stages `hub/skills/` into it, and
+every `skills:` / `skill_sets:` / `default_skill_set:` key in `gaia-agent.yaml` is
+commented out. So **L5–L7 cannot pass on a clean checkout** — not because the agent is
+broken, but because it has nothing to load.
+
+Install the one you are testing, and copy it rather than `gaia skill import` — import
+re-stamps the tier `experimental`, which is not what ships:
+
+```bash
+cp -r hub/skills/github-triage ~/.gaia/skills/
+gaia skill list      # expect: github-triage  2.0.0  community  user
+```
+
+Also note `gh` is refused until the skill that grants it is **loaded** — the grant is
+`shell:execute:gh`. Asking for `gh` first produces a confident refusal that looks like a
+missing-tool bug and is not one.
 
 ### 2. Launcher (adapt paths, keep the structure)
 
@@ -268,7 +356,75 @@ curl -s http://127.0.0.1:13305/api/v1/health    # note: 13305, NOT 8000
 ```
 
 Lemonade has died on its own mid-session more than once. Check it before blaming a
-change.
+change. Restarting it is **not** `lemonade-server serve` — that binary may not exist,
+and `lemonade.exe` is the *client* and rejects `serve`:
+
+```bash
+powershell.exe -NoProfile -Command "Start-Process 'C:\Users\<you>\AppData\Local\lemonade_server\bin\LemonadeServer.exe' -WindowStyle Minimized"
+curl -s -X POST http://127.0.0.1:13305/api/v1/load -H "Content-Type: application/json" \
+     -d '{"model_name":"Gemma-4-E4B-it-GGUF"}'      # pre-warm, or turn 1 pays ~3.5 min
+```
+
+A cold first turn is **~240s** (ttft ~228s) while both the LLM and the embedding model
+load; warm turns are ~6s. Pre-warm before timing anything, or the first number is a
+model load and you will report it as agent latency.
+
+## When a shell command hangs for exactly 180s
+
+Two real bugs produced this, both fixed — but the diagnostic pattern generalises to any
+tool the agent shells out to.
+
+1. **Check for orphans.** `Get-CimInstance Win32_Process -Filter "Name='gh.exe'"`. A
+   live child whose parent is gone means `subprocess.run` killed the `cmd.exe` at its
+   inner timeout, then blocked forever in a second `communicate()` on pipes the
+   grandchild still holds. The 180s you see is the OUTER tool timeout.
+2. **Compare against the same command from a shell.** 0.07s outside vs a hang inside
+   means the environment the agent spawns into, not the command.
+3. **Suspect stdin first.** `capture_output` redirects stdout/stderr and leaves stdin
+   inherited — the agent's stdin is the TUI's pipe, open and never written. Anything
+   that reads or probes it waits on input that cannot arrive.
+4. **Then suspect the decode.** Bare `text=True` decodes with the OS locale codec
+   (cp1252 on Windows) *inside subprocess's reader thread*. One unmappable byte kills
+   that thread and `run()` returns **returncode 0 with empty stdout** — a success with
+   the output silently discarded. `gh issue list` on amd/gaia hits it, because issue
+   #2962's title contains "⚠️".
+
+Both failures lie in the same direction: the agent reports a confident, wrong
+explanation ("a networking bottleneck", "no issues found") rather than an error. Always
+diff the agent's answer against `gh` directly.
+
+## Re-run the ladder after every merge — a merge can kill Enter
+
+Merging four feature branches took the ladder from 7/7 to **0/7**, and nothing
+anywhere reported an error. Every rung just timed out at 20s, because Enter had
+stopped submitting: one branch added a heuristic treating an Enter within 50ms of
+the last keystroke as a pasted line break, and the control API delivers a line
+and its Enter back to back.
+
+Two lessons, both cheap to act on:
+
+- **The ladder is the merge gate, not just the feature gate.** `go test ./...`
+  passed the whole time — the broken behaviour was covered by a test asserting
+  the *new* intent. Only driving the real TUI caught it.
+- **A timing heuristic on input will find your harness.** Anything of the form
+  "too fast to be a person" is also true of the control API, and of a fast
+  typist. Treat a change that infers intent from keystroke timing as a red flag.
+
+The signature to recognise: `driver.py ladder` returns rungs whose captured
+output is the *startup banner* rather than an answer, each taking exactly the
+idle-wait timeout. That means no turn ever started — look at input handling, not
+at the agent.
+
+## Watch out for a launcher that steals focus
+
+`Start-Process -WindowStyle Normal` puts the new window in front, so keystrokes
+the user is typing elsewhere land in the TUI. That produced turns arriving as
+`▶ You: life Load the xlsx skill` and `▶ You: tCan you reliably…` — fragments of
+the user's own typing, which read convincingly as an input bug in the product.
+
+It reproduced 2 of 4 launches and then 0 of 3. If you see junk prepended to a
+turn, check whether a human was typing before you write it up. A phantom bug
+filed against the product costs more than the hour spent disproving it.
 
 ## Reporting
 

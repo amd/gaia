@@ -31,6 +31,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, FastAPI, HTTPException
+from gaia_agent.session_registry import SessionCapacityError
 from gaia_agent.session_registry import registry as session_registry
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.responses import StreamingResponse
@@ -429,6 +430,29 @@ async def query(request: QueryRequest):
                     ),
                 )
             agent = session.agent
+            if session.reclaimed_after_eviction:
+                # Consume once: reset before the warning reaches the caller so
+                # a later turn on this same still-live session isn't re-warned.
+                session.reclaimed_after_eviction = False
+                logger.warning(
+                    "%s session %s was evicted (LRU cap or idle timeout) and "
+                    "reclaimed with a fresh agent; loaded skills and other "
+                    "per-turn state did not survive",
+                    AGENT_ID,
+                    request.session_id,
+                )
+                handler._emit(
+                    {
+                        "type": "status",
+                        "status": "warning",
+                        "message": (
+                            "This session was reclaimed after being idle or "
+                            "crowded out by other sessions — loaded skills "
+                            "and other per-turn state were reset. Reload any "
+                            "skill you still need."
+                        ),
+                    }
+                )
         else:
             # No session handle — a genuine one-shot. Nothing persists past this
             # turn, and the agent is told so rather than over-promising.
@@ -455,6 +479,13 @@ async def query(request: QueryRequest):
         if session is not None:
             session.run_lock.release()
         raise
+    except SessionCapacityError as exc:
+        # Actionable and temporary ("N sessions are already active and none
+        # are idle enough to evict") — 503, not a bug-shaped 500.
+        _registry.remove(request.run_id)
+        if session is not None:
+            session.run_lock.release()
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:
         _registry.remove(request.run_id)
         if session is not None:
@@ -484,7 +515,18 @@ async def query(request: QueryRequest):
                 session.run_lock.release()
 
     thread = threading.Thread(target=_run_agent, daemon=True)
-    thread.start()
+    try:
+        thread.start()
+    except Exception as exc:
+        # _run_agent never got to run, so its own finally: never fires —
+        # release the run_lock here or a thread-exhaustion failure leaves
+        # this session_id permanently 409ing for the life of the process.
+        _registry.remove(request.run_id)
+        if session is not None:
+            session.run_lock.release()
+        raise HTTPException(
+            status_code=500, detail=f"Failed to start the query run: {exc}"
+        ) from exc
 
     async def _stream():
         translator = CanonicalTranslator(request.run_id, agent_id=AGENT_ID)

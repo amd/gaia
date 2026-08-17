@@ -21,6 +21,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
+from gaia.agents.base.memory import MemoryMixin
 from gaia.agents.base.memory_store import MemoryStore
 
 # ---------------------------------------------------------------------------
@@ -38,6 +39,19 @@ def _future_iso(days: int = 1) -> str:
 
 def _past_iso(days: int = 1) -> str:
     return (datetime.now().astimezone() - timedelta(days=days)).isoformat()
+
+
+def _any_stored_content_contains(host, substring: str) -> bool:
+    """Scan every stored knowledge row's raw content for *substring*.
+
+    A plain substring scan (not FTS5 search()) — short/hyphenated needles
+    like "sk-" tokenize unreliably in FTS5, and this is a leak check, so it
+    must not depend on tokenization behaving a particular way.
+    """
+    items = host.memory_store.get_all_knowledge(
+        sensitive=None, limit=100, include_superseded=True
+    )["items"]
+    return any(substring in item.get("content", "") for item in items)
 
 
 # ---------------------------------------------------------------------------
@@ -935,6 +949,213 @@ class TestRememberTool:
             or "error" in str(result).lower()
             or "invalid" in str(result).lower()
         )
+
+
+# ===========================================================================
+# 5a. remember() — transient self-observations must not become doctrine (#6.1)
+# ===========================================================================
+
+
+class TestRememberTransientProtection:
+    """A model-issued remember() about a passing tool hiccup must not stick.
+
+    _is_transient_error() already stops the auto-store path (test_memory_error_
+    staleness.py) from persisting a tool's own transient error. This is the
+    other half: nothing stopped the model from doing the exact same thing
+    itself via remember(category='error', ...) — observed on the flagship as
+    a stale "execute_python_file times out intermittently" surviving the bug
+    that caused it by ten minutes and being recited as durable fact.
+    """
+
+    def test_transient_self_observation_is_not_stored(self, mixin_with_tools):
+        """The exact flagship repro: a transient tool observation is refused."""
+        func = mixin_with_tools._registered_tools["remember"]["function"]
+        result = func(
+            fact="execute_python_file times out intermittently on reportlab PDF scripts",
+            category="error",
+        )
+
+        assert result.get("status") == "skipped"
+        results = mixin_with_tools.memory_store.get_by_category("error")
+        assert not any("execute_python_file" in r["content"] for r in results)
+
+    def test_genuine_personal_fact_is_still_stored(self, mixin_with_tools):
+        """A durable personal fact is completely unaffected by the new gate."""
+        func = mixin_with_tools._registered_tools["remember"]["function"]
+        result = func(fact="My project is Beacon", category="fact")
+
+        assert result.get("status") == "stored"
+        results = mixin_with_tools.memory_store.get_by_category("fact")
+        assert any("Beacon" in r["content"] for r in results)
+
+    def test_durable_tool_constraint_is_still_stored(self, mixin_with_tools):
+        """A real rule about this agent (not a moment) still persists.
+
+        Mirrors test_durable_constraints_are_still_remembered in
+        test_memory_error_staleness.py — the gate must not overreach into
+        durable, non-transient error-category facts.
+        """
+        func = mixin_with_tools._registered_tools["remember"]["function"]
+        result = func(fact="pip isn't allowed via shell", category="error")
+
+        assert result.get("status") == "stored"
+        results = mixin_with_tools.memory_store.get_by_category("error")
+        assert any("pip isn't allowed" in r["content"] for r in results)
+
+    def test_transient_wording_outside_error_category_is_unaffected(
+        self, mixin_with_tools
+    ):
+        """The gate only applies to category='error' — a 'note' is never blocked.
+
+        Scoping to category='error' keeps the blast radius to what the marker
+        set was built for; free-form notes/facts that happen to contain a
+        transient-sounding word (e.g. quoting someone) are never at risk.
+        """
+        func = mixin_with_tools._registered_tools["remember"]["function"]
+        result = func(
+            fact="Ops said the outage was intermittent and unrelated to us",
+            category="note",
+        )
+
+        assert result.get("status") == "stored"
+
+
+# ===========================================================================
+# 5b. remember() / update_memory() — credential-shaped content is refused (#6.2)
+# ===========================================================================
+
+
+class TestCredentialDetection:
+    """MemoryMixin._looks_like_credential — pattern-based, conservative."""
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "sk-ant-api03-aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789aBcDeFgHiJkLmN",
+            "OPENAI_API_KEY=sk-abcdefghijklmnopqrstuvwxyzABCDEF0123456789",
+            "the passphrase is HALIBUT-4417-ZULU",
+            "File contains passphrase HALIBUT-4417-ZULU",
+            "github token: ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789",
+            "AWS key AKIAABCDEFGHIJKLMNOP",
+            "Authorization: Bearer aBcDeFgHiJkLmNoPqRsTuVwXyZ012345",
+            "my password is Sw0rdfish!2026rocks",
+        ],
+    )
+    def test_credential_shapes_are_recognised(self, text):
+        from gaia.agents.base.memory import MemoryMixin
+
+        assert MemoryMixin._looks_like_credential(text)
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Sarah's email is sarah@company.com",
+            "API gateway runs on port 8080 and uses basic HTTP auth",
+            "My project is Beacon",
+            "I'm allergic to shellfish",
+            "Work deployment uses kubectl",
+            "",
+        ],
+    )
+    def test_ordinary_content_is_unaffected(self, text):
+        from gaia.agents.base.memory import MemoryMixin
+
+        assert not MemoryMixin._looks_like_credential(text)
+
+
+class TestRememberCredentialProtection:
+    """remember() refuses to store credential-shaped content outright.
+
+    Policy: refuse-to-store, not redact-on-recall or store-with-a-flag — see
+    the PR description for why. A local-first memory that quietly
+    accumulates secrets on disk is the failure mode to avoid; a sensitivity
+    flag doesn't help because recall() already returns sensitive items
+    verbatim on an explicit query (by design, for legitimately-sensitive but
+    non-secret content), which is exactly how the flagship recited a
+    passphrase back on request.
+    """
+
+    def test_real_world_api_key_is_refused(self, mixin_with_tools):
+        func = mixin_with_tools._registered_tools["remember"]["function"]
+        result = func(
+            fact="sk-ant-api03-aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789aBcDeFgHiJkLmN",
+            category="fact",
+        )
+
+        assert result.get("status") == "skipped"
+        assert not _any_stored_content_contains(mixin_with_tools, "sk-ant-api03")
+
+    def test_passphrase_sentence_is_refused(self, mixin_with_tools):
+        """The exact flagship repro: a passphrase found in a file is recited."""
+        func = mixin_with_tools._registered_tools["remember"]["function"]
+        result = func(
+            fact="File `C:\\probe.txt` contains passphrase `HALIBUT-4417-ZULU`",
+            category="fact",
+        )
+
+        assert result.get("status") == "skipped"
+        assert not _any_stored_content_contains(mixin_with_tools, "HALIBUT")
+
+    def test_ordinary_fact_with_an_email_is_still_stored(self, mixin_with_tools):
+        """Not every string with a value after a colon is a secret."""
+        func = mixin_with_tools._registered_tools["remember"]["function"]
+        result = func(
+            fact="Sarah's email is sarah@company.com",
+            category="fact",
+            entity="person:sarah_chen",
+        )
+
+        assert result.get("status") == "stored"
+        results = mixin_with_tools.memory_store.get_by_entity("person:sarah_chen")
+        assert len(results) >= 1
+
+
+class TestUpdateMemoryCredentialProtection:
+    """update_memory() applies the same refusal when content is being set."""
+
+    def test_updating_content_to_a_credential_is_refused(self, mixin_with_tools):
+        remember_fn = mixin_with_tools._registered_tools["remember"]["function"]
+        stored = remember_fn(fact="Deployment notes: TBD", category="note")
+        kid = stored["knowledge_id"]
+
+        update_fn = mixin_with_tools._registered_tools["update_memory"]["function"]
+        result = update_fn(
+            knowledge_id=kid,
+            content="the api key is sk-abcdefghijklmnopqrstuvwxyz0123456789AB",
+        )
+
+        assert result.get("status") == "skipped"
+        assert not _any_stored_content_contains(mixin_with_tools, "sk-abcdefgh")
+        # The original row is untouched, not silently blanked.
+        notes = mixin_with_tools.memory_store.get_by_category("note")
+        assert any(r["id"] == kid and "TBD" in r["content"] for r in notes)
+
+
+class TestExtractionCredentialProtection:
+    """The Mem0-style auto-extraction path refuses credential-shaped ADD/UPDATE.
+
+    This path has even less oversight than remember() — no explicit model
+    tool call to gate, just conversational text the LLM decided was worth
+    keeping — so it gets the same refusal.
+    """
+
+    def test_add_operation_with_credential_is_skipped(self, mixin_host):
+        ops = [
+            {
+                "op": "add",
+                "category": "fact",
+                "content": "the passphrase is HALIBUT-4417-ZULU",
+            }
+        ]
+        mixin_host._execute_extraction_operations(ops, existing_items=[])
+
+        assert not _any_stored_content_contains(mixin_host, "HALIBUT")
+
+    def test_add_operation_without_credential_still_stores(self, mixin_host):
+        ops = [{"op": "add", "category": "fact", "content": "User's team is Nimbus"}]
+        mixin_host._execute_extraction_operations(ops, existing_items=[])
+
+        assert _any_stored_content_contains(mixin_host, "Nimbus")
 
 
 # ===========================================================================
@@ -3914,6 +4135,130 @@ class TestRecalledSkillInjection:
 
 
 # ===========================================================================
+# #6.3 — a stored procedure must actually be observable in production
+# ===========================================================================
+#
+# The live flagship store reported procedures: {total: 5, active: 4,
+# last_recalled: None} — a procedure written by skill synthesis had never once
+# been recalled, despite near-verbatim repeats of its trigger phrase occurring
+# well after it was stored. The wiring itself (put_skill -> FAISS index ->
+# recall_skill -> _refresh_recalled_skills -> get_recalled_skills_system_prompt
+# -> composed system prompt) turned out to be intact — TestRecalledSkillInjection
+# above already proves it end to end. What was genuinely missing: recall_skill
+# never logged a single line except on a hard embedding failure, so "never
+# recalled" was undiagnosable without opening the SQLite file by hand. These
+# tests pin the fix (observability) and re-confirm the end-to-end path this
+# defect report asked to have proven, not just asserted.
+
+
+class TestRecallEndToEndReachesThePrompt:
+    """put_skill() -> a relevant query actually reaches the composed prompt.
+
+    This is the literal defect-3 acceptance test: not "recall_skill() was
+    called" but "the procedure's body is present in the system prompt the
+    LLM would actually see."
+    """
+
+    def test_put_skill_is_recalled_into_the_composed_prompt(self, composing_host):
+        pytest.importorskip("faiss")
+        from gaia.agents.base.memory import _embedding_to_blob
+
+        composing_host._memory_post_init_pending = False  # isolate from synthesis
+
+        trigger = "Use this when the user asks to rotate deploy keys."
+        pid = composing_host._memory_store.put_skill(
+            name="rotate-deploy-keys",
+            when_to_use=trigger,
+            markdown_body=(
+                "# Rotate Deploy Keys\n1. generate new key\n2. update secrets "
+                "store\n## Edge cases\n- revoke the old key last"
+            ),
+            tools_required=["shell"],
+            embedding=_embedding_to_blob(composing_host._embed_text(trigger)),
+        )
+        composing_host._rebuild_proc_faiss_index()
+        assert (
+            composing_host._memory_store.search_skills(skill_id=pid)[0]["last_used_at"]
+            is None
+        )
+
+        composing_host.process_query("please rotate the deploy keys")
+
+        prompt = composing_host.get_recalled_skills_system_prompt()
+        assert "RECALLED PROCEDURES" in prompt
+        assert "rotate-deploy-keys" in prompt
+        assert "revoke the old key last" in prompt
+        assert "RECALLED PROCEDURES" in composing_host.system_prompt
+        # And the recall was actually recorded, not just rendered.
+        assert (
+            composing_host._memory_store.search_skills(skill_id=pid)[0]["last_used_at"]
+            is not None
+        )
+
+
+class TestRecallSkillObservability:
+    """recall_skill() must log what it did — the diagnosability gap #6.3 exposed.
+
+    Before this fix, a below-threshold miss and an empty index were both
+    silent: nothing short of reading the raw procedures table distinguished
+    "never even tried" from "tried and just missed". Both are now an INFO
+    line carrying the score and the threshold it was measured against.
+    """
+
+    def test_below_tau_miss_logs_the_score_and_tau(self, mixin_host, caplog):
+        pytest.importorskip("faiss")
+        from gaia.agents.base.memory import EMBEDDING_DIM, _embedding_to_blob
+
+        e1 = np.zeros(EMBEDDING_DIM, dtype=np.float32)
+        e1[0] = 1.0
+        e2 = np.zeros(EMBEDDING_DIM, dtype=np.float32)
+        e2[1] = 1.0  # orthogonal → cosine 0.0, well below tau
+
+        mixin_host._memory_store.put_skill(
+            name="proc-z",
+            when_to_use="trigger",
+            markdown_body="# B\n1. s\n## Edge cases\n- e",
+            embedding=_embedding_to_blob(e1),
+        )
+        mixin_host._rebuild_proc_faiss_index()
+
+        with patch.object(type(mixin_host), "_embed_text", return_value=e2):
+            with caplog.at_level(
+                logging.INFO, logger="gaia.agents.base.procedural_memory"
+            ):
+                result = mixin_host.recall_skill("completely unrelated goal")
+
+        assert result == []
+        assert "no match cleared tau" in caplog.text.lower()
+        assert "score=" in caplog.text.lower()
+        assert "tau=" in caplog.text.lower()
+
+    def test_hit_logs_the_matched_procedure_name(self, mixin_host, caplog):
+        pytest.importorskip("faiss")
+        pid = _seed_procedure(mixin_host, name="triage-support-ticket")
+
+        with caplog.at_level(logging.INFO, logger="gaia.agents.base.procedural_memory"):
+            skills = mixin_host.recall_skill("help me triage this ticket")
+
+        assert [s.name for s in skills] == ["triage-support-ticket"]
+        assert "matched" in caplog.text.lower()
+        assert "triage-support-ticket" in caplog.text
+        assert pid  # sanity: seeding actually returned an id
+
+    def test_empty_index_logs_distinctly_from_a_below_tau_miss(
+        self, mixin_host, caplog
+    ):
+        pytest.importorskip("faiss")
+        assert mixin_host._proc_faiss_index.ntotal == 0
+
+        with caplog.at_level(logging.INFO, logger="gaia.agents.base.procedural_memory"):
+            result = mixin_host.recall_skill("any goal")
+
+        assert result == []
+        assert "no candidates" in caplog.text.lower()
+
+
+# ===========================================================================
 # AC2 (#887) — recall reduces the tool-step count on a repeated goal
 # ===========================================================================
 
@@ -4004,3 +4349,47 @@ class TestRecallReducesToolSteps:
         assert len(recall) < len(baseline)  # 3 < 5
         assert recall == needed  # follows the recipe exactly
         assert len(baseline) > len(needed)  # baseline pays a discovery cost
+
+
+class TestRecallRedactsCredentialsAlreadyOnDisk:
+    """The write gate only protects rows written after it existed.
+
+    A store built before it — or anything the detector missed on the way in —
+    still held the secret, and the prompt injection handed it straight back.
+    Observed live: asked what it remembered, the agent recited a stored
+    passphrase verbatim. On a remote backend that also sends it off-machine.
+    """
+
+    def test_a_credential_row_is_masked_on_the_way_out(self):
+        items = [
+            {"content": "File x.txt contains passphrase HALIBUT-4417-ZULU"},
+            {"content": "my api key is sk-ant-api03-abcdefghijklmnop"},
+        ]
+        out = MemoryMixin._redact_credentials(items)
+
+        for row in out:
+            assert "HALIBUT" not in row["content"]
+            assert "sk-ant" not in row["content"]
+            assert "redacted" in row["content"]
+            assert (
+                "/memory" in row["content"]
+            ), "a masked row must say how to review or remove it"
+
+    def test_ordinary_memories_are_untouched(self):
+        items = [
+            {"content": "My favourite colour is teal."},
+            {"content": "Main project is Beacon."},
+        ]
+        assert MemoryMixin._redact_credentials(items) == items
+
+    def test_the_row_is_not_mutated_in_place(self):
+        """The stored row must survive so /memory can still show it."""
+        original = {"content": "the passphrase is HALIBUT-4417-ZULU"}
+        items = [original]
+
+        MemoryMixin._redact_credentials(items)
+
+        assert original["content"] == "the passphrase is HALIBUT-4417-ZULU"
+
+    def test_missing_content_does_not_explode(self):
+        assert MemoryMixin._redact_credentials([{}, {"content": None}])

@@ -345,6 +345,16 @@ The agent is built to host **Agent Skills** (short playbooks loaded into its own
 prompt, grouped into named sets, one set active per launch), and its bundled
 skill directory is the highest-precedence discovery root.
 
+Loaded skills are **not** all resident every turn: each turn the agent embeds
+the query against every loaded skill's description and renders only the
+matching bodies in full — the rest collapse to a one-line menu entry, and the
+model (or the user) re-activates one by calling `load_skill` on it again.
+`GAIA_DYNAMIC_SKILLS=0` disables the per-turn selection (every loaded body
+renders every turn); `GAIA_DYNAMIC_SKILLS_TAU=<float>` overrides the match
+threshold. Manifest `skills:` entries are always-on and never collapse. If the
+embedder is unavailable, selection disables itself for the session and every
+body renders — capability is never silently lost to a failed match.
+
 **Nothing ships enabled in 0.1.0.** The bundled skill library is empty, and
 `gaia-agent.yaml` ships its `skills:` / `skill_sets:` / `default_skill_set:`
 blocks **commented out** — following the email agent's precedent, because skill
@@ -452,6 +462,11 @@ curl -N -X POST http://127.0.0.1:8141/v1/gaia/query \
 A healthy run streams `status` / `token` events and ends with one `final`. If
 `/v1/gaia/init` is 503, fix what its `hint` names and retry — the rest of your
 integration is fine.
+
+**A 503 from `/query` itself is a different condition**: every retained
+session slot is busy and none is idle enough to evict (SPEC §5.2). Do NOT
+loop on `/v1/gaia/init` — it will report ready. Wait for a running turn to
+finish (or close an idle session) and retry the same `/query`.
 
 For the full wire contract, lock schema, exit codes, and timeout table, see
 [`SPEC.md`](./SPEC.md). For the user-facing overview, see [`README.md`](./README.md)

@@ -30,6 +30,30 @@ var dev bool
 // an unmissable banner for as long as it is on.
 var bypassPermissions bool
 
+// useClaude routes the spawned agent's inference to Anthropic's Claude API
+// instead of the local Lemonade backend. A real privacy change from GAIA's
+// local-by-default posture, so the chat header carries a "claude" chip for as
+// long as the session runs.
+var useClaude bool
+
+// claudeModel picks which Claude model --use-claude uses. Defaults to Claude
+// Sonnet 5; an explicit empty value lets the agent pick its own default.
+var claudeModel string
+
+// defaultClaudeModel is the model --use-claude runs on when --claude-model is
+// not given.
+const defaultClaudeModel = "claude-sonnet-5"
+
+// claudeModelArg is the model to forward to the child. Without --use-claude
+// there is nothing to forward — the default would otherwise trip the factory's
+// model-without-mode refusal on every local launch.
+func claudeModelArg() string {
+	if !useClaude {
+		return ""
+	}
+	return claudeModel
+}
+
 const defaultBinaryName = "gaia-tui"
 
 // binaryName derives the command name from argv[0]. The installer ships this as
@@ -64,7 +88,7 @@ var rootCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		return ui.RunHub(dev, mockAgent, ctrl, bypassPermissions)
+		return ui.RunHub(dev, mockAgent, ctrl, bypassPermissions, useClaude, claudeModelArg())
 	},
 }
 
@@ -83,6 +107,23 @@ func init() {
 		"run every tool without asking for confirmation — the agent acts fully "+
 			"autonomously. Off by default; the TUI shows a persistent warning "+
 			"while it is on, and /bypass off turns it off mid-session")
+	rootCmd.PersistentFlags().BoolVar(&useClaude, "use-claude", false,
+		"run the agent against Anthropic's Claude API instead of the local Lemonade "+
+			"backend — your conversation is sent to Anthropic, not processed on this "+
+			"machine. Requires ANTHROPIC_API_KEY. The chat header shows a \"claude\" "+
+			"chip while this is on")
+	rootCmd.PersistentFlags().StringVar(&claudeModel, "claude-model", defaultClaudeModel,
+		"Claude model id to use with --use-claude (pass \"\" to let the agent pick)")
+	// --claude-model without --use-claude would be accepted and then change
+	// nothing; refuse it before any UI opens.
+	rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		if rootCmd.PersistentFlags().Changed("claude-model") && !useClaude {
+			return fmt.Errorf(
+				"--claude-model only applies with --use-claude: the local Lemonade " +
+					"backend does not run Claude models. Add --use-claude, or drop --claude-model")
+		}
+		return nil
+	}
 	rootCmd.PersistentFlags().BoolVar(&controlEnabled, "control", false,
 		"expose the loopback control API so an assistant can drive this session (auto-assigned port)")
 	rootCmd.PersistentFlags().IntVar(&controlPort, "control-port", 0,
