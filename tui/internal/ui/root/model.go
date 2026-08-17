@@ -31,12 +31,10 @@ type RootModel struct {
 	chat       *chat.ChatModel
 	chatClient client.AgentClient
 	catalog    *catalog.Catalog
-	showHelp   bool
-	helpCtx    components.HelpContext
-	// helpScroll is how many body lines are scrolled past while help is open.
-	// Reset to 0 whenever the panel opens or closes so it never reappears
-	// mid-scroll from a previous session with a shorter chunk of text.
-	helpScroll int
+	// help is the shared overlay state machine (components.HelpState) — the
+	// same one the chat view uses on a direct launch, so open/scroll/dismiss
+	// behavior can never diverge between the two paths.
+	help components.HelpState
 	width      int
 	height     int
 	dev        bool
@@ -192,34 +190,18 @@ func (m RootModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.returnToHub(msg.AgentID)
 
 	case chat.ToggleHelpMsg:
-		m.showHelp = !m.showHelp
-		m.helpCtx = components.HelpContextChat
-		m.helpScroll = 0
+		m.help.Toggle(components.HelpContextChat)
 		return m, nil
 
 	case components.HelpContext:
-		m.showHelp = !m.showHelp
-		m.helpCtx = msg
-		m.helpScroll = 0
+		m.help.Toggle(msg)
 		return m, nil
 
 	case tea.KeyMsg:
-		if m.showHelp {
-			// ↑/↓/PgUp/PgDn/Home/End navigate the open panel instead of
-			// closing it — the same keys the transcript itself uses, just
-			// aimed at whatever is on screen. Anything else still dismisses,
-			// exactly like before this panel could scroll at all.
-			if delta, jump, handled := components.HelpScrollKey(msg, m.height); handled {
-				max := components.HelpMaxScroll(m.helpCtx, m.width, m.height)
-				if jump {
-					m.helpScroll = clampInt(delta, 0, max)
-				} else {
-					m.helpScroll = clampInt(m.helpScroll+delta, 0, max)
-				}
-				return m, nil
-			}
-			m.showHelp = false
-			m.helpScroll = 0
+		if m.help.Open {
+			// Navigation keys scroll the open panel; anything else dismisses
+			// it — HelpState owns that vocabulary for every view.
+			m.help.HandleKey(msg, m.width, m.height)
 			return m, nil
 		}
 		// The mailbox hand-off owns every key while it is up, the way the hub's
@@ -278,8 +260,8 @@ func (m RootModel) View() string {
 		}
 	}
 
-	if m.showHelp {
-		return components.RenderHelpOverlay(m.helpCtx, base, m.width, m.height, m.helpScroll)
+	if m.help.Open {
+		return m.help.Render(base, m.width, m.height)
 	}
 
 	return base
