@@ -236,7 +236,14 @@ model is loaded — `/v1/gaia/init` answers that.
 whole conversation.** Contract ≥ 2.12 resolves `session_id` to a *retained*
 agent instead of a throwaway built fresh per call — indexed documents and
 `load_skill` state only survive between turns when the same `session_id`
-threads them together. Omitting it is a valid, explicit one-shot: nothing
+threads them together.
+
+A retained skill stays *loaded* but its body is not necessarily in the prompt
+every turn: the agent selects per turn which loaded bodies match the query and
+collapses the rest to a one-line menu entry (re-activated by calling
+`load_skill` again). `GAIA_DYNAMIC_SKILLS=0` disables the selection;
+`GAIA_DYNAMIC_SKILLS_TAU=<float>` overrides its threshold; an embedder outage
+disables it for the session and every body renders. Omitting it is a valid, explicit one-shot: nothing
 persists past that single turn, and the agent is not told otherwise.
 
 A second `/query` for a `session_id` that already has a turn in flight gets
