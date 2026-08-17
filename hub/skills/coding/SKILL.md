@@ -40,9 +40,9 @@ guessing at names.
 
 ## Read the file before you edit it
 
-Not the top of it — the part you are changing, plus enough around it to see what
-else depends on it. An edit written from memory of a similar file is how you
-delete someone's special case.
+Not the top of it — use `read_file` on the part you are changing, plus enough
+around it to see what else depends on it. An edit written from memory of a
+similar file is how you delete someone's special case.
 
 `edit_file` replaces an exact string. If it fails, the file is not what you
 thought: **re-read it**, do not retry with a guess. Never fall back to

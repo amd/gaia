@@ -12,6 +12,7 @@ previous run left it lying around is not a passing test.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -219,7 +220,9 @@ def test_malformed_declarations_fail_loudly(blocks, expected):
 
 def test_manifest_error_names_the_file():
     path = "/tmp/does-not-matter/gaia-agent.yaml"
-    with pytest.raises(ManifestError, match=path):
+    # The loader renders the source through Path(), so on Windows the message
+    # carries backslashes — match the normalized form, not the literal.
+    with pytest.raises(ManifestError, match=re.escape(str(Path(path)))):
         AgentManifest.from_dict(
             {**_BASE_MANIFEST, "skill_sets": {"work": []}, "default_skill_set": "work"},
             source=path,

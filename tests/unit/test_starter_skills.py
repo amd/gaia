@@ -152,7 +152,9 @@ def registry_tool_names() -> frozenset[str]:
     from gaia.agents.base.memory import MemoryMixin
     from gaia.agents.base.tools import _TOOL_REGISTRY
     from gaia.agents.tools.browser_tools import BrowserToolsMixin
+    from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
     from gaia.agents.tools.file_io_tools import FileIOToolsMixin
+    from gaia.agents.tools.file_tools import FileSearchToolsMixin
     from gaia.agents.tools.filesystem_tools import FileSystemToolsMixin
     from gaia.agents.tools.rag_tools import RAGToolsMixin
     from gaia.agents.tools.scratchpad_tools import ScratchpadToolsMixin
@@ -176,8 +178,10 @@ def registry_tool_names() -> frozenset[str]:
         (RAGToolsMixin, "register_rag_tools"),
         (ScratchpadToolsMixin, "register_scratchpad_tools"),
         (FileIOToolsMixin, "register_file_io_tools"),
+        (FileSearchToolsMixin, "register_file_search_tools"),
         (FileSystemToolsMixin, "register_filesystem_tools"),
         (ShellToolsMixin, "register_shell_tools"),
+        (CodeIndexToolsMixin, "register_code_index_tools"),
         (MemoryMixin, "register_memory_tools"),
     ]
 
@@ -189,7 +193,25 @@ def registry_tool_names() -> frozenset[str]:
     finally:
         _TOOL_REGISTRY.clear()
         _TOOL_REGISTRY.update(before)
-    return names
+    return names | _chat_agent_inline_tools()
+
+
+def _chat_agent_inline_tools() -> frozenset[str]:
+    """Tools ChatAgent registers inline in ``_register_tools`` (no mixin).
+
+    The flagship gaia agent inherits ChatAgent, so a starter skill may target
+    these too. Instantiating ChatAgent here would drag in an LLM client, so
+    each name is instead verified against the agent's source: the ``def``
+    must exist in ``agent.py`` or the name is dropped — keeping this list
+    incapable of drifting past a rename.
+    """
+    import gaia_agent_chat
+
+    source = (Path(gaia_agent_chat.__file__).parent / "agent.py").read_text(
+        encoding="utf-8"
+    )
+    inline = {"execute_python_file", "list_files"}
+    return frozenset(t for t in inline if f"def {t}(" in source)
 
 
 def test_registry_fixture_actually_registered_something(registry_tool_names):
