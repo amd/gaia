@@ -68,6 +68,7 @@ from gaia_agent_email.tools.triage_heuristics import (
 )
 from gaia_agent_email.tools.usage import aggregate_usage_stats
 from gaia_agent_email.verbose import (
+    log_search_effective_query,
     log_tool_call,
     log_triage_decision,
     log_triage_dispatch,
@@ -973,6 +974,7 @@ def search_messages_impl(
                     query=retried_query, max_results=max_results
                 )
                 stubs = listing.get("messages", [])
+        log_search_effective_query(query=query, retried_query=retried_query)
         if include_bodies:
             full_msgs = [gmail.get_message(stub["id"]) for stub in stubs]
             out = _format_messages_within_budget(

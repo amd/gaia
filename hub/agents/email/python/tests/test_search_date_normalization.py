@@ -322,3 +322,42 @@ def test_registered_search_messages_returns_structured_error_for_bad_duration():
 
     assert payload["ok"] is False
     assert "1.5d" in payload["error"]
+
+
+# ---------------------------------------------------------------------------
+# Effective-query logging: the log MESSAGE (not just tool_call's structured
+# ``extra``) must carry the post-normalization query and retry state (#2830
+# increment 3) -- greppable proof, in ~/.gaia/gaia.log, of what query Gmail
+# actually saw when a report of "0 messages" turns out to be a bad unit.
+# ---------------------------------------------------------------------------
+
+
+def test_search_messages_logs_effective_query_when_retry_not_needed(caplog):
+    gmail = FakeGmailBackend(user_email="user@example.com")
+    with caplog.at_level("INFO", logger="gaia_agent_email"):
+        search_messages_impl(gmail, query='from:"alice@example.com" newer_than:2w')
+    query_records = [
+        r for r in caplog.records if r.getMessage().startswith("search_messages ")
+    ]
+    assert len(query_records) == 1
+    message = query_records[0].getMessage()
+    # Post-normalization: the unsupported 'w' unit converted to 'd'.
+    assert "newer_than:14d" in message
+    # Address-bearing query renders redacted, not the raw address (#2830, 68a16a77).
+    assert "alice@example.com" not in message
+    assert "[REDACTED]" in message
+    # An operator query never triggers the widen retry -- state says so.
+    assert "retry=none" in message
+
+
+def test_search_messages_logs_retry_state_when_widen_fires(caplog):
+    gmail = FakeGmailBackend(user_email="user@example.com")
+    with caplog.at_level("INFO", logger="gaia_agent_email"):
+        search_messages_impl(gmail, query="Last Week in AI")
+    query_records = [
+        r for r in caplog.records if r.getMessage().startswith("search_messages ")
+    ]
+    assert len(query_records) == 1
+    message = query_records[0].getMessage()
+    assert "retried_to=" in message
+    assert "from:(Last Week in AI) OR subject:(Last Week in AI)" in message

@@ -180,9 +180,38 @@ def log_tool_call(
         )
 
 
+def log_search_effective_query(
+    *, query: str, retried_query: Optional[str] = None
+) -> None:
+    """``search_messages``-scoped: the effective (post-normalization) query
+    and retry outcome, rendered into the log MESSAGE itself.
+
+    ``tool_call``'s ``tool_args`` already carries the effective query
+    structured in ``extra`` (``query`` is reassigned before that context
+    opens), but nothing greps a log MESSAGE against ``extra`` fields -- a
+    false "0 messages" report (#2830) needs the query visible in the text
+    that ``gaia diagnostics`` bundles and users paste into issues.
+    """
+    redacted_query = _redact(query)
+    retry_state = (
+        "none" if retried_query is None else f"retried_to={_redact(retried_query)!r}"
+    )
+    logger.info(
+        "search_messages effective_query=%r retry=%s",
+        redacted_query,
+        retry_state,
+        extra={
+            "stage": "search_query",
+            "effective_query": redacted_query,
+            "retry_state": retry_state,
+        },
+    )
+
+
 __all__ = [
     "log_triage_decision",
     "log_triage_dispatch",
     "log_tool_call",
+    "log_search_effective_query",
     "logger",
 ]
