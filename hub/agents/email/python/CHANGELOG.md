@@ -5,6 +5,31 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/); the REST
 contract version is tracked separately as
 `gaia_agent_email.contract.SCHEMA_VERSION` (see `CONTRACT.md`).
 
+## [Unreleased]
+
+### Fixed
+
+- **A `newer_than:`/`older_than:` search could report 0 messages for mail
+  that exists (#2830, Gmail mailboxes only).** The issue blamed
+  `from:"<brand>"` matching nothing on a display name — disproven: that
+  query matched fine. The real cause is `w` (weeks), which the model
+  reaches for but Gmail does not implement as a duration unit — Gmail
+  silently returns an empty result set instead of an error, so `newer_than:2w`
+  and a working `newer_than:14d` looked identical to the agent. Duration
+  values on `newer_than:`/`older_than:` are now validated and `w` converted
+  to days before the query reaches Gmail; an unrecognized unit now raises an
+  actionable error instead of a silent zero-result search. The `search`
+  REST endpoint's error path for a bad duration also stopped returning a
+  bare `500` and now surfaces the actionable `400`. The effective
+  (post-normalization) query and retry state are now logged for
+  `search_messages`, so a future zero-result report is diagnosable from
+  `~/.gaia/gaia.log` without reproducing it live.
+  **Outlook mailboxes are unaffected by this fix** — `outlook_backend.py`
+  sends the whole query as a single quoted Microsoft Graph `$search` phrase
+  and never parses Gmail operator syntax, so the corrected duration handling
+  has no effect there; operator search against Outlook was already
+  non-functional before and after this change.
+
 ## [0.6.0] - 2026-08-12
 
 ### Added
