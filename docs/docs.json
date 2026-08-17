@@ -482,7 +482,8 @@
               "plans/docker-containers",
               "plans/mcp-docs",
               "plans/desktop-installer",
-              "plans/tool-loader"
+              "plans/tool-loader",
+              "plans/code-index-review"
             ]
           },
           {
