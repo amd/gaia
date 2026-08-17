@@ -246,44 +246,46 @@ class CodeIndexSDK:
         except ImportError as e:
             raise ImportError(_MISSING_DEPS_MSG) from e
 
-        # Reuse existing embeddings for unchanged chunks
+        # Reuse existing embeddings for unchanged chunks. Matching is keyed on
+        # (file_path, start_line, content) with each cache row consumed at
+        # most once — an oversized chunk split into parts gives every part
+        # the SAME (file_path, start_line), so a position-only match handed
+        # parts 2..N part 1's embedding. Matching is per-chunk: a chunk that
+        # misses the cache is re-embedded on its own instead of discarding
+        # reuse for every other chunk in the repo, and the keyed map makes
+        # the scan O(n) instead of O(reused x existing).
         reused_embeddings = None
+        matched_chunks: List[CodeChunk] = []
+        missed_chunks: List[CodeChunk] = [
+            c for c in reused_chunks if isinstance(c, CodeChunk)
+        ]
         if reused_chunks and existing_meta:
             existing_chunk_dicts = existing_meta.get("chunks", [])
-            # Build index map: find positions of reused chunks in existing
-            # index. Match on content too, and consume each cache row at most
-            # once — an oversized chunk split into parts gives every part the
-            # SAME (file_path, start_line), so a position-only match handed
-            # parts 2..N part 1's embedding. A chunk that finds no row falls
-            # through to the re-embed fallback below; pairing fewer embeddings
-            # than chunks would silently misalign every later search hit.
-            reused_indices = []
-            matched = 0
-            used: set = set()
+            rows_by_key: Dict[tuple, List[int]] = {}
+            for i, cd in enumerate(existing_chunk_dicts):
+                if cd.get("chunk_type") == "code":
+                    key = (cd.get("file_path"), cd.get("start_line"), cd.get("content"))
+                    rows_by_key.setdefault(key, []).append(i)
+
+            reused_indices: List[int] = []
+            missed_chunks = []
             for rc in reused_chunks:
                 if not isinstance(rc, CodeChunk):
                     continue
-                for i, cd in enumerate(existing_chunk_dicts):
-                    if i in used:
-                        continue
-                    if (
-                        cd.get("chunk_type") == "code"
-                        and cd.get("file_path") == rc.file_path
-                        and cd.get("start_line") == rc.start_line
-                        and cd.get("content") == rc.content
-                    ):
-                        reused_indices.append(i)
-                        used.add(i)
-                        matched += 1
-                        break
+                rows = rows_by_key.get((rc.file_path, rc.start_line, rc.content))
+                if rows:
+                    reused_indices.append(rows.pop(0))
+                    matched_chunks.append(rc)
+                else:
+                    missed_chunks.append(rc)
 
-            if matched != len(reused_chunks):
+            if missed_chunks:
                 self.log.warning(
-                    f"Only {matched}/{len(reused_chunks)} unchanged chunks "
-                    "matched the cache — re-embedding them all to keep chunks "
-                    "and embeddings aligned"
+                    f"{len(missed_chunks)}/{len(reused_chunks)} unchanged "
+                    "chunks missed the embedding cache — re-embedding only "
+                    "those"
                 )
-            elif reused_indices and self._ensure_index_loaded():
+            if reused_indices and self._ensure_index_loaded():
                 try:
                     reused_embeddings = np.array(
                         [self._faiss_index.reconstruct(i) for i in reused_indices],
@@ -297,6 +299,11 @@ class CodeIndexSDK:
                         f"Could not reuse embeddings (cache desync, will re-embed): {e}"
                     )
                     reused_embeddings = None
+        if reused_embeddings is None:
+            # No index to reconstruct from (or it desynced): every unchanged
+            # chunk goes through the re-embed path.
+            matched_chunks = []
+            missed_chunks = [c for c in reused_chunks if isinstance(c, CodeChunk)]
 
         # Embed only new/changed chunks
         chunks_to_embed = new_chunks
@@ -320,16 +327,16 @@ class CodeIndexSDK:
         valid_chunks = []
         embedding_parts = []
         if reused_embeddings is not None and reused_embeddings.size > 0:
-            valid_chunks.extend(reused_chunks)
+            valid_chunks.extend(matched_chunks)
             embedding_parts.append(reused_embeddings)
-        elif reused_chunks:
-            # Fallback: could not reuse embeddings, must re-embed reused chunks too
+        if missed_chunks:
             self.log.info(
-                "Re-embedding unchanged chunks (no existing index to reuse from)"
+                f"Re-embedding {len(missed_chunks)} unchanged chunk(s) the "
+                "cache could not supply"
             )
-            texts = [self._chunk_to_embed_text(c) for c in reused_chunks]
+            texts = [self._chunk_to_embed_text(c) for c in missed_chunks]
             reused_emb, valid_reused = self._encode_texts_with_sync(
-                texts, reused_chunks
+                texts, missed_chunks
             )
             if valid_reused:
                 valid_chunks.extend(valid_reused)
@@ -674,8 +681,9 @@ class CodeIndexSDK:
             return None
 
     def _chunk_to_embed_text(self, chunk: CodeChunk) -> str:
-        """Extract the text to embed (first 1200 chars for search)."""
-        MAX_EMBED_CHARS = 1200
+        """Extract the text to embed (first MAX_EMBED_CHARS chars for search)."""
+        from gaia.code_index.parsers import MAX_EMBED_CHARS
+
         prefix = ""
         if chunk.symbol_name:
             prefix = f"{chunk.symbol_type or 'symbol'}: {chunk.symbol_name}\n"
@@ -808,8 +816,9 @@ class CodeIndexSDK:
 
         self._load_embedder()
 
+        from gaia.code_index.parsers import MAX_EMBED_CHARS
+
         BATCH_SIZE = 25
-        MAX_EMBED_CHARS = 1200
         safe_texts = [t[:MAX_EMBED_CHARS] for t in texts]
 
         all_embeddings: List[list] = []
@@ -837,8 +846,9 @@ class CodeIndexSDK:
 
         self._load_embedder()
 
+        from gaia.code_index.parsers import MAX_EMBED_CHARS
+
         BATCH_SIZE = 25
-        MAX_EMBED_CHARS = 1200
 
         valid_chunks = []
         valid_embeddings = []

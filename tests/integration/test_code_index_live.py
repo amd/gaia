@@ -202,8 +202,11 @@ class TestSingleSlotEviction:
         client = LemonadeClient(base_url=_BASE_URL)
         try:
             client.unload_model(_EMBEDDING_MODEL)
-        except Exception:
-            pass  # not loaded yet — fine
+        except Exception as e:  # noqa: BLE001 — precondition, not the assertion
+            # "Not loaded yet" is fine, but say so — a swallowed connection
+            # error here would let the test proceed against a dead server and
+            # fail later with a misleading message.
+            print(f"unload_model precondition: {e}")
 
         # Evict by loading a different embedding model into the single slot.
         other_model = "nomic-embed-text-v2-moe-GGUF"

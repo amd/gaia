@@ -342,12 +342,19 @@ def _chunk_by_blocks(
 # Oversized-chunk guard
 # ---------------------------------------------------------------------------
 
+# How much of a chunk's text is actually embedded. Defined here (the SDK
+# imports it) so the split size below can never drift from it again.
+MAX_EMBED_CHARS = 1200
+
 # A single pathological chunk (one giant minified line, a generated file with
 # no blank lines for _chunk_by_blocks to split on) can otherwise become one
-# CodeChunk holding the entire file: unbounded metadata.json growth, and only
-# the first ~1200 chars are ever embedded (_chunk_to_embed_text truncates),
-# so the rest of the file is silently unsearchable. Hard-split on chars.
-_MAX_CHUNK_CHARS = 20_000
+# CodeChunk holding the entire file: unbounded metadata.json growth and a
+# mostly-unsearchable blob. Split at just under the embed window — a split
+# part larger than what gets embedded defeats the split: at the previous
+# 20,000 the guard's own stated goal failed, with ~94% of every part still
+# unembedded. The margin leaves room for the "file: symbol:" prefix
+# _chunk_to_embed_text prepends.
+_MAX_CHUNK_CHARS = MAX_EMBED_CHARS - 100
 
 
 def _split_oversized_chunk(
