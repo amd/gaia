@@ -147,11 +147,13 @@ func TestStaleAnswerIsDropped(t *testing.T) {
 	m := modelWith(t, c)
 	m = feed(t, m, needsInput())
 
-	updated, cmd := m.Update(components.QuestionAnsweredMsg{RequestID: "old", Value: "yes"})
+	// A non-nil cmd alone doesn't mean the stale answer went anywhere: the
+	// question is still open here (feed built it via handleEvent directly,
+	// bypassing Update, so the mouse was never actually captured for it yet),
+	// and Update's own mouse-capture reconciliation legitimately returns one
+	// to grab it now — see mousecapture.go. c.answers is the real assertion.
+	updated, _ := m.Update(components.QuestionAnsweredMsg{RequestID: "old", Value: "yes"})
 	m = updated.(ChatModel)
-	if cmd != nil {
-		t.Error("a stale answer must not be sent")
-	}
 	if len(c.answers) != 0 {
 		t.Errorf("transport received a stale answer: %v", c.answers)
 	}

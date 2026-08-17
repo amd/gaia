@@ -40,14 +40,19 @@ func prepareTerminal() {
 // If mockAgent is non-empty, all agent binary paths are overridden with it for testing.
 // A non-nil ctrl starts the loopback control API against this very program.
 // bypassPermissions starts launched agents with confirmation prompts off.
-func RunHub(dev bool, mockAgent string, ctrl *control.Options, bypassPermissions bool) error {
+// useClaude/claudeModel start them against Anthropic's Claude API instead of
+// the local Lemonade backend.
+func RunHub(dev bool, mockAgent string, ctrl *control.Options, bypassPermissions bool, useClaude bool, claudeModel string) error {
 	cat := catalog.NewCatalog()
 	if mockAgent != "" {
 		cat.SetMockBinary(mockAgent)
 	} else {
 		cat.DiscoverBinaries()
 	}
-	return run(root.NewRootModel(cat, dev).WithBypassPermissions(bypassPermissions), dev, ctrl)
+	m := root.NewRootModel(cat, dev).
+		WithBypassPermissions(bypassPermissions).
+		WithClaude(useClaude, claudeModel)
+	return run(m, dev, ctrl)
 }
 
 // RunChat launches the chat TUI directly with a subprocess agent (standalone mode).
@@ -74,15 +79,19 @@ func RunChat(subprocess string, query string, dev bool, ctrl *control.Options) e
 
 // teaOptions are the terminal capabilities every GAIA TUI program asks for.
 //
-// Mouse cell motion is on so the wheel scrolls the transcript — in an alt-screen
-// app the terminal's own scrollback does not exist, so without this the history
-// above the fold is simply unreachable. The trade is that the terminal no longer
-// handles click-drag selection itself; hold Shift while dragging to select, which
-// is the standard override every terminal emulator honours.
+// The mouse is left to the TERMINAL by default, so drag-select and the platform's
+// own copy/paste work the way they do in every other program — Ctrl/Cmd+C,
+// Ctrl+Shift+C, right-click, whatever that terminal uses.
+//
+// Capturing it (mode 1002) buys exactly one thing: the wheel scrolling the
+// transcript, which an alt-screen app cannot get from the terminal's scrollback
+// because it has none. That is not worth breaking selection for every user who
+// never asked for it — "I still can't drag my mouse over terminal text and copy
+// it" is the report this default answers. Ctrl+T turns capture on when the wheel
+// is what you want; ↑/↓ and PgUp/PgDn scroll regardless.
 func teaOptions() []tea.ProgramOption {
 	return []tea.ProgramOption{
 		tea.WithAltScreen(),
-		tea.WithMouseCellMotion(),
 	}
 }
 
@@ -168,7 +177,7 @@ func run(model tea.Model, dev bool, ctrl *control.Options) error {
 // already refused that combination (see cli.agentControlOptions) rather than
 // pass a non-nil ctrl through here.
 // Returns the process exit code.
-func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctrl *control.Options, bypassPermissions bool) (int, error) {
+func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctrl *control.Options, bypassPermissions bool, useClaude bool, claudeModel string) (int, error) {
 	cat := catalog.NewCatalog()
 	cat.DiscoverBinaries()
 
@@ -201,6 +210,8 @@ func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctr
 		// answer a question, so it must not claim it can.
 		Interactive:       query == "",
 		BypassPermissions: bypassPermissions,
+		UseClaude:         useClaude,
+		ClaudeModel:       claudeModel,
 	})
 	if err != nil {
 		return 1, err

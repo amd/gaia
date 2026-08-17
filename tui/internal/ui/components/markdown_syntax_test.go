@@ -22,12 +22,11 @@ import (
 // quietly compare the light palette against dark's output. The light table is
 // therefore checked where it is defined, not where it is drawn.
 
-// A fenced block has to look like a slab, whatever language it claims. Glamour
-// names a background exactly once, at the top of its chroma table, and chroma
-// only paints a background where a token asks for one — so the builtin's
-// #373737 never reaches the screen and a fence arrives as loose prose-coloured
-// text. Every token in GAIA's table carries the background itself.
-func TestFencedCodeIsPaintedAsABlock(t *testing.T) {
+// Code carries NO background, anywhere. A tinted slab behind every inline span
+// turned a paragraph about code into a patchwork of little rectangles, and the
+// same fill behind a fence is a second shade of near-black on a black terminal.
+// Colour is what marks code now — see gaiaChroma.
+func TestCodeIsNeverPaintedOnABackground(t *testing.T) {
 	out := renderDark(t, strings.Join([]string{
 		"```python",
 		"# warm the model first",
@@ -39,8 +38,8 @@ func TestFencedCodeIsPaintedAsABlock(t *testing.T) {
 	// Single words, not phrases: glamour splits a styled run at every word
 	// boundary (see markdown_style_test.go).
 	for _, word := range []string{"# warm", "def", "pull", "42", "\"n\""} {
-		if run := styleBefore(out, word); !strings.Contains(run, "48;5;") {
-			t.Errorf("%q is not painted on the code background, so the block has holes in it: %q", word, run)
+		if run := styleBefore(out, word); strings.Contains(run, "48;5;") {
+			t.Errorf("%q still carries a background fill: %q", word, run)
 		}
 	}
 }
@@ -52,11 +51,11 @@ func TestAnUnlabelledFenceStillReadsAsCode(t *testing.T) {
 	out := renderDark(t, "Body sentence.\n\n```\nplainfence\n```\n")
 
 	fence := styleBefore(out, "plainfence")
-	if !strings.Contains(fence, "48;5;") {
-		t.Errorf("an unlabelled fence has no background, so it collapses into body text: %q", fence)
+	if strings.Contains(fence, "48;5;") {
+		t.Errorf("an unlabelled fence is still painted on a background: %q", fence)
 	}
-	if body := styleBefore(out, "Body"); fence == body {
-		t.Errorf("an unlabelled fence is styled exactly like prose: %q", fence)
+	if body := styleBefore(out, "Body"); foreground(fence) == foreground(body) {
+		t.Errorf("an unlabelled fence is the same colour as prose: %q", fence)
 	}
 }
 
@@ -104,8 +103,8 @@ func TestInlineCodeIsRelatedToFencedCodeWithoutBeingIt(t *testing.T) {
 
 	inline := styleBefore(out, "lemonade_client.py")
 	fenced := styleBefore(out, "fmt")
-	if background(inline) == "" || background(inline) != background(fenced) {
-		t.Errorf("inline (%q) and fenced (%q) code sit on different backgrounds", inline, fenced)
+	if background(inline) != "" || background(fenced) != "" {
+		t.Errorf("code is still painted: inline=%q fenced=%q", inline, fenced)
 	}
 	if foreground(inline) == foreground(fenced) {
 		t.Errorf("inline code is indistinguishable from a fenced block: %q", inline)

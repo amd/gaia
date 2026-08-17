@@ -387,8 +387,12 @@ dependencies = ["amd-gaia[api]>=0.20.0"]   # add ,rag / ,etc. for extra capabili
 The [email agent](https://github.com/amd/gaia/tree/main/hub/agents/email/python)
 goes one step further and ships a **frozen native binary** plus an npm package
 (`@amd-gaia/agent-email`) so JavaScript apps can run it with no Python installed.
-That packaging is currently hand-built per agent; reusable tooling to make any agent
-an npm sidecar is on the roadmap.
+The [flagship `gaia` agent](https://github.com/amd/gaia/tree/main/hub/agents/gaia/python)
+follows the same pattern as its second instance (`@amd-gaia/gaia`), additionally
+consuming the Go terminal UI as a separately-published hub component rather than
+bundling a copy of its own — see [`plans/flagship-installer`](/plans/flagship-installer)
+for that packaging in detail. That packaging is currently hand-built per agent;
+reusable tooling to make any agent an npm sidecar is on the roadmap.
 
 ## Publishing a skill instead of an agent
 

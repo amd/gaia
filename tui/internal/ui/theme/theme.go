@@ -118,6 +118,12 @@ var (
 	OnFill       = lipgloss.AdaptiveColor{Light: "#FFFFFF", Dark: "#FFFFFF"}
 )
 
+// Selected is the gold marking the row you are ON in a list — a palette, a menu,
+// a set of answers. Deliberately NOT the brand green: green already means
+// "a command you can run" everywhere else in this UI, so using it for "the one
+// under your cursor" made the two indistinguishable.
+var Selected = lipgloss.AdaptiveColor{Light: "#8A5300", Dark: "#FFC65C"}
+
 // SurfaceBG is the quiet band — the status bar, an unselected button. Unlike a
 // badge it does follow the mode, and it has to stay visible against BOTH ends of
 // its mode's background range: a #303030 bar disappears on a One Half Dark
@@ -168,6 +174,7 @@ func All() map[string]lipgloss.AdaptiveColor {
 		"AccentFillBG": AccentFillBG, "WarnFillBG": WarnFillBG,
 		"DangerFillBG": DangerFillBG, "InfoFillBG": InfoFillBG, "OnFill": OnFill,
 		"SurfaceBG": SurfaceBG, "OnSurface": OnSurface,
+		"Selected":  Selected,
 		"ArtBright": ArtBright, "ArtBody": ArtBody, "ArtMid": ArtMid,
 		"ArtDetail": ArtDetail, "ArtShadow": ArtShadow, "ArtEye": ArtEye,
 	}

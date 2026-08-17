@@ -12,6 +12,7 @@ that run as separate processes via npx commands.
 
 import json
 import os
+import shutil
 import subprocess
 import time
 from typing import Any, Dict, List, Optional
@@ -43,6 +44,35 @@ class ExternalMCPService:
         self.timeout = timeout
         self.process = None
 
+    def _resolved_command(self) -> List[str]:
+        """``self.command`` with argv[0] resolved to a real executable path.
+
+        Node ships ``npx`` on Windows as ``npx.cmd``. Without shell=True,
+        CreateProcess is handed the literal string "npx", which does not exist,
+        and the call fails with "[WinError 2] The system cannot find the file
+        specified" — a message that names neither npx nor Node, so it reads as a
+        mystery OS fault. The agent, told only that, explained to the user that
+        it had "a consistent environmental problem preventing external network
+        requests" and gave up. shutil.which applies PATHEXT and finds npx.cmd.
+
+        Left unresolved when nothing matches, so the FileNotFoundError below can
+        say which program is missing.
+        """
+        if not self.command:
+            return self.command
+        found = shutil.which(self.command[0])
+        return [found, *self.command[1:]] if found else list(self.command)
+
+    def _missing_executable_error(self) -> Dict[str, str]:
+        """Name the missing program and how to get it, rather than an errno."""
+        program = self.command[0] if self.command else "the MCP service"
+        hint = (
+            " Install Node.js (https://nodejs.org) — it provides npx."
+            if program == "npx"
+            else ""
+        )
+        return {"error": f"'{program}' was not found on PATH.{hint}"}
+
     def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """
         Call a tool on the external MCP service.
@@ -65,10 +95,13 @@ class ExternalMCPService:
 
             # Call the MCP service via subprocess
             result = subprocess.run(
-                self.command,
+                self._resolved_command(),
                 input=json.dumps(request) + "\n",
                 capture_output=True,
-                text=True,
+                # An MCP service speaks JSON, which is UTF-8 by specification —
+                # never the Windows locale codec bare text=True would apply.
+                encoding="utf-8",
+                errors="replace",
                 env=self.env,
                 timeout=self.timeout,
                 check=False,
@@ -100,6 +133,12 @@ class ExternalMCPService:
         except subprocess.TimeoutExpired:
             logger.error(f"MCP service call timed out after {self.timeout}s")
             return {"error": f"Request timed out after {self.timeout} seconds"}
+        except (FileNotFoundError, NotADirectoryError):
+            # Reached when argv[0] resolved to nothing. Raw, this surfaces as
+            # "[WinError 2] The system cannot find the file specified", which
+            # names no program and sends the reader hunting for a network fault.
+            logger.error("MCP service executable not found: %s", self.command[:1])
+            return self._missing_executable_error()
         except Exception as e:
             logger.error(f"MCP service call failed: {e}")
             return {"error": str(e)}
@@ -115,10 +154,11 @@ class ExternalMCPService:
             request = {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}}
 
             result = subprocess.run(
-                self.command,
+                self._resolved_command(),
                 input=json.dumps(request) + "\n",
                 capture_output=True,
-                text=True,
+                encoding="utf-8",
+                errors="replace",
                 env=self.env,
                 timeout=self.timeout,
                 check=False,
@@ -479,6 +519,20 @@ class PerplexityService(ExternalMCPService):
         Returns:
             Web search results with answer and sources
         """
+        # Checked here rather than only at construction: without a key the
+        # service still starts, then fails deep inside npx with something that
+        # never mentions the key. Say the actual precondition instead — the
+        # model relays this text to the user, so an accurate refusal is the
+        # difference between "set PERPLEXITY_API_KEY" and the agent inventing a
+        # network-outage story.
+        if not self.env.get("PERPLEXITY_API_KEY"):
+            message = (
+                "Web search is unavailable: PERPLEXITY_API_KEY is not set. "
+                "Set it in the environment to enable this tool."
+            )
+            logger.warning(message)
+            return {"success": False, "error": message, "answer": ""}
+
         result = self.call_tool(
             "perplexity_ask", {"messages": [{"role": "user", "content": query}]}
         )

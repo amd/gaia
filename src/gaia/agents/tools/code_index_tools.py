@@ -19,6 +19,7 @@ requiring cooperative ``__init__`` chaining.
 
 import json
 import os
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from gaia.agents.base.tools import tool
@@ -124,9 +125,21 @@ class CodeIndexToolsMixin:
                     return json.dumps({"error": f"Not a directory: {resolved}"})
                 # Restrict to the agent's original repo_path to prevent
                 # LLM-directed path traversal to arbitrary directories.
-                original = os.path.abspath(self._repo_path)
-                if not resolved.startswith(original + os.sep) and resolved != original:
-                    return json.dumps({"error": f"repo_path must be within {original}"})
+                # Compare *resolved* (symlink-following) paths, not raw
+                # abspath — a symlink inside the allowed root that points
+                # outside it would otherwise pass this string check and
+                # then, in CodeIndexSDK.__init__ (which does resolve()),
+                # silently re-root the whole index/search sandbox onto the
+                # symlink's target.
+                real_resolved = str(Path(resolved).resolve())
+                real_original = str(Path(self._repo_path).resolve())
+                if (
+                    not real_resolved.startswith(real_original + os.sep)
+                    and real_resolved != real_original
+                ):
+                    return json.dumps(
+                        {"error": f"repo_path must be within {real_original}"}
+                    )
                 self._repo_path = resolved
                 self._code_index_config = None
                 self._code_index_sdk = None

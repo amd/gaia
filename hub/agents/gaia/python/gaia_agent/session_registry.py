@@ -1,3 +1,5 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
 """Session-scoped agent retention for the flagship sidecar (#2829, schema 2.12).
 
 Schema 2.12 is the contract version that let ``/query`` resolve a conversation's
@@ -26,6 +28,10 @@ logger = logging.getLogger(__name__)
 #: Human label used in the cap-exhausted error below.
 AGENT_LABEL = "GAIA"
 
+#: Distinguishes "id was in _evicted_ids" from "id mapped to None" — dict.pop's
+#: default can't do that since the dict's values are always None already.
+_SENTINEL = object()
+
 
 def build_session_agent(**config_kwargs: Any):
     """Construct a live ``GaiaAgent`` for a new session.
@@ -49,6 +55,15 @@ class _AgentSession:
         self.session_id = session_id
         self.agent = agent
         self.run_lock = threading.Lock()
+        #: True exactly once, on the session built to replace one this
+        #: registry involuntarily evicted (LRU cap or idle timeout) — never
+        #: for a session_id used for the first time. The caller (server.py)
+        #: surfaces this as a loud warning instead of silently handing back
+        #: a skill-less agent under the same session_id: that silence is the
+        #: exact failure mode this module exists to prevent (see module
+        #: docstring), and an LRU-cap eviction can happen to a conversation
+        #: that is still very much in use, just crowded out by others.
+        self.reclaimed_after_eviction = False
 
     def is_running(self) -> bool:
         return self.run_lock.locked()
@@ -90,6 +105,20 @@ class _SessionRegistry:
     ) -> None:
         self._sessions: Dict[str, _AgentSession] = {}
         self._last_used: Dict[str, float] = {}
+        #: session_ids involuntarily evicted whose NEXT get_or_create must
+        #: come back flagged `reclaimed_after_eviction` instead of silently
+        #: looking identical to a first-time session_id. Consumed (popped) the
+        #: first time that id is reused, so a later, genuinely-fresh reuse of
+        #: the same id is not flagged twice.
+        #:
+        #: Bounded, but generously — NOT to max_sessions. A tombstone must
+        #: outlive the eviction that created it long enough for the evicted
+        #: id's own next get_or_create to see it, and at max_sessions=1 that
+        #: next call is itself the very eviction that would immediately
+        #: retire the previous tombstone to make room, erasing it before it
+        #: was ever consumed.
+        self._evicted_ids: Dict[str, None] = {}
+        self._max_evicted_ids = max(4 * max_sessions, 32)
         self._lock = threading.Lock()
         self._idle_ttl_seconds = idle_ttl_seconds
         self._max_sessions = max_sessions
@@ -97,6 +126,13 @@ class _SessionRegistry:
     def get(self, session_id: str) -> Optional[_AgentSession]:
         with self._lock:
             return self._sessions.get(session_id)
+
+    def _note_evicted_locked(self, session_id: str) -> None:
+        """Record an involuntary eviction. Caller holds ``self._lock``."""
+        self._evicted_ids.pop(session_id, None)  # re-insert at the end (MRU)
+        self._evicted_ids[session_id] = None
+        while len(self._evicted_ids) > self._max_evicted_ids:
+            self._evicted_ids.pop(next(iter(self._evicted_ids)))
 
     def get_or_create(self, session_id: str, **config_kwargs: Any) -> _AgentSession:
         self.reap()
@@ -116,6 +152,7 @@ class _SessionRegistry:
                         "terminal/window, or wait for one to finish its current "
                         "turn, and retry."
                     )
+            reclaimed = self._evicted_ids.pop(session_id, _SENTINEL) is not _SENTINEL
         if evicted is not None:
             _close_agent(evicted.agent)
         # Build outside the lock — construction is slow and must not block other
@@ -129,6 +166,7 @@ class _SessionRegistry:
                 self._last_used[session_id] = time.monotonic()
                 return existing
             session = _AgentSession(session_id, agent)
+            session.reclaimed_after_eviction = reclaimed
             self._sessions[session_id] = session
             self._last_used[session_id] = time.monotonic()
             return session
@@ -151,6 +189,7 @@ class _SessionRegistry:
             if self._sessions[sid].run_lock.acquire(blocking=False):
                 session = self._sessions.pop(sid)
                 self._last_used.pop(sid, None)
+                self._note_evicted_locked(sid)
                 return session
         return None
 
@@ -175,6 +214,7 @@ class _SessionRegistry:
                     continue  # a real turn is starting/running — never evict
                 self._sessions.pop(sid)
                 self._last_used.pop(sid, None)
+                self._note_evicted_locked(sid)
                 evicted.append(session)
         for session in evicted:
             _close_agent(session.agent)

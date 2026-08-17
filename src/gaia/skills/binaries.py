@@ -17,9 +17,13 @@ is still deferred:
 2. **No global state.** The grant lives on the agent instance
    (:class:`BinaryGrants`), never in a module-level allowlist. One agent's skill
    can never widen another agent's shell.
-3. **Read-only by construction.** The tables list the subcommands that only
-   *read*. Anything that mutates a remote, writes a file, installs code, or
-   prints a credential is simply not listed.
+3. **Read-only by construction — for CLIs that talk to something *external*.**
+   ``gh``'s tables list the subcommands that only read a remote. ``pytest`` is a
+   different class of grant and says so in its own summary: it EXECUTES the
+   project's own test code, the same trust boundary as the ungated
+   ``execute_python_file`` tool. What its table restricts is invocation shape
+   (no plugin injection, no interactive hang, no writes/paths outside the
+   checkout) — never what the tests themselves do.
 
 Adding a CLI is a data entry here plus a ``SKILL.md`` — never a new branch in the
 shell tool. That is the acceptance test for this module: supporting GitLab must
@@ -48,7 +52,8 @@ if TYPE_CHECKING:  # ``permissions`` imports this module — keep the edge one-w
 
 @dataclass(frozen=True)
 class Subcommand:
-    """The read-only rule for one ``<binary> <subcommand>`` pair.
+    """The read-only rule for one ``<binary> <subcommand>`` pair — or, when set
+    as :attr:`BinaryPolicy.positional`, for a binary with no subcommand at all.
 
     Attributes:
         actions: Allowed third tokens (``gh issue **list**``). Empty plus
@@ -64,6 +69,21 @@ class Subcommand:
             carry one of those values (``--method GET``).
         value_flags: Flags that consume the following token. Needed so a flag's
             value is never mistaken for the action positional.
+        path_operands: For :attr:`BinaryPolicy.positional` rules only — every
+            non-flag token is a path operand (pytest's test paths), not a
+            single subcommand action, and each is checked for a shape that
+            could escape the project (absolute, drive-letter, or ``..``).
+        allowed_flags: For :attr:`BinaryPolicy.positional` rules only — the
+            valueless flags this grant accepts. Positional-mode flag checking
+            is an ALLOWLIST (unlike the subcommand mode's denylist above):
+            a binary that takes no subcommand executes the caller's own
+            arguments far more directly, so an unreviewed flag is refused
+            rather than passed through.
+        flag_value_prefixes: For positional rules — ``{flag: allowed lowercase
+            value prefixes}``. Like ``flag_values`` but for a flag whose safe
+            values share a prefix rather than an exact set (``-p no:...``).
+        denied_flag_reasons: For positional rules — ``{flag: one-line reason}``
+            shown in the refusal. Falls back to a generic message when absent.
     """
 
     actions: frozenset[str] = frozenset()
@@ -72,6 +92,10 @@ class Subcommand:
     denied_flags: frozenset[str] = frozenset()
     flag_values: Mapping[str, frozenset[str]] = field(default_factory=dict)
     value_flags: frozenset[str] = frozenset()
+    path_operands: bool = False
+    allowed_flags: frozenset[str] = frozenset()
+    flag_value_prefixes: Mapping[str, frozenset[str]] = field(default_factory=dict)
+    denied_flag_reasons: Mapping[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -83,15 +107,31 @@ class BinaryPolicy:
         summary: One line for error messages and ``gaia skill info``.
         install_hint: How to get it — named in the load-time failure when the
             binary is not on ``PATH``.
-        subcommands: The read-only allowlist. Absent == refused.
+        subcommands: The read-only allowlist, keyed by subcommand. Absent ==
+            refused. Ignored when ``positional`` is set.
         bare_flags: Flags accepted with no subcommand at all (``gh --version``).
+            Also folded into the allowlist for a ``positional`` binary, where
+            *every* invocation is "no subcommand".
+        positional: Set instead of ``subcommands`` for a binary whose shape is
+            ``<binary> [operands] [flags]`` with no subcommand step at all
+            (``pytest tests/unit -k foo``, vs. ``gh issue list``). When set,
+            every token in the invocation is validated against this one rule.
     """
 
     binary: str
     summary: str
     install_hint: str
-    subcommands: Mapping[str, Subcommand]
+    subcommands: Mapping[str, Subcommand] = field(default_factory=dict)
     bare_flags: frozenset[str] = frozenset({"--version", "--help", "-h"})
+    positional: Subcommand | None = None
+
+    def __post_init__(self) -> None:
+        if bool(self.subcommands) == bool(self.positional is not None):
+            raise ValueError(
+                f"BinaryPolicy({self.binary!r}) must set exactly one of "
+                "'subcommands' (a gh-shaped CLI) or 'positional' (a "
+                "no-subcommand CLI like pytest), never both or neither."
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -192,6 +232,102 @@ BINARY_POLICIES: dict[str, BinaryPolicy] = {
             "auth": _gh({"status"}),
             "api": _GH_API,
         },
+    ),
+    # `pytest` is NOT a read-only grant in the sense `gh` is — it EXECUTES the
+    # project's own test code. That is the same trust boundary as the
+    # ungated `execute_python_file` tool (code already in the repo runs),
+    # not a new one. What this policy restricts is the invocation shape: no
+    # plugin injection, no interactive hang, no write outside the run, no
+    # pointing pytest at config/paths outside the checkout. It does not, and
+    # cannot, sandbox what the tests themselves do.
+    #
+    # Flags are an ALLOWLIST here (unlike `gh`'s denylist): a no-subcommand
+    # binary parses the caller's arguments far more directly, so an
+    # unreviewed flag is refused by default rather than passed through.
+    #
+    # Deliberately ABSENT — refused by simply not being in `allowed_flags` /
+    # `value_flags` / `flag_values` / `flag_value_prefixes`:
+    #   -s / --capture=no          not needed for a pass/fail run
+    #   -l / --showlocals          can leak env vars/secrets into output
+    #   --import-mode, --assert    change how test code is loaded/rewritten
+    #   anything plugin-shaped that isn't `-p no:...` (see denied below)
+    "pytest": BinaryPolicy(
+        binary="pytest",
+        summary=(
+            "pytest — runs the project's own test suite. This EXECUTES "
+            "project code (the same class as execute_python_file), not a "
+            "read; the grant restricts flags and paths, never what a test "
+            "itself does."
+        ),
+        install_hint=(
+            "Install pytest with 'pip install pytest' (already a dev "
+            "dependency: 'uv pip install -e \".[dev]\"'). Verify with "
+            "'pytest --version'."
+        ),
+        positional=Subcommand(
+            path_operands=True,
+            allowed_flags=frozenset(
+                {
+                    "-q",
+                    "--quiet",
+                    "-v",
+                    "--verbose",
+                    "-x",
+                    "--exitfirst",
+                    "--collect-only",
+                    "--co",
+                    "--no-header",
+                }
+            ),
+            # Any value is fine for these — -k/-m are pytest's own restricted
+            # keyword/marker matchers (no eval, cannot call anything), and
+            # --maxfail is just a count.
+            value_flags=frozenset({"-k", "-m", "--maxfail"}),
+            flag_values={
+                "--tb": frozenset({"auto", "long", "short", "line", "native", "no"}),
+            },
+            # `-p <plugin>` auto-imports and runs that plugin's code at
+            # collection time. Only a `no:`-prefixed *disable* is safe; `-p`
+            # naming a plugin to enable is refused (falls through to the
+            # denied-value error below, same message shape as gh's -X GET).
+            flag_value_prefixes={"-p": frozenset({"no:"})},
+            denied_flags=frozenset(
+                {
+                    # Interactive debuggers hang a non-interactive run forever
+                    # (this process's stdin is DEVNULL — see shell_tools.py).
+                    "--pdb",
+                    "--trace",
+                    # Report writers. This policy has no notion of "inside
+                    # the project" to confine the destination to — deny
+                    # outright rather than guess at containment.
+                    "--junitxml",
+                    "--result-log",
+                    "--basetemp",
+                    # Point pytest at a config/rootdir outside the checkout,
+                    # changing what actually runs. Same "no containment
+                    # notion" reasoning as the writers above.
+                    "-c",
+                    "--rootdir",
+                    # Re-injects arbitrary CLI options (including `-p` with a
+                    # real plugin, or any flag denied above) via an ini
+                    # override — the one flag-level bypass of every other
+                    # rule in this table, so it is denied on its own.
+                    "-o",
+                    "--override-ini",
+                }
+            ),
+            denied_flag_reasons={
+                "--pdb": "it drops into an interactive debugger and hangs a non-interactive run forever",
+                "--trace": "it drops into an interactive debugger and hangs a non-interactive run forever",
+                "--junitxml": "it writes a report file outside this grant's read-only run",
+                "--result-log": "it writes a report file outside this grant's read-only run",
+                "--basetemp": "it picks pytest's temp directory outside this grant's read-only run",
+                "-c": "it can point pytest at a config file outside the project, changing what actually runs",
+                "--rootdir": "it can point pytest at a config file outside the project, changing what actually runs",
+                "-o": "it overrides pytest ini options (e.g. addopts), which can re-inject any flag this grant denies",
+                "--override-ini": "it overrides pytest ini options (e.g. addopts), which can re-inject any flag this grant denies",
+            },
+        ),
     ),
 }
 
@@ -358,6 +494,10 @@ def validate_invocation(policy: BinaryPolicy, argv: Sequence[str]) -> str | None
     *argv* is the shlex-split command, ``argv[0]`` being the binary.
     """
     tokens = list(argv[1:])
+
+    if policy.positional is not None:
+        return _validate_positional_invocation(policy, tokens)
+
     allowed_subcommands = ", ".join(sorted(policy.subcommands))
 
     # Leading flags may only be the valueless ones (`gh --version`); anything
@@ -441,5 +581,122 @@ def validate_invocation(policy: BinaryPolicy, argv: Sequence[str]) -> str | None
                 f"'{policy.binary} {subcommand} {action}' is not allowed. "
                 f"Allowed {subcommand} actions: {', '.join(sorted(rule.actions))}."
             )
+
+    return None
+
+
+_UNSAFE_OPERAND_RE = re.compile(r"^[a-zA-Z]:[\\/]")
+
+
+def _unsafe_operand(token: str) -> bool:
+    """True when *token* could name a path outside the project checkout.
+
+    Purely lexical — ``validate_invocation`` is never given a cwd, so it can
+    only refuse shapes that are never a legitimate in-repo test path: a POSIX
+    absolute path, a Windows drive letter, or a ``..`` path component. This is
+    the only path check a ``path_operands`` binary gets: the shell tool's own
+    path-traversal scan (``shell_tools.py``) skips every segment whose binary
+    is skill-granted, on the assumption a granted CLI's operands are remote
+    ids, not local paths — true for ``gh``, false for ``pytest``.
+    """
+    if token.startswith(("/", "\\")):
+        return True
+    if _UNSAFE_OPERAND_RE.match(token):
+        return True
+    return ".." in re.split(r"[\\/]", token)
+
+
+def _validate_positional_invocation(
+    policy: BinaryPolicy, tokens: Sequence[str]
+) -> str | None:
+    """``validate_invocation`` for a :attr:`BinaryPolicy.positional` binary.
+
+    No subcommand step: every token is either a path operand or a flag, and
+    flags are checked against an ALLOWLIST (``rule.allowed_flags`` /
+    ``value_flags`` / ``flag_values`` / ``flag_value_prefixes``), not the
+    subcommand path's denylist — see the "Flags are an ALLOWLIST here"
+    comment on the ``pytest`` entry for why.
+    """
+    rule = policy.positional
+    known_flags = (
+        rule.allowed_flags
+        | policy.bare_flags
+        | frozenset(rule.flag_values)
+        | frozenset(rule.value_flags)
+        | frozenset(rule.flag_value_prefixes)
+    )
+
+    cursor = 0
+    while cursor < len(tokens):
+        token = tokens[cursor]
+        cursor += 1
+
+        if not token.startswith("-") or token == "-":
+            if rule.path_operands and _unsafe_operand(token):
+                return (
+                    f"'{policy.binary} {token}' is not allowed: operand paths "
+                    "must stay inside the project checkout — no leading '/', "
+                    "drive letter, or '..' component."
+                )
+            continue
+
+        name, inline = _split_flag(token)
+
+        if name in rule.denied_flags:
+            reason = rule.denied_flag_reasons.get(
+                name, "it is outside this grant's read-only flag set"
+            )
+            return f"'{policy.binary} {name}' is not allowed: {reason}."
+
+        if name in rule.allowed_flags or name in policy.bare_flags:
+            if inline is not None:
+                # A bundled/'='-attached form on a flag we only ever validated
+                # as bare (`-xvs`, `--quiet=1`) could smuggle an unreviewed
+                # flag or value past this allowlist unexamined.
+                return (
+                    f"'{policy.binary} {token}' is not allowed: {name} takes "
+                    "no value — pass it on its own, e.g. "
+                    f"'{policy.binary} {name} ...' not bundled or '='-attached."
+                )
+            continue
+
+        takes_value = (
+            name in rule.flag_values
+            or name in rule.value_flags
+            or name in rule.flag_value_prefixes
+        )
+        if not takes_value:
+            return (
+                f"'{policy.binary} {name}' is not allowed. This skill's grant "
+                f"covers a fixed set of read-only flags: "
+                f"{', '.join(sorted(known_flags))}."
+            )
+
+        value = inline
+        if inline is None:
+            value = tokens[cursor] if cursor < len(tokens) else None
+            cursor += 1  # the value is never mistaken for a path operand
+
+        if name in rule.flag_values:
+            allowed = rule.flag_values[name]
+            if value is None or value.lower() not in allowed:
+                spelled = " ".join(filter(None, (name, value)))
+                return (
+                    f"'{policy.binary} {spelled}' is not allowed: {name} may "
+                    f"only be {', '.join(sorted(allowed))}."
+                )
+        elif name in rule.flag_value_prefixes:
+            prefixes = rule.flag_value_prefixes[name]
+            if value is None or not any(
+                value.lower().startswith(prefix) for prefix in prefixes
+            ):
+                spelled = " ".join(filter(None, (name, value)))
+                return (
+                    f"'{policy.binary} {spelled}' is not allowed: {name} only "
+                    f"accepts a value starting with "
+                    f"{', '.join(sorted(prefixes))!r}."
+                )
+        # else: a bare `value_flags` entry (e.g. -k, -m, --maxfail) — any
+        # value is accepted, matching gh's `value_flags` semantics.
 
     return None

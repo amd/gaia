@@ -202,6 +202,8 @@ setup(
             "pypdf",
             "python-pptx>=0.6.21",
             "python-docx>=1.1.0",
+            "openpyxl>=3.1.0",
+            "reportlab>=4.0.0",
             # Memory cross-encoder reranker (gaia.agents.base.memory) — optional
             # at runtime (graceful degradation) but bundled with "ui" so the
             # full chat experience gets reranking out of the box. NOT a RAG dep.
@@ -222,10 +224,13 @@ setup(
             "bpy",
         ],
         "mcp": [
-            # Capped below 2.0: mcp 2.0.0 (released 2026-07-28) breaks
-            # MCPClient.connect() — the custom-agent harness went red with no
-            # code change. Lift the cap in a change that ports the client.
-            "mcp>=1.1.0,<3.0",
+            # Capped below 2.0: mcp 2.0.0 (released 2026-07-28) removed
+            # mcp.server.fastmcp (FastMCP -> MCPServer, moved to
+            # mcp.server.mcpserver), breaking every FastMCP-based server
+            # GAIA ships (agent_mcp_server.py, servers/agent_ui_mcp.py,
+            # servers/tui_mcp.py). Lift the cap only in a change that
+            # ports them.
+            "mcp>=1.1.0,<2.0",
             "starlette",
             "uvicorn",
         ],
@@ -302,8 +307,16 @@ setup(
             "numpy>=1.24.0",
             "pymupdf>=1.24.0",
             "pypdf",
+            # Reading AND writing the common office formats. The read half is
+            # what RAG needs; the write half is what the document skills need,
+            # and this is the extra `gaia init --profile chat` installs. Without
+            # openpyxl and reportlab the pdf and xlsx skills load fine and then
+            # cannot do their job — the agent hand-writes raw PDF and raw OOXML
+            # instead, which works and is not a plan.
             "python-pptx>=0.6.21",
             "python-docx>=1.1.0",
+            "openpyxl>=3.1.0",
+            "reportlab>=4.0.0",
         ],
         "lint": [
             "black",

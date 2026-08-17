@@ -37,6 +37,40 @@ type confirmActionResultMsg struct {
 func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bool) {
 	switch e := evt.(type) {
 	case event.CanonicalStatusEvent:
+		// The model-state ping (ModelID set) is header metadata, not turn
+		// progress — it never touches the activity log. Sent once at agent
+		// startup and again after every `/model` switch, so the header always
+		// names what the agent actually resolved, never a launch flag's guess.
+		if e.ModelID != "" {
+			// A change nobody here asked for means the agent process was
+			// replaced without a live `/model` switch in flight — a
+			// cancelled turn respawns the child from its ORIGINAL launch
+			// flags (subprocess.go), silently reverting any earlier switch.
+			// The header self-corrects either way (below); this just makes
+			// the revert visible instead of quietly true.
+			if m.modelID != "" && e.ModelID != m.modelID && !m.awaitingModelSwitch {
+				m.messages = append(m.messages, Message{
+					Role: RoleStatus,
+					Content: "[!] the agent process restarted and reverted to " +
+						e.ModelDisplay + " — use /model to switch again.",
+				})
+			}
+			m.modelID = e.ModelID
+			m.modelDisplay = e.ModelDisplay
+			m.modelBackend = e.ModelBackend
+			m.modelRemote = e.ModelRemote
+			if e.LemonadeReachable != nil {
+				m.lemonadeKnown = true
+				m.lemonadeUp = *e.LemonadeReachable
+				m.lemonadeVersion = e.LemonadeVersion
+				m.lemonadeBaseURL = e.LemonadeBaseURL
+			}
+			// Keep the legacy flag in sync — renderClaudeChip is still the
+			// pre-first-event fallback (see renderModelChip).
+			m.claudeMode = e.ModelRemote
+			break
+		}
+
 		// One live line, replaced — not a log. A user watching a 200s turn needs
 		// to know what is happening NOW; an accumulating list of "Step 2/50"
 		// and "Thinking" answers a question nobody asked and buries the tool

@@ -14,6 +14,12 @@ terminal UI meant building it from source.
 
 ### Added
 
+- **Per-turn skill-body selection.** A loaded skill stays loaded, but its body
+  only renders in the prompt on turns whose query matches its description; the
+  rest collapse to a one-line menu the model re-activates with `load_skill`.
+  `GAIA_DYNAMIC_SKILLS=0` turns the selection off, `GAIA_DYNAMIC_SKILLS_TAU`
+  overrides the match threshold, and an embedder outage disables it for the
+  session (every body renders — capability is never lost to a failed match).
 - **`gaia run` (the default command)** — resolves the host platform, fetches and
   SHA-256 verifies both binaries, then launches the terminal UI and propagates its
   exit code. Arguments after a bare `--` are forwarded to the TUI verbatim.

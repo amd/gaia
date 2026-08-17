@@ -47,7 +47,7 @@ type HubModel struct {
 	confirm   *components.ConfirmModel
 	trust     *trustModel
 	install   *installState
-	dev     bool
+	dev       bool
 	width     int
 	height    int
 	status    string // ephemeral status messages
@@ -73,7 +73,7 @@ func NewHubModel(cat *catalog.Catalog, hc *catalog.HubClient, dev bool) HubModel
 		hub:          hc,
 		list:         l,
 		tabs:         tabs,
-		dev:        dev,
+		dev:          dev,
 		catalogState: catalogLoading,
 	}
 	// A fresh machine has an empty Installed tab. Opening on it shows a new

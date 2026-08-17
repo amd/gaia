@@ -410,9 +410,13 @@ func TestResize(t *testing.T) {
 // scrollback) while /screen still reports the clean logical frame — so the
 // corruption is invisible to the very API you would test with.
 func TestResizeRefusesToExceedTheTerminal(t *testing.T) {
-	prev := attachedToTerminal
-	attachedToTerminal = func() bool { return true }
-	t.Cleanup(func() { attachedToTerminal = prev })
+	prev := realTerminalSize
+	// A fixed, real 120x42 viewport for the whole test — NOT s.state.Size(),
+	// which the handler itself mutates on every successful resize. Stubbing
+	// the real syscall this way is what catches the ratchet bug: the model's
+	// logical size moves, the physical terminal (this stub) does not.
+	realTerminalSize = func() (int, int, bool) { return 120, 42, true }
+	t.Cleanup(func() { realTerminalSize = prev })
 
 	srv, _ := newTestServer(t)
 	if status, body := request(t, srv, http.MethodPost, "/resize",
@@ -444,6 +448,39 @@ func TestResizeRefusesToExceedTheTerminal(t *testing.T) {
 	if status, body := request(t, srv, http.MethodPost, "/resize",
 		map[string]any{"cols": 80, "rows": 24}, srv.Token()); status != http.StatusOK {
 		t.Errorf("shrink: status = %d (%v), want 200", status, body)
+	}
+
+	// The regression this test exists for: after that shrink, the model's
+	// OWN logical size (80x24) is now smaller than the real terminal
+	// (120x42). Growing back toward the real terminal must still succeed —
+	// a boundary keyed off s.state.Size() instead of the real terminal would
+	// 409 this forever.
+	if status, body := request(t, srv, http.MethodPost, "/resize",
+		map[string]any{"cols": 120, "rows": 42}, srv.Token()); status != http.StatusOK {
+		t.Errorf("grow back to the real terminal size: status = %d (%v), want 200", status, body)
+	}
+
+	// Exactly the real terminal size is not "exceeding" it.
+	if status, body := request(t, srv, http.MethodPost, "/resize",
+		map[string]any{"cols": 120, "rows": 42}, srv.Token()); status != http.StatusOK {
+		t.Errorf("exact match: status = %d (%v), want 200", status, body)
+	}
+}
+
+// Headless runs (tests, CI, MCP drivers with no attached PTY) have no
+// physical viewport to overflow, so realTerminalSize reporting ok=false must
+// leave the endpoint free to lay out any size in the normal bad_size range —
+// the same behavior the un-stubbed default gets when stdout is not a
+// terminal.
+func TestResizeIsUnboundedWithoutARealTerminal(t *testing.T) {
+	prev := realTerminalSize
+	realTerminalSize = func() (int, int, bool) { return 0, 0, false }
+	t.Cleanup(func() { realTerminalSize = prev })
+
+	srv, _ := newTestServer(t)
+	if status, body := request(t, srv, http.MethodPost, "/resize",
+		map[string]any{"cols": 300, "rows": 100}, srv.Token()); status != http.StatusOK {
+		t.Errorf("headless grow: status = %d (%v), want 200", status, body)
 	}
 }
 
