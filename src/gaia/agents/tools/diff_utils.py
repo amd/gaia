@@ -31,6 +31,21 @@ from typing import Any, Dict, Optional, Tuple
 #: transport itself.
 DIFF_MAX_LINES = 4000
 
+#: Hard cap on the diff's SIZE, applied after the line cap. Lines can be
+#: arbitrarily long (minified JS, generated code), and the TUI's JSONL reader
+#: caps one line at 1MB — 4000 long lines exceeds that after JSON escaping
+#: and kills the whole turn. The diff also rides back into the model's
+#: context as part of the tool result, where the NPU profile truncates any
+#: result over ~20K chars; staying well under that keeps the rest of the
+#: result intact.
+DIFF_MAX_BYTES = 8_000
+
+#: A brand-new file's "diff" is just its entire content as additions — the
+#: model already has that content (it supplied it), so echoing more than a
+#: short preview back through the tool result costs context for nothing.
+#: Matches the display card's own row cap (maxDiffCardRows).
+NEW_FILE_PREVIEW_LINES = 40
+
 
 def read_text_or_binary(path: str) -> Tuple[Optional[str], Optional[int]]:
     """Read *path* as UTF-8 text.
@@ -94,6 +109,10 @@ def build_diff(
             n=context_lines,
         )
     )
+    # difflib emits the final line WITHOUT a newline when the source lacks
+    # one, so "".join would glue the next diff line onto it ("-beta+beta"),
+    # corrupting the parse and shifting every later line number in the card.
+    diff_lines = [l if l.endswith("\n") else l + "\n" for l in diff_lines]
 
     additions = sum(
         1 for line in diff_lines if line.startswith("+") and not line.startswith("+++")
@@ -104,6 +123,8 @@ def build_diff(
     has_changes = before_text != after
 
     truncated = False
+    if is_new_file:
+        max_lines = min(max_lines, NEW_FILE_PREVIEW_LINES)
     if len(diff_lines) > max_lines:
         hidden = len(diff_lines) - max_lines
         diff_lines = diff_lines[:max_lines]
@@ -112,6 +133,20 @@ def build_diff(
             "shown — truncated for transport)\n"
         )
         truncated = True
+
+    # Byte ceiling on top of the line ceiling — truncate at a line boundary.
+    total = 0
+    for i, line in enumerate(diff_lines):
+        total += len(line.encode("utf-8"))
+        if total > DIFF_MAX_BYTES:
+            hidden = len(diff_lines) - i
+            diff_lines = diff_lines[:i]
+            diff_lines.append(
+                f"... ({hidden} more diff line{'s' if hidden != 1 else ''} not "
+                "shown — truncated for transport)\n"
+            )
+            truncated = True
+            break
 
     if is_new_file:
         line_count = len(after.splitlines())

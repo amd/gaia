@@ -102,6 +102,40 @@ class TestBuildDiff:
         assert result["diff_truncated"] is False
         assert "truncated" not in result["diff"]
 
+    def test_missing_trailing_newline_does_not_glue_lines(self):
+        """difflib emits the final line bare when the source lacks a trailing
+        newline; unjoined, "-beta" and "+beta" fused into "-beta+beta" and the
+        card mis-parsed every later line number."""
+        result = build_diff("f.py", "alpha\nbeta", "alpha\nbeta\ngamma\n")
+        assert "-beta+beta" not in result["diff"]
+        for line in result["diff"].splitlines():
+            # exactly one diff marker per physical line
+            assert not (line.startswith("-") and "+{}".format(line[1:]) in line)
+        assert result["additions"] >= 1
+
+    def test_diff_is_capped_by_bytes_not_just_lines(self):
+        """4000 minified-JS-length lines blow the TUI's 1MB JSONL line cap and
+        ride into the model's context; the byte ceiling bounds both."""
+        long_line = "x" * 2000
+        before = "\n".join(f"a{i}" for i in range(50)) + "\n"
+        after = "\n".join(long_line + str(i) for i in range(50)) + "\n"
+        result = build_diff("big.js", before, after)
+        assert len(result["diff"].encode("utf-8")) < 12_000
+        assert result["diff_truncated"] is True
+        assert "truncated for transport" in result["diff"]
+
+    def test_new_file_diff_is_a_short_preview(self):
+        """A new file's diff is its whole content as additions — content the
+        model already supplied. Only a preview rides back through the result."""
+        big = "\n".join(f"line {i}" for i in range(500)) + "\n"
+        result = build_diff("new.txt", None, big)
+        assert result["is_new_file"] is True
+        assert result["diff_truncated"] is True
+        assert len(result["diff"].splitlines()) <= 45
+        # counters still describe the WHOLE write, not the preview
+        assert result["additions"] == 500
+        assert "new file, 500 lines" == result["summary"]
+
     def test_context_lines_is_honored(self):
         before = "".join(f"l{i}\n" for i in range(20))
         after = before.replace("l10\n", "lX\n")
