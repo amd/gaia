@@ -1161,6 +1161,7 @@ jobs:
           done
           if [ "$HEALTH_OK" -ne 1 ]; then
             echo "::error::userns-restricted: /api/health did not report service=gaia-agent-ui"
+            tail -n 200 /tmp/stdout.log /tmp/stderr.log || true
             kill -9 "$APP_PID" 2>/dev/null || true
             exit 1
           fi

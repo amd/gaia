@@ -4762,7 +4762,6 @@ Let me know your answer!
 
         # Code generation + editing benchmark: gaia eval code
         if getattr(args, "eval_command", None) == "code":
-            import os
             import time as _time
             from pathlib import Path as _Path
 
@@ -4811,7 +4810,6 @@ Let me know your answer!
 
         # Replay real Claude Code sessions: gaia eval sessions
         if getattr(args, "eval_command", None) == "sessions":
-            import os
             import time as _time
             from pathlib import Path as _Path
 
