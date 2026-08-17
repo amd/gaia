@@ -373,11 +373,14 @@ def _split_oversized_chunk(
 
     n_parts = -(-len(text) // max_chars)  # ceil division
     parts = []
+    newlines_before = 0  # running offset — rescanning the prefix is O(n^2)
     for i in range(n_parts):
         lo = i * max_chars
         piece = text[lo : lo + max_chars]
-        part_start = chunk.start_line + text.count("\n", 0, lo)
-        part_end = min(chunk.end_line, part_start + piece.count("\n"))
+        part_start = chunk.start_line + newlines_before
+        newlines_in_piece = piece.count("\n")
+        part_end = min(chunk.end_line, part_start + newlines_in_piece)
+        newlines_before += newlines_in_piece
         symbol_name = chunk.symbol_name
         if symbol_name:
             symbol_name = f"{symbol_name} (part {i + 1}/{n_parts})"

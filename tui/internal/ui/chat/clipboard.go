@@ -170,17 +170,19 @@ func pasteFromClipboardOrImage() tea.Cmd {
 			return pasteClipboardMsg{text: text, err: nil}
 		}
 		png, ok, err := readClipboardImagePNG()
-		if ok && err == nil {
+		if ok {
+			// The image is the payload here. A decode failure surfaces —
+			// silently pasting the caption URL instead would hide that the
+			// image copy failed (the platform readers' documented contract).
+			if err != nil {
+				return pasteImageMsg{err: err}
+			}
 			path, werr := writeClipboardImageToTemp(png)
 			return pasteImageMsg{path: path, err: werr}
 		}
 		if hasText {
-			// The text slot is all we can actually deliver — a caption-ish
-			// URL beats an image that failed to decode or isn't there.
+			// No image at all — the caption-ish text is all there is.
 			return pasteClipboardMsg{text: text, err: nil}
-		}
-		if ok && err != nil {
-			return pasteImageMsg{err: err}
 		}
 		return pasteClipboardMsg{text: text, err: terr}
 	}

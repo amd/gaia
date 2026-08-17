@@ -601,7 +601,22 @@ class CodeIndexSDK:
         result = []
         max_size_bytes = int(self.config.max_file_size_mb * 1024 * 1024)
 
+        # Bound the WALK, not just the result list: max_files caps how many
+        # files are indexed, but enumerating a huge non-repo root (a home
+        # directory, a whole drive) could burn the entire tool timeout just
+        # listing entries before a single one was embedded.
+        max_entries = max(self.config.max_files * 40, 200_000)
+        entries_seen = 0
+
         for root, dirs, files in os.walk(str(self._repo_root)):
+            entries_seen += len(dirs) + len(files)
+            if entries_seen > max_entries:
+                raise RuntimeError(
+                    f"stopped after scanning {entries_seen} directory entries "
+                    f"under {self._repo_root} without finishing — this does "
+                    "not look like a code repository. Point repo_path at the "
+                    "repository root itself."
+                )
             rel_root = Path(root).relative_to(self._repo_root)
 
             # Filter out skipped directories in-place

@@ -185,3 +185,32 @@ func TestWriteClipboardImageSweepsOldPastes(t *testing.T) {
 		t.Errorf("paste landed in %s, want %s", filepath.Dir(path), dir)
 	}
 }
+
+// The caption heuristic decides whether Ctrl+V delivers the text or the image
+// when the clipboard holds both. A wrong answer either pastes a picture of
+// Excel cells or a bare URL instead of a copied browser image.
+func TestLooksLikeImageCaption(t *testing.T) {
+	captions := []string{
+		"https://example.com/cat.png",
+		"  http://example.com/img.jpg  ",
+		"data:image/png;base64,iVBORw0KGgo=",
+		"file:///C:/Users/me/shot.png",
+	}
+	for _, c := range captions {
+		if !looksLikeImageCaption(c) {
+			t.Errorf("%q should read as an image caption", c)
+		}
+	}
+	content := []string{
+		"",
+		"Quarterly numbers:\n\tQ1\t42",        // Excel cells
+		"see https://example.com for details", // prose containing a URL
+		"plain copied sentence",
+		"https://a.com\nhttps://b.com", // multi-line — someone copied a list
+	}
+	for _, c := range content {
+		if looksLikeImageCaption(c) {
+			t.Errorf("%q should read as real text, not a caption", c)
+		}
+	}
+}

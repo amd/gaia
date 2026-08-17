@@ -248,6 +248,10 @@ persists past that single turn, and the agent is not told otherwise.
 
 A second `/query` for a `session_id` that already has a turn in flight gets
 `409 Conflict` — cancel the running turn or wait for it, then retry. A
+`/query` that needs a **new** session while every retained slot is busy and
+none is idle enough to evict gets `503` with the reason in `detail` — a
+temporary, retryable condition, not a bug: wait for a turn to finish (or
+close an idle session) and retry. A
 `session_id` can also be evicted from the retention table under an idle
 timeout or an LRU cap on concurrent sessions; a `/query` that lands on an
 evicted id gets a fresh agent (the conversation is not blocked) but the

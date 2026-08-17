@@ -39,7 +39,7 @@ requirements:
   platforms: [win-x64, linux-x64, darwin-arm64]
 
 dependencies:
-  - amd-gaia>=0.22.0
+  - amd-gaia>=0.23.0
   - gaia-agent-chat>=0.1.0
 
 # ---------------------------------------------------------------------------

@@ -120,7 +120,10 @@ class CodeIndexToolsMixin:
             self._ensure_code_index_state()
 
             if repo_path:
-                resolved = os.path.abspath(repo_path)
+                # expanduser first: the refusal below suggests '~/...' paths,
+                # and a model following that advice literally must not get
+                # "<cwd>/~/..." back.
+                resolved = os.path.abspath(os.path.expanduser(repo_path))
                 if not os.path.isdir(resolved):
                     return json.dumps({"error": f"Not a directory: {resolved}"})
                 # Restrict to the agent's original repo_path to prevent

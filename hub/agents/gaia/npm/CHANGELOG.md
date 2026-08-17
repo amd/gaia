@@ -14,6 +14,10 @@ terminal UI meant building it from source.
 
 ### Added
 
+- **`503` from `/query` at session capacity.** When every retained session
+  slot is busy and none is idle enough to evict, starting a new session
+  returns `503` with the reason in `detail` — retryable, distinct from a
+  bug-shaped `500`. See SPEC §5.2.
 - **Per-turn skill-body selection.** A loaded skill stays loaded, but its body
   only renders in the prompt on turns whose query matches its description; the
   rest collapse to a one-line menu the model re-activates with `load_skill`.

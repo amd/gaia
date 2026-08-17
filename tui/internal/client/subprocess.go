@@ -208,9 +208,7 @@ func (s *SubprocessClient) Send(ctx context.Context, query string) (<-chan inter
 		// resetting). Keeping the state marks the corpse as "started" and
 		// every later Send would fail exactly like this one, telling the
 		// user to retry the one thing that can never work.
-		st.proc.kill()
-		st.proc.reap()
-		s.discard(st.proc)
+		s.resetDeadChild(st.proc)
 		close(st.turnDone)
 		return nil, fmt.Errorf(
 			"failed to write to the agent (it will be restarted on your next message): %w", err)
@@ -332,9 +330,7 @@ func (s *SubprocessClient) Send(ctx context.Context, query string) (<-chan inter
 			// A scanner error (e.g. a line over the 1MB cap) is permanent on
 			// this scanner — without a reset, every later turn re-emits this
 			// same error without ever reading again.
-			st.proc.kill()
-			st.proc.reap()
-			s.discard(st.proc)
+			s.resetDeadChild(st.proc)
 			return
 		}
 
@@ -478,6 +474,17 @@ func (s *SubprocessClient) ClaudeAtLaunch() bool {
 		}
 	}
 	return false
+}
+
+// resetDeadChild kills, reaps, and discards a child the client can no longer
+// talk to. One helper, because the sequence is easy to get subtly wrong: a
+// missed discard leaves a corpse marked "started" and every later Send fails
+// against it. Closing the turn's done channel stays at the call sites — only
+// the pre-reader failure path owns an unclosed one.
+func (s *SubprocessClient) resetDeadChild(proc *procHandle) {
+	proc.kill()
+	proc.reap()
+	s.discard(proc)
 }
 
 // discard clears the client's process state, but only if it still refers to

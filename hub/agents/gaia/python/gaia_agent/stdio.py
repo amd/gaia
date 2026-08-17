@@ -867,21 +867,22 @@ def run_turn(
             if event is None:  # signal_done sentinel
                 break
             for canonical in translator.translate(event):
+                # The reader stops at the FIRST terminal event, so nothing
+                # may be WRITTEN after one (a per-tool policy_alert mapped to
+                # ``error`` while the run continues, then the run's own
+                # ``final``, would sit unread in the pipe and be consumed as
+                # the opening events of the NEXT turn). But the drain must
+                # keep RUNNING until the worker finishes: exiting early would
+                # let the strictly-sequential main loop start a second
+                # process_query() on the same agent while this one is still
+                # mutating it.
+                if terminated:
+                    continue
                 _write(canonical, out)
                 if canonical.get("type") == "final":
                     streamed_answer = str(canonical.get("answer") or "")
                 if canonical.get("type") in TERMINAL_TYPES:
                     terminated = True
-            if terminated:
-                # The reader stops at the FIRST terminal event. Anything
-                # written after it (a per-tool policy_alert mapped to
-                # ``error`` while the run continues, then the run's own
-                # ``final``) would sit unread in the pipe and be consumed as
-                # the opening events of the NEXT turn — every later turn then
-                # shows the previous turn's answer, for the life of the
-                # process. server.py returns at this point for the same
-                # reason.
-                break
 
         if not terminated:
             for canonical in translator.flush():
@@ -895,9 +896,11 @@ def run_turn(
 
         if terminated:
             # The normal exit. A turn that ended in an error event is not
-            # recorded: replaying a failure as if it were an answer teaches the
-            # model that the failure is what it said.
-            if streamed_answer is not None:
+            # recorded — replaying a failure as if it were an answer teaches
+            # the model that the failure is what it said — and an empty
+            # streamed answer is skipped for the same reason the fallback
+            # path below skips one.
+            if streamed_answer:
                 _record_turn(agent, query, streamed_answer)
             return
         if "error" in result:
@@ -918,7 +921,7 @@ def run_turn(
             answer = value
         if answer:
             # An empty answer is not a turn worth replaying into every later
-            # prompt — mirrors the terminated branch's None guard.
+            # prompt — same rule as the streamed branch above.
             _record_turn(agent, query, answer)
         _write({"type": "final", "answer": answer}, out)
     finally:
