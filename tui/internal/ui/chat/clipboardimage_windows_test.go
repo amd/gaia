@@ -9,6 +9,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"slices"
 	"testing"
 )
 
@@ -95,7 +96,7 @@ func Test32BitBitFieldsWithRealAlphaDecodesCorrectly(t *testing.T) {
 	binary.LittleEndian.PutUint32(full[48:52], 0x000000FF) // blue mask
 	binary.LittleEndian.PutUint32(full[52:56], 0xFF000000) // alpha mask
 	pixel := []byte{0x40, 0x00, 0x80, 0x7F}                // B=0x40 G=0x00 R=0x80 A=0x7F
-	raw := append(full, pixel...)
+	raw := slices.Concat(full, pixel)
 
 	png, err := decodeDIBToPNG(raw)
 	if err != nil {
@@ -121,7 +122,7 @@ func Test32BitAllZeroAlphaIsTreatedAsOpaque(t *testing.T) {
 	binary.LittleEndian.PutUint32(full[48:52], 0x000000FF)
 	binary.LittleEndian.PutUint32(full[52:56], 0xFF000000)
 	pixel := []byte{0x00, 0x00, 0xFF, 0x00} // red, alpha byte 0
-	raw := append(full, pixel...)
+	raw := slices.Concat(full, pixel)
 
 	png, err := decodeDIBToPNG(raw)
 	if err != nil {
