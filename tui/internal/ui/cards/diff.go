@@ -106,11 +106,17 @@ func diffContentLines(unified string) []diffLine {
 
 	var out []diffLine
 	oldNum, newNum := 0, 0
+	seenHunk := false
 	for _, raw := range rawLines {
-		if strings.HasPrefix(raw, "--- ") || strings.HasPrefix(raw, "+++ ") {
+		// File headers appear only BEFORE the first hunk. Matching the
+		// prefix on every line ate real content — a deleted SQL comment
+		// ("-- x") arrives as "--- x", an added "++i;" as "+++i;" — and
+		// desynced the gutter for the rest of the hunk.
+		if !seenHunk && (strings.HasPrefix(raw, "--- ") || strings.HasPrefix(raw, "+++ ")) {
 			continue
 		}
 		if m := hunkHeaderPattern.FindStringSubmatch(raw); m != nil {
+			seenHunk = true
 			oldNum = atoiSafe(m[1])
 			newNum = atoiSafe(m[2])
 			out = append(out, diffLine{kind: '@', text: raw})

@@ -114,12 +114,12 @@ def build_diff(
     # corrupting the parse and shifting every later line number in the card.
     diff_lines = [l if l.endswith("\n") else l + "\n" for l in diff_lines]
 
-    additions = sum(
-        1 for line in diff_lines if line.startswith("+") and not line.startswith("+++")
-    )
-    deletions = sum(
-        1 for line in diff_lines if line.startswith("-") and not line.startswith("---")
-    )
+    # Count by POSITION, not prefix: the only header lines are the first two
+    # ("--- "/"+++ "). A prefix exclusion also ate real content — a deleted
+    # SQL comment ("-- x") diffs as "--- x" and an added "++i;" as "+++i;".
+    body_lines = diff_lines[2:] if len(diff_lines) >= 2 else []
+    additions = sum(1 for line in body_lines if line.startswith("+"))
+    deletions = sum(1 for line in body_lines if line.startswith("-"))
     has_changes = before_text != after
 
     truncated = False
@@ -178,7 +178,10 @@ def binary_skip_result(size_bytes: int) -> Dict[str, Any]:
     return {
         "diff": "",
         "is_binary": True,
-        "size_bytes": size_bytes,
+        # NOT "size_bytes": the write tools put the bytes JUST WRITTEN under
+        # that key, and merging these fields after it would clobber a 1KB
+        # write's size with the 200KB binary it replaced.
+        "previous_size_bytes": size_bytes,
         "has_changes": True,
         "is_new_file": False,
         "diff_truncated": False,

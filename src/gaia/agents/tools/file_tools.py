@@ -1342,8 +1342,6 @@ class FileSearchToolsMixin:
             5. Audit logging
             """
             try:
-                import difflib
-
                 resolved_path = Path(file_path).resolve()
 
                 # Get the PathValidator
@@ -1411,14 +1409,13 @@ class FileSearchToolsMixin:
                 # Replace content (first occurrence only)
                 updated_content = current_content.replace(old_content, new_content, 1)
 
-                # Generate diff for logging/display
-                diff = "\n".join(
-                    difflib.unified_diff(
-                        current_content.splitlines(keepends=True),
-                        updated_content.splitlines(keepends=True),
-                        fromfile=str(resolved_path),
-                        tofile=str(resolved_path),
-                    )
+                # Same helper as every file_io_tools editor: the raw
+                # "\n".join over keepends lines double-spaced the diff and
+                # corrupted the TUI's structural diff card.
+                from gaia.agents.tools.diff_utils import build_diff
+
+                diff_fields = build_diff(
+                    str(resolved_path), current_content, updated_content
                 )
 
                 # Write updated content
@@ -1444,8 +1441,8 @@ class FileSearchToolsMixin:
                     "file_path": str(resolved_path),
                     "old_size": len(current_content),
                     "new_size": len(updated_content),
-                    "diff": diff,
                 }
+                result.update(diff_fields)
                 if backup_path:
                     result["backup_path"] = backup_path
                 return result

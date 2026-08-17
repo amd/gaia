@@ -164,3 +164,29 @@ func lineContaining(text, substr string) string {
 	}
 	return ""
 }
+
+// A deleted SQL comment ("-- x") arrives as "--- x" and an added "++i;" as
+// "+++i;". Only the two real header lines — before the first hunk — may be
+// stripped; matching the prefix everywhere ate these and desynced the gutter.
+func TestDiffContentResemblingHeadersIsKept(t *testing.T) {
+	unified := "--- a/q.sql\n" +
+		"+++ b/q.sql\n" +
+		"@@ -1,3 +1,2 @@\n" +
+		" SELECT 1;\n" +
+		"--- old comment\n" +
+		"+++i;\n"
+	out := Render("diff", unifiedJSON(t, "q.sql", unified), width80)
+	t.Logf("\n%s", plain(out))
+
+	got := plain(out)
+	if lineContaining(got, "-- old comment") == "" {
+		t.Error("deleted '-- old comment' line was stripped as a file header")
+	}
+	if lineContaining(got, "++i;") == "" {
+		t.Error("added '++i;' line was stripped as a file header")
+	}
+	// Gutter stays in sync: the deletion is old line 2, the addition new line 2.
+	if del := lineContaining(got, "-- old comment"); del != "" && !strings.Contains(del, "2") {
+		t.Errorf("deleted line lost its line number: %q", del)
+	}
+}

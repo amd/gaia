@@ -174,7 +174,10 @@ class TestBinaryDetection:
         result = binary_skip_result(2_400_000)
         assert result["is_binary"] is True
         assert result["diff"] == ""
-        assert result["size_bytes"] == 2_400_000
+        # previous_*: merged into a write result AFTER the write's own
+        # size_bytes, this must never clobber the bytes actually written.
+        assert result["previous_size_bytes"] == 2_400_000
+        assert "size_bytes" not in result
         assert "2.3 MB" in result["summary"]
         assert "skipped" in result["summary"]
 
@@ -532,3 +535,24 @@ class TestDiffReachesTheCanonicalWireEvent:
         result = {"status": "success", "content": "hello world"}
         wire_data = self._translate_one_tool_result(result)
         assert "diff" not in wire_data
+
+
+class TestHeaderVsContentDisambiguation:
+    """The only header lines are the first two — content that HAPPENS to
+    start with '---'/'+++' (a deleted SQL '-- x' comment, an added '++i;')
+    is data, and both the counters and the card must keep it."""
+
+    def test_deleted_sql_comment_lines_are_counted(self):
+        before = "SELECT 1;\n-- old comment\n-- another\n"
+        after = "SELECT 1;\n"
+        result = build_diff("q.sql", before, after)
+        assert result["deletions"] == 2
+        assert result["additions"] == 0
+        assert result["summary"] == "+0 -2"
+
+    def test_added_increment_lines_are_counted(self):
+        before = "int i;\n"
+        after = "int i;\n++i;\n"
+        result = build_diff("f.c", before, after)
+        assert result["additions"] == 1
+        assert result["summary"] == "+1 -0"
