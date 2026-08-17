@@ -10,6 +10,7 @@ incremental-reindex correctness end to end, and single-slot model eviction.
 All tests skip cleanly via ``require_lemonade`` when Lemonade isn't running.
 """
 
+import os
 import shutil
 
 import pytest
@@ -40,13 +41,16 @@ pytestmark = [
 
 _EMBEDDING_MODEL = "user.embeddinggemma-300m-GGUF"
 
+#: Honors the same env override every LemonadeClient consumer does.
+_BASE_URL = os.getenv("LEMONADE_BASE_URL", "http://localhost:13305/api/v1")
+
 
 def make_sdk(tmp_path) -> "CodeIndexSDK":
     config = CodeIndexConfig(
         repo_path=str(tmp_path / "repo"),
         cache_dir=str(tmp_path / "cache"),
         embedding_model=_EMBEDDING_MODEL,
-        embedding_base_url="http://localhost:13305/api/v1",
+        embedding_base_url=_BASE_URL,
     )
     return CodeIndexSDK(config)
 
@@ -195,7 +199,7 @@ class TestSingleSlotEviction:
             "def evict_marker_fn(): return 42\n", encoding="utf-8"
         )
 
-        client = LemonadeClient(base_url="http://localhost:13305/api/v1")
+        client = LemonadeClient(base_url=_BASE_URL)
         try:
             client.unload_model(_EMBEDDING_MODEL)
         except Exception:

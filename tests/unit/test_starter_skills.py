@@ -187,6 +187,9 @@ def registry_tool_names() -> frozenset[str]:
 
     before = dict(_TOOL_REGISTRY)
     try:
+        # Start from an empty registry: names left behind by an earlier test
+        # must not count as "real tools" or the honesty guard passes vacuously.
+        _TOOL_REGISTRY.clear()
         for mixin, method in registrars:
             getattr(mixin, method)(_Stub())
         names = frozenset(_TOOL_REGISTRY)

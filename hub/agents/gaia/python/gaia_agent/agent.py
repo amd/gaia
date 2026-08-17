@@ -42,6 +42,7 @@ unchanged.
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -56,6 +57,8 @@ from gaia.agents.base.skill_loader import (
     dynamic_skills_env_override,
 )
 from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
+
+logger = logging.getLogger(__name__)
 
 #: Bundled skills ship inside the package so they survive both the wheel and the
 #: frozen sidecar; as ``SKILL_DIRS`` they outrank a same-named user or Claude Code copy.
@@ -255,11 +258,23 @@ class GaiaAgent(SkillLibraryToolsMixin, CodeIndexToolsMixin, ChatAgent):
         after an embedder failure, or memory is off (``GAIA_MEMORY_DISABLED``
         tears down ``_memory_store``, and the same embedder backs both).
         """
-        return (
+        active = (
             self.skill_loader is not None
             and not self.skill_loader.session_disabled
             and getattr(self, "_memory_store", None) is not None
         )
+        if (
+            not active
+            and self.skill_loader is not None
+            and not self.skill_loader.session_disabled
+        ):
+            # Memory off silently reverts to full-body prompts otherwise —
+            # say so once per turn at INFO so a bloated prompt is explicable.
+            logger.info(
+                "[skills] dynamic per-turn selection off: memory store is "
+                "disabled, every loaded skill's body renders in full"
+            )
+        return active
 
     def _select_skills_for_turn(self, user_input: str) -> Optional[List[str]]:
         """This turn's active skill-body subset, or ``None`` for "render all".

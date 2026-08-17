@@ -102,6 +102,9 @@ class IndexResult:
     files_indexed: int
     chunks_created: int
     duration_seconds: float
+    #: Chunks whose embedding failed and were left out of the index. Their
+    #: files are also left un-hashed so the next index retries them.
+    chunks_dropped: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -247,21 +250,40 @@ class CodeIndexSDK:
         reused_embeddings = None
         if reused_chunks and existing_meta:
             existing_chunk_dicts = existing_meta.get("chunks", [])
-            # Build index map: find positions of reused chunks in existing index
+            # Build index map: find positions of reused chunks in existing
+            # index. Match on content too, and consume each cache row at most
+            # once — an oversized chunk split into parts gives every part the
+            # SAME (file_path, start_line), so a position-only match handed
+            # parts 2..N part 1's embedding. A chunk that finds no row falls
+            # through to the re-embed fallback below; pairing fewer embeddings
+            # than chunks would silently misalign every later search hit.
             reused_indices = []
+            matched = 0
+            used: set = set()
             for rc in reused_chunks:
                 if not isinstance(rc, CodeChunk):
                     continue
                 for i, cd in enumerate(existing_chunk_dicts):
+                    if i in used:
+                        continue
                     if (
                         cd.get("chunk_type") == "code"
                         and cd.get("file_path") == rc.file_path
                         and cd.get("start_line") == rc.start_line
+                        and cd.get("content") == rc.content
                     ):
                         reused_indices.append(i)
+                        used.add(i)
+                        matched += 1
                         break
 
-            if reused_indices and self._ensure_index_loaded():
+            if matched != len(reused_chunks):
+                self.log.warning(
+                    f"Only {matched}/{len(reused_chunks)} unchanged chunks "
+                    "matched the cache — re-embedding them all to keep chunks "
+                    "and embeddings aligned"
+                )
+            elif reused_indices and self._ensure_index_loaded():
                 try:
                     reused_embeddings = np.array(
                         [self._faiss_index.reconstruct(i) for i in reused_indices],
@@ -331,6 +353,28 @@ class CodeIndexSDK:
                 f"{describe_client_hint('load', self.config.embedding_model).instruction}"
             )
 
+        # A file that lost even one chunk to a failed embedding must NOT have
+        # its hash recorded: the hash marks it "indexed", every later run
+        # would skip it as unchanged, and the missing chunks would stay
+        # unsearchable until someone wiped the cache. Un-hashed, the next
+        # index re-parses and re-embeds it.
+        from collections import Counter
+
+        wanted = Counter(c.file_path for c in all_chunks if isinstance(c, CodeChunk))
+        kept = Counter(c.file_path for c in valid_chunks if isinstance(c, CodeChunk))
+        incomplete = sorted(p for p, n in wanted.items() if kept.get(p, 0) != n)
+        chunks_dropped = sum(wanted.values()) - sum(kept.values())
+        if incomplete:
+            self.log.warning(
+                f"{chunks_dropped} chunk(s) across {len(incomplete)} file(s) "
+                f"lost their embeddings and were left out of the index; those "
+                f"files stay un-hashed so the next index_codebase retries "
+                f"them: {', '.join(incomplete[:5])}"
+                + ("…" if len(incomplete) > 5 else "")
+            )
+            for rel in incomplete:
+                new_file_hashes.pop(rel, None)
+
         embeddings = np.concatenate(embedding_parts, axis=0)
         faiss_index = self._build_faiss_index(embeddings)
 
@@ -357,6 +401,7 @@ class CodeIndexSDK:
             files_indexed=files_indexed,
             chunks_created=len(valid_chunks),
             duration_seconds=duration,
+            chunks_dropped=chunks_dropped,
         )
 
     def search(

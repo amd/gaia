@@ -695,3 +695,49 @@ class TestFilesystemFailureModes:
             result = sdk._read_file_safe(str(f))
 
         assert result is None
+
+
+class TestDroppedChunksAreRetriedNextIndex:
+    """A file that loses a chunk to a failed embedding must stay un-hashed.
+
+    Recording its hash marks it "indexed"; every later run then skips it as
+    unchanged and the missing chunks stay unsearchable until the cache is
+    wiped (the silent hole the hardening pass otherwise closed).
+    """
+
+    def test_file_with_dropped_chunk_is_left_unhashed(self, tmp_path):
+        skip_if_unavailable()
+        sdk = make_sdk(tmp_path)
+        _write_py(tmp_path, "kept.py", "def kept(): pass\n")
+        _write_py(tmp_path, "hole.py", "def hole(): pass\n")
+
+        try:
+            import faiss  # noqa: F401
+        except ImportError:
+            pytest.skip("faiss not installed")
+
+        import numpy as np
+
+        saved = {}
+
+        def fake_save(index, meta):
+            saved["meta"] = meta
+
+        def fake_encode(texts, chunks):
+            # Simulate the embedder silently dropping every chunk of hole.py.
+            kept = [c for c in chunks if c.file_path != "hole.py"]
+            return np.zeros((len(kept), 8), dtype="float32"), kept
+
+        with (
+            patch.object(sdk, "_load_embedder"),
+            patch.object(sdk, "_encode_texts_with_sync", side_effect=fake_encode),
+            patch.object(sdk, "_save_atomic", side_effect=fake_save),
+        ):
+            result = sdk.index_repository()
+
+        hashes = saved["meta"]["file_hashes"]
+        assert "kept.py" in hashes, "the fully-embedded file must be hashed"
+        assert (
+            "hole.py" not in hashes
+        ), "a file that lost chunks must be re-tried on the next index"
+        assert result.chunks_dropped >= 1

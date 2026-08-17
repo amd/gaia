@@ -282,15 +282,11 @@ const paletteBoxMaxWidth = 60
 // columns) plus a two-column gutter.
 const paletteNameColumn = 9
 
-// paletteChromeRows/paletteTightChromeRows/paletteTightHeight mirror
-// helpoverlay.go's helpChromeRows family: the box costs one border row and
-// one padding row at each end normally, and drops the padding on a short
-// window rather than clip.
-const (
-	paletteChromeRows      = 4
-	paletteTightChromeRows = 2
-	paletteTightHeight     = 14
-)
+// paletteBoxStyle is Padding(0, 2): the borderless box adds NO rows of its
+// own, so the fits-check budgets zero chrome. The old bordered-design values
+// (4 normally, 2 under 14 rows) made a window of exactly 14 rows draw
+// nothing while a 13-row one drew fine.
+const paletteChromeRows = 0
 
 // renderCommandPalette renders the palette full-window, the same way
 // RenderHelpOverlay does (components/helpoverlay.go): the box is placed on a
@@ -299,7 +295,7 @@ const (
 // at all. query is the raw composer text, echoed at the top of the box so
 // the reader can still see what they typed once it takes over the screen.
 func renderCommandPalette(background, query string, items []paletteCommand, selected, width, height int) string {
-	box, _, ok := buildPaletteBox(query, items, selected, width, height)
+	box, ok := buildPaletteBox(query, items, selected, width, height)
 	if !ok {
 		return background
 	}
@@ -311,9 +307,9 @@ func renderCommandPalette(background, query string, items []paletteCommand, sele
 // (which places it on screen) and paletteHitTest (which has to know exactly
 // where it landed to map a click back to a row). ok is false when there is no
 // room to draw at all, mirroring renderCommandPalette's background fallback.
-func buildPaletteBox(query string, items []paletteCommand, selected, width, height int) (box string, tight, ok bool) {
+func buildPaletteBox(query string, items []paletteCommand, selected, width, height int) (box string, ok bool) {
 	if len(items) == 0 {
-		return "", false, false
+		return "", false
 	}
 
 	boxWidth := width - 4
@@ -322,26 +318,18 @@ func buildPaletteBox(query string, items []paletteCommand, selected, width, heig
 	}
 	inner := boxWidth - 4
 	if inner < 1 || height < 3 {
-		return "", false, false
-	}
-
-	style := paletteBoxStyle
-	chrome := paletteChromeRows
-	if height < paletteTightHeight {
-		style = style.Padding(0, 2)
-		chrome = paletteTightChromeRows
-		tight = true
+		return "", false
 	}
 
 	lines := paletteBodyLines(query, items, selected, inner)
-	if len(lines)+chrome > height {
+	if len(lines)+paletteChromeRows > height {
 		// No scrolling here (unlike help): the list is 7 commands long at
 		// most, so a window too short to hold it is too short for a usable
 		// palette at all — leave the composer visible instead of clipping.
-		return "", false, false
+		return "", false
 	}
 
-	return style.Width(boxWidth).Render(strings.Join(lines, "\n")), tight, true
+	return paletteBoxStyle.Width(boxWidth).Render(strings.Join(lines, "\n")), true
 }
 
 // paletteBodyPrefixRows is how many rendered lines (title, divider, echoed
@@ -369,7 +357,7 @@ func centerOffset(outer, inner int) int {
 // box entirely (the click-outside-closes case); row is -1 when insideBox is
 // true but the row is chrome (title, divider, blank) rather than an item.
 func paletteHitTest(query string, items []paletteCommand, selected, width, height, x, y int) (row int, insideBox bool) {
-	box, _, ok := buildPaletteBox(query, items, selected, width, height)
+	box, ok := buildPaletteBox(query, items, selected, width, height)
 	if !ok {
 		return -1, false
 	}

@@ -395,3 +395,21 @@ func containsAll(haystack []string, want ...string) bool {
 	}
 	return true
 }
+
+// The borderless palette adds no rows of its own, so the full 7-command list
+// (4 prefix lines + 7 items = 11 lines) must render on any window that can
+// hold those 11 lines. The old bordered-design chrome budget (4 rows, 2 when
+// "tight") made a 14-row window — taller than a 13-row one that worked —
+// silently draw nothing.
+func TestPaletteRendersOnEveryWindowTallEnoughForItsLines(t *testing.T) {
+	items := filterPaletteCommands("/")
+	lines := len(paletteBodyLines("/", items, 0, paletteBoxMaxWidth-4))
+	for h := lines; h <= lines+6; h++ {
+		if _, ok := buildPaletteBox("/", items, 0, 100, h); !ok {
+			t.Errorf("buildPaletteBox drew nothing at height %d, body is only %d lines", h, lines)
+		}
+	}
+	if _, ok := buildPaletteBox("/", items, 0, 100, lines-1); ok {
+		t.Error("buildPaletteBox drew on a window one row too short — it should decline, not clip")
+	}
+}

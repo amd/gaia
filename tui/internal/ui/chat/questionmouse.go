@@ -55,7 +55,9 @@ func (m ChatModel) handleQuestionMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 	switch msg.Action {
 	case tea.MouseActionMotion:
-		if row >= 0 {
+		// Gate on the cursor actually moving: All-Motion tracking delivers an
+		// event per cell, and updateViewport re-renders the whole transcript.
+		if row >= 0 && row != m.question.Cursor() {
 			q := m.question.WithCursor(row)
 			m.question = &q
 			m.updateViewport()

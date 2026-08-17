@@ -106,11 +106,11 @@ func readClipboardImagePNG() (data []byte, ok bool, err error) {
 	if !ok {
 		return nil, true, fmt.Errorf("the clipboard reports an image but its data could not be read")
 	}
-	png, err := decodeDIBToPNG(raw)
+	data, err = decodeDIBToPNG(raw)
 	if err != nil {
 		return nil, true, err
 	}
-	return png, true, nil
+	return data, true, nil
 }
 
 func formatAvailable(format uintptr) bool {
