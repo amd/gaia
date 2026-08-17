@@ -144,6 +144,35 @@ def test_embedder_failure_disables_session_and_signals_fallback():
     assert loader.select("q2", _loaded(["a"])) is None
 
 
+def test_embedder_failure_is_a_cooldown_not_a_death_sentence():
+    """One warm-up hiccup must not cost every remaining turn of the session.
+
+    Nothing in any host resets a skill loader mid-session, so a permanent
+    disable silently reinstated the prompt bloat this module exists to fix.
+    After the cooldown the embedder is tried again and selection resumes.
+    """
+    calls = {"n": 0}
+
+    def _recovering(_text):
+        calls["n"] += 1
+        if calls["n"] <= 1:  # the first attempt dies on the doc embed
+            raise RuntimeError("warming up")
+        import numpy as np
+
+        return np.array([1.0, 0.0], dtype=np.float32)
+
+    loader = SkillLoader(_recovering)
+    loaded = _loaded(["a"])
+
+    assert loader.select("q", loaded) is None  # failure starts the cooldown
+    for _ in range(SkillLoader.RETRY_COOLDOWN_TURNS):
+        assert loader.select("q", loaded) is None  # cooling down, no embed calls
+    n_during_cooldown = calls["n"]
+
+    assert loader.select("q", loaded) == ["a"]  # retried and recovered
+    assert calls["n"] > n_during_cooldown
+
+
 def test_reset_session_clears_disabled_flag():
     calls = {"n": 0}
 

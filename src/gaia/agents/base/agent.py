@@ -493,6 +493,16 @@ class Agent(abc.ABC):
     # are exempt and always render in full — see ``_always_on_skill_names``.
     _active_skill_filter: Optional[List[str]] = None
 
+    #: Explicit re-activations (``load_skill`` on an already-loaded skill)
+    #: pinned active for this many upcoming turns. Without it the escape
+    #: hatch survived less than one exchange: the next turn's fresh selection
+    #: wiped it, and a follow-up like "yes, continue" collapsed the recipe
+    #: the model was mid-way through executing.
+    STICKY_SKILL_TURNS: ClassVar[int] = 3
+
+    #: name -> turns of pinning remaining; decremented each refresh.
+    _sticky_skill_turns: Optional[Dict[str, int]] = None
+
     # Skill sets (#2466): the parsed manifest declarations, the explicit
     # ``--skill-set`` request, and the set that actually resolved.
     _skill_sets: Optional[Any] = None
@@ -1150,8 +1160,36 @@ Do NOT wrap conversational replies in JSON.
         """
         # pylint: disable-next=assignment-from-none
         new_filter = self._select_skills_for_turn(user_input)
+        new_filter = self._union_sticky_skills(new_filter)
         if new_filter != self._active_skill_filter:
             self._apply_skill_filter(new_filter)
+
+    def _union_sticky_skills(
+        self, new_filter: Optional[List[str]]
+    ) -> Optional[List[str]]:
+        """Fold explicitly re-activated skills into this turn's selection.
+
+        Each pinned name is kept active for ``STICKY_SKILL_TURNS`` refreshes
+        after its ``load_skill`` call, then expires back to pure semantic
+        selection. ``None`` (selection off / fallback) passes through — every
+        body renders anyway.
+        """
+        sticky = getattr(self, "_sticky_skill_turns", None)
+        if not sticky:
+            return new_filter
+        loaded = getattr(self, "_loaded_skills", None) or {}
+        for name in list(sticky):
+            if name not in loaded:
+                del sticky[name]
+        pinned = set(sticky)
+        # Decrement AFTER use, so a pin of N covers N refreshes, not N-1.
+        for name in list(sticky):
+            sticky[name] -= 1
+            if sticky[name] <= 0:
+                del sticky[name]
+        if new_filter is None or not pinned:
+            return new_filter
+        return sorted(set(new_filter) | pinned)
 
     def _apply_skill_filter(self, new_filter: Optional[List[str]]) -> None:
         """Swap the active skill-body filter and recompute the cached prompt."""
@@ -1169,7 +1207,20 @@ Do NOT wrap conversational replies in JSON.
         Callers still need to call :meth:`rebuild_system_prompt` themselves.
         """
         current = self._active_skill_filter
-        if current is not None and name not in current:
+        if current is None:
+            return
+        # Pin the explicit ask for the next few turns too — a follow-up like
+        # "yes, continue" scores nothing against the skill's description, and
+        # collapsing the body one turn after the user asked for it strands
+        # the model mid-recipe.
+        # getattr, not attribute access: test stubs copy this method without
+        # inheriting the class attributes.
+        sticky = getattr(self, "_sticky_skill_turns", None)
+        if sticky is None:
+            sticky = {}
+            self._sticky_skill_turns = sticky
+        sticky[name] = getattr(self, "STICKY_SKILL_TURNS", 3)
+        if name not in current:
             self._active_skill_filter = sorted(set(current) | {name})
 
     @property

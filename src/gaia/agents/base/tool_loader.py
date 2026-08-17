@@ -547,6 +547,14 @@ class ToolLoader:
         if missing:
             if self._embed_batch_fn is not None:
                 vecs = self._embed_batch_fn([docs[n] for n in missing])
+                if len(vecs) != len(missing):
+                    # A warming-up embedder can answer 200 with fewer vectors
+                    # than texts; a bare zip would silently drop entries and
+                    # surface later as a misleading KeyError.
+                    raise RuntimeError(
+                        f"embedding batch returned {len(vecs)} vectors for "
+                        f"{len(missing)} texts — embedder still loading?"
+                    )
                 for name, vec in zip(missing, vecs):
                     self._embed_cache[keys[name]] = np.asarray(vec, dtype=np.float32)
             else:

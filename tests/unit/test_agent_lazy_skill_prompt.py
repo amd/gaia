@@ -74,6 +74,9 @@ class _StubAgent:
     get_skills_system_prompt = Agent.get_skills_system_prompt
     _select_skills_for_turn = Agent._select_skills_for_turn
     _refresh_active_skill_filter = Agent._refresh_active_skill_filter
+    _union_sticky_skills = Agent._union_sticky_skills
+    STICKY_SKILL_TURNS = Agent.STICKY_SKILL_TURNS
+    _sticky_skill_turns = None
     _note_skill_active = Agent._note_skill_active
     _always_on_skill_names = Agent._always_on_skill_names
 
@@ -250,6 +253,26 @@ def test_reactivating_an_already_active_skill_is_a_no_op(agent):
     agent.load_skill("skill-a")
 
     assert agent.rebuilt == rebuilds_before  # no spurious rebuild
+
+
+# ── explicit reactivation survives a few turns, then expires ─────────────
+
+
+def test_explicit_reactivation_is_sticky_across_refreshes(agent):
+    """A follow-up like "yes, continue" scores nothing against the skill's
+    description; the explicit load_skill must survive those turns or the model
+    is stranded mid-recipe one exchange after the user asked for the skill."""
+    agent.load_skill("skill-a")
+    agent._active_skill_filter = []
+    agent.load_skill("skill-a")  # explicit reactivation — pins it
+    agent._select_skills_for_turn = lambda _q: []  # selector never matches again
+
+    for _ in range(agent.STICKY_SKILL_TURNS):
+        agent._refresh_active_skill_filter("yes, continue")
+        assert agent._active_skill_filter == ["skill-a"]
+
+    agent._refresh_active_skill_filter("something else entirely")
+    assert agent._active_skill_filter == []  # pin expired, semantics rule again
 
 
 # ── unload prunes the filter ─────────────────────────────────────────────

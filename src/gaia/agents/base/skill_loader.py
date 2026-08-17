@@ -92,12 +92,18 @@ class SkillLoader:
         self._embed_cache: Dict[tuple, "np.ndarray"] = {}
 
         self._turn = 0
-        self._session_disabled = False
+        self._disabled_until_turn = 0
+
+    #: Turns to wait before retrying after an embedder failure. A permanent
+    #: disable quietly reinstated the prompt-bloat this module exists to fix:
+    #: nothing in any host resets a *skill* loader mid-session, so one
+    #: warm-up hiccup on turn 1 used to cost every remaining turn.
+    RETRY_COOLDOWN_TURNS = 5
 
     @property
     def session_disabled(self) -> bool:
-        """True once an embedding failure has disabled selection for the session."""
-        return self._session_disabled
+        """True while an embedding failure has selection on cooldown."""
+        return self._turn < self._disabled_until_turn
 
     def reset_session(self) -> None:
         """Clear per-session state for a new conversation.
@@ -106,7 +112,7 @@ class SkillLoader:
         not the conversation.
         """
         self._turn = 0
-        self._session_disabled = False
+        self._disabled_until_turn = 0
 
     def select(
         self, query: str, loaded_skills: Dict[str, "Skill"]
@@ -121,26 +127,26 @@ class SkillLoader:
         Returns:
             Sorted skill names scoring ``>= threshold`` against *query*.
             Empty list when nothing is loaded or nothing matches. ``None``
-            when the embedder has failed this session — the caller must fall
+            while the embedder is on failure cooldown — the caller must fall
             back to rendering every loaded skill's body.
         """
         if not loaded_skills:
             return []
-        if self._session_disabled:
-            return None
 
         self._turn += 1
+        if self._turn <= self._disabled_until_turn:
+            return None
 
         try:
             skill_vecs = self._ensure_skill_embeddings(loaded_skills)
             qvec = self._embed_fn(query)
         except Exception as exc:  # noqa: BLE001 — disabled + re-surfaced loudly
-            self._session_disabled = True
+            self._disabled_until_turn = self._turn + self.RETRY_COOLDOWN_TURNS
             logger.warning(
                 "[SkillLoader] embedding service unreachable — lazy skill-body "
-                "selection disabled for this session (every loaded skill's "
-                "body will render every turn; start lemonade-server and "
-                "reload to re-enable). Reason: %s",
+                "selection disabled for the next %d turns (every loaded "
+                "skill's body will render in full meanwhile). Reason: %s",
+                self.RETRY_COOLDOWN_TURNS,
                 exc,
             )
             return None
@@ -184,6 +190,14 @@ class SkillLoader:
         if missing:
             if self._embed_batch_fn is not None:
                 vecs = self._embed_batch_fn([docs[n] for n in missing])
+                if len(vecs) != len(missing):
+                    # A warming-up embedder can answer 200 with fewer vectors
+                    # than texts; a bare zip would silently drop entries and
+                    # surface later as a misleading KeyError.
+                    raise RuntimeError(
+                        f"embedding batch returned {len(vecs)} vectors for "
+                        f"{len(missing)} texts — embedder still loading?"
+                    )
                 for name, vec in zip(missing, vecs):
                     self._embed_cache[keys[name]] = np.asarray(vec, dtype=np.float32)
             else:
