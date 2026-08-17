@@ -369,7 +369,7 @@ func centerOffset(outer, inner int) int {
 // box entirely (the click-outside-closes case); row is -1 when insideBox is
 // true but the row is chrome (title, divider, blank) rather than an item.
 func paletteHitTest(query string, items []paletteCommand, selected, width, height, x, y int) (row int, insideBox bool) {
-	box, tight, ok := buildPaletteBox(query, items, selected, width, height)
+	box, _, ok := buildPaletteBox(query, items, selected, width, height)
 	if !ok {
 		return -1, false
 	}
@@ -381,11 +381,9 @@ func paletteHitTest(query string, items []paletteCommand, selected, width, heigh
 		return -1, false
 	}
 
-	topChrome := 2 // border + padding row
-	if tight {
-		topChrome = 1 // padding dropped on a short window — see buildPaletteBox
-	}
-	bodyLine := (y - top) - topChrome
+	// Padding(0, 2) adds no rows above the content, so the box's first
+	// screen row is already lines[0] — no chrome offset to subtract.
+	bodyLine := y - top
 	item := bodyLine - paletteBodyPrefixRows
 	if item < 0 || item >= len(items) {
 		return -1, true

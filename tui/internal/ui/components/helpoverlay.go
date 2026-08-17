@@ -222,6 +222,12 @@ const chatHelpText = `  GAIA Chat
   Esc twice   Give up waiting on the cancel
   Ctrl+C      Quit
 
+  Commands    /help /hub /clear /bypass
+              /setup /memory /model
+  /           On an empty line, browse commands —
+              hover/click or ↑/↓ to pick, Enter or
+              click to run, Esc or click out to close
+
   Scroll        ↑ / ↓ line · PgUp/PgDn page
   Home / End    Top / bottom, if the composer is
                 empty — otherwise cursor keys
@@ -239,10 +245,4 @@ const chatHelpText = `  GAIA Chat
   Ctrl+V      Paste — a clipboard screenshot pastes
               as a file path · Ctrl+Y copy answer ·
               Ctrl+B code
-  Drag a file/folder in — pastes as its path
-
-  Commands    /help /hub /clear /bypass
-              /setup /memory /model
-  /           On an empty line, browse commands —
-              hover/click or ↑/↓ to pick, Enter or
-              click to run, Esc or click out to close`
+  Drag a file/folder in — pastes as its path`

@@ -202,13 +202,13 @@ func TestQuestionAnswerLabelPrefersOptionLabel(t *testing.T) {
 
 // --- mouse: RowAt / WithCursor -------------------------------------------------
 
-// RowAt(0) is always the panel's own top border — never a selectable row,
-// whatever the question text does.
-func TestRowAtTopBorderIsNotSelectable(t *testing.T) {
+// RowAt(0) is always the question title — never a selectable row, whatever
+// the question text does.
+func TestRowAtTitleRowIsNotSelectable(t *testing.T) {
 	q := NewQuestionModel("q1", "Pick one", opts(), false, false)
 	q.SetWidth(76)
 	if got := q.RowAt(0); got != -1 {
-		t.Errorf("RowAt(0) = %d, want -1 (the border)", got)
+		t.Errorf("RowAt(0) = %d, want -1 (the title)", got)
 	}
 }
 
@@ -228,6 +228,33 @@ func TestRowAtMapsEveryRenderedRowToItsOption(t *testing.T) {
 	}
 	if !seen[0] || !seen[1] {
 		t.Errorf("expected both options reachable via RowAt, got hits for %v across %d rows", seen, len(lines))
+	}
+}
+
+// The mapping must be EXACT, not merely reachable: the screen row that shows
+// an option's "[N]" marker must resolve to option N-1. A constant off-by-one
+// (e.g. subtracting a border row the borderless panel no longer has) keeps
+// every option reachable through its wrapped description lines while sending
+// a click on the label itself to the row above — this pins the label row.
+func TestRowAtOptionLabelRowResolvesToThatOption(t *testing.T) {
+	q := NewQuestionModel("q1", "Which mailbox should I connect?", opts(), true, false)
+	q.SetWidth(76)
+	lines := strings.Split(q.View(), "\n")
+
+	for i := range opts() {
+		marker := "[" + string(rune('1'+i)) + "]"
+		found := false
+		for row, line := range lines {
+			if strings.Contains(stripANSI(line), marker) {
+				found = true
+				if got := q.RowAt(row); got != i {
+					t.Errorf("RowAt(%d) — the %s label row — = %d, want %d", row, marker, got, i)
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("no rendered row carries the %s marker", marker)
+		}
 	}
 }
 

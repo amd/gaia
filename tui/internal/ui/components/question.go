@@ -317,20 +317,18 @@ func (m QuestionModel) View() string {
 }
 
 // RowAt maps row — a screen row measured from the TOP OF View()'s rendered
-// output (0 is the panel's own top border) — to the selectable row it
-// belongs to: an option index, len(options) for the free-text row, or -1 for
-// a border/chrome row a click should not act on.
+// output (0 is the title's first line) — to the selectable row it belongs
+// to: an option index, len(options) for the free-text row, or -1 for a
+// chrome row (title, hint) a click should not act on.
 //
-// questionPanelStyle pads only horizontally (Padding(0, 1)), so exactly one
-// row of chrome — the top border — sits above the body layout returns.
+// questionPanelStyle pads only horizontally (Padding(0, 1)), so View()'s
+// first row IS layout's first line — there is no chrome offset to subtract.
 func (m QuestionModel) RowAt(row int) int {
-	const topChrome = 1
-	body := row - topChrome
 	lines := m.layout(m.innerWidth())
-	if body < 0 || body >= len(lines) {
+	if row < 0 || row >= len(lines) {
 		return -1
 	}
-	return lines[body].row
+	return lines[row].row
 }
 
 // hang prefixes the first line of s with first and every later line with rest,
