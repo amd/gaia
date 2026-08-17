@@ -85,7 +85,7 @@ func readClipboardImagePNG() (data []byte, ok bool, err error) {
 	}
 
 	if err := waitOpenClipboardForImage(); err != nil {
-		return nil, true, fmt.Errorf("could not open the clipboard: %w", err)
+		return nil, true, fmt.Errorf("%w: %v", errClipboardBusy, err)
 	}
 	defer imgCloseClipboard.Call()
 

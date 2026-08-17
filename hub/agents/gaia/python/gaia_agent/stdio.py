@@ -883,6 +883,12 @@ def run_turn(
                     streamed_answer = str(canonical.get("answer") or "")
                 if canonical.get("type") in TERMINAL_TYPES:
                     terminated = True
+                    # The reader is gone the moment a terminal event goes
+                    # out, so cancel the run: a worker that parks on a
+                    # confirmation nobody can ever see would otherwise wait
+                    # forever and this drain — which must outlive the worker
+                    # — would never return, wedging the whole process.
+                    handler.cancelled.set()
 
         if not terminated:
             for canonical in translator.flush():
@@ -897,10 +903,11 @@ def run_turn(
         if terminated:
             # The normal exit. A turn that ended in an error event is not
             # recorded — replaying a failure as if it were an answer teaches
-            # the model that the failure is what it said — and an empty
-            # streamed answer is skipped for the same reason the fallback
-            # path below skips one.
-            if streamed_answer:
+            # the model that the failure is what it said. An EMPTY final is
+            # recorded (with its empty answer): dropping it would also drop
+            # the user's question, and "try answering my last question
+            # again" must not reach a model with no record it was asked.
+            if streamed_answer is not None:
                 _record_turn(agent, query, streamed_answer)
             return
         if "error" in result:
@@ -919,10 +926,9 @@ def run_turn(
                     break
         elif isinstance(value, str):
             answer = value
-        if answer:
-            # An empty answer is not a turn worth replaying into every later
-            # prompt — same rule as the streamed branch above.
-            _record_turn(agent, query, answer)
+        # Recorded even when empty — same reasoning as the streamed branch:
+        # the question half of the pair must survive.
+        _record_turn(agent, query, answer)
         _write({"type": "final", "answer": answer}, out)
     finally:
         # Every exit path, including the early returns above: leaving a dead

@@ -4,6 +4,7 @@
 package chat
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -171,10 +172,15 @@ func pasteFromClipboardOrImage() tea.Cmd {
 		}
 		png, ok, err := readClipboardImagePNG()
 		if ok {
-			// The image is the payload here. A decode failure surfaces —
-			// silently pasting the caption URL instead would hide that the
-			// image copy failed (the platform readers' documented contract).
 			if err != nil {
+				// A transient failure to OPEN the clipboard is not a broken
+				// image — deliver the caption text already in hand rather
+				// than failing a paste that has a usable payload.
+				if errors.Is(err, errClipboardBusy) && hasText {
+					return pasteClipboardMsg{text: text, err: nil}
+				}
+				// A real decode failure surfaces — silently pasting the
+				// caption URL would hide that the image copy failed.
 				return pasteImageMsg{err: err}
 			}
 			path, werr := writeClipboardImageToTemp(png)
@@ -183,6 +189,11 @@ func pasteFromClipboardOrImage() tea.Cmd {
 		if hasText {
 			// No image at all — the caption-ish text is all there is.
 			return pasteClipboardMsg{text: text, err: nil}
+		}
+		if err != nil {
+			// Nothing to paste AND the platform reader knows why (e.g. no
+			// wl-paste/xclip installed) — say so instead of a silent no-op.
+			return pasteImageMsg{err: err}
 		}
 		return pasteClipboardMsg{text: text, err: terr}
 	}
@@ -220,6 +231,11 @@ func writeClipboardImageToTemp(png []byte) (string, error) {
 	}
 	return f.Name(), nil
 }
+
+// errClipboardBusy marks a clipboard that could not be OPENED (another app
+// holds it) — a transient condition distinct from an image that cannot be
+// decoded. Platform readers wrap their open failures with it.
+var errClipboardBusy = errors.New("clipboard is held by another application")
 
 // looksLikeImageCaption reports whether clipboard text reads as the metadata
 // a "Copy image" action leaves beside the bitmap — a single URL (or data:

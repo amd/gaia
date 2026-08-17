@@ -68,7 +68,10 @@ class CodeIndexToolsMixin:
             repo_path: Repository root (absolute or relative, resolved here).
             code_index_config: Optional pre-built ``CodeIndexConfig``.
         """
-        self._repo_path = os.path.abspath(repo_path)
+        # expanduser everywhere a root is stored, or a '~'-style
+        # allowed_paths config produces a "<cwd>/~" root that rejects the
+        # very paths it was meant to allow.
+        self._repo_path = os.path.abspath(os.path.expanduser(repo_path))
         self._code_index_config = code_index_config
         self._code_index_sdk: Optional[Any] = None
 

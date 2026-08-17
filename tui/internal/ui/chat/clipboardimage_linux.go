@@ -5,6 +5,7 @@ package chat
 
 import (
 	"bytes"
+	"fmt"
 	"os/exec"
 )
 
@@ -27,7 +28,12 @@ var linuxImageClipboardTools = []struct {
 // same reasoning atotto/clipboard's own Linux build already relies on for
 // text, via xclip/xsel).
 func readClipboardImagePNG() (data []byte, ok bool, err error) {
+	anyTool := false
 	for _, tool := range linuxImageClipboardTools {
+		if _, lookErr := exec.LookPath(tool.name); lookErr != nil {
+			continue
+		}
+		anyTool = true
 		out, runErr := exec.Command(tool.name, tool.args...).Output()
 		if runErr != nil {
 			// Not installed, or nothing image/png-shaped on the clipboard
@@ -40,6 +46,14 @@ func readClipboardImagePNG() (data []byte, ok bool, err error) {
 			continue
 		}
 		return out, true, nil
+	}
+	if !anyTool {
+		// ok=false (no image was detected) but with the WHY: the caller
+		// surfaces this only when there is nothing else to paste, so a
+		// user without wl-paste/xclip learns what to install instead of
+		// getting a silent no-op.
+		return nil, false, fmt.Errorf(
+			"no clipboard image tool found — install wl-paste (Wayland) or xclip (X11) to paste screenshots")
 	}
 	return nil, false, nil
 }

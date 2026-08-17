@@ -463,6 +463,11 @@ A healthy run streams `status` / `token` events and ends with one `final`. If
 `/v1/gaia/init` is 503, fix what its `hint` names and retry — the rest of your
 integration is fine.
 
+**A 503 from `/query` itself is a different condition**: every retained
+session slot is busy and none is idle enough to evict (SPEC §5.2). Do NOT
+loop on `/v1/gaia/init` — it will report ready. Wait for a running turn to
+finish (or close an idle session) and retry the same `/query`.
+
 For the full wire contract, lock schema, exit codes, and timeout table, see
 [`SPEC.md`](./SPEC.md). For the user-facing overview, see [`README.md`](./README.md)
 and <https://amd-gaia.ai/docs/guides/gaia>.

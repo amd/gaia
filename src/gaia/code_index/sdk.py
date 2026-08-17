@@ -64,6 +64,10 @@ class CodeIndexConfig:
 
     repo_path: str
     max_files: int = 5000
+    #: Ceiling on directory entries the discovery walk may enumerate (counted
+    #: after pruning). max_files caps what gets INDEXED; without this, walking
+    #: a huge non-repo root could burn the whole tool timeout just listing.
+    max_walk_entries: int = 200_000
     max_file_size_mb: float = 1
     chunk_overlap: int = 50
     embedding_model: str = DEFAULT_EMBEDDING_MODEL
@@ -604,19 +608,12 @@ class CodeIndexSDK:
         # Bound the WALK, not just the result list: max_files caps how many
         # files are indexed, but enumerating a huge non-repo root (a home
         # directory, a whole drive) could burn the entire tool timeout just
-        # listing entries before a single one was embedded.
-        max_entries = max(self.config.max_files * 40, 200_000)
+        # listing entries. A cap, not an error — a legitimate repo with a
+        # giant assets/ subtree indexes what was found, exactly like the
+        # max_files cap below, and the truncation is logged loudly.
         entries_seen = 0
 
         for root, dirs, files in os.walk(str(self._repo_root)):
-            entries_seen += len(dirs) + len(files)
-            if entries_seen > max_entries:
-                raise RuntimeError(
-                    f"stopped after scanning {entries_seen} directory entries "
-                    f"under {self._repo_root} without finishing — this does "
-                    "not look like a code repository. Point repo_path at the "
-                    "repository root itself."
-                )
             rel_root = Path(root).relative_to(self._repo_root)
 
             # Filter out skipped directories in-place
@@ -628,6 +625,13 @@ class CodeIndexSDK:
                 and not d.startswith(".")
                 and not any(fnmatch.fnmatch(d, p) for p in ignore_patterns)
             ]
+
+            # Counted AFTER pruning, so node_modules/.git and gitignored
+            # trees cost nothing against the budget. Checked at the END of
+            # the loop body (files from this directory are kept), so one
+            # directory can overshoot by its own listing — which os.walk
+            # already paid for — but partial results always survive.
+            entries_seen += len(dirs) + len(files)
 
             if len(result) >= self.config.max_files:
                 break
@@ -661,6 +665,17 @@ class CodeIndexSDK:
                     continue
 
                 result.append(abs_path)
+
+            if entries_seen > self.config.max_walk_entries:
+                self.log.warning(
+                    f"discovery stopped after {entries_seen} directory "
+                    f"entries under {self._repo_root} (max_walk_entries="
+                    f"{self.config.max_walk_entries}) — indexing the "
+                    f"{len(result)} files found so far. If this is a code "
+                    "repository, raise max_walk_entries; if not, point "
+                    "repo_path at the repository root."
+                )
+                break
 
         return result
 

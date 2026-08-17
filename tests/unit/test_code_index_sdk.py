@@ -741,3 +741,45 @@ class TestDroppedChunksAreRetriedNextIndex:
             "hole.py" not in hashes
         ), "a file that lost chunks must be re-tried on the next index"
         assert result.chunks_dropped >= 1
+
+
+class TestWalkBound:
+    """max_walk_entries caps ENUMERATION (max_files caps what gets indexed).
+
+    A cap, not an error: a legitimate repo with a giant subtree indexes the
+    files found before the budget ran out, exactly like the max_files cap —
+    the truncation is logged, never raised.
+    """
+
+    def test_walk_stops_at_the_entry_budget_and_keeps_partial_results(
+        self, tmp_path, caplog
+    ):
+        skip_if_unavailable()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        # Nested, one file per subdir: the budget is checked per directory,
+        # so truncation lands mid-walk and partial results must survive.
+        for i in range(30):
+            sub = repo / f"sub{i:02d}"
+            sub.mkdir()
+            (sub / "f.py").write_text(f"def f{i}(): pass\n", encoding="utf-8")
+
+        sdk = make_sdk(tmp_path)
+        sdk.config.max_walk_entries = 35  # 30 subdir entries + a few files
+
+        import logging
+
+        with caplog.at_level(logging.WARNING):
+            files = sdk._discover_files()
+
+        assert 0 < len(files) < 30
+        assert any("max_walk_entries" in r.message for r in caplog.records)
+
+    def test_default_budget_does_not_touch_a_normal_repo(self, tmp_path):
+        skip_if_unavailable()
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        for i in range(5):
+            (repo / f"f{i}.py").write_text("x = 1\n", encoding="utf-8")
+        sdk = make_sdk(tmp_path)
+        assert len(sdk._discover_files()) == 5

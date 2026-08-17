@@ -83,3 +83,32 @@ class TestAbsentMeasurementsStayAbsent:
     def test_a_bare_answer_carries_no_usage_at_all(self):
         final = translate({"type": "answer", "content": "hi"})
         assert "usage" not in final
+
+
+class TestTerminalClamp:
+    """Nothing is emitted after the first terminal event.
+
+    The contract is one final|error per turn, and every reader stops at it —
+    an event written afterwards sits unread in the pipe and opens the NEXT
+    turn (the stdio pipe-poisoning bug). The clamp lives in the translator so
+    every consumer loop is trivially correct.
+    """
+
+    def test_events_after_a_terminal_error_are_suppressed(self):
+        t = CanonicalTranslator(run_id=None, agent_id="gaia", debug=False)
+        first = t.translate({"type": "policy_alert", "reason": "blocked"})
+        assert any(e.get("type") == "error" for e in first)
+
+        assert t.translate({"type": "status", "message": "still going"}) == []
+        assert t.translate({"type": "answer", "answer": "late answer"}) == []
+        assert t.flush() == []
+
+    def test_a_batch_is_truncated_at_its_terminal(self):
+        t = CanonicalTranslator(run_id=None, agent_id="gaia", debug=False)
+        out = t.translate({"type": "answer", "answer": "done"})
+        # whatever preceded it, nothing FOLLOWS the terminal in the batch
+        terminal_indices = [
+            i for i, e in enumerate(out) if e.get("type") in ("final", "error")
+        ]
+        assert terminal_indices, "an answer event must produce a terminal"
+        assert terminal_indices[0] == len(out) - 1

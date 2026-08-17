@@ -237,8 +237,11 @@ func (s *SubprocessClient) Send(ctx context.Context, query string) (<-chan inter
 		// and reads nothing.
 		defer func() {
 			if ctx.Err() != nil {
-				st.proc.reap()
-				s.discard(st.proc)
+				// resetDeadChild, not a hand-rolled subset: kill() is
+				// idempotent on the already-killed child, and one shared
+				// sequence means a future reset change cannot miss the
+				// cancellation path.
+				s.resetDeadChild(st.proc)
 			}
 		}()
 
