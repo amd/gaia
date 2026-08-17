@@ -134,9 +134,9 @@ class TestUnconvertibleValuesAreRefusedNotPassedOn:
 class TestTheDispatcherActuallyCallsIt:
     def test_execute_tool_coerces_before_dispatch(self):
         src = inspect.getsource(Agent._execute_tool)
-        assert "_coerce_tool_args" in src, (
-            "coercion is not wired into the dispatch path, so no tool benefits"
-        )
-        assert src.index("_coerce_tool_args") < src.index("_call_tool_bounded"), (
-            "arguments must be fitted before the tool runs, not after"
-        )
+        assert (
+            "_coerce_tool_args" in src
+        ), "coercion is not wired into the dispatch path, so no tool benefits"
+        assert src.index("_coerce_tool_args") < src.index(
+            "_call_tool_bounded"
+        ), "arguments must be fitted before the tool runs, not after"

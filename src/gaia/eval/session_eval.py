@@ -319,10 +319,18 @@ def report(results: List[CaseResult], card: Dict[str, Any], backend: str) -> str
             "— the failure mode that matters most.",
         ]
 
-    lines += ["", "## Per case", "", "| Case | Score | Verdict | Time |", "|---|---|---|---|"]
+    lines += [
+        "",
+        "## Per case",
+        "",
+        "| Case | Score | Verdict | Time |",
+        "|---|---|---|---|",
+    ]
     for r in sorted(results, key=lambda x: x.score):
         note = r.error or r.verdict
-        lines.append(f"| `{r.id}` | {r.score if not r.error else '—'} | {note} | {r.elapsed_s}s |")
+        lines.append(
+            f"| `{r.id}` | {r.score if not r.error else '—'} | {note} | {r.elapsed_s}s |"
+        )
 
     worst = [r for r in sorted(results, key=lambda x: x.score) if not r.error][:3]
     if worst:
@@ -352,7 +360,9 @@ def save(
     (out_dir / "results.json").write_text(
         json.dumps([asdict(r) for r in results], indent=2), encoding="utf-8"
     )
-    (out_dir / "scorecard.json").write_text(json.dumps(card, indent=2), encoding="utf-8")
+    (out_dir / "scorecard.json").write_text(
+        json.dumps(card, indent=2), encoding="utf-8"
+    )
     path = out_dir / "report.md"
     path.write_text(report(results, card, backend), encoding="utf-8")
     return path

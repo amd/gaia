@@ -2730,7 +2730,9 @@ the suite decides — no LLM judge. A TUI must already be running with
         "--control", default=None, help="Path to the running TUI's control.json"
     )
     code_eval_parser.add_argument(
-        "--out", default=None, help="Output directory (default: eval/results/code-<timestamp>)"
+        "--out",
+        default=None,
+        help="Output directory (default: eval/results/code-<timestamp>)",
     )
     code_eval_parser.add_argument(
         "--workspace",
@@ -4794,7 +4796,9 @@ Let me know your answer!
                 )
 
             print(f"[RUN] driving the TUI at {control}")
-            results = run(TUIDriver(_Path(control)), root=workspace, on_progress=_progress)
+            results = run(
+                TUIDriver(_Path(control)), root=workspace, on_progress=_progress
+            )
             card = scorecard(results)
             report_path = save(out_dir, results, card, "live TUI")
             print()

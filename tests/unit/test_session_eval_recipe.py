@@ -28,9 +28,7 @@ from gaia.eval.session_eval import PASS_SCORE, CaseResult, judge, report, scorec
 
 def write_session(tmp_path, records, name="sess"):
     path = tmp_path / f"{name}.jsonl"
-    path.write_text(
-        "\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8"
-    )
+    path.write_text("\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8")
     return path
 
 
@@ -160,14 +158,23 @@ class TestSelectionKeepsTheSampleHonest:
         assert select([self._turn("ok")], limit=5) == []
 
     def test_a_thin_answer_cannot_be_judged(self):
-        assert select([self._turn("A perfectly reasonable question here", "short")], limit=5) == []
+        assert (
+            select(
+                [self._turn("A perfectly reasonable question here", "short")], limit=5
+            )
+            == []
+        )
 
     def test_a_context_dependent_opener_is_refused(self):
-        """"Also do the other one" scores the harness, not the agent."""
-        assert select([self._turn("also do that for the other file too")], limit=5) == []
+        """ "Also do the other one" scores the harness, not the agent."""
+        assert (
+            select([self._turn("also do that for the other file too")], limit=5) == []
+        )
 
     def test_a_real_task_survives(self):
-        chosen = select([self._turn("Fix the failing tests in the cart module")], limit=5)
+        chosen = select(
+            [self._turn("Fix the failing tests in the cart module")], limit=5
+        )
         assert len(chosen) == 1
 
 
@@ -185,14 +192,18 @@ class TestJudging:
         return {"prompt": "Fix it", "reference": "I fixed the discount bug."}
 
     def test_a_score_is_parsed_from_the_reply(self):
-        client = self._Client('{"score": 4, "verdict": "solid", "rationale": "minor gap"}')
+        client = self._Client(
+            '{"score": 4, "verdict": "solid", "rationale": "minor gap"}'
+        )
         verdict = judge(self._case(), "I fixed it.", client)
 
         assert verdict["score"] == 4.0
         assert verdict["verdict"] == "solid"
 
     def test_prose_around_the_json_is_tolerated(self):
-        client = self._Client('Sure!\n{"score": 5, "verdict": "great", "rationale": "x"}\nDone')
+        client = self._Client(
+            'Sure!\n{"score": 5, "verdict": "great", "rationale": "x"}\nDone'
+        )
         assert judge(self._case(), "answer", client)["score"] == 5.0
 
     def test_a_judge_that_did_not_answer_is_an_error_not_a_zero(self):
@@ -239,16 +250,24 @@ class TestScorecard:
 
     def test_passed_matches_the_threshold_constant(self):
         assert CaseResult(id="a", prompt="p", reference="r", score=PASS_SCORE).passed
-        assert not CaseResult(id="b", prompt="p", reference="r", score=PASS_SCORE - 0.1).passed
+        assert not CaseResult(
+            id="b", prompt="p", reference="r", score=PASS_SCORE - 0.1
+        ).passed
 
 
 class TestReport:
     def test_it_leads_with_the_number_and_names_the_failures(self):
         results = [
-            CaseResult(id="good", prompt="p", reference="r", score=5.0, verdict="nailed it"),
             CaseResult(
-                id="bad", prompt="explain the retry logic", reference="r",
-                score=1.0, verdict="missed the point", rationale="never read the file",
+                id="good", prompt="p", reference="r", score=5.0, verdict="nailed it"
+            ),
+            CaseResult(
+                id="bad",
+                prompt="explain the retry logic",
+                reference="r",
+                score=1.0,
+                verdict="missed the point",
+                rationale="never read the file",
             ),
         ]
         text = report(results, scorecard(results), "claude-sonnet-5")
@@ -293,5 +312,7 @@ class TestABenchmarkCannotMutateTheMachineItMeasures:
         assert select([self._turn(prompt)], limit=5) == []
 
     def test_an_ordinary_task_is_unaffected(self):
-        chosen = select([self._turn("Explain how the retry backoff is calculated")], limit=5)
+        chosen = select(
+            [self._turn("Explain how the retry backoff is calculated")], limit=5
+        )
         assert len(chosen) == 1

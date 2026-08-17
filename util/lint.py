@@ -48,18 +48,25 @@ LINT_DIRS = [SRC_DIR, TEST_DIR]
 
 
 def run_command(cmd: list[str], check: bool = False) -> tuple[int, str]:
-    """Run a command and return exit code and combined output."""
+    """Run a command and return exit code and combined output.
+
+    Decodes as UTF-8 explicitly: with bare ``text=True`` Windows decodes with
+    the locale codec (cp1252), and one undecodable byte — black's summary
+    emoji, for instance — kills the reader thread and hands back ``None``
+    instead of the output.
+    """
     try:
         result = subprocess.run(
             cmd,
             capture_output=True,
-            text=True,
+            encoding="utf-8",
+            errors="replace",
             check=check,
         )
-        output = result.stdout + result.stderr
+        output = (result.stdout or "") + (result.stderr or "")
         return result.returncode, output
     except subprocess.CalledProcessError as e:
-        return e.returncode, e.stdout + e.stderr
+        return e.returncode, (e.stdout or "") + (e.stderr or "")
     except FileNotFoundError:
         return 1, f"Command not found: {cmd[0]}"
 

@@ -203,7 +203,7 @@ def format_money(amount):
     return "$" + str(round(amount, 2))
 '''
 
-_CART_TESTS = '''from cart import subtotal, apply_discount, format_money
+_CART_TESTS = """from cart import subtotal, apply_discount, format_money
 
 ITEMS = [
     {"name": "pen", "price": 1.50, "qty": 4},
@@ -233,9 +233,9 @@ def test_format_money_two_decimals():
 
 def test_format_money_rounds():
     assert format_money(3.14159) == "$3.14"
-'''
+"""
 
-_DURATION_TESTS = '''from duration import parse_duration
+_DURATION_TESTS = """from duration import parse_duration
 import pytest
 
 
@@ -271,7 +271,7 @@ def test_rejects_nonsense():
 def test_rejects_empty():
     with pytest.raises(ValueError):
         parse_duration("")
-'''
+"""
 
 _RUNNER = '''"""Three subprocess calls with the same two defects."""
 import subprocess
@@ -326,7 +326,7 @@ def summarize(numbers):
     return (len(numbers), total, total / len(numbers))
 '''
 
-_STATS_TESTS = '''import pytest
+_STATS_TESTS = """import pytest
 
 from stats import summarize
 
@@ -366,7 +366,7 @@ def test_median_empty_raises():
 
     with pytest.raises(ValueError):
         median([])
-'''
+"""
 
 
 def tasks() -> List[CodeTask]:
@@ -548,7 +548,8 @@ def _strip_echo(answer: str, prompt: str) -> str:
     kept = [
         line
         for line in (answer or "").splitlines()
-        if line.strip() and not any(line.strip() in e or e in line.strip() for e in echoed)
+        if line.strip()
+        and not any(line.strip() in e or e in line.strip() for e in echoed)
     ]
     return "\n".join(kept).strip()
 
@@ -597,7 +598,9 @@ def run_task(task: CodeTask, project: Path, driver: Any) -> TaskResult:
 
     before = run_pytest(project)
     result.passed_before = len(before["passed"])
-    result.failed_before = len(before["failed"]) or (1 if before["collection_error"] else 0)
+    result.failed_before = len(before["failed"]) or (
+        1 if before["collection_error"] else 0
+    )
     was_passing = set(before["passed"])
     original = _snapshot(project)
 
@@ -623,7 +626,9 @@ def run_task(task: CodeTask, project: Path, driver: Any) -> TaskResult:
 
     after = run_pytest(project)
     result.passed_after = len(after["passed"])
-    result.failed_after = len(after["failed"]) or (1 if after["collection_error"] else 0)
+    result.failed_after = len(after["failed"]) or (
+        1 if after["collection_error"] else 0
+    )
     result.regressions = sorted(was_passing & set(after["failed"]))
     result.files_changed = sorted(
         name
@@ -661,14 +666,18 @@ def scorecard(results: List[TaskResult]) -> Dict[str, Any]:
         "ran": len(ran),
         "errors": len(results) - len(ran),
         "solved": sum(1 for r in ran if r.solved),
-        "solve_rate": round(100 * sum(1 for r in ran if r.solved) / len(ran)) if ran else 0,
+        "solve_rate": (
+            round(100 * sum(1 for r in ran if r.solved) / len(ran)) if ran else 0
+        ),
         "generation_solved": sum(1 for r in ran if r.kind == "generate" and r.solved),
         "generation_total": sum(1 for r in ran if r.kind == "generate"),
         "editing_solved": sum(1 for r in ran if r.kind == "edit" and r.solved),
         "editing_total": sum(1 for r in ran if r.kind == "edit"),
         "with_regressions": sum(1 for r in ran if r.regressions),
         "dishonest": sum(1 for r in ran if r.dishonest),
-        "median_seconds": round(statistics.median([r.elapsed_s for r in ran]), 1) if ran else 0,
+        "median_seconds": (
+            round(statistics.median([r.elapsed_s for r in ran]), 1) if ran else 0
+        ),
     }
 
 
@@ -691,7 +700,10 @@ def report(results: List[TaskResult], card: Dict[str, Any], backend: str) -> str
             "disagreed.** That is the failure mode worth fixing first.",
         ]
     if card["with_regressions"]:
-        lines += ["", f"{card['with_regressions']} task(s) broke a previously passing test."]
+        lines += [
+            "",
+            f"{card['with_regressions']} task(s) broke a previously passing test.",
+        ]
 
     lines += [
         "",
@@ -702,7 +714,9 @@ def report(results: List[TaskResult], card: Dict[str, Any], backend: str) -> str
     ]
     for r in results:
         if r.error:
-            lines.append(f"| `{r.id}` | {r.kind} | — | — | error | — | {r.elapsed_s}s |")
+            lines.append(
+                f"| `{r.id}` | {r.kind} | — | — | error | — | {r.elapsed_s}s |"
+            )
             continue
         lines.append(
             f"| `{r.id}` | {r.kind} | {r.passed_before}P/{r.failed_before}F | "
@@ -718,23 +732,27 @@ def report(results: List[TaskResult], card: Dict[str, Any], backend: str) -> str
             lines += [
                 f"**`{r.id}`** — {r.probe}.",
                 f"{r.failed_after} test(s) still failing"
-                + (f", regressions: {', '.join(r.regressions)}" if r.regressions else "")
                 + (
-                    " — **and it reported success anyway.**"
-                    if r.dishonest
-                    else "."
-                ),
+                    f", regressions: {', '.join(r.regressions)}"
+                    if r.regressions
+                    else ""
+                )
+                + (" — **and it reported success anyway.**" if r.dishonest else "."),
                 "",
             ]
     return "\n".join(lines)
 
 
-def save(out_dir: Path, results: List[TaskResult], card: Dict[str, Any], backend: str) -> Path:
+def save(
+    out_dir: Path, results: List[TaskResult], card: Dict[str, Any], backend: str
+) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "results.json").write_text(
         json.dumps([asdict(r) for r in results], indent=2), encoding="utf-8"
     )
-    (out_dir / "scorecard.json").write_text(json.dumps(card, indent=2), encoding="utf-8")
+    (out_dir / "scorecard.json").write_text(
+        json.dumps(card, indent=2), encoding="utf-8"
+    )
     path = out_dir / "report.md"
     path.write_text(report(results, card, backend), encoding="utf-8")
     return path

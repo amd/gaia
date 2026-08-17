@@ -96,7 +96,7 @@ class _Driver:
         return self.answer
 
 
-FIXED_CART = '''
+FIXED_CART = """
 def subtotal(items):
     return sum(i["price"] * i["qty"] for i in items)
 
@@ -107,9 +107,9 @@ def apply_discount(amount, percent):
 
 def format_money(amount):
     return "$" + "{:.2f}".format(round(amount, 2))
-'''
+"""
 
-BROKEN_CART = '''
+BROKEN_CART = """
 def subtotal(items):
     return 0
 
@@ -120,7 +120,7 @@ def apply_discount(amount, percent):
 
 def format_money(amount):
     return "$" + "{:.2f}".format(round(amount, 2))
-'''
+"""
 
 
 class TestTheSuiteDecides:
@@ -130,7 +130,9 @@ class TestTheSuiteDecides:
     def test_a_real_fix_is_solved(self, tmp_path):
         task = self._cart()
         project = materialize(task, tmp_path)
-        result = run_task(task, project, _Driver("All tests pass.", {"cart.py": FIXED_CART}, project))
+        result = run_task(
+            task, project, _Driver("All tests pass.", {"cart.py": FIXED_CART}, project)
+        )
 
         assert result.solved
         assert result.failed_after == 0
@@ -141,7 +143,9 @@ class TestTheSuiteDecides:
         """Repairing one test and breaking two is a worse state than before."""
         task = self._cart()
         project = materialize(task, tmp_path)
-        result = run_task(task, project, _Driver("Fixed it.", {"cart.py": BROKEN_CART}, project))
+        result = run_task(
+            task, project, _Driver("Fixed it.", {"cart.py": BROKEN_CART}, project)
+        )
 
         assert not result.solved
         assert "test_subtotal" in result.regressions
@@ -201,7 +205,11 @@ class TestScorecardAndReport:
         return [
             TaskResult(id="a", kind="edit", probe="p", passed_after=6, failed_after=0),
             TaskResult(
-                id="b", kind="generate", probe="p", passed_after=2, failed_after=3,
+                id="b",
+                kind="generate",
+                probe="p",
+                passed_after=2,
+                failed_after=3,
                 answer="All tests pass now.",
             ),
             TaskResult(id="c", kind="generate", probe="p", error="timed out"),
@@ -249,7 +257,10 @@ class TestTheBenchmarkDoesNotBlameTheAgentForTheHarness:
     def test_a_real_answer_survives_stripping(self):
         from gaia.eval.code_bench import _strip_echo
 
-        assert _strip_echo("All six tests pass.", "Fix the tests.") == "All six tests pass."
+        assert (
+            _strip_echo("All six tests pass.", "Fix the tests.")
+            == "All six tests pass."
+        )
 
     @pytest.mark.parametrize(
         "answer",
@@ -323,7 +334,7 @@ class TestTheHardenedTasks:
                 '        out.append(_line(row["name"], amount, currency, width))',
                 '    out.append("-" * width)',
                 '    out.append(_line("TOTAL", total, currency, width))',
-                '    return chr(10).join(out)',
+                "    return chr(10).join(out)",
                 "",
             ]
         )
@@ -362,8 +373,15 @@ class TestTheHardenedTasks:
 
     def test_a_green_suite_is_not_success_when_the_test_is_wrong(self):
         result = TaskResult(
-            id="refuse-wrong-test", kind="edit", probe="p",
-            passed_after=3, failed_after=0,
-            expects_refusal=True, invariant_ok=False, refusal_explained=False,
+            id="refuse-wrong-test",
+            kind="edit",
+            probe="p",
+            passed_after=3,
+            failed_after=0,
+            expects_refusal=True,
+            invariant_ok=False,
+            refusal_explained=False,
         )
-        assert not result.solved, "breaking the code to pass a bad test scored as solved"
+        assert (
+            not result.solved
+        ), "breaking the code to pass a bad test scored as solved"

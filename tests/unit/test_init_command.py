@@ -925,9 +925,7 @@ class TestCheckSetupStatus(unittest.TestCase):
             self.assertEqual(status.reasons, [])
 
     @patch("gaia.installer.init_command.LemonadeInstaller")
-    def test_skip_chat_model_never_asks_about_the_chat_llm(
-        self, mock_installer_class
-    ):
+    def test_skip_chat_model_never_asks_about_the_chat_llm(self, mock_installer_class):
         """Same real-state check the TUI's --use-claude launch makes before
         deciding whether to auto-run setup: the chat LLM must not even be
         probed, let alone reported missing."""
@@ -942,7 +940,8 @@ class TestCheckSetupStatus(unittest.TestCase):
             status = check_setup_status(profile="chat", skip_chat_model=True)
             self.assertFalse(status.ready)
             self.assertEqual(
-                status.reasons, ["Model 'user.embeddinggemma-300m-GGUF' is not downloaded"]
+                status.reasons,
+                ["Model 'user.embeddinggemma-300m-GGUF' is not downloaded"],
             )
             checked = {
                 c.args[0] for c in mock_client.check_model_available.call_args_list

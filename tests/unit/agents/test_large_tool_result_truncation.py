@@ -496,16 +496,16 @@ class TestSecondGateDoesNotUndoTheFirst:
         ]
 
         assert len(text) <= target, "the backstop stopped capping anything at all"
-        assert len(text) > 2000, (
-            f"device={device!r} still capped near the old hardcoded 2,000 chars"
-        )
+        assert (
+            len(text) > 2000
+        ), f"device={device!r} still capped near the old hardcoded 2,000 chars"
 
     def test_no_hardcoded_cap_left_in_create_tool_message(self):
         src = inspect.getsource(Agent._create_tool_message)
         assert "max_chars=2000" not in src
-        assert "truncation_budget" in src, (
-            "the cap must derive from the device profile, not a literal"
-        )
+        assert (
+            "truncation_budget" in src
+        ), "the cap must derive from the device profile, not a literal"
 
 
 # ---------------------------------------------------------------------------
@@ -542,9 +542,10 @@ class TestTheBudgetFollowsTheModelInUse:
 
     def test_the_local_path_is_unchanged(self):
         for device in ("npu", "gpu", "cpu", None):
-            assert (
-                self._agent(claude=False, device=device)._truncation_budget()
-                == truncation_budget(device)
+            assert self._agent(
+                claude=False, device=device
+            )._truncation_budget() == truncation_budget(
+                device
             ), f"device={device!r} no longer matches the local profile"
 
     def test_a_payload_that_overflowed_the_npu_survives_on_the_remote_model(self):
@@ -554,9 +555,9 @@ class TestTheBudgetFollowsTheModelInUse:
 
         fitted = agent._handle_large_tool_result("list_skills", payload, [], {})
 
-        assert len(fitted["messages"]) == len(payload["messages"]), (
-            "items were dropped from a payload the remote model had room for"
-        )
+        assert len(fitted["messages"]) == len(
+            payload["messages"]
+        ), "items were dropped from a payload the remote model had room for"
 
     def test_both_gates_ask_the_agent_rather_than_the_device(self):
         for method in (Agent._handle_large_tool_result, Agent._create_tool_message):

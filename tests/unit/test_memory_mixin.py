@@ -4371,9 +4371,9 @@ class TestRecallRedactsCredentialsAlreadyOnDisk:
             assert "HALIBUT" not in row["content"]
             assert "sk-ant" not in row["content"]
             assert "redacted" in row["content"]
-            assert "/memory" in row["content"], (
-                "a masked row must say how to review or remove it"
-            )
+            assert (
+                "/memory" in row["content"]
+            ), "a masked row must say how to review or remove it"
 
     def test_ordinary_memories_are_untouched(self):
         items = [
