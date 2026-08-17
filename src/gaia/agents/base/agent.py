@@ -27,6 +27,7 @@ from typing import (
     Callable,
     ClassVar,
     Dict,
+    FrozenSet,
     List,
     Literal,
     Optional,
@@ -69,6 +70,26 @@ def _skill_validation_error(message: str) -> Exception:
     from gaia.skills.errors import SkillValidationError
 
     return SkillValidationError(message)
+
+
+#: How much of a skill's description the always-on menu line carries (#2848
+#: follow-up). A loaded-but-inactive skill still needs to be discoverable
+#: without paying for its full body, and some skills (ported from other
+#: ecosystems) ship trigger descriptions over 1,000 characters — capped so the
+#: menu itself never becomes what it exists to avoid.
+_SKILL_MENU_DESCRIPTION_CHARS = 160
+
+
+def _skill_menu_description(description: str) -> str:
+    """First non-empty line of *description*, capped for the resident menu."""
+    text = ""
+    for line in (description or "").splitlines():
+        if line.strip():
+            text = line.strip()
+            break
+    if len(text) <= _SKILL_MENU_DESCRIPTION_CHARS:
+        return text
+    return text[:_SKILL_MENU_DESCRIPTION_CHARS].rstrip() + "…"
 
 
 # Content truncation thresholds
@@ -459,6 +480,18 @@ class Agent(abc.ABC):
     _loaded_skills: Optional[Dict[str, Any]] = None
     # ``shell:execute:<binary>`` grants held by the currently loaded skills.
     _granted_binaries: Optional[Any] = None
+
+    # Lazy skill-body activation (#2848 follow-up): the sorted subset of
+    # LOADED skill names whose full body renders this turn, or ``None`` to
+    # render every loaded skill's body unconditionally (legacy, byte-identical
+    # — the default for every agent that hasn't opted in). Set by
+    # ``_select_skills_for_turn`` at the top of each query; consulted by
+    # ``get_skills_system_prompt``. Unlike the tool filter this is NOT
+    # monotonic: a stale match has to be dropped, or lazy loading reproduces
+    # the exact bug it fixes (a skill body riding along on every turn once
+    # matched once). Always-on skills (the manifest's plain ``skills:`` list)
+    # are exempt and always render in full — see ``_always_on_skill_names``.
+    _active_skill_filter: Optional[List[str]] = None
 
     # Skill sets (#2466): the parsed manifest declarations, the explicit
     # ``--skill-set`` request, and the set that actually resolved.
@@ -1094,6 +1127,62 @@ Do NOT wrap conversational replies in JSON.
         self._active_tool_filter = new_filter
         self._system_prompt_cache = self._compose_system_prompt()
 
+    def _select_skills_for_turn(  # pylint: disable=unused-argument
+        self, user_input: str
+    ) -> Optional[List[str]]:
+        """Return the loaded-skill-name subset whose body renders this turn.
+
+        Default: ``None`` — render every loaded skill's full body every turn
+        (legacy behavior, unchanged for every agent that doesn't opt in).
+        GaiaAgent overrides this with a per-turn semantic selector so an
+        unrelated skill's body doesn't ride along on every subsequent turn
+        for the life of the session (#2848).
+        """
+        return None
+
+    def _refresh_active_skill_filter(self, user_input: str) -> None:
+        """Update the active skill-body filter for this turn, if it changed.
+
+        Mirrors :meth:`_refresh_active_tool_filter`. Recomputed fresh every
+        turn rather than accumulated: a skill body is large enough (measured
+        15-19KB, #2848) that letting a stale match stick around reproduces the
+        exact permanent-inlining bug this exists to fix.
+        """
+        # pylint: disable-next=assignment-from-none
+        new_filter = self._select_skills_for_turn(user_input)
+        if new_filter != self._active_skill_filter:
+            self._apply_skill_filter(new_filter)
+
+    def _apply_skill_filter(self, new_filter: Optional[List[str]]) -> None:
+        """Swap the active skill-body filter and recompute the cached prompt."""
+        self._active_skill_filter = new_filter
+        self._system_prompt_cache = self._compose_system_prompt()
+
+    def _note_skill_active(self, name: str) -> None:
+        """Force *name*'s body active for the rest of this turn, if filtering is on.
+
+        No-op on the legacy path (``_active_skill_filter is None`` — every
+        loaded skill's body already renders unconditionally). This is the
+        explicit escape hatch: calling ``load_skill`` on an already-loaded
+        skill always brings its instructions back, even when the per-turn
+        selector missed it — mirrors the ``load_tools`` escape hatch for tools.
+        Callers still need to call :meth:`rebuild_system_prompt` themselves.
+        """
+        current = self._active_skill_filter
+        if current is not None and name not in current:
+            self._active_skill_filter = sorted(set(current) | {name})
+
+    @property
+    def _always_on_skill_names(self) -> FrozenSet[str]:
+        """Names from the manifest's plain ``skills:`` (always-on) list.
+
+        Exempt from the per-turn skill-body filter for the same reason
+        ToolLoader's CORE tier is exempt from its cap: small and deliberately
+        resident every turn (e.g. an honesty-floor skill), not a per-topic
+        recipe. Empty for an agent with no manifest or no always-on entries.
+        """
+        return frozenset(ref.name for ref in self.skill_sets.always)
+
     def rebuild_system_prompt(self) -> None:
         """Rebuild system prompt with current tools from _TOOL_REGISTRY.
 
@@ -1236,6 +1325,13 @@ Do NOT wrap conversational replies in JSON.
 
         if name in self.loaded_skills:
             logger.debug("Skill '%s' is already loaded for this agent", name)
+            # Explicit reactivation escape hatch: an already-loaded skill whose
+            # body the per-turn filter hid still comes back on request.
+            if self._active_skill_filter is not None and name not in (
+                self._active_skill_filter
+            ):
+                self._note_skill_active(name)
+                self.rebuild_system_prompt()
             return self.loaded_skills[name]
 
         skill = resolver.load(name)
@@ -1266,6 +1362,7 @@ Do NOT wrap conversational replies in JSON.
                 self.granted_binaries.grant(policy.binary, skill_name=skill.name)
 
             self.loaded_skills[name] = skill
+            self._note_skill_active(name)
             self.rebuild_system_prompt()
         except Exception:
             unregister_skill_tools(skill.name)
@@ -1411,6 +1508,10 @@ Do NOT wrap conversational replies in JSON.
                 self._instance_tools.pop(key, None)
         revoked = self.granted_binaries.revoke_skill(name)
         self.loaded_skills.pop(name, None)
+        if self._active_skill_filter is not None:
+            self._active_skill_filter = [
+                n for n in self._active_skill_filter if n != name
+            ]
         self.rebuild_system_prompt()
         logger.info(
             "Unloaded skill '%s'%s",
@@ -1619,24 +1720,61 @@ Do NOT wrap conversational replies in JSON.
         return loaded
 
     def get_skills_system_prompt(self) -> str:
-        """Render the loaded skills' bodies as a system-prompt fragment.
+        """Render the loaded skills as a system-prompt fragment.
 
         Auto-discovered by ``_get_mixin_prompts()``, so a skill's instructions
         reach the model as soon as it is loaded. Returns "" when no skill is
         loaded, keeping every existing agent's prompt byte-identical.
+
+        ``_active_skill_filter is None`` (the default, every agent that hasn't
+        opted into per-turn selection) renders every loaded skill's full body
+        every turn — the original, byte-identical behavior. When a subclass
+        has set the filter (GaiaAgent, #2848 follow-up), a loaded skill whose
+        name is not in the filter — and is not in the manifest's always-on
+        ``skills:`` list — collapses to a one-line menu entry instead of its
+        full body, so a loaded-but-irrelevant skill costs a menu line, not a
+        multi-KB body, on the turns that don't need it.
         """
         skills = getattr(self, "_loaded_skills", None)
         if not skills:
             return ""
 
-        sections = []
-        for skill in skills.values():
-            if not skill.body:
-                continue
-            sections.append(f"--- SKILL: {skill.name} ---\n{skill.body}")
-        if not sections:
-            return ""
-        return "==== LOADED SKILLS ====\n" + "\n\n".join(sections)
+        active_filter = getattr(self, "_active_skill_filter", None)
+        if active_filter is None:
+            sections = []
+            for skill in skills.values():
+                if not skill.body:
+                    continue
+                sections.append(f"--- SKILL: {skill.name} ---\n{skill.body}")
+            if not sections:
+                return ""
+            return "==== LOADED SKILLS ====\n" + "\n\n".join(sections)
+
+        active = set(active_filter) | self._always_on_skill_names
+        body_sections = []
+        menu_lines = []
+        for skill in sorted(skills.values(), key=lambda s: s.name):
+            if skill.name in active:
+                if skill.body:
+                    body_sections.append(f"--- SKILL: {skill.name} ---\n{skill.body}")
+            else:
+                menu_lines.append(
+                    f"- {skill.name}: {_skill_menu_description(skill.description)}"
+                )
+
+        parts = []
+        if body_sections:
+            parts.append(
+                "==== LOADED SKILLS (active this turn) ====\n"
+                + "\n\n".join(body_sections)
+            )
+        if menu_lines:
+            parts.append(
+                "==== LOADED SKILLS (instructions hidden this turn to save "
+                "space — call load_skill('<name>') again to bring one back) "
+                "====\n" + "\n".join(menu_lines)
+            )
+        return "\n\n".join(parts)
 
     def list_tools(self, verbose: bool = True) -> None:
         """
@@ -3994,6 +4132,11 @@ Do NOT wrap conversational replies in JSON.
         # Dynamic tool selection (#1449): pick this turn's tool subset and
         # recompute the cached system prompt only when it changes.
         self._refresh_active_tool_filter(user_input)
+
+        # Lazy skill-body activation (#2848 follow-up): same per-turn timing
+        # as the tool filter above, so a stale skill match never survives
+        # into a turn that no longer needs it.
+        self._refresh_active_skill_filter(user_input)
 
         logger.debug(f"Processing query: {user_input}")
         conversation = []

@@ -323,6 +323,10 @@ class _StubAgent:
     _requested_skill_set = None
     _active_skill_set = None
     _skill_set_loaded = None
+    # Lazy skill-body activation (#2848 follow-up): unset -> every loaded
+    # skill's body renders in full, the legacy path these skill-set tests
+    # exercise (get_skills_system_prompt's own tests cover the lazy path).
+    _active_skill_filter = None
     _SKILL_MANIFEST_FILENAME = Agent._SKILL_MANIFEST_FILENAME
 
     skill_manager = Agent.skill_manager
@@ -334,6 +338,7 @@ class _StubAgent:
     granted_binaries = Agent.granted_binaries
     _tools_registry = Agent._tools_registry
     _format_tools_for_prompt = Agent._format_tools_for_prompt
+    _note_skill_active = Agent._note_skill_active
     load_skill = Agent.load_skill
     unload_skill = Agent.unload_skill
     select_skill_set = Agent.select_skill_set
