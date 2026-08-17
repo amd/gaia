@@ -1491,7 +1491,8 @@ jobs:
           # Note: claude-code-action does not support workflow_run events natively.
           # Using automation mode (via `prompt`) to bypass event type validation.
           prompt: |
-            Generate comprehensive release notes for GAIA version ${{ steps.tag.outputs.TAG_NAME }}.
+            Generate release notes for GAIA version ${{ steps.tag.outputs.TAG_NAME }}.
+            Short, plain, and bulleted — see the format and word budget below.
 
             ## FIRST ACTIONS
             1. Read release-context.txt - Contains commit log, contributors, PRs, and list of diff files
@@ -1530,41 +1531,43 @@ jobs:
             ```
             ---
             title: "${{ steps.tag.outputs.TAG_NAME }}"
-            description: "[One-line summary of this release]"
+            description: "[One plain line: what shipped. Not a pitch.]"
             ---
             ```
 
-            Then use this content structure for both files:
+            Then use this content structure for both files. Sections and shape must match
+            `.claude/skills/gaia-release/SKILL.md` (*Notes format*, Phase 1) exactly — both
+            generators write `docs/releases/<tag>.mdx`, so a divergence here makes the file's
+            shape depend on which one happened to run.
+
+            Bullets, not paragraphs. Every entry is one bullet, never a prose block.
 
             # GAIA ${{ steps.tag.outputs.TAG_NAME }} Release Notes
 
-            ## Overview
-
-            [2-3 sentence summary of the most important changes. Highlight major new features, significant improvements, or breaking changes.]
-
-            ## What's New
-
-            ### 🚀 [Major Feature Name]
-            [Description with code example if applicable]
-
-            [Continue for each major new feature...]
-
-            ## Improvements
-
-            ### [Category - e.g., Agent UX, Performance, etc.]
-            - **[Improvement name]**: [Brief description]
-
-            ## Bug Fixes
-
-            - **#[issue]**: [Description of fix]
-
-            ## Infrastructure
-
-            - [Change description]
+            [Optional single sentence naming what this release is about. Drop it if the
+            bullets already say it — that is the common case. Never a paragraph, and never
+            an "## Overview" section.]
 
             ## Breaking Changes
 
-            [List any breaking changes, or "None. All changes are additive."]
+            - **[what changed]** - [what to do instead]. (PR #[number])
+
+            ## What's New
+
+            - **[what the user can now do]** - `[gaia command]`. [At most one more sentence,
+              only if the title genuinely needs it.] (PRs #[number], #[number])
+
+            ## Bug Fixes
+
+            - **[what was broken]** - [what now happens]. (PR #[number])
+
+            ## Known Issues
+
+            - **[what still does not work]** - [workaround, or "tracked in #[number]"].
+
+            ## Contributors
+
+            - @[handle] - [what they contributed]. (PR #[number])
 
             ## Full Changelog
 
@@ -1575,14 +1578,33 @@ jobs:
 
             Full Changelog: [${{ env.PREVIOUS_TAG }}...${{ steps.tag.outputs.TAG_NAME }}](https://github.com/amd/gaia/compare/${{ env.PREVIOUS_TAG }}...${{ steps.tag.outputs.TAG_NAME }})
 
+            Omit `## Breaking Changes` and `## Known Issues` when there are none — do not emit
+            an empty section or a "None. All changes are additive." placeholder.
+
             ## Guidelines
 
-            1. **Be specific** - Reference actual file changes, not generic descriptions
-            2. **Include code examples** - For new features, show how to use them
-            3. **Categorize properly**: 🚀 new features, 🎯 improvements, 🐛 bug fixes, 🔧 infrastructure, 📚 docs, 🔒 security
-            4. **Link PRs and issues** - Use #number format
-            5. **Credit contributors** - Mention contributors for significant changes
-            6. **Highlight AMD-specific features** - NPU optimizations, Ryzen AI features
+            1. **Plain language, outcome first** - say what a user can now do, in the words
+               they would use. CLAUDE.md "How You Communicate" governs this output too.
+            2. **Bulleted and short** - one bullet per entry, at most two sentences in it.
+               No `###` prose blocks, no code examples, no walkthroughs.
+            3. **Word budget (a cap, not a target)** - from the top down to the first of
+               `## Bug Fixes` / `## Known Issues` / `## Contributors` / `## Full Changelog`,
+               total <= 350 words for a patch release, <= 600 for a minor/major. Those four are
+               reference lists sized by how many fixes shipped; squeezing them hides work. The
+               cap is on the narrative part. Over budget means cut entries, not reflow them.
+               Count before finishing:
+               `awk '/^## (Bug Fixes|Known Issues|Contributors|Full Changelog)/{exit} {print}' <file> | wc -w`
+            4. **Factual, not promotional** - state the capability and stop. No emoji anywhere,
+               in headings or body. Banned: "we're excited to announce", "finally",
+               "blazing(-fast)", "game-changer", "seamless", "powerful", "unlock",
+               "makes X effortless", invented benchmarks.
+            5. **Specific, not generic** - name the actual command, flag, or behavior that
+               changed, not "various improvements".
+            6. **Order by what users run** - agents and commands first, including AMD-specific
+               capabilities (NPU, Ryzen AI) when they ship; SDK, CI, and refactor work last, or
+               omitted when it has no user-visible effect.
+            7. **Link PRs and issues** - use the #number format.
+            8. **Credit contributors** - one comma-separated line under `## Contributors`.
 
             ## What NOT to Include
 
