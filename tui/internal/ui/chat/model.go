@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/amd/gaia/tui/internal/client"
 	"github.com/amd/gaia/tui/internal/event"
@@ -2428,6 +2429,11 @@ func (m ChatModel) renderHeader() string {
 	// always tell where inference runs and which model answered.
 	title += m.renderModelChip()
 	title += m.renderLemonadeChip()
+	if m.width > 0 {
+		// Never let the header wrap: contentHeaderRows budgets it as exactly
+		// one row, and a wrapped header shifts every mouse hit-test below it.
+		title = ansi.Truncate(title, m.width, "…")
+	}
 	return title
 }
 

@@ -5,8 +5,11 @@ package chat
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -130,5 +133,51 @@ func TestCopyingWithNoAnswerYetReportsIt(t *testing.T) {
 	res, ok := cmd().(clipboardResultMsg)
 	if !ok || res.err == nil {
 		t.Fatalf("copying an empty transcript reported success: %+v", res)
+	}
+}
+
+// Every Ctrl+V used to leave its PNG in %TEMP% forever; the paste path now
+// writes into a swept subdirectory. This pins both halves: old pastes go,
+// fresh ones (and non-paste files) stay.
+func TestWriteClipboardImageSweepsOldPastes(t *testing.T) {
+	dir := filepath.Join(os.TempDir(), "gaia-paste")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	old := filepath.Join(dir, "gaia-paste-sweeptest-old.png")
+	if err := os.WriteFile(old, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	stale := time.Now().Add(-8 * 24 * time.Hour)
+	if err := os.Chtimes(old, stale, stale); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+	bystander := filepath.Join(dir, "not-a-paste.png")
+	if err := os.WriteFile(bystander, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := os.Chtimes(bystander, stale, stale); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(bystander) })
+
+	path, err := writeClipboardImageToTemp([]byte("png-bytes"))
+	if err != nil {
+		t.Fatalf("writeClipboardImageToTemp: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(path) })
+
+	if _, err := os.Stat(old); !os.IsNotExist(err) {
+		t.Error("a week-old paste survived the sweep")
+	}
+	if _, err := os.Stat(bystander); err != nil {
+		t.Error("the sweep removed a file it does not own")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("the fresh paste is missing: %v", err)
+	}
+	if filepath.Dir(path) != dir {
+		t.Errorf("paste landed in %s, want %s", filepath.Dir(path), dir)
 	}
 }

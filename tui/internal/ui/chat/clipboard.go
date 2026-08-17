@@ -6,7 +6,9 @@ package chat
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/atotto/clipboard"
 	tea "github.com/charmbracelet/bubbletea"
@@ -176,7 +178,15 @@ func pasteFromClipboardOrImage() tea.Cmd {
 // this half, the part actually worth testing, is a pure function of bytes in,
 // a file on disk out.
 func writeClipboardImageToTemp(png []byte) (string, error) {
-	f, err := os.CreateTemp("", "gaia-paste-*.png")
+	// A dedicated subdirectory, swept on use: without it every Ctrl+V left a
+	// multi-MB PNG in %TEMP% forever. Seven days comfortably outlives any
+	// session that might still hand the path to the agent.
+	dir := filepath.Join(os.TempDir(), "gaia-paste")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("could not create the paste directory %s: %w", dir, err)
+	}
+	sweepOldPastes(dir, 7*24*time.Hour)
+	f, err := os.CreateTemp(dir, "gaia-paste-*.png")
 	if err != nil {
 		return "", fmt.Errorf("could not create a temp file for the pasted image: %w", err)
 	}
@@ -185,6 +195,29 @@ func writeClipboardImageToTemp(png []byte) (string, error) {
 		return "", fmt.Errorf("could not write the pasted image to %s: %w", f.Name(), err)
 	}
 	return f.Name(), nil
+}
+
+// sweepOldPastes deletes pasted images older than maxAge from dir. Best-effort
+// housekeeping on the paste path: a file that cannot be listed or removed is
+// left for the next sweep rather than failing the paste the user is making.
+func sweepOldPastes(dir string, maxAge time.Duration) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	cutoff := time.Now().Add(-maxAge)
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), "gaia-paste-") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || info.IsDir() {
+			continue
+		}
+		if info.ModTime().Before(cutoff) {
+			_ = os.Remove(filepath.Join(dir, e.Name()))
+		}
+	}
 }
 
 // pasteImageHint is what the status line says once a pasted screenshot has
