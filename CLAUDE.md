@@ -621,6 +621,7 @@ New agents are Python classes inheriting from `Agent` (see [`src/gaia/agents/bas
 | `browser` | `gaia.agents.tools.browser_tools.BrowserToolsMixin` | Web search, page fetch, download |
 | `sd` | `gaia.sd.mixin.SDToolsMixin` | Stable Diffusion image generation |
 | `vlm` | `gaia.vlm.mixin.VLMToolsMixin` | Vision LLM / structured extraction |
+| `skills` | `gaia.agents.tools.skill_library_tools.SkillLibraryToolsMixin` | Model-driven skill library (list/search/install/load/unload) |
 
 When adding a new tool mixin, register it in `KNOWN_TOOLS` so other agents can compose it by name.
 

@@ -34,7 +34,7 @@ root) and declared in ``gaia-agent.yaml``. Following the email agent's precedent
 (#2848), **no skill set loads by default** — the manifest ships its
 ``default_skill_set`` commented out until an eval measures the prompt-token cost.
 Skills are opt-in via ``--skill-set``, ``GAIA_SKILL_SET``, or — mid-session — the
-skill-library tools in :mod:`gaia_agent.skill_tools`, which let the model
+skill-library tools in :mod:`gaia.agents.tools.skill_library_tools`, which let the model
 discover, install, load, and unload skills on demand without a restart. Those
 tools never load anything on their own, so the out-of-the-box prompt budget is
 unchanged.
@@ -48,7 +48,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import ClassVar, List, Optional
 
-from gaia_agent.skill_tools import SkillLibraryToolsMixin
 from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 
 from gaia.agents.base.skill_loader import (
@@ -57,6 +56,7 @@ from gaia.agents.base.skill_loader import (
     dynamic_skills_env_override,
 )
 from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
+from gaia.agents.tools.skill_library_tools import SkillLibraryToolsMixin
 
 logger = logging.getLogger(__name__)
 
@@ -174,7 +174,10 @@ class GaiaAgentConfig(ChatAgentConfig):
     )
 
 
-class GaiaAgent(SkillLibraryToolsMixin, CodeIndexToolsMixin, ChatAgent):
+# Base agent first, tool mixins after — the repo's MRO convention for every
+# hub agent. Neither mixin overrides anything today; this order keeps a future
+# mixin method from silently winning over ChatAgent's.
+class GaiaAgent(ChatAgent, SkillLibraryToolsMixin, CodeIndexToolsMixin):
     """The flagship GAIA agent — conversation, documents, data, web, and skills."""
 
     SKILL_DIRS: ClassVar[List[str]] = _bundled_skill_roots()
@@ -211,7 +214,12 @@ class GaiaAgent(SkillLibraryToolsMixin, CodeIndexToolsMixin, ChatAgent):
         """
         self.skill_loader = self._maybe_build_skill_loader()
         self.register_skill_library_tools()
-        self._init_code_index_state(repo_path=os.getcwd())
+        # Same scope as allowed_paths, for the same reason that field rejects
+        # cwd: the daemon launches this sidecar with cwd = the package
+        # directory, so cwd would sandbox code search to the agent's own
+        # source tree — and index it by default.
+        allowed = getattr(self.config, "allowed_paths", None) or [str(Path.home())]
+        self._init_code_index_state(repo_path=allowed[0])
         self.register_code_index_tools()
         super()._register_tools()
 
