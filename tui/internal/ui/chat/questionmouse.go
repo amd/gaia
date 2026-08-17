@@ -68,7 +68,9 @@ func (m ChatModel) handleQuestionMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		if msg.Button != tea.MouseButtonLeft || row < 0 {
 			return m, nil
 		}
-		if row == m.question.Cursor() {
+		// Click-the-selected-row answers — except the free-text row, where a
+		// click means "focus here", never "submit my half-typed answer".
+		if row == m.question.Cursor() && !m.question.IsFreeTextRow(row) {
 			q, cmd := m.question.Update(tea.KeyMsg{Type: tea.KeyEnter})
 			m.question = &q
 			m.updateViewport()

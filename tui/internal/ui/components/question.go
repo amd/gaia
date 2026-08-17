@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/amd/gaia/tui/internal/ui/theme"
 )
@@ -118,6 +119,14 @@ func (m *QuestionModel) SetWidth(w int) {
 
 func (m QuestionModel) onFreeText() bool {
 	return m.allowFreeText && m.cursor == len(m.options)
+}
+
+// IsFreeTextRow reports whether row is the free-text input row. Mouse
+// handling needs it: clicking an option that is already selected answers
+// with it, but a click on the input row must only focus it — synthesizing
+// Enter there would submit whatever half-typed text it holds.
+func (m QuestionModel) IsFreeTextRow(row int) bool {
+	return m.allowFreeText && row == len(m.options)
 }
 
 func (m QuestionModel) rows() int {
@@ -258,8 +267,12 @@ func (m QuestionModel) layout(inner int) []questionLine {
 			cursor = "> "
 			label = questionSelectedStyle.Render(opt.Label)
 		}
+		// Truncated, never wrapped: layout counts each option label as
+		// exactly one line, and RowAt's row->option map (and every mouse
+		// hit-test built on it) breaks the moment a long label wraps on a
+		// narrow panel.
 		lines = append(lines, questionLine{
-			fmt.Sprintf("%s%s [%d] %s", cursor, marker, i+1, label), i,
+			ansi.Truncate(fmt.Sprintf("%s%s [%d] %s", cursor, marker, i+1, label), inner, "…"), i,
 		})
 		if opt.Description != "" {
 			for _, l := range strings.Split(WrapText("      "+opt.Description, inner), "\n") {

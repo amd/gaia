@@ -145,18 +145,23 @@ type pasteImageMsg struct {
 	err  error
 }
 
-// pasteFromClipboardOrImage is Ctrl+V's real entry point: an image on the
-// clipboard wins over text — a screenshot tool puts nothing useful in the
-// text slot anyway, and a person who just pressed Win+Shift+S wants the
-// image, not whatever text was on the clipboard before that.
+// pasteFromClipboardOrImage is Ctrl+V's real entry point: TEXT on the
+// clipboard wins over an image. A screenshot tool (Win+Shift+S,
+// Cmd+Shift+4) puts nothing in the text slot, so screenshots still paste as
+// images — but Excel, Word, and browsers put BOTH a text and a bitmap
+// rendering of the same copy on the clipboard, and image-first turned
+// "paste the cells I copied" into a PNG path of a picture of them.
 //
 // readClipboardImagePNG (one implementation per OS — clipboardimage_*.go) is
 // the only OS-specific part; everything after it (encode-to-temp-file,
 // insert-the-path) is shared, so a platform that cannot read clipboard images
-// at all (clipboardimage_other.go) still gets a correct, if narrower, Ctrl+V:
-// ok=false falls straight through to the existing text path below.
+// at all (clipboardimage_other.go) still gets a correct, if narrower, Ctrl+V.
 func pasteFromClipboardOrImage() tea.Cmd {
 	return func() tea.Msg {
+		text, terr := clipboard.ReadAll()
+		if terr == nil && strings.TrimSpace(text) != "" {
+			return pasteClipboardMsg{text: text, err: nil}
+		}
 		png, ok, err := readClipboardImagePNG()
 		if ok {
 			if err != nil {
@@ -165,7 +170,6 @@ func pasteFromClipboardOrImage() tea.Cmd {
 			path, werr := writeClipboardImageToTemp(png)
 			return pasteImageMsg{path: path, err: werr}
 		}
-		text, terr := clipboard.ReadAll()
 		return pasteClipboardMsg{text: text, err: terr}
 	}
 }
@@ -178,10 +182,16 @@ func pasteFromClipboardOrImage() tea.Cmd {
 // this half, the part actually worth testing, is a pure function of bytes in,
 // a file on disk out.
 func writeClipboardImageToTemp(png []byte) (string, error) {
-	// A dedicated subdirectory, swept on use: without it every Ctrl+V left a
-	// multi-MB PNG in %TEMP% forever. Seven days comfortably outlives any
-	// session that might still hand the path to the agent.
-	dir := filepath.Join(os.TempDir(), "gaia-paste")
+	// Under the user's HOME, not os.TempDir(): the gaia agent's default file
+	// sandbox is the home directory, and on Linux/macOS the system temp dir
+	// lives outside it — the agent would refuse the very path this paste
+	// inserts. A dedicated subdirectory, swept on use, keeps pastes from
+	// accumulating forever.
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("could not resolve a home directory for the pasted image: %w", err)
+	}
+	dir := filepath.Join(home, ".gaia", "paste")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return "", fmt.Errorf("could not create the paste directory %s: %w", dir, err)
 	}

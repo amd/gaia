@@ -55,10 +55,18 @@ func (m *ChatModel) applyMouseCapture() tea.Cmd {
 		return tea.DisableMouse
 
 	case wantOn && (!m.mouseCaptured || wantAll != m.mouseCaptureAllMotion):
+		steppingDown := m.mouseCaptured && m.mouseCaptureAllMotion && !wantAll
 		m.mouseCaptured = true
 		m.mouseCaptureAllMotion = wantAll
 		if wantAll {
 			return tea.EnableMouseAllMotion
+		}
+		if steppingDown {
+			// bubbletea's EnableMouseCellMotion sends only ?1002h — it never
+			// clears ?1003, and a terminal tracking the two flags
+			// independently keeps streaming every pointer movement while our
+			// state says Cell-Motion. Drop everything first, then re-arm.
+			return tea.Sequence(tea.DisableMouse, tea.EnableMouseCellMotion)
 		}
 		return tea.EnableMouseCellMotion
 

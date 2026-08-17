@@ -140,7 +140,11 @@ func TestCopyingWithNoAnswerYetReportsIt(t *testing.T) {
 // writes into a swept subdirectory. This pins both halves: old pastes go,
 // fresh ones (and non-paste files) stay.
 func TestWriteClipboardImageSweepsOldPastes(t *testing.T) {
-	dir := filepath.Join(os.TempDir(), "gaia-paste")
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatalf("home: %v", err)
+	}
+	dir := filepath.Join(home, ".gaia", "paste")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
