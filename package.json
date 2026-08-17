@@ -21,8 +21,8 @@
     "electron": "^43.2.0"
   },
   "dependencies": {
-    "@prisma/client": "^7.9.0",
-    "prisma": "^7.9.0",
+    "@prisma/client": "^7.9.1",
+    "prisma": "^7.9.1",
     "zod": "^4.4.3"
   },
   "overrides": {

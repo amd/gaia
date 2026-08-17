@@ -180,7 +180,8 @@ func TestKeysRouteToThePendingQuestion(t *testing.T) {
 	}
 }
 
-// Cancelling the turn takes the question down with it.
+// Cancelling the turn takes the question down with it. Streaming itself does
+// not clear until the run settles (doneMsg) -- see requestCancel (#2901).
 func TestCancellingTheTurnClearsTheQuestion(t *testing.T) {
 	c := &respondingClient{}
 	m := modelWith(t, c)
@@ -192,8 +193,14 @@ func TestCancellingTheTurnClearsTheQuestion(t *testing.T) {
 	if m.question != nil {
 		t.Error("an abandoned question must not stay on screen")
 	}
+	if !m.streaming {
+		t.Error("streaming must stay true until the run's channel settles (doneMsg), not flip synchronously")
+	}
+
+	updated, _ = m.Update(doneMsg{ch: m.events})
+	m = updated.(ChatModel)
 	if m.streaming {
-		t.Error("Esc must still cancel the turn while a question is up")
+		t.Error("Esc must still cancel the turn while a question is up, once settlement is confirmed")
 	}
 }
 

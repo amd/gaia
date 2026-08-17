@@ -48,10 +48,28 @@
  * raw scan results. `NeedsYouItem.kind` reuses `AttentionItemKind` (extended
  * with "urgent" / "needs_response") rather than a new enum. No existing
  * field changed, so 2.4 consumers keep working (additive).
+ * Schema 2.12 (additive over 2.11, #2829): `EmailQueryRequest` gains an
+ * optional `session_id` — when the host sends it, the run resolves the SAME
+ * agent every other turn on that id used, instead of a throwaway per-call
+ * agent, so a reference to something an earlier turn surfaced can resolve.
+ * Omitted -> unchanged behaviour. No existing field changed (additive).
+ * Schema 2.13 (additive over 2.12, #2900): `PreScanItem` gains
+ * `is_phishing`/`is_spam` (boolean, default `false`) — a flag previously
+ * readable only inside a prose `why` string is now a real field.
+ * `EmailPreScanResult` gains `suspicious` (PreScanItem[]) and
+ * `suspicious_total` (number) — the phishing/spam-flagged subset of
+ * `actionable`, captured before `actionable`'s own cap so a flagged message
+ * ranked past it is never silently dropped from the count. No existing
+ * field changed (additive).
+ * Schema 2.14 (additive over 2.13, #2629): a third mailbox provider value,
+ * `microsoft_work` (work Microsoft 365 / Entra, distinct from the personal
+ * `microsoft` Outlook.com connector), is now valid wherever a provider
+ * string is accepted or returned. No existing field or value changed
+ * (additive).
  */
 
 /** Frozen contract version echoed by the server's `/version` endpoint. */
-export const SCHEMA_VERSION = "2.11" as const;
+export const SCHEMA_VERSION = "2.14" as const;
 
 /**
  * The five-bucket triage taxonomy (schema 2.0 — contract.py: EmailCategory).
@@ -346,6 +364,18 @@ export interface PreScanItem {
    * detection makes no calendar changes.
    */
   is_meeting_request: boolean;
+  /**
+   * True when the shared phishing detector (`detect_phishing`) flagged this
+   * message (schema 2.13, #2900). Previously readable only as a fragment
+   * inside `why` ("flagged as phishing — ..."); now a real field so a
+   * caller can act on it without re-parsing prose.
+   */
+  is_phishing: boolean;
+  /**
+   * True when the shared spam heuristic flagged this message (schema 2.13,
+   * #2900). Same rationale as `is_phishing` above.
+   */
+  is_spam: boolean;
 }
 
 /** Session preferences that shaped a pre-scan (contract.py: PreScanPreferencesApplied). */
@@ -440,6 +470,20 @@ export interface EmailPreScanResult {
   needs_you_total: number;
   /** The filtered remainder: a count PLUS the test(s) that filtered it (schema 2.11). */
   bulk?: BulkSummary | null;
+  /**
+   * Messages flagged `is_phishing`/`is_spam` this scan (schema 2.13,
+   * #2900) — a VIEW over the same rows already present in `actionable`
+   * above, captured BEFORE `actionable`'s cap so a flagged message ranked
+   * past that cap is never silently dropped. Never a second classification
+   * pass.
+   */
+  suspicious: PreScanItem[];
+  /**
+   * The true count of flagged messages before `suspicious`'s own cap
+   * (schema 2.13, #2900) — lets a caller state the count verbatim rather
+   * than counting the (possibly capped) list.
+   */
+  suspicious_total: number;
 }
 
 /**
@@ -928,6 +972,16 @@ export interface EmailQueryRequest {
    * which then get an immediate actionable refusal instead.
    */
   can_answer_questions?: boolean;
+  /**
+   * Opaque conversation id (schema 2.12, #2829). Omitted -> a throwaway
+   * per-call agent, exactly like before. Present -> the run resolves the
+   * SAME agent every other turn on this id used, so a reference to
+   * something an earlier turn surfaced can resolve. Mint one per
+   * conversation and reuse it (e.g. `crypto.randomUUID()`) — the sidecar
+   * keys a real, stateful agent off it, so the caller controls
+   * conversation boundaries, not the server.
+   */
+  session_id?: string;
 }
 
 /** Progress narration (also carries folded step/thinking/plan lines). */
@@ -1031,6 +1085,8 @@ export interface QueryUsage {
   elapsed?: number;
   /** Token counts, when the backend reports them. */
   tokens?: number;
+  /** Time to first inference token, in seconds, when the backend reports it. */
+  ttft?: number;
   [key: string]: unknown;
 }
 

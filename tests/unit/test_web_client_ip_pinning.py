@@ -1,6 +1,7 @@
 import socket
 import threading
 from unittest.mock import MagicMock, patch
+from urllib.parse import urlparse
 
 import pytest
 import requests
@@ -138,6 +139,35 @@ def test_http_pinning_does_not_set_tls_hostname(monkeypatch):
     assert "93.184.216.34:80" in req.url
 
 
+@pytest.mark.parametrize(("scheme", "port"), [("http", 80), ("https", 443)])
+def test_ip_pinning_brackets_ipv6_literals(monkeypatch, scheme, port):
+    pinned_ip = "2606:4700:4700::1111"
+
+    def fake_getaddrinfo(host, resolved_port, *args, **kwargs):
+        return [
+            (
+                socket.AF_INET6,
+                socket.SOCK_STREAM,
+                6,
+                "",
+                (pinned_ip, resolved_port, 0, 0),
+            )
+        ]
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+    adapter = PinnedIPAdapter()
+    req = requests.Request("GET", f"{scheme}://example.com/path").prepare()
+    mock_response = requests.Response()
+
+    with patch.object(PinnedIPAdapter.__bases__[0], "send", return_value=mock_response):
+        adapter.send(req)
+
+    parsed = urlparse(req.url)
+    assert f"[{pinned_ip}]:{port}" in parsed.netloc
+    assert parsed.hostname == pinned_ip
+    assert parsed.port == port
+
+
 def test_concurrent_https_requests_use_correct_tls_hostname(monkeypatch):
     """Each thread's HTTPS request gets the correct assert_hostname on its pool."""
 
@@ -270,6 +300,19 @@ def test_strip_tls_host_without_userinfo():
     clean, hostname = PinnedIPAdapter._strip_tls_host(url)
     assert hostname is None
     assert clean == url
+
+
+def test_strip_tls_host_brackets_ipv6_literal():
+    pinned_ip = "2606:4700:4700::1111"
+    url = f"https://example.com@[{pinned_ip}]:443/path?q=1"
+
+    clean, hostname = PinnedIPAdapter._strip_tls_host(url)
+
+    parsed = urlparse(clean)
+    assert hostname == "example.com"
+    assert parsed.netloc == f"[{pinned_ip}]:443"
+    assert parsed.hostname == pinned_ip
+    assert parsed.port == 443
 
 
 # ============================================================================

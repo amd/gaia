@@ -7,7 +7,7 @@
 # single source the publish workflow reads. Both are asserted equal in CI.
 id: terminal-hub
 name: GAIA Terminal Hub
-version: 0.22.0
+version: 0.23.0
 description: "Browse, install, and chat with GAIA agents from the terminal"
 author: AMD
 license: MIT
@@ -24,8 +24,9 @@ icon: terminal
 tools_count: 0
 models: []
 
-# 0.22.0's wheel serves host API 1; this binary needs 1.1 for the control plane and
-# the /v1/<agent>/* relay, so the floor is the next core release.
+# Needs daemon host API v1.1; released 0.22.0 ships v1, so the first core that
+# can serve this binary is the next release. util/check_component_core_api.py
+# enforces it and blocks a publish under an older core.
 min_gaia_version: "0.23.0"
 
 requirements:

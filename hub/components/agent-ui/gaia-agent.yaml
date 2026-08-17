@@ -6,7 +6,7 @@
 # release. The publish workflow reads this file and asserts the two agree.
 id: agent-ui
 name: GAIA Agent UI
-version: 0.22.0
+version: 0.23.0
 description: "Desktop app for chatting with GAIA agents, with documents and RAG"
 author: AMD
 license: MIT
@@ -27,9 +27,7 @@ icon: monitor
 tools_count: 0
 models: []
 
-# 0.22.0's wheel serves host API 1; the daemon contract these components rely on needs
-# 1.1, so the floor is the next core release.
-min_gaia_version: "0.23.0"
+min_gaia_version: "0.22.0"
 
 requirements:
   # The Electron shell alone. Whichever agent the user opens adds its own model

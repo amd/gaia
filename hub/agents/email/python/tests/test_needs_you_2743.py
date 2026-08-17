@@ -270,18 +270,18 @@ class TestNeedsYouOrdering:
 
 
 class TestNeedsYouCap:
-    def test_capped_at_five_with_honest_total(self):
+    def test_capped_with_honest_total(self):
         gmail = FakeGmailBackend(user_email="me@example.com")
         mapping = {}
-        for i in range(7):
+        for i in range(14):
             msg_id = f"urgent-{i}"
             gmail.add_message(_msg(msg_id, internal_date=str(1700000000000 + i)))
             mapping[msg_id] = CATEGORY_URGENT
         out = pre_scan_inbox_impl(
-            gmail, max_messages=10, slm_classifier=_slm_by_id(mapping)
+            gmail, max_messages=20, slm_classifier=_slm_by_id(mapping)
         )
-        assert len(out["needs_you"]) == NEEDS_YOU_CAP == 5
-        assert out["needs_you_total"] == 7
+        assert len(out["needs_you"]) == NEEDS_YOU_CAP == 10
+        assert out["needs_you_total"] == 14
 
 
 class TestBulkFilterTests:
@@ -541,6 +541,9 @@ class TestContractAdditivity:
             "needs_you",
             "needs_you_total",
             "bulk",
+            # #2900: the phishing/spam-flagged subset of actionable.
+            "suspicious",
+            "suspicious_total",
         }
 
 

@@ -10,6 +10,13 @@
  * Worker serves can be consumed by the same code that reads the source manifest.
  */
 
+/**
+ * Catalog lane discriminator. `agent | app | component` shipped with #1716;
+ * `skill` is the marketplace lane (#2467) — a `SKILL.md` (± `tools.py`) bundle
+ * published and installed on its own, not a runnable package.
+ */
+export type PackageType = "agent" | "app" | "component" | "skill";
+
 /** Worker runtime bindings (see wrangler.toml). */
 export interface Env {
   /** R2 bucket holding the catalog, per-agent manifests, and artifacts. */
@@ -76,7 +83,11 @@ export interface ParsedManifest {
   author: string;
   license: string;
   language: string;
-  /** Package kind: agent | app | component. Defaults to "agent" (#1716). */
+  /**
+   * Package kind: agent | app | component. Defaults to "agent" (#1716).
+   * `skill` is deliberately NOT accepted here — skills are published from a
+   * `SKILL.md` through POST /publish/skill, not from a gaia-agent.yaml (#2467).
+   */
   type: string;
   category: string;
   tags: string[];
@@ -160,6 +171,151 @@ export interface AgentManifest {
   versions: Record<string, VersionEntry>;
 }
 
+// ── Skills lane (#2467) ─────────────────────────────────────────────────────
+// A skill is published from its `SKILL.md` front matter, whose grammar is
+// `docs/plans/skill-format.mdx`: the Agent Skills standard base (name,
+// description, license, version) plus the GAIA-owned `metadata.gaia` namespace.
+// Skills live under their own R2 prefix (`skills/`) but share the catalog, so
+// the marketplace is a fourth lane of the existing hub, not a second registry.
+
+/**
+ * One `@tool` declaration a skill PROVIDES (`metadata.gaia.tools`). Distinct
+ * from `tools_required`, which names registry tools the skill CONSUMES — the
+ * skill-format spec locks that distinction, so never collapse the two.
+ */
+export interface SkillToolDecl {
+  name: string;
+  /** "" when the declaration omits one. */
+  description: string;
+}
+
+/**
+ * `metadata.gaia.requirements` — the skill's own constraint block. Unrelated to
+ * the agent-lane {@link Requirements} (memory/disk/platforms): a skill declares
+ * model/context/runtime/dependency constraints instead. Always fully populated
+ * ("" / [] for unset) so the stored shape is stable.
+ */
+export interface SkillRequirements {
+  /** Minimum parameter count, e.g. ">=7B" (advisory). */
+  model: string;
+  /** Minimum context window, e.g. ">=8K". */
+  context: string;
+  /** Python constraint, e.g. ">=3.10". */
+  python: string;
+  dependencies: string[];
+  node_dependencies: string[];
+  env_vars: string[];
+  hardware: SkillHardware;
+}
+
+/** `metadata.gaia.requirements.hardware`; "" when unset. */
+export interface SkillHardware {
+  /** e.g. "required" | "optional". */
+  npu: string;
+  /** e.g. ">=8GB". */
+  gpu_vram: string;
+}
+
+/**
+ * The pre-publish security-audit result recorded against a published skill
+ * (#2468). Only cleared publishes reach the catalog, so the stored verdict is
+ * either "ALLOW" (a report cleared the gate) or "unaudited" (the tier's gate is
+ * advisory and no report was supplied) — BLOCK/REVIEW are rejected at publish
+ * and never written. See `audit.ts`.
+ */
+export interface SkillAuditRecord {
+  verdict: "ALLOW" | "unaudited";
+  /** Audit engine id + version from the report, e.g. "gaia-skill-audit/0.1.0"; "" when unaudited. */
+  engine: string;
+  /** ISO-8601 timestamp the report was produced; "" when unaudited. */
+  audited_at: string;
+  /** Number of non-blocking findings the report surfaced. */
+  findings: number;
+  /**
+   * How much the verdict is worth (#2468).
+   *
+   * `publisher-asserted` — the publisher supplied the report and the Worker
+   * checked it is self-consistent (right skill, version, tier, manifest bytes).
+   * It is NOT proof the audit ran: the report carries no attestation a publisher
+   * could not mint, so a consumer must not read it as "AMD vouches for this".
+   *
+   * `unaudited` — no report was attached (only the advisory `experimental` tier
+   * permits this).
+   *
+   * A future `signer-attested` value belongs here once report signing lands
+   * (#1710); the field exists now so consumers can already tell the cases apart
+   * instead of having to assume the strongest one.
+   */
+  attestation?: "publisher-asserted" | "unaudited";
+  /** Tiers the audit reported as cleared; "" / [] when unaudited. */
+  cleared_tiers?: string[];
+  /** sha256 over the audited skill tree, as reported. Recorded, not recomputed. */
+  content_digest?: string;
+  /** sha256 over the audited SKILL.md, verified against the uploaded manifest. */
+  manifest_digest?: string;
+}
+
+/**
+ * A validated `SKILL.md` front matter block. Mirrors the field reference in
+ * `docs/plans/skill-format.mdx`; the canonical loader-side validation is
+ * `src/gaia/skills/` (#888).
+ */
+export interface ParsedSkillManifest {
+  name: string;
+  version: string;
+  description: string;
+  /** "" when the front matter omits it. */
+  license: string;
+  security_tier: string;
+  permissions: string[];
+  tools: SkillToolDecl[];
+  tools_required: string[];
+  requirements: SkillRequirements;
+}
+
+/**
+ * Per-skill manifest stored at `skills/<name>/manifest.json`. The skill-lane
+ * counterpart of {@link AgentManifest}: same aggregate-plus-versions shape, so
+ * immutability, ownership, and version resolution work identically. Install-time
+ * artifact verification reads `versions[v].artifact.sha256` from here, exactly
+ * as the agent lane does.
+ */
+export interface SkillManifest {
+  name: string;
+  description: string;
+  /** Publisher identity resolved from the publish token — a skill's provenance. */
+  author: string;
+  license: string;
+  security_tier: string;
+  permissions: string[];
+  tools: SkillToolDecl[];
+  tools_required: string[];
+  requirements: SkillRequirements;
+  audit: SkillAuditRecord;
+  latest_version: string;
+  versions: Record<string, VersionEntry>;
+}
+
+/**
+ * Skill-only catalog fields, nested so the flat {@link IndexEntry} keys keep
+ * their agent-lane meaning for every existing reader. `security_tier` and
+ * `permissions` are NOT duplicated here — they are already top-level and carry
+ * the same meaning in both lanes.
+ *
+ * Named `skill_metadata` rather than `skill` because `IndexEntry.skill` is
+ * already taken by an agent's SKILL.md playbook markdown.
+ */
+export interface SkillMetadata {
+  /** Typed `@tool` declarations the skill provides. */
+  tools: SkillToolDecl[];
+  /** Registry tool names the skill consumes (the #887/#1451 recipe contract). */
+  tools_required: string[];
+  /** Skill-shaped requirements (model/context/deps/env/hardware). */
+  requirements: SkillRequirements;
+  /** Pre-publish security-audit result (#2468). */
+  audit: SkillAuditRecord;
+}
+
 /**
  * The `requirements` block in an index entry. Same numbers as
  * {@link Requirements} but `npu` is rendered as "required"/"optional" — the
@@ -187,8 +343,13 @@ export interface IndexEntry {
   latest_version: string;
   icon: string;
   language: string;
-  /** Package kind: agent | app | component. Defaults to "agent" (#1716). */
-  type: string;
+  /**
+   * Catalog lane: agent | app | component (#1716) | skill (#2467). Defaults to
+   * "agent". A reader that renders every entry as an installable agent MUST
+   * filter on this — skills install through `gaia skill install`, not the agent
+   * install path.
+   */
+  type: PackageType;
   author: string;
   security_tier: string;
   download_size_bytes: number;
@@ -234,6 +395,11 @@ export interface IndexEntry {
    * published for the latest version.
    */
   package?: PackageInfo;
+  /**
+   * Skill-lane fields (#2467). Present only on `type: "skill"` entries; absent
+   * everywhere else, so agent-lane readers are untouched.
+   */
+  skill_metadata?: SkillMetadata;
 }
 
 /** One file inside the whole-package zip (for the hub's file-list display). */
@@ -252,7 +418,14 @@ export interface PackageInfo {
   files: PackageFile[];
 }
 
-/** The top-level catalog served at GET /index.json. */
+/**
+ * The top-level catalog served at GET /index.json.
+ *
+ * Every lane — agents, apps, components, and skills (#2467) — lives in the one
+ * `agents` array, discriminated by {@link IndexEntry.type}. The key keeps its
+ * historical name so every published consumer keeps parsing the catalog
+ * unchanged; lane segmentation is a filter, not a second array.
+ */
 export interface CatalogIndex {
   schema_version: number;
   generated_at: string;

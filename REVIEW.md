@@ -8,8 +8,8 @@ This rubric pairs with the review workflow (`.github/workflows/claude.yml`): the
 delivers this file to the reviewer from the **base branch** and enforces the non-tunable
 invariants itself — the security-escalation protocol (tagging @kovtcharov-amd) and the
 GAIA architecture/convention checks. Keep those OUT of this file; they are defense-in-depth
-and must not depend on this rubric loading. See `CLAUDE.md` → "Issue Response Guidelines"
-for the shared tone/format rules this rubric builds on.
+and must not depend on this rubric loading. See `CLAUDE.md` → "How You Communicate"
+for the shared voice this rubric builds on.
 
 ## Correctness first
 

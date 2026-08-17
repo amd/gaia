@@ -59,9 +59,11 @@ def thread_budget_tokens() -> int:
     )
 
 
-def envelope_budget_tokens(ctx_size: Optional[int] = None) -> int:
+def envelope_budget_tokens(
+    ctx_size: Optional[int] = None, extra_fixed_tokens: int = 0
+) -> int:
     """Usable token budget for a tool-result envelope re-read on the agent
-    loop's next turn (#2087, #2514).
+    loop's next turn (#2087, #2514, #2466).
 
     ``ctx_size`` (default ``CONTEXT_TARGET_TOKENS``, the eval harness's
     pinned 16K target) minus the agent-loop fixed prompt cost (system prompt
@@ -74,9 +76,23 @@ def envelope_budget_tokens(ctx_size: Optional[int] = None) -> int:
     body budget (#2514) — passes the active profile's window explicitly,
     e.g. ``envelope_budget_tokens(ctx_size=active_profile_ctx_size())``:
     GPU/CPU 65536, NPU 32768 (``gaia.llm.lemonade_client``).
+
+    ``extra_fixed_tokens`` accounts for prompt text this launch carries that
+    ``_AGENT_LOOP_FIXED_TOKENS`` does not model — today, the bodies of the
+    loaded Agent Skills (#2466), which vary by which skill set is active. It is
+    a *subtraction from the envelope*, never an increase in the ctx: every token
+    a skill adds to the prompt is a token the tool result must give back, or the
+    post-tool turn overflows the window. Measured, not guessed — see
+    :func:`skill_prompt_tokens`.
     """
     base = CONTEXT_TARGET_TOKENS if ctx_size is None else ctx_size
-    return max(0, base - _AGENT_LOOP_FIXED_TOKENS - _RESPONSE_RESERVE_TOKENS)
+    return max(
+        0,
+        base
+        - _AGENT_LOOP_FIXED_TOKENS
+        - _RESPONSE_RESERVE_TOKENS
+        - max(0, extra_fixed_tokens),
+    )
 
 
 def active_profile_ctx_size() -> int:
@@ -104,6 +120,41 @@ def active_profile_ctx_size() -> int:
             "`gaia config set default_device gpu`."
         ) from exc
     return profile_ctx_size(device)
+
+
+# Chars per token for prose-heavy Markdown, measured on real hardware: the
+# verbatim 60-email envelope was 23,965 chars → ~11.4K tokens (see
+# ``estimate_tokens_json``). ``estimate_tokens``' chars//4 prose ratio therefore
+# under-counts by ~2x, which is fine for a *capacity* estimate and wrong for a
+# *budget subtraction* — under-crediting the skill cost is how the post-tool turn
+# 400s. Round pessimistically, always.
+_SKILL_BODY_CHARS_PER_TOKEN = 2.1
+
+
+def skill_prompt_tokens(agent) -> int:
+    """Token cost of the Agent Skills bodies loaded into *agent*'s prompt.
+
+    Zero when the agent has no skills loaded, which keeps every pre-#2466 budget
+    calculation byte-identical. Measured off the rendered fragment the agent
+    actually injects, so a trimmed or extended skill body is reflected without
+    touching a constant.
+
+    Deliberately pessimistic (``_SKILL_BODY_CHARS_PER_TOKEN``, not
+    ``estimate_tokens``): this figure is *subtracted* from the envelope, so an
+    under-count silently hands the tool result budget the prompt is already
+    using. Over-crediting costs exemplar slots; under-crediting costs a 400.
+    """
+    render = getattr(agent, "get_skills_system_prompt", None)
+    if not callable(render):
+        return 0
+    fragment = render()
+    if not fragment:
+        return 0
+    # Never below the generic estimate — this is a floor, not a replacement.
+    return max(
+        estimate_tokens(fragment),
+        int(len(fragment) / _SKILL_BODY_CHARS_PER_TOKEN) + 1,
+    )
 
 
 def estimate_tokens(text: str) -> int:

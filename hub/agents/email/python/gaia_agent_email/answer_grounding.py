@@ -23,10 +23,11 @@ from __future__ import annotations
 import json
 import re
 import time
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from gaia_agent_email.attention_cache import ATTENTION_CACHE_TTL_SECONDS
 from gaia_agent_email.attention_cache import peek as _peek_attention_cache
+from gaia_agent_email.mailbox_state import provider_label
 from gaia_agent_email.tools.calendar_tools import (
     _listed_event_count_from_conversation,
     append_conflict_grounding_correction,
@@ -298,6 +299,369 @@ def strip_scaffolding_leaks(text: str) -> str:
     return cleaned.strip()
 
 
+# A numbered triage item at the start of a line -- the shape the list is
+# supposed to have, and the signal that this answer IS a triage list.
+# Tolerates the shapes a model reaches for around the number — a bullet, bold
+# markers, or both ("- **9.** …"). Missing one of them makes the rebuild below
+# think the reply has no list and append a second copy of it.
+_NUMBERED_ITEM_LINE_RE = re.compile(
+    r"^[ \t]*(?:[-*+•·][ \t]*)?\*{0,2}\d{1,3}\.\*{0,2}[ \t]", re.MULTILINE
+)
+
+# A numbered item that ran on mid-line instead of starting its own, e.g.
+# "...scheduling meetings: 4. Tomasz ... 5. Tomasz ...".
+_INLINE_NUMBERED_ITEM_RE = re.compile(r"(?<=\S)[ \t]+(?=\d{1,3}\.[ \t]+\S)")
+
+# Any bare address on an item line, however the model punctuated around it.
+# The sender is already named beside it, so a bare address renders twice --
+# once as text, once as the mailto: link the markdown renderer expands. An
+# explicit mailto: link goes too, for the same reason.
+_ITEM_LINE_EMAIL_RE = re.compile(
+    r"[ \t]*\[?<?(?:mailto:)?[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}>?\]?"
+    r"(?:\((?:mailto:)?[^)]*\))?"
+)
+
+
+def normalize_triage_list(text: str) -> str:
+    """Give a numbered triage list the shape the skill asks for and the model
+    keeps missing: one item per line, no duplicated sender address.
+
+    Formatting a list the tool already computed is not a judgement call, so it
+    is enforced here rather than requested in the prompt — three consecutive
+    live runs showed the instruction alone does not hold. Applies only to an
+    answer that already contains a numbered item at the start of a line, so
+    ordinary prose that happens to say "in 5. Then" is untouched.
+    """
+    if not text or not _NUMBERED_ITEM_LINE_RE.search(text):
+        return text
+    out = _INLINE_NUMBERED_ITEM_RE.sub("\n", text)
+    out = "\n".join(
+        _ITEM_LINE_EMAIL_RE.sub("", line) if _NUMBERED_ITEM_LINE_RE.match(line) else line
+        for line in out.split("\n")
+    )
+    return out
+
+
+# needs_you ``kind`` → the section it belongs under, in the order refs are
+# assigned (_NEEDS_YOU_KIND_ORDER, read_tools.py), so the numbers ascend down
+# the page without the renderer sorting anything.
+_TRIAGE_SECTIONS: List[Tuple[str, Tuple[str, ...]]] = [
+    ("Waiting on your reply", ("urgent", "waiting_on_you")),
+    ("Needs a response", ("needs_response",)),
+    ("Meetings to decide", ("meeting_request",)),
+    ("Needs a manual look", ("needs_review", "action_item")),
+]
+
+
+# ``needs_you.sender`` carries a display name, an address, or both. Only the
+# name is worth a row -- an address renders twice once the markdown renderer
+# turns it into a mailto: link.
+_SENDER_EMAIL_RE = re.compile(r"\s*<?([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})>?")
+
+
+def _sender_label(sender: Any) -> str:
+    text = str(sender or "").strip()
+    if not text:
+        return "unknown sender"
+    match = _SENDER_EMAIL_RE.search(text)
+    if match is None:
+        return text
+    name = _SENDER_EMAIL_RE.sub(" ", text).strip(" <>|,-–—")
+    # Address-only sender: keep it (the reader still needs to know who) but as
+    # code, so the renderer cannot autolink it into a duplicate.
+    return name or f"`{match.group(1)}`"
+
+
+def _age_phrase(age_seconds: Any) -> str:
+    if not isinstance(age_seconds, (int, float)) or age_seconds < 0:
+        return ""
+    days = int(age_seconds // 86400)
+    if days >= 1:
+        return f"{days}d ago"
+    hours = int(age_seconds // 3600)
+    return f"{hours}h ago" if hours >= 1 else "just now"
+
+
+def render_needs_you_list(envelope: Dict[str, Any]) -> str:
+    """Build the numbered triage list straight from ``needs_you``.
+
+    The list is entirely determined by the tool's own output — every field is
+    already computed, and the refs are already in display order — so composing
+    it is not a judgement the model should be making. Five consecutive live
+    runs had it drop items, renumber them, merge sections, or answer with
+    totals alone; none of those are possible here.
+    """
+    items = envelope.get("needs_you") or []
+    if not items:
+        return ""
+    by_kind: Dict[str, List[Dict[str, Any]]] = {}
+    for item in items:
+        by_kind.setdefault(str(item.get("kind") or ""), []).append(item)
+
+    blocks: List[str] = []
+    for heading, kinds in _TRIAGE_SECTIONS:
+        rows = [row for kind in kinds for row in by_kind.get(kind, [])]
+        if not rows:
+            continue
+        rows.sort(key=lambda r: r.get("ref") or 0)
+        lines = [f"### {heading}", ""]
+        for row in rows:
+            who = _sender_label(row.get("sender"))
+            what = str(row.get("subject") or "").strip() or "(no subject)"
+            # ``why`` is the classifier's own reason for the row, not chat-model
+            # embellishment, so it survives the rewrite.
+            notes = [
+                n
+                for n in (_age_phrase(row.get("age_seconds")), str(row.get("why") or "").strip())
+                if n
+            ]
+            suffix = f" ({' · '.join(notes)})" if notes else ""
+            lines.append(f"{row.get('ref')}. {who} — {what}{suffix}")
+        blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
+
+
+def _lead_paragraph(text: str) -> str:
+    """The answer's opening prose — the one part still worth asking a model for.
+
+    Skips headings and any block that has already turned into a list, so a
+    reply that opens straight into items contributes no lead at all rather
+    than half a list.
+    """
+    for block in (text or "").split("\n\n"):
+        candidate = block.strip()
+        if not candidate or candidate.startswith("#"):
+            continue
+        if _NUMBERED_ITEM_LINE_RE.search(candidate):
+            break
+        return candidate
+    return ""
+
+
+def rewrite_triage_answer(
+    final_answer: str, conversation: Optional[List[Dict[str, Any]]]
+) -> str:
+    """Replace a triage reply's list with one built from the scan itself.
+
+    The categories are still model judgement — a heuristic, then the
+    ``specific-ai-triage`` SLM, then an LLM fallback, all inside
+    ``pre_scan_inbox``. What is NOT a judgement is transcribing the result,
+    and asking the chat model to do it produced invented numbering, dropped
+    items, merged sections, and once no list at all. So the chat model keeps
+    the opening sentence and this renders the rest.
+
+    Deliberately keyed on tool PRESENCE, not on parsing the user's question:
+    any turn that calls ``pre_scan_inbox`` gets the authoritative list, even
+    for a narrower ask ("how many urgent emails do I have?"). A hand-
+    summarized partial view is exactly the failure mode this function
+    replaces, and ``pre_scan_inbox`` only ever runs when the model judged
+    the question worth a scan in the first place — so a rewrite here is
+    never wrong, only sometimes more complete than the question strictly
+    asked for.
+    """
+    prescan = last_tool_payload(conversation, "pre_scan_inbox")
+    if not prescan:
+        return final_answer
+    rendered = render_needs_you_list(prescan)
+    if not rendered:
+        return final_answer
+    lead = _lead_paragraph(final_answer) or _honest_prescan_summary(prescan)
+    return f"{lead}\n\n{rendered}"
+
+
+def render_suspicious_list(envelope: Dict[str, Any]) -> str:
+    """Build the flagged-mail list straight from ``suspicious``, as bullets.
+
+    The narrow-tool counterpart to ``render_needs_you_list`` — same
+    rationale: the list is entirely determined by the tool's own output, so
+    composing it is not a judgement the model should be making. A
+    phishing/spam list is higher-stakes to get wrong (drop, merge, or
+    invent an entry) than a general triage list, not lower.
+
+    Deliberately NOT numbered. ``check_suspicious_mail``'s rows carry no
+    ``ref`` — they are never placed on the positional-reference card
+    (``agent._last_needs_you_card`` stays untouched, see
+    ``check_suspicious_mail``'s own docstring) — so a number here would be
+    exactly the "number the card doesn't carry" case ``agent.py``'s
+    NUMBERING ITEMS IN YOUR REPLY rule forbids: a follow-up like "archive 1"
+    would resolve against whatever ``needs_you`` card is still cached from
+    an earlier turn, not against this list, and act on the wrong message.
+    """
+    items = envelope.get("suspicious") or []
+    if not items:
+        return ""
+    lines = ["### Flagged this scan", ""]
+    for row in items:
+        who = _sender_label(row.get("sender"))
+        what = str(row.get("subject") or "").strip() or "(no subject)"
+        tags = [t for t, flag in (("phishing", row.get("is_phishing")), ("spam", row.get("is_spam"))) if flag]
+        why = str(row.get("why") or "").strip()
+        notes = [n for n in (", ".join(tags), why) if n]
+        suffix = f" ({' · '.join(notes)})" if notes else ""
+        lines.append(f"- {who} — {what}{suffix}")
+    return "\n".join(lines)
+
+
+def _suspicious_scan_has_coverage_gap(envelope: Dict[str, Any]) -> bool:
+    """True when a zero-finding scan still owes the user a caveat: a
+    mailbox failed (``degraded``) or the inbox scan didn't reach everything
+    (``scanned`` under ``total_inbox``). Same fields ``_honest_suspicious_summary``
+    already turns into prose — this only decides whether that prose is
+    needed when there is no flagged-mail list to attach it to.
+    """
+    if envelope.get("degraded"):
+        return True
+    scanned = envelope.get("scanned")
+    total_inbox = envelope.get("total_inbox")
+    return (
+        isinstance(scanned, int) and isinstance(total_inbox, int) and scanned < total_inbox
+    )
+
+
+def rewrite_suspicious_mail_answer(
+    final_answer: str, conversation: Optional[List[Dict[str, Any]]]
+) -> str:
+    """Replace ``check_suspicious_mail``'s flagged-mail list with one built
+    from the scan itself — the narrow-tool counterpart to
+    ``rewrite_triage_answer``.
+
+    Same rationale (#2900): a model paraphrasing a precomputed
+    phishing/spam list is exactly the failure mode ``rewrite_triage_answer``
+    exists to prevent for ``pre_scan_inbox``'s ``needs_you`` list, and a
+    flagged-mail list is higher-stakes to get wrong, not lower. Keyed on
+    tool PRESENCE, never question parsing (#2762).
+
+    Deliberately a no-op when ``pre_scan_inbox`` ALSO ran this turn —
+    ``rewrite_triage_answer``'s four-bucket card already wins that turn (see
+    its own docstring and the pinned #2900 residual-risk test); rendering a
+    narrower list here on top would silently discard that card instead of
+    leaving it as the documented residual risk.
+
+    The lead sentence is always the grounded summary, never the model's own
+    framing, once the scan actually flagged something. A model that opens
+    with "Nothing flagged this scan" while ``scan`` carries rows is not a
+    formatting slip like a dropped item or bad numbering — it is a clean
+    bill of health printed directly above the phishing list this function
+    renders, which is worse than the verbosity this rewrite otherwise fixes.
+    Unlike ``rewrite_triage_answer``, this has no downstream contradiction
+    check to catch a wrong opener (guard 2 only reconciles against
+    ``pre_scan_inbox``), so the lead cannot be allowed through unchecked —
+    unconditionally preferring the grounded summary is simpler than pattern-
+    matching every way a model could phrase a false all-clear, and strictly
+    safer.
+
+    Zero findings is normally a no-op (there is no list, so there is
+    nothing to protect against paraphrase) — EXCEPT when the scan itself
+    was incomplete (``_suspicious_scan_has_coverage_gap``): a failed
+    mailbox or a partial inbox pass turns "nothing flagged" from a clean
+    bill of health into a false all-clear, the same failure mode this
+    function exists to prevent, just with an empty list instead of a wrong
+    one (#2900 follow-up). That case unconditionally replaces the answer
+    with ``_honest_suspicious_summary`` too, for the same reason as the
+    non-empty branch above: detecting whether the model's own prose already
+    disclosed the gap is exactly the fragile pattern-matching this module
+    already rejected once.
+    """
+    if last_tool_payload(conversation, "pre_scan_inbox") is not None:
+        return final_answer
+    scan = last_tool_payload(conversation, "check_suspicious_mail")
+    if not scan:
+        return final_answer
+    rendered = render_suspicious_list(scan)
+    if not rendered:
+        if _suspicious_scan_has_coverage_gap(scan):
+            return _honest_suspicious_summary(scan)
+        return final_answer
+    lead = _honest_suspicious_summary(scan)
+    return f"{lead}\n\n{rendered}"
+
+
+def _mailbox_failure_caveat(mailbox_errors: Any) -> str:
+    """One clause naming which mailbox(es) a degraded scan could not read,
+    so a partial scan is never mistaken for whole-account coverage (#2900
+    follow-up — a failed mailbox is the same false-all-clear this rewrite
+    exists to prevent, one layer up).
+
+    Mirrors the phrasing the system prompt already asks the model for
+    (``agent.py``: "Outlook couldn't be scanned (token expired); results
+    below are Gmail only.") so the deterministic fallback and the model's
+    own honest framing read the same way.
+    """
+    clauses = []
+    for entry in mailbox_errors or []:
+        if not isinstance(entry, dict) or not entry.get("mailbox"):
+            # ``degraded`` promised at least one entry here — a malformed
+            # one is a broken envelope, not a normal case worth hiding.
+            logger.warning(
+                "email agent: degraded check_suspicious_mail envelope has a "
+                "malformed mailbox_errors entry (%r) — omitting it from the "
+                "coverage caveat",
+                entry,
+            )
+            continue
+        label = provider_label(entry["mailbox"])
+        error = str(entry.get("error") or "").strip()
+        clauses.append(f"{label} couldn't be scanned ({error})" if error else f"{label} couldn't be scanned")
+    if not clauses:
+        return "Part of your mail could not be scanned this time."
+    return "; ".join(clauses) + "; results below are from the rest of your mailboxes only."
+
+
+def _honest_suspicious_summary(envelope: Dict[str, Any]) -> str:
+    """A minimal, always-grounded summary sentence built straight from the
+    envelope's own counts — the unconditional lead for
+    ``rewrite_suspicious_mail_answer`` once the scan has flagged rows,
+    since the model's own framing sentence cannot be trusted not to
+    contradict that same envelope.
+
+    ``suspicious_total`` is captured pre-cap (#2900) so a flagged message
+    ranked past ``PRE_SCAN_SUSPICIOUS_CAP`` is never silently dropped from
+    the count — but ``render_suspicious_list`` only ever renders the capped
+    ``suspicious`` list beneath this lead. When the two diverge, say so
+    ("showing N") instead of quoting a total the list underneath never
+    displays.
+
+    Two coverage caveats the replaced model sentence could have carried,
+    and the replacement must not silently drop (#2900 follow-up): a failed
+    mailbox (``degraded``/``mailbox_errors``, ``check_suspicious_mail``
+    passes both through from ``pre_scan_inbox``'s own envelope), and a
+    partial inbox scan (``scanned`` under ``total_inbox``).
+    """
+    shown = len(envelope.get("suspicious") or [])
+    total = envelope.get("suspicious_total")
+    if not isinstance(total, int):
+        # The contract (``EmailPreScanResult.suspicious_total``) defaults
+        # this to 0, always present — a missing/non-int value means the
+        # envelope itself is malformed, not a normal case. Falling back to
+        # ``shown`` is the most honest number we CAN state (we have no
+        # other candidate total), but doing so silently would hide a
+        # truncation this same function exists to disclose — log it.
+        logger.warning(
+            "email agent: check_suspicious_mail envelope missing a valid "
+            "suspicious_total (got %r) — summary falls back to the shown "
+            "count, which may under-report a truncated list",
+            total,
+        )
+        total = shown
+    noun = "message" if total == 1 else "messages"
+
+    scanned = envelope.get("scanned", 0)
+    total_inbox = envelope.get("total_inbox")
+    if isinstance(scanned, int) and isinstance(total_inbox, int) and scanned < total_inbox:
+        coverage = f"{scanned} of {total_inbox} in the inbox scanned"
+    else:
+        coverage = f"{scanned} messages scanned"
+
+    if shown < total:
+        lead = f"{total} flagged {noun} this scan — showing {shown}. {coverage}."
+    else:
+        lead = f"{total} flagged {noun} this scan. {coverage}."
+
+    if envelope.get("degraded"):
+        lead += " " + _mailbox_failure_caveat(envelope.get("mailbox_errors"))
+    return lead
+
+
 def _honest_prescan_summary(envelope: Dict[str, Any]) -> str:
     """A minimal, always-grounded pre-scan sentence built straight from the
     envelope's own counts — the fallback used when the model's own framing
@@ -476,6 +840,190 @@ def _attention_card_correction(cached: Dict[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Guard 6 — an invite claimed as sent/received/confirmed (#2766)
+# ---------------------------------------------------------------------------
+#
+# No tool in this package can currently confirm that a genuine calendar
+# invite was sent or received — detect_meeting_request is a text heuristic
+# for PROPOSALS, never a confirmation, and list_calendar_events /
+# detect_calendar_conflicts return real events but an event existing is not
+# evidence anyone emailed an invite for it (see calendar_tools' docstrings).
+# A completion-framed invite claim is therefore always ungrounded today,
+# with one exception: create_event_from_email's own mutation legitimately
+# sends calendar invites to its attendees, so a turn that actually called it
+# licenses the claim (mirrors guard 1's "grounded when a tool ran" shape).
+
+_INVITE_CLAIM_RE = re.compile(
+    r"\binvite[sd]?\b[^.!?]{0,40}\b(?:sent|received|confirmed)\b"
+    r"|\b(?:sent|received)\b[^.!?]{0,40}\binvite[sd]?\b",
+    re.IGNORECASE,
+)
+
+# A negation or hedging modal anywhere in the same clause turns a completed-
+# action / positive claim into something else -- a (correct) denial ("no
+# invite has been sent", "no attendees are listed") or a hypothetical ("an
+# invite would be sent") -- neither of which asserts what the bare claim
+# asserts. Shared with guard 7 below (same concept, not invite-specific).
+# Deliberately broad (checked over the whole clause, not a fixed window)
+# since a denial can front-load its negation far from the claimed word.
+_CLAUSE_NEGATION_RE = re.compile(
+    r"\b(?:no|not|n't|never|none|nobody|isn't|wasn't|hasn't|haven't|didn't"
+    r"|doesn't|don't|aren't|would|will|might|could|should)\b",
+    re.IGNORECASE,
+)
+
+
+def _clause_around(text: str, start: int, end: int) -> str:
+    """The sentence-ish span of ``text`` containing ``[start, end)`` —
+    bounded by the nearest ``.``/``!``/``?`` on either side (or the string's
+    own edges). Shared by guards that need "same clause" context without
+    crossing into an unrelated sentence.
+    """
+    clause_start = (
+        max(
+            text.rfind(".", 0, start),
+            text.rfind("!", 0, start),
+            text.rfind("?", 0, start),
+        )
+        + 1
+    )
+    ends = [
+        idx
+        for idx in (text.find(".", end), text.find("!", end), text.find("?", end))
+        if idx != -1
+    ]
+    clause_end = min(ends) if ends else len(text)
+    return text[clause_start:clause_end]
+
+
+def find_ungrounded_invite_claim(
+    final_answer: Optional[str], conversation: Optional[List[Dict[str, Any]]]
+) -> Optional[str]:
+    """Return a reason when ``final_answer`` claims a calendar invite was
+    sent, received, or confirmed; ``None`` when the claim is grounded,
+    negated, or absent.
+
+    Proposals are not invites (#2766): "X proposed Thursday at 2pm" is fine,
+    "X sent you an invite" is not, unless this turn actually created one.
+    """
+    if not final_answer:
+        return None
+    match = _INVITE_CLAIM_RE.search(final_answer)
+    if not match:
+        return None
+    clause = _clause_around(final_answer, match.start(), match.end())
+    if _CLAUSE_NEGATION_RE.search(clause):
+        return None
+    if "create_event_from_email" in tools_called_this_turn(conversation):
+        return None
+    return f"claims an invite was sent/received/confirmed: {match.group(0)!r}"
+
+
+_INVITE_GROUNDING_CORRECTION = (
+    "\n\nNote: I don't have a way to confirm a calendar invite was actually "
+    "sent or received — what's described above may be a proposal, not a "
+    "confirmed invite."
+)
+
+
+def append_invite_grounding_correction(response_text: str) -> str:
+    """Append a correction notice to a response with an ungrounded invite
+    claim. Never edits the original text — see ``find_ungrounded_invite_claim``
+    for why this is an append, not a replace."""
+    return (response_text or "") + _INVITE_GROUNDING_CORRECTION
+
+
+# ---------------------------------------------------------------------------
+# Guard 7 — an attendee/invitee named for a calendar event this turn's own
+# tool result shows has none (#2766)
+# ---------------------------------------------------------------------------
+#
+# list_calendar_events / detect_calendar_conflicts now report each event's
+# real ``attendees`` (calendar_tools._extract_attendees) — [] when the
+# calendar has no one beyond the organizer, which #2766's live probes show
+# is true of every real event in the reference corpus. This guard is
+# deliberately narrow: it does not try to catch every way a name could leak
+# into prose (arbitrary proper-noun detection is not reliable), only the
+# bounded, checkable case where the model uses attendee/invitee vocabulary
+# for an event this turn's own tool result already proved carries none.
+
+_ATTENDEE_CLAIM_RE = re.compile(r"\battendee[s]?\b|\binvitee[s]?\b", re.IGNORECASE)
+
+
+def _any_listed_event_has_attendees(
+    conversation: Optional[List[Dict[str, Any]]],
+) -> Optional[bool]:
+    """Across every ``list_calendar_events`` / ``detect_calendar_conflicts``
+    result this turn: ``True`` if any listed event carries a non-empty
+    ``attendees``, ``False`` if every one is empty, ``None`` if neither tool
+    ran (nothing to reconcile against).
+    """
+    saw_any_tool = False
+    for entry in _tool_entries(conversation):
+        if entry.get("name") not in (
+            "list_calendar_events",
+            "detect_calendar_conflicts",
+        ):
+            continue
+        payload = _parse_tool_payload(entry.get("content"))
+        if not isinstance(payload, dict):
+            continue
+        events = payload.get("events")
+        if events is None:
+            events = payload.get("conflicts")
+        if not isinstance(events, list):
+            continue
+        saw_any_tool = True
+        for ev in events:
+            if isinstance(ev, dict) and ev.get("attendees"):
+                return True
+    return False if saw_any_tool else None
+
+
+def find_fabricated_attendee_claim(
+    final_answer: Optional[str], conversation: Optional[List[Dict[str, Any]]]
+) -> Optional[str]:
+    """Return a reason when ``final_answer`` names attendees/invitees for a
+    calendar event this turn's own tool result shows has none; ``None``
+    when neither calendar tool ran, at least one listed event actually
+    carries attendees, the answer makes no attendee-shaped claim, or the
+    claim is itself a (correct) denial -- "no attendees are listed" must not
+    be treated like "the attendees are Jane and John" (#2766: an agent
+    honestly reporting the real, empty attendee list is the desired
+    behavior, not a fabrication to correct).
+    """
+    if not final_answer:
+        return None
+    match = _ATTENDEE_CLAIM_RE.search(final_answer)
+    if not match:
+        return None
+    clause = _clause_around(final_answer, match.start(), match.end())
+    if _CLAUSE_NEGATION_RE.search(clause):
+        return None
+    has_attendees = _any_listed_event_has_attendees(conversation)
+    if has_attendees is None or has_attendees:
+        return None
+    return (
+        "names an attendee/invitee for a calendar event whose own "
+        "attendees list is empty"
+    )
+
+
+_ATTENDEE_GROUNDING_CORRECTION = (
+    "\n\nNote: the calendar event(s) above don't list any attendees — I "
+    "can't confirm who, if anyone, is attending."
+)
+
+
+def append_attendee_grounding_correction(response_text: str) -> str:
+    """Append a correction notice to a response with a fabricated attendee
+    claim. Never edits the original text — see
+    ``find_fabricated_attendee_claim`` for why this is an append, not a
+    replace."""
+    return (response_text or "") + _ATTENDEE_GROUNDING_CORRECTION
+
+
+# ---------------------------------------------------------------------------
 # Orchestration — the single call site EmailTriageAgent.process_query uses
 # ---------------------------------------------------------------------------
 
@@ -491,14 +1039,15 @@ def ground_final_answer(result: Dict[str, Any]) -> Dict[str, Any]:
     from. A replaced answer is not re-scanned by the other check: each
     fallback is already, by construction, clean of the pattern it replaces.
 
-    The calendar-conflict (#2571) and attention-card (#2636) checks run
-    last and, unlike the two above, APPEND a correction instead of
-    replacing the answer — in both cases the rest of the answer stays
-    useful and only a specific clause is unverified/contradicted. They
-    never run against text a prior contradiction check has already
-    replaced (those checks already ``return``), but they are independent
-    of each other and MUST both be allowed to fire on the same turn,
-    appending in sequence — neither may short-circuit the other.
+    The calendar-conflict (#2571), attention-card (#2636), invite-claim, and
+    fabricated-attendee (#2766) checks run last and, unlike the two above,
+    APPEND a correction instead of replacing the answer — in every case the
+    rest of the answer stays useful and only a specific clause is
+    unverified/contradicted. They never run against text a prior
+    contradiction check has already replaced (those checks already
+    ``return``), but all four are independent of each other and MUST all be
+    allowed to fire on the same turn, appending in sequence — none may
+    short-circuit another.
     """
     final_answer = result.get("result")
     if not isinstance(final_answer, str) or not final_answer:
@@ -508,6 +1057,17 @@ def ground_final_answer(result: Dict[str, Any]) -> Dict[str, Any]:
 
     if find_scaffolding_leak(final_answer):
         final_answer = strip_scaffolding_leaks(final_answer)
+
+    final_answer = normalize_triage_list(final_answer)
+
+    # The list is tool output, not prose. Rendering it here rather than asking
+    # the model to retype it is what makes one list, correctly numbered, every
+    # time — see rewrite_triage_answer.
+    final_answer = rewrite_triage_answer(final_answer, conversation)
+    # Same guarantee for the narrow "anything suspicious?" tool (#2900) — see
+    # rewrite_suspicious_mail_answer's docstring for why it defers to the
+    # above when both tools ran this turn.
+    final_answer = rewrite_suspicious_mail_answer(final_answer, conversation)
 
     success_claim = find_ungrounded_success_claim(final_answer, conversation)
     if success_claim:
@@ -561,16 +1121,36 @@ def ground_final_answer(result: Dict[str, Any]) -> Dict[str, Any]:
                 final_answer.rstrip() + "\n\n" + _attention_card_correction(cached)
             )
 
+    invite_reason = find_ungrounded_invite_claim(final_answer, conversation)
+    if invite_reason:
+        logger.warning(
+            "email agent: appended ungrounded invite-claim correction — %s",
+            invite_reason,
+        )
+        final_answer = append_invite_grounding_correction(final_answer)
+
+    attendee_reason = find_fabricated_attendee_claim(final_answer, conversation)
+    if attendee_reason:
+        logger.warning(
+            "email agent: appended fabricated-attendee correction — %s",
+            attendee_reason,
+        )
+        final_answer = append_attendee_grounding_correction(final_answer)
+
     result["result"] = final_answer
     return result
 
 
 __all__ = [
     "UNGROUNDED_SUCCESS_FALLBACK",
+    "append_attendee_grounding_correction",
+    "append_invite_grounding_correction",
     "decode_stray_unicode_escapes",
     "find_attention_card_contradiction",
+    "find_fabricated_attendee_claim",
     "find_scaffolding_leak",
     "find_ungrounded_calendar_conflict_claim",
+    "find_ungrounded_invite_claim",
     "find_ungrounded_success_claim",
     "find_unlicensed_cross_mailbox_claim",
     "find_unqualified_negative_claim",

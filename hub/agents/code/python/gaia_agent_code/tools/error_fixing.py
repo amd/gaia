@@ -129,7 +129,8 @@ class ErrorFixingMixin:
             except Exception as e:
                 return {"status": "error", "error": str(e)}
 
-        @tool
+        # _fix_code_with_llm retries 3x at 600s per LLM call — 1800s worst case.
+        @tool(timeout=1900)
         def fix_code(file_path: str, error_description: str = "") -> Dict[str, Any]:
             """Fix Python code using LLM-driven analysis and correction.
 

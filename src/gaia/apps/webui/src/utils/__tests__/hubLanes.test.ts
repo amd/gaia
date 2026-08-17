@@ -5,6 +5,8 @@ import { describe, it, expect } from 'vitest';
 import type { AgentInfo } from '../../types';
 import {
     packageType,
+    isSkill,
+    LANES,
     groupIntoLanes,
     filterCatalog,
     trustTier,
@@ -33,19 +35,87 @@ describe('packageType', () => {
         expect(packageType(agent({ id: 'a', type: 'app' }))).toBe('app');
         expect(packageType(agent({ id: 'a', type: 'component' }))).toBe('component');
     });
+
+    it('recognises the skills lane (#2467)', () => {
+        expect(packageType(agent({ id: 'web-research', type: 'skill' }))).toBe('skill');
+        expect(isSkill(agent({ id: 'web-research', type: 'skill' }))).toBe(true);
+    });
+
+    it('never mistakes another lane for a skill', () => {
+        for (const type of ['agent', 'app', 'component'] as const) {
+            expect(isSkill(agent({ id: 'a', type }))).toBe(false);
+        }
+        expect(isSkill(agent({ id: 'a' }))).toBe(false);
+    });
+});
+
+describe('LANES', () => {
+    it('declares a lane per package type, with Skills last', () => {
+        expect(LANES.map((l) => l.key)).toEqual(['app', 'component', 'agent', 'skill']);
+    });
 });
 
 describe('groupIntoLanes', () => {
-    it('segments the catalog into app / component / agent lanes', () => {
+    it('segments the catalog into app / component / agent / skill lanes', () => {
         const lanes = groupIntoLanes([
             agent({ id: 'studio', type: 'app' }),
             agent({ id: 'rag-kit', type: 'component' }),
             agent({ id: 'chat', type: 'agent' }),
             agent({ id: 'legacy' }), // no type → agent
+            agent({ id: 'web-research', type: 'skill' }),
         ]);
         expect(lanes.app.map((a) => a.id)).toEqual(['studio']);
         expect(lanes.component.map((a) => a.id)).toEqual(['rag-kit']);
         expect(lanes.agent.map((a) => a.id)).toEqual(['chat', 'legacy']);
+        // A skill must never land in the agent lane — that lane renders an
+        // install button wired to the agent installer.
+        expect(lanes.skill.map((a) => a.id)).toEqual(['web-research']);
+    });
+
+    it('starts every lane empty so a missing lane is never undefined', () => {
+        const lanes = groupIntoLanes([]);
+        for (const lane of LANES) {
+            expect(lanes[lane.key]).toEqual([]);
+        }
+    });
+
+    it('funnels unknown lane values into agents and never into skills', () => {
+        // A newer hub can serve a lane this build has never heard of, and a
+        // near-miss ('skills', 'Skill') must not be read as the real thing:
+        // promoting an unknown kind into the Skills lane would render it with
+        // an installer that cannot handle it. Falling back to agents is the
+        // documented default; the one thing that must never happen is a
+        // silent promotion.
+        const lanes = groupIntoLanes([
+            agent({ id: 'plural', type: 'skills' as never }),
+            agent({ id: 'capitalised', type: 'Skill' as never }),
+            agent({ id: 'blank', type: '' as never }),
+            agent({ id: 'future', type: 'workflow' as never }),
+            agent({ id: 'real-skill', type: 'skill' }),
+        ]);
+        expect(lanes.skill.map((a) => a.id)).toEqual(['real-skill']);
+        expect(lanes.agent.map((a) => a.id)).toEqual([
+            'plural',
+            'capitalised',
+            'blank',
+            'future',
+        ]);
+        expect(lanes.app).toEqual([]);
+        expect(lanes.component).toEqual([]);
+    });
+
+    it('accounts for every entry exactly once across the lanes', () => {
+        const catalog = [
+            agent({ id: 'studio', type: 'app' }),
+            agent({ id: 'rag-kit', type: 'component' }),
+            agent({ id: 'chat', type: 'agent' }),
+            agent({ id: 'web-research', type: 'skill' }),
+            agent({ id: 'mystery', type: 'nonsense' as never }),
+        ];
+        const lanes = groupIntoLanes(catalog);
+        const laned = LANES.flatMap((l) => lanes[l.key].map((a) => a.id));
+        // No entry silently dropped, and none duplicated into two lanes.
+        expect(laned.sort()).toEqual(catalog.map((a) => a.id).sort());
     });
 });
 

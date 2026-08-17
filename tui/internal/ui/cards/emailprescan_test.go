@@ -20,7 +20,7 @@ func TestPreScanPopulated(t *testing.T) {
 		"┌─ Inbox ",
 		"15 inbox messages scanned",
 		// Section is one worklist, not four buckets (#2743).
-		"NEEDS YOU",
+		"NEEDS A REPLY",
 		// Verb labels, mapped from kind -- REPLY covers urgent/waiting_on_you/needs_response.
 		"REPLY",
 		// Display name is extracted from the raw From header.
@@ -54,7 +54,7 @@ func TestPreScanEmptyState(t *testing.T) {
 		"none of them named a deadline",
 	)
 	// No worklist header for a genuinely empty scan.
-	assertNotContains(t, out, "NEEDS YOU")
+	assertNotContains(t, out, "NEEDS A REPLY")
 	assertNotContains(t, out, "Nothing needs you.")
 }
 
@@ -107,10 +107,10 @@ func TestPreScanCapsHitShowsNofM(t *testing.T) {
 	t.Logf("\n%s", plain(out))
 
 	assertWidth(t, out, width80)
-	// needs_you is capped at 5 server-side while needs_you_total (40)
-	// reports the true pre-cap count -- the header must read "5 of 40"
-	// rather than a bare count that implies the list is everything.
-	assertContains(t, out, "NEEDS YOU", "5 of 40")
+	// The fixture ships fewer needs_you rows (5) than needs_you_total (40)
+	// reports -- the header must read "5 of 40" rather than a bare count
+	// that implies the list is everything.
+	assertContains(t, out, "NEEDS A REPLY", "5 of 40")
 }
 
 func TestPreScanUncappedShowsBareCount(t *testing.T) {
@@ -132,7 +132,7 @@ func TestPreScanMailboxErrorsBanner(t *testing.T) {
 		"[!] Outlook wasn't scanned: token expired",
 		"Results below are unaffected.",
 		// Results that DID arrive are still shown.
-		"NEEDS YOU", "Sarah Chen", "Prod incident",
+		"NEEDS A REPLY", "Sarah Chen", "Prod incident",
 		// Rows are tagged with their account, because more than one is in play.
 		"Gmail · Sarah Chen", "Outlook ·",
 	)
@@ -142,6 +142,24 @@ func TestPreScanSingleMailboxOmitsTag(t *testing.T) {
 	// One account: the mailbox tag is noise, so it is not drawn.
 	out := Render("email_pre_scan", raw(t, populatedPreScan), width80)
 	assertNotContains(t, out, "Gmail ·", "Outlook ·")
+}
+
+// mailboxLabel is what turns a raw connector id into the per-item provenance
+// label a three-mailbox prescan actually displays. A missing case here
+// renders as the raw internal id instead of a name a user recognizes.
+func TestMailboxLabel(t *testing.T) {
+	cases := map[string]string{
+		"google":         "Gmail",
+		"microsoft":      "Outlook",
+		"microsoft_work": "Microsoft 365",
+		"":               "A mailbox",
+		"yahoo":          "yahoo",
+	}
+	for provider, want := range cases {
+		if got := mailboxLabel(provider); got != want {
+			t.Errorf("mailboxLabel(%q) = %q, want %q", provider, got, want)
+		}
+	}
 }
 
 func TestPreScanMissingNeedsYouTotalFallsBackToListLength(t *testing.T) {
@@ -158,15 +176,15 @@ func TestPreScanMissingNeedsYouTotalFallsBackToListLength(t *testing.T) {
 	out := Render("email_pre_scan", data, width80)
 	assertWidth(t, out, width80)
 	// A missing needs_you_total decodes as its zero value (0), which is not
-	// greater than the 5 shown -- so the "NEEDS YOU" section header falls
+	// greater than the 5 shown -- so the "NEEDS A REPLY" section header falls
 	// back to a bare count rather than claiming a hidden tail that was
 	// never reported. Checked against the header specifically, not a bare
 	// " of " substring -- the bulk line's own falsifiable phrasing ("none
 	// OF them asked...") legitimately contains that substring too.
-	if headers := sectionHeaderCounts(t, plain(out), "NEEDS YOU"); headers != "5" {
-		t.Errorf("NEEDS YOU header = %q, want a bare \"5\" with no hidden tail", headers)
+	if headers := sectionHeaderCounts(t, plain(out), "NEEDS A REPLY"); headers != "5" {
+		t.Errorf("NEEDS A REPLY header = %q, want a bare \"5\" with no hidden tail", headers)
 	}
-	assertContains(t, out, "NEEDS YOU", "Sarah Chen")
+	assertContains(t, out, "NEEDS A REPLY", "Sarah Chen")
 }
 
 // sectionHeaderCounts reads the count text off a section header line (the
@@ -219,8 +237,8 @@ func TestPreScanDegradesAtNarrowWidth(t *testing.T) {
 	for _, w := range []int{20, 24, 32, 40, 60, 76, 120} {
 		out := Render("email_pre_scan", raw(t, populatedPreScan), w)
 		assertWidth(t, out, w)
-		if !strings.Contains(plain(out), "NEEDS YOU") {
-			t.Errorf("width %d dropped the NEEDS YOU section:\n%s", w, plain(out))
+		if !strings.Contains(plain(out), "NEEDS A REPLY") {
+			t.Errorf("width %d dropped the NEEDS A REPLY section:\n%s", w, plain(out))
 		}
 	}
 }

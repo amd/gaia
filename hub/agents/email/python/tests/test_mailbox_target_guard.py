@@ -41,6 +41,31 @@ from gaia_agent_email.agent import _detect_targeted_mailboxes
         # Provider words as a SENDER are NOT mailbox targeting.
         ("summarize the email from Microsoft about security", set()),
         ("archive the newsletter from Google", set()),
+        # Work Microsoft 365 vocabulary (#2629) — mirrors the alias remap in
+        # mailbox_state.PROVIDER_ALIASES, which sends these words to the work
+        # connector, never the personal one.
+        ("check my Microsoft 365 inbox", {"microsoft_work"}),
+        ("check my microsoft365 inbox", {"microsoft_work"}),
+        ("search office365 for the invoice", {"microsoft_work"}),
+        ("search office 365 for the invoice", {"microsoft_work"}),
+        ("check my o365 mailbox", {"microsoft_work"}),
+        ("check my m365 mailbox", {"microsoft_work"}),
+        ("check my entra mailbox", {"microsoft_work"}),
+        # "exchange" is in the same alias table but is ordinary English too
+        # ("in exchange for..."), so it only counts paired with a mailbox noun.
+        ("check my exchange inbox", {"microsoft_work"}),
+        ("scan my exchange mail", {"microsoft_work"}),
+        ("I will give you X in exchange for Y", set()),
+        ("let's exchange notes after the meeting", set()),
+        ("check my exchange rate today", set()),
+        # A bare "microsoft" must still mean the personal connector, and the
+        # two mailboxes remain simultaneously detectable.
+        ("check my microsoft account", {"microsoft"}),
+        ("check my microsoft 365 and my outlook", {"microsoft_work", "microsoft"}),
+        # "Microsoft Teams"/"Microsoft Office" remain excluded non-mailbox
+        # products for the work vocabulary too.
+        ("my microsoft teams meeting", set()),
+        ("my microsoft office", set()),
     ],
 )
 def test_detect_targeted_mailboxes(query, expected):

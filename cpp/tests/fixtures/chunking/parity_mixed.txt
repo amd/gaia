@@ -1,0 +1,33 @@
+Release Checklist
+
+This file exercises the title-line heuristic: a short capitalized line with no
+trailing punctuation, surrounded by blank lines, is treated as a section break.
+
+Build The Wheel
+
+Run the packaging job and confirm the artifact hash matches the one recorded in
+the release notes. If it does not, stop and investigate before tagging.
+
+===
+
+lowercase heading is not a boundary
+
+A line that starts lowercase is left inside the previous section, and so is a
+line that ends with punctuation, because the heuristic requires a capital start
+and no trailing period.
+
+This line is far too long to be treated as a section title because it runs well
+past the one hundred character limit the heuristic enforces on candidate lines.
+
+# Hash Marks Start A Section
+
+Any line beginning with a hash is a boundary regardless of length or case. That
+covers Markdown headers and shell comments alike, which is why a source file
+full of comments fragments into many sections.
+
+Final Notes
+
+Dr. Knuth wrote about literate programming. He argued that a program should be
+written for a human reader first, e.g. as an essay, and only incidentally for
+the machine. That argument applies to chunking too: the cut points should fall
+where a human would pause, not where a byte counter happens to land.

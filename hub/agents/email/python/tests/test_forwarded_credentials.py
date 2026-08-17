@@ -105,6 +105,21 @@ def test_missing_credential_error_interpolates_real_all_scopes_not_a_placeholder
         assert scope in msg
 
 
+def test_missing_credential_error_names_real_scopes_for_the_work_connector():
+    """#2629: microsoft_work must interpolate the same real Graph scopes as
+    microsoft — not an empty ``--scopes`` list. Before this was fixed,
+    ``_all_scopes_for`` fell through to ``[]`` for any provider that wasn't
+    literally "google" or "microsoft"."""
+    from gaia_agent_email.outlook_scopes import OUTLOOK_ALL_SCOPES
+
+    with pytest.raises(ConnectorsError) as exc:
+        forwarded_credentials.get_forwarded_token("microsoft_work", ["s1"])
+    msg = str(exc.value)
+    assert "--scopes  --grant-agent" not in msg  # the empty-list symptom
+    for scope in OUTLOOK_ALL_SCOPES:
+        assert scope in msg
+
+
 def test_expired_token_error_interpolates_real_all_scopes_not_a_placeholder():
     from gaia_agent_email.scopes import ALL_SCOPES
 

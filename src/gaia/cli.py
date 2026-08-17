@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.install_hints import agent_not_installed_message
+from gaia.eval.config import DEFAULT_CLAUDE_MODEL
 from gaia.llm import create_client
 from gaia.llm.lemonade_client import (
     DEFAULT_HOST,
@@ -2494,8 +2495,8 @@ Examples:
     )
     agent_eval_parser.add_argument(
         "--model",
-        default="claude-sonnet-4-6",
-        help="Eval model (default: claude-sonnet-4-6)",
+        default=DEFAULT_CLAUDE_MODEL,
+        help=f"Judge model that scores the run (default: {DEFAULT_CLAUDE_MODEL})",
     )
     agent_eval_parser.add_argument(
         "--budget",
@@ -2748,7 +2749,12 @@ Examples:
     )
     # Note: --base-url is inherited from parent_parser
     mcp_start_parser.add_argument(
-        "--auth-token", help="Optional authentication token for secure connections"
+        "--auth-token",
+        help=(
+            "Require 'Authorization: Bearer <token>' on every request except "
+            "/health. Defaults to $GAIA_MCP_AUTH_TOKEN. Without it the bridge "
+            "is unauthenticated."
+        ),
     )
     mcp_start_parser.add_argument(
         "--no-streaming", action="store_true", help="Disable streaming responses"
@@ -2783,6 +2789,10 @@ Examples:
     mcp_status_parser.add_argument(
         "--port", type=int, default=8765, help="Port to check (default: 8765)"
     )
+    mcp_status_parser.add_argument(
+        "--auth-token",
+        help="Bearer token if the bridge requires one (default: $GAIA_MCP_AUTH_TOKEN)",
+    )
 
     # MCP stop command
     _ = mcp_subparsers.add_parser("stop", help="Stop background MCP bridge server")
@@ -2802,6 +2812,10 @@ Examples:
     )
     mcp_test_parser.add_argument(
         "--tool", default="gaia.chat", help="Tool to test (default: gaia.chat)"
+    )
+    mcp_test_parser.add_argument(
+        "--auth-token",
+        help="Bearer token if the bridge requires one (default: $GAIA_MCP_AUTH_TOKEN)",
     )
 
     # MCP agent command
@@ -2824,6 +2838,10 @@ Examples:
     )
     mcp_agent_parser.add_argument(
         "--context", help="Optional additional context about the request"
+    )
+    mcp_agent_parser.add_argument(
+        "--auth-token",
+        help="Bearer token if the bridge requires one (default: $GAIA_MCP_AUTH_TOKEN)",
     )
 
     # MCP Docker command (per-agent MCP server)
@@ -5639,10 +5657,12 @@ def handle_api_command(args):
 
             # Now import the app (agent_registry will see the env vars)
             from gaia.api.openai_server import app
+            from gaia.api.sse_handler import warn_if_unconfirmed_tools_allowed
 
             print("🚀 Starting GAIA OpenAI-compatible API server...")
             print(f"   Host: {args.host}")
             print(f"   Port: {args.port}")
+            warn_if_unconfirmed_tools_allowed()
 
             # Show debug features if enabled
             if (
@@ -6511,6 +6531,33 @@ Example output:
 _INFER_REFRESH_DAYS = 30  # Re-run LLM inference after this many days
 
 
+def _collect_signal(source_key: str, scanner):
+    """Run `scanner` unless this platform has no branch for `source_key`.
+
+    Applies the same platform gate as ``scan_all``, which a direct scanner call
+    bypasses — otherwise an unsupported source is indistinguishable from a user
+    who genuinely has nothing to find.
+
+    Args:
+        source_key: A discovery source name as used by ``scan_all``.
+        scanner: Zero-argument callable returning the scanner's fact dicts.
+
+    Returns:
+        The scanner's fact dicts, or [] after printing why there are none.
+    """
+    from gaia.agents.base.discovery import unsupported_reason
+
+    reason = unsupported_reason(source_key)
+    if reason:
+        print(f"\n  Skipped: {reason}")
+        return []
+    try:
+        return scanner()
+    except Exception as e:
+        print(f"\n  '{source_key}' scan failed, continuing without it: {e}")
+        return []
+
+
 def _bootstrap_infer():
     """Phase 3 (optional): LLM-assisted profile inference from browser history + system data.
 
@@ -6564,8 +6611,10 @@ def _bootstrap_infer():
                             return
         finally:
             store_check.close()
-    except Exception:
-        pass  # Non-critical — proceed anyway
+    except Exception as e:
+        # Non-critical — inference still runs, but say why the staleness check
+        # did not, or a broken store looks like "no facts yet".
+        print(f"  Could not check for existing inferred facts: {e}")
 
     # Explicit consent for browser history access
     try:
@@ -6586,92 +6635,73 @@ def _bootstrap_infer():
 
     # 1. Browser history (top domains, visit counts)
     if use_browser:
-        try:
-            browser_results = discovery.scan_browser_history(days=30)
-            if browser_results:
-                lines = []
-                for item in browser_results[:40]:
-                    # content is "Frequently visited: domain.com (N visits)"
-                    lines.append(f"  {item['content']}")
-                sections.append(
-                    "BROWSER HISTORY (top domains, last 30 days):\n" + "\n".join(lines)
-                )
-        except Exception:
-            pass
+        browser_results = _collect_signal(
+            "browser_history", lambda: discovery.scan_browser_history(days=30)
+        )
+        if browser_results:
+            # content is "Frequently visited: domain.com (N visits)"
+            lines = [f"  {item['content']}" for item in browser_results[:40]]
+            sections.append(
+                "BROWSER HISTORY (top domains, last 30 days):\n" + "\n".join(lines)
+            )
 
     # 2. Installed applications
-    try:
-        app_results = discovery.scan_installed_apps()
-        if app_results:
-            # Extract just the app names from content strings like "Installed app: VS Code"
-            apps = []
-            for item in app_results:
-                content = item.get("content", "")
-                if content.startswith("Installed app: "):
-                    apps.append(content[len("Installed app: ") :].strip())
-            if apps:
-                sections.append("INSTALLED APPS:\n  " + ", ".join(apps))
-    except Exception:
-        pass
+    app_results = _collect_signal("installed_apps", discovery.scan_installed_apps)
+    apps = [
+        item["content"][len("Installed app: ") :].strip()
+        for item in app_results
+        if item.get("content", "").startswith("Installed app: ")
+    ]
+    if apps:
+        sections.append("INSTALLED APPS:\n  " + ", ".join(apps))
 
     # 3. Git identity (name / employer domain — not raw email)
-    try:
-        git_results = discovery.scan_git_identity()
-        if git_results:
-            git_lines = []
-            for item in git_results:
-                # Skip sensitive (raw email) items
-                if not item.get("sensitive") and item.get("content"):
-                    git_lines.append(f"  {item['content']}")
-            if git_lines:
-                sections.append("GIT IDENTITY:\n" + "\n".join(git_lines))
-    except Exception:
-        pass
+    git_results = _collect_signal("git_identity", discovery.scan_git_identity)
+    git_lines = [
+        f"  {item['content']}"
+        for item in git_results
+        if not item.get("sensitive") and item.get("content")
+    ]
+    if git_lines:
+        sections.append("GIT IDENTITY:\n" + "\n".join(git_lines))
 
     # 4. Project languages / manifests (non-sensitive)
-    try:
-        manifest_results = discovery.scan_project_manifests()
-        if manifest_results:
-            manifest_lines = []
-            for item in manifest_results[:10]:
-                if not item.get("sensitive") and item.get("content"):
-                    manifest_lines.append(f"  {item['content']}")
-            if manifest_lines:
-                sections.append(
-                    "PROJECT MANIFESTS (sample):\n" + "\n".join(manifest_lines)
-                )
-    except Exception:
-        pass
+    manifest_results = _collect_signal(
+        "project_manifests", discovery.scan_project_manifests
+    )
+    manifest_lines = [
+        f"  {item['content']}"
+        for item in manifest_results[:10]
+        if not item.get("sensitive") and item.get("content")
+    ]
+    if manifest_lines:
+        sections.append("PROJECT MANIFESTS (sample):\n" + "\n".join(manifest_lines))
 
-    # 5. App launch frequency (UserAssist — covers consumer apps like Spotify, Outlook)
-    try:
-        userassist_results = discovery.scan_windows_userassist()
-        if userassist_results:
-            lines = [f"  {item['content']}" for item in userassist_results[:20]]
-            sections.append(
-                "FREQUENTLY LAUNCHED APPS (actual usage frequency):\n"
-                + "\n".join(lines)
-            )
-    except Exception:
-        pass
+    # 5. App launch frequency — covers consumer apps like Spotify and Outlook
+    usage_results = _collect_signal(
+        "windows_userassist", discovery.scan_windows_userassist
+    ) + _collect_signal("macos_app_usage", discovery.scan_macos_app_usage)
+    if usage_results:
+        lines = [f"  {item['content']}" for item in usage_results[:20]]
+        sections.append(
+            "FREQUENTLY LAUNCHED APPS (actual usage frequency):\n" + "\n".join(lines)
+        )
 
     # 6. Recent file type patterns
-    try:
-        filetype_results = discovery.scan_recent_file_types()
-        if filetype_results:
-            lines = [f"  {item['content']}" for item in filetype_results]
-            sections.append("RECENT FILE TYPES (work patterns):\n" + "\n".join(lines))
-    except Exception:
-        pass
+    filetype_results = _collect_signal(
+        "recent_file_types", discovery.scan_recent_file_types
+    )
+    if filetype_results:
+        lines = [f"  {item['content']}" for item in filetype_results]
+        sections.append("RECENT FILE TYPES (work patterns):\n" + "\n".join(lines))
 
     # 7. Gaming and media
-    try:
-        gaming_results = discovery.scan_gaming_and_media()
-        if gaming_results:
-            lines = [f"  {item['content']}" for item in gaming_results]
-            sections.append("GAMING AND MEDIA:\n" + "\n".join(lines))
-    except Exception:
-        pass
+    gaming_results = _collect_signal(
+        "gaming_and_media", discovery.scan_gaming_and_media
+    )
+    if gaming_results:
+        lines = [f"  {item['content']}" for item in gaming_results]
+        sections.append("GAMING AND MEDIA:\n" + "\n".join(lines))
 
     print(" done.")
 
@@ -8137,6 +8167,18 @@ def handle_mcp_command(args):
         print(f"❌ Unknown MCP action: {args.mcp_action}")
 
 
+# Kept in sync with gaia.mcp.mcp_bridge.AUTH_TOKEN_ENV_VAR by
+# tests/unit/test_mcp_bridge_auth.py — duplicated here so the client-side
+# `mcp status` / `mcp test` paths don't have to import the heavy bridge module.
+MCP_AUTH_TOKEN_ENV = "GAIA_MCP_AUTH_TOKEN"
+
+
+def _mcp_auth_headers(args):
+    """Bearer headers for reaching a token-protected MCP bridge, else {}."""
+    token = getattr(args, "auth_token", None) or os.environ.get(MCP_AUTH_TOKEN_ENV)
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
 def handle_mcp_start(args):
     """Start the MCP bridge server (HTTP-native implementation)."""
     log = get_logger(__name__)
@@ -8203,8 +8245,6 @@ def handle_mcp_start(args):
             # Add optional arguments if provided
             if args.base_url:
                 cmd_args.extend(["--base-url", args.base_url])
-            if args.auth_token:
-                cmd_args.extend(["--auth-token", args.auth_token])
             if args.no_streaming:
                 cmd_args.append("--no-streaming")
             if getattr(args, "verbose", False):
@@ -8212,9 +8252,20 @@ def handle_mcp_start(args):
             if getattr(args, "no_lemonade_check", False):
                 cmd_args.append("--no-lemonade-check")
 
+            # Hand the token over the environment, not argv — argv is world
+            # readable via `ps` on Linux/macOS.
+            child_env = os.environ.copy()
+            bg_token = args.auth_token or os.environ.get(MCP_AUTH_TOKEN_ENV) or None
+            if bg_token:
+                child_env[MCP_AUTH_TOKEN_ENV] = bg_token
+
             print("🚀 Starting GAIA MCP Bridge in background")
             print(f"📍 Host: {args.host}:{args.port}")
             print(f"📄 Log file: {log_file_path}")
+            if bg_token:
+                print("🔒 Authentication enabled (Bearer token required)")
+            else:
+                print("🔓 Authentication disabled - pass --auth-token to require one")
 
             # Write initial banner BEFORE starting subprocess (prevents truncation issues)
             import datetime
@@ -8244,6 +8295,7 @@ def handle_mcp_start(args):
                         stderr=subprocess.STDOUT,
                         creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
                         cwd=os.getcwd(),
+                        env=child_env,
                         text=True,
                     )
                 else:
@@ -8255,6 +8307,7 @@ def handle_mcp_start(args):
                         stderr=subprocess.STDOUT,
                         start_new_session=True,
                         cwd=os.getcwd(),
+                        env=child_env,
                         text=True,
                     )
             except Exception:
@@ -8284,8 +8337,11 @@ def handle_mcp_start(args):
         log.info("Starting GAIA MCP Bridge on %s:%s", args.host, args.port)
         print(f"🚀 Starting GAIA MCP Bridge on {args.host}:{args.port}")
 
-        if args.auth_token:
-            print("🔒 Authentication enabled")
+        auth_token = args.auth_token or os.environ.get(MCP_AUTH_TOKEN_ENV) or None
+        if auth_token:
+            print("🔒 Authentication enabled (Bearer token required; /health public)")
+        else:
+            print("🔓 Authentication disabled - pass --auth-token to require one")
 
         print(f"🔗 GAIA LLM server: {args.base_url}")
         print(f"📡 Streaming: {'disabled' if args.no_streaming else 'enabled'}")
@@ -8297,7 +8353,11 @@ def handle_mcp_start(args):
         # Start HTTP-native MCP bridge
         verbose = getattr(args, "verbose", False)
         start_mcp_http(
-            host=args.host, port=args.port, base_url=args.base_url, verbose=verbose
+            host=args.host,
+            port=args.port,
+            base_url=args.base_url,
+            verbose=verbose,
+            auth_token=auth_token,
         )
 
     except KeyboardInterrupt:
@@ -8396,8 +8456,12 @@ def handle_mcp_status(args):
 
                 # First try the new /status endpoint
                 status_url = f"http://{args.host}:{args.port}/status"
+                auth_headers = _mcp_auth_headers(args)
                 try:
-                    with urllib.request.urlopen(status_url, timeout=3) as response:
+                    status_req = urllib.request.Request(
+                        status_url, headers=auth_headers
+                    )
+                    with urllib.request.urlopen(status_req, timeout=3) as response:
                         data = json.loads(response.read().decode())
 
                         if data.get("status") == "healthy":
@@ -8440,6 +8504,13 @@ def handle_mcp_status(args):
                         else:
                             print("⚠️  Server is running but may not be healthy")
                 except urllib.error.HTTPError as e:
+                    if e.code in (401, 403):
+                        print("🔒 MCP server requires authentication")
+                        print(
+                            "   Pass --auth-token <token> or set "
+                            f"{MCP_AUTH_TOKEN_ENV} to inspect it"
+                        )
+                        return
                     if e.code == 404:
                         # Fall back to /health for older versions
                         health_url = f"http://{args.host}:{args.port}/health"
@@ -8514,7 +8585,12 @@ def handle_mcp_test(args):
             url = f"http://{args.host}:{args.port}/"
             data = json.dumps(rpc_request).encode("utf-8")
             req = urllib.request.Request(
-                url, data=data, headers={"Content-Type": "application/json"}
+                url,
+                data=data,
+                headers={
+                    "Content-Type": "application/json",
+                    **_mcp_auth_headers(args),
+                },
             )
 
             with urllib.request.urlopen(req, timeout=30) as response:
@@ -8543,7 +8619,14 @@ def handle_mcp_test(args):
                     print("❌ Unexpected response format")
 
         except urllib.error.HTTPError as e:
-            print(f"❌ HTTP Error: {e.code} {e.reason}")
+            if e.code in (401, 403):
+                print(f"🔒 MCP server rejected the request ({e.code})")
+                print(
+                    "   The bridge was started with --auth-token. Pass the same "
+                    f"token via --auth-token, or set {MCP_AUTH_TOKEN_ENV}."
+                )
+            else:
+                print(f"❌ HTTP Error: {e.code} {e.reason}")
         except urllib.error.URLError as e:
             print(f"❌ Connection error: {e.reason}")
         except json.JSONDecodeError as e:
@@ -8603,7 +8686,12 @@ def handle_mcp_agent(args):
             url = f"http://{args.host}:{args.port}/"
             data = json.dumps(rpc_request).encode("utf-8")
             req = urllib.request.Request(
-                url, data=data, headers={"Content-Type": "application/json"}
+                url,
+                data=data,
+                headers={
+                    "Content-Type": "application/json",
+                    **_mcp_auth_headers(args),
+                },
             )
 
             print("🔄 Agent is analyzing request and orchestrating tools...")
@@ -8661,7 +8749,14 @@ def handle_mcp_agent(args):
                     print("❌ Unexpected response format")
 
         except urllib.error.HTTPError as e:
-            print(f"❌ HTTP Error: {e.code} {e.reason}")
+            if e.code in (401, 403):
+                print(f"🔒 MCP server rejected the request ({e.code})")
+                print(
+                    "   The bridge was started with --auth-token. Pass the same "
+                    f"token via --auth-token, or set {MCP_AUTH_TOKEN_ENV}."
+                )
+            else:
+                print(f"❌ HTTP Error: {e.code} {e.reason}")
         except urllib.error.URLError as e:
             print(f"❌ Connection error: {e.reason}")
         except json.JSONDecodeError as e:
