@@ -285,13 +285,11 @@ func (m RootModel) View() string {
 	return base
 }
 
-
 // helpScrollKey reports how ↑/↓/PgUp/PgDn/Home/End should move the open help
 // panel's scroll offset. delta is a relative line count unless jump is true,
 // in which case delta is an absolute target the caller still has to clamp.
 // Any other key reports handled=false, which is the caller's cue to close
 // the panel instead — the behavior every other key has always had.
-
 
 func clampInt(v, lo, hi int) int {
 	if v < lo {
