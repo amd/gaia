@@ -133,10 +133,6 @@ setup(
         "apscheduler>=3.10.0",
         "tomli-w>=1.0.0",
         "tomli>=2.0.0; python_version < '3.11'",
-        # Required by the `gaia-mcp` bridge (base console_script), which parses
-        # multipart uploads via python_multipart at import time. Base — not an
-        # extra — so a plain `pip install amd-gaia` ships a working gaia-mcp.
-        "python-multipart>=0.0.9",
         # gaia connectors is a base CLI command; keyring is its OS credential store (OAuth tokens #915). #1621
         "keyring>=24.0.0,<26.0.0",
         "tavily-python>=0.5.0",

@@ -442,28 +442,6 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
         self.end_headers()
 
-    def send_sse_headers(self):
-        """Send standard headers for Server-Sent Events."""
-        self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream")
-        self.send_header("Cache-Control", "no-cache")
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Connection", "keep-alive")
-        self.send_header("X-Accel-Buffering", "no")
-        self.end_headers()
-
-    def stream_sse(self, iterator):
-        """Stream SSE data from an iterator of chunk dicts."""
-        for chunk in iterator:
-            if chunk.get("is_complete"):
-                data_out = json.dumps(
-                    {"event": "complete", "performance": chunk.get("performance", {})}
-                )
-            else:
-                data_out = json.dumps({"text": chunk.get("text", "")})
-            self.wfile.write(f"data: {data_out}\n\n".encode("utf-8"))
-            self.wfile.flush()
-
     def send_json(self, status, data):
         """Send JSON response."""
         if VERBOSE:

@@ -61,8 +61,10 @@ class ApiAgent(Agent):
             Model ID string (e.g., "gaia")
 
         Example:
-            GaiaAgent -> gaia
-            FooAgent  -> gaia-foo
+            FooAgent -> gaia-foo
+
+        The flagship is served as the model id "gaia" via its AGENT_MODELS key,
+        not through this default.
         """
         # All agents follow *Agent naming convention, strip "Agent" suffix
         name = self.__class__.__name__
