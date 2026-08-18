@@ -500,8 +500,59 @@ jobs:
               }
             $logHint = if ($logged) { "the llama-server error is in the Lemonade log tail above" } else { "no Lemonade log was found on this runner (looked in: $($logGlobs -join ', ')) - read llama-server's failure from the Lemonade console instead" }
             if (-not $logged) { Write-Host "(none found)" }
-            Write-Host "::error::The RAG embedder $embeddingModel cannot serve embeddings on this runner (probe exit $embedCode; its output is above). rag_quality and context_retention would score ~2/10 as non-answers against a ~9/10 baseline and look like a model regression. The probe already re-registered and re-pulled the model, so a load that still fails is the RUNNER, not the registration: $logHint, then on sjlab-stx-halo-18 run ``powershell -File installer\scripts\ensure-lemonade-running.ps1 -ForceRestart`` and re-run this probe by hand (``python tests/ci_lemonade_check.py --model $embeddingModel --checkpoint $embeddingCheckpoint --recipe $embeddingRecipe --register-embedding --embeddings --llamacpp-args '--ubatch-size 2048'``). Do NOT re-run the eval until it passes - it costs 3.5h and measures nothing."
-            exit 1
+
+            # A stale llama.cpp backend in Lemonade's bin cache cannot spawn, and
+            # reports exactly this "llama-server failed to start". install-lemonade
+            # already wipes that cache - but only when it reconciles, so a runner
+            # whose VERSION is correct never clears it and can never self-heal
+            # (#2920). Do the same wipe here, restart, and re-probe once.
+            Write-Host "=== Probe failed; clearing the llama.cpp backend cache and retrying once ==="
+            $cacheRoots = @(
+              "$env:SystemRoot\System32\config\systemprofile\.cache\lemonade",
+              "$env:USERPROFILE\.cache\lemonade"
+            )
+            if ($env:LEMONADE_CACHE_DIR) { $cacheRoots += $env:LEMONADE_CACHE_DIR }
+            $seenRoots = @{}
+            foreach ($root in ($cacheRoots | Where-Object { $_ })) {
+              $rootKey = $root.ToLowerInvariant()
+              if ($seenRoots.ContainsKey($rootKey)) { continue }
+              $seenRoots[$rootKey] = $true
+              $backendDir = Join-Path $root "bin"
+              if (-not (Test-Path $backendDir)) { continue }
+              Write-Host "Clearing stale llama.cpp backend cache at $backendDir"
+              # Cached ROCm Composable-Kernel headers blow past MAX_PATH, so mirror
+              # an empty dir over the tree with robocopy (long-path-safe) first.
+              $emptyDir = Join-Path $env:RUNNER_TEMP "lemonade-wipe-empty"
+              if (-not (Test-Path $emptyDir)) { New-Item -ItemType Directory -Path $emptyDir -Force | Out-Null }
+              robocopy $emptyDir $backendDir /MIR /NFL /NDL /NJH /NJS /NP | Out-Null
+              # robocopy: <8 is success. Fail loud - a swallowed wipe leaves the
+              # stale backend in place and the retry below repeats the failure.
+              if ($LASTEXITCODE -ge 8) { throw "robocopy mirror-wipe of $backendDir failed with exit code $LASTEXITCODE" }
+              Remove-Item $backendDir -Recurse -Force -ErrorAction Stop
+            }
+            $global:LASTEXITCODE = 0
+
+            Write-Host "Restarting Lemonade so it refetches a matching backend..."
+            powershell -ExecutionPolicy Bypass -File installer\scripts\ensure-lemonade-running.ps1 -ForceRestart
+            $global:LASTEXITCODE = 0
+
+            $ErrorActionPreference = "Continue"
+            $embedOut = & python tests/ci_lemonade_check.py `
+              --model $embeddingModel `
+              --checkpoint $embeddingCheckpoint `
+              --recipe $embeddingRecipe `
+              --register-embedding `
+              --embeddings `
+              --llamacpp-args "--ubatch-size 2048" 2>&1
+            $embedCode = $LASTEXITCODE
+            $ErrorActionPreference = "Stop"
+            $embedOut | ForEach-Object { Write-Host "$_" }
+
+            if ($embedCode -ne 0 -or -not ($embedOut -match '\[ci\] embeddings OK \(dim=')) {
+              Write-Host "::error::The RAG embedder $embeddingModel cannot serve embeddings on this runner, and clearing the llama.cpp backend cache did not fix it (retry exit $embedCode; its output is above). rag_quality and context_retention would score ~2/10 as non-answers against a ~9/10 baseline and look like a model regression. Registration, download and the backend cache have all been ruled out, so this is the RUNNER: $logHint. On sjlab-stx-halo-18 read llama-server's failure from the Lemonade console and re-run this probe by hand (``python tests/ci_lemonade_check.py --model $embeddingModel --checkpoint $embeddingCheckpoint --recipe $embeddingRecipe --register-embedding --embeddings --llamacpp-args '--ubatch-size 2048'``). Check whether an Application Control policy is blocking llama-server.exe (#2826). Do NOT re-run the eval until it passes - it costs 3.5h and measures nothing."
+              exit 1
+            }
+            Write-Host "Embedder recovered after the backend-cache wipe - the cached llama.cpp backend was stale."
           }
 
       - name: Run the three eval categories serially
