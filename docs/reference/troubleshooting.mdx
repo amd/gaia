@@ -220,8 +220,7 @@ icon: "bug"
 
 <AccordionGroup>
   <Accordion title="Connection refused" icon="plug-circle-xmark">
-    **Ensure server is running** (default port is 8080; also shared by
-    `gaia mcp docker` so check for a collision):
+    **Ensure server is running** (default port is 8080):
     ```bash
     gaia api start --port 8080
     ```
@@ -238,11 +237,12 @@ icon: "bug"
   </Accordion>
 
   <Accordion title="Model not found error" icon="circle-question">
-    Use the correct model ID:
+    `AGENT_MODELS` is empty by default, so `/v1/models` returns no models until
+    one is registered:
     ```bash
     curl http://localhost:8080/v1/models
     ```
-    Default model ID is `gaia-code`.
+    See [Adding New Agents](/reference/api-spec#adding-new-agents).
   </Accordion>
 
   <Accordion title="Agent processing failed" icon="triangle-exclamation">
@@ -373,35 +373,6 @@ icon: "bug"
     - Verify documents were indexed successfully at startup
     - Check console output for indexing confirmation
     - Ensure document path is correct
-  </Accordion>
-</AccordionGroup>
-
----
-
-## Routing Agent Issues
-
-<AccordionGroup>
-  <Accordion title="Routing to wrong language" icon="shuffle">
-    The routing agent may misdetect the language/framework.
-
-    **Solutions:**
-    - Be more specific in your query (mention the language)
-    - Check the routing confidence in logs
-    - Adjust routing thresholds if available
-  </Accordion>
-
-  <Accordion title="Too many clarifying questions" icon="circle-question">
-    **Solutions:**
-    - Include framework/language in initial query
-    - Set default routing preferences
-    - Adjust confidence thresholds
-  </Accordion>
-
-  <Accordion title="Routing agent errors or skips detection" icon="forward">
-    **Check:**
-    - Lemonade Server is running
-    - Routing model is loaded
-    - Query format is valid
   </Accordion>
 </AccordionGroup>
 

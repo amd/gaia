@@ -16,8 +16,7 @@ on:
       - 'src/gaia/api/**'
       - 'src/gaia/agents/base/**'
       - 'src/gaia/llm/**'
-      - 'hub/agents/routing/python/**'
-      - 'hub/agents/code/python/**'
+      - 'hub/agents/email/python/**'
       - 'tests/test_api.py'
       - 'setup.py'
       - '.github/workflows/test_api.yml'
@@ -30,8 +29,7 @@ on:
       - 'src/gaia/api/**'
       - 'src/gaia/agents/base/**'
       - 'src/gaia/llm/**'
-      - 'hub/agents/routing/python/**'
-      - 'hub/agents/code/python/**'
+      - 'hub/agents/email/python/**'
       - 'tests/test_api.py'
       - 'setup.py'
       - '.github/workflows/test_api.yml'
@@ -69,13 +67,6 @@ jobs:
         shell: powershell
         run: |
           uv pip install pytest pytest-timeout requests --python .venv\Scripts\python.exe
-          # The 'gaia-code' API model routes through RoutingAgent, which now
-          # ships as the standalone gaia-agent-routing wheel (#1102). Install
-          # both local hub packages (routing first, since gaia-agent-code
-          # depends on it and it isn't on PyPI) so the gaia-code streaming
-          # tests exercise the real agent instead of the missing-wheel error.
-          uv pip install -e hub/agents/routing/python --python .venv\Scripts\python.exe
-          uv pip install -e hub/agents/code/python --python .venv\Scripts\python.exe
           # The email REST router only mounts when gaia-agent-email is
           # importable; without it every /v1/email test in tests/test_api.py
           # 404s (red on main since the email agent moved to a hub wheel).
@@ -123,7 +114,6 @@ jobs:
               $apiJob = Start-Job -ScriptBlock {
                   Set-Location $using:PWD
                   & .\.venv\Scripts\Activate.ps1
-                  $env:AGENT_ROUTING_MODEL = "Qwen3-0.6B-GGUF"
                   & gaia api start 2>&1
               }
               Write-Host "Started API server job with ID: $($apiJob.Id)"

@@ -28,19 +28,6 @@ tkml_version = "5.0.4"
 # the incident. Do not move this back into extras_require until the wheels
 # are live on PyPI.
 AGENT_WHEEL_PACKAGES = [
-    "gaia-agent-summarize",
-    "gaia-agent-sd",
-    "gaia-agent-fileio",
-    "gaia-agent-docker",
-    "gaia-agent-jira",
-    "gaia-agent-blender",
-    "gaia-agent-emr",
-    "gaia-agent-code",
-    "gaia-agent-connectors-demo",
-    "gaia-agent-analyst",
-    "gaia-agent-browser",
-    "gaia-agent-docqa",
-    "gaia-agent-routing",
     "gaia-agent-email",
     "gaia-agent-chat",
     "gaia-agent-gaia",
@@ -74,11 +61,7 @@ setup(
         "gaia.testing",
         "gaia.utils",
         "gaia.apps",
-        "gaia.apps.docker",
-        "gaia.apps.jira",
         "gaia.apps.llm",
-        "gaia.apps.summarize",
-        "gaia.apps.summarize.templates",
         "gaia.eval",
         "gaia.installer",
         "gaia.hub",
@@ -220,9 +203,6 @@ setup(
             "torch>=2.0.0,<2.14",
             "torchvision<0.29.0",
             "torchaudio",
-        ],
-        "blender": [
-            "bpy",
         ],
         "mcp": [
             # Capped below 2.0: mcp 2.0.0 (released 2026-07-28) removed

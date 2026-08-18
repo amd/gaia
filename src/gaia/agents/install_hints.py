@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 """Shared "agent wheel not installed" messaging.
 
-The ``gaia-agent-*`` wheels (chat, email, code, sd, docker, ...) are built
+The ``gaia-agent-*`` wheels (gaia, chat, email) are built
 and packaged (``hub/agents/<id>/python/``) but publishing them to PyPI is
 still paused (see ``.github/workflows/publish_agents.yml``, tracked by
 #1179 / #1513). Until that lands, ``pip install gaia-agent-<id>`` and
@@ -17,21 +17,9 @@ import sys
 # hub/agents/<subdir>/python for each wheel this module has a hint for. Keep
 # in sync with the directories under hub/agents/ (ls hub/agents/).
 _AGENT_SOURCE_SUBDIRS = {
-    "gaia-agent-analyst": "analyst",
-    "gaia-agent-blender": "blender",
-    "gaia-agent-browser": "browser",
     "gaia-agent-chat": "chat",
-    "gaia-agent-code": "code",
-    "gaia-agent-connectors-demo": "connectors-demo",
-    "gaia-agent-docker": "docker",
-    "gaia-agent-docqa": "docqa",
     "gaia-agent-email": "email",
-    "gaia-agent-emr": "emr",
-    "gaia-agent-fileio": "fileio",
-    "gaia-agent-jira": "jira",
-    "gaia-agent-routing": "routing",
-    "gaia-agent-sd": "sd",
-    "gaia-agent-summarize": "summarize",
+    "gaia-agent-gaia": "gaia",
 }
 
 _REPO_URL = "https://github.com/amd/gaia.git"

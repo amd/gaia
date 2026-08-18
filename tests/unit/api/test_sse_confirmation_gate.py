@@ -48,7 +48,8 @@ class _ApiAgent(Agent):
     def __init__(self, canary=None, **kwargs):
         # Bound before super().__init__ — _register_tools closes over it.
         self._fired = [] if canary is None else canary
-        # AGENT_MODELS passes api_mode; only RoutingAgent accepts it.
+        # Some agents accept an api_mode kwarg the base Agent doesn't; drop it
+        # so this test double stays constructable regardless of caller.
         kwargs.pop("api_mode", None)
         super().__init__(**kwargs)
 

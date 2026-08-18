@@ -79,62 +79,14 @@ agent::email:
   - changed-files:
     - any-glob-to-any-file: ['hub/agents/email/python/**/*', 'hub/agents/email/npm/**/*', 'docs/guides/email.mdx']
 
-agent::analyst:
-  - changed-files:
-    - any-glob-to-any-file: ['hub/agents/analyst/python/**/*', 'docs/guides/analyze.mdx']
-
-agent::blender:
-  - changed-files:
-    - any-glob-to-any-file: ['hub/agents/blender/python/**/*', 'docs/guides/blender.mdx']
-
-agent::browser:
-  - changed-files:
-    - any-glob-to-any-file: ['hub/agents/browser/python/**/*', 'docs/guides/browse.mdx']
-
-agent::code:
-  - changed-files:
-    - any-glob-to-any-file: ['hub/agents/code/python/**/*', 'docs/guides/code.mdx']
-
 agent::connectors-demo:
   - changed-files:
     - any-glob-to-any-file: ['hub/agents/connectors-demo/python/**/*']
 
-agent::docker:
-  - changed-files:
-    - any-glob-to-any-file: ['hub/agents/docker/python/**/*', 'docs/guides/docker.mdx']
-
-agent::docqa:
-  - changed-files:
-    - any-glob-to-any-file: ['hub/agents/docqa/python/**/*']
-
-agent::emr:
-  - changed-files:
-    - any-glob-to-any-file: ['hub/agents/emr/python/**/*', 'docs/guides/emr.mdx']
-
-agent::fileio:
-  - changed-files:
-    - any-glob-to-any-file: ['hub/agents/fileio/python/**/*']
-
-agent::jira:
-  - changed-files:
-    - any-glob-to-any-file: ['hub/agents/jira/python/**/*', 'src/gaia/apps/jira/**/*', 'docs/guides/jira.mdx']
-
-agent::routing:
-  - changed-files:
-    - any-glob-to-any-file: ['hub/agents/routing/python/**/*', 'docs/guides/routing.mdx']
-
-agent::sd:
-  - changed-files:
-    - any-glob-to-any-file: ['hub/agents/sd/python/**/*']
-
-agent::summarize:
-  - changed-files:
-    - any-glob-to-any-file: ['hub/agents/summarize/python/**/*']
-
-# Tutorial / reference example agents (hello-world, word-count, doc-search)
+# Tutorial / reference example agents (hello-world, word-count)
 agent::examples:
   - changed-files:
-    - any-glob-to-any-file: ['hub/agents/hello-world/python/**/*', 'hub/agents/word-count/python/**/*', 'hub/agents/doc-search/python/**/*']
+    - any-glob-to-any-file: ['hub/agents/hello-world/python/**/*', 'hub/agents/word-count/python/**/*']
 
 # Evaluation framework changes
 eval:

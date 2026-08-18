@@ -81,40 +81,6 @@ updates:
         patterns:
           - "*"
 
-  # JavaScript - Jira Electron app (JAX)
-  - package-ecosystem: "npm"
-    directory: "/src/gaia/apps/jira/webui"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-    labels:
-      - "dependencies"
-      - "javascript"
-      - "electron"
-      - "jira-app"
-    open-pull-requests-limit: 5
-    groups:
-      jira-app-dependencies:
-        patterns:
-          - "*"
-
-  # JavaScript - EMR Dashboard Electron wrapper
-  - package-ecosystem: "npm"
-    directory: "/hub/agents/emr/python/gaia_agent_emr/dashboard/electron"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-    labels:
-      - "dependencies"
-      - "javascript"
-      - "electron"
-      - "emr-dashboard"
-    open-pull-requests-limit: 5
-    groups:
-      emr-dashboard-dependencies:
-        patterns:
-          - "*"
-
   # GitHub Actions dependencies
   - package-ecosystem: "github-actions"
     directory: "/"

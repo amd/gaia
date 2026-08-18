@@ -27,21 +27,13 @@ from gaia.api.sse_handler import SSEOutputHandler
 logger = logging.getLogger(__name__)
 
 
-# Hardcoded agent mappings: "model" name -> (Agent class, init params)
-# These are the "models" exposed in /v1/models and selectable in VSCode
-AGENT_MODELS = {
-    "gaia-code": {
-        # RoutingAgent ships as the standalone gaia-agent-routing wheel (#1102).
-        "class_name": "gaia_agent_routing.agent.RoutingAgent",
-        "init_params": {
-            "api_mode": True,  # Skip interactive questions, use defaults/best-guess
-            "silent_mode": True,
-            "streaming": False,
-            "max_steps": 100,
-        },
-        "description": "Intelligent routing agent that detects language/project type and routes to CodeAgent",
-    }
-}
+# Agent mappings: "model" name -> (Agent class, init params). These are the
+# "models" exposed in /v1/models and selectable in VSCode.
+#
+# Empty since the routing agent was removed: its entry was the only one, and it
+# routed to the code agent, which is gone too. The server still starts and
+# serves an empty /v1/models list; add an entry here to expose an agent again.
+AGENT_MODELS = {}
 
 
 # Apply environment variable overrides to all agent init_params
@@ -100,7 +92,7 @@ class AgentRegistry:
         Dynamically load agent class from module path.
 
         Args:
-            class_path: Full module path (e.g., "gaia_agent_routing.agent.RoutingAgent")
+            class_path: Full module path (e.g., "gaia_agent_email.agent.EmailTriageAgent")
 
         Returns:
             Agent class

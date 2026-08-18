@@ -20,8 +20,6 @@ from pathlib import Path
 from typing import Any, Dict
 from urllib.parse import urlparse
 
-from python_multipart.multipart import MultipartParser, parse_options_header
-
 # Add GAIA to path
 sys.path.insert(
     0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -50,79 +48,6 @@ AUTH_TOKEN_ENV_VAR = "GAIA_MCP_AUTH_TOKEN"
 # including unknown ones, is authenticated. (CORS preflight is also exempt, but
 # via do_OPTIONS: browsers never send Authorization on a preflight.)
 PUBLIC_PATHS = frozenset({"/health"})
-
-
-class MultipartCollector:
-    def __init__(self):
-        self.fields = {}
-        self.files = {}
-        self._headers = []
-        self._name = None
-        self._filename = None
-        self._buffer = None
-
-    def _parse_cd(self, value: str):
-        name = None
-        filename = None
-        try:
-            parts = [p.strip() for p in value.split(";")]
-            for p in parts:
-                pl = p.lower()
-                if pl.startswith("name="):
-                    name = p.split("=", 1)[1].strip().strip('"')
-                elif pl.startswith("filename="):
-                    filename = p.split("=", 1)[1].strip().strip('"')
-        except (AttributeError, IndexError, ValueError) as e:
-            logger.debug("Failed to parse Content-Disposition %r: %s", value, e)
-        return name, filename
-
-    def on_part_begin(self):
-        self._headers = []
-        self._name = None
-        self._filename = None
-        self._buffer = io.BytesIO()
-
-    def on_header_field(self, data: bytes, start: int, end: int):
-        field = data[start:end].decode("latin-1")
-        self._headers.append([field, ""])
-
-    def on_header_value(self, data: bytes, start: int, end: int):
-        if self._headers:
-            self._headers[-1][1] += data[start:end].decode("latin-1")
-
-    def on_headers_finished(self):
-        for k, v in self._headers:
-            if k.lower() == "content-disposition":
-                name, filename = self._parse_cd(v)
-                self._name = name
-                self._filename = filename
-
-    def on_part_data(self, data: bytes, start: int, end: int):
-        if self._buffer is not None:
-            self._buffer.write(data[start:end])
-
-    def on_part_end(self):
-        if self._name is None:
-            self._buffer = None
-            return
-        if self._filename:
-            self.files[self._name] = {
-                "file_name": self._filename,
-                "file_object": self._buffer,
-            }
-        else:
-            self.fields[self._name] = self._buffer.getvalue()
-        self._buffer = None
-
-    def callbacks(self):
-        return {
-            "on_part_begin": self.on_part_begin,
-            "on_header_field": self.on_header_field,
-            "on_header_value": self.on_header_value,
-            "on_headers_finished": self.on_headers_finished,
-            "on_part_data": self.on_part_data,
-            "on_part_end": self.on_part_end,
-        }
 
 
 class GAIAMCPBridge:
@@ -172,48 +97,6 @@ class GAIAMCPBridge:
                 "capabilities": ["conversation", "history", "context_management"],
             }
 
-            # Blender agent
-            try:
-                from gaia_agent_blender.agent import BlenderAgent
-
-                self.agents["blender"] = {
-                    "class": BlenderAgent,
-                    "description": "3D content creation",
-                    "capabilities": ["3d_modeling", "scene_manipulation", "rendering"],
-                }
-            except ImportError:
-                logger.warning("Blender agent not available")
-            # Summarize agent
-            try:
-                from gaia_agent_summarize.agent import SummarizerAgent
-
-                self.agents["summarize"] = {
-                    "class": SummarizerAgent,
-                    "description": "Text/document summarization",
-                    "capabilities": ["summarize", "pdf", "email", "transcript"],
-                    "init_params": {},
-                }
-                logger.info("✅ Summarize agent registered")
-            except ImportError as e:
-                logger.warning(f"Summarize agent not available: {e}")
-            # Jira agent - THE KEY ADDITION
-            try:
-                from gaia_agent_jira.agent import JiraAgent
-
-                self.agents["jira"] = {
-                    "class": JiraAgent,
-                    "description": "Natural language Jira orchestration",
-                    "capabilities": ["search", "create", "update", "bulk_operations"],
-                    "init_params": {
-                        "model_id": DEFAULT_MODEL_NAME,
-                        "silent_mode": True,
-                        "debug": False,
-                    },
-                }
-                logger.info("✅ Jira agent registered")
-            except ImportError as e:
-                logger.warning(f"Jira agent not available: {e}")
-
             logger.info(f"Initialized {len(self.agents)} agents")
 
         except Exception as e:
@@ -241,23 +124,6 @@ class GAIAMCPBridge:
         except Exception as e:
             logger.warning(f"Could not load mcp.json: {e}")
 
-        # Ensure core tools are registered
-        if "gaia.jira" not in self.tools:
-            self.tools["gaia.jira"] = {
-                "name": "gaia.jira",
-                "description": "Natural language Jira operations",
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "query": {"type": "string"},
-                        "operation": {
-                            "type": "string",
-                            "enum": ["query", "create", "update"],
-                        },
-                    },
-                },
-            }
-
         if "gaia.chat" not in self.tools:
             self.tools["gaia.chat"] = {
                 "name": "gaia.chat",
@@ -281,57 +147,15 @@ class GAIAMCPBridge:
     def execute_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
         """Execute a tool and return results."""
         try:
-            if tool_name == "gaia.jira":
-                return self._execute_jira(arguments)
-            elif tool_name == "gaia.query":
+            if tool_name == "gaia.query":
                 return self._execute_query(arguments)
             elif tool_name == "gaia.chat":
                 return self._execute_chat(arguments)
-            elif tool_name == "gaia.blender.create":
-                return self._execute_blender(arguments)
-            elif tool_name == "gaia.summarize":
-                return self._execute_summarize(arguments)
             else:
                 return {"error": f"Tool not implemented: {tool_name}"}
         except Exception as e:
             logger.error(f"Tool execution error: {e}")
             return {"error": str(e)}
-
-    def _execute_jira(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute Jira operations."""
-        query = args.get("query", "")
-
-        # Get or create agent
-        agent_config = self.agents.get("jira")
-        if not agent_config:
-            return {"error": "Jira agent not available"}
-
-        # Lazy initialization
-        if "instance" not in agent_config:
-            agent_class = agent_config["class"]
-            init_params = agent_config.get("init_params", {})
-            agent_config["instance"] = agent_class(**init_params)
-
-            # Initialize Jira config discovery
-            try:
-                config = agent_config["instance"].initialize()
-                logger.info(
-                    f"Jira initialized: {len(config.get('projects', []))} projects found"
-                )
-            except Exception as e:
-                logger.warning(f"Jira config discovery failed: {e}")
-
-        agent = agent_config["instance"]
-
-        # Execute query
-        result = agent.process_query(query, trace=False)
-
-        return {
-            "success": True,
-            "result": result.get("final_answer", ""),
-            "steps_taken": result.get("steps_taken", 0),
-            "conversation": result.get("conversation", []),
-        }
 
     def _execute_query(self, args: Dict[str, Any]) -> Dict[str, Any]:
         """Execute LLM query."""
@@ -376,114 +200,6 @@ class GAIAMCPBridge:
             logger.error(f"Chat execution error: {e}")
             return {"success": False, "error": str(e)}
 
-    def _execute_blender(self, _args: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute Blender operations."""
-        # Implementation would go here
-        return {"success": True, "result": "Blender operation completed"}
-
-    def _execute_summarize(self, args: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute summarize operations.
-        Returns either a non-streaming result or streaming iterator metadata.
-        """
-        collector = args.get("multipart_collector")
-        if not collector:
-            return {"success": False, "error": "Missing multipart_collector"}
-
-        file_rec = collector.files.get("file")
-        style_bytes = collector.fields.get("style") or b"brief"
-        stream_val = collector.fields.get("stream")
-        accept_sse = bool(args.get("accept_sse"))
-
-        # Normalize flags
-        try:
-            style = (
-                style_bytes.decode("utf-8", errors="ignore")
-                if isinstance(style_bytes, (bytes, bytearray))
-                else str(style_bytes)
-            )
-        except Exception:
-            style = "brief"
-        try:
-            stream = str(
-                (
-                    stream_val.decode("utf-8")
-                    if isinstance(stream_val, (bytes, bytearray))
-                    else stream_val
-                )
-                or ""
-            ).lower() in ["1", "true", "yes"]
-        except Exception:
-            stream = False
-        # Honor Accept: text/event-stream if not explicitly set by field
-        if not stream and accept_sse:
-            stream = True
-
-        if not file_rec:
-            return {"success": False, "error": "No file uploaded"}
-
-        # Save file to temp
-        filename = file_rec.get("file_name")
-        ext = os.path.splitext(filename)[1] if filename else ".pdf"
-        tmpfile_path = None
-        try:
-            with tempfile.NamedTemporaryFile(
-                delete=False, suffix=ext or ".pdf"
-            ) as tmpfile:
-                buf = file_rec.get("file_object")
-                buf.seek(0)
-                shutil.copyfileobj(buf, tmpfile)
-                tmpfile_path = tmpfile.name
-
-            # Initialize agent
-            agent_config = self.agents.get("summarize")
-            if not agent_config:
-                return {"success": False, "error": "Summarize agent not available"}
-            if "instance" not in agent_config:
-                agent_class = agent_config["class"]
-                init_params = agent_config.get("init_params", {})
-                agent_config["instance"] = agent_class(**init_params)
-            agent = agent_config["instance"]
-
-            # Validate style early to provide clear error message
-            try:
-                agent._validate_styles(style)  # pylint: disable=protected-access
-            except ValueError as e:
-                return {"success": False, "error": str(e)}
-
-            if stream:
-                content = agent.get_summary_content_from_file(Path(tmpfile_path))
-                if not content:
-                    return {
-                        "success": False,
-                        "error": "No extractable text found in uploaded file",
-                    }
-                iterator = agent.summarize_stream(
-                    content, input_type="pdf", style=style
-                )
-                # Return tmpfile_path for cleanup after streaming completes
-                return {
-                    "success": True,
-                    "stream": True,
-                    "style": style,
-                    "tmpfile_path": tmpfile_path,
-                    "iterator": iterator,
-                }
-            else:
-                result = agent.summarize_file(tmpfile_path, styles=[style])
-                return {
-                    "success": True,
-                    "stream": False,
-                    "style": style,
-                    "result": result,
-                }
-        finally:
-            # Clean up temp file for non-streaming responses or on error
-            # For streaming responses, cleanup happens in the HTTP handler after streaming completes
-            if tmpfile_path and not stream and os.path.exists(tmpfile_path):
-                try:
-                    os.unlink(tmpfile_path)
-                except Exception as e:
-                    logger.warning(f"Failed to cleanup temp file {tmpfile_path}: {e}")
 
 
 class MCPHTTPHandler(BaseHTTPRequestHandler):
@@ -616,7 +332,6 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                         "status": "GET /status - Detailed status (this endpoint)",
                         "tools": "GET /tools - List available tools",
                         "chat": "POST /chat - Interactive chat",
-                        "jira": "POST /jira - Jira operations",
                         "llm": "POST /llm - Direct LLM queries",
                         "jsonrpc": "POST / - JSON-RPC endpoint",
                     },
@@ -646,24 +361,6 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
                 logger.error("Invalid JSON in request body")
                 self.send_json(400, {"error": "Invalid JSON"})
                 return
-        elif ctype.startswith("multipart/form-data"):
-            raw_data = self.rfile.read(content_length)
-
-            # Extract boundary using python-multipart helper and ensure bytes
-            _, opts = parse_options_header(ctype)
-            boundary = opts.get(b"boundary")
-            if not boundary:
-                raise ValueError("Missing multipart boundary")
-
-            # boundary is bytes from parse_options_header; encode to UTF-8 for parser
-            boundary_bytes = boundary.decode("latin-1").strip('"').encode("utf-8")
-
-            collector = MultipartCollector()
-            mp = MultipartParser(boundary_bytes, callbacks=collector.callbacks())
-            mp.write(raw_data)
-            mp.finalize()
-            data = {}
-            data["multipart_collector"] = collector
         else:
             data = {}
             self.log_request_details("POST", self.path)
@@ -676,32 +373,10 @@ class MCPHTTPHandler(BaseHTTPRequestHandler):
             # Direct chat endpoint for conversations
             result = self.bridge.execute_tool("gaia.chat", data)
             self.send_json(200 if result.get("success") else 500, result)
-        elif parsed.path == "/jira":
-            # Direct Jira endpoint for convenience
-            result = self.bridge.execute_tool("gaia.jira", data)
-            self.send_json(200 if result.get("success") else 500, result)
         elif parsed.path == "/llm":
             # Direct LLM endpoint (no conversation context)
             result = self.bridge.execute_tool("gaia.query", data)
             self.send_json(200 if result.get("success") else 500, result)
-        elif parsed.path == "/summarize":
-            # Direct Summarize endpoint accept multipart/form-data (file upload) for browser clients
-            accept_header = self.headers.get("Accept", "")
-            if isinstance(data, dict):
-                data["accept_sse"] = "text/event-stream" in accept_header
-            result = self.bridge.execute_tool("gaia.summarize", data)
-            if result.get("success") and result.get("stream"):
-                self.send_sse_headers()
-                try:
-                    self.stream_sse(result.get("iterator", []))
-                finally:
-                    tmp = result.get("tmpfile_path")
-                    if tmp and os.path.exists(tmp):
-                        os.unlink(tmp)
-                return
-            else:
-                self.send_json(200 if result.get("success") else 500, result)
-                return
         else:
             self.send_json(404, {"error": "Not found"})
 
@@ -902,14 +577,10 @@ def start_server(
     print(f"  GET  http://{host}:{port}/tools      - List tools")
     print(f"  POST http://{host}:{port}/           - JSON-RPC")
     print(f"  POST http://{host}:{port}/chat       - Chat (with context)")
-    print(f"  POST http://{host}:{port}/jira       - Direct Jira")
     print(f"  POST http://{host}:{port}/llm        - Direct LLM (no context)")
     print("\n🔧 Usage Examples:")
     print(
         '  Chat: curl -X POST http://localhost:8765/chat -d \'{"query":"Hello GAIA!"}\''
-    )
-    print(
-        '  Jira: curl -X POST http://localhost:8765/jira -d \'{"query":"show my issues"}\''
     )
     print('  n8n: HTTP Request → POST /chat → {"query": "..."}')
     print("  MCP: JSON-RPC to / with method: tools/call")
