@@ -115,10 +115,84 @@ jobs:
             --verify-released \
             --release-version "${VERSION}"
 
+  # ── Bring the Worker up to date before anything is uploaded to it ───────────
+  # The Worker validates every manifest it accepts, so a Worker older than the
+  # manifests rejects a release that is perfectly valid. That is not theoretical:
+  # `go` and `typescript` were added to VALID_LANGUAGES in July, the Worker was
+  # never redeployed, and every publish since died on
+  #   invalid_manifest: language "go" is not supported. Use one of: cpp, python
+  # — an error quoting a list that no longer exists in the source. There is no
+  # other deploy path (agent_hub_worker_ci.yml only type-checks and tests), so
+  # the Worker drifts until someone runs `wrangler deploy` by hand.
+  #
+  # Deploying here rather than on push-to-main is deliberate: this job inherits
+  # the agent-publish reviewer gate, so a production Worker deploy still needs a
+  # human, and it lands in the same approval as the upload it has to match.
+  deploy-worker:
+    name: Deploy Agent Hub Worker
+    needs: version
+    if: needs.version.outputs.dry_run == 'false'
+    runs-on: ubuntu-latest
+    environment: agent-publish
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+
+      - name: Install Worker dependencies
+        working-directory: workers/agent-hub
+        run: npm ci
+
+      # Type-check before deploying: agent_hub_worker_ci.yml gates PRs, but a
+      # dispatch can run from any ref, and shipping a Worker that fails tsc
+      # would break publishing for every agent, not just this release.
+      - name: Type-check
+        working-directory: workers/agent-hub
+        run: npx tsc --noEmit
+
+      - name: Deploy
+        working-directory: workers/agent-hub
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
+            echo "::error::missing environment secret CLOUDFLARE_API_TOKEN on the agent-publish environment. The Agent Hub Worker validates the manifests this workflow uploads, so publishing without deploying it first is how a stale validator rejects a valid release. Create a Cloudflare API token with the 'Edit Cloudflare Workers' template and add it (plus CLOUDFLARE_ACCOUNT_ID) to the agent-publish environment. See workers/agent-hub/README.md."
+            exit 1
+          fi
+          npx wrangler deploy
+          echo "✓ agent-hub Worker deployed from this ref"
+
+      # Prove the deployed Worker is the one we just built, not a cached edge
+      # version — the failure this job exists to prevent was invisible until a
+      # publish failed, because nothing ever asserted what was live.
+      - name: Verify the live Worker answers
+        run: |
+          set -euo pipefail
+          for i in 1 2 3 4 5; do
+            if curl -fsS --max-time 15 https://hub.amd-gaia.ai/health >/dev/null; then
+              echo "✓ hub.amd-gaia.ai/health OK"
+              exit 0
+            fi
+            echo "health check attempt $i failed; retrying in 5s"
+            sleep 5
+          done
+          echo "::error::the Worker deployed but hub.amd-gaia.ai/health did not answer. Check the Cloudflare dashboard before re-running the publish — uploading to a half-deployed Worker is how partial state gets into an immutable path."
+          exit 1
+
   # ── terminal-hub: build the 6 targets and publish them ──────────────────────
   terminal-hub:
     name: Publish terminal-hub
-    needs: version
+    needs: [version, deploy-worker]
+    # deploy-worker is skipped on a dry run; a skipped dependency would skip this
+    # job too, so admit 'skipped' explicitly while still refusing 'failure'.
+    if: |
+      always()
+      && needs.version.result == 'success'
+      && (needs.deploy-worker.result == 'success' || needs.deploy-worker.result == 'skipped')
     runs-on: ubuntu-latest
     # agent-publish gates on a deployment tag allowlist that lives in repo settings,
     # not here: it must include v* or every release tag is rejected before any step
@@ -225,7 +299,13 @@ jobs:
   # ── agent-ui: republish the installers build-installers.yml already made ────
   agent-ui:
     name: Publish agent-ui
-    needs: version
+    needs: [version, deploy-worker]
+    # deploy-worker is skipped on a dry run; a skipped dependency would skip this
+    # job too, so admit 'skipped' explicitly while still refusing 'failure'.
+    if: |
+      always()
+      && needs.version.result == 'success'
+      && (needs.deploy-worker.result == 'success' || needs.deploy-worker.result == 'skipped')
     runs-on: ubuntu-latest
     # Same tag-allowlist requirement as terminal-hub above (#2935).
     environment: agent-publish
