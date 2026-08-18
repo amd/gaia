@@ -5,6 +5,20 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/); the REST
 contract version is tracked separately as
 `gaia_agent_email.contract.SCHEMA_VERSION` (see `CONTRACT.md`).
 
+## [Unreleased]
+
+### Fixed
+
+- **The OpenAPI document now declares the sidecar's bearer-token gate (#2993).**
+  `require_caller_token` enforces a per-session bearer token at runtime, but was
+  invisible to schema generation (it's a plain `Request` dependency, not a
+  `fastapi.security` class) — every documented operation showed 0 security
+  requirements. The live `/openapi.json` and the committed `openapi.email.json`
+  now declare a `bearerAuth` HTTP scheme and, per gated operation, `security:
+  [{"bearerAuth": []}, {}]` (bearer OR none — the check is conditional, skipped
+  when the sidecar has no token configured for local development). `EXEMPT_PATHS`
+  routes declare an explicit empty requirement. No runtime auth behavior changed.
+
 ## [0.6.0] - 2026-08-12
 
 ### Added
