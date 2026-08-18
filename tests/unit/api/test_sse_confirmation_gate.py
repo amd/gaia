@@ -244,15 +244,22 @@ class TestRegistryWiring:
         """The bug was that ``AgentRegistry.get_agent`` hands every API-served
         agent this handler. Drive the real registry and assert the handler it
         installs is the one the agent actually consults — ``silent_mode=True``
-        in ``AGENT_MODELS`` must not win over ``output_handler``."""
+        in ``AGENT_MODELS`` must not win over ``output_handler``.
+
+        AGENT_MODELS is empty post-collapse (#1102) — the routing/code agents
+        it used to expose are gone — so a fake entry is patched in here to
+        exercise the get_agent() wiring this test actually targets.
+        """
         from unittest.mock import patch
 
-        from gaia.api.agent_registry import AgentRegistry
+        from gaia.api.agent_registry import AGENT_MODELS, AgentRegistry
 
         registry = AgentRegistry()
-        with patch.object(AgentRegistry, "_load_agent_class", return_value=_ApiAgent):
-            with patch("gaia.agents.base.agent.AgentSDK"):
-                agent = registry.get_agent("gaia-code")
+        fake_model = {"class_name": "unused.Module.Class", "init_params": {"silent_mode": True}}
+        with patch.dict(AGENT_MODELS, {"gaia-code": fake_model}):
+            with patch.object(AgentRegistry, "_load_agent_class", return_value=_ApiAgent):
+                with patch("gaia.agents.base.agent.AgentSDK"):
+                    agent = registry.get_agent("gaia-code")
 
         assert isinstance(agent.console, SSEOutputHandler)
         result = agent._execute_tool("write_file", {"path": "/x", "content": "y"})
@@ -332,7 +339,18 @@ class TestHttpSurface:
         from fastapi.testclient import TestClient
 
         from gaia.api import openai_server
-        from gaia.api.agent_registry import AgentRegistry
+        from gaia.api.agent_registry import AGENT_MODELS, AgentRegistry
+
+        # AGENT_MODELS is empty post-collapse (#1102) — the routing/code
+        # agents it used to expose are gone. Without an entry here,
+        # registry.model_exists("gaia-code") 404s before the request ever
+        # reaches the get_agent stub below, before this end-to-end refusal
+        # path can be exercised at all.
+        monkeypatch.setitem(
+            AGENT_MODELS,
+            "gaia-code",
+            {"class_name": "unused.Module.Class", "init_params": {"silent_mode": True}},
+        )
 
         class _Probe(_ApiAgent):
             def __init__(self, **kwargs):
