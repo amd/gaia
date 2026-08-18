@@ -261,6 +261,15 @@ checked into the repo:
 
    Without them the job fails loudly rather than publishing to a stale Worker.
 
+   The deploy stamps the commit into `WORKER_BUILD`, which `GET /health`
+   returns, so the workflow can assert *which* build went live instead of
+   assuming. Check it by hand any time:
+
+   ```bash
+   curl -s https://hub.amd-gaia.ai/health
+   # {"status":"ok","build":"<commit>"}   — "unknown" means a hand-run deploy
+   ```
+
 4. **(Optional) Bind the route** by uncommenting the `routes` line in
    `wrangler.toml` to serve the API under `hub.amd-gaia.ai/*`.
 
