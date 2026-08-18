@@ -361,3 +361,26 @@ def test_search_messages_logs_retry_state_when_widen_fires(caplog):
     message = query_records[0].getMessage()
     assert "retried_to=" in message
     assert "from:(Last Week in AI) OR subject:(Last Week in AI)" in message
+
+
+# --- #2830 review follow-up: Gmail grouping punctuation -------------------
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    [
+        # Already-valid values inside grouping survive untouched -- before the
+        # capture excluded brackets, `7d)` reached the validator and raised,
+        # hard-failing a query Gmail accepts.
+        ("(newer_than:7d)", "(newer_than:7d)"),
+        ("{newer_than:7d}", "{newer_than:7d}"),
+        # ...and a week unit inside grouping still converts, with the bracket
+        # left in place so the expression stays balanced.
+        ("(newer_than:2w)", "(newer_than:14d)"),
+        ("{from:a newer_than:2w}", "{from:a newer_than:14d}"),
+        ("from:x OR (newer_than:2w)", "from:x OR (newer_than:14d)"),
+        ("older_than:3w]", "older_than:21d]"),
+    ],
+)
+def test_grouping_punctuation_is_not_swallowed_by_the_value(query, expected):
+    assert normalize_gmail_date_operators(query) == expected

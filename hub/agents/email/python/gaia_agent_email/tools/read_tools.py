@@ -42,7 +42,7 @@ from gaia_agent_email.context_budget import (
     skill_prompt_tokens,
 )
 from gaia_agent_email.gmail_backend import decode_message_body
-from gaia_agent_email.gmail_query import _DURATION_OP_RE, _parse_gmail_duration_value
+from gaia_agent_email.gmail_query import DURATION_OP_RE, parse_gmail_duration_value
 from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 
 # Re-exported so the pre-scan tests can monkeypatch ``read_tools.make_llm_classifier``
@@ -869,10 +869,10 @@ def normalize_gmail_date_operators(query: str) -> str:
 
     def _duration_sub(m: "re.Match[str]") -> str:
         op = m.group("op")
-        return f"{op}:{_parse_gmail_duration_value(m.group('val'), op=op)}"
+        return f"{op}:{parse_gmail_duration_value(m.group('val'), op=op)}"
 
     query = _DATE_OP_RE.sub(_sub, query)
-    return _DURATION_OP_RE.sub(_duration_sub, query)
+    return DURATION_OP_RE.sub(_duration_sub, query)
 
 
 # Gmail search operators (a leading ``token:`` in the query). If a query
@@ -960,21 +960,26 @@ def search_messages_impl(
         },
         debug=debug,
     ) as st:
-        listing = gmail.list_messages(query=query, max_results=max_results)
-        stubs = listing.get("messages", [])
         retried_query = None
-        # A literal-phrase query with zero hits is the #2114 failure mode:
-        # retry once as an operator query before giving up. Only when the
-        # user's query carried no operator of its own (else we'd second-guess
-        # an intentional ``from:`` search).
-        if not stubs and operator_retry and not has_gmail_operator(query):
-            retried_query = operatorize_query(query)
-            if retried_query != query:
-                listing = gmail.list_messages(
-                    query=retried_query, max_results=max_results
-                )
-                stubs = listing.get("messages", [])
-        log_search_effective_query(query=query, retried_query=retried_query)
+        # ``finally`` so the effective query still reaches the log when the
+        # backend raises -- that is the reproduce-from-a-diagnostics-bundle
+        # case this line exists for.
+        try:
+            listing = gmail.list_messages(query=query, max_results=max_results)
+            stubs = listing.get("messages", [])
+            # A literal-phrase query with zero hits is the #2114 failure mode:
+            # retry once as an operator query before giving up. Only when the
+            # user's query carried no operator of its own (else we'd
+            # second-guess an intentional ``from:`` search).
+            if not stubs and operator_retry and not has_gmail_operator(query):
+                retried_query = operatorize_query(query)
+                if retried_query != query:
+                    listing = gmail.list_messages(
+                        query=retried_query, max_results=max_results
+                    )
+                    stubs = listing.get("messages", [])
+        finally:
+            log_search_effective_query(query=query, retried_query=retried_query)
         if include_bodies:
             full_msgs = [gmail.get_message(stub["id"]) for stub in stubs]
             out = _format_messages_within_budget(

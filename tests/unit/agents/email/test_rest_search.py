@@ -212,3 +212,38 @@ class TestSearchInvalidDurationIsA400:
         resp = client.post("/v1/email/search", json={"query": "newer_than:1.5d"})
         assert resp.status_code == 400
         assert "1.5d" in resp.json()["detail"]
+
+
+class TestSearchErrorBoundaryIsNarrow:
+    """#2830 review: only query parsing may map to a 400.
+
+    The first cut wrapped the whole search, so any ValueError raised deeper in
+    the backend would surface to the caller as "your request was bad" with an
+    internal message attached. These pin that only the parse step does.
+    """
+
+    def test_unparseable_duration_is_a_400(self, client):
+        resp = client.post("/v1/email/search", json={"query": "newer_than:1.5w"})
+        assert resp.status_code == 400
+        assert "1.5w" in resp.json()["detail"]
+
+    def test_internal_valueerror_is_not_reported_as_a_bad_request(self, client):
+        """A ValueError from inside the search is a server fault, not a 400."""
+
+        class _Exploding:
+            def list_messages(self, **_kw):
+                raise ValueError("internal detail that must not leak as a 400")
+
+        client.app.dependency_overrides[api_routes.get_search_backend] = _Exploding
+        try:
+            with pytest.raises(ValueError):
+                client.post("/v1/email/search", json={"query": "newer_than:7d"})
+        finally:
+            client.app.dependency_overrides[api_routes.get_search_backend] = (
+                lambda: None
+            )
+
+    def test_grouped_duration_is_accepted_not_rejected(self, client):
+        """`(newer_than:7d)` is valid Gmail and must not 400."""
+        resp = client.post("/v1/email/search", json={"query": "(newer_than:7d)"})
+        assert resp.status_code == 200

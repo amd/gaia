@@ -4290,7 +4290,7 @@
             "description": "Successful Response"
           },
           "400": {
-            "description": "Ambiguous or unknown account: the named provider is not connected, or no provider was given while several accounts are connected."
+            "description": "Ambiguous or unknown account: the named provider is not connected, or no provider was given while several accounts are connected. Also returned when ``query`` carries an unparseable date or duration operator value (e.g. ``newer_than:1.5w``)."
           },
           "403": {
             "description": "Authorization failed — the account's auth is missing, expired, or revoked (reconnect via Settings → Connectors), or a confirmation gate rejected the request (mint a fresh confirmation token)."

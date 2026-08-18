@@ -16,8 +16,8 @@ The accept-list below is measured directly against live Gmail, not read
 from a doc — Gmail's own documentation omits ``h`` (hours) entirely, yet
 ``newer_than:12h`` is a working query.
 
-A peer module rather than living in ``tools/read_tools.py`` (already 3021
-lines) — imported from there, which is the sole call site that wires it into
+A peer module rather than living in ``tools/read_tools.py`` (already very
+large) — imported from there, which is the sole call site that wires it into
 ``normalize_gmail_date_operators``.
 """
 
@@ -25,19 +25,22 @@ from __future__ import annotations
 
 import re
 
-# Value grammar mirrors read_tools._DATE_OP_RE's quoted-string/\S+ fallback
-# -- a narrower pattern would fail to even match a quoted or malformed value
-# (`newer_than:"2w"`, `newer_than:-3d`) and leave it in the query unvalidated.
+# Value grammar mirrors read_tools._DATE_OP_RE's quoted-string/bare-token
+# fallback so a malformed value still reaches the validator instead of being
+# silently passed through (`newer_than:"2w"`, `newer_than:-3d`) -- but it stops
+# at Gmail's grouping punctuation: `(newer_than:7d)` must capture `7d`, never
+# `7d)`. Stripping the bracket after the fact would drop it from the rewritten
+# query and unbalance the expression, so it must never enter the match.
 #
 # Op group is exactly newer_than|older_than, not newer(?:_than)? -- the
 # broader form would also match bare newer:/older: and misparse their
 # already-correct date as a duration.
-_DURATION_OP_RE = re.compile(
+DURATION_OP_RE = re.compile(
     r"""
     \b(?P<op>newer_than|older_than):
     (?P<val>
         "[^"]*"
-      | \S+
+      | [^\s)}\]]+
     )
     """,
     re.IGNORECASE | re.VERBOSE,
@@ -52,7 +55,7 @@ _DURATION_VALUE_RE = re.compile(r"^(\d+)([A-Za-z]+)$")
 _DURATION_PASSTHROUGH_UNITS = {"h", "d", "m", "y"}
 
 
-def _parse_gmail_duration_value(raw: str, *, op: str) -> str:
+def parse_gmail_duration_value(raw: str, *, op: str) -> str:
     """Parse one ``newer_than:``/``older_than:`` value into what Gmail accepts.
 
     Accepts an integer count plus a case-insensitive ``h``/``d``/``m``/``y``
