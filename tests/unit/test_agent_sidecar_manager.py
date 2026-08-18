@@ -922,3 +922,21 @@ def test_dev_mode_real_spawn_health_and_treekill(monkeypatch):
     finally:
         m.shutdown()
     assert not m.is_running
+
+
+def test_builtin_gaia_spec_token_env_vars_match_the_hub_wheel_contract():
+    # Same cross-repo mirror rule as email's above. This one matters more than
+    # usual: the flagship sidecar exposes shell and file tools, so a drifted
+    # literal means the daemon mints a token the sidecar never reads and the
+    # port silently falls back to unauthenticated.
+    gaia = builtin_specs()["gaia"]
+    assert gaia.token_env_var == "GAIA_GAIA_SIDECAR_TOKEN"
+    assert gaia.token_file_env_var == "GAIA_GAIA_SIDECAR_TOKEN_FILE"
+
+
+def test_gaia_spec_literals_match_the_installed_caller_auth_module():
+    # The real assertion, when the hub wheel is importable.
+    caller_auth = pytest.importorskip("gaia_agent.caller_auth")
+    gaia = builtin_specs()["gaia"]
+    assert gaia.token_env_var == caller_auth.TOKEN_ENV_VAR
+    assert gaia.token_file_env_var == caller_auth.TOKEN_FILE_ENV_VAR

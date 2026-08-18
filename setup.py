@@ -43,6 +43,7 @@ AGENT_WHEEL_PACKAGES = [
     "gaia-agent-routing",
     "gaia-agent-email",
     "gaia-agent-chat",
+    "gaia-agent-gaia",
 ]
 
 setup(
@@ -67,6 +68,7 @@ setup(
         "gaia.ui",
         "gaia.ui.routers",
         "gaia.ui.email_sidecar",
+        "gaia.sidecar",
         "gaia.database",
         "gaia.talk",
         "gaia.testing",
@@ -201,6 +203,8 @@ setup(
             "pypdf",
             "python-pptx>=0.6.21",
             "python-docx>=1.1.0",
+            "openpyxl>=3.1.0",
+            "reportlab>=4.0.0",
             # Memory cross-encoder reranker (gaia.agents.base.memory) — optional
             # at runtime (graceful degradation) but bundled with "ui" so the
             # full chat experience gets reranking out of the box. NOT a RAG dep.
@@ -304,8 +308,16 @@ setup(
             "numpy>=1.24.0",
             "pymupdf>=1.24.0",
             "pypdf",
+            # Reading AND writing the common office formats. The read half is
+            # what RAG needs; the write half is what the document skills need,
+            # and this is the extra `gaia init --profile chat` installs. Without
+            # openpyxl and reportlab the pdf and xlsx skills load fine and then
+            # cannot do their job — the agent hand-writes raw PDF and raw OOXML
+            # instead, which works and is not a plan.
             "python-pptx>=0.6.21",
             "python-docx>=1.1.0",
+            "openpyxl>=3.1.0",
+            "reportlab>=4.0.0",
         ],
         "lint": [
             "black",

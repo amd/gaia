@@ -1,0 +1,69 @@
+[
+  {
+    "id": "edit-fix-bugs",
+    "kind": "edit",
+    "probe": "Fix failing tests without breaking passing ones",
+    "passed_before": 4,
+    "failed_before": 2,
+    "passed_after": 6,
+    "failed_after": 0,
+    "regressions": [],
+    "files_changed": [
+      "cart.20260814_144712.bak.py",
+      "cart.py"
+    ],
+    "answer": "All 6 tests pass now:  6 passed in 0.09s .\n  Bugs were in  cart.py :  apply_discount  treated  percent  as a fraction instead of\n  dividing by 100, and  format_money  used  round()  which drops trailing zeros (e.g.\n  $5.5  instead of  $5.50 ) \u2014 fixed with  \"{:.2f}\".format(amount) .\n  28.8s \u00b7 ttft 13.7s \u00b7 8 steps \u00b7 8 tools",
+    "elapsed_s": 31.2,
+    "error": ""
+  },
+  {
+    "id": "generate-from-tests",
+    "kind": "generate",
+    "probe": "Write a new module from scratch against a spec in tests",
+    "passed_before": 0,
+    "failed_before": 1,
+    "passed_after": 8,
+    "failed_after": 0,
+    "regressions": [],
+    "files_changed": [
+      "duration.py"
+    ],
+    "answer": "All 8 tests pass:  8 passed in 0.07s .\n   duration.py  parses  Xh ,  Xm ,  Xs  (any combination) or a bare integer as seconds,\n  raising  ValueError  on anything else, including empty strings.\n  18.2s \u00b7 ttft 17.1s \u00b7 6 steps \u00b7 5 tools",
+    "elapsed_s": 20.8,
+    "error": ""
+  },
+  {
+    "id": "edit-every-instance",
+    "kind": "edit",
+    "probe": "Find and fix the same defect in several places",
+    "passed_before": 1,
+    "failed_before": 2,
+    "passed_after": 3,
+    "failed_after": 0,
+    "regressions": [],
+    "files_changed": [
+      "runner.20260814_144805.bak.py",
+      "runner.py"
+    ],
+    "answer": "All 3 tests pass:  3 passed in 0.02s .\n  Fixed both defects in every  subprocess.run  call in  runner.py : added\n  errors=\"replace\"  (so undecodable bytes don't crash the decode) and\n  stdin=subprocess.DEVNULL  (so no call can hang waiting on inherited stdin).\n  22.0s \u00b7 ttft 20.8s \u00b7 6 steps \u00b7 6 tools",
+    "elapsed_s": 23.7,
+    "error": ""
+  },
+  {
+    "id": "generate-add-function",
+    "kind": "generate",
+    "probe": "Add a new function to an existing module without disturbing it",
+    "passed_before": 2,
+    "failed_before": 4,
+    "passed_after": 6,
+    "failed_after": 0,
+    "regressions": [],
+    "files_changed": [
+      "stats.20260814_144830.bak.py",
+      "stats.py"
+    ],
+    "answer": "All 6 tests pass:  6 passed in 0.02s .\n  Added  median()  to  stats.py  (sorts, returns the middle value for odd-length lists\n  the average of the two middle values for even, raises  ValueError  on empty input) \u2014\n  summarize()  untouched.\n  21.7s \u00b7 ttft 9.8s \u00b7 7 steps \u00b7 7 tools",
+    "elapsed_s": 23.7,
+    "error": ""
+  }
+]

@@ -42,7 +42,7 @@ func controlOptions(enabled bool, port int, explicitPort bool) (*control.Options
 	}
 	return &control.Options{
 		Port:    port,
-		Debug:   debug,
+		Debug:   dev,
 		Version: version,
 	}, nil
 }

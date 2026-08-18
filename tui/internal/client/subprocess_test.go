@@ -501,3 +501,35 @@ func TestSubprocessClient_SendAfterCancelRespawns(t *testing.T) {
 		}
 	}
 }
+
+// Killing the agent mid-turn produced "agent process exited with code
+// 4294967295". That is 0xFFFFFFFF — Windows' force-terminated status, not a
+// code the agent chose — and it reads as memory corruption rather than "it was
+// stopped". The transport respawns on the next Send, so the message must also
+// say that recovery is automatic; nothing else on screen tells the user.
+func TestDescribeAgentExitExplainsATerminatedProcess(t *testing.T) {
+	for _, code := range []int{windowsTerminated, -1} {
+		got := describeAgentExit(code)
+		if strings.Contains(got, "4294967295") {
+			t.Errorf("code %d leaked the raw status: %q", code, got)
+		}
+		if !strings.Contains(got, "stopped") {
+			t.Errorf("code %d does not say it was stopped: %q", code, got)
+		}
+		if !strings.Contains(got, "next message") {
+			t.Errorf("code %d does not say recovery is automatic: %q", code, got)
+		}
+	}
+}
+
+// A real non-zero exit still reports its code — that one is a genuine signal.
+func TestDescribeAgentExitKeepsARealExitCode(t *testing.T) {
+	got := describeAgentExit(2)
+
+	if !strings.Contains(got, "code 2") {
+		t.Errorf("a real exit code should survive: %q", got)
+	}
+	if !strings.Contains(got, "next message") {
+		t.Errorf("should still say recovery is automatic: %q", got)
+	}
+}
