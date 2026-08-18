@@ -581,3 +581,65 @@ def test_already_sufficient_echo_is_cross_checked_against_ceiling(mock_cls):
         "A config echo that merely repeats the request must never be "
         "trusted as 'sufficient' without checking the model's real ceiling."
     )
+    # The model is already at its honest ceiling (40960) — reloading it at
+    # the same clamped value cannot change anything and must not be
+    # attempted (#2992).
+    client.load_model.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Case 15 — a reload that CANNOT raise the effective context (resident model
+#           already at its known ceiling) must not fire at all: no
+#           load_model call, no "Reloading..." message, just the honest
+#           capped-context report emitted exactly once.
+# ---------------------------------------------------------------------------
+
+
+@patch("gaia.llm.lemonade_manager.LemonadeClient")
+def test_reload_skipped_when_already_at_known_ceiling(mock_cls, caplog):
+    """Qwen3-0.6B-GGUF already resident at its real ceiling (40960), GPU
+    profile requests 65536: a reload can only reproduce the identical
+    40960 result, so it must be skipped entirely — not attempted once."""
+    client = _make_client_mock(
+        _status(
+            running=True,
+            context_size=40960,
+            loaded_models=[
+                {
+                    "id": "Qwen3-0.6B-GGUF",
+                    "model_name": "Qwen3-0.6B-GGUF",
+                    "max_context_window": 40960,
+                    "recipe_options": {"ctx_size": 40960},
+                }
+            ],
+        )
+    )
+    client.get_model_max_context_window.return_value = 40960
+    client.get_status.return_value = _status(
+        running=True,
+        context_size=40960,
+        loaded_models=[
+            {
+                "id": "Qwen3-0.6B-GGUF",
+                "model_name": "Qwen3-0.6B-GGUF",
+                "max_context_window": 40960,
+                "recipe_options": {"ctx_size": 40960},
+            }
+        ],
+    )
+    mock_cls.return_value = client
+
+    with caplog.at_level("WARNING", logger="gaia.llm.lemonade_manager"):
+        ok = LemonadeManager.ensure_ready(min_context_size=65536, quiet=True)
+
+    assert ok is True
+    client.load_model.assert_not_called()
+    capped_msgs = [
+        rec.message
+        for rec in caplog.records
+        if "capped by" in rec.message and "trained context" in rec.message
+    ]
+    assert (
+        len(capped_msgs) == 1
+    ), f"Expected exactly one honest capped-context report, got {capped_msgs}"
+    assert LemonadeManager.get_context_size() == 40960

@@ -667,6 +667,16 @@ class LemonadeManager:
                             and cls._context_size < min_context_size
                             and llm_models_loaded
                         ):
+                            # Same wasted-reload trap as the init block below
+                            # (#2992): already at the model's known ceiling,
+                            # so a reload would just redo the identical load.
+                            if (
+                                cls._context_ceiling is not None
+                                and cls._context_size >= cls._context_ceiling
+                            ):
+                                cls._report_capped_at_ceiling(min_context_size, quiet)
+                                return True
+
                             if cls._try_reload_with_ctx(
                                 client, status, min_context_size, quiet, cls._lock
                             ):
@@ -799,15 +809,7 @@ class LemonadeManager:
                     and cls._context_size < min_context_size
                     and llm_models_loaded
                 ):
-                    cls._log.warning(
-                        f"Lemonade loaded with {cls._context_size} tokens, "
-                        f"capped by the model's trained context (requested "
-                        f"{min_context_size})."
-                    )
-                    if not quiet:
-                        cls.print_context_message(
-                            cls._context_size, min_context_size, MessageType.WARNING
-                        )
+                    cls._report_capped_at_ceiling(min_context_size, quiet)
                     return True
 
                 # Only warn if:
@@ -820,6 +822,23 @@ class LemonadeManager:
                     and cls._context_size < min_context_size
                     and llm_models_loaded
                 ):
+                    # ``_honest_context_size`` above already resolved this
+                    # model's ceiling against the same ``status`` a reload
+                    # attempt would use — if we're already sitting at it, a
+                    # reload can't raise the effective context. Skip the
+                    # (real, blocking) model reload entirely rather than
+                    # doing one that is guaranteed to reproduce the exact
+                    # same result (#2992): every ``gaia <cmd>`` invocation is
+                    # a fresh process, so an unconditional reload here would
+                    # fire on every single command, not just once.
+                    at_known_ceiling = (
+                        cls._context_ceiling is not None
+                        and cls._context_size >= cls._context_ceiling
+                    )
+                    if at_known_ceiling:
+                        cls._report_capped_at_ceiling(min_context_size, quiet)
+                        return True
+
                     if cls._try_reload_with_ctx(
                         client, status, min_context_size, quiet, cls._lock
                     ):
@@ -901,6 +920,24 @@ class LemonadeManager:
                 ceiling,
             )
         return honest_ctx
+
+    @classmethod
+    def _report_capped_at_ceiling(cls, min_context_size: int, quiet: bool) -> None:
+        """Tell the truth once about a model already at its real ceiling.
+
+        Shared by every call site that finds ``cls._context_size`` pinned at
+        ``cls._context_ceiling`` below ``min_context_size`` (#2992) — a
+        reload can't raise a value already at the model's trained-context
+        ceiling, so none of these call sites should attempt one.
+        """
+        cls._log.warning(
+            f"Lemonade running with {cls._context_size} tokens, capped by "
+            f"the model's trained context (requested {min_context_size})."
+        )
+        if not quiet:
+            cls.print_context_message(
+                cls._context_size, min_context_size, MessageType.WARNING
+            )
 
     @classmethod
     def _try_preload_with_ctx(
