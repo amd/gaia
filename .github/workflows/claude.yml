@@ -497,8 +497,9 @@ jobs:
         - Post exactly ONE review in the TWO-part format below, leading with a Verdict
           (Approve / Approve with suggestions / Request changes) and honouring the rubric's
           nit cap. Even a clean PR gets a posted "Approve" — silence is NOT allowed here.
-        - Write it to /tmp/rereview.md first, then
-          `gh pr comment ${{ github.event.pull_request.number }} --body-file /tmp/rereview.md`.
+        - Write it to /tmp/rereview.md. A workflow step posts that file after you
+          exit; do NOT post it yourself — a model-issued post that never happens
+          leaves the job green and the PR unreviewed.
         Then STOP — the rest of this prompt is RE-REVIEW MODE and does not apply.
         ═════════════════════════════════════════════════════════════════════
 
