@@ -1925,6 +1925,48 @@ def test_calendar_create_bad_event_after_gate_is_400(client, monkeypatch):
     assert "start" in resp.json()["detail"].lower()
 
 
+# ---------------------------------------------------------------------------
+# 13. OpenAPI security declaration (#2993) — the per-session bearer gate
+#     (``require_caller_token``) is invisible to FastAPI's schema generator
+#     because it is a plain ``Request`` dependency, not a ``SecurityBase``
+#     one. The document must still declare the scheme and the real,
+#     conditional posture: bearer OR none, since the gate no-ops when the
+#     sidecar has no token configured (local dev).
+# ---------------------------------------------------------------------------
+
+from gaia_agent_email import caller_auth as _caller_auth  # noqa: E402
+
+
+def test_spec_declares_bearer_security_scheme(spec):
+    schemes = spec["components"]["securitySchemes"]
+    assert schemes["bearerAuth"]["type"] == "http"
+    assert schemes["bearerAuth"]["scheme"] == "bearer"
+
+
+def test_gated_operations_require_bearer_or_none(spec):
+    # Every documented operation not in EXEMPT_PATHS must declare the
+    # conditional posture: bearer OR no credential — never a blanket
+    # "bearer always required" (the gate is off when no token is configured).
+    for path, operations in spec["paths"].items():
+        if _caller_auth.is_exempt_path(path):
+            continue
+        for method, op in operations.items():
+            assert op.get("security") == [{"bearerAuth": []}, {}], (
+                f"{method.upper()} {path} does not declare the conditional "
+                "bearer-or-none security requirement"
+            )
+
+
+def test_exempt_paths_are_explicitly_public(spec):
+    for path in ("/v1/email/health", "/v1/email/version"):
+        assert path in spec["paths"], f"{path} missing from spec"
+        for method, op in spec["paths"][path].items():
+            assert op.get("security") == [], (
+                f"{method.upper()} {path} is an EXEMPT_PATHS route and must "
+                "declare an explicit empty security requirement"
+            )
+
+
 def test_spec_page_serves_html(client):
     """GET /spec (include_in_schema=False, human page) serves the HTML spec."""
     resp = client.get("/v1/email/spec")

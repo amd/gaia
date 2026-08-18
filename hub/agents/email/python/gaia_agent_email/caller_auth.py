@@ -184,6 +184,36 @@ def is_exempt_path(path: str) -> bool:
     return path in EXEMPT_PATHS
 
 
+# HTTP methods FastAPI/OpenAPI ever attach an operation to under a path item.
+_OPENAPI_METHODS: FrozenSet[str] = frozenset(
+    {"get", "post", "put", "patch", "delete", "options", "head", "trace"}
+)
+
+
+def openapi_security_extension(spec: dict) -> dict:
+    """Overlay the bearer-token gate onto a generated OpenAPI document (#2993).
+
+    ``require_caller_token`` is a plain ``Request``-typed dependency (by
+    design — it must not risk behaviour drift in the live auth path), so
+    FastAPI's schema generator never sees it and emits no
+    ``securitySchemes``/``security`` at all. This overlay documents the REAL
+    posture instead: the gate is skipped entirely when the sidecar has no
+    token configured (local dev), so every gated operation declares
+    ``security: [{"bearerAuth": []}, {}]`` — bearer OR none — never a false
+    "always required" claim. :data:`EXEMPT_PATHS` routes get an explicit
+    empty requirement (``security: []``) so they read as deliberately public,
+    not merely undocumented. Mutates and returns ``spec``.
+    """
+    schemes = spec.setdefault("components", {}).setdefault("securitySchemes", {})
+    schemes["bearerAuth"] = {"type": "http", "scheme": "bearer"}
+    for path, operations in spec.get("paths", {}).items():
+        requirement = [] if is_exempt_path(path) else [{"bearerAuth": []}, {}]
+        for method, operation in operations.items():
+            if method in _OPENAPI_METHODS:
+                operation["security"] = requirement
+    return spec
+
+
 def _host_only(header_value: str) -> str:
     """Extract the bare host from a ``Host`` header value, dropping the port.
 
@@ -291,4 +321,5 @@ __all__ = [
     "config_from_env",
     "is_exempt_path",
     "token_ok",
+    "openapi_security_extension",
 ]
