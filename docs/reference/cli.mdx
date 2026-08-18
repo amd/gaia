@@ -536,7 +536,13 @@ gaia agent status            # every discovered agent
 ```
 
 ```bash Gate a script on a single agent
-gaia agent status chat --json | jq -e '.health == "healthy"'
+# Exit code alone is enough to gate on: 0 if installed, 1 if not.
+gaia agent status chat || echo "chat is not installed"
+
+# Or inspect the JSON. Passing the value with --arg keeps this working in
+# Windows PowerShell 5.1, which strips embedded double quotes from arguments
+# to native commands.
+gaia agent status chat --json | jq -e --arg v healthy '.health == $v'
 ```
 </CodeGroup>
 
