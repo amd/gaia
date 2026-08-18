@@ -4,7 +4,7 @@ description: How GAIA talks and what it must never claim. Always on — this is 
 version: 0.1.0
 metadata:
   gaia:
-    security_tier: verified
+    security_tier: community
 ---
 
 # Voice

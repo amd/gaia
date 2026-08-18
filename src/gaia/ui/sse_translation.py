@@ -481,7 +481,7 @@ class CanonicalTranslator:
         # retries. Surface as a status line, not an error (spec §6.2).
         return [{"type": "status", "message": str(event.get("message", ""))}]
 
-    def _on_agent_created(self, event: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _on_agent_created(self, _event: Dict[str, Any]) -> List[Dict[str, Any]]:
         # Registry-refresh signal with no chat-stream meaning — dropped from the
         # /query stream by contract decision (spec §6.2). It belongs on a host
         # control channel, not this event stream.

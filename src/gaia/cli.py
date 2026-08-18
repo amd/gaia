@@ -4764,9 +4764,6 @@ Let me know your answer!
 
         # Code generation + editing benchmark: gaia eval code
         if getattr(args, "eval_command", None) == "code":
-            import time as _time
-            from pathlib import Path as _Path
-
             from gaia.eval.code_bench import run, save, scorecard
             from gaia.eval.session_eval import TUIDriver
 
@@ -4775,16 +4772,16 @@ Let me know your answer!
                 or os.path.join(os.path.expanduser("~"), ".gaia", "tui"),
                 "control.json",
             )
-            if not _Path(control).is_file():
+            if not Path(control).is_file():
                 raise FileNotFoundError(
                     f"No running TUI found at {control}. Start one with "
                     "`gaia-drive run gaia --control-port 8817`, or pass --control."
                 )
 
-            out_dir = _Path(
-                args.out or f"eval/results/code-{_time.strftime('%Y%m%d-%H%M%S')}"
+            out_dir = Path(
+                args.out or f"eval/results/code-{time.strftime('%Y%m%d-%H%M%S')}"
             )
-            workspace = _Path(args.workspace) if args.workspace else None
+            workspace = Path(args.workspace) if args.workspace else None
 
             def _progress(index, total, result):
                 mark = "OK " if result.solved else ("ERR" if result.error else "FAIL")
@@ -4797,7 +4794,7 @@ Let me know your answer!
 
             print(f"[RUN] driving the TUI at {control}")
             results = run(
-                TUIDriver(_Path(control)), root=workspace, on_progress=_progress
+                TUIDriver(Path(control)), root=workspace, on_progress=_progress
             )
             card = scorecard(results)
             report_path = save(out_dir, results, card, "live TUI")
@@ -4814,14 +4811,11 @@ Let me know your answer!
 
         # Replay real Claude Code sessions: gaia eval sessions
         if getattr(args, "eval_command", None) == "sessions":
-            import time as _time
-            from pathlib import Path as _Path
-
             from gaia.eval.session_dataset import build_dataset
             from gaia.eval.session_eval import TUIDriver, run, save, scorecard
 
-            out_dir = _Path(
-                args.out or f"eval/results/sessions-{_time.strftime('%Y%m%d-%H%M%S')}"
+            out_dir = Path(
+                args.out or f"eval/results/sessions-{time.strftime('%Y%m%d-%H%M%S')}"
             )
             dataset = build_dataset(project=args.project, limit=args.limit)
             print(
@@ -4840,7 +4834,7 @@ Let me know your answer!
                 or os.path.join(os.path.expanduser("~"), ".gaia", "tui"),
                 "control.json",
             )
-            if not _Path(control).is_file():
+            if not Path(control).is_file():
                 raise FileNotFoundError(
                     f"No running TUI found at {control}. Start one with "
                     "`gaia-drive run gaia --control-port 8817`, or pass "
@@ -4849,7 +4843,7 @@ Let me know your answer!
 
             from gaia.eval.claude import ClaudeClient
 
-            driver = TUIDriver(_Path(control))
+            driver = TUIDriver(Path(control))
             client = ClaudeClient()
 
             def _progress(index, total, result):
@@ -8135,10 +8129,13 @@ def _resolve_sidecar_log(agent_id: str):
                     candidate = log_dir / f"sidecar-{entry['port']}.log"
                     if candidate.exists():
                         return candidate
-    except SystemExit:
-        raise
-    except Exception:
-        pass  # fall through to the newest-file heuristic
+    except Exception as exc:
+        # A down daemon is expected here; record why before the disk fallback.
+        logging.getLogger("gaia.cli").debug(
+            "daemon lookup for %s failed (%s); using newest log on disk",
+            agent_id,
+            exc,
+        )
 
     if not log_dir.is_dir():
         return None

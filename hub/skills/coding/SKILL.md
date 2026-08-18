@@ -5,7 +5,7 @@ license: MIT
 version: 0.1.0
 metadata:
   gaia:
-    security_tier: verified
+    security_tier: community
     permissions:
       - shell:execute:pytest
     tools_required:

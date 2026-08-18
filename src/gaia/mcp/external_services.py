@@ -218,8 +218,6 @@ class Context7Service(ExternalMCPService):
 
         # Check if npx is available
         try:
-            import shutil
-
             if not shutil.which("npx"):
                 logger.info("Context7 unavailable: npx not found in PATH")
                 cls._is_available = False

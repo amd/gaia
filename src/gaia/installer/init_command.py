@@ -217,9 +217,7 @@ def check_setup_status(
         valid = ", ".join(INIT_PROFILES.keys())
         raise ValueError(f"Invalid profile '{profile}'. Valid profiles: {valid}")
 
-    from gaia.installer.lemonade_installer import LemonadeInstaller
     from gaia.llm.lemonade_client import DEFAULT_LEMONADE_URL, LemonadeClient
-    from gaia.version import LEMONADE_VERSION
 
     profile_config = INIT_PROFILES[profile]
     base_url = os.environ.get("LEMONADE_BASE_URL") or DEFAULT_LEMONADE_URL

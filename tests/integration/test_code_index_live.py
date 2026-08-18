@@ -11,7 +11,6 @@ All tests skip cleanly via ``require_lemonade`` when Lemonade isn't running.
 """
 
 import os
-import shutil
 
 import pytest
 

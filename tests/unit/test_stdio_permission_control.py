@@ -14,7 +14,12 @@ import threading
 import time
 
 import pytest
-from gaia_agent.stdio import (
+
+# The stdio transport ships with the standalone gaia-agent wheel; skip when the
+# core-only test job hasn't installed it.
+pytest.importorskip("gaia_agent")
+
+from gaia_agent.stdio import (  # noqa: E402
     PermissionState,
     apply_control,
     parse_control,
