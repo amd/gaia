@@ -184,7 +184,7 @@ Supports both **streaming** (SSE) and **non-streaming** responses.
 
 ## Available Models
 
-`AGENT_MODELS` in [`src/gaia/api/agent_registry.py`](https://github.com/amd/gaia/blob/main/src/gaia/api/agent_registry.py) is empty by default. `GET /v1/models` returns an empty list until an agent is registered there — see [Adding New Agents](#adding-new-agents) below.
+`AGENT_MODELS` in [`src/gaia/api/agent_registry.py`](https://github.com/amd/gaia/blob/main/src/gaia/api/agent_registry.py) holds one entry, `gaia`, mapping to the flagship `GaiaAgent`. `GET /v1/models` returns it. To expose another agent, add an entry — see [Adding New Agents](#adding-new-agents) below.
 
 ---
 

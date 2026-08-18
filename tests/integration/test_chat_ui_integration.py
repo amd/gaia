@@ -2237,4 +2237,3 @@ class TestCustomAgentModelChoice:
             f"Issue #841: agent.model_id must reflect kwargs.setdefault value; "
             f"got {captured['agent_model_id']!r}"
         )
-

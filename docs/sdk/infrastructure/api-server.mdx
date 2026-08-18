@@ -24,8 +24,8 @@ import uvicorn
 # Run server (app is a module-level FastAPI instance)
 uvicorn.run(app, host="0.0.0.0", port=8080)
 
-# Now accessible via the OpenAI SDK — once a model is registered in
-# AGENT_MODELS (empty by default, see below):
+# Now accessible via the OpenAI SDK. The flagship ships registered as "gaia";
+# add more in AGENT_MODELS (see below):
 # from openai import OpenAI
 # client = OpenAI(base_url="http://localhost:8080/v1", api_key="dummy")
 # response = client.chat.completions.create(
@@ -135,8 +135,8 @@ class MyAPIAgent(ApiAgent):
 
 The API server exposes a **static registry** of agent models at
 `src/gaia/api/agent_registry.py`, not a runtime `register()` API. `AGENT_MODELS`
-is empty by default — the server starts and serves an empty `/v1/models` list
-until you add an entry. To expose a model, append an entry to `AGENT_MODELS`:
+ships one entry, `gaia`, the flagship agent. To expose another model, append an
+entry to `AGENT_MODELS`:
 
 ```python
 # src/gaia/api/agent_registry.py

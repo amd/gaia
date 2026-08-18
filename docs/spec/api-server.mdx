@@ -291,12 +291,12 @@ async def list_models() -> ModelListResponse:
         Response:
         {
             "object": "list",
-            "data": []
+            "data": [{"id": "gaia", "object": "model", ...}]
         }
 
-        (AGENT_MODELS is empty by default — the list stays empty until an
-        agent is registered in src/gaia/api/agent_registry.py. A registered
-        entry would look like:
+        (AGENT_MODELS holds one entry, "gaia", the flagship agent. Register
+        another in src/gaia/api/agent_registry.py to add to this list. An
+        entry looks like:
         {
             "id": "your-agent-id",
             "object": "model",
@@ -338,9 +338,12 @@ new model you edit `AGENT_MODELS` and restart the server.
 from importlib import import_module
 from typing import Any, Dict
 
-# Empty by default: the server starts and serves an empty /v1/models list
-# until an entry is added here.
+# One entry ships: "gaia", the flagship agent. Add more here to expose them.
 AGENT_MODELS: Dict[str, Dict[str, Any]] = {
+    "gaia": {
+        "class_name": "gaia_agent.agent.GaiaAgent",
+        "init_params": {"silent_mode": True, "streaming": False},
+    },
     # "your-agent-id": {
     #     "class_name": "my_package.my_agent.MyAPIAgent",
     #     "init_params": {"api_mode": True, "silent_mode": True},

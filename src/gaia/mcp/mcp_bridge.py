@@ -12,11 +12,8 @@ import io
 import json
 import os
 import secrets
-import shutil
 import sys
-import tempfile
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from pathlib import Path
 from typing import Any, Dict
 from urllib.parse import urlparse
 
@@ -26,9 +23,6 @@ sys.path.insert(
 )
 
 from gaia.llm import create_client  # pylint: disable=wrong-import-position
-from gaia.llm.lemonade_client import (  # pylint: disable=wrong-import-position
-    DEFAULT_MODEL_NAME,
-)
 from gaia.logger import get_logger  # pylint: disable=wrong-import-position
 
 # pylint: enable=wrong-import-position
@@ -199,7 +193,6 @@ class GAIAMCPBridge:
         except Exception as e:
             logger.error(f"Chat execution error: {e}")
             return {"success": False, "error": str(e)}
-
 
 
 class MCPHTTPHandler(BaseHTTPRequestHandler):

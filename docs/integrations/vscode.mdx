@@ -235,7 +235,7 @@ VSCode language model provider.
     **Symptoms**: Model picker doesn't show GAIA models
 
     **Solutions**:
-    - Confirm at least one agent is registered in `AGENT_MODELS` (`src/gaia/api/agent_registry.py`) — it's empty by default, so an empty picker is expected until you add one
+    - The picker should list `gaia`. If it is empty, check that the `gaia-agent-gaia` package is installed — the server logs the import error it hit
     - Ensure Lemonade Server is running: `lemonade-server serve --ctx-size 32768`
     - The API server needs to be running before selecting models
     - Check the GAIA output channel for error messages (View > Output > GAIA)

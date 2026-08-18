@@ -15,7 +15,6 @@ Test coverage includes:
 - Edge cases and resilience testing
 """
 
-import json
 import logging
 
 import pytest
@@ -74,15 +73,10 @@ class TestApiUnitValidation:
 
         from gaia.api.openai_server import registry as server_registry
 
-        # AGENT_MODELS is empty now that the routing/code agents are gone
-        # (#1102 collapse), so the handler's model-existence check has to be
-        # stubbed too, not just get_agent, or every request 404s before it's
-        # even attempted.
-        mocker.patch.object(server_registry, "model_exists", return_value=True)
         mocker.patch.object(server_registry, "get_agent", return_value=fake_agent)
 
         payload = {
-            "model": "gaia-code",
+            "model": "gaia",
             "messages": [
                 {"role": "user", "content": "Write a hello world function in Python"}
             ],
@@ -97,7 +91,7 @@ class TestApiUnitValidation:
         assert data["object"] == "chat.completion"
         assert data["id"].startswith("chatcmpl-")
         assert isinstance(data["created"], int)
-        assert data["model"] == "gaia-code"
+        assert data["model"] == "gaia"
 
         # The agent was invoked with the extracted user message.
         fake_agent.process_query.assert_called_once()
@@ -129,15 +123,10 @@ class TestApiUnitValidation:
 
         from gaia.api.openai_server import registry as server_registry
 
-        # AGENT_MODELS is empty now that the routing/code agents are gone
-        # (#1102 collapse), so the handler's model-existence check has to be
-        # stubbed too, not just get_agent, or every request 404s before it's
-        # even attempted.
-        mocker.patch.object(server_registry, "model_exists", return_value=True)
         mocker.patch.object(server_registry, "get_agent", return_value=fake_agent)
 
         payload = {
-            "model": "gaia-code",
+            "model": "gaia",
             "messages": [
                 {"role": "system", "content": "You are helpful"},
                 {"role": "user", "content": "first question"},
@@ -167,11 +156,6 @@ class TestApiUnitValidation:
 
         from gaia.api.openai_server import registry as server_registry
 
-        # AGENT_MODELS is empty now that the routing/code agents are gone
-        # (#1102 collapse), so the handler's model-existence check has to be
-        # stubbed too, not just get_agent, or every request 404s before it's
-        # even attempted.
-        mocker.patch.object(server_registry, "model_exists", return_value=True)
         mocker.patch.object(server_registry, "get_agent", return_value=fake_agent)
 
         prompt = (
@@ -184,7 +168,7 @@ class TestApiUnitValidation:
         response = self.client.post(
             "/v1/chat/completions",
             json={
-                "model": "gaia-code",
+                "model": "gaia",
                 "messages": [{"role": "user", "content": prompt}],
                 "stream": False,
                 "temperature": 0.2,
@@ -264,7 +248,7 @@ class TestApiUnitValidation:
     def test_missing_messages_returns_422(self):
         """Test that missing messages field returns 422."""
         response = self.client.post(
-            "/v1/chat/completions", json={"model": "gaia-code", "stream": False}
+            "/v1/chat/completions", json={"model": "gaia", "stream": False}
         )
         assert response.status_code == 422
 
@@ -273,7 +257,7 @@ class TestApiUnitValidation:
         response = self.client.post(
             "/v1/chat/completions",
             json={
-                "model": "gaia-code",
+                "model": "gaia",
                 "messages": [{"role": "invalid_role", "content": "test"}],
                 "stream": False,
             },
@@ -285,7 +269,7 @@ class TestApiUnitValidation:
         response = self.client.post(
             "/v1/chat/completions",
             json={
-                "model": "gaia-code",
+                "model": "gaia",
                 "messages": [{"content": "test"}],
                 "stream": False,
             },
@@ -296,7 +280,7 @@ class TestApiUnitValidation:
         """Test that messages field that is not an array returns 422."""
         response = self.client.post(
             "/v1/chat/completions",
-            json={"model": "gaia-code", "messages": "not an array", "stream": False},
+            json={"model": "gaia", "messages": "not an array", "stream": False},
         )
         assert response.status_code == 422
 
@@ -305,7 +289,7 @@ class TestApiUnitValidation:
         response = self.client.post(
             "/v1/chat/completions",
             json={
-                "model": "gaia-code",
+                "model": "gaia",
                 "messages": [{"role": "user", "content": "test"}],
                 "stream": "not a boolean",
             },
@@ -341,7 +325,7 @@ class TestApiUnitValidation:
 
         response = self.client.post(
             "/v1/chat/completions",
-            json={"model": "gaia-code", "messages": [], "stream": False},
+            json={"model": "gaia", "messages": [], "stream": False},
         )
         assert response.status_code == 400
         assert "no user message" in response.json()["detail"].lower()
@@ -360,7 +344,7 @@ class TestApiUnitValidation:
         response = self.client.post(
             "/v1/chat/completions",
             json={
-                "model": "gaia-code",
+                "model": "gaia",
                 "messages": [{"role": "user"}],  # content defaults to None
                 "stream": False,
             },
@@ -376,7 +360,7 @@ class TestApiUnitValidation:
         response = self.client.post(
             "/v1/chat/completions",
             json={
-                "model": "gaia-code",
+                "model": "gaia",
                 "messages": [{"role": "system", "content": "You are helpful"}],
                 "stream": False,
             },
@@ -388,7 +372,7 @@ class TestApiUnitValidation:
         response = self.client.post(
             "/v1/chat/completions",
             json={
-                "model": "gaia-code",
+                "model": "gaia",
                 "messages": [None, {"role": "user", "content": "test"}],
                 "stream": False,
             },
@@ -407,20 +391,23 @@ class TestApiUnitValidation:
         assert data["status"] == "ok"
         assert data["service"] == "gaia-api"
 
-    def test_models_endpoint_returns_list(self):
-        """Test that /v1/models returns an OpenAI-compatible (empty) list.
+    def test_models_endpoint_advertises_the_flagship(self):
+        """/v1/models lists the flagship agent in OpenAI-compatible shape.
 
-        AGENT_MODELS is empty post-collapse (#1102) — the routing/code agents
-        it exposed are gone and nothing has replaced them yet — so the
-        endpoint's job is just to keep returning a well-formed, empty list
-        rather than erroring.
+        This is what a client's model picker reads, so an empty list here means
+        the picker is empty and nothing is selectable — the state this endpoint
+        was in while the collapsed per-task agents were its only entries.
         """
         response = self.client.get("/v1/models")
         assert response.status_code == 200
         data = response.json()
 
         assert data["object"] == "list"
-        assert data["data"] == []
+        ids = [m["id"] for m in data["data"]]
+        assert "gaia" in ids, f"flagship not advertised; got {ids}"
+        for model in data["data"]:
+            assert model["object"] == "model"
+            assert model["owned_by"]
 
     def test_nonexistent_endpoint_returns_404(self):
         """Test that non-existent endpoint returns 404."""
@@ -459,7 +446,7 @@ class TestApiUnitValidation:
     def test_422_error_has_detail_field(self):
         """Test that 422 validation error has detail field."""
         response = self.client.post(
-            "/v1/chat/completions", json={"model": "gaia-code"}  # Missing messages
+            "/v1/chat/completions", json={"model": "gaia"}  # Missing messages
         )
         assert response.status_code == 422
         error_data = response.json()
@@ -571,7 +558,7 @@ class TestChatCompletionsNonStreaming:
 
     def test_missing_messages_returns_422(self, api_server, api_client):
         """Test that missing messages returns 422 validation error"""
-        payload = {"model": "gaia-code", "stream": False}
+        payload = {"model": "gaia", "stream": False}
         response = api_client.post(f"{api_server}/v1/chat/completions", json=payload)
         assert response.status_code == 422  # FastAPI validation error
 
@@ -631,7 +618,7 @@ class TestRequestValidation:
     def test_missing_messages_field(self, api_server, api_client):
         """Test request without messages field"""
         payload = {
-            "model": "gaia-code",
+            "model": "gaia",
             "stream": False,
         }
         response = api_client.post(f"{api_server}/v1/chat/completions", json=payload)
@@ -640,7 +627,7 @@ class TestRequestValidation:
     def test_invalid_message_role(self, api_server, api_client):
         """Test message with invalid role - Pydantic validates Literal type"""
         payload = {
-            "model": "gaia-code",
+            "model": "gaia",
             "messages": [{"role": "invalid_role", "content": "test"}],
             "stream": False,
         }
@@ -650,7 +637,7 @@ class TestRequestValidation:
     def test_message_without_role(self, api_server, api_client):
         """Test message missing role field - role is required in schema"""
         payload = {
-            "model": "gaia-code",
+            "model": "gaia",
             "messages": [{"content": "test"}],
             "stream": False,
         }
@@ -678,7 +665,7 @@ class TestInvalidPayloads:
     def test_invalid_stream_value(self, api_server, api_client):
         """Test invalid value for stream field - Pydantic validates boolean type"""
         payload = {
-            "model": "gaia-code",
+            "model": "gaia",
             "messages": [{"role": "user", "content": "test"}],
             "stream": "not a boolean",
         }
@@ -730,7 +717,7 @@ class TestMessageArrayErrors:
     def test_messages_not_array(self, api_server, api_client):
         """Test messages field that is not an array"""
         payload = {
-            "model": "gaia-code",
+            "model": "gaia",
             "messages": "not an array",
             "stream": False,
         }
@@ -740,7 +727,7 @@ class TestMessageArrayErrors:
     def test_messages_with_null_element(self, api_server, api_client):
         """Test messages array containing null - Pydantic validation error"""
         payload = {
-            "model": "gaia-code",
+            "model": "gaia",
             "messages": [None, {"role": "user", "content": "test"}],
             "stream": False,
         }
@@ -795,7 +782,7 @@ class TestErrorResponseFormat:
     def test_422_error_format(self, api_server, api_client):
         """Test 422 validation error format"""
         payload = {
-            "model": "gaia-code",
+            "model": "gaia",
             # Missing messages field
         }
         response = api_client.post(f"{api_server}/v1/chat/completions", json=payload)

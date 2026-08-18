@@ -255,9 +255,14 @@ class TestRegistryWiring:
         from gaia.api.agent_registry import AGENT_MODELS, AgentRegistry
 
         registry = AgentRegistry()
-        fake_model = {"class_name": "unused.Module.Class", "init_params": {"silent_mode": True}}
+        fake_model = {
+            "class_name": "unused.Module.Class",
+            "init_params": {"silent_mode": True},
+        }
         with patch.dict(AGENT_MODELS, {"gaia-code": fake_model}):
-            with patch.object(AgentRegistry, "_load_agent_class", return_value=_ApiAgent):
+            with patch.object(
+                AgentRegistry, "_load_agent_class", return_value=_ApiAgent
+            ):
                 with patch("gaia.agents.base.agent.AgentSDK"):
                     agent = registry.get_agent("gaia-code")
 

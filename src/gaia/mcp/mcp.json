@@ -37,12 +37,6 @@
       "servers": [
         "gaia-bridge"
       ]
-    },
-    "gaia.eval": {
-      "description": "Run evaluation and benchmarking",
-      "servers": [
-        "gaia-bridge"
-      ]
     }
   },
   "rateLimits": {

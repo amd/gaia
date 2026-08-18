@@ -26,7 +26,7 @@ from gaia.llm.lemonade_client import (
     LemonadeClientError,
     _get_lemonade_config,
 )
-from gaia.llm.lemonade_launcher import describe_client_hint, describe_start_hint
+from gaia.llm.lemonade_launcher import describe_start_hint
 from gaia.logger import get_logger
 from gaia.perf_analysis import run_perf_visualization
 from gaia.version import version

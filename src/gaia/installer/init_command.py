@@ -91,15 +91,6 @@ INIT_PROFILES = {
         "min_context_size": 32768,
         "pip_extras": ["rag"],
     },
-    "code": {
-        "description": "Autonomous coding assistant",
-        "agent": "code",
-        "models": ["Gemma-4-E4B-it-GGUF"],
-        "approx_size": "~3 GB",
-        "min_lemonade_version": "10.2.0",
-        "min_context_size": 32768,
-        "pip_extras": [],
-    },
     "rag": {
         "description": "Document Q&A with retrieval",
         "agent": "rag",
