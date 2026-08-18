@@ -196,22 +196,10 @@ def build_app():
     # first session build.
     app.include_router(agent_router, dependencies=token_gate)
 
-    def _openapi():
-        if app.openapi_schema:
-            return app.openapi_schema
-        from fastapi.openapi.utils import get_openapi
-
-        schema = get_openapi(
-            title=app.title, version=app.version, description=app.description,
-            routes=app.routes,
-        )
-        # require_caller_token is a plain Request dependency (not a
-        # fastapi.security class), so FastAPI never emits securitySchemes for
-        # it (#2993) — overlay the real, conditional (bearer-or-none) posture.
-        app.openapi_schema = caller_auth.openapi_security_extension(schema)
-        return app.openapi_schema
-
-    app.openapi = _openapi
+    # require_caller_token is a plain Request dependency (not a
+    # fastapi.security class), so FastAPI never emits securitySchemes for
+    # it (#2993) — overlay the real, conditional (bearer-or-none) posture.
+    caller_auth.install_openapi_security(app)
     return app
 
 

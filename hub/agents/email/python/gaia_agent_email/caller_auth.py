@@ -214,6 +214,28 @@ def openapi_security_extension(spec: dict) -> dict:
     return spec
 
 
+def install_openapi_security(app) -> None:
+    """Wire :func:`openapi_security_extension` onto ``app.openapi()`` (#2993).
+
+    Shared by the sidecar (``server.py``) and the export app
+    (``export_openapi.py``) so the bearer-gate overlay is defined once and both
+    documents can never drift apart. Delegates to the app's own ``app.openapi``
+    (FastAPI's default schema builder) rather than calling
+    ``fastapi.openapi.utils.get_openapi`` directly — the default already forwards
+    everything ``FastAPI.__init__`` was given (``servers``, ``openapi_tags``,
+    etc.), so nothing set on the app can silently drop out of the published spec.
+    """
+    base_openapi = app.openapi
+
+    def _openapi() -> dict:
+        if app.openapi_schema:
+            return app.openapi_schema
+        app.openapi_schema = openapi_security_extension(base_openapi())
+        return app.openapi_schema
+
+    app.openapi = _openapi
+
+
 def _host_only(header_value: str) -> str:
     """Extract the bare host from a ``Host`` header value, dropping the port.
 
@@ -322,4 +344,5 @@ __all__ = [
     "is_exempt_path",
     "token_ok",
     "openapi_security_extension",
+    "install_openapi_security",
 ]

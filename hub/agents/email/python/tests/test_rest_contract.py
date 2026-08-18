@@ -31,6 +31,7 @@ pytest.importorskip("gaia_agent_email")
 
 from fastapi.testclient import TestClient  # noqa: E402
 from gaia_agent_email import __version__ as package_version  # noqa: E402
+from gaia_agent_email import caller_auth as _caller_auth  # noqa: E402
 from gaia_agent_email import export_openapi  # noqa: E402
 from gaia_agent_email.contract import (  # noqa: E402
     SCHEMA_VERSION,
@@ -1934,9 +1935,6 @@ def test_calendar_create_bad_event_after_gate_is_400(client, monkeypatch):
 #     sidecar has no token configured (local dev).
 # ---------------------------------------------------------------------------
 
-from gaia_agent_email import caller_auth as _caller_auth  # noqa: E402
-
-
 def test_spec_declares_bearer_security_scheme(spec):
     schemes = spec["components"]["securitySchemes"]
     assert schemes["bearerAuth"]["type"] == "http"
@@ -1951,6 +1949,8 @@ def test_gated_operations_require_bearer_or_none(spec):
         if _caller_auth.is_exempt_path(path):
             continue
         for method, op in operations.items():
+            if method not in _caller_auth._OPENAPI_METHODS:
+                continue
             assert op.get("security") == [{"bearerAuth": []}, {}], (
                 f"{method.upper()} {path} does not declare the conditional "
                 "bearer-or-none security requirement"
@@ -1965,6 +1965,24 @@ def test_exempt_paths_are_explicitly_public(spec):
                 f"{method.upper()} {path} is an EXEMPT_PATHS route and must "
                 "declare an explicit empty security requirement"
             )
+
+
+def test_sidecar_app_document_declares_the_gate():
+    # The `spec`/`client` fixtures above build the export app, which mounts
+    # the same routers as the sidecar but never wires require_caller_token
+    # itself — asserting only on that app would leave the actual shipped
+    # sidecar document (`server.build_app()`) unverified. `/health` and
+    # `/version` are mounted on the sidecar app directly rather than via a
+    # router, so they appear ONLY in this document, not the export app's.
+    from gaia_agent_email import server
+
+    spec = server.build_app().openapi()
+    assert spec["components"]["securitySchemes"]["bearerAuth"]["scheme"] == "bearer"
+    assert spec["paths"]["/v1/email/send"]["post"]["security"] == [
+        {"bearerAuth": []},
+        {},
+    ]
+    assert spec["paths"]["/health"]["get"]["security"] == []
 
 
 def test_spec_page_serves_html(client):

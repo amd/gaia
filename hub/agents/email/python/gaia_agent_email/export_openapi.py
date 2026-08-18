@@ -53,7 +53,6 @@ def build_app():
     spec matches what a host actually serves.
     """
     from fastapi import FastAPI
-    from fastapi.openapi.utils import get_openapi
     from gaia_agent_email import caller_auth
     from gaia_agent_email.api_routes import router as email_router
     from gaia_agent_email.connection_intake_routes import (
@@ -71,21 +70,11 @@ def build_app():
     # playground-only connector routes (include_in_schema=False).
     app.include_router(connection_intake_router)
 
-    def _openapi():
-        if app.openapi_schema:
-            return app.openapi_schema
-        schema = get_openapi(
-            title=app.title, version=app.version, description=app.description,
-            routes=app.routes,
-        )
-        # Declare the sidecar's bearer gate (#2993) — this app mounts the
-        # SAME routers the sidecar gates in server.py, so its exported
-        # document must describe the same posture even though this minimal
-        # app never wires the dependency itself.
-        app.openapi_schema = caller_auth.openapi_security_extension(schema)
-        return app.openapi_schema
-
-    app.openapi = _openapi
+    # Declare the sidecar's bearer gate (#2993) — this app mounts the SAME
+    # routers the sidecar gates in server.py, so its exported document must
+    # describe the same posture even though this minimal app never wires the
+    # dependency itself.
+    caller_auth.install_openapi_security(app)
     return app
 
 
