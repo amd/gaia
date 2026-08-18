@@ -1852,6 +1852,15 @@ gaia eval agent --fix                              # Auto-fix failures with Clau
 gaia eval agent --compare run1/scorecard.json run2/scorecard.json  # Compare runs
 ```
 
+Drive a running TUI (start one with `--control-port` first — both modes score
+that live session, not a hidden subprocess):
+```bash
+gaia eval code --control ~/.gaia/tui/control.json      # Code benchmark, scored by running each task's tests
+gaia eval sessions --control ~/.gaia/tui/control.json  # Replay real Claude Code sessions, judge-scored
+gaia eval code --workspace ./scratch                   # Materialize task projects somewhere you can inspect
+gaia eval sessions --dataset-only                      # Build the dataset and stop
+```
+
 Generate a report:
 ```bash
 gaia report -d ./eval_results
@@ -2380,10 +2389,12 @@ The effective tier is `min(claimed, attested)`, so **no unsigned skill installs 
 
 <Warning>
 **v1 skills are instruction + connector-bridged only.** A skill declaring a
-local-capability permission (`filesystem`, `shell`, `database`, `desktop`, `env`)
+local-capability permission (`filesystem`, `database`, `desktop`, `env`)
 is **refused at every tier**, including `verified` — the sandbox that would contain
-it is deferred ([#1019](https://github.com/amd/gaia/issues/1019)). A `verified`
-stamp is a provenance claim, not a runtime sandbox.
+it is deferred ([#1019](https://github.com/amd/gaia/issues/1019)). The one exception
+is `shell:execute:<binary>`, which is bridged: it grants that single CLI, limited to
+the read-only subcommands in `BINARY_POLICIES`. Unscoped `shell:execute` is refused.
+A `verified` stamp is a provenance claim, not a runtime sandbox.
 </Warning>
 
 ### `skill-lock.json`
@@ -2520,7 +2531,7 @@ skipped. Set `AUTOLOAD_DECLARED_SKILLS = False` on the class to opt out and call
 `load_declared_skills()` yourself.
 
 <Warning>
-**A skill declaring a local-capability permission is refused, not sandboxed.** `network` and `mcp` permissions bridge to the connector grant model and load fine. `filesystem`, `shell`, `database`, `desktop`, and `env` need the permission sandbox, which is deferred ([#1019](https://github.com/amd/gaia/issues/1019)) — until then `load_skill` fails with an actionable error rather than loading the skill unenforced.
+**A skill declaring an unbridged local-capability permission is refused, not sandboxed.** `network` and `mcp` permissions bridge to the connector grant model and load fine, and `shell:execute:<binary>` bridges to a single named CLI restricted to the read-only subcommands in `BINARY_POLICIES`. `filesystem`, `database`, `desktop`, `env`, and an unscoped `shell:execute` need the permission sandbox, which is deferred ([#1019](https://github.com/amd/gaia/issues/1019)) — until then `load_skill` fails with an actionable error rather than loading the skill unenforced.
 </Warning>
 
 <Note>

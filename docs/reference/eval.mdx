@@ -562,6 +562,34 @@ No `-g` flag provided
 - Comparative evaluation pays for itself in model selection accuracy
 - Individual prompts (default) prioritize quality over cost for production reliability
 
+## Code Benchmark: scoring by running the tests
+
+`gaia eval code` asks the agent to change a real project and lets that project's
+own test suite decide. There is no LLM judge — a task passes when its suite
+passes, which makes the score reproducible and cheap to trust.
+
+Like Session Replay, this drives a TUI that is **already running** with
+`--control-port`, so the run is visible while it happens rather than hidden in a
+subprocess.
+
+```bash
+# Terminal 1 — the TUI under test
+gaia-tui run gaia --control-port 8817
+
+# Terminal 2
+gaia eval code --control ~/.gaia/tui/control.json
+```
+
+| Flag | Meaning |
+|---|---|
+| `--control` | The running TUI's `control.json` (default: `~/.gaia/tui/control.json`, or `$GAIA_TUI_HOME/control.json`) |
+| `--out` | Output directory (default: `eval/results/code-<timestamp>`) |
+| `--workspace` | Where to materialize the task projects (default: a temp directory) |
+
+Each task ships a project plus its test suite; the scorecard reports how many
+suites went green, so a regression names the task that broke rather than a
+number that drifted.
+
 ## Session Replay: scoring against real Claude Code sessions
 
 `gaia eval sessions` answers a question the other modes cannot: **is the agent

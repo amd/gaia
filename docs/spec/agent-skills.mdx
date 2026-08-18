@@ -484,13 +484,13 @@ refused, not faked.**
 | `network` | `read`, `write`, `none` | **Bridged** — resolves to a `ConnectorRequirement`. |
 | `mcp` | `connect`, `none` | **Bridged** — resolves to a `ConnectorRequirement`. |
 | `filesystem` | `read`, `write` | **Refused** — needs the sandbox. |
-| `shell` | `execute` | **Refused** — needs the sandbox. |
+| `shell` | `execute` | **Bridged when scoped** — `shell:execute:<binary>` grants that one CLI, restricted to the read-only subcommands in `BINARY_POLICIES`. An unscoped `shell:execute` is still refused. |
 | `database` | `read`, `write` | **Refused** — needs the sandbox. |
 | `desktop` | `control` | **Refused** — needs the sandbox. |
 | `env` | `read` | **Refused** — needs the sandbox. |
 | *any* | `none` | **Inert** — grants nothing, so it neither refuses nor produces a requirement. |
 
-A skill declaring **any** local-capability permission raises
+A skill declaring any **unbridged** local-capability permission raises
 `SkillPermissionError` at load time, naming the offending grants and pointing at
 [#1019](https://github.com/amd/gaia/issues/1019). It is never silently loaded and
 never wrapped in a sandbox that does not exist — an unenforceable grant is a
@@ -539,7 +539,7 @@ Highlights as they apply at the agent boundary:
 | Concern | How it's handled | State |
 |---------|------------------|-------|
 | Bridged permissions | `network:*` / `mcp:connect` become per-agent `ConnectorRequirement`s | Shipped (declaration; egress not enforced) |
-| Local-capability permissions | `filesystem` / `shell` / `database` / `desktop` / `env` refuse the load outright | Shipped (refusal); enforcement deferred |
+| Local-capability permissions | `filesystem` / `database` / `desktop` / `env` refuse the load outright. `shell:execute:<binary>` is bridged: it grants that one CLI, limited to the read-only subcommands in `BINARY_POLICIES`; unscoped `shell:execute` is still refused | Shipped |
 | Per-agent least privilege | An agent receives a skill's tools only after the skill is explicitly loaded; no ambient activation. Tools are namespaced and instance-scoped | Shipped |
 | Instruction-only bodies | Loaded as context under a `==== LOADED SKILLS ====` prompt fragment (on the flagship agent, split into an `(active this turn)` bodies section and a collapsed one-line menu for the rest — per-turn semantic selection); treated as untrusted input, never as system-level instructions | Shipped |
 | Untrusted imports | `gaia skill import` stamps `security_tier: experimental` regardless of the tier the skill claims, and reports the reset | Shipped |
