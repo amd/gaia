@@ -191,13 +191,14 @@ class AgentRegistry:
 
         for model_id, config in AGENT_MODELS.items():
             try:
-                # Try to load agent to get metadata (if it implements ApiAgent)
                 agent_class = self._load_agent_class(config["class_name"])
-                agent = agent_class(**config["init_params"])
 
-                # Get model info (custom if ApiAgent, default otherwise)
-                if isinstance(agent, ApiAgent):
-                    model_info = agent.get_model_info()
+                # Only an ApiAgent can customise its metadata, and asking costs
+                # an instance. Check the CLASS first: clients poll /v1/models on
+                # startup, and building an agent to read two integers off it
+                # opens that agent's DB handles and HTTP session every time.
+                if issubclass(agent_class, ApiAgent):
+                    model_info = agent_class(**config["init_params"]).get_model_info()
                     logger.debug(
                         f"Agent {model_id} provides custom model info: {model_info}"
                     )

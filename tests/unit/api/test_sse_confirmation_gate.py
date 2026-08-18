@@ -246,7 +246,7 @@ class TestRegistryWiring:
         installs is the one the agent actually consults — ``silent_mode=True``
         in ``AGENT_MODELS`` must not win over ``output_handler``.
 
-        AGENT_MODELS is empty post-collapse (#1102) — the routing/code agents
+        AGENT_MODELS holds the flagship, not the agent this probe stubs, so
         it used to expose are gone — so a fake entry is patched in here to
         exercise the get_agent() wiring this test actually targets.
         """
@@ -346,7 +346,7 @@ class TestHttpSurface:
         from gaia.api import openai_server
         from gaia.api.agent_registry import AGENT_MODELS, AgentRegistry
 
-        # AGENT_MODELS is empty post-collapse (#1102) — the routing/code
+        # AGENT_MODELS holds the flagship, not this probe agent, so the
         # agents it used to expose are gone. Without an entry here,
         # registry.model_exists("gaia-code") 404s before the request ever
         # reaches the get_agent stub below, before this end-to-end refusal

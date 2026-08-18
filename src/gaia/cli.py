@@ -758,7 +758,6 @@ async def async_main(action, **kwargs):
                     agent.stop_watching()
             except Exception:  # pylint: disable=broad-except
                 pass
-                agent.close()
     elif action == "talk":
         # Use TalkSDK for voice functionality
         from gaia.talk.sdk import TalkConfig, TalkSDK
@@ -993,7 +992,6 @@ def _show_interactive_menu(log=None):
         print('    gaia prompt "Hello"    Single prompt to LLM')
         print("    gaia talk              Voice interaction")
         print("    gaia init              Setup Lemonade + models")
-        print("    gaia code              Code generation agent")
         print()
         print("  Run 'gaia --help' for the full command list.")
     else:
@@ -1797,9 +1795,6 @@ Examples:
 
   # Download models for chat agent only
   gaia download --agent chat
-
-  # Download models for code agent
-  gaia download --agent code
 
   # List available agents and their required models
   gaia download --list
@@ -2891,7 +2886,6 @@ Examples:
             "minimal",
             "sd",
             "chat",
-            "code",
             "rag",
             "mcp",
             "vlm",
@@ -2899,7 +2893,7 @@ Examples:
             "npu",
             "all",
         ],
-        help="Profile to initialize: minimal, sd (image gen), chat, code, rag, mcp, vlm (vision), email (Gmail/Outlook triage), npu (Ryzen AI NPU), all (default: chat)",
+        help="Profile to initialize: minimal, sd (image gen), chat, rag, mcp, vlm (vision), email (Gmail/Outlook triage), npu (Ryzen AI NPU), all (default: chat)",
     )
     init_parser.add_argument(
         "--minimal",
@@ -3562,7 +3556,7 @@ Let me know your answer!
                     print("   To delete them, restart Lemonade Server and try again:")
                     print()
                     print(
-                        "   1. Close any running GAIA commands (gaia chat, gaia code, etc.)"
+                        "   1. Close any running GAIA commands (gaia chat, gaia email, etc.)"
                     )
                     print(
                         f"   2. Restart Lemonade Server "
@@ -4486,11 +4480,6 @@ def kill_process_by_port(port):
             "success": False,
             "message": f"Error killing process on port {port}: {str(e)}",
         }
-
-
-def wait_for_user():
-    """Wait for user to press Enter before continuing."""
-    input("Press Enter to continue to the next example...")
 
 
 def handle_email_command(args):

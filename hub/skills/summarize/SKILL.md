@@ -36,9 +36,16 @@ material when the input is too long to read in one pass.
    rather than silently guessing — the style below changes with it.
 2. **Get the full text.** For an indexed document, `index_document` it first
    if it isn't already (`list_indexed_documents` to check), then either call
-   `summarize_document(file_path, summary_type)` directly or `dump_document`
-   first if you need to inspect the raw extracted text before deciding how to
-   split it. For pasted text or a plain text file, `read_file` is enough.
+   `summarize_document(file_path, summary_type)` or `dump_document` first if
+   you need the raw extracted text. For pasted text or a plain text file,
+   `read_file` is enough.
+
+   `summary_type` accepts **only** `brief`, `detailed`, or `bullets` — anything
+   else comes back as an error, not a summary. The named styles below are how
+   *you* shape the output: pick the closest of those three, then write to the
+   style the user actually asked for. For "what were the action items", that
+   means `detailed` (so nothing is dropped) and then writing the list yourself
+   from the text.
 3. **Decide if it fits in one pass.** If the content is short enough for you
    to read and reason over directly, write the summary yourself using the
    style instructions below — don't reach for the section-by-section tool
@@ -53,14 +60,17 @@ material when the input is too long to read in one pass.
 
 **Transcripts and emails** — conversational, outcome-focused:
 
+Only `brief`, `detailed` and `bullets` are real `summary_type` values; the
+rest name a shape you write yourself.
+
 | Style | What to produce |
 |---|---|
-| `brief` / `executive` | 2–3 sentences on the key outcomes and decisions. |
-| `detailed` | Full paragraph coverage of every major topic and outcome. |
-| `participants` | Simple list of who was involved, with role/title if known. |
-| `action_items` | Simple list of what was assigned, and to whom if stated. |
-| `key_decisions` | Simple list of concrete decisions and outcomes — not discussion. |
-| `topics_discussed` | Simple list of the subjects covered. |
+| brief / executive | 2–3 sentences on the key outcomes and decisions. |
+| detailed | Full paragraph coverage of every major topic and outcome. |
+| participants | Simple list of who was involved, with role/title if known. |
+| action_items | Simple list of what was assigned, and to whom if stated. |
+| key_decisions | Simple list of concrete decisions and outcomes — not discussion. |
+| topics_discussed | Simple list of the subjects covered. |
 
 **Documents, PDFs, and business content** — numbers before narrative:
 
@@ -69,7 +79,7 @@ material when the input is too long to read in one pass.
 | `brief` | At most 3 sentences, no bullets, only the 2–3 essential takeaways. No filler ("Overall", "In summary"). |
 | `detailed` | 250+ words. Extract every number, percentage, dollar amount, date, and metric. Name competitors, partners, customers, technologies. Full paragraphs, no bullets. |
 | `bullets` | At most 3 bullets total, each under 20 words, one idea per bullet. |
-| `executive` | At most 5 sentences. Priority order: (1) quantitative metrics, (2) financial data, (3) strategic outcomes, (4) competitive differentiators. Always keep the specific numbers. Board-ready tone, no bullets. |
+| executive | At most 5 sentences. Priority order: (1) quantitative metrics, (2) financial data, (3) strategic outcomes, (4) competitive differentiators. Always keep the specific numbers. Board-ready tone, no bullets. |
 
 The rule underneath the table: for business documents, a metric always
 outranks the marketing language around it. "Revenue grew 40% YoY to $12M" is

@@ -4012,7 +4012,7 @@ class LemonadeClient:
         Get agent profile by name.
 
         Args:
-            agent: Name of the agent (chat, code, rag, talk, blender, etc.)
+            agent: Name of the agent (chat, rag, talk, vlm, etc.)
 
         Returns:
             AgentProfile if found, None otherwise
@@ -4332,7 +4332,7 @@ class LemonadeClient:
             status = client.initialize(agent="chat")
 
             # Initialize with custom context size
-            status = client.initialize(agent="code", ctx_size=65536)
+            status = client.initialize(agent="chat", ctx_size=65536)
         """
         profile = self.get_agent_profile(agent)
         if not profile:
@@ -4718,7 +4718,7 @@ def initialize_lemonade(
         status = initialize_lemonade(agent="chat")
 
         # Initialize for code agent with larger context
-        status = initialize_lemonade(agent="code", ctx_size=65536)
+        status = initialize_lemonade(agent="chat", ctx_size=65536)
     """
     client = LemonadeClient(host=host, port=port, keep_alive=True)
     return client.initialize(

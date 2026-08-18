@@ -297,7 +297,7 @@ class InitCommand:
         Initialize the init command.
 
         Args:
-            profile: Profile to initialize (minimal, chat, code, rag, all)
+            profile: Profile to initialize (minimal, chat, rag, all)
             skip_models: Skip model downloads
             skip_lemonade: Skip Lemonade installation check (for CI)
             force_reinstall: Force reinstall even if compatible version exists
@@ -2216,11 +2216,9 @@ class InitCommand:
             # Profile-specific quick start commands
             if self.profile == "sd":
                 self.console.print(
-                    '    [cyan]gaia sd "create a cute robot kitten and tell me a story"[/cyan]'
-                )
-                self.console.print('    [cyan]gaia sd "sunset over mountains"[/cyan]')
-                self.console.print(
-                    "    [cyan]gaia sd -i[/cyan]                                        Interactive mode"
+                    "    [cyan]gaia chat[/cyan]                            "
+                    "Then ask for an image — image generation runs through the "
+                    "agent's SD tools"
                 )
             elif self.profile == "chat":
                 self.console.print(
@@ -2295,11 +2293,8 @@ class InitCommand:
             # Profile-specific quick start commands
             if self.profile == "sd":
                 self._print(
-                    '    gaia sd "create a cute robot kitten and tell me a story"'
-                )
-                self._print('    gaia sd "sunset over mountains"')
-                self._print(
-                    "    gaia sd -i                                        # Interactive mode"
+                    "    gaia chat                    Then ask for an image — "
+                    "image generation runs through the agent's SD tools"
                 )
             elif self.profile == "chat":
                 self._print(
@@ -2373,7 +2368,7 @@ def run_init(
     Entry point for `gaia init` command.
 
     Args:
-        profile: Profile to initialize (minimal, chat, code, rag, all)
+        profile: Profile to initialize (minimal, chat, rag, all)
         skip_models: Skip model downloads
         skip_lemonade: Skip Lemonade installation check (for CI)
         force_reinstall: Force reinstall even if compatible version exists

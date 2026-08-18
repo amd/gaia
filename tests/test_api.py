@@ -319,7 +319,7 @@ class TestApiUnitValidation:
         from gaia.api.openai_server import registry as server_registry
 
         # Model-existence check runs before the empty-messages check, and
-        # AGENT_MODELS is empty post-collapse (#1102) — stub it so this test
+        # Stub the registry so this test
         # exercises the message-validation branch it's named for.
         mocker.patch.object(server_registry, "model_exists", return_value=True)
 
