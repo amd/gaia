@@ -1347,6 +1347,20 @@ def get_search_backend():
     return LiveOutlookBackend(functools.partial(_get_outlook_token, provider))
 
 
+def _normalize_search_query(query: Optional[str]) -> Optional[str]:
+    """Normalize a search query's date/duration operators, or raise ``ValueError``.
+
+    Split out of ``_search_inbox`` so the route can map ONLY this failure to a
+    400 (#2830). Lazily imported for the same reason ``_search_inbox`` is: the
+    OpenAPI export must not pull in the live-mail machinery.
+    """
+    from gaia_agent_email.tools.read_tools import normalize_gmail_date_operators
+
+    if not query:
+        return query
+    return normalize_gmail_date_operators(query)
+
+
 def _search_inbox(
     backend: Any,
     *,
@@ -2122,6 +2136,20 @@ _CONNECTOR_ERROR_RESPONSES = {
 # Passing an unconnected provider, or omitting it with 2+ accounts connected,
 # is ambiguous — the backend resolvers refuse to guess (fail-loud, never a
 # silent pick). Shared by every route that resolves a provider-bound backend.
+# ``/search`` can 400 for a second reason: an unparseable date/duration
+# operator value in ``query`` (#2830). Declared separately so the spec says
+# which failures a caller can actually provoke.
+_SEARCH_400 = {
+    400: {
+        "description": (
+            "Ambiguous or unknown account: the named provider is not connected, "
+            "or no provider was given while several accounts are connected. Also "
+            "returned when ``query`` carries an unparseable date or duration "
+            "operator value (e.g. ``newer_than:1.5w``)."
+        )
+    }
+}
+
 _AMBIGUOUS_PROVIDER_400 = {
     400: {
         "description": (
@@ -2201,7 +2229,7 @@ async def triage_email_batch(request: BatchTriageRequest) -> BatchTriageResponse
 @router.post(
     "/search",
     response_model=EmailSearchResponse,
-    responses={**_CONNECTOR_ERROR_RESPONSES, **_AMBIGUOUS_PROVIDER_400},
+    responses={**_CONNECTOR_ERROR_RESPONSES, **_SEARCH_400},
 )
 async def search_inbox(
     request: EmailSearchRequest,
@@ -2219,11 +2247,19 @@ async def search_inbox(
     ambiguous mailbox counts). Backend auth / config / transport errors surface
     as actionable 4xx/5xx, never a silent empty result.
     """
+    # Normalize here, not around the whole search: only an unparseable date /
+    # duration operator is the caller's fault (400). A ValueError raised deeper
+    # inside the search is a server fault and must not be reported as a bad
+    # request with an internal message attached (#2830).
+    try:
+        normalized_query = _normalize_search_query(request.query)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     try:
         return await asyncio.to_thread(
             _search_inbox,
             backend,
-            query=request.query,
+            query=normalized_query,
             labels=request.labels,
             max_results=request.max_results,
             page_token=request.page_token,
