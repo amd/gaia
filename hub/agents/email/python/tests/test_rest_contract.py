@@ -1961,6 +1961,8 @@ def test_exempt_paths_are_explicitly_public(spec):
     for path in ("/v1/email/health", "/v1/email/version"):
         assert path in spec["paths"], f"{path} missing from spec"
         for method, op in spec["paths"][path].items():
+            if method not in _caller_auth._OPENAPI_METHODS:
+                continue
             assert op.get("security") == [], (
                 f"{method.upper()} {path} is an EXEMPT_PATHS route and must "
                 "declare an explicit empty security requirement"

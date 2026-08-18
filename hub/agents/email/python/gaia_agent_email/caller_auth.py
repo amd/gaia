@@ -84,6 +84,8 @@ EXEMPT_PATHS: FrozenSet[str] = frozenset(
         "/version",
         "/v1/email/health",
         "/v1/email/version",
+        # spec/playground are include_in_schema=False, so they never appear
+        # in the generated OpenAPI document below.
         "/v1/email/spec",
         "/v1/email/playground",
     }
