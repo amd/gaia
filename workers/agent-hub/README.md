@@ -244,6 +244,32 @@ checked into the repo:
    npx wrangler deploy
    ```
 
+   CI does this for you on a real publish. `release_components.yml`'s
+   `deploy-worker` job deploys this Worker before it uploads anything, because
+   the Worker *validates* the manifests being uploaded — a Worker older than the
+   manifests rejects a valid release. That is not hypothetical: `go` and
+   `typescript` were added to `VALID_LANGUAGES` and the Worker was not
+   redeployed, so every publish failed with `language "go" is not supported`
+   while the source said otherwise.
+
+   The job needs two secrets on the **`agent-publish`** environment:
+
+   | Secret | How to get it |
+   |---|---|
+   | `CLOUDFLARE_API_TOKEN` | Cloudflare dashboard → My Profile → API Tokens → Create Token → **Edit Cloudflare Workers** template. Must also cover R2 for the bucket binding. |
+   | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare dashboard → Workers & Pages → Account ID |
+
+   Without them the job fails loudly rather than publishing to a stale Worker.
+
+   The deploy stamps the commit into `WORKER_BUILD`, which `GET /health`
+   returns, so the workflow can assert *which* build went live instead of
+   assuming. Check it by hand any time:
+
+   ```bash
+   curl -s https://hub.amd-gaia.ai/health
+   # {"status":"ok","build":"<commit>"}   — "unknown" means a hand-run deploy
+   ```
+
 4. **(Optional) Bind the route** by uncommenting the `routes` line in
    `wrangler.toml` to serve the API under `hub.amd-gaia.ai/*`.
 
