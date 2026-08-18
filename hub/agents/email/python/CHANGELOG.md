@@ -30,6 +30,20 @@ contract version is tracked separately as
   has no effect there; operator search against Outlook was already
   non-functional before and after this change.
 
+### Changed
+
+- **Email addresses are now redacted from verbose tool-call logs.** The
+  `tool_call` / `tool_result` records emitted for **every** tool previously
+  passed addresses through unscrubbed — `_REDACT_PATTERNS` matched MFA codes,
+  long URLs and JWT-shaped tokens, but nothing address-shaped. Since
+  `~/.gaia/gaia.log` is bundled by `gaia diagnostics` by default and the docs
+  ask users to attach that bundle to a public issue, a contact's address could
+  travel from a local search straight into a public bug report. Addresses now
+  render as `[REDACTED]`. This is deliberate privacy hardening with a
+  debuggability cost: a recipient in a verbose `send_email` log line, for
+  instance, is no longer readable, and logs written before this release still
+  contain the raw values.
+
 ## [0.6.0] - 2026-08-12
 
 ### Added
