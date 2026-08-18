@@ -395,6 +395,29 @@ class LemonadeManager:
         print("", file=sys.stderr)
 
     @classmethod
+    def print_ceiling_message(cls, current_size: int, requested_size: int):
+        """Print the message for a model already at its trained-context ceiling.
+
+        Distinct from :meth:`print_context_message` (#2992): that message's
+        remediation — stop the server, restart with a bigger ctx_size — does
+        nothing here, because the shortfall is a property of the *model*
+        (its GGUF's ``n_ctx_train``), not the server configuration. No
+        restart, flag, or `gaia init` raises a model's trained context.
+        """
+        print("", file=sys.stderr)
+        print(
+            f"⚠️  This model's trained context is {current_size} tokens "
+            f"(requested {requested_size}); that is the maximum available "
+            f"regardless of configuration.",
+            file=sys.stderr,
+        )
+        print(
+            "   Use a model with a larger trained context if you need more.",
+            file=sys.stderr,
+        )
+        print("", file=sys.stderr)
+
+    @classmethod
     def _validate_device_requirement(cls, client, required_min_device, device):
         """Raise ``HardwareRequirementError`` if *required_min_device* isn't met.
 
@@ -935,9 +958,7 @@ class LemonadeManager:
             f"the model's trained context (requested {min_context_size})."
         )
         if not quiet:
-            cls.print_context_message(
-                cls._context_size, min_context_size, MessageType.WARNING
-            )
+            cls.print_ceiling_message(cls._context_size, min_context_size)
 
     @classmethod
     def _try_preload_with_ctx(

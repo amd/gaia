@@ -11,6 +11,7 @@ model with the required `ctx_size` instead of asking the user to run a manual
 """
 
 import threading
+from io import StringIO
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -643,3 +644,73 @@ def test_reload_skipped_when_already_at_known_ceiling(mock_cls, caplog):
         len(capped_msgs) == 1
     ), f"Expected exactly one honest capped-context report, got {capped_msgs}"
     assert LemonadeManager.get_context_size() == 40960
+
+
+# ---------------------------------------------------------------------------
+# Case 16 — the ceiling message must NOT reuse print_context_message's
+# server-remediation text (stop the server, restart it) — none of that can
+# raise a GGUF's trained context. It must instead name the shortfall as a
+# property of the model and point at the only real remedy: a bigger model.
+# ---------------------------------------------------------------------------
+
+
+def test_print_ceiling_message_has_no_server_remediation_text():
+    stderr_capture = StringIO()
+    with patch("sys.stderr", stderr_capture):
+        LemonadeManager.print_ceiling_message(40960, 65536)
+
+    output = stderr_capture.getvalue()
+    assert "To fix this issue" not in output
+    assert "Stop the Lemonade server" not in output
+    assert "gaia init" not in output
+    assert "40960" in output
+    assert "65536" in output
+    assert "trained context" in output
+    assert "larger trained context" in output
+
+
+@patch("gaia.llm.lemonade_manager.LemonadeClient")
+def test_ensure_ready_ceiling_path_prints_no_server_remediation(mock_cls):
+    """End-to-end through `ensure_ready`, not just the message function
+    directly: a model already at its known ceiling must surface the
+    model-property message on stderr, never the "stop the server / restart
+    it" text meant for an actually-too-small server configuration."""
+    client = _make_client_mock(
+        _status(
+            running=True,
+            context_size=40960,
+            loaded_models=[
+                {
+                    "id": "Qwen3-0.6B-GGUF",
+                    "model_name": "Qwen3-0.6B-GGUF",
+                    "max_context_window": 40960,
+                    "recipe_options": {"ctx_size": 40960},
+                }
+            ],
+        )
+    )
+    client.get_model_max_context_window.return_value = 40960
+    client.get_status.return_value = _status(
+        running=True,
+        context_size=40960,
+        loaded_models=[
+            {
+                "id": "Qwen3-0.6B-GGUF",
+                "model_name": "Qwen3-0.6B-GGUF",
+                "max_context_window": 40960,
+                "recipe_options": {"ctx_size": 40960},
+            }
+        ],
+    )
+    mock_cls.return_value = client
+
+    stderr_capture = StringIO()
+    with patch("sys.stderr", stderr_capture):
+        ok = LemonadeManager.ensure_ready(min_context_size=65536, quiet=False)
+
+    output = stderr_capture.getvalue()
+    assert ok is True
+    assert "To fix this issue" not in output
+    assert "Stop the Lemonade server" not in output
+    assert "trained context is 40960 tokens" in output
+    assert "larger trained context" in output
