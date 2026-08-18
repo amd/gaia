@@ -1,6 +1,13 @@
 ---
 name: testing-the-gaia-agent
 description: Test the flagship GAIA agent end-to-end through the Go TUI — launch it, drive it without colliding with other agents, run the capability ladder, verify skills really call their tools instead of fabricating, and check the permission gate. Use when validating the gaia agent, its skills, or the TUI chat view.
+metadata:
+  gaia:
+    security_tier: community
+    # driver.py reads the TUI's control.json and talks to the loopback control API.
+    permissions:
+      - filesystem:read
+      - network:write:127.0.0.1
 ---
 
 # Testing the flagship GAIA agent through the TUI

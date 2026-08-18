@@ -208,7 +208,9 @@ def _chat_agent_inline_tools() -> frozenset[str]:
     must exist in ``agent.py`` or the name is dropped — keeping this list
     incapable of drifting past a rename.
     """
-    import gaia_agent_chat
+    # Ships with the standalone gaia-agent-chat wheel, which the core-only test
+    # job does not install; skip rather than judge the list against nothing.
+    gaia_agent_chat = pytest.importorskip("gaia_agent_chat")
 
     source = (Path(gaia_agent_chat.__file__).parent / "agent.py").read_text(
         encoding="utf-8"
