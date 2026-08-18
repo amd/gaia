@@ -24,13 +24,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import queue
 import threading
 import time
 import uuid
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, FastAPI, HTTPException
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
+from gaia_agent import caller_auth
 from gaia_agent.session_registry import SessionCapacityError
 from gaia_agent.session_registry import registry as session_registry
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -329,7 +331,32 @@ def _probe_lemonade() -> Dict[str, Any]:
     return out
 
 
-router = APIRouter(tags=[f"{AGENT_ID}-query"])
+async def require_caller_token(request: Request) -> None:
+    """Reject a request that does not carry this session's bearer token.
+
+    No-ops when auth was never configured (the product server and the OpenAPI
+    export mount this router without it) or when no token is set (dev mode,
+    warned about at startup) — Host/Origin still apply in both cases.
+    """
+    config = caller_auth.get_config()
+    if config is None or caller_auth.is_exempt_path(request.url.path):
+        return
+    if not caller_auth.token_ok(config, request.headers.get("authorization", "")):
+        raise HTTPException(
+            status_code=401,
+            detail=(
+                "Unauthorized: this sidecar requires the per-session bearer "
+                "token minted by the process that spawned it. Send "
+                "'Authorization: Bearer <token>'. Hosts get the token from "
+                f"{caller_auth.TOKEN_FILE_ENV_VAR} (a 0600 file) or "
+                f"{caller_auth.TOKEN_ENV_VAR}."
+            ),
+        )
+
+
+router = APIRouter(
+    tags=[f"{AGENT_ID}-query"], dependencies=[Depends(require_caller_token)]
+)
 
 
 @router.get("/init")
@@ -657,6 +684,34 @@ def build_app() -> FastAPI:
     from gaia_agent import __version__
 
     app = FastAPI(title="GAIA Agent", version=__version__)
+
+    # Loopback is not access control: without this, any page the user visits can
+    # drive an agent that has shell and file tools. Wired ONLY here, on the
+    # sidecar app the frozen binary serves.
+    auth_config = caller_auth.config_from_environment()
+    caller_auth.configure(auth_config)
+    app.add_middleware(caller_auth.HostOriginMiddleware)
+    if auth_config.token:
+        channel = (
+            f"0600 secret file ({caller_auth.TOKEN_FILE_ENV_VAR})"
+            if os.environ.get(caller_auth.TOKEN_FILE_ENV_VAR)
+            else f"{caller_auth.TOKEN_ENV_VAR} env var (legacy delivery)"
+        )
+        logger.info(
+            "GAIA sidecar: caller authentication ENABLED via %s "
+            "(per-session bearer token required on /v1/%s/* requests).",
+            channel,
+            AGENT_ID,
+        )
+    else:
+        logger.warning(
+            "GAIA sidecar: caller authentication DISABLED — neither %s nor %s "
+            "is in the environment. This is intended for LOCAL DEVELOPMENT "
+            "only; the shipped product spawns the sidecar with a per-session "
+            "token. Host/Origin protection is still enforced.",
+            caller_auth.TOKEN_FILE_ENV_VAR,
+            caller_auth.TOKEN_ENV_VAR,
+        )
 
     @app.get("/health", include_in_schema=True)
     async def health() -> Dict[str, str]:

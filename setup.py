@@ -68,6 +68,7 @@ setup(
         "gaia.ui",
         "gaia.ui.routers",
         "gaia.ui.email_sidecar",
+        "gaia.sidecar",
         "gaia.database",
         "gaia.talk",
         "gaia.testing",

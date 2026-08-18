@@ -1,13 +1,6 @@
 ---
 name: testing-the-gaia-agent
 description: Test the flagship GAIA agent end-to-end through the Go TUI — launch it, drive it without colliding with other agents, run the capability ladder, verify skills really call their tools instead of fabricating, and check the permission gate. Use when validating the gaia agent, its skills, or the TUI chat view.
-metadata:
-  gaia:
-    security_tier: community
-    # driver.py reads the TUI's control.json and talks to the loopback control API.
-    permissions:
-      - filesystem:read
-      - network:write:127.0.0.1
 ---
 
 # Testing the flagship GAIA agent through the TUI
@@ -233,7 +226,7 @@ opens. PowerShell `Start-Process` with a `.ps1` avoids the quoting entirely.
 
 ### 3. Driver
 
-Use `driver.py` from this skill directory (repoint `CJ` at your `GAIA_TUI_HOME`).
+Use `util/tui_driver.py` from the repo root (repoint `CJ` at your `GAIA_TUI_HOME`).
 
 **Why one process:** process spawn costs 0.7–2.0s on a Windows/MSYS box with AV —
 `curl --version` alone measured 2051 ms. A bash driver spawning bash + 2 × python +
@@ -417,7 +410,7 @@ Two lessons, both cheap to act on:
   "too fast to be a person" is also true of the control API, and of a fast
   typist. Treat a change that infers intent from keystroke timing as a red flag.
 
-The signature to recognise: `driver.py ladder` returns rungs whose captured
+The signature to recognise: `tui_driver.py ladder` returns rungs whose captured
 output is the *startup banner* rather than an answer, each taking exactly the
 idle-wait timeout. That means no turn ever started — look at input handling, not
 at the agent.

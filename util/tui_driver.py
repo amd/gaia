@@ -3,10 +3,10 @@
 
 Point ``CJ`` at the ``control.json`` inside your ``GAIA_TUI_HOME``, then:
 
-    python driver.py status
-    python driver.py ask "What is 17 times 23?"
-    python driver.py ladder          # the full capability ladder
-    python driver.py gate            # gh read-only policy check (no LLM, instant)
+    python util/tui_driver.py status
+    python util/tui_driver.py ask "What is 17 times 23?"
+    python util/tui_driver.py ladder          # the full capability ladder
+    python util/tui_driver.py gate            # gh read-only policy check (no LLM, instant)
 
 Why one process: spawning a process costs 0.7-2.0s on a Windows/MSYS box with AV
 (``curl --version`` alone measures ~2s), while the control API answers in 3ms. A
