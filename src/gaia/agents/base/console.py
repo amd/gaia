@@ -11,6 +11,7 @@ import time
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from gaia.agents.base.tool_grants import grant_scope
 from gaia.agents.base.tools import get_tool_display_name
 
 logger = logging.getLogger(__name__)
@@ -73,10 +74,14 @@ _TRUTHY_ENV_VALUES = frozenset({"1", "true", "yes", "on"})
 # decision-critical part is often at the end.
 MAX_CONFIRMATION_VALUE_CHARS = 600
 
-# "Always allow" is never offered for these: the tool name says nothing about
-# what the next call will do, so one approval would hand over arbitrary
-# execution for the rest of the session.
-NO_ALWAYS_ALLOW_TOOLS = frozenset({"run_shell_command", "run_cli_command"})
+# The shell tools used to be listed here as never-offer-"always", because the
+# tool name says nothing about what the next call will do and one approval
+# would have handed over arbitrary execution for the rest of the session. That
+# reasoning was right; the remedy was too blunt. Grants are now keyed on the
+# INVOCATION (gaia.agents.base.tool_grants), so `gh issue list` can be allowed
+# for the session without also allowing `rm -rf`, and a call that cannot be
+# scoped that narrowly gets no "always" at all — which reproduces the old ban
+# exactly where it was actually needed.
 
 
 def auto_approve_env_enabled() -> bool:
@@ -402,6 +407,64 @@ class OutputHandler(ABC):
         """True when this handler may approve gated tools without asking."""
         return bool(self.auto_approve_gated_tools) or auto_approve_env_enabled()
 
+    # -- "always allow" grants ---------------------------------------------
+    #
+    # Scoped to the INVOCATION, for the life of this console — never to the bare
+    # tool name. See :mod:`gaia.agents.base.tool_grants`: a prompt shows one
+    # call, so the grant it offers may not exceed that call. A tool with no
+    # scope rule gets no "always" at all, and the user answers each time.
+    # ``reset_tool_approvals`` ends every grant early.
+
+    def session_grants(self) -> Set[str]:
+        """Grant keys the user has answered "always" to on this console."""
+        return self._lazy_tool_set("_session_grants")
+
+    def call_is_granted(self, tool_name: str, tool_args: Any) -> bool:
+        """True when an earlier "always" already covers THIS exact call."""
+        scope = grant_scope(tool_name, tool_args)
+        return scope is not None and scope.key in self.session_grants()
+
+    def grant_call_for_session(self, tool_name: str, tool_args: Any) -> Optional[str]:
+        """Record an "always allow" for this call; return what was granted.
+
+        ``None`` means the call has no scope narrow enough to describe, so
+        nothing was granted — a caller must not read that as approval of
+        anything beyond the single call in front of it.
+        """
+        scope = grant_scope(tool_name, tool_args)
+        if scope is None:
+            logger.warning(
+                "Refused a session grant for '%s': this call has no scope "
+                "narrow enough to describe, so it must be answered each time.",
+                tool_name,
+            )
+            return None
+        self.session_grants().add(scope.key)
+        self._last_denial = None
+        logger.info("User granted '%s' for the remainder of this session", scope.label)
+        return scope.label
+
+    def reset_tool_approvals(self) -> None:
+        """Forget every "always allow" answer.
+
+        Call when the conversation the approvals were given in ends (new session,
+        new user) so consent does not outlive its context.
+        """
+        self.session_grants().clear()
+
+    def _lazy_tool_set(self, attribute: str) -> Set[str]:
+        """Per-instance string set, created on first use.
+
+        Never a shared class-level set, which would leak one user's approval
+        into every other console in the process — so a subclass that skips
+        ``super().__init__()`` still behaves.
+        """
+        names = getattr(self, attribute, None)
+        if names is None:
+            names = set()
+            setattr(self, attribute, names)
+        return names
+
     def log_auto_approval(self, tool_name: str) -> None:
         """Record that a gated tool ran without a human decision."""
         self._last_denial = None
@@ -625,9 +688,10 @@ class TerminalConfirmationMixin:
             self.log_auto_approval(tool_name)
             return True
 
-        if tool_name in self._always_allowed():
+        if self.call_is_granted(tool_name, tool_args):
             logger.info(
-                "Confirmation-gated tool '%s' pre-approved for this session by the user",
+                "Confirmation-gated call to '%s' pre-approved for this session "
+                "by the user",
                 tool_name,
             )
             return True
@@ -641,7 +705,9 @@ class TerminalConfirmationMixin:
                 self._display("denial notice", self._show_denial_notice, reason)
             return self.deny_tool_execution(tool_name, reason)
 
-        allow_always = tool_name not in NO_ALWAYS_ALLOW_TOOLS
+        # "Always" is offered only when this call has a scope narrow enough to
+        # name — never for the bare tool. See tool_grants.
+        scope = grant_scope(tool_name, tool_args)
         # A live spinner/preview would fight with the prompt for the terminal.
         self._display("progress pause", self.pause_progress)
         try:
@@ -656,7 +722,9 @@ class TerminalConfirmationMixin:
                 return self.deny_tool_execution(
                     tool_name, unaskable_denial_message(tool_name)
                 )
-            answer = self._read_confirmation_answer(allow_always)
+            answer = self._read_confirmation_answer(
+                scope is not None, scope.label if scope else ""
+            )
         finally:
             self._display("progress resume", self.resume_progress)
 
@@ -665,12 +733,8 @@ class TerminalConfirmationMixin:
                 tool_name, unaskable_denial_message(tool_name)
             )
 
-        if allow_always and answer in ("a", "always"):
-            self._always_allowed().add(tool_name)
-            logger.info(
-                "User approved '%s' for the remainder of this session", tool_name
-            )
-            self._last_denial = None
+        if scope is not None and answer in ("a", "always"):
+            self.grant_call_for_session(tool_name, tool_args)
             return True
         if answer in ("y", "yes"):
             logger.info("User approved confirmation-gated tool '%s'", tool_name)
@@ -699,34 +763,13 @@ class TerminalConfirmationMixin:
             return False
 
     def reset_tool_approvals(self) -> None:
-        """Forget every "always allow" answer.
-
-        Call when the conversation the approvals were given in ends (new session,
-        new user) so consent does not outlive its context.
-        """
-        self._always_allowed().clear()
+        """Forget every "always allow" answer, and re-arm the denial notices."""
+        super().reset_tool_approvals()
         self._notified_denials().clear()
-
-    def _always_allowed(self) -> Set[str]:
-        """The per-console "always allow" set, created on first use.
-
-        Lazily instantiated per instance — never a shared class-level set, which
-        would leak one user's approval into every other console in the process —
-        so a subclass that skips ``super().__init__()`` still behaves.
-        """
-        return self._lazy_tool_set("_session_approved_tools")
 
     def _notified_denials(self) -> Set[str]:
         """Tools whose unattended-denial notice has already been shown."""
         return self._lazy_tool_set("_denial_notices_shown")
-
-    def _lazy_tool_set(self, attribute: str) -> Set[str]:
-        """Per-instance set of tool names, created on first use."""
-        names = getattr(self, attribute, None)
-        if names is None:
-            names = set()
-            setattr(self, attribute, names)
-        return names
 
     def _show_denial_notice(self, reason: str) -> None:
         """Tell the user why a gated tool was refused. Quiet consoles stay quiet
@@ -740,19 +783,28 @@ class TerminalConfirmationMixin:
         print(f"\n⚠️  Confirm: {get_tool_display_name(tool_name)}")
         print(format_confirmation_args(tool_args))
 
-    def _read_confirmation_answer(self, allow_always: bool = True) -> Optional[str]:
+    def _read_confirmation_answer(
+        self, allow_always: bool = True, always_scope: str = ""
+    ) -> Optional[str]:
         """Read the user's answer.
+
+        *always_scope* is what "always" would actually grant, e.g.
+        ``gh issue list``. It is spelled out in the prompt because the grant is
+        the part the user cannot take back by reading more carefully: an
+        unqualified "always for this tool" reads as far broader than the
+        invocation-scoped grant that is really on offer.
 
         Ctrl-C / EOF read as an explicit "no" (empty string). ``None`` means the
         terminal broke before an answer could be read (a detached or closed tty
         raises ``OSError`` from ``input()``) — the caller denies with a different
         message, because nobody actually said no.
         """
-        prompt = (
-            self.CONFIRMATION_PROMPT
-            if allow_always
-            else self.CONFIRMATION_PROMPT_NO_ALWAYS
-        )
+        if not allow_always:
+            prompt = self.CONFIRMATION_PROMPT_NO_ALWAYS
+        elif always_scope:
+            prompt = f"Allow this? [y]es / [N]o / [a]lways for `{always_scope}`: "
+        else:
+            prompt = self.CONFIRMATION_PROMPT
         try:
             return input(prompt).strip().lower()
         except (EOFError, KeyboardInterrupt):

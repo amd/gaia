@@ -14,8 +14,35 @@ from any ``test_memory_*.py`` file so the per-test mocks take effect.
 
 import os
 import socket
+from pathlib import Path
 
 import pytest
+
+
+@pytest.fixture
+def mock_home(tmp_path, monkeypatch):
+    """Redirect the process home directory at a per-test ``tmp_path``.
+
+    Patches ``HOME``, ``USERPROFILE``, ``Path.home()``, and
+    ``os.path.expanduser`` so code resolving the home dir through env vars,
+    pathlib, or ``os.path`` lands in the sandbox — a real ``~/.gaia`` is never
+    read or written. Returns the fake home so tests can build expected paths
+    under it.
+    """
+    real_expanduser = os.path.expanduser
+
+    def fake_expanduser(path):
+        if path == "~":
+            return str(tmp_path)
+        if path.startswith(("~/", "~\\")):
+            return str(tmp_path) + path[1:]
+        return real_expanduser(path)
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: tmp_path))
+    monkeypatch.setattr(os.path, "expanduser", fake_expanduser)
+    return tmp_path
 
 
 def pytest_configure(config):

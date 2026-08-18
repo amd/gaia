@@ -85,6 +85,7 @@
                   {
                     "group": "Core Agents",
                     "pages": [
+                      "guides/gaia",
                       "guides/chat",
                       "guides/talk",
                       "guides/browse",
@@ -465,6 +466,7 @@
               "plans/agent-hub-ui",
               "plans/agent-ui-hub-publish",
               "plans/email-agent-packaging",
+              "plans/flagship-installer",
               "spec/agent-hub-restructure",
               "spec/agent-skills",
               "plans/skill-format",
@@ -480,7 +482,8 @@
               "plans/docker-containers",
               "plans/mcp-docs",
               "plans/desktop-installer",
-              "plans/tool-loader"
+              "plans/tool-loader",
+              "plans/code-index-review"
             ]
           },
           {

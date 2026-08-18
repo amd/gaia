@@ -789,6 +789,166 @@ class TestDownloadModels(unittest.TestCase):
             mock_client.pull_model.assert_not_called()
 
 
+class TestSkipChatModel(unittest.TestCase):
+    """skip_chat_model (the TUI's --use-claude path) must skip the chat LLM
+    while still pulling the embedder RAG/memory need — and this must be true
+    of the REAL `_download_models()` filtering, not a stub that only proves
+    the method was invoked (see CLAUDE.md's hidden-state/mock-validity note
+    and the #1655 case it cites)."""
+
+    @patch("gaia.installer.init_command.LemonadeInstaller")
+    def test_without_skip_chat_model_downloads_both(self, mock_installer_class):
+        """Control case: the chat profile's normal behavior pulls the chat
+        LLM AND the embedder, so the skip test below is a real change in
+        behavior, not just an assertion that happens to always pass."""
+        from gaia.installer.init_command import InitCommand
+
+        cmd = InitCommand(profile="chat", yes=True)
+        self.assertFalse(cmd.skip_chat_model)
+
+        with patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client.ensure_model_downloaded.return_value = True
+            mock_client_class.return_value = mock_client
+
+            result = cmd._download_models()
+            self.assertTrue(result)
+            pulled = {
+                c.args[0] for c in mock_client.ensure_model_downloaded.call_args_list
+            }
+            self.assertEqual(
+                pulled, {"Gemma-4-E4B-it-GGUF", "user.embeddinggemma-300m-GGUF"}
+            )
+
+    @patch("gaia.installer.init_command.LemonadeInstaller")
+    def test_skip_chat_model_downloads_only_the_embedder(self, mock_installer_class):
+        """A Claude-backed session never calls the local chat LLM — pulling
+        it would waste several GB of bandwidth/disk for a model that is
+        never loaded. The embedder is still required: RAG/memory/code-index
+        embeddings have no Claude equivalent (Anthropic has no embeddings
+        API — see hub/agents/gaia/python/gaia_agent/stdio.py)."""
+        from gaia.installer.init_command import InitCommand
+
+        cmd = InitCommand(profile="chat", yes=True, skip_chat_model=True)
+
+        with patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client.ensure_model_downloaded.return_value = True
+            mock_client_class.return_value = mock_client
+
+            result = cmd._download_models()
+            self.assertTrue(result)
+            pulled = {
+                c.args[0] for c in mock_client.ensure_model_downloaded.call_args_list
+            }
+            self.assertEqual(pulled, {"user.embeddinggemma-300m-GGUF"})
+            # Never even asked about the chat LLM's availability, let alone
+            # downloaded it.
+            checked = {
+                c.args[0] for c in mock_client.check_model_available.call_args_list
+            }
+            self.assertNotIn("Gemma-4-E4B-it-GGUF", checked)
+
+    @patch("gaia.installer.init_command.LemonadeInstaller")
+    def test_skip_chat_model_verify_only_checks_the_embedder(
+        self, mock_installer_class
+    ):
+        """_verify_setup must apply the same filter, or a Claude session
+        reports the chat LLM as "not downloaded" for a model it deliberately
+        never pulled."""
+        from gaia.installer.init_command import InitCommand
+
+        cmd = InitCommand(profile="chat", yes=True, skip_chat_model=True)
+
+        with patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client.health_check.return_value = True
+            mock_client.check_model_available.return_value = False
+            mock_client_class.return_value = mock_client
+
+            with patch(
+                "gaia.llm.lemonade_manager.LemonadeManager.ensure_ready",
+                return_value=True,
+            ):
+                result = cmd._verify_setup()
+            self.assertTrue(result)
+            checked = {
+                c.args[0] for c in mock_client.check_model_available.call_args_list
+            }
+            self.assertEqual(checked, {"user.embeddinggemma-300m-GGUF"})
+
+
+class TestCheckSetupStatus(unittest.TestCase):
+    """gaia init --check: a read-only readiness probe the TUI polls on every
+    launch instead of trusting a marker file the user cannot see or clear."""
+
+    def test_invalid_profile_raises(self):
+        from gaia.installer.init_command import check_setup_status
+
+        with self.assertRaises(ValueError):
+            check_setup_status(profile="not-a-real-profile")
+
+    @patch("gaia.installer.init_command.LemonadeInstaller")
+    def test_server_unreachable_reports_not_ready_without_probing_models(
+        self, mock_installer_class
+    ):
+        from gaia.installer.init_command import check_setup_status
+
+        mock_installer_class.return_value.check_installation.return_value = (
+            LemonadeInfo(installed=False, version=None, path=None)
+        )
+
+        with patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client.health_check.return_value = False
+            mock_client_class.return_value = mock_client
+
+            status = check_setup_status(profile="chat")
+            self.assertFalse(status.ready)
+            self.assertTrue(status.reasons)
+            mock_client.check_model_available.assert_not_called()
+
+    @patch("gaia.installer.init_command.LemonadeInstaller")
+    def test_ready_when_server_up_and_required_models_present(
+        self, mock_installer_class
+    ):
+        from gaia.installer.init_command import check_setup_status
+
+        with patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client.health_check.return_value = True
+            mock_client.check_model_available.return_value = True
+            mock_client_class.return_value = mock_client
+
+            status = check_setup_status(profile="chat")
+            self.assertTrue(status.ready)
+            self.assertEqual(status.reasons, [])
+
+    @patch("gaia.installer.init_command.LemonadeInstaller")
+    def test_skip_chat_model_never_asks_about_the_chat_llm(self, mock_installer_class):
+        """Same real-state check the TUI's --use-claude launch makes before
+        deciding whether to auto-run setup: the chat LLM must not even be
+        probed, let alone reported missing."""
+        from gaia.installer.init_command import check_setup_status
+
+        with patch("gaia.llm.lemonade_client.LemonadeClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client.health_check.return_value = True
+            mock_client.check_model_available.return_value = False
+            mock_client_class.return_value = mock_client
+
+            status = check_setup_status(profile="chat", skip_chat_model=True)
+            self.assertFalse(status.ready)
+            self.assertEqual(
+                status.reasons,
+                ["Model 'user.embeddinggemma-300m-GGUF' is not downloaded"],
+            )
+            checked = {
+                c.args[0] for c in mock_client.check_model_available.call_args_list
+            }
+            self.assertEqual(checked, {"user.embeddinggemma-300m-GGUF"})
+
+
 class TestInstallPipExtras(unittest.TestCase):
     """Test _install_pip_extras frontend selection and messaging."""
 

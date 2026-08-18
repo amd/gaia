@@ -44,8 +44,6 @@ func NewConfirmModel(id, title, message string) ConfirmModel {
 
 var (
 	confirmBorder = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(theme.Accent).
 			Padding(1, 2)
 
 	confirmTitle = lipgloss.NewStyle().Bold(true)

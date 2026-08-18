@@ -258,7 +258,15 @@ func TestKeysDriveTheRightActions(t *testing.T) {
 		// launcher: the launcher is "" on a machine with no Lemonade (every CI
 		// runner), and strings.Contains(_, "") is always true — an assertion that
 		// silently stops asserting is how the stale literal survived.
-		if !strings.Contains(ansi.Strip(m.View()), lemonadeStartRemedy().Command) {
+		//
+		// Whitespace is squeezed out of both sides before comparing. The panel
+		// wraps a long command across lines, and a real install path makes it
+		// long: this passed on CI (no Lemonade, short command, no wrap) and
+		// failed on any developer machine that actually had it installed.
+		if !strings.Contains(
+			squeezeSpace(ansi.Strip(m.View())),
+			squeezeSpace(lemonadeStartRemedy().Command),
+		) {
 			t.Errorf("pressing f on an unfixable row said nothing useful:\n%s", m.View())
 		}
 	})
@@ -354,4 +362,10 @@ func TestRenderWrapsLongRemediesInsteadOfOverflowing(t *testing.T) {
 	if !strings.Contains(flat, "https://www.googleapis.com/auth/gmail.send") {
 		t.Errorf("the scope did not survive wrapping:\n%s", screen)
 	}
+}
+
+// squeezeSpace removes every run of whitespace so a comparison survives the
+// panel wrapping a long line. Only for assertions — never for what a user sees.
+func squeezeSpace(s string) string {
+	return strings.Join(strings.Fields(s), "")
 }

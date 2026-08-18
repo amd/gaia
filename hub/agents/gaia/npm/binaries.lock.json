@@ -1,0 +1,78 @@
+{
+  "schemaVersion": "3.0",
+  "agentVersion": "0.1.0",
+  "components": {
+    "sidecar": {
+      "componentVersion": "0.1.0",
+      "baseUrl": "https://hub.amd-gaia.ai/agents/gaia/0.1.0",
+      "platforms": {
+        "win32-x64": {
+          "filename": "gaia-agent-win32-x64.exe",
+          "executable": "gaia-agent.exe",
+          "sha256": "PENDING-replace-with-real-sha256",
+          "size": 0
+        },
+        "darwin-arm64": {
+          "filename": "gaia-agent-darwin-arm64",
+          "executable": "gaia-agent",
+          "sha256": "PENDING-replace-with-real-sha256",
+          "size": 0
+        },
+        "darwin-x64": {
+          "filename": "gaia-agent-darwin-x64",
+          "executable": "gaia-agent",
+          "sha256": "PENDING-replace-with-real-sha256",
+          "size": 0
+        },
+        "linux-x64": {
+          "filename": "gaia-agent-linux-x64",
+          "executable": "gaia-agent",
+          "sha256": "PENDING-replace-with-real-sha256",
+          "size": 0
+        }
+      }
+    },
+    "tui": {
+      "componentVersion": "0.23.0",
+      "baseUrl": "https://hub.amd-gaia.ai/agents/terminal-hub/0.23.0",
+      "platforms": {
+        "win32-x64": {
+          "filename": "gaia-win-x64.exe",
+          "executable": "gaia-tui.exe",
+          "sha256": "PENDING-replace-with-real-sha256",
+          "size": 0
+        },
+        "win32-arm64": {
+          "filename": "gaia-win-arm64.exe",
+          "executable": "gaia-tui.exe",
+          "sha256": "PENDING-replace-with-real-sha256",
+          "size": 0
+        },
+        "darwin-arm64": {
+          "filename": "gaia-darwin-arm64",
+          "executable": "gaia-tui",
+          "sha256": "PENDING-replace-with-real-sha256",
+          "size": 0
+        },
+        "darwin-x64": {
+          "filename": "gaia-darwin-x64",
+          "executable": "gaia-tui",
+          "sha256": "PENDING-replace-with-real-sha256",
+          "size": 0
+        },
+        "linux-x64": {
+          "filename": "gaia-linux-x64",
+          "executable": "gaia-tui",
+          "sha256": "PENDING-replace-with-real-sha256",
+          "size": 0
+        },
+        "linux-arm64": {
+          "filename": "gaia-linux-arm64",
+          "executable": "gaia-tui",
+          "sha256": "PENDING-replace-with-real-sha256",
+          "size": 0
+        }
+      }
+    }
+  }
+}

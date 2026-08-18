@@ -73,6 +73,14 @@
       "icon": "file"
     },
     {
+      "id": "gaia",
+      "manifestId": "gaia",
+      "name": "GAIA",
+      "description": "The flagship GAIA agent — conversation, document Q&A, data analysis, and web research, with persistent memory and add-on skills",
+      "category": "general",
+      "icon": "sparkles"
+    },
+    {
       "id": "jira",
       "manifestId": "jira",
       "name": "Jira",

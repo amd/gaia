@@ -1,0 +1,66 @@
+{
+  "name": "@amd-gaia/gaia",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "One command to run GAIA: fetches and SHA-256 verifies the flagship agent sidecar and the terminal UI, then launches them. Runs 100% locally on AMD Ryzen AI.",
+  "author": "AMD AI Group",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/amd/gaia.git",
+    "directory": "hub/agents/gaia/npm"
+  },
+  "homepage": "https://amd-gaia.ai/docs/guides/gaia",
+  "bugs": {
+    "url": "https://github.com/amd/gaia/issues"
+  },
+  "keywords": [
+    "gaia",
+    "amd",
+    "ryzen-ai",
+    "agent",
+    "tui",
+    "local-llm",
+    "privacy",
+    "sidecar"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "gaia": "./dist/cli.js"
+  },
+  "files": [
+    "dist/",
+    "binaries.lock.json",
+    "README.md",
+    "CHANGELOG.md",
+    "SPEC.md",
+    "SKILL.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "prepublishOnly": "npm run clean && npm run build",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

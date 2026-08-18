@@ -198,6 +198,11 @@ class TestPrintProcessingStart:
         assert events[0]["type"] == "status"
         assert "LLM" in events[0]["message"]
 
+    def test_model_banner_is_tagged_for_the_debug_channel(self, handler):
+        """'Processing with <model>...' names the harness, not the work (#2804)."""
+        handler.print_processing_start("hello", 10, model_id="qwen")
+        assert _drain(handler)[0]["channel"] == "debug"
+
 
 # ===========================================================================
 # SSEOutputHandler.print_step_header
@@ -220,6 +225,9 @@ class TestPrintStepHeader:
             "step": 2,
             "total": 5,
             "status": "started",
+            # The step counter describes the harness, not the user's work, so it
+            # is tagged for the debug channel and filtered downstream (#2804).
+            "channel": "debug",
         }
 
 
@@ -695,11 +703,22 @@ class TestStartProgress:
         handler.start_progress("Analyzing code...")
         events = _drain(handler)
         assert len(events) == 1
+        # A real progress line is untagged, so it reaches the user (#2804).
         assert events[0] == {
             "type": "status",
             "status": "working",
             "message": "Analyzing code...",
         }
+
+    @pytest.mark.parametrize(
+        "label", ["Thinking", "thinking...", "Working", "PROCESSING"]
+    )
+    def test_harness_progress_labels_are_tagged_for_the_debug_channel(
+        self, handler, label
+    ):
+        """A bare 'Thinking' says the loop is alive, not what it is doing (#2804)."""
+        handler.start_progress(label)
+        assert _drain(handler)[0]["channel"] == "debug"
 
     def test_filters_executing_prefix(self, handler):
         handler.start_progress("Executing search_file")
