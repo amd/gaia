@@ -39,7 +39,10 @@ async function route(request: Request, env: Env): Promise<Response> {
   const method = request.method.toUpperCase();
 
   if (path === "/health") {
-    return json({ status: "ok" });
+    // `build` is the commit this Worker was deployed from. A fixed "ok"
+    // cannot tell a current Worker from a months-stale one — which is how an
+    // outdated manifest validator went unnoticed until every release failed.
+    return json({ status: "ok", build: env.WORKER_BUILD ?? "unknown" });
   }
 
   if (path === "/publish") {
