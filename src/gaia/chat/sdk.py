@@ -189,6 +189,56 @@ class AgentSDK:
         )
         return f"[Called tools: {calls}]"
 
+    # ── per-turn performance recording (dev mode, opt-in) ──────────────────
+    #
+    # Hooked here, not at the agent's call sites: every backend request funnels
+    # through this class, so one pair of hooks covers all four of them.
+
+    #: Set by the agent loop per turn; ``None`` disables all recording.
+    turn_recorder: Optional[Any] = None
+
+    #: Step index stamped onto the next recorded call, set by the agent loop.
+    turn_step: int = 0
+
+    def _recorder_begin(
+        self, structured: List[Dict[str, Any]], tools: Optional[List[Dict]]
+    ) -> None:
+        recorder = self.turn_recorder
+        if recorder is None:
+            return
+        try:
+            # Proxy for what the server renders. The chat template is
+            # deterministic, so a common prefix here is a common prefix there —
+            # which is the only property the cache comparison needs.
+            rendered = json.dumps(structured, default=str)
+            if tools:
+                rendered += json.dumps(tools, default=str)
+            recorder.start_llm_call(self.turn_step, rendered)
+        except Exception as e:  # noqa: BLE001 - diagnostics must not fail a turn
+            self.log.warning("turn recorder (begin) failed: %s", e)
+
+    def _recorder_mark(self) -> None:
+        """Stop the clock on the open call before its stats are fetched."""
+        recorder = self.turn_recorder
+        if recorder is None:
+            return
+        try:
+            recorder.mark_llm_call_end()
+        except Exception as e:  # noqa: BLE001 - diagnostics must not fail a turn
+            self.log.warning("turn recorder (mark) failed: %s", e)
+
+    def _recorder_end(self, stats: Optional[Dict[str, Any]] = None) -> None:
+        """Close the open call. A no-op once closed, so a ``finally`` can back
+        up a normal close without recording the call twice."""
+        recorder = self.turn_recorder
+        if recorder is None:
+            return
+        try:
+            recorder.mark_llm_call_end()
+            recorder.end_llm_call(stats if stats is not None else self.get_stats())
+        except Exception as e:  # noqa: BLE001 - diagnostics must not fail a turn
+            self.log.warning("turn recorder (end) failed: %s", e)
+
     def send_messages(
         self,
         messages: List[Dict[str, Any]],
@@ -278,12 +328,16 @@ class AgentSDK:
             if tools:
                 kwargs["tools"] = tools
 
-            response = self.llm_client.chat(
-                messages=structured,
-                model=self.effective_model,
-                stream=False,
-                **kwargs,
-            )
+            self._recorder_begin(structured, tools)
+            try:
+                response = self.llm_client.chat(
+                    messages=structured,
+                    model=self.effective_model,
+                    stream=False,
+                    **kwargs,
+                )
+            finally:
+                self._recorder_end()
 
             # Prepare response data
             stats = None
@@ -392,6 +446,7 @@ class AgentSDK:
             if tools:
                 kwargs["tools"] = tools
 
+            self._recorder_begin(structured, tools)
             for chunk in self.llm_client.chat(
                 messages=structured, model=self.effective_model, stream=True, **kwargs
             ):
@@ -401,15 +456,20 @@ class AgentSDK:
                 # as the complete response, which is the shape the agent loop's
                 # native tool_calls branch already parses.
                 if tools and chunk.startswith(NATIVE_TOOL_CALLS_PREFIX):
+                    self._recorder_mark()
+                    tool_call_stats = self.get_stats()
+                    self._recorder_end(tool_call_stats)
                     yield AgentResponse(
-                        text=chunk, stats=self.get_stats(), is_complete=True
+                        text=chunk, stats=tool_call_stats, is_complete=True
                     )
                     return
                 yield AgentResponse(text=chunk, is_complete=False)
 
             # Send final response with stats
             # Always get stats for token tracking (show_stats controls display, not collection)
+            self._recorder_mark()
             stats = self.get_stats()
+            self._recorder_end(stats)
 
             yield AgentResponse(text="", stats=stats, is_complete=True)
 
@@ -422,6 +482,11 @@ class AgentSDK:
         except Exception as e:
             self.log.error(f"Error in send_messages_stream: {e}")
             raise
+        finally:
+            # Cancelling closes this generator at the yield; without this the
+            # call stays open and its seconds read as agent overhead. Empty
+            # stats, never a fetch — a cancel must start no HTTP request.
+            self._recorder_end(stats={})
 
     def send(
         self, message: str, *, no_history: bool = False, **kwargs

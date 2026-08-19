@@ -223,6 +223,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			Steps:     usage.Steps,
 			ToolsUsed: usage.ToolsUsed,
 			Tokens:    usage.Tokens,
+			Metrics:   usage.Metrics,
 		})
 		// Drain here, not on doneMsg: streaming flips false in THIS handler, and doneMsg fires later, after a second query could already be in flight.
 		m.drainPendingPreScan()
