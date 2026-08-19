@@ -72,15 +72,38 @@ foreach ($cfg in @(
 
 # (Re)register a Scheduled Task that runs the server as SYSTEM, auto-starting at
 # boot and restarting on failure. Force overwrites any prior definition.
+#
+# Wrapped in powershell.exe + Start-Process only to capture output: a Task
+# Scheduler action has no console and the scheduler records its stdout/stderr
+# nowhere, so a bare -Execute discards the server's output entirely. This
+# captures the SERVER's streams; whether llama-server's own stderr rides on them
+# or goes to a pipe Lemonade owns is unconfirmed, so do not rely on this alone
+# to explain a child that will not spawn.
+# Fixed ProgramData path (SYSTEM-writable): the task outlives the job that
+# registered it, so its log has to outlive that job too.
+$LogDir = "C:\ProgramData\GaiaLemonadeServer"
+New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
+$StdoutLog = Join-Path $LogDir "lemonade-task-stdout.log"
+$StderrLog = Join-Path $LogDir "lemonade-task-stderr.log"
+# PYTHONUNBUFFERED: Python block-buffers stdout when it is a pipe rather than a
+# console, so without this a server that never exits never flushes and its stdout
+# log stays empty. Measured: stdout 0 bytes without it, 39 with; stderr arrives
+# either way (Python line-buffers stderr). So an empty STDERR log is not a
+# buffering symptom -- it means the server wrote nothing there.
+$InnerCmd  = "`$env:PYTHONUNBUFFERED='1'; " +
+             "Start-Process -FilePath '$ServerExe' -ArgumentList '--port $Port' " +
+             "-RedirectStandardOutput '$StdoutLog' -RedirectStandardError '$StderrLog' " +
+             "-NoNewWindow -Wait"
 try {
-    $action    = New-ScheduledTaskAction -Execute $ServerExe -Argument "--port $Port"
+    $action    = New-ScheduledTaskAction -Execute "powershell.exe" `
+                    -Argument "-NoProfile -ExecutionPolicy Bypass -Command `"$InnerCmd`""
     $trigger   = New-ScheduledTaskTrigger -AtStartup
     $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
     $settings  = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
                     -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
     Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger `
         -Principal $principal -Settings $settings -Force -ErrorAction Stop | Out-Null
-    Write-Host "Registered scheduled task '$TaskName'."
+    Write-Host "Registered scheduled task '$TaskName' (stdout: $StdoutLog, stderr: $StderrLog)."
 } catch {
     Write-Host "ERROR: could not register scheduled task (need admin?): $($_.Exception.Message)"
     exit 1

@@ -30,6 +30,13 @@ export interface Env {
   PUBLISH_TOKENS?: string;
 
   /**
+   * Commit this Worker was deployed from, surfaced by `GET /health` so a
+   * deploy can be verified rather than assumed. Set at deploy time with
+   * `wrangler deploy --var WORKER_BUILD:<sha>`; absent in local dev.
+   */
+  WORKER_BUILD?: string;
+
+  /**
    * Bearer token for the maintainer-only `POST /reindex` endpoint, which
    * rebuilds index.json from the immutable R2 objects (idempotent). Separate
    * from PUBLISH_TOKENS so a reindex never needs a publish credential.
