@@ -432,12 +432,13 @@ jobs:
             return $found
           }
 
-          # Lemonade's POST /delete is documented to remove a model's files, but
-          # GAIA ships `gaia uninstall --purge-hf-cache` precisely because the HF
-          # blob cache survives deletion. The probe has re-"downloaded" this model
-          # on every attempt with no change in behaviour, which is what a cache hit
-          # looks like. Delete the blobs directly and REPORT what was there, so the
-          # log settles which of the two is true instead of leaving it assumed.
+          # Lemonade's POST /delete deregisters a model but never removes its
+          # files, so the probe's delete + re-pull cannot re-fetch anything: it
+          # short-circuits on the blob cache and reloads the same bytes every
+          # time. Freeing them needs an OS-level delete, which is this function.
+          # Roots follow _huggingface_cache_dir / _lemonade_models_dir in
+          # src/gaia/installer/uninstall_command.py; report what was removed, since
+          # the sizes are the evidence that a re-pull was ever real.
           function Clear-EmbedderFromDisk {
             $sys = "$env:SystemRoot\System32\config\systemprofile"
             $roots = @(
@@ -463,9 +464,13 @@ jobs:
                 }
             }
             if ($removed -eq 0) {
-              Write-Host "PURGE: nothing left on disk - Lemonade's delete DOES remove the bytes, so each prior re-pull was a real download."
+              # Do NOT read this as "the delete worked" - it never removes files.
+              # Nothing found almost certainly means the cache lives somewhere the
+              # roots above do not cover, so the retry below is still loading the
+              # same bytes and this probe proved nothing.
+              Write-Host "PURGE: found nothing to remove. Lemonade's delete does not remove files, so this most likely means the model cache is NOT under any of these roots, not that the disk was clean: $($roots -join '; ')"
             } else {
-              Write-Host "PURGE: removed $removed dir(s) that SURVIVED Lemonade's delete - every prior 're-download' was a cache hit on the same files."
+              Write-Host "PURGE: removed $removed dir(s). Lemonade's delete only deregisters, so this is the first time the bytes are actually gone and the next pull genuinely re-fetches."
             }
             return $removed
           }
