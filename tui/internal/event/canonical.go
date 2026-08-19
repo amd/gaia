@@ -241,6 +241,8 @@ type CanonicalTurnTool struct {
 type CanonicalTurnTotals struct {
 	LLMS                   float64 `json:"llm_s"`
 	ToolS                  float64 `json:"tool_s"`
+	// Blocked on a human approving a tool. Neither tool nor model cost.
+	WaitingOnUserS         float64 `json:"waiting_on_user_s"`
 	OverheadS              float64 `json:"overhead_s"`
 	InputTokensLocal       int     `json:"input_tokens_local"`
 	InputTokensCachedLocal int     `json:"input_tokens_cached_local"`

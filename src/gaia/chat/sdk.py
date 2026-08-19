@@ -207,12 +207,17 @@ class AgentSDK:
         if recorder is None:
             return
         try:
-            # Proxy for what the server renders. The chat template is
-            # deterministic, so a common prefix here is a common prefix there —
-            # which is the only property the cache comparison needs.
-            rendered = json.dumps(structured, default=str)
+            # Proxy for what the server renders, and the ORDER matters: chat
+            # templates inject the tool schemas alongside the system block, at
+            # the front, not after the conversation. Appending them last made
+            # the shared prefix stop at the first history message, so a turn
+            # whose whole 12.2k system+tools header was reusable reported 27%
+            # cache hit instead of ~99%. Measured in a live run, invisible to
+            # every unit test, because only a real turn grows the history.
+            head = json.dumps(structured[:1], default=str) if structured else ""
             if tools:
-                rendered += json.dumps(tools, default=str)
+                head += json.dumps(tools, default=str)
+            rendered = head + json.dumps(structured[1:], default=str)
             recorder.start_llm_call(self.turn_step, rendered)
         except Exception as e:  # noqa: BLE001 - diagnostics must not fail a turn
             self.log.warning("turn recorder (begin) failed: %s", e)

@@ -3235,18 +3235,24 @@ Do NOT wrap conversational replies in JSON.
         # be recorded ok, and ``_is_error_result(None)`` would say it was.
         ok = False
         self._tool_timing_depth = 1
+        self._confirmation_wait_s = 0.0
         try:
             result = self._execute_tool(tool_name, tool_args)
             ok = not self._is_error_result(result)
             return result
         finally:
             self._tool_timing_depth = 0
+            waited = getattr(self, "_confirmation_wait_s", 0.0) or 0.0
             try:
                 recorder.record_tool(
                     step=getattr(getattr(self, "chat", None), "turn_step", 0),
                     name=tool_name or "<unnamed>",
-                    wall_s=time.perf_counter() - started,
+                    # Human approval time is excluded — it is neither tool nor
+                    # model cost, and folding it in made a 1.3s command report
+                    # as 322.6s in a live run.
+                    wall_s=max(0.0, time.perf_counter() - started - waited),
                     ok=ok,
+                    waited_s=waited,
                 )
             except Exception as e:  # noqa: BLE001 - never displace a tool error
                 logger.warning("could not record tool timing: %s", e)
@@ -3331,7 +3337,15 @@ Do NOT wrap conversational replies in JSON.
         # (#2210): AgentConsole prompts on a TTY, SSEOutputHandler blocks on the
         # frontend modal, everything else denies with an actionable message.
         if self._tool_requires_confirmation(tool_name, tool_args):
-            if not self.console.confirm_tool_execution(tool_name, tool_args):
+            # Blocking on a human is not tool cost. Timed separately so a turn
+            # where someone took five minutes to approve does not report the
+            # tool as having taken five minutes.
+            _confirm_started = time.perf_counter()
+            try:
+                approved = self.console.confirm_tool_execution(tool_name, tool_args)
+            finally:
+                self._confirmation_wait_s = time.perf_counter() - _confirm_started
+            if not approved:
                 return {
                     "status": "denied",
                     "error": self._confirmation_denied_error(tool_name),

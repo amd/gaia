@@ -411,3 +411,64 @@ class TestTimingHoldsUpOnTheUnhappyPaths:
 
         assert agent._turn_recorder is None, "the recorder outlived the turn"
         assert log.exists(), "the failed turn wrote no record"
+
+
+class TestThePrefixProxyMatchesWhereTheServerPutsThings:
+    """The cached/new split is only meaningful if our rendered proxy orders
+    things the way the chat template does. Caught in a live Haiku run: tools
+    were appended AFTER the conversation, so the shared prefix stopped at the
+    first history message and a turn whose entire system+tools header was
+    reusable reported 27% cache hit instead of ~99%."""
+
+    @staticmethod
+    def _sdk(recorder):
+        from gaia.chat.sdk import AgentSDK
+
+        sdk = AgentSDK.__new__(AgentSDK)
+        sdk.turn_recorder = recorder
+        sdk.turn_step = 1
+        sdk.log = logging.getLogger("test.sdk")
+        return sdk
+
+    def _recorder(self, tmp_path):
+        return TurnRecorder(
+            query="q",
+            agent_name="A",
+            model_id="m",
+            system_prompt="sys",
+            tool_schemas=None,
+            path=tmp_path / "turns.jsonl",
+        )
+
+    def test_growing_history_still_reuses_the_system_and_tools_header(self, tmp_path):
+        recorder = self._recorder(tmp_path)
+        sdk = self._sdk(recorder)
+        system = {"role": "system", "content": "S" * 12000}
+        tools = [
+            {
+                "type": "function",
+                "function": {"name": f"t{i}", "description": "d" * 400},
+            }
+            for i in range(30)
+        ]
+
+        # Step 1: system + one user message.
+        sdk._recorder_begin([system, {"role": "user", "content": "hello"}], tools)
+        sdk._recorder_end(stats={})
+        # Step 2: a tool call and its result appended — the header is untouched.
+        sdk._recorder_begin(
+            [
+                system,
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": "calling"},
+                {"role": "user", "content": "[Tool result: shell] ok"},
+            ],
+            tools,
+        )
+        sdk._recorder_end(stats={})
+
+        second = recorder.llm_calls[1]
+        assert second["cache_hit_ratio"] > 0.95, (
+            "the system+tools header must stay in the shared prefix when history "
+            f"grows; got {second['cache_hit_ratio']:.0%}"
+        )

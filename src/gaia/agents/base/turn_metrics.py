@@ -228,16 +228,30 @@ class TurnRecorder:
 
     # ── tool calls ─────────────────────────────────────────────────────────
 
-    def record_tool(self, step: int, name: str, wall_s: float, ok: bool = True) -> None:
-        self.tool_calls.append(
-            {
-                "step": step,
-                "name": name,
-                "at": _now(),
-                "wall_s": round(wall_s, 4),
-                "ok": bool(ok),
-            }
-        )
+    def record_tool(
+        self,
+        step: int,
+        name: str,
+        wall_s: float,
+        ok: bool = True,
+        waited_s: float = 0.0,
+    ) -> None:
+        """Record one tool execution.
+
+        *wall_s* is the tool's own cost. *waited_s* is time blocked on a human
+        approving it, kept separate because it belongs to neither the tool nor
+        the model — folding it into either misreports where the turn went.
+        """
+        entry = {
+            "step": step,
+            "name": name,
+            "at": _now(),
+            "wall_s": round(wall_s, 4),
+            "ok": bool(ok),
+        }
+        if waited_s:
+            entry["waited_s"] = round(waited_s, 4)
+        self.tool_calls.append(entry)
 
     # ── completion ─────────────────────────────────────────────────────────
 
@@ -254,6 +268,7 @@ class TurnRecorder:
         total_s = time.perf_counter() - self._t0
         llm_s = sum(c.get("wall_s", 0.0) for c in self.llm_calls)
         tool_s = sum(c.get("wall_s", 0.0) for c in self.tool_calls)
+        waited_s = sum(c.get("waited_s", 0.0) for c in self.tool_calls)
 
         record = {
             "schema": SCHEMA,
@@ -277,7 +292,10 @@ class TurnRecorder:
             "totals": {
                 "llm_s": round(llm_s, 3),
                 "tool_s": round(tool_s, 3),
-                "overhead_s": round(max(0.0, total_s - llm_s - tool_s), 3),
+                # Blocked on a human approving a tool. Its own line so it
+                # inflates neither tool_s nor overhead_s.
+                "waiting_on_user_s": round(waited_s, 3),
+                "overhead_s": round(max(0.0, total_s - llm_s - tool_s - waited_s), 3),
                 "input_tokens_server": sum(
                     c.get("input_tokens") or 0 for c in self.llm_calls
                 ),
