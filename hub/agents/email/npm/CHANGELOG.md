@@ -4,6 +4,14 @@ What's new in `@amd-gaia/agent-email`, in plain language. For the technical deta
 behind any entry — API shapes, endpoints, and version semantics — see
 [`SPEC.md`](https://github.com/amd/gaia/blob/agent-pkg-email-v0.6.0/hub/agents/email/npm/SPEC.md).
 
+## [Unreleased]
+
+- **The published API contract now shows that requests need a session token.**
+  The sidecar has always required a bearer token on most calls, but the
+  contract document didn't say so. It now declares the requirement (and marks
+  `/health`, `/version`, and the other exempt routes as public) — nothing about
+  which calls need a token, or when, has changed (#2993).
+
 ## [0.6.0] - 2026-08-12
 
 - **Work Microsoft 365 mailboxes are now supported alongside Gmail and personal

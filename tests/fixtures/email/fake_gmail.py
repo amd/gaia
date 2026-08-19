@@ -776,18 +776,20 @@ class FakeCalendarBackend:
 # ---------------------------------------------------------------------------
 
 
+# No "w" -- real Gmail silently rejects newer_than:/older_than: durations in
+# weeks (#2830), so the fake must not accept what the API doesn't, or a test
+# using an unconverted week value would pass here and fail against Gmail.
 _RELATIVE_UNIT_SECONDS = {
     "h": 3600,
     "d": 86_400,
-    "w": 7 * 86_400,
     "m": 30 * 86_400,
     "y": 365 * 86_400,
 }
 
 
 def _relative_window_seconds(value: str) -> Optional[int]:
-    """Parse a Gmail relative window like ``1d`` / ``2w`` / ``3m`` into seconds."""
-    m = re.fullmatch(r"(\d+)\s*([hdwmy])", value.strip().lower())
+    """Parse a Gmail relative window like ``1d`` / ``2m`` into seconds."""
+    m = re.fullmatch(r"(\d+)\s*([hdmy])", value.strip().lower())
     if not m:
         return None
     return int(m.group(1)) * _RELATIVE_UNIT_SECONDS[m.group(2)]

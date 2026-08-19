@@ -5,6 +5,54 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/); the REST
 contract version is tracked separately as
 `gaia_agent_email.contract.SCHEMA_VERSION` (see `CONTRACT.md`).
 
+## [Unreleased]
+
+### Fixed
+
+- **The OpenAPI document now declares the sidecar's bearer-token gate (#2993).**
+  `require_caller_token` enforces a per-session bearer token at runtime, but was
+  invisible to schema generation (it's a plain `Request` dependency, not a
+  `fastapi.security` class) — every documented operation showed 0 security
+  requirements. The live `/openapi.json` and the committed `openapi.email.json`
+  now declare a `bearerAuth` HTTP scheme and, per gated operation, `security:
+  [{"bearerAuth": []}, {}]` (bearer OR none — the check is conditional, skipped
+  when the sidecar has no token configured for local development). `EXEMPT_PATHS`
+  routes declare an explicit empty requirement. No runtime auth behavior changed.
+- **A `newer_than:`/`older_than:` search could report 0 messages for mail
+  that exists (#2830, Gmail mailboxes only).** The issue blamed
+  `from:"<brand>"` matching nothing on a display name — disproven: that
+  query matched fine. The real cause is `w` (weeks), which the model
+  reaches for but Gmail does not implement as a duration unit — Gmail
+  silently returns an empty result set instead of an error, so `newer_than:2w`
+  and a working `newer_than:14d` looked identical to the agent. Duration
+  values on `newer_than:`/`older_than:` are now validated and `w` converted
+  to days before the query reaches Gmail; an unrecognized unit now raises an
+  actionable error instead of a silent zero-result search. The `search`
+  REST endpoint's error path for a bad duration also stopped returning a
+  bare `500` and now surfaces the actionable `400`. The effective
+  (post-normalization) query and retry state are now logged for
+  `search_messages`, so a future zero-result report is diagnosable from
+  `~/.gaia/gaia.log` without reproducing it live.
+  **Outlook mailboxes are unaffected by this fix** — `outlook_backend.py`
+  sends the whole query as a single quoted Microsoft Graph `$search` phrase
+  and never parses Gmail operator syntax, so the corrected duration handling
+  has no effect there; operator search against Outlook was already
+  non-functional before and after this change.
+
+### Changed
+
+- **Email addresses are now redacted from verbose tool-call logs.** The
+  `tool_call` / `tool_result` records emitted for **every** tool previously
+  passed addresses through unscrubbed — `_REDACT_PATTERNS` matched MFA codes,
+  long URLs and JWT-shaped tokens, but nothing address-shaped. Since
+  `~/.gaia/gaia.log` is bundled by `gaia diagnostics` by default and the docs
+  ask users to attach that bundle to a public issue, a contact's address could
+  travel from a local search straight into a public bug report. Addresses now
+  render as `[REDACTED]`. This is deliberate privacy hardening with a
+  debuggability cost: a recipient in a verbose `send_email` log line, for
+  instance, is no longer readable, and logs written before this release still
+  contain the raw values.
+
 ## [0.6.0] - 2026-08-12
 
 ### Added
