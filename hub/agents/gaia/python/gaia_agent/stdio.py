@@ -76,6 +76,16 @@ from gaia.ui.sse_translation import TERMINAL_TYPES, CanonicalTranslator
 
 logger = get_logger(__name__)
 
+#: Backstop for a confirmation whose client can no longer answer it.
+#:
+#: Deliberately longer than the TUI's own 10-minute bound
+#: (``components.DeliverableConfirmationTimeout``) so the client always wins the
+#: race and the user's real answer is never pre-empted by this. It only fires
+#: when nothing is coming: the TUI exited, or the control channel broke while
+#: the agent was parked. Without it that agent waits forever on a question no
+#: one can see.
+ORPHANED_CONFIRM_TIMEOUT_SECONDS = 15 * 60
+
 AGENT_ID = "gaia"
 
 #: Key that marks a stdin line as a control message rather than a query.
@@ -147,8 +157,12 @@ class PermissionState:
             handler.auto_approve_gated_tools = self._bypass
             handler.session_grants().update(self._grants)
             # A human is on the other end of this pipe with a modal on screen,
-            # so the wait is theirs to end — see confirm_tool_execution.
-            handler.confirm_timeout_seconds = None
+            # so the wait is theirs to end — see confirm_tool_execution. The
+            # TUI answers its own prompt long before this fires (its bound is
+            # 10 minutes); this is the backstop for the case where it cannot,
+            # because the client died or the control channel broke. Unbounded
+            # there leaves an agent parked on a question nobody can answer.
+            handler.confirm_timeout_seconds = ORPHANED_CONFIRM_TIMEOUT_SECONDS
             self._handler = handler
 
     def detach(self, handler: Any) -> None:
