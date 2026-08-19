@@ -706,7 +706,10 @@ class _ExecutingAgent(_Gated):
     from gaia.agents.base.agent import Agent as _Base
 
     _policy_refusal = _Base._policy_refusal
+    # _execute_tool is a thin timing wrapper; the dispatch this test exercises
+    # lives in _execute_tool_impl, so the stub needs both.
     _execute_tool = _Base._execute_tool
+    _execute_tool_impl = _Base._execute_tool_impl
     # _execute_tool fits arguments to their annotated types before dispatch, so
     # the stub needs that too or it is not the real path any more.
     _coerce_tool_args = _Base._coerce_tool_args
