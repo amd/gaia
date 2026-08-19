@@ -1,6 +1,6 @@
 ---
 name: github-triage
-description: Triage GitHub issues with the gh CLI — read the backlog, group duplicates, judge severity, and draft the reply. Use when the user asks to triage issues, review a backlog, or work out what to fix first in a repository.
+description: Triage GitHub work with the gh CLI — your unread notification inbox, or one repository's issue backlog. Groups what arrived, judges what is urgent, drafts the reply. Use when asked to triage issues or notifications, check the GitHub inbox, see what needs attention or what you are blocking, review a backlog, or work out what to fix first.
 license: MIT
 version: 2.0.0
 metadata:
@@ -25,13 +25,21 @@ Run every GitHub command through `run_shell_command`.
 
 ## Setup
 
+Check before you conclude anything is missing. A command that failed is not
+proof `gh` is absent:
+
 ```bash
-gh auth login        # once, interactively
-gh auth status       # confirm: prints the account and its scopes
+gh --version     # installed?  ("gh version", no dashes, is refused)
+gh auth status   # logged in?  prints the account and its scopes
 ```
 
-If `gh` is not installed the skill refuses to load and says so — it never loads
-and then guesses. Install it from https://cli.github.com.
+- `gh --version` fails → not installed. Offer to install it: `winget install
+  GitHub.cli` (Windows), `brew install gh` (macOS), else https://cli.github.com.
+  That is not a `gh` command, so the user approves it per-call — ask, then run it.
+- `gh auth status` fails → installed but not logged in. `gh auth login` is
+  interactive and you cannot drive it; hand that one step to the user.
+- Any **other** failure is a bug in the command you sent, not a missing `gh`.
+  Quote the error and fix the command. Never diagnose it as "not installed".
 
 ## What the grant allows
 
@@ -49,6 +57,32 @@ call with `-X POST` or a `-f`/`--field` body, `gh auth token`, `gh alias`,
 no-op. That is the enforcement behind *Draft, do not send* below — do not try to
 work around it. Any *other* shell command still needs the user's per-call
 approval, so keep to `gh`; piping its output elsewhere will stop and ask.
+
+## Which inbox
+
+"My inbox", "my notifications", "what needs my attention", "what am I blocking"
+mean the **notification feed** — start at *Triage the inbox*. A named repository
+means its **backlog** — start at *Procedure*. Never substitute one for the other,
+and never answer either from memory: if you did not run `gh` this turn, you have
+not triaged.
+
+## Triage the inbox
+
+```bash
+gh api "notifications?all=false&per_page=50" --jq ".[]|[.reason,.repository.full_name,.subject.type,.updated_at[0:10],.subject.title]|@tsv"
+```
+
+Rank by `reason` — it answers *who is blocked on me?*
+
+| reason | act |
+|---|---|
+| `review_requested`, `assign` | first — someone is waiting on you |
+| `mention`, `team_mention` | next — you were asked directly |
+| `ci_activity` | only if it failed |
+| `subscribed`, `author`, `comment` | batch; usually skip |
+
+Then group and judge with steps 3–5 below, and close with action items that each
+name a number and a verb. An empty inbox is a finding — say so, never pad it.
 
 ## Procedure
 
@@ -95,11 +129,15 @@ approval, so keep to `gh`; piping its output elsewhere will stop and ask.
   name.
 - Report a refused command as a refusal. Never substitute an invented answer for
   one you could not fetch.
+- Write one line that survives every shell: **double quotes only, no single
+  quotes, no `\` continuation, no spaces inside a `--jq` expression.** Windows
+  hands the raw string to `cmd.exe` (single quotes and `\` there fail with "The
+  system cannot find the path specified" — a quoting bug, not a missing binary);
+  macOS and Linux get a pre-split argv with no shell, so `|`, `&` and `>` are
+  literal characters, never operators. A command shaped this way behaves the
+  same on all three.
 
 ## Fork this
 
-Point it at your own repo's labels and severity ladder. The same shape works for
-any CLI in GAIA's read-only command policy: declare `shell:execute:<binary>`,
-document its login step, and write the procedure against real commands. Adding a
-new CLI — GitLab's `glab`, say — is an entry in `BINARY_POLICIES`
-(`gaia/skills/binaries.py`) plus a `SKILL.md` like this one.
+Same shape for any CLI in GAIA's read-only policy: add it to `BINARY_POLICIES`
+(`gaia/skills/binaries.py`) and write a `SKILL.md` like this one.
