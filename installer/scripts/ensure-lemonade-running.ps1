@@ -85,9 +85,11 @@ $LogDir = "C:\ProgramData\GaiaLemonadeServer"
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 $StdoutLog = Join-Path $LogDir "lemonade-task-stdout.log"
 $StderrLog = Join-Path $LogDir "lemonade-task-stderr.log"
-# PYTHONUNBUFFERED: the server is Python, and Python block-buffers stdout when
-# it is a pipe rather than a console. Without this the redirect below produces
-# two empty files for the whole life of a server that never exits.
+# PYTHONUNBUFFERED: Python block-buffers stdout when it is a pipe rather than a
+# console, so without this a server that never exits never flushes and its stdout
+# log stays empty. Measured: stdout 0 bytes without it, 39 with; stderr arrives
+# either way (Python line-buffers stderr). So an empty STDERR log is not a
+# buffering symptom -- it means the server wrote nothing there.
 $InnerCmd  = "`$env:PYTHONUNBUFFERED='1'; " +
              "Start-Process -FilePath '$ServerExe' -ArgumentList '--port $Port' " +
              "-RedirectStandardOutput '$StdoutLog' -RedirectStandardError '$StderrLog' " +
