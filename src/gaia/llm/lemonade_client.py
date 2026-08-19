@@ -2553,7 +2553,7 @@ class LemonadeClient:
 
         try:
             catalog = self.list_models(show_all=True).get("data", [])
-        except Exception as e:  # pylint: disable=broad-except
+        except LemonadeClientError as e:
             self.log.debug(f"Could not query model catalog for {model_id!r}: {e}")
             return None
         for m in catalog:
