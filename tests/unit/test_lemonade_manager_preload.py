@@ -723,6 +723,63 @@ def test_first_discovery_of_ceiling_skips_restart_advice(mock_cls, capsys):
 
 
 @patch("gaia.llm.lemonade_manager.LemonadeClient")
+def test_ceiling_does_not_stick_after_switching_to_a_roomier_model(mock_cls):
+    """A long-lived process (e.g. gaia.ui.server) caches a small model's
+    ceiling, then the server switches to a model with real headroom. The
+    cached ceiling must not keep capping `_context_size` forever just
+    because it was true for the PREVIOUS model (#2992)."""
+    client = _make_client_mock(
+        _status(
+            running=True,
+            context_size=40960,
+            loaded_models=[
+                {
+                    "id": "Qwen3-0.6B-GGUF",
+                    "model_name": "Qwen3-0.6B-GGUF",
+                    "max_context_window": 40960,
+                    "recipe_options": {"ctx_size": 40960},
+                }
+            ],
+        )
+    )
+    client.get_model_max_context_window.return_value = 40960
+    mock_cls.return_value = client
+
+    ok = LemonadeManager.ensure_ready(min_context_size=65536, quiet=True)
+    assert ok is True
+    assert LemonadeManager.get_context_size() == 40960
+    assert LemonadeManager._context_ceiling == 40960
+    assert LemonadeManager._context_ceiling_model == "Qwen3-0.6B-GGUF"
+
+    # The server switches to a roomier model. Force past the rate limiter
+    # so the next ensure_ready() call actually re-checks live status
+    # instead of trusting the stale small-model ceiling.
+    LemonadeManager._last_recheck_time = 0.0
+    client.get_model_max_context_window.return_value = 131072
+    client.get_status.return_value = _status(
+        running=True,
+        context_size=65536,
+        loaded_models=[
+            {
+                "id": "Gemma-4-E4B-it-GGUF",
+                "model_name": "Gemma-4-E4B-it-GGUF",
+                "max_context_window": 131072,
+                "recipe_options": {"ctx_size": 65536},
+            }
+        ],
+    )
+
+    ok2 = LemonadeManager.ensure_ready(min_context_size=65536, quiet=True)
+
+    assert ok2 is True
+    assert LemonadeManager.get_context_size() == 65536, (
+        "The new model's real (larger) context must replace the stale "
+        "cached ceiling from the previously loaded model."
+    )
+    assert LemonadeManager._context_ceiling_model == "Gemma-4-E4B-it-GGUF"
+
+
+@patch("gaia.llm.lemonade_manager.LemonadeClient")
 def test_ensure_ready_ceiling_path_prints_no_server_remediation(mock_cls):
     """End-to-end through `ensure_ready`, not just the message function
     directly: a model already at its known ceiling must surface the

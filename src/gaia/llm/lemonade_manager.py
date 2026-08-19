@@ -281,6 +281,11 @@ class LemonadeManager:
     # "already at the model's real max" and stop retrying a reload that
     # would just hit the same wall every time.
     _context_ceiling: Optional[int] = None
+    # The model id ``_context_ceiling`` was measured against. A long-lived
+    # process (e.g. ``gaia.ui.server``) can switch to a roomier model after
+    # caching a small model's ceiling — without this, the fast path would
+    # keep reporting the old model's cap forever (#2992).
+    _context_ceiling_model: Optional[str] = None
     _lock = threading.Lock()
     _log = get_logger(__name__)
 
@@ -619,7 +624,22 @@ class LemonadeManager:
                     cls._context_ceiling is not None
                     and cls._context_size >= cls._context_ceiling
                 )
-                if cls._context_size >= min_context_size or at_known_ceiling:
+                # A cached ceiling is only trustworthy for the model it was
+                # measured against — a long-lived process (e.g.
+                # gaia.ui.server) can switch to a roomier model between
+                # calls (#2992). There's no live model id here without a
+                # status call, so require one periodically rather than
+                # trusting the cached ceiling forever; the fall-through
+                # below is itself rate-limited by _RECHECK_INTERVAL, so this
+                # doesn't add an unconditional get_status() to every call.
+                now = time.monotonic()
+                ceiling_needs_reconfirm = (
+                    at_known_ceiling
+                    and now - cls._last_recheck_time >= cls._RECHECK_INTERVAL
+                )
+                if cls._context_size >= min_context_size or (
+                    at_known_ceiling and not ceiling_needs_reconfirm
+                ):
                     cls._log.debug(
                         "Lemonade already initialized with sufficient context"
                     )
@@ -630,7 +650,6 @@ class LemonadeManager:
                     # every single chat message triggers 2 HTTP calls (/health +
                     # /models) just to re-validate context size, adding 40-200 ms of
                     # blocking overhead even for trivial replies like "cool".
-                    now = time.monotonic()
                     if now - cls._last_recheck_time < cls._RECHECK_INTERVAL:
                         cls._log.debug(
                             "Skipping context re-check (%.1fs ago, interval=%.1fs)",
@@ -656,6 +675,11 @@ class LemonadeManager:
                                 verbose=not quiet,
                             )
                         status = client.get_status()
+                        # Defensive normalisation: some Lemonade versions can
+                        # return `loaded_models: null`, which would crash the
+                        # `any(...)` and `_find_loaded_llm_id` calls below.
+                        if status.loaded_models is None:
+                            status.loaded_models = []
                         # Update cached context size — clamped against the
                         # loaded model's real ceiling, never a bare echo of
                         # what the server reports back (#2992).
@@ -956,6 +980,7 @@ class LemonadeManager:
         ceiling = client.get_model_max_context_window(model_id, status=status)
         if ceiling:
             cls._context_ceiling = ceiling
+            cls._context_ceiling_model = model_id
         honest_ctx = resolve_effective_ctx_size(reported_ctx, ceiling)
         if honest_ctx < reported_ctx:
             cls._log.warning(
@@ -1103,7 +1128,9 @@ class LemonadeManager:
             or ceiling
         )
         effective_ctx = resolve_effective_ctx_size(requested_ctx, final_ceiling)
-        cls._context_ceiling = final_ceiling
+        if final_ceiling:
+            cls._context_ceiling = final_ceiling
+            cls._context_ceiling_model = DEFAULT_MODEL_NAME
 
         if not quiet:
             if effective_ctx < min_context_size:
@@ -1194,7 +1221,9 @@ class LemonadeManager:
             effective_ctx = resolve_effective_ctx_size(
                 reported_ctx or requested_ctx, new_ceiling
             )
-            cls._context_ceiling = new_ceiling
+            if new_ceiling:
+                cls._context_ceiling = new_ceiling
+                cls._context_ceiling_model = model_id
             success = effective_ctx >= min_context_size
             if success:
                 cls._log.info(
@@ -1270,6 +1299,7 @@ class LemonadeManager:
             cls._base_url = None
             cls._context_size = 0
             cls._context_ceiling = None
+            cls._context_ceiling_model = None
             cls._last_recheck_time = 0.0
             cls._validated_min_devices = set()
             cls._log.debug("LemonadeManager state reset")
