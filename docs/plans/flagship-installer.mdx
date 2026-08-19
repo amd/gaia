@@ -181,17 +181,22 @@ decision already made and shipped is:
 
 - **Lemonade is required on every platform**, including Mac — for the RAG/memory
   embedder at minimum, because Anthropic has no embeddings API.
-- **The chat model itself is optional**, via `--use-claude`. That flag maps onto
-  `gaia init --skip-chat-model`: the multi-GB `Gemma-4-E4B-it-GGUF` download is
-  skipped, but the small embedding model still downloads, and Lemonade still has to
-  be installed and running.
+- **The chat model itself is optional**, via `--use-claude`, and so is running
+  setup at all: a Claude launch skips the first-boot gate entirely and never
+  starts the local server. Running an installer that launches Lemonade would
+  defeat the one flag whose purpose is to avoid it, and would hold the first
+  answer behind a multi-minute install. The session says on screen that setup
+  was skipped and names `gaia init --profile chat --skip-chat-model` (or
+  `/setup`) as the way to get the local half.
 - There is **no** "refuse entirely, Claude-only, no local component" mode. I agree
   with this — memory and RAG are core to what makes this agent "the flagship," and
-  neither has a non-local equivalent today.
+  neither has a non-local equivalent today. A Claude session simply defers the
+  local half rather than doing without it forever.
 
-This is fully implemented, not a gap: `setupCheckArgs`/`setupRunArgs` in `setup.go`
-already branch on `claudeMode`, and the npm README documents Lemonade + the `gaia`
-CLI on PATH as hard requirements regardless of backend.
+Implemented in `applyFirstBootGate` (`tui/internal/ui/chat/setup.go`), which
+returns early in Claude mode; `setupCheckArgs`/`setupRunArgs` still branch on
+`claudeMode` for the explicit `/setup` path. The npm README documents Lemonade +
+the `gaia` CLI on PATH as requirements for the local-embedding features.
 
 ---
 
