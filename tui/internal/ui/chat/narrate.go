@@ -24,16 +24,22 @@ import (
 //   - A tool result becomes ONE indented line: outcome, size, latency. Never raw
 //     JSON — the render card in the transcript is where a full result belongs.
 const (
-	// widestLogMeasure is the widest a work-log row is ever laid out to. It
-	// is NOT the measure a row uses — that is logWidth, and it follows the
-	// real terminal. This exists because capture happens before any width is
-	// known and the user can widen the window mid-turn, so the bounds below
-	// have to assume the roomiest window they might later be rendered into.
-	widestLogMeasure = 240
+	// widestLogMeasure is an upper BOUND on what a work-log row could ever be
+	// laid out to — never the measure a row actually uses, which is logWidth
+	// and has no ceiling at all. It exists only because capture happens before
+	// any width is known, and the user can widen the window mid-turn, so the
+	// bounds below have to assume the roomiest window they might later be
+	// rendered into.
+	//
+	// 500 is the widest the TUI accepts anywhere (control/server.go's resize
+	// range), so deriving from it means no window this program will lay out
+	// can outrun what was captured for it.
+	widestLogMeasure = 500
 	// narrationMax bounds the whole narration string. It is a sanity bound on a
 	// runaway payload — a shell command with a page-long --jq expression — set to
-	// the rows the log will actually show, so nothing is carried that can never
-	// be rendered.
+	// the rows the log can show on the WIDEST window, so nothing is carried that
+	// no window could ever render. A narrower one shows less; it is the same
+	// string, laid out to fewer columns.
 	narrationMax = logHeadRows * widestLogMeasure
 	// detailMax bounds an outcome string the same way, over the rows its `└`
 	// line may wrap to. An outcome that failed carries the remedy, so it gets

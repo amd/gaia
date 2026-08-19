@@ -72,18 +72,63 @@ func TestLogWidthFollowsTheTerminal(t *testing.T) {
 	}
 }
 
-// A terminal too small to lay anything out still gets a positive budget - but
-// never one that prints past its own last column. The floor exists so a
-// cramped window shows SOMETHING, not so it overflows.
-func TestLogWidthNeverOverrunsATinyTerminal(t *testing.T) {
-	for w := 8; w <= 32; w++ {
+// minSupportedCols is the narrowest window the TUI claims to work at: the
+// control API refuses a resize under it ("cols must be 20-500",
+// control/server.go). It is a real floor, not a convenience — a live row spends
+// 11 columns on decoration alone (gutter, spinner, the two-space gap and the
+// clock), so below about 13 no arrangement of text fits and the question stops
+// being about budgets.
+const minSupportedCols = 20
+
+// A cramped window must not shear. This RENDERS every row type at every width
+// in the band rather than checking logWidth's arithmetic: an earlier version of
+// this test asserted only that logWidth()+4 fits, which certified a property the
+// rendered rows did not actually have — wrapLog was raising the measure back up
+// to its own floor of 8, and the row printed past the last column anyway.
+func TestNoRowShearsOnACrampedTerminal(t *testing.T) {
+	for w := minSupportedCols; w <= 48; w++ {
+		// The opening frame of a turn: the idle live line, before any event.
+		idle := sizedChat(t, w, 10)
+		checkRowsFit(t, w, "opening frame", idle.liveRegionView())
+
+		// A turn under way: a live row with a clock, a wrapped action, an
+		// outcome, and the "still working" hint, all at once.
 		m := sizedChat(t, w, 10)
-		got := m.logWidth()
-		if got < 1 {
-			t.Errorf("logWidth() = %d on a %d-column terminal; a line would vanish", got, w)
+		m.dev = true
+		m.queryStart = time.Now().Add(-2 * stillWorkingAfter)
+		m = feed(t, m,
+			event.CanonicalToolCallEvent{
+				Type: "tool_call", Tool: "run_shell_command",
+				Args: json.RawMessage(`{"command":"` + strings.Repeat("z", 200) + `"}`),
+			},
+		)
+		checkRowsFit(t, w, "live row + hint", m.liveRegionView())
+
+		// And with the action closed, so the outcome and --dev payload rows draw.
+		m = feed(t, m, event.CanonicalToolResultEvent{
+			Type: "tool_result", Tool: "run_shell_command",
+			Preview: strings.Repeat("d", 200),
+		})
+		checkRowsFit(t, w, "closed action", m.liveRegionView())
+
+		// A repeated call stacks the "xN" counter onto whichever row is live.
+		rep := ActivityItem{Kind: "tool", Tool: "get_message", Content: strings.Repeat("m", 200), Repeat: 13}
+		for _, live := range []bool{true, false} {
+			checkRowsFit(t, w, "repeated action", strings.Join(
+				sizedChat(t, w, 10).renderActivityItem(rep, live, 3720*time.Second, 0), "\n"))
 		}
-		if got+4 > w {
-			t.Errorf("logWidth() = %d plus the 4-column gutter overruns a %d-column terminal", got, w)
+	}
+}
+
+// checkRowsFit fails if any rendered row is wider than the terminal drawing it.
+// Nothing in this viewport soft-wraps, so an over-wide row takes the row below
+// it with it.
+func checkRowsFit(t *testing.T, width int, what, rendered string) {
+	t.Helper()
+	for _, line := range strings.Split(ansi.Strip(rendered), "\n") {
+		if got := ansi.StringWidth(line); got > width {
+			t.Errorf("%s: a row is %d columns wide on a %d-column terminal: %q",
+				what, got, width, line)
 		}
 	}
 }
@@ -159,7 +204,7 @@ func TestTheLiveLineLeavesRoomForItsClock(t *testing.T) {
 			m := sizedChat(t, tc.width, tc.height)
 			item := ActivityItem{Kind: "tool", Tool: "run_shell_command", Content: strings.Repeat("z", 500)}
 			for _, elapsed := range []time.Duration{9 * time.Second, 125 * time.Second, 3720 * time.Second} {
-				for _, line := range m.renderActivityItem(item, true, elapsed) {
+				for _, line := range m.renderActivityItem(item, true, elapsed, 0) {
 					if w := ansi.StringWidth(ansi.Strip(line)); w > tc.width {
 						t.Errorf("the live line is %d columns wide at %s on a %d-column terminal",
 							w, formatElapsed(elapsed), tc.width)
@@ -177,7 +222,7 @@ func TestAWiderTerminalShowsMoreOnOneRow(t *testing.T) {
 	item := ActivityItem{Kind: "tool", Tool: "run_shell_command", Content: longNarration}
 	rendered := func(w int) []string {
 		m := sizedChat(t, w, 40)
-		return m.renderActivityItem(item, false, 0)
+		return m.renderActivityItem(item, false, 0, 0)
 	}
 
 	narrow, wide := rendered(80), rendered(240)
@@ -283,12 +328,119 @@ func TestAReservedCounterAndClockStack(t *testing.T) {
 				Content: strings.Repeat("m", 400),
 				Repeat:  13,
 			}
-			for _, line := range m.renderActivityItem(item, true, 3720*time.Second) {
+			for _, line := range m.renderActivityItem(item, true, 3720*time.Second, 0) {
 				if w := ansi.StringWidth(ansi.Strip(line)); w > tc.width {
 					t.Errorf("a repeated live row is %d columns wide on a %d-column terminal: %q",
 						w, tc.width, ansi.Strip(line))
 				}
 			}
 		})
+	}
+}
+
+// A resize reflows the work log, which before this change it could not: the
+// measure was pinned at 74, so widening from 100 to 240 columns moved nothing.
+// Now it moves 94 to 234 — straight into the peak-height hold, which is there to
+// absorb the log shrinking under a reader mid-sentence. A deliberate resize is
+// not that, and holding the old peak stranded blank rows under the log for the
+// rest of the turn.
+func TestResizingMidTurnStrandsNoBlankRows(t *testing.T) {
+	m := sizedChat(t, 100, 44)
+	m.queryStart = time.Now().Add(-95 * time.Second)
+	args, _ := json.Marshal(map[string]string{"command": longNarration})
+	m = feed(t, m,
+		event.CanonicalToolCallEvent{Type: "tool_call", Tool: "run_shell_command", Args: args},
+		event.CanonicalToolResultEvent{
+			Type: "tool_result", Tool: "run_shell_command",
+			Preview: "failed - permission denied; run gaia from a shell with write access to that folder",
+		},
+		event.CanonicalToolCallEvent{
+			Type: "tool_call", Tool: "query_documents",
+			Args: json.RawMessage(`{"query":"what did the Q3 board deck say about NPU attach rate targets"}`),
+		},
+	)
+
+	// Widen, narrow, widen again — a window drag, not a tidy single step.
+	for _, w := range []int{100, 240, 60, 240, 100} {
+		m.width = w
+		m.resize()
+		rows := strings.Split(ansi.Strip(m.liveRegionView()), "\n")
+		for i, r := range rows {
+			if strings.TrimSpace(r) == "" {
+				t.Errorf("at %d columns row %d of the live region is blank padding held over from another width:\n%s",
+					w, i, strings.Join(rows, "\n"))
+				break
+			}
+			if got := ansi.StringWidth(r); got > w {
+				t.Errorf("at %d columns a row is %d columns wide: %q", w, got, r)
+			}
+		}
+	}
+}
+
+// The hold itself must survive: it exists for the log growing and shrinking as
+// EVENTS land, which is the case that yanks the transcript under a reader. Only
+// the width case is released.
+func TestTheHeightHoldStillAbsorbsEventChurn(t *testing.T) {
+	m := sizedChat(t, 100, 44)
+	m = feed(t, m,
+		event.CanonicalToolCallEvent{Type: "tool_call", Tool: "read_file",
+			Args: json.RawMessage(`{"file_path":"` + strings.Repeat("some/long/path/", 12) + `x.go"}`)},
+		event.CanonicalToolResultEvent{Type: "tool_result", Tool: "read_file", Preview: "ok"},
+	)
+	tall := strings.Count(m.liveRegionView(), "\n") + 1
+
+	// A cancel is the one thing allowed to drop the height, so use ordinary new
+	// work: the region must not get SHORTER than it has already been.
+	m = feed(t, m, event.CanonicalStatusEvent{Type: "status", Message: "Thinking"})
+	if got := strings.Count(m.liveRegionView(), "\n") + 1; got < tall {
+		t.Errorf("the live region shrank from %d rows to %d while the turn was still running", tall, got)
+	}
+}
+
+// resize() also runs when the COMPOSER grows a row, with the width unchanged.
+// Releasing the height hold on every resize() rather than on a width change
+// would let typing a multi-line follow-up collapse the log under the answer
+// being read - the exact yank the hold exists to prevent.
+func TestGrowingTheComposerDoesNotReleaseTheHold(t *testing.T) {
+	m := sizedChat(t, 100, 44)
+	m = feed(t, m,
+		event.CanonicalToolCallEvent{Type: "tool_call", Tool: "read_file",
+			Args: json.RawMessage(`{"file_path":"` + strings.Repeat("some/long/path/", 12) + `x.go"}`)},
+		event.CanonicalToolResultEvent{Type: "tool_result", Tool: "read_file", Preview: "ok"},
+	)
+	m.liveRegionView()
+	peak := m.logPeakRows
+	if peak == 0 {
+		t.Fatal("no peak was recorded, so this proves nothing")
+	}
+
+	m.resize() // same width: a composer-height change, not a window resize
+	if m.logPeakRows != peak {
+		t.Errorf("a same-width resize dropped the held height from %d to %d", peak, m.logPeakRows)
+	}
+}
+
+// The capture bound has to outrun the widest window this program will ever lay
+// out, or a wide terminal re-clips text that capture already cut - which is the
+// original bug, one layer up. 500 columns is the ceiling the control API's
+// resize accepts, so that is the window to prove against.
+func TestCaptureCoversTheWidestWindowTheTUIAccepts(t *testing.T) {
+	const maxAcceptedCols = 500 // control/server.go: "cols must be 20-500"
+
+	if got := sizedChat(t, maxAcceptedCols, 60).logWidth(); got > widestLogMeasure {
+		t.Errorf("the widest accepted terminal lays rows out to %d columns, past the %d capture assumes",
+			got, widestLogMeasure)
+	}
+	// And an action's whole wrapped body fits inside what capture kept.
+	if rowsWorth := logHeadRows * widestLogMeasure; narrationMax < rowsWorth {
+		t.Errorf("narrationMax %d cannot fill the %d rows the log will render", narrationMax, logHeadRows)
+	}
+	if rowsWorth := logDetailRows * widestLogMeasure; detailMax < rowsWorth {
+		t.Errorf("detailMax %d cannot fill the %d rows an outcome will render", detailMax, logDetailRows)
+	}
+	if devPayloadWidth < widestLogMeasure {
+		t.Errorf("a --dev payload is captured at %d columns but one row can show %d",
+			devPayloadWidth, widestLogMeasure)
 	}
 }

@@ -306,6 +306,10 @@ type ChatModel struct {
 	// height is held there (see liveRegionView) so it never shrinks mid-turn and
 	// drops the transcript above back down while it is being read.
 	logPeakRows int
+	// logPeakWidth is the measure logPeakRows was reached at. A width change
+	// reflows the log, so a peak measured at another width describes a layout
+	// that no longer exists.
+	logPeakWidth int
 
 	// followTail is true while the view should stay pinned to the newest
 	// content. Scrolling up clears it, so a streaming answer stops yanking the
@@ -1718,6 +1722,15 @@ func (m *ChatModel) resize() {
 		vpWidth = 10
 	}
 
+	// A width change reflows the work log, so the height it peaked at was
+	// measured against a layout that no longer exists — holding it strands
+	// blank rows under the log for the rest of the turn. The mid-stream hold
+	// (liveRegionView) is untouched: that one absorbs the log shrinking while
+	// the reader is mid-sentence, which is not what a deliberate resize is.
+	if m.logPeakWidth != m.width {
+		m.logPeakWidth = m.width
+		m.logPeakRows = 0
+	}
 	m.viewport.Width = vpWidth
 	m.viewport.Height = vpHeight
 	m.input.SetWidth(vpWidth - 2)
@@ -2039,6 +2052,11 @@ func (m ChatModel) logRows() int {
 	return budget
 }
 
+// logGutter is the widest left margin a work-log row carries: two spaces, the
+// spinner (which draws two columns, not one) and a space. Static rows spend a
+// column less; one budget serves them all, so it is set by the widest.
+const logGutter = 5
+
 // logWidth is the measure one work-log ROW is laid out to on THIS terminal.
 //
 // Single-line content follows the window. A tool line, a live status and its
@@ -2057,9 +2075,10 @@ func (m ChatModel) logWidth() int {
 	}
 	// The floor is there so a cramped window still shows SOMETHING, not so it
 	// prints past the last column: the viewport does not soft-wrap, so a row
-	// one column too wide shears the row beneath it. The gutter comes off the
-	// terminal either way.
-	if fits := m.width - 4; m.width > 0 && w > fits {
+	// one column too wide shears the row beneath it. Measured against the
+	// WIDEST gutter, since one budget serves every row and the live one is a
+	// column deeper than the rest.
+	if fits := m.width - logGutter; m.width > 0 && w > fits {
 		w = fits
 	}
 	if w < 1 {
@@ -2154,7 +2173,11 @@ func (m ChatModel) renderLiveRegion() string {
 		groups = append(groups, m.renderActivityItem(item, i == live, elapsed, 0))
 	}
 	if live < 0 {
-		groups = append(groups, []string{m.renderLiveLine(m.idlePhrase(len(log)), elapsed)})
+		// Measured like every other row. This is the OPENING frame of every
+		// turn — before any tool event exists — so an unmeasured phrase here
+		// shears the frame on the very first thing a narrow window draws.
+		phrase := wrapLog(m.idlePhrase(len(log)), "", m.logWidth()-elapsedReserve, 1)[0]
+		groups = append(groups, []string{m.renderLiveLine(phrase, elapsed)})
 	}
 	// Shown until something has actually COMPLETED. A stage line alone does not
 	// count: a turn that sits on "Working out how to answer" for 1:47 with no
@@ -2167,7 +2190,7 @@ func (m ChatModel) renderLiveRegion() string {
 		// 80-column terminal, but on a narrower one it wrapped to two rows and
 		// broke the single-row assumption the budget below is making.
 		hint = "     " + activityStyle.Render(truncateRunes(
-			glyphDetail+" still working — local model, usually 60-90s", m.logWidth()-1))
+			glyphDetail+" still working — usually 60-90s", m.logWidth()-1))
 	}
 
 	// The hint is part of the height budget, not an extra row bolted on after
@@ -2410,7 +2433,8 @@ func (m ChatModel) renderActivityItem(item ActivityItem, live bool, elapsed time
 }
 
 // elapsedReserve is the room renderLiveLine's trailing clock needs: two spaces
-// and up to "10:05".
+// and up to "10:05", plus the column the spinner takes beyond a static row's
+// marker — the live row's gutter is one deeper than every other row's.
 const elapsedReserve = 8
 
 // wrapLog lays one work-log string out over at most maxRows rows of width
@@ -2424,8 +2448,13 @@ const elapsedReserve = 8
 // is the bug this replaces. suffix (the repeat counter, or "") stays visible
 // even then: it is the part saying this call happened fourteen times.
 func wrapLog(s, suffix string, width, maxRows int) []string {
-	if width < 8 {
-		width = 8
+	// Floored at 1, never raised to a comfortable minimum: this measure is what
+	// the CALLER can afford, and handing back a wider row than the window has
+	// columns is the shear every other budget here exists to avoid. One column
+	// of text is unreadable; a sheared frame is unreadable and takes the row
+	// below with it.
+	if width < 1 {
+		width = 1
 	}
 	if maxRows < 1 {
 		maxRows = 1
