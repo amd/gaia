@@ -70,6 +70,11 @@ llm_openai = create_client(use_openai=True)
 # Requires: pip install 'gaia[litellm]'
 llm_litellm = create_client("litellm", model="anthropic/claude-sonnet-4-6")
 
+# OrcaRouter gateway — OpenAI-compatible model routing (zero-trust security
+# for AI agents). Reads ORCAROUTER_API_KEY / ORCAROUTER_BASE_URL /
+# ORCAROUTER_MODEL, defaults to https://api.orcarouter.ai/v1 + "orcarouter/auto".
+llm_orcarouter = create_client("orcarouter")
+
 # Use same interface
 response = llm_claude.generate("Explain Python decorators")
 ```

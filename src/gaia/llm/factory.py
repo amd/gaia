@@ -11,6 +11,7 @@ _PROVIDERS: dict[str, str] = {
     "openai": "gaia.llm.providers.openai_provider.OpenAIProvider",
     "claude": "gaia.llm.providers.claude.ClaudeProvider",
     "litellm": "gaia.llm.providers.litellm.LiteLLMProvider",
+    "orcarouter": "gaia.llm.providers.orcarouter.OrcaRouterProvider",
 }
 
 
@@ -24,7 +25,8 @@ def create_client(
     Create an LLM client, auto-detecting provider from parameters.
 
     Args:
-        provider: Explicit provider name ("lemonade", "openai", "claude", or "litellm").
+        provider: Explicit provider name ("lemonade", "openai", "claude",
+                  "litellm", or "orcarouter").
                   If not specified, auto-detected from use_claude/use_openai flags.
         use_claude: If True, use Claude provider (ignored if provider is specified)
         use_openai: If True, use OpenAI provider (ignored if provider is specified)

@@ -36,15 +36,15 @@ The LLM client package provides a unified interface for generating text from mul
 
 **Provider Capabilities:**
 
-| Method | Lemonade | OpenAI | Claude |
-|--------|:--------:|:------:|:------:|
-| `generate()` | ✓ | ✓ | ✓ |
-| `chat()` | ✓ | ✓ | ✓ |
-| `embed()` | ✓ | ✓ | ✗ |
-| `vision()` | ✓ | ✗ | ✓ |
-| `get_performance_stats()` | ✓ | ✗ | ✗ |
-| `load_model()` | ✓ | ✗ | ✗ |
-| `unload_model()` | ✓ | ✗ | ✗ |
+| Method | Lemonade | OpenAI | Claude | LiteLLM | OrcaRouter |
+|--------|:--------:|:------:|:------:|:-------:|:----------:|
+| `generate()` | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `chat()` | ✓ | ✓ | ✓ | ✓ | ✓ |
+| `embed()` | ✓ | ✓ | ✗ | ✓ | ✗ |
+| `vision()` | ✓ | ✗ | ✓ | ✗ | ✗ |
+| `get_performance_stats()` | ✓ | ✗ | ✗ | ✗ | ✗ |
+| `load_model()` | ✓ | ✗ | ✗ | ✗ | ✗ |
+| `unload_model()` | ✓ | ✗ | ✗ | ✗ | ✗ |
 
 <Note>
 Methods marked with ✗ raise `NotSupportedError` when called on that provider.
@@ -58,7 +58,7 @@ Methods marked with ✗ raise `NotSupportedError` when called on that provider.
 
 1. **Factory Pattern**
    - `create_client()` factory function for client creation
-   - Explicit provider selection via `provider` parameter ("lemonade", "openai", "claude")
+   - Explicit provider selection via `provider` parameter ("lemonade", "openai", "claude", "orcarouter")
    - Backward-compatible `use_claude`/`use_openai` flags
    - Auto-detection of provider from flags when `provider` not specified
    - Default to Lemonade provider when no flags set
@@ -80,6 +80,7 @@ Methods marked with ✗ raise `NotSupportedError` when called on that provider.
    - **LemonadeProvider**: Full support for all methods, connects to local Lemonade server
    - **OpenAIProvider**: `generate`, `chat`, `embed` only
    - **ClaudeProvider**: `generate`, `chat`, `vision` only
+   - **OrcaRouterProvider**: `generate`, `chat` only (OpenAI-compatible gateway, no embeddings)
    - All providers support streaming and non-streaming modes
 
 4. **Error Handling**
@@ -123,7 +124,9 @@ src/gaia/llm/
 └── providers/
     ├── lemonade.py          # LemonadeProvider
     ├── openai_provider.py   # OpenAIProvider
-    └── claude.py            # ClaudeProvider
+    ├── claude.py            # ClaudeProvider
+    ├── litellm.py           # LiteLLMProvider
+    └── orcarouter.py        # OrcaRouterProvider
 ```
 
 ### Package Exports (`__init__.py`)
@@ -150,7 +153,7 @@ def create_client(
     Create an LLM client, auto-detecting provider from parameters.
 
     Args:
-        provider: Explicit provider name ("lemonade", "openai", or "claude").
+        provider: Explicit provider name ("lemonade", "openai", "claude", or "orcarouter").
                   If not specified, auto-detected from use_claude/use_openai flags.
         use_claude: If True, use Claude provider (ignored if provider is specified)
         use_openai: If True, use OpenAI provider (ignored if provider is specified)
@@ -170,6 +173,7 @@ def create_client(
         client = create_client(provider="lemonade", model="Qwen3-0.6B-GGUF")
         client = create_client(provider="openai", api_key="sk-...")
         client = create_client(provider="claude", api_key="sk-ant-...")
+        client = create_client(provider="orcarouter", api_key="sk-orca-...")
 
         # Backward-compatible flags
         client = create_client(use_claude=True, api_key="sk-ant-...")
