@@ -75,15 +75,21 @@ foreach ($cfg in @(
 #
 # Wrapped in powershell.exe + Start-Process only to capture output: a Task
 # Scheduler action has no console and the scheduler records its stdout/stderr
-# nowhere, so a bare -Execute discards the server's output entirely -- and with
-# it llama-server's startup error, which the child writes to inherited handles.
+# nowhere, so a bare -Execute discards the server's output entirely. This
+# captures the SERVER's streams; whether llama-server's own stderr rides on them
+# or goes to a pipe Lemonade owns is unconfirmed, so do not rely on this alone
+# to explain a child that will not spawn.
 # Fixed ProgramData path (SYSTEM-writable): the task outlives the job that
 # registered it, so its log has to outlive that job too.
 $LogDir = "C:\ProgramData\GaiaLemonadeServer"
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 $StdoutLog = Join-Path $LogDir "lemonade-task-stdout.log"
 $StderrLog = Join-Path $LogDir "lemonade-task-stderr.log"
-$InnerCmd  = "Start-Process -FilePath '$ServerExe' -ArgumentList '--port $Port' " +
+# PYTHONUNBUFFERED: the server is Python, and Python block-buffers stdout when
+# it is a pipe rather than a console. Without this the redirect below produces
+# two empty files for the whole life of a server that never exits.
+$InnerCmd  = "`$env:PYTHONUNBUFFERED='1'; " +
+             "Start-Process -FilePath '$ServerExe' -ArgumentList '--port $Port' " +
              "-RedirectStandardOutput '$StdoutLog' -RedirectStandardError '$StderrLog' " +
              "-NoNewWindow -Wait"
 try {

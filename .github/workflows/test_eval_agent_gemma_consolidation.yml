@@ -361,6 +361,108 @@ jobs:
           $ErrorActionPreference = "Stop"
           $ProgressPreference = "SilentlyContinue"
 
+          # One probe, so each rung of the ladder below runs an identical check.
+          # $LlamacppArgs empty = load the embedder bare, which is ONLY ever used
+          # as the discriminator on the last rung -- never to take the job green,
+          # because production RAG always passes --ubatch-size 2048
+          # (gaia/rag/sdk.py::_load_embedder) and measuring a different load than
+          # production performs is exactly the "we did not measure" case the
+          # integrity gate exists to refuse.
+          function Invoke-EmbedProbe {
+            param([string]$LlamacppArgs)
+            $ErrorActionPreference = "Continue"
+            $global:LASTEXITCODE = 0
+            if ($LlamacppArgs) {
+              $out = & python tests/ci_lemonade_check.py `
+                --model $embeddingModel --checkpoint $embeddingCheckpoint `
+                --recipe $embeddingRecipe --register-embedding --embeddings `
+                --llamacpp-args $LlamacppArgs 2>&1
+            } else {
+              $out = & python tests/ci_lemonade_check.py `
+                --model $embeddingModel --checkpoint $embeddingCheckpoint `
+                --recipe $embeddingRecipe --register-embedding --embeddings 2>&1
+            }
+            $code = $LASTEXITCODE
+            $ErrorActionPreference = "Stop"
+            $out | ForEach-Object { Write-Host "$_" }
+            # Assert the EMBEDDINGS line, not the helper's terminal `[ci] OK` -
+            # that one prints whether or not --embeddings was passed. `dim=` only
+            # prints after a real vector came back. Exit 0 alone is not enough
+            # either: a command that fails to LAUNCH leaves $LASTEXITCODE at the
+            # reset 0 and would read as a pass.
+            return ($code -eq 0 -and [bool]($out -match '\[ci\] embeddings OK \(dim='))
+          }
+
+          # Lemonade runs as a SYSTEM Scheduled Task, whose action has no console
+          # and whose stdout/stderr the scheduler records nowhere -- so until
+          # ensure-lemonade-running.ps1 began redirecting them, llama-server's
+          # startup error was discarded by the OS, not merely hard to locate.
+          # Every #2920 failure reported "(none found)" from a SYSTEM-profile glob
+          # that never had anything to match. Read the redirect target instead.
+          function Show-LemonadeTaskLog {
+            $dir = "C:\ProgramData\GaiaLemonadeServer"
+            Write-Host "=== Lemonade task stdout/stderr (tail) ==="
+            $found = $false
+            foreach ($f in @("$dir\lemonade-task-stderr.log", "$dir\lemonade-task-stdout.log")) {
+              if (Test-Path $f) {
+                # Report the size: "file exists but is empty" and "file is absent"
+                # are different faults (buffering vs. no redirect) and printing
+                # nothing for both makes them indistinguishable.
+                $len = (Get-Item $f).Length
+                Write-Host "--- $f ($len bytes) ---"
+                if ($len -gt 0) {
+                  Get-Content $f -Tail 120 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "$_" }
+                  $found = $true
+                } else {
+                  Write-Host "(empty - server captured nothing on this stream)"
+                }
+              }
+            }
+            if (-not $found) {
+              Write-Host "(none found in $dir - this runner's Scheduled Task predates the redirect; the -ForceRestart below re-registers it with logging)"
+            }
+            return $found
+          }
+
+          # Lemonade's POST /delete is documented to remove a model's files, but
+          # GAIA ships `gaia uninstall --purge-hf-cache` precisely because the HF
+          # blob cache survives deletion. The probe has re-"downloaded" this model
+          # on every attempt with no change in behaviour, which is what a cache hit
+          # looks like. Delete the blobs directly and REPORT what was there, so the
+          # log settles which of the two is true instead of leaving it assumed.
+          function Clear-EmbedderFromDisk {
+            $sys = "$env:SystemRoot\System32\config\systemprofile"
+            $roots = @(
+              "$sys\AppData\Local\huggingface\hub", "$sys\.cache\huggingface\hub",
+              "$sys\AppData\Local\lemonade\models",  "$sys\.cache\lemonade\models",
+              "$env:LOCALAPPDATA\huggingface\hub",   "$env:USERPROFILE\.cache\huggingface\hub",
+              "$env:LOCALAPPDATA\lemonade\models",   "$env:USERPROFILE\.cache\lemonade\models"
+            )
+            if ($env:HF_HOME) { $roots += (Join-Path $env:HF_HOME "hub") }
+            $removed = 0
+            foreach ($root in ($roots | Where-Object { $_ } | Select-Object -Unique)) {
+              if (-not (Test-Path $root)) { continue }
+              Get-ChildItem $root -Filter "*embeddinggemma*" -Directory -ErrorAction SilentlyContinue |
+                ForEach-Object {
+                  $mb = 0
+                  try {
+                    $mb = [math]::Round(((Get-ChildItem $_.FullName -Recurse -File -ErrorAction SilentlyContinue |
+                          Measure-Object Length -Sum).Sum / 1MB), 1)
+                  } catch { }
+                  Write-Host "Removing on-disk embedder cache: $($_.FullName) ($mb MB)"
+                  Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+                  $removed++
+                }
+            }
+            if ($removed -eq 0) {
+              Write-Host "PURGE: nothing left on disk - Lemonade's delete DOES remove the bytes, so each prior re-pull was a real download."
+            } else {
+              Write-Host "PURGE: removed $removed dir(s) that SURVIVED Lemonade's delete - every prior 're-download' was a cache hit on the same files."
+            }
+            return $removed
+          }
+
+
           if (-not $env:ANTHROPIC_API_KEY) {
             Write-Host "::error::ANTHROPIC_API_KEY is not set. The eval judge (src/gaia/eval/claude.py) reads it from the environment; without it every scenario scores as an infra error and the scorecard is meaningless. Add the ANTHROPIC_API_KEY repository secret, or run the eval locally on AMD hardware."
             exit 1
@@ -420,6 +522,28 @@ jobs:
           }
           Write-Host "Model under test present: $modelUnderTest"
 
+          # ...but "present" only means the GGUF is on disk. Nothing in this job
+          # has ever LOADED it: ensure-lemonade-running.ps1 warms via /pull, which
+          # is a download, and the check above reads /models' `downloaded` flag. So
+          # a runner where llama-server cannot start AT ALL looks identical here to
+          # a healthy one, and the first thing to actually load a model is the
+          # embedder probe below -- which is why an embedder-specific fault and a
+          # dead llama-server have been indistinguishable for this gate's whole
+          # history (#2920). Load the CHAT model first: it shares the llama-server
+          # binary, so if it also fails, the embedder is not the variable.
+          $ErrorActionPreference = "Continue"
+          $global:LASTEXITCODE = 0
+          $chatOut = & python tests/ci_lemonade_check.py --model $modelUnderTest --chat 2>&1
+          $chatCode = $LASTEXITCODE
+          $ErrorActionPreference = "Stop"
+          $chatOut | ForEach-Object { Write-Host "$_" }
+          if ($chatCode -ne 0 -or -not ($chatOut -match '\[ci\] chat OK')) {
+            Write-Host "::error::llama-server cannot start for the CHAT model $modelUnderTest on this runner either, so this is not an embedder fault - no model can be served here and every category would fail. The GGUF is downloaded and Lemonade answers /health, so the server process is up and the binary underneath it is what will not spawn. Check whether an Application Control policy is blocking llama-server.exe on this box (#2826), and read the Lemonade task log below."
+            Show-LemonadeTaskLog | Out-Null
+            exit 1
+          }
+          Write-Host "Chat model loads and serves - llama-server works on this runner, so an embedder failure below is embedder-specific."
+
           # THE RAG CATEGORIES RUN ON A SECOND MODEL. rag_quality and
           # context_retention answer entirely out of chunks the EMBEDDER
           # produced, so an embedder that cannot start turns every doc-grounded
@@ -457,99 +581,6 @@ jobs:
           # Continue, not Stop: under Stop the helper's first stderr line becomes
           # a terminating NativeCommandError and the step dies before the
           # ::error:: below. Same reasoning as the eval step's own note.
-          # One probe, so each rung of the ladder below runs an identical check.
-          # $LlamacppArgs empty = load the embedder bare, which is ONLY ever used
-          # as the discriminator on the last rung -- never to take the job green,
-          # because production RAG always passes --ubatch-size 2048
-          # (gaia/rag/sdk.py::_load_embedder) and measuring a different load than
-          # production performs is exactly the "we did not measure" case the
-          # integrity gate exists to refuse.
-          function Invoke-EmbedProbe {
-            param([string]$LlamacppArgs)
-            $ErrorActionPreference = "Continue"
-            $global:LASTEXITCODE = 0
-            if ($LlamacppArgs) {
-              $out = & python tests/ci_lemonade_check.py `
-                --model $embeddingModel --checkpoint $embeddingCheckpoint `
-                --recipe $embeddingRecipe --register-embedding --embeddings `
-                --llamacpp-args $LlamacppArgs 2>&1
-            } else {
-              $out = & python tests/ci_lemonade_check.py `
-                --model $embeddingModel --checkpoint $embeddingCheckpoint `
-                --recipe $embeddingRecipe --register-embedding --embeddings 2>&1
-            }
-            $code = $LASTEXITCODE
-            $ErrorActionPreference = "Stop"
-            $out | ForEach-Object { Write-Host "$_" }
-            # Assert the EMBEDDINGS line, not the helper's terminal `[ci] OK` -
-            # that one prints whether or not --embeddings was passed. `dim=` only
-            # prints after a real vector came back. Exit 0 alone is not enough
-            # either: a command that fails to LAUNCH leaves $LASTEXITCODE at the
-            # reset 0 and would read as a pass.
-            return ($code -eq 0 -and [bool]($out -match '\[ci\] embeddings OK \(dim='))
-          }
-
-          # Lemonade runs as a SYSTEM Scheduled Task, whose action has no console
-          # and whose stdout/stderr the scheduler records nowhere -- so until
-          # ensure-lemonade-running.ps1 began redirecting them, llama-server's
-          # startup error was discarded by the OS, not merely hard to locate.
-          # Every #2920 failure reported "(none found)" from a SYSTEM-profile glob
-          # that never had anything to match. Read the redirect target instead.
-          function Show-LemonadeTaskLog {
-            $dir = "C:\ProgramData\GaiaLemonadeServer"
-            Write-Host "=== Lemonade task stdout/stderr (tail) ==="
-            $found = $false
-            foreach ($f in @("$dir\lemonade-task-stderr.log", "$dir\lemonade-task-stdout.log")) {
-              if (Test-Path $f) {
-                Write-Host "--- $f ---"
-                Get-Content $f -Tail 120 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "$_" }
-                $found = $true
-              }
-            }
-            if (-not $found) {
-              Write-Host "(none found in $dir - this runner's Scheduled Task predates the redirect; the -ForceRestart below re-registers it with logging)"
-            }
-            return $found
-          }
-
-          # Lemonade's POST /delete is documented to remove a model's files, but
-          # GAIA ships `gaia uninstall --purge-hf-cache` precisely because the HF
-          # blob cache survives deletion. The probe has re-"downloaded" this model
-          # on every attempt with no change in behaviour, which is what a cache hit
-          # looks like. Delete the blobs directly and REPORT what was there, so the
-          # log settles which of the two is true instead of leaving it assumed.
-          function Clear-EmbedderFromDisk {
-            $sys = "$env:SystemRoot\System32\config\systemprofile"
-            $roots = @(
-              "$sys\AppData\Local\huggingface\hub", "$sys\.cache\huggingface\hub",
-              "$sys\AppData\Local\lemonade\models",  "$sys\.cache\lemonade\models",
-              "$env:LOCALAPPDATA\huggingface\hub",   "$env:USERPROFILE\.cache\huggingface\hub",
-              "$env:LOCALAPPDATA\lemonade\models",   "$env:USERPROFILE\.cache\lemonade\models"
-            )
-            if ($env:HF_HOME) { $roots += (Join-Path $env:HF_HOME "hub") }
-            $removed = 0
-            foreach ($root in ($roots | Where-Object { $_ } | Select-Object -Unique)) {
-              if (-not (Test-Path $root)) { continue }
-              Get-ChildItem $root -Filter "*embeddinggemma*" -Directory -ErrorAction SilentlyContinue |
-                ForEach-Object {
-                  $mb = 0
-                  try {
-                    $mb = [math]::Round(((Get-ChildItem $_.FullName -Recurse -File -ErrorAction SilentlyContinue |
-                          Measure-Object Length -Sum).Sum / 1MB), 1)
-                  } catch { }
-                  Write-Host "Removing on-disk embedder cache: $($_.FullName) ($mb MB)"
-                  Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
-                  $removed++
-                }
-            }
-            if ($removed -eq 0) {
-              Write-Host "PURGE: nothing left on disk - Lemonade's delete DOES remove the bytes, so each prior re-pull was a real download."
-            } else {
-              Write-Host "PURGE: removed $removed dir(s) that SURVIVED Lemonade's delete - every prior 're-download' was a cache hit on the same files."
-            }
-            return $removed
-          }
-
           # RUNG 1 - the load production performs.
           $embedOk = Invoke-EmbedProbe -LlamacppArgs "--ubatch-size 2048"
 
