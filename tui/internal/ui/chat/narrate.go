@@ -166,9 +166,14 @@ func toolNarration(tool string, args json.RawMessage, narration string) string {
 
 	line := phrase.Without
 	if arg != "" && phrase.With != "" {
-		line = fmt.Sprintf(phrase.With, truncateRunes(arg, narrationMax))
+		// Budgeted against the TEMPLATE, not against the whole line. Several
+		// phrases put words after the %s — "Looking for %s in your documents" —
+		// and an argument allowed to fill the line pushed them off the end,
+		// leaving the reader the query with no clue what was done with it.
+		room := narrationMax - displayWidth(fmt.Sprintf(phrase.With, ""))
+		line = fmt.Sprintf(phrase.With, truncateRunes(arg, room))
 	} else if arg != "" {
-		line = phrase.Without + ": " + truncateRunes(arg, narrationMax)
+		line = phrase.Without + ": " + truncateRunes(arg, narrationMax-displayWidth(phrase.Without)-2)
 	}
 	if line == "" {
 		line = "Running " + tool
@@ -230,7 +235,11 @@ func toolResultDetail(e event.CanonicalToolResultEvent) string {
 		parts = append(parts, summary)
 	}
 	if len(parts) == 0 {
-		if msg := firstLine(firstStringOf(data, "message", "error", "detail", "display_message")); msg != "" {
+		// clean, not firstLine, matching failureDetail: this is the ERROR text
+		// path, and a tool puts the remedy on its second line as often as not.
+		// `summary` above stays first-line-only — a summary that runs to several
+		// lines is a payload dump, not a sentence with a tail worth keeping.
+		if msg := firstStringOf(data, "message", "error", "detail", "display_message"); msg != "" {
 			parts = append(parts, msg)
 		}
 	}

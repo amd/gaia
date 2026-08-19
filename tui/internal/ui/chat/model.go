@@ -2072,8 +2072,12 @@ func (m *ChatModel) liveRegionView() string {
 	if m.viewport.Height <= 0 {
 		return out
 	}
+	// Padded ABOVE. Below, the blank rows open a gap between the log and the
+	// answer streaming under it; above, they land in the space that already
+	// separates the log from the transcript, and hold the block's total height
+	// just the same.
 	if pad := m.logPeakRows - rows; pad > 0 {
-		out += strings.Repeat("\n", pad)
+		out = strings.Repeat("\n", pad) + out
 	}
 	return out
 }
@@ -2107,7 +2111,7 @@ func (m ChatModel) renderLiveRegion() string {
 	// hanging under nothing.
 	groups := make([][]string, 0, len(log)+1)
 	for i, item := range log {
-		groups = append(groups, m.renderActivityItem(item, i == live, elapsed))
+		groups = append(groups, m.renderActivityItem(item, i == live, elapsed, 0))
 	}
 	if live < 0 {
 		groups = append(groups, []string{m.renderLiveLine(m.idlePhrase(len(log)), elapsed)})
@@ -2141,12 +2145,15 @@ func (m ChatModel) renderLiveRegion() string {
 	}
 	if kept > 0 {
 		groups = groups[len(groups)-kept:]
-	} else if len(groups) > 0 {
+	} else if n := len(log) - 1; n >= 0 {
 		// One action taller than the entire budget — a wrapped shell command on
-		// a 12-row terminal, where the budget is two rows. Clip it to fit rather
-		// than drop it: an empty live region is a blank screen, which is the one
-		// thing this whole region exists to prevent.
-		groups = [][]string{clipRows(groups[len(groups)-1], budget)}
+		// a 12-row terminal, where the budget is two rows. Re-render it to fit
+		// rather than drop it: an empty live region is a blank screen, which is
+		// the one thing this whole region exists to prevent. Re-rendered, not
+		// row-sliced, so the ellipsis lands inside the text rather than after
+		// the clock. (The synthetic idle line is one row and always fits, so the
+		// group that overflowed is always the last log entry.)
+		groups = [][]string{m.renderActivityItem(log[n], n == live, elapsed, budget)}
 	}
 
 	var lines []string
@@ -2158,20 +2165,6 @@ func (m ChatModel) renderLiveRegion() string {
 	}
 
 	return strings.Join(lines, "\n")
-}
-
-// clipRows cuts one action's rendered rows to a height budget, marking the cut
-// so the reader can tell the action says more than the window can show.
-func clipRows(rows []string, max int) []string {
-	if max < 1 {
-		max = 1
-	}
-	if len(rows) <= max {
-		return rows
-	}
-	out := append([]string(nil), rows[:max]...)
-	out[max-1] += activityStyle.Render(" …")
-	return out
 }
 
 // anyCompleted reports whether anything in the log has actually finished — the
@@ -2279,7 +2272,12 @@ func formatElapsed(d time.Duration) string {
 // Failure is never signalled by colour or a glyph alone: a failed call's outcome
 // line begins with the word "failed" (see toolResultDetail / failureDetail), so
 // the state survives a terminal with no colour.
-func (m ChatModel) renderActivityItem(item ActivityItem, live bool, elapsed time.Duration) []string {
+// maxRows is the height this ONE action may occupy, or 0 for the standard caps.
+// The live region passes a real number only when a single action is taller than
+// the whole region's budget: the cut has to be made HERE, inside the text, or
+// the marker ends up appended to a rendered row — after the elapsed clock on the
+// live line, where it reads as part of the timer rather than as a truncation.
+func (m ChatModel) renderActivityItem(item ActivityItem, live bool, elapsed time.Duration, maxRows int) []string {
 	width := m.logWidth()
 
 	// The counter rides along through the wrap rather than being appended after
@@ -2291,15 +2289,17 @@ func (m ChatModel) renderActivityItem(item ActivityItem, live bool, elapsed time
 		suffix = fmt.Sprintf(" x%d", item.Repeat+1)
 	}
 
-	// The live row's measure is narrower by what the spinner's clock occupies:
-	// the clock is appended AFTER the text, so text wrapped to the full measure
-	// would push it past the pane's edge and the viewport would clip the one
-	// number proving the turn is still moving.
-	headWidth := width
-	if live {
-		headWidth -= elapsedReserve
+	headRows := logHeadRows
+	if maxRows > 0 && maxRows < headRows {
+		headRows = maxRows
 	}
-	rows := wrapLog(clean(item.Content), suffix, headWidth, logHeadRows)
+	// Only the FIRST row carries the clock, so only the first row pays for it.
+	// Charging every wrapped row 8 columns for a number none of them shows threw
+	// away two words per row of the longest lines in the log.
+	rows := wrapLog(clean(item.Content), suffix, width, headRows)
+	if live {
+		rows = wrapLogLead(clean(item.Content), suffix, width-elapsedReserve, width, headRows)
+	}
 
 	// Glyph and colour differ per kind; the wrap and the continuation indent do
 	// not. Continuations line up under the TEXT, not the glyph, so the marker
@@ -2331,12 +2331,16 @@ func (m ChatModel) renderActivityItem(item ActivityItem, live bool, elapsed time
 		lines = append(lines, "    "+style.Render(row))
 	}
 
-	if detail := clean(item.Detail); detail != "" {
+	detailRows := logDetailRows
+	if maxRows > 0 {
+		detailRows = maxRows - len(lines) // the call outranks its outcome
+	}
+	if detail := clean(item.Detail); detail != "" && detailRows > 0 {
 		dstyle := activityStyle
 		if item.Success != nil && !*item.Success {
 			dstyle = failStyle
 		}
-		drows := wrapLog(detail, "", width-2, logDetailRows)
+		drows := wrapLog(detail, "", width-2, detailRows)
 		lines = append(lines, "    "+dstyle.Render(glyphDetail+" "+drows[0]))
 		for _, row := range drows[1:] {
 			lines = append(lines, "      "+dstyle.Render(row))
@@ -2389,6 +2393,27 @@ func wrapLog(s, suffix string, width, maxRows int) []string {
 	rows = rows[:maxRows]
 	rows[maxRows-1] = clipTail(strings.TrimRight(rows[maxRows-1], " "), width-displayWidth(suffix)) + suffix
 	return rows
+}
+
+// wrapLogLead wraps like wrapLog, except the FIRST row gets a narrower measure
+// than the rest. The live row's elapsed clock is appended after its text and
+// takes those columns from THAT row only — continuations carry no clock and
+// should not pay for one.
+func wrapLogLead(s, suffix string, lead, width, maxRows int) []string {
+	if lead < 8 {
+		lead = 8
+	}
+	if displayWidth(s+suffix) <= lead {
+		return []string{s + suffix}
+	}
+	first := hardBreak(strings.Split(components.WrapText(s, lead), "\n"), lead)[0]
+	// A prefix of s, not a re-rendering of it: clean() has already collapsed
+	// runs of spaces, so WrapText's rows rejoin to exactly what went in.
+	rest := strings.TrimSpace(strings.TrimPrefix(s, first))
+	if rest == "" || maxRows <= 1 {
+		return wrapLog(s, suffix, lead, maxRows)
+	}
+	return append([]string{first}, wrapLog(rest, suffix, width, maxRows-1)...)
 }
 
 // hardBreak splits any row still wider than the measure. WrapText breaks on
