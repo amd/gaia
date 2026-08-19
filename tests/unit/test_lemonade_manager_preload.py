@@ -670,6 +670,59 @@ def test_print_ceiling_message_has_no_server_remediation_text():
 
 
 @patch("gaia.llm.lemonade_manager.LemonadeClient")
+def test_first_discovery_of_ceiling_skips_restart_advice(mock_cls, capsys):
+    """A reload that *just discovered* the ceiling (not one already known
+    before the attempt) must not fall through to "Restart Lemonade Server"
+    — that advice cannot raise a GGUF's trained context either, and the
+    reload path already printed the correct ceiling message once (#2992)."""
+    client = _make_client_mock(
+        _status(
+            running=True,
+            context_size=8192,
+            loaded_models=[{"id": "Qwen3-0.6B-GGUF", "model_name": "Qwen3-0.6B-GGUF"}],
+        )
+    )
+    # Ceiling unresolved before the reload, discovered only afterwards.
+    client.get_model_max_context_window.side_effect = [None, None, 40960]
+    client.get_status.side_effect = [
+        _status(
+            running=True,
+            context_size=8192,
+            loaded_models=[
+                {"id": "Qwen3-0.6B-GGUF", "model_name": "Qwen3-0.6B-GGUF"}
+            ],
+        ),
+        _status(
+            running=True,
+            context_size=40960,
+            loaded_models=[
+                {
+                    "id": "Qwen3-0.6B-GGUF",
+                    "model_name": "Qwen3-0.6B-GGUF",
+                    "max_context_window": 40960,
+                    "recipe_options": {"ctx_size": 40960},
+                }
+            ],
+        ),
+    ]
+    mock_cls.return_value = client
+
+    ok = LemonadeManager.ensure_ready(min_context_size=65536, quiet=False)
+    captured = capsys.readouterr()
+    output = captured.out + captured.err
+
+    assert ok is True
+    assert "Restart Lemonade Server" not in output
+    assert "To fix this issue" not in output
+    assert LemonadeManager.get_context_size() == 40960
+    # The reload path already announced the cap once — the fall-through
+    # must not print a second, separate ceiling message.
+    assert output.count("trained context") == 1, (
+        f"Expected exactly one ceiling announcement, got:\n{output}"
+    )
+
+
+@patch("gaia.llm.lemonade_manager.LemonadeClient")
 def test_ensure_ready_ceiling_path_prints_no_server_remediation(mock_cls):
     """End-to-end through `ensure_ready`, not just the message function
     directly: a model already at its known ceiling must surface the

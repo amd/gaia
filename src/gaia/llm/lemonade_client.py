@@ -3363,25 +3363,25 @@ class LemonadeClient:
 
         # Best-effort floor-vs-ceiling conflict check (#2992): if the MODELS
         # registry requires more context than the model can actually train
-        # on, that's an unresolvable data error — fail loudly rather than
-        # silently loading at a value that reopens the #1030 truncation bug
-        # the registry floor exists to prevent. No extra HTTP call here
-        # (``allow_catalog_lookup=False``) — this only catches the conflict
-        # when the model happens to already be loaded (and thus in
-        # ``status``); an undownloaded model's ceiling is unknown anyway.
+        # on, clamp to the model's real ceiling rather than raise — this must
+        # agree with LemonadeManager._report_capped_at_ceiling, which treats
+        # the identical situation as "proceed capped", not fatal. No extra
+        # HTTP call here (``allow_catalog_lookup=False``) — this only catches
+        # the conflict when the model happens to already be loaded (and thus
+        # in ``status``); an undownloaded model's ceiling is unknown anyway.
         _ceiling = self.get_model_max_context_window(
             model, status=status, allow_catalog_lookup=False
         )
         if _ceiling and expected_ctx > _ceiling:
-            raise LemonadeClientError(
-                f"GAIA requires ctx_size={expected_ctx} for '{model}' "
-                f"(MODELS registry min_ctx_size), but Lemonade reports its "
-                f"trained context ceiling as {_ceiling} tokens "
-                f"(max_context_window). Lower MODELS[...].min_ctx_size for "
-                f"this model or choose a different one — requesting more "
-                f"than the model supports would silently truncate every "
-                f"prompt."
+            self.log.warning(
+                f"'{model}' requires ctx_size={expected_ctx} (MODELS "
+                f"registry min_ctx_size), but its trained context ceiling "
+                f"is {_ceiling} tokens (max_context_window); loading at "
+                f"{_ceiling} instead. Use a model with a larger trained "
+                f"context if more is needed — no server restart or config "
+                f"change raises a GGUF's trained context."
             )
+            expected_ctx = _ceiling
         elif _ceiling is None:
             # Not an error — the common case for a model not yet loaded (its
             # metadata isn't resolvable without a catalog round trip, which

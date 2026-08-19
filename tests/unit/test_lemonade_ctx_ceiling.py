@@ -146,14 +146,17 @@ class TestGetModelMaxContextWindow:
 class TestFloorCeilingConflict:
     @patch.object(LemonadeClient, "load_model")
     @patch.object(LemonadeClient, "get_status")
-    def test_registry_floor_exceeding_known_ceiling_raises_loudly(
-        self, mock_status, mock_load
+    def test_registry_floor_exceeding_known_ceiling_clamps_and_warns(
+        self, mock_status, mock_load, caplog
     ):
         """If MODELS[...].min_ctx_size (the floor GAIA requires for a model)
-        exceeds a *known* max_context_window ceiling, that is a genuine,
-        unresolvable conflict: the model cannot serve GAIA's minimum
-        required context. Must fail loudly, not silently pick a value that
-        re-opens the #1030 truncation bug this floor exists to prevent."""
+        exceeds a *known* max_context_window ceiling, GAIA must clamp to the
+        ceiling and load anyway — matching
+        ``LemonadeManager._report_capped_at_ceiling``, which treats the
+        identical situation as "proceed capped", not fatal. Raising here
+        would leave the client and the manager disagreeing about the exact
+        same (floor, ceiling) conflict, and the manager's own reload path
+        already reaches this state successfully."""
         client = LemonadeClient(host="localhost", port=13305)
         # Qwen3-0.6B-GGUF's registry floor is 4096; report a ceiling below it.
         mock_status.return_value = LemonadeStatus(
@@ -169,14 +172,18 @@ class TestFloorCeilingConflict:
             ],
         )
 
-        with pytest.raises(LemonadeClientError) as exc_info:
+        with caplog.at_level("WARNING", logger="gaia.llm.lemonade_client"):
             client._ensure_model_loaded("Qwen3-0.6B-GGUF", auto_download=True)
 
-        msg = str(exc_info.value)
-        assert "4096" in msg
-        assert "2048" in msg
-        assert "Qwen3-0.6B-GGUF" in msg
-        mock_load.assert_not_called()
+        warning = "\n".join(
+            rec.message for rec in caplog.records if rec.levelname == "WARNING"
+        )
+        assert "4096" in warning
+        assert "2048" in warning
+        assert "Qwen3-0.6B-GGUF" in warning
+        mock_load.assert_called_once_with(
+            "Qwen3-0.6B-GGUF", auto_download=True, prompt=False, ctx_size=2048
+        )
 
     @patch.object(LemonadeClient, "load_model")
     @patch.object(LemonadeClient, "get_status")

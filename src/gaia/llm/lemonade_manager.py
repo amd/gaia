@@ -704,6 +704,18 @@ class LemonadeManager:
                                 client, status, min_context_size, quiet, cls._lock
                             ):
                                 return True
+                            # The reload can have failed because it just
+                            # discovered the model's real ceiling (#2992) —
+                            # in that case "restart with a bigger ctx_size"
+                            # is wrong advice, so report the cap instead.
+                            if (
+                                cls._context_ceiling is not None
+                                and cls._context_size >= cls._context_ceiling
+                            ):
+                                cls._report_capped_at_ceiling(
+                                    min_context_size, quiet, already_announced=True
+                                )
+                                return True
                             cls._log.warning(
                                 f"Lemonade running with {cls._context_size} tokens, "
                                 f"but {min_context_size} requested. Restart Lemonade "
@@ -866,6 +878,17 @@ class LemonadeManager:
                         client, status, min_context_size, quiet, cls._lock
                     ):
                         return True
+                    # As above (#2992): a reload that failed because it just
+                    # discovered the model's real ceiling should report the
+                    # cap, not tell the user to restart the server.
+                    if (
+                        cls._context_ceiling is not None
+                        and cls._context_size >= cls._context_ceiling
+                    ):
+                        cls._report_capped_at_ceiling(
+                            min_context_size, quiet, already_announced=True
+                        )
+                        return True
                     cls._log.warning(
                         f"Context size {cls._context_size} is less than "
                         f"requested {min_context_size}. Some features may not work correctly."
@@ -945,19 +968,30 @@ class LemonadeManager:
         return honest_ctx
 
     @classmethod
-    def _report_capped_at_ceiling(cls, min_context_size: int, quiet: bool) -> None:
+    def _report_capped_at_ceiling(
+        cls,
+        min_context_size: int,
+        quiet: bool,
+        already_announced: bool = False,
+    ) -> None:
         """Tell the truth once about a model already at its real ceiling.
 
         Shared by every call site that finds ``cls._context_size`` pinned at
         ``cls._context_ceiling`` below ``min_context_size`` (#2992) — a
         reload can't raise a value already at the model's trained-context
         ceiling, so none of these call sites should attempt one.
+
+        Args:
+            already_announced: True when the caller already printed the
+                ceiling message itself (e.g. ``_try_reload_with_ctx`` on the
+                reload attempt that just discovered the ceiling) — skips the
+                user-facing print to avoid showing it twice, but still logs.
         """
         cls._log.warning(
             f"Lemonade running with {cls._context_size} tokens, capped by "
             f"the model's trained context (requested {min_context_size})."
         )
-        if not quiet:
+        if not quiet and not already_announced:
             cls.print_ceiling_message(cls._context_size, min_context_size)
 
     @classmethod
