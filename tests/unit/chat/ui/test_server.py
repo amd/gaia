@@ -305,7 +305,9 @@ class TestSystemStatus:
         assert data["context_size_sufficient"] is True
 
     @patch("httpx.AsyncClient")
-    def test_system_status_ctx_size_clamped_to_model_ceiling(self, mock_httpx_cls, client):
+    def test_system_status_ctx_size_clamped_to_model_ceiling(
+        self, mock_httpx_cls, client
+    ):
         """recipe_options.ctx_size is Lemonade's config echo of what was
         REQUESTED, not a measurement — it can report the request even after
         silently capping the real window lower (#2992). The reported

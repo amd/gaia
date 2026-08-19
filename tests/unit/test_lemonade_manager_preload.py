@@ -688,9 +688,7 @@ def test_first_discovery_of_ceiling_skips_restart_advice(mock_cls, capsys):
         _status(
             running=True,
             context_size=8192,
-            loaded_models=[
-                {"id": "Qwen3-0.6B-GGUF", "model_name": "Qwen3-0.6B-GGUF"}
-            ],
+            loaded_models=[{"id": "Qwen3-0.6B-GGUF", "model_name": "Qwen3-0.6B-GGUF"}],
         ),
         _status(
             running=True,
@@ -717,9 +715,9 @@ def test_first_discovery_of_ceiling_skips_restart_advice(mock_cls, capsys):
     assert LemonadeManager.get_context_size() == 40960
     # The reload path already announced the cap once — the fall-through
     # must not print a second, separate ceiling message.
-    assert output.count("trained context") == 1, (
-        f"Expected exactly one ceiling announcement, got:\n{output}"
-    )
+    assert (
+        output.count("trained context") == 1
+    ), f"Expected exactly one ceiling announcement, got:\n{output}"
 
 
 @patch("gaia.llm.lemonade_manager.LemonadeClient")

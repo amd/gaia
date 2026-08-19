@@ -14,8 +14,6 @@ the value actually in force.
 
 from unittest.mock import patch
 
-import pytest
-
 from gaia.llm.lemonade_client import (
     NPU_CTX_SIZE,
     LemonadeClient,
