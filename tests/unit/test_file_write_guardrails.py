@@ -82,6 +82,10 @@ class TestBlockedDirectories:
         assert os.path.join(home, ".ssh") in BLOCKED_DIRECTORIES
         assert os.path.join(home, ".gnupg") in BLOCKED_DIRECTORIES
 
+    def test_gaia_state_dir_is_blocked(self):
+        """Verify GAIA's own state directory is blocked on every platform."""
+        assert os.path.normpath(str(Path.home() / ".gaia")) in BLOCKED_DIRECTORIES
+
     def test_get_blocked_directories_returns_set(self):
         """Verify _get_blocked_directories() returns a set of strings."""
         result = _get_blocked_directories()
@@ -266,6 +270,53 @@ class TestIsWriteBlocked:
         is_blocked, reason = validator.is_write_blocked("/etc/test_file.conf")
         assert is_blocked is True
         assert "blocked" in reason.lower()
+
+    def test_gaia_mcp_server_config_is_blocked(self, validator):
+        """Agent file tools must not be able to rewrite ~/.gaia/mcp_servers.json."""
+        target = str(Path.home() / ".gaia" / "mcp_servers.json")
+        is_blocked, reason = validator.is_write_blocked(target)
+        assert is_blocked is True
+        assert "blocked" in reason.lower()
+
+    def test_gaia_state_dir_blocked_even_when_allowlisted(self, tmp_path):
+        """The denylist wins over an allowlist entry covering ~/.gaia."""
+        gaia_dir = Path.home() / ".gaia"
+        validator = PathValidator(allowed_paths=[str(gaia_dir), str(tmp_path)])
+        is_allowed, reason = validator.validate_write(
+            str(gaia_dir / "mcp_servers.json"), prompt_user=False
+        )
+        assert is_allowed is False
+        assert "blocked" in reason.lower()
+
+    @pytest.mark.parametrize(
+        "relative",
+        [
+            "connectors/google.json",
+            "agents/custom/agent.py",
+            "cache/allowed_paths.json",
+        ],
+    )
+    def test_gaia_config_surfaces_are_blocked(self, validator, relative):
+        """Config and installed-code surfaces under ~/.gaia stay protected."""
+        target = str(Path.home() / ".gaia" / relative)
+        is_blocked, _ = validator.is_write_blocked(target)
+        assert is_blocked is True
+
+    @pytest.mark.parametrize(
+        "relative",
+        ["documents/report.pdf", "chat/uploads/notes.txt", "screenshots/shot.png"],
+    )
+    def test_gaia_user_content_dirs_remain_writable(self, validator, relative):
+        """Agent UI upload dirs are user content, not config — writes still allowed."""
+        target = str(Path.home() / ".gaia" / relative)
+        is_blocked, reason = validator.is_write_blocked(target)
+        assert is_blocked is False, reason
+
+    def test_gaia_user_content_carveout_cannot_escape(self, validator):
+        """A traversal out of a carved-out dir back into config is still blocked."""
+        target = str(Path.home() / ".gaia" / "documents" / ".." / "mcp_servers.json")
+        is_blocked, _ = validator.is_write_blocked(target)
+        assert is_blocked is True
 
     def test_regular_txt_file_not_blocked(self, validator, tmp_path):
         """Verify a regular .txt file in a safe directory is not blocked."""

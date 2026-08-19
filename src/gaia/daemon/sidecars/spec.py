@@ -109,6 +109,12 @@ _EMAIL_TOKEN_FILE_ENV_VAR = "GAIA_EMAIL_SIDECAR_TOKEN_FILE"
 # lock-step with the release cut that first ships caller_auth's file leg.
 _EMAIL_SECRET_FILE_MIN_VERSION = "0.6.0"
 
+# The flagship agent's caller-auth token channel. Same cross-repo literal
+# contract as email's above: these MUST equal the names the gaia-agent-gaia
+# sidecar reads, and are kept as literals so core never imports the hub wheel.
+_GAIA_TOKEN_ENV_VAR = "GAIA_GAIA_SIDECAR_TOKEN"
+_GAIA_TOKEN_FILE_ENV_VAR = "GAIA_GAIA_SIDECAR_TOKEN_FILE"
+
 # The email agent's grant-ledger identity (mirrors gaia-agent.yaml ``id: email``
 # → ``installed:email``, and ``connector_routes.EMAIL_AGENT_ID``). Kept a literal
 # so core never imports the hub wheel.
@@ -142,6 +148,18 @@ _EMAIL_REQUIRED_CONNECTIONS = (
     ),
     ConnectorRequirement(
         connector_id="microsoft",
+        scopes=(
+            "https://graph.microsoft.com/Mail.ReadWrite",  # from gaia_agent_email/outlook_scopes.py
+            "https://graph.microsoft.com/Mail.Send",  # from gaia_agent_email/outlook_scopes.py
+            "https://graph.microsoft.com/Calendars.ReadWrite",  # from gaia_agent_email/outlook_scopes.py
+        ),
+        required_scopes=(
+            "https://graph.microsoft.com/Mail.ReadWrite",  # from gaia_agent_email/outlook_scopes.py
+            "https://graph.microsoft.com/Mail.Send",  # from gaia_agent_email/outlook_scopes.py
+        ),
+    ),
+    ConnectorRequirement(
+        connector_id="microsoft_work",
         scopes=(
             "https://graph.microsoft.com/Mail.ReadWrite",  # from gaia_agent_email/outlook_scopes.py
             "https://graph.microsoft.com/Mail.Send",  # from gaia_agent_email/outlook_scopes.py
@@ -204,6 +222,10 @@ def _default_email_src_dir() -> Path:
     # follows the Python environment that launched the DAEMON, never a
     # caller's — see resolve_caller_dev_src_dir for the caller-side mirror.
     return agent_dev_src_dir(Path(__file__).resolve().parents[4], "email")
+
+
+def _default_gaia_src_dir() -> Path:
+    return agent_dev_src_dir(Path(__file__).resolve().parents[4], "gaia")
 
 
 def resolve_caller_mode(agent_id: str, override: Optional[str] = None) -> str:
@@ -313,8 +335,26 @@ def builtin_specs() -> "dict[str, AgentSidecarSpec]":
             cache_dir_name="email",
             dev_src_dir=_default_email_src_dir(),
             grant_agent_id=_EMAIL_GRANT_AGENT_ID,
-            forward_providers=("google", "microsoft"),
+            forward_providers=("google", "microsoft", "microsoft_work"),
             forwarded_mode_env_var=_EMAIL_FORWARDED_MODE_ENV_VAR,
             required_connections=_EMAIL_REQUIRED_CONNECTIONS,
+        ),
+        "gaia": AgentSidecarSpec(
+            agent_id="gaia",
+            service_id="gaia-agent-gaia",
+            display_name="GAIA",
+            expected_api_major="2",
+            docs_url="https://amd-gaia.ai/docs/guides/gaia",
+            token_env_var=_GAIA_TOKEN_ENV_VAR,
+            token_file_env_var=_GAIA_TOKEN_FILE_ENV_VAR,
+            # First release already reads the token file, so there is no older
+            # installed binary needing the deprecated bare-env leg.
+            secret_file_min_version="0.1.0",
+            mode_env_var="GAIA_GAIA_AGENT_MODE",
+            cache_dir_name="gaia",
+            dev_src_dir=_default_gaia_src_dir(),
+            # No forward_providers: the flagship reaches external services through
+            # MCP servers the user activates, not daemon-forwarded OAuth tokens.
+            # Listing a provider here would hand it credentials it cannot use.
         ),
     }

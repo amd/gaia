@@ -1,3 +1,5 @@
 bin/
 *.exe
 *.exe~
+coverage.out
+coverage.txt

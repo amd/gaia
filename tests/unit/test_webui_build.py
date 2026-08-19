@@ -745,6 +745,8 @@ class TestInitCommandWebuiBuild(unittest.TestCase):
             patch.object(InitCommand, "_ensure_lemonade_installed", return_value=True),
             patch.object(InitCommand, "_ensure_server_running", return_value=True),
             patch.object(InitCommand, "_verify_setup", return_value=True),
+            # Never touch the real ~/.gaia/config.json during a test.
+            patch("gaia.config.GaiaConfig"),
         ):
             cmd = InitCommand.__new__(InitCommand)
             cmd.profile = "minimal"
@@ -757,6 +759,7 @@ class TestInitCommandWebuiBuild(unittest.TestCase):
             cmd._lemonade_base_url = None
             cmd.installer = mock_installer
             cmd.console = MagicMock()
+            cmd.yes = True
             cmd.run()
 
         return mock_ensure_built

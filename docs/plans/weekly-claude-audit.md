@@ -15,10 +15,17 @@ review that files **one ranked triage issue** a maintainer skims and promotes.
 
 ## Modes
 
-- **normal** (weekly) — reviews the last N days of merged work + the subsystems it touched.
-- **deep** (monthly) — whole-codebase latent-debt sweep. Auto-selected on the first
-  Monday of each month (day-of-month ≤ 7, since cron only fires Mondays); also selectable
-  via `workflow_dispatch`. Deep runs still file issues — that is the point of the sweep.
+- **normal** (6 nights/week) — reviews the last N days of merged work (`window_days`, default 1) + the subsystems it touched. Skips entirely on a night with no commits.
+- **deep** (Sundays) — whole-codebase latent-debt sweep. Auto-selected when the ISO
+  day-of-week is 7; also selectable via `workflow_dispatch`. Deep runs still file issues —
+  that is the point of the sweep.
+
+> **Cadence update:** this shipped weekly and now runs **nightly** at 10:37 UTC
+> (≈3am Pacific), alongside `claude-security-audit.yml` at 09:13 UTC. The mode selector
+> moved from day-of-month to ISO day-of-week at the same time — under a nightly cron the
+> old `day-of-month ≤ 7` test would have matched the 1st–7th of every month and fired
+> seven consecutive deep sweeps. See the `weekly-audit-patterns` skill for current
+> invariants.
 
 ## Dimensions (one read-only Claude job each, in parallel)
 
@@ -99,7 +106,7 @@ ranks by severity (**🔴 high · 🟠 medium · 🟡 low** — no green; green 
   to a public issue, so it hands security off rather than disclosing it here.
 - **Skip-if-empty**: normal mode exits before any Claude call on a no-change week.
 - **Read-only**: `--allowedTools Read,Grep,Glob,Bash`; never install or run repo code.
-- **Model** `claude-opus-4-8` via the top-level `AUDIT_MODEL` env (one place to change);
+- **Model** `claude-opus-5` via the top-level `AUDIT_MODEL` env (one place to change);
   `claude-fable-5` for max depth at ~2x cost. Dimensions run `max-parallel: 1` (serialized)
   to stay under the Max subscription's rolling rate limit.
 

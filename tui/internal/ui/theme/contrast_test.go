@@ -94,6 +94,7 @@ var tokens = []entry{
 	{"Danger", Danger, roleText},
 	{"Info", Info, roleText},
 	{"Highlight", Highlight, roleText},
+	{"Selected", Selected, roleText},
 
 	{"Faint", Faint, roleFaint},
 
@@ -195,6 +196,7 @@ var family = map[string]hueFamily{
 	"Text": hueNeutral, "Dim": hueNeutral, "Faint": hueNeutral,
 	"Accent": hueGreen, "AccentBright": hueGreen, "Success": hueGreen,
 	"Warning": hueAmber, "Danger": hueRed, "Info": hueBlue, "Highlight": hueMagenta,
+	"Selected":  hueAmber,
 	"Divider":   hueNeutral,
 	"ArtBright": hueGreen, "ArtBody": hueGreen, "ArtMid": hueGreen, "ArtDetail": hueGreen,
 	"ArtShadow": hueNeutral, "ArtEye": hueCyan,

@@ -23,12 +23,30 @@ From an agent::
         def _register_tools(self):
             self.load_skill("web-research")   # tools land under 'web-research/'
 
-Phase 1 (issue #888) bridges connector-backed permissions only. A skill
-declaring a local-capability permission (``filesystem``, ``shell``,
-``database``, ``desktop``, ``env``) is refused — see
+Permissions bridge two ways: connector-backed domains (``network``, ``mcp``)
+and scoped binary grants (``shell:execute:gh``, gated by
+:mod:`gaia.skills.binaries`). A skill declaring an unbridged local capability
+(``filesystem``, ``database``, ``desktop``, ``env``) is refused — see
 :mod:`gaia.skills.permissions`.
 """
 
+from gaia.skills.binaries import (
+    BINARY_POLICIES,
+    BinaryGrants,
+    BinaryPolicy,
+    Subcommand,
+    normalize_binary,
+    resolve_binary_policies,
+    validate_invocation,
+)
+from gaia.skills.consume import (
+    AGENT_MANIFEST_FILENAME,
+    ResolvedSkills,
+    SkillRequirement,
+    find_agent_manifest,
+    requirements_from_refs,
+    resolve_requirements,
+)
 from gaia.skills.errors import (
     SkillError,
     SkillNotFoundError,
@@ -50,6 +68,8 @@ from gaia.skills.format import (
     parse_skill,
     parse_skill_file,
     parse_skill_metadata,
+    reset_security_tier,
+    split_frontmatter,
     validate_skill,
 )
 from gaia.skills.loader import register_skill_tools, unregister_skill_tools
@@ -63,7 +83,22 @@ from gaia.skills.manager import (
     reset_default_manager,
     user_skills_dir,
 )
+from gaia.skills.migrate import (
+    HERMES_NAMESPACES,
+    OPENCLAW_NAMESPACES,
+    VENDOR_HERMES,
+    VENDOR_OPENCLAW,
+    VENDORS,
+    MigrationOutcome,
+    detect_vendor,
+    find_source_skills,
+    format_report,
+    install_migrated,
+    migrate_skill_dir,
+    migrate_text,
+)
 from gaia.skills.permissions import (
+    BINARY_BRIDGED_DOMAINS,
     CONNECTOR_BRIDGED_DOMAINS,
     LOCAL_CAPABILITY_DOMAINS,
     Permission,
@@ -80,6 +115,20 @@ from gaia.skills.sets import (
     SkillSets,
     parse_skill_sets,
 )
+from gaia.skills.tiers import (
+    DANGEROUS_GRANTS,
+    LOWEST_TIER,
+    TIER_ORDER,
+    effective_tier,
+    enforce_tier_ceiling,
+    tier_rank,
+)
+
+# NOTE: the marketplace modules (``gaia.skills.hub``, ``install``, ``publish``,
+# ``signing``, ``lock``, ``audit_gate``) are deliberately NOT re-exported here.
+# They pull in ``requests``, ``cryptography``, and the hub catalog; importing
+# ``gaia.skills`` is on the hot path for every agent that composes a skill, and
+# it should not pay for a publish-time dependency. Import them by module.
 
 __all__ = [
     # Format
@@ -90,6 +139,8 @@ __all__ = [
     "parse_skill",
     "parse_skill_file",
     "parse_skill_metadata",
+    "split_frontmatter",
+    "reset_security_tier",
     "validate_skill",
     "SKILL_FILENAME",
     "SKILL_TOOLS_FILENAME",
@@ -106,6 +157,19 @@ __all__ = [
     "get_default_manager",
     "reset_default_manager",
     "user_skills_dir",
+    # Migration (OpenClaw / Hermes → GAIA)
+    "MigrationOutcome",
+    "detect_vendor",
+    "migrate_text",
+    "migrate_skill_dir",
+    "find_source_skills",
+    "install_migrated",
+    "format_report",
+    "VENDORS",
+    "VENDOR_OPENCLAW",
+    "VENDOR_HERMES",
+    "OPENCLAW_NAMESPACES",
+    "HERMES_NAMESPACES",
     # Skill sets (issue #2466)
     "SkillRef",
     "SkillSets",
@@ -123,7 +187,30 @@ __all__ = [
     "connector_requirements",
     "refuse_unbridged_permissions",
     "CONNECTOR_BRIDGED_DOMAINS",
+    "BINARY_BRIDGED_DOMAINS",
     "LOCAL_CAPABILITY_DOMAINS",
+    # Binary bridge (shell:execute:<binary>)
+    "BINARY_POLICIES",
+    "BinaryPolicy",
+    "BinaryGrants",
+    "Subcommand",
+    "normalize_binary",
+    "resolve_binary_policies",
+    "validate_invocation",
+    # Security tiers (#2467)
+    "TIER_ORDER",
+    "LOWEST_TIER",
+    "DANGEROUS_GRANTS",
+    "tier_rank",
+    "effective_tier",
+    "enforce_tier_ceiling",
+    # Declarative consumption (#2467 scope D)
+    "SkillRequirement",
+    "ResolvedSkills",
+    "AGENT_MANIFEST_FILENAME",
+    "find_agent_manifest",
+    "resolve_requirements",
+    "requirements_from_refs",
     # Errors
     "SkillError",
     "SkillValidationError",

@@ -27,9 +27,10 @@ type Message struct {
 	ToolName  string
 	Success   *bool
 	Duration  time.Duration // time from query to answer
-	TTFT      time.Duration // time to first event (model load + first inference)
+	TTFT      time.Duration // time to first inference token; never model-load or a tool/status event
 	Steps     int           // agent steps taken
 	ToolsUsed int           // tools invoked
+	Tokens    int           // real generated-token count; 0 => not reported, omit from display
 
 	// Render / Data carry a RoleCard message's payload straight off the wire;
 	// the cards package decides how (and whether) it can be drawn.
@@ -83,8 +84,23 @@ func (m *Message) renderCardDeduped(w int, seen map[string]bool) string {
 }
 
 type ActivityItem struct {
-	Kind    string // "thinking", "tool", "step", "status"
+	Kind string // "thinking", "tool", "step", "status", "confirm"
+	// Content is the user-facing line — for a tool, the narrated phrase
+	// ("Loading the github-triage skill"), never the bare tool name.
 	Content string
+	// Tool is the raw tool name behind a "tool" item. Kept alongside the
+	// narration so repeat-folding groups by the tool that ran rather than by
+	// the prose, which legitimately differs per call.
+	Tool string
+	// Detail is the one-line outcome drawn under the item once its result
+	// lands ("18 skills · 21ms"). Empty until then.
+	Detail string
+	// Args and Output are the raw call arguments and raw result payload, one
+	// line each. Populated only in developer mode — in user mode they are left
+	// empty rather than filled and hidden at render time, so the quiet path
+	// never pays to format text nobody will read.
+	Args    string
+	Output  string
 	Done    bool
 	Success *bool
 	// Repeat counts additional consecutive occurrences folded into this item by

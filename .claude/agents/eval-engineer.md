@@ -1,11 +1,25 @@
 ---
 name: eval-engineer
 description: GAIA evaluation framework specialist. Use PROACTIVELY for writing eval tests, generating ground truth, running batch experiments, benchmarking models, or analysing transcripts.
-tools: Read, Write, Edit, Bash, Grep
+tools: Read, Write, Edit, Bash, Grep, Glob
 model: opus
 ---
 
 You work on GAIA's evaluation framework in `src/gaia/eval/`. Your job is making model/agent comparisons reproducible.
+
+## Output style
+
+Follow [`CLAUDE.md`](../../CLAUDE.md) → "How You Communicate".
+
+## NEVER run evals in parallel
+
+At most **one** `gaia eval agent` process at any moment — including `--fix` runs and any batch fix-loop that chains them. Two concurrent runs race-evict each other's models off the single-tenant Lemonade backend, producing garbage that looks like real failures: `exceeds the available context size (4096 tokens)`, spurious `BLOCKED_BY_ARCHITECTURE` / `INFRA_ERROR`, `llama-server failed to start`.
+
+```bash
+ps aux | grep "gaia eval" | grep -v grep | wc -l    # must print "0" before you start
+```
+
+Chain sequentially (`run-1 && run-2`), never with background `&`. The judge LLM can fan out concurrently — the local backend cannot.
 
 ## When to use
 
@@ -40,29 +54,13 @@ See `docs/reference/eval.mdx` for the user-facing reference.
 
 1. **Define the task** — inputs, expected outputs, grading function
 2. **Run the agent eval** — `gaia eval agent --category <category> --agent-type <type>` (prints the run dir + `scorecard.json`)
-3. **Compare to baseline** — `gaia eval agent --compare <baseline-scorecard.json> <run-dir>/scorecard.json`
+3. **Compare to baseline** — `gaia eval agent --compare tests/fixtures/eval_baselines/<model>/scorecard_<category>.json <run-dir>/scorecard.json`. `--compare` only *diffs* two scorecards; it never runs an eval. Pick the baseline matching your model by name — don't `ls -t`, a fresh clone stamps every baseline with the checkout time
 4. **Report** — `gaia report` to render results
 5. **Visualize performance** — `gaia perf-vis`
 
 ## Writing a new eval
 
-```python
-# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
-# SPDX-License-Identifier: MIT
-
-from gaia.logger import get_logger
-from gaia.eval import Evaluator  # verify actual import at src/gaia/eval/__init__.py
-
-log = get_logger(__name__)
-
-def run(model: str, dataset: str):
-    evaluator = Evaluator(model=model)
-    results = evaluator.run_batch(dataset)
-    evaluator.generate_report(results)
-    return results
-```
-
-**Always verify the actual API** in `src/gaia/eval/` before writing eval code — signatures evolve faster than docs.
+There is no `gaia.eval.Evaluator` and `src/gaia/eval/__init__.py` exports nothing — don't write against an imagined façade. Read [`src/gaia/eval/runner.py`](../../src/gaia/eval/runner.py) (plus `scorecard.py` / `audit.py`) and mirror the nearest existing eval in the tree. Signatures here move faster than any doc.
 
 ## Metrics to track
 

@@ -414,12 +414,17 @@ class TestAnalyzeFileWithUsageBinaryTemperature:
 
 
 # ---------------------------------------------------------------------------
-# Judge factories pin temperature=0.0 (#2094 AC-5)
+# Judge factories send no sampling params
+#
+# The judge model rejects `temperature` with a 400, which fails every judged
+# eval at its first API call. The factories pinned temperature=0.0 until that
+# parameter was removed from the model; these tests keep the pin from coming
+# back. Determinism is now a property of the judge prompt, not the request.
 # ---------------------------------------------------------------------------
 
 
 class TestJudgeFactoryTemperature:
-    def test_action_item_quality_pins_temperature_zero(self, monkeypatch):
+    def test_action_item_quality_sends_no_temperature(self, monkeypatch):
         spy = MagicMock()
         monkeypatch.setattr("gaia.eval.claude.ClaudeClient", spy)
 
@@ -427,9 +432,9 @@ class TestJudgeFactoryTemperature:
 
         make_claude_judge(model="claude-sonnet-4-6")
 
-        spy.assert_called_once_with(model="claude-sonnet-4-6", temperature=0.0)
+        spy.assert_called_once_with(model="claude-sonnet-4-6")
 
-    def test_briefing_quality_pins_temperature_zero(self, monkeypatch):
+    def test_briefing_quality_sends_no_temperature(self, monkeypatch):
         spy = MagicMock()
         monkeypatch.setattr("gaia.eval.claude.ClaudeClient", spy)
 
@@ -437,9 +442,9 @@ class TestJudgeFactoryTemperature:
 
         make_claude_judge(model="claude-sonnet-4-6")
 
-        spy.assert_called_once_with(model="claude-sonnet-4-6", temperature=0.0)
+        spy.assert_called_once_with(model="claude-sonnet-4-6")
 
-    def test_draft_quality_pins_temperature_zero(self, monkeypatch):
+    def test_draft_quality_sends_no_temperature(self, monkeypatch):
         spy = MagicMock()
         monkeypatch.setattr("gaia.eval.claude.ClaudeClient", spy)
 
@@ -447,4 +452,4 @@ class TestJudgeFactoryTemperature:
 
         make_claude_judge(model="claude-sonnet-4-6")
 
-        spy.assert_called_once_with(model="claude-sonnet-4-6", temperature=0.0)
+        spy.assert_called_once_with(model="claude-sonnet-4-6")

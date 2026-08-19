@@ -27,9 +27,43 @@ const (
 )
 
 // CanonicalStatusEvent — progress narration (spinner label / status line).
+//
+// The Model* fields are additive, riding the existing `status` type rather
+// than a new one — but unlike Narration/Preview they are NOT part of the
+// frozen `/query` HTTP contract other hub agents publish
+// (docs/spec/agent-ui-query-sse-contract.md governs that one; the gaia
+// flagship agent has no such surface). They are a stdio-transport-local
+// extension: a model-state ping gaia_agent/stdio.py sends at startup and
+// after a live `/model` switch. Safe to share this Go type with the
+// daemon-relay path anyway — an agent that never sets these fields leaves
+// them at their zero value, which decodes as an ordinary (blank) status
+// line. ModelID is empty on every ordinary progress status — that's the
+// field a receiver checks to tell the two apart (see
+// ChatModel.handleCanonicalEvent).
 type CanonicalStatusEvent struct {
 	Type    string `json:"type"`
 	Message string `json:"message"`
+	// ModelID is the model actually resolved for chat (e.g. "claude-sonnet-5"
+	// or "Gemma-4-E4B-it-GGUF") — empty means this is a plain status line, not
+	// a model banner.
+	ModelID string `json:"model_id,omitempty"`
+	// ModelDisplay is the short header name for ModelID (e.g. "Sonnet 5"),
+	// falling back to ModelID itself when there is no friendlier form.
+	ModelDisplay string `json:"model_display,omitempty"`
+	// ModelBackend is "claude" or "lemonade".
+	ModelBackend string `json:"model_backend,omitempty"`
+	// ModelRemote is true while inference runs off-machine (Anthropic) —
+	// the header chip's warning color is keyed on this, not on ModelBackend,
+	// so a future non-Claude remote backend still gets the warning.
+	ModelRemote bool `json:"model_remote,omitempty"`
+	// LemonadeReachable/LemonadeVersion/LemonadeBaseURL report the local model
+	// server, and are sent even for a remote chat model: embeddings (RAG,
+	// memory) still run on Lemonade, so "chat is remote" does not make Lemonade
+	// being down harmless. Reachable is a *bool so "not reported" (an older
+	// agent) stays distinguishable from "reported as down".
+	LemonadeReachable *bool  `json:"lemonade_reachable,omitempty"`
+	LemonadeVersion   string `json:"lemonade_version,omitempty"`
+	LemonadeBaseURL   string `json:"lemonade_base_url,omitempty"`
 }
 
 // CanonicalTokenEvent — one incremental chunk of assistant answer text.
@@ -39,10 +73,16 @@ type CanonicalTokenEvent struct {
 }
 
 // CanonicalToolCallEvent — a tool invocation with its arguments.
+//
+// Narration is the sidecar's own plain-language sentence for this call ("Reading
+// issue #2924"). Additive and optional: an agent that doesn't send one gets a
+// phrase derived from the tool name and its salient argument (see toolNarration
+// in ui/chat), because a bare tool name is not what the user asked about.
 type CanonicalToolCallEvent struct {
-	Type string          `json:"type"`
-	Tool string          `json:"tool"`
-	Args json.RawMessage `json:"args,omitempty"`
+	Type      string          `json:"type"`
+	Tool      string          `json:"tool"`
+	Args      json.RawMessage `json:"args,omitempty"`
+	Narration string          `json:"narration,omitempty"`
 }
 
 // CanonicalToolResultEvent — a tool's structured result.
@@ -51,21 +91,35 @@ type CanonicalToolCallEvent struct {
 // generic primitives "table" / "key_value" / "list" / "image" / "diff"). Data is
 // the render-specific payload. An unknown Render must degrade to a generic result
 // card — never to a blank.
+//
+// Preview is the sidecar's own one-line outcome for the work log ("18 skills ·
+// 21ms"). Additive and optional: absent, one is composed from Data (see
+// toolResultDetail in ui/chat). It is never a substitute for the card — the card
+// is the full result, this is the line under the tool call.
 type CanonicalToolResultEvent struct {
-	Type   string          `json:"type"`
-	Tool   string          `json:"tool"`
-	Render string          `json:"render,omitempty"`
-	Data   json.RawMessage `json:"data,omitempty"`
+	Type    string          `json:"type"`
+	Tool    string          `json:"tool"`
+	Render  string          `json:"render,omitempty"`
+	Data    json.RawMessage `json:"data,omitempty"`
+	Preview string          `json:"preview,omitempty"`
 }
 
 // CanonicalNeedsConfirmationEvent — the run pauses for a user decision.
 // ConfirmURL is present only under the resume model; the stateless surface omits it.
 type CanonicalNeedsConfirmationEvent struct {
-	Type       string `json:"type"`
-	RunID      string `json:"run_id"`
-	Action     string `json:"action"`
-	Summary    string `json:"summary"`
-	ConfirmURL string `json:"confirm_url,omitempty"`
+	Type    string `json:"type"`
+	RunID   string `json:"run_id"`
+	Action  string `json:"action"`
+	Summary string `json:"summary"`
+	// ConfirmID is the emitter's handle for THIS prompt, echoed back with the
+	// decision so a late answer cannot resolve the confirmation that replaced
+	// the one it was typed for. Absent on transports that do not mint one.
+	ConfirmID string `json:"confirm_id,omitempty"`
+	// AlwaysScope is what an "always" answer would grant, e.g. `gh issue list`.
+	// Empty means this call has no scope narrow enough to grant, so the client
+	// must not offer the choice — the agent decides that, not the renderer.
+	AlwaysScope string `json:"always_scope,omitempty"`
+	ConfirmURL  string `json:"confirm_url,omitempty"`
 }
 
 // CanonicalNeedsInputEvent — the run pauses on a QUESTION and resumes on this
@@ -97,7 +151,7 @@ type CanonicalInputOption struct {
 }
 
 // CanonicalFinalEvent — terminal success. Usage is an optional
-// {steps?, tools_used?, elapsed?, tokens?} object.
+// {steps?, tools_used?, elapsed?, tokens?, ttft?} object.
 type CanonicalFinalEvent struct {
 	Type   string          `json:"type"`
 	Answer string          `json:"answer"`
@@ -106,10 +160,15 @@ type CanonicalFinalEvent struct {
 
 // CanonicalUsage is the shape the TUI reads out of CanonicalFinalEvent.Usage.
 // Fields absent from the payload stay zero and are simply not displayed.
+// Tokens is the real generated-token count. TTFT is the turn's first LLM
+// call's own measured time-to-first-token — the server-measured fallback
+// used when no token ever streamed this turn.
 type CanonicalUsage struct {
 	Steps     int     `json:"steps"`
 	ToolsUsed int     `json:"tools_used"`
 	Elapsed   float64 `json:"elapsed"`
+	Tokens    int     `json:"tokens"`
+	TTFT      float64 `json:"ttft"`
 }
 
 // CanonicalErrorEvent — terminal failure. Detail is actionable and surfaced

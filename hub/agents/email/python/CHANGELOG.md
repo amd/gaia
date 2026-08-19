@@ -7,8 +7,65 @@ contract version is tracked separately as
 
 ## [Unreleased]
 
+### Fixed
+
+- **The OpenAPI document now declares the sidecar's bearer-token gate (#2993).**
+  `require_caller_token` enforces a per-session bearer token at runtime, but was
+  invisible to schema generation (it's a plain `Request` dependency, not a
+  `fastapi.security` class) — every documented operation showed 0 security
+  requirements. The live `/openapi.json` and the committed `openapi.email.json`
+  now declare a `bearerAuth` HTTP scheme and, per gated operation, `security:
+  [{"bearerAuth": []}, {}]` (bearer OR none — the check is conditional, skipped
+  when the sidecar has no token configured for local development). `EXEMPT_PATHS`
+  routes declare an explicit empty requirement. No runtime auth behavior changed.
+- **A `newer_than:`/`older_than:` search could report 0 messages for mail
+  that exists (#2830, Gmail mailboxes only).** The issue blamed
+  `from:"<brand>"` matching nothing on a display name — disproven: that
+  query matched fine. The real cause is `w` (weeks), which the model
+  reaches for but Gmail does not implement as a duration unit — Gmail
+  silently returns an empty result set instead of an error, so `newer_than:2w`
+  and a working `newer_than:14d` looked identical to the agent. Duration
+  values on `newer_than:`/`older_than:` are now validated and `w` converted
+  to days before the query reaches Gmail; an unrecognized unit now raises an
+  actionable error instead of a silent zero-result search. The `search`
+  REST endpoint's error path for a bad duration also stopped returning a
+  bare `500` and now surfaces the actionable `400`. The effective
+  (post-normalization) query and retry state are now logged for
+  `search_messages`, so a future zero-result report is diagnosable from
+  `~/.gaia/gaia.log` without reproducing it live.
+  **Outlook mailboxes are unaffected by this fix** — `outlook_backend.py`
+  sends the whole query as a single quoted Microsoft Graph `$search` phrase
+  and never parses Gmail operator syntax, so the corrected duration handling
+  has no effect there; operator search against Outlook was already
+  non-functional before and after this change.
+
+### Changed
+
+- **Email addresses are now redacted from verbose tool-call logs.** The
+  `tool_call` / `tool_result` records emitted for **every** tool previously
+  passed addresses through unscrubbed — `_REDACT_PATTERNS` matched MFA codes,
+  long URLs and JWT-shaped tokens, but nothing address-shaped. Since
+  `~/.gaia/gaia.log` is bundled by `gaia diagnostics` by default and the docs
+  ask users to attach that bundle to a public issue, a contact's address could
+  travel from a local search straight into a public bug report. Addresses now
+  render as `[REDACTED]`. This is deliberate privacy hardening with a
+  debuggability cost: a recipient in a verbose `send_email` log line, for
+  instance, is no longer readable, and logs written before this release still
+  contain the raw values.
+
+## [0.6.0] - 2026-08-12
+
 ### Added
 
+- **Work Microsoft 365 mailboxes (#2629, schema 2.14).** A third mailbox
+  provider, `microsoft_work` (work/school Entra ID, distinct from the personal
+  `microsoft` Outlook.com connector), is now recognized wherever a provider
+  string is accepted or returned — `REQUIRED_CONNECTORS`, the Graph token
+  resolvers, onboarding, and mailbox selection all read it. Fixed alongside it:
+  the daemon's OAuth token-forward path now forwards the work-mailbox
+  connector's token to the agent, not just the personal one. `SCHEMA_VERSION`
+  bumped `2.13` -> `2.14` (additive; existing `microsoft`/`google` consumers are
+  unaffected).
 - **A follow-up like "reply to number 1" can now resolve (#2829).** `POST
   /v1/email/query` accepts an optional `session_id`: send the same id on
   every turn of a conversation and the run resolves the SAME agent each
@@ -19,9 +76,65 @@ contract version is tracked separately as
   rejected, `409`); a session id the sidecar has never seen arriving with
   prior conversation history (e.g. the sidecar restarted mid-conversation)
   gets a one-time notice instead of silently starting over.
+- **A scoped "anything suspicious in my inbox?" question no longer dumps the
+  full triage report (#2900).** New read-only tool `check_suspicious_mail`
+  surfaces only phishing/spam-flagged mail — precomputed and counted by the
+  same shared classifier every triage tool already uses, never re-classified.
+  `PreScanItem` gains `is_phishing`/`is_spam` (bool, default `false`) and
+  `EmailPreScanResult` gains `suspicious`/`suspicious_total` (schema 2.13) so
+  the flag, previously readable only inside a prose `why` string, is a real
+  field — captured before `actionable`'s own cap so a flagged message ranked
+  past it is never silently dropped from the count. A general (non-
+  question-parsing) request still gets the full four-bucket
+  `pre_scan_inbox` card unchanged.
+### Changed
+
+- **`office365`/`o365`/`m365`/"microsoft 365"/`entra`/`exchange` now resolve
+  to the work connector, not the personal one (#2629, BREAKING).** Before
+  this release these six words (`resolve_provider()`, used by tool-argument
+  normalization and the mailbox-targeting NLU guard) mapped to the personal
+  `microsoft` Outlook.com connector — the only Microsoft connector that
+  existed. They now map to `microsoft_work`. A user who has only the
+  personal connector configured and refers to their mailbox as "office365"
+  or "exchange" now names a connector they have not connected, and gets the
+  actionable not-connected error for `microsoft_work` instead of being
+  served from `microsoft`. Bare `microsoft`/`outlook`/`outlook.com`/
+  `hotmail`/`live` are unaffected.
+- **Agent Skills ship disabled for this agent, pending eval evidence (#2695
+  follow-up).** The `skill_sets:` and `default_skill_set: personal` blocks in
+  `gaia-agent.yaml` are commented out, so `parse_manifest(...).skill_sets` is
+  empty, `load_skill_set()` early-returns, and the agent launches with
+  `loaded_skills == {}` / `active_skill_set is None`. Skills were turned on by
+  default with no eval run behind them, and an active `personal` set cost ~1,334
+  prompt tokens — shrinking the bulk-triage result envelope from 6144 to 4810
+  (the `work` set, to 4070). `envelope_budget_tokens()` is back to **6144**
+  (16384 − 9216 − 1024), byte-identical to pre-skills. Nothing was deleted: the six
+  `gaia_agent_email/skills/<name>/SKILL.md` bodies still ship in the wheel and
+  the frozen binary, and `SKILL_DIRS`, `select_skill_set()`,
+  `ACCOUNT_TYPE_SKILL_SETS`, `GAIA_EMAIL_SKILL_SET`, `--skill-set`, and the
+  `skill_prompt_tokens` accounting are all intact but inert. With no sets
+  declared, a pinned set is a startup error rather than a silent no-op —
+  `--skill-set personal` exits with "…requested skill set 'personal', but this
+  agent declares no skill sets — Agent Skills are switched off in this build.
+  Drop the option, or uncomment the 'skill_sets:' and 'default_skill_set:'
+  blocks in gaia-agent.yaml." Re-enabling is uncommenting those two blocks
+  **together**; a non-empty `skill_sets:` with no `default_skill_set:` is a
+  validation error. `tools_count` (65), the REST/MCP contract, the connector
+  surface, and `SCHEMA_VERSION` are unaffected.
 
 ### Fixed
 
+- **A reply/draft/send action could report failure even though it actually
+  succeeded, and a retry made things worse (#2902).** After a draft was
+  created or a message sent, a separate local audit-log write (`state.db`,
+  shared with the scheduler's background agent, #1115) could transiently
+  fail with `database is locked` — and that bookkeeping failure was reported
+  to the user as if the whole action had failed. `draft_reply`,
+  `draft_forward`, and `send_draft` now match `send_now`'s existing
+  ordering-invariant guard: the audit write is logged, not raised, once the
+  real Gmail/Outlook call has already succeeded. Retrying `send_draft`
+  against a draft id already consumed by a prior send now gets a plain
+  "already sent" message instead of a generic connector-error dump.
 - **Asked about upcoming meetings or calendar invites, the agent could invent
   attendee names and invite confirmations that exist nowhere in the mailbox
   or the tool trace (#2766).** A calendar event's real `organizer` was
@@ -38,6 +151,13 @@ contract version is tracked separately as
   could have confirmed one, and an attendee named for an event the tool
   result shows has none; both leave a correctly-reported organizer and an
   honest "no attendees" alone.
+- **A pinned `GAIA_EMAIL_SKILL_SET` leaked across tests, failing suites that
+  never mention skills.** The variable was set process-wide by the skill-set
+  tests and never cleared, so every later agent construction requested a set
+  that no longer exists once skills ship disabled — surfacing as unrelated
+  trash/restore, undo, and zero-connector failures rather than as a skills
+  problem. The fixture now scopes and restores it, so the fail-loud
+  `SkillSetError` fires only where a set is genuinely requested.
 - **`get_thread` invented messages, senders, and timestamps that were never
   in the mailbox (#2765).** Asked to catch up on a conversation, the agent
   could hand back a duplicated message, another replaced by a repeat of an
@@ -129,9 +249,10 @@ contract version is tracked separately as
   buckets plus the waiting-on-you detector and persisted action items —
   never re-derived from raw scan results, so nothing those buckets already
   caught can go missing from it. `bulk.filter_tests` carries opaque ids (never
-  prose) a renderer maps to a sentence, so "47 filtered" always names the
-  test that filtered it. `NeedsYouItem.due_hint` (action items only) is
-  wrapped in the same untrusted-input delimiters that cover a raw message
+  prose) that a renderer can map to a sentence naming the test that filtered
+  a message, rather than a bare unauditable count. `NeedsYouItem.due_hint`
+  (action items only) is wrapped in the same untrusted-input delimiters
+  that cover a raw message
   body — it is regex-extracted verbatim from a message body and re-enters
   the calling agent's own tool-result context while that agent holds
   archive/send/delete authority. Nothing existing was removed, renamed, or
@@ -149,6 +270,22 @@ contract version is tracked separately as
   was never budgeted for. A follow-up will populate it, bounded to a
   deadline so a slow extraction degrades to partial detail rather than a
   stalled card.
+- **The triage card is now rendered from the scan's own data instead of
+  retyped by the model (#2858).** The chat model was previously asked to
+  transcribe a list the tools had already computed — categories, numbering,
+  addresses — and that transcription could drift from the underlying scan:
+  a number pointing at a different message than the one shown under it, an
+  item dropped or duplicated, or no list at all despite a populated scan.
+  Categorization is still model judgement (heuristic, then the
+  `specific-ai-triage` SLM, then an LLM fallback, all inside
+  `pre_scan_inbox`); the breakdown itself is now rendered directly from
+  `needs_you` via a `finalize_answer` hook on the base agent, so a
+  reference like `archive 3` always resolves to the message actually shown
+  as row 3, and the same deterministic corrections (calendar-conflict,
+  attention-card, invite-claim, fabricated-attendee) now reach the stream
+  and the console, not just an unread return value. On a 55-item real
+  inbox on the NPU profile this completed in under a minute, with no
+  timeout, on the CLI-to-daemon relay path.
 - **The inbox-scan default is now owned in one place (#2743, closing the loop
   #2643 started).** `config.DEFAULT_INBOX_SCAN_MESSAGES` (50) is now the
   single source every scan-default call site imports instead of restating a
@@ -255,6 +392,14 @@ contract version is tracked separately as
   every other `gaia email` command (no second auth scheme): `status`,
   `set-level`, `pause`, `resume`, `run`, `trust`, `kill`. Closes the gap where
   the code and the plan doc both described this command before it existed.
+- **The autonomy CLI now works against a real installed sidecar, not just
+  this checkout (#2894).** The `/v1/email/agent/autonomy*` routes above did
+  not exist in any binary published before this release, so `gaia email
+  autonomy status` (and every other subcommand) 404'd for anyone running an
+  installed sidecar rather than a source checkout, with nothing explaining
+  why. This release is the first where the shipped binary actually serves
+  those routes: every subcommand now reaches a real route and returns 200,
+  or a correct 409 when autonomy is off.
 
 ### Fixed
 
@@ -533,6 +678,9 @@ contract version is tracked separately as
   still inviolable at every level — broadening the candidate map cannot make a floor tool
   auto-executable.
 - **Bundled Agent Skills, and the active set keyed to the mailbox kind (#2466).**
+  **Ships disabled** — the manifest blocks are commented out, so none of the
+  behaviour below is active; see *Changed* above. The rest of this entry
+  describes what the machinery does once they are uncommented.
   The agent brought identical instincts to every mailbox — the same triage
   judgement for one full of newsletters and booking confirmations as for one full
   of meeting invites and outstanding commitments. It now bundles six
@@ -728,6 +876,20 @@ contract version is tracked separately as
   request too large even at the smallest usable body size fails with an
   actionable error naming the limit instead of silently returning less
   than was asked for.
+- **A counting question about a long-bodied sender no longer overflows the
+  model's context and comes back with an apology instead of an answer
+  (#2782).** Asking "how many emails from X in the last two weeks?" against
+  a verbose sender ran the search correctly, then blew the context window
+  re-reading the full body of every result and gave up — reproduced 8 of 8
+  times across two machines. `search_messages` now defaults to metadata
+  only (subject/from/date/snippet, no body): a counting or listing question
+  never needed the body, and metadata cuts the result size by roughly an
+  order of magnitude. A docstring instruction telling the model to pass
+  `include_bodies=False` for a counting question was tried first and
+  measured to fail live — the model didn't reliably do it — so the fix
+  flips the tool's *default* instead, which holds regardless of what the
+  model does. A turn that still can't fit now names the actual constraint
+  rather than a generic "had to trim the conversation" apology.
 - **Calendar listing and conflict checks no longer 400 on a date-only range,
   and never end a turn narrating a retry that didn't happen (#2517).**
   `list_calendar_events` and `detect_calendar_conflicts` forwarded a
@@ -889,7 +1051,7 @@ contract version is tracked separately as
     fully-trusted sender — a parity test locks the policy floor to the agent's
     real `CONFIRMATION_REQUIRED_TOOLS`. Only reversible actions auto-execute,
     each with undo via `action_store`.
-  - **It learns from your corrections.** `record_autonomy_outcome` is the single
+  - **A correction pulls trust back down.** `record_autonomy_outcome` is the single
     funnel every trust signal flows through; undoing an auto-archive (through the
     real `undo_archive_batch` tool) is captured automatically as a negative outcome
     and pulls trust back below the bar, updating both the sender and the category

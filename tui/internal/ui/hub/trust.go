@@ -87,8 +87,6 @@ func (m trustModel) Update(msg tea.Msg) (trustModel, tea.Cmd) {
 
 var (
 	trustBorder = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(theme.Warning).
 			Padding(1, 2)
 
 	trustTitleStyle = lipgloss.NewStyle().Bold(true).Foreground(theme.Warning)

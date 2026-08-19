@@ -1,0 +1,277 @@
+---
+title: "Starter Skills"
+description: "Ten ready-made SKILL.md skills to install, read, and fork into your own — the fastest way to see what GAIA can be told to do."
+icon: "puzzle-piece"
+---
+
+<Info>
+  **First time here?** Complete the [Setup](/setup) guide first. For the field
+  grammar behind every file shown here, see [Skill Format](/plans/skill-format);
+  for how an agent discovers and composes skills, see
+  [Agent Skills](/spec/agent-skills).
+</Info>
+
+A **skill** is a folder with a `SKILL.md` in it: some YAML frontmatter and a
+Markdown procedure. That's the whole format. It is not code, not an agent, and
+not a plugin — it is a written-down way of doing something, in a shape an agent
+can load.
+
+The point of shipping ten of them is not that GAIA does ten things. It is that
+**you can describe a new one in an afternoon**. Each skill below is a worked
+example of a different platform primitive, and each is meant to be copied and
+edited rather than used verbatim.
+
+The pack lives in the hub's skills lane,
+[`hub/skills/`](https://github.com/amd/gaia/tree/main/hub/skills) — one directory
+per skill, alongside `hub/agents/` and `hub/components/`.
+
+## Install one
+
+```bash
+# From a GAIA checkout
+gaia skill import hub/skills/research-report
+
+gaia skill list                       # see what's installed, and from which root
+gaia skill info research-report       # the manifest: permissions, tools, tier
+gaia skill info research-report --body   # ...and the full procedure
+```
+
+`import` copies the folder into `~/.gaia/skills/` and stamps it
+`security_tier: experimental` — **imported skills always re-earn trust**,
+whatever tier the file claims. That is deliberate: the tier records what *you*
+have verified, not what the author asserted.
+
+## Use one
+
+<Warning>
+**Phase 1 loads skills programmatically, not from a chat flag.** The skills
+runtime that ships today ([#888](https://github.com/amd/gaia/issues/888)) covers
+the format, discovery, validation, permission bridge, tool loading, and the
+`gaia skill` CLI. Wiring a skill into an interactive `gaia chat` session with a
+flag is not part of it. Until it lands, the two ways to run a starter skill are
+the SDK call below and simply reading the procedure yourself.
+</Warning>
+
+Any agent built on GAIA's base `Agent` can load a skill by name:
+
+```python
+from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
+
+agent = ChatAgent(ChatAgentConfig())
+agent.load_skill("research-report")     # body joins the system prompt
+
+print(agent.process_query("What's the current state of NPU support in llama.cpp?"))
+```
+
+`load_skill` resolves the name across the discovery roots, validates the
+manifest, registers any tools the skill provides under `<skill-name>/<tool>`,
+bridges its permissions to connector requirements, and injects the procedure
+into the system prompt. `unload_skill(name)` reverses all of it.
+
+On most agents a loaded body then renders in the prompt on every turn. The
+flagship `gaia` agent is the exception: it selects per turn which loaded
+bodies are relevant, and collapses the rest to a one-line menu entry — see
+[the skill spec](/spec/agent-skills) for the mechanics.
+
+`ChatAgent` is the agent to target for this pack: on its default `full` profile
+it registers the web, RAG, scratchpad, memory, file, and shell tools that these
+skills consume. A skill loaded into a narrower agent still works, but any tool
+it names that the agent lacks is logged as unavailable.
+
+## The ten skills
+
+### research-report
+
+Decomposes a topic into sub-questions, searches each, reads the best sources,
+and writes a Markdown report with inline citations and an explicit "what I could
+not confirm" section.
+
+- **Demonstrates** — multi-step planning, web search + fetch, optional RAG over
+  what it fetched.
+- **Consumes** — `search_web`, `fetch_page`, `write_file`, `index_document`,
+  `query_documents`.
+- **Configure** — nothing. Ask it for a report on anything.
+- **Note** — `search_web` is DuckDuckGo-backed; coverage is uneven and it is
+  rate-limited.
+
+### document-brief
+
+Indexes a file or folder and answers questions from it, quoting the sentence
+that proves each claim rather than paraphrasing from the filename.
+
+- **Demonstrates** — the RAG loop end to end: index, query, summarize, status.
+- **Consumes** — `index_document`, `index_directory`, `list_indexed_documents`,
+  `query_documents`, `summarize_document`, `rag_status`.
+- **Configure** — a file or directory path.
+
+### data-explore
+
+Loads messy tabular data into SQL scratchpad tables and answers with real
+queries. Written around the observation that an LLM reading numbers off a table
+gets them subtly wrong, while an LLM writing SQL against them does not.
+
+- **Demonstrates** — scratchpad tables for structured analysis.
+- **Consumes** — `create_table`, `insert_data`, `query_data`, `list_tables`.
+- **Configure** — a CSV, export, or pasted table.
+
+### source-watch
+
+The generic watcher, and the template the next two are forked from: fetch a
+source, extract items, apply a match, suppress anything already reported via
+memory, and speak up only when there is news.
+
+- **Demonstrates** — the watcher shape; memory used for de-duplication.
+- **Consumes** — `fetch_page`, `recall`, `remember`.
+- **Configure** — a source URL, a match condition, and a memory key.
+- **Limit** — **runs when you invoke it.** GAIA's scheduler runs recurring
+  *prompts* but cannot yet run a *skill* on a cron; `gaia schedule add --skill`
+  is rejected at creation time.
+
+### price-watch
+
+`source-watch` specialized to products: extract the current price, compare to
+the lowest ever recorded in memory, alert only on a new low.
+
+- **Demonstrates** — forking a template; memory holding a running extreme rather
+  than a seen-list; the traps in extracting one number from a retail page.
+- **Consumes** — `fetch_page`, `recall`, `remember`.
+- **Configure** — product URLs, one memory key each, an optional price floor.
+
+### recommendations
+
+Recalls what the user has liked and bounced off, searches for what is actually
+available now, ranks by predicted fit, and records the reaction so the next run
+is better.
+
+- **Demonstrates** — memory as personalization; the write-back step that makes a
+  skill improve with use.
+- **Consumes** — `recall`, `search_web`, `fetch_page`, `remember`.
+- **Configure** — a category. It asks two questions if memory is empty.
+
+### check-in
+
+The smallest complete memory loop in the pack: recall open commitments, ask
+about them specifically, write back what changed.
+
+- **Demonstrates** — `recall` → converse → `update_memory` / `remember`.
+- **Consumes** — `recall`, `search_past_conversations`, `remember`,
+  `update_memory`.
+- **Limit** — you start it. A genuinely proactive daily check-in needs
+  skill-aware scheduling, which is not wired yet.
+
+### daily-brief
+
+Gathers several independent sources, tolerates any one of them failing, cuts
+hard, and produces one digest under 250 words.
+
+- **Demonstrates** — composition across sources and graceful partial failure.
+- **Consumes** — `search_web`, `fetch_page`, `recall`.
+- **Configure** — the sections you want and the topics or URLs behind each.
+- **Limit** — you ask for it; it is not delivered. See
+  [what's deferred](#what-is-not-in-the-pack-yet).
+
+### github-triage
+
+The bring-your-own-CLI example. Reads a backlog with the `gh` command, groups
+duplicates, ranks by severity × reach, and drafts the reply without sending it.
+
+- **Demonstrates** — a scoped binary grant. It declares `shell:execute:gh`, which
+  grants the GitHub CLI to this skill's session on this agent, restricted to
+  read-only subcommands (see
+  [Bring your own CLI](/plans/skill-format#bring-your-own-cli)).
+- **Configure** —
+
+  ```bash
+  gh auth login       # gh owns its own auth — GAIA never sees the token
+  gh auth status
+  ```
+
+  If `gh` is not on PATH the skill refuses to load and names the install command.
+  Writes are refused by the runtime, not just by the instructions: `gh issue
+  create`, `gh api -X POST`, and `gh auth token` all come back as errors. Reads
+  run without a per-call approval prompt — loading the skill is the consent — but
+  any command outside the grant still asks.
+
+### rss-digest
+
+The pack's one **tool-providing** skill: it ships a `tools.py` with a `fetch_rss`
+function, declared in `metadata.gaia.tools` and registered as
+`rss-digest/fetch_rss`.
+
+- **Demonstrates** — a skill contributing its own `@tool`. The loader compares
+  the manifest to the function signature and refuses the skill if they disagree,
+  so a stale manifest cannot ship.
+- **Configure** — a feed URL. Handles both RSS 2.0 and Atom.
+- **Note** — it fetches through GAIA's `WebClient`, so private and loopback
+  addresses are refused.
+
+## Fork one
+
+This is the part that matters. Copying a skill and editing it is the whole
+workflow:
+
+```bash
+cp -r hub/skills/source-watch ~/my-skills/gpu-restock-watch
+```
+
+Then, in `gpu-restock-watch/SKILL.md`:
+
+1. Change `name: source-watch` to `name: gpu-restock-watch`. **The `name` field
+   must equal the directory name** — a mismatch is a loud, fixable error rather
+   than a silent misload.
+2. Rewrite `description`. It is not documentation; it is the trigger signal a
+   model reads to decide whether this skill is relevant. Say what it does *and
+   when to use it*.
+3. Edit the procedure. Numbered, concrete steps beat prose.
+4. Bump `version` and drop the `provenance` block if it is no longer ours.
+
+```bash
+gaia skill import ~/my-skills/gpu-restock-watch
+gaia skill info gpu-restock-watch
+```
+
+### Rules worth knowing before you edit
+
+- **Permissions are declarations, and v1 only honors some of them.**
+  `network:*` and `mcp:connect:<connector-id>` bridge to the connector model and
+  work today. `filesystem`, `shell`, `database`, `desktop`, and `env` need a
+  sandbox that has not shipped, so a skill declaring one is **refused at load**
+  rather than loaded unenforced ([#1019](https://github.com/amd/gaia/issues/1019)).
+  Do not add a permission to look thorough — add it only if the skill needs it.
+- **`tools` and `tools_required` are different fields.** `tools` are `@tool`
+  functions your skill *provides* (and must exist in its `tools.py`).
+  `tools_required` names registry tools it *consumes*. Only `rss-digest` uses
+  the former.
+- **Never put a secret in a skill file.** Reference it as a
+  `requirements.env_vars` entry and configure it through
+  `gaia connectors configure`.
+
+## What is not in the pack yet
+
+Several skills in the original proposal ([#893](https://github.com/amd/gaia/issues/893))
+describe things GAIA cannot do yet. Rather than ship manifests that parse but
+cannot run, they are left out, with the specific blocker named:
+
+| Proposed | Blocker |
+|---|---|
+| `morning-brief` (scheduled voice digest to Telegram) | Four at once: the scheduler cannot run skills; there is no Gmail/Calendar/Weather connector in the catalog; text-to-speech is not exposed as an agent tool; the Telegram adapter has no voice-note path. `daily-brief` covers the composition half. |
+| `voice-research` (voice in, voice out) | The Telegram adapter handles photos and documents but not voice messages, and TTS is CLI-only (`gaia talk`), not a tool an agent can call. |
+| `trading-alert` (RSI / unusual volume) | No finance connector in the catalog, and no historical price source to compute an indicator from. Alerting on a number the agent cannot actually obtain would be theatre. |
+| `email-triage` (Gmail triage over MCP) | There is no `gmail` connector id — Gmail is a *scope* of the `google` OAuth connector, not an MCP server with tools. Email triage ships instead as a full agent: see the [Email guide](/guides/email). `github-triage` covers the same backlog-triage shape over a CLI grant. |
+
+Scheduling is the single largest unblock: with `gaia schedule add --skill` wired
+to the skills runtime, `source-watch`, `price-watch`, `check-in`, and
+`daily-brief` all become the background jobs they were designed to be.
+
+## Attribution
+
+- **[Nous Research](https://hermes-agent.nousresearch.com)** — the
+  curated-starter-pack model is theirs. Hermes Agent ships roughly 118 starter
+  skills, and it is the existence proof that a pack of forkable examples is the
+  right shape for a consumer agent platform. This pack is a deliberately small,
+  fully-verified subset of that idea.
+- **[agentskills.io](https://agentskills.io)** — the `SKILL.md` format these
+  files are written in. GAIA adopts the standard's base (`name`, `description`,
+  `license`, `metadata`) unchanged and adds a top-level `version` plus its own
+  `metadata.gaia` namespace, so every skill here remains a valid standard skill
+  that a non-GAIA runtime can read.

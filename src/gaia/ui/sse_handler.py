@@ -10,6 +10,7 @@ to JSON events that the streaming endpoint sends to the frontend.
 
 import json
 import logging
+import math
 import queue
 import re
 import socket
@@ -21,12 +22,30 @@ from pathlib import Path
 from typing import Any, ClassVar, Dict, List, Optional
 
 from gaia.agents.base.console import OutputHandler
+from gaia.agents.base.tool_grants import grant_scope
 from gaia.agents.base.tools import get_tool_display_label, get_tool_metadata
+from gaia.ui.event_narration import DEBUG_CHANNEL, format_count
 
 logger = logging.getLogger(__name__)
 
 #: Seconds the agent thread waits for a tool-confirm response from the frontend.
 TOOL_CONFIRM_TIMEOUT_SECONDS = 60
+
+#: Sentinel for "the caller did not pass a timeout". Distinct from ``None``,
+#: which is a caller explicitly asking to wait for the human indefinitely.
+_USE_HANDLER_TIMEOUT = object()
+
+# ``DEBUG_CHANNEL`` marks an event as harness bookkeeping rather than a
+# description of the user's work (#2804). The emitter is the only layer that
+# knows which it is, so it tags at the source; downstream
+# (:mod:`gaia.ui.sse_translation`) decides whether to forward it.
+
+#: ``start_progress`` labels the agent loop uses to say "I am alive" rather than
+#: "here is what I am doing". Compared lower-cased and stripped of trailing
+#: punctuation. Anything else — a goal, a real narration — passes through.
+_HARNESS_PROGRESS_LABELS = frozenset(
+    {"thinking", "working", "processing", "generating", "generating response"}
+)
 
 # ── Shared LLM output cleaning patterns ─────────────────────────────────
 # These regexes are the canonical definitions for filtering LLM noise.
@@ -169,6 +188,23 @@ class SSEOutputHandler(OutputHandler):
 
     blocking_confirmation = True
 
+    #: How long to wait for a decision. A host that can actually deliver one
+    #: sets this to ``None`` (wait for the human); left bounded, an unattended
+    #: host still fails closed instead of parking the run forever.
+    #:
+    #: Class-level so a handler built with ``__new__`` — which callers that only
+    #: need the confirmation gate do, to skip the queue setup — still has a
+    #: usable value.
+    confirm_timeout_seconds: Optional[float] = TOOL_CONFIRM_TIMEOUT_SECONDS
+
+    #: The tool the live prompt is for, so an "always" answer grants the right
+    #: one without the responder having to name it.
+    _confirm_tool: Optional[str] = None
+
+    #: The arguments of the live prompt, so an "always" answer grants the scope
+    #: the user was actually shown rather than the whole tool.
+    _confirm_args: Optional[Dict[str, Any]] = None
+
     def __init__(self, background_mode: bool = False):
         self.event_queue: queue.Queue = queue.Queue()
         self.cancelled = threading.Event()
@@ -184,6 +220,8 @@ class SSEOutputHandler(OutputHandler):
         self._confirm_event: Optional[threading.Event] = None
         self._confirm_result: bool = False
         self._confirm_id: Optional[str] = None
+        self._confirm_tool = None
+        self._confirm_args = None
         self._tool_start_time: Optional[float] = None
         # Autonomous loop support
         # background_mode=True: skip blocking user confirmation; immediately deny.
@@ -225,6 +263,7 @@ class SSEOutputHandler(OutputHandler):
                 "type": "status",
                 "status": "working",
                 "message": f"Processing with {model_label}...",
+                "channel": DEBUG_CHANNEL,
             }
         )
 
@@ -236,6 +275,7 @@ class SSEOutputHandler(OutputHandler):
                 "step": step_num,
                 "total": step_limit,
                 "status": "started",
+                "channel": DEBUG_CHANNEL,
             }
         )
 
@@ -481,13 +521,15 @@ class SSEOutputHandler(OutputHandler):
         if message and message.lower().startswith("executing "):
             return
         # Emit as status (not thinking — thinking is reserved for LLM reasoning)
-        self._emit(
-            {
-                "type": "status",
-                "status": "working",
-                "message": message or "Working",
-            }
-        )
+        text = message or "Working"
+        event: Dict[str, Any] = {
+            "type": "status",
+            "status": "working",
+            "message": text,
+        }
+        if text.strip().lower().rstrip(".…") in _HARNESS_PROGRESS_LABELS:
+            event["channel"] = DEBUG_CHANNEL
+        self._emit(event)
 
     def stop_progress(self):
         pass  # No-op for SSE - frontend manages its own spinners
@@ -544,8 +586,12 @@ class SSEOutputHandler(OutputHandler):
     # === Completion Methods ===
 
     def print_final_answer(
-        self, answer: str, streaming: bool = True
-    ):  # pylint: disable=unused-argument
+        self,
+        answer: str,
+        streaming: bool = True,  # pylint: disable=unused-argument
+        total_tokens: Optional[int] = None,
+        ttft_seconds: Optional[float] = None,
+    ):
         if answer:
             answer = _THINK_TAG_SUB_RE.sub("", answer)
             # Extract answer text from {"thought":..., "answer":...} JSON before
@@ -559,15 +605,30 @@ class SSEOutputHandler(OutputHandler):
             answer = _TOOL_CALL_JSON_SUB_RE.sub("", answer)
             answer = _THOUGHT_JSON_SUB_RE.sub("", answer)
             answer = answer.strip()
-        self._emit(
-            {
-                "type": "answer",
-                "content": _fix_double_escaped(answer) if answer else answer,
-                "elapsed": self._elapsed(),
-                "steps": self._step_count,
-                "tools_used": self._tool_count,
-            }
-        )
+        event: Dict[str, Any] = {
+            "type": "answer",
+            "content": _fix_double_escaped(answer) if answer else answer,
+            "elapsed": self._elapsed(),
+            "steps": self._step_count,
+            "tools_used": self._tool_count,
+        }
+        # Omit entirely when no real count exists — never emit a fake zero.
+        # `_sum_conversation_tokens` returns 0 both when a real turn generated
+        # zero output tokens (never happens for a completed answer) and when
+        # no per-step stats were collected at all (the common "no real count"
+        # case) — it can't tell the two apart, so treat <= 0 as unavailable,
+        # same as the ttft guard below.
+        if total_tokens is not None and total_tokens > 0:
+            event["tokens"] = total_tokens
+        # Same omit-don't-fake rule for ttft: real value from Lemonade's own
+        # generation timing, or nothing.
+        if (
+            ttft_seconds is not None
+            and math.isfinite(ttft_seconds)
+            and ttft_seconds > 0
+        ):
+            event["ttft"] = round(ttft_seconds, 3)
+        self._emit(event)
 
     def print_repeated_tool_warning(self):
         self._emit(
@@ -843,15 +904,51 @@ class SSEOutputHandler(OutputHandler):
         self,
         tool_name: str,
         tool_args: Dict[str, Any],
-        timeout: float = TOOL_CONFIRM_TIMEOUT_SECONDS,
+        timeout: Optional[float] = _USE_HANDLER_TIMEOUT,
     ) -> bool:
         """Block the agent thread until the user approves or denies a tool call.
 
-        Emits a ``permission_request`` SSE event so the frontend can show a modal.
-        Waits up to ``timeout`` seconds for ``resolve_tool_confirmation()``
-        to be called by the HTTP endpoint.  Returns ``True`` if the user allows,
-        ``False`` otherwise.
+        Emits a ``permission_request`` SSE event so the frontend can show a modal
+        and waits for ``resolve_tool_confirmation()``. Returns ``True`` if the
+        user allows, ``False`` otherwise.
+
+        *timeout* defaults to ``self.confirm_timeout_seconds``. ``None`` waits
+        indefinitely, which is what a host with a live decision channel and a
+        modal on screen wants: a person reading a prompt routinely takes longer
+        than a minute, and expiring under them denies work they were in the
+        middle of approving. Waiting is safe because it is interruptible —
+        ``cancelled`` still breaks the loop, so Ctrl+C ends the run either way.
         """
+        if timeout is _USE_HANDLER_TIMEOUT:
+            timeout = self.confirm_timeout_seconds
+
+        # Bypass and prior "always" grants are checked before anything is
+        # emitted: neither has a question to ask, so putting a modal up would be
+        # theatre. Checked per call, so toggling bypass mid-run takes effect on
+        # the very next gated tool.
+        if self.auto_approve_confirmations_enabled():
+            self.log_auto_approval(tool_name)
+            self._emit(
+                {
+                    "type": "status",
+                    "status": "warning",
+                    "message": (
+                        f"Bypass permissions is ON — ran '{tool_name}' without "
+                        "asking."
+                    ),
+                }
+            )
+            return True
+
+        if self.call_is_granted(tool_name, tool_args):
+            self._last_denial = None
+            logger.info(
+                "Confirmation-gated call to '%s' pre-approved for this session "
+                "by the user",
+                tool_name,
+            )
+            return True
+
         # Background mode: immediately deny — no semaphore hold, no waiting.
         if self.background_mode:
             unattended_message = (
@@ -877,25 +974,37 @@ class SSEOutputHandler(OutputHandler):
         with self._confirm_lock:
             self._confirm_event = threading.Event()
             self._confirm_result = False
-        self._confirm_id = confirm_id
+            self._confirm_id = confirm_id
+            self._confirm_tool = tool_name
+            self._confirm_args = tool_args if isinstance(tool_args, dict) else {}
         self._last_denial = None
 
-        self._emit(
-            {
-                "type": "permission_request",
-                "tool": tool_name,
-                "args": tool_args,
-                "confirm_id": confirm_id,
-                "timeout_seconds": timeout,
-            }
-        )
+        request: Dict[str, Any] = {
+            "type": "permission_request",
+            "tool": tool_name,
+            "args": tool_args,
+            "confirm_id": confirm_id,
+        }
+        # Present only when an "always" answer would create a grant, and it
+        # names exactly what that grant covers. A front-end must not offer the
+        # choice without it: an unqualified "always" is read as far broader
+        # than the invocation-scoped grant actually on offer.
+        scope = grant_scope(tool_name, tool_args)
+        if scope is not None:
+            request["always_scope"] = scope.label
+        # Advertised only when it is real. A front-end told "60 s" that then
+        # never expires runs a countdown to nothing; one told nothing correctly
+        # renders a prompt that waits.
+        if timeout is not None:
+            request["timeout_seconds"] = timeout
+        self._emit(request)
 
         # Poll in short intervals so cancellation is detected promptly.
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
+        deadline = None if timeout is None else time.monotonic() + timeout
+        answered = False
+        while deadline is None or time.monotonic() < deadline:
             if self.cancelled.is_set():
-                self._confirm_id = None
-                self._confirm_event = None
+                self._clear_pending_confirmation()
                 self._last_denial = (
                     tool_name,
                     f"Confirmation for '{tool_name}' was abandoned: the run was "
@@ -903,36 +1012,43 @@ class SSEOutputHandler(OutputHandler):
                 )
                 return False
             if self._confirm_event.wait(timeout=0.5):
+                answered = True
                 break
-        else:
-            # Timeout reached
+
+        if not answered:
             self._emit(
                 {
                     "type": "status",
                     "status": "warning",
-                    "message": f"Confirmation for '{tool_name}' timed out ({TOOL_CONFIRM_TIMEOUT_SECONDS} s). Execution denied.",
+                    "message": f"Confirmation for '{tool_name}' timed out ({timeout:g} s). Execution denied.",
                 }
             )
             logger.warning("Tool confirmation timed out for '%s'", tool_name)
-            self._confirm_id = None
-            self._confirm_event = None
+            self._clear_pending_confirmation()
             self._last_denial = (
                 tool_name,
                 f"Confirmation for '{tool_name}' timed out after "
-                f"{TOOL_CONFIRM_TIMEOUT_SECONDS} s with no user response. "
+                f"{timeout:g} s with no user response. "
                 "Execution denied.",
             )
             return False
 
         result = self._confirm_result
-        self._confirm_id = None
-        self._confirm_event = None
+        self._clear_pending_confirmation()
         if not result:
             self._last_denial = (
                 tool_name,
                 f"Tool '{tool_name}' was denied by the user.",
             )
         return result
+
+    def _clear_pending_confirmation(self) -> None:
+        """Drop the live prompt's slot so a later answer cannot resolve it."""
+        with self._confirm_lock:
+            self._confirm_id = None
+            self._confirm_event = None
+            self._confirm_tool = None
+            self._confirm_args = None
 
     def print_policy_alert(
         self,
@@ -956,18 +1072,44 @@ class SSEOutputHandler(OutputHandler):
             event["receipt_id"] = receipt_id
         self._emit(event)
 
-    def resolve_tool_confirmation(self, approved: bool) -> bool:
+    def resolve_tool_confirmation(
+        self,
+        approved: bool,
+        always: bool = False,
+        confirm_id: Optional[str] = None,
+    ) -> bool:
         """Unblock the agent thread waiting in ``confirm_tool_execution()``.
 
-        Called by the ``POST /api/chat/confirm-tool`` HTTP endpoint.  Returns
-        ``False`` if there is no pending confirmation request.
+        Called by the ``POST /api/chat/confirm-tool`` HTTP endpoint and by the
+        TUI's stdio control channel. Returns ``False`` if there is no pending
+        confirmation request.
+
+        *always* grants the pending tool for the rest of the session, so this
+        prompt and every later one for the same tool are approved — the grant
+        the terminal prompt's ``[a]lways for this tool`` already makes.
+
+        *confirm_id*, when given, must match the live prompt. A decision typed
+        against a prompt that has since expired or been replaced is dropped
+        rather than applied to whatever is on screen now — the difference
+        between approving what you read and approving what arrived while you
+        were reading.
         """
         with self._confirm_lock:
+            if confirm_id is not None and confirm_id != self._confirm_id:
+                logger.warning(
+                    "Dropped a tool decision for confirm_id %s: the live prompt "
+                    "is %s",
+                    confirm_id,
+                    self._confirm_id,
+                )
+                return False
+            if always and self._confirm_tool:
+                self.grant_call_for_session(self._confirm_tool, self._confirm_args)
             if self._confirm_event is None:
                 # No pending confirmation — initialise state anyway so callers can
                 # inspect _confirm_result and _confirm_event after the call.
                 self._confirm_event = threading.Event()
-            self._confirm_result = approved
+            self._confirm_result = approved or always
             self._confirm_event.set()
         return True
 
@@ -1164,6 +1306,19 @@ def _format_tool_args(  # pylint: disable=unused-argument
     return "\n".join(parts) if len(parts) > 2 else ", ".join(parts)
 
 
+def _count_summary(data: Dict[str, Any]) -> Optional[str]:
+    """``{"status": "success", "skills": [...]}`` -> ``"18 skills"``.
+
+    Returns ``None`` when nothing countable is present, so the caller keeps its
+    own wording rather than inventing a number.
+    """
+    for key, value in data.items():
+        if key == "status" or not isinstance(value, list) or not value:
+            continue
+        return format_count(len(value), key)
+    return None
+
+
 def _summarize_tool_result(data: Dict[str, Any]) -> str:
     """Create a detailed human-readable summary of a tool result."""
     if not isinstance(data, dict):
@@ -1274,7 +1429,9 @@ def _summarize_tool_result(data: Dict[str, Any]) -> str:
         msg = data.get("message", data.get("error", data.get("display_message", "")))
         if msg:
             return f"{status}: {str(msg)[:200]}"
-        return str(status)
+        # A bare "success" tells the user nothing. Report what came back
+        # instead, when the payload carries a countable collection (#2804).
+        return _count_summary(data) or str(status)
 
     # Generic fallback - show more useful info
     keys = list(data.keys())[:6]

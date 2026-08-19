@@ -60,18 +60,35 @@ func detectStyle() string {
 
 // buildLocked constructs the renderer from the already-resolved style. It does
 // no terminal I/O, so it is safe at any point in the program's life.
+//
+// The GAIA style (markdown_style.go) is used for the two builtin variants this
+// TUI resolves on its own. An explicit GLAMOUR_STYLE is left completely alone:
+// a user who set it — or pointed it at a style FILE — asked for that style, not
+// for ours layered over it.
 func buildLocked() error {
 	if built {
 		return rendererErr
 	}
 	built = true
-	// WithStylePath, not WithStandardStyle: it resolves a builtin name the same
-	// way but also accepts a style FILE, which is what GLAMOUR_STYLE usually
-	// holds. Neither queries the terminal once the name is concrete.
-	renderer, rendererErr = glamour.NewTermRenderer(
-		glamour.WithStylePath(styleName),
-		glamour.WithWordWrap(wordWrap),
-	)
+
+	opts := []glamour.TermRendererOption{glamour.WithWordWrap(wordWrap)}
+	switch {
+	case os.Getenv(EnvStyle) != "":
+		// WithStylePath, not WithStandardStyle: it resolves a builtin name the
+		// same way but also accepts a style FILE, which is what GLAMOUR_STYLE
+		// usually holds. Neither queries the terminal once the name is concrete.
+		opts = append(opts, glamour.WithStylePath(styleName))
+	case styleName == styles.DarkStyle:
+		opts = append(opts, glamour.WithStyles(gaiaStyle(true)))
+	case styleName == styles.LightStyle:
+		opts = append(opts, glamour.WithStyles(gaiaStyle(false)))
+	default:
+		// NoTTY and anything else: the builtin, verbatim. A pipe has no colours
+		// to theme.
+		opts = append(opts, glamour.WithStylePath(styleName))
+	}
+
+	renderer, rendererErr = glamour.NewTermRenderer(opts...)
 	if rendererErr != nil {
 		renderer = nil
 		rendererErr = fmt.Errorf("cannot build the %s markdown renderer: %w", styleName, rendererErr)

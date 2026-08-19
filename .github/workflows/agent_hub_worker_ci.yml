@@ -5,7 +5,10 @@
 # The worker's test suite guards the shared catalog contract (POST /publish,
 # index.json shape) that every hub agent release and the website depend on —
 # previously it was local-only, so a contract regression could reach main
-# without any CI ever running the suite. Deploys stay manual; this only tests.
+# without any CI ever running the suite. This workflow only tests; the Worker
+# is deployed by release_components.yml's deploy-worker job, immediately
+# before it publishes to it (a Worker older than the manifests it validates
+# rejects valid releases).
 
 name: Agent Hub Worker CI
 

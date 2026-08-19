@@ -195,6 +195,11 @@ def build_app():
     # Router import is light; the heavy agent/memory imports are deferred to the
     # first session build.
     app.include_router(agent_router, dependencies=token_gate)
+
+    # require_caller_token is a plain Request dependency (not a
+    # fastapi.security class), so FastAPI never emits securitySchemes for
+    # it (#2993) — overlay the real, conditional (bearer-or-none) posture.
+    caller_auth.install_openapi_security(app)
     return app
 
 
@@ -306,6 +311,15 @@ def main(argv=None) -> int:
             parser.error(
                 f"{source} requested skill set {requested_set!r}, but this "
                 f"build's declared sets could not be read: {exc}"
+            )
+        if not declared:
+            # This build ships with gaia-agent.yaml's skill_sets: commented out,
+            # so there is nothing to pin. Say that, rather than "Valid sets: ".
+            parser.error(
+                f"{source} requested skill set {requested_set!r}, but this "
+                "agent declares no skill sets — Agent Skills are switched off "
+                "in this build. Drop the option, or uncomment the 'skill_sets:' "
+                "and 'default_skill_set:' blocks in gaia-agent.yaml."
             )
         if requested_set not in declared:
             parser.error(

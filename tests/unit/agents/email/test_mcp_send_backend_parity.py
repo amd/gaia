@@ -6,11 +6,12 @@ MCP send parity — connector-derived backend (#1603, M6).
 ``EmailTriageMCPAgent._resolve_send_backend()`` must mirror the REST
 connector-derived logic (D2):
 
-  - GAIA_EMAIL_MCP_FAKE_SEND set → _FakeSendBackend (test seam, short-circuits)
-  - 0 connected providers  → RuntimeError with actionable message
-  - 2+ connected providers → RuntimeError with ambiguous-provider message
-  - 1 connected: google    → LiveGmailBackend
-  - 1 connected: microsoft → LiveOutlookBackend
+  - GAIA_EMAIL_MCP_FAKE_SEND set    → _FakeSendBackend (test seam, short-circuits)
+  - 0 connected providers           → RuntimeError with actionable message
+  - 2+ connected providers          → RuntimeError with ambiguous-provider message
+  - 1 connected: google             → LiveGmailBackend
+  - 1 connected: microsoft          → LiveOutlookBackend bound to the personal connector
+  - 1 connected: microsoft_work     → LiveOutlookBackend bound to the work connector (#2629)
 
 The fake-send seam must short-circuit BEFORE the count check (as today),
 so that parity tests can run without a live mailbox connection.
@@ -24,7 +25,7 @@ pytest.importorskip("gaia_agent_email")
 
 from gaia_agent_email.gmail_backend import LiveGmailBackend
 from gaia_agent_email.mcp_server import EmailTriageMCPAgent
-from gaia_agent_email.outlook_backend import LiveOutlookBackend
+from gaia_agent_email.outlook_backend import LiveOutlookBackend, _get_outlook_token
 
 
 def _agent(monkeypatch, providers):
@@ -84,6 +85,31 @@ class TestMcpSendBackendConnectorDerived:
         agent = _agent(monkeypatch, ["microsoft"])
         backend = agent._resolve_send_backend()
         assert isinstance(backend, LiveOutlookBackend)
+        # Bound to the personal connector specifically, not just "some Outlook".
+        assert backend._access_token_fn.func is _get_outlook_token
+        assert backend._access_token_fn.args == ("microsoft",)
+
+    def test_microsoft_work_only_returns_live_outlook_backend_bound_to_work(
+        self, monkeypatch
+    ):
+        """A matching microsoft_work branch must fetch the WORK connector's
+        token, not silently fall back to the personal one — the exact
+        cross-account defect #2629 exists to remove."""
+        monkeypatch.delenv("GAIA_EMAIL_MCP_FAKE_SEND", raising=False)
+        agent = _agent(monkeypatch, ["microsoft_work"])
+        backend = agent._resolve_send_backend()
+        assert isinstance(backend, LiveOutlookBackend)
+        assert backend._access_token_fn.func is _get_outlook_token
+        assert backend._access_token_fn.args == ("microsoft_work",)
+
+    def test_unknown_provider_raises_naming_all_supported(self, monkeypatch):
+        monkeypatch.delenv("GAIA_EMAIL_MCP_FAKE_SEND", raising=False)
+        agent = _agent(monkeypatch, ["carrier-pigeon"])
+        with pytest.raises(RuntimeError) as exc_info:
+            agent._resolve_send_backend()
+        msg = str(exc_info.value)
+        assert "carrier-pigeon" in msg
+        assert "google" in msg and "microsoft" in msg and "microsoft_work" in msg
 
 
 class TestMcpSendOutlook502Parity:

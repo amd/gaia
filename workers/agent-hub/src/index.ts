@@ -6,16 +6,20 @@
  *
  * Routes:
  *   POST /publish                              publish a new agent version (auth)
- *   GET  /index.json                           lightweight catalog
+ *   POST /publish/skill                        publish a new skill version (auth)
+ *   GET  /index.json                           lightweight catalog (all lanes)
  *   GET  /agents/<id>/manifest.json            per-agent aggregate manifest
  *   GET  /agents/<id>/<version>/<filename>     artifact / raw manifest download
+ *   GET  /skills/<name>/manifest.json          per-skill aggregate manifest
+ *   GET  /skills/<name>/<version>/<filename>   skill bundle / SKILL.md download
  *   GET  /health                               liveness probe
  */
 
 import { rebuildIndex } from "./catalog";
 import { errorResponse, HttpError, json } from "./http";
 import { handlePublish } from "./publish";
-import { AGENTS_PREFIX, INDEX_KEY } from "./storage";
+import { handleSkillPublish } from "./skill-publish";
+import { AGENTS_PREFIX, INDEX_KEY, SKILLS_PREFIX } from "./storage";
 import type { Env } from "./types";
 
 async function serveObject(bucket: R2Bucket, key: string): Promise<Response> {
@@ -35,7 +39,10 @@ async function route(request: Request, env: Env): Promise<Response> {
   const method = request.method.toUpperCase();
 
   if (path === "/health") {
-    return json({ status: "ok" });
+    // `build` is the commit this Worker was deployed from. A fixed "ok"
+    // cannot tell a current Worker from a months-stale one — which is how an
+    // outdated manifest validator went unnoticed until every release failed.
+    return json({ status: "ok", build: env.WORKER_BUILD ?? "unknown" });
   }
 
   if (path === "/publish") {
@@ -43,6 +50,13 @@ async function route(request: Request, env: Env): Promise<Response> {
       throw new HttpError(405, "method_not_allowed", "Use POST to /publish.");
     }
     return handlePublish(request, env);
+  }
+
+  if (path === "/publish/skill") {
+    if (method !== "POST") {
+      throw new HttpError(405, "method_not_allowed", "Use POST to /publish/skill.");
+    }
+    return handleSkillPublish(request, env);
   }
 
   if (path === "/reindex") {
@@ -73,10 +87,11 @@ async function route(request: Request, env: Env): Promise<Response> {
     if (path === "/index.json" || path === "/") {
       return serveObject(env.BUCKET, INDEX_KEY);
     }
-    if (path.startsWith("/agents/")) {
+    if (path.startsWith("/agents/") || path.startsWith("/skills/")) {
       const key = decodeURIComponent(path.slice(1)); // strip leading "/"
       // Guard against path traversal in the object key.
-      if (!key.startsWith(AGENTS_PREFIX) || key.includes("..")) {
+      const prefix = path.startsWith("/agents/") ? AGENTS_PREFIX : SKILLS_PREFIX;
+      if (!key.startsWith(prefix) || key.includes("..")) {
         throw new HttpError(400, "invalid_path", `Invalid object path: ${path}.`);
       }
       return serveObject(env.BUCKET, key);

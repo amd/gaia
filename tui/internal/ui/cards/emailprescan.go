@@ -793,6 +793,8 @@ func mailboxLabel(provider string) string {
 		return "Gmail"
 	case "microsoft":
 		return "Outlook"
+	case "microsoft_work":
+		return "Microsoft 365"
 	case "":
 		return "A mailbox"
 	default:

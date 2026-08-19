@@ -1564,8 +1564,9 @@ func TestTheModelRowKeepsItsRawAnswerWhenLemonadeFails(t *testing.T) {
 // against, so a one-sided edit to either language's scope constants fails a
 // test on whichever side moved (#2730 D2a).
 type emailScopesFixture struct {
-	Google    providerScopesFixture `json:"google"`
-	Microsoft providerScopesFixture `json:"microsoft"`
+	Google        providerScopesFixture `json:"google"`
+	Microsoft     providerScopesFixture `json:"microsoft"`
+	MicrosoftWork providerScopesFixture `json:"microsoft_work"`
 }
 
 type providerScopesFixture struct {
@@ -1612,8 +1613,9 @@ func sameScopeSet(got, want []string) bool {
 func TestConnectScopesMatchesTheSharedFixture(t *testing.T) {
 	fixture := loadEmailScopesFixture(t)
 	cases := map[string][]string{
-		"google":    fixture.Google.ConnectUnion,
-		"microsoft": fixture.Microsoft.ConnectUnion,
+		"google":         fixture.Google.ConnectUnion,
+		"microsoft":      fixture.Microsoft.ConnectUnion,
+		"microsoft_work": fixture.MicrosoftWork.ConnectUnion,
 	}
 	for provider, want := range cases {
 		got, ok := connectScopes[provider]
@@ -1635,8 +1637,9 @@ func TestConnectScopesMatchesTheSharedFixture(t *testing.T) {
 func TestConnectCommandRequestsTheFullScopeUnion(t *testing.T) {
 	fixture := loadEmailScopesFixture(t)
 	cases := map[string][]string{
-		"google":    fixture.Google.ConnectUnion,
-		"microsoft": fixture.Microsoft.ConnectUnion,
+		"google":         fixture.Google.ConnectUnion,
+		"microsoft":      fixture.Microsoft.ConnectUnion,
+		"microsoft_work": fixture.MicrosoftWork.ConnectUnion,
 	}
 	for provider, want := range cases {
 		cmd := connectCommand(provider)

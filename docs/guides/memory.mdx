@@ -330,6 +330,7 @@ Some knowledge is private -- email addresses, API tokens, health information, fi
 | `recall` results | Returned | Returned (explicit query only) |
 | Tool history args | Full args logged | Args redacted to keys only |
 | Memory Dashboard | Normal display | Content blurred until clicked |
+| Terminal `/memory` view | Normal display | Shown in full, tagged `sensitive` -- not blurred |
 
 The agent can still access sensitive data when you explicitly ask for it via `recall` -- it just will not be broadcast in the system prompt where it could leak into logs or debugging output.
 
@@ -433,6 +434,15 @@ The dashboard also provides maintenance tools for keeping your memory healthy:
 <Info>
   To launch the Agent UI with the dashboard: `gaia chat --ui`
 </Info>
+
+### Terminal hub: `/memory`
+
+No browser handy? The [Terminal Hub](/guides/terminal-hub) (`gaia tui`) has a
+read-only `/memory` command in the chat screen -- grouped by category, with
+counts, confidence, and when each entry was last touched, so you can see the
+actual rows instead of asking the agent to summarize its own memory (which can
+omit or misremember what it stored). It only reads; editing, deleting, and
+adding are still Agent UI features.
 
 ---
 

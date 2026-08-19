@@ -86,18 +86,20 @@
 #      cancel-in-progress, so rapid pushes never stack up 90-minute jobs.
 #   3. LIMIT. PR runs triage 20 emails, not 50 — same slice the release gate uses.
 #
-# COST TO THE RELEASE PATH, STATED PLAINLY. The `lemonade-eval` group holds one
-# running plus one pending run; a newly-queued run CANCELS the previously pending
-# one. Adding ~1 PR run/day to that group therefore makes it possible for a
-# release-gate or weekly call to be evicted while pending. That is the price of
-# pre-merge coverage on a single-slot pool, and it is bounded, not hidden:
-# per-PR cancel-in-progress collapses repeated pushes to one run, and
-# weekly_eval.yml now treats a non-success (not merely a 'failure') callee as a
-# reportable outcome so an eviction cannot pass as a clean run. Making the same
-# eviction visible in publish.yml / release_agent_email.yml is tracked separately.
-# It cuts the other way too: a PR run can itself be evicted while pending, which
-# leaves that PR with no eval and no auto-requeue. Re-run the job from the Checks
-# tab if the coverage matters for the change under review.
+# COST TO THE RELEASE PATH, STATED PLAINLY. The `lemonade-eval` group runs one at
+# a time and queues the rest FIFO (`queue: max`), so adding ~1 PR run/day costs
+# release-gate and weekly calls WAIT time rather than eviction. FIFO has no
+# priority lane: a release call sits behind every PR eval already queued, plus any
+# in-flight scorecard refresh (up to 14h) or gemma consolidation (up to 7.5h).
+# Even so the cost is bounded and visible, not hidden: per-PR cancel-in-progress
+# collapses repeated pushes to one run, and weekly_eval.yml treats a non-success
+# (not merely a 'failure') callee as a reportable outcome. The residual bad
+# outcome is a run that waits out GitHub's 24h job-queue limit and is CANCELLED,
+# leaving it with no eval and no auto-requeue — rarer than the evict-the-pending-
+# run behavior this replaced, but not gone. Re-run the job from the Checks tab if
+# the coverage matters for the change under review. Surfacing that outcome in
+# publish.yml / release_agent_email.yml the way weekly_eval.yml already does is
+# tracked separately.
 #
 # A PR RUN IS ADVISORY, AND THAT IS NOT A TRIGGER-SCOPED CHOICE. Per the enforce
 # state above, no gate blocks anything on any trigger right now, so a PR run is
@@ -117,10 +119,11 @@
 # FORKS. The job does not run for fork PRs — pointing a self-hosted runner at
 # unreviewed fork code is not acceptable, and a fork PR carries no
 # ANTHROPIC_API_KEY, so it could only ever produce an un-judged result.
-# test_eval_agent_gemma_consolidation.yml reaches the same end by having no
-# `pull_request` trigger at all; this workflow needs one, so the guard is explicit
-# in the job's `if:`. A fork PR touching the email agent needs a maintainer to
-# push the branch into this repo and re-run.
+# test_eval_agent_gemma_consolidation.yml now triggers on `pull_request` too (a
+# `push` filter re-fired it on every main-merge, gating PRs that touched no
+# Python), so it carries the same fork and draft clauses in its job `if:` —
+# without this workflow's `skip-email-eval` clause. A fork PR touching the email
+# agent needs a maintainer to push the branch into this repo and re-run.
 
 name: Email Agent Eval (offline, report mode)
 
@@ -291,6 +294,9 @@ jobs:
     concurrency:
       group: lemonade-eval
       cancel-in-progress: false
+      # `queue: single` (the default) keeps only ONE pending run and cancels the
+      # previously-queued one — a phantom red X on the PR. `max` queues them FIFO.
+      queue: max
     # PR guard (no-op for schedule / workflow_dispatch / workflow_call):
     #   - fork PRs never reach the self-hosted pool, and could only produce an
     #     un-judged result anyway (no ANTHROPIC_API_KEY) — see the header;

@@ -43,6 +43,7 @@ AGENT_WHEEL_PACKAGES = [
     "gaia-agent-routing",
     "gaia-agent-email",
     "gaia-agent-chat",
+    "gaia-agent-gaia",
 ]
 
 setup(
@@ -67,6 +68,7 @@ setup(
         "gaia.ui",
         "gaia.ui.routers",
         "gaia.ui.email_sidecar",
+        "gaia.sidecar",
         "gaia.database",
         "gaia.talk",
         "gaia.testing",
@@ -104,6 +106,7 @@ setup(
         "gaia.connectors.catalog",
         "gaia.connectors.providers",
         "gaia.skills",
+        "gaia.skills.audit",
     ],
     package_data={
         "gaia.eval": [
@@ -154,6 +157,11 @@ setup(
         # gaia connectors is a base CLI command; keyring is its OS credential store (OAuth tokens #915). #1621
         "keyring>=24.0.0,<26.0.0",
         "tavily-python>=0.5.0",
+        # Ed25519 signature verification for `gaia skill install` (#2467). Core,
+        # not an extra: a skill's security tier rests on its signature, and a
+        # build that cannot verify one would have to either refuse every signed
+        # skill or skip the check — neither is acceptable for a base install.
+        "cryptography>=42.0.0",
         # gaia.daemon locks the sidecar launch-secret file down with an
         # owner-only NTFS DACL (#2250) — chmod 0600 is inert on Windows. Core,
         # not an extra: without win32security the daemon cannot spawn ANY
@@ -195,6 +203,8 @@ setup(
             "pypdf",
             "python-pptx>=0.6.21",
             "python-docx>=1.1.0",
+            "openpyxl>=3.1.0",
+            "reportlab>=4.0.0",
             # Memory cross-encoder reranker (gaia.agents.base.memory) — optional
             # at runtime (graceful degradation) but bundled with "ui" so the
             # full chat experience gets reranking out of the box. NOT a RAG dep.
@@ -215,10 +225,13 @@ setup(
             "bpy",
         ],
         "mcp": [
-            # Capped below 2.0: mcp 2.0.0 (released 2026-07-28) breaks
-            # MCPClient.connect() — the custom-agent harness went red with no
-            # code change. Lift the cap in a change that ports the client.
-            "mcp>=1.1.0,<3.0",
+            # Capped below 2.0: mcp 2.0.0 (released 2026-07-28) removed
+            # mcp.server.fastmcp (FastMCP -> MCPServer, moved to
+            # mcp.server.mcpserver), breaking every FastMCP-based server
+            # GAIA ships (agent_mcp_server.py, servers/agent_ui_mcp.py,
+            # servers/tui_mcp.py). Lift the cap only in a change that
+            # ports them.
+            "mcp>=1.1.0,<2.0",
             "starlette",
             "uvicorn",
         ],
@@ -295,8 +308,16 @@ setup(
             "numpy>=1.24.0",
             "pymupdf>=1.24.0",
             "pypdf",
+            # Reading AND writing the common office formats. The read half is
+            # what RAG needs; the write half is what the document skills need,
+            # and this is the extra `gaia init --profile chat` installs. Without
+            # openpyxl and reportlab the pdf and xlsx skills load fine and then
+            # cannot do their job — the agent hand-writes raw PDF and raw OOXML
+            # instead, which works and is not a plan.
             "python-pptx>=0.6.21",
             "python-docx>=1.1.0",
+            "openpyxl>=3.1.0",
+            "reportlab>=4.0.0",
         ],
         "lint": [
             "black",

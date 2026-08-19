@@ -160,13 +160,9 @@ func (s installState) done() bool {
 
 var (
 	installBorder = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(theme.Accent).
 			Padding(1, 2)
 
 	installFailBorder = lipgloss.NewStyle().
-				Border(lipgloss.RoundedBorder()).
-				BorderForeground(theme.Danger).
 				Padding(1, 2)
 
 	barFill  = lipgloss.NewStyle().Foreground(theme.Accent)

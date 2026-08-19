@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/amd/gaia/tui/internal/event"
 )
@@ -87,6 +88,176 @@ func TestCanonicalFinalWithoutTokens(t *testing.T) {
 	if last.Role != RoleAssistant || last.Content != "no streaming here" {
 		t.Fatalf("unexpected message: %+v", last)
 	}
+	if last.Tokens != 0 {
+		t.Errorf("no usage.tokens on the wire -> Message.Tokens must stay 0, got %d", last.Tokens)
+	}
+}
+
+// TestCanonicalFinalCarriesRealTokenCount is AC2(a): a real usage.tokens
+// value on the wire reaches Message.Tokens, and renders as "N tokens" — no
+// "~" prefix, since this is a real count, not the old char-length guess.
+func TestCanonicalFinalCarriesRealTokenCount(t *testing.T) {
+	m, _ := newTestModel(t)
+	// The token count is a --dev figure; this test is about the plumbing
+	// that carries it, so it asks for the dev breakdown explicitly.
+	m.dev = true
+	m.streaming = true
+	m.queryStart = time.Now().Add(-5 * time.Second)
+	m.ttft = 1 * time.Second
+
+	m = feed(t, m, event.CanonicalFinalEvent{
+		Type:   "final",
+		Answer: "short",
+		Usage:  []byte(`{"steps":2,"tools_used":1,"tokens":42}`),
+	})
+
+	last := m.messages[len(m.messages)-1]
+	if last.Tokens != 42 {
+		t.Fatalf("Tokens = %d, want 42", last.Tokens)
+	}
+
+	rendered := m.renderMessage(&last, nil)
+	if !strings.Contains(rendered, "42 tokens") {
+		t.Errorf("rendered stats line missing \"42 tokens\":\n%s", rendered)
+	}
+	if strings.Contains(rendered, "~42") {
+		t.Errorf("rendered stats line still shows the old approximation marker:\n%s", rendered)
+	}
+}
+
+// TestCanonicalRenderOmitsTokensWhenZero is AC4: the stats line stays
+// present (duration/ttft/steps/tools) even when no real token count exists —
+// this is a fix, not a removal, and there is no fallback to the old guess.
+func TestCanonicalRenderOmitsTokensWhenZero(t *testing.T) {
+	m, _ := newTestModel(t)
+	m.dev = true
+	msg := &Message{
+		Role:      RoleAssistant,
+		Duration:  3200 * time.Millisecond,
+		TTFT:      800 * time.Millisecond,
+		Steps:     2,
+		ToolsUsed: 1,
+		Tokens:    0,
+		Content:   "a reasonably long answer that would have guessed a nonzero token count under the old code",
+	}
+
+	rendered := m.renderMessage(msg, nil)
+	if strings.Contains(rendered, "tokens") || strings.Contains(rendered, "tok/s") {
+		t.Errorf("expected no tokens/tok-per-sec sub-line when Tokens == 0:\n%s", rendered)
+	}
+	for _, want := range []string{"3.2s", "ttft 0.8s", "2 steps", "1 tools"} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("expected stats line to still contain %q:\n%s", want, rendered)
+		}
+	}
+}
+
+// TestCanonicalTTFTAnchorsOnFirstToken covers the warm-query shape: the
+// status frame arrives immediately, but ttft must anchor on the first real
+// token, not the status frame.
+func TestCanonicalTTFTAnchorsOnFirstToken(t *testing.T) {
+	m, _ := newTestModel(t)
+	m.streaming = true
+	m.queryStart = time.Now()
+
+	m = feed(t, m, event.CanonicalStatusEvent{Type: "status", Message: "Scanning inbox"})
+	if m.ttft != 0 {
+		t.Fatalf("status frame must not set ttft, got %v", m.ttft)
+	}
+
+	// Simulate 8s of real elapsed time between the status frame and the
+	// first token, matching the live-baseline warm-query gap.
+	m.queryStart = m.queryStart.Add(-8 * time.Second)
+
+	m = feed(t, m, event.CanonicalTokenEvent{Type: "token", Delta: "Hi"})
+	if m.ttft < 7500*time.Millisecond || m.ttft > 8500*time.Millisecond {
+		t.Errorf("ttft = %v, want ~8s (anchored on the token, not the earlier status frame)", m.ttft)
+	}
+
+	// A second token must not move ttft again.
+	firstTTFT := m.ttft
+	m.queryStart = m.queryStart.Add(-100 * time.Second) // would blow up ttft if re-anchored
+	m = feed(t, m, event.CanonicalTokenEvent{Type: "token", Delta: " there"})
+	if m.ttft != firstTTFT {
+		t.Errorf("ttft changed on a second token: got %v, want unchanged %v", m.ttft, firstTTFT)
+	}
+}
+
+// TestCanonicalLegacyTransportNeverSetsTTFT: the legacy transport never
+// fires ChunkEvent, so ttft stays 0 and is omitted — intentional, not a bug.
+func TestCanonicalLegacyTransportNeverSetsTTFT(t *testing.T) {
+	m, _ := newTestModel(t)
+	m.streaming = true
+	m.queryStart = time.Now().Add(-5 * time.Second)
+
+	m = feed(t, m, event.AnswerEvent{Type: "answer", Content: "no chunk events here", Steps: 1, ToolsUsed: 0})
+
+	last := m.messages[len(m.messages)-1]
+	if last.TTFT != 0 {
+		t.Errorf("legacy transport with no ChunkEvent must leave TTFT at 0, got %v", last.TTFT)
+	}
+}
+
+// TestCanonicalTTFTFallsBackToServerReportedValue: when no token ever
+// streamed this turn (the normal non-streaming tool-calling path), the
+// client must use the server-reported usage.ttft instead of leaving it at 0.
+func TestCanonicalTTFTFallsBackToServerReportedValue(t *testing.T) {
+	m, _ := newTestModel(t)
+	m.dev = true
+	m.streaming = true
+	m.queryStart = time.Now().Add(-82 * time.Second)
+
+	// No CanonicalTokenEvent anywhere in this turn — the non-streaming
+	// daemon path a native tool-calling model always takes.
+	m = feed(t, m, event.CanonicalFinalEvent{
+		Type:   "final",
+		Answer: "triage summary",
+		Usage:  []byte(`{"steps":2,"tools_used":1,"tokens":72,"ttft":9.4}`),
+	})
+
+	last := m.messages[len(m.messages)-1]
+	wantTTFT := time.Duration(9.4 * float64(time.Second))
+	if last.TTFT != wantTTFT {
+		t.Fatalf("TTFT = %v, want %v from the server-reported usage.ttft fallback", last.TTFT, wantTTFT)
+	}
+
+	rendered := m.renderMessage(&last, nil)
+	if !strings.Contains(rendered, "ttft 9.4s") {
+		t.Errorf("rendered stats line missing \"ttft 9.4s\" — ttft still never reaches the user:\n%s", rendered)
+	}
+}
+
+// TestCanonicalTTFTClientObservedWinsOverServerReported ensures a genuinely
+// streamed token still anchors ttft on the real client-observed timestamp
+// rather than the server-reported fallback: the client's wall-clock
+// measurement is an end-to-end observation (covers the wire too), while the
+// server-reported value is only Lemonade's own internal timer for the first
+// LLM call. The two are not interchangeable, so the more complete
+// measurement must win whenever it was actually captured.
+func TestCanonicalTTFTClientObservedWinsOverServerReported(t *testing.T) {
+	m, _ := newTestModel(t)
+	m.streaming = true
+	m.queryStart = time.Now().Add(-8 * time.Second)
+
+	m = feed(t, m, event.CanonicalTokenEvent{Type: "token", Delta: "Hi"})
+	clientTTFT := m.ttft
+	if clientTTFT <= 0 {
+		t.Fatalf("test setup: client-observed ttft should be positive, got %v", clientTTFT)
+	}
+
+	// The final event's server-reported ttft is deliberately a very different
+	// value (0.05s) — if the fallback ever overrides a real client
+	// observation, this assertion catches it.
+	m = feed(t, m, event.CanonicalFinalEvent{
+		Type:   "final",
+		Answer: "Hi there",
+		Usage:  []byte(`{"ttft":0.05}`),
+	})
+
+	last := m.messages[len(m.messages)-1]
+	if last.TTFT != clientTTFT {
+		t.Errorf("TTFT = %v, want the client-observed %v (server-reported fallback must not override it)", last.TTFT, clientTTFT)
+	}
 }
 
 func TestCanonicalToolCallAndResult(t *testing.T) {
@@ -111,8 +282,14 @@ func TestCanonicalToolCallAndResult(t *testing.T) {
 	if item.Success == nil || !*item.Success {
 		t.Errorf("expected success from {\"ok\":true}, got %v", item.Success)
 	}
-	if !strings.Contains(item.Content, "search_email") || !strings.Contains(item.Content, "invoice") {
-		t.Errorf("tool line lost its detail: %q", item.Content)
+	// The line names the work in words, plus the one argument that says what the
+	// work is ABOUT. The raw tool name stays on the item for repeat-folding, but
+	// it is not what the user reads.
+	if !strings.Contains(item.Content, "invoice") {
+		t.Errorf("tool line lost the argument that says what it is doing: %q", item.Content)
+	}
+	if item.Tool != "search_email" {
+		t.Errorf("tool line lost the raw tool name it folds on: %q", item.Tool)
 	}
 	// The render key is no longer echoed onto the activity line — it now draws a
 	// real card in the transcript, which is where the detail belongs.
@@ -225,8 +402,19 @@ func TestRoleErrorProducersSanitizeControlBytesPreserveNewlines(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m, _ := newTestModel(t)
-			switch tt.event.(type) {
-			case errMsg, questionFailedMsg, confirmActionResultMsg:
+			switch v := tt.event.(type) {
+			case errMsg:
+				// errMsg{} as written above has turnSeq's zero value, which
+				// only matches a fresh model's own zero-valued turnSeq by
+				// coincidence — not what a real errMsg looks like (a live
+				// turn's turnSeq is always >= 1, see its doc comment). Drive
+				// a real turn first so this exercises turnSeq scoping
+				// honestly, matching production (#2912 review).
+				updated, _ := m.Update(sendQueryMsg{query: "x"})
+				m = updated.(ChatModel)
+				updated, _ = m.Update(errMsg{err: v.err, turnSeq: m.turnSeq})
+				m = updated.(ChatModel)
+			case questionFailedMsg, confirmActionResultMsg:
 				updated, _ := m.Update(tt.event)
 				m = updated.(ChatModel)
 			default:

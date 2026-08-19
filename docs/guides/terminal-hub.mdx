@@ -15,18 +15,20 @@ cd tui && make build     # -> tui/bin/gaia
 ```
 
 <Warning>
-  The hub is a Go binary and is **not yet distributed** — no release carries a
-  `gaia-<os>-<arch>` asset, `pip install amd-gaia` does not provide it, and the
-  Python CLI has no `tui` subcommand (`gaia tui` exits 2 today). Building from
-  source is the only way to get it. Once it ships as a hub component, this page
-  will name the download instead.
+  The hub binary is **not yet published** — `release_components.yml` builds and
+  publishes it as the `terminal-hub` hub component (all six platform/arch targets,
+  cross-compiled from one Go toolchain), but no version has been tagged and released
+  yet. `pip install amd-gaia` does not provide it, and the Python CLI has no `tui`
+  subcommand (`gaia tui` exits 2 today). Building from source
+  (`cd tui && make build`) remains the only way to get it until the first tag lands.
+  Once a version is live, this page will name the download instead.
 </Warning>
 
 <Info>
   The Terminal Hub and the [Agent UI](/guides/agent-ui) are two front ends over the
   same agents and the same background service. Use the hub when you live in a
-  terminal or are on a headless box; use the Agent UI when you want file drops,
-  rendered cards, and a browser.
+  terminal or are on a headless box; use the Agent UI when you want rendered cards
+  and a browser. Both take a dropped file or a pasted screenshot.
 </Info>
 
 <Note>
@@ -220,16 +222,75 @@ Type /help for available commands.
 
 | Key | What it does |
 |---|---|
-| `Enter` | Send message |
-| `Esc` | Cancel streaming, or return to the hub |
-| `PgUp` / `PgDn` | Scroll the conversation |
+| `Enter` | Send message (queues it if the agent is still working) |
+| `Alt+Enter`, `Ctrl+J` | New line in the composer |
+| `Esc` | Cancel streaming, or return to the hub; press again to give up waiting |
 | `Ctrl+C` | Quit |
+| `↑` / `↓`, `PgUp` / `PgDn` | Scroll the conversation one line / one page |
+| `Home` / `End` | Jump to the top / bottom, if the composer is empty |
+| Drag and drop a file or folder | Its path lands in the composer, quoted by your terminal if it has spaces |
+| `Ctrl+V` | Paste — text, or a clipboard **image** (a screenshot), which is saved to a temp file and its path inserted |
+| `Ctrl+Y` | Copy the whole answer |
+| `Ctrl+B` | Copy the last code block in the answer |
+
+By default your terminal owns the mouse, so drag-to-select and its own copy/paste
+(right-click, `Ctrl+Shift+C`, `Cmd+C`) work everywhere with nothing to learn. Two
+things borrow it back, each only for as long as they are on screen:
+
+| Mouse | What it does |
+|---|---|
+| Wheel, with `Ctrl+T` on | Scrolls the conversation. Selection is off while `Ctrl+T` is on; `Ctrl+T` or `Esc` gives it back |
+| Hover / click, on a `/` palette row or a question's options | Hover (or click) selects the row; clicking the already-selected row runs or answers it, same as `Enter`. Click outside the palette to close it. Released the instant the palette or question closes — a wheel-mode `Ctrl+T` you turned on yourself survives that unaffected |
 
 | Command | What it does |
 |---|---|
-| `/help` | Show the shortcut overlay |
+| `/help` | Show the shortcut overlay (scrolls with `↑`/`↓`/`PgUp`/`PgDn` if it doesn't fit) |
 | `/hub` | Return to the Agent Hub |
 | `/clear` | Clear the conversation |
+| `/setup` | Re-run first-time setup (`gaia init`) for the flagship agent |
+| `/memory` | See what the agent has stored about you — read-only, `Esc` to dismiss |
+| `/model` | Switch the flagship agent's live model |
+| `/bypass` | Let the agent run tools without asking (off by default) |
+
+Typing `/` as the first character of an empty composer opens a palette listing every
+command above with a one-line description, so there's no need to already know them or
+open `/help` first:
+
+```
+         ╭────────────────────────────────────────────────────────────╮
+         │  Slash Commands                                            │
+         │  ────────────────────────────────────────────────────────  │
+         │  /mo▏                                                      │
+         │                                                            │
+         │  ▸ /model   Switch the model this session runs on (gaia …  │
+         ╰────────────────────────────────────────────────────────────╯
+```
+
+Keep typing to narrow the list (`/mo` above narrows to `/model`), `↑`/`↓` to move the
+selection, `Enter` to run it, `Esc` to close the palette without touching the composer
+or cancelling a running turn. A `/` typed mid-sentence is just a slash — the palette
+only opens on an otherwise-empty line.
+
+The mouse works the same list: hovering a row moves the selection there, and
+clicking the row that is already selected runs it — the common case, since hovering
+already selects before you click. Clicking outside the box closes the palette, same
+as `Esc`. None of this needs a mouse: every path above is reachable from the keyboard
+alone.
+
+When an agent asks a follow-up question mid-turn — "Gmail or Outlook?", say — its
+options are the same: `↑`/`↓` (or `Tab`) to move between them, a number key to pick
+one directly, `Enter` to answer, and the mouse works identically to the palette above.
+`Esc` cancels the turn rather than the question, since abandoning it is the only way
+out once it is up.
+
+The flagship agent (the one spawned as a local subprocess, not through the
+background daemon) runs this same setup automatically on its first launch on a
+clean machine — installing Lemonade and downloading the models it needs instead
+of failing at whichever piece is missing. `/setup` reruns it on demand, e.g.
+after deleting a model or reinstalling Lemonade. A session launched with
+`--use-claude` skips downloading the local chat model (inference runs on
+Anthropic's API instead) but still installs the RAG/memory embedding model,
+which has no Claude equivalent.
 
 ## Next steps
 

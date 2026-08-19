@@ -260,7 +260,7 @@ indistinguishable from a dead one.
   "properties": {
     "type":   { "const": "final" },
     "answer": { "type": "string" },
-    "usage":  { "type": "object" }   // optional {steps?, tools_used?, elapsed?, tokens?}
+    "usage":  { "type": "object" }   // optional {steps?, tools_used?, elapsed?, tokens?, ttft?}
   } }
 
 // error
@@ -414,7 +414,7 @@ truth:** [`src/gaia/ui/sse_handler.py`](../../src/gaia/ui/sse_handler.py) on
 |---|---|---|
 | `tool_start` | `tool_call` | Rename; carry `tool`. `args` filled from the paired `tool_args` (§6.3). `detail`/`mcp_server` dropped (host derives its own label). |
 | `chunk` | `token` | `content` → `delta`. |
-| `answer` | `final` | `content` → `answer`; `elapsed`/`steps`/`tools_used` → `usage`. |
+| `answer` | `final` | `content` → `answer`; `elapsed`/`steps`/`tools_used`/`tokens`/`ttft` → `usage`. |
 | `permission_request` | `needs_confirmation` | `tool` → `action`; render `args` as `summary`; carry `run_id`; `confirm_url` per §5. |
 
 ### 6.2 Every remaining top-level source event

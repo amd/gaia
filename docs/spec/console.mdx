@@ -159,8 +159,19 @@ class OutputHandler(ABC):
     # === Completion Methods (Required) ===
 
     @abstractmethod
-    def print_final_answer(self, answer: str):
-        """Print final answer/result."""
+    def print_final_answer(
+        self,
+        answer: str,
+        total_tokens: Optional[int] = None,
+        ttft_seconds: Optional[float] = None,
+    ):
+        """Print final answer/result.
+
+        total_tokens: real output-token count generated across the run, if
+        known. ttft_seconds: real time-to-first-token for the LLM call that
+        produced this answer, if known. Both None when no real value is
+        available — never a substituted estimate.
+        """
         ...
 
     @abstractmethod
@@ -364,7 +375,13 @@ class SilentConsole(TerminalConfirmationMixin, OutputHandler):
         self.silence_final_answer = silence_final_answer
         self.auto_approve_gated_tools = auto_approve_gated_tools
 
-    def print_final_answer(self, answer: str, streaming: bool = True) -> None:
+    def print_final_answer(
+        self,
+        answer: str,
+        streaming: bool = True,
+        total_tokens: Optional[int] = None,
+        ttft_seconds: Optional[float] = None,
+    ) -> None:
         """
         Print the final answer.
         Only suppressed if silence_final_answer is True.
@@ -399,6 +416,9 @@ class SSEOutputHandler(OutputHandler):
     that can be consumed by the API server.
     """
 
+    # Denies outright rather than waiting for a user decision.
+    blocking_confirmation: bool = False
+
     def __init__(self, debug_mode: bool = False):
         """
         Initialize the SSE output handler.
@@ -411,6 +431,21 @@ class SSEOutputHandler(OutputHandler):
         self.debug_mode = debug_mode
         self.current_step = 0
         self.total_steps = 0
+
+    def confirm_tool_execution(self, tool_name, tool_args) -> bool:
+        """Deny confirmation-gated tools — the API has no approval channel.
+
+        The base handler already fails closed; this override emits a
+        ``tool_confirm_denied`` event naming the tool, why it was refused, and
+        to use the Agent UI instead, so the reason reaches the caller. Returns
+        True only under the shared GAIA_AUTO_APPROVE_TOOLS opt-in.
+        """
+        if self.auto_approve_confirmations_enabled():
+            self.log_auto_approval(tool_name)
+            self._add_event("warning", {"message": "Auto-approved without review"})
+            return True
+        self._add_event("tool_confirm_denied", {"tool": tool_name, "message": "..."})
+        return self.deny_tool_execution(tool_name, "...")
 
     def _add_event(self, event_type: str, data: Dict[str, Any]):
         """Add an event to the output queue."""

@@ -235,6 +235,9 @@ def register_subparsers(agent_subparsers) -> None:
         help="Health check: does an installed agent load + its entry point resolve?",
     )
     health_p.add_argument("id", help="Agent id to health-check, e.g. 'chat'")
+    health_p.add_argument(
+        "--json", action="store_true", dest="as_json", help="Emit machine-readable JSON"
+    )
 
     status_p = agent_subparsers.add_parser(
         "status",
@@ -245,6 +248,9 @@ def register_subparsers(agent_subparsers) -> None:
         nargs="?",
         default=None,
         help="Agent id (omit to show every discovered agent)",
+    )
+    status_p.add_argument(
+        "--json", action="store_true", dest="as_json", help="Emit machine-readable JSON"
     )
 
     login_p = agent_subparsers.add_parser(
@@ -986,23 +992,45 @@ def cmd_configure(args) -> None:
 
 def cmd_health(args) -> None:
     """Run a health check against an installed agent."""
+    import json
+
     from gaia.hub import lifecycle
+
+    as_json = getattr(args, "as_json", False)
+    if as_json:
+        _quiet_console_logging()
 
     registry = _build_registry()
     result = lifecycle.health_check(args.id, registry=registry)
-    print(f"{args.id}: {result.state}")
-    if result.detail:
-        print(f"  {result.detail}")
-    for warning in result.warnings:
-        print(f"  warning: {warning}")
+
+    if as_json:
+        print(json.dumps(result.to_dict(), indent=2, sort_keys=True))
+    else:
+        print(f"{args.id}: {result.state}")
+        if result.detail:
+            print(f"  {result.detail}")
+        for warning in result.warnings:
+            print(f"  warning: {warning}")
     # error/not_installed are non-zero exits so scripts can gate on it.
     if result.state in (lifecycle.HEALTH_ERROR, lifecycle.HEALTH_NOT_INSTALLED):
         sys.exit(1)
 
 
 def cmd_status(args) -> None:
-    """Show installed version + health + config for one or all agents."""
+    """Show installed version + health + config for one or all agents.
+
+    Exit code: with an explicit ``id``, a not-installed/error agent exits
+    non-zero so scripts can gate on it (same contract as ``cmd_health``). The
+    all-agents listing always exits 0 — an absent agent there is just a row,
+    not the thing being asked about.
+    """
+    import json
+
     from gaia.hub import lifecycle
+
+    as_json = getattr(args, "as_json", False)
+    if as_json:
+        _quiet_console_logging()
 
     registry = _build_registry()
     if args.id:
@@ -1011,17 +1039,42 @@ def cmd_status(args) -> None:
         statuses = lifecycle.status_all(registry=registry)
 
     if not statuses:
-        print("No agents discovered.")
+        # Only the all-agents form can land here — a single explicit id
+        # always yields a (possibly not_installed) AgentStatus, never empty.
+        if as_json:
+            print(json.dumps([]))
+        else:
+            print("No agents discovered.")
         return
 
-    width = max(len(aid) for aid in statuses)
-    print(f"{'AGENT'.ljust(width)}  VERSION    HEALTH         SOURCE")
-    for aid, st in statuses.items():
-        version = st.installed_version or "-"
+    if as_json:
+        payload = [st.to_dict() for st in statuses.values()]
         print(
-            f"{aid.ljust(width)}  {version.ljust(9)}  "
-            f"{st.health.ljust(13)}  {st.source or '-'}"
+            json.dumps(payload if not args.id else payload[0], indent=2, sort_keys=True)
         )
+    else:
+        width = max(len(aid) for aid in statuses)
+        print(f"{'AGENT'.ljust(width)}  VERSION    HEALTH         SOURCE")
+        for aid, st in statuses.items():
+            version = st.installed_version or "-"
+            print(
+                f"{aid.ljust(width)}  {version.ljust(9)}  "
+                f"{st.health.ljust(13)}  {st.source or '-'}"
+            )
+
+    # Only the specifically-addressed form gates on health; the listing form
+    # (args.id is None) always exits 0 even if some listed agent is absent.
+    if args.id:
+        health = statuses[args.id].health
+        if health in (lifecycle.HEALTH_ERROR, lifecycle.HEALTH_NOT_INSTALLED):
+            sys.exit(1)
+
+
+def _quiet_console_logging() -> None:
+    """Keep stdout pure JSON — route log lines to stderr for ``--json`` output."""
+    from gaia.logger import route_console_logging_to_stderr
+
+    route_console_logging_to_stderr()
 
 
 def _build_registry():

@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 
 from gaia.agents.base.console import AgentConsole
 from gaia.agents.install_hints import agent_not_installed_message
+from gaia.eval.config import DEFAULT_CLAUDE_MODEL
 from gaia.llm import create_client
 from gaia.llm.lemonade_client import (
     DEFAULT_HOST,
@@ -2500,8 +2501,8 @@ Examples:
     )
     agent_eval_parser.add_argument(
         "--model",
-        default="claude-sonnet-4-6",
-        help="Eval model (default: claude-sonnet-4-6)",
+        default=DEFAULT_CLAUDE_MODEL,
+        help=f"Judge model that scores the run (default: {DEFAULT_CLAUDE_MODEL})",
     )
     agent_eval_parser.add_argument(
         "--budget",
@@ -2674,6 +2675,77 @@ Examples:
         "but warned loudly.",
     )
 
+    # Replay real Claude Code sessions against the live agent: gaia eval sessions
+    sessions_eval_parser = eval_subparsers.add_parser(
+        "sessions",
+        help="Score the agent against real Claude Code sessions, via a live TUI",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Build a 10-case dataset and replay it through a running TUI
+  gaia eval sessions --control ~/.gaia/tui/control.json --limit 10
+
+  # Dataset only — no agent, no judge
+  gaia eval sessions --dataset-only --out eval/results/sessions
+
+A TUI must already be running with --control-port; this drives THAT session so
+the run is visible on screen. Judging needs ANTHROPIC_API_KEY (the repo .env is
+read automatically).
+""",
+    )
+    sessions_eval_parser.add_argument(
+        "--control",
+        default=None,
+        help="Path to the running TUI's control.json (default: "
+        "~/.gaia/tui/control.json, or $GAIA_TUI_HOME/control.json)",
+    )
+    sessions_eval_parser.add_argument(
+        "--limit", type=int, default=10, help="Number of cases (default: 10)"
+    )
+    sessions_eval_parser.add_argument(
+        "--project",
+        default="",
+        help="Only sessions from one project directory under ~/.claude/projects",
+    )
+    sessions_eval_parser.add_argument(
+        "--out",
+        default=None,
+        help="Output directory (default: eval/results/sessions-<timestamp>)",
+    )
+    sessions_eval_parser.add_argument(
+        "--dataset-only",
+        action="store_true",
+        help="Build the dataset and stop — no agent run, no judge",
+    )
+
+    # Code generation + editing, scored by running the tests: gaia eval code
+    code_eval_parser = eval_subparsers.add_parser(
+        "code",
+        help="Code generation and editing benchmark, scored by running the tests",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  gaia eval code --control ~/.gaia/tui/control.json
+
+Each task ships a project and a test suite. The agent is asked to change it and
+the suite decides — no LLM judge. A TUI must already be running with
+--control-port; this drives THAT session so the run is visible.
+""",
+    )
+    code_eval_parser.add_argument(
+        "--control", default=None, help="Path to the running TUI's control.json"
+    )
+    code_eval_parser.add_argument(
+        "--out",
+        default=None,
+        help="Output directory (default: eval/results/code-<timestamp>)",
+    )
+    code_eval_parser.add_argument(
+        "--workspace",
+        default=None,
+        help="Where to materialize the task projects (default: a temp directory)",
+    )
+
     # Add new subparser for generating summary reports from evaluation directories
     report_parser = subparsers.add_parser(
         "report",
@@ -2754,7 +2826,12 @@ Examples:
     )
     # Note: --base-url is inherited from parent_parser
     mcp_start_parser.add_argument(
-        "--auth-token", help="Optional authentication token for secure connections"
+        "--auth-token",
+        help=(
+            "Require 'Authorization: Bearer <token>' on every request except "
+            "/health. Defaults to $GAIA_MCP_AUTH_TOKEN. Without it the bridge "
+            "is unauthenticated."
+        ),
     )
     mcp_start_parser.add_argument(
         "--no-streaming", action="store_true", help="Disable streaming responses"
@@ -2789,6 +2866,10 @@ Examples:
     mcp_status_parser.add_argument(
         "--port", type=int, default=8765, help="Port to check (default: 8765)"
     )
+    mcp_status_parser.add_argument(
+        "--auth-token",
+        help="Bearer token if the bridge requires one (default: $GAIA_MCP_AUTH_TOKEN)",
+    )
 
     # MCP stop command
     _ = mcp_subparsers.add_parser("stop", help="Stop background MCP bridge server")
@@ -2808,6 +2889,10 @@ Examples:
     )
     mcp_test_parser.add_argument(
         "--tool", default="gaia.chat", help="Tool to test (default: gaia.chat)"
+    )
+    mcp_test_parser.add_argument(
+        "--auth-token",
+        help="Bearer token if the bridge requires one (default: $GAIA_MCP_AUTH_TOKEN)",
     )
 
     # MCP agent command
@@ -2830,6 +2915,10 @@ Examples:
     )
     mcp_agent_parser.add_argument(
         "--context", help="Optional additional context about the request"
+    )
+    mcp_agent_parser.add_argument(
+        "--auth-token",
+        help="Bearer token if the bridge requires one (default: $GAIA_MCP_AUTH_TOKEN)",
     )
 
     # MCP Docker command (per-agent MCP server)
@@ -2956,7 +3045,7 @@ Examples:
     )
     daemon_stop_agent_parser.add_argument("agent_id", help="Agent to stop")
     daemon_logs_parser = daemon_subparsers.add_parser(
-        "logs", help="Show the daemon log"
+        "logs", help="Show the daemon log (or a sidecar's log with --agent)"
     )
     daemon_logs_parser.add_argument(
         "-n",
@@ -2970,6 +3059,16 @@ Examples:
         "--follow",
         action="store_true",
         help="Follow the log (like tail -f); Ctrl-C to stop",
+    )
+    daemon_logs_parser.add_argument(
+        "--agent",
+        metavar="AGENT_ID",
+        default=None,
+        help=(
+            "Show the named sidecar agent's log (the rich agent-loop activity — "
+            "tool calls, triage decisions) instead of the host daemon log. "
+            "E.g. `gaia daemon logs --agent email -f`."
+        ),
     )
     daemon_parser.set_defaults(action="daemon")
 
@@ -3294,6 +3393,22 @@ Examples:
         "--remote",
         action="store_true",
         help="Use remote Lemonade Server (skip local install/start; downloads models via API). Auto-detected when LEMONADE_BASE_URL points to a non-localhost URL.",
+    )
+    init_parser.add_argument(
+        "--skip-chat-model",
+        action="store_true",
+        help="Skip the profile's chat LLM (e.g. Gemma-4-E4B-it-GGUF) but still "
+        "install Lemonade and any embedding model the profile needs. For a "
+        "session backed by a remote LLM (e.g. the TUI's --use-claude) that "
+        "never calls the local chat model but still needs Lemonade for "
+        "RAG/memory embeddings.",
+    )
+    init_parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Report whether this profile is already set up and exit — no "
+        "install, no download, no side effects. Exit code 0 means ready, "
+        "1 means `gaia init` still has work to do.",
     )
 
     # Install command (install specific components)
@@ -4658,6 +4773,109 @@ Let me know your answer!
                 print(f"[BASELINE] Saved baseline → {baseline_path}")
             return
 
+        # Code generation + editing benchmark: gaia eval code
+        if getattr(args, "eval_command", None) == "code":
+            from gaia.eval.code_bench import run, save, scorecard
+            from gaia.eval.session_eval import TUIDriver
+
+            control = args.control or os.path.join(
+                os.environ.get("GAIA_TUI_HOME")
+                or os.path.join(os.path.expanduser("~"), ".gaia", "tui"),
+                "control.json",
+            )
+            if not Path(control).is_file():
+                raise FileNotFoundError(
+                    f"No running TUI found at {control}. Start one with "
+                    "`gaia-drive run gaia --control-port 8817`, or pass --control."
+                )
+
+            out_dir = Path(
+                args.out or f"eval/results/code-{time.strftime('%Y%m%d-%H%M%S')}"
+            )
+            workspace = Path(args.workspace) if args.workspace else None
+
+            def _progress(index, total, result):
+                mark = "OK " if result.solved else ("ERR" if result.error else "FAIL")
+                claim = " CLAIMED-SUCCESS" if result.dishonest else ""
+                print(
+                    f"  [{index}/{total}] {mark} {result.id} "
+                    f"{result.passed_after}P/{result.failed_after}F "
+                    f"({result.elapsed_s}s){claim}"
+                )
+
+            print(f"[RUN] driving the TUI at {control}")
+            results = run(
+                TUIDriver(Path(control)), root=workspace, on_progress=_progress
+            )
+            card = scorecard(results)
+            report_path = save(out_dir, results, card, "live TUI")
+            print()
+            print(
+                f"[SCORE] solved {card['solved']}/{card['ran']} "
+                f"({card['solve_rate']}%) · generation "
+                f"{card['generation_solved']}/{card['generation_total']} · editing "
+                f"{card['editing_solved']}/{card['editing_total']} · "
+                f"{card['dishonest']} false success claim(s)"
+            )
+            print(f"[OUTPUT] {report_path.resolve()}")
+            return
+
+        # Replay real Claude Code sessions: gaia eval sessions
+        if getattr(args, "eval_command", None) == "sessions":
+            from gaia.eval.session_dataset import build_dataset
+            from gaia.eval.session_eval import TUIDriver, run, save, scorecard
+
+            out_dir = Path(
+                args.out or f"eval/results/sessions-{time.strftime('%Y%m%d-%H%M%S')}"
+            )
+            dataset = build_dataset(project=args.project, limit=args.limit)
+            print(
+                f"[DATASET] {dataset['sessions_scanned']} session(s), "
+                f"{dataset['turns_extracted']} turn(s) -> {len(dataset['cases'])} case(s)"
+            )
+            if args.dataset_only:
+                out_dir.mkdir(parents=True, exist_ok=True)
+                path = out_dir / "dataset.json"
+                path.write_text(json.dumps(dataset, indent=2), encoding="utf-8")
+                print(f"[OUTPUT] {path.resolve()}")
+                return
+
+            control = args.control or os.path.join(
+                os.environ.get("GAIA_TUI_HOME")
+                or os.path.join(os.path.expanduser("~"), ".gaia", "tui"),
+                "control.json",
+            )
+            if not Path(control).is_file():
+                raise FileNotFoundError(
+                    f"No running TUI found at {control}. Start one with "
+                    "`gaia-drive run gaia --control-port 8817`, or pass "
+                    "--control <path to its control.json>."
+                )
+
+            from gaia.eval.claude import ClaudeClient
+
+            driver = TUIDriver(Path(control))
+            client = ClaudeClient()
+
+            def _progress(index, total, result):
+                mark = "OK " if result.passed else ("ERR" if result.error else "LOW")
+                print(
+                    f"  [{index}/{total}] {mark} {result.id} "
+                    f"score={result.score} ({result.elapsed_s}s) {result.verdict}"
+                )
+
+            print(f"[RUN] driving the TUI at {control}")
+            results = run(dataset, driver, client, on_progress=_progress)
+            card = scorecard(results)
+            report_path = save(out_dir, dataset, results, card, "live TUI")
+            print()
+            print(
+                f"[SCORE] mean {card['mean_score']}/5 · pass rate "
+                f"{card['pass_rate']}% · {card['errors']} error(s)"
+            )
+            print(f"[OUTPUT] {report_path.resolve()}")
+            return
+
         # Email-triage throughput benchmark: gaia eval benchmark (#1233)
         if getattr(args, "eval_command", None) == "benchmark":
             import tempfile
@@ -4924,6 +5142,26 @@ Let me know your answer!
             )
             sys.exit(exit_code)
 
+        if args.check:
+            from gaia.installer.init_command import check_setup_status
+
+            try:
+                status = check_setup_status(
+                    profile=profile,
+                    skip_chat_model=getattr(args, "skip_chat_model", False),
+                    remote=getattr(args, "remote", False),
+                )
+            except ValueError as e:
+                print(f"Error: {e}", file=sys.stderr)
+                sys.exit(1)
+            if status.ready:
+                print(f"READY: profile '{profile}' is already set up")
+                sys.exit(0)
+            print(f"NOT READY: profile '{profile}' needs setup")
+            for reason in status.reasons:
+                print(f"  - {reason}")
+            sys.exit(1)
+
         from gaia.installer.init_command import run_init
 
         exit_code = run_init(
@@ -4936,6 +5174,7 @@ Let me know your answer!
             verbose=getattr(args, "verbose", False),
             remote=getattr(args, "remote", False),
             skip_webui_build=getattr(args, "skip_webui_build", False),
+            skip_chat_model=getattr(args, "skip_chat_model", False),
         )
         sys.exit(exit_code)
 
@@ -5651,10 +5890,12 @@ def handle_api_command(args):
 
             # Now import the app (agent_registry will see the env vars)
             from gaia.api.openai_server import app
+            from gaia.api.sse_handler import warn_if_unconfirmed_tools_allowed
 
             print("🚀 Starting GAIA OpenAI-compatible API server...")
             print(f"   Host: {args.host}")
             print(f"   Port: {args.port}")
+            warn_if_unconfirmed_tools_allowed()
 
             # Show debug features if enabled
             if (
@@ -7878,19 +8119,47 @@ def _handle_daemon_restart():
     _handle_daemon_start()
 
 
-def _handle_daemon_logs(args):
-    from gaia.daemon import paths
+def _resolve_sidecar_log(agent_id: str):
+    """Return the Path to the given sidecar's current (or most recent) log.
 
-    log_file = paths.log_path()
-    if not log_file.exists():
-        print(f"No daemon log at {log_file} (the daemon has not started yet).")
-        return
-    lines = getattr(args, "lines", 100)
-    if getattr(args, "follow", False):
-        # Simple follow loop: print the tail, then stream appended bytes.
+    Prefers the log of the running sidecar (its live port, learned from the
+    daemon) so ``-f`` follows the active process; falls back to the newest
+    ``sidecar-*.log`` on disk when the daemon is down or the agent is stopped
+    (so ``logs`` still works post-mortem). Returns ``None`` if no log exists.
+    """
+    log_dir = Path.home() / ".gaia" / "agents" / agent_id / "logs"
+
+    # Best-effort: ask the daemon for the running port so we follow the live
+    # process. Never fatal — a down daemon just means we use the newest file.
+    try:
+        from gaia.daemon import client
+
+        inst = client.attach()
+        if inst is not None:
+            for entry in _fetch_daemon_agents(inst):
+                if entry.get("agent_id") == agent_id and entry.get("port"):
+                    candidate = log_dir / f"sidecar-{entry['port']}.log"
+                    if candidate.exists():
+                        return candidate
+    except Exception as exc:
+        # A down daemon is expected here; record why before the disk fallback.
+        logging.getLogger("gaia.cli").debug(
+            "daemon lookup for %s failed (%s); using newest log on disk",
+            agent_id,
+            exc,
+        )
+
+    if not log_dir.is_dir():
+        return None
+    logs = sorted(log_dir.glob("sidecar-*.log"), key=lambda p: p.stat().st_mtime)
+    return logs[-1] if logs else None
+
+
+def _tail_file(log_file, lines: int, follow: bool) -> None:
+    """Print the last ``lines`` of ``log_file``, optionally following it."""
+    if follow:
         with open(log_file, "r", encoding="utf-8", errors="replace") as f:
-            existing = f.readlines()
-            for line in existing[-lines:]:
+            for line in f.readlines()[-lines:]:
                 print(line, end="")
             try:
                 while True:
@@ -7903,9 +8172,36 @@ def _handle_daemon_logs(args):
                 return
         return
     with open(log_file, "r", encoding="utf-8", errors="replace") as f:
-        tail = f.readlines()[-lines:]
-    for line in tail:
-        print(line, end="")
+        for line in f.readlines()[-lines:]:
+            print(line, end="")
+
+
+def _handle_daemon_logs(args):
+    from gaia.daemon import paths
+
+    lines = getattr(args, "lines", 100)
+    follow = getattr(args, "follow", False)
+    agent_id = getattr(args, "agent", None)
+
+    if agent_id:
+        log_file = _resolve_sidecar_log(agent_id)
+        if log_file is None:
+            print(
+                f"No log for sidecar '{agent_id}' at "
+                f"{Path.home() / '.gaia' / 'agents' / agent_id / 'logs'} "
+                f"(it has not run yet). Start it with `gaia daemon start-agent "
+                f"{agent_id}` or run the agent once."
+            )
+            return
+        print(f"# {log_file}")
+        _tail_file(log_file, lines, follow)
+        return
+
+    log_file = paths.log_path()
+    if not log_file.exists():
+        print(f"No daemon log at {log_file} (the daemon has not started yet).")
+        return
+    _tail_file(log_file, lines, follow)
 
 
 # ---------------------------------------------------------------------------
@@ -8159,6 +8455,18 @@ def handle_mcp_command(args):
         print(f"❌ Unknown MCP action: {args.mcp_action}")
 
 
+# Kept in sync with gaia.mcp.mcp_bridge.AUTH_TOKEN_ENV_VAR by
+# tests/unit/test_mcp_bridge_auth.py — duplicated here so the client-side
+# `mcp status` / `mcp test` paths don't have to import the heavy bridge module.
+MCP_AUTH_TOKEN_ENV = "GAIA_MCP_AUTH_TOKEN"
+
+
+def _mcp_auth_headers(args):
+    """Bearer headers for reaching a token-protected MCP bridge, else {}."""
+    token = getattr(args, "auth_token", None) or os.environ.get(MCP_AUTH_TOKEN_ENV)
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
 def handle_mcp_start(args):
     """Start the MCP bridge server (HTTP-native implementation)."""
     log = get_logger(__name__)
@@ -8225,8 +8533,6 @@ def handle_mcp_start(args):
             # Add optional arguments if provided
             if args.base_url:
                 cmd_args.extend(["--base-url", args.base_url])
-            if args.auth_token:
-                cmd_args.extend(["--auth-token", args.auth_token])
             if args.no_streaming:
                 cmd_args.append("--no-streaming")
             if getattr(args, "verbose", False):
@@ -8234,9 +8540,20 @@ def handle_mcp_start(args):
             if getattr(args, "no_lemonade_check", False):
                 cmd_args.append("--no-lemonade-check")
 
+            # Hand the token over the environment, not argv — argv is world
+            # readable via `ps` on Linux/macOS.
+            child_env = os.environ.copy()
+            bg_token = args.auth_token or os.environ.get(MCP_AUTH_TOKEN_ENV) or None
+            if bg_token:
+                child_env[MCP_AUTH_TOKEN_ENV] = bg_token
+
             print("🚀 Starting GAIA MCP Bridge in background")
             print(f"📍 Host: {args.host}:{args.port}")
             print(f"📄 Log file: {log_file_path}")
+            if bg_token:
+                print("🔒 Authentication enabled (Bearer token required)")
+            else:
+                print("🔓 Authentication disabled - pass --auth-token to require one")
 
             # Write initial banner BEFORE starting subprocess (prevents truncation issues)
             import datetime
@@ -8266,6 +8583,7 @@ def handle_mcp_start(args):
                         stderr=subprocess.STDOUT,
                         creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
                         cwd=os.getcwd(),
+                        env=child_env,
                         text=True,
                     )
                 else:
@@ -8277,6 +8595,7 @@ def handle_mcp_start(args):
                         stderr=subprocess.STDOUT,
                         start_new_session=True,
                         cwd=os.getcwd(),
+                        env=child_env,
                         text=True,
                     )
             except Exception:
@@ -8306,8 +8625,11 @@ def handle_mcp_start(args):
         log.info("Starting GAIA MCP Bridge on %s:%s", args.host, args.port)
         print(f"🚀 Starting GAIA MCP Bridge on {args.host}:{args.port}")
 
-        if args.auth_token:
-            print("🔒 Authentication enabled")
+        auth_token = args.auth_token or os.environ.get(MCP_AUTH_TOKEN_ENV) or None
+        if auth_token:
+            print("🔒 Authentication enabled (Bearer token required; /health public)")
+        else:
+            print("🔓 Authentication disabled - pass --auth-token to require one")
 
         print(f"🔗 GAIA LLM server: {args.base_url}")
         print(f"📡 Streaming: {'disabled' if args.no_streaming else 'enabled'}")
@@ -8319,7 +8641,11 @@ def handle_mcp_start(args):
         # Start HTTP-native MCP bridge
         verbose = getattr(args, "verbose", False)
         start_mcp_http(
-            host=args.host, port=args.port, base_url=args.base_url, verbose=verbose
+            host=args.host,
+            port=args.port,
+            base_url=args.base_url,
+            verbose=verbose,
+            auth_token=auth_token,
         )
 
     except KeyboardInterrupt:
@@ -8418,8 +8744,12 @@ def handle_mcp_status(args):
 
                 # First try the new /status endpoint
                 status_url = f"http://{args.host}:{args.port}/status"
+                auth_headers = _mcp_auth_headers(args)
                 try:
-                    with urllib.request.urlopen(status_url, timeout=3) as response:
+                    status_req = urllib.request.Request(
+                        status_url, headers=auth_headers
+                    )
+                    with urllib.request.urlopen(status_req, timeout=3) as response:
                         data = json.loads(response.read().decode())
 
                         if data.get("status") == "healthy":
@@ -8462,6 +8792,13 @@ def handle_mcp_status(args):
                         else:
                             print("⚠️  Server is running but may not be healthy")
                 except urllib.error.HTTPError as e:
+                    if e.code in (401, 403):
+                        print("🔒 MCP server requires authentication")
+                        print(
+                            "   Pass --auth-token <token> or set "
+                            f"{MCP_AUTH_TOKEN_ENV} to inspect it"
+                        )
+                        return
                     if e.code == 404:
                         # Fall back to /health for older versions
                         health_url = f"http://{args.host}:{args.port}/health"
@@ -8536,7 +8873,12 @@ def handle_mcp_test(args):
             url = f"http://{args.host}:{args.port}/"
             data = json.dumps(rpc_request).encode("utf-8")
             req = urllib.request.Request(
-                url, data=data, headers={"Content-Type": "application/json"}
+                url,
+                data=data,
+                headers={
+                    "Content-Type": "application/json",
+                    **_mcp_auth_headers(args),
+                },
             )
 
             with urllib.request.urlopen(req, timeout=30) as response:
@@ -8565,7 +8907,14 @@ def handle_mcp_test(args):
                     print("❌ Unexpected response format")
 
         except urllib.error.HTTPError as e:
-            print(f"❌ HTTP Error: {e.code} {e.reason}")
+            if e.code in (401, 403):
+                print(f"🔒 MCP server rejected the request ({e.code})")
+                print(
+                    "   The bridge was started with --auth-token. Pass the same "
+                    f"token via --auth-token, or set {MCP_AUTH_TOKEN_ENV}."
+                )
+            else:
+                print(f"❌ HTTP Error: {e.code} {e.reason}")
         except urllib.error.URLError as e:
             print(f"❌ Connection error: {e.reason}")
         except json.JSONDecodeError as e:
@@ -8625,7 +8974,12 @@ def handle_mcp_agent(args):
             url = f"http://{args.host}:{args.port}/"
             data = json.dumps(rpc_request).encode("utf-8")
             req = urllib.request.Request(
-                url, data=data, headers={"Content-Type": "application/json"}
+                url,
+                data=data,
+                headers={
+                    "Content-Type": "application/json",
+                    **_mcp_auth_headers(args),
+                },
             )
 
             print("🔄 Agent is analyzing request and orchestrating tools...")
@@ -8683,7 +9037,14 @@ def handle_mcp_agent(args):
                     print("❌ Unexpected response format")
 
         except urllib.error.HTTPError as e:
-            print(f"❌ HTTP Error: {e.code} {e.reason}")
+            if e.code in (401, 403):
+                print(f"🔒 MCP server rejected the request ({e.code})")
+                print(
+                    "   The bridge was started with --auth-token. Pass the same "
+                    f"token via --auth-token, or set {MCP_AUTH_TOKEN_ENV}."
+                )
+            else:
+                print(f"❌ HTTP Error: {e.code} {e.reason}")
         except urllib.error.URLError as e:
             print(f"❌ Connection error: {e.reason}")
         except json.JSONDecodeError as e:

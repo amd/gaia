@@ -64,11 +64,17 @@ SOURCE_NONE = "none"
 class SkillRef:
     """One entry in a ``skills:`` list or a ``skill_sets:`` bundle.
 
-    ``version`` is a **declaration surface only** in this phase: it is parsed,
-    validated as a string, and surfaced, but no constraint solving happens until
-    the marketplace phase (#2467) can install versioned skills. ``required:
-    false`` marks an optional enhancement — a missing optional skill is logged
-    and skipped, a missing required one fails the launch.
+    ``version`` is a SemVer range (``">=1.0.0"``, ``"^1.2"``) and it is
+    **enforced at load**, not merely recorded: this module parses it, and
+    :func:`gaia.skills.consume.resolve_requirements` matches it against the
+    installed skill's frontmatter ``version``. A skill that is unversioned, or
+    versioned outside the range, does not satisfy the pin. ``required: false``
+    marks an optional enhancement — an optional skill that is missing or
+    version-incompatible is logged and skipped, a required one fails the launch.
+
+    Full resolution *across installable versions* (picking which version to
+    fetch) still belongs to the marketplace phase (#2467); what happens here is
+    checking the one version that is actually installed.
     """
 
     name: str
@@ -350,6 +356,8 @@ def _parse_ref(entry: Any, field_name: str, where: str) -> SkillRef:
             f"version or range, e.g. '>=1.0.0'), got {version!r}. "
             f"See {_SETS_DOCS_URL}."
         )
+    if isinstance(version, str):
+        _validated_range(version.strip(), field_name, where)
 
     required = entry.get("required", True)
     if not isinstance(required, bool):
@@ -363,6 +371,25 @@ def _parse_ref(entry: Any, field_name: str, where: str) -> SkillRef:
         version=version.strip() if isinstance(version, str) else None,
         required=required,
     )
+
+
+def _validated_range(spec: str, field_name: str, where: str) -> None:
+    """Reject a ``version:`` range the resolver would not be able to evaluate.
+
+    Checked here, with every other malformed shape, so the verdict does not
+    depend on whether the pinned skill happens to be installed on this machine.
+    """
+    # Deferred like NAME_PATTERN below: keeps the manifest validator's import
+    # graph off the hub catalog for the agents that declare no skills.
+    from gaia.skills.versions import validate_spec
+
+    try:
+        validate_spec(spec)
+    except SkillValidationError as e:
+        raise SkillValidationError(
+            f"'{field_name}.version'{where} is not a version range GAIA can "
+            f"evaluate. {e}"
+        ) from e
 
 
 def _validated_name(value: Any, field_name: str, where: str) -> str:

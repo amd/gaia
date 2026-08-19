@@ -18,6 +18,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from gaia.api.sse_handler import warn_if_unconfirmed_tools_allowed
+
 logger = logging.getLogger(__name__)
 
 
@@ -48,6 +50,8 @@ def start_server(
         >>> start_server("localhost", 8080, debug=True, show_prompts=True)
         ✅ GAIA API server started with debug mode enabled
     """
+    warn_if_unconfirmed_tools_allowed()
+
     # Set environment variables for agent configuration
     # These will be read by agent_registry.py when agents are instantiated
     if debug:

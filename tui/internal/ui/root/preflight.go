@@ -409,6 +409,8 @@ func providerLabel(provider string) string {
 		return "Gmail"
 	case "microsoft":
 		return "Outlook"
+	case "microsoft_work":
+		return "Microsoft 365"
 	default:
 		return provider
 	}

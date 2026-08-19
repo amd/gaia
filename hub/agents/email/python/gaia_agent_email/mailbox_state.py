@@ -39,30 +39,76 @@ log = get_logger(__name__)
 #: Grant-ledger identity the email agent's mailbox access is recorded under.
 AGENT_ID = "installed:email"
 
+#: Connector ids that both authenticate against Microsoft Graph — a personal
+#: Outlook.com/Hotmail/Live account (``microsoft``) and a work Microsoft 365 /
+#: Entra tenant (``microsoft_work``, #2628). Two accounts, one backend family.
+MICROSOFT_CONNECTOR_IDS = ("microsoft", "microsoft_work")
+
 #: Mailbox providers this agent can drive, in canonical (display) order.
-PROVIDERS = ("google", "microsoft")
+PROVIDERS = ("google", "microsoft", "microsoft_work")
 
 #: Human names — the user picked "Gmail", not "google".
-PROVIDER_LABELS = {"google": "Gmail", "microsoft": "Outlook"}
+PROVIDER_LABELS = {
+    "google": "Gmail",
+    "microsoft": "Outlook",
+    "microsoft_work": "Microsoft 365",
+}
 
-#: User/model-facing vocabulary -> canonical provider id (#2590). This
-#: agent's own copy says "Gmail" and "Outlook" everywhere (``provider_label``
-#: above) — a model that hears "Outlook" has every reason to pass that word
-#: back as the ``provider`` argument, not the internal id ``"microsoft"``.
-#: Validating against ``PROVIDERS`` directly rejected exactly the word the
-#: product itself teaches, with a message that named that same word as
-#: supported — resolve aliases FIRST, before any validation happens.
+#: Canonical id -> which client class talks to it. Two accounts (personal and
+#: work Microsoft) share one Graph backend; only the connector id (token,
+#: grant, keyring slot) differs between them (#2629 Decision 0).
+PROVIDER_BACKEND_FAMILY: Dict[str, str] = {
+    "google": "gmail",
+    "microsoft": "graph",
+    "microsoft_work": "graph",
+}
+
+
+def backend_family(provider: str) -> str:
+    """Canonical connector id -> backend family (``"gmail"`` or ``"graph"``).
+
+    Raises ``ValueError`` on an unrecognized id rather than guessing — this is
+    the one place a fourth connector or client class gets added.
+    """
+    try:
+        return PROVIDER_BACKEND_FAMILY[provider]
+    except KeyError:
+        raise ValueError(
+            f"Unknown mailbox provider {provider!r}. Supported: {', '.join(PROVIDERS)}."
+        ) from None
+
+
+#: User/model-facing vocabulary -> canonical provider id (#2590, remapped for
+#: the three-way split in #2629). This agent's own copy says "Gmail",
+#: "Outlook" and "Microsoft 365" everywhere (``provider_label`` above) — a
+#: model that hears one of those words has every reason to pass it back as the
+#: ``provider`` argument, not the internal id. Validating against ``PROVIDERS``
+#: directly rejected exactly the word the product itself teaches, with a
+#: message that named that same word as supported — resolve aliases FIRST,
+#: before any validation happens.
+#:
+#: The work-vocabulary aliases (``office365``/``o365``/``m365``/
+#: ``microsoft 365``/``entra``/``exchange``) moved from ``microsoft`` to
+#: ``microsoft_work`` here — this remap is BREAKING and intended (#2629
+#: Decision 1): those words mean work mail, and mapping them to the personal
+#: connector was an accident of there having been only one Microsoft
+#: connector. Bare ``microsoft``/``outlook``/``outlook.com``/``hotmail``/
+#: ``live`` still resolve to the personal connector, unchanged. ``work`` and
+#: ``school`` are deliberately NOT aliased — common English words with real
+#: false-positive risk ("email my work colleague").
 PROVIDER_ALIASES: Dict[str, str] = {
     "microsoft": "microsoft",
     "outlook": "microsoft",
     "outlook.com": "microsoft",
     "hotmail": "microsoft",
     "live": "microsoft",
-    "office365": "microsoft",
-    "o365": "microsoft",
-    "microsoft 365": "microsoft",
-    "entra": "microsoft",
-    "exchange": "microsoft",
+    "microsoft_work": "microsoft_work",
+    "office365": "microsoft_work",
+    "o365": "microsoft_work",
+    "m365": "microsoft_work",
+    "microsoft 365": "microsoft_work",
+    "entra": "microsoft_work",
+    "exchange": "microsoft_work",
     "google": "google",
     "gmail": "google",
     "gmail.com": "google",
@@ -115,17 +161,14 @@ def required_scopes(provider: str) -> List[str]:
     the narrow set self-repair CHECKS against; :func:`requested_scopes` is
     the wider set it now ASKS for (#2730 D1/D3) — request vs. enforce.
     """
-    if provider == "google":
+    family = backend_family(provider)
+    if family == "gmail":
         from gaia_agent_email.scopes import GMAIL_SCOPES
 
         return list(GMAIL_SCOPES)
-    if provider == "microsoft":
-        from gaia_agent_email.outlook_scopes import OUTLOOK_MAIL_SCOPES
+    from gaia_agent_email.outlook_scopes import OUTLOOK_MAIL_SCOPES
 
-        return list(OUTLOOK_MAIL_SCOPES)
-    raise ValueError(
-        f"Unknown mailbox provider {provider!r}. Supported: {', '.join(PROVIDERS)}."
-    )
+    return list(OUTLOOK_MAIL_SCOPES)
 
 
 def requested_scopes(provider: str) -> List[str]:
@@ -139,17 +182,14 @@ def requested_scopes(provider: str) -> List[str]:
     screen is still fine — :func:`required_scopes` is what self-repair
     actually gates on.
     """
-    if provider == "google":
+    family = backend_family(provider)
+    if family == "gmail":
         from gaia_agent_email.scopes import ALL_SCOPES
 
         return list(ALL_SCOPES)
-    if provider == "microsoft":
-        from gaia_agent_email.outlook_scopes import OUTLOOK_ALL_SCOPES
+    from gaia_agent_email.outlook_scopes import OUTLOOK_ALL_SCOPES
 
-        return list(OUTLOOK_ALL_SCOPES)
-    raise ValueError(
-        f"Unknown mailbox provider {provider!r}. Supported: {', '.join(PROVIDERS)}."
-    )
+    return list(OUTLOOK_ALL_SCOPES)
 
 
 def _account_email(raw: Any) -> Optional[str]:

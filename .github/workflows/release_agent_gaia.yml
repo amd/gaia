@@ -1,0 +1,1114 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Fully-automated, tag-triggered release for the flagship GAIA agent package
+# (@amd-gaia/gaia on npm, gaia-agent-gaia on the Agent Hub). One namespaced tag
+# does the whole release.
+#
+# TWO shipped components, from TWO DIFFERENT HUB LANES:
+#
+#   sidecar — the agent's REST sidecar, frozen with PyInstaller into a one-file
+#             native binary per platform. PyInstaller cannot cross-compile, so
+#             each platform needs its own runner. THIS workflow builds and
+#             publishes it, into agents/gaia/<version>/:
+#               gaia-agent-win32-x64.exe / -darwin-arm64 / -darwin-x64 / -linux-x64
+#             Installed executable name: gaia-agent[.exe]
+#   tui     — the Go terminal UI, CONSUMED (not built) from the published
+#             `terminal-hub` component at agents/terminal-hub/<tuiVersion>/:
+#               gaia-{win-x64,win-arm64,darwin-arm64,darwin-x64,
+#                     linux-x64,linux-arm64}[.exe]
+#             Installed executable name: gaia-tui[.exe]
+#
+# This workflow does NOT build or publish a TUI. release_components.yml already
+# builds `tui/cmd/gaia` from the same source with the same flags and publishes it
+# as `terminal-hub`; a second copy under this lane would be the same bytes at a
+# different version under a third naming convention, and the two would drift.
+# Consuming terminal-hub means a `gaia` from npm and a `gaia tui` from a core
+# install are the same binary, so their behaviour is identical by construction.
+#
+# COST OF THAT: this release is gated on terminal-hub being published at the
+# version binaries.lock.json pins. It is not fetched-if-available — a missing
+# version fails the release loudly, naming the version required. There is no
+# fallback to building our own.
+#
+# binaries.lock.json is therefore TWO-LANE (schemaVersion "3.0") — each component
+# carries its own version and base URL, which one shared top-level baseUrl could
+# not express:
+#   { schemaVersion, agentVersion,
+#     components: { <name>: { componentVersion, baseUrl, platforms: {...} } } }
+# gen_binaries_lock.py writes each lane from the per-artifact meta records the
+# jobs below emit.
+#
+# Stages:
+#   1. version   — resolve the release version from the tag / dispatch input and
+#                  fail fast if it disagrees with package.json or
+#                  gaia-agent.yaml, or if stamp_version.py --check finds drift.
+#                  Also reads the terminal-hub pin out of the committed lock.
+#                  Runs BEFORE ~40 runner-minutes of freezing.
+#   2. freeze    — per-platform PyInstaller freeze of the sidecar, smoke-tested
+#                  on the frozen binary itself, staged under its hub name with a
+#                  SHA-256 + size meta.
+#   3. tui       — prove the pinned terminal-hub version is published, download
+#                  all 6 artifacts from that lane, and cross-check each against
+#                  the hub's own recorded SHA-256 before emitting its meta.
+#   4. tests     — the gaia agent's Python test suite + the npm package's vitest
+#                  suite. A failure blocks the release.
+#   5. publish   — behind the `agent-publish` environment's manual approval:
+#                  POST the SIDECAR binaries + gaia-agent.yaml to the Agent Hub
+#                  Worker's /publish endpoint, regenerate binaries.lock.json with
+#                  the REAL hashes for both lanes, verify every entry is
+#                  fetchable AND hash-matches at the public origin, then
+#                  `npm publish` via npm trusted publishing (OIDC, provenance —
+#                  NO npm token).
+#
+# Distribution model (identical to email): the Agent Hub Worker
+# (workers/agent-hub/) fronts the gaia-hub R2 bucket at hub.amd-gaia.ai.
+# Publishing goes through POST /publish (server-side checksummed, rebuilds
+# index.json); downloads are a plain public GET at
+# hub.amd-gaia.ai/agents/gaia/<ver>/<file>. The SHA-256 in binaries.lock.json is
+# the integrity gate the install-time fetcher enforces.
+#
+# Atomic + idempotent: POST /publish is immutable per filename (re-publishing
+# the same bytes is a verified no-op; different bytes under a published name
+# fail loudly); the post-upload fetch-verify is the release's real integrity
+# gate; npm publish is skipped if that exact version already exists.
+#
+# Tag namespace: `agent-pkg-gaia-*` (NOT `v*`). This is the established Agent
+# Hub package-share namespace and deliberately does NOT fire publish.yml (v*
+# only) or the paused publish_agents.yml (no tag trigger). Example:
+#   git tag agent-pkg-gaia-v0.1.0 && git push origin --tags
+#
+# Maintainer setup (one-time):
+#   Environment:
+#     agent-publish          — create this GitHub environment (Settings →
+#                              Environments) with REQUIRED REVIEWERS and its
+#                              deployment branches/tags restricted to `main` AND
+#                              the `agent-pkg-*` tag pattern (the release trigger
+#                              is a TAG push, so a main-only rule blocks the
+#                              gate and the release hangs). The publish job is
+#                              bound to it, so a release pauses for human
+#                              approval before any hub/npm publish. Shared with
+#                              release_agent_email.yml / release_agent_chat.yml.
+#   Secrets:
+#     GAIA_HUB_TOKEN         — Agent Hub Bearer publish token; must match an
+#                              entry in the Worker's PUBLISH_TOKENS secret,
+#                              scoped to the `AMD` author
+#                              (workers/agent-hub/README.md). Define it as an
+#                              ENVIRONMENT secret on `agent-publish` (NOT a repo
+#                              secret) so it is unreadable until the gate is
+#                              approved.
+#   Variables:
+#     GAIA_HUB_BASE_URL      — public Worker origin for downloads + the lock
+#                              baseUrl. Default https://hub.amd-gaia.ai.
+#     GAIA_HUB_PUBLISH_URL   — origin CI POSTs uploads to. MUST be the Worker's
+#                              workers.dev URL: the free-plan managed WAF on the
+#                              proxied hub.amd-gaia.ai custom domain blocks large
+#                              binary uploads, but not GET downloads. Unset →
+#                              falls back to GAIA_HUB_BASE_URL (uploads 403).
+#   npm trusted publisher for @amd-gaia/gaia registered against THIS workflow
+#   file name: release_agent_gaia.yml (repo amd/gaia). The OIDC subject is tied
+#   to the exact filename — RENAMING THIS FILE BREAKS THE npm PUBLISH.
+#
+# Not carried over from release_agent_email.yml (deliberate):
+#   * the `verify-darwin-x64-compat` leg. darwin-x64 is built on macos-26-intel,
+#     the newest Intel image, which can raise the frozen binary's minimum macOS.
+#     Email added a macos-15-intel smoke leg to catch that. Add the same here if
+#     Intel-Mac backward-compat becomes a real support burden; today darwin-x64
+#     is best-effort and its absence/breakage fails loudly at install.
+#   * the eval / scorecard gates (email-specific corpora + thresholds).
+#   * the whole-package zip (disabled upstream — exceeded the edge upload limit).
+
+name: Release Agent (gaia)
+
+on:
+  push:
+    tags:
+      - 'agent-pkg-gaia-*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (must match package.json + gaia-agent.yaml), e.g. 0.1.0'
+        required: true
+
+concurrency:
+  # Never cancel a half-done release — a partial publish must finish.
+  group: release-agent-gaia-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  PKG_DIR: hub/agents/gaia/npm
+  PY_DIR: hub/agents/gaia/python
+  PACKAGING: hub/agents/gaia/python/packaging
+  MANIFEST: hub/agents/gaia/python/gaia-agent.yaml
+  # Canonical integrator-facing docs live with the npm client (same convention
+  # as email): they are what the hub renders and what ships in the npm tarball.
+  README: hub/agents/gaia/npm/README.md
+  CHANGELOG: hub/agents/gaia/npm/CHANGELOG.md
+  SPEC: hub/agents/gaia/npm/SPEC.md
+  SKILL: hub/agents/gaia/npm/SKILL.md
+  FREEZE_DIST: hub/agents/gaia/python/packaging/dist
+  # Hub key prefix (mirrors the Worker's agents/<id> layout). The Worker owns
+  # the bucket binding; CI never talks to R2 directly — it POSTs to /publish.
+  HUB_PREFIX: agents/gaia
+  NPM_PKG: '@amd-gaia/gaia'
+
+jobs:
+  # ── Stage 1: resolve + validate the version (fail fast) ─────────────
+  # Runs before the freeze matrix so a version typo costs seconds, not the
+  # ~40 runner-minutes of PyInstaller. `publish` re-checks after the approval
+  # gate (the gate can sit for hours; re-verifying is cheap insurance).
+  version:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      base_url: ${{ steps.ver.outputs.base_url }}
+      tui_version: ${{ steps.tui.outputs.tui_version }}
+      tui_base_url: ${{ steps.tui.outputs.tui_base_url }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Install PyYAML
+        run: python -m pip install --upgrade pyyaml
+
+      - name: Resolve + validate release version
+        id: ver
+        shell: bash
+        # User-controlled inputs go through env (never inlined into the script
+        # text) so a value cannot inject shell — GitHub Actions script-injection
+        # hardening. The tag path uses GITHUB_REF_NAME (also env), and the
+        # version is triple-checked against package.json + the manifest below.
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          GAIA_HUB_BASE_URL: ${{ vars.GAIA_HUB_BASE_URL }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            VERSION="$INPUT_VERSION"
+          else
+            TAG="${GITHUB_REF_NAME}"
+            VERSION="${TAG#agent-pkg-gaia-}"
+            VERSION="${VERSION#v}"
+          fi
+          if [ -z "${VERSION}" ]; then
+            echo "::error::could not resolve a release version from event='${EVENT_NAME}' ref='${GITHUB_REF_NAME}'. Tag as agent-pkg-gaia-vX.Y.Z, or pass the version input on workflow_dispatch."
+            exit 1
+          fi
+          if [ ! -f "${PKG_DIR}/package.json" ]; then
+            echo "::error::missing ${PKG_DIR}/package.json — the ${NPM_PKG} npm package must exist before a release can be cut."
+            exit 1
+          fi
+          PKG_VER="$(node -p "require('./${PKG_DIR}/package.json').version")"
+          PKG_NAME="$(node -p "require('./${PKG_DIR}/package.json').name")"
+          MAN_VER="$(python -c "import yaml; print(yaml.safe_load(open('${MANIFEST}'))['version'])")"
+          echo "release version: ${VERSION} (package.json=${PKG_VER}, manifest=${MAN_VER})"
+          if [ "$PKG_NAME" != "$NPM_PKG" ]; then
+            echo "::error::${PKG_DIR}/package.json declares name='${PKG_NAME}' but this workflow publishes '${NPM_PKG}'. The npm trusted publisher is bound to that exact name — align them before releasing."
+            exit 1
+          fi
+          if [ "$VERSION" != "$PKG_VER" ] || [ "$VERSION" != "$MAN_VER" ]; then
+            echo "::error::version mismatch — tag/input=${VERSION}, package.json=${PKG_VER}, gaia-agent.yaml=${MAN_VER}. Align all three before tagging."
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "base_url=${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}/${HUB_PREFIX}/${VERSION}" >> "$GITHUB_OUTPUT"
+
+      # Single-source version gate: every committed version reference (manifest,
+      # pyproject, package.json, the lock's agentVersion/baseUrl, doc URLs) must
+      # agree. Stdlib-only; fails loudly on any drift so a release can't ship a
+      # stale static reference (e.g. a lock baseUrl still pointing at the prior
+      # version's hub directory).
+      - name: Verify version references are in sync (single source of truth)
+        shell: bash
+        run: python "${PACKAGING}/stamp_version.py" --check
+
+      # The TUI is not built here — it is the published `terminal-hub` component,
+      # and binaries.lock.json is where the consumed version is pinned. Read the
+      # pin from the lock (not from a workflow variable) so the release verifies
+      # exactly the URL the SHIPPED lock will send users to.
+      - name: Resolve the pinned terminal-hub component
+        id: tui
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Writes key=value pairs to tui.env rather than straight to
+          # $GITHUB_OUTPUT, so a failure's ::error:: still lands on the step's
+          # stdout where Actions can render it as an annotation.
+          python - "${PKG_DIR}/binaries.lock.json" tui.env <<'PY'
+          import json, sys
+          lock_path, out_path = sys.argv[1:3]
+          lock = json.load(open(lock_path, encoding="utf-8"))
+          lane = (lock.get("components") or {}).get("tui")
+          if not lane:
+              print(
+                  "::error::binaries.lock.json has no 'tui' component. This package "
+                  "consumes the published terminal-hub component for the terminal "
+                  "UI; without that lane there is nothing to ship.",
+                  flush=True,
+              )
+              raise SystemExit(1)
+          version = lane.get("componentVersion")
+          base = (lane.get("baseUrl") or "").rstrip("/")
+          expected = f"agents/terminal-hub/{version}"
+          if not version or not base.endswith(expected):
+              print(
+                  f"::error::binaries.lock.json tui lane is inconsistent: "
+                  f"componentVersion={version!r}, baseUrl={base!r}. The base URL must "
+                  f"end with '{expected}' -- hub paths are agents/<id>/<version>/, so "
+                  "a mismatch would point every installer at the wrong release.",
+                  flush=True,
+              )
+              raise SystemExit(1)
+          with open(out_path, "w", encoding="utf-8") as fh:
+              fh.write(f"tui_version={version}\ntui_base_url={base}\n")
+          print(f"terminal-hub pin: {version} @ {base}")
+          PY
+          cat tui.env >> "$GITHUB_OUTPUT"
+
+      # `npm ci` (used by both the test gate and the publish job) requires a
+      # committed lockfile — a release must install exactly the resolved
+      # dependency tree, never re-resolve it. Assert it here so the failure is
+      # one actionable line in the first 30 seconds instead of an opaque
+      # `npm ci` error inside the approval-gated publish job.
+      - name: Assert npm lockfile is committed
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -f "${PKG_DIR}/package-lock.json" ]; then
+            echo "::error::missing ${PKG_DIR}/package-lock.json. A release installs with 'npm ci', which requires a committed lockfile so the published build is reproducible. Run 'npm install' in ${PKG_DIR} and commit the lockfile."
+            exit 1
+          fi
+
+      # The hub renders these and npm ships them in the tarball. Checked here
+      # (not just at publish time) so a missing doc fails before the runner
+      # spend, and long before the approval gate.
+      - name: Assert required hub docs are present
+        shell: bash
+        run: |
+          set -euo pipefail
+          missing=()
+          for f in "${README}" "${CHANGELOG}"; do
+            [ -f "$f" ] || missing+=("$f")
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::missing required hub doc(s): ${missing[*]}. The hub page renders them and package.json lists them in 'files'. Add them before releasing."
+            exit 1
+          fi
+          for f in "${SPEC}" "${SKILL}"; do
+            [ -f "$f" ] || echo "::warning::${f} not found — the release will publish without that hub doc tab."
+          done
+
+  # ── Stage 2: native sidecar freeze on every platform ────────────────
+  freeze:
+    name: Freeze sidecar (${{ matrix.key }})
+    runs-on: ${{ matrix.os }}
+    needs: [version]
+    # darwin-x64 (Intel) is BEST-EFFORT, built on macos-26-intel (the latest
+    # Intel image; macos-13 retired Dec 2025, Intel images supported through
+    # Aug 2027). TRADE-OFF: building on the newest macOS can raise the frozen
+    # binary's minimum-OS, so Intel-Mac users on older macOS may not be able to
+    # run it; switch to macos-15-intel if broad backward-compat matters more
+    # than a current toolchain. PyInstaller can't cross-compile, so an Intel
+    # binary needs an Intel host. The leg may fail without failing the release
+    # (continue-on-error + required:false); `publish` gates only on the 3
+    # REQUIRED platforms. A miss is announced LOUDLY (::warning:: + job summary)
+    # and Intel users still fail loudly at install — never silent.
+    continue-on-error: ${{ !matrix.required }}
+    timeout-minutes: ${{ matrix.required && 40 || 60 }}
+    strategy:
+      # Never let one slow/stuck leg cancel the others — each platform freezes
+      # independently and `publish` reconciles whatever arrived.
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: win32-x64
+            key: win32-x64
+            artifact: gaia-agent-win32-x64.exe
+            frozen: gaia-agent.exe
+            required: true
+          - os: macos-14
+            platform: darwin-arm64
+            key: darwin-arm64
+            artifact: gaia-agent-darwin-arm64
+            frozen: gaia-agent
+            required: true
+          - os: ubuntu-latest
+            platform: linux-x64
+            key: linux-x64
+            artifact: gaia-agent-linux-x64
+            frozen: gaia-agent
+            required: true
+          # darwin-x64 (Intel) BEST-EFFORT — see the job-level comment above.
+          - os: macos-26-intel
+            platform: darwin-x64
+            key: darwin-x64
+            artifact: gaia-agent-darwin-x64
+            frozen: gaia-agent
+            required: false
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Install deps + PyInstaller (frozen-binary env)
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv venv .venv-freeze --python 3.12
+          # gaia-agent-gaia is a hard dependency of gaia-agent-chat (GaiaAgent
+          # subclasses ChatAgent), so chat is installed from the same checkout
+          # rather than resolved from PyPI — the frozen binary must contain the
+          # ChatAgent this commit was developed against, not whatever is
+          # published.
+          uv pip install --python .venv-freeze \
+            -e ".[api]" \
+            -e hub/agents/chat/python \
+            -e hub/agents/gaia/python \
+            pyinstaller
+
+      - name: Freeze one-file binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          PY=.venv-freeze/$([ "$RUNNER_OS" = "Windows" ] && echo Scripts || echo bin)/python
+          "$PY" "${PACKAGING}/freeze.py" --onefile
+
+      # The gate that matters: the FROZEN binary must actually boot and serve.
+      # An import that only resolves in the dev venv (a hidden import PyInstaller
+      # missed, a package-data file that didn't get collected) fails here rather
+      # than on a user's machine after the tag is immutable.
+      - name: Smoke-test the frozen binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          PY=.venv-freeze/$([ "$RUNNER_OS" = "Windows" ] && echo Scripts || echo bin)/python
+          "$PY" "${PACKAGING}/smoke_test.py" "${FREEZE_DIST}/${{ matrix.frozen }}"
+
+      - name: Stage artifact + compute SHA-256 / size
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p staging
+          cp "${FREEZE_DIST}/${{ matrix.frozen }}" "staging/${{ matrix.artifact }}"
+          python - "staging/${{ matrix.artifact }}" "${{ matrix.platform }}" "${{ matrix.artifact }}" "${{ matrix.frozen }}" <<'PY'
+          import hashlib, json, sys
+          path, platform, filename, frozen = sys.argv[1:5]
+          data = open(path, "rb").read()
+          meta = {
+              "component": "sidecar",
+              "platform": platform,
+              "filename": filename,
+              "executable": "gaia-agent.exe" if frozen.endswith(".exe") else "gaia-agent",
+              "sha256": hashlib.sha256(data).hexdigest(),
+              "size": len(data),
+          }
+          with open(f"staging/sidecar-{platform}.meta.json", "w") as fh:
+              fh.write(json.dumps([meta], indent=2))
+          print(json.dumps(meta, indent=2))
+          PY
+
+      - name: Upload platform artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: gaia-agent-${{ matrix.key }}
+          path: |
+            staging/${{ matrix.artifact }}
+            staging/sidecar-${{ matrix.platform }}.meta.json
+          if-no-files-found: error
+
+  # ── Stage 3: verify the pinned terminal-hub component ───────────────
+  # The TUI is not built here. This job proves the pinned terminal-hub version is
+  # actually published, downloads all 6 artifacts from that lane, and records
+  # their hashes for the lock.
+  #
+  # A lane we do not own needs MORE verification, not less, so each artifact is
+  # checked against two independent sources: the hub's own server-side SHA-256
+  # (recorded in agents/terminal-hub/manifest.json at publish time, never trusted
+  # from the publisher) and a re-hash of the bytes actually served. Publishing is
+  # immutable per path, so a disagreement means the edge served something other
+  # than the stored object — never something to shrug at.
+  tui:
+    name: Verify terminal-hub ${{ needs.version.outputs.tui_version }}
+    runs-on: ubuntu-latest
+    needs: [version]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Fetch + verify the terminal-hub artifacts
+        shell: bash
+        env:
+          TUI_VERSION: ${{ needs.version.outputs.tui_version }}
+          TUI_BASE_URL: ${{ needs.version.outputs.tui_base_url }}
+        run: |
+          set -euo pipefail
+          mkdir -p staging
+          python - "${TUI_VERSION}" "${TUI_BASE_URL}" staging <<'PY'
+          import hashlib, json, sys, time, urllib.error, urllib.request
+
+          version, base, out_dir = sys.argv[1:4]
+          base = base.rstrip("/")
+          # agents/terminal-hub/<v> -> the Worker origin that also serves the
+          # per-agent manifest. Derived from the lock's own base URL so the
+          # manifest and the artifacts can never come from different origins.
+          origin = base.split("/agents/")[0]
+          manifest_url = f"{origin}/agents/terminal-hub/manifest.json"
+
+          # npm platform key -> the artifact terminal-hub publishes. Mirrors
+          # TUI_ARTIFACT_NAMES in npm/src/platform.ts and packaging/
+          # gen_binaries_lock.py. terminal-hub spells Windows `win-*`; our keys
+          # come from process.platform, which says `win32-*`.
+          ARTIFACTS = {
+              "win32-x64": "gaia-win-x64.exe",
+              "win32-arm64": "gaia-win-arm64.exe",
+              "darwin-arm64": "gaia-darwin-arm64",
+              "darwin-x64": "gaia-darwin-x64",
+              "linux-x64": "gaia-linux-x64",
+              "linux-arm64": "gaia-linux-arm64",
+          }
+
+          # Cloudflare's managed WAF in front of hub.amd-gaia.ai 403s the default
+          # Python-urllib User-Agent — for published objects too, so it reads as
+          # "not published" rather than "blocked". Always send a real one.
+          HEADERS = {
+              "user-agent": "gaia-release/1 (+https://github.com/amd/gaia)",
+              "accept": "application/octet-stream",
+          }
+
+          def die(msg: str) -> None:
+              print(f"::error::{msg}", flush=True)
+              raise SystemExit(1)
+
+          def get(url: str, label: str) -> bytes:
+              last = ""
+              req = urllib.request.Request(url, headers=HEADERS)
+              for attempt in range(1, 6):
+                  try:
+                      with urllib.request.urlopen(req, timeout=120) as resp:
+                          return resp.read()
+                  except urllib.error.HTTPError as e:
+                      if e.code == 404:
+                          return b""      # a real "not published", not a blip
+                      last = f"HTTP {e.code}"
+                  except Exception as e:   # network / edge hiccup
+                      last = f"{type(e).__name__}: {e}"
+                  print(f"  attempt {attempt}/5 failed for {label}: {last} -- retrying in 10s", flush=True)
+                  time.sleep(10)
+              die(f"could not fetch {label} at {url} after 5 attempts ({last}).")
+              return b""                   # unreachable; keeps the type checker honest
+
+          raw = get(manifest_url, "the terminal-hub manifest")
+          if not raw:
+              die(
+                  f"the terminal-hub component has never been published -- "
+                  f"{manifest_url} returned 404. @amd-gaia/gaia ships the published "
+                  "terminal-hub binary as its TUI and does not build its own, so "
+                  f"terminal-hub {version} must be released first (tag the core "
+                  "release; release_components.yml publishes it). Re-run this "
+                  "workflow once it is live."
+              )
+          manifest = json.loads(raw)
+          versions = manifest.get("versions") or {}
+          entry = versions.get(version)
+          if entry is None:
+              die(
+                  f"terminal-hub {version} is NOT published (available: "
+                  f"{', '.join(sorted(versions)) or 'none'}). binaries.lock.json pins "
+                  f"{version} for the tui component. Either release terminal-hub "
+                  f"{version}, or re-pin the lock's components.tui to a published "
+                  "version and re-run. Refusing to ship a lock that 404s at install."
+              )
+
+          by_name = {a["filename"]: a for a in entry.get("artifacts") or []}
+          missing = [f for f in ARTIFACTS.values() if f not in by_name]
+          if missing:
+              die(
+                  f"terminal-hub {version} is published but is missing "
+                  f"{', '.join(missing)} (has: {', '.join(sorted(by_name)) or 'none'}). "
+                  "All six platform artifacts are required -- a partial set would "
+                  "ship a lock that 404s for whichever platform is absent."
+              )
+
+          metas = []
+          for platform, filename in sorted(ARTIFACTS.items()):
+              url = f"{base}/{filename}"
+              want = by_name[filename]
+              data = get(url, f"tui/{platform}")
+              if not data:
+                  die(
+                      f"{url} returned 404 even though the terminal-hub manifest "
+                      f"records it for {version}. The catalog and the bucket "
+                      "disagree; do not ship a lock pointing at it."
+                  )
+              got_sha = hashlib.sha256(data).hexdigest()
+              if got_sha != want["sha256"] or len(data) != int(want["size_bytes"]):
+                  die(
+                      f"tui/{platform} at {url} does not match what the hub recorded "
+                      f"when it was published (served sha256={got_sha} size={len(data)}, "
+                      f"manifest sha256={want['sha256']} size={want['size_bytes']}). "
+                      "Hub objects are immutable per path, so these must agree -- "
+                      "refusing to record an unverified hash."
+                  )
+              metas.append({
+                  "component": "tui",
+                  "platform": platform,
+                  "filename": filename,
+                  "executable": "gaia-tui.exe" if filename.endswith(".exe") else "gaia-tui",
+                  "sha256": got_sha,
+                  "size": len(data),
+              })
+              print(f"  ok  tui/{platform}  {url}  ({len(data)} bytes)", flush=True)
+              with open(f"{out_dir}/tui-{platform}.meta.json", "w", encoding="utf-8") as fh:
+                  fh.write(json.dumps([metas[-1]], indent=2))
+
+          print(f"verified {len(metas)} terminal-hub artifacts at {version}", flush=True)
+          PY
+          ls -la staging
+
+      # Metas only — the binaries themselves are NOT re-uploaded anywhere. They
+      # already live in the terminal-hub lane, which is where users fetch them
+      # from; carrying them further would be the duplicate this change removes.
+      - name: Upload terminal-hub metas
+        uses: actions/upload-artifact@v7
+        with:
+          name: terminal-hub-metas
+          path: staging/tui-*.meta.json
+          if-no-files-found: error
+
+  # ── Stage 4: unit tests (release gate) ──────────────────────────────
+  tests:
+    name: Test suite (release gate)
+    runs-on: ubuntu-latest
+    needs: [version]
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Install core + chat + gaia (editable)
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv pip install --system -e ".[api]" -e hub/agents/chat/python -e hub/agents/gaia/python pytest
+
+      - name: Python tests (hub/agents/gaia/python/tests)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pytest "${PY_DIR}/tests" -v --tb=short
+
+      - name: npm install + build + vitest
+        working-directory: ${{ env.PKG_DIR }}
+        run: |
+          npm ci
+          npm run build
+          npm test
+
+  # ── Stage 5: publish to the hub + npm (single atomic step) ──────────
+  publish:
+    name: Publish to Hub + npm
+    runs-on: ubuntu-latest
+    needs: [version, freeze, tui, tests]
+    # Manual approval gate: the `agent-publish` environment is configured (repo
+    # Settings → Environments) with required reviewers, so this job pauses until
+    # a maintainer approves — the human backstop for an accidental/tampered
+    # release tag. GAIA_HUB_TOKEN lives as an ENVIRONMENT secret here, so the
+    # publish credential isn't even readable until approval. Restrict the env's
+    # deployment branches/tags to `main` + the `agent-pkg-*` tag pattern — the
+    # release is a tag push, so a main-only rule would block this gate.
+    environment: agent-publish
+    permissions:
+      contents: read
+      id-token: write   # npm trusted publishing (OIDC) — no npm token
+      actions: write    # gh workflow run deploy_website.yml (redeploy on publish)
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # full history so the main-ancestry guard can resolve
+
+      # Publishing (hub + npm) is allowed ONLY from main. A tag must point at a
+      # commit on main; a workflow_dispatch must run on main. This blocks an
+      # accidental release from a feature branch (and keeps npm OIDC on main).
+      - name: Assert release is cut from main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          if git merge-base --is-ancestor "$(git rev-parse HEAD)" origin/main; then
+            echo "✓ release commit is on main"
+          else
+            echo "::error::Publishing is only allowed from main. The current ref '${GITHUB_REF_NAME}' ($(git rev-parse --short HEAD)) is not on main — merge to main, then tag or dispatch the release from main."
+            exit 1
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install deps (requests + PyYAML)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade requests pyyaml
+
+      # Re-run of the `version` job's gates AFTER the approval pause: the gate
+      # can sit for hours, and this job re-checks out the ref. Cheap insurance
+      # against a moved tag / amended commit between queue and approval.
+      - name: Verify version references are in sync (single source of truth)
+        shell: bash
+        run: python "${PACKAGING}/stamp_version.py" --check
+
+      - name: Re-validate release version against tag / package.json / manifest
+        id: ver
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+          RESOLVED_VERSION: ${{ needs.version.outputs.version }}
+          GAIA_HUB_BASE_URL: ${{ vars.GAIA_HUB_BASE_URL }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            VERSION="$INPUT_VERSION"
+          else
+            TAG="${GITHUB_REF_NAME}"
+            VERSION="${TAG#agent-pkg-gaia-}"
+            VERSION="${VERSION#v}"
+          fi
+          PKG_VER="$(node -p "require('./${PKG_DIR}/package.json').version")"
+          MAN_VER="$(python -c "import yaml; print(yaml.safe_load(open('${MANIFEST}'))['version'])")"
+          if [ "$VERSION" != "$PKG_VER" ] || [ "$VERSION" != "$MAN_VER" ] || [ "$VERSION" != "$RESOLVED_VERSION" ]; then
+            echo "::error::version mismatch at publish time — tag/input=${VERSION}, package.json=${PKG_VER}, gaia-agent.yaml=${MAN_VER}, resolved-at-queue-time=${RESOLVED_VERSION}. The ref moved between queueing and approval, or the files disagree. Refusing to publish."
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "base_url=${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}/${HUB_PREFIX}/${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Assert hub publish token present
+        shell: bash
+        # Secret goes through env (never inlined into the script text) so a
+        # value with shell metacharacters can't break parsing or defeat masking.
+        env:
+          GAIA_HUB_TOKEN: ${{ secrets.GAIA_HUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GAIA_HUB_TOKEN:-}" ]; then
+            echo "::error::missing environment secret GAIA_HUB_TOKEN on the agent-publish environment — the Agent Hub Bearer publish token (must match the Worker's PUBLISH_TOKENS). See workers/agent-hub/README.md."
+            exit 1
+          fi
+
+      - name: Download sidecar artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: gaia-agent-*
+          path: artifacts/sidecar
+
+      # Metas only: the TUI binaries stay in the terminal-hub lane and are never
+      # copied into ours. `bins/` below therefore holds sidecar artifacts alone,
+      # which is exactly what gets POSTed to /publish.
+      - name: Download terminal-hub metas
+        uses: actions/download-artifact@v8
+        with:
+          name: terminal-hub-metas
+          path: artifacts/tui
+
+      - name: Collect binaries + assert required platforms present
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p bins metas
+          # Binaries and their meta records land in separate trees so a glob can
+          # never mistake one for the other.
+          find artifacts -type f -name '*.meta.json' -exec cp {} metas/ \;
+          find artifacts -type f -name 'gaia-agent-*' ! -name '*.meta.json' \
+            -exec cp {} bins/ \;
+          echo "=== collected binaries (sidecar only) ===" && ls -la bins/
+          echo "=== collected metas ===" && ls -la metas/
+
+          # Nothing but the sidecar may be published under agents/gaia/. Anything
+          # else staged here — a terminal UI binary above all — would mean the
+          # duplicate publish this release deliberately dropped crept back in.
+          for f in bins/*; do
+            [ -f "$f" ] || continue
+            case "$(basename "$f")" in
+              gaia-agent-*) ;;
+              *)
+                echo "::error::'$(basename "$f")' is staged for publish in bins/, but this release publishes ONLY the sidecar (gaia-agent-*) under agents/gaia/. The terminal UI is consumed from the published terminal-hub component and must never be republished here. Remove whatever job staged it."
+                exit 1
+                ;;
+            esac
+          done
+
+          missing=()
+          # Sidecar: the 3 non-Intel platforms are REQUIRED. A missing one is a
+          # real build failure, not best-effort — fail the release loudly.
+          for f in gaia-agent-win32-x64.exe gaia-agent-darwin-arm64 gaia-agent-linux-x64; do
+            [ -f "bins/$f" ] || missing+=("sidecar:$f")
+          done
+          if [ "${#missing[@]}" -gt 0 ]; then
+            echo "::error::required release artifacts missing: ${missing[*]}. Their build leg failed — the release cannot proceed. Re-run those jobs, then re-approve."
+            exit 1
+          fi
+
+          # Every lock entry is built from a meta, so a missing meta silently
+          # drops that platform. The 6 tui metas come from the terminal-hub
+          # verify job, not from a build here.
+          for m in sidecar-win32-x64 sidecar-darwin-arm64 sidecar-linux-x64 \
+                   tui-win32-x64 tui-win32-arm64 tui-darwin-arm64 \
+                   tui-darwin-x64 tui-linux-x64 tui-linux-arm64; do
+            if [ ! -f "metas/${m}.meta.json" ]; then
+              echo "::error::missing artifact meta metas/${m}.meta.json — binaries.lock.json would ship without an entry for it. Re-run the job that produces it (freeze for sidecar-*, the terminal-hub verify for tui-*)."
+              exit 1
+            fi
+          done
+
+          # darwin-x64 sidecar (Intel) is BEST-EFFORT.
+          if [ -f "bins/gaia-agent-darwin-x64" ] && [ -f "metas/sidecar-darwin-x64.meta.json" ]; then
+            echo "DARWIN_X64_SIDECAR=true" >> "$GITHUB_ENV"
+            echo "darwin-x64 (Intel) sidecar present — full 4-platform sidecar release."
+          else
+            echo "DARWIN_X64_SIDECAR=false" >> "$GITHUB_ENV"
+            # Never publish a binary we have no verified hash for.
+            rm -f bins/gaia-agent-darwin-x64 metas/sidecar-darwin-x64.meta.json
+            echo "::warning::darwin-x64 (Intel macOS) SIDECAR not published — its best-effort freeze leg did not produce a binary + meta. Releasing the other 3 sidecar platforms; Intel-mac users get a loud 'no sidecar binary for darwin-x64' error at install until one is published for this version. (The terminal UI is unaffected — it is consumed from the published terminal-hub component, not built here.)"
+            {
+              echo "### ⚠️ Intel macOS (darwin-x64) sidecar NOT published"
+              echo ""
+              echo "The best-effort \`darwin-x64\` PyInstaller freeze did not produce a usable binary, so this release ships **3 of 4** sidecar platforms. The terminal UI is unaffected — it comes from the published \`terminal-hub\` component."
+              echo ""
+              echo "Intel-mac users will hit a loud install error until an Intel sidecar is published for this version."
+              echo ""
+              echo "**Follow-up:** re-run once the Intel leg succeeds; \`POST /publish\` is immutable-per-filename, so adding the Intel binary to the *same* version is safe and idempotent."
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Publish binaries to the Agent Hub (POST /publish)
+        shell: bash
+        env:
+          # The Worker reads the Bearer token from this env var only — never the
+          # command line or disk. It computes the SHA-256 server-side, stores
+          # each object immutably under agents/gaia/<ver>/, and rebuilds
+          # index.json.
+          AGENT_HUB_PUBLISH_TOKEN: ${{ secrets.GAIA_HUB_TOKEN }}
+          # Upload through GAIA_HUB_PUBLISH_URL (the Worker's workers.dev URL):
+          # the free-plan managed WAF on the proxied hub.amd-gaia.ai custom
+          # domain blocks large binary multipart uploads (the POST /publish
+          # path). workers.dev is a separate zone with no such ruleset and hits
+          # the same Worker + bucket. Downloads and the lock baseUrl stay on
+          # hub.amd-gaia.ai (GETs aren't blocked).
+          GAIA_HUB_PUBLISH_URL: ${{ vars.GAIA_HUB_PUBLISH_URL }}
+          GAIA_HUB_BASE_URL: ${{ vars.GAIA_HUB_BASE_URL }}
+        run: |
+          set -euo pipefail
+          for required in "${README}" "${CHANGELOG}"; do
+            if [ ! -f "${required}" ]; then
+              echo "::error::missing required hub doc '${required}' — the hub page renders it and it ships in the npm tarball. Add it before releasing."
+              exit 1
+            fi
+          done
+          doc_args=(--readme "${README}" --changelog "${CHANGELOG}")
+          # SPEC.md (technical reference) and SKILL.md (AI-integration playbook)
+          # render as their own hub doc tabs. Warn loudly rather than fail if a
+          # release predates them — but never publish silently without saying so.
+          for pair in "spec:${SPEC}" "skill:${SKILL}"; do
+            flag="${pair%%:*}"; path="${pair#*:}"
+            if [ -f "${path}" ]; then
+              doc_args+=(--"${flag}" "${path}")
+            else
+              echo "::warning::${path} not found — publishing without the '${flag}' hub doc tab."
+            fi
+          done
+
+          # Sidecar binaries only — the TUI is already published in the
+          # terminal-hub lane and is deliberately not republished here.
+          args=()
+          for f in bins/*; do
+            [ -f "$f" ] || continue
+            args+=(--artifact "$f")
+          done
+          if [ "${#args[@]}" -eq 0 ]; then
+            echo "::error::no binaries staged in bins/ — nothing to publish."
+            exit 1
+          fi
+
+          python "${PACKAGING}/publish_to_r2.py" \
+            --base-url "${GAIA_HUB_PUBLISH_URL:-${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}}" \
+            --manifest "${MANIFEST}" \
+            "${doc_args[@]}" \
+            "${args[@]}"
+
+      - name: Regenerate binaries.lock.json with real hashes
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Every meta from every leg, both lanes. gen_binaries_lock writes each
+          # lane's componentVersion + baseUrl + platforms, refuses a
+          # placeholder/non-sha256 hash, and rejects a tui filename that is not
+          # what terminal-hub publishes — so a bad record fails here rather than
+          # shipping an unverifiable lock. The fetch-verify below proves these
+          # hashes match the bytes served publicly, from BOTH lanes.
+          meta_args=()
+          for m in metas/*.meta.json; do
+            [ -f "$m" ] || continue
+            meta_args+=(--meta "$m")
+          done
+          if [ "${#meta_args[@]}" -eq 0 ]; then
+            echo "::error::no artifact metas collected — refusing to regenerate binaries.lock.json without real hashes."
+            exit 1
+          fi
+          python "${PACKAGING}/gen_binaries_lock.py" \
+            --version "${{ steps.ver.outputs.version }}" \
+            --sidecar-base-url "${{ steps.ver.outputs.base_url }}" \
+            --tui-version "${{ needs.version.outputs.tui_version }}" \
+            --tui-base-url "${{ needs.version.outputs.tui_base_url }}" \
+            --lock "${PKG_DIR}/binaries.lock.json" \
+            "${meta_args[@]}"
+
+          # gen_binaries_lock.py keeps the PRIOR entry for any platform absent
+          # from the metas. If the best-effort Intel sidecar was skipped, that
+          # prior entry is the committed PENDING-replace-with-real-sha256
+          # placeholder — drop it so the shipped lock carries NO sidecar
+          # darwin-x64 entry. The installer then emits a clear "no sidecar
+          # binary for darwin-x64 (available: …)" error instead of chasing an
+          # object that was never published. Explicit absence beats a
+          # placeholder hash.
+          if [ "${DARWIN_X64_SIDECAR}" = "false" ]; then
+            python - "${PKG_DIR}/binaries.lock.json" <<'PY'
+          import json, sys
+          p = sys.argv[1]
+          lock = json.load(open(p))
+          platforms = lock.get("components", {}).get("sidecar", {}).get("platforms", {})
+          removed = platforms.pop("darwin-x64", None)
+          if removed is not None:
+              print("[lock] dropped unpublished sidecar/darwin-x64 entry (Intel best-effort skip)")
+          open(p, "w").write(json.dumps(lock, indent=2) + "\n")
+          PY
+          fi
+
+          # Backstop: no entry may survive with a placeholder / non-sha256 hash.
+          # Catches a component+platform that exists in the committed lock but
+          # has no build leg producing a meta for it — which would otherwise
+          # ship an unverifiable entry.
+          python - "${PKG_DIR}/binaries.lock.json" <<'PY'
+          import json, re, sys
+          lock = json.load(open(sys.argv[1]))
+          bad = [
+              f"{c}/{p}"
+              for c, lane in (lock.get("components") or {}).items()
+              for p, rec in (lane.get("platforms") or {}).items()
+              if not re.fullmatch(r"[0-9a-f]{64}", str(rec.get("sha256", "")))
+              or int(rec.get("size", 0)) <= 0
+          ]
+          if bad:
+              print(
+                  "::error::binaries.lock.json still has placeholder/invalid entries "
+                  f"after regeneration: {', '.join(sorted(bad))}. Every shipped entry "
+                  "needs a real SHA-256 and a non-zero size. Either add a build leg "
+                  "that produces its meta, or remove the entry from the committed "
+                  "lock. Refusing to publish an unverifiable lock.",
+                  flush=True,
+              )
+              raise SystemExit(1)
+          PY
+
+          echo "=== regenerated lock ==="
+          cat "${PKG_DIR}/binaries.lock.json"
+
+      - name: Verify every published object is fetchable + hash-matches
+        shell: bash
+        env:
+          GAIA_HUB_BASE_URL: ${{ vars.GAIA_HUB_BASE_URL }}
+        run: |
+          set -euo pipefail
+          # Atomicity gate: for EVERY entry in the regenerated lock, GET the
+          # public object at its OWN component's base URL and re-hash the bytes.
+          # This is the release's real integrity check — it proves the object the
+          # installer will download is byte-identical to what the lock promises,
+          # across both lanes.
+          #
+          # For the tui lane this is not a check of our own upload (we publish
+          # nothing there) — it is proof that the exact terminal-hub URLs the
+          # shipped lock sends users to resolve, and still serve the bytes the
+          # verify job hashed. That matters MORE for a lane we do not own, not
+          # less: nothing else in this pipeline would notice it going wrong.
+          #
+          # Done with the lock + a plain GET (rather than the npm client's fetch
+          # CLI) so the gate does not depend on that CLI's flag surface.
+          #
+          # Bounded retry: a just-uploaded object can briefly 404 or serve a
+          # stale negative cache at the Cloudflare edge before it propagates —
+          # that edge is separate from R2's read-after-write store. Explicit,
+          # caller-requested retry that still fails loudly once exhausted.
+          python - "${PKG_DIR}/binaries.lock.json" <<'PY'
+          import hashlib, json, sys, time, urllib.request
+
+          # The WAF in front of hub.amd-gaia.ai 403s the default Python-urllib
+          # User-Agent even for objects that exist, which would fail this gate on
+          # every release. Send a real one.
+          HEADERS = {
+              "user-agent": "gaia-release/1 (+https://github.com/amd/gaia)",
+              "accept": "application/octet-stream",
+          }
+
+          lock = json.load(open(sys.argv[1]))
+          components = lock.get("components") or {}
+          if sorted(components) != ["sidecar", "tui"]:
+              print(
+                  "::error::regenerated binaries.lock.json does not carry exactly the "
+                  f"sidecar + tui components (got: {', '.join(sorted(components)) or 'none'}). "
+                  "Expected the two-lane schemaVersion 3.0 shape. gen_binaries_lock.py "
+                  "did not write what this release expects; refusing to publish an "
+                  "unverifiable lock.",
+                  flush=True,
+              )
+              raise SystemExit(1)
+
+          checked = 0
+          for component, lane in sorted(components.items()):
+              base = str(lane.get("baseUrl", "")).rstrip("/")
+              if not base:
+                  print(
+                      f"::error::the '{component}' component in the regenerated lock has "
+                      "no baseUrl, so the installer would have nowhere to download it "
+                      "from. Refusing to publish.",
+                      flush=True,
+                  )
+                  raise SystemExit(1)
+              for platform, rec in sorted((lane.get("platforms") or {}).items()):
+                  url = f"{base}/{rec['filename']}"
+                  want_sha, want_size = rec["sha256"], int(rec["size"])
+                  req = urllib.request.Request(url, headers=HEADERS)
+                  for attempt in range(1, 6):
+                      try:
+                          with urllib.request.urlopen(req, timeout=120) as resp:
+                              data = resp.read()
+                          got_sha = hashlib.sha256(data).hexdigest()
+                          if got_sha == want_sha and len(data) == want_size:
+                              print(f"  ok  {component}/{platform}  {url}  ({len(data)} bytes)")
+                              break
+                          reason = (
+                              f"sha256 {got_sha} != {want_sha}"
+                              if got_sha != want_sha
+                              else f"size {len(data)} != {want_size}"
+                          )
+                      except Exception as e:  # network / 404 / edge cache miss
+                          reason = f"{type(e).__name__}: {e}"
+                      if attempt == 5:
+                          # ::error:: must reach stdout as its own line for the
+                          # Actions annotation to render; SystemExit(str) writes
+                          # to stderr and would lose the annotation.
+                          print(
+                              f"::error::published object verify FAILED for "
+                              f"{component}/{platform} at {url} after 5 attempts "
+                              f"({reason}). The bytes served publicly do not match "
+                              f"binaries.lock.json -- do NOT ship this release; "
+                              f"re-run the publish or cut a new version.",
+                              flush=True,
+                          )
+                          raise SystemExit(1)
+                      print(f"  attempt {attempt}/5 failed for {component}/{platform}: {reason} -- retrying in 10s", flush=True)
+                      time.sleep(10)
+                  checked += 1
+
+          print(f"verified {checked} published objects across {len(components)} components")
+          PY
+
+      - name: Build npm package
+        working-directory: ${{ env.PKG_DIR }}
+        run: |
+          npm ci
+          npm run build
+
+      - name: Upgrade npm (trusted publishing support)
+        run: npm install -g npm@latest
+
+      - name: Publish to npm (OIDC trusted publishing, provenance)
+        working-directory: ${{ env.PKG_DIR }}
+        shell: bash
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          set -euo pipefail
+          if npm view "${NPM_PKG}@${VERSION}" version >/dev/null 2>&1; then
+            echo "${NPM_PKG}@${VERSION} already on npm — skipping (idempotent)."
+            exit 0
+          fi
+          # --ignore-scripts: dist/ was already built by the "Build npm package"
+          # step, so no lifecycle script (prepublishOnly/prepare/prepack) needs
+          # to run here — and we don't want any package/dependency script
+          # executing in this OIDC-privileged job. Matches publish.yml.
+          npm publish --access public --provenance --ignore-scripts
+
+      - name: Redeploy the website to publish the new catalog entry
+        shell: bash
+        # The website builds its Agent Hub pages at deploy time from the live hub
+        # index.json (website/src/data/catalog.ts, HUB_CATALOG_URL), so a freshly
+        # published agent only appears after the site rebuilds. deploy_website.yml
+        # auto-triggers only on website/** changes — a hub publish touches no such
+        # file — so trigger it explicitly. Least-privilege: this job's
+        # GITHUB_TOKEN (actions: write), no extra secret.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh workflow run deploy_website.yml --ref main
+          echo "✓ requested website redeploy (deploy_website.yml on main)"
+
+      - name: Release summary
+        if: always()
+        shell: bash
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          BASE_URL: ${{ steps.ver.outputs.base_url }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### GAIA agent ${VERSION}"
+            echo ""
+            echo "- Hub: \`${BASE_URL}\`"
+            echo "- npm: \`${NPM_PKG}@${VERSION}\`"
+            echo "- Intel sidecar published: \`${DARWIN_X64_SIDECAR:-unknown}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -201,12 +201,19 @@ func TestUnknownAgentErrorSeparatesRunnableFromNotRunnable(t *testing.T) {
 func TestChatSubprocessRefusesFlagsItCannotHonour(t *testing.T) {
 	gaiaBin, _ := buildBinaries(t)
 
-	for _, flag := range []struct{ name, value string }{
-		{"--model", "some-model"},
-		{"--timeout", "3s"},
+	for _, flag := range []struct {
+		name string
+		args []string
+	}{
+		{"--model", []string{"--model", "some-model"}},
+		{"--timeout", []string{"--timeout", "3s"}},
+		// A persistent flag, not a local one — this pins that the refusal's
+		// Changed() lookup sees flags inherited from the root command too.
+		{"--use-claude", []string{"--use-claude"}},
 	} {
 		t.Run(flag.name, func(t *testing.T) {
-			cmd := exec.Command(gaiaBin, "chat", "--subprocess", "/bin/echo", flag.name, flag.value)
+			args := append([]string{"chat", "--subprocess", "/bin/echo"}, flag.args...)
+			cmd := exec.Command(gaiaBin, args...)
 			var stdout, stderr bytes.Buffer
 			cmd.Stdout = &stdout
 			cmd.Stderr = &stderr

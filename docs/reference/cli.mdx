@@ -196,6 +196,8 @@ gaia init [OPTIONS]
 | `--yes, -y` | flag | false | Skip confirmation prompts (non-interactive) |
 | `--verbose` | flag | false | Enable verbose output |
 | `--remote` | flag | false | Use remote Lemonade Server (skip local install/start, download models via API). Auto-detected when `LEMONADE_BASE_URL` is set to a non-localhost URL. |
+| `--skip-chat-model` | flag | false | Skip the profile's chat LLM but still install Lemonade and any embedding model the profile needs — for a session backed by a remote LLM (e.g. the Go TUI's `--use-claude`) that never calls the local chat model but still needs Lemonade for RAG/memory embeddings |
+| `--check` | flag | false | Report whether the profile is already set up and exit — no install, no download, no side effects. Exit code `0` means ready, `1` means `gaia init` still has work to do. Used by the Go TUI's first-boot check and `/setup` command |
 
 **Available Profiles:**
 
@@ -215,6 +217,15 @@ canonical choices list):
 | `email` | Gemma-4-E4B-it-GGUF | Gmail/Outlook triage with local inference | ~3 GB |
 | `npu` | gemma4-it-e2b-FLM, embed-gemma-300m-FLM | Ryzen AI NPU acceleration via FLM backend (requires XDNA2 NPU) | ~3 GB |
 | `all` | All models | All models for all agents | ~26 GB |
+
+<Note>
+`gaia init` sets up Lemonade + models only — it does not install the flagship [GAIA
+agent](/guides/gaia) or its terminal UI (`gaia-tui`). Get both with
+`npx @amd-gaia/gaia` (fetches and verifies both binaries, no Python required) or, from a
+checkout, `uv pip install -e hub/agents/gaia/python`. See the
+[flagship installer plan](/plans/flagship-installer) for how the two pieces fit together
+and current release status.
+</Note>
 
 <Note>
 The `talk`, `blender`, `jira`, and `docker` agents all rely on the `chat` profile —
@@ -490,15 +501,19 @@ Manage an *installed* agent: set per-agent configuration, verify it loads, and i
 
 ```bash
 gaia agent configure <id> [--model NAME] [--set KEY=VALUE ...] [--replace] [--show]
-gaia agent health <id>
-gaia agent status [<id>]
+gaia agent health <id> [--json]
+gaia agent status [<id>] [--json]
 ```
 
 **`configure`** writes per-agent settings (e.g. a preferred model). `--set` values are JSON-decoded when possible (`--set temperature=0.2` stores a number, `--set verbose=true` a boolean), otherwise kept as strings. Settings merge into the existing config by default; pass `--replace` to overwrite it wholesale, or `--show` to print the current config without changing it.
 
-**`health`** verifies that an installed agent actually loads — its registration resolves and its entry point imports. It reports one of `healthy`, `degraded` (loads but something optional is off, e.g. a corrupt config), `error` (a required piece fails to load), or `not_installed`, and exits non-zero for `error` / `not_installed` so scripts can gate on it.
+**`health`** verifies that an installed agent actually loads — its registration resolves and its entry point imports. It reports one of `healthy`, `degraded` (loads but something optional is off, e.g. a corrupt config), `error` (a required piece fails to load), or `not_installed`.
 
 **`status`** aggregates installed version, health, config summary, and source for one agent — or every discovered agent when `<id>` is omitted.
+
+**Exit codes:** with an explicit `<id>`, both commands exit `1` when that agent's health is `error` or `not_installed`, `0` otherwise — so scripts can gate on a single agent without parsing table output. The all-agents form (`gaia agent status` with no `<id>`) always exits `0`; an absent agent shows up as a row, not a failure of the listing itself.
+
+**`--json`** emits machine-readable output instead of the table/text form, with log lines routed to stderr so stdout stays pure JSON for `| jq`. `health --json` prints one object (`HealthStatus.to_dict()`); `status --json` prints one object for a single `<id>`, or a JSON **list** of objects for the all-agents form.
 
 | Option | Applies to | Description |
 |--------|------------|-------------|
@@ -507,6 +522,7 @@ gaia agent status [<id>]
 | `--set KEY=VALUE` | `configure` | Set an arbitrary setting (repeatable) |
 | `--replace` | `configure` | Replace the whole config instead of merging |
 | `--show` | `configure` | Print the current config and exit |
+| `--json` | `health`, `status` | Emit machine-readable JSON instead of text |
 
 **Examples:**
 
@@ -518,6 +534,16 @@ gaia agent configure chat --model Qwen3.5-35B-A3B-GGUF
 ```bash Check health and status
 gaia agent health chat
 gaia agent status            # every discovered agent
+```
+
+```bash Gate a script on a single agent
+# Exit code alone is enough to gate on: 0 if installed, 1 if not.
+gaia agent status chat || echo "chat is not installed"
+
+# Or inspect the JSON. Passing the value with --arg keeps this working in
+# Windows PowerShell 5.1, which strips embedded double quotes from arguments
+# to native commands.
+gaia agent status chat --json | jq -e --arg v healthy '.health == $v'
 ```
 </CodeGroup>
 
@@ -1518,12 +1544,51 @@ gaia mcp test --query "Hello from GAIA MCP!"
 |--------|---------|-------------|
 | `--host` | `localhost` | Bind address |
 | `--port` | `8765` | Port for the MCP bridge |
-| `--auth-token` | _none_ | If set, require `Authorization: Bearer <token>` on every request |
+| `--auth-token` | `$GAIA_MCP_AUTH_TOKEN` | Require `Authorization: Bearer <token>` on every request except `/health` |
 | `--no-streaming` | off | Disable SSE streaming; reply synchronously |
 | `--background` | off | Detach; use `gaia mcp stop` to terminate |
 | `--log-file` | stdout | Write logs to this path (useful with `--background`) |
 | `--verbose` | off | Verbose logging |
 | `--ctx-size` | `32768` | Context window hint passed to Lemonade for loaded models |
+
+##### Authentication
+
+The bridge is **unauthenticated by default**. Anything that can reach the port
+can enumerate and invoke its tools, which is why `--host` defaults to
+`localhost`. Pass `--auth-token` before exposing it anywhere else:
+
+```bash
+export GAIA_MCP_AUTH_TOKEN=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+gaia mcp start --host 0.0.0.0 --port 8765
+```
+
+Prefer the environment variable over `--auth-token <token>`: on Linux and macOS
+command-line arguments are visible to any local user via `ps`.
+
+Clients then send the token on every call:
+
+```bash
+curl -H "Authorization: Bearer $GAIA_MCP_AUTH_TOKEN" http://localhost:8765/status
+```
+
+| Request | Response |
+|---------|----------|
+| Valid `Bearer` token | Normal response |
+| Missing or malformed `Authorization` header | `401` |
+| Well-formed header, wrong token | `403` |
+
+`GET /health` stays public so container and orchestrator liveness probes keep
+working; it reports only liveness plus agent/tool **counts**. Every other
+endpoint — `/status`, `/tools`, `/chat`, `/llm`, `/jira`, `/summarize`, and the
+JSON-RPC endpoint — requires the token. `gaia mcp status`, `gaia mcp test`, and
+`gaia mcp agent` accept `--auth-token` (also defaulting to
+`$GAIA_MCP_AUTH_TOKEN`) so they can reach a protected bridge.
+
+<Warning>
+The bridge speaks plain HTTP. A bearer token stops anonymous callers but does
+not encrypt traffic — put it behind a TLS-terminating reverse proxy, or keep it
+on loopback, before sending a token across an untrusted network.
+</Warning>
 
 #### `gaia mcp test` options
 
@@ -1531,6 +1596,7 @@ gaia mcp test --query "Hello from GAIA MCP!"
 |--------|---------|-------------|
 | `--query` | _required_ | Text to send to the server |
 | `--tool` | `gaia.chat` | Which MCP tool to invoke when testing |
+| `--auth-token` | `$GAIA_MCP_AUTH_TOKEN` | Bearer token, if the bridge requires one |
 
 #### `gaia mcp agent`
 
@@ -1836,7 +1902,7 @@ gaia eval agent [OPTIONS]
 | `--category` | string | all | Run all scenarios in a category |
 | `--backend` | string | `http://localhost:4200` | Agent UI backend URL |
 | `--agent-type` | string | backend default | Agent registration ID to target (e.g. `gaia-lite`); scenarios run against this agent |
-| `--model` | string | `claude-sonnet-4-6` | Judge/simulator model |
+| `--model` | string | `claude-opus-5` | Driver **and** judge — it runs each scenario as well as scoring it, so it must match the baseline you compare against |
 | `--iterations` | integer | `1` | Run each scenario N times for reliability measurement |
 | `--keep-sessions` | flag | false | Don't delete Agent UI sessions after eval — leave them for manual inspection |
 | `--device` | `cpu`\|`gpu`\|`npu` | – | Inference device hint for the run |
@@ -2075,7 +2141,9 @@ Manage agent memory: run day-zero onboarding and view memory statistics.
 Author and manage agent skills. A skill is a directory whose only required file is `SKILL.md`; GAIA implements the [Agent Skills](https://agentskills.io) open standard, so a Claude Code skill loads unchanged.
 
 ```bash
-gaia skill {list,info,create,import,export} [OPTIONS]
+gaia skill {list,info,create,import,export,migrate} [OPTIONS]     # author locally
+gaia skill audit <dir> [OPTIONS]                                  # pre-publish gate
+gaia skill {search,install,remove,publish,keygen,trust} [OPTIONS] # marketplace
 ```
 
 Skills are discovered from three roots, highest precedence first:
@@ -2095,6 +2163,13 @@ Skills are discovered from three roots, highest precedence first:
 | `create <name>` | Scaffold a new skill directory |
 | `import <source>` | Copy a skill folder, `.zip`, or URL into `~/.gaia/skills/` |
 | `export <name>` | Export a skill to a `.zip` bundle |
+| `migrate <source>` | Convert an OpenClaw or Hermes skill to GAIA format |
+| `search [query]` | Search the Agent Hub's skills lane |
+| `install <name[@range]>` | Install a published skill into `~/.gaia/skills/` |
+| `remove <name>` | Delete an installed skill and drop its lock entry |
+| `publish <dir>` | Validate, audit, sign, and publish a skill to the hub |
+| `keygen` | Generate an Ed25519 publisher key for signing |
+| `trust {list,add,remove}` | Manage the public keys whose signatures this machine trusts |
 
 <Tabs>
   <Tab title="list">
@@ -2168,7 +2243,204 @@ Skills are discovered from three roots, highest precedence first:
 
     Bundles the whole skill directory. Import it elsewhere with `gaia skill import <file>.zip`.
   </Tab>
+
+  <Tab title="audit">
+    ```bash
+    gaia skill audit <dir> [OPTIONS]
+    ```
+
+    | Option | Description |
+    |--------|-------------|
+    | `--json` | Emit the machine-readable report on stdout — the payload the hub publish path attaches as its `audit` part |
+    | `--output FILE` | Also write the JSON report to `FILE` |
+    | `--sarif FILE` | Write SARIF 2.1.0 for upload to GitHub code scanning |
+    | `--path-prefix DIR` | Repo-relative prefix for SARIF paths (default: the audited path) |
+    | `--tier TIER` | Audit against `experimental`/`community`/`verified` instead of the tier the skill declares |
+    | `--fail-on SEVERITY` | Exit non-zero when any finding reaches this severity, even if the tier would allow it |
+    | `--show-snippets` | Include the offending source text (withheld by default) |
+
+    Runs the pre-publish security audit ([#2468](https://github.com/amd/gaia/issues/2468)) over a skill's code *and* its instruction body, printing an `ALLOW` / `REVIEW` / `BLOCK` verdict with `file:line` findings and the fix for each. This is the same engine that gates both contribution paths — the **Skill Audit** PR check, and `gaia skill publish`, which runs it before upload — so a clean local audit is what either one requires: `BLOCK` fails, `REVIEW` holds for maintainer sign-off, `ALLOW` passes.
+
+    **Exit codes:** `0` allow · `5` review · `6` block · `4` the skill could not be parsed. `REVIEW` and `BLOCK` are distinct so CI can hold a skill without reporting it as rejected.
+
+    Use `--tier community` to check a claim *before* making it — a skill cannot be stamped a tier whose gate it did not clear, so this is the difference between finding out locally and finding out as a publish rejection.
+
+    Nothing is imported, executed, or fetched, so auditing an untrusted skill is itself safe.
+  </Tab>
+
+  <Tab title="migrate">
+    ```bash
+    gaia skill migrate <source> [--from openclaw|hermes|auto] [OPTIONS]
+    ```
+
+    | Option | Description |
+    |--------|-------------|
+    | `--from` | Source format: `openclaw` \| `hermes` \| `auto` (default — detect from `metadata.<vendor>`) |
+    | `--out` | Write migrated skills here instead of installing into `~/.gaia/skills/` |
+    | `--name` | Migrate under this name (single-skill sources only) |
+    | `--force` | Replace an existing skill of the same name (refused when the target resolves to the source's own directory — replacing it there would delete the source) |
+    | `--dry-run` | Report what would be migrated without writing anything |
+    | `--json` | Emit the migration report as JSON |
+
+    `<source>` is one skill directory, its `SKILL.md`, or a directory **of** skill directories — so a whole ClawHub checkout migrates in one command.
+
+    The foreign `metadata.<vendor>` namespace becomes a `metadata.gaia` block. Fields GAIA models fully are consumed; anything partially or un-modeled stays under `metadata.<vendor>` and is listed in the report, so nothing is dropped silently. **Every migrated skill lands at the `experimental` tier**, whatever the source claimed — the same trust reset `import` applies.
+
+    <Warning>
+    **A source needing a local capability is refused, not downgraded.** `requires.bins` maps to `shell:execute:<bin>` and `requires.config` to `filesystem:read:<path>`; both need the deferred permission sandbox ([#1019](https://github.com/amd/gaia/issues/1019)), so the skill is reported unmigratable with the reason rather than quietly stripped of the permission. Other skills in the same batch still migrate — exit code is `4` when any were refused.
+    </Warning>
+  </Tab>
+
+  <Tab title="search">
+    ```bash
+    gaia skill search [query] [--json] [--hub-url URL]
+    ```
+
+    Matches the query against each published skill's name, description, and the
+    tools it provides. Omit the query to list the whole skills lane.
+
+    ```
+    NAME                         VERSION    TIER          TOOLS  DESCRIPTION
+    web-research                 1.2.0      community     1      Search the web and summarize results
+    incident-review              0.3.1      experimental  0      Structure a postmortem from an incident log
+    ```
+  </Tab>
+
+  <Tab title="install">
+    ```bash
+    gaia skill install <name[@version-range]> [OPTIONS]
+    ```
+
+    | Option | Description |
+    |--------|-------------|
+    | `--allow-experimental` | Required when the skill's **effective** tier is `experimental` |
+    | `--force` | Replace an already-installed copy |
+    | `--yes` | Grant dangerous permissions without prompting (CI) |
+    | `--hub-url` | Hub origin override |
+    | `--json` | Emit JSON instead of text |
+
+    The version is a SemVer range — `web-research@^1.2`, `@>=1.0.0, <2.0.0`,
+    `@1.4.7`, or omitted for the latest. The highest published version satisfying
+    it wins, the same rule agent `dependencies:` use.
+
+    Install verifies the artifact's SHA-256 against the hub manifest, verifies the
+    bundle's `SIGNATURE.json` over every file, then installs at
+    `min(claimed tier, tier the signature earned)`. Nothing is written until every
+    gate passes.
+  </Tab>
+
+  <Tab title="publish">
+    ```bash
+    gaia skill publish <directory> [OPTIONS]
+    ```
+
+    | Option | Description |
+    |--------|-------------|
+    | `--hub-url` | Hub origin override (default: `GAIA_HUB_URL`) |
+    | `--key-name` | Signing key to use (default: `publisher`) |
+    | `--publisher` | Publisher identity recorded in the signature |
+    | `--unsigned` | Publish without a signature — only valid for `experimental` |
+    | `--audit-report` | Use this audit report JSON instead of running the audit engine |
+    | `--dry-run` | Run every gate and build the upload, but do not send it |
+
+    Requires a hub token in `GAIA_HUB_TOKEN` (or stored by `gaia agent login`), and
+    a SemVer `version:` in `SKILL.md` — the catalog is versioned and each version is
+    immutable.
+
+    <Warning>
+    **Publishing is gated on the pre-publish security audit**
+    ([#2468](https://github.com/amd/gaia/issues/2468)). If the audit engine is not
+    installed and no `--audit-report` is supplied, publish **fails** — it never
+    proceeds un-audited.
+    </Warning>
+  </Tab>
+
+  <Tab title="keygen / trust">
+    ```bash
+    gaia skill keygen [--key-name NAME] [--force]
+    gaia skill trust list
+    gaia skill trust add <public-key|file.pub> [--publisher NAME] [--role publisher|amd]
+    gaia skill trust remove <key-id>
+    ```
+
+    `keygen` writes an Ed25519 keypair to `~/.gaia/skills/keys/` (private key
+    owner-only). Share the `.pub` half with anyone who should trust your skills.
+
+    A key's **role** decides the highest tier its signatures can attest:
+
+    | Role | Attests | Meaning |
+    |------|---------|---------|
+    | `publisher` | `community` | A publisher you trust |
+    | `amd` | `verified` | The AMD signing root |
+
+    The trust store ships **empty** — no AMD key is bundled. Until an operator adds
+    one, every skill installs at `experimental`, which is the honest floor rather
+    than a placeholder that would make `verified` look anchored when it is not.
+  </Tab>
 </Tabs>
+
+### Security tiers at install
+
+Three tiers set the install-time permission ceiling. A skill's front matter states
+the tier it *wants*; its signature decides the tier it *gets*.
+
+| Tier | Signature required | Ceiling | At install |
+|------|--------------------|---------|------------|
+| `verified` | AMD-role trust-store key | Every declared permission | Auto-grant, no prompt |
+| `community` | Any trusted publisher key | `network:read`, `network:write`, `mcp:connect` | Dangerous grants prompt |
+| `experimental` | None | `network:read` only | Needs `--allow-experimental` |
+
+The effective tier is `min(claimed, attested)`, so **no unsigned skill installs as
+`verified`** — the claim is collapsed rather than trusted. Imported skills
+(`gaia skill import`) always land `experimental`.
+
+<Warning>
+**v1 skills are instruction + connector-bridged only.** A skill declaring a
+local-capability permission (`filesystem`, `shell`, `database`, `desktop`, `env`)
+is **refused at every tier**, including `verified` — the sandbox that would contain
+it is deferred ([#1019](https://github.com/amd/gaia/issues/1019)). A `verified`
+stamp is a provenance claim, not a runtime sandbox.
+</Warning>
+
+### `skill-lock.json`
+
+Hub installs are tracked in `~/.gaia/skills/skill-lock.json`. Discovery answers
+*what is on disk*; the lock answers what was **requested**, what **resolved**, what
+the artifact **hashed** to, who **signed** it, and which tier it was installed at
+after the ceiling was applied:
+
+```json
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-30T12:00:00+00:00",
+  "skills": {
+    "web-research": {
+      "name": "web-research",
+      "version": "1.2.0",
+      "requested": "^1.0",
+      "source": "hub",
+      "hub_url": "https://hub.amd-gaia.ai",
+      "artifact_sha256": "9f2c…",
+      "artifact_filename": "web-research-1.2.0.zip",
+      "claimed_tier": "community",
+      "attested_tier": "community",
+      "installed_tier": "community",
+      "signature": {
+        "signed": true,
+        "key_id": "a7630e70…",
+        "publisher": "acme",
+        "role": "publisher"
+      },
+      "permissions": ["network:read:*.brave.com"],
+      "installed_at": "2026-07-30T12:00:00+00:00",
+      "path": "/Users/me/.gaia/skills/web-research"
+    }
+  }
+}
+```
+
+Only hub installs are tracked — a skill from `create` or `import` has no hub
+provenance to record.
 
 **Examples:**
 
@@ -2194,6 +2466,32 @@ gaia skill import ~/.claude/skills/my-skill    # take ownership, resets to exper
 gaia skill export web-research --output ./web-research.zip
 gaia skill import ./web-research.zip --name web-research-copy
 ```
+
+```bash Bring an OpenClaw skill over
+gaia skill migrate ./my-openclaw-skill --from openclaw
+gaia skill migrate ~/clawhub-skills --dry-run     # whole collection, no writes
+gaia skill migrate ~/clawhub-skills --json | jq '.skills[] | select(.migrated == false)'
+```
+
+```bash Install from the hub
+gaia skill search "web search"
+gaia skill install web-research@^1.2
+gaia skill info web-research               # tier the signature actually earned
+gaia skill install some-skill --allow-experimental
+gaia skill remove web-research
+```
+
+```bash Publish your own
+gaia skill keygen                          # once, per machine
+export GAIA_HUB_TOKEN=...
+gaia skill publish ./my-skill/ --dry-run   # run every gate, upload nothing
+gaia skill publish ./my-skill/ --publisher acme
+```
+
+```bash Trust a publisher
+gaia skill trust add ./acme.pub --publisher acme --role publisher
+gaia skill trust list
+```
 </CodeGroup>
 
 **Exit codes:** `0` success · `2` missing/unknown subcommand · `3` skill not found · `4` invalid skill (bad manifest, name collision without `--force`, or a discovery root containing a malformed skill).
@@ -2210,12 +2508,39 @@ class WebAgent(Agent):
         self.load_skill("web-research")   # tools land under 'web-research/'
 ```
 
+**Or declare them** in the agent's `gaia-agent.yaml` and write no Python at all:
+
+```yaml
+id: web
+name: Web Research
+version: 0.1.0
+language: python
+
+skills:
+  - name: web-research
+    version: ">=1.0.0"
+    required: true
+  - name: incident-review
+    version: ">=0.1.0"
+    required: false      # optional enhancement; the agent runs without it
+```
+
+Every `Agent` subclass resolves this block at construction, so a **custom agent**
+under `~/.gaia/agents/<id>/` consumes an installed hub skill by dropping a
+`gaia-agent.yaml` beside its `agent.py` — no code change, no registration call.
+Resolution mirrors agent `dependencies:`: highest installed version satisfying the
+range, tool providers ordered before their consumers, and fail-loud on a conflict
+or a dependency cycle. A missing `required: true` skill raises with the
+`gaia skill install` command that fixes it; a missing optional one is logged and
+skipped. Set `AUTOLOAD_DECLARED_SKILLS = False` on the class to opt out and call
+`load_declared_skills()` yourself.
+
 <Warning>
 **A skill declaring a local-capability permission is refused, not sandboxed.** `network` and `mcp` permissions bridge to the connector grant model and load fine. `filesystem`, `shell`, `database`, `desktop`, and `env` need the permission sandbox, which is deferred ([#1019](https://github.com/amd/gaia/issues/1019)) — until then `load_skill` fails with an actionable error rather than loading the skill unenforced.
 </Warning>
 
 <Note>
-`gaia skill install`, `remove`, `search`, `publish`, and `migrate` are **not implemented** and do not parse — they need the skill registry and land with the marketplace ([#2467](https://github.com/amd/gaia/issues/2467)). Use `import` / `export` for local distribution.
+`search` / `install` / `remove` / `publish` shipped with the marketplace ([#2467](https://github.com/amd/gaia/issues/2467)); `gaia skill migrate` (OpenClaw / Hermes import) shipped with [#692](https://github.com/amd/gaia/issues/692); `skill_sets:` is [#2466](https://github.com/amd/gaia/issues/2466).
 </Note>
 
 [→ Agent Skills Spec](/spec/agent-skills) · [→ Skill Format Reference](/plans/skill-format)
