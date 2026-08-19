@@ -506,11 +506,13 @@ func failureDetail(e event.CanonicalToolResultEvent, te event.ToolError) string 
 	if te.Code != "" {
 		head += " — " + te.Code
 	}
-	if msg := firstLine(te.Message); msg != "" {
-		return truncateRunes(head+": "+msg, detailWidth)
+	// clean, not firstLine: the log wraps now, and a tool's error message puts
+	// the remedy on its second line as often as not.
+	if msg := clean(te.Message); msg != "" {
+		return truncateRunes(head+": "+msg, detailMax)
 	}
 	if detail := toolResultDetail(e); detail != "" && !isBareStatusWord(detail) {
-		return truncateRunes(head+": "+detail, detailWidth)
+		return truncateRunes(head+": "+detail, detailMax)
 	}
 	return head
 }

@@ -302,6 +302,11 @@ type ChatModel struct {
 	firstToken   bool      // whether the first real inference token has arrived this turn (not just any SSE frame)
 	ttft         time.Duration
 
+	// logPeakRows is the tallest the work log has been THIS turn. The region's
+	// height is held there (see liveRegionView) so it never shrinks mid-turn and
+	// drops the transcript above back down while it is being read.
+	logPeakRows int
+
 	// followTail is true while the view should stay pinned to the newest
 	// content. Scrolling up clears it, so a streaming answer stops yanking the
 	// reader back to the bottom mid-sentence; returning to the bottom (or
@@ -1147,6 +1152,9 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m ChatModel) requestCancel() (tea.Model, tea.Cmd) {
 	m.cancelPending = true
 	m.activity = nil
+	// The log just emptied; holding the height it reached would leave a block of
+	// blank rows under "Stopping at the next step".
+	m.logPeakRows = 0
 	m.question = nil
 	m.confirmation = nil
 	// A follow-up queued behind this turn was written on the assumption the
@@ -1359,6 +1367,7 @@ func (m ChatModel) sendQuery(query string) (tea.Model, tea.Cmd) {
 func (m ChatModel) startTurn(query string) (tea.Model, tea.Cmd) {
 	m.streaming = true
 	m.activity = nil
+	m.logPeakRows = 0
 	m.buffer = ""
 	// Asking a new question means you want to see its answer, wherever the
 	// scroll happened to be left.
@@ -1530,7 +1539,11 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 		// arrives with tabs, CRs and occasionally ANSI colour, and the old
 		// byte slice at [:60] cut mid-rune on any non-ASCII output — a path
 		// with an accent or a box-drawing character rendered as mojibake.
-		summary = truncateRunes(clean(summary), 60)
+		//
+		// Bounded here, but no longer CUT to a row: the renderer wraps this
+		// (renderActivityItem) and is the one place that decides where a line
+		// ends. A 60-column cut here lost the tail before it ever got there.
+		summary = truncateRunes(clean(summary), narrationMax)
 		if len(m.activity) > 0 {
 			last := &m.activity[len(m.activity)-1]
 			if last.Kind == "tool" {
@@ -1767,7 +1780,7 @@ func (m *ChatModel) updateViewport() {
 	// lands — the silent gap before an agent's first event is exactly when a
 	// blank screen reads as a hang.
 	if m.streaming {
-		sb.WriteString(m.renderLiveRegion())
+		sb.WriteString(m.liveRegionView())
 		sb.WriteString("\n")
 	}
 
@@ -1997,6 +2010,18 @@ const workLogLines = 6
 // 13 rows and shove the answer the user is reading off the top.
 const workLogMaxRows = 9
 
+// logHeadRows caps how many rows ONE action's description may wrap to. Wrapping
+// is what buys the tail back; the per-action cap is what stops a single 300-
+// character shell command from spending the whole region on itself and hiding
+// every other action. The region's own ceiling (logRows) is unchanged by
+// wrapping — a wrapped line costs HISTORY, never height.
+const logHeadRows = 3
+
+// logDetailRows caps an action's `└` outcome. Same room as the call above it,
+// not less: the outcomes that run long are the FAILURES, and a failure's tail
+// is the remedy — the one line in the log a user has to act on.
+const logDetailRows = 3
+
 // logRows is the height budget for THIS terminal: never more than half the
 // visible pane, so the log cannot crowd out the transcript on a short window
 // (a 12-row terminal leaves the viewport 5 rows — the fixed cap alone would
@@ -2012,9 +2037,10 @@ func (m ChatModel) logRows() int {
 	return budget
 }
 
-// logWidth is the column budget for one work-log line on THIS terminal. The
-// fixed caps are a readability ceiling, not a layout assumption: below ~80
-// columns every line would soft-wrap and double the region's real height.
+// logWidth is the measure one work-log ROW is wrapped to on THIS terminal. The
+// fixed cap is a readability ceiling, not a layout assumption: a line is wrapped
+// to it, never clipped by it, so the terminal's own width still decides where
+// the text breaks below ~80 columns.
 func (m ChatModel) logWidth() int {
 	// 4 for the marker gutter, 2 for the viewport's own edge.
 	w := m.width - 6
@@ -2045,6 +2071,37 @@ const (
 	glyphStatus = "✻"
 	glyphDetail = "└"
 )
+
+// liveRegionView is the work log at a height that does not go backwards.
+//
+// The region's height moves with what the agent is doing: an outcome lands and
+// an action grows a row; a wrapped action pushes an older one out and the block
+// gets SHORTER. Growth is fine — it is new work, at the bottom where the eye
+// already is. Shrinking is the one that hurts: everything above drops back down
+// mid-sentence while it is being read, and wrapping makes the swings bigger. So
+// the height is held at this turn's peak, never above the terminal's budget,
+// and the difference is padded with blank rows.
+func (m *ChatModel) liveRegionView() string {
+	out := m.renderLiveRegion()
+	rows := strings.Count(out, "\n") + 1
+	if rows > m.logPeakRows {
+		m.logPeakRows = rows
+	}
+	// A resize can lower the ceiling under a peak reached on a taller window.
+	if budget := m.logRows(); m.logPeakRows > budget {
+		m.logPeakRows = budget
+	}
+	// Before the first WindowSizeMsg there is no viewport to budget against, so
+	// logRows' 9 is a guess — padding to it would open the turn with a block of
+	// blank rows on a window that may only have five.
+	if m.viewport.Height <= 0 {
+		return out
+	}
+	if pad := m.logPeakRows - rows; pad > 0 {
+		out += strings.Repeat("\n", pad)
+	}
+	return out
+}
 
 // renderLiveRegion draws the rolling activity log for the running turn: one line
 // per meaningful action, newest last, each closed action followed by a single
@@ -2097,14 +2154,24 @@ func (m ChatModel) renderLiveRegion() string {
 		budget--
 	}
 	// Oldest first: the newest action is the one being watched, and the live
-	// line is always last.
-	rows := 0
+	// line is always last. Trimming from the top is what pays for wrapping —
+	// a wrapped action costs older HISTORY, not extra height.
+	kept, rows := 0, 0
 	for i := len(groups) - 1; i >= 0; i-- {
-		rows += len(groups[i])
-		if rows > budget {
-			groups = groups[i+1:]
+		if rows+len(groups[i]) > budget {
 			break
 		}
+		rows += len(groups[i])
+		kept++
+	}
+	if kept > 0 {
+		groups = groups[len(groups)-kept:]
+	} else if len(groups) > 0 {
+		// One action taller than the entire budget — a wrapped shell command on
+		// a 12-row terminal, where the budget is two rows. Clip it to fit rather
+		// than drop it: an empty live region is a blank screen, which is the one
+		// thing this whole region exists to prevent.
+		groups = [][]string{clipRows(groups[len(groups)-1], budget)}
 	}
 
 	var lines []string
@@ -2116,6 +2183,20 @@ func (m ChatModel) renderLiveRegion() string {
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+// clipRows cuts one action's rendered rows to a height budget, marking the cut
+// so the reader can tell the action says more than the window can show.
+func clipRows(rows []string, max int) []string {
+	if max < 1 {
+		max = 1
+	}
+	if len(rows) <= max {
+		return rows
+	}
+	out := append([]string(nil), rows[:max]...)
+	out[max-1] += activityStyle.Render(" …")
+	return out
 }
 
 // anyCompleted reports whether anything in the log has actually finished — the
@@ -2225,45 +2306,71 @@ func formatElapsed(d time.Duration) string {
 // the state survives a terminal with no colour.
 func (m ChatModel) renderActivityItem(item ActivityItem, live bool, elapsed time.Duration) []string {
 	width := m.logWidth()
-	// The counter is reserved BEFORE truncating, not appended after. Appending
-	// after meant any narration already at the cap — which shell commands and
-	// long paths routinely are, and which are exactly the calls that repeat —
-	// had its "x14" cut straight back off.
-	content := item.Content
+
+	// The counter rides along through the wrap rather than being appended after
+	// it. Appended after, any narration already at the measure — which shell
+	// commands and long paths routinely are, and which are exactly the calls
+	// that repeat — had its "x14" cut straight back off.
+	suffix := ""
 	if item.Repeat > 0 {
-		suffix := fmt.Sprintf(" x%d", item.Repeat+1)
-		content = truncateRunes(content, width-len(suffix)) + suffix
-	} else {
-		content = truncateRunes(content, width)
+		suffix = fmt.Sprintf(" x%d", item.Repeat+1)
 	}
 
-	var head string
+	// The live row's measure is narrower by what the spinner's clock occupies:
+	// the clock is appended AFTER the text, so text wrapped to the full measure
+	// would push it past the pane's edge and the viewport would clip the one
+	// number proving the turn is still moving.
+	headWidth := width
+	if live {
+		headWidth -= elapsedReserve
+	}
+	rows := wrapLog(clean(item.Content), suffix, headWidth, logHeadRows)
+
+	// Glyph and colour differ per kind; the wrap and the continuation indent do
+	// not. Continuations line up under the TEXT, not the glyph, so the marker
+	// column stays a gutter and the eye reads one action as one block.
+	glyph := ""
+	style := activityStyle
 	switch {
 	case live:
-		head = m.renderLiveLine(content, elapsed)
+		style = thinkingStyle
 	case item.Kind == "tool" || item.Kind == "confirm":
-		style := toolNameStyle
+		glyph, style = glyphTool, toolNameStyle
 		if item.Success != nil && !*item.Success {
 			style = failStyle
 		}
-		head = "  " + activityStyle.Render(glyphTool) + " " + style.Render(content)
 	case item.Kind == "status" || item.Kind == "thinking":
-		head = "  " + activityStyle.Render(glyphStatus) + " " +
-			lipgloss.NewStyle().Foreground(theme.Warning).Render(content)
-	default:
-		head = "    " + activityStyle.Render(content)
+		glyph, style = glyphStatus, lipgloss.NewStyle().Foreground(theme.Warning)
 	}
 
-	lines := []string{head}
-	if detail := truncateRunes(clean(item.Detail), width-2); detail != "" {
-		style := activityStyle
+	var lines []string
+	switch {
+	case live:
+		lines = append(lines, m.renderLiveLine(rows[0], elapsed))
+	case glyph != "":
+		lines = append(lines, "  "+activityStyle.Render(glyph)+" "+style.Render(rows[0]))
+	default:
+		lines = append(lines, "    "+style.Render(rows[0]))
+	}
+	for _, row := range rows[1:] {
+		lines = append(lines, "    "+style.Render(row))
+	}
+
+	if detail := clean(item.Detail); detail != "" {
+		dstyle := activityStyle
 		if item.Success != nil && !*item.Success {
-			style = failStyle
+			dstyle = failStyle
 		}
-		lines = append(lines, "    "+style.Render(glyphDetail+" "+detail))
+		drows := wrapLog(detail, "", width-2, logDetailRows)
+		lines = append(lines, "    "+dstyle.Render(glyphDetail+" "+drows[0]))
+		for _, row := range drows[1:] {
+			lines = append(lines, "      "+dstyle.Render(row))
+		}
 	}
 	// Developer mode only. Args and Output are populated nowhere else, so the
 	// user-mode log is genuinely unchanged rather than merely filtered here.
+	// These stay ONE clipped row each: they are raw JSON, not prose, and the
+	// transcript's render card is where a full payload belongs.
 	for _, extra := range []struct{ label, text string }{
 		{"args", item.Args},
 		{"out", item.Output},
@@ -2277,6 +2384,86 @@ func (m ChatModel) renderActivityItem(item ActivityItem, live bool, elapsed time
 		}
 	}
 	return lines
+}
+
+// elapsedReserve is the room renderLiveLine's trailing clock needs: two spaces
+// and up to "10:05".
+const elapsedReserve = 8
+
+// wrapLog lays one work-log string out over at most maxRows rows of width
+// columns, reusing the same wrap the transcript uses (components.WrapText) so
+// there is one wrapping path in this package, not three.
+//
+// Wrapped, not clipped, for the reason the status path already gives: the
+// viewport does not soft-wrap, so a line longer than the measure loses its tail
+// — and for the lines that carry a reason or a remedy, the tail IS the point.
+// What the row cap cuts is still marked with an ellipsis, because a silent cut
+// is the bug this replaces. suffix (the repeat counter, or "") stays visible
+// even then: it is the part saying this call happened fourteen times.
+func wrapLog(s, suffix string, width, maxRows int) []string {
+	if width < 8 {
+		width = 8
+	}
+	if maxRows < 1 {
+		maxRows = 1
+	}
+	rows := hardBreak(strings.Split(components.WrapText(s+suffix, width), "\n"), width)
+	if len(rows) <= maxRows {
+		return rows
+	}
+	rows = rows[:maxRows]
+	rows[maxRows-1] = clipTail(strings.TrimRight(rows[maxRows-1], " "), width-displayWidth(suffix)) + suffix
+	return rows
+}
+
+// hardBreak splits any row still wider than the measure. WrapText breaks on
+// SPACES, and the lines that run long are routinely one unbroken token — a URL,
+// a Windows path, a quoted shell argument — which it emits whole. Left alone
+// those rows overrun the pane and the viewport clips them, which is the bug this
+// whole change is about.
+func hardBreak(rows []string, width int) []string {
+	out := make([]string, 0, len(rows))
+	for _, row := range rows {
+		for displayWidth(row) > width {
+			head, rest := splitAtWidth(row, width)
+			out = append(out, head)
+			row = rest
+		}
+		out = append(out, row)
+	}
+	return out
+}
+
+// splitAtWidth cuts s at a COLUMN count, never mid-rune.
+func splitAtWidth(s string, width int) (string, string) {
+	used := 0
+	for i, r := range s {
+		w := displayWidth(string(r))
+		if used+w > width {
+			return s[:i], s[i:]
+		}
+		used += w
+	}
+	return s, ""
+}
+
+// clipTail cuts s to limit columns and ALWAYS ends it with an ellipsis.
+// truncateRunes alone leaves a string that already fits untouched — and rows
+// arrive here filled TO the measure, so that is the common case, not a boundary
+// one. It would mean a cut with nothing on screen to say so.
+func clipTail(s string, limit int) string {
+	if limit <= 1 {
+		return "…"
+	}
+	if displayWidth(s) < limit {
+		return s + "…"
+	}
+	// limit-1, not limit: a row that lands EXACTLY on the measure — which is the
+	// common case, since the wrap fills rows to it — is "within budget" as far
+	// as truncateRunes is concerned, and it would hand the string straight back
+	// unmarked. Asking for one column less forces the cut, and truncateRunes
+	// adds the ellipsis itself.
+	return truncateRunes(s, limit-1)
 }
 
 // queuedEchoFloor is the narrowest the echoed line may get before the key hint
@@ -2415,8 +2602,12 @@ func (m ChatModel) View() string {
 // tool_args payload. Every truncation goes through truncateRunes: the previous
 // byte slice at [:60] split multi-byte runes, so a command touching a path with
 // any non-ASCII character rendered a replacement glyph mid-word.
+//
+// Bounded to the same measure the canonical path gives an argument, for the same
+// reason: the work log wraps, so a capture-time cut at one row's width threw the
+// tail away before anything could show it.
 func extractCommandFromArgs(raw json.RawMessage) string {
-	const argWidth = 60
+	const argWidth = narrationMax
 
 	var args map[string]interface{}
 	if err := json.Unmarshal(raw, &args); err != nil {
