@@ -671,7 +671,27 @@ jobs:
               exit 1
             }
 
-            Write-Host "::error::The RAG embedder $embeddingModel cannot serve embeddings on this runner, and it fails WITH and WITHOUT ``--ubatch-size 2048``. Registration, the model's on-disk bytes and the llama.cpp backend cache have each been purged and retried, so none of those is the cause and the flag is not the trigger either - what is left is this RUNNER or the co-resident chat model. $logHint. Reproduce by hand with ``python tests/ci_lemonade_check.py --model $embeddingModel --checkpoint $embeddingCheckpoint --recipe $embeddingRecipe --register-embedding --embeddings --llamacpp-args '--ubatch-size 2048'``, and check whether an Application Control policy is blocking llama-server.exe (#2826). rag_quality and context_retention would otherwise score ~2/10 as non-answers against a ~9/10 baseline and read as a model regression. Do NOT re-run the eval until this passes - it costs 3.5h and measures nothing."
+            # RUNG 5 - the last hypothesis standing. The chat model loaded and
+            # served over the same llama-server binary earlier in this step, so
+            # the box can spawn it; the flag, the registration, the model's bytes
+            # and the backend cache are all eliminated above. What differs from
+            # the two green sibling jobs is that they load this embedder on a
+            # fresh `-NoModel` server while here a chat model is already resident
+            # (#1544 keeps it co-resident by design). Evict everything and load
+            # the embedder alone: if that works, co-residency is the cause, and
+            # on unified-memory hardware that is a GAIA problem, not a CI one.
+            Write-Host "=== Final discriminator: unloading ALL models, then loading the embedder ALONE ==="
+            $ErrorActionPreference = "Continue"
+            python -c "from gaia.llm.lemonade_client import LemonadeClient; LemonadeClient().unload_model(ignore_if_not_loaded=True); print('[ci] unloaded all models')"
+            $ErrorActionPreference = "Stop"
+            $aloneOk = Invoke-EmbedProbe -LlamacppArgs "--ubatch-size 2048"
+            Show-LemonadeTaskLog | Out-Null
+            if ($aloneOk) {
+              Write-Host "::error::The RAG embedder $embeddingModel loads ALONE but not while the chat model is resident. This runner cannot hold both at once, and gaia/rag/sdk.py::_load_embedder deliberately keeps the chat model resident (#1544) — so on this hardware every RAG-backed agent hits the same wall, and this gate has never been able to measure them. Fix the co-residency in the RAG SDK (evict-then-reload, or a smaller resident context); do NOT paper over it here, since an eval that unloads the chat model measures a configuration GAIA never runs."
+              exit 1
+            }
+
+            Write-Host "::error::The RAG embedder $embeddingModel cannot be served on this runner under any condition tried. Everything cheap is now eliminated, so do not re-run hoping it clears: the chat model LOADED and served over the same llama-server binary earlier in this step (so the binary spawns fine here and this is not #2826), the load fails identically with and without ``--ubatch-size 2048``, alone and co-resident with the chat model, and the registration, the model's on-disk bytes and the llama.cpp backend cache were each purged and retried. What is left is this specific embedding model on this specific box - most likely the ``--embeddings``/pooling path of the llama.cpp build Lemonade ships here, which is the same class of fault as #1831. Next step is a HUMAN one: on the runner, run Lemonade in a console (not the Scheduled Task, whose stdout/stderr it does not write to) and read llama-server's own failure while reproducing with ``python tests/ci_lemonade_check.py --model $embeddingModel --checkpoint $embeddingCheckpoint --recipe $embeddingRecipe --register-embedding --embeddings --llamacpp-args '--ubatch-size 2048'``. $logHint. Until then rag_quality and context_retention cannot be measured at all - they would score ~2/10 as non-answers against a ~9/10 baseline and read as a model regression."
             exit 1
           }
 
