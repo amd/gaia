@@ -50,6 +50,10 @@ KNOWN_TOOLS: Dict[str, tuple] = {
     "sd": ("gaia.sd.mixin", "SDToolsMixin"),
     "vlm": ("gaia.vlm.mixin", "VLMToolsMixin"),
     "skills": ("gaia.agents.tools.skill_library_tools", "SkillLibraryToolsMixin"),
+    "skill_learning": (
+        "gaia.agents.tools.skill_learning_tools",
+        "SkillLearningToolsMixin",
+    ),
 }
 
 # Manifest-fingerprint keys used to detect a legacy YAML manifest masquerading

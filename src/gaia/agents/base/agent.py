@@ -104,6 +104,108 @@ CHUNK_TRUNCATION_SIZE = 2500
 DEFAULT_MAX_STEPS = 50
 
 
+def effective_skill_body(agent, skill) -> str:
+    """*skill*'s authored body with *agent*'s approved learned changes applied.
+
+    A module-level function, not a method, on purpose: it is called from
+    :meth:`Agent.get_skills_system_prompt`, which is routinely composed onto
+    lightweight doubles that carry the skill-prompt methods and nothing else. As
+    a method it made every one of those a hard dependency; as a function it
+    duck-types, and an object with no memory store simply renders its authored
+    skills — which is exactly what "no learned changes" should look like.
+
+    Resolution is cached per (skill, base digest) for the session's life, so a
+    delta approved mid-session takes effect on the *next* one — stated in the
+    approval prompt rather than discovered.
+
+    **This must never raise.** ``_get_mixin_prompts`` invokes the calling
+    fragment inside a bare ``except`` that drops it on error, so an exception
+    here would silently delete every loaded skill's instructions. Any failure
+    floors to the authored body and says so in the log.
+    """
+    base = getattr(skill, "body", "") or ""
+    if not base:
+        return base
+
+    enabled = getattr(agent, "learned_skills_enabled", None)
+    if not callable(enabled) or not enabled():
+        return base
+
+    try:
+        from gaia.agents.base.skill_deltas import SkillDelta, resolve_skill_body
+        from gaia.skills.sections import section_digest
+
+        cache = getattr(agent, "_effective_skill_cache", None)
+        if cache is None:
+            cache = {}
+            agent._effective_skill_cache = cache
+        key = (skill.name, section_digest(base))
+        if key in cache:
+            return cache[key]
+
+        store = agent._memory_store
+        rows = store.search_deltas(
+            base_name=skill.name,
+            scope=agent.learned_skill_scope(),
+            status="active",
+        )
+        resolved = resolve_skill_body(
+            base,
+            [
+                SkillDelta(
+                    id=r["id"],
+                    base_name=r["base_name"],
+                    scope=r["scope"],
+                    kind=r["kind"],
+                    anchor_section=r["anchor_section"],
+                    anchor_digest=r["anchor_digest"],
+                    payload=r["payload"],
+                    provenance=r["provenance"],
+                    status=r["status"],
+                    superseded_by=r["superseded_by"],
+                    created_at=r["created_at"],
+                    approved_at=r["approved_at"],
+                )
+                for r in rows
+            ],
+        )
+
+        for note in resolved.notes:
+            if note.outcome != "applied":
+                logger.warning(
+                    "[SkillDeltas] %s on %s/%s: %s",
+                    note.outcome,
+                    skill.name,
+                    note.section,
+                    note.detail,
+                )
+        if resolved.applied:
+            agent.overlaid_skills[skill.name] = list(resolved.applied)
+            logger.info(
+                "[SkillDeltas] %s running with %d learned change(s), "
+                "%+d tokens vs authored",
+                skill.name,
+                len(resolved.applied),
+                resolved.token_delta,
+            )
+            try:
+                store.touch_deltas(resolved.applied)
+            except Exception:  # noqa: BLE001 - telemetry must not break a turn
+                logger.debug("[SkillDeltas] touch_deltas failed", exc_info=True)
+
+        cache[key] = resolved.body
+        return resolved.body
+    except Exception as exc:  # noqa: BLE001 - see the docstring
+        logger.error(
+            "[SkillDeltas] could not resolve the learned overlay for %s; using "
+            "the authored skill unchanged: %s",
+            getattr(skill, "name", "?"),
+            exc,
+            exc_info=True,
+        )
+        return base
+
+
 def default_max_steps() -> int:
     """Resolve the global default agent step limit.
 
@@ -502,6 +604,18 @@ class Agent(abc.ABC):
 
     #: name -> turns of pinning remaining; decremented each refresh.
     _sticky_skill_turns: Optional[Dict[str, int]] = None
+
+    # Adaptive skills (#2674): the learned overlay composed over an authored
+    # skill at render time. ``False`` is the ``--no-learned-skills`` floor and
+    # must produce a byte-identical prompt, so nothing here may be consulted
+    # before ``learned_skills_enabled()`` says so.
+    _learned_skills_enabled: bool = True
+    #: (skill name, base digest) -> resolved body. Resolution happens once per
+    #: session so the fragment is stable across turns; a delta approved
+    #: mid-session applies to the next one.
+    _effective_skill_cache: Optional[Dict[tuple, str]] = None
+    #: skill name -> ids of the deltas currently applied to it.
+    _overlaid_skills: Optional[Dict[str, List[str]]] = None
 
     # Skill sets (#2466): the parsed manifest declarations, the explicit
     # ``--skill-set`` request, and the set that actually resolved.
@@ -1773,6 +1887,56 @@ Do NOT wrap conversational replies in JSON.
         )
         return loaded
 
+    def learned_skills_enabled(self) -> bool:
+        """Whether the learned overlay participates in skill resolution.
+
+        ``False`` under ``--no-learned-skills``, with memory off, or in an
+        incognito session. Each of those must give a prompt byte-identical to a
+        build with no overlay at all.
+        """
+        if not getattr(self, "_learned_skills_enabled", True):
+            return False
+        if getattr(self, "_memory_store", None) is None:
+            return False
+        if getattr(self, "_incognito", False):
+            return False
+        return True
+
+    def learned_skill_scope(self) -> str:
+        """The leak boundary for learned deltas. Never ``None``.
+
+        ``_namespaced_agent_id()`` may legitimately return ``None`` (an agent
+        that opted out of the activation layer, or one built outside the
+        registry), and a null scope would either be refused at write time or —
+        worse, if the store allowed it — pool one agent's learned changes into
+        every other agent's skills. So this falls back to the concrete class
+        name, which is stable across sessions and distinct between agents.
+        """
+        return self._namespaced_agent_id() or type(self).__name__
+
+    def _effective_skill_body(self, skill) -> str:
+        """This agent's view of *skill* with its approved learned changes applied.
+
+        Thin wrapper over :func:`effective_skill_body` so subclasses can
+        override resolution. The render path calls the module-level function
+        directly, so an agent that composes ``get_skills_system_prompt`` without
+        this method still renders its authored skills.
+        """
+        return effective_skill_body(self, skill)
+
+    @property
+    def overlaid_skills(self) -> Dict[str, List[str]]:
+        """Loaded skills currently running with an overlay -> applied delta ids.
+
+        The legibility surface: a user must be able to see that an agent is not
+        running the skill as shipped.
+        """
+        overlaid = getattr(self, "_overlaid_skills", None)
+        if overlaid is None:
+            overlaid = {}
+            self._overlaid_skills = overlaid
+        return overlaid
+
     def get_skills_system_prompt(self) -> str:
         """Render the loaded skills as a system-prompt fragment.
 
@@ -1799,7 +1963,8 @@ Do NOT wrap conversational replies in JSON.
             for skill in skills.values():
                 if not skill.body:
                     continue
-                sections.append(f"--- SKILL: {skill.name} ---\n{skill.body}")
+                body = effective_skill_body(self, skill)
+                sections.append(f"--- SKILL: {skill.name} ---\n{body}")
             if not sections:
                 return ""
             return "==== LOADED SKILLS ====\n" + "\n\n".join(sections)
@@ -1810,7 +1975,8 @@ Do NOT wrap conversational replies in JSON.
         for skill in sorted(skills.values(), key=lambda s: s.name):
             if skill.name in active:
                 if skill.body:
-                    body_sections.append(f"--- SKILL: {skill.name} ---\n{skill.body}")
+                    body = effective_skill_body(self, skill)
+                    body_sections.append(f"--- SKILL: {skill.name} ---\n{body}")
             else:
                 menu_lines.append(
                     f"- {skill.name}: {_skill_menu_description(skill.description)}"

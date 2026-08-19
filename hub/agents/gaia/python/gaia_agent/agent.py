@@ -56,6 +56,7 @@ from gaia.agents.base.skill_loader import (
     dynamic_skills_env_override,
 )
 from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
+from gaia.agents.tools.skill_learning_tools import SkillLearningToolsMixin
 from gaia.agents.tools.skill_library_tools import SkillLibraryToolsMixin
 
 logger = logging.getLogger(__name__)
@@ -177,7 +178,9 @@ class GaiaAgentConfig(ChatAgentConfig):
 # Base agent first, tool mixins after — the repo's MRO convention for every
 # hub agent. Neither mixin overrides anything today; this order keeps a future
 # mixin method from silently winning over ChatAgent's.
-class GaiaAgent(ChatAgent, SkillLibraryToolsMixin, CodeIndexToolsMixin):
+class GaiaAgent(
+    ChatAgent, SkillLibraryToolsMixin, SkillLearningToolsMixin, CodeIndexToolsMixin
+):
     """The flagship GAIA agent — conversation, documents, data, web, and skills."""
 
     SKILL_DIRS: ClassVar[List[str]] = _bundled_skill_roots()
@@ -214,6 +217,9 @@ class GaiaAgent(ChatAgent, SkillLibraryToolsMixin, CodeIndexToolsMixin):
         """
         self.skill_loader = self._maybe_build_skill_loader()
         self.register_skill_library_tools()
+        # Adaptive skills (#2674): lets the agent correct a loaded skill that does
+        # not fit, under the same confirmation gate as any other write.
+        self.register_skill_learning_tools()
         # Same scope as allowed_paths, for the same reason that field rejects
         # cwd: the daemon launches this sidecar with cwd = the package
         # directory, so cwd would sandbox code search to the agent's own
