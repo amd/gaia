@@ -247,12 +247,22 @@ jobs:
     # LemonadeServer.exe. Landing on Linux dies with 'powershell: command not
     # found'. Same guard as test_email_agent_eval.yml.
     #
-    # `lemonade-eval` — as opposed to the `stx` label the sibling evals use — is
-    # currently carried by exactly one runner (sjlab-stx-halo-18, itself an stx
-    # box). Serialisation comes from the concurrency group above, NOT from this
-    # label; the label only narrows WHICH box. Widen to `stx` if this job should
-    # be schedulable across the whole pool.
-    runs-on: [self-hosted, Windows, lemonade-eval]
+    # `strix-halo` pins the SoC, and that is a correctness requirement, not a
+    # preference: the `stx` pool spans Strix Point boxes as well (sjlab-stx-1,
+    # sjlab-stx-3), which do not have the 128 GB of unified memory this eval's
+    # model needs, and scores from two different SoCs are not comparable to each
+    # other or to the committed baselines. Do NOT widen this to `stx` — an
+    # earlier revision of this comment suggested exactly that, which would have
+    # let a scorecard be produced on whichever machine happened to be free.
+    #
+    # `lemonade-eval` is kept alongside it to say WHICH Halo box owns the long
+    # eval slot. It is redundant while exactly one runner carries both, and that
+    # is the point: if the label is ever moved to a non-Halo box this job finds
+    # no runner and queues visibly, rather than quietly measuring the wrong
+    # hardware. Serialisation still comes from the concurrency group, not either
+    # label. Same `Windows` guard as the sibling evals: the pool also matches a
+    # Linux box (xsj-aimlab-stxp-04) and every step here is PowerShell.
+    runs-on: [self-hosted, Windows, strix-halo, lemonade-eval]
     defaults:
       run:
         # Pinned to Windows PowerShell 5.1, not left to the runner default (pwsh
@@ -516,6 +526,22 @@ jobs:
             exit 1
           }
           Write-Host "Lemonade reachable at $lemonadeUrl"
+
+          # Record WHICH machine produced this scorecard. The runs-on labels state
+          # the intent; this is the only thing that proves it held at runtime, and
+          # a score is not interpretable without it - the pool spans two SoCs and
+          # only Strix Halo has the memory this eval assumes. /v1/system-info also
+          # carries per-recipe backend state (unsupported / installable /
+          # update_required / installed) and compatible devices, which is the
+          # diff that explains why this embedder loads on a Strix Point box and
+          # not here (#3016). Best-effort and never fatal: it is evidence, not a
+          # gate, and must not be able to fail a run on its own.
+          $ErrorActionPreference = "Continue"
+          Write-Host "=== Lemonade system-info (device + llamacpp backend state) ==="
+          python -c "import json; from gaia.llm.lemonade_client import LemonadeClient; si = LemonadeClient().get_system_info(); print(json.dumps({k: v for k, v in si.items() if k != 'recipes'}, indent=2, default=str)[:2000]); print('--- recipes.llamacpp ---'); print(json.dumps(si.get('recipes', {}).get('llamacpp'), indent=2, default=str)[:2000])"
+          if ($LASTEXITCODE -ne 0) { Write-Host "(system-info unavailable on this Lemonade build - continuing, this is diagnostic only)" }
+          $global:LASTEXITCODE = 0
+          $ErrorActionPreference = "Stop"
 
           # ensure-lemonade-running.ps1 SWALLOWS a failed warm pull ("WARN: warm
           # pull failed") and still exits 0, so a healthy server proves nothing
