@@ -3017,6 +3017,10 @@ Do NOT wrap conversational replies in JSON.
         it — a triage is five to ten reads — a wall of modals attended, and a
         guaranteed failure unattended.
 
+        Reads only. The same grant also declares which ``gh`` *writes* may be
+        offered to the user, and those answer False here — the grant says a
+        write may be asked about, never that it is already approved.
+
         Duck-typed on purpose. The host that owns a grant implements
         ``skill_grant_covers_call``; an agent with no such mixin has no way to
         answer yes, so its gate stays byte-identical.

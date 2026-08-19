@@ -6,24 +6,49 @@ The ``shell:execute:<binary>`` bridge — a skill brings its own CLI.
 A skill that needs GitHub does not need a bespoke connector; it needs ``gh``.
 Declaring ``shell:execute:gh`` in ``SKILL.md`` grants **that one binary**, to
 **that one skill's session**, on **that one agent instance**, restricted to the
-read-only subcommands named in :data:`BINARY_POLICIES` below.
+subcommands named in :data:`BINARY_POLICIES` below.
 
-Three properties make this safe enough to bridge while the general shell sandbox
+Every invocation lands in exactly one of **three** tiers
+(:func:`classify_invocation`):
+
+* ``ALLOW`` — a read. Runs with no prompt: loading the skill is the consent, and
+  a triage is five to ten reads.
+* ``CONFIRM`` — a bounded write (``gh issue comment``). The user is shown the
+  **exact command** and answers yes / no / always-for-this-command-class. It
+  never runs on its own.
+* ``REFUSE`` — never runs, and never raises a prompt. Reserved for the
+  escalation classes a single yes/no cannot honestly describe: printing a
+  credential (``gh auth token``), defining or installing code that then runs
+  (``gh alias``, ``gh extension``, ``gh config``), and the unbounded generic
+  surfaces (any ``gh api`` write, which is "do anything to any resource" behind
+  one flag).
+
+Keeping CONFIRM and REFUSE apart is the point. Collapsing them into one prompt
+turns the gate into a habit — click yes, and yes covers ``gh auth token`` too.
+
+Four properties make this safe enough to bridge while the general shell sandbox
 is still deferred:
 
 1. **Deny by default at two levels.** A binary with no entry here cannot be
    declared at all, and a subcommand absent from its entry is refused. Nothing is
-   permitted by omission.
+   permitted by omission — and nothing is *confirmable* by omission either: a
+   write reaches the CONFIRM tier only by being listed in ``confirm_actions``.
 2. **No global state.** The grant lives on the agent instance
    (:class:`BinaryGrants`), never in a module-level allowlist. One agent's skill
    can never widen another agent's shell.
-3. **Read-only by construction — for CLIs that talk to something *external*.**
-   ``gh``'s tables list the subcommands that only read a remote. ``pytest`` is a
-   different class of grant and says so in its own summary: it EXECUTES the
-   project's own test code, the same trust boundary as the ungated
+3. **A write executes only behind the agent's confirmation gate.** This module
+   classifies; it does not enforce consent. ``Agent._execute_tool`` is what
+   actually stops a CONFIRM call — the same single funnel that has always gated
+   ``write_file`` — and ``ShellToolsMixin.skill_grant_covers_call`` exempts only
+   the ALLOW tier from it. A caller wanting "may this run with nobody asked?"
+   uses :func:`validate_invocation`, which answers no for CONFIRM and REFUSE
+   alike, so an un-updated caller fails closed.
+4. **Read-only by construction — for CLIs that talk to something *external*.**
+   ``pytest`` is a different class of grant and says so in its own summary: it
+   EXECUTES the project's own test code, the same trust boundary as the ungated
    ``execute_python_file`` tool. What its table restricts is invocation shape
    (no plugin injection, no interactive hang, no writes/paths outside the
-   checkout) — never what the tests themselves do.
+   checkout) — never what the tests themselves do. It has no CONFIRM tier.
 
 Adding a CLI is a data entry here plus a ``SKILL.md`` — never a new branch in the
 shell tool. That is the acceptance test for this module: supporting GitLab must
@@ -50,21 +75,63 @@ if TYPE_CHECKING:  # ``permissions`` imports this module — keep the edge one-w
     from gaia.skills.permissions import Permission
 
 
+#: The three answers :func:`classify_invocation` can give. Strings rather than
+#: an enum so a decision survives a JSON round-trip to a UI unchanged.
+ALLOW = "allow"
+CONFIRM = "confirm"
+REFUSE = "refuse"
+
+
 @dataclass(frozen=True)
-class Subcommand:
-    """The read-only rule for one ``<binary> <subcommand>`` pair — or, when set
-    as :attr:`BinaryPolicy.positional`, for a binary with no subcommand at all.
+class InvocationDecision:
+    """What the gate decided about one invocation, and how to say it.
 
     Attributes:
-        actions: Allowed third tokens (``gh issue **list**``). Empty plus
-            ``free_form=False`` means the subcommand takes no action and any
-            action token is refused.
+        outcome: :data:`ALLOW`, :data:`CONFIRM`, or :data:`REFUSE`.
+        message: Empty for ALLOW. For REFUSE, the actionable error the caller
+            returns to the model. For CONFIRM, why the call needs a human —
+            what :func:`validate_invocation` hands back to a caller that only
+            knows two tiers, so it must read as an explanation, not a refusal.
+    """
+
+    outcome: str
+    message: str = ""
+
+    @property
+    def allowed(self) -> bool:
+        """True only for :data:`ALLOW` — a call that may run unasked."""
+        return self.outcome == ALLOW
+
+    @property
+    def needs_confirmation(self) -> bool:
+        """True only for :data:`CONFIRM`."""
+        return self.outcome == CONFIRM
+
+
+_ALLOWED = InvocationDecision(ALLOW)
+
+
+@dataclass(frozen=True)
+class Subcommand:
+    """The rule for one ``<binary> <subcommand>`` pair — or, when set as
+    :attr:`BinaryPolicy.positional`, for a binary with no subcommand at all.
+
+    Attributes:
+        actions: Allowed third tokens (``gh issue **list**``), each running with
+            no prompt. Empty plus ``free_form=False`` means the subcommand takes
+            no action and any action token is refused.
+        confirm_actions: Action tokens that WRITE and are offered to the user as
+            a confirmable action rather than refused (``gh issue **create**``).
+            Disjoint from *actions* by construction — an action in both would be
+            silently read-only, which is the one mistake this table must not
+            make quietly, so :meth:`__post_init__` refuses it.
         free_form: The subcommand's first positional is data, not an action
             (``gh api **repos/amd/gaia**``), so it is not matched against
             *actions*. ``denied_actions`` still applies.
         denied_actions: Action tokens refused even under ``free_form``.
-        denied_flags: Flags refused outright — typically the ones that turn a
-            read into a write.
+        denied_flags: Flags refused outright, checked BEFORE the action is
+            classified — so a denied flag refuses a confirmable write too, and
+            no prompt is raised for it.
         flag_values: ``{flag: allowed lowercase values}``. A listed flag must
             carry one of those values (``--method GET``).
         value_flags: Flags that consume the following token. Needed so a flag's
@@ -82,11 +149,14 @@ class Subcommand:
         flag_value_prefixes: For positional rules — ``{flag: allowed lowercase
             value prefixes}``. Like ``flag_values`` but for a flag whose safe
             values share a prefix rather than an exact set (``-p no:...``).
-        denied_flag_reasons: For positional rules — ``{flag: one-line reason}``
-            shown in the refusal. Falls back to a generic message when absent.
+        denied_flag_reasons: ``{flag: one-line reason}`` shown in the refusal.
+            Falls back to a generic message when absent. Used by both rule
+            shapes — a denied flag has to say *why* it is denied or the model
+            retries it verbatim.
     """
 
     actions: frozenset[str] = frozenset()
+    confirm_actions: frozenset[str] = frozenset()
     free_form: bool = False
     denied_actions: frozenset[str] = frozenset()
     denied_flags: frozenset[str] = frozenset()
@@ -96,6 +166,16 @@ class Subcommand:
     allowed_flags: frozenset[str] = frozenset()
     flag_value_prefixes: Mapping[str, frozenset[str]] = field(default_factory=dict)
     denied_flag_reasons: Mapping[str, str] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        overlap = self.actions & self.confirm_actions
+        if overlap:
+            raise ValueError(
+                "Subcommand actions and confirm_actions must be disjoint; "
+                f"{sorted(overlap)} is in both. An action in both tiers reads "
+                "as read-only and runs unprompted — the failure this table "
+                "exists to prevent."
+            )
 
 
 @dataclass(frozen=True)
@@ -107,8 +187,8 @@ class BinaryPolicy:
         summary: One line for error messages and ``gaia skill info``.
         install_hint: How to get it — named in the load-time failure when the
             binary is not on ``PATH``.
-        subcommands: The read-only allowlist, keyed by subcommand. Absent ==
-            refused. Ignored when ``positional`` is set.
+        subcommands: The allowlist, keyed by subcommand. Absent == refused.
+            Ignored when ``positional`` is set.
         bare_flags: Flags accepted with no subcommand at all (``gh --version``).
             Also folded into the allowlist for a ``positional`` binary, where
             *every* invocation is "no subcommand".
@@ -138,16 +218,34 @@ class BinaryPolicy:
 # The table. One entry per CLI a skill may declare.
 # ---------------------------------------------------------------------------
 #
-# Deliberately ABSENT from `gh` — do not add them without re-reading why:
+# HARD-REFUSED for `gh` — never confirmable, so no prompt is ever raised for
+# them. Each is an escalation of a DIFFERENT kind than "this writes to a repo",
+# which is why they are not merely writes the user could approve:
+#   auth token prints the credential itself (hence auth allows `status` only)
 #   alias      defines an arbitrary shell command under a gh name
 #   extension  installs and runs third-party code
-#   codespace  opens a remote shell
 #   config     sets the editor/pager, i.e. command execution
-#   auth token prints the credential (hence auth allows `status` only)
+#   codespace  opens a remote shell
 #   secret / variable / ssh-key / gpg-key   credential surfaces
-#   issue|pr create/edit/close/comment/merge  writes to the repository
+#   api -X POST|PATCH|DELETE, -f/--field, --input, graphql
+#              the generic surface: one prompt cannot describe "any resource,
+#              any method". The named write subcommands below can.
+#   pr merge / repo delete / release delete / label delete
+#              irreversible on someone else's work; land or destroy, not triage
+#
+# ALLOWED but worth knowing: `gh issue create -T/--template` seeds the body from
+# the repo's own .github/ISSUE_TEMPLATE. It reads a local file, so it is the
+# same shape as --body-file — but only ever a file already published in the
+# repo it posts to, so it discloses nothing new. Revisit if gh ever lets
+# --template name an arbitrary path.
 #
 # They need no explicit block: anything not listed below is refused.
+#
+# CONFIRMABLE writes (`confirm_actions`) are the triage last mile — post the
+# comment, file the issue, apply the label. Each shows the user the exact
+# command and runs only on approval. Scope creep here is the risk the table
+# guards: a write earns a place only if a single line of prompt text can
+# honestly describe what it does.
 
 _GH_API = Subcommand(
     free_form=True,
@@ -206,27 +304,112 @@ _GH_COMMON_VALUE_FLAGS = frozenset(
 )
 
 
-def _gh(actions: Iterable[str]) -> Subcommand:
-    """A plain read-only gh subcommand: an action allowlist and nothing else."""
-    return Subcommand(actions=frozenset(actions), value_flags=_GH_COMMON_VALUE_FLAGS)
+#: Value-taking flags on gh's write subcommands. Listed for a security reason,
+#: not for completeness: the action is the FIRST non-flag token, so a flag whose
+#: value is not consumed leaves that value standing in as the action.
+#: ``gh issue --body list comment 42`` would otherwise classify as the read
+#: ``gh issue list`` and run with no prompt.
+_GH_WRITE_VALUE_FLAGS = frozenset(
+    {
+        "-b",
+        "--body",
+        # gh spells these `-t/--title` and `-T/--template`; `-t` is already in
+        # the common set, so only the two long forms and `-T` are new here.
+        "--title",
+        "-T",
+        "-m",
+        "-c",
+        "--color",
+        "-d",
+        "--description",
+        "-n",
+        "--name",
+        "-p",
+        "--project",
+        "--add-label",
+        "--remove-label",
+        "--add-assignee",
+        "--remove-assignee",
+        "--add-project",
+        "--remove-project",
+        "--add-reviewer",
+        "--remove-reviewer",
+    }
+)
+
+#: Refused on every gh subcommand that can write, before the action is even
+#: classified — so they raise no prompt. Not writes in themselves; each is a
+#: different capability smuggled in on a write's back.
+_GH_WRITE_DENIED_FLAGS = frozenset(
+    {"-F", "--body-file", "-e", "--editor", "-w", "--web"}
+)
+
+_GH_WRITE_DENIED_FLAG_REASONS = {
+    "-F": "it posts the contents of a LOCAL file to the remote — a file-read "
+    "and an upload wearing an issue body's clothes. Pass the text with --body",
+    "--body-file": "it posts the contents of a LOCAL file to the remote — a "
+    "file-read and an upload wearing an issue body's clothes. Pass the text "
+    "with --body",
+    "-e": "it opens an interactive editor, which hangs an agent whose stdin is "
+    "closed. Pass the text with --body",
+    "--editor": "it opens an interactive editor, which hangs an agent whose "
+    "stdin is closed. Pass the text with --body",
+    "-w": "it opens a browser on the machine instead of returning anything, so "
+    "a read gets you no output and a write you approved never happens",
+    "--web": "it opens a browser on the machine instead of returning anything, "
+    "so a read gets you no output and a write you approved never happens",
+}
+
+
+def _gh(actions: Iterable[str], confirm: Iterable[str] = ()) -> Subcommand:
+    """One gh subcommand: reads that run unasked, plus writes the user approves.
+
+    *confirm* is empty for a purely read-only subcommand. When it is not, the
+    write-flag denylist comes with it — those flags are refused on the reads
+    too, which costs nothing (no read accepts them) and means one rule covers
+    the subcommand rather than one per action.
+    """
+    confirm_actions = frozenset(confirm)
+    if not confirm_actions:
+        return Subcommand(
+            actions=frozenset(actions), value_flags=_GH_COMMON_VALUE_FLAGS
+        )
+    return Subcommand(
+        actions=frozenset(actions),
+        confirm_actions=confirm_actions,
+        value_flags=_GH_COMMON_VALUE_FLAGS | _GH_WRITE_VALUE_FLAGS,
+        denied_flags=_GH_WRITE_DENIED_FLAGS,
+        denied_flag_reasons=_GH_WRITE_DENIED_FLAG_REASONS,
+    )
 
 
 BINARY_POLICIES: dict[str, BinaryPolicy] = {
     "gh": BinaryPolicy(
         binary="gh",
-        summary="GitHub CLI — read issues, pull requests, releases, and runs.",
+        summary=(
+            "GitHub CLI — reads issues, pull requests, releases, and runs; "
+            "comments, files, and labels only with your per-command approval."
+        ),
         install_hint=(
             "Install the GitHub CLI from https://cli.github.com (winget install "
             "GitHub.cli / brew install gh / apt install gh), then authenticate "
             "with 'gh auth login'. Verify with 'gh auth status'."
         ),
         subcommands={
-            "issue": _gh({"list", "view", "status"}),
-            "pr": _gh({"list", "view", "diff", "checks", "status"}),
+            # `close`/`reopen` are deliberately absent: the triage skill's own
+            # rule is "never close an issue on your own judgement", and closing
+            # is the one issue write that silently ends someone else's thread.
+            "issue": _gh({"list", "view", "status"}, {"create", "comment", "edit"}),
+            # `comment` only. `merge` lands code and `close` kills a
+            # contribution — neither is triage, and both are irreversible in
+            # ways a one-line prompt understates.
+            "pr": _gh({"list", "view", "diff", "checks", "status"}, {"comment"}),
             "repo": _gh({"list", "view"}),
             "release": _gh({"list", "view"}),
             "run": _gh({"list", "view"}),
-            "label": _gh({"list"}),
+            # `delete` is absent: deleting a label strips it from every issue
+            # that carries it, which no per-call prompt makes visible.
+            "label": _gh({"list"}, {"create", "edit"}),
             "search": _gh({"issues", "prs", "repos", "code", "commits"}),
             # `status` only. `gh auth token` prints the credential.
             "auth": _gh({"status"}),
@@ -388,7 +571,7 @@ def binary_permissions(permissions: Sequence["Permission"]) -> list["Permission"
 def refuse_unpoliced_binaries(
     permissions: Sequence["Permission"], *, skill_name: str
 ) -> None:
-    """Refuse a binary grant core has no read-only policy for.
+    """Refuse a binary grant core has no command policy for.
 
     Called from :func:`gaia.skills.permissions.refuse_unbridged_permissions`, so
     every entry point — install, publish, migrate, ``register_skill_tools``,
@@ -404,7 +587,7 @@ def refuse_unpoliced_binaries(
             continue
         raise SkillPermissionError(
             f"Skill '{skill_name}' declares 'shell:execute:{binary}', but GAIA "
-            f"ships no read-only command policy for {binary!r}, so the grant "
+            f"ships no command policy for {binary!r}, so the grant "
             "cannot be enforced and the skill is refused rather than loaded "
             "unenforced. Declarable binaries: "
             f"{', '.join(sorted(BINARY_POLICIES)) or '(none)'}. To add one, "
@@ -489,14 +672,45 @@ def _flag_name(token: str) -> str:
 
 
 def validate_invocation(policy: BinaryPolicy, argv: Sequence[str]) -> str | None:
-    """Check one granted invocation against *policy*. Returns an error, or None.
+    """May this invocation run with **nobody asked**? Returns an error, or None.
+
+    The narrow question, and the one a caller deciding whether to skip the
+    confirmation prompt must ask. ``None`` means yes — the ALLOW tier only. A
+    write the user *could* approve answers with the CONFIRM message rather than
+    ``None``, so a caller that has not been taught about the third tier keeps
+    refusing writes instead of running them unasked.
+
+    Use :func:`classify_invocation` where the three tiers are actually
+    distinguished (a host that can raise a prompt).
 
     *argv* is the shlex-split command, ``argv[0]`` being the binary.
+    """
+    decision = classify_invocation(policy, argv)
+    return None if decision.allowed else decision.message
+
+
+def _refuse(message: str) -> InvocationDecision:
+    return InvocationDecision(REFUSE, message)
+
+
+def classify_invocation(
+    policy: BinaryPolicy, argv: Sequence[str]
+) -> InvocationDecision:
+    """Sort one granted invocation into ALLOW / CONFIRM / REFUSE.
+
+    *argv* is the shlex-split command, ``argv[0]`` being the binary.
+
+    Deciding, not enforcing: a ``CONFIRM`` verdict is the gate saying the user
+    may be *asked*, never that the command has been approved. The approval
+    itself lives in ``Agent._execute_tool``.
     """
     tokens = list(argv[1:])
 
     if policy.positional is not None:
-        return _validate_positional_invocation(policy, tokens)
+        # A positional binary (pytest) has no write tier — its rule is entirely
+        # about invocation shape, so every verdict is allow or refuse.
+        error = _validate_positional_invocation(policy, tokens)
+        return _ALLOWED if error is None else _refuse(error)
 
     allowed_subcommands = ", ".join(sorted(policy.subcommands))
 
@@ -505,7 +719,7 @@ def validate_invocation(policy: BinaryPolicy, argv: Sequence[str]) -> str | None
     index = 0
     while index < len(tokens) and tokens[index].startswith("-"):
         if _flag_name(tokens[index]) not in policy.bare_flags:
-            return (
+            return _refuse(
                 f"'{policy.binary} {tokens[index]}' is not allowed: only "
                 f"{', '.join(sorted(policy.bare_flags))} may precede a subcommand. "
                 f"Put the subcommand first, e.g. '{policy.binary} "
@@ -514,19 +728,54 @@ def validate_invocation(policy: BinaryPolicy, argv: Sequence[str]) -> str | None
         index += 1
 
     if index >= len(tokens):
-        return None  # bare `gh`, `gh --version` — help text only
+        return _ALLOWED  # bare `gh`, `gh --version` — help text only
 
     subcommand = tokens[index].lower()
     rule = policy.subcommands.get(subcommand)
     if rule is None:
-        return (
+        # Only mention the write tier when this policy actually has one — a
+        # read-only binary promising "writes ask you first" sends the model
+        # hunting for a write that does not exist.
+        has_writes = any(r.confirm_actions for r in policy.subcommands.values())
+        tiers = (
+            "reads run straight through, and the few writes among them ask you "
+            "first. "
+            if has_writes
+            else ""
+        )
+        return _refuse(
             f"'{policy.binary} {subcommand}' is not allowed. This skill's grant "
-            f"covers read-only {policy.binary} commands only: {allowed_subcommands}. "
-            f"Anything that writes, installs, opens a shell, or prints a credential "
-            "is refused."
+            f"covers these {policy.binary} commands: {allowed_subcommands} — "
+            f"{tiers}Anything that installs, opens a shell, or prints a "
+            "credential is refused outright and cannot be approved."
         )
 
     rest = tokens[index + 1 :]
+
+    # The action must be the FIRST token after the subcommand. Not a style rule
+    # — it is what keeps GAIA's verdict and cobra's dispatch on the same token.
+    #
+    # ``gh``'s parser strips a value for any flag it cannot prove is boolean AT
+    # THAT LEVEL, including one it has never heard of. So in
+    # ``gh label -f list create``, cobra eats ``list`` as ``-f``'s value and
+    # dispatches ``create`` — while a scanner that merely skips unknown flags
+    # sees ``list`` and calls it a read. That divergence turns a repo write into
+    # an unprompted one, and no allowlist of value-flags closes it: the next gh
+    # release can add a flag this table has never seen.
+    #
+    # Refusing a leading flag removes the ambiguity instead of chasing it. It
+    # costs nothing real — nobody writes ``gh issue --repo x list`` — and the
+    # refusal says how to spell it.
+    if not rule.free_form and rest and rest[0].startswith("-") and rest[0] != "-":
+        return _refuse(
+            f"'{policy.binary} {subcommand} {rest[0]}' is not allowed: the "
+            f"action has to come first. Write '{policy.binary} {subcommand} "
+            f"<action> {rest[0]} ...' instead — allowed actions are "
+            f"{_spell_actions(rule)}. A flag ahead of the action can swallow it "
+            f"and leave a different action in its place, so {policy.binary} "
+            "would run something other than what was checked."
+        )
+
     denied_flags = rule.denied_flags
 
     action: str | None = None
@@ -540,11 +789,16 @@ def validate_invocation(policy: BinaryPolicy, argv: Sequence[str]) -> str | None
             continue
 
         name, inline = _split_flag(token)
+        # Checked before the action is classified, so a denied flag refuses the
+        # call outright — a confirmable write carrying one never reaches a
+        # prompt, because the flag is the escalation, not the write.
         if name in denied_flags:
-            return (
-                f"'{policy.binary} {subcommand} {name}' is not allowed: that flag "
-                "sends a request body, which makes the call a write. Read-only "
-                f"{policy.binary} {subcommand} calls only."
+            reason = rule.denied_flag_reasons.get(
+                name,
+                "that flag sends a request body, which makes the call a write",
+            )
+            return _refuse(
+                f"'{policy.binary} {subcommand} {name}' is not allowed: {reason}."
             )
 
         takes_value = name in rule.flag_values or name in rule.value_flags
@@ -557,7 +811,7 @@ def validate_invocation(policy: BinaryPolicy, argv: Sequence[str]) -> str | None
             allowed = rule.flag_values[name]
             if value is None or value.lower() not in allowed:
                 spelled = " ".join(filter(None, (name, value)))
-                return (
+                return _refuse(
                     f"'{policy.binary} {subcommand} {spelled}' is not allowed: "
                     f"{name} may only be "
                     f"{', '.join(sorted(v.upper() for v in allowed))}. "
@@ -565,24 +819,51 @@ def validate_invocation(policy: BinaryPolicy, argv: Sequence[str]) -> str | None
                 )
 
     if action is not None and action.lower().strip("/") in rule.denied_actions:
-        return (
+        return _refuse(
             f"'{policy.binary} {subcommand} {action}' is not allowed: it can "
             "mutate the remote even through what looks like a read."
         )
 
     if not rule.free_form:
         if action is None:
-            return (
-                f"'{policy.binary} {subcommand}' needs a read-only action: "
-                f"{', '.join(sorted(rule.actions))}."
+            return _refuse(
+                f"'{policy.binary} {subcommand}' needs an action: "
+                f"{_spell_actions(rule)}."
+            )
+        if action.lower() in rule.confirm_actions:
+            return InvocationDecision(
+                CONFIRM,
+                f"'{policy.binary} {subcommand} {action.lower()}' writes to "
+                "GitHub, so it runs only after you approve this exact command.",
             )
         if action.lower() not in rule.actions:
-            return (
+            return _refuse(
                 f"'{policy.binary} {subcommand} {action}' is not allowed. "
-                f"Allowed {subcommand} actions: {', '.join(sorted(rule.actions))}."
+                f"Allowed {subcommand} actions: {_spell_actions(rule)}."
             )
 
-    return None
+    return _ALLOWED
+
+
+def _spell_actions(rule: Subcommand) -> str:
+    """The subcommand's actions, saying which ones stop to ask.
+
+    One string rather than two lists: a model reading "allowed actions: list,
+    view" concludes it cannot comment at all and goes back to drafting, which
+    is the dead end this tier exists to remove.
+    """
+    reads = ", ".join(sorted(rule.actions))
+    if not rule.confirm_actions:
+        return reads
+    writes = ", ".join(sorted(rule.confirm_actions))
+    asks = (
+        "which asks you to approve it first"
+        if len(rule.confirm_actions) == 1
+        else "which ask you to approve them first"
+    )
+    if not reads:
+        return f"{writes} ({asks})"
+    return f"{reads} — plus {writes}, {asks}"
 
 
 _UNSAFE_OPERAND_RE = re.compile(r"^[a-zA-Z]:[\\/]")

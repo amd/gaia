@@ -6,7 +6,7 @@ Point ``CJ`` at the ``control.json`` inside your ``GAIA_TUI_HOME``, then:
     python util/tui_driver.py status
     python util/tui_driver.py ask "What is 17 times 23?"
     python util/tui_driver.py ladder          # the full capability ladder
-    python util/tui_driver.py gate            # gh read-only policy check (no LLM, instant)
+    python util/tui_driver.py gate            # gh command-policy tiers (no LLM, instant)
 
 Why one process: spawning a process costs 0.7-2.0s on a Windows/MSYS box with AV
 (``curl --version`` alone measures ~2s), while the control API answers in 3ms. A
@@ -24,16 +24,40 @@ import time
 # --- point this at YOUR GAIA_TUI_HOME ---------------------------------------
 CJ = r"C:/Users/kovtchar/AppData/Local/Temp/gaia-tui-solo/control.json"
 
-_info = json.load(open(CJ))
-_conn = http.client.HTTPConnection("127.0.0.1", _info["port"], timeout=900)
-_HDRS = {
-    "Authorization": "Bearer " + _info["token"],
-    "Content-Type": "application/json",
-}
+_conn = None
+_HDRS = {}
+
+
+def _connect():
+    """Attach to the running TUI, or say exactly what is missing.
+
+    Deferred rather than done at import: `gate` drives no TUI at all, and
+    reading control.json up front made the one check that needs no TUI the one
+    check you could not run without one.
+    """
+    global _conn, _HDRS
+    if _conn is not None:
+        return _conn
+    try:
+        info = json.load(open(CJ))
+    except FileNotFoundError:
+        raise SystemExit(
+            f"No TUI control file at {CJ}.\n"
+            "Launch the TUI with --control-port and set CJ (top of this file) to "
+            "the control.json inside that launch's GAIA_TUI_HOME. "
+            "'gate' needs no TUI and does not reach this path."
+        )
+    _conn = http.client.HTTPConnection("127.0.0.1", info["port"], timeout=900)
+    _HDRS = {
+        "Authorization": "Bearer " + info["token"],
+        "Content-Type": "application/json",
+    }
+    return _conn
 
 
 def call(method, path, body=None):
     """One control-API call, reconnecting once if the connection went stale."""
+    _connect()
     payload = json.dumps(body) if body is not None else None
     for attempt in (1, 2):
         try:
@@ -115,33 +139,60 @@ LADDER = [
     ("L1 arithmetic", "What is 17 times 23? Answer with just the number."),
     ("L2 store memory", "Remember that my favourite colour is teal. Just acknowledge."),
     ("L3 recall", "What is my favourite colour? One word."),
-    ("L4 shell tool", "Use your shell tool to run pwd and tell me the directory it printed."),
+    (
+        "L4 shell tool",
+        "Use your shell tool to run pwd and tell me the directory it printed.",
+    ),
     ("L5 load skill", "Load the github-triage skill."),
     ("L6 skill persists", "Which skills do you currently have loaded? Name them."),
-    ("L7 real triage", "Using the github-triage skill, list the 3 most recently opened "
-                       "issues in the amd/gaia repo with their numbers and titles."),
+    (
+        "L7 real triage",
+        "Using the github-triage skill, list the 3 most recently opened "
+        "issues in the amd/gaia repo with their numbers and titles.",
+    ),
 ]
 
+# One case per tier boundary that has ever been got wrong. Expected verdicts
+# are in the tuple so the output is checkable at a glance instead of read and
+# nodded at -- a gate check nobody can grade is not a check.
 GATE_CASES = [
-    "gh issue list --repo amd/gaia",
-    "gh auth status",
-    "gh auth token",
-    "gh issue create --title x",
-    "gh api -X POST /repos",
-    "gh alias set x !sh",
-    "gh extension install evil",
-    "gh api repos/amd/gaia/issues",
+    ("gh issue list --repo amd/gaia", "allow"),
+    ("gh auth status", "allow"),
+    ("gh api repos/amd/gaia/issues", "allow"),
+    # The last mile: a write the user is offered, not refused.
+    ("gh issue create --title x", "confirm"),
+    ("gh issue comment 1 --body hi", "confirm"),
+    ("gh issue edit 1 --add-label bug", "confirm"),
+    # Escalations. These must never reach a prompt -- a gate the user learns to
+    # approve is a gate that approves the credential print too.
+    ("gh auth token", "refuse"),
+    ("gh api -X POST /repos", "refuse"),
+    ("gh alias set x !sh", "refuse"),
+    ("gh extension install evil", "refuse"),
+    ("gh issue close 1", "refuse"),
+    ("gh pr merge 1", "refuse"),
+    # A write carrying an escalating flag is refused, not asked about.
+    ("gh issue create --body-file /etc/passwd", "refuse"),
 ]
 
 
 def run_gate():
-    """Read-only policy check. No LLM, no TUI -- instant."""
-    from gaia.skills.binaries import BINARY_POLICIES, validate_invocation
+    """Command-policy tier check. No LLM, no TUI -- instant."""
+    from gaia.skills.binaries import BINARY_POLICIES, classify_invocation
 
     policy = BINARY_POLICIES["gh"]
-    for cmd in GATE_CASES:
-        err = validate_invocation(policy, cmd.split())
-        print(f"{cmd:34} -> " + ("ALLOWED" if err is None else f"REFUSED ({str(err)[:52]})"))
+    bad = 0
+    for cmd, expected in GATE_CASES:
+        decision = classify_invocation(policy, cmd.split())
+        ok = decision.outcome == expected
+        bad += not ok
+        mark = "ok  " if ok else "WRONG"
+        print(
+            f"{mark} {decision.outcome.upper():8} {cmd:38} "
+            f"{'' if ok else f'(expected {expected})'}"
+        )
+    print(f"\n{len(GATE_CASES) - bad}/{len(GATE_CASES)} as expected")
+    return bad
 
 
 if __name__ == "__main__":
@@ -149,8 +200,10 @@ if __name__ == "__main__":
     if cmd == "status":
         s = call("GET", "status")
         st = s["state"]
-        print(f"{s['cols']}x{s['rows']} view={st['view']} agent={st.get('agent')} "
-              f"streaming={st['streaming']} frame={s['frame_seq']}")
+        print(
+            f"{s['cols']}x{s['rows']} view={st['view']} agent={st.get('agent')} "
+            f"streaming={st['streaming']} frame={s['frame_seq']}"
+        )
     elif cmd == "screen":
         print(screen())
     elif cmd == "keys":
@@ -164,6 +217,7 @@ if __name__ == "__main__":
         for label, query in LADDER:
             show(label, query)
     elif cmd == "gate":
-        run_gate()
+        # Exit non-zero on a wrong tier: a check that always passes is not one.
+        sys.exit(1 if run_gate() else 0)
     else:
         print(__doc__)

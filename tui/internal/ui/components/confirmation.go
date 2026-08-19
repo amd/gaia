@@ -439,11 +439,12 @@ func (m ConfirmationModel) resultOrHint(inner int) string {
 
 // keyHint spells out each choice, and says what "always" actually grants.
 //
-// "always allow" alone reads as "allow this again", which is narrower than the
-// grant really is: the backend records the TOOL NAME
-// (OutputHandler.session_approved_tools), so every later call runs whatever
-// arguments it likes. Naming the tool and saying "any" is the difference
-// between informed consent and a pleasant surprise.
+// "always allow" alone reads as "allow this again", which says nothing about
+// how much else it covers. The backend records an INVOCATION-scoped key, not
+// the tool name (gaia/agents/base/tool_grants.py), so the honest label is the
+// scope it sent us — `gh issue comment`, not `run_shell_command`. Printing that
+// scope verbatim is the difference between informed consent and a pleasant
+// surprise, and it is why an empty AlwaysScope hides the choice entirely.
 func (m ConfirmationModel) keyHint() string {
 	base := "y run once · n/esc deny"
 	if m.allowAlways() {
