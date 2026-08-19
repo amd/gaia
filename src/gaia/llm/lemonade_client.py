@@ -1084,6 +1084,10 @@ class LemonadeClient:
         self.active_downloads: Dict[str, DownloadTask] = {}
         self._downloads_lock = threading.Lock()
 
+        # Models already warned about a floor-vs-ceiling clamp (#2992), so the
+        # warning fires once per model instead of on every already-loaded call.
+        self._ceiling_clamp_warned: set = set()
+
         # Set logging level based on verbosity
         if not verbose:
             self.log.setLevel(logging.WARNING)
@@ -3338,26 +3342,6 @@ class LemonadeClient:
             # health entries enriched with ``id`` + ``recipe_options`` so we
             # can read ctx_size.
             status = self.get_status()
-            loaded_entry = self._find_loaded_entry(status, model)
-
-            if loaded_entry is not None:
-                loaded_ctx = (
-                    loaded_entry.get("recipe_options", {}).get("ctx_size", 0) or 0
-                )
-                if loaded_ctx >= expected_ctx:
-                    self.log.debug(
-                        f"Model '{model}' already loaded at ctx={loaded_ctx} "
-                        f"(expected >= {expected_ctx})"
-                    )
-                    return
-                # Loaded but under-sized — fall through to the reload path
-                # which calls /load with explicit ctx_size.
-                self.log.info(
-                    f"Model '{model}' loaded at ctx={loaded_ctx} but GAIA "
-                    f"expects ctx={expected_ctx}; reloading."
-                )
-            else:
-                self.log.debug(f"Model '{model}' not loaded, loading...")
         except Exception as e:  # pylint: disable=broad-except
             self.log.debug(f"Could not pre-check model status: {e}")
 
@@ -3369,18 +3353,23 @@ class LemonadeClient:
         # HTTP call here (``allow_catalog_lookup=False``) — this only catches
         # the conflict when the model happens to already be loaded (and thus
         # in ``status``); an undownloaded model's ceiling is unknown anyway.
+        # Resolved BEFORE the already-loaded comparison below, so a model
+        # resident at its (clamped) ceiling short-circuits instead of
+        # reloading forever at the same ceiling every call.
         _ceiling = self.get_model_max_context_window(
             model, status=status, allow_catalog_lookup=False
         )
         if _ceiling and expected_ctx > _ceiling:
-            self.log.warning(
-                f"'{model}' requires ctx_size={expected_ctx} (MODELS "
-                f"registry min_ctx_size), but its trained context ceiling "
-                f"is {_ceiling} tokens (max_context_window); loading at "
-                f"{_ceiling} instead. Use a model with a larger trained "
-                f"context if more is needed — no server restart or config "
-                f"change raises a GGUF's trained context."
-            )
+            if model not in self._ceiling_clamp_warned:
+                self.log.warning(
+                    f"'{model}' requires ctx_size={expected_ctx} (MODELS "
+                    f"registry min_ctx_size), but its trained context ceiling "
+                    f"is {_ceiling} tokens (max_context_window); loading at "
+                    f"{_ceiling} instead. Use a model with a larger trained "
+                    f"context if more is needed — no server restart or config "
+                    f"change raises a GGUF's trained context."
+                )
+                self._ceiling_clamp_warned.add(model)
             expected_ctx = _ceiling
         elif _ceiling is None:
             # Not an error — the common case for a model not yet loaded (its
@@ -3393,6 +3382,31 @@ class LemonadeClient:
                 f"current status; proceeding with ctx_size={expected_ctx} "
                 f"without a floor/ceiling check."
             )
+
+        if status is not None:
+            try:
+                loaded_entry = self._find_loaded_entry(status, model)
+
+                if loaded_entry is not None:
+                    loaded_ctx = (
+                        loaded_entry.get("recipe_options", {}).get("ctx_size", 0) or 0
+                    )
+                    if loaded_ctx >= expected_ctx:
+                        self.log.debug(
+                            f"Model '{model}' already loaded at ctx={loaded_ctx} "
+                            f"(expected >= {expected_ctx})"
+                        )
+                        return
+                    # Loaded but under-sized — fall through to the reload path
+                    # which calls /load with explicit ctx_size.
+                    self.log.info(
+                        f"Model '{model}' loaded at ctx={loaded_ctx} but GAIA "
+                        f"expects ctx={expected_ctx}; reloading."
+                    )
+                else:
+                    self.log.debug(f"Model '{model}' not loaded, loading...")
+            except Exception as e:  # pylint: disable=broad-except
+                self.log.debug(f"Could not pre-check model status: {e}")
 
         # Distinguish "needs download" from "needs memory-map" so the user
         # sees an honest expectation. ``list_models`` returns per-model

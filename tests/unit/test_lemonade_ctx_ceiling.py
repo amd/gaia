@@ -156,7 +156,8 @@ class TestFloorCeilingConflict:
         same (floor, ceiling) conflict, and the manager's own reload path
         already reaches this state successfully."""
         client = LemonadeClient(host="localhost", port=13305)
-        # Qwen3-0.6B-GGUF's registry floor is 4096; report a ceiling below it.
+        # Qwen3-0.6B-GGUF's registry floor is 4096; report a ceiling below it,
+        # with the model resident under that ceiling so a reload is expected.
         mock_status.return_value = LemonadeStatus(
             url="http://localhost:13305",
             running=True,
@@ -165,7 +166,7 @@ class TestFloorCeilingConflict:
                     "id": "Qwen3-0.6B-GGUF",
                     "model_name": "Qwen3-0.6B-GGUF",
                     "max_context_window": 2048,
-                    "recipe_options": {"ctx_size": 2048},
+                    "recipe_options": {"ctx_size": 1024},
                 }
             ],
         )
@@ -182,6 +183,35 @@ class TestFloorCeilingConflict:
         mock_load.assert_called_once_with(
             "Qwen3-0.6B-GGUF", auto_download=True, prompt=False, ctx_size=2048
         )
+
+    @patch.object(LemonadeClient, "load_model")
+    @patch.object(LemonadeClient, "get_status")
+    def test_resident_at_clamped_ceiling_skips_reload(self, mock_status, mock_load):
+        """A model already loaded exactly at its (clamped) ceiling must NOT
+        reload on every call. The clamp has to apply BEFORE the already-loaded
+        comparison, or the comparison runs against the unclamped registry
+        floor, never matches, and every chat completion pays a wasted /load
+        that changes nothing."""
+        client = LemonadeClient(host="localhost", port=13305)
+        # Qwen3-0.6B-GGUF's registry floor is 4096; its ceiling here is 2048,
+        # and it's already resident at that ceiling.
+        mock_status.return_value = LemonadeStatus(
+            url="http://localhost:13305",
+            running=True,
+            loaded_models=[
+                {
+                    "id": "Qwen3-0.6B-GGUF",
+                    "model_name": "Qwen3-0.6B-GGUF",
+                    "max_context_window": 2048,
+                    "recipe_options": {"ctx_size": 2048},
+                }
+            ],
+        )
+
+        client._ensure_model_loaded("Qwen3-0.6B-GGUF", auto_download=True)
+        client._ensure_model_loaded("Qwen3-0.6B-GGUF", auto_download=True)
+
+        mock_load.assert_not_called()
 
     @patch.object(LemonadeClient, "load_model")
     @patch.object(LemonadeClient, "get_status")
