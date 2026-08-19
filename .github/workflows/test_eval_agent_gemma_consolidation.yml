@@ -260,6 +260,14 @@ jobs:
         # 5.1's rules — the Tee-Object/`2>&1` and $LASTEXITCODE notes are
         # 5.1-specific — and this file's first run died because nothing declared
         # a shell at all and the steps were bash.
+        #
+        # KEEP EVERY `run:` BODY PURE ASCII. Actions writes the block to a .ps1
+        # with no BOM, and PowerShell 5.1 reads a BOM-less file as ANSI, not
+        # UTF-8 — so one em dash inside a `run:` string is three cp1252 bytes
+        # mid-token and the whole step dies at parse time before a line executes.
+        # (Run 32274575191: a single `—` in an ::error:: message produced
+        # "Missing argument in parameter list" 30 lines away from itself.) YAML
+        # comments and step `name:` values are fine; they never reach the file.
         shell: powershell
     # BUDGET DERIVATION — measured on this runner, not guessed.
     #
@@ -687,7 +695,7 @@ jobs:
             $aloneOk = Invoke-EmbedProbe -LlamacppArgs "--ubatch-size 2048"
             Show-LemonadeTaskLog | Out-Null
             if ($aloneOk) {
-              Write-Host "::error::The RAG embedder $embeddingModel loads ALONE but not while the chat model is resident. This runner cannot hold both at once, and gaia/rag/sdk.py::_load_embedder deliberately keeps the chat model resident (#1544) — so on this hardware every RAG-backed agent hits the same wall, and this gate has never been able to measure them. Fix the co-residency in the RAG SDK (evict-then-reload, or a smaller resident context); do NOT paper over it here, since an eval that unloads the chat model measures a configuration GAIA never runs."
+              Write-Host "::error::The RAG embedder $embeddingModel loads ALONE but not while the chat model is resident. This runner cannot hold both at once, and gaia/rag/sdk.py::_load_embedder deliberately keeps the chat model resident (#1544), so on this hardware every RAG-backed agent hits the same wall, and this gate has never been able to measure them. Fix the co-residency in the RAG SDK (evict-then-reload, or a smaller resident context); do NOT paper over it here, since an eval that unloads the chat model measures a configuration GAIA never runs."
               exit 1
             }
 
