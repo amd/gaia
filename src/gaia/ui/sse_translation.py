@@ -384,6 +384,9 @@ class CanonicalTranslator:
             ("elapsed", "elapsed"),
             ("tokens", "tokens"),
             ("ttft", "ttft"),
+            # Dev-mode per-turn record, passed through verbatim — the client
+            # decides what of it to show, so a new field needs no change here.
+            ("metrics", "metrics"),
         ):
             if event.get(src) is not None:
                 usage[dst] = event[src]

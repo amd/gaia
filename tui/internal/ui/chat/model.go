@@ -1907,6 +1907,11 @@ func (m ChatModel) answerStats(msg *Message) string {
 	if msg.ToolsUsed > 0 {
 		stats = append(stats, fmt.Sprintf("%d tools", msg.ToolsUsed))
 	}
+	// The fixed prompt re-sent on every call — the term that actually explains
+	// a slow local turn, and the only one none of the numbers above imply.
+	if msg.Metrics != nil && msg.Metrics.Prompt.FixedPrefillTokens > 0 {
+		stats = append(stats, thousands(msg.Metrics.Prompt.FixedPrefillTokens)+" prefill")
+	}
 	return strings.Join(stats, " · ")
 }
 
@@ -1938,6 +1943,9 @@ func (m ChatModel) renderMessage(msg *Message, seen map[string]bool) string {
 
 		if stats := m.answerStats(msg); stats != "" {
 			panel += "\n" + activityStyle.Render("  "+stats)
+		}
+		if block := m.turnMetricsBlock(msg); block != "" {
+			panel += "\n" + block
 		}
 		return panel
 
