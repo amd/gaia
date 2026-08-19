@@ -80,10 +80,10 @@ func stepNumberOf(status string) (int, bool) {
 
 // devPayloadWidth caps an args/output line at capture time.
 //
-// Wider than detailWidth (66) because a payload is data rather than prose and
-// the interesting part is often a path or an id near the end, but still short
-// of the narrowest terminal worth supporting so the line cannot wrap and push
-// the live region around.
+// A payload is data rather than prose, so it gets a wide capture — the renderer
+// re-clips it to whatever the terminal leaves (renderActivityItem), and unlike a
+// narration or an outcome it does not wrap: one row, always, so a --dev payload
+// can never push the live region around.
 const devPayloadWidth = 100
 
 // devPayload renders a tool's arguments or its result for the developer log:
