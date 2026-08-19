@@ -215,6 +215,14 @@ type ChatModel struct {
 	// kept in sync by every model-state ping thereafter (handleCanonicalEvent).
 	claudeMode bool
 
+	// launchClaudeModel is the id --claude-model put on the child's argv, ""
+	// when the launch named none. Kept separate from modelID on purpose:
+	// modelID means "what the agent RESOLVED" and the restart detector keys
+	// off it, so seeding it from a flag would let a launch flag masquerade as
+	// agent truth. This one is only ever read by the header's pre-ping
+	// fallback (renderClaudeChip).
+	launchClaudeModel string
+
 	// mouseCaptured is true while the APP holds the mouse, for either of the
 	// two independent reasons documented on overlayOpen (mousecapture.go):
 	// the user turned on wheel scrolling, or an overlay is open and needs
@@ -256,6 +264,11 @@ type ChatModel struct {
 	lemonadeUp      bool
 	lemonadeVersion string
 	lemonadeBaseURL string
+	// lemonadeDownRefused makes the "local server is down" pre-refusal fire
+	// once per down report instead of forever. Nothing refreshes lemonadeUp
+	// between pings, so a sticky refusal would outlive the problem — see
+	// refuseModelSwitch. Cleared by the next ping, whatever it says.
+	lemonadeDownRefused bool
 
 	// modelID/modelDisplay/modelBackend/modelRemote come from the agent's own
 	// model-state ping (a CanonicalStatusEvent with ModelID set — see
@@ -1234,6 +1247,18 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 				Content: m.agentName + " does not support live model switching " +
 					"(/model) — only the gaia flagship agent does.",
 			})
+			m.updateViewport()
+			return m, nil
+		}
+		// Refused here when the round-trip could only end in the same
+		// refusal — a bad Claude id, or a local id with the local server
+		// known-down. See refuseModelSwitch: the agent still validates, this
+		// only spares a turn that had no chance.
+		if reason := m.refuseModelSwitch(modelCommandArg(query)); reason != "" {
+			// Spent: the next identical request goes to the agent, which is
+			// the only thing that can re-probe the local server.
+			m.lemonadeDownRefused = true
+			m.messages = append(m.messages, Message{Role: RoleError, Content: reason})
 			m.updateViewport()
 			return m, nil
 		}
