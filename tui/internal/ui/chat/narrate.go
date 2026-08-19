@@ -24,20 +24,21 @@ import (
 //   - A tool result becomes ONE indented line: outcome, size, latency. Never raw
 //     JSON — the render card in the transcript is where a full result belongs.
 const (
-	// narrationWidth is the MEASURE one work-log row is laid out to — the column
-	// the render layer wraps at, not the most text a line may carry. The log
-	// wraps rather than clips (renderActivityItem), so a line longer than this
-	// keeps its tail on a second row instead of losing it.
-	narrationWidth = 74
+	// widestLogMeasure is the widest a work-log row is ever laid out to. It
+	// is NOT the measure a row uses — that is logWidth, and it follows the
+	// real terminal. This exists because capture happens before any width is
+	// known and the user can widen the window mid-turn, so the bounds below
+	// have to assume the roomiest window they might later be rendered into.
+	widestLogMeasure = 240
 	// narrationMax bounds the whole narration string. It is a sanity bound on a
 	// runaway payload — a shell command with a page-long --jq expression — set to
 	// the rows the log will actually show, so nothing is carried that can never
 	// be rendered.
-	narrationMax = logHeadRows * narrationWidth
+	narrationMax = logHeadRows * widestLogMeasure
 	// detailMax bounds an outcome string the same way, over the rows its `└`
 	// line may wrap to. An outcome that failed carries the remedy, so it gets
 	// the same room as the call above it rather than one clipped row.
-	detailMax = logDetailRows * narrationWidth
+	detailMax = logDetailRows * widestLogMeasure
 )
 
 // shellTools name their argument better than any phrase could: for these the

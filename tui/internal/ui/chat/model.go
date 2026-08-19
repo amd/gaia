@@ -1863,7 +1863,9 @@ func (m ChatModel) cardWidth() int {
 // answerMeasure caps how wide a line of prose gets. A 200-column terminal will
 // happily lay an answer out as 200-character lines, and the eye loses the start
 // of the next one on the way back — the reason newspapers set narrow columns.
-// Tables and cards are not prose and are not capped by this.
+// Tables and cards are not prose and are not capped by this, and neither is the
+// work log: one-line content follows the terminal (see logWidth), because for a
+// single row more columns mean more of the line, not a longer read.
 const answerMeasure = 88
 
 // answerWidth is the width an answer lays out to — the same for the streaming
@@ -2037,18 +2039,31 @@ func (m ChatModel) logRows() int {
 	return budget
 }
 
-// logWidth is the measure one work-log ROW is wrapped to on THIS terminal. The
-// fixed cap is a readability ceiling, not a layout assumption: a line is wrapped
-// to it, never clipped by it, so the terminal's own width still decides where
-// the text breaks below ~80 columns.
+// logWidth is the measure one work-log ROW is laid out to on THIS terminal.
+//
+// Single-line content follows the window. A tool line, a live status and its
+// outcome each start as one row, so extra columns buy the reader more of the
+// SAME row rather than more rows — which matters most for the lines whose tail
+// carries the reason or the remedy. Wrapping (wrapLog) is what saves a tail
+// that still does not fit; a wider window is what stops it needing to.
+//
+// That is the opposite call from prose, which stays at answerMeasure however
+// wide the window gets; see that constant for why the two differ.
 func (m ChatModel) logWidth() int {
 	// 4 for the marker gutter, 2 for the viewport's own edge.
 	w := m.width - 6
-	if w > narrationWidth {
-		w = narrationWidth
-	}
 	if w < 16 {
 		w = 16
+	}
+	// The floor is there so a cramped window still shows SOMETHING, not so it
+	// prints past the last column: the viewport does not soft-wrap, so a row
+	// one column too wide shears the row beneath it. The gutter comes off the
+	// terminal either way.
+	if fits := m.width - 4; m.width > 0 && w > fits {
+		w = fits
+	}
+	if w < 1 {
+		w = 1
 	}
 	return w
 }
@@ -2148,7 +2163,11 @@ func (m ChatModel) renderLiveRegion() string {
 	// reappears the moment the last finished action scrolls out of view.
 	hint := ""
 	if !anyCompleted(m.activity) && elapsed >= stillWorkingAfter {
-		hint = "     " + activityStyle.Render(glyphDetail+" still working — local model, usually 60-90s")
+		// Measured like every other row in this region. Its 50 columns fit an
+		// 80-column terminal, but on a narrower one it wrapped to two rows and
+		// broke the single-row assumption the budget below is making.
+		hint = "     " + activityStyle.Render(truncateRunes(
+			glyphDetail+" still working — local model, usually 60-90s", m.logWidth()-1))
 	}
 
 	// The hint is part of the height budget, not an extra row bolted on after

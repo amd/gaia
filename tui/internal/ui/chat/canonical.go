@@ -83,13 +83,17 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		if n, ok := stepNumberOf(e.Message); ok {
 			m.totalSteps = n
 		}
+		// Bounded on the way in, like every other agent-supplied line the log
+		// keeps (see narrate.go). What PRINTS is still laid out to this terminal
+		// at render time; this only stops a megabyte of "status" living in the
+		// model for the rest of the session.
 		if msg := userFacingStatus(e.Message); msg != "" {
-			m.setLiveStatus(msg)
+			m.setLiveStatus(truncateRunes(msg, narrationMax))
 		} else if m.dev {
 			// --dev is where harness internals belong: suppressing them for
 			// everyone would make a wire-level bug invisible to whoever has to
 			// fix it.
-			m.setLiveStatus("[harness] " + clean(e.Message))
+			m.setLiveStatus(truncateRunes("[harness] "+clean(e.Message), narrationMax))
 		}
 
 	case event.CanonicalTokenEvent:
