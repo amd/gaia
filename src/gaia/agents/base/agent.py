@@ -503,6 +503,17 @@ class Agent(abc.ABC):
     #: name -> turns of pinning remaining; decremented each refresh.
     _sticky_skill_turns: Optional[Dict[str, int]] = None
 
+    #: Proactive skill discovery: matches the user's turn against skills that
+    #: are INSTALLED BUT NOT LOADED and activates the winner, so a user never
+    #: has to know a skill's name. ``None`` (the default) leaves every existing
+    #: agent's behavior and composed prompt byte-identical; GaiaAgent builds one.
+    #: See :mod:`gaia.agents.base.skill_discovery`.
+    _skill_discovery: Optional[Any] = None
+
+    #: This turn's discovery note, rendered by
+    #: ``get_skill_discovery_system_prompt``. Cleared and recomputed per turn.
+    _skill_discovery_result: Optional[Any] = None
+
     # Skill sets (#2466): the parsed manifest declarations, the explicit
     # ``--skill-set`` request, and the set that actually resolved.
     _skill_sets: Optional[Any] = None
@@ -1150,6 +1161,84 @@ Do NOT wrap conversational replies in JSON.
         """
         return None
 
+    def _discover_skills_for_turn(self, user_input: str) -> None:
+        """Match this turn against installed-but-unloaded skills and act on it.
+
+        No-op unless a subclass built a
+        :class:`~gaia.agents.base.skill_discovery.SkillDiscovery` — every other
+        agent's composed prompt stays byte-identical.
+
+        Runs BEFORE :meth:`_refresh_active_skill_filter` so a skill loaded here
+        is in ``loaded_skills`` when the body filter is computed, and pinned via
+        :meth:`_pin_skill_body` so the filter cannot immediately hide the body of
+        the skill it just decided the turn was about.
+        """
+        discovery = self._skill_discovery
+        if discovery is None:
+            return
+
+        previous = self._skill_discovery_result
+        query = self._build_skill_discovery_query(user_input)
+        result = discovery.run(
+            query, loaded=self.loaded_skills, load_fn=self.load_skill
+        )
+        self._skill_discovery_result = result
+        if result.loaded:
+            self._pin_skill_body(result.loaded)
+
+        # Rebuild whenever the note changed, INCLUDING after a successful load.
+        # ``load_skill`` rebuilds too, but it runs before the line above, so the
+        # prompt it composed still carries the *previous* turn's note — the
+        # "SKILL ACTIVATED" line would be missing on exactly the turns that
+        # earned it. The later ``_refresh_active_skill_filter`` only recomposes
+        # when the body filter changes, so it cannot be relied on to fix this.
+        before = previous.prompt_fragment() if previous is not None else ""
+        if result.prompt_fragment() != before:
+            self.rebuild_system_prompt()
+
+    def _build_skill_discovery_query(self, user_input: str) -> str:
+        """The text discovery matches on — previous + current user message.
+
+        Reuses ChatAgent's tool-selection query when the agent has one, so a
+        follow-up ("and the one before that?") still carries the prior turn's
+        subject instead of matching on four pronouns.
+        """
+        builder = getattr(self, "_build_tool_selection_query", None)
+        if callable(builder):
+            return builder(user_input)
+        return user_input
+
+    def get_skill_discovery_system_prompt(self) -> str:
+        """Sourcing rule + this turn's discovery note.
+
+        Auto-discovered by :meth:`_get_mixin_prompts`. Returns "" for any agent
+        without discovery enabled, so no existing prompt changes.
+        """
+        if self._skill_discovery is None:
+            return ""
+        from gaia.agents.base.skill_discovery import GROUNDING_RULE
+
+        result = self._skill_discovery_result
+        note = result.prompt_fragment() if result is not None else ""
+        return f"{GROUNDING_RULE}\n\n{note}" if note else GROUNDING_RULE
+
+    def _pin_skill_body(self, name: str, turns: Optional[int] = None) -> None:
+        """Keep *name*'s body rendered for the next few filter refreshes.
+
+        Unlike :meth:`_note_skill_active` this works before any filter exists —
+        proactive discovery runs before the first refresh of a session, and
+        without the pin the very next selection could hide the body of the skill
+        that was just loaded *because* this turn needed it.
+        """
+        # getattr throughout: test stubs copy these methods onto a plain class
+        # without inheriting the class attributes they read.
+        sticky = getattr(self, "_sticky_skill_turns", None)
+        if sticky is None:
+            sticky = {}
+            self._sticky_skill_turns = sticky
+        default = getattr(self, "STICKY_SKILL_TURNS", 3)
+        sticky[name] = default if turns is None else turns
+
     def _refresh_active_skill_filter(self, user_input: str) -> None:
         """Update the active skill-body filter for this turn, if it changed.
 
@@ -1213,13 +1302,7 @@ Do NOT wrap conversational replies in JSON.
         # "yes, continue" scores nothing against the skill's description, and
         # collapsing the body one turn after the user asked for it strands
         # the model mid-recipe.
-        # getattr, not attribute access: test stubs copy this method without
-        # inheriting the class attributes.
-        sticky = getattr(self, "_sticky_skill_turns", None)
-        if sticky is None:
-            sticky = {}
-            self._sticky_skill_turns = sticky
-        sticky[name] = getattr(self, "STICKY_SKILL_TURNS", 3)
+        self._pin_skill_body(name)
         if name not in current:
             self._active_skill_filter = sorted(set(current) | {name})
 
@@ -4186,6 +4269,11 @@ Do NOT wrap conversational replies in JSON.
         # Dynamic tool selection (#1449): pick this turn's tool subset and
         # recompute the cached system prompt only when it changes.
         self._refresh_active_tool_filter(user_input)
+
+        # Proactive skill discovery: a skill the user never named can become
+        # loaded here, so it must run BEFORE the body filter below computes
+        # which loaded skills render.
+        self._discover_skills_for_turn(user_input)
 
         # Lazy skill-body activation (#2848 follow-up): same per-turn timing
         # as the tool filter above, so a stale skill match never survives

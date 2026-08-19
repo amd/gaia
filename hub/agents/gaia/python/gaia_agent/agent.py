@@ -50,6 +50,11 @@ from typing import ClassVar, List, Optional
 
 from gaia_agent_chat.agent import ChatAgent, ChatAgentConfig
 
+from gaia.agents.base.skill_discovery import (
+    DISCOVERY_ENV,
+    DISCOVERY_THRESHOLD_ENV,
+    SkillDiscovery,
+)
 from gaia.agents.base.skill_loader import (
     DEFAULT_SKILL_THRESHOLD,
     SkillLoader,
@@ -59,6 +64,15 @@ from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
 from gaia.agents.tools.skill_library_tools import SkillLibraryToolsMixin
 
 logger = logging.getLogger(__name__)
+
+
+def _env_flag(name: str, *, default: bool) -> bool:
+    """Read a truthy/falsy env override, falling back to *default* when unset."""
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
 
 #: Bundled skills ship inside the package so they survive both the wheel and the
 #: frozen sidecar; as ``SKILL_DIRS`` they outrank a same-named user or Claude Code copy.
@@ -153,6 +167,14 @@ class GaiaAgentConfig(ChatAgentConfig):
     dynamic_skills: bool = True
     dynamic_skills_threshold: float = DEFAULT_SKILL_THRESHOLD
 
+    # Proactive skill discovery: match each turn against skills that are
+    # INSTALLED BUT NOT LOADED and activate the winner, so the user never has
+    # to know a skill's name. On for this agent specifically — it is the one
+    # that ships a skill library and meets users who have never read it.
+    # Overridable via GAIA_SKILL_DISCOVERY.
+    skill_discovery: bool = True
+    skill_discovery_threshold: Optional[float] = None
+
     # Image generation stays off: it pulls a second resident model, and evicting
     # the chat model to draw a picture is not a trade a document agent should
     # make silently.
@@ -213,6 +235,7 @@ class GaiaAgent(ChatAgent, SkillLibraryToolsMixin, CodeIndexToolsMixin):
         access at construction time — only the first real turn does.
         """
         self.skill_loader = self._maybe_build_skill_loader()
+        self._skill_discovery = self._maybe_build_skill_discovery()
         self.register_skill_library_tools()
         # Same scope as allowed_paths, for the same reason that field rejects
         # cwd: the daemon launches this sidecar with cwd = the package
@@ -224,6 +247,36 @@ class GaiaAgent(ChatAgent, SkillLibraryToolsMixin, CodeIndexToolsMixin):
         super()._register_tools()
 
     # ── lazy skill-body loader (#2848 follow-up) ────────────────────────────
+
+    def _maybe_build_skill_discovery(self) -> Optional[SkillDiscovery]:
+        """Construct the proactive discoverer, or ``None`` when switched off.
+
+        Built here rather than lazily so ``_discover_skills_for_turn`` never
+        races the first turn, and so a misconfigured threshold fails at startup
+        instead of mid-conversation.
+        """
+        if not _env_flag(DISCOVERY_ENV, default=bool(self.config.skill_discovery)):
+            return None
+        return SkillDiscovery(
+            self.skill_manager,
+            threshold=self._resolve_discovery_threshold(),
+            # Lambda, not the mapping: tool registration is still running when
+            # this is built, so a snapshot taken here would be empty and every
+            # skill would look like it had unmet requirements.
+            tools_fn=lambda: self._tools_registry,
+        )
+
+    def _resolve_discovery_threshold(self) -> Optional[float]:
+        """Threshold override: env wins over config; a malformed value fails loudly."""
+        raw = os.environ.get(DISCOVERY_THRESHOLD_ENV)
+        if raw is None:
+            return getattr(self.config, "skill_discovery_threshold", None)
+        try:
+            return float(raw)
+        except ValueError as e:
+            raise ValueError(
+                f"{DISCOVERY_THRESHOLD_ENV} must be a float, got {raw!r}"
+            ) from e
 
     def _maybe_build_skill_loader(self) -> Optional[SkillLoader]:
         """Construct the per-turn skill-body selector, or ``None`` when off."""
