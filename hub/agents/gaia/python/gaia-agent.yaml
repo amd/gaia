@@ -16,8 +16,11 @@ icon: sparkles
 # no skill set loaded). Drift-guarded by tests/test_gaia_agent.py, which builds
 # the agent and compares — a hand-edit that disagrees with the registry fails CI.
 # 55 from ChatAgent's "full" profile + 7 skill-library tools
-# (gaia_agent.skill_tools.SKILL_LIBRARY_TOOL_NAMES).
-tools_count: 66
+# (gaia_agent.skill_tools.SKILL_LIBRARY_TOOL_NAMES) + 4 code-index tools
+# + the load_tools escape hatch, which registers because dynamic_tools is on.
+# This is the REGISTERED size — what the agent can do. Dynamic tool loading
+# means a single turn only shows the model a subset of it.
+tools_count: 67
 
 language: python
 min_gaia_version: "0.23.0"
