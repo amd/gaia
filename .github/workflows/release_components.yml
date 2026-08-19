@@ -161,15 +161,21 @@ jobs:
   # other deploy path (agent_hub_worker_ci.yml only tests), so the Worker drifts
   # until someone runs `wrangler deploy` by hand.
   #
-  # Deploying here rather than on push-to-main is deliberate: this job inherits
-  # the agent-publish reviewer gate, so a production Worker deploy still needs a
-  # human, and it lands in the same approval as the upload it has to match.
+  # Deliberately NOT in the agent-publish environment, despite deploying to
+  # production. GitHub raises one approval per batch of jobs that pend together;
+  # this job must finish before the publishes, so gating it here would mean two
+  # prompts per release. The reviewer gate exists for the part that cannot be
+  # undone — an immutable R2 upload — and this deploy is neither irreversible
+  # (redeploy fixes it) nor unchecked (worker-check runs typecheck, the suite,
+  # and a bundle first). It also only runs on a real release the maintainer
+  # dispatched, never on a dry run.
+  #
+  # Consequence: CLOUDFLARE_* must be REPO-level secrets, not environment ones.
   deploy-worker:
     name: Deploy Agent Hub Worker
     needs: [version, worker-check]
     if: needs.version.outputs.dry_run == 'false'
     runs-on: ubuntu-latest
-    environment: agent-publish
     steps:
       - uses: actions/checkout@v7
 
@@ -193,7 +199,7 @@ jobs:
           [ -n "${CLOUDFLARE_API_TOKEN:-}" ]  || missing="${missing} CLOUDFLARE_API_TOKEN"
           [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ] || missing="${missing} CLOUDFLARE_ACCOUNT_ID"
           if [ -n "${missing}" ]; then
-            echo "::error::missing environment secret(s) on agent-publish:${missing}. The Agent Hub Worker validates the manifests this workflow uploads, so publishing without deploying it first is how a stale validator rejects a valid release. Create a Cloudflare API token from the 'Edit Cloudflare Workers' template (it must also cover R2 for the bucket binding) and add both secrets to the agent-publish environment. See workers/agent-hub/README.md."
+            echo "::error::missing repository secret(s):${missing}. The Agent Hub Worker validates the manifests this workflow uploads, so publishing without deploying it first is how a stale validator rejects a valid release. Create a Cloudflare API token from the 'Edit Cloudflare Workers' template (it must also cover R2 for the bucket binding) and add both as REPOSITORY secrets (not environment ones — this job runs outside agent-publish so the release needs only one approval). See workers/agent-hub/README.md."
             exit 1
           fi
           # Stamp the commit so the check below can prove WHICH build went live.

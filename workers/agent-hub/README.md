@@ -252,7 +252,8 @@ checked into the repo:
    redeployed, so every publish failed with `language "go" is not supported`
    while the source said otherwise.
 
-   The job needs two secrets on the **`agent-publish`** environment:
+   The job needs two **repository** secrets (not environment ones — it runs
+   outside `agent-publish` so a release needs only one approval):
 
    | Secret | How to get it |
    |---|---|
