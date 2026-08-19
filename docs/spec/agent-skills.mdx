@@ -389,6 +389,40 @@ Tunables: `GAIA_SKILL_DISCOVERY` (`0` to disable) and `GAIA_SKILL_DISCOVERY_TAU`
 (confidence threshold). `util/skill_retrieval_bench.py` reports precision, recall,
 and latency against a labeled query set.
 
+## Learned changes: the effective skill vs. the shipped one
+
+A skill you install is a **starting point**, not a fixed contract. An agent can
+adapt one it was given — correcting a command that fails on your machine, or
+reshaping a procedure written around a workflow you do not follow — and what it
+learns is stored in agent memory, resolved over the authored body at load time.
+
+**The `SKILL.md` on disk is never written.** What changes is the *effective*
+skill the agent runs, which is why two machines with the same installed skill can
+behave differently, and why `gaia skill deltas <name>` exists to show you when
+that is happening.
+
+Three properties are load-bearing:
+
+- **Learned changes replace, they do not accumulate.** A correction substitutes
+  the text it fixes rather than being appended beneath it, and a second
+  correction to the same section supersedes the first. A skill an agent has been
+  taught ten things about is no larger in the prompt than one taught a single
+  thing — and adapting a skill to the workflow you actually use usually makes it
+  *smaller*, because the workflow you do not use gets replaced rather than kept.
+- **Nothing applies without your consent.** A learned change is stored inert and
+  shown to you — the exact diff — before it ever reaches the model.
+- **It is always recoverable.** `gaia skill deltas <name> --reset` returns the
+  agent to the shipped skill, and `--no-learned-skills` runs a session with none
+  of them; the composed prompt is then byte-identical to a build with no overlay.
+
+A learned change can only rewrite instruction text. It cannot edit frontmatter,
+so it can never widen a permission or raise a security tier; it cannot introduce
+a tool, because the loader drops names absent from the live registry; and it
+cannot change *when* a skill activates, because selection embeds a skill's name
+and description, never its body. Removing a section is a human action, not one
+the model can take.
+
+Design and current status: [Adaptive Skills](/plans/adaptive-skills).
 ## Skill sets
 
 One agent, more than one job. The same email assistant should behave differently

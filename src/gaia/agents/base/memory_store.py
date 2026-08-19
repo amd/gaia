@@ -302,6 +302,39 @@ CREATE INDEX IF NOT EXISTS idx_proc_enabled ON procedures(enabled)
     WHERE enabled = 1;
 CREATE INDEX IF NOT EXISTS idx_proc_superseded ON procedures(superseded_by)
     WHERE superseded_by IS NOT NULL;
+
+-- Learned overlay on an AUTHORED skill (v4 — adaptive skills, #2674).
+-- A sibling of `procedures`, not a subtype: a procedure is standalone and
+-- recallable, a delta is an *attachment* keyed by (base identity, section
+-- anchor). It also cannot live in `procedures` mechanically — that table's
+-- when_to_use/markdown_body are NOT NULL, and the synthesis reconciler would
+-- treat a fragment as a supersede target for a whole procedure.
+CREATE TABLE IF NOT EXISTS skill_deltas (
+    id             TEXT PRIMARY KEY,
+    base_name      TEXT NOT NULL,           -- authored skill name (== its directory)
+    base_root      TEXT,                    -- discovery root that supplied the base
+    base_version   TEXT,                    -- base `version` at write time (may be NULL)
+    scope          TEXT NOT NULL,           -- namespaced agent id, or 'user' when shared
+    kind           TEXT NOT NULL,           -- replace_section | replace_snippet | drop_section
+    learn_tier     INTEGER NOT NULL DEFAULT 3,  -- NOT the security tier; see skills/tiers.py
+    anchor_section TEXT NOT NULL,           -- section slug in the authored body
+    anchor_digest  TEXT NOT NULL,           -- sha256 of that section at write time
+    payload        TEXT NOT NULL,           -- JSON, shape per `kind`
+    provenance     TEXT NOT NULL,           -- JSON {source, turns:[...]} — trust class
+    status         TEXT NOT NULL DEFAULT 'staged',  -- staged|active|archived|orphaned
+    success_count  INTEGER NOT NULL DEFAULT 0,
+    attempt_count  INTEGER NOT NULL DEFAULT 0,
+    embedding      BLOB,                    -- reserved for retrieval-gated kinds
+    superseded_by  TEXT,                    -- lineage; the row is KEPT, never deleted
+    created_at     TEXT NOT NULL,
+    approved_at    TEXT,                    -- consent-gate stamp; NULL while staged
+    last_used_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_delta_base ON skill_deltas(base_name, scope);
+CREATE INDEX IF NOT EXISTS idx_delta_active ON skill_deltas(status)
+    WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS idx_delta_superseded ON skill_deltas(superseded_by)
+    WHERE superseded_by IS NOT NULL;
 """
 
 # Sync triggers for conversations_fts (external-content FTS5 table).
@@ -392,12 +425,12 @@ class MemoryStore:
                 except sqlite3.OperationalError:
                     pass  # Trigger already exists
 
-            # Initialize schema_version if empty (fresh install → v3)
+            # Initialize schema_version if empty (fresh install → v4)
             cursor = self._conn.execute("SELECT COUNT(*) FROM schema_version")
             if cursor.fetchone()[0] == 0:
                 self._conn.execute(
                     "INSERT INTO schema_version VALUES (?, ?)",
-                    (3, _now_iso()),
+                    (4, _now_iso()),
                 )
             else:
                 # Run migrations for existing databases
@@ -468,6 +501,21 @@ class MemoryStore:
             )
             logger.info("[MemoryStore] schema migration to v3 complete")
             current_version = 3
+
+        if current_version < 4:
+            logger.info("[MemoryStore] migrating schema v%d -> v4", current_version)
+
+            # v3 -> v4: add the skill_deltas table (adaptive skills, #2674).
+            # Same shape as the v2 -> v3 step: _SCHEMA_SQL's CREATE TABLE IF NOT
+            # EXISTS already ran in _init_schema(), so this only advances the
+            # marker. Additive — no existing row or read path is touched, and an
+            # older GAIA opening a v4 file still sees every table it knows.
+            self._conn.execute(
+                "UPDATE schema_version SET version = 4, migrated_at = ?",
+                (_now_iso(),),
+            )
+            logger.info("[MemoryStore] schema migration to v4 complete")
+            current_version = 4
 
     # ------------------------------------------------------------------
     # Low-level helpers
@@ -1489,8 +1537,9 @@ class MemoryStore:
 
         Used when the active embedder changes: vectors from a different model
         live in a different vector space (and possibly a different dimension),
-        so reusing them would silently corrupt similarity search. Clears both
-        knowledge and procedure embeddings. Returns the total rows cleared.
+        so reusing them would silently corrupt similarity search. Clears
+        knowledge, procedure, and skill-delta embeddings. Returns the total rows
+        cleared.
         """
         with self._lock:
             try:
@@ -1500,16 +1549,23 @@ class MemoryStore:
                 procedures = self._conn.execute(
                     "UPDATE procedures SET embedding = NULL WHERE embedding IS NOT NULL"
                 ).rowcount
+                # A delta vector left behind here would keep answering from the
+                # old embedder's space long after every other table moved.
+                deltas = self._conn.execute(
+                    "UPDATE skill_deltas SET embedding = NULL WHERE embedding IS NOT NULL"
+                ).rowcount
                 self._conn.commit()
             except Exception:
                 self._conn.rollback()
                 raise
         logger.info(
-            "[MemoryStore] cleared embeddings (embedder change): knowledge=%d procedures=%d",
+            "[MemoryStore] cleared embeddings (embedder change): "
+            "knowledge=%d procedures=%d skill_deltas=%d",
             knowledge,
             procedures,
+            deltas,
         )
-        return knowledge + procedures
+        return knowledge + procedures + deltas
 
     #: ``meta`` key recording which embedder produced the stored vectors.
     _EMBEDDER_META_KEY = "embedder_id"
@@ -2775,6 +2831,232 @@ class MemoryStore:
                 rowcount = self._conn.execute(
                     f"UPDATE procedures SET last_used_at = ? WHERE id IN ({placeholders})",
                     (stamp, *skill_ids),
+                ).rowcount
+                self._conn.commit()
+                return rowcount
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    # ------------------------------------------------------------------
+    # Skill deltas — the learned overlay on an authored skill (v4, #2674)
+    # ------------------------------------------------------------------
+
+    def put_delta(
+        self,
+        base_name: str,
+        scope: str,
+        kind: str,
+        anchor_section: str,
+        anchor_digest: str,
+        payload: dict,
+        provenance: dict,
+        base_root: str | None = None,
+        base_version: str | None = None,
+        learn_tier: int = 3,
+        status: str = "staged",
+        delta_id: str | None = None,
+    ) -> str:
+        """Insert one learned delta and return its id.
+
+        Insert-only, like ``put_skill``'s reconcile path: a revised lesson is a
+        new row plus ``supersede_delta`` on the old one, so the history of what
+        an agent believed stays inspectable.
+
+        Deltas are written ``staged`` by default — stored, inert, and invisible
+        to resolution until :meth:`approve_delta` records the user's consent.
+        """
+        if not base_name or not base_name.strip():
+            raise ValueError("base_name is required")
+        if not scope or not scope.strip():
+            raise ValueError("scope is required")
+        if not anchor_section or not anchor_section.strip():
+            raise ValueError("anchor_section is required")
+
+        payload_json = json.dumps(payload or {})
+        provenance_json = json.dumps(provenance or {})
+        result_id = delta_id or f"delta_{uuid4().hex}"
+        now = _now_iso()
+
+        with self._lock:
+            try:
+                self._conn.execute(
+                    """
+                    INSERT INTO skill_deltas (
+                        id, base_name, base_root, base_version, scope, kind,
+                        learn_tier, anchor_section, anchor_digest, payload,
+                        provenance, status, success_count, attempt_count,
+                        embedding, superseded_by, created_at, approved_at,
+                        last_used_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0,
+                              NULL, NULL, ?, NULL, NULL)
+                    """,
+                    (
+                        result_id,
+                        base_name,
+                        base_root,
+                        base_version,
+                        scope,
+                        kind,
+                        int(learn_tier),
+                        anchor_section,
+                        anchor_digest,
+                        payload_json,
+                        provenance_json,
+                        status,
+                        now,
+                    ),
+                )
+                self._conn.commit()
+            except Exception:
+                self._conn.rollback()
+                raise
+
+        logger.info(
+            "[MemoryStore] skill delta stored id=%s base=%s section=%s kind=%s",
+            result_id,
+            base_name,
+            anchor_section,
+            kind,
+        )
+        return result_id
+
+    def search_deltas(
+        self,
+        base_name: str | None = None,
+        scope: str | None = None,
+        status: str | None = None,
+        delta_id: str | None = None,
+        include_superseded: bool = False,
+        limit: int = 200,
+    ) -> List[Dict]:
+        """Return delta rows as dicts, newest first.
+
+        ``include_superseded=False`` is the resolution view: a superseded row is
+        retained forever but never applies.
+        """
+        clauses: List[str] = []
+        params: List[Any] = []
+        if delta_id:
+            clauses.append("id = ?")
+            params.append(delta_id)
+        if base_name:
+            clauses.append("base_name = ?")
+            params.append(base_name)
+        if scope:
+            clauses.append("scope = ?")
+            params.append(scope)
+        if status:
+            clauses.append("status = ?")
+            params.append(status)
+        if not include_superseded:
+            clauses.append("superseded_by IS NULL")
+
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        sql = (
+            "SELECT id, base_name, base_root, base_version, scope, kind, "
+            "learn_tier, anchor_section, anchor_digest, payload, provenance, "
+            "status, success_count, attempt_count, superseded_by, created_at, "
+            "approved_at, last_used_at FROM skill_deltas "
+            f"{where} ORDER BY created_at ASC, id ASC LIMIT ?"
+        )
+        params.append(limit)
+
+        with self._lock:
+            rows = self._conn.execute(sql, params).fetchall()
+        return [self._row_to_delta_dict(row) for row in rows]
+
+    @staticmethod
+    def _row_to_delta_dict(row) -> Dict:
+        """Map a ``skill_deltas`` row to a dict, JSON columns decoded."""
+        return {
+            "id": row[0],
+            "base_name": row[1],
+            "base_root": row[2],
+            "base_version": row[3],
+            "scope": row[4],
+            "kind": row[5],
+            "learn_tier": row[6],
+            "anchor_section": row[7],
+            "anchor_digest": row[8],
+            "payload": json.loads(row[9]) if row[9] else {},
+            "provenance": json.loads(row[10]) if row[10] else {},
+            "status": row[11],
+            "success_count": row[12],
+            "attempt_count": row[13],
+            "superseded_by": row[14],
+            "created_at": row[15],
+            "approved_at": row[16],
+            "last_used_at": row[17],
+        }
+
+    def approve_delta(self, delta_id: str, when: str | None = None) -> bool:
+        """Record the user's consent: ``staged`` -> ``active``.
+
+        The consent gate. Until this runs, nothing the delta contains has ever
+        reached the model.
+        """
+        stamp = when or _now_iso()
+        with self._lock:
+            try:
+                rowcount = self._conn.execute(
+                    "UPDATE skill_deltas SET status = 'active', approved_at = ? "
+                    "WHERE id = ? AND status = 'staged'",
+                    (stamp, delta_id),
+                ).rowcount
+                self._conn.commit()
+                return rowcount > 0
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def supersede_delta(self, delta_id: str, superseded_by: str) -> bool:
+        """Retire *delta_id* in favour of *superseded_by*. The row is kept.
+
+        This is what keeps repeated learning flat: a revised correction to the
+        same section retires the previous one instead of stacking with it.
+        """
+        with self._lock:
+            try:
+                rowcount = self._conn.execute(
+                    "UPDATE skill_deltas SET superseded_by = ? WHERE id = ?",
+                    (superseded_by, delta_id),
+                ).rowcount
+                self._conn.commit()
+                return rowcount > 0
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def archive_delta(self, delta_id: str) -> bool:
+        """Retire a delta without a replacement (``gaia skill revert``).
+
+        Archive, never delete — the row stays inspectable. User-initiated
+        *erasure* is a separate path and genuinely deletes; this is not it.
+        """
+        with self._lock:
+            try:
+                rowcount = self._conn.execute(
+                    "UPDATE skill_deltas SET status = 'archived' WHERE id = ?",
+                    (delta_id,),
+                ).rowcount
+                self._conn.commit()
+                return rowcount > 0
+            except Exception:
+                self._conn.rollback()
+                raise
+
+    def touch_deltas(self, delta_ids: List[str], when: str | None = None) -> int:
+        """Stamp ``last_used_at`` on deltas that applied this session."""
+        if not delta_ids:
+            return 0
+        stamp = when or _now_iso()
+        placeholders = ",".join("?" for _ in delta_ids)
+        with self._lock:
+            try:
+                rowcount = self._conn.execute(
+                    f"UPDATE skill_deltas SET last_used_at = ? WHERE id IN ({placeholders})",
+                    (stamp, *delta_ids),
                 ).rowcount
                 self._conn.commit()
                 return rowcount
