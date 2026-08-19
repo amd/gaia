@@ -63,9 +63,10 @@ dependencies:
 # the flagship and they corrupt an answer no matter which task is running, so
 # they cannot live in an opt-in bundle the way a task skill can.
 #
-# It is deliberately small (~900 tokens, measured) and declares no tools, so the concern
-# that kept `default_skill_set` commented out — loading several large skill
-# bodies into every prompt — does not apply. default_skill_set stays off.
+# Its body is 677 tiktoken (cl100k) tokens, measured, and it declares no tools —
+# so the concern that kept `default_skill_set` commented out, loading several
+# large skill bodies into every prompt, does not apply. Keep it that size: it is
+# paid on every LLM call of every turn. default_skill_set stays off.
 skills:
   - gaia-voice
 
