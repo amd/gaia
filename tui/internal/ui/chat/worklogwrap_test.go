@@ -394,3 +394,89 @@ func TestWrapLog(t *testing.T) {
 		})
 	}
 }
+
+// The cut marker has to land in the TEXT. Appended to the rendered row instead,
+// it follows the live line's elapsed clock — where it reads as part of the timer
+// rather than as "there is more of this command than fits".
+func TestTheCutMarkerLandsInTheTextNotAfterTheClock(t *testing.T) {
+	m := chatAt(t, term{"tiny", 60, 12})
+	// 12 rows leaves the region two, and the still-working hint (nothing has
+	// completed after 20s) takes one of them — so the live row is the ONLY row,
+	// and it is the row carrying the clock.
+	m.queryStart = time.Now().Add(-30 * time.Second)
+	m = feed(t, m, shellCall(strings.Repeat("gaia --flag ", 40)))
+	rows := rowsOf(m.renderLiveRegion())
+	t.Logf("\n%s", strings.Join(rows, "\n"))
+
+	if !strings.Contains(flat(rows), "…") {
+		t.Fatalf("the cut was not marked at all:\n%s", strings.Join(rows, "\n"))
+	}
+	for _, r := range rows {
+		if liveClock.MatchString(strings.TrimRight(r, "… ")) && strings.HasSuffix(strings.TrimRight(r, " "), "…") {
+			t.Errorf("the cut marker was appended after the elapsed clock: %q", r)
+		}
+	}
+}
+
+// Only the first row of a live action carries the clock, so only the first row
+// pays for it. Charging every wrapped row for a number none of them shows threw
+// away two words a row on the longest lines in the log.
+func TestOnlyTheClockRowPaysForTheClock(t *testing.T) {
+	m := chatAt(t, term{"standard", 80, 24})
+	m = feed(t, m, shellCall(longShell+" "+longShell))
+	rows := rowsOf(m.renderLiveRegion())
+	t.Logf("\n%s", strings.Join(rows, "\n"))
+
+	widest := 0
+	for _, r := range rows[1:] {
+		if w := ansi.StringWidth(strings.TrimSpace(r)); w > widest {
+			widest = w
+		}
+	}
+	if narrowed := m.logWidth() - elapsedReserve; widest <= narrowed {
+		t.Errorf("continuation rows reach only %d columns; the measure without the clock is %d", widest, m.logWidth())
+	}
+	for _, r := range rows {
+		if w := ansi.StringWidth(r); w > 80 {
+			t.Errorf("row is %d columns on an 80-column terminal: %q", w, r)
+		}
+	}
+}
+
+// Several phrases put words AFTER the argument. An argument allowed to fill the
+// whole line pushes them off the end, leaving the reader a query with no clue
+// what was done with it.
+func TestALongArgumentCannotEatItsOwnPhrase(t *testing.T) {
+	args, _ := json.Marshal(map[string]string{"query": strings.Repeat("retrieval augmented generation ", 12)})
+	got := toolNarration("search_indexed_chunks", args, "")
+	t.Logf("%q", got)
+
+	if !strings.HasPrefix(got, "Looking for ") {
+		t.Errorf("the phrase lost its opening: %q", got)
+	}
+	if !strings.Contains(got, "in your documents") {
+		t.Errorf("the argument ate the clause that says what was done with it: %q", got)
+	}
+}
+
+// The held height pads ABOVE the log. Below, the blank rows open a gap between
+// the log and the answer streaming under it.
+func TestHeldHeightPadsAboveTheLog(t *testing.T) {
+	m := chatAt(t, term{"standard", 80, 24})
+	for i := 0; i < 6; i++ {
+		m = feed(t, m,
+			shellCall(longShell+strings.Repeat(" --x", i)),
+			event.CanonicalToolResultEvent{
+				Type: "tool_result", Tool: "run_shell_command",
+				Preview: "failed - the remote closed the connection after 30s; check the network and retry",
+			},
+		)
+	}
+	m.activity = nil // the log empties, the held height stays
+	rows := rowsOf(m.liveRegionView())
+	t.Logf("%d rows:\n%s", len(rows), strings.Join(rows, "\n"))
+
+	if last := strings.TrimSpace(rows[len(rows)-1]); last == "" {
+		t.Errorf("the region ends in blank rows — the pad is under the log, not above it:\n%q", rows)
+	}
+}
