@@ -9,6 +9,7 @@ import Eyebrow from '../components/Eyebrow.astro';
 import Terminal from '../components/Terminal.astro';
 import WayCard from '../components/WayCard.astro';
 import InstallCommand from '../components/InstallCommand.astro';
+import TuiDownload from '../components/TuiDownload.astro';
 
 const DOCS = 'https://amd-gaia.ai/docs';
 
@@ -77,7 +78,14 @@ const TRUST = ['100% local', 'Open source · MIT', 'Ryzen™ AI optimized'];
 
         <InstallCommand class="animate-g-rise mt-9 [animation-delay:0.18s]" />
 
-        <div class="animate-g-rise mt-6 flex flex-wrap gap-x-[18px] gap-y-2 text-[14px]" style="animation-delay:0.21s">
+        <details class="animate-g-rise group mt-5" style="animation-delay:0.21s">
+          <summary class="g-cta-link cursor-pointer list-none text-[14px]">
+            Prefer a direct download?<span class="transition-transform group-open:rotate-90" aria-hidden="true">→</span>
+          </summary>
+          <TuiDownload class="mt-4" />
+        </details>
+
+        <div class="animate-g-rise mt-6 flex flex-wrap gap-x-[18px] gap-y-2 text-[14px]" style="animation-delay:0.24s">
           <a href="/hub" class="g-cta-link">Browse the Agent Hub<span aria-hidden="true">→</span></a>
           <a href="#build" class="g-cta-link">Build your own agent<span aria-hidden="true">→</span></a>
         </div>

@@ -243,6 +243,88 @@ export async function getAgent(id: string): Promise<Agent | undefined> {
   return agents.find((a) => a.id === id);
 }
 
+/** One published per-platform binary, with the URL it downloads from. */
+export interface PlatformBinary {
+  filename: string;
+  sha256: string;
+  size_bytes: number;
+  url: string;
+}
+
+export interface ComponentRelease {
+  version: string;
+  binaries: PlatformBinary[];
+}
+
+const componentReleases = new Map<string, Promise<ComponentRelease>>();
+
+/**
+ * The published per-platform binaries of one hub entry, from its
+ * `agents/<id>/manifest.json`. index.json carries a single representative
+ * download size, not the artifact list, so a per-platform download link has to
+ * come from here.
+ *
+ * Fails loudly for the same reason the catalog does: a download button built
+ * from stale or guessed filenames 404s on the visitor, and the filenames are
+ * only knowable from what the hub actually published.
+ */
+export async function getComponentRelease(id: string): Promise<ComponentRelease> {
+  const hubUrl = process.env.HUB_CATALOG_URL;
+  if (!hubUrl) {
+    throw new Error(
+      `[catalog] HUB_CATALOG_URL is not set, so the published binaries for '${id}' ` +
+        `cannot be resolved. Set HUB_CATALOG_URL=https://hub.amd-gaia.ai.`
+    );
+  }
+  const base = hubUrl.replace(/\/+$/, '');
+  const url = `${base}/agents/${id}/manifest.json`;
+
+  const load = async (): Promise<ComponentRelease> => {
+    let res: Response;
+    try {
+      res = await fetch(`${url}?t=${Date.now()}`, { cache: 'no-store' });
+    } catch (e) {
+      throw new Error(
+        `[catalog] Failed to fetch the '${id}' manifest from ${url}: ${(e as Error).message}. ` +
+          `The download links are built from it and there is no bundled fallback.`
+      );
+    }
+    if (!res.ok) {
+      throw new Error(
+        `[catalog] Manifest request for '${id}' at ${url} returned HTTP ${res.status}. ` +
+          `Check that '${id}' is published (GET ${base}/index.json lists what the hub serves).`
+      );
+    }
+    const manifest = (await res.json()) as {
+      latest_version?: string;
+      versions?: Record<string, { artifacts?: Omit<PlatformBinary, 'url'>[] }>;
+    };
+    const version = manifest.latest_version;
+    if (!version) {
+      throw new Error(`[catalog] The '${id}' manifest at ${url} declares no latest_version.`);
+    }
+    const artifacts = manifest.versions?.[version]?.artifacts ?? [];
+    if (!artifacts.length) {
+      throw new Error(
+        `[catalog] The '${id}' manifest names latest_version ${version} but publishes ` +
+          `no artifacts for it. See ${url}.`
+      );
+    }
+    console.log(`[catalog] Loaded ${artifacts.length} '${id}' binaries at ${version}`);
+    return {
+      version,
+      binaries: artifacts.map((a) => ({
+        ...a,
+        url: `${base}/agents/${id}/${version}/${a.filename}`,
+      })),
+    };
+  };
+
+  const cached = componentReleases.get(id) ?? load();
+  componentReleases.set(id, cached);
+  return cached;
+}
+
 // ---- Display helpers ----
 
 // Every category any hub/agents manifest declares. A missing entry falls through
