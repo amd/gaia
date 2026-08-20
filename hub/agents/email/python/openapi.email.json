@@ -3371,6 +3371,12 @@
         "title": "VersionResponse",
         "type": "object"
       }
+    },
+    "securitySchemes": {
+      "bearerAuth": {
+        "scheme": "bearer",
+        "type": "http"
+      }
     }
   },
   "info": {
@@ -3396,6 +3402,12 @@
             "description": "Successful Response"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
         "summary": "List Forwarded Connections",
         "tags": [
           "email-forward-out"
@@ -3439,6 +3451,12 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
         "summary": "Withdraw Forwarded Connection",
         "tags": [
           "email-forward-out"
@@ -3490,6 +3508,12 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
         "summary": "Import Forwarded Connection",
         "tags": [
           "email-forward-out"
@@ -3547,6 +3571,12 @@
             "description": "No account connected, or backend configuration is missing — connect Google or Microsoft in Settings → Connectors."
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
         "summary": "Archive Email",
         "tags": [
           "email"
@@ -3600,6 +3630,12 @@
             "description": "No account connected, or backend configuration is missing — connect Google or Microsoft in Settings → Connectors."
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
         "summary": "Get Attention View",
         "tags": [
           "email"
@@ -3628,6 +3664,12 @@
             "description": "The persisted briefing could not be read or does not match the email_pre_scan envelope."
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
         "summary": "Get Briefing",
         "tags": [
           "email"
@@ -3722,6 +3764,12 @@
             "description": "No account connected, or backend configuration is missing — connect Google or Microsoft in Settings → Connectors."
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
         "summary": "List Calendar Events",
         "tags": [
           "email"
@@ -3774,6 +3822,12 @@
             "description": "No account connected, or backend configuration is missing — connect Google or Microsoft in Settings → Connectors."
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
         "summary": "Create Calendar Event",
         "tags": [
           "email"
@@ -3816,6 +3870,12 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
         "summary": "Preview Calendar Event",
         "tags": [
           "email"
@@ -3870,6 +3930,12 @@
             "description": "No account connected, or backend configuration is missing — connect Google or Microsoft in Settings → Connectors."
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
         "summary": "Respond Calendar Event",
         "tags": [
           "email"
@@ -3912,6 +3978,12 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
         "summary": "Confirm Action",
         "tags": [
           "email"
@@ -3954,6 +4026,12 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
         "summary": "Draft Reply",
         "tags": [
           "email"
@@ -3976,6 +4054,7 @@
             "description": "Successful Response"
           }
         },
+        "security": [],
         "summary": "Email Health",
         "tags": [
           "email"
@@ -4008,6 +4087,12 @@
             "description": "Service Unavailable"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
         "summary": "Email Init",
         "tags": [
           "email"
@@ -4059,6 +4144,12 @@
             "description": "No account connected, or backend configuration is missing — connect Google or Microsoft in Settings → Connectors."
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
         "summary": "Prescan Inbox",
         "tags": [
           "email"
@@ -4113,6 +4204,12 @@
             "description": "No account connected, or backend configuration is missing — connect Google or Microsoft in Settings → Connectors."
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
         "summary": "Quarantine Email",
         "tags": [
           "email"
@@ -4159,6 +4256,12 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
         "summary": "Query",
         "tags": [
           "email",
@@ -4203,6 +4306,12 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
         "summary": "Cancel Query",
         "tags": [
           "email",
@@ -4257,6 +4366,12 @@
             "description": "Validation Error"
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
         "summary": "Respond Query",
         "tags": [
           "email",
@@ -4290,7 +4405,7 @@
             "description": "Successful Response"
           },
           "400": {
-            "description": "Ambiguous or unknown account: the named provider is not connected, or no provider was given while several accounts are connected."
+            "description": "Ambiguous or unknown account: the named provider is not connected, or no provider was given while several accounts are connected. Also returned when ``query`` carries an unparseable date or duration operator value (e.g. ``newer_than:1.5w``)."
           },
           "403": {
             "description": "Authorization failed — the account's auth is missing, expired, or revoked (reconnect via Settings → Connectors), or a confirmation gate rejected the request (mint a fresh confirmation token)."
@@ -4312,6 +4427,12 @@
             "description": "No account connected, or backend configuration is missing — connect Google or Microsoft in Settings → Connectors."
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
         "summary": "Search Inbox",
         "tags": [
           "email"
@@ -4369,6 +4490,12 @@
             "description": "No account connected, or backend configuration is missing — connect Google or Microsoft in Settings → Connectors."
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
         "summary": "Send Email",
         "tags": [
           "email"
@@ -4414,6 +4541,12 @@
             "description": "Local LLM triage failed — Lemonade Server unreachable or it returned an unusable result."
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
         "summary": "Triage Email",
         "tags": [
           "email"
@@ -4459,6 +4592,12 @@
             "description": "Local LLM triage failed — Lemonade Server unreachable or it returned an unusable result."
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
         "summary": "Triage Email Batch",
         "tags": [
           "email"
@@ -4516,6 +4655,12 @@
             "description": "No account connected, or backend configuration is missing — connect Google or Microsoft in Settings → Connectors."
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
         "summary": "Unarchive Email",
         "tags": [
           "email"
@@ -4573,6 +4718,12 @@
             "description": "No account connected, or backend configuration is missing — connect Google or Microsoft in Settings → Connectors."
           }
         },
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {}
+        ],
         "summary": "Unquarantine Email",
         "tags": [
           "email"
@@ -4595,6 +4746,7 @@
             "description": "Successful Response"
           }
         },
+        "security": [],
         "summary": "Email Version",
         "tags": [
           "email"
