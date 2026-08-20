@@ -282,3 +282,77 @@ def test_summary_line_reports_every_number_the_user_asked_for():
 
     for expected in ("total", "steps", "prefill", "tools", "cached", "out", "model"):
         assert expected in line
+
+
+# ── backend-reported cache counters ────────────────────────────────────────
+#
+# A remote prefix cache (Anthropic) knows exactly how much of the prompt it
+# reused. The local prefix estimate cannot see across turns — it resets with
+# each record — so on a one-step turn it always reads 0% no matter what the
+# server actually reused. When the backend reports, its numbers win.
+
+
+def test_backend_cache_counters_reach_the_record():
+    rec = _recorder()
+    rec.start_llm_call(1, "x" * 4000)
+    rec.end_llm_call(
+        {
+            "prompt_tokens": 12380,
+            "output_tokens": 28,
+            "cache_read_input_tokens": 12200,
+            "cache_creation_input_tokens": 0,
+        }
+    )
+    record = rec.finish(query="q", answer="a", steps=1, agent_name="A", model_id="M")
+
+    (call,) = record["llm_calls"]
+    assert call["cache_read_input_tokens"] == 12200
+    assert call["cache_creation_input_tokens"] == 0
+    assert record["totals"]["input_tokens_cached_server"] == 12200
+    assert record["totals"]["input_tokens_server"] == 12380
+
+
+def test_a_backend_that_reports_no_cache_counters_leaves_them_absent():
+    """Absent means unmeasured; a 0 would read as a measured cache miss."""
+    rec = _recorder()
+    rec.start_llm_call(1, "x" * 4000)
+    rec.end_llm_call({"input_tokens": 1000, "output_tokens": 42})
+    record = rec.finish(query="q", answer="a", steps=1, agent_name="A", model_id="M")
+
+    (call,) = record["llm_calls"]
+    assert "cache_read_input_tokens" not in call
+    assert record["totals"]["input_tokens_cached_server"] == 0
+
+
+def test_summary_prefers_the_backends_own_cache_numbers():
+    rec = _recorder()
+    rec.start_llm_call(1, "x" * 4000)
+    rec.end_llm_call(
+        {
+            "prompt_tokens": 12380,
+            "output_tokens": 28,
+            "cache_read_input_tokens": 12200,
+        }
+    )
+    record = rec.finish(query="q", answer="a", steps=1, agent_name="A", model_id="M")
+
+    # The local estimate for this same turn is 0% — one call, nothing before it.
+    assert record["totals"]["input_tokens_cached_local"] == 0
+    assert "in 12,380 (99% cached)" in format_summary(record)
+
+
+def test_a_cold_turn_that_only_wrote_the_cache_still_uses_server_totals():
+    """Otherwise turn 1 reads from the local estimator and turn 2 from the
+    server, and the two lines a user compares are on different scales."""
+    rec = _recorder()
+    rec.start_llm_call(1, "x" * 4000)
+    rec.end_llm_call(
+        {
+            "prompt_tokens": 14034,
+            "output_tokens": 5,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 13696,
+        }
+    )
+    record = rec.finish(query="q", answer="a", steps=1, agent_name="A", model_id="M")
+    assert "in 14,034 (0% cached)" in format_summary(record)

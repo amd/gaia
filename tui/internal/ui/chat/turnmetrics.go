@@ -37,10 +37,9 @@ func (m ChatModel) turnMetricsBlock(msg *Message) string {
 	lines = append(lines, fmt.Sprintf("model %.1fs · tools %.1fs · overhead %.1fs",
 		t.Totals.LLMS, t.Totals.ToolS, t.Totals.OverheadS))
 
-	in := t.Totals.InputTokensLocal
-	cached := t.Totals.InputTokensCachedLocal
+	in, cached, fresh := turnTokenSplit(t)
 	tokenLine := fmt.Sprintf("in %s tok (%s cached, %s new · %s hit) · out %s tok",
-		commas(in), commas(cached), commas(t.Totals.InputTokensNewLocal),
+		commas(in), commas(cached), commas(fresh),
 		hitRate(cached, in), commas(int(t.Totals.OutputTokensServer)))
 	lines = append(lines, tokenLine)
 
@@ -60,6 +59,41 @@ func (m ChatModel) turnMetricsBlock(msg *Message) string {
 	return strings.Join(out, "\n")
 }
 
+// turnTokenSplit picks the honest cached/new split for the turn.
+//
+// A backend that reports its own cache accounting — Anthropic's prefix cache
+// does, a local llama.cpp KV cache does not — is ground truth. A cold turn
+// that only *wrote* the cache counts as reporting, so the first turn and the
+// second are drawn from the same source and their totals are comparable.
+//
+// The local estimate is the stand-in for backends that report nothing, and it
+// is blind to a cache that spans turns: it compares each call against the
+// previous one *within* the record, so the first call of every turn reads as
+// 0% no matter what the server reused.
+func turnTokenSplit(t *event.CanonicalTurnStats) (total, cached, fresh int) {
+	reported := t.Totals.InputTokensCachedServer > 0 || t.Totals.CacheWriteTokensServer > 0
+	if reported && t.Totals.InputTokensServer > 0 {
+		total = t.Totals.InputTokensServer
+		cached = t.Totals.InputTokensCachedServer
+	} else {
+		total = t.Totals.InputTokensLocal
+		cached = t.Totals.InputTokensCachedLocal
+	}
+	fresh = total - cached
+	if fresh < 0 {
+		fresh = 0
+	}
+	return total, cached, fresh
+}
+
+// callTokenSplit is turnTokenSplit for a single call.
+func callTokenSplit(c event.CanonicalTurnCall) (total, cached int) {
+	if (c.CacheReadInputTokens > 0 || c.CacheCreationInputTokens > 0) && c.InputTokens > 0 {
+		return int(c.InputTokens), int(c.CacheReadInputTokens)
+	}
+	return c.InputTokensLocal, c.InputTokensCached
+}
+
 // stepLines draws one row per backend call, with that step's tool time hung on
 // the end. Per-step is the resolution that matters: a turn is slow because one
 // step re-read the whole prompt, and an aggregate hides which.
@@ -75,8 +109,9 @@ func stepLines(t *event.CanonicalTurnStats) []string {
 
 	lines := make([]string, 0, len(t.LLMCalls))
 	for _, c := range t.LLMCalls {
+		stepIn, stepCached := callTokenSplit(c)
 		row := fmt.Sprintf("step %-2d %5.1fs  ttft %4.1fs  in %s (%s cached)",
-			c.Step, c.WallS, c.TTFTS, commas(c.InputTokensLocal), commas(c.InputTokensCached))
+			c.Step, c.WallS, c.TTFTS, commas(stepIn), commas(stepCached))
 		// Prefill rate over the tokens the server actually had to read. Far
 		// above the cold rate means the cache prefix was accepted.
 		if c.PrefillTokPerS > 0 {

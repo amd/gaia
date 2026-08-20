@@ -172,3 +172,60 @@ func stripANSI(s string) string {
 	}
 	return b.String()
 }
+
+// A backend with a real prefix cache (Anthropic) reports what it actually
+// reused. The local estimator cannot see across turns — it resets with each
+// record — so on a one-step turn it always says 0%, which is exactly the
+// reading that made the cache look broken when it was working.
+func TestServerCacheCountersWinOverTheLocalEstimate(t *testing.T) {
+	stats := sampleTurnStats()
+	stats.LLMCalls = []event.CanonicalTurnCall{
+		{Step: 1, WallS: 0.7, InputTokens: 14057, CacheReadInputTokens: 13696},
+	}
+	stats.Totals = event.CanonicalTurnTotals{
+		InputTokensLocal: 12895, InputTokensCachedLocal: 0, InputTokensNewLocal: 12895,
+		InputTokensServer: 14057, InputTokensCachedServer: 13696,
+		OutputTokensServer: 5,
+	}
+	msg := sampleMetricsMessage()
+	msg.Metrics = stats
+
+	block := NewChatModel(&nullClient{}, "GAIA", "", true).turnMetricsBlock(msg)
+	for _, want := range []string{"14,057 tok", "13,696 cached", "361 new", "97% hit"} {
+		if !strings.Contains(block, want) {
+			t.Errorf("block is missing %q:\n%s", want, block)
+		}
+	}
+	if strings.Contains(block, "12,895") {
+		t.Errorf("local estimate leaked into a turn the backend measured:\n%s", block)
+	}
+}
+
+// A cold turn only writes the cache. It still counts as measured, so turn 1 and
+// turn 2 are drawn from the same source and their totals compare directly.
+func TestAColdTurnStillUsesTheServerTotals(t *testing.T) {
+	stats := sampleTurnStats()
+	stats.LLMCalls = nil
+	stats.Totals = event.CanonicalTurnTotals{
+		InputTokensLocal: 12858, InputTokensCachedLocal: 0,
+		InputTokensServer: 14034, CacheWriteTokensServer: 13696,
+	}
+	msg := sampleMetricsMessage()
+	msg.Metrics = stats
+
+	block := NewChatModel(&nullClient{}, "GAIA", "", true).turnMetricsBlock(msg)
+	if !strings.Contains(block, "14,034 tok") || !strings.Contains(block, "0 cached") {
+		t.Errorf("cold turn did not report the server total:\n%s", block)
+	}
+}
+
+// Lemonade reports neither counter, so the local prefix estimate must survive —
+// it is the only cached/new signal a local llama.cpp turn has.
+func TestLocalEstimateSurvivesOnABackendThatReportsNoCache(t *testing.T) {
+	block := NewChatModel(&nullClient{}, "GAIA", "", true).turnMetricsBlock(sampleMetricsMessage())
+	for _, want := range []string{"51,204 tok", "38,110 cached", "74% hit"} {
+		if !strings.Contains(block, want) {
+			t.Errorf("block is missing %q:\n%s", want, block)
+		}
+	}
+}

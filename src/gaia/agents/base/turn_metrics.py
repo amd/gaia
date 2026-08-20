@@ -15,10 +15,11 @@ a session is greppable and two builds are diffable. Off by default; when off,
 What it records that nothing else does
 --------------------------------------
 * **prefill tokens** — the system prompt + tool schemas re-sent on every call
-* **cached vs new input tokens** — the KV-cache prefix this call could reuse,
-  computed as the common prefix with the *previous* call's rendered prompt.
-  That is exactly the comparison llama.cpp makes, so it measures what we offer
-  the cache; ``prefill_tok_per_s`` next to it shows whether the server took it.
+* **cached vs new input tokens** — from the backend itself where it reports
+  them (Anthropic's prefix cache does), otherwise the common prefix with the
+  *previous* call's rendered prompt. That estimate is exactly the comparison
+  llama.cpp makes, so it measures what we offer the cache; the two sources are
+  recorded separately and never summed.
 * **wall time split** — model time vs tool time vs agent overhead
 * **total turn time** — user submit to final answer, the number a user feels
 * **absolute timestamps** on the turn and every call, so a log lines up against
@@ -215,6 +216,13 @@ class TurnRecorder:
         call["output_tokens"] = _num(stats.get("output_tokens")) or _num(
             stats.get("completion_tokens")
         )
+        # What the backend itself says it reused, when it says anything. A
+        # remote prefix cache (Anthropic) reports this directly; a local
+        # llama.cpp KV cache does not, and leaves these absent rather than 0 —
+        # absent means "unmeasured", 0 means "measured, and it missed".
+        for key in ("cache_read_input_tokens", "cache_creation_input_tokens"):
+            if key in stats:
+                call[key] = _num(stats.get(key))
 
         # Prefill rate over the tokens the server actually had to process.
         # Far above the cold-start rate means the KV prefix was reused; at or
@@ -293,6 +301,12 @@ class TurnRecorder:
                 "input_tokens_new_local": sum(
                     c.get("input_tokens_new") or 0 for c in self.llm_calls
                 ),
+                "input_tokens_cached_server": sum(
+                    c.get("cache_read_input_tokens") or 0 for c in self.llm_calls
+                ),
+                "cache_write_tokens_server": sum(
+                    c.get("cache_creation_input_tokens") or 0 for c in self.llm_calls
+                ),
             },
         }
         self._write(record)
@@ -326,15 +340,22 @@ def format_summary(record: Dict[str, Any]) -> str:
     """One-line human summary — what the TUI shows in dev mode."""
     t = record.get("totals", {})
     p = record.get("prompt", {})
-    local = t.get("input_tokens_local", 0)
-    cached = t.get("input_tokens_cached_local", 0)
-    hit = f"{100 * cached / local:.0f}%" if local else "n/a"
+    # A backend that reports its own cache accounting is ground truth; the
+    # local prefix estimate is the stand-in for backends that report nothing.
+    # A cold turn that only *wrote* the cache still counts as measured, so
+    # turn 1 and turn 2 are drawn from the same source and compare directly.
+    total = t.get("input_tokens_server", 0)
+    cached = t.get("input_tokens_cached_server", 0)
+    if not (cached or t.get("cache_write_tokens_server")) or not total:
+        total = t.get("input_tokens_local", 0)
+        cached = t.get("input_tokens_cached_local", 0)
+    hit = f"{100 * cached / total:.0f}%" if total else "n/a"
     parts = [
         f"{record.get('total_s', 0):.1f}s total",
         f"{record.get('steps', 0)} steps",
         f"{p.get('fixed_prefill_tokens', 0) / 1000:.1f}k prefill",
         f"{p.get('tools_sent', 0)} tools",
-        f"in {local:,} ({hit} cached)",
+        f"in {total:,} ({hit} cached)",
         f"out {t.get('output_tokens_server', 0):,}",
         f"model {t.get('llm_s', 0):.1f}s",
         f"tools {t.get('tool_s', 0):.1f}s",

@@ -222,8 +222,14 @@ type CanonicalTurnCall struct {
 	InputTokensLocal  int     `json:"input_tokens_local"`
 	InputTokensCached int     `json:"input_tokens_cached"`
 	InputTokensNew    int     `json:"input_tokens_new"`
+	InputTokens       float64 `json:"input_tokens"`
 	OutputTokens      float64 `json:"output_tokens"`
 	PrefillTokPerS    float64 `json:"prefill_tok_per_s"`
+	// Reported by the backend itself, on backends that report it at all
+	// (Anthropic's prefix cache does; a local llama.cpp KV cache does not).
+	// Absent means unmeasured — not a miss.
+	CacheReadInputTokens     float64 `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens float64 `json:"cache_creation_input_tokens"`
 }
 
 // CanonicalTurnTool is one tool execution, timed around every return path.
@@ -236,16 +242,19 @@ type CanonicalTurnTool struct {
 
 // CanonicalTurnTotals splits the turn's wall time and its token counts. The
 // *Local counts come from the client-side estimator and the *Server ones from
-// the backend: they use different tokenizers, so the cached/new split is only
-// ever valid against InputTokensLocal.
+// the backend: they use different tokenizers, so a cached/new split is only
+// ever valid within one source — never Cached_Server against Local.
 type CanonicalTurnTotals struct {
-	LLMS                   float64 `json:"llm_s"`
-	ToolS                  float64 `json:"tool_s"`
-	OverheadS              float64 `json:"overhead_s"`
-	InputTokensLocal       int     `json:"input_tokens_local"`
-	InputTokensCachedLocal int     `json:"input_tokens_cached_local"`
-	InputTokensNewLocal    int     `json:"input_tokens_new_local"`
-	OutputTokensServer     float64 `json:"output_tokens_server"`
+	LLMS                    float64 `json:"llm_s"`
+	ToolS                   float64 `json:"tool_s"`
+	OverheadS               float64 `json:"overhead_s"`
+	InputTokensLocal        int     `json:"input_tokens_local"`
+	InputTokensCachedLocal  int     `json:"input_tokens_cached_local"`
+	InputTokensNewLocal     int     `json:"input_tokens_new_local"`
+	InputTokensServer       int     `json:"input_tokens_server"`
+	InputTokensCachedServer int     `json:"input_tokens_cached_server"`
+	CacheWriteTokensServer  int     `json:"cache_write_tokens_server"`
+	OutputTokensServer      float64 `json:"output_tokens_server"`
 }
 
 // CanonicalErrorEvent — terminal failure. Detail is actionable and surfaced
