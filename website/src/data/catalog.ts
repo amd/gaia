@@ -21,7 +21,7 @@ export type SecurityTier = 'verified' | 'community' | 'experimental';
 export type AgentLanguage = 'python' | 'cpp' | 'go' | 'typescript' | 'markdown';
 
 // What a catalog entry IS. Agents are the default; the terminal hub publishes
-// as a component, the Agent UI as an app, and marketplace skills as `skill`
+// as a component, standalone apps as `app`, and marketplace skills as `skill`
 // (#2467) — so a listing that shows only agents must filter on this rather than
 // assume every entry is one.
 export type PackageType = 'agent' | 'app' | 'component' | 'skill';
@@ -350,7 +350,7 @@ export function packageType(agent: Agent): PackageType {
   return agent.type ?? 'agent';
 }
 
-/** True for the entries that ARE agents — excludes the Agent UI and terminal hub. */
+/** True for the entries that ARE agents — excludes components like the terminal hub. */
 export function isAgent(agent: Agent): boolean {
   return packageType(agent) === 'agent';
 }
@@ -379,8 +379,8 @@ export function installMethods(agent: Agent): InstallMethod[] {
 
   // A component/app is not installed *into* GAIA and has no PyPI wheel — it is
   // downloaded per platform. `gaia agent install <id>` would not work for it.
-  // An npm package, where one exists, is a real second path (the Agent UI
-  // ships `gaia-ui` globally), so offer it alongside rather than instead.
+  // An npm package, where one exists, is a real second path, so offer it
+  // alongside rather than instead.
   if (!isAgent(agent)) {
     const methods: InstallMethod[] = [
       {
@@ -437,10 +437,8 @@ export function installMethods(agent: Agent): InstallMethod[] {
   return methods;
 }
 
-// Wording mirrors the Agent UI's trust gate (src/gaia/apps/webui/src/utils/hubLanes.ts)
-// so the same tier never reads differently in two places. Describe only what the
-// hub actually enforces — there is no publisher-signing scheme and no Python
-// sandbox, so neither may be implied here.
+// Describe only what the hub actually enforces — there is no publisher-signing
+// scheme and no Python sandbox, so neither may be implied here.
 const SECURITY_TIER_DESCRIPTIONS: Record<SecurityTier, string> = {
   verified: 'Built and reviewed by AMD.',
   community: 'Community-published — not audited by AMD. Install with the usual third-party caution.',

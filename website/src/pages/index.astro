@@ -7,45 +7,29 @@ import Header from '../components/Header.astro';
 import Footer from '../components/Footer.astro';
 import Eyebrow from '../components/Eyebrow.astro';
 import Terminal from '../components/Terminal.astro';
-import Marquee from '../components/Marquee.astro';
 import WayCard from '../components/WayCard.astro';
-import CodePanel from '../components/CodePanel.astro';
-import EntryPoints from '../components/EntryPoints.astro';
+import InstallCommand from '../components/InstallCommand.astro';
 
 const DOCS = 'https://amd-gaia.ai/docs';
-
-// The published email agent's real capabilities, from hub/agents/email/npm/README.md.
-const CAPABILITIES = [
-  'Triage',
-  'Organize',
-  'Reply & send',
-  'Calendar',
-  'Follow-ups',
-  'Daily briefing',
-  'Plain-language requests',
-  'Action items',
-];
 
 const WAYS = [
   {
     n: '01',
     icon: 'cpu',
     who: 'For everyone',
-    title: 'Run agents',
-    // `gaia-ui` starts the BROWSER app and bootstraps a Python backend on first
-    // run (bin/gaia-ui.cjs) — the desktop app is the installer the hero links to.
-    body: 'Run the Agent UI, point it at your files, and ask. Chat, document Q&A, and tool execution — all on-device, nothing sent to a cloud. Prefer an installer? Grab the desktop app above.',
-    code: 'npm install -g @amd-gaia/agent-ui',
-    cta: 'Agent UI guide',
-    href: `${DOCS}/guides/agent-ui`,
+    title: 'Chat in your terminal',
+    body: 'Open the terminal hub, pick an agent, and talk to it — document Q&A, research, real work on your files. Everything runs on-device; nothing you type is sent to a cloud.',
+    code: 'gaia-tui',
+    cta: 'Quickstart',
+    href: `${DOCS}/quickstart`,
     external: true,
   },
   {
     n: '02',
     icon: 'package',
     who: 'For app teams',
-    title: 'Integrate agents',
-    body: 'Embed a published agent in your JS or TS app as a local sidecar or MCP server. A self-contained binary — no Python in your users’ environment.',
+    title: 'Embed an agent',
+    body: 'Drop a published agent into your JS or TS app as a local sidecar or MCP server. A self-contained binary — no Python in your users’ environment.',
     code: 'npm install @amd-gaia/agent-email',
     cta: 'Browse the Hub',
     href: '/hub',
@@ -59,7 +43,7 @@ const WAYS = [
     // Python only: `gaia agent pack` refuses non-python manifests, so a C++ agent
     // cannot reach the Hub today (src/gaia/hub/packager.py). `--layout hub` is
     // required — the flag defaults to `flat`.
-    body: 'Subclass Agent, register tools with the @tool decorator, and scaffold a hub-layout package with the CLI. Python.',
+    body: 'Subclass Agent, register tools with the @tool decorator, and scaffold a hub-layout package with the CLI. Publish it and anyone installs it from the hub.',
     code: 'gaia agent init my-agent --layout hub',
     cta: 'Custom agent guide',
     href: `${DOCS}/guides/custom-agent`,
@@ -67,110 +51,36 @@ const WAYS = [
   },
 ];
 
-// Names the surfaces, never their counts. The catalog carries the published
-// CAPABILITY_MATRIX.md as raw markdown, so there is no field to derive a count
-// from — and a hardcoded one goes stale on the agent's next release.
-const INTEGRATION_POINTS = [
-  'Local REST sidecar',
-  'MCP server',
-  'CLI + pipe interfaces',
-  'SDK: RAG · vision · tools · voice',
-];
-
-const INSTALLS = [
-  {
-    label: 'pip',
-    cmd: 'pip install amd-gaia',
-    note: 'The framework, SDK, and gaia CLI from PyPI. Python 3.10+.',
-  },
-  {
-    label: 'npm',
-    cmd: 'npm install -g @amd-gaia/agent-ui',
-    note: 'The Agent UI as a browser app. A separate desktop installer covers Windows, Linux, and Apple Silicon Macs.',
-  },
-  {
-    label: 'model',
-    cmd: 'gaia init && lemonade-server serve',
-    note: 'Downloads the default model and starts the local runtime. Required before any agent runs.',
-  },
-];
-
 const TRUST = ['100% local', 'Open source · MIT', 'Ryzen™ AI optimized'];
-
-// The real @amd-gaia/agent-email API, verbatim from the package README.
-type Segment = [string, string];
-const APP_TS: Segment[][] = [
-  [['// embed the email agent as a local sidecar', 'tok-com']],
-  [
-    ['import', 'tok-key'],
-    [' { fetchBinary, startSidecar } ', ''],
-    ['from', 'tok-key'],
-    [' ', ''],
-    ['"@amd-gaia/agent-email"', 'tok-str'],
-    [';', ''],
-  ],
-  [],
-  [['// once, at build time: fetch + verify the platform binary', 'tok-com']],
-  [
-    ['const', 'tok-key'],
-    [' { binaryPath } = ', ''],
-    ['await', 'tok-key'],
-    [' ', ''],
-    ['fetchBinary', 'tok-fn'],
-    ['({ outDir: ', ''],
-    ['"resources"', 'tok-str'],
-    [' });', ''],
-  ],
-  [
-    ['const', 'tok-key'],
-    [' sidecar = ', ''],
-    ['await', 'tok-key'],
-    [' ', ''],
-    ['startSidecar', 'tok-fn'],
-    ['({ binaryPath, port: ', ''],
-    ['8131', 'tok-num'],
-    [' });', ''],
-  ],
-  [],
-  [
-    ['const', 'tok-key'],
-    [' res = ', ''],
-    ['await', 'tok-key'],
-    [' sidecar.client.', ''],
-    ['triage', 'tok-fn'],
-    ['({ payload });', ''],
-  ],
-  [['// → res.result.category · classified on-device', 'tok-com']],
-];
 ---
 
 <Layout
-  title="GAIA — The Agent Factory"
-  description="The open-source factory for local AI agents. Build one in minutes, ship it to the Agent Hub, and run it entirely on your own machine."
+  title="GAIA — Local AI agents in your terminal"
+  description="AMD's open-source framework for AI agents that run entirely on your machine. One command installs the terminal hub — pick an agent and chat. No cloud, no API keys."
 >
   <Header />
   <main id="main-content">
-    <!-- 1. Hero — copy left, live terminal right. -->
-    <section class="g-shell grid items-center gap-12 pb-16 pt-[122px] lg:grid-cols-[1.05fr_0.95fr] lg:gap-14 lg:pb-20 lg:pt-[162px]">
+    <!-- 1. Hero — copy + the one install command left, live terminal right. -->
+    <section id="install" class="g-shell grid items-center gap-12 pb-20 pt-[122px] lg:grid-cols-[1.05fr_0.95fr] lg:gap-14 lg:pb-28 lg:pt-[170px]">
       <div class="min-w-0">
         <Eyebrow pill class="animate-g-rise mb-7">The Agent Factory</Eyebrow>
 
         <h1 class="g-h-hero animate-g-rise" style="animation-delay:0.05s">
-          Assemble AI agents<br />that run <span class="text-g-gold-text">on your&nbsp;machine.</span>
+          AI agents that live<br />in your terminal — <span class="text-g-gold-text">and on your&nbsp;machine.</span>
         </h1>
 
         <p class="g-lede animate-g-rise mt-6" style="animation-delay:0.12s">
-          The open-source factory for local AI agents. Build one in minutes, ship it to the Agent
-          Hub, and anyone installs it in a click. Your data never leaves the machine — no cloud, no
+          GAIA is AMD's open-source framework for local AI agents. One command installs the
+          terminal hub; pick an agent and chat. Your data never leaves the machine — no cloud, no
           API keys, no catch.
         </p>
 
-        <!-- Two peer front doors: the Agent UI and the terminal hub. -->
-        <EntryPoints class="animate-g-rise mt-9 [animation-delay:0.18s]" />
+        <InstallCommand class="animate-g-rise mt-9 [animation-delay:0.18s]" />
 
-        <a href="#build" class="g-cta-link animate-g-rise mt-5 text-[14px]" style="animation-delay:0.21s">
-          Or build your own agent<span aria-hidden="true">→</span>
-        </a>
+        <div class="animate-g-rise mt-6 flex flex-wrap gap-x-[18px] gap-y-2 text-[14px]" style="animation-delay:0.21s">
+          <a href="/hub" class="g-cta-link">Browse the Agent Hub<span aria-hidden="true">→</span></a>
+          <a href="#build" class="g-cta-link">Build your own agent<span aria-hidden="true">→</span></a>
+        </div>
 
         <ul class="animate-g-rise mt-8 flex flex-wrap items-center gap-x-[18px] gap-y-2.5" style="animation-delay:0.24s">
           {TRUST.map((mark) => (
@@ -189,93 +99,37 @@ const APP_TS: Segment[][] = [
       </div>
     </section>
 
-    <!-- 2. Capability marquee — what the published email agent actually does. -->
-    <section class="g-shell pb-7">
-      <Marquee items={CAPABILITIES} label="Email agent capabilities" />
-    </section>
-
-    <!-- 3. Three ways in -->
-    <section id="run" class="g-shell g-section scroll-mt-[66px]">
+    <!-- 2. Three ways in -->
+    <section id="build" class="g-shell g-section scroll-mt-[66px]">
       <div class="mb-11 flex flex-wrap items-end justify-between gap-6">
         <div>
           <Eyebrow class="mb-3.5">Three ways in</Eyebrow>
           <h2 class="g-h-section">One factory.<br />Three kinds of builder.</h2>
         </div>
         <p class="g-lede-sm max-w-[360px]">
-          Whether you never open a terminal or you live in one, there's a floor of the factory for
-          you.
+          Chat with agents, ship them inside your product, or build and publish your own.
         </p>
       </div>
 
       <div class="grid gap-[18px] md:grid-cols-3">
         {WAYS.map((w) => <WayCard {...w} />)}
       </div>
-    </section>
 
-    <!-- 4. Integrate -->
-    <section id="integrate" class="g-band scroll-mt-[66px]">
-      <div class="g-shell grid items-center gap-10 lg:grid-cols-2 lg:gap-[52px]">
-        <div>
-          <Eyebrow class="mb-3.5">Integrate</Eyebrow>
-          <h2 class="g-h-band">Ship an agent inside<br />your own product.</h2>
-          <p class="g-lede-sm mt-4 max-w-[440px]">
-            Drop a published agent into any app as a local REST sidecar, an MCP server, or the
-            OpenAI-compatible API. GAIA supplies the building blocks — you ship the experience. No
-            Python for your users.
-          </p>
-          <ul class="mt-6 grid gap-x-6 gap-y-2.5 sm:grid-cols-2">
-            {INTEGRATION_POINTS.map((point) => (
-              <li class="flex items-center gap-2.5 text-[13.5px] text-g-muted">
-                <span class="text-g-gold-text" aria-hidden="true">▹</span>{point}
-              </li>
-            ))}
-          </ul>
-        </div>
-
-        <CodePanel title="app.ts" lines={APP_TS} />
-      </div>
-    </section>
-
-    <!-- 5. Build & publish -->
-    <section id="build" class="g-shell g-section scroll-mt-[66px]">
-      <div class="mx-auto mb-11 max-w-[620px] text-center">
-        <Eyebrow class="mb-3.5">Build &amp; publish</Eyebrow>
-        <h2 class="g-h-section">Prefer the terminal? Start here.</h2>
-        <p class="g-lede-sm mx-auto mt-3.5">
-          Install the framework, scaffold an agent, and publish it to the Hub with a pull request —
-          anyone can install it in a click.
-        </p>
-      </div>
-
-      <div class="mx-auto grid max-w-[960px] gap-4 md:grid-cols-3">
-        {INSTALLS.map((d) => (
-          <div class="g-card g-card-hover rounded-g-panel p-5">
-            <div class="g-label mb-3 tracking-[0.1em] text-g-gold-text">{d.label}</div>
-            <div class="g-cmd-plain items-start text-[12px] leading-[1.6]">
-              <span class="text-g-gold" aria-hidden="true">$</span>
-              <span>{d.cmd}</span>
-            </div>
-            <p class="mt-3 text-[12.5px] leading-[1.55] text-g-faint">{d.note}</p>
-          </div>
-        ))}
-      </div>
-
-      <div class="mt-8 flex flex-wrap justify-center gap-x-[18px] gap-y-2 text-[14px]">
+      <div class="mt-10 flex flex-wrap gap-x-[18px] gap-y-2 text-[14px]">
         <a href={`${DOCS}/quickstart`} class="prose-link" target="_blank" rel="noopener noreferrer">Build your first agent →</a>
         <span class="text-g-faint" aria-hidden="true">·</span>
         <a href={`${DOCS}/guides/hub-publishing`} class="prose-link" target="_blank" rel="noopener noreferrer">Publish to the Hub →</a>
       </div>
     </section>
 
-    <!-- 6. Closing CTA -->
+    <!-- 3. Closing CTA -->
     <section class="border-t border-g-border">
       <div class="g-shell py-16 text-center sm:py-[88px]">
         <h2 class="g-h-cta mx-auto max-w-[720px]">The factory floor is open.</h2>
         <p class="g-lede-sm mx-auto mt-4 max-w-[480px] sm:text-[17px]">
-          Take the desktop app or the terminal hub — run your first local agent in under two
-          minutes.
+          One command, one local model, and your first agent — in under two minutes.
         </p>
-        <EntryPoints align="center" class="mt-8" />
+        <InstallCommand align="center" class="mt-8" />
 
         <a href="/hub" class="g-cta-link mt-6 text-[14px]">
           Browse the Agent Hub<span aria-hidden="true">→</span>

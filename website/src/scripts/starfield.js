@@ -4,7 +4,10 @@
  * Framework-agnostic, dependency-free, no build step. Mount it on a fixed,
  * pointer-events:none <canvas> behind the page content. See StarField.astro.
  *
- * Honors prefers-reduced-motion: renders one static frame, no rAF loop.
+ * Pointer-reactive: a smoothed cursor trails the real one, carrying a soft
+ * glow, brightening nearby lines, and drifting nearby stars toward it.
+ * Honors prefers-reduced-motion: renders one static frame, no rAF loop, and
+ * no pointer reaction at all.
  *
  * Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
  * SPDX-License-Identifier: MIT
@@ -13,7 +16,9 @@
 const STAR_CELL = 108;        // grid cell px — one candidate star each
 const STAR_SKIP = 0.82;       // > this random value → skip the cell (open sky)
 const LINK_MAX_DIST = 150;    // px — constellation line reach
-const POINTER_RADIUS = 280;   // px — pointer influence radius
+const POINTER_RADIUS = 300;   // px — pointer influence radius
+const POINTER_ATTRACT = 12;   // px — max drift of a star toward the pointer
+const POINTER_SMOOTH = 160;   // ms — time constant of the trailing pointer
 const PACKET_INTERVAL = 340;  // ms between signal packets
 const PACKET_MAX = 46;
 
@@ -57,7 +62,8 @@ export function mountStarField(canvas, palette) {
 
   let W = 0, H = 0;
   let nodes = [], edges = [], packets = [];
-  let pointerX = null, pointerY = null;
+  let pointerX = null, pointerY = null;   // raw pointer (event target)
+  let spx = null, spy = null, pk = 0;     // smoothed pointer + influence 0..1
   let raf = 0, last = performance.now(), spawnAcc = 0;
 
   function build() {
@@ -79,10 +85,14 @@ export function mountStarField(canvas, palette) {
         const mag = rnd(s + 5);              // magnitude: most tiny, few bright
         const t = rnd(s + 13);
         const col = pal.stars[CLASS_WEIGHTS.findIndex((w) => t < w)] || pal.stars[0];
+        const x = (gx + 0.15 + rnd(s) * 0.7) * STAR_CELL;
+        const y = (gy + 0.15 + rnd(s + 3) * 0.7) * STAR_CELL;
         nodes.push({
           id: id++,
-          x: (gx + 0.15 + rnd(s) * 0.7) * STAR_CELL,
-          y: (gy + 0.15 + rnd(s + 3) * 0.7) * STAR_CELL,
+          x,
+          y,
+          dx: x,                             // drawn position (pointer drift)
+          dy: y,
           col,
           base: 0.5 + mag * mag * 1.8,       // radius
           bright: 0.28 + mag * 0.5,
@@ -120,6 +130,21 @@ export function mountStarField(canvas, palette) {
     last = now;
     ctx.clearRect(0, 0, W, H);
 
+    // The pointer the field reacts to trails the real one (exponential
+    // smoothing), and its influence fades in/out instead of popping. In a
+    // reduced-motion static frame pk stays 0, so the field never reacts.
+    if (!reduce) {
+      const t = 1 - Math.exp(-dt / POINTER_SMOOTH);
+      if (pointerX != null) {
+        if (spx == null) { spx = pointerX; spy = pointerY; }
+        spx += (pointerX - spx) * t;
+        spy += (pointerY - spy) * t;
+        pk += (1 - pk) * t;
+      } else {
+        pk += (0 - pk) * t;
+      }
+    }
+
     // Faint cool zodiacal glow — depth without a color cast.
     const sx = W * 0.8, sy = H * 0.14, sr = Math.max(W, H) * 0.45;
     const glow = ctx.createRadialGradient(sx, sy, 0, sx, sy, sr);
@@ -129,14 +154,40 @@ export function mountStarField(canvas, palette) {
     ctx.fillStyle = glow;
     ctx.fillRect(0, 0, W, H);
 
-    // Pointer proximity, squared falloff.
+    // Pointer proximity against the SMOOTHED pointer, squared falloff, scaled
+    // by the fade so leaving the window releases the field gradually.
     const near = (x, y) => {
-      if (pointerX == null) return 0;
-      const d = Math.hypot(x - pointerX, y - pointerY);
+      if (spx == null || pk < 0.01) return 0;
+      const d = Math.hypot(x - spx, y - spy);
       if (d > POINTER_RADIUS) return 0;
       const k = 1 - d / POINTER_RADIUS;
-      return k * k;
+      return k * k * pk;
     };
+
+    // Soft glow trailing the pointer — the ambient half of the reaction.
+    if (spx != null && pk > 0.01) {
+      const g = ctx.createRadialGradient(spx, spy, 0, spx, spy, POINTER_RADIUS * 1.25);
+      g.addColorStop(0, `rgba(${gr},${gg},${gb},${0.075 * pk})`);
+      g.addColorStop(0.55, `rgba(${gr},${gg},${gb},${0.028 * pk})`);
+      g.addColorStop(1, `rgba(${gr},${gg},${gb},0)`);
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, W, H);
+    }
+
+    // Each star drifts a touch toward the pointer. Computed once per frame and
+    // reused by lines, packets and the star pass so the geometry stays coherent.
+    nodes.forEach((n) => {
+      const k = near(n.x, n.y);
+      if (k > 0) {
+        const d = Math.hypot(spx - n.x, spy - n.y) || 1;
+        const m = k * POINTER_ATTRACT;
+        n.dx = n.x + ((spx - n.x) / d) * m;
+        n.dy = n.y + ((spy - n.y) / d) * m;
+      } else {
+        n.dx = n.x;
+        n.dy = n.y;
+      }
+    });
 
     // Constellation lines.
     ctx.lineWidth = 1;
@@ -148,8 +199,8 @@ export function mountStarField(canvas, palette) {
       );
       ctx.strokeStyle = `rgba(${lr},${lg},${lb},${pal.lineAlpha + k * 0.22})`;
       ctx.beginPath();
-      ctx.moveTo(e.a.x, e.a.y);
-      ctx.lineTo(e.b.x, e.b.y);
+      ctx.moveTo(e.a.dx, e.a.dy);
+      ctx.lineTo(e.b.dx, e.b.dy);
       ctx.stroke();
     });
 
@@ -174,8 +225,8 @@ export function mountStarField(canvas, palette) {
           packets.splice(i, 1);
           continue;
         }
-        const x = p.e.a.x + (p.e.b.x - p.e.a.x) * p.t;
-        const y = p.e.a.y + (p.e.b.y - p.e.a.y) * p.t;
+        const x = p.e.a.dx + (p.e.b.dx - p.e.a.dx) * p.t;
+        const y = p.e.a.dy + (p.e.b.dy - p.e.a.dy) * p.t;
         const g = ctx.createRadialGradient(x, y, 0, x, y, 7);
         g.addColorStop(0, 'rgba(244,196,107,0.65)');
         g.addColorStop(1, 'rgba(231,163,60,0)');
@@ -198,14 +249,14 @@ export function mountStarField(canvas, palette) {
 
       if (n.base > 1.1 || n.pulse > 0.02 || k > 0.05) {
         const halo = n.base * 3 + 4 + n.pulse * 10 + k * 12;
-        const g = ctx.createRadialGradient(n.x, n.y, 0, n.x, n.y, halo);
+        const g = ctx.createRadialGradient(n.dx, n.dy, 0, n.dx, n.dy, halo);
         g.addColorStop(0, `rgba(${cr},${cg},${cb},${a * 0.32})`);
         g.addColorStop(1, `rgba(${cr},${cg},${cb},0)`);
         ctx.fillStyle = g;
-        ctx.beginPath(); ctx.arc(n.x, n.y, halo, 0, 7); ctx.fill();
+        ctx.beginPath(); ctx.arc(n.dx, n.dy, halo, 0, 7); ctx.fill();
       }
       ctx.fillStyle = `rgba(${cr},${cg},${cb},${Math.min(1, a + 0.15)})`;
-      ctx.beginPath(); ctx.arc(n.x, n.y, r, 0, 7); ctx.fill();
+      ctx.beginPath(); ctx.arc(n.dx, n.dy, r, 0, 7); ctx.fill();
     });
 
     raf = requestAnimationFrame(draw);
@@ -213,8 +264,11 @@ export function mountStarField(canvas, palette) {
 
   const onMove = (e) => { pointerX = e.clientX; pointerY = e.clientY; };
   const onLeave = () => { pointerX = pointerY = null; };
-  addEventListener('pointermove', onMove, { passive: true });
-  addEventListener('pointerleave', onLeave);
+  // Reduced motion renders one static frame — a pointer must not animate it.
+  if (!reduce) {
+    addEventListener('pointermove', onMove, { passive: true });
+    addEventListener('pointerleave', onLeave);
+  }
 
   const ro = new ResizeObserver(() => build());
   ro.observe(canvas);

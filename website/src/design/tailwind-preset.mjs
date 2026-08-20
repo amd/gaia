@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 // GAIA Tailwind preset — maps the CSS variables in tokens.css to utilities.
-// Consumed by the website now and the Agent UI (src/gaia/apps/webui) in
-// Phase 2 via `presets: [gaiaPreset]`. Plain ESM, no framework dependency.
+// Plain ESM, no framework dependency.
 //
 // Two color shapes (see tokens.css):
 //   rgb(var(--x) / <alpha-value>)  -> supports opacity modifiers: text-g-gold/40

@@ -84,22 +84,19 @@ website/
 ├── scripts/
 │   └── generate-in-development.mjs  # Regenerates the in-development snapshot
 ├── src/
-│   ├── components/                  # 21 Astro components
+│   ├── components/                  # 18 Astro components
 │   │   ├── AgentIcon.astro
 │   │   ├── AgentRow.astro
-│   │   ├── CodePanel.astro
 │   │   ├── ComingSoonRow.astro
 │   │   ├── DocTabs.astro
-│   │   ├── DownloadButton.astro
-│   │   ├── EntryPoints.astro
 │   │   ├── Eyebrow.astro
 │   │   ├── FeaturedCard.astro
 │   │   ├── FileTree.astro
 │   │   ├── Footer.astro
 │   │   ├── Header.astro
 │   │   ├── InstallCard.astro
+│   │   ├── InstallCommand.astro
 │   │   ├── InstallMethods.astro
-│   │   ├── Marquee.astro
 │   │   ├── SidebarCard.astro
 │   │   ├── StarField.astro
 │   │   ├── StatBlock.astro
@@ -138,7 +135,7 @@ website/
 
 ## Design System
 
-`src/design/tokens.css` is the single source of truth (shared with the Agent UI);
+`src/design/tokens.css` is the single source of truth;
 `src/design/tailwind-preset.mjs` maps those variables to `g-*` Tailwind
 utilities. Read those files rather than trusting a copy — the headlines only:
 
