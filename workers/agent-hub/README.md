@@ -252,7 +252,9 @@ checked into the repo:
    redeployed, so every publish failed with `language "go" is not supported`
    while the source said otherwise.
 
-   The job needs two secrets on the **`agent-publish`** environment:
+   The job needs two secrets on the **`worker-deploy`** environment — a second
+   environment with no required reviewers (so a release still prompts once)
+   but the same deployment ref allowlist as `agent-publish`:
 
    | Secret | How to get it |
    |---|---|
@@ -260,6 +262,15 @@ checked into the repo:
    | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare dashboard → Workers & Pages → Account ID |
 
    Without them the job fails loudly rather than publishing to a stale Worker.
+
+   **Creating the environment** (Settings → Environments → New environment,
+   named `worker-deploy`). Both settings below are load-bearing, and the second
+   one is easy to miss:
+
+   | Setting | Value | Why |
+   |---|---|---|
+   | Required reviewers | *leave empty* | The publish jobs are already gated on `agent-publish`. A reviewer here would add a second approval prompt to every release, which is the thing this environment exists to avoid. |
+   | Deployment branches and tags | `main`, `v*`, `agent-pkg-*` — the same allowlist as `agent-publish` | This is the *only* remaining restriction on the job. Without it, anyone with write access can dispatch the workflow from an arbitrary branch with `dry_run` unchecked and push that branch's Worker to production — and the Worker is the manifest validator that holds the R2 binding. |
 
    The deploy stamps the commit into `WORKER_BUILD`, which `GET /health`
    returns, so the workflow can assert *which* build went live instead of

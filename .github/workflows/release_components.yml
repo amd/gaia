@@ -161,15 +161,26 @@ jobs:
   # other deploy path (agent_hub_worker_ci.yml only tests), so the Worker drifts
   # until someone runs `wrangler deploy` by hand.
   #
-  # Deploying here rather than on push-to-main is deliberate: this job inherits
-  # the agent-publish reviewer gate, so a production Worker deploy still needs a
-  # human, and it lands in the same approval as the upload it has to match.
+  # A SECOND environment, not agent-publish, and not no-environment at all.
+  #
+  # GitHub raises one approval per batch of jobs that pend together. This job
+  # must finish before the publishes, so putting it in agent-publish costs a
+  # second prompt. Dropping `environment:` entirely would fix that but throw
+  # away more than the prompt: agent-publish also carries the deployment ref
+  # allowlist (main / v* / agent-pkg-*), and without it anyone with write access
+  # could dispatch this workflow from an arbitrary branch with dry_run unchecked
+  # and push that branch's Worker straight to production — the Worker being the
+  # manifest validator and the holder of the R2 binding.
+  #
+  # worker-deploy therefore has NO required reviewers (so no second prompt) but
+  # the SAME ref allowlist as agent-publish, and holds the Cloudflare secrets so
+  # they stay environment-scoped rather than readable by every workflow.
   deploy-worker:
     name: Deploy Agent Hub Worker
     needs: [version, worker-check]
     if: needs.version.outputs.dry_run == 'false'
     runs-on: ubuntu-latest
-    environment: agent-publish
+    environment: worker-deploy
     steps:
       - uses: actions/checkout@v7
 
@@ -193,7 +204,7 @@ jobs:
           [ -n "${CLOUDFLARE_API_TOKEN:-}" ]  || missing="${missing} CLOUDFLARE_API_TOKEN"
           [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ] || missing="${missing} CLOUDFLARE_ACCOUNT_ID"
           if [ -n "${missing}" ]; then
-            echo "::error::missing environment secret(s) on agent-publish:${missing}. The Agent Hub Worker validates the manifests this workflow uploads, so publishing without deploying it first is how a stale validator rejects a valid release. Create a Cloudflare API token from the 'Edit Cloudflare Workers' template (it must also cover R2 for the bucket binding) and add both secrets to the agent-publish environment. See workers/agent-hub/README.md."
+            echo "::error::missing environment secret(s) on worker-deploy:${missing}. The Agent Hub Worker validates the manifests this workflow uploads, so publishing without deploying it first is how a stale validator rejects a valid release. Create a Cloudflare API token from the 'Edit Cloudflare Workers' template (it must also cover R2 for the bucket binding) and add both to the worker-deploy environment (which has no reviewers, so the release still needs only one approval). See workers/agent-hub/README.md."
             exit 1
           fi
           # Stamp the commit so the check below can prove WHICH build went live.
@@ -210,7 +221,15 @@ jobs:
           GAIA_HUB_BASE_URL: ${{ vars.GAIA_HUB_BASE_URL }}
         run: |
           set -euo pipefail
-          base="${GAIA_HUB_PUBLISH_URL:-${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}}"
+          # No default. Falling back to the custom domain would verify a
+          # DIFFERENT origin than the publish jobs upload to (they go through
+          # workers.dev because the WAF fronts hub.amd-gaia.ai), so a silent
+          # default here reports freshness for something we are not publishing to.
+          base="${GAIA_HUB_PUBLISH_URL:-${GAIA_HUB_BASE_URL:-}}"
+          if [ -z "${base}" ]; then
+            echo "::error::neither GAIA_HUB_PUBLISH_URL nor GAIA_HUB_BASE_URL resolved for this job. Both must be REPOSITORY variables — an environment-scoped one resolves empty here, and this check would then target the custom domain rather than the origin the publish jobs POST to."
+            exit 1
+          fi
           for i in 1 2 3 4 5 6; do
             live="$(curl -fsS --max-time 15 "${base}/health" | python -c 'import json,sys; print(json.load(sys.stdin).get("build",""))' 2>/dev/null || true)"
             if [ "${live}" = "${GITHUB_SHA}" ]; then
