@@ -225,9 +225,24 @@ def publish_one(
     # different transport, not a weaker guarantee.
     by_reference = size >= DIRECT_UPLOAD_THRESHOLD
     if by_reference:
-        _upload_to_r2(
-            artifact_path, f"agents/{agent_id}/{version}/{filename}", local_sha
-        )
+        # Check BEFORE uploading. The Worker's by-reference immutability guard
+        # keys on the agent manifest and therefore fires only AFTER this PUT
+        # would already have replaced the published bytes — leaving the catalog
+        # describing the old artifact while R2 serves the new one, and the 409
+        # handler below re-downloading the bytes it just overwrote and happily
+        # agreeing with itself. Skipping the upload keeps that 409 meaningful.
+        download_url = f"{base_url.rstrip('/')}/agents/{agent_id}/{version}/{filename}"
+        head = requests.head(download_url, timeout=60, allow_redirects=True)
+        if head.status_code == 200:
+            print(
+                f"[publish] {filename} is already in R2 — not overwriting it; "
+                "the POST below verifies the stored bytes against this build.",
+                flush=True,
+            )
+        else:
+            _upload_to_r2(
+                artifact_path, f"agents/{agent_id}/{version}/{filename}", local_sha
+            )
 
     with contextlib.ExitStack() as stack:
         files = {

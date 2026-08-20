@@ -185,6 +185,20 @@ async function verifyUploadedArtifact(
     );
   }
 
+  // The inline lane enforces this before storing; the by-reference lane must
+  // too, or MAX_ARTIFACT_BYTES silently stops being the artifact size cap the
+  // README says it is. The 250 MiB default clears the 135 MiB installers, so
+  // this costs nothing today and keeps one ceiling rather than two.
+  const limit = maxBytes(env);
+  if (head.size > limit) {
+    throw new HttpError(
+      413,
+      "artifact_too_large",
+      `Object at ${key} is ${head.size} bytes, over the ${limit}-byte limit. ` +
+        `The catalog was not modified.`
+    );
+  }
+
   const stored = head.checksums?.sha256;
   if (!stored) {
     throw new HttpError(

@@ -168,4 +168,14 @@ describe("publish by reference", () => {
     const res = await publishRef(env, { token: "not-a-real-token" }, sha);
     expect(res.status).toBe(401);
   });
+
+  it("applies MAX_ARTIFACT_BYTES to a by-reference publish too", async () => {
+    // Otherwise the documented artifact ceiling quietly stops covering the one
+    // lane that exists specifically for the largest artifacts.
+    const env = makeEnv({ maxBytes: "16" });
+    const { sha, bytes } = await stage(env);
+    const res = await publishRef(env, {}, sha, bytes.byteLength);
+    expect(res.status).toBe(413);
+    expect(((await res.json()) as any).error.code).toBe("artifact_too_large");
+  });
 });

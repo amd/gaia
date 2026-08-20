@@ -373,6 +373,30 @@ jobs:
       # yet. Wait for the full set, bounded — and fail loudly on timeout rather
       # than publishing a partial platform set that the catalog would then
       # advertise as complete.
+      # Before the wait, not after: this job can sit for up to an hour on the
+      # installer assets and then pull ~400 MB, and discovering a missing secret
+      # at the end wastes all of it. Covers the R2 credentials too — the
+      # installers are large enough to take the direct-to-R2 lane, so those are
+      # as load-bearing here as the hub token.
+      - name: Require the publish credentials
+        if: needs.version.outputs.dry_run == 'false'
+        env:
+          GAIA_HUB_TOKEN: ${{ secrets.GAIA_HUB_TOKEN }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          missing=""
+          [ -n "${GAIA_HUB_TOKEN:-}" ]        || missing="${missing} GAIA_HUB_TOKEN"
+          [ -n "${R2_ACCESS_KEY_ID:-}" ]      || missing="${missing} R2_ACCESS_KEY_ID"
+          [ -n "${R2_SECRET_ACCESS_KEY:-}" ]  || missing="${missing} R2_SECRET_ACCESS_KEY"
+          [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ] || missing="${missing} CLOUDFLARE_ACCOUNT_ID"
+          if [ -n "${missing}" ]; then
+            echo "::error::missing secret(s):${missing}. GAIA_HUB_TOKEN must match the Worker's PUBLISH_TOKENS; the R2_* pair are R2 S3 credentials (Cloudflare -> R2 -> Manage API Tokens, Object Read & Write) needed because these installers exceed the Worker request-body cap and go straight to R2. See workers/agent-hub/README.md."
+            exit 1
+          fi
+
       - name: Wait for the installer assets on the release
         if: needs.version.outputs.dry_run == 'false'
         shell: bash
@@ -418,17 +442,6 @@ jobs:
             --pattern "gaia-agent-ui-${VERSION}-arm64.dmg" \
             --pattern "gaia-agent-ui-${VERSION}-x86_64.AppImage"
           ls -la dist
-
-      - name: Require the publish token
-        if: needs.version.outputs.dry_run == 'false'
-        env:
-          GAIA_HUB_TOKEN: ${{ secrets.GAIA_HUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          if [ -z "${GAIA_HUB_TOKEN:-}" ]; then
-            echo "::error::missing environment secret GAIA_HUB_TOKEN on the agent-publish environment (must match the Worker's PUBLISH_TOKENS). See workers/agent-hub/README.md."
-            exit 1
-          fi
 
       - name: Install publisher deps
         if: needs.version.outputs.dry_run == 'false'
