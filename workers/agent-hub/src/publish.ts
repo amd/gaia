@@ -82,6 +82,152 @@ async function optionalPackageFiles(form: FormData): Promise<string | null> {
   return JSON.stringify({ files });
 }
 
+/**
+ * Pick the artifact source for this publish: an inline `artifact` file part, or
+ * a by-reference upload named by `artifact_ref_filename`. Exactly one is valid.
+ */
+function selectArtifactSource(
+  form: FormData,
+  byReference: boolean,
+  refFilename: string | null
+): { artifactFile: File | null; filename: string } {
+  const part = form.get("artifact");
+  if (byReference) {
+    if (part != null) {
+      throw new HttpError(
+        400,
+        "invalid_request",
+        "Send either an 'artifact' file part or 'artifact_ref_*' fields, not both."
+      );
+    }
+    return { artifactFile: null, filename: refFilename as string };
+  }
+  if (part == null || typeof part === "string") {
+    throw new HttpError(
+      400,
+      "invalid_request",
+      "Missing 'artifact' file part (the wheel or binary to publish), and no " +
+        "'artifact_ref_filename' for a by-reference publish."
+    );
+  }
+  // workers-types declares FormData.get() as `string | null`, so the guard above
+  // narrows to `never`; the cast is how the rest of this file already bridges
+  // that gap between the declared type and the runtime File.
+  const file = part as File;
+  return { artifactFile: file, filename: file.name };
+}
+
+/** Hex-encode an ArrayBuffer (R2 returns checksums as raw bytes). */
+function hex(buf: ArrayBuffer): string {
+  return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * Verify an artifact CI uploaded straight to R2, and build its catalog record.
+ *
+ * The Worker never sees these bytes — that is the whole point, since anything
+ * over the plan's request-body cap (100 MB on Free/Pro) 413s at the edge before
+ * this code runs. So "trust the publisher's claim" is not good enough: the
+ * caller states a size and SHA-256, and both are checked against what R2 itself
+ * recorded when it accepted the PUT.
+ *
+ * R2 only stores a whole-object SHA-256 for NON-multipart uploads. A missing
+ * checksum is therefore refused rather than waved through — a multipart upload
+ * would otherwise silently downgrade this to an unverified claim, which is
+ * exactly the guarantee the inline path never gives up. CI must force a
+ * single-part PUT with x-amz-checksum-sha256.
+ */
+async function verifyUploadedArtifact(
+  env: Env,
+  form: FormData,
+  key: string,
+  filename: string
+): Promise<ArtifactInfo> {
+  const claimedSha = (await optionalTextPart(form, "artifact_ref_sha256", "artifact_ref_sha256"))
+    ?.trim()
+    .toLowerCase();
+  const claimedSizeText = await optionalTextPart(form, "artifact_ref_size", "artifact_ref_size");
+  const contentType =
+    (await optionalTextPart(form, "artifact_ref_content_type", "artifact_ref_content_type")) ??
+    "application/octet-stream";
+
+  if (!claimedSha || !/^[0-9a-f]{64}$/.test(claimedSha)) {
+    throw new HttpError(
+      400,
+      "invalid_request",
+      "A by-reference publish needs 'artifact_ref_sha256' as 64 lowercase hex characters."
+    );
+  }
+  const claimedSize = Number(claimedSizeText);
+  if (!Number.isInteger(claimedSize) || claimedSize <= 0) {
+    throw new HttpError(
+      400,
+      "invalid_request",
+      "A by-reference publish needs 'artifact_ref_size' as the object's byte count."
+    );
+  }
+
+  const head = await env.BUCKET.head(key);
+  if (!head) {
+    throw new HttpError(
+      404,
+      "artifact_not_uploaded",
+      `No object at ${key}. Upload the artifact to R2 first (S3 API), then publish ` +
+        `it by reference. Nothing has been recorded in the catalog.`
+    );
+  }
+  if (head.size !== claimedSize) {
+    throw new HttpError(
+      409,
+      "artifact_mismatch",
+      `Object at ${key} is ${head.size} bytes but the publish claims ${claimedSize}. ` +
+        `Re-upload the artifact; the catalog was not modified.`
+    );
+  }
+
+  // The inline lane enforces this before storing; the by-reference lane must
+  // too, or MAX_ARTIFACT_BYTES silently stops being the artifact size cap the
+  // README says it is. The 250 MiB default clears the 135 MiB installers, so
+  // this costs nothing today and keeps one ceiling rather than two.
+  const limit = maxBytes(env);
+  if (head.size > limit) {
+    throw new HttpError(
+      413,
+      "artifact_too_large",
+      `Object at ${key} is ${head.size} bytes, over the ${limit}-byte limit. ` +
+        `The catalog was not modified.`
+    );
+  }
+
+  const stored = head.checksums?.sha256;
+  if (!stored) {
+    throw new HttpError(
+      409,
+      "artifact_unverifiable",
+      `Object at ${key} has no SHA-256 recorded by R2, so its integrity cannot be ` +
+        `confirmed. R2 stores a whole-object SHA-256 only for single-part uploads — ` +
+        `re-upload without multipart and with x-amz-checksum-sha256 set.`
+    );
+  }
+  const actualSha = hex(stored);
+  if (actualSha !== claimedSha) {
+    throw new HttpError(
+      409,
+      "artifact_mismatch",
+      `Object at ${key} hashes to ${actualSha} but the publish claims ${claimedSha}. ` +
+        `The catalog was not modified.`
+    );
+  }
+
+  return {
+    filename,
+    path: key,
+    size_bytes: head.size,
+    sha256: actualSha,
+    content_type: contentType,
+  };
+}
+
 export async function handlePublish(
   request: Request,
   env: Env,
@@ -114,15 +260,24 @@ export async function handlePublish(
   const manifestText =
     typeof manifestPart === "string" ? manifestPart : await (manifestPart as Blob).text();
 
-  const artifactPart = form.get("artifact");
-  if (artifactPart == null || typeof artifactPart === "string") {
-    throw new HttpError(
-      400,
-      "invalid_request",
-      "Missing 'artifact' file part (the wheel or binary to publish)."
-    );
-  }
-  const artifactFile = artifactPart as File;
+  // Two ways to supply the artifact:
+  //
+  //   inline     — an `artifact` file part. The Worker hashes and stores it.
+  //   by-reference — `artifact_ref_*` text parts naming an object CI already
+  //                  PUT straight into R2 over the S3 API.
+  //
+  // by-reference exists because a Worker request body is capped by the
+  // Cloudflare plan (100 MB on Free/Pro) and the Agent UI installers are
+  // 106-135 MiB, so they 413 at the edge before the Worker ever runs. Uploading
+  // to R2 directly has no such cap. The integrity guarantees are NOT relaxed:
+  // the object is verified below against the size and SHA-256 the caller
+  // claims, using the checksum R2 itself recorded at PUT time.
+  const refFilename = await optionalTextPart(form, "artifact_ref_filename", "artifact_ref_filename");
+  const byReference = refFilename != null;
+
+  // Exactly one of the two must be present. Resolved through a small helper so
+  // the File narrowing stays local and cannot leak into the rest of the handler.
+  const { artifactFile, filename } = selectArtifactSource(form, byReference, refFilename);
 
   // Optional README + CHANGELOG markdown for this version (rendered on the Hub
   // pages). Both are optional; an empty part is rejected (omit it instead).
@@ -155,7 +310,6 @@ export async function handlePublish(
   const manifest = parseManifest(manifestText);
   assertAuthorAllowed(publisher, manifest.author);
 
-  const filename = artifactFile.name;
   if (!ARTIFACT_FILENAME_RE.test(filename)) {
     throw new HttpError(
       400,
@@ -192,49 +346,66 @@ export async function handlePublish(
   }
   const versionExists = Boolean(existing?.versions[manifest.version]);
 
-  const bytes = new Uint8Array(await artifactFile.arrayBuffer());
-  const limit = maxBytes(env);
-  if (bytes.byteLength === 0) {
-    throw new HttpError(400, "invalid_artifact", "Artifact is empty (0 bytes).");
-  }
-  if (bytes.byteLength > limit) {
-    throw new HttpError(
-      413,
-      "artifact_too_large",
-      `Artifact is ${bytes.byteLength} bytes, over the ${limit}-byte limit.`
-    );
-  }
-
   const key = artifactKey(manifest.id, manifest.version, filename);
   // Per-filename immutability: a published artifact is never overwritten. A new
   // platform binary under an existing version uses a distinct filename and is
-  // allowed; re-uploading the same filename is rejected. (Idempotent re-runs of
+  // allowed; re-publishing the same filename is rejected. (Idempotent re-runs of
   // a release job should treat this 409 as "already published" — success.)
-  if (await env.BUCKET.head(key)) {
+  //
+  // What counts as "published" differs by mode, and the distinction matters:
+  // inline, the R2 object only exists once the Worker has stored it, so its
+  // presence IS the record. By-reference, CI has already PUT the object before
+  // calling this, so the object always exists and heading it would 409 every
+  // time — the record is the AGENT MANIFEST, which only lists artifacts this
+  // endpoint accepted.
+  const alreadyPublished = byReference
+    ? Boolean(existing?.versions[manifest.version]?.artifacts?.some((a) => a.filename === filename))
+    : Boolean(await env.BUCKET.head(key));
+  if (alreadyPublished) {
     throw new HttpError(
       409,
       "version_exists",
-      `Artifact already exists at ${key} and is immutable. To add another ` +
-        `platform binary use a distinct filename; to change this one, bump the version.`
+      `Artifact ${filename} is already published under ${manifest.id}@${manifest.version} ` +
+        `and is immutable. To add another platform binary use a distinct filename; ` +
+        `to change this one, bump the version.`
     );
   }
 
-  const sha256 = await sha256Hex(bytes);
-  const artifact: ArtifactInfo = {
-    filename,
-    path: key,
-    size_bytes: bytes.byteLength,
-    sha256,
-    content_type: artifactFile.type || "application/octet-stream",
-  };
-
-  // Store the artifact. The raw gaia-agent.yaml is written only on the first
-  // publish of a version so it stays the immutable record of that release; a
-  // later platform binary joining the same version must not rewrite it.
-  await env.BUCKET.put(key, bytes, {
-    httpMetadata: { contentType: artifact.content_type },
-    sha256,
-  });
+  let artifact: ArtifactInfo;
+  if (byReference) {
+    artifact = await verifyUploadedArtifact(env, form, key, filename);
+  } else {
+    const file = artifactFile!;
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const limit = maxBytes(env);
+    if (bytes.byteLength === 0) {
+      throw new HttpError(400, "invalid_artifact", "Artifact is empty (0 bytes).");
+    }
+    if (bytes.byteLength > limit) {
+      throw new HttpError(
+        413,
+        "artifact_too_large",
+        `Artifact is ${bytes.byteLength} bytes, over the ${limit}-byte limit. ` +
+          `Artifacts above the Cloudflare request-body cap must be uploaded to R2 ` +
+          `directly and published by reference (artifact_ref_* fields).`
+      );
+    }
+    const sha256 = await sha256Hex(bytes);
+    artifact = {
+      filename,
+      path: key,
+      size_bytes: bytes.byteLength,
+      sha256,
+      content_type: file.type || "application/octet-stream",
+    };
+    // Store the artifact. The raw gaia-agent.yaml is written only on the first
+    // publish of a version so it stays the immutable record of that release; a
+    // later platform binary joining the same version must not rewrite it.
+    await env.BUCKET.put(key, bytes, {
+      httpMetadata: { contentType: artifact.content_type },
+      sha256,
+    });
+  }
   // The raw gaia-agent.yaml, README, and CHANGELOG are per-version records:
   // write them only on the first publish of a version so a later platform binary
   // joining the same version cannot rewrite them.

@@ -287,6 +287,38 @@ checked into the repo:
 `MAX_ARTIFACT_BYTES` (a plain var, default 250 MiB) caps artifact size and can be
 overridden per environment without a secret.
 
+## Publishing artifacts larger than 100 MB
+
+A Worker request body is capped by the Cloudflare **account plan** — 100 MB on
+Free and Pro, 200 MB Business, 500 MB Enterprise. `POST /publish` therefore
+cannot carry the Agent UI installers (106-135 MiB); they are rejected with a
+`413` by Cloudflare's edge before the Worker executes, so `MAX_ARTIFACT_BYTES`
+is not involved and raising it changes nothing.
+
+Artifacts at or above 90 MiB are instead PUT straight into the bucket over R2's
+S3 API and published **by reference**: the POST carries
+`artifact_ref_{filename,sha256,size,content_type}` in place of the file part.
+
+Integrity is not relaxed. Before recording anything the Worker heads the object
+and checks its size and SHA-256 against what R2 stored at PUT time. R2 keeps a
+whole-object SHA-256 only for **single-part** uploads, so an object without one
+is refused (`artifact_unverifiable`) rather than accepted on the publisher's
+word — the uploader must use `put_object` with `ChecksumSHA256`, never
+`upload_file`, which switches to multipart and drops the checksum.
+
+The publisher needs three extra secrets for this path:
+
+| Secret | How to get it |
+|---|---|
+| `R2_ACCESS_KEY_ID` | Cloudflare dashboard → R2 → **Manage API Tokens** → create a token with **Object Read & Write** on the hub bucket |
+| `R2_SECRET_ACCESS_KEY` | Shown once alongside the access key id |
+| `CLOUDFLARE_ACCOUNT_ID` | Same value the Worker deploy uses |
+
+These are R2 S3 credentials and are **not** the same as `CLOUDFLARE_API_TOKEN`,
+which deploys the Worker. Missing any of them is a loud failure naming all
+three; the publisher never silently falls back to the Worker path, because that
+path 413s and would waste the release.
+
 ## Deploying on Railway (demo)
 
 For demo/staging only: [`Dockerfile`](./Dockerfile) runs `wrangler dev`
