@@ -4,8 +4,9 @@
  * Framework-agnostic, dependency-free, no build step. Mount it on a fixed,
  * pointer-events:none <canvas> behind the page content. See StarField.astro.
  *
- * Pointer-reactive: a smoothed cursor trails the real one, carrying a soft
- * glow, brightening nearby lines, and drifting nearby stars toward it.
+ * Pointer-reactive: a smoothed cursor trails the real one, brightening nearby
+ * stars and constellation lines and drifting nearby stars toward it. No
+ * ambient glow — the reaction lives entirely in the field itself.
  * Honors prefers-reduced-motion: renders one static frame, no rAF loop, and
  * no pointer reaction at all.
  *
@@ -163,16 +164,6 @@ export function mountStarField(canvas, palette) {
       const k = 1 - d / POINTER_RADIUS;
       return k * k * pk;
     };
-
-    // Soft glow trailing the pointer — the ambient half of the reaction.
-    if (spx != null && pk > 0.01) {
-      const g = ctx.createRadialGradient(spx, spy, 0, spx, spy, POINTER_RADIUS * 1.25);
-      g.addColorStop(0, `rgba(${gr},${gg},${gb},${0.075 * pk})`);
-      g.addColorStop(0.55, `rgba(${gr},${gg},${gb},${0.028 * pk})`);
-      g.addColorStop(1, `rgba(${gr},${gg},${gb},0)`);
-      ctx.fillStyle = g;
-      ctx.fillRect(0, 0, W, H);
-    }
 
     // Each star drifts a touch toward the pointer. Computed once per frame and
     // reused by lines, packets and the star pass so the geometry stays coherent.
