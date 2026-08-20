@@ -18,8 +18,8 @@ const WAYS = [
     n: '01',
     icon: 'cpu',
     who: 'For everyone',
-    title: 'Chat in your terminal',
-    body: 'Open the terminal hub, pick an agent, and talk to it — document Q&A, research, real work on your files. Everything runs on-device; nothing you type is sent to a cloud.',
+    title: 'Talk to the GAIA agent',
+    body: 'Open the terminal hub and start asking — document Q&A, data analysis, web research, on your own files. It remembers across sessions and picks up new skills as you need them.',
     code: 'gaia-tui',
     cta: 'Quickstart',
     href: `${DOCS}/quickstart`,
@@ -56,34 +56,28 @@ const TRUST = ['100% local', 'Open source · MIT', 'Ryzen™ AI optimized'];
 ---
 
 <Layout
-  title="GAIA — Local AI agents in your terminal"
-  description="AMD's open-source framework for AI agents that run entirely on your machine. One command installs the terminal hub — pick an agent and chat. No cloud, no API keys."
+  title="GAIA — The AI agent in your terminal"
+  description="AMD's open-source AI agent, running entirely on your own hardware. Download the terminal hub and ask it about your documents, your data, or your code. No cloud, no API keys."
 >
   <Header />
   <main id="main-content">
-    <!-- 1. Hero — copy + the one install command left, live terminal right. -->
+    <!-- 1. Hero — copy + the download CTA left, live terminal right. -->
     <section id="install" class="g-shell grid items-center gap-12 pb-20 pt-[122px] lg:grid-cols-[1.05fr_0.95fr] lg:gap-14 lg:pb-28 lg:pt-[170px]">
       <div class="min-w-0">
         <Eyebrow pill class="animate-g-rise mb-7">The Agent Factory</Eyebrow>
 
         <h1 class="g-h-hero animate-g-rise" style="animation-delay:0.05s">
-          AI agents that live<br />in your terminal — <span class="text-g-gold-text">and on your&nbsp;machine.</span>
+          The AI agent<br />in your terminal — <span class="text-g-gold-text">and on your&nbsp;machine.</span>
         </h1>
 
         <p class="g-lede animate-g-rise mt-6" style="animation-delay:0.12s">
-          GAIA is AMD's open-source framework for local AI agents. One command installs the
-          terminal hub; pick an agent and chat. Your data never leaves the machine — no cloud, no
+          GAIA is AMD's open-source AI agent, and it runs entirely on your own hardware — with
+          memory that persists between sessions and skills you can add. Ask it about your
+          documents, your data, or your code. Nothing you type leaves the machine: no cloud, no
           API keys, no catch.
         </p>
 
-        <InstallCommand class="animate-g-rise mt-9 [animation-delay:0.18s]" />
-
-        <details class="animate-g-rise group mt-5" style="animation-delay:0.21s">
-          <summary class="g-cta-link cursor-pointer list-none text-[14px]">
-            Prefer a direct download?<span class="transition-transform group-open:rotate-90" aria-hidden="true">→</span>
-          </summary>
-          <TuiDownload class="mt-4" />
-        </details>
+        <TuiDownload class="animate-g-rise mt-9 [animation-delay:0.18s]" />
 
         <div class="animate-g-rise mt-6 flex flex-wrap gap-x-[18px] gap-y-2 text-[14px]" style="animation-delay:0.24s">
           <a href="/hub" class="g-cta-link">Browse the Agent Hub<span aria-hidden="true">→</span></a>
@@ -130,12 +124,14 @@ const TRUST = ['100% local', 'Open source · MIT', 'Ryzen™ AI optimized'];
       </div>
     </section>
 
-    <!-- 3. Closing CTA -->
-    <section class="border-t border-g-border">
+    <!-- 3. Closing CTA — the terminal path, for people who would rather not
+         click a download at all. -->
+    <section id="terminal-install" class="scroll-mt-[66px] border-t border-g-border">
       <div class="g-shell py-16 text-center sm:py-[88px]">
-        <h2 class="g-h-cta mx-auto max-w-[720px]">The factory floor is open.</h2>
-        <p class="g-lede-sm mx-auto mt-4 max-w-[480px] sm:text-[17px]">
-          One command, one local model, and your first agent — in under two minutes.
+        <h2 class="g-h-cta mx-auto max-w-[720px]">Or install it from the terminal.</h2>
+        <p class="g-lede-sm mx-auto mt-4 max-w-[520px] sm:text-[17px]">
+          One command sets up the <code class="bg-transparent p-0">gaia</code> CLI and the terminal
+          hub together, and puts both on your <code class="bg-transparent p-0">PATH</code>.
         </p>
         <InstallCommand align="center" class="mt-8" />
 
