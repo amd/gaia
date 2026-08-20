@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from decimal import Decimal
 from math import inf, nan
@@ -17,10 +18,10 @@ from gaia.governance import (
     CheckpointResolution,
     GaiaGovernanceAdapter,
     GaiaGovernanceError,
+    GaiaRiskTagFloorEngine,
     GovernanceDecision,
     WorkflowTransition,
 )
-from gaia.governance.adapter import GaiaRiskTagFloorEngine
 from gaia.governance.checkpoint_bridge import InMemoryCheckpointBridge
 from gaia.governance.policy_binding import StaticPolicyBindingService
 from gaia.governance.receipt_service import InMemoryReceiptService, JsonlReceiptService
@@ -417,8 +418,9 @@ def test_from_acgs_lite_fail_closes_when_package_missing(monkeypatch):
     real_import = builtins.__import__
 
     def _blocked(name, *args, **kwargs):
-        if name.startswith("acgs_lite"):
-            raise ModuleNotFoundError(f"No module named {name!r}", name=name)
+        if name == "acgs_lite" or name.startswith("acgs_lite."):
+            # CPython reports the top-level name when the package is absent.
+            raise ModuleNotFoundError("No module named 'acgs_lite'", name="acgs_lite")
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", _blocked)
@@ -444,8 +446,22 @@ def test_from_acgs_lite_reports_broken_inner_dependency(monkeypatch):
         GaiaGovernanceAdapter.from_acgs_lite(audit_log=None)
 
 
+def test_from_acgs_lite_fail_closes_when_constitution_module_missing(monkeypatch):
+    """Installed wheel missing acgs_lite.constitution is an upgrade, not a reinstall."""
+    import sys
+    import types
+
+    _purge_acgs_lite(monkeypatch)
+    monkeypatch.setitem(sys.modules, "acgs_lite", types.ModuleType("acgs_lite"))
+
+    with pytest.raises(
+        GaiaGovernanceError, match="does not ship acgs_lite.constitution"
+    ):
+        GaiaGovernanceAdapter.from_acgs_lite(audit_log=None)
+
+
 def test_from_acgs_lite_fail_closes_when_adapter_module_missing(monkeypatch):
-    """Published acgs-lite 2.11.0 has no integrations.gaia — fail closed."""
+    """Installed wheel missing integrations.gaia — fail closed with an upgrade hint."""
     import sys
     import types
 
@@ -547,9 +563,17 @@ def test_from_acgs_lite_wires_binding_and_gaia_owned_floor(monkeypatch):
     assert "gaia:risk-tag:blocked" in tagged.rule_ids
 
 
+@pytest.mark.acgs_live
 def test_from_acgs_lite_honors_constitution_when_installed():
-    """Opt-in live path when acgs-lite>=2.12.0 is installed."""
-    pytest.importorskip("acgs_lite.integrations.gaia")
+    """Live path against a published acgs-lite wheel.
+
+    Default unit CI skips this. The dedicated ``acgs-lite-live`` job sets
+    ``GAIA_REQUIRE_ACGS_LITE=1`` so a missing wheel is a failure, not a skip.
+    """
+    if os.environ.get("GAIA_REQUIRE_ACGS_LITE"):
+        import acgs_lite.integrations.gaia as _acgs_gaia  # noqa: F401
+    else:
+        pytest.importorskip("acgs_lite.integrations.gaia")
     from acgs_lite import Constitution, Rule, Severity, ViolationAction
 
     constitution = Constitution.from_rules(
@@ -560,7 +584,14 @@ def test_from_acgs_lite_honors_constitution_when_installed():
                 keywords=["wipe-disk"],
                 severity=Severity.CRITICAL,
                 workflow_action=ViolationAction.BLOCK,
-            )
+            ),
+            Rule(
+                id="GAIA-REVIEW-1",
+                text="Outbound notify requires operator review",
+                keywords=["notify-oncall"],
+                severity=Severity.HIGH,
+                workflow_action=ViolationAction.REQUIRE_HUMAN_REVIEW,
+            ),
         ]
     )
     adapter = GaiaGovernanceAdapter.from_acgs_lite(
@@ -581,6 +612,19 @@ def test_from_acgs_lite_honors_constitution_when_installed():
         )
     )
     assert blocked.decision == "BLOCK"
+
+    reviewed = adapter.govern_action(
+        ActionRequest(
+            action_id="a3",
+            actor_id="actor",
+            tool_name="notify",
+            action_type="notify",
+            args={"cmd": "notify-oncall pager"},
+            risk_tags=[],
+            workflow_id="wf_test",
+        )
+    )
+    assert reviewed.decision == "REVIEW"
 
     tagged = adapter.govern_action(_action("publish_post", ["blocked"]))
     assert tagged.decision == "BLOCK"

@@ -287,12 +287,10 @@ class TestAgentWheelExtras:
     def test_acgs_extra_pins_published_adapter_wheel(self):
         """[acgs] names a live PyPI dist that ships the GAIA adapter.
 
-        acgs-lite 2.12.0 is published and includes
-        acgs_lite.integrations.gaia, so this extra cannot trigger
-        #2240's unpublished-wheel silent downgrade. The upper bound
-        keeps a breaking policy-engine major from resolving silently.
-        Comments are stripped first so a commented pin cannot hide an
-        unbounded live spec.
+        This asserts the pin string. The acgs-lite-live CI job is the
+        resolve proof: it installs ``.[acgs]`` and imports
+        ``acgs_lite.integrations.gaia``. Together they close #2240 for
+        this extra — a string-only check cannot.
         """
         extras_block = _parse_extras_require_block()
         live = "\n".join(

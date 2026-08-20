@@ -174,8 +174,8 @@ _STUB_HINT = (
 def _classify_acgs_lite_import_error(exc: ModuleNotFoundError) -> GaiaGovernanceError:
     """Map a missing-module error to an actionable, non-misleading hint.
 
-    Distinguishes: package absent, adapter module absent from an installed
-    wheel, and a broken transitive import inside an installed wheel.
+    Distinguishes: package absent, a submodule absent from an installed
+    wheel (adapter or otherwise), and a broken transitive import.
     """
     missing = getattr(exc, "name", None) or ""
     message = str(exc)
@@ -188,7 +188,13 @@ def _classify_acgs_lite_import_error(exc: ModuleNotFoundError) -> GaiaGovernance
             "`acgs-lite>=2.12.0,<3.0` (or `pip install "
             f"'amd-gaia[acgs]'`). {_STUB_HINT}"
         )
-    if (not missing) or missing == "acgs_lite" or str(missing).startswith("acgs_lite."):
+    if str(missing).startswith("acgs_lite."):
+        return GaiaGovernanceError(
+            f"acgs-lite is installed but does not ship {missing} "
+            f"({exc}). Upgrade to `acgs-lite>=2.12.0,<3.0` "
+            f"(or `pip install 'amd-gaia[acgs]'`). {_STUB_HINT}"
+        )
+    if (not missing) or missing == "acgs_lite":
         return GaiaGovernanceError(
             f"ACGS-lite is not installed ({exc}). Install it with "
             "`pip install 'acgs-lite>=2.12.0,<3.0'` "
@@ -328,7 +334,10 @@ class GaiaGovernanceAdapter:
         audit_log: str | None = "receipts.jsonl",
         agent_id: str = "gaia-agent",
     ) -> "GaiaGovernanceAdapter":
-        """Production-shaped adapter using ACGS-lite as the PolicyEngine.
+        """Adapter using ACGS-lite as the PolicyEngine.
+
+        Checkpoints remain in-memory — swap ``checkpoint_runtime`` for a
+        durable service if REVIEW checkpoints must survive a restart.
 
         The in-repo :meth:`default` stub remains for demos and tests. This
         factory is the documented ACGS-lite swap. Constitution decisions
