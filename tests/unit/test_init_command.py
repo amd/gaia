@@ -17,6 +17,7 @@ from gaia.installer.lemonade_installer import (
     LemonadeInfo,
     LemonadeInstaller,
 )
+from gaia.ui.build import WebuiBuildResult, WebuiBuildStatus
 from gaia.version import LEMONADE_VERSION
 
 
@@ -2030,7 +2031,10 @@ class _HubInstallWiringTestBase(unittest.TestCase):
             patch.object(
                 cmd, "_install_backend", side_effect=_tracked("install_backend")
             ),
-            patch("gaia.ui.build.ensure_webui_built", return_value=True),
+            patch(
+                "gaia.ui.build.ensure_webui_built",
+                return_value=WebuiBuildResult(status=WebuiBuildStatus.OK),
+            ),
             # Never touch the real user's ~/.gaia/config.json during a test.
             patch("gaia.config.GaiaConfig"),
         ]
@@ -2242,6 +2246,106 @@ class TestHubInstallWiringNpuProfile(_HubInstallWiringTestBase):
 
         self.assertEqual(rc, 0)
         mock_install.assert_called_once()
+
+
+class TestWebuiBuildGatesInitCompletion(_HubInstallWiringTestBase):
+    """AC4/4b/5 (#2880): a hard Agent UI build failure (too-old Node, or a
+    build failure with no usable dist/) must not let `gaia init` report
+    plain success -- but verify_setup and config persistence, which don't
+    depend on the frontend build, must still run unconditionally. A merely
+    absent toolchain (no node/npm at all) stays a warn-and-continue outcome,
+    since a backend-only dev install is legitimate.
+
+    Uses the "minimal" profile so only the webui-build step's own
+    `gaia.ui.build.ensure_webui_built` patch (installed by
+    `_patch_common_steps`, overridden per test below) is in play --
+    "minimal" doesn't trigger the hub-agent-install or device/backend
+    branches, which need their own separate patches.
+    """
+
+    def _run_with_webui_result(self, result):
+        cmd = self._make_cmd("minimal")
+        self._patch_common_steps(cmd)
+        # Override the "OK" stub _patch_common_steps installed above.
+        p = patch("gaia.ui.build.ensure_webui_built", return_value=result)
+        p.start()
+        self.addCleanup(p.stop)
+        rc = cmd.run()
+        return cmd, rc
+
+    def test_node_too_old_does_not_report_plain_success(self):
+        result = WebuiBuildResult(
+            status=WebuiBuildStatus.NODE_TOO_OLD,
+            message="Agent UI frontend requires Node >=20.19.0, but "
+            "/usr/bin/node reports v18.19.0.",
+            found_version="18.19.0",
+            required_range=">=20.19.0",
+            node_path="/usr/bin/node",
+        )
+        cmd = self._make_cmd("minimal")
+        self._patch_common_steps(cmd)
+        p = patch("gaia.ui.build.ensure_webui_built", return_value=result)
+        p.start()
+        self.addCleanup(p.stop)
+
+        with patch.object(cmd, "_print_completion") as mock_completion:
+            rc = cmd.run()
+
+        self.assertNotEqual(rc, 0, "NODE_TOO_OLD must not exit 0")
+        mock_completion.assert_not_called()
+
+    def test_build_failed_with_no_dist_does_not_report_plain_success(self):
+        result = WebuiBuildResult(
+            status=WebuiBuildStatus.BUILD_FAILED,
+            message="Warning: Frontend build failed (exit code 1).",
+        )
+        _cmd, rc = self._run_with_webui_result(result)
+
+        self.assertNotEqual(rc, 0, "BUILD_FAILED (no usable dist) must not exit 0")
+
+    def test_node_too_old_still_runs_verify_and_persists_config(self):
+        result = WebuiBuildResult(
+            status=WebuiBuildStatus.NODE_TOO_OLD, message="too old"
+        )
+        cmd = self._make_cmd("minimal")
+        self._patch_common_steps(cmd)
+        p = patch("gaia.ui.build.ensure_webui_built", return_value=result)
+        p.start()
+        self.addCleanup(p.stop)
+
+        mock_config_cls = MagicMock()
+        with (
+            patch.object(cmd, "_verify_setup", return_value=True) as mock_verify,
+            patch("gaia.config.GaiaConfig", mock_config_cls),
+        ):
+            rc = cmd.run()
+
+        mock_verify.assert_called_once()
+        mock_config_cls.load.return_value.save.assert_called_once()
+        self.assertNotEqual(rc, 0)
+
+    def test_toolchain_absent_still_returns_zero(self):
+        """node/npm missing entirely is tolerable -- a backend-only dev
+        install is legitimate, so this must stay a warn-and-continue exit 0,
+        unlike NODE_TOO_OLD/BUILD_FAILED above."""
+        result = WebuiBuildResult(
+            status=WebuiBuildStatus.TOOLCHAIN_ABSENT,
+            message="Warning: Node.js not found. Cannot auto-rebuild Agent UI frontend.",
+        )
+        _cmd, rc = self._run_with_webui_result(result)
+
+        self.assertEqual(rc, 0)
+
+    def test_stale_dist_still_usable_returns_zero(self):
+        """A build failure with a stale-but-working dist/ is status OK (the
+        5th outcome) -- it must not fail init."""
+        result = WebuiBuildResult(
+            status=WebuiBuildStatus.OK,
+            message="Warning: npm install failed: ERR",
+        )
+        _cmd, rc = self._run_with_webui_result(result)
+
+        self.assertEqual(rc, 0)
 
 
 # ---------------------------------------------------------------------------
@@ -2474,7 +2578,10 @@ class TestRunKeyboardInterruptExitCode(unittest.TestCase):
             patch.object(cmd, "_ensure_server_running", return_value=True),
             patch.object(cmd, "_download_models", return_value=True),
             patch.object(cmd, "_test_model_inference", side_effect=KeyboardInterrupt),
-            patch("gaia.ui.build.ensure_webui_built", return_value=False),
+            patch(
+                "gaia.ui.build.ensure_webui_built",
+                return_value=WebuiBuildResult(status=WebuiBuildStatus.SKIPPED),
+            ),
             patch("gaia.config.GaiaConfig"),
             patch(
                 "gaia.llm.lemonade_client.LemonadeClient",
