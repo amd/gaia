@@ -147,6 +147,7 @@ def _upload_to_r2(artifact_path: Path, key: str, sha_hex: str) -> None:
     """
     try:
         import boto3  # imported lazily: only the direct-upload path needs it
+        from botocore.config import Config as BotoConfig
     except ImportError as e:  # pragma: no cover - environment problem, not logic
         raise SystemExit(
             "error: boto3 is required to upload artifacts larger than "
@@ -167,12 +168,24 @@ def _upload_to_r2(artifact_path: Path, key: str, sha_hex: str) -> None:
     access_key, secret_key, account_id = creds
     bucket = os.environ.get("R2_BUCKET", "gaia-hub")
 
+    # boto3 >= 1.36 adds a CRC32 checksum to every PutObject by default and
+    # sends it as an aws-chunked trailer (Content-Encoding: aws-chunked,
+    # x-amz-content-sha256: STREAMING-UNSIGNED-PAYLOAD-TRAILER). R2 does not
+    # accept that trailer format and rejects the request outright — as
+    # `Unauthorized`, which reads like a credentials problem and is not one.
+    # `when_required` suppresses the automatic checksum while still sending the
+    # explicit ChecksumSHA256 below as a normal header, which is the whole point:
+    # the Worker refuses to publish an object R2 recorded no SHA-256 for.
     client = boto3.client(
         "s3",
         endpoint_url=f"https://{account_id}.r2.cloudflarestorage.com",
         aws_access_key_id=access_key,
         aws_secret_access_key=secret_key,
         region_name="auto",
+        config=BotoConfig(
+            request_checksum_calculation="when_required",
+            response_checksum_validation="when_required",
+        ),
     )
     print(
         f"[publish] uploading {artifact_path.name} -> r2://{bucket}/{key}", flush=True

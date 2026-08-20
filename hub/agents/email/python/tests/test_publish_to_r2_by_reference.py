@@ -77,7 +77,13 @@ class _Resp:
 @pytest.fixture
 def captured(monkeypatch):
     """Capture the outgoing POST and any R2 upload, without performing either."""
-    seen: dict = {"post": None, "put": None, "head": None, "already_published": False}
+    seen: dict = {
+        "post": None,
+        "put": None,
+        "head": None,
+        "client_kwargs": None,
+        "already_published": False,
+    }
 
     def fake_post(url, headers=None, files=None, timeout=None):
         # requests encodes each value as (filename, body[, content_type]); read
@@ -98,6 +104,10 @@ def captured(monkeypatch):
         def put_object(self, **kw):
             seen["put"] = kw
 
+    def fake_client(*a, **kw):
+        seen["client_kwargs"] = kw
+        return _S3()
+
     def fake_head(url, timeout=None, allow_redirects=None):
         seen["head"] = url
         return type(
@@ -108,11 +118,22 @@ def captured(monkeypatch):
 
     monkeypatch.setattr(pub.requests, "post", fake_post)
     monkeypatch.setattr(pub, "_download_sha256", lambda *a, **k: None)
+
+    # Stub boto3 AND botocore.config: neither is installed in the unit env, and
+    # the client is constructed with a botocore Config object whose settings are
+    # the thing under test.
+    class _Config:
+        def __init__(self, **kw):
+            self.__dict__.update(kw)
+
+    sysmod = __import__("sys").modules
     monkeypatch.setitem(
-        __import__("sys").modules,
-        "boto3",
-        type("m", (), {"client": lambda *a, **k: _S3()}),
+        sysmod, "boto3", type("m", (), {"client": staticmethod(fake_client)})
     )
+    botocore = type("m", (), {})
+    botocore_config = type("m", (), {"Config": _Config})
+    monkeypatch.setitem(sysmod, "botocore", botocore)
+    monkeypatch.setitem(sysmod, "botocore.config", botocore_config)
     return seen
 
 
@@ -246,3 +267,40 @@ def test_the_check_runs_before_the_upload_not_after(
 
     assert captured["head"] is not None
     assert captured["put"] is not None
+
+
+def test_r2_client_disables_boto3_automatic_checksums(
+    manifest, tmp_path, captured, monkeypatch
+):
+    """boto3 >= 1.36 breaks R2 uploads unless the new defaults are turned off.
+
+    It adds a CRC32 checksum to every PutObject and sends it as an aws-chunked
+    trailer, which R2 rejects — reported as `Unauthorized`, which reads like a
+    credentials problem and sends you looking in the wrong place entirely. This
+    cost one real release, so pin the config rather than the symptom.
+    """
+    monkeypatch.setenv("R2_ACCESS_KEY_ID", "k")
+    monkeypatch.setenv("R2_SECRET_ACCESS_KEY", "s")
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct")
+
+    _publish(manifest, _artifact(tmp_path, pub.DIRECT_UPLOAD_THRESHOLD + 1))
+
+    cfg = captured["client_kwargs"]["config"]
+    assert cfg.request_checksum_calculation == "when_required"
+    assert cfg.response_checksum_validation == "when_required"
+    # The explicit digest must survive — the Worker refuses an object R2 has no
+    # SHA-256 for, so suppressing checksums entirely would break verification.
+    assert "ChecksumSHA256" in captured["put"]
+
+
+def test_the_r2_endpoint_is_account_scoped(manifest, tmp_path, captured, monkeypatch):
+    monkeypatch.setenv("R2_ACCESS_KEY_ID", "k")
+    monkeypatch.setenv("R2_SECRET_ACCESS_KEY", "s")
+    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct123")
+
+    _publish(manifest, _artifact(tmp_path, pub.DIRECT_UPLOAD_THRESHOLD + 1))
+
+    assert (
+        captured["client_kwargs"]["endpoint_url"]
+        == "https://acct123.r2.cloudflarestorage.com"
+    )
