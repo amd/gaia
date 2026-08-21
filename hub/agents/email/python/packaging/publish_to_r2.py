@@ -94,17 +94,25 @@ def _parse_artifact_arg(arg: str) -> tuple[Path, str | None]:
 
 
 def _infer_platform_key(filename: str) -> str:
-    """Infer the platform key from ``email-agent-<key>[.exe]``."""
+    """Infer the platform key from ``<product>-agent-<key>[.exe]``.
+
+    Keyed on the ``-agent-`` marker, not one product name: this publisher is
+    shared by every agent lane (``gaia-agent-linux-x64``, ``email-agent-…``),
+    and release_agent_gaia.yml passes its binaries with no explicit
+    ``=<platform-key>``.
+    """
     stem = filename
     if stem.endswith(".exe"):
         stem = stem[: -len(".exe")]
-    prefix = "email-agent-"
-    if not stem.startswith(prefix):
+    marker = "-agent-"
+    idx = stem.rfind(marker)
+    if idx == -1:
         raise SystemExit(
-            f"error: cannot infer platform key from '{filename}'. Pass it "
-            "explicitly as <path>=<platform-key>."
+            f"error: cannot infer platform key from '{filename}' (expected "
+            "'<product>-agent-<platform>', e.g. 'gaia-agent-linux-x64'). Pass "
+            "it explicitly as <path>=<platform-key>."
         )
-    return stem[len(prefix) :]
+    return stem[idx + len(marker) :]
 
 
 def _download_published(
@@ -330,6 +338,7 @@ def publish_one(
             timeout=300,
         )
 
+    published_now = False
     if resp.status_code == 201:
         body = resp.json()
         server_sha = body.get("published", {}).get("artifact", {}).get("sha256")
@@ -339,6 +348,7 @@ def publish_one(
                 f"sha256={server_sha} but local sha256={local_sha}. The upload was "
                 "corrupted in transit; failing loudly."
             )
+        published_now = True
         n = body.get("published", {}).get("version_artifacts", "?")
         print(
             f"[publish] OK 201 — stored, server sha256 verified. "
@@ -346,6 +356,22 @@ def publish_one(
             flush=True,
         )
     elif resp.status_code == 409:
+        # Only ONE of the Worker's four 409s means "already published":
+        # version_exists. artifact_mismatch / artifact_unverifiable / id_conflict
+        # all say "the catalog was NOT modified" -- reconciling those against the
+        # R2 object would report success for a release the hub never recorded.
+        error_code = ""
+        try:
+            error_code = str(resp.json().get("error", {}).get("code", ""))
+        except ValueError:
+            pass
+        if error_code != "version_exists":
+            raise SystemExit(
+                f"error: publish of {filename} was rejected with HTTP 409 "
+                f"{error_code or '(no error code)'} -- this is NOT 'already "
+                f"published' and the Worker did not record it in the catalog. "
+                f"{resp.text[:500]}"
+            )
         # Already published. Nothing can overwrite it, so the only question is
         # what this run reports downstream.
         remote_sha, remote_size = _download_published(
@@ -385,13 +411,21 @@ def publish_one(
             f"{resp.text[:500]}"
         )
 
-    executable = "email-agent.exe" if filename.endswith(".exe") else "email-agent"
+    # Derived from the artifact, not hardcoded to one product: this publisher is
+    # shared by every lane, and `gaia-agent-linux-x64` installs as `gaia-agent`.
+    stem = filename[: -len(".exe")] if filename.endswith(".exe") else filename
+    idx = stem.rfind("-agent-")
+    base = f"{stem[:idx]}-agent" if idx != -1 else "email-agent"
+    executable = base + (".exe" if filename.endswith(".exe") else "")
     return {
         "platform": platform_key,
         "filename": filename,
         "executable": executable,
         "sha256": local_sha,
         "size": size,
+        # Consumed by main()'s "did anything actually ship?" report and stripped
+        # before the summary is written, so the on-disk shape is unchanged.
+        "_published": published_now,
     }
 
 
@@ -466,6 +500,13 @@ def main(argv=None) -> int:
         "--summary-out",
         type=Path,
         help="Write a JSON array of {platform,filename,executable,sha256,size}.",
+    )
+    parser.add_argument(
+        "--require-new",
+        action="store_true",
+        help="Exit non-zero when every artifact was already published, i.e. the "
+        "run shipped nothing. Catches a forgotten version bump, which is "
+        "otherwise a green release that changes nothing.",
     )
     parser.add_argument(
         "--strict-immutable",
@@ -599,6 +640,22 @@ def main(argv=None) -> int:
         for p in (_parse_artifact_arg(raw)[0] for raw in args.artifact)
         if p.exists() and p.stat().st_size >= DIRECT_UPLOAD_THRESHOLD
     ]
+    if oversized:
+        # boto3 is only imported by the upload itself, so a missing dependency
+        # would otherwise surface mid-publish -- after the smaller platforms are
+        # already stored immutably under a version that can never be completed.
+        try:
+            import boto3  # noqa: F401
+        except ImportError:
+            listing = "\n".join(f"    {p.name}" for p in oversized)
+            raise SystemExit(
+                "error: these artifacts must upload over the S3 API:\n"
+                f"{listing}\n"
+                "  but boto3 is not installed for this interpreter.\n"
+                "  Fix: add boto3 to this step's dependency install "
+                "(see release_components.yml).\n"
+                "  Nothing has been published."
+            ) from None
     if oversized and _r2_credentials() is None:
         listing = "\n".join(
             f"    {p.name}  ({p.stat().st_size / 1e6:.1f} MB)" for p in oversized
@@ -648,12 +705,29 @@ def main(argv=None) -> int:
             )
         )
 
+    stored = sum(1 for r in results if r.pop("_published", False))
+
     if args.summary_out:
         args.summary_out.write_text(json.dumps(results, indent=2), encoding="utf-8")
         print(f"[publish] wrote summary -> {args.summary_out}", flush=True)
 
+    version = str(manifest["version"])
+    if stored == 0 and results:
+        print(
+            f"::warning::nothing new was stored — all {len(results)} artifact(s) "
+            f"were already published at {manifest['id']}@{version}. If you meant "
+            f"to ship a change, bump 'version' in the manifest: a published "
+            f"version can never be replaced, so re-running it is a no-op.",
+            flush=True,
+        )
+        if args.require_new:
+            raise SystemExit(
+                f"error: --require-new was set and {manifest['id']}@{version} was "
+                "already fully published. Bump the manifest version."
+            )
     print(
-        f"[publish] DONE — {len(results)} artifact(s) published/verified.", flush=True
+        f"[publish] DONE — {len(results)} artifact(s) verified, {stored} newly stored.",
+        flush=True,
     )
     return 0
 

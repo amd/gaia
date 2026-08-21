@@ -700,7 +700,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python -m pip install --upgrade requests pyyaml
+          # boto3 is not optional here: the Linux sidecar exceeds the Worker's
+          # request-body cap, so it uploads over the S3 API. Without it the
+          # publish dies on that artifact with the smaller platforms already
+          # stored immutably.
+          python -m pip install --upgrade requests pyyaml boto3
 
       # Re-run of the `version` job's gates AFTER the approval pause: the gate
       # can sit for hours, and this job re-checks out the ref. Cheap insurance
