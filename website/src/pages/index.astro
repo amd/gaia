@@ -19,7 +19,7 @@ const WAYS = [
     icon: 'cpu',
     who: 'For everyone',
     title: 'Talk to the GAIA agent',
-    body: 'Open the terminal hub and start asking — document Q&A, data analysis, web research, on your own files. It remembers across sessions and picks up new skills as you need them.',
+    body: 'The terminal is the way in. Ask it about your documents, your data, your code — it answers on your own machine, remembers across sessions, and picks up new skills as you need them.',
     code: 'gaia-tui',
     cta: 'Quickstart',
     href: `${DOCS}/quickstart`,
@@ -57,7 +57,7 @@ const TRUST = ['100% local', 'Open source · MIT', 'Ryzen™ AI optimized'];
 
 <Layout
   title="GAIA — The AI agent in your terminal"
-  description="AMD's open-source AI agent, running entirely on your own hardware. Download the terminal hub and ask it about your documents, your data, or your code. No cloud, no API keys."
+  description="AMD's open-source AI agent, running entirely on your own hardware. Install it and ask about your documents, your data, or your code — in your terminal. No cloud, no API keys."
 >
   <Header />
   <main id="main-content">
@@ -130,8 +130,9 @@ const TRUST = ['100% local', 'Open source · MIT', 'Ryzen™ AI optimized'];
       <div class="g-shell py-16 text-center sm:py-[88px]">
         <h2 class="g-h-cta mx-auto max-w-[720px]">Or install it from the terminal.</h2>
         <p class="g-lede-sm mx-auto mt-4 max-w-[520px] sm:text-[17px]">
-          One command sets up the <code class="bg-transparent p-0">gaia</code> CLI and the terminal
-          hub together, and puts both on your <code class="bg-transparent p-0">PATH</code>.
+          One command sets up the <code class="bg-transparent p-0">gaia</code> CLI, the local
+          model runtime, and <code class="bg-transparent p-0">gaia-tui</code> — the terminal entry
+          point to the agent.
         </p>
         <InstallCommand align="center" class="mt-8" />
 

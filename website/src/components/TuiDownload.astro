@@ -2,7 +2,7 @@
 // Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-// Direct download of the terminal hub binary, OS-detected.
+// Direct download of the agent's terminal entry point, OS-detected.
 //
 // Every published platform is rendered server-side, so a no-JS visitor gets the
 // whole list and a working link. JS promotes the one this machine can run into
@@ -11,7 +11,7 @@
 // than guessing — see scripts/download-target.ts.
 //
 // The binary is the raw artifact, not an installer: it lands in Downloads
-// without a PATH entry and needs the `gaia` CLI for the daemon it starts. The
+// without a PATH entry and needs the `gaia` CLI for the local model. The
 // one-liner does both, so it stays on screen as the recommended path.
 
 import { getComponentRelease, formatBytes } from '../data/catalog';
@@ -57,7 +57,7 @@ const downloads = release.binaries
       <svg class="h-4 w-4 flex-none" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" aria-hidden="true">
         <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
       </svg>
-      <span data-dl-label>Download the terminal hub</span>
+      <span data-dl-label>Install the GAIA agent</span>
     </a>
     <span data-dl-meta class="mono text-[11.5px] text-g-faint" hidden></span>
   </div>
@@ -85,11 +85,11 @@ const downloads = release.binaries
   </div>
 
   <p class="mt-3.5 max-w-[520px] text-[12.5px] leading-[1.6] text-g-faint">
-    A single binary — rename it to <code class="bg-transparent p-0">gaia-tui</code> and put it on your
-    <code class="bg-transparent p-0">PATH</code>. It needs the <code class="bg-transparent p-0">gaia</code> CLI
-    for the local runtime, which the
-    <a href="#terminal-install" class="prose-link">one-line installer</a> sets up alongside this
-    same binary.
+    The GAIA agent runs on your machine and you talk to it in the terminal. Rename the
+    download to <code class="bg-transparent p-0">gaia-tui</code>, put it on your
+    <code class="bg-transparent p-0">PATH</code>, and run it. It needs the
+    <code class="bg-transparent p-0">gaia</code> CLI for the local model, which the
+    <a href="#terminal-install" class="prose-link">one-line installer</a> sets up for you.
   </p>
 </div>
 
@@ -114,7 +114,7 @@ const downloads = release.binaries
     if (!primary || !label) return;
 
     primary.href = match.href;
-    label.textContent = `Download for ${PLATFORM_LABELS[platform]}`;
+    label.textContent = `Install GAIA for ${PLATFORM_LABELS[platform]}`;
     primary.hidden = false;
     if (meta) {
       meta.textContent = `${match.dataset.filename} · ${match.dataset.size}`;

@@ -16,15 +16,15 @@
 //
 // Nothing else in the app changes: pages consume getCatalog()/getAgent() only.
 
-export type SecurityTier = 'verified' | 'community' | 'experimental';
+export type SecurityTier = "verified" | "community" | "experimental";
 // `markdown` is the skills lane: an instruction-only skill ships no code.
-export type AgentLanguage = 'python' | 'cpp' | 'go' | 'typescript' | 'markdown';
+export type AgentLanguage = "python" | "cpp" | "go" | "typescript" | "markdown";
 
 // What a catalog entry IS. Agents are the default; the terminal hub publishes
 // as a component, standalone apps as `app`, and marketplace skills as `skill`
 // (#2467) — so a listing that shows only agents must filter on this rather than
 // assume every entry is one.
-export type PackageType = 'agent' | 'app' | 'component' | 'skill';
+export type PackageType = "agent" | "app" | "component" | "skill";
 
 export interface AgentRequirements {
   min_memory_gb: number;
@@ -132,7 +132,7 @@ export interface SkillMetadata {
   // Pre-publish security-audit result (#2468); `unaudited` when the skill's
   // tier made the scan advisory and none was supplied.
   audit: {
-    verdict: 'ALLOW' | 'unaudited';
+    verdict: "ALLOW" | "unaudited";
     engine: string;
     audited_at: string;
     findings: number;
@@ -146,7 +146,7 @@ interface CatalogFile {
 }
 
 async function fetchLiveCatalog(baseUrl: string): Promise<CatalogFile> {
-  const url = `${baseUrl.replace(/\/+$/, '')}/index.json`;
+  const url = `${baseUrl.replace(/\/+$/, "")}/index.json`;
   // Cache-bust the edge. A release publishes the new index.json moments before the
   // website redeploy runs, but the Cloudflare edge in front of hub.amd-gaia.ai can
   // still serve a stale copy (the deploy races the cache invalidation) — which would
@@ -154,33 +154,37 @@ async function fetchLiveCatalog(baseUrl: string): Promise<CatalogFile> {
   // param + `no-store` forces a fresh origin fetch, so every build reflects the
   // just-published catalog. Build-time only, so there's no runtime cost.
   const fetchUrl = `${url}?t=${Date.now()}`;
-  console.log(`[catalog] HUB_CATALOG_URL is set — fetching live catalog from ${url}`);
+  console.log(
+    `[catalog] HUB_CATALOG_URL is set — fetching live catalog from ${url}`,
+  );
   let res: Response;
   try {
-    res = await fetch(fetchUrl, { cache: 'no-store' });
+    res = await fetch(fetchUrl, { cache: "no-store" });
   } catch (e) {
     throw new Error(
       `[catalog] Failed to fetch the live catalog from ${url}: ${(e as Error).message}. ` +
         `The website has no bundled fixture — the live hub is the only source, so the ` +
         `build cannot continue. Check that the hub is reachable, or start a local ` +
-        `agent-hub worker and point HUB_CATALOG_URL at it (workers/agent-hub/README.md).`
+        `agent-hub worker and point HUB_CATALOG_URL at it (workers/agent-hub/README.md).`,
     );
   }
   if (!res.ok) {
     throw new Error(
       `[catalog] Live catalog request to ${url} returned HTTP ${res.status}. ` +
         `Check that the agent-hub worker is healthy (GET /health) and has at least ` +
-        `one published agent (workers/agent-hub/README.md).`
+        `one published agent (workers/agent-hub/README.md).`,
     );
   }
   const catalog = (await res.json()) as CatalogFile;
   if (!Array.isArray(catalog.agents)) {
     throw new Error(
       `[catalog] Live catalog at ${url} has no 'agents' array — the hub worker ` +
-        `returned an unexpected shape. See workers/agent-hub/schemas/index.schema.json.`
+        `returned an unexpected shape. See workers/agent-hub/schemas/index.schema.json.`,
     );
   }
-  console.log(`[catalog] Loaded ${catalog.agents.length} agents from the live catalog`);
+  console.log(
+    `[catalog] Loaded ${catalog.agents.length} agents from the live catalog`,
+  );
   return catalog;
 }
 
@@ -192,11 +196,11 @@ async function loadCatalog(): Promise<CatalogFile> {
   const hubUrl = process.env.HUB_CATALOG_URL;
   if (!hubUrl) {
     throw new Error(
-      '[catalog] HUB_CATALOG_URL is not set. The website builds its Agent Hub ' +
-        'pages from the live hub catalog and has no bundled fixture fallback. ' +
-        'Set HUB_CATALOG_URL=https://hub.amd-gaia.ai for production/Railway, or ' +
-        'point it at a local agent-hub Worker (workers/agent-hub/README.md), e.g. ' +
-        '`HUB_CATALOG_URL=https://hub.amd-gaia.ai npm run build`.'
+      "[catalog] HUB_CATALOG_URL is not set. The website builds its Agent Hub " +
+        "pages from the live hub catalog and has no bundled fixture fallback. " +
+        "Set HUB_CATALOG_URL=https://hub.amd-gaia.ai for production/Railway, or " +
+        "point it at a local agent-hub Worker (workers/agent-hub/README.md), e.g. " +
+        "`HUB_CATALOG_URL=https://hub.amd-gaia.ai npm run build`.",
     );
   }
   liveCatalog ??= fetchLiveCatalog(hubUrl);
@@ -208,6 +212,12 @@ async function loadCatalog(): Promise<CatalogFile> {
  * Use this when you genuinely want everything (e.g. generating a page per
  * published package); use getAgentPackages()/getSkills() to render one lane.
  */
+// Published to the hub, deliberately absent from the site: the Agent UI desktop
+// app is no longer maintained, and the terminal hub replaced it as the way in.
+// Filtered here rather than per-page so it cannot reappear in a listing, a
+// category pill, a stat count, or a generated /hub/<id> page.
+const HIDDEN_FROM_SITE = new Set(["agent-ui"]);
+
 export async function getCatalog(): Promise<Agent[]> {
   const { agents } = await loadCatalog();
   const tierRank: Record<SecurityTier, number> = {
@@ -215,12 +225,14 @@ export async function getCatalog(): Promise<Agent[]> {
     community: 1,
     experimental: 2,
   };
-  return [...agents].sort((a, b) => {
-    if (a.deprecated !== b.deprecated) return a.deprecated ? 1 : -1;
-    const tier = tierRank[a.security_tier] - tierRank[b.security_tier];
-    if (tier !== 0) return tier;
-    return a.name.localeCompare(b.name);
-  });
+  return [...agents]
+    .filter((a) => !HIDDEN_FROM_SITE.has(a.id))
+    .sort((a, b) => {
+      if (a.deprecated !== b.deprecated) return a.deprecated ? 1 : -1;
+      const tier = tierRank[a.security_tier] - tierRank[b.security_tier];
+      if (tier !== 0) return tier;
+      return a.name.localeCompare(b.name);
+    });
 }
 
 /**
@@ -268,49 +280,55 @@ const componentReleases = new Map<string, Promise<ComponentRelease>>();
  * from stale or guessed filenames 404s on the visitor, and the filenames are
  * only knowable from what the hub actually published.
  */
-export async function getComponentRelease(id: string): Promise<ComponentRelease> {
+export async function getComponentRelease(
+  id: string,
+): Promise<ComponentRelease> {
   const hubUrl = process.env.HUB_CATALOG_URL;
   if (!hubUrl) {
     throw new Error(
       `[catalog] HUB_CATALOG_URL is not set, so the published binaries for '${id}' ` +
-        `cannot be resolved. Set HUB_CATALOG_URL=https://hub.amd-gaia.ai.`
+        `cannot be resolved. Set HUB_CATALOG_URL=https://hub.amd-gaia.ai.`,
     );
   }
-  const base = hubUrl.replace(/\/+$/, '');
+  const base = hubUrl.replace(/\/+$/, "");
   const url = `${base}/agents/${id}/manifest.json`;
 
   const load = async (): Promise<ComponentRelease> => {
     let res: Response;
     try {
-      res = await fetch(`${url}?t=${Date.now()}`, { cache: 'no-store' });
+      res = await fetch(`${url}?t=${Date.now()}`, { cache: "no-store" });
     } catch (e) {
       throw new Error(
         `[catalog] Failed to fetch the '${id}' manifest from ${url}: ${(e as Error).message}. ` +
-          `The download links are built from it and there is no bundled fallback.`
+          `The download links are built from it and there is no bundled fallback.`,
       );
     }
     if (!res.ok) {
       throw new Error(
         `[catalog] Manifest request for '${id}' at ${url} returned HTTP ${res.status}. ` +
-          `Check that '${id}' is published (GET ${base}/index.json lists what the hub serves).`
+          `Check that '${id}' is published (GET ${base}/index.json lists what the hub serves).`,
       );
     }
     const manifest = (await res.json()) as {
       latest_version?: string;
-      versions?: Record<string, { artifacts?: Omit<PlatformBinary, 'url'>[] }>;
+      versions?: Record<string, { artifacts?: Omit<PlatformBinary, "url">[] }>;
     };
     const version = manifest.latest_version;
     if (!version) {
-      throw new Error(`[catalog] The '${id}' manifest at ${url} declares no latest_version.`);
+      throw new Error(
+        `[catalog] The '${id}' manifest at ${url} declares no latest_version.`,
+      );
     }
     const artifacts = manifest.versions?.[version]?.artifacts ?? [];
     if (!artifacts.length) {
       throw new Error(
         `[catalog] The '${id}' manifest names latest_version ${version} but publishes ` +
-          `no artifacts for it. See ${url}.`
+          `no artifacts for it. See ${url}.`,
       );
     }
-    console.log(`[catalog] Loaded ${artifacts.length} '${id}' binaries at ${version}`);
+    console.log(
+      `[catalog] Loaded ${artifacts.length} '${id}' binaries at ${version}`,
+    );
     return {
       version,
       binaries: artifacts.map((a) => ({
@@ -331,17 +349,17 @@ export async function getComponentRelease(id: string): Promise<ComponentRelease>
 // to the raw slug, which renders as a lowercase odd-one-out next to the labelled
 // pills — so add the label here when a manifest introduces a new category.
 const CATEGORY_LABELS: Record<string, string> = {
-  conversation: 'Conversation',
-  development: 'Development',
-  productivity: 'Productivity',
-  integrations: 'Integrations',
-  creative: 'Creative',
-  vision: 'Vision',
-  research: 'Research',
-  infrastructure: 'Infrastructure',
-  healthcare: 'Healthcare',
-  examples: 'Examples',
-  skills: 'Skills',
+  conversation: "Conversation",
+  development: "Development",
+  productivity: "Productivity",
+  integrations: "Integrations",
+  creative: "Creative",
+  vision: "Vision",
+  research: "Research",
+  infrastructure: "Infrastructure",
+  healthcare: "Healthcare",
+  examples: "Examples",
+  skills: "Skills",
 };
 
 export function categoryLabel(category: string): string {
@@ -349,11 +367,11 @@ export function categoryLabel(category: string): string {
 }
 
 const LANGUAGE_LABELS: Record<AgentLanguage, string> = {
-  python: 'Python',
-  cpp: 'C++',
-  go: 'Go',
-  typescript: 'TypeScript',
-  markdown: 'Markdown',
+  python: "Python",
+  cpp: "C++",
+  go: "Go",
+  typescript: "TypeScript",
+  markdown: "Markdown",
 };
 
 export function languageLabel(language: AgentLanguage): string {
@@ -361,9 +379,9 @@ export function languageLabel(language: AgentLanguage): string {
 }
 
 const SECURITY_TIER_LABELS: Record<SecurityTier, string> = {
-  verified: 'Verified',
-  community: 'Community',
-  experimental: 'Experimental',
+  verified: "Verified",
+  community: "Community",
+  experimental: "Experimental",
 };
 
 export function securityTierLabel(tier: SecurityTier): string {
@@ -379,14 +397,17 @@ export function packageDownloadUrl(agent: Agent): string | null {
   if (!agent.package) return null;
   const base = process.env.HUB_CATALOG_URL;
   if (!base) return null;
-  return `${base.replace(/\/+$/, '')}/agents/${agent.id}/${agent.latest_version}/${agent.package.filename}`;
+  return `${base.replace(/\/+$/, "")}/agents/${agent.id}/${agent.latest_version}/${agent.package.filename}`;
 }
 
 /** Human-readable download size, e.g. "2.3 MB". */
 export function formatBytes(bytes: number): string {
-  if (bytes <= 0) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB'];
-  const i = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  if (bytes <= 0) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  const i = Math.min(
+    Math.floor(Math.log(bytes) / Math.log(1024)),
+    units.length - 1,
+  );
   const value = bytes / Math.pow(1024, i);
   return `${value.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
 }
@@ -394,16 +415,19 @@ export function formatBytes(bytes: number): string {
 /** Pretty platform label, e.g. "win-x64" → "Windows x64". */
 export function platformLabel(platform: string): string {
   const map: Record<string, string> = {
-    'win-x64': 'Windows x64',
-    'linux-x64': 'Linux x64',
-    'darwin-arm64': 'macOS (Apple Silicon)',
-    'darwin-x64': 'macOS (Intel)',
+    "win-x64": "Windows x64",
+    "linux-x64": "Linux x64",
+    "darwin-arm64": "macOS (Apple Silicon)",
+    "darwin-x64": "macOS (Intel)",
   };
   return map[platform] ?? platform;
 }
 
 /** Distinct sorted values of a field across the catalog (for filter chips). */
-export function distinct<K extends keyof Agent>(agents: Agent[], key: K): string[] {
+export function distinct<K extends keyof Agent>(
+  agents: Agent[],
+  key: K,
+): string[] {
   const set = new Set<string>();
   for (const a of agents) set.add(String(a[key]));
   return [...set].sort();
@@ -429,17 +453,17 @@ export interface InstallMethod {
  */
 /** An entry's package type, defaulting to 'agent' as the manifest schema does. */
 export function packageType(agent: Agent): PackageType {
-  return agent.type ?? 'agent';
+  return agent.type ?? "agent";
 }
 
 /** True for the entries that ARE agents — excludes components like the terminal hub. */
 export function isAgent(agent: Agent): boolean {
-  return packageType(agent) === 'agent';
+  return packageType(agent) === "agent";
 }
 
 /** True for marketplace skills (#2467) — a different lane and a different installer. */
 export function isSkill(agent: Agent): boolean {
-  return packageType(agent) === 'skill';
+  return packageType(agent) === "skill";
 }
 
 export function installMethods(agent: Agent): InstallMethod[] {
@@ -448,13 +472,13 @@ export function installMethods(agent: Agent): InstallMethod[] {
   if (isSkill(agent)) {
     return [
       {
-        key: 'skill',
-        label: 'GAIA',
+        key: "skill",
+        label: "GAIA",
         command: `gaia skill install ${agent.id}`,
         note:
-          agent.security_tier === 'experimental'
-            ? 'Experimental — installing requires --allow-experimental.'
-            : 'Installs into ~/.gaia/skills/ and can be composed by any agent.',
+          agent.security_tier === "experimental"
+            ? "Experimental — installing requires --allow-experimental."
+            : "Installs into ~/.gaia/skills/ and can be composed by any agent.",
       },
     ];
   }
@@ -466,18 +490,18 @@ export function installMethods(agent: Agent): InstallMethod[] {
   if (!isAgent(agent)) {
     const methods: InstallMethod[] = [
       {
-        key: 'download',
-        label: 'Download',
-        command: '',
-        note: 'Download the build for your platform from the release below.',
+        key: "download",
+        label: "Download",
+        command: "",
+        note: "Download the build for your platform from the release below.",
       },
     ];
     if (agent.npm_package) {
       methods.push({
-        key: 'npm',
-        label: 'npm',
+        key: "npm",
+        label: "npm",
         command: `npm install -g ${agent.npm_package}`,
-        note: 'Global CLI install from npm.',
+        note: "Global CLI install from npm.",
       });
     }
     return methods;
@@ -486,35 +510,35 @@ export function installMethods(agent: Agent): InstallMethod[] {
   if (agent.npm_package) {
     return [
       {
-        key: 'npm',
-        label: 'npm',
+        key: "npm",
+        label: "npm",
         command: `npm i ${agent.npm_package}`,
-        note: '',
+        note: "",
       },
     ];
   }
 
   const methods: InstallMethod[] = [
     {
-      key: 'gaia',
-      label: 'GAIA',
+      key: "gaia",
+      label: "GAIA",
       command: `gaia agent install ${agent.id}`,
-      note: 'Recommended — installs into your GAIA app and registers the agent automatically.',
+      note: "Recommended — installs into your GAIA app and registers the agent automatically.",
     },
   ];
-  if (agent.language === 'python') {
+  if (agent.language === "python") {
     methods.push({
-      key: 'pip',
-      label: 'pip',
+      key: "pip",
+      label: "pip",
       command: `pip install gaia-agent-${agent.id}`,
-      note: 'Python package from PyPI. Discovered via the gaia.agent entry-point group.',
+      note: "Python package from PyPI. Discovered via the gaia.agent entry-point group.",
     });
   }
   methods.push({
-    key: 'source',
-    label: 'Source',
-    command: 'git clone https://github.com/amd/gaia.git',
-    note: 'Build from the GAIA repository — clone, then follow the agent README to install it.',
+    key: "source",
+    label: "Source",
+    command: "git clone https://github.com/amd/gaia.git",
+    note: "Build from the GAIA repository — clone, then follow the agent README to install it.",
   });
   return methods;
 }
@@ -522,16 +546,18 @@ export function installMethods(agent: Agent): InstallMethod[] {
 // Describe only what the hub actually enforces — there is no publisher-signing
 // scheme and no Python sandbox, so neither may be implied here.
 const SECURITY_TIER_DESCRIPTIONS: Record<SecurityTier, string> = {
-  verified: 'Built and reviewed by AMD.',
-  community: 'Community-published — not audited by AMD. Install with the usual third-party caution.',
-  experimental: 'Unreviewed and may be unstable. Review the source before installing.',
+  verified: "Built and reviewed by AMD.",
+  community:
+    "Community-published — not audited by AMD. Install with the usual third-party caution.",
+  experimental:
+    "Unreviewed and may be unstable. Review the source before installing.",
 };
 
 export function securityTierDescription(tier: SecurityTier): string {
-  return SECURITY_TIER_DESCRIPTIONS[tier] ?? '';
+  return SECURITY_TIER_DESCRIPTIONS[tier] ?? "";
 }
 
 /** Human label for the catalog's normalized npu value ("required" | "optional"). */
 export function npuLabel(npu: string): string {
-  return npu === 'required' ? 'Required' : 'Optional';
+  return npu === "required" ? "Required" : "Optional";
 }

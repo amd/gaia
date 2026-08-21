@@ -54,25 +54,6 @@ Consequences worth knowing before you debug a red build:
 - The entry shape is defined by `workers/agent-hub/schemas/index.schema.json`
   and mirrored by the `Agent` interface in `src/data/catalog.ts`.
 
-### The "in development" list is a committed snapshot
-
-Unpublished agents (those in `hub/agents/<id>/` but not yet in the live catalog)
-are listed from `src/data/in-development.json` — a **committed snapshot** of the
-agent manifests, not a build-time read of `../hub/`. The Railway deploy uploads
-only `website/`, so `hub/` does not exist in the production build context.
-
-**Whenever an agent is added, removed, or renamed under `hub/agents/`, regenerate
-the snapshot from a full checkout and commit the result:**
-
-```bash
-cd website
-npm run generate:agents    # rewrite the snapshot
-npm run check:agents       # verify it matches the manifests (also run in CI)
-```
-
-See `src/data/inDevelopment.ts` and `scripts/generate-in-development.mjs` for the
-full rationale.
-
 ## Project Structure
 
 ```
@@ -82,12 +63,10 @@ website/
 │   ├── gaia-icon.png
 │   └── robots.txt
 ├── scripts/
-│   └── generate-in-development.mjs  # Regenerates the in-development snapshot
 ├── src/
 │   ├── components/                  # 18 Astro components
 │   │   ├── AgentIcon.astro
 │   │   ├── AgentRow.astro
-│   │   ├── ComingSoonRow.astro
 │   │   ├── DocTabs.astro
 │   │   ├── Eyebrow.astro
 │   │   ├── FeaturedCard.astro
@@ -106,8 +85,6 @@ website/
 │   ├── data/
 │   │   ├── catalog.ts               # Live hub catalog access (build-time fetch)
 │   │   ├── fileTree.ts              # Nested tree from package file listings
-│   │   ├── in-development.json      # Committed snapshot of unpublished agents
-│   │   ├── inDevelopment.ts         # Snapshot loader
 │   │   ├── markdown.ts              # Dependency-free Markdown → semantic HTML
 │   │   └── *.test.ts                # Vitest unit tests
 │   ├── design/
@@ -197,9 +174,9 @@ a degraded deploy:
 ### Deploys only fire on `website/**` changes
 
 Both `deploy_website.yml` and `website-ci.yml` are path-filtered to `website/**`.
-A commit that only adds an agent under `hub/agents/` therefore **neither validates
-the in-development snapshot nor redeploys the site** — so a newly published agent
-will not appear on `/hub` on its own.
+A commit that only adds an agent under `hub/agents/` therefore **does not redeploy
+the site** — and since `/hub` is built from the live catalog at deploy time, a
+newly published agent will not appear on its own.
 
 Release workflows work around this by dispatching the deploy explicitly after a
 successful publish (see the "Redeploy the website to publish the new catalog
