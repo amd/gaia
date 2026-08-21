@@ -62,6 +62,8 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			if e.LemonadeReachable != nil {
 				m.lemonadeKnown = true
 				m.lemonadeUp = *e.LemonadeReachable
+				// Fresh evidence, so the one-shot pre-refusal is armed again.
+				m.lemonadeDownRefused = false
 				m.lemonadeVersion = e.LemonadeVersion
 				m.lemonadeBaseURL = e.LemonadeBaseURL
 			}
@@ -81,13 +83,17 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		if n, ok := stepNumberOf(e.Message); ok {
 			m.totalSteps = n
 		}
+		// Bounded on the way in, like every other agent-supplied line the log
+		// keeps (see narrate.go). What PRINTS is still laid out to this terminal
+		// at render time; this only stops a megabyte of "status" living in the
+		// model for the rest of the session.
 		if msg := userFacingStatus(e.Message); msg != "" {
-			m.setLiveStatus(msg)
+			m.setLiveStatus(truncateRunes(msg, narrationMax))
 		} else if m.dev {
 			// --dev is where harness internals belong: suppressing them for
 			// everyone would make a wire-level bug invisible to whoever has to
 			// fix it.
-			m.setLiveStatus("[harness] " + clean(e.Message))
+			m.setLiveStatus(truncateRunes("[harness] "+clean(e.Message), narrationMax))
 		}
 
 	case event.CanonicalTokenEvent:
@@ -504,11 +510,13 @@ func failureDetail(e event.CanonicalToolResultEvent, te event.ToolError) string 
 	if te.Code != "" {
 		head += " — " + te.Code
 	}
-	if msg := firstLine(te.Message); msg != "" {
-		return truncateRunes(head+": "+msg, detailWidth)
+	// clean, not firstLine: the log wraps now, and a tool's error message puts
+	// the remedy on its second line as often as not.
+	if msg := clean(te.Message); msg != "" {
+		return truncateRunes(head+": "+msg, detailMax)
 	}
 	if detail := toolResultDetail(e); detail != "" && !isBareStatusWord(detail) {
-		return truncateRunes(head+": "+detail, detailWidth)
+		return truncateRunes(head+": "+detail, detailMax)
 	}
 	return head
 }

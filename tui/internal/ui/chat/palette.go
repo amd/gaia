@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/amd/gaia/tui/internal/client"
 	"github.com/amd/gaia/tui/internal/ui/theme"
 )
 
@@ -38,12 +39,71 @@ var paletteCommands = []paletteCommand{
 	{"/model", "Switch the model this session runs on (gaia flagship agent only)"},
 }
 
+// modelPalettePrefix is what turns the palette into the model picker: the
+// command name plus the space that starts its argument.
+//
+// `/model` takes a free-form model id, so it cannot be a flat palette row the
+// way `/bypass on` could — one row per id at the top level would bury the
+// real commands under a model list nobody was looking for. So the palette
+// gets a second level instead: `/model` stays one row, and typing the space
+// after it swaps the list for the ids. The set is closed and known at compile
+// time (client.ClaudeModels), which is exactly what makes it listable.
+//
+// Local ids are deliberately absent: only the agent knows which Lemonade
+// models are actually downloaded, and a palette that offered one the machine
+// does not have would be worse than not offering any. Bare `/model` — the
+// first row here — asks the agent for that list.
+const modelPalettePrefix = modelCommandPrefix + " "
+
+// modelPaletteCommands is the model picker's rows, built fresh per call so
+// the list can never drift from client.ClaudeModels.
+func modelPaletteCommands() []paletteCommand {
+	out := []paletteCommand{
+		{modelCommandPrefix, "List every model, including the local ones this machine has"},
+	}
+	for _, cm := range client.ClaudeModels {
+		out = append(out, paletteCommand{
+			Name: modelPalettePrefix + cm.ID,
+			// Short on purpose: the panel is capped at 60 columns and these
+			// names are the longest in it, so a longer line is a truncated
+			// line. Naming the destination is what has to survive the
+			// budget — the launch banner and the header chip already carry
+			// the longer "this conversation is sent to Anthropic".
+			Desc: cm.Label + " · Anthropic API",
+		})
+	}
+	return out
+}
+
+// filterModelCommands narrows the model picker to rows matching what has been
+// typed after `/model `. Matched by substring, not prefix: nobody types
+// "claude-" to find Haiku, they type "haiku".
+func filterModelCommands(arg string) []paletteCommand {
+	if arg == "" {
+		return modelPaletteCommands()
+	}
+	var out []paletteCommand
+	for _, c := range modelPaletteCommands() {
+		if strings.Contains(strings.ToLower(c.Name), arg) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 // filterPaletteCommands narrows paletteCommands to the ones whose name
 // starts with the composer's current text, case-insensitively. Recomputed
 // fresh on every keystroke rather than cached — the list is 7 entries long,
 // and caching it correctly would mean invalidating on every input change
 // anyway.
 func filterPaletteCommands(value string) []paletteCommand {
+	// The space after `/model` is the switch into the model picker, so this
+	// one case is matched BEFORE trimming — trimming would erase the very
+	// character that distinguishes "/model" (still naming a command) from
+	// "/model " (now naming its argument).
+	if arg, ok := strings.CutPrefix(strings.ToLower(value), modelPalettePrefix); ok {
+		return filterModelCommands(strings.TrimSpace(arg))
+	}
 	q := strings.ToLower(strings.TrimSpace(value))
 	var out []paletteCommand
 	for _, c := range paletteCommands {
@@ -279,8 +339,18 @@ const paletteBoxMaxWidth = 60
 
 // paletteNameColumn is how many columns a command's name gets before its
 // description starts — wide enough for the longest name ("/memory", 7
-// columns) plus a two-column gutter.
+// columns) plus paletteNameGutter.
+//
+// It is a floor, not a cap: the model picker's rows ("/model
+// claude-haiku-4-5") are more than twice this wide, and they keep the gutter
+// rather than being squeezed into the column.
 const paletteNameColumn = 9
+
+// paletteNameGutter is the blank space every row keeps between its name and
+// its description. Without it a name wider than paletteNameColumn ran
+// straight into its own description — "/model claude-opus-5Claude Opus 5 …"
+// on screen, which reads as one mangled string rather than two fields.
+const paletteNameGutter = 2
 
 // paletteBoxStyle is Padding(0, 2): the borderless box adds NO rows of its
 // own, so the fits-check budgets zero chrome. The old bordered-design values
@@ -389,7 +459,7 @@ func paletteBodyLines(query string, items []paletteCommand, selected, inner int)
 		"",
 	}
 	for i, c := range items {
-		name := c.Name
+		name := c.Name + strings.Repeat(" ", paletteNameGutter)
 		for lipgloss.Width(name) < paletteNameColumn {
 			name += " "
 		}
