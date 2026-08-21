@@ -49,8 +49,9 @@ The GAIA API Server provides an OpenAI-compatible REST API for exposing GAIA age
    - Model metadata (tokens, description)
 
 3. **GET /health**
-   - Health check endpoint
-   - Returns 200 OK
+   - Reports API, Lemonade LLM, and RAG component status
+   - Returns 200 OK while the API process is serving
+   - Uses top-level `degraded` when Lemonade is unavailable or no LLM is loaded
 
 #### Agent Registry
 
@@ -315,18 +316,40 @@ async def list_models() -> ModelListResponse:
 @app.get("/health")
 async def health_check():
     """
-    Health check endpoint.
+    Report API and backing-service health.
 
     Returns:
-        {"status": "ok"}
+        Overall status and component-level status
 
     Example:
         GET /health
 
         Response:
-        {"status": "ok"}
+        {
+            "status": "ok",
+            "service": "gaia-api",
+            "components": {
+                "api": {"status": "ready"},
+                "llm": {
+                    "status": "ready",
+                    "backend": "lemonade",
+                    "model": "Gemma-4-E4B-it-GGUF",
+                    "url": "http://localhost:13305/api/v1"
+                },
+                "rag": {"status": "not_configured"}
+            }
+        }
     """
-    return {"status": "ok"}
+    llm = await _lemonade_health()
+    return {
+        "status": "ok" if llm["status"] == "ready" else "degraded",
+        "service": "gaia-api",
+        "components": {
+            "api": {"status": "ready"},
+            "llm": llm,
+            "rag": {"status": "not_configured"},
+        },
+    }
 ```
 
 ### Agent Registry
@@ -620,7 +643,10 @@ def test_health_check():
     """Test health endpoint."""
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "ok"}
+    data = response.json()
+    assert data["status"] in ("ok", "degraded")
+    assert data["service"] == "gaia-api"
+    assert data["components"]["api"] == {"status": "ready"}
 
 def test_list_models():
     """Test models listing."""

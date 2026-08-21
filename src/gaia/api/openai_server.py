@@ -21,6 +21,7 @@ import time
 import uuid
 from typing import AsyncGenerator
 
+import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -41,6 +42,8 @@ from .schemas import (
 # Configure logging
 logger = logging.getLogger(__name__)
 _REDACTED_LOG_VALUE = "[redacted]"
+_DEFAULT_LEMONADE_BASE_URL = "http://localhost:13305/api/v1"
+_LEMONADE_HEALTH_TIMEOUT_SECONDS = 0.35
 
 # Set logger level based on debug flag
 if os.environ.get("GAIA_API_DEBUG") == "1":
@@ -663,21 +666,102 @@ async def list_models() -> ModelListResponse:
 @app.get("/health")
 async def health_check():
     """
-    Health check endpoint.
+    Report API and backing-service health.
 
     Returns:
-        Status and service name
+        Overall status, service name, and component-level status
 
     Example:
         ```
         GET /health
         {
             "status": "ok",
-            "service": "gaia-api"
+            "service": "gaia-api",
+            "components": {
+                "api": {"status": "ready"},
+                "llm": {
+                    "status": "ready",
+                    "backend": "lemonade",
+                    "model": "Gemma-4-E4B-it-GGUF",
+                    "url": "http://localhost:13305/api/v1"
+                },
+                "rag": {"status": "not_configured"}
+            }
         }
         ```
     """
-    return {"status": "ok", "service": "gaia-api"}
+    llm = await _lemonade_health()
+    return {
+        "status": "ok" if llm["status"] == "ready" else "degraded",
+        "service": "gaia-api",
+        "components": {
+            "api": {"status": "ready"},
+            "llm": llm,
+            "rag": {"status": "not_configured"},
+        },
+    }
+
+
+async def _lemonade_health():
+    base_url = os.getenv("LEMONADE_BASE_URL", _DEFAULT_LEMONADE_BASE_URL).rstrip("/")
+    if not base_url.endswith("/api/v1"):
+        base_url = f"{base_url}/api/v1"
+
+    component = {
+        "status": "unavailable",
+        "backend": "lemonade",
+        "model": None,
+        "url": base_url,
+    }
+    api_key = os.getenv("LEMONADE_API_KEY", "").strip()
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+
+    try:
+        async with asyncio.timeout(_LEMONADE_HEALTH_TIMEOUT_SECONDS):
+            async with httpx.AsyncClient(
+                timeout=_LEMONADE_HEALTH_TIMEOUT_SECONDS
+            ) as client:
+                response = await client.get(f"{base_url}/health", headers=headers)
+        response.raise_for_status()
+    except httpx.HTTPStatusError:
+        component["status"] = "error"
+        return component
+    except (httpx.RequestError, TimeoutError):
+        return component
+
+    try:
+        payload = response.json()
+    except ValueError:
+        component["status"] = "error"
+        return component
+
+    if not isinstance(payload, dict) or payload.get("status") != "ok":
+        component["status"] = "error"
+        return component
+
+    model = _loaded_llm_model(payload)
+    if model is None:
+        return component
+
+    component["status"] = "ready"
+    component["model"] = model
+    return component
+
+
+def _loaded_llm_model(payload):
+    loaded = payload.get("all_models_loaded")
+    if isinstance(loaded, list):
+        model = next(
+            (
+                item.get("model_name") or item.get("checkpoint")
+                for item in loaded
+                if isinstance(item, dict) and item.get("type") in (None, "llm")
+            ),
+            None,
+        )
+        if model is not None:
+            return model
+    return payload.get("model_loaded")
 
 
 # Agent /v1/<agent>/* surface (#2178 / V2-17, #2176): the /query loop streams
