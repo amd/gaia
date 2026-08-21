@@ -1,8 +1,16 @@
 /*
- * Real star charts — J2000 positions of the bright stars in eleven classical
- * constellations, plus the line figures that join them.
+ * Real star charts — the WINTER sky, at J2000 positions, with the line figures
+ * that join them.
  *
- * Coordinates are right ascension in HOURS (0–24) and declination in DEGREES,
+ * The set is what actually stands over the northern hemisphere on a winter
+ * night: Orion and its belt at the centre, with Taurus (Aldebaran, the Hyades
+ * and the Pleiades), Auriga, Gemini and the two dogs
+ * around it, Perseus and Andromeda to the west, and the circumpolar trio —
+ * the Big Dipper, the Little Dipper and Cassiopeia — turning above. Summer
+ * figures (Lyra, Cygnus, Scorpius) and the southern Crux are deliberately not
+ * here: the first three are the wrong season, and Crux draws a cross.
+ *
+ * Coordinates are right ascension in HOURS (0-24) and declination in DEGREES,
  * epoch J2000, rounded to the precision a background needs (~0.5'). Magnitudes
  * are visual. The figures are the conventional asterisms — the shapes a person
  * actually recognises — not the IAU boundary polygons.
@@ -23,6 +31,7 @@
 /** @type {Constellation[]} */
 export const CONSTELLATIONS = [
   {
+    // The Big Dipper — the asterism, not the whole of Ursa Major.
     name: 'Ursa Major',
     stars: [
       [11.0622, 61.751, 1.79, 'Dubhe'],
@@ -53,95 +62,42 @@ export const CONSTELLATIONS = [
     ],
   },
   {
-    name: 'Cassiopeia',
+    // Aldebaran and the Hyades V, plus the Pleiades — Subaru, M45 — as the
+    // cluster it is: real member positions at their real separation from the
+    // rest of Taurus, and joined by no lines, so it reads as a knot of stars
+    // about a degree across rather than another stick figure.
+    name: 'Taurus',
     stars: [
-      [0.1529, 59.15, 2.27, 'Caph'],
-      [0.6751, 56.537, 2.24, 'Schedar'],
-      [0.9451, 60.717, 2.15, 'Gamma Cas'],
-      [1.4304, 60.235, 2.68, 'Ruchbah'],
-      [1.9067, 63.67, 3.35, 'Segin'],
+      [5.6274, 21.143, 3.0, 'Zeta Tau'],
+      [4.5987, 16.509, 0.85, 'Aldebaran'],
+      [4.4767, 15.871, 3.4, 'Theta Tau'],
+      [4.3299, 15.628, 3.65, 'Gamma Tau'],
+      [4.382, 17.542, 3.76, 'Delta Tau'],
+      [4.4776, 19.18, 3.53, 'Epsilon Tau'],
+      [5.4382, 28.608, 1.65, 'Elnath'],
+      [3.7914, 24.105, 2.87, 'Alcyone'],
+      [3.8194, 24.053, 3.63, 'Atlas'],
+      [3.7449, 24.113, 3.7, 'Electra'],
+      [3.7625, 24.367, 3.87, 'Maia'],
+      [3.7716, 23.948, 4.18, 'Merope'],
+      [3.7554, 24.467, 4.3, 'Taygeta'],
+      [3.8192, 24.136, 5.05, 'Pleione'],
+      [3.7425, 24.289, 5.45, 'Celaeno'],
+      [3.7607, 24.555, 5.76, 'Asterope'],
     ],
-    lines: [[0, 1], [1, 2], [2, 3], [3, 4]],
+    lines: [[0, 1], [1, 2], [2, 3], [3, 4], [4, 5], [5, 6]],
   },
   {
-    name: 'Cygnus',
+    name: 'Auriga',
     stars: [
-      [20.6905, 45.28, 1.25, 'Deneb'],
-      [20.3705, 40.257, 2.23, 'Sadr'],
-      [20.7702, 33.97, 2.48, 'Gienah'],
-      [19.7498, 45.131, 2.87, 'Delta Cyg'],
-      [19.512, 27.96, 3.18, 'Albireo'],
+      [5.2782, 45.998, 0.08, 'Capella'],
+      [5.9921, 44.947, 1.9, 'Menkalinan'],
+      [5.9953, 37.213, 2.62, 'Mahasim'],
+      [5.4382, 28.608, 1.65, 'Elnath'],
+      [4.9497, 33.166, 2.69, 'Hassaleh'],
+      [5.0328, 43.823, 3.03, 'Almaaz'],
     ],
-    lines: [[0, 1], [1, 4], [1, 2], [1, 3]],
-  },
-  {
-    name: 'Lyra',
-    stars: [
-      [18.6156, 38.784, 0.03, 'Vega'],
-      [18.7461, 37.605, 4.36, 'Zeta Lyr'],
-      [18.9089, 36.899, 4.3, 'Delta Lyr'],
-      [18.9824, 32.69, 3.25, 'Sulafat'],
-      [18.8347, 33.363, 3.52, 'Sheliak'],
-    ],
-    lines: [[0, 1], [1, 2], [2, 3], [3, 4], [4, 1]],
-  },
-  {
-    name: 'Scorpius',
-    stars: [
-      [16.0906, -19.805, 2.62, 'Graffias'],
-      [16.0055, -22.622, 2.29, 'Dschubba'],
-      [15.9811, -26.114, 2.89, 'Pi Sco'],
-      [16.3533, -25.593, 2.89, 'Sigma Sco'],
-      [16.4901, -26.432, 1.06, 'Antares'],
-      [16.5983, -28.216, 2.82, 'Tau Sco'],
-      [16.8361, -34.293, 2.29, 'Epsilon Sco'],
-      [17.622, -42.998, 1.86, 'Sargas'],
-      [17.5601, -37.104, 1.62, 'Shaula'],
-    ],
-    lines: [
-      [0, 1], [1, 2], [1, 3], [3, 4], [4, 5],
-      [5, 6], [6, 7], [7, 8],
-    ],
-  },
-  {
-    name: 'Crux',
-    stars: [
-      [12.4433, -63.099, 0.77, 'Acrux'],
-      [12.5194, -57.113, 1.63, 'Gacrux'],
-      [12.7953, -59.689, 1.25, 'Mimosa'],
-      [12.2525, -58.749, 2.79, 'Delta Cru'],
-    ],
-    lines: [[0, 1], [2, 3]],
-  },
-  {
-    name: 'Leo',
-    stars: [
-      [10.1395, 11.967, 1.36, 'Regulus'],
-      [10.1222, 16.763, 3.51, 'Eta Leo'],
-      [10.3329, 19.841, 2.08, 'Algieba'],
-      [9.8797, 26.007, 3.88, 'Mu Leo'],
-      [9.7643, 23.774, 2.98, 'Epsilon Leo'],
-      [11.2351, 20.524, 2.56, 'Zosma'],
-      [11.8177, 14.572, 2.14, 'Denebola'],
-      [11.2372, 15.43, 3.33, 'Chertan'],
-    ],
-    lines: [
-      [0, 1], [1, 2], [2, 3], [3, 4], [2, 5],
-      [5, 6], [6, 7], [7, 0],
-    ],
-  },
-  {
-    name: 'Ursa Minor',
-    stars: [
-      [2.5303, 89.264, 1.98, 'Polaris'],
-      [17.5369, 86.586, 4.35, 'Yildun'],
-      [16.7661, 82.037, 4.21, 'Epsilon UMi'],
-      [15.7345, 77.794, 4.29, 'Zeta UMi'],
-      [14.8451, 74.155, 2.08, 'Kochab'],
-      [15.3453, 71.834, 3.05, 'Pherkad'],
-      [16.2917, 75.755, 4.95, 'Eta UMi'],
-    ],
-    lines: [[0, 1], [1, 2], [2, 3], [3, 4], [4, 5], [5, 6], [6, 3]],
+    lines: [[0, 1], [1, 2], [2, 3], [3, 4], [4, 0], [0, 5]],
   },
   {
     name: 'Gemini',
@@ -156,17 +112,74 @@ export const CONSTELLATIONS = [
     lines: [[0, 1], [0, 2], [2, 3], [1, 4], [4, 5]],
   },
   {
-    name: 'Taurus',
+    name: 'Canis Major',
     stars: [
-      [5.6274, 21.143, 3.0, 'Zeta Tau'],
-      [4.5987, 16.509, 0.85, 'Aldebaran'],
-      [4.4767, 15.871, 3.4, 'Theta Tau'],
-      [4.3299, 15.628, 3.65, 'Gamma Tau'],
-      [4.382, 17.542, 3.76, 'Delta Tau'],
-      [4.4776, 19.18, 3.53, 'Epsilon Tau'],
-      [5.4382, 28.608, 1.65, 'Elnath'],
+      [6.7525, -16.716, -1.46, 'Sirius'],
+      [6.3783, -17.956, 1.98, 'Mirzam'],
+      [7.05, -23.833, 3.02, 'Omicron2 CMa'],
+      [7.1399, -26.393, 1.83, 'Wezen'],
+      [6.977, -28.972, 1.5, 'Adhara'],
+      [7.4015, -29.303, 2.45, 'Aludra'],
+      [6.339, -30.063, 3.02, 'Furud'],
     ],
-    lines: [[0, 1], [1, 2], [2, 3], [3, 4], [4, 5], [5, 6]],
+    lines: [[1, 0], [0, 2], [2, 3], [3, 5], [3, 4], [4, 6]],
+  },
+  {
+    name: 'Canis Minor',
+    stars: [
+      [7.6551, 5.225, 0.34, 'Procyon'],
+      [7.4527, 8.289, 2.89, 'Gomeisa'],
+    ],
+    lines: [[0, 1]],
+  },
+  {
+    name: 'Perseus',
+    stars: [
+      [3.4054, 49.861, 1.79, 'Mirfak'],
+      [3.1361, 40.956, 2.12, 'Algol'],
+      [3.902, 31.884, 2.85, 'Zeta Per'],
+      [3.9642, 40.01, 2.89, 'Epsilon Per'],
+      [3.08, 53.507, 2.93, 'Gamma Per'],
+      [3.7154, 47.788, 3.01, 'Delta Per'],
+      [2.8451, 55.895, 3.76, 'Eta Per'],
+    ],
+    lines: [[6, 4], [4, 0], [0, 5], [5, 3], [3, 2], [0, 1]],
+  },
+  {
+    name: 'Andromeda',
+    stars: [
+      [0.1398, 29.091, 2.06, 'Alpheratz'],
+      [0.6553, 30.861, 3.27, 'Delta And'],
+      [1.1622, 35.621, 2.06, 'Mirach'],
+      [2.065, 42.33, 2.1, 'Almach'],
+    ],
+    lines: [[0, 1], [1, 2], [2, 3]],
+  },
+  {
+    name: 'Cassiopeia',
+    stars: [
+      [0.1529, 59.15, 2.27, 'Caph'],
+      [0.6751, 56.537, 2.24, 'Schedar'],
+      [0.9451, 60.717, 2.15, 'Gamma Cas'],
+      [1.4304, 60.235, 2.68, 'Ruchbah'],
+      [1.9067, 63.67, 3.35, 'Segin'],
+    ],
+    lines: [[0, 1], [1, 2], [2, 3], [3, 4]],
+  },
+  {
+    // The Little Dipper. Its stars straddle the pole, which is why every figure
+    // is projected about its own centre — see projectFigure.
+    name: 'Ursa Minor',
+    stars: [
+      [2.5303, 89.264, 1.98, 'Polaris'],
+      [17.5369, 86.586, 4.35, 'Yildun'],
+      [16.7661, 82.037, 4.21, 'Epsilon UMi'],
+      [15.7345, 77.794, 4.29, 'Zeta UMi'],
+      [14.8451, 74.155, 2.08, 'Kochab'],
+      [15.3453, 71.834, 3.05, 'Pherkad'],
+      [16.2917, 75.755, 4.95, 'Eta UMi'],
+    ],
+    lines: [[0, 1], [1, 2], [2, 3], [3, 4], [4, 5], [5, 6], [6, 3]],
   },
 ];
 
