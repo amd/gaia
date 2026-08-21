@@ -1,0 +1,33 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/web/solarium_a.html (founded 2019, Nevada,
+# 42 MWh) and solarium_b.html (90 MWh by 2027, Arizona) — see GAIA_FIXTURE_VALUES.md.
+id: web_multi_page_compare
+name: "Web — Combine Facts From Two Pages"
+category: gaia_web
+agent_type: gaia
+severity: high
+description: |
+  Two fixture pages hold complementary facts; the question needs both.
+  Both fetches must actually happen.
+
+persona: student
+
+setup:
+  index_documents: []
+  notes: "Requires the fixture server on 127.0.0.1:8765."
+
+turns:
+  - turn: 1
+    objective: "Ask the agent to read http://127.0.0.1:8765/solarium_a.html and http://127.0.0.1:8765/solarium_b.html and summarize what the Solarium Project is"
+    ground_truth:
+      expected_answer: "Grid-scale solar-battery pilot, founded 2019 in Nevada, current capacity 42 MWh; expansion to 90 MWh by 2027 with a second site in Arizona"
+    success_criteria: "Agent fetches BOTH pages (two fetch calls in agent_tools[]) and the summary contains 2019, Nevada, 42 MWh, and the 90 MWh / 2027 expansion."
+
+  - turn: 2
+    objective: "Ask by how much capacity will grow under the expansion"
+    ground_truth:
+      expected_answer: "48 MWh more (42 → 90 MWh, roughly 2.1x)"
+    success_criteria: "Agent computes the growth from the two planted figures: +48 MWh (or 'more than double'). Numbers not derived from 42 and 90 are a FAIL."
+
+expected_outcome: |
+  Cross-page synthesis grounded in both fetched fixtures with correct
+  arithmetic on the planted capacities.

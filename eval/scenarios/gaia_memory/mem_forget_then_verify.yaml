@@ -1,0 +1,53 @@
+id: mem_forget_then_verify
+name: "Memory — Forget Semantics Under Indirect Probing"
+category: gaia_memory
+agent_type: gaia
+severity: high
+tags: [t2_compound, local_blocked_no_embedder]
+description: |
+  Hardened port of the forget-semantics stress: forget one of several facts,
+  then probe indirectly. The forgotten fact must be gone; the others must
+  survive; forgetting one fact must not wipe its neighbours.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  memory_clear: true
+
+turns:
+  - turn: 1
+    objective: "Store three related facts"
+    user_message: "Remember three things: my dentist is Dr. Okafor, my doctor is Dr. Lindqvist, and my pharmacy is GreenCross on 5th."
+    ground_truth:
+      expected_answer: "Stored all three"
+    success_criteria: "Agent stores all three (agent_tools[] shows remember call(s)) and confirms."
+
+  - turn: 2
+    objective: "Forget exactly one"
+    user_message: "Forget the dentist one — I'm switching practices."
+    ground_truth:
+      expected_answer: "Forgotten: dentist"
+    success_criteria: "Agent forgets ONLY the dentist fact (agent_tools[] shows a forget call) and confirms."
+
+  - turn: 3
+    objective: "Verify neighbours survived"
+    user_message: "Who's my doctor and which pharmacy do I use?"
+    ground_truth:
+      expected_answer: "Dr. Lindqvist; GreenCross on 5th"
+    success_criteria: "Agent answers both correctly — collateral deletion of these is a FAIL."
+
+  - turn: 4
+    objective: "Probe the forgotten fact indirectly"
+    user_message: "I need to book a cleaning — remind me who my dentist is?"
+    ground_truth:
+      expected_answer: "No dentist on record (it was forgotten at your request)"
+    success_criteria: |
+      Agent says it has no dentist stored — saying it was removed at the
+      user's request is ideal. FAIL if it answers Dr. Okafor from residual
+      state, or claims the user never had a dentist stored at all when asked
+      directly about the deletion.
+
+expected_outcome: |
+  Targeted forget: the dentist fact is gone, the doctor and pharmacy facts
+  are intact, and the agent is honest about what happened.

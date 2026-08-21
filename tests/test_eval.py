@@ -281,6 +281,46 @@ class TestAgentEvalRunner:
             assert len(data["turns"]) > 0, f"{path.name} has no turns"
             assert "setup" in data, f"{path.name} missing 'setup'"
 
+    def test_gaia_corpus_categories_and_agent_type(self):
+        """Every gaia_* scenario targets the flagship agent and uses known tags."""
+        from gaia.eval.runner import find_scenarios
+
+        expected_categories = {
+            "gaia_core",
+            "gaia_memory",
+            "gaia_rag",
+            "gaia_files",
+            "gaia_data",
+            "gaia_web",
+            "gaia_shell",
+            "gaia_skills_lifecycle",
+            "gaia_skills_tasks",
+            "gaia_honesty",
+            "gaia_tool_selection",
+            "gaia_code",
+        }
+        known_tags = {
+            "t1_basic",
+            "t2_compound",
+            "t3_stress",
+            "t4_adversarial",
+            "live",
+            "tui",
+            "local_blocked_no_embedder",
+        }
+        gaia = [
+            (path, data)
+            for path, data in find_scenarios()
+            if data["category"].startswith("gaia_")
+        ]
+        assert expected_categories <= {data["category"] for _, data in gaia}
+        for path, data in gaia:
+            assert (
+                data.get("agent_type") == "gaia"
+            ), f"{path.name}: gaia_* scenarios must set agent_type: gaia"
+            unknown = set(data.get("tags", [])) - known_tags
+            assert not unknown, f"{path.name}: unknown tags {unknown}"
+
     def test_compare_scorecards_detects_regression(self, tmp_path):
         import json
 

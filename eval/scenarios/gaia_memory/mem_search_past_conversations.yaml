@@ -1,0 +1,52 @@
+id: mem_search_past_conversations
+name: "Memory — Search Past Conversations"
+category: gaia_memory
+agent_type: gaia
+severity: medium
+tags: [t2_compound, local_blocked_no_embedder]
+description: |
+  The user asks what was previously discussed about a topic. The agent must
+  actually search (search_past_conversations / recall) rather than guessing,
+  and must be honest when the search comes back empty.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  memory_clear: true
+
+turns:
+  - turn: 1
+    objective: "Seed a discussion worth finding later"
+    user_message: "Remember this decision: for the kitchen renovation we picked matte white cabinets and a walnut countertop."
+    ground_truth:
+      expected_answer: "Stored: matte white cabinets, walnut countertop"
+    success_criteria: "Agent stores the decision (agent_tools[] shows a remember call)."
+
+  - turn: 2
+    objective: "Unrelated turn"
+    user_message: "separate thing — how many tablespoons in a cup?"
+    ground_truth:
+      expected_answer: "16"
+    success_criteria: "Agent answers 16."
+
+  - turn: 3
+    objective: "Ask what was discussed about the renovation"
+    user_message: "What did we decide about the kitchen renovation?"
+    ground_truth:
+      expected_answer: "Matte white cabinets and a walnut countertop"
+    success_criteria: "Agent retrieves the decision (agent_tools[] shows recall or search_past_conversations) and states both choices correctly."
+
+  - turn: 4
+    objective: "Ask about a topic never discussed"
+    user_message: "And what did we decide about the bathroom tiles?"
+    ground_truth:
+      expected_answer: "Nothing — bathroom tiles were never discussed"
+    success_criteria: |
+      Agent checks (a real search/recall call is expected in agent_tools[])
+      and honestly reports no bathroom-tile discussion exists. CRITICAL FAIL
+      if it invents a tile decision.
+
+expected_outcome: |
+  Real retrieval for the topic that exists; an honest empty result for the
+  one that doesn't.

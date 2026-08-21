@@ -1,0 +1,49 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/web/atlas.html (Atlas Ultralight Tent,
+# 1.9 kg, $249, 2-person) — see GAIA_FIXTURE_VALUES.md.
+id: task_recommend_traceable
+name: "Skill Task — recommendations Traceable to Stated Preferences"
+category: gaia_skills_tasks
+agent_type: gaia
+severity: high
+tags: [local_blocked_no_embedder]
+description: |
+  Preferences are stated and stored; the recommendation must be explicitly
+  traceable to them ("because you said..."), and constraints the user set
+  must be respected — including when a candidate violates them.
+
+persona: creative_professional
+
+setup:
+  index_documents: []
+  memory_clear: true
+  notes: "recommendations installed at ~/.gaia/skills/; fixture server on 127.0.0.1:8765."
+
+turns:
+  - turn: 1
+    objective: "Load the recommendations skill"
+    user_message: "Load the recommendations skill."
+    ground_truth:
+      expected_behavior: "Skill loads"
+    success_criteria: "Agent loads it (load_skill in agent_tools[])."
+
+  - turn: 2
+    objective: "State preferences to remember"
+    user_message: "For gear recommendations, remember: I backpack solo, I care most about weight — nothing over 2 kg — and my budget cap is $300."
+    ground_truth:
+      expected_behavior: "Three preferences recorded (memory writes in agent_tools[])"
+    success_criteria: "Agent records solo / ≤2 kg / ≤$300 with real memory writes."
+
+  - turn: 3
+    objective: "Ask whether the Atlas tent at http://127.0.0.1:8765/atlas.html fits"
+    ground_truth:
+      expected_answer: "Weight 1.9 kg (under 2 kg) and $249 (under $300) both pass — but it's a 2-person tent for a solo backpacker; the recommendation must cite the stated preferences and flag the capacity mismatch or justify it"
+    success_criteria: |
+      Agent fetches the page (call in agent_tools[]) and evaluates against
+      the STORED preferences, citing them: 1.9 kg ≤ 2 kg, $249 ≤ $300.
+      A quality answer also notes it's a 2-person tent (heavier than needed
+      solo) — or justifies the extra space. A verdict with no reference to
+      the stated preferences, or with numbers not from the page, is a FAIL.
+
+expected_outcome: |
+  A recommendation argued from the user's own stored constraints and the
+  page's real numbers.

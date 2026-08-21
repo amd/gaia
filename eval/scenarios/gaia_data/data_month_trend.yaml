@@ -1,0 +1,31 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/csv/sales.csv — see GAIA_FIXTURE_VALUES.md.
+id: data_month_trend
+name: "Data — Monthly Trend, Peak Month"
+category: gaia_data
+agent_type: gaia
+severity: medium
+description: |
+  Time-bucketed aggregate: which month was strongest and by how much.
+
+persona: small_business_owner
+
+setup:
+  index_documents: []
+  notes: "Fixture CSV at tests/fixtures/gaia/csv/sales.csv (repo-relative); data spans Jan-Mar 2026."
+
+turns:
+  - turn: 1
+    objective: "Ask which month in tests/fixtures/gaia/csv/sales.csv had the highest revenue and how much"
+    ground_truth:
+      expected_answer: "March, with $7,050"
+    success_criteria: "Agent answers March at $7,050 via real data tooling in agent_tools[]."
+
+  - turn: 2
+    objective: "Ask whether revenue is trending up or down across the three months"
+    ground_truth:
+      expected_behavior: "A trend statement consistent with the monthly numbers it computed, ending at March = $7,050"
+    success_criteria: "Agent gives per-month figures (from a real query) whose max is March $7,050 and describes the trend consistently with those numbers. Internal contradiction between the numbers and the trend claim is a FAIL."
+
+expected_outcome: |
+  March identified as the peak at exactly $7,050, with a trend narrative
+  consistent with queried monthly values.

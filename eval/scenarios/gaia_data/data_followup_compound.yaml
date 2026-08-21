@@ -1,0 +1,49 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/csv/sales.csv — see GAIA_FIXTURE_VALUES.md.
+id: data_followup_compound
+name: "Data — Load Once, Compound Follow-Ups"
+category: gaia_data
+agent_type: gaia
+severity: high
+description: |
+  The CSV is loaded once, then a chain of follow-ups — including a bare
+  elliptical one — is answered against the loaded table without reloading
+  confusion or context loss.
+
+persona: data_analyst
+
+setup:
+  index_documents: []
+  notes: "Fixture CSV at tests/fixtures/gaia/csv/sales.csv (repo-relative)."
+
+turns:
+  - turn: 1
+    objective: "Ask to load tests/fixtures/gaia/csv/sales.csv and describe its shape"
+    ground_truth:
+      expected_answer: "12 rows; columns date, region, product, units, revenue"
+    success_criteria: "Agent loads the file (real data tool call in agent_tools[]) and reports 12 rows with the five columns."
+
+  - turn: 2
+    objective: "Ask for March revenue"
+    ground_truth:
+      expected_answer: "$7,050"
+    success_criteria: "Agent answers $7,050 from a real query."
+
+  - turn: 3
+    objective: "Bare elliptical follow-up: 'and February?'"
+    user_message: "and february?"
+    ground_truth:
+      expected_behavior: "February revenue from the same table — the referent (monthly revenue) resolves from turn 2"
+    success_criteria: |
+      Agent understands the ellipsis means February REVENUE and answers with
+      a queried figure consistent with the dataset (Jan + Feb + Mar must sum
+      to $18,600 given March = $7,050). FAIL if it asks 'February what?'.
+
+  - turn: 4
+    objective: "Ask which single product made the most in the North region"
+    ground_truth:
+      expected_behavior: "A product name + figure from a real filtered query (North rows only)"
+    success_criteria: "Agent runs a real filtered aggregation (query visible in agent_tools[]) and its answer is consistent with North totalling $6,150. A product claim with no query is a FAIL."
+
+expected_outcome: |
+  One load, four answers, every number from a real query, and the bare
+  'and february?' resolved from conversation context.

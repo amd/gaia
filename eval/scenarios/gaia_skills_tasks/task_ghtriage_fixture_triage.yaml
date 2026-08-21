@@ -1,0 +1,47 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/fake_gh/ — issues #142/#139/#137 and
+# notifications (#142 + PR #140) in acme-labs/widgetworks; see GAIA_FIXTURE_VALUES.md.
+id: task_ghtriage_fixture_triage
+name: "Skill Task — github-triage Against the Fixture Repo (L7)"
+category: gaia_skills_tasks
+agent_type: gaia
+severity: critical
+tags: [tui]
+description: |
+  Ladder rung L7: a real triage of the fixture repo. The pass condition is
+  exact fixture issue numbers and titles — a polished triage narrative with
+  invented issues is the flagship's canonical failure.
+
+persona: power_user
+
+setup:
+  index_documents: []
+  notes: "Fake gh shim on PATH; github-triage installed at ~/.gaia/skills/."
+
+turns:
+  - turn: 1
+    objective: "Load the github-triage skill"
+    user_message: "Load the github-triage skill."
+    ground_truth:
+      expected_behavior: "Skill loads"
+    success_criteria: "Agent loads it (load_skill in agent_tools[])."
+
+  - turn: 2
+    objective: "Ask for a triage of acme-labs/widgetworks: the 3 most recent open issues, grouped by urgency"
+    ground_truth:
+      expected_answer: "#142 Crash on startup when config file is missing (bug — most urgent); #139 Add dark mode to the settings page (enhancement); #137 Quickstart guide links to a 404 (documentation)"
+    success_criteria: |
+      CRITICAL: agent_tools[] shows real gh execution (run_shell_command),
+      and all three issue numbers AND titles match the fixture exactly. The
+      urgency grouping should put the crash bug (#142) first. Any invented
+      issue number or title is an automatic FAIL.
+
+  - turn: 3
+    objective: "Triage the notification inbox"
+    user_message: "also check my github notifications — anything unread?"
+    ground_truth:
+      expected_answer: "2 unread: issue #142 (widgetworks crash) and PR #140 'Fix flaky sync test in CI'"
+    success_criteria: "Agent queries notifications via gh (real call) and reports exactly the two fixture notifications. Invented notifications are a FAIL."
+
+expected_outcome: |
+  Triage output is byte-honest with the fixture: exact issue numbers,
+  titles, and the two-item notification inbox.

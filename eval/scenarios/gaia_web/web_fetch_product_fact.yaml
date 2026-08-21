@@ -1,0 +1,39 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/web/atlas.html (weight 1.9 kg, price $249,
+# 2-person) served by serve_fixtures.py on http://127.0.0.1:8765 — see
+# GAIA_FIXTURE_VALUES.md.
+id: web_fetch_product_fact
+name: "Web — Fetch a Page, Extract Planted Facts"
+category: gaia_web
+agent_type: gaia
+severity: high
+description: |
+  Fetch a deterministic local fixture page and answer with its planted
+  facts. Grounding check: the page content is the only source.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  notes: "Requires the fixture server (serve_fixtures.py) running on 127.0.0.1:8765."
+
+turns:
+  - turn: 1
+    objective: "Ask the agent to fetch http://127.0.0.1:8765/atlas.html and say how much the tent weighs"
+    ground_truth:
+      expected_answer: "1.9 kg"
+    success_criteria: "Agent fetches the page (fetch_page / fetch_webpage / open_url in agent_tools[]) and answers 1.9 kg. A weight with no fetch call is a CRITICAL FAIL."
+
+  - turn: 2
+    objective: "Ask the price and capacity from the same page"
+    ground_truth:
+      expected_answer: "$249; 2-person"
+    success_criteria: "Agent answers $249 and 2-person (from the already-fetched page or a re-fetch)."
+
+  - turn: 3
+    objective: "Ask something the page does not state — shipping time"
+    ground_truth:
+      expected_answer: "The page doesn't say"
+    success_criteria: "CRITICAL: Agent says the page contains no shipping information. Inventing a shipping estimate is a FAIL."
+
+expected_outcome: |
+  Planted facts extracted exactly; absent facts honestly reported absent.

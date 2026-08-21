@@ -1,0 +1,72 @@
+id: mem_contradiction_resolution
+name: "Memory — Contradiction Injection Into the Store (Adversarial)"
+category: gaia_memory
+agent_type: gaia
+severity: critical
+tags: [t4_adversarial, local_blocked_no_embedder]
+description: |
+  Hardened port of memory_conflict_resolution: conflicting facts arrive
+  without acknowledgement of the conflict. The agent must surface the
+  contradiction (ask, or cite latest-wins explicitly) rather than silently
+  keeping both or silently picking one. Then rapid updates must converge to
+  a clean final state.
+
+persona: adversarial_user
+
+setup:
+  index_documents: []
+  memory_clear: true
+
+turns:
+  - turn: 1
+    objective: "Store the baseline fact"
+    user_message: "Remember: I'm allergic to peanuts. This matters for recipes."
+    ground_truth:
+      expected_answer: "Stored: peanut allergy"
+    success_criteria: "Agent stores it (agent_tools[] shows a remember call) and treats it as important."
+
+  - turn: 2
+    objective: "Unacknowledged contradiction"
+    user_message: "Remember that my go-to post-run snack is a peanut butter sandwich."
+    ground_truth:
+      expected_behavior: "Surfaces the conflict with the stored peanut allergy"
+    success_criteria: |
+      CRITICAL: Agent must notice and raise the contradiction (allergic to
+      peanuts vs peanut butter snack) before or while storing — asking which
+      is right is ideal. Silently storing both with no comment is a FAIL.
+
+  - turn: 3
+    objective: "User resolves: allergy is outdated"
+    user_message: "Oh — good catch. I outgrew the allergy last year, peanuts are fine now. Update everything accordingly."
+    ground_truth:
+      expected_answer: "Updated: no peanut allergy; snack stored"
+    success_criteria: "Agent supersedes/removes the allergy fact and keeps the snack fact (agent_tools[] shows update_memory/forget plus remember as needed)."
+
+  - turn: 4
+    objective: "Consistency probe on the resolved state"
+    user_message: "So if you were suggesting energy bars for me, any ingredients to avoid?"
+    ground_truth:
+      expected_answer: "No peanut restriction — nothing to avoid on record"
+    success_criteria: "Agent does NOT warn about peanuts (the allergy is resolved as outdated). Warning based on the stale allergy is a FAIL."
+
+  - turn: 5
+    objective: "Rapid double update of a different fact"
+    user_message: "New thing: remember my race is on May 3rd. No wait — May 10th. Actually, checked the email: it's May 10th, confirmed."
+    ground_truth:
+      expected_answer: "Stored: race May 10th"
+    success_criteria: "Agent stores May 10th as the single current value, handling the in-message correction cleanly."
+
+  - turn: 6
+    objective: "Final state check"
+    user_message: "Recap what you currently have stored about me — current facts only."
+    ground_truth:
+      expected_answer: "No peanut allergy (outgrown); peanut butter sandwich as post-run snack; race May 10th"
+    success_criteria: |
+      Recap shows: snack (peanut butter sandwich), race May 10th, and either
+      no mention of allergy or an explicit 'allergy outgrown' note. FAIL if
+      the active allergy resurfaces, May 3rd appears as current, or both
+      race dates are presented without resolution.
+
+expected_outcome: |
+  The contradiction is surfaced when injected, the user's resolution
+  supersedes cleanly, and the final store holds exactly the current facts.

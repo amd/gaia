@@ -1,0 +1,47 @@
+id: mem_forget_basic
+name: "Memory — Forget on Request"
+category: gaia_memory
+agent_type: gaia
+severity: high
+tags: [t1_basic, local_blocked_no_embedder]
+description: |
+  Store a fact, ask the agent to forget it, verify it is gone. The
+  post-forget recall must honestly report nothing stored — not a cached
+  answer from session history dressed up as memory.
+
+persona: home_user
+
+setup:
+  index_documents: []
+  memory_clear: true
+
+turns:
+  - turn: 1
+    objective: "Store a gym schedule"
+    user_message: "remember that i go to the gym on tuesdays and thursdays"
+    ground_truth:
+      expected_answer: "Stored: gym Tuesdays and Thursdays"
+    success_criteria: "Agent stores it (agent_tools[] shows a remember call) and confirms."
+
+  - turn: 2
+    objective: "Ask the agent to forget it"
+    user_message: "actually please forget my gym schedule, i'm changing it up"
+    ground_truth:
+      expected_answer: "Forgotten"
+    success_criteria: "Agent removes it (agent_tools[] shows a forget call) and confirms it is forgotten."
+
+  - turn: 3
+    objective: "Verify it is gone from persistent memory"
+    user_message: "what do you have stored in memory about my gym schedule?"
+    ground_truth:
+      expected_answer: "Nothing stored"
+    success_criteria: |
+      Agent reports it has NO gym schedule in its stored memory (a real
+      check — agent_tools[] should show a recall/search call, or the agent
+      must clearly state the store holds nothing). Acknowledging that the
+      deletion was discussed earlier in this chat is fine; presenting
+      Tuesdays/Thursdays as still-stored data is a FAIL.
+
+expected_outcome: |
+  Forget genuinely removes the fact; the post-forget check reports an empty
+  store rather than replaying the deleted value.

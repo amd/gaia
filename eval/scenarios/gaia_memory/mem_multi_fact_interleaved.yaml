@@ -1,0 +1,77 @@
+id: mem_multi_fact_interleaved
+name: "Memory — Interleaved Facts, Out-of-Order Recall"
+category: gaia_memory
+agent_type: gaia
+severity: high
+tags: [t2_compound, local_blocked_no_embedder]
+description: |
+  Five facts are stored across turns, interleaved with chatter, then recalled
+  in a DIFFERENT order than stored. Recall must be selective — the right
+  fact for each question, not a dump of everything.
+
+persona: small_business_owner
+
+setup:
+  index_documents: []
+  memory_clear: true
+
+turns:
+  - turn: 1
+    objective: "Store facts 1 and 2"
+    user_message: "Remember these: my shop is called Fern & Co, and we close at 6pm on weekdays."
+    ground_truth:
+      expected_answer: "Stored: Fern & Co; weekday close 6pm"
+    success_criteria: "Agent stores both (agent_tools[] shows remember call(s)) and confirms."
+
+  - turn: 2
+    objective: "Chatter between facts"
+    user_message: "Busy week. Anyway — quick one, how many weeks are in a quarter?"
+    ground_truth:
+      expected_answer: "13"
+    success_criteria: "Agent answers 13."
+
+  - turn: 3
+    objective: "Store fact 3"
+    user_message: "Also remember: my accountant's name is Marisol."
+    ground_truth:
+      expected_answer: "Stored: accountant Marisol"
+    success_criteria: "Agent stores it and confirms."
+
+  - turn: 4
+    objective: "Store facts 4 and 5"
+    user_message: "Two more: our bestseller is the eucalyptus candle, and payroll runs on the 15th."
+    ground_truth:
+      expected_answer: "Stored: bestseller eucalyptus candle; payroll on the 15th"
+    success_criteria: "Agent stores both and confirms."
+
+  - turn: 5
+    objective: "Recall fact 3 first (out of storage order)"
+    user_message: "What's my accountant's name?"
+    ground_truth:
+      expected_answer: "Marisol"
+    success_criteria: "Agent answers Marisol — just that fact, not a dump of all five."
+
+  - turn: 6
+    objective: "Recall fact 5"
+    user_message: "When does payroll run?"
+    ground_truth:
+      expected_answer: "The 15th"
+    success_criteria: "Agent answers the 15th."
+
+  - turn: 7
+    objective: "Recall facts 1 and 2 together"
+    user_message: "And what's my shop called and when do we close on weekdays?"
+    ground_truth:
+      expected_answer: "Fern & Co; 6pm"
+    success_criteria: "Agent answers Fern & Co and 6pm. FAIL if either is wrong or missing."
+
+  - turn: 8
+    objective: "Recall fact 4"
+    user_message: "Which product is our bestseller?"
+    ground_truth:
+      expected_answer: "The eucalyptus candle"
+    success_criteria: "Agent answers eucalyptus candle."
+
+expected_outcome: |
+  All five facts recalled correctly, each in response to its own question,
+  in an order different from storage.
