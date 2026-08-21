@@ -97,6 +97,13 @@
 #                              ENVIRONMENT secret on `agent-publish` (NOT a repo
 #                              secret) so it is unreadable until the gate is
 #                              approved.
+#     R2_ACCESS_KEY_ID       — R2 S3 credentials + account, from an R2 API token
+#     R2_SECRET_ACCESS_KEY     with Object Read & Write on the hub bucket
+#     CLOUDFLARE_ACCOUNT_ID    (Cloudflare → R2 → Manage R2 API Tokens). REQUIRED
+#                              for every release, not optional: the Linux sidecar
+#                              is past the Worker's request-body cap, so it is
+#                              PUT straight to R2 and published by reference.
+#                              Same ENVIRONMENT-secret placement as above.
 #   Variables:
 #     GAIA_HUB_BASE_URL      — public Worker origin for downloads + the lock
 #                              baseUrl. Default https://hub.amd-gaia.ai.
@@ -739,16 +746,31 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "base_url=${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}/${HUB_PREFIX}/${VERSION}" >> "$GITHUB_OUTPUT"
 
-      - name: Assert hub publish token present
+      - name: Assert publish credentials present
         shell: bash
-        # Secret goes through env (never inlined into the script text) so a
-        # value with shell metacharacters can't break parsing or defeat masking.
+        # Secrets go through env (never inlined into the script text) so a value
+        # with shell metacharacters can't break parsing or defeat masking.
         env:
           GAIA_HUB_TOKEN: ${{ secrets.GAIA_HUB_TOKEN }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           set -euo pipefail
           if [ -z "${GAIA_HUB_TOKEN:-}" ]; then
             echo "::error::missing environment secret GAIA_HUB_TOKEN on the agent-publish environment — the Agent Hub Bearer publish token (must match the Worker's PUBLISH_TOKENS). See workers/agent-hub/README.md."
+            exit 1
+          fi
+          # The Linux sidecar is past the Worker's request-body cap, so every
+          # release needs the direct-to-R2 lane. publish_to_r2.py refuses to
+          # store anything without these; checking here names all three missing
+          # secrets at once, before the artifact downloads.
+          missing=""
+          for name in R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY CLOUDFLARE_ACCOUNT_ID; do
+            [ -n "${!name:-}" ] || missing="${missing} ${name}"
+          done
+          if [ -n "${missing}" ]; then
+            echo "::error::missing secret(s):${missing}. The Linux sidecar exceeds the Cloudflare Worker request-body cap and uploads straight to R2, so these are required for every release. Create an R2 API token with Object Read & Write (Cloudflare -> R2 -> Manage R2 API Tokens) and add them as ENVIRONMENT secrets on 'agent-publish' (a repo secret is also read, but keep them behind the approval gate). See workers/agent-hub/README.md."
             exit 1
           fi
 
@@ -894,9 +916,18 @@ jobs:
             exit 1
           fi
 
+          # --strict-immutable: the publisher's lenient default skips an already
+          # published artifact whose bytes differ and reports the PUBLISHED hash
+          # in its --summary-out. This lane does not use that summary — the lock
+          # is rebuilt from the freeze metas below — so a skipped artifact would
+          # be recorded with this run's local rebuild hash and only blow up two
+          # steps later, in the fetch-verify, blaming the bytes the hub serves.
+          # Fail here instead, where the error says to bump the version. Drop
+          # this flag if the lock is ever switched to --summary-out.
           python "${PACKAGING}/publish_to_r2.py" \
             --base-url "${GAIA_HUB_PUBLISH_URL:-${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}}" \
             --manifest "${MANIFEST}" \
+            --strict-immutable \
             "${doc_args[@]}" \
             "${args[@]}"
 
