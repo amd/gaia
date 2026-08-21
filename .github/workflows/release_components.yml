@@ -225,16 +225,15 @@ jobs:
       - name: Verify the deployed build is live
         env:
           GAIA_HUB_PUBLISH_URL: ${{ vars.GAIA_HUB_PUBLISH_URL }}
-          GAIA_HUB_BASE_URL: ${{ vars.GAIA_HUB_BASE_URL }}
         run: |
           set -euo pipefail
           # No default. Falling back to the custom domain would verify a
           # DIFFERENT origin than the publish jobs upload to (they go through
           # workers.dev because the WAF fronts hub.amd-gaia.ai), so a silent
           # default here reports freshness for something we are not publishing to.
-          base="${GAIA_HUB_PUBLISH_URL:-${GAIA_HUB_BASE_URL:-}}"
+          base="${GAIA_HUB_PUBLISH_URL:-}"
           if [ -z "${base}" ]; then
-            echo "::error::neither GAIA_HUB_PUBLISH_URL nor GAIA_HUB_BASE_URL resolved for this job. Both must be REPOSITORY variables — an environment-scoped one resolves empty here, and this check would then target the custom domain rather than the origin the publish jobs POST to."
+            echo "::error::GAIA_HUB_PUBLISH_URL resolved empty for this job. It must be a REPOSITORY variable — an environment-scoped one resolves empty here, and this check would then target the custom domain rather than the origin the publish jobs POST to."
             exit 1
           fi
           for i in 1 2 3 4 5 6; do
@@ -336,6 +335,17 @@ jobs:
             exit 1
           fi
 
+      - name: Require the publish URL
+        if: needs.version.outputs.dry_run == 'false'
+        env:
+          GAIA_HUB_PUBLISH_URL: ${{ vars.GAIA_HUB_PUBLISH_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GAIA_HUB_PUBLISH_URL:-}" ]; then
+            echo "::error::missing repository variable GAIA_HUB_PUBLISH_URL — the Worker's workers.dev origin CI POSTs uploads to (the proxied hub.amd-gaia.ai custom domain's managed WAF blocks large uploads). Publishing without it would silently target a hardcoded fallback URL. Set it as a REPOSITORY variable (an environment-scoped one resolves empty here). See workers/agent-hub/README.md."
+            exit 1
+          fi
+
       - name: Install publisher deps
         if: needs.version.outputs.dry_run == 'false'
         run: python -m pip install --upgrade requests pyyaml boto3
@@ -346,7 +356,6 @@ jobs:
         env:
           AGENT_HUB_PUBLISH_TOKEN: ${{ secrets.GAIA_HUB_TOKEN }}
           GAIA_HUB_PUBLISH_URL: ${{ vars.GAIA_HUB_PUBLISH_URL }}
-          GAIA_HUB_BASE_URL: ${{ vars.GAIA_HUB_BASE_URL }}
           # Artifacts at/over 90 MiB cannot travel through the Worker at all
           # (Cloudflare caps request bodies at 100 MB on Free/Pro), so the
           # publisher PUTs them straight into R2 and publishes them by
@@ -359,7 +368,7 @@ jobs:
           # Explicit =<platform-key> on every artifact: the publisher's
           # inference only special-cases email-agent-* filenames.
           python hub/agents/email/python/packaging/publish_to_r2.py \
-            --base-url "${GAIA_HUB_PUBLISH_URL:-${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}}" \
+            --base-url "${GAIA_HUB_PUBLISH_URL}" \
             --manifest "${TERMINAL_HUB_MANIFEST}" \
             --artifact "bin/gaia-linux-x64=linux-x64" \
             --artifact "bin/gaia-linux-arm64=linux-arm64" \
@@ -423,6 +432,17 @@ jobs:
             exit 1
           fi
 
+      - name: Require the publish URL
+        if: needs.version.outputs.dry_run == 'false'
+        env:
+          GAIA_HUB_PUBLISH_URL: ${{ vars.GAIA_HUB_PUBLISH_URL }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GAIA_HUB_PUBLISH_URL:-}" ]; then
+            echo "::error::missing repository variable GAIA_HUB_PUBLISH_URL — the Worker's workers.dev origin CI POSTs uploads to (the proxied hub.amd-gaia.ai custom domain's managed WAF blocks large uploads). Publishing without it would silently target a hardcoded fallback URL. Set it as a REPOSITORY variable (an environment-scoped one resolves empty here). See workers/agent-hub/README.md."
+            exit 1
+          fi
+
       - name: Wait for the installer assets on the release
         if: needs.version.outputs.dry_run == 'false'
         shell: bash
@@ -479,7 +499,6 @@ jobs:
         env:
           AGENT_HUB_PUBLISH_TOKEN: ${{ secrets.GAIA_HUB_TOKEN }}
           GAIA_HUB_PUBLISH_URL: ${{ vars.GAIA_HUB_PUBLISH_URL }}
-          GAIA_HUB_BASE_URL: ${{ vars.GAIA_HUB_BASE_URL }}
           # Artifacts at/over 90 MiB cannot travel through the Worker at all
           # (Cloudflare caps request bodies at 100 MB on Free/Pro), so the
           # publisher PUTs them straight into R2 and publishes them by
@@ -494,7 +513,7 @@ jobs:
           # for apt users — publishing it as a second linux-x64 object would
           # make the catalog's per-platform download ambiguous.
           python hub/agents/email/python/packaging/publish_to_r2.py \
-            --base-url "${GAIA_HUB_PUBLISH_URL:-${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}}" \
+            --base-url "${GAIA_HUB_PUBLISH_URL}" \
             --manifest "${AGENT_UI_MANIFEST}" \
             --artifact "dist/gaia-agent-ui-${VERSION}-x64-setup.exe=win-x64" \
             --artifact "dist/gaia-agent-ui-${VERSION}-arm64.dmg=darwin-arm64" \
