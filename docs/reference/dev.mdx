@@ -300,6 +300,27 @@ Key fixtures live in `tests/conftest.py` (`api_client`, `api_server`,
 `require_lemonade`, `lemonade_available`). The `require_lemonade` fixture
 auto-skips integration tests when no Lemonade server is running.
 
+### Verifying the Agent Hub publish pipeline
+
+Publishing to the hub is **irreversible** — `hub.amd-gaia.ai` has no unpublish
+route, so a bad release is permanent and public. Before running any
+`release_*.yml` workflow that publishes, prove the pipeline locally:
+
+```bash
+python util/verify_publish_pipeline.py
+```
+
+It boots `workers/agent-hub` under `wrangler dev` with Miniflare's simulated R2,
+drives the real publisher against it, and asserts on behaviour — the happy path,
+idempotent re-runs, immutability, the oversized direct-to-R2 lane, and the
+pre-flight checks that must refuse to publish anything at all. It refuses to run
+against any non-loopback URL, needs no credentials, and cleans up after itself.
+It skips with a message (not a failure) when Node.js is unavailable.
+
+Read the module docstring for what it deliberately **cannot** prove — real R2
+credentials from GitHub's IP space, real installer sizes, and the macOS freeze
+legs still only get exercised in CI.
+
 ### Real-World Testing with Claude Code
 
 Unit and integration tests prove code paths; they don't prove a feature works
