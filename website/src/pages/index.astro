@@ -19,21 +19,21 @@ const DOCS = 'https://amd-gaia.ai/docs';
 const PATHS = [
   {
     title: 'Run it',
-    body: 'Point it at your documents, your data, or your code. It runs the task locally and remembers between sessions.',
+    body: 'Give it a task over your files, your data, or your code — it runs locally.',
     code: 'gaia-tui',
     href: `${DOCS}/quickstart`,
     external: true,
   },
   {
     title: 'Integrate it',
-    body: 'Embed the same agent in your app as a local sidecar — one npm package, no Python.',
+    body: 'Embed the agent in your app as a local sidecar.',
     code: 'npm install @amd-gaia/gaia',
     href: `${DOCS}/guides/gaia`,
     external: true,
   },
   {
     title: 'Build on it',
-    body: 'Add a capability as a skill, or publish your own agent to the hub.',
+    body: 'Add a skill, or publish your own agent to the hub.',
     code: 'gaia skill create <name>',
     href: `${DOCS}/guides/custom-agent`,
     external: true,
@@ -42,8 +42,8 @@ const PATHS = [
 ---
 
 <Layout
-  title="GAIA — an AI agent that runs on your hardware"
-  description="GAIA is AMD's open-source AI agent. Inference runs locally, so there are no API keys and no per-token cost, and it works without network access once the model is downloaded."
+  title="GAIA — the agent for AI PCs"
+  description="GAIA is AMD's open-source AI agent for AI PCs. It runs locally on your own hardware: your data stays on the machine, it works air-gapped, and there are no token costs."
 >
   <Header />
   <main id="main-content">
@@ -51,45 +51,44 @@ const PATHS = [
          and will return as a real recording; the scripted stand-in was removed
          rather than left on the page pretending to be one. -->
     <section id="install" class="g-shell flex flex-col items-center pb-24 pt-[136px] text-center sm:pb-32 sm:pt-[184px]">
-      <h1 class="g-h-hero animate-g-rise max-w-[15ch]">
-        {/* The gold clause must not wrap — it is the claim. */}
-        An AI agent that runs<br /><span class="whitespace-nowrap text-g-gold-text">on your hardware.</span>
+      <h1 class="g-h-hero animate-g-rise max-w-[14ch]">
+        The agent for<br /><span class="whitespace-nowrap text-g-gold-text">AI PCs.</span>
       </h1>
 
       <p class="g-lede animate-g-rise mt-6 text-center" style="animation-delay:0.08s">
-        GAIA is AMD's open-source AI agent. Inference runs locally: no API keys, no
-        per-token cost, and your files stay on the machine.
+        GAIA runs on your own hardware. Your data stays on the machine, it works
+        air-gapped, and there are no token costs.
       </p>
 
       <TuiDownload align="center" class="animate-g-rise mt-10 [animation-delay:0.14s]" />
     </section>
 
-    <!-- 2. The whole product, in three lines. -->
+    <!-- 2. The whole product, in three boxes. -->
     <section id="build" class="g-shell g-section scroll-mt-[66px]">
       <div class="g-label mb-8">Run · Integrate · Build</div>
 
-      <ul class="border-t border-g-border">
+      <ul class="grid gap-[18px] md:grid-cols-3">
         {PATHS.map((p) => (
-          <li class="grid items-baseline gap-x-7 gap-y-2.5 border-b border-g-border py-7 sm:grid-cols-[minmax(0,1fr)_auto] sm:py-8">
-            <div class="min-w-0">
-              <h2 class="g-h-card">
-                <a
-                  href={p.href}
-                  target={p.external ? '_blank' : undefined}
-                  rel={p.external ? 'noopener noreferrer' : undefined}
-                  class="group inline-flex items-baseline gap-2 transition-colors hover:text-g-gold-text"
-                >
-                  {p.title}
-                  <span class="text-[15px] text-g-faint transition-colors group-hover:text-g-gold-text" aria-hidden="true">→</span>
-                </a>
+          <li>
+            <a
+              href={p.href}
+              target={p.external ? '_blank' : undefined}
+              rel={p.external ? 'noopener noreferrer' : undefined}
+              class="g-card g-card-hover group flex h-full flex-col p-[26px]"
+            >
+              <h2 class="g-h-card flex items-baseline gap-2">
+                {p.title}
+                <span class="text-[15px] text-g-faint transition-colors group-hover:text-g-gold-text" aria-hidden="true">→</span>
               </h2>
-              <p class="g-body mt-1.5 max-w-[520px]">{p.body}</p>
-            </div>
-            {/* Focusable: the command overflows at narrow widths, and a scroll
-                region no keyboard user can reach hides the tail of it. */}
-            <code tabindex="0" class="mono block overflow-x-auto whitespace-nowrap text-[12.5px] text-g-gold-text sm:text-right">
-              {p.code}
-            </code>
+              <p class="g-body mb-6 mt-2.5">{p.body}</p>
+
+              {/* Focusable: the command overflows at narrow widths, and a scroll
+                  region no keyboard user can reach hides the tail of it. */}
+              <div tabindex="0" class="g-cmd-plain mt-auto overflow-x-auto text-[12px]">
+                <span class="text-g-gold" aria-hidden="true">$</span>
+                <span class="whitespace-nowrap">{p.code}</span>
+              </div>
+            </a>
           </li>
         ))}
       </ul>
