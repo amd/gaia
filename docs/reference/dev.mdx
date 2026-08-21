@@ -159,6 +159,16 @@ build, pulling ~18 `nvidia-*` / `cuda-*` packages — a 4.7 GB venv instead of
 
 ### Step 6: Claude Code Plugins (Optional)
 
+<Note>
+The same `.claude/settings.json` registers a `SessionStart` hook that runs
+[`scripts/cloud_bootstrap.sh`](https://github.com/amd/gaia/blob/main/scripts/cloud_bootstrap.sh).
+It builds the editable dev install for [Claude Code cloud sessions](https://code.claude.com/docs/en/claude-code-on-the-web),
+where the environment's own setup script runs before the repo is cloned and so
+cannot do it. On a local machine and in CI it exits immediately without output —
+it is gated on `CLAUDE_CODE_REMOTE` and `CI`.
+</Note>
+
+
 GAIA ships a `.claude/settings.json` that declares two recommended Claude Code plugins from the official Anthropic marketplace:
 
 - **`frontend-design`** — higher-quality, less generic UI generation
