@@ -1,0 +1,66 @@
+id: mem_topic_resume_memory
+name: "Memory — Stored Plan Survives a Detour Into Tool Work"
+category: gaia_memory
+agent_type: gaia
+severity: high
+tags: [t3_stress, local_blocked_no_embedder]
+description: |
+  A plan is stored in memory, the session detours into unrelated tool work,
+  then the user resumes with a vague back-reference. The agent must retrieve
+  the stored plan and continue it, not restart or ask for a recap.
+
+persona: student
+
+setup:
+  index_documents: []
+  memory_clear: true
+
+turns:
+  - turn: 1
+    objective: "Store a study plan"
+    user_message: "Remember my exam plan: linear algebra exam on the 29th, I'm doing chapters 4 and 5 this week, chapter 6 next week."
+    ground_truth:
+      expected_answer: "Stored: exam 29th; ch. 4-5 this week; ch. 6 next week"
+    success_criteria: "Agent stores the plan (agent_tools[] shows a remember call) and confirms the three parts."
+
+  - turn: 2
+    objective: "Detour: file work"
+    user_message: "unrelated — can you list what's in my Downloads folder?"
+    ground_truth:
+      expected_behavior: "Real listing via a file tool"
+    success_criteria: "Agent lists contents with a real file tool call in agent_tools[] (browse_directory / list_files), or honestly reports the folder can't be read. No invented listings."
+
+  - turn: 3
+    objective: "Detour: general question"
+    user_message: "also what's the derivative of x^3 ln(x)?"
+    ground_truth:
+      expected_answer: "3x^2 ln(x) + x^2"
+    success_criteria: "Agent answers 3x²ln(x) + x²."
+
+  - turn: 4
+    objective: "Detour: another question"
+    user_message: "and is a matrix with determinant 0 invertible?"
+    ground_truth:
+      expected_answer: "No"
+    success_criteria: "Agent answers no, singular matrices are not invertible."
+
+  - turn: 5
+    objective: "Vague resume of the stored plan"
+    user_message: "ok back to my plan — what am I supposed to cover this week again, and when's the exam?"
+    ground_truth:
+      expected_answer: "Chapters 4 and 5 this week; exam on the 29th"
+    success_criteria: |
+      Agent retrieves the stored plan (a recall call in agent_tools[] is
+      expected) and answers chapters 4-5 and the 29th. CRITICAL FAIL if it
+      asks which plan or gets the chapters/date wrong.
+
+  - turn: 6
+    objective: "Extend the plan using its stored shape"
+    user_message: "if I fall behind and only finish chapter 4 this week, how should the rest shift?"
+    ground_truth:
+      expected_behavior: "A shifted schedule consistent with the stored plan (ch. 5 moves to next week alongside or before ch. 6, still done before the 29th)"
+    success_criteria: "Agent proposes a shift consistent with the stored plan's chapters and the fixed exam date."
+
+expected_outcome: |
+  The stored plan is retrieved intact after the detour and used as the basis
+  for follow-on reasoning.

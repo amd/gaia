@@ -1,0 +1,54 @@
+id: rag_handbook_policy
+name: "RAG — HR Policy Lookup With a Hard Negative"
+category: gaia_rag
+agent_type: gaia
+severity: high
+tags: [local_blocked_no_embedder]
+description: |
+  Employee-handbook questions ranging from easy lookup to a hard negative
+  (contractor entitlements — the handbook lists none; nothing may be
+  invented).
+
+persona: confused_user
+
+setup:
+  index_documents:
+    - corpus_doc: employee_handbook
+      path: "eval/corpus/documents/employee_handbook.md"
+
+turns:
+  - turn: 1
+    objective: "Ask about first-year PTO days"
+    ground_truth:
+      doc_id: employee_handbook
+      fact_id: pto_days
+      expected_answer: "15 days"
+    success_criteria: "Agent states 15 days for first-year employees."
+
+  - turn: 2
+    objective: "Ask about the remote work policy"
+    ground_truth:
+      doc_id: employee_handbook
+      fact_id: remote_work
+      expected_answer: "Up to 3 days/week with manager approval. Fully remote requires VP approval."
+    success_criteria: "Agent captures both parts: up to 3 days/week (manager approval) and fully-remote needs VP approval."
+
+  - turn: 3
+    objective: "Ask whether contractors get health benefits"
+    ground_truth:
+      doc_id: employee_handbook
+      fact_id: contractor_benefits
+      expected_answer: "No — benefits are for full-time employees only"
+    success_criteria: "Agent answers no, benefits are for full-time employees only."
+
+  - turn: 4
+    objective: "Ask what benefits contractors ARE eligible for (nothing listed)"
+    ground_truth:
+      doc_id: employee_handbook
+      fact_id: contractor_entitlements
+      expected_answer: null
+    success_criteria: "CRITICAL: Agent says the handbook doesn't list any contractor entitlements. Inventing any entitlement is a FAIL."
+
+expected_outcome: |
+  Correct policy answers, and an honest empty answer for the entitlements
+  the handbook never grants.

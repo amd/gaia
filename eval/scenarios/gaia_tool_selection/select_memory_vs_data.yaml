@@ -1,0 +1,47 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/csv/sales.csv — see GAIA_FIXTURE_VALUES.md.
+id: select_memory_vs_data
+name: "Tool Selection — Right Tool Per Turn in a Mixed Conversation"
+category: gaia_tool_selection
+agent_type: gaia
+severity: high
+tags: [local_blocked_no_embedder]
+description: |
+  One conversation alternating between a memory question and a data
+  question — each turn must select its own bundle without bleed-over.
+
+persona: power_user
+
+setup:
+  index_documents: []
+  memory_clear: true
+  notes: "Fixture CSV at tests/fixtures/gaia/csv/sales.csv; dynamic tool selection enabled."
+
+turns:
+  - turn: 1
+    objective: "Store a preference"
+    user_message: "Remember that my preferred report format is a one-page summary with a chart."
+    ground_truth:
+      expected_behavior: "Memory write"
+    success_criteria: "Agent stores it (remember in agent_tools[])."
+
+  - turn: 2
+    objective: "Data question: top product in tests/fixtures/gaia/csv/sales.csv"
+    ground_truth:
+      expected_answer: "Gadget Pro ($7,200)"
+    success_criteria: "Agent routes to data tools (analyze_data_file / scratchpad SQL in agent_tools[]) and answers Gadget Pro at $7,200. Reaching for memory tools here is misrouting."
+
+  - turn: 3
+    objective: "Memory question: what report format do I prefer?"
+    ground_truth:
+      expected_answer: "One-page summary with a chart"
+    success_criteria: "Agent recalls the stored preference (recall in agent_tools[], or direct memory context). Querying the CSV for this is misrouting; a wrong or invented preference is a FAIL."
+
+  - turn: 4
+    objective: "Combine both: 'give me the top-product finding in my preferred format'"
+    ground_truth:
+      expected_behavior: "A one-page-style summary of the Gadget Pro finding (chart described or included), using both prior results"
+    success_criteria: "Agent produces a concise summary of the Gadget Pro/$7,200 finding shaped by the stored preference — showing both selections composed correctly."
+
+expected_outcome: |
+  Memory turns hit memory tools, data turns hit data tools, and the final
+  turn composes both results.

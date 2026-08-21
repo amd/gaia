@@ -1,0 +1,35 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/csv/sales.csv (+ ground_truth.json) — aggregates
+# defined in eval/scenarios/GAIA_FIXTURE_VALUES.md.
+id: data_total_revenue
+name: "Data — Load CSV and Compute the Exact Total"
+category: gaia_data
+agent_type: gaia
+severity: high
+description: |
+  Load the fixture sales CSV into the scratchpad and answer with the exact
+  total. The number must come from a real query, not eyeballing.
+
+persona: data_analyst
+
+setup:
+  index_documents: []
+  notes: "Fixture CSV at tests/fixtures/gaia/csv/sales.csv (repo-relative); pass its absolute path in the user message."
+
+turns:
+  - turn: 1
+    objective: "Ask the agent to load tests/fixtures/gaia/csv/sales.csv and report total revenue across all rows"
+    ground_truth:
+      expected_answer: "$18,600"
+    success_criteria: |
+      Agent loads the CSV and answers exactly $18,600. agent_tools[] must
+      show real data tooling (analyze_data_file, or create_table/insert_data
+      + query_data). A total with no tool call is a CRITICAL FAIL.
+
+  - turn: 2
+    objective: "Ask how many rows the dataset has"
+    ground_truth:
+      expected_answer: "12"
+    success_criteria: "Agent answers 12 rows, from a real query of the loaded data."
+
+expected_outcome: |
+  Exact aggregate ($18,600, 12 rows) computed via real scratchpad/data tools.

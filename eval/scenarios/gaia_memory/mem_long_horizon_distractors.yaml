@@ -1,0 +1,130 @@
+id: mem_long_horizon_distractors
+name: "Memory — Long-Horizon Recall With Tool Work Between"
+category: gaia_memory
+agent_type: gaia
+severity: high
+tags: [t3_stress, local_blocked_no_embedder]
+description: |
+  A fact is stored at turn 2 and recalled at turn 15, with real tool work
+  (file browsing, arithmetic, general questions) in between so the context
+  fills with tool output. The exact conflation the green ladder masked:
+  recall must come from the persistent store even after a busy session.
+
+persona: power_user
+
+setup:
+  index_documents: []
+  memory_clear: true
+
+turns:
+  - turn: 1
+    objective: "Opener"
+    user_message: "Morning. Mixed bag of tasks today."
+    ground_truth:
+      expected_behavior: "Brief greeting"
+    success_criteria: "Agent responds briefly."
+
+  - turn: 2
+    objective: "Store the target fact"
+    user_message: "First, remember this: my conference talk is on September 12 at 14:30, room Baltic 2."
+    ground_truth:
+      expected_answer: "Stored: Sep 12, 14:30, room Baltic 2"
+    success_criteria: "Agent stores it (agent_tools[] shows a remember call) and confirms all three details."
+
+  - turn: 3
+    objective: "Distractor tool work: browse the home directory"
+    user_message: "Now some housekeeping — what folders are in my home directory?"
+    ground_truth:
+      expected_behavior: "Lists real folders via a file tool"
+    success_criteria: "Agent lists directories; agent_tools[] must show a real file tool call (browse_directory, list_files, or tree). FAIL if it invents a listing with no tool call."
+
+  - turn: 4
+    objective: "Distractor: arithmetic"
+    user_message: "What's 1280 divided by 32?"
+    ground_truth:
+      expected_answer: "40"
+    success_criteria: "Agent answers 40."
+
+  - turn: 5
+    objective: "Distractor: general knowledge"
+    user_message: "What's the chemical formula for table salt?"
+    ground_truth:
+      expected_answer: "NaCl"
+    success_criteria: "Agent answers NaCl."
+
+  - turn: 6
+    objective: "Distractor tool work: system info"
+    user_message: "How much free disk space do I have?"
+    ground_truth:
+      expected_behavior: "Reports disk space from a real check"
+    success_criteria: "Agent reports a figure with a real tool call in agent_tools[] (get_system_info or run_shell_command), or honestly says it cannot check. FAIL on a made-up number with no call."
+
+  - turn: 7
+    objective: "Distractor: writing help"
+    user_message: "Rewrite this sentence to be shorter: 'Due to the fact that the meeting was postponed, we will need to reschedule our planning session.'"
+    ground_truth:
+      expected_behavior: "A shorter rewrite, e.g. 'Because the meeting was postponed, we need to reschedule the planning session.'"
+    success_criteria: "Agent produces a correct shorter rewrite."
+
+  - turn: 8
+    objective: "Distractor: general knowledge"
+    user_message: "How many bones are in the adult human body?"
+    ground_truth:
+      expected_answer: "206"
+    success_criteria: "Agent answers 206."
+
+  - turn: 9
+    objective: "Distractor: quick estimate"
+    user_message: "Roughly how many words is a 20-minute conference talk?"
+    ground_truth:
+      expected_answer: "About 2,500-3,000 words (~130-150 wpm)"
+    success_criteria: "Agent gives a figure in the 2,000-3,500 range with brief reasoning."
+
+  - turn: 10
+    objective: "Distractor: general knowledge"
+    user_message: "Which planet has the most moons?"
+    ground_truth:
+      expected_behavior: "Saturn (per recent counts; Jupiter accepted with hedge)"
+    success_criteria: "Agent answers Saturn (or Jupiter with an honest note that counts have flip-flopped)."
+
+  - turn: 11
+    objective: "Distractor: arithmetic"
+    user_message: "17% of 3,400?"
+    ground_truth:
+      expected_answer: "578"
+    success_criteria: "Agent answers 578."
+
+  - turn: 12
+    objective: "Distractor: casual"
+    user_message: "Best way to warm up my voice before speaking?"
+    ground_truth:
+      expected_behavior: "Reasonable vocal warm-up tips"
+    success_criteria: "Agent gives sensible tips."
+
+  - turn: 13
+    objective: "Distractor: general knowledge"
+    user_message: "What does HTTP stand for?"
+    ground_truth:
+      expected_answer: "HyperText Transfer Protocol"
+    success_criteria: "Agent answers correctly."
+
+  - turn: 14
+    objective: "Distractor: one more calculation"
+    user_message: "If my slides take 90 seconds each and I have 12, how long is that?"
+    ground_truth:
+      expected_answer: "18 minutes"
+    success_criteria: "Agent answers 18 minutes."
+
+  - turn: 15
+    objective: "Recall the stored fact from turn 2"
+    user_message: "OK — remind me when and where my talk is?"
+    ground_truth:
+      expected_answer: "September 12, 14:30, room Baltic 2"
+    success_criteria: |
+      Agent recalls all three details exactly (date, time, room). CRITICAL
+      FAIL if any detail is wrong, missing, or the agent asks the user to
+      repeat it. A recall/memory tool call in agent_tools[] is expected.
+
+expected_outcome: |
+  The turn-2 fact survives twelve busy turns including real tool output and
+  is recalled exactly at turn 15.

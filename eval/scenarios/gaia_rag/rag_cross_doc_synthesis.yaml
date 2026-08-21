@@ -1,0 +1,49 @@
+id: rag_cross_doc_synthesis
+name: "RAG — Cross-Document Synthesis"
+category: gaia_rag
+agent_type: gaia
+severity: high
+tags: [local_blocked_no_embedder]
+description: |
+  Two documents indexed; questions require pulling facts from each and one
+  question requires combining them. Retrieval must hit the right document
+  per question.
+
+persona: data_analyst
+
+setup:
+  index_documents:
+    - corpus_doc: product_comparison
+      path: "eval/corpus/documents/product_comparison.html"
+    - corpus_doc: budget_2025
+      path: "eval/corpus/documents/budget_2025.md"
+
+turns:
+  - turn: 1
+    objective: "Ask the price difference between the two products"
+    ground_truth:
+      doc_id: product_comparison
+      fact_id: price_diff
+      expected_answer: "$30/month (ProFlow costs more)"
+    success_criteria: "Agent states ProFlow ($79) costs $30/month more than StreamLine ($49)."
+
+  - turn: 2
+    objective: "Ask what spending threshold requires CFO approval"
+    ground_truth:
+      doc_id: budget_2025
+      fact_id: cfo_approval_threshold
+      expected_answer: "Expenses over $50K require CFO approval"
+    success_criteria: "Agent states the $50K CFO-approval threshold — from the budget doc, not the product doc."
+
+  - turn: 3
+    objective: "Combine: would a year of ProFlow for 40 users need CFO approval?"
+    ground_truth:
+      expected_answer: "$79 x 40 x 12 = $37,920 — under $50K, so no CFO approval needed"
+    success_criteria: |
+      Agent combines ProFlow's $79/month with the $50K threshold: ~$37,920
+      per year for 40 users, below $50K, so no CFO approval. Arithmetic and
+      the conclusion must both be right.
+
+expected_outcome: |
+  Per-document retrieval is accurate and the synthesis question combines
+  facts from both documents with correct arithmetic.

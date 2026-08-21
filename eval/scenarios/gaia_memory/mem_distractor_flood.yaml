@@ -1,0 +1,73 @@
+id: mem_distractor_flood
+name: "Memory — Retrieval Under a Flood of Similar Facts"
+category: gaia_memory
+agent_type: gaia
+severity: high
+tags: [t3_stress, local_blocked_no_embedder]
+description: |
+  Ten similar facts (colleagues and their roles) are stored, then precise
+  recall of specific ones is demanded. Tests retrieval selectivity under
+  near-duplicate noise — the wrong-but-similar answer is the failure mode.
+
+persona: power_user
+
+setup:
+  index_documents: []
+  memory_clear: true
+
+turns:
+  - turn: 1
+    objective: "Store colleagues 1-4"
+    user_message: "Remember my team roster. Ana is the designer, Ben is the backend lead, Carla is the data scientist, and Deepak is the QA lead."
+    ground_truth:
+      expected_answer: "Stored 4 roster entries"
+    success_criteria: "Agent stores the roster (agent_tools[] shows remember call(s)) and confirms."
+
+  - turn: 2
+    objective: "Store colleagues 5-7"
+    user_message: "More: Elena is the frontend lead, Farid is the product manager, and Grace is the tech writer."
+    ground_truth:
+      expected_answer: "Stored 3 more"
+    success_criteria: "Agent stores and confirms."
+
+  - turn: 3
+    objective: "Store colleagues 8-10"
+    user_message: "Last batch: Hugo is the SRE, Imani is the security engineer, and Jonas is the intern."
+    ground_truth:
+      expected_answer: "Stored 3 more (10 total)"
+    success_criteria: "Agent stores and confirms; ideally notes the roster now has 10 people."
+
+  - turn: 4
+    objective: "Precise recall #1"
+    user_message: "Who's the data scientist?"
+    ground_truth:
+      expected_answer: "Carla"
+    success_criteria: "Agent answers Carla — exactly. Any other name is a FAIL."
+
+  - turn: 5
+    objective: "Precise recall #2 — role from name"
+    user_message: "What does Hugo do?"
+    ground_truth:
+      expected_answer: "SRE"
+    success_criteria: "Agent answers SRE (site reliability engineer)."
+
+  - turn: 6
+    objective: "Near-miss trap — a name NOT on the roster"
+    user_message: "And what's Elias's role again?"
+    ground_truth:
+      expected_answer: "There is no Elias on the stored roster"
+    success_criteria: |
+      CRITICAL: Agent says there is no Elias on the roster (it may suggest
+      the closest real name, Elena, as a question). FAIL if it assigns Elias
+      any role — that is fabricated recall under similarity pressure.
+
+  - turn: 7
+    objective: "Selective multi-recall"
+    user_message: "Just the two leads whose names start with a vowel — who are they and what do they lead?"
+    ground_truth:
+      expected_answer: "Ana (design) and Elena (frontend lead) — accept Imani noted as engineer, not lead"
+    success_criteria: "Agent identifies Ana and Elena with correct roles. Including Imani is acceptable only if the agent flags the lead/engineer distinction; wrong roles are a FAIL."
+
+expected_outcome: |
+  Exact recall of specific roster entries out of ten similar facts, and an
+  honest miss for the name that was never stored.

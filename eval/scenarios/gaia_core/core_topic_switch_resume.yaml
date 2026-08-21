@@ -1,0 +1,108 @@
+id: core_topic_switch_resume
+name: "Core — Topic Switch and Resume (Long)"
+category: gaia_core
+agent_type: gaia
+severity: high
+tags: [t3_stress]
+description: |
+  A 12-turn conversation: the user sets up a trip plan with specific numbers,
+  abandons the topic for unrelated questions, then resumes with "back to what
+  we discussed earlier". The trip details must survive the interruption in
+  session history — no memory tools required to pass.
+
+persona: home_user
+
+setup:
+  index_documents: []
+
+turns:
+  - turn: 1
+    objective: "Open a trip-planning topic with a budget"
+    user_message: "im planning a trip to portugal in october. my total budget is $2,400 for two people"
+    ground_truth:
+      expected_behavior: "Engages with the trip plan, notes the budget"
+    success_criteria: "Agent engages helpfully with the Portugal trip and does not lose the $2,400 / two people / October facts."
+
+  - turn: 2
+    objective: "Add a constraint: 9 days, flying from Chicago"
+    user_message: "we have 9 days and we're flying out of chicago"
+    ground_truth:
+      expected_behavior: "Incorporates the 9 days and Chicago departure"
+    success_criteria: "Agent acknowledges and works with the new constraints."
+
+  - turn: 3
+    objective: "Ask for a rough split of the budget"
+    user_message: "how would you roughly split that budget?"
+    ground_truth:
+      expected_behavior: "A rough split of $2,400 across flights/lodging/food/etc."
+    success_criteria: "Agent proposes a split that sums to roughly $2,400 — it must use the budget from turn 1 without asking for it again."
+
+  - turn: 4
+    objective: "Abrupt topic switch: a cooking question"
+    user_message: "totally different question — how long do hard boiled eggs keep in the fridge?"
+    ground_truth:
+      expected_answer: "About one week"
+    success_criteria: "Agent answers the egg question (about 1 week) without dragging the trip back in."
+
+  - turn: 5
+    objective: "Another unrelated question: arithmetic"
+    user_message: "whats 320 divided by 8"
+    ground_truth:
+      expected_answer: "40"
+    success_criteria: "Agent answers 40, no tools."
+
+  - turn: 6
+    objective: "Another unrelated question: word meaning"
+    user_message: "what does 'peripatetic' mean"
+    ground_truth:
+      expected_behavior: "Correct definition: travelling from place to place / itinerant"
+    success_criteria: "Agent gives a correct definition."
+
+  - turn: 7
+    objective: "Small talk continues away from the trip"
+    user_message: "nice. any tips for jet lag in general?"
+    ground_truth:
+      expected_behavior: "Reasonable general jet lag tips"
+    success_criteria: "Agent gives sensible jet lag advice."
+
+  - turn: 8
+    objective: "Resume the abandoned topic without restating it"
+    user_message: "ok back to what we discussed earlier — what was my total budget again?"
+    ground_truth:
+      expected_answer: "$2,400"
+    success_criteria: |
+      Agent identifies the earlier topic as the Portugal trip and states the
+      budget $2,400. CRITICAL FAIL if it asks which discussion the user means
+      or cannot recall the number.
+
+  - turn: 9
+    objective: "Probe another detail from the early turns"
+    user_message: "and how many days did I say we have?"
+    ground_truth:
+      expected_answer: "9 days"
+    success_criteria: "Agent answers 9 days without asking."
+
+  - turn: 10
+    objective: "Probe the departure city"
+    user_message: "remind me where we're flying out of?"
+    ground_truth:
+      expected_answer: "Chicago"
+    success_criteria: "Agent answers Chicago."
+
+  - turn: 11
+    objective: "Ask for the earlier budget split again, adjusted"
+    user_message: "if we cut the budget to $2,000, how does your earlier split change?"
+    ground_truth:
+      expected_behavior: "Adjusts its own turn-3 split proportionally to $2,000"
+    success_criteria: "Agent produces an adjusted split referencing or consistent with its earlier proposal, summing to roughly $2,000."
+
+  - turn: 12
+    objective: "Confirm nothing was confabulated"
+    user_message: "did I ever tell you which cities in portugal we want to visit?"
+    ground_truth:
+      expected_answer: "No"
+    success_criteria: "Agent correctly says the user has NOT named any cities. FAIL if it claims cities were mentioned or invents an itinerary the user supposedly gave."
+
+expected_outcome: |
+  Trip facts from turns 1-3 survive a five-turn interruption and are recalled
+  exactly on resume; the agent never invents details that were not said.

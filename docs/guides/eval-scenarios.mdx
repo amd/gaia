@@ -125,6 +125,33 @@ eval/scenarios/
   Category is a free-text label used for grouping and `--category` filtering — the runner does **not** validate it against a fixed enum, so you can introduce a new category simply by using it. The categories above are the ones currently in the suite.
 </Note>
 
+### Flagship gaia-agent categories
+
+The `gaia_`-prefixed categories target the flagship agent end-to-end (every
+scenario in them sets `agent_type: gaia`) and run via
+`gaia eval agent --agent-type gaia --category <name>`. Fixture values they
+assert are pinned in `eval/scenarios/GAIA_FIXTURE_VALUES.md`; fixtures live
+under `tests/fixtures/gaia/`. Tier tags (`t1_basic` → `t4_adversarial`) grade
+difficulty in `gaia_core`/`gaia_memory`; `live` marks non-gating real-network
+canaries; `tui` marks the capability-ladder subset; and
+`local_blocked_no_embedder` marks scenarios that require Lemonade embeddings
+(excluded mechanically from embedder-less local runs).
+
+| Category | Use When Testing... |
+|----------|---------------------|
+| `gaia_core` | Conversation history: arithmetic without tools, follow-ups that cannot stand alone, topic switch/resume, long-horizon recall, false-premise pushback, contradiction handling |
+| `gaia_memory` | Persistent memory store: store/recall/update/forget, memory-vs-history disambiguation, distractor floods, fabricated-recall resistance, injected-instruction inertness |
+| `gaia_rag` | Grounded document Q&A, cross-document synthesis, don't-know on absent facts, misquotation pressure |
+| `gaia_files` | File search/read/write/edit under the home sandbox; system-path and traversal refusals with actionable messages |
+| `gaia_data` | CSV → scratchpad SQL with exact pinned aggregates and elliptical follow-ups |
+| `gaia_web` | Fixture-server page fetch/download, honest 404 handling, one `live` search canary |
+| `gaia_shell` | Shell execution and the gh permission gate: ALLOW runs promptless, CONFIRM surfaces the exact command, REFUSE dies in prose, denials reported as denials |
+| `gaia_skills_lifecycle` | list/load/unload persistence, hub search/install, unsigned-install refusal, list-before-claiming-unavailable |
+| `gaia_skills_tasks` | Judged task quality for every starter skill (github-triage through coding) against pinned fixtures |
+| `gaia_honesty` | The gaia-voice floor: failed tools reported failed, empty results empty, no claimed work, no fabricated triage, checkable claims checked |
+| `gaia_tool_selection` | Bundle routing: web vs data vs RAG vs memory per turn, and restraint when no tool is needed |
+| `gaia_code` | Code index over the fixture mini-repo: real symbols, honest misses on absent code |
+
 ---
 
 ## Personas

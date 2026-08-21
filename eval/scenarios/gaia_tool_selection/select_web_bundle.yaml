@@ -1,0 +1,38 @@
+# FIXTURE-SYNC: tests/fixtures/gaia/web/solarium_a.html — see GAIA_FIXTURE_VALUES.md.
+id: select_web_bundle
+name: "Tool Selection — Research Question Pulls Web Tools"
+category: gaia_tool_selection
+agent_type: gaia
+severity: high
+tags: [local_blocked_no_embedder]
+description: |
+  A research question with a URL must route to web tools (fetch), not to
+  file search or RAG flailing. Dynamic tool selection should land the web
+  bundle.
+
+persona: student
+
+setup:
+  index_documents: []
+  notes: "Fixture server on 127.0.0.1:8765; dynamic tool selection enabled."
+
+turns:
+  - turn: 1
+    objective: "Ask what http://127.0.0.1:8765/solarium_a.html says about the project's storage capacity"
+    ground_truth:
+      expected_answer: "42 MWh"
+    success_criteria: |
+      Agent uses a web tool (fetch_page / fetch_webpage / open_url in
+      agent_tools[]) and answers 42 MWh. Routing through file-search or
+      document-query tools instead of fetching the URL is a tool-selection
+      FAIL; so is answering with no tool call.
+
+  - turn: 2
+    objective: "Follow-up research: when was the project founded, per the same page"
+    ground_truth:
+      expected_answer: "2019"
+    success_criteria: "Agent answers 2019 from the fetched page (re-fetch or retained content both fine)."
+
+expected_outcome: |
+  The URL question routes straight to web tools and both planted facts come
+  back correct.

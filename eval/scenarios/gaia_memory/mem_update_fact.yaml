@@ -1,0 +1,40 @@
+id: mem_update_fact
+name: "Memory — Update a Stored Fact"
+category: gaia_memory
+agent_type: gaia
+severity: high
+tags: [t1_basic, local_blocked_no_embedder]
+description: |
+  Store a fact, openly change it, then recall — the NEW value must win and
+  the old one must not resurface.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  memory_clear: true
+
+turns:
+  - turn: 1
+    objective: "Store an apartment number"
+    user_message: "Remember my apartment number is 4B."
+    ground_truth:
+      expected_answer: "Stored: apartment 4B"
+    success_criteria: "Agent stores it (agent_tools[] shows a remember call) and confirms 4B."
+
+  - turn: 2
+    objective: "Update the fact — user moved"
+    user_message: "Actually I just moved — it's 7C now. Update that."
+    ground_truth:
+      expected_answer: "Updated: apartment 7C"
+    success_criteria: "Agent updates the stored fact (agent_tools[] shows update_memory or an equivalent remember-with-supersede call) and confirms 7C."
+
+  - turn: 3
+    objective: "Recall the current value"
+    user_message: "What's my apartment number?"
+    ground_truth:
+      expected_answer: "7C"
+    success_criteria: "Agent answers 7C. FAIL if it answers 4B, offers both without saying 7C is current, or doesn't know."
+
+expected_outcome: |
+  Update supersedes cleanly; only the new value is recalled.
