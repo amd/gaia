@@ -21,3 +21,8 @@ cpp/third_party/sqlite/sqlite3.h -diff
 # without a union merge, sibling PRs merged close together conflict on the
 # same insertion point.
 hub/agents/email/python/CHANGELOG.md merge=union
+
+# gaia eval fixtures: the POSIX gh shim needs an LF shebang everywhere, and the
+# fixture-hub zips' sha256s are pinned in their manifests — keep both byte-exact.
+tests/fixtures/gaia/fake_gh/gh eol=lf
+tests/fixtures/gaia/fixture_hub/**/*.zip binary

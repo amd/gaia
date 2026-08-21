@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Fixture Engineering Digest</title>
+    <link>http://127.0.0.1/rss/feed.xml</link>
+    <description>Deterministic RSS fixture for the gaia-agent eval (rss-digest scenarios).</description>
+    <lastBuildDate>Thu, 23 Jul 2026 06:00:00 GMT</lastBuildDate>
+    <item>
+      <title>Widget Factory 3.2 postponed to November 2</title>
+      <link>http://127.0.0.1/web/source_watch/v2.html</link>
+      <guid>fixture-digest-0004</guid>
+      <pubDate>Wed, 22 Jul 2026 18:30:00 GMT</pubDate>
+      <description>The 3.2 release moves from October 14 to November 2, 2026; a 500-tester public beta opens October 5.</description>
+    </item>
+    <item>
+      <title>Zephyr-7 solid-state cell hits 412 Wh/kg</title>
+      <link>http://127.0.0.1/web/research/solid_state_batteries_overview.html</link>
+      <guid>fixture-digest-0003</guid>
+      <pubDate>Tue, 21 Jul 2026 09:00:00 GMT</pubDate>
+      <description>Prototype retains 91% capacity after 1,200 cycles; dendrite formation remains the key obstacle.</description>
+    </item>
+    <item>
+      <title>AeroBook 14 drops to $1,299</title>
+      <link>http://127.0.0.1/web/price_watch.html</link>
+      <guid>fixture-digest-0002</guid>
+      <pubDate>Mon, 20 Jul 2026 12:00:00 GMT</pubDate>
+      <description>Down from the $1,449 list price set on June 10.</description>
+    </item>
+    <item>
+      <title>Harbor Street bridge closes July 27 for six weeks</title>
+      <link>http://127.0.0.1/web/daily_brief/local_news.html</link>
+      <guid>fixture-digest-0001</guid>
+      <pubDate>Sun, 19 Jul 2026 15:45:00 GMT</pubDate>
+      <description>Detour adds about 12 minutes to the average commute.</description>
+    </item>
+  </channel>
+</rss>

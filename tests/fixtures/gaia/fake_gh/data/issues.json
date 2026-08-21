@@ -1,0 +1,121 @@
+[
+  {
+    "number": 101,
+    "title": "Crash on startup when config.yaml is missing",
+    "body": "Deleting config.yaml and launching widget-factory 4.2.0 crashes immediately with a FileNotFoundError traceback instead of creating a default config. Windows 11, Python 3.11.",
+    "state": "open",
+    "labels": [{"name": "bug", "color": "d73a4a"}],
+    "createdAt": "2026-07-01T09:12:00Z",
+    "updatedAt": "2026-07-20T14:03:00Z",
+    "author": {"login": "sparrow-dev"},
+    "comments": [
+      {
+        "author": {"login": "maintainer-kim"},
+        "body": "Reproduced on 4.2.0. Regression from the config loader rewrite.",
+        "createdAt": "2026-07-02T10:00:00Z"
+      }
+    ],
+    "url": "https://github.com/gaia-fixtures/widget-factory/issues/101"
+  },
+  {
+    "number": 102,
+    "title": "App crashes at launch if the config file was deleted",
+    "body": "Fresh install, removed the config to reset settings, app now won't start at all. No error dialog, just closes. macOS 15.",
+    "state": "open",
+    "labels": [{"name": "bug", "color": "d73a4a"}],
+    "createdAt": "2026-07-08T16:40:00Z",
+    "updatedAt": "2026-07-08T16:40:00Z",
+    "author": {"login": "brioche44"},
+    "comments": [],
+    "url": "https://github.com/gaia-fixtures/widget-factory/issues/102"
+  },
+  {
+    "number": 103,
+    "title": "Silent wrong totals in CSV export when locale uses comma decimals",
+    "body": "Exporting the monthly report on a German-locale machine writes 1,5 instead of 1.5 and downstream tools read it as 15. No error is raised — the numbers are just wrong. Affects every locale that uses comma decimal separators.",
+    "state": "open",
+    "labels": [{"name": "bug", "color": "d73a4a"}, {"name": "data-integrity", "color": "b60205"}],
+    "createdAt": "2026-06-18T08:00:00Z",
+    "updatedAt": "2026-07-22T11:15:00Z",
+    "author": {"login": "lena-ops"},
+    "comments": [
+      {
+        "author": {"login": "sparrow-dev"},
+        "body": "This bit us too — quarterly numbers were off by 10x in two cells and nobody noticed for a month.",
+        "createdAt": "2026-07-05T13:30:00Z"
+      }
+    ],
+    "url": "https://github.com/gaia-fixtures/widget-factory/issues/103"
+  },
+  {
+    "number": 104,
+    "title": "Feature request: dark mode",
+    "body": "Would love a dark theme for the dashboard. Happy to contribute if pointed at the theming code.",
+    "state": "open",
+    "labels": [{"name": "enhancement", "color": "a2eeef"}],
+    "createdAt": "2026-05-30T19:22:00Z",
+    "updatedAt": "2026-05-30T19:22:00Z",
+    "author": {"login": "nightowl-ui"},
+    "comments": [],
+    "url": "https://github.com/gaia-fixtures/widget-factory/issues/104"
+  },
+  {
+    "number": 105,
+    "title": "Docs: quickstart missing Windows steps",
+    "body": "The quickstart only covers macOS/Linux. Windows users need the venv activation and PATH steps spelled out.",
+    "state": "open",
+    "labels": [{"name": "documentation", "color": "0075ca"}],
+    "createdAt": "2026-06-02T07:45:00Z",
+    "updatedAt": "2026-06-02T07:45:00Z",
+    "author": {"login": "docs-first"},
+    "comments": [],
+    "url": "https://github.com/gaia-fixtures/widget-factory/issues/105"
+  },
+  {
+    "number": 106,
+    "title": "Data loss: saving a project to a network share truncates the file",
+    "body": "Saving to an SMB share writes a 0-byte file about 1 in 5 times and the previous version is gone. No backup is kept. This has destroyed real work for our whole team — affects every user who saves to a share.",
+    "state": "open",
+    "labels": [{"name": "bug", "color": "d73a4a"}, {"name": "critical", "color": "b60205"}],
+    "createdAt": "2026-07-15T12:05:00Z",
+    "updatedAt": "2026-07-23T09:41:00Z",
+    "author": {"login": "atlas-team"},
+    "comments": [
+      {
+        "author": {"login": "maintainer-kim"},
+        "body": "Confirmed: the save path truncates before the write completes. Needs write-to-temp-then-rename.",
+        "createdAt": "2026-07-16T08:20:00Z"
+      },
+      {
+        "author": {"login": "brioche44"},
+        "body": "Also seen on NFS, so it's not SMB-specific.",
+        "createdAt": "2026-07-18T17:55:00Z"
+      }
+    ],
+    "url": "https://github.com/gaia-fixtures/widget-factory/issues/106"
+  },
+  {
+    "number": 107,
+    "title": "Typo in error message: 'occured' in the export dialog",
+    "body": "\"An error occured while exporting\" — should be 'occurred'. One-line fix in exporter.py.",
+    "state": "open",
+    "labels": [{"name": "bug", "color": "d73a4a"}, {"name": "good first issue", "color": "7057ff"}],
+    "createdAt": "2026-07-19T21:10:00Z",
+    "updatedAt": "2026-07-19T21:10:00Z",
+    "author": {"login": "eagle-eye"},
+    "comments": [],
+    "url": "https://github.com/gaia-fixtures/widget-factory/issues/107"
+  },
+  {
+    "number": 108,
+    "title": "Add CSV import to complement the exporter",
+    "body": "We can export projects to CSV but not load them back. Round-tripping would let us bulk-edit in a spreadsheet.",
+    "state": "open",
+    "labels": [{"name": "enhancement", "color": "a2eeef"}],
+    "createdAt": "2026-06-25T10:30:00Z",
+    "updatedAt": "2026-06-25T10:30:00Z",
+    "author": {"login": "lena-ops"},
+    "comments": [],
+    "url": "https://github.com/gaia-fixtures/widget-factory/issues/108"
+  }
+]
