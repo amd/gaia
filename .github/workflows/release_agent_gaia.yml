@@ -849,6 +849,14 @@ jobs:
           # hub.amd-gaia.ai (GETs aren't blocked).
           GAIA_HUB_PUBLISH_URL: ${{ vars.GAIA_HUB_PUBLISH_URL }}
           GAIA_HUB_BASE_URL: ${{ vars.GAIA_HUB_BASE_URL }}
+          # The sidecar crosses the Worker's request-body cap on Linux
+          # (measured 120,677,152 bytes with the RAG deps compiled in), so that
+          # artifact is uploaded straight to R2 over the S3 API and published by
+          # reference. Without these the publish dies partway through, after the
+          # smaller platforms have already been stored immutably.
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           set -euo pipefail
           for required in "${README}" "${CHANGELOG}"; do

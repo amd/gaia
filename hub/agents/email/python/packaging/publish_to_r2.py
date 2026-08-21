@@ -107,7 +107,10 @@ def _infer_platform_key(filename: str) -> str:
     return stem[len(prefix) :]
 
 
-def _download_sha256(base_url: str, agent_id: str, version: str, filename: str) -> str:
+def _download_published(
+    base_url: str, agent_id: str, version: str, filename: str
+) -> tuple[str, int]:
+    """SHA-256 and byte size of what is ALREADY published under this name."""
     url = f"{base_url.rstrip('/')}/agents/{agent_id}/{version}/{filename}"
     resp = requests.get(
         url, headers={"accept": "application/octet-stream"}, timeout=120
@@ -117,7 +120,7 @@ def _download_sha256(base_url: str, agent_id: str, version: str, filename: str) 
             f"error: 409 said '{filename}' exists but GET {url} returned "
             f"HTTP {resp.status_code}. Cannot verify idempotency; failing loudly."
         )
-    return hashlib.sha256(resp.content).hexdigest()
+    return hashlib.sha256(resp.content).hexdigest(), len(resp.content)
 
 
 # Cloudflare caps a Worker request body by plan — 100 MB on Free/Pro. Anything
@@ -216,6 +219,7 @@ def publish_one(
     capability_matrix_bytes: bytes | None = None,
     eval_scorecard_bytes: bytes | None = None,
     package_files_bytes: bytes | None = None,
+    strict_immutable: bool = False,
 ) -> dict:
     if not artifact_path.exists():
         raise SystemExit(f"error: artifact not found: {artifact_path}")
@@ -342,19 +346,39 @@ def publish_one(
             flush=True,
         )
     elif resp.status_code == 409:
-        # Already published. Verify the stored bytes match ours (true no-op).
-        remote_sha = _download_sha256(base_url, agent_id, version, filename)
-        if remote_sha != local_sha:
+        # Already published. Nothing can overwrite it, so the only question is
+        # what this run reports downstream.
+        remote_sha, remote_size = _download_published(
+            base_url, agent_id, version, filename
+        )
+        if remote_sha == local_sha:
+            print(
+                f"[publish] OK 409 — already published with identical bytes "
+                f"(idempotent no-op).",
+                flush=True,
+            )
+        elif strict_immutable:
             raise SystemExit(
                 f"error: {filename} is already published at {agent_id}@{version} "
                 f"with a DIFFERENT sha256 (remote={remote_sha}, local={local_sha}). "
                 "Published artifacts are immutable — bump the version to change it."
             )
-        print(
-            f"[publish] OK 409 — already published with identical bytes "
-            f"(idempotent no-op).",
-            flush=True,
-        )
+        else:
+            # A rebuild of an already-released version. Neither Go nor
+            # PyInstaller is byte-reproducible, so re-running any published
+            # version lands here every time -- that is a no-op to skip, not a
+            # failure. The PUBLISHED bytes are authoritative: report their hash
+            # and size so the lock describes what the hub actually serves, never
+            # this run's throwaway rebuild.
+            print(
+                f"::warning::{filename} is already published at "
+                f"{agent_id}@{version} and this rebuild differs "
+                f"(remote={remote_sha[:12]}…, local={local_sha[:12]}…). Keeping "
+                f"the published bytes. If you meant to ship a CHANGE, bump the "
+                f"version — a published version can never be replaced.",
+                flush=True,
+            )
+            local_sha, size = remote_sha, remote_size
     else:
         raise SystemExit(
             f"error: publish of {filename} failed: HTTP {resp.status_code} "
@@ -442,6 +466,14 @@ def main(argv=None) -> int:
         "--summary-out",
         type=Path,
         help="Write a JSON array of {platform,filename,executable,sha256,size}.",
+    )
+    parser.add_argument(
+        "--strict-immutable",
+        action="store_true",
+        help="Fail when an artifact is already published and this build's bytes "
+        "differ. Off by default: neither Go nor PyInstaller is byte-reproducible, "
+        "so re-running a published version always differs and is a no-op to skip, "
+        "not a failure. Turn it on to police 'changed the code, forgot to bump'.",
     )
     args = parser.parse_args(argv)
 
@@ -558,6 +590,34 @@ def main(argv=None) -> int:
             flush=True,
         )
 
+    # Pre-flight the oversized lane BEFORE publishing anything. Each artifact is
+    # published in turn, so discovering halfway through that the S3 credentials
+    # are absent leaves the smaller platforms stored immutably under a version
+    # that can never be completed -- recoverable only by burning a version.
+    oversized = [
+        p
+        for p in (_parse_artifact_arg(raw)[0] for raw in args.artifact)
+        if p.exists() and p.stat().st_size >= DIRECT_UPLOAD_THRESHOLD
+    ]
+    if oversized and _r2_credentials() is None:
+        listing = "\n".join(
+            f"    {p.name}  ({p.stat().st_size / 1e6:.1f} MB)" for p in oversized
+        )
+        raise SystemExit(
+            "error: these artifacts exceed the Worker request-body cap "
+            f"({DIRECT_UPLOAD_THRESHOLD / 1e6:.1f} MB) and must upload straight to "
+            f"R2 over the S3 API:\n{listing}\n"
+            "  but R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY and CLOUDFLARE_ACCOUNT_ID "
+            "are not all set.\n"
+            "  Fix: pass all three to this step (see release_components.yml), from "
+            "an R2 API token with\n"
+            "       Object Read & Write (Cloudflare -> R2 -> Manage R2 API Tokens).\n"
+            "  Note: the cap is 100 MB on BOTH the Free and Pro plans, so upgrading "
+            "to Pro does not\n"
+            "        remove this requirement.\n"
+            "  Nothing has been published."
+        )
+
     results = []
     for raw in args.artifact:
         path, key = _parse_artifact_arg(raw)
@@ -584,6 +644,7 @@ def main(argv=None) -> int:
                 capability_matrix_bytes=capability_matrix_bytes,
                 eval_scorecard_bytes=eval_scorecard_bytes,
                 package_files_bytes=package_files_bytes,
+                strict_immutable=args.strict_immutable,
             )
         )
 
