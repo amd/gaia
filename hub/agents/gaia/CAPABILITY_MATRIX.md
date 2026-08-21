@@ -58,9 +58,22 @@ The committed SSE sequence pins under `python/eval_baselines/query_sequences/` s
   - `query/{run_id}/cancel`
   - `query/{run_id}/respond`
 - MCP tools: **0** (see MCP Scope Decision)
-- Eval suites: **0**
-  - no eval suites wired yet (no `tests/fixtures/gaia/*_gate_thresholds.json` fixtures exist)
-- Judged scenario categories (`eval/scenarios/gaia_*`): **0**
+- Eval suites: **2**
+  - `perf`: enforce=False, acceptance_enforce=None
+  - `quality`: enforce=False, acceptance_enforce=None
+- Judged scenario categories (`eval/scenarios/gaia_*`): **12**
+  - `gaia_code`
+  - `gaia_core`
+  - `gaia_data`
+  - `gaia_files`
+  - `gaia_honesty`
+  - `gaia_memory`
+  - `gaia_rag`
+  - `gaia_shell`
+  - `gaia_skills_lifecycle`
+  - `gaia_skills_tasks`
+  - `gaia_tool_selection`
+  - `gaia_web`
 
 ## MCP Scope Decision
 

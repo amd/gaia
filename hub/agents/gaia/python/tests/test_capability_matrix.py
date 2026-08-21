@@ -229,8 +229,22 @@ def test_eval_surface_state_is_derived_not_asserted(matrix):
     assert matrix.scenario_categories == scenario_dirs
 
     # Current state pins — move these WITH the corpus, never delete them.
-    assert matrix.eval_suites == {}
-    assert matrix.scenario_categories == []
+    assert set(matrix.eval_suites) == {"quality", "perf"}
+    assert all(s["enforce"] is False for s in matrix.eval_suites.values())
+    assert matrix.scenario_categories == [
+        "gaia_code",
+        "gaia_core",
+        "gaia_data",
+        "gaia_files",
+        "gaia_honesty",
+        "gaia_memory",
+        "gaia_rag",
+        "gaia_shell",
+        "gaia_skills_lifecycle",
+        "gaia_skills_tasks",
+        "gaia_tool_selection",
+        "gaia_web",
+    ]
     assert capability_matrix.EVAL_FOLLOWUP_PLAN.strip()
 
 
