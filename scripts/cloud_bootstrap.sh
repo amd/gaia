@@ -23,13 +23,18 @@ if [ -n "$CI" ]; then
     exit 0
 fi
 
+# Defensive only: the hook interpolates $CLAUDE_PROJECT_DIR to locate this
+# script, so an unset value fails before this runs. Reachable when invoked directly.
 if [ -z "$CLAUDE_PROJECT_DIR" ]; then
     echo "cloud_bootstrap: CLAUDE_PROJECT_DIR is unset, cannot locate the repo root." >&2
-    echo "  Expected Claude Code to set it. Check the SessionStart hook in .claude/settings.json." >&2
+    echo "  Set it to the repo root, or run via the SessionStart hook in .claude/settings.json." >&2
     exit 1
 fi
 
-cd "$CLAUDE_PROJECT_DIR" || exit 1
+if ! cd "$CLAUDE_PROJECT_DIR"; then
+    echo "cloud_bootstrap: cannot enter CLAUDE_PROJECT_DIR ($CLAUDE_PROJECT_DIR)." >&2
+    exit 1
+fi
 
 # Claude Code clones the repo before SessionStart hooks run, so a missing
 # checkout means something is wrong upstream. Say so rather than acting on it.
@@ -38,11 +43,21 @@ if [ ! -f pyproject.toml ]; then
     exit 1
 fi
 
+if ! command -v uv >/dev/null 2>&1; then
+    echo "cloud_bootstrap: uv is not installed, cannot build the dev environment." >&2
+    echo "  Add 'curl -LsSf https://astral.sh/uv/install.sh | sh' to the cloud environment's setup script." >&2
+    exit 1
+fi
+
 set -e
 
-# A cached environment snapshot may already carry a provisioned venv.
-if [ ! -x .venv/bin/python ]; then
-    uv venv .venv --python 3.12
+# Probe the package, not the interpreter: an install interrupted partway leaves
+# a working .venv/bin/python behind but no gaia, and every later session would
+# skip the rebuild while still being told the install is ready.
+if ! .venv/bin/python -c "import gaia" >/dev/null 2>&1; then
+    # --clear because uv refuses to build over an existing venv, which is
+    # exactly the state the probe above catches.
+    uv venv .venv --clear --python 3.12
 
     # --extra-index-url is load-bearing: without the CPU wheel index this
     # resolves to the CUDA torch build and drags in ~4.7 GB of packages.
