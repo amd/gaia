@@ -90,25 +90,51 @@ def _api(base_url: str, method: str, path: str, **kwargs) -> Dict[str, Any]:
         return _normalize_error(e, base_url)
 
 
+# Keep in sync with gaia.ui._chat_helpers (not imported here: gaia.ui pulls the
+# optional [ui] FastAPI stack, and this bridge must stay importable without it).
+_EVAL_PROVIDER_ENV = "GAIA_EVAL_AGENT_PROVIDER"
+
+
+def _model_pin() -> Dict[str, Any]:
+    """The ``model`` entry for /api/chat/send, provider-aware.
+
+    Default (env unset): pin GAIA's canonical chat LLM so the UI backend can't
+    fall back to its installer-time ``default_model_name`` (currently
+    ``Qwen3.5-4B-GGUF``) and force Lemonade to swap models on every call.
+    Without this, an eval scenario that defaults the session ends up thrashing
+    Lemonade between Qwen↔Gemma for each turn, which routinely blew the
+    per-scenario 930s budget (rag_quality ``negation_handling`` was the
+    canary). Pin is harmless for users who haven't customised their default —
+    the agent layer was already going to dispatch to Gemma anyway.
+
+    ``GAIA_EVAL_AGENT_PROVIDER=claude``: NO Lemonade pin — the backend's
+    provider opt-in (``use_claude=True``) is authoritative, and pinning Gemma
+    here would force Lemonade model resolution on a run that must never touch
+    Lemonade. Any other value raises, mirroring the backend — never a silent
+    Lemonade fallback.
+    """
+    provider = os.environ.get(_EVAL_PROVIDER_ENV, "").strip().lower()
+    if provider and provider != "claude":
+        raise ValueError(
+            f"{_EVAL_PROVIDER_ENV}={provider!r} is not a supported eval agent "
+            "provider. Valid values: claude (or unset the variable for the "
+            "default Lemonade backend). Refusing to guess a backend."
+        )
+    if provider == "claude":
+        return {}
+    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
+
+    return {"model": DEFAULT_MODEL_NAME}
+
+
 def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]:
     """Send a message via SSE stream and collect the full response."""
     url = f"{base_url}/api/chat/send"
-    # Pin the model to GAIA's canonical chat LLM so the UI backend can't
-    # fall back to its installer-time ``default_model_name`` (currently
-    # ``Qwen3.5-4B-GGUF``) and force Lemonade to swap models on every
-    # call. Without this, an eval scenario that defaults the session
-    # ends up thrashing Lemonade between Qwen↔Gemma for each turn, which
-    # routinely blew the per-scenario 930s budget (rag_quality
-    # ``negation_handling`` was the canary). Pin is harmless for users
-    # who haven't customised their default — the agent layer was already
-    # going to dispatch to Gemma anyway.
-    from gaia.llm.lemonade_client import DEFAULT_MODEL_NAME
-
     payload = {
         "session_id": session_id,
         "message": message,
         "stream": True,
-        "model": DEFAULT_MODEL_NAME,
+        **_model_pin(),
     }
 
     try:

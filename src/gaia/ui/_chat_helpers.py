@@ -1244,6 +1244,15 @@ def _maybe_load_expected_model(model_id: str, sse_handler=None) -> None:
     """
     if not model_id:
         return
+    # Provider override is authoritative: with GAIA_EVAL_AGENT_PROVIDER=claude
+    # the agent runs on Claude, and this Lemonade preflight would contact — and
+    # possibly load a model into — a backend the eval must never touch.
+    if _eval_provider_kwargs():
+        logger.info(
+            "Pre-flight skipped: %s=claude — Lemonade is not in use",
+            _EVAL_PROVIDER_ENV,
+        )
+        return
     try:
         import httpx
 

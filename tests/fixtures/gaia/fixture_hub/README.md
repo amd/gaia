@@ -1,50 +1,48 @@
 # Fixture skill hub — a local, deterministic Agent Hub skills lane
 
-A servable copy of the hub layout `gaia.skills.hub` fetches (catalog +
-per-skill manifest + versioned `SKILL.md` + zip artifact), so
-`search_skill_hub` / `install_skill` eval scenarios run with **zero network**.
+Committed here: only **unsigned skill sources** (`sources/<name>/SKILL.md`,
+verbatim copies of `hub/skills/<name>/SKILL.md`). The servable hub — catalog +
+per-skill manifest + versioned `SKILL.md` + zip artifacts — is built **per
+run** by `tests/fixtures/gaia/prepare_fixture_hub.py`, which signs bundles
+with an **ephemeral** `eval-test-publisher` Ed25519 keypair. No private key is
+ever committed; the throwaway key and its trust-store entry live only in the
+run's `--skills-root`.
 
-## Serving it
+## Per-run setup
 
 ```bash
-python tests/fixtures/gaia/serve_fixtures.py --port 8765
-# then, in the agent's environment:
-GAIA_HUB_URL=http://127.0.0.1:8765/fixture_hub
+# 1. Build + sign into fixture_hub/_prepared (gitignored) and trust the key
+#    in the agent-under-eval's skills root:
+python tests/fixtures/gaia/prepare_fixture_hub.py --skills-root <agent skills root>
+
+# 2. Serve it (ephemeral port; NEVER 4001/4200/8141/13305):
+python tests/fixtures/gaia/serve_fixtures.py --dir tests/fixtures/gaia/fixture_hub/_prepared
+# prints: SERVING http://127.0.0.1:<port>/
+
+# 3. Point the agent at it:
+GAIA_HUB_URL=http://127.0.0.1:<port>
 ```
 
-(`GAIA_HUB_URL` may carry a path segment; every `gaia.skills.hub` /
-`gaia.hub.catalog` URL is built by suffixing it. Serving with
-`--dir tests/fixtures/gaia/fixture_hub` and no path suffix works too.)
+`--skills-root` is required and must be the skills root the agent actually
+uses (that is where `install_skill` reads `trusted-keys.json`). It is never
+defaulted, so a developer's real `~/.gaia/skills` trust store can't pick up a
+test key by accident.
 
-## Contents
+## Contents and the tier behaviour scenarios can rely on (all verified)
 
-| Skill | Version | Claimed tier | Permissions |
+| Skill | Version | Signed by default? | Install outcome |
 |---|---|---|---|
-| `github-triage` | 2.1.0 | community | `shell:execute:gh` |
-| `data-explore` | 1.0.0 | community | (none) |
+| `data-explore` | 1.0.0 | yes (ephemeral key) | **installs cleanly at `community`** — no flags, no prompts. The clean hub-install target. |
+| `github-triage` | 2.1.0 | **deliberately unsigned** | **refused** — unsigned collapses it to `experimental`, and its `shell:execute:gh` grant is above the `experimental` ceiling (which allows only `network:read`). The install-refusal scenario target; the error carries the `--allow-experimental` guidance chain. |
 
-`SKILL.md` files are verbatim copies of `hub/skills/<name>/SKILL.md`. Rebuild
-after a starter-skill change with
-`python tests/fixtures/gaia/fixture_hub/_build_fixture_hub.py` — it re-zips
-deterministically and re-stamps the sha256s; never edit the manifests by hand.
-
-## Tier behaviour scenarios can rely on (verified against this fixture)
-
-The zips are **unsigned**, so `attested_tier` is `experimental` and the
-community claim collapses to `experimental` at install
-(`effective_tier = min(claimed, attested)`):
-
-- `install_skill("data-explore")` → **refused** (`SkillInstallError`: needs
-  `--allow-experimental`).
-- `install_skill("data-explore", allow_experimental=True)` → **installs** at
-  tier `experimental` (re-stamped from the community claim; sha256 verified,
-  lock entry recorded).
-- `install_skill("github-triage", allow_experimental=True)` → **refused**
-  (`SkillPermissionError`: `shell:execute:gh` is above the `experimental`
-  ceiling, which allows only `network:read`). This is the canonical
-  "unsigned skill cannot carry a binary grant" refusal scenario — installing
-  github-triage for use in scenarios must go through the signed/real hub or
-  the documented `~/.gaia/skills/` copy method, not this fixture.
+Also verified, for corpus planning: signing github-triage too
+(`--unsigned ""`) makes it installable at `community`, but its
+`shell:execute:gh` is a dangerous grant — the install **prompts** (declining
+refuses; `assume_yes`/`--yes` installs). So `data-explore` remains the only
+zero-interaction clean-install target.
 
 Search behaviour: `search_skills("")` lists both; matching covers id, name,
 description, and declared tool names (e.g. `query_data` → `data-explore`).
+
+Rebuilding is cheap and idempotent — `prepare_fixture_hub.py` wipes and
+recreates `--out`, and regenerates the keypair (`force=True`) each run.
