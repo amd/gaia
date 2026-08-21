@@ -10,8 +10,28 @@ Run it with no arguments::
     python util/verify_publish_pipeline.py
 
 It boots ``workers/agent-hub`` under ``wrangler dev`` with Miniflare's simulated
-R2, drives ``hub/agents/email/python/packaging/publish_to_r2.py`` against it, and
-asserts on behaviour. Exit code is 0 only if every case passes.
+R2, drives a publisher against it, and asserts on behaviour. Exit code is 0 only
+if every applicable case passes.
+
+TWO PUBLISHERS, NOT ONE
+-----------------------
+There are two ``publish_to_r2.py`` scripts and they are different programs::
+
+    hub/agents/email/python/packaging/publish_to_r2.py   --publisher email
+        release_agent_email.yml, release_agent_chat.yml, release_components.yml
+
+    hub/agents/gaia/python/packaging/publish_to_r2.py    --publisher gaia
+        release_agent_gaia.yml
+
+Proving one says NOTHING about the other, which is why this runs both by default
+and labels every row with the publisher it came from. They differ today in more
+than plumbing: the gaia copy has no direct-to-R2 lane (it refuses anything at the
+request-body cap and tells you to port one), still hard-fails a differing
+rebuild, takes ``<component>:<platform>`` artifact keys rather than
+``<platform>``, and has neither opt-in flag. Those differences live in ``SPECS``;
+a case needing a capability a publisher lacks is reported **N/A**, never passed.
+When the R2 lane is ported to the gaia publisher, flip its ``direct_r2`` and
+``lenient_rebuild`` and the relevant cases start applying to it.
 
 WHAT THIS PROVES
 ----------------
@@ -33,10 +53,13 @@ G  The same pre-flight refuses to start when boto3 is missing, before storing
 H  ``--require-new`` turns "this run stored nothing new" into a hard failure,
    while the default stays lenient with a warning that says so.
 I  The platform key and executable name are derived from the artifact filename
-   rather than hardcoded to one product. Both are load-bearing:
-   release_agent_gaia.yml passes its binaries with no explicit
-   ``=<platform-key>``, and release_agent_email.yml feeds this summary into
-   gen_binaries_lock.py, which reads ``executable`` straight out of it.
+   rather than hardcoded to one product. Both are load-bearing: the release
+   workflows pass binaries with no explicit artifact key, and
+   release_agent_email.yml feeds this summary into gen_binaries_lock.py, which
+   reads ``executable`` straight out of it.
+J  A publisher WITHOUT a direct-to-R2 lane refuses an oversized artifact at the
+   cap rather than 413ing mid-release. This is the gaia release's live blocker:
+   its Linux sidecar is ~120 MB.
 
 WHAT THIS CANNOT PROVE
 ----------------------
@@ -79,10 +102,10 @@ from urllib.parse import urlparse
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKER_DIR = REPO_ROOT / "workers" / "agent-hub"
-PUBLISHER = REPO_ROOT / "hub/agents/email/python/packaging/publish_to_r2.py"
 
-# Must match DIRECT_UPLOAD_THRESHOLD in publish_to_r2.py. Asserted at startup so
-# a change there fails here loudly instead of silently testing the wrong lane.
+# The size at which an artifact stops fitting through the Worker. Checked against
+# each publisher's own constant at startup, so moving it there fails here loudly
+# instead of silently testing the wrong lane.
 DIRECT_UPLOAD_THRESHOLD = 90 * 1024 * 1024
 
 AGENT_ID = "zz-pipeline-test"
@@ -100,6 +123,67 @@ BOGUS_R2 = {
 FORBIDDEN_PORTS = {4001}
 
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "[::1]"}
+
+
+@dataclass(frozen=True)
+class Spec:
+    """One publisher script, and which behaviours it currently claims to have.
+
+    There are TWO publishers and they are not the same program. Every case below
+    names the one it exercises, because proving the email publisher says nothing
+    about the gaia release -- release_agent_gaia.yml runs the gaia copy.
+    """
+
+    key: str
+    path: Path
+    threshold_const: str
+    drives: str
+    # Capabilities. A case that needs one the publisher lacks is reported N/A
+    # rather than passed or failed, so the table never overstates coverage.
+    direct_r2: bool
+    lenient_rebuild: bool
+    strict_immutable_flag: bool
+    require_new_flag: bool
+    # (filename, expected platform, expected executable) for case I.
+    executable_cases: tuple[tuple[str, str, str], ...]
+    _artifact_key: str = "{platform}"
+
+    def artifact_arg(self, path: Path, platform: str) -> str:
+        return f"{path}={self._artifact_key.format(platform=platform)}"
+
+
+SPECS = {
+    "email": Spec(
+        key="email",
+        path=REPO_ROOT / "hub/agents/email/python/packaging/publish_to_r2.py",
+        threshold_const="DIRECT_UPLOAD_THRESHOLD",
+        drives="release_agent_email.yml, release_agent_chat.yml, release_components.yml",
+        direct_r2=True,
+        lenient_rebuild=True,
+        strict_immutable_flag=True,
+        require_new_flag=True,
+        executable_cases=(
+            ("gaia-agent-linux-x64", "linux-x64", "gaia-agent"),
+            ("email-agent-win32-x64.exe", "win32-x64", "email-agent.exe"),
+        ),
+    ),
+    # A separate 367-line script. It has NONE of the email publisher's fixes: no
+    # direct-to-R2 lane (it hard-fails at the cap and tells you to port one), the
+    # old hard-failure on a differing rebuild, and neither opt-in flag. Its
+    # artifact key is <component>:<platform>, not <platform>.
+    "gaia": Spec(
+        key="gaia",
+        path=REPO_ROOT / "hub/agents/gaia/python/packaging/publish_to_r2.py",
+        threshold_const="WORKER_BODY_LIMIT",
+        drives="release_agent_gaia.yml",
+        direct_r2=False,
+        lenient_rebuild=False,
+        strict_immutable_flag=False,
+        require_new_flag=False,
+        executable_cases=(("gaia-agent-linux-x64", "linux-x64", "gaia-agent"),),
+        _artifact_key="sidecar:{platform}",
+    ),
+}
 
 
 class Skip(Exception):
@@ -383,10 +467,14 @@ class Run:
 @dataclass
 class Ctx:
     worker: Worker
+    spec: Spec
     tmp: Path
     dist: Path
     no_boto_runner: Path
     manifests: dict[str, Path] = field(default_factory=dict)
+
+    def arg(self, path: Path, platform: str) -> str:
+        return self.spec.artifact_arg(path, platform)
 
     def manifest_for(self, version: str) -> Path:
         if version not in self.manifests:
@@ -437,7 +525,7 @@ class Ctx:
         if block_boto3:
             cmd.append(str(self.no_boto_runner))
         cmd += [
-            str(PUBLISHER),
+            str(self.spec.path),
             "--base-url",
             self.worker.base_url,
             "--manifest",
@@ -490,7 +578,7 @@ WIN = f"{AGENT_ID}-win-x64.exe"
 
 def case_a(c: Ctx) -> str:
     path, sha = c.write_artifact(LINUX, SMALL)
-    run, summary = c.publish("0.0.1", [f"{path}=linux-x64"], summary="a.json")
+    run, summary = c.publish("0.0.1", [c.arg(path, "linux-x64")], summary="a.json")
     assert run.returncode == 0, f"expected exit 0, got {run.returncode}\n{run.output}"
     assert run.says("ok 201"), f"expected a 201 publish\n{run.output}"
     status, body = c.worker.download("0.0.1", LINUX)
@@ -503,7 +591,7 @@ def case_a(c: Ctx) -> str:
 
 def case_b(c: Ctx) -> str:
     path, sha = c.write_artifact(LINUX, SMALL)
-    run, summary = c.publish("0.0.1", [f"{path}=linux-x64"], summary="b.json")
+    run, summary = c.publish("0.0.1", [c.arg(path, "linux-x64")], summary="b.json")
     assert run.returncode == 0, f"expected exit 0, got {run.returncode}\n{run.output}"
     assert run.says(
         "409", "identical bytes"
@@ -515,7 +603,19 @@ def case_b(c: Ctx) -> str:
 def case_c(c: Ctx) -> str:
     published_sha, published_size = _sha256(SMALL), len(SMALL)
     path, local_sha = c.write_artifact(LINUX, REBUILD)
-    run, summary = c.publish("0.0.1", [f"{path}=linux-x64"], summary="c.json")
+    run, summary = c.publish("0.0.1", [c.arg(path, "linux-x64")], summary="c.json")
+
+    if not c.spec.lenient_rebuild:
+        # This publisher still hard-fails a differing rebuild. Assert THAT, so the
+        # table records real behaviour -- and so porting the lenient path here has
+        # to come with a deliberate flip of `lenient_rebuild` on the spec.
+        assert run.returncode != 0, (
+            f"{c.spec.key} publisher is marked lenient_rebuild=False but exited 0\n"
+            f"{run.output}"
+        )
+        assert run.says("immutable"), f"wrong error\n{run.output}"
+        return "non-zero exit (this publisher has no lenient rebuild path yet)"
+
     assert run.returncode == 0, f"expected exit 0, got {run.returncode}\n{run.output}"
     assert "::warning::" in run.output, f"expected a ::warning::\n{run.output}"
     assert summary, "no summary written"
@@ -536,7 +636,10 @@ def case_c(c: Ctx) -> str:
 def case_d(c: Ctx) -> str:
     path, _ = c.write_artifact(LINUX, REBUILD)
     run, summary = c.publish(
-        "0.0.1", [f"{path}=linux-x64"], extra=["--strict-immutable"], summary="d.json"
+        "0.0.1",
+        [c.arg(path, "linux-x64")],
+        extra=["--strict-immutable"],
+        summary="d.json",
     )
     assert run.returncode != 0, f"expected a non-zero exit\n{run.output}"
     assert run.says("immutable", "bump the version"), f"wrong error\n{run.output}"
@@ -558,7 +661,7 @@ def case_e(c: Ctx) -> str:
     big, _ = c.write_artifact(WIN, OVERSIZED)
     run, summary = c.publish(
         "0.0.2",
-        [f"{sibling}=darwin-arm64", f"{big}=win-x64"],
+        [c.arg(sibling, "darwin-arm64"), c.arg(big, "win-x64")],
         creds=False,
         summary="e.json",
     )
@@ -624,7 +727,7 @@ def case_f(c: Ctx) -> str:
     sibling, _ = c.write_artifact(DARWIN, SIBLING)
     run, _ = c.publish(
         "0.0.3",
-        [f"{sibling}=darwin-arm64", f"{big}=win-x64"],
+        [c.arg(sibling, "darwin-arm64"), c.arg(big, "win-x64")],
         creds=True,
         summary="f.json",
     )
@@ -659,7 +762,7 @@ def case_g(c: Ctx) -> str:
     big, _ = c.write_artifact(WIN, OVERSIZED)
     run, summary = c.publish(
         "0.0.4",
-        [f"{sibling}=darwin-arm64", f"{big}=win-x64"],
+        [c.arg(sibling, "darwin-arm64"), c.arg(big, "win-x64")],
         creds=True,
         block_boto3=True,
         summary="g.json",
@@ -680,14 +783,14 @@ def case_h(c: Ctx) -> str:
     path, _ = c.write_artifact(LINUX, SMALL)
 
     strict, _ = c.publish(
-        "0.0.1", [f"{path}=linux-x64"], extra=["--require-new"], summary="h1.json"
+        "0.0.1", [c.arg(path, "linux-x64")], extra=["--require-new"], summary="h1.json"
     )
     assert strict.returncode != 0, (
         f"--require-new accepted a run that stored nothing (exit {strict.returncode})\n"
         f"{strict.output}"
     )
 
-    lenient, _ = c.publish("0.0.1", [f"{path}=linux-x64"], summary="h2.json")
+    lenient, _ = c.publish("0.0.1", [c.arg(path, "linux-x64")], summary="h2.json")
     assert (
         lenient.returncode == 0
     ), f"expected exit 0 without the flag\n{lenient.output}"
@@ -707,51 +810,93 @@ def case_i(c: Ctx) -> str:
     no explicit ``=<platform-key>``, and release_agent_email.yml feeds this
     summary into gen_binaries_lock.py, which reads ``rec["executable"]``.
     """
-    gaia, _ = c.write_artifact("gaia-agent-linux-x64", SIBLING)
-    email, _ = c.write_artifact("email-agent-win32-x64.exe", SIBLING + b"x")
-    # Deliberately NO "=platform" -- inference is half of what this proves.
-    run, summary = c.publish("0.0.5", [str(gaia), str(email)], summary="i.json")
+    expected, args = {}, []
+    for i, (filename, platform, executable) in enumerate(c.spec.executable_cases):
+        path, _ = c.write_artifact(filename, SIBLING + bytes([i]))
+        # Deliberately NO explicit artifact key -- inference is half of the proof.
+        args.append(str(path))
+        expected[filename] = (platform, executable)
+    run, summary = c.publish("0.0.5", args, summary="i.json")
     assert run.returncode == 0, f"expected exit 0, got {run.returncode}\n{run.output}"
     assert summary, "no summary written"
     got = {r["filename"]: (r["platform"], r["executable"]) for r in summary}
-    expected = {
-        "gaia-agent-linux-x64": ("linux-x64", "gaia-agent"),
-        "email-agent-win32-x64.exe": ("win32-x64", "email-agent.exe"),
-    }
     assert (
         got == expected
     ), f"derived names wrong:\n  got      {got}\n  expected {expected}"
     assert (
         "_published" not in summary[0]
     ), "the internal _published flag leaked into the summary"
-    return "gaia-agent-linux-x64 -> gaia-agent; email-agent-win32-x64.exe -> email-agent.exe"
+    return "; ".join(f"{f} -> {e}" for f, (_, e) in sorted(expected.items()))
 
 
+def case_j(c: Ctx) -> str:
+    """A publisher with no direct-to-R2 lane must refuse an oversized artifact.
+
+    This is the gaia release's real blocker: the Linux sidecar is ~120 MB against
+    a publisher that stops at the cap. When the lane is ported, flip ``direct_r2``
+    on the spec and cases E/F/G take over from this one.
+    """
+    sibling, _ = c.write_artifact(DARWIN, SIBLING)
+    big, _ = c.write_artifact(WIN, OVERSIZED)
+    run, summary = c.publish(
+        "0.0.6",
+        [c.arg(sibling, "darwin-arm64"), c.arg(big, "win-x64")],
+        creds=True,
+        summary="j.json",
+    )
+    assert run.returncode != 0, f"expected a non-zero exit\n{run.output}"
+    assert (
+        WIN in run.output
+    ), f"the error does not name the offending file\n{run.output}"
+    assert run.says("cap"), f"the error should name the request-body cap\n{run.output}"
+    assert summary is None, "a summary was written for a failed run"
+    return "non-zero exit at the request-body cap, as this publisher has no R2 lane"
+
+
+# (letter, title, fn, required capability). A case whose capability the selected
+# publisher lacks is reported N/A -- never silently passed. "!x" means the case
+# applies only when the publisher does NOT have x.
 CASES = [
-    ("A", "small artifact, happy path", case_a),
-    ("B", "re-publish identical bytes", case_b),
-    ("C", "re-publish different bytes (remote hash wins)", case_c),
-    ("D", "--strict-immutable restores the hard failure", case_d),
-    ("E", "oversized pre-flight, no R2 credentials", case_e),
-    ("F", "oversized by-reference, verified against R2", case_f),
-    ("G", "oversized pre-flight, boto3 missing", case_g),
-    ("H", "--require-new when a run stores nothing", case_h),
-    ("I", "platform key + executable name are derived", case_i),
+    ("A", "small artifact, happy path", case_a, None),
+    ("B", "re-publish identical bytes", case_b, None),
+    ("C", "re-publish different bytes", case_c, None),
+    (
+        "D",
+        "--strict-immutable restores the hard failure",
+        case_d,
+        "strict_immutable_flag",
+    ),
+    ("E", "oversized pre-flight, no R2 credentials", case_e, "direct_r2"),
+    ("F", "oversized by-reference, verified against R2", case_f, "direct_r2"),
+    ("G", "oversized pre-flight, boto3 missing", case_g, "direct_r2"),
+    ("H", "--require-new when a run stores nothing", case_h, "require_new_flag"),
+    ("I", "platform key + executable name are derived", case_i, None),
+    ("J", "oversized refused (no direct-to-R2 lane)", case_j, "!direct_r2"),
 ]
 
 
-def _read_threshold() -> int:
-    """Read DIRECT_UPLOAD_THRESHOLD out of the publisher without importing it."""
+def _applies(spec: Spec, need: str | None) -> bool:
+    if need is None:
+        return True
+    if need.startswith("!"):
+        return not getattr(spec, need[1:])
+    return bool(getattr(spec, need))
+
+
+def _read_threshold(spec: Spec) -> int:
+    """Read a publisher's request-body cap constant without importing it."""
     import ast
 
-    tree = ast.parse(PUBLISHER.read_text(encoding="utf-8"))
+    tree = ast.parse(spec.path.read_text(encoding="utf-8"))
     for node in tree.body:
         if isinstance(node, ast.Assign) and any(
-            isinstance(t, ast.Name) and t.id == "DIRECT_UPLOAD_THRESHOLD"
+            isinstance(t, ast.Name) and t.id == spec.threshold_const
             for t in node.targets
         ):
             return int(eval(compile(ast.Expression(node.value), "<t>", "eval")))
-    raise SystemExit("error: DIRECT_UPLOAD_THRESHOLD not found in publish_to_r2.py")
+    raise SystemExit(
+        f"error: {spec.threshold_const} not found in {spec.path.relative_to(REPO_ROOT)}"
+    )
 
 
 def main(argv=None) -> int:
@@ -765,64 +910,107 @@ def main(argv=None) -> int:
         help="Run only these cases, e.g. --only ACF. Default: all.",
     )
     parser.add_argument(
+        "--publisher",
+        choices=[*SPECS, "both"],
+        default="both",
+        help="Which publisher script to exercise. There are TWO and they are not "
+        "the same program: 'email' backs the email/chat/components releases, "
+        "'gaia' backs release_agent_gaia.yml. Default: both.",
+    )
+    parser.add_argument(
         "--keep-temp",
         action="store_true",
         help="Leave the temp dir (fixtures + wrangler log) in place for debugging.",
     )
     args = parser.parse_args(argv)
 
-    if not PUBLISHER.exists():
-        raise SystemExit(f"error: publisher not found at {PUBLISHER}")
-    threshold = _read_threshold()
-    if threshold != DIRECT_UPLOAD_THRESHOLD:
-        raise SystemExit(
-            f"error: publish_to_r2.py's DIRECT_UPLOAD_THRESHOLD is {threshold}, but this "
-            f"harness builds its oversized fixture at {DIRECT_UPLOAD_THRESHOLD}. Update "
-            "DIRECT_UPLOAD_THRESHOLD in this file so cases E/F/G still test the right lane."
-        )
-
-    selected = [c for c in CASES if not args.only or c[0] in args.only.upper()]
-    tmp = Path(tempfile.mkdtemp(prefix="zz-verify-publish-"))
-    results: list[tuple[str, str, bool, str]] = []
-    try:
-        dist = tmp / "dist"
-        dist.mkdir()
-        runner = tmp / "_no_boto3.py"
-        runner.write_text(NO_BOTO_RUNNER, encoding="utf-8")
-
-        try:
-            with Worker(tmp) as worker:
-                ctx = Ctx(worker=worker, tmp=tmp, dist=dist, no_boto_runner=runner)
-                for letter, title, fn in selected:
-                    print(f"\n=== {letter}. {title} ===", flush=True)
-                    try:
-                        detail = fn(ctx)
-                        results.append((letter, title, True, detail))
-                        print(f"  PASS  {detail}", flush=True)
-                    except AssertionError as e:
-                        first = str(e).split("\n")[0]
-                        results.append((letter, title, False, first))
-                        print(f"  FAIL  {e}", flush=True)
-        except Skip as e:
-            print(f"\nSKIPPED: {e}.")
-            print(
-                "  This harness needs Node.js to run the Agent Hub Worker locally. "
-                "Install Node 20+ and re-run; nothing was verified."
+    specs = (
+        list(SPECS.values()) if args.publisher == "both" else [SPECS[args.publisher]]
+    )
+    for spec in specs:
+        if not spec.path.exists():
+            raise SystemExit(f"error: {spec.key} publisher not found at {spec.path}")
+        threshold = _read_threshold(spec)
+        if threshold != DIRECT_UPLOAD_THRESHOLD:
+            raise SystemExit(
+                f"error: {spec.path.relative_to(REPO_ROOT)} sets {spec.threshold_const} "
+                f"to {threshold}, but this harness builds its oversized fixture at "
+                f"{DIRECT_UPLOAD_THRESHOLD}. Update DIRECT_UPLOAD_THRESHOLD here so the "
+                "oversized cases still test the right lane."
             )
-            return 0
-    finally:
-        if args.keep_temp:
-            print(f"\n[cleanup] temp dir kept: {tmp}")
-        else:
-            shutil.rmtree(tmp, ignore_errors=True)
 
-    print("\n" + "=" * 72)
-    for letter, title, ok, detail in results:
-        print(f"  {'PASS' if ok else 'FAIL'}  {letter}. {title}")
+    results: list[tuple[str, str, str, str, str]] = []
+    for spec in specs:
+        print(
+            f"\n########  publisher: {spec.key}  ({spec.path.relative_to(REPO_ROOT)})"
+        )
+        print(f"########  drives: {spec.drives}")
+        # A fresh Worker per publisher: both write to the same agent id, so one
+        # bucket would let the second run inherit the first's published versions.
+        tmp = Path(tempfile.mkdtemp(prefix=f"zz-verify-publish-{spec.key}-"))
+        try:
+            dist = tmp / "dist"
+            dist.mkdir()
+            runner = tmp / "_no_boto3.py"
+            runner.write_text(NO_BOTO_RUNNER, encoding="utf-8")
+            try:
+                with Worker(tmp) as worker:
+                    ctx = Ctx(
+                        worker=worker,
+                        spec=spec,
+                        tmp=tmp,
+                        dist=dist,
+                        no_boto_runner=runner,
+                    )
+                    for letter, title, fn, need in CASES:
+                        if args.only and letter not in args.only.upper():
+                            continue
+                        if not _applies(spec, need):
+                            results.append(
+                                (
+                                    spec.key,
+                                    letter,
+                                    title,
+                                    "N/A",
+                                    f"publisher has no {need}",
+                                )
+                            )
+                            print(f"\n=== {letter}. {title} ===\n  N/A   no {need}")
+                            continue
+                        print(f"\n=== {letter}. {title} ===", flush=True)
+                        try:
+                            detail = fn(ctx)
+                            results.append((spec.key, letter, title, "PASS", detail))
+                            print(f"  PASS  {detail}", flush=True)
+                        except AssertionError as e:
+                            results.append(
+                                (spec.key, letter, title, "FAIL", str(e).split("\n")[0])
+                            )
+                            print(f"  FAIL  {e}", flush=True)
+            except Skip as e:
+                print(f"\nSKIPPED: {e}.")
+                print(
+                    "  This harness needs Node.js to run the Agent Hub Worker locally. "
+                    "Install Node 20+ and re-run; nothing was verified."
+                )
+                return 0
+        finally:
+            if args.keep_temp:
+                print(f"\n[cleanup] temp dir kept: {tmp}")
+            else:
+                shutil.rmtree(tmp, ignore_errors=True)
+
+    print("\n" + "=" * 78)
+    for key, letter, title, verdict, detail in results:
+        print(f"  {verdict:<5} {key:<6} {letter}. {title}")
         print(f"          {detail}")
-    failed = [r for r in results if not r[2]]
-    print("=" * 72)
-    print(f"{len(results) - len(failed)}/{len(results)} passed")
+    failed = [r for r in results if r[3] == "FAIL"]
+    ran = [r for r in results if r[3] != "N/A"]
+    print("=" * 78)
+    print(
+        f"{len(ran) - len(failed)}/{len(ran)} passed "
+        f"({len(results) - len(ran)} N/A) across {len(specs)} publisher(s)"
+    )
     if failed:
         print(
             "\nThe publish pipeline is NOT verified. Fix the failures above before "

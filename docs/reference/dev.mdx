@@ -311,11 +311,19 @@ python util/verify_publish_pipeline.py
 ```
 
 It boots `workers/agent-hub` under `wrangler dev` with Miniflare's simulated R2,
-drives the real publisher against it, and asserts on behaviour — the happy path,
+drives the real publishers against it, and asserts on behaviour — the happy path,
 idempotent re-runs, immutability, the oversized direct-to-R2 lane, and the
 pre-flight checks that must refuse to publish anything at all. It refuses to run
 against any non-loopback URL, needs no credentials, and cleans up after itself.
 It skips with a message (not a failure) when Node.js is unavailable.
+
+**There are two publisher scripts and they are different programs.**
+`hub/agents/email/python/packaging/publish_to_r2.py` backs the email, chat, and
+components releases; `hub/agents/gaia/python/packaging/publish_to_r2.py` backs
+`release_agent_gaia.yml`. Proving one says nothing about the other, so the
+harness runs both by default and labels every row with the publisher it came
+from. Use `--publisher email` or `--publisher gaia` to narrow it. A case that
+needs a capability a publisher does not have is reported **N/A**, never passed.
 
 Read the module docstring for what it deliberately **cannot** prove — real R2
 credentials from GitHub's IP space, real installer sizes, and the macOS freeze
