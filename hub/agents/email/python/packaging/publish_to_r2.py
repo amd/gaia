@@ -14,10 +14,18 @@ README.
 Idempotency (re-running a published release is a no-op):
   * 201 -> published. We assert the Worker-returned SHA-256 equals the SHA-256
     we computed locally (integrity/atomicity check).
-  * 409 (version_exists) -> the filename is already published. We GET the stored
-    object and assert its bytes hash to the SAME SHA-256 we hold. If they match
-    it is a true no-op (success); if they DIFFER we fail loudly — that means a
-    different binary is already published under this immutable name.
+  * 409 version_exists -> the filename is already published. We GET the stored
+    object. Identical bytes are a true no-op. DIFFERENT bytes are also a no-op,
+    because neither Go nor PyInstaller is byte-reproducible and a rebuild of a
+    released version therefore always differs: the published object stays
+    authoritative and is what this run reports, so the lock describes what the
+    hub actually serves. ``--strict-immutable`` restores the old hard failure.
+  * any OTHER 409 (artifact_mismatch, artifact_unverifiable, id_conflict) is a
+    real rejection -- the catalog was NOT modified -- and fails loudly.
+
+A run that stores nothing warns loudly, because with the above a forgotten
+version bump would otherwise be a green release that ships nothing.
+``--require-new`` turns that warning into a failure.
 
 NO silent fallback: any other non-2xx, a SHA mismatch, or a missing token
 raises with an actionable message.

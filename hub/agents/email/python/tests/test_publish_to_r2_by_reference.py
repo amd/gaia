@@ -117,7 +117,9 @@ def captured(monkeypatch):
     monkeypatch.setattr(pub.requests, "head", fake_head)
 
     monkeypatch.setattr(pub.requests, "post", fake_post)
-    monkeypatch.setattr(pub, "_download_sha256", lambda *a, **k: None)
+    # Returns (sha256, size) now: the 409 path needs the published SIZE too, so
+    # a reconciled artifact reports what the hub serves rather than this build.
+    monkeypatch.setattr(pub, "_download_published", lambda *a, **k: ("", 0))
 
     # Stub boto3 AND botocore.config: neither is installed in the unit env, and
     # the client is constructed with a botocore Config object whose settings are

@@ -58,7 +58,6 @@ jobs:
     outputs:
       version: ${{ steps.v.outputs.version }}
       tui_version: ${{ steps.v.outputs.tui_version }}
-      ui_version: ${{ steps.v.outputs.ui_version }}
       dry_run: ${{ steps.v.outputs.dry_run }}
     steps:
       - uses: actions/checkout@v7
@@ -102,9 +101,10 @@ jobs:
 
           echo "version=${CORE}"       >> "$GITHUB_OUTPUT"
           echo "tui_version=${TUI_V}"  >> "$GITHUB_OUTPUT"
-          echo "ui_version=${UI_V}"    >> "$GITHUB_OUTPUT"
           echo "core release : ${CORE}  (min_gaia_version gate only)"
           echo "terminal-hub : ${TUI_V} -> agents/terminal-hub/${TUI_V}/"
+          # agent-ui publishes under its manifest version, read by
+          # publish_to_r2.py itself -- logged here, not passed as an output.
           echo "agent-ui     : ${UI_V} -> agents/agent-ui/${UI_V}/"
 
       # A manifest can agree with the tag and STILL be a lie: the terminal hub
