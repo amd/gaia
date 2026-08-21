@@ -342,7 +342,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${GAIA_HUB_PUBLISH_URL:-}" ]; then
-            echo "::error::missing repository variable GAIA_HUB_PUBLISH_URL — the Worker's workers.dev origin CI POSTs uploads to (the proxied hub.amd-gaia.ai custom domain's managed WAF blocks large uploads). Publishing without it would silently target a hardcoded fallback URL. Set it as a REPOSITORY variable (an environment-scoped one resolves empty here). See workers/agent-hub/README.md."
+            echo "::error::missing repository variable GAIA_HUB_PUBLISH_URL — the Worker's workers.dev origin CI POSTs uploads to (the proxied hub.amd-gaia.ai custom domain's managed WAF blocks large uploads). Set it as a repository variable, or as an environment variable on the agent-publish environment. See workers/agent-hub/README.md."
             exit 1
           fi
 
@@ -439,7 +439,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${GAIA_HUB_PUBLISH_URL:-}" ]; then
-            echo "::error::missing repository variable GAIA_HUB_PUBLISH_URL — the Worker's workers.dev origin CI POSTs uploads to (the proxied hub.amd-gaia.ai custom domain's managed WAF blocks large uploads). Publishing without it would silently target a hardcoded fallback URL. Set it as a REPOSITORY variable (an environment-scoped one resolves empty here). See workers/agent-hub/README.md."
+            echo "::error::missing repository variable GAIA_HUB_PUBLISH_URL — the Worker's workers.dev origin CI POSTs uploads to (the proxied hub.amd-gaia.ai custom domain's managed WAF blocks large uploads). Set it as a repository variable, or as an environment variable on the agent-publish environment. See workers/agent-hub/README.md."
             exit 1
           fi
 
