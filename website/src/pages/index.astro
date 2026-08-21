@@ -29,7 +29,10 @@ const PATHS = [
     title: 'Integrate it',
     body: 'Embed the agent in your app as a local sidecar.',
     code: 'npm install @amd-gaia/gaia',
-    href: `${DOCS}/guides/gaia`,
+    // The npm page, not ${DOCS}/guides/gaia: that guide is not on main yet, so
+    // the docs site 404s it. The package is published (0.1.0) and its README is
+    // the integration reference until the guide ships.
+    href: 'https://www.npmjs.com/package/@amd-gaia/gaia',
     external: true,
   },
   {
