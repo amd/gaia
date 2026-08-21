@@ -1,0 +1,44 @@
+{
+  "generated_at": "2026-01-01T00:00:00Z",
+  "agents": [
+    {
+      "id": "github-triage",
+      "type": "skill",
+      "name": "github-triage",
+      "description": "Triage GitHub work with the gh CLI \u2014 your unread notification inbox, or one repository's issue backlog. Groups what arrived, judges what is urgent, and posts the reply once you approve it. Use when asked to triage issues or notifications, check the GitHub inbox, see what needs attention or what you are blocking, review a backlog, comment on or label an issue, or work out what to fix first.",
+      "latest_version": "2.1.0",
+      "security_tier": "community",
+      "skill_metadata": {
+        "tools": [
+          {
+            "name": "run_shell_command"
+          }
+        ]
+      }
+    },
+    {
+      "id": "data-explore",
+      "type": "skill",
+      "name": "data-explore",
+      "description": "Load messy tabular data into SQL scratchpad tables and answer questions with real queries instead of eyeballing. Use when the user has a CSV, spreadsheet, export, or pasted table and asks for totals, trends, outliers, or a breakdown.",
+      "latest_version": "1.0.0",
+      "security_tier": "community",
+      "skill_metadata": {
+        "tools": [
+          {
+            "name": "create_table"
+          },
+          {
+            "name": "insert_data"
+          },
+          {
+            "name": "query_data"
+          },
+          {
+            "name": "list_tables"
+          }
+        ]
+      }
+    }
+  ]
+}

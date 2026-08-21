@@ -1,0 +1,11 @@
+{
+  "_comment": "Performance-regression bars for the gaia-agent eval (T5 tier, plan section 2b). Same posture as tests/fixtures/email/perf_gate_thresholds.json: 'enforce' ships FALSE (report mode) until the bars are calibrated against the first committed runner baseline — the values below are deliberately generous placeholders, not measurements. Token/cache metrics come from Lemonade usage counters and are self-hosted-runner-only; the local Claude validation run reports turn/tool counts and wall time only.",
+  "_gating": "All keys are GATING bars when enforced. A metric the run could not measure must be reported as 'not measured' by the perf report, never rendered as a pass.",
+  "max_input_tokens_per_scenario": 200000,
+  "max_output_tokens_per_scenario": 20000,
+  "min_cache_hit_ratio": 0.20,
+  "max_elapsed_s": 600.0,
+  "max_llm_calls_per_turn": 12,
+  "max_tool_calls_per_turn": 10,
+  "enforce": false
+}

@@ -1,0 +1,6 @@
+{
+  "_comment": "Quality-gate thresholds for the gaia-agent judged eval suite (gaia eval agent --agent-type gaia). Mirrors the email manifests' pattern (tests/fixtures/email/quality_gate_thresholds.json): the bars are targets, 'enforce' is the SINGLE switch CI keys off, and it ships FALSE (report mode) on purpose — the values below are generous placeholders to be tightened once the first self-hosted-runner baseline is captured (plan phase 4). Flipping 'enforce' to true happens here, in data, not in code. Integrity failures (missing judge key, zero judged scenarios, harness crash) fail regardless of this switch.",
+  "min_judged_pass_rate": 0.60,
+  "min_avg_score": 5.0,
+  "enforce": false
+}

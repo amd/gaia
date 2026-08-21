@@ -1,0 +1,41 @@
+{
+  "_comment": "Known aggregates for sales.csv, used as ground truth by gaia_data and data-explore eval scenarios. Regenerate with _gen_sales.py if the CSV ever changes \u2014 never edit these numbers by hand.",
+  "row_count": 24,
+  "total_units": 2505,
+  "total_revenue": 20220.0,
+  "revenue_by_region": {
+    "East": 4732.5,
+    "North": 6143.75,
+    "South": 4375.0,
+    "West": 4968.75
+  },
+  "top_region_by_revenue": "North",
+  "units_by_product": {
+    "Gadget Mini": 1510,
+    "Widget Basic": 695,
+    "Widget Pro": 300
+  },
+  "revenue_by_product": {
+    "Gadget Mini": 6417.5,
+    "Widget Basic": 6602.5,
+    "Widget Pro": 7200.0
+  },
+  "best_selling_product_by_units": "Gadget Mini",
+  "top_product_by_revenue": "Widget Pro",
+  "revenue_by_month": {
+    "2026-04": 6702.5,
+    "2026-05": 6468.75,
+    "2026-06": 7048.75
+  },
+  "distinct_regions": [
+    "East",
+    "North",
+    "South",
+    "West"
+  ],
+  "distinct_products": [
+    "Gadget Mini",
+    "Widget Basic",
+    "Widget Pro"
+  ]
+}

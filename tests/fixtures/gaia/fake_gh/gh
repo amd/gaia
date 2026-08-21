@@ -1,0 +1,6 @@
+#!/bin/sh
+# POSIX shim for the fake gh (see gh.py). Windows resolves gh.cmd instead.
+if command -v python3 >/dev/null 2>&1; then
+    exec python3 "$(dirname "$0")/gh.py" "$@"
+fi
+exec python "$(dirname "$0")/gh.py" "$@"

@@ -1,0 +1,21 @@
+{
+  "name": "github-triage",
+  "description": "Triage GitHub work with the gh CLI \u2014 your unread notification inbox, or one repository's issue backlog. Groups what arrived, judges what is urgent, and posts the reply once you approve it. Use when asked to triage issues or notifications, check the GitHub inbox, see what needs attention or what you are blocking, review a backlog, comment on or label an issue, or work out what to fix first.",
+  "license": "MIT",
+  "security_tier": "community",
+  "permissions": [
+    "shell:execute:gh"
+  ],
+  "latest_version": "2.1.0",
+  "versions": {
+    "2.1.0": {
+      "artifact": {
+        "filename": "github-triage-2.1.0.zip",
+        "sha256": "16329b4aeafd35853b0a3c679da1542c9b53c8888231ccea46dd195a03efa6c8",
+        "size_bytes": 7828,
+        "path": "skills/github-triage/2.1.0/github-triage-2.1.0.zip",
+        "content_type": "application/zip"
+      }
+    }
+  }
+}
