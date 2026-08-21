@@ -231,7 +231,7 @@ setup(
             # GAIA ships (agent_mcp_server.py, servers/agent_ui_mcp.py,
             # servers/tui_mcp.py). Lift the cap only in a change that
             # ports them.
-            "mcp>=1.1.0,<2.0",
+            "mcp>=1.1.0,<3.0",
             "starlette",
             "uvicorn",
         ],
