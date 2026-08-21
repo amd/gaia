@@ -1,0 +1,78 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+#
+# Prove the Agent Hub publish pipeline on every PR that touches it.
+#
+# Publishing is irreversible: the hub has no unpublish route, so a defect in
+# this path is only discovered by a release that half-publishes and cannot be
+# undone. That is exactly how it went — the pipeline failed for four days
+# across four different causes, each found one failed release at a time.
+#
+# util/verify_publish_pipeline.py boots the Worker under `wrangler dev` with
+# Miniflare's simulated R2 and drives the REAL publisher against it, so this
+# runs the same code a release runs, with no credentials and no way to reach
+# the live hub (it asserts loopback before doing anything).
+#
+# It cannot prove the real R2 credential from GitHub's IP space, real artifact
+# sizes, or the macOS freeze legs — see the harness docstring.
+
+name: Publish Pipeline Tests
+
+on:
+  pull_request:
+    paths:
+      - 'hub/agents/*/python/packaging/publish_to_r2.py'
+      - 'hub/agents/*/python/packaging/gen_binaries_lock.py'
+      - 'workers/agent-hub/**'
+      - 'util/verify_publish_pipeline.py'
+      - '.github/workflows/release_agent_*.yml'
+      - '.github/workflows/release_components.yml'
+      - '.github/workflows/test_publish_pipeline.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Verify publish pipeline (local Worker)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: workers/agent-hub/package-lock.json
+
+      - name: Install Worker dependencies
+        working-directory: workers/agent-hub
+        run: npm ci
+
+      # requests + pyyaml are what the publisher imports at module scope; boto3
+      # is needed for the oversized lane, and case G asserts the pre-flight
+      # refuses to run WITHOUT it, so the harness controls that per-case.
+      - name: Install publisher dependencies
+        run: python -m pip install --upgrade requests pyyaml boto3
+
+      - name: Run the pipeline harness
+        run: python util/verify_publish_pipeline.py
+
+      # The publisher's own unit tests: the by-reference lane, the threshold,
+      # and the credential guards. Fast, and they catch a signature change the
+      # harness would only reach at runtime.
+      - name: Publisher unit tests
+        run: |
+          python -m pip install --upgrade pytest
+          PYTHONPATH="hub/agents/email/python:src" \
+            python -m pytest hub/agents/email/python/tests/test_publish_to_r2_by_reference.py -q
