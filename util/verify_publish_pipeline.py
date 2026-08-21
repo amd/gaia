@@ -31,7 +31,12 @@ F  An oversized artifact already in R2 publishes by reference: the Worker
 G  The same pre-flight refuses to start when boto3 is missing, before storing
    anything -- credentials alone are not enough to make the upload possible.
 H  ``--require-new`` turns "this run stored nothing new" into a hard failure,
-   while the default stays lenient with a warning.
+   while the default stays lenient with a warning that says so.
+I  The platform key and executable name are derived from the artifact filename
+   rather than hardcoded to one product. Both are load-bearing:
+   release_agent_gaia.yml passes its binaries with no explicit
+   ``=<platform-key>``, and release_agent_email.yml feeds this summary into
+   gen_binaries_lock.py, which reads ``executable`` straight out of it.
 
 WHAT THIS CANNOT PROVE
 ----------------------
@@ -669,11 +674,40 @@ def case_h(c: Ctx) -> str:
     assert (
         lenient.returncode == 0
     ), f"expected exit 0 without the flag\n{lenient.output}"
-    assert (
-        "::warning::" in lenient.output
-    ), f"a run that stored nothing should still warn\n{lenient.output}"
+    # Not just "any ::warning::" -- case C emits one too, so a bare check would
+    # pass for the wrong reason. This must be the nothing-shipped warning.
+    assert lenient.says(
+        "::warning::", "nothing new was stored"
+    ), f"a run that stored nothing should say so\n{lenient.output}"
     assert c.worker.artifacts("0.0.1") == before, "the catalog changed"
-    return "--require-new -> non-zero; default -> exit 0 with a ::warning::"
+    return "--require-new -> non-zero; default -> exit 0 + 'nothing new was stored'"
+
+
+def case_i(c: Ctx) -> str:
+    """The platform key and executable name are derived, not hardcoded.
+
+    Both matter beyond cosmetics: release_agent_gaia.yml passes its binaries with
+    no explicit ``=<platform-key>``, and release_agent_email.yml feeds this
+    summary into gen_binaries_lock.py, which reads ``rec["executable"]``.
+    """
+    gaia, _ = c.write_artifact("gaia-agent-linux-x64", SIBLING)
+    email, _ = c.write_artifact("email-agent-win32-x64.exe", SIBLING + b"x")
+    # Deliberately NO "=platform" -- inference is half of what this proves.
+    run, summary = c.publish("0.0.5", [str(gaia), str(email)], summary="i.json")
+    assert run.returncode == 0, f"expected exit 0, got {run.returncode}\n{run.output}"
+    assert summary, "no summary written"
+    got = {r["filename"]: (r["platform"], r["executable"]) for r in summary}
+    expected = {
+        "gaia-agent-linux-x64": ("linux-x64", "gaia-agent"),
+        "email-agent-win32-x64.exe": ("win32-x64", "email-agent.exe"),
+    }
+    assert (
+        got == expected
+    ), f"derived names wrong:\n  got      {got}\n  expected {expected}"
+    assert (
+        "_published" not in summary[0]
+    ), "the internal _published flag leaked into the summary"
+    return "gaia-agent-linux-x64 -> gaia-agent; email-agent-win32-x64.exe -> email-agent.exe"
 
 
 CASES = [
@@ -685,6 +719,7 @@ CASES = [
     ("F", "oversized by-reference, verified against R2", case_f),
     ("G", "oversized pre-flight, boto3 missing", case_g),
     ("H", "--require-new when a run stores nothing", case_h),
+    ("I", "platform key + executable name are derived", case_i),
 ]
 
 
