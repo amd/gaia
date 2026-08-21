@@ -17,7 +17,7 @@ setup:
 
 turns:
   - turn: 1
-    objective: "Ask the agent to remember a colour preference"
+    objective: "SETUP FIRST (simulator action, not a user message): reset persistent memory by calling the eval MCP admin tool memory_clear(scope=all) — the runner convention and the only cross-scenario isolation; requires GAIA_MEMORY_ADMIN=1 on the backend. Then send this turn: Ask the agent to remember a colour preference"
     user_message: "Remember that my favourite colour is teal. Just acknowledge."
     ground_truth:
       expected_answer: "Acknowledged; stored"

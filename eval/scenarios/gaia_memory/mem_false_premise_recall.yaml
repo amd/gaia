@@ -19,7 +19,7 @@ setup:
 
 turns:
   - turn: 1
-    objective: "Store two real facts"
+    objective: "SETUP FIRST (simulator action, not a user message): reset persistent memory by calling the eval MCP admin tool memory_clear(scope=all) — the runner convention and the only cross-scenario isolation; requires GAIA_MEMORY_ADMIN=1 on the backend. Then send this turn: Store two real facts"
     user_message: "Remember two things: my car is a blue Honda Civic, and my parking spot at work is #23."
     ground_truth:
       expected_answer: "Stored: blue Honda Civic; spot #23"

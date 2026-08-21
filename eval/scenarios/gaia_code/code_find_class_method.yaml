@@ -1,4 +1,4 @@
-# FIXTURE-SYNC: tests/fixtures/gaia/mini_repo/ (tempkeeper) — see
+# FIXTURE-SYNC: ~/gaia-eval/mini_repo/ (tempkeeper) — see
 # GAIA_FIXTURE_VALUES.md.
 id: code_find_class_method
 name: "Code — Locate a Method by Behavior"
@@ -14,11 +14,11 @@ persona: power_user
 
 setup:
   index_documents: []
-  notes: "Fixture repo at tests/fixtures/gaia/mini_repo/."
+  notes: "Staged fixture repo at ~/gaia-eval/mini_repo/ (staged by eval setup)."
 
 turns:
   - turn: 1
-    objective: "Ask where the median of the temperature readings is computed in tests/fixtures/gaia/mini_repo"
+    objective: "Ask where the median of the temperature readings is computed in ~/gaia-eval/mini_repo"
     ground_truth:
       expected_answer: "ReadingStore.median in tempkeeper/store.py"
     success_criteria: "CRITICAL: Agent names the ReadingStore class, its median method, and tempkeeper/store.py, backed by real search/read calls in agent_tools[] (indexing first is fine). Invented names are an automatic FAIL."

@@ -20,7 +20,7 @@ turns:
   - turn: 1
     objective: "Ask the agent to find and install the rss-digest skill from the hub"
     ground_truth:
-      expected_behavior: "Real search + install of rss-digest v1.0.0 (community, signed); any install confirmation is approved by the user"
+      expected_behavior: "Real search + install of rss-digest v1.0.0 (community, signed — signature verification passes deterministically against the fixture hub); the install gate auto-approves on the eval transport (GAIA_AUTO_APPROVE_TOOLS=1)"
     success_criteria: |
       agent_tools[] must show search_skill_hub and install_skill actually
       running. The agent reports rss-digest v1.0.0 installed. Claiming an
