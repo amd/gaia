@@ -63,6 +63,9 @@ jobs:
       # is needed for the oversized lane, and case G asserts the pre-flight
       # refuses to run WITHOUT it, so the harness controls that per-case.
       - name: Install publisher dependencies
+        # requests/pyyaml are the publisher's module-scope imports; boto3 is the
+        # oversized lane. Case G asserts the pre-flight refuses to run WITHOUT
+        # boto3, so the harness controls that per-case rather than uninstalling.
         run: python -m pip install --upgrade requests pyyaml boto3
 
       - name: Run the pipeline harness
@@ -79,11 +82,8 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-      # The publisher's own unit tests: the by-reference lane, the threshold,
-      # and the credential guards. Fast, and they catch a signature change the
-      # harness would only reach at runtime.
-      - name: Publisher unit tests
-        run: |
-          python -m pip install --upgrade pytest
-          PYTHONPATH="hub/agents/email/python:src" \
-            python -m pytest hub/agents/email/python/tests/test_publish_to_r2_by_reference.py -q
+      # The publisher's unit tests are NOT re-run here. test_email_agent.yml
+      # already runs hub/agents/email/python/tests/ with the package installed,
+      # and test_email_agent_unit.yml triggers on the same paths a publisher
+      # change touches. Duplicating that dependency setup here would be a second
+      # copy to drift -- which is the class of bug this workflow guards against.
