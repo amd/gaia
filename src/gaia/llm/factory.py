@@ -9,6 +9,7 @@ from .base_client import LLMClient
 _PROVIDERS: dict[str, str] = {
     "lemonade": "gaia.llm.providers.lemonade.LemonadeProvider",
     "openai": "gaia.llm.providers.openai_provider.OpenAIProvider",
+    "atlascloud": "gaia.llm.providers.atlascloud.AtlasCloudProvider",
     "claude": "gaia.llm.providers.claude.ClaudeProvider",
     "litellm": "gaia.llm.providers.litellm.LiteLLMProvider",
 }
@@ -24,8 +25,9 @@ def create_client(
     Create an LLM client, auto-detecting provider from parameters.
 
     Args:
-        provider: Explicit provider name ("lemonade", "openai", "claude", or "litellm").
-                  If not specified, auto-detected from use_claude/use_openai flags.
+        provider: Explicit provider name ("lemonade", "openai", "atlascloud",
+                  "claude", or "litellm"). If not specified, auto-detected from
+                  use_claude/use_openai flags.
         use_claude: If True, use Claude provider (ignored if provider is specified)
         use_openai: If True, use OpenAI provider (ignored if provider is specified)
         **kwargs: Provider-specific arguments (base_url, model, api_key, etc.)
