@@ -197,8 +197,17 @@ def _kill_tree(pid: int) -> None:
         return
     import signal
 
+    # Refuse to signal our OWN group: the child is spawned with
+    # start_new_session, so a shared group means that call failed and killpg
+    # would take this process (and the CI step) down with it.
+    def _kill_group() -> None:
+        pgid = os.getpgid(pid)
+        if pgid == os.getpgid(0):
+            raise OSError(f"pid {pid} shares our process group ({pgid})")
+        os.killpg(pgid, signal.SIGTERM)
+
     for kill in (
-        lambda: os.killpg(os.getpgid(pid), signal.SIGTERM),
+        _kill_group,
         lambda: os.kill(pid, signal.SIGTERM),
     ):
         try:
@@ -259,6 +268,13 @@ class Worker:
             str(self._persist / "wrangler-state"),
         ]
         print(f"[setup] {' '.join(cmd)}")
+        # POSIX: give wrangler its OWN process group. Teardown kills the group so
+        # workerd dies with its parent, and without this that group is the one we
+        # are running in -- on a GitHub runner every case passed and the step then
+        # exited 143, because the SIGTERM reached the shell too.
+        spawn: dict = {}
+        if os.name != "nt":
+            spawn["start_new_session"] = True
         with self.log.open("wb") as fh:
             self._proc = subprocess.Popen(
                 cmd,
@@ -266,6 +282,7 @@ class Worker:
                 stdout=fh,
                 stderr=subprocess.STDOUT,
                 stdin=subprocess.DEVNULL,
+                **spawn,
             )
         self._await_health()
         return self
