@@ -14,10 +14,18 @@ README.
 Idempotency (re-running a published release is a no-op):
   * 201 -> published. We assert the Worker-returned SHA-256 equals the SHA-256
     we computed locally (integrity/atomicity check).
-  * 409 (version_exists) -> the filename is already published. We GET the stored
-    object and assert its bytes hash to the SAME SHA-256 we hold. If they match
-    it is a true no-op (success); if they DIFFER we fail loudly — that means a
-    different binary is already published under this immutable name.
+  * 409 version_exists -> the filename is already published. We GET the stored
+    object. Identical bytes are a true no-op. DIFFERENT bytes are also a no-op,
+    because neither Go nor PyInstaller is byte-reproducible and a rebuild of a
+    released version therefore always differs: the published object stays
+    authoritative and is what this run reports, so the lock describes what the
+    hub actually serves. ``--strict-immutable`` restores the old hard failure.
+  * any OTHER 409 (artifact_mismatch, artifact_unverifiable, id_conflict) is a
+    real rejection -- the catalog was NOT modified -- and fails loudly.
+
+A run that stores nothing warns loudly, because with the above a forgotten
+version bump would otherwise be a green release that ships nothing.
+``--require-new`` turns that warning into a failure.
 
 NO silent fallback: any other non-2xx, a SHA mismatch, or a missing token
 raises with an actionable message.
@@ -94,20 +102,31 @@ def _parse_artifact_arg(arg: str) -> tuple[Path, str | None]:
 
 
 def _infer_platform_key(filename: str) -> str:
-    """Infer the platform key from ``email-agent-<key>[.exe]``."""
+    """Infer the platform key from ``<product>-agent-<key>[.exe]``.
+
+    Keyed on the ``-agent-`` marker, not one product name: this publisher is
+    shared by every agent lane (``gaia-agent-linux-x64``, ``email-agent-…``),
+    and release_agent_gaia.yml passes its binaries with no explicit
+    ``=<platform-key>``.
+    """
     stem = filename
     if stem.endswith(".exe"):
         stem = stem[: -len(".exe")]
-    prefix = "email-agent-"
-    if not stem.startswith(prefix):
+    marker = "-agent-"
+    idx = stem.rfind(marker)
+    if idx == -1:
         raise SystemExit(
-            f"error: cannot infer platform key from '{filename}'. Pass it "
-            "explicitly as <path>=<platform-key>."
+            f"error: cannot infer platform key from '{filename}' (expected "
+            "'<product>-agent-<platform>', e.g. 'gaia-agent-linux-x64'). Pass "
+            "it explicitly as <path>=<platform-key>."
         )
-    return stem[len(prefix) :]
+    return stem[idx + len(marker) :]
 
 
-def _download_sha256(base_url: str, agent_id: str, version: str, filename: str) -> str:
+def _download_published(
+    base_url: str, agent_id: str, version: str, filename: str
+) -> tuple[str, int]:
+    """SHA-256 and byte size of what is ALREADY published under this name."""
     url = f"{base_url.rstrip('/')}/agents/{agent_id}/{version}/{filename}"
     resp = requests.get(
         url, headers={"accept": "application/octet-stream"}, timeout=120
@@ -117,7 +136,7 @@ def _download_sha256(base_url: str, agent_id: str, version: str, filename: str) 
             f"error: 409 said '{filename}' exists but GET {url} returned "
             f"HTTP {resp.status_code}. Cannot verify idempotency; failing loudly."
         )
-    return hashlib.sha256(resp.content).hexdigest()
+    return hashlib.sha256(resp.content).hexdigest(), len(resp.content)
 
 
 # Cloudflare caps a Worker request body by plan — 100 MB on Free/Pro. Anything
@@ -216,6 +235,7 @@ def publish_one(
     capability_matrix_bytes: bytes | None = None,
     eval_scorecard_bytes: bytes | None = None,
     package_files_bytes: bytes | None = None,
+    strict_immutable: bool = False,
 ) -> dict:
     if not artifact_path.exists():
         raise SystemExit(f"error: artifact not found: {artifact_path}")
@@ -326,6 +346,7 @@ def publish_one(
             timeout=300,
         )
 
+    published_now = False
     if resp.status_code == 201:
         body = resp.json()
         server_sha = body.get("published", {}).get("artifact", {}).get("sha256")
@@ -335,6 +356,7 @@ def publish_one(
                 f"sha256={server_sha} but local sha256={local_sha}. The upload was "
                 "corrupted in transit; failing loudly."
             )
+        published_now = True
         n = body.get("published", {}).get("version_artifacts", "?")
         print(
             f"[publish] OK 201 — stored, server sha256 verified. "
@@ -342,32 +364,76 @@ def publish_one(
             flush=True,
         )
     elif resp.status_code == 409:
-        # Already published. Verify the stored bytes match ours (true no-op).
-        remote_sha = _download_sha256(base_url, agent_id, version, filename)
-        if remote_sha != local_sha:
+        # Only ONE of the Worker's four 409s means "already published":
+        # version_exists. artifact_mismatch / artifact_unverifiable / id_conflict
+        # all say "the catalog was NOT modified" -- reconciling those against the
+        # R2 object would report success for a release the hub never recorded.
+        error_code = ""
+        try:
+            error_code = str(resp.json().get("error", {}).get("code", ""))
+        except ValueError:
+            pass
+        if error_code != "version_exists":
+            raise SystemExit(
+                f"error: publish of {filename} was rejected with HTTP 409 "
+                f"{error_code or '(no error code)'} -- this is NOT 'already "
+                f"published' and the Worker did not record it in the catalog. "
+                f"{resp.text[:500]}"
+            )
+        # Already published. Nothing can overwrite it, so the only question is
+        # what this run reports downstream.
+        remote_sha, remote_size = _download_published(
+            base_url, agent_id, version, filename
+        )
+        if remote_sha == local_sha:
+            print(
+                f"[publish] OK 409 — already published with identical bytes "
+                f"(idempotent no-op).",
+                flush=True,
+            )
+        elif strict_immutable:
             raise SystemExit(
                 f"error: {filename} is already published at {agent_id}@{version} "
                 f"with a DIFFERENT sha256 (remote={remote_sha}, local={local_sha}). "
                 "Published artifacts are immutable — bump the version to change it."
             )
-        print(
-            f"[publish] OK 409 — already published with identical bytes "
-            f"(idempotent no-op).",
-            flush=True,
-        )
+        else:
+            # A rebuild of an already-released version. Neither Go nor
+            # PyInstaller is byte-reproducible, so re-running any published
+            # version lands here every time -- that is a no-op to skip, not a
+            # failure. The PUBLISHED bytes are authoritative: report their hash
+            # and size so the lock describes what the hub actually serves, never
+            # this run's throwaway rebuild.
+            print(
+                f"::warning::{filename} is already published at "
+                f"{agent_id}@{version} and this rebuild differs "
+                f"(remote={remote_sha[:12]}…, local={local_sha[:12]}…). Keeping "
+                f"the published bytes. If you meant to ship a CHANGE, bump the "
+                f"version — a published version can never be replaced.",
+                flush=True,
+            )
+            local_sha, size = remote_sha, remote_size
     else:
         raise SystemExit(
             f"error: publish of {filename} failed: HTTP {resp.status_code} "
             f"{resp.text[:500]}"
         )
 
-    executable = "email-agent.exe" if filename.endswith(".exe") else "email-agent"
+    # Derived from the artifact, not hardcoded to one product: this publisher is
+    # shared by every lane, and `gaia-agent-linux-x64` installs as `gaia-agent`.
+    stem = filename[: -len(".exe")] if filename.endswith(".exe") else filename
+    idx = stem.rfind("-agent-")
+    base = f"{stem[:idx]}-agent" if idx != -1 else "email-agent"
+    executable = base + (".exe" if filename.endswith(".exe") else "")
     return {
         "platform": platform_key,
         "filename": filename,
         "executable": executable,
         "sha256": local_sha,
         "size": size,
+        # Consumed by main()'s "did anything actually ship?" report and stripped
+        # before the summary is written, so the on-disk shape is unchanged.
+        "_published": published_now,
     }
 
 
@@ -442,6 +508,21 @@ def main(argv=None) -> int:
         "--summary-out",
         type=Path,
         help="Write a JSON array of {platform,filename,executable,sha256,size}.",
+    )
+    parser.add_argument(
+        "--require-new",
+        action="store_true",
+        help="Exit non-zero when every artifact was already published, i.e. the "
+        "run shipped nothing. Catches a forgotten version bump, which is "
+        "otherwise a green release that changes nothing.",
+    )
+    parser.add_argument(
+        "--strict-immutable",
+        action="store_true",
+        help="Fail when an artifact is already published and this build's bytes "
+        "differ. Off by default: neither Go nor PyInstaller is byte-reproducible, "
+        "so re-running a published version always differs and is a no-op to skip, "
+        "not a failure. Turn it on to police 'changed the code, forgot to bump'.",
     )
     args = parser.parse_args(argv)
 
@@ -558,6 +639,50 @@ def main(argv=None) -> int:
             flush=True,
         )
 
+    # Pre-flight the oversized lane BEFORE publishing anything. Each artifact is
+    # published in turn, so discovering halfway through that the S3 credentials
+    # are absent leaves the smaller platforms stored immutably under a version
+    # that can never be completed -- recoverable only by burning a version.
+    oversized = [
+        p
+        for p in (_parse_artifact_arg(raw)[0] for raw in args.artifact)
+        if p.exists() and p.stat().st_size >= DIRECT_UPLOAD_THRESHOLD
+    ]
+    if oversized:
+        # boto3 is only imported by the upload itself, so a missing dependency
+        # would otherwise surface mid-publish -- after the smaller platforms are
+        # already stored immutably under a version that can never be completed.
+        try:
+            import boto3  # noqa: F401
+        except ImportError:
+            listing = "\n".join(f"    {p.name}" for p in oversized)
+            raise SystemExit(
+                "error: these artifacts must upload over the S3 API:\n"
+                f"{listing}\n"
+                "  but boto3 is not installed for this interpreter.\n"
+                "  Fix: add boto3 to this step's dependency install "
+                "(see release_components.yml).\n"
+                "  Nothing has been published."
+            ) from None
+    if oversized and _r2_credentials() is None:
+        listing = "\n".join(
+            f"    {p.name}  ({p.stat().st_size / 1e6:.1f} MB)" for p in oversized
+        )
+        raise SystemExit(
+            "error: these artifacts exceed the Worker request-body cap "
+            f"({DIRECT_UPLOAD_THRESHOLD / 1e6:.1f} MB) and must upload straight to "
+            f"R2 over the S3 API:\n{listing}\n"
+            "  but R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY and CLOUDFLARE_ACCOUNT_ID "
+            "are not all set.\n"
+            "  Fix: pass all three to this step (see release_components.yml), from "
+            "an R2 API token with\n"
+            "       Object Read & Write (Cloudflare -> R2 -> Manage R2 API Tokens).\n"
+            "  Note: the cap is 100 MB on BOTH the Free and Pro plans, so upgrading "
+            "to Pro does not\n"
+            "        remove this requirement.\n"
+            "  Nothing has been published."
+        )
+
     results = []
     for raw in args.artifact:
         path, key = _parse_artifact_arg(raw)
@@ -584,15 +709,33 @@ def main(argv=None) -> int:
                 capability_matrix_bytes=capability_matrix_bytes,
                 eval_scorecard_bytes=eval_scorecard_bytes,
                 package_files_bytes=package_files_bytes,
+                strict_immutable=args.strict_immutable,
             )
         )
+
+    stored = sum(1 for r in results if r.pop("_published", False))
 
     if args.summary_out:
         args.summary_out.write_text(json.dumps(results, indent=2), encoding="utf-8")
         print(f"[publish] wrote summary -> {args.summary_out}", flush=True)
 
+    version = str(manifest["version"])
+    if stored == 0 and results:
+        print(
+            f"::warning::nothing new was stored — all {len(results)} artifact(s) "
+            f"were already published at {manifest['id']}@{version}. If you meant "
+            f"to ship a change, bump 'version' in the manifest: a published "
+            f"version can never be replaced, so re-running it is a no-op.",
+            flush=True,
+        )
+        if args.require_new:
+            raise SystemExit(
+                f"error: --require-new was set and {manifest['id']}@{version} was "
+                "already fully published. Bump the manifest version."
+            )
     print(
-        f"[publish] DONE — {len(results)} artifact(s) published/verified.", flush=True
+        f"[publish] DONE — {len(results)} artifact(s) verified, {stored} newly stored.",
+        flush=True,
     )
     return 0
 

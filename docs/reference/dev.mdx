@@ -300,6 +300,58 @@ Key fixtures live in `tests/conftest.py` (`api_client`, `api_server`,
 `require_lemonade`, `lemonade_available`). The `require_lemonade` fixture
 auto-skips integration tests when no Lemonade server is running.
 
+### Verifying the Agent Hub publish pipeline
+
+Publishing to the hub is **irreversible** — `hub.amd-gaia.ai` has no unpublish
+route, so a bad release is permanent and public. Before running any
+`release_*.yml` workflow that publishes, prove the pipeline locally:
+
+```bash
+python util/verify_publish_pipeline.py
+```
+
+It boots `workers/agent-hub` under `wrangler dev` with Miniflare's simulated R2,
+drives the real publishers against it, and asserts on behaviour — the happy path,
+idempotent re-runs, immutability, the oversized direct-to-R2 lane, and the
+pre-flight checks that must refuse to publish anything at all. It refuses to run
+against any non-loopback URL, needs no credentials, and cleans up after itself.
+It skips with a message (not a failure) when Node.js is unavailable.
+
+**There are two publisher scripts and they are different programs.**
+`hub/agents/email/python/packaging/publish_to_r2.py` backs the email, chat, and
+components releases; `hub/agents/gaia/python/packaging/publish_to_r2.py` backs
+`release_agent_gaia.yml`. Proving one says nothing about the other, so the
+harness runs both by default and labels every row with the publisher it came
+from. Use `--publisher email` or `--publisher gaia` to narrow it. A case that
+needs a capability a publisher does not have is reported **N/A**, never passed.
+
+Read the module docstring for what it deliberately **cannot** prove — real R2
+credentials from GitHub's IP space, real installer sizes, and the macOS freeze
+legs still only get exercised in CI.
+
+### Verifying the R2 credentials
+
+The harness runs on **bogus** credentials against a local Worker, so it proves
+the publish logic and nothing about whether the real key works. Every artifact
+over the Worker's request-body cap — the Agent UI installers, the gaia sidecar's
+Linux build — is PUT straight to R2 instead, and R2 answers both a bad
+credential and a malformed request with the same `Unauthorized`:
+
+```bash
+python util/check_r2_credentials.py --size-mb 120
+```
+
+It checks bucket scope, a checksummed write, a write at real release size, and
+a round-trip back through the hub Worker, naming the first that fails. That last
+check is the one worth understanding: a credential can happily write to a
+same-named bucket in a *different* Cloudflare account, and only the Worker
+serving the bytes back rules that out.
+
+It reads `.env` (gitignored) or the environment, writes probes under
+`agents/_credential-probe/` and deletes them, and prints no secret value. It
+still cannot prove the credential works **from GitHub's runners** — a token with
+Client IP Address Filtering passes locally and fails in CI.
+
 ### Real-World Testing with Claude Code
 
 Unit and integration tests prove code paths; they don't prove a feature works
