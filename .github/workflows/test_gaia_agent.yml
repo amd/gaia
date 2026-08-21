@@ -15,6 +15,7 @@ on:
     branches: [ main ]
     paths:
       - 'hub/agents/gaia/python/**'
+      - 'hub/agents/gaia/CAPABILITY_MATRIX.md'
       - 'hub/agents/chat/python/**'
       - 'src/gaia/agents/base/**'
       - 'src/gaia/agents/tools/**'
@@ -27,6 +28,7 @@ on:
     types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - 'hub/agents/gaia/python/**'
+      - 'hub/agents/gaia/CAPABILITY_MATRIX.md'
       - 'hub/agents/chat/python/**'
       - 'src/gaia/agents/base/**'
       - 'src/gaia/agents/tools/**'
@@ -72,6 +74,15 @@ jobs:
           # from it.
           uv pip install --system -e ".[dev,api]"
           uv pip install --system -e hub/agents/chat/python -e hub/agents/gaia/python
+
+      - name: Check Capability Matrix Is Current
+        run: |
+          # The committed CAPABILITY_MATRIX.md must be byte-identical to a
+          # fresh regeneration — a tool/REST/eval surface change without a
+          # regenerated matrix fails here. Invoked by script path, never -m
+          # (packaging/ has no __init__.py so it never ships in the frozen
+          # binary).
+          python hub/agents/gaia/python/packaging/capability_matrix.py --check
 
       - name: Run Gaia Agent Package Tests
         env:
