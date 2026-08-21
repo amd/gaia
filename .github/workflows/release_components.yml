@@ -518,5 +518,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh workflow run deploy_website.yml --ref main
+          # --repo: this job has no checkout, so gh cannot infer the repository.
+          gh workflow run deploy_website.yml --repo "${GITHUB_REPOSITORY}" --ref main
           echo "✓ requested website redeploy (deploy_website.yml on main)"
