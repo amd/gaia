@@ -171,6 +171,12 @@ def _download_sha256(base_url: str, agent_id: str, version: str, filename: str) 
     return hashlib.sha256(resp.content).hexdigest()
 
 
+# Cloudflare's Worker request-body cap on Free/Pro. Mirrors
+# DIRECT_UPLOAD_THRESHOLD's rationale in the email publisher, which has the
+# direct-to-R2 lane this script lacks.
+WORKER_BODY_LIMIT = 90 * 1024 * 1024
+
+
 def publish_one(
     base_url: str,
     manifest_path: Path,
@@ -185,6 +191,20 @@ def publish_one(
         raise SystemExit(f"error: artifact not found: {artifact_path}")
     filename = artifact_path.name
     local_sha, size = _sha256_file(artifact_path)
+    # Cloudflare caps a Worker request body by plan (100 MB on Free/Pro), so an
+    # artifact above it is rejected at the edge before the Worker runs — a bare
+    # 413 with an HTML body, mid-release, after the freeze has already been paid
+    # for. The email publisher has a direct-to-R2 lane for this; this one does
+    # not, so say so plainly rather than letting the release discover it.
+    if size >= WORKER_BODY_LIMIT:
+        raise SystemExit(
+            f"error: {artifact_path.name} is {size} bytes, at or over the "
+            f"{WORKER_BODY_LIMIT}-byte Cloudflare request-body cap, and this "
+            "publisher can only POST through the Worker. Port the direct-to-R2 "
+            "lane from hub/agents/email/python/packaging/publish_to_r2.py "
+            "(_upload_to_r2 + the artifact_ref_* fields) before releasing a "
+            "sidecar this large."
+        )
     agent_id = str(manifest["id"])
     version = str(manifest["version"])
     publish_url = f"{base_url.rstrip('/')}{PUBLISH_PATH}"

@@ -42,6 +42,8 @@ inferred from the filename suffix.
 from __future__ import annotations
 
 import argparse
+import base64
+import contextlib
 import hashlib
 import json
 import os
@@ -118,6 +120,87 @@ def _download_sha256(base_url: str, agent_id: str, version: str, filename: str) 
     return hashlib.sha256(resp.content).hexdigest()
 
 
+# Cloudflare caps a Worker request body by plan — 100 MB on Free/Pro. Anything
+# at or above this goes straight to R2 over the S3 API instead, and is published
+# by reference. Deliberately below the real cap so an artifact that grows into
+# the limit switches lanes before it starts 413ing mid-release.
+DIRECT_UPLOAD_THRESHOLD = 90 * 1024 * 1024
+
+
+def _r2_credentials() -> tuple[str, str, str] | None:
+    """R2 S3 credentials, or None when direct upload is not configured."""
+    key = os.environ.get("R2_ACCESS_KEY_ID")
+    secret = os.environ.get("R2_SECRET_ACCESS_KEY")
+    account = os.environ.get("CLOUDFLARE_ACCOUNT_ID")
+    if key and secret and account:
+        return key, secret, account
+    return None
+
+
+def _upload_to_r2(artifact_path: Path, key: str, sha_hex: str) -> None:
+    """PUT an artifact straight into the hub bucket, bypassing the Worker.
+
+    Single-part on purpose: R2 records a whole-object SHA-256 only for
+    non-multipart uploads, and the Worker refuses to publish an object it cannot
+    verify. ``put_object`` is always single-part (``upload_file`` would switch to
+    multipart above its threshold and silently strip the checksum).
+    """
+    try:
+        import boto3  # imported lazily: only the direct-upload path needs it
+        from botocore.config import Config as BotoConfig
+    except ImportError as e:  # pragma: no cover - environment problem, not logic
+        raise SystemExit(
+            "error: boto3 is required to upload artifacts larger than "
+            f"{DIRECT_UPLOAD_THRESHOLD} bytes directly to R2. "
+            "Install it (pip install boto3) and re-run."
+        ) from e
+
+    creds = _r2_credentials()
+    if creds is None:
+        raise SystemExit(
+            f"error: {artifact_path.name} is too large to publish through the "
+            "Worker (Cloudflare caps request bodies at 100 MB on Free/Pro), so it "
+            "must go directly to R2 — but R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY "
+            "and CLOUDFLARE_ACCOUNT_ID are not all set. Create an R2 API token "
+            "(Cloudflare dashboard -> R2 -> Manage API Tokens) with Object "
+            "Read & Write on the hub bucket and set all three."
+        )
+    access_key, secret_key, account_id = creds
+    bucket = os.environ.get("R2_BUCKET", "gaia-hub")
+
+    # boto3 >= 1.36 adds a CRC32 checksum to every PutObject by default and
+    # sends it as an aws-chunked trailer (Content-Encoding: aws-chunked,
+    # x-amz-content-sha256: STREAMING-UNSIGNED-PAYLOAD-TRAILER). R2 does not
+    # accept that trailer format and rejects the request outright — as
+    # `Unauthorized`, which reads like a credentials problem and is not one.
+    # `when_required` suppresses the automatic checksum while still sending the
+    # explicit ChecksumSHA256 below as a normal header, which is the whole point:
+    # the Worker refuses to publish an object R2 recorded no SHA-256 for.
+    client = boto3.client(
+        "s3",
+        endpoint_url=f"https://{account_id}.r2.cloudflarestorage.com",
+        aws_access_key_id=access_key,
+        aws_secret_access_key=secret_key,
+        region_name="auto",
+        config=BotoConfig(
+            request_checksum_calculation="when_required",
+            response_checksum_validation="when_required",
+        ),
+    )
+    print(
+        f"[publish] uploading {artifact_path.name} -> r2://{bucket}/{key}", flush=True
+    )
+    with artifact_path.open("rb") as fh:
+        client.put_object(
+            Bucket=bucket,
+            Key=key,
+            Body=fh,
+            ContentType="application/octet-stream",
+            # Base64, not hex — and this is what makes the object verifiable.
+            ChecksumSHA256=base64.b64encode(bytes.fromhex(sha_hex)).decode("ascii"),
+        )
+
+
 def publish_one(
     base_url: str,
     manifest_path: Path,
@@ -148,15 +231,48 @@ def publish_one(
         flush=True,
     )
 
-    with artifact_path.open("rb") as fh:
+    # Oversized artifacts cannot travel through the Worker at all (Cloudflare
+    # caps the request body at 100 MB on Free/Pro), so they go straight to R2 and
+    # the POST below only carries their coordinates. The Worker verifies the
+    # stored object's size and SHA-256 before recording it, so this is a
+    # different transport, not a weaker guarantee.
+    by_reference = size >= DIRECT_UPLOAD_THRESHOLD
+    if by_reference:
+        # Check BEFORE uploading. The Worker's by-reference immutability guard
+        # keys on the agent manifest and therefore fires only AFTER this PUT
+        # would already have replaced the published bytes — leaving the catalog
+        # describing the old artifact while R2 serves the new one, and the 409
+        # handler below re-downloading the bytes it just overwrote and happily
+        # agreeing with itself. Skipping the upload keeps that 409 meaningful.
+        download_url = f"{base_url.rstrip('/')}/agents/{agent_id}/{version}/{filename}"
+        head = requests.head(download_url, timeout=60, allow_redirects=True)
+        if head.status_code == 200:
+            print(
+                f"[publish] {filename} is already in R2 — not overwriting it; "
+                "the POST below verifies the stored bytes against this build.",
+                flush=True,
+            )
+        else:
+            _upload_to_r2(
+                artifact_path, f"agents/{agent_id}/{version}/{filename}", local_sha
+            )
+
+    with contextlib.ExitStack() as stack:
         files = {
             "manifest": (
                 "gaia-agent.yaml",
                 manifest_path.read_bytes(),
                 "application/x-yaml",
             ),
-            "artifact": (filename, fh, "application/octet-stream"),
         }
+        if by_reference:
+            files["artifact_ref_filename"] = (None, filename)
+            files["artifact_ref_sha256"] = (None, local_sha)
+            files["artifact_ref_size"] = (None, str(size))
+            files["artifact_ref_content_type"] = (None, "application/octet-stream")
+        else:
+            fh = stack.enter_context(artifact_path.open("rb"))
+            files["artifact"] = (filename, fh, "application/octet-stream")
         # Same multipart field name + shape the Worker expects from
         # `gaia agent publish` (src/gaia/hub/publisher.py): the README becomes
         # the catalog entry's `readme` (rendered as sanitized markdown on the

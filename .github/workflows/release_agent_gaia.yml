@@ -381,8 +381,14 @@ jobs:
           # rather than resolved from PyPI — the frozen binary must contain the
           # ChatAgent this commit was developed against, not whatever is
           # published.
+          #
+          # `rag` is required, not optional, in THIS lane: the agent's own
+          # pyproject leaves it out because a wheel gets it from `gaia init`
+          # into the active interpreter (#2358), and a frozen binary has no
+          # interpreter to install into. Without it faiss/pypdf are absent, the
+          # RAG tools still register, and document Q&A fails on every call.
           uv pip install --python .venv-freeze \
-            -e ".[api]" \
+            -e ".[api,rag]" \
             -e hub/agents/chat/python \
             -e hub/agents/gaia/python \
             pyinstaller
@@ -625,7 +631,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          uv pip install --system -e ".[api]" -e hub/agents/chat/python -e hub/agents/gaia/python pytest
+          # Same extras as the freeze env: testing without `rag` would exercise
+          # a dependency set no released binary ever has.
+          uv pip install --system -e ".[api,rag]" -e hub/agents/chat/python -e hub/agents/gaia/python pytest
 
       - name: Python tests (hub/agents/gaia/python/tests)
         shell: bash
