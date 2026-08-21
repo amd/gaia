@@ -12,6 +12,7 @@ import Header from '../components/Header.astro';
 import Footer from '../components/Footer.astro';
 import InstallCommand from '../components/InstallCommand.astro';
 import TuiDownload from '../components/TuiDownload.astro';
+import Feature from '../components/Feature.astro';
 
 const DOCS = 'https://amd-gaia.ai/docs';
 
@@ -40,35 +41,68 @@ const PATHS = [
   },
 ];
 
-// What is actually different about GAIA, in plain words. Every line is a real
-// property of the system, not a claim: the NPU path (Lemonade on Ryzen AI), the
-// single resident model and its per-device context window, the frozen-binary
-// sidecar behind a REST/SSE contract, runtime-loaded signed skills, memory plus
-// local retrieval instead of context compaction, and the immutable hub.
+// Only what the flagship agent actually exposes through the TUI today. Its
+// config is prompt_profile="full" — doc_rag + file_fs + data_scratch +
+// web_browse — plus the code index and the skill library, and every tool call
+// goes through the TUI's approval gate. Voice and image generation are NOT in
+// this list on purpose: neither ships in the TUI, and `enable_sd_tools` is off
+// by design (a second resident model would evict the chat model).
+const CAPABILITIES = [
+  {
+    title: 'Answers from your documents',
+    body: 'PDFs and notes indexed on the machine, never uploaded.',
+  },
+  {
+    title: 'Reads and edits your files',
+    body: 'Scoped to your home folder, with the rest of the disk off limits.',
+  },
+  {
+    title: 'Searches code by meaning',
+    body: 'A semantic index of the repository, not a grep.',
+  },
+  {
+    title: 'Works your spreadsheets',
+    body: 'CSV and Excel loaded into a local SQL scratchpad it can query.',
+  },
+  {
+    title: 'Looks things up on the web',
+    body: 'Searches and reads pages when a task needs something it does not have.',
+  },
+  {
+    title: 'Asks before it acts',
+    body: 'Every tool call needs your approval until you decide otherwise.',
+  },
+];
+
+// Why it is built this way. Every line is a real property of the system: the
+// NPU path through Lemonade, the single resident model and its per-device
+// context window, memory plus retrieval instead of compaction, runtime-loaded
+// signed skills, the shared tool-mixin registry, and opt-in-only remote models.
 const ARCHITECTURE = [
   {
     title: 'The AI chip in your PC does the work',
-    body: 'Models run on the NPU and integrated graphics of a Ryzen™ AI machine — no server, no account, no request leaving the box.',
+    body: 'Models run on the NPU and integrated graphics of a Ryzen™ AI machine, served locally by',
+    link: { label: 'Lemonade', href: 'https://lemonade-server.ai/', emoji: '🍋' },
   },
   {
     title: 'One model stays loaded',
-    body: 'Every agent and skill shares the same model in memory, so switching between them costs nothing — no reload, no second copy of it.',
+    body: 'Every agent and skill shares it, so switching between them costs nothing.',
   },
   {
     title: 'It remembers instead of forgetting',
-    body: 'Long conversations survive on real memory and a local index of your own files, rather than by quietly summarising your history away.',
+    body: 'Memory and a local index of your files — not a summary of your history.',
   },
   {
     title: 'Skills, not more installs',
-    body: 'New abilities are small packages the agent picks up and puts down while it runs. Each one is audited and signed before it reaches the hub.',
+    body: 'Small signed packages the agent picks up and puts down while it runs.',
   },
   {
-    title: 'One file to embed',
-    body: 'An agent ships as a single self-contained binary behind a small local API, so putting it in your product means no runtime for your users to install.',
+    title: 'Tools snap together',
+    body: 'Files, web, SQL and search — one set every agent composes by name.',
   },
   {
-    title: 'Nothing published can change',
-    body: 'Every version is fixed and checksummed. What you download today is exactly what was published, and it can never be replaced under the same name.',
+    title: 'No silent cloud fallback',
+    body: 'A remote model is something you switch on for a run, never a default.',
   },
 ];
 ---
@@ -126,17 +160,19 @@ const ARCHITECTURE = [
       </ul>
     </section>
 
-    <!-- 3. Why it is built this way — technical substance in plain words. -->
+    <!-- 3. What it can do, and why it is built that way. One bullet shape for
+         both, so the page reads as one list, twice. -->
+    <section id="features" class="g-shell g-section scroll-mt-[66px] border-t border-g-border">
+      <div class="g-label mb-8">What it can do</div>
+      <ul class="grid gap-x-10 gap-y-9 sm:grid-cols-2 lg:grid-cols-3">
+        {CAPABILITIES.map((f) => <Feature {...f} />)}
+      </ul>
+    </section>
+
     <section id="architecture" class="g-shell g-section scroll-mt-[66px] border-t border-g-border">
       <div class="g-label mb-8">Under the hood</div>
-
-      <ul class="grid gap-x-14 gap-y-9 sm:grid-cols-2">
-        {ARCHITECTURE.map((a) => (
-          <li>
-            <h2 class="g-h-card text-[17px]">{a.title}</h2>
-            <p class="g-body mt-2 max-w-[440px]">{a.body}</p>
-          </li>
-        ))}
+      <ul class="grid gap-x-10 gap-y-9 sm:grid-cols-2 lg:grid-cols-3">
+        {ARCHITECTURE.map((f) => <Feature {...f} />)}
       </ul>
     </section>
 

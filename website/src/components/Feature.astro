@@ -1,0 +1,39 @@
+---
+// Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+// One bullet in the landing page's two list sections — what it can do, and how
+// it is built. Both use this component so the two lists cannot drift into
+// different type sizes, measures, or spacing.
+//
+// `link` closes the sentence with a credit or reference (e.g. the Lemonade
+// backend); the trailing period belongs to the component, not the copy, so a
+// bullet with a link and one without end identically.
+
+interface Props {
+  title: string;
+  body: string;
+  link?: { label: string; href: string; emoji?: string };
+}
+
+const { title, body, link } = Astro.props;
+---
+
+<li>
+  <h3 class="font-display text-[15.5px] font-semibold tracking-[-0.01em] text-g-text">{title}</h3>
+  <p class="g-body mt-1.5 max-w-[360px] text-[13.5px]">
+    {body}{link && (
+      <>
+        {' '}
+        <a
+          href={link.href}
+          target="_blank"
+          rel="noopener noreferrer"
+          class="prose-link whitespace-nowrap"
+        >
+          {link.emoji && <span aria-hidden="true">{link.emoji}</span>}{link.emoji && ' '}{link.label}
+        </a>.
+      </>
+    )}
+  </p>
+</li>
