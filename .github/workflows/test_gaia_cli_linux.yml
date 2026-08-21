@@ -246,15 +246,15 @@ jobs:
               sleep 1
             done
 
-            if "${START_ARGV[@]}"; then
-              echo "✅ Started via systemd user unit: ${START_ARGV[*]}"
-              LEMONADE_SYSTEMD_MANAGED=true
-            else
-              echo "::warning::systemctl --user start lemond failed on this runner (no user D-Bus session even after enable-linger) — falling back to launching /usr/bin/lemond directly, the same no-systemd path build_start_command() already takes on macOS."
+            if ! "${START_ARGV[@]}"; then
+              echo "::error::systemctl --user start lemond failed on this runner even after enabling the user systemd session (loginctl enable-linger + XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR). GAIA's own build_start_command() for modern Linux tooling requires a working systemd --user session -- inspect the loginctl/systemctl output above; this is the same command a real Linux user's desktop session runs."
+              exit 1
             fi
-          fi
-
-          if [ "$LEMONADE_SYSTEMD_MANAGED" != "true" ]; then
+            echo "✅ Started via systemd user unit: ${START_ARGV[*]}"
+            LEMONADE_SYSTEMD_MANAGED=true
+          else
+            # Legacy tooling (`lemonade-server serve ...`) is a foreground
+            # process, not a service-manager command -- background it directly.
             mapfile -t START_ENV < <(echo "$STARTSPEC" | jq -r '.env | to_entries[] | "\(.key)=\(.value)"')
             env "${START_ENV[@]}" "${START_ARGV[@]}" > lemonade.log 2>&1 &
             LEMONADE_PID=$!
