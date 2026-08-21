@@ -10,18 +10,20 @@
 // (Apple Silicon behind Safari, an unknown arch) keeps the full list rather
 // than guessing — see scripts/download-target.ts.
 //
-// The binary is the raw artifact, not an installer: it lands in Downloads
-// without a PATH entry and needs the `gaia` CLI for the local model. The
-// one-liner does both, so it stays on screen as the recommended path.
+// The binary is the raw artifact, not an installer: it needs the `gaia` CLI for
+// the local model. That caveat lives in the page's terminal-install section
+// rather than under the button, which stays a single uncluttered action.
 
-import { getComponentRelease, formatBytes } from '../data/catalog';
+import { getComponentRelease } from '../data/catalog';
 import { PLATFORM_LABELS, type PlatformKey } from '../scripts/download-target';
 
 interface Props {
   class?: string;
+  align?: 'left' | 'center';
 }
 
-const { class: className = '' } = Astro.props;
+const { class: className = '', align = 'left' } = Astro.props;
+const centered = align === 'center';
 
 const release = await getComponentRelease('terminal-hub');
 
@@ -44,8 +46,8 @@ const downloads = release.binaries
   .sort((a, b) => ORDER.indexOf(a.platform) - ORDER.indexOf(b.platform));
 ---
 
-<div class:list={['min-w-0', className]} data-tui-download>
-  <div class="flex flex-wrap items-center gap-3">
+<div class:list={['min-w-0', centered && 'flex flex-col items-center text-center', className]} data-tui-download>
+  <div class:list={['flex flex-wrap items-center gap-3', centered && 'justify-center']}>
     {/* The resolved-platform CTA. Hidden until JS places the machine — with no
         JS the list below is the whole interface. */}
     <a
@@ -59,38 +61,27 @@ const downloads = release.binaries
       </svg>
       <span data-dl-label>Install the GAIA agent</span>
     </a>
-    <span data-dl-meta class="mono text-[11.5px] text-g-faint" hidden></span>
   </div>
 
   <div data-dl-list class="mt-4">
     <div class="g-label mb-2.5" data-dl-list-label>Download for your platform · v{release.version}</div>
-    <ul class="grid gap-x-6 gap-y-1.5 sm:grid-cols-2">
+    <ul class:list={['grid gap-x-6 gap-y-1.5 sm:grid-cols-2', centered && 'justify-items-center']}>
       {downloads.map((d) => (
         <li>
           <a
             href={d.url}
             data-dl-option
             data-platform={d.platform}
-            data-filename={d.filename}
-            data-size={formatBytes(d.size_bytes)}
             class="group inline-flex items-baseline gap-2 text-[13.5px] text-g-muted transition-colors hover:text-g-gold-text"
           >
             <span class="text-g-gold-text" aria-hidden="true">↓</span>
             <span>{PLATFORM_LABELS[d.platform]}</span>
-            <span class="mono text-[11px] text-g-faint">{formatBytes(d.size_bytes)}</span>
           </a>
         </li>
       ))}
     </ul>
   </div>
 
-  <p class="mt-3.5 max-w-[520px] text-[12.5px] leading-[1.6] text-g-faint">
-    The GAIA agent runs on your machine and you talk to it in the terminal. Rename the
-    download to <code class="bg-transparent p-0">gaia-tui</code>, put it on your
-    <code class="bg-transparent p-0">PATH</code>, and run it. It needs the
-    <code class="bg-transparent p-0">gaia</code> CLI for the local model, which the
-    <a href="#terminal-install" class="prose-link">one-line installer</a> sets up for you.
-  </p>
 </div>
 
 <script>
@@ -110,16 +101,11 @@ const downloads = release.binaries
 
     const primary = root.querySelector<HTMLAnchorElement>('[data-dl-primary]');
     const label = root.querySelector('[data-dl-label]');
-    const meta = root.querySelector<HTMLElement>('[data-dl-meta]');
     if (!primary || !label) return;
 
     primary.href = match.href;
     label.textContent = `Install GAIA for ${PLATFORM_LABELS[platform]}`;
     primary.hidden = false;
-    if (meta) {
-      meta.textContent = `${match.dataset.filename} · ${match.dataset.size}`;
-      meta.hidden = false;
-    }
 
     // The other platforms stay reachable, one disclosure away.
     const list = root.querySelector<HTMLElement>('[data-dl-list]');

@@ -2,9 +2,9 @@
 // Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
-// The site's single primary CTA: the one-line installer for the gaia CLI and
-// the terminal hub (gaia-tui). Both platform commands are server-rendered so
-// no-JS visitors see them; JS only adds the copy buttons' behavior.
+// The terminal route to the same install: one line for the gaia CLI and the
+// agent's terminal entry point (gaia-tui). Both platform commands are
+// server-rendered so no-JS visitors see them; JS only adds the copy behavior.
 //
 // The commands are the real ones served at amd-gaia.ai (installer/scripts/):
 // they install the Python CLI and download the published terminal-hub binary
@@ -55,9 +55,8 @@ const centered = align === 'center';
   ))}
 
   <p class:list={['mono mt-1 text-[11.5px] leading-[1.7] text-g-faint', centered && 'text-center']}>
-    Installs the <code class="bg-transparent p-0">gaia</code> CLI and the terminal hub.
-    Then <code class="bg-transparent p-0">gaia init</code> downloads the local model, and
-    <code class="bg-transparent p-0">gaia-tui</code> opens the hub.
+    <code class="bg-transparent p-0">gaia init</code> downloads the model;
+    <code class="bg-transparent p-0">gaia-tui</code> runs the agent.
   </p>
 </div>
 

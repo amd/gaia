@@ -2,143 +2,105 @@
 // Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
 // SPDX-License-Identifier: MIT
 
+// The landing page has exactly one job: get a visitor to install the GAIA agent
+// and put it to work. One product, one install, one entry point — so the page
+// carries one primary CTA and no competing paths, and the only branch it offers
+// is what you do with that one agent: run it, integrate it, build on it.
+
 import Layout from '../layouts/Layout.astro';
 import Header from '../components/Header.astro';
 import Footer from '../components/Footer.astro';
-import Eyebrow from '../components/Eyebrow.astro';
-import Terminal from '../components/Terminal.astro';
-import WayCard from '../components/WayCard.astro';
 import InstallCommand from '../components/InstallCommand.astro';
 import TuiDownload from '../components/TuiDownload.astro';
 
 const DOCS = 'https://amd-gaia.ai/docs';
 
-const WAYS = [
+// Three things you can do with the one agent — not three products.
+const PATHS = [
   {
-    n: '01',
-    icon: 'cpu',
-    who: 'For everyone',
-    title: 'Talk to the GAIA agent',
-    body: 'The terminal is the way in. Ask it about your documents, your data, your code — it answers on your own machine, remembers across sessions, and picks up new skills as you need them.',
+    title: 'Run it',
+    body: 'Point it at your documents, your data, or your code. It runs the task locally and remembers between sessions.',
     code: 'gaia-tui',
-    cta: 'Quickstart',
     href: `${DOCS}/quickstart`,
     external: true,
   },
   {
-    n: '02',
-    icon: 'package',
-    who: 'For app teams',
-    title: 'Embed an agent',
-    body: 'Drop a published agent into your JS or TS app as a local sidecar or MCP server. A self-contained binary — no Python in your users’ environment.',
-    code: 'npm install @amd-gaia/agent-email',
-    cta: 'Browse the Hub',
-    href: '/hub',
-    external: false,
+    title: 'Integrate it',
+    body: 'Embed the same agent in your app as a local sidecar — one npm package, no Python.',
+    code: 'npm install @amd-gaia/gaia',
+    href: `${DOCS}/guides/gaia`,
+    external: true,
   },
   {
-    n: '03',
-    icon: 'code',
-    who: 'For developers',
-    title: 'Build your own',
-    // Python only: `gaia agent pack` refuses non-python manifests, so a C++ agent
-    // cannot reach the Hub today (src/gaia/hub/packager.py). `--layout hub` is
-    // required — the flag defaults to `flat`.
-    body: 'Subclass Agent, register tools with the @tool decorator, and scaffold a hub-layout package with the CLI. Publish it and anyone installs it from the hub.',
-    code: 'gaia agent init my-agent --layout hub',
-    cta: 'Custom agent guide',
+    title: 'Build on it',
+    body: 'Add a capability as a skill, or publish your own agent to the hub.',
+    code: 'gaia skill create <name>',
     href: `${DOCS}/guides/custom-agent`,
     external: true,
   },
 ];
-
-const TRUST = ['100% local', 'Open source · MIT', 'Ryzen™ AI optimized'];
 ---
 
 <Layout
-  title="GAIA — The AI agent in your terminal"
-  description="AMD's open-source AI agent, running entirely on your own hardware. Install it and ask about your documents, your data, or your code — in your terminal. No cloud, no API keys."
+  title="GAIA — an AI agent that runs on your hardware"
+  description="GAIA is AMD's open-source AI agent. Inference runs locally, so there are no API keys and no per-token cost, and it works without network access once the model is downloaded."
 >
   <Header />
   <main id="main-content">
-    <!-- 1. Hero — copy + the download CTA left, live terminal right. -->
-    <section id="install" class="g-shell grid items-center gap-12 pb-20 pt-[122px] lg:grid-cols-[1.05fr_0.95fr] lg:gap-14 lg:pb-28 lg:pt-[170px]">
-      <div class="min-w-0">
-        <Eyebrow pill class="animate-g-rise mb-7">The Agent Factory</Eyebrow>
+    <!-- 1. Hero — the claim, then the one install. A product demo belongs here
+         and will return as a real recording; the scripted stand-in was removed
+         rather than left on the page pretending to be one. -->
+    <section id="install" class="g-shell flex flex-col items-center pb-24 pt-[136px] text-center sm:pb-32 sm:pt-[184px]">
+      <h1 class="g-h-hero animate-g-rise max-w-[15ch]">
+        {/* The gold clause must not wrap — it is the claim. */}
+        An AI agent that runs<br /><span class="whitespace-nowrap text-g-gold-text">on your hardware.</span>
+      </h1>
 
-        <h1 class="g-h-hero animate-g-rise" style="animation-delay:0.05s">
-          The AI agent<br />in your terminal — <span class="text-g-gold-text">and on your&nbsp;machine.</span>
-        </h1>
+      <p class="g-lede animate-g-rise mt-6 text-center" style="animation-delay:0.08s">
+        GAIA is AMD's open-source AI agent. Inference runs locally: no API keys, no
+        per-token cost, and your files stay on the machine.
+      </p>
 
-        <p class="g-lede animate-g-rise mt-6" style="animation-delay:0.12s">
-          GAIA is AMD's open-source AI agent, and it runs entirely on your own hardware — with
-          memory that persists between sessions and skills you can add. Ask it about your
-          documents, your data, or your code. Nothing you type leaves the machine: no cloud, no
-          API keys, no catch.
-        </p>
-
-        <TuiDownload class="animate-g-rise mt-9 [animation-delay:0.18s]" />
-
-        <div class="animate-g-rise mt-6 flex flex-wrap gap-x-[18px] gap-y-2 text-[14px]" style="animation-delay:0.24s">
-          <a href="/hub" class="g-cta-link">Browse the Agent Hub<span aria-hidden="true">→</span></a>
-          <a href="#build" class="g-cta-link">Build your own agent<span aria-hidden="true">→</span></a>
-        </div>
-
-        <ul class="animate-g-rise mt-8 flex flex-wrap items-center gap-x-[18px] gap-y-2.5" style="animation-delay:0.24s">
-          {TRUST.map((mark) => (
-            <li class="mono flex items-center gap-[7px] text-[12.5px] text-g-faint">
-              <svg class="h-[13px] w-[13px] flex-none text-g-gold-text" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M20 6 9 17l-5-5" />
-              </svg>
-              {mark}
-            </li>
-          ))}
-        </ul>
-      </div>
-
-      <div class="animate-g-rise" style="animation-delay:0.16s">
-        <Terminal />
-      </div>
+      <TuiDownload align="center" class="animate-g-rise mt-10 [animation-delay:0.14s]" />
     </section>
 
-    <!-- 2. Three ways in -->
+    <!-- 2. The whole product, in three lines. -->
     <section id="build" class="g-shell g-section scroll-mt-[66px]">
-      <div class="mb-11 flex flex-wrap items-end justify-between gap-6">
-        <div>
-          <Eyebrow class="mb-3.5">Three ways in</Eyebrow>
-          <h2 class="g-h-section">One factory.<br />Three kinds of builder.</h2>
-        </div>
-        <p class="g-lede-sm max-w-[360px]">
-          Chat with agents, ship them inside your product, or build and publish your own.
-        </p>
-      </div>
+      <div class="g-label mb-8">Run · Integrate · Build</div>
 
-      <div class="grid gap-[18px] md:grid-cols-3">
-        {WAYS.map((w) => <WayCard {...w} />)}
-      </div>
-
-      <div class="mt-10 flex flex-wrap gap-x-[18px] gap-y-2 text-[14px]">
-        <a href={`${DOCS}/quickstart`} class="prose-link" target="_blank" rel="noopener noreferrer">Build your first agent →</a>
-        <span class="text-g-faint" aria-hidden="true">·</span>
-        <a href={`${DOCS}/guides/hub-publishing`} class="prose-link" target="_blank" rel="noopener noreferrer">Publish to the Hub →</a>
-      </div>
+      <ul class="border-t border-g-border">
+        {PATHS.map((p) => (
+          <li class="grid items-baseline gap-x-7 gap-y-2.5 border-b border-g-border py-7 sm:grid-cols-[minmax(0,1fr)_auto] sm:py-8">
+            <div class="min-w-0">
+              <h2 class="g-h-card">
+                <a
+                  href={p.href}
+                  target={p.external ? '_blank' : undefined}
+                  rel={p.external ? 'noopener noreferrer' : undefined}
+                  class="group inline-flex items-baseline gap-2 transition-colors hover:text-g-gold-text"
+                >
+                  {p.title}
+                  <span class="text-[15px] text-g-faint transition-colors group-hover:text-g-gold-text" aria-hidden="true">→</span>
+                </a>
+              </h2>
+              <p class="g-body mt-1.5 max-w-[520px]">{p.body}</p>
+            </div>
+            {/* Focusable: the command overflows at narrow widths, and a scroll
+                region no keyboard user can reach hides the tail of it. */}
+            <code tabindex="0" class="mono block overflow-x-auto whitespace-nowrap text-[12.5px] text-g-gold-text sm:text-right">
+              {p.code}
+            </code>
+          </li>
+        ))}
+      </ul>
     </section>
 
-    <!-- 3. Closing CTA — the terminal path, for people who would rather not
-         click a download at all. -->
+    <!-- 3. The terminal install, for people who would rather not click a
+         download at all. -->
     <section id="terminal-install" class="scroll-mt-[66px] border-t border-g-border">
       <div class="g-shell py-16 text-center sm:py-[88px]">
         <h2 class="g-h-cta mx-auto max-w-[720px]">Or install it from the terminal.</h2>
-        <p class="g-lede-sm mx-auto mt-4 max-w-[520px] sm:text-[17px]">
-          One command sets up the <code class="bg-transparent p-0">gaia</code> CLI, the local
-          model runtime, and <code class="bg-transparent p-0">gaia-tui</code> — the terminal entry
-          point to the agent.
-        </p>
         <InstallCommand align="center" class="mt-8" />
-
-        <a href="/hub" class="g-cta-link mt-6 text-[14px]">
-          Browse the Agent Hub<span aria-hidden="true">→</span>
-        </a>
       </div>
     </section>
   </main>
