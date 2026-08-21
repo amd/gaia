@@ -298,3 +298,6 @@ tests/unit/eval/test_mcp_tool_reliability_scenarios.py
 /context.md
 /savings.md
 /labels.txt
+# Per-run gaia eval fixture hub (built by tests/fixtures/gaia/prepare_fixture_hub.py;
+# signed with an ephemeral key that must never be committed)
+tests/fixtures/gaia/fixture_hub/_prepared/

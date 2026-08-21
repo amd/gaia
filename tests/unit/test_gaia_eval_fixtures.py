@@ -152,40 +152,41 @@ def test_fake_gh_never_fakes_refuse_tier_commands(argv):
 # ── serve helper + fixture hub ───────────────────────────────────────────────
 
 
-@pytest.fixture()
-def fixture_server():
+def _fixtures_import(name: str):
     sys.path.insert(0, str(FIXTURES))
     try:
-        from serve_fixtures import make_server
+        return __import__(name)
     finally:
         sys.path.remove(str(FIXTURES))
 
-    server = make_server(0, FIXTURES)  # port 0: never collides, never 4001
+
+def _serve(directory: Path):
+    make_server = _fixtures_import("serve_fixtures").make_server
+    server = make_server(0, directory)  # port 0: never collides, never 4001
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
+    return server, thread, f"http://127.0.0.1:{server.server_address[1]}"
+
+
+@pytest.fixture()
+def fixture_server():
+    server, thread, base = _serve(FIXTURES)
     try:
-        yield f"http://127.0.0.1:{server.server_address[1]}"
+        yield base
     finally:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
 
 
-@pytest.mark.allow_network  # loopback socket only (ephemeral port, never 4001)
-def test_serve_fixtures_serves_the_hub_manifest_and_catalog(fixture_server):
-    with urllib.request.urlopen(
-        f"{fixture_server}/fixture_hub/skills/github-triage/manifest.json"
-    ) as response:
-        manifest = json.loads(response.read())
-    assert manifest["name"] == "github-triage"
-    version = manifest["latest_version"]
-    artifact = manifest["versions"][version]["artifact"]
-    assert artifact["filename"] and artifact["sha256"]
-
-    with urllib.request.urlopen(f"{fixture_server}/fixture_hub/index.json") as response:
-        index = json.loads(response.read())
-    skill_ids = {e["id"] for e in index["agents"] if e.get("type") == "skill"}
-    assert skill_ids == {"github-triage", "data-explore"}
+@pytest.fixture()
+def prepared_hub(tmp_path):
+    """A per-run signed hub (github-triage left unsigned) + its skills root."""
+    prepare = _fixtures_import("prepare_fixture_hub").prepare
+    skills_root = tmp_path / "skills"
+    hub_dir = tmp_path / "prepared_hub"
+    summaries = prepare(skills_root, hub_dir, frozenset({"github-triage"}))
+    return skills_root, hub_dir, summaries
 
 
 @pytest.mark.allow_network  # loopback socket only (ephemeral port, never 4001)
@@ -196,24 +197,100 @@ def test_serve_fixtures_serves_web_and_rss(fixture_server):
         assert response.read().decode("utf-8").count("<item>") == 4
 
 
-def test_fixture_hub_artifact_sha256_matches_manifest():
-    """Drift guard: a hand-edited zip or manifest breaks install checksums."""
-    for name in ("github-triage", "data-explore"):
+def test_source_watch_versions_are_two_distinct_urls():
+    """A static server can't swap one URL's content mid-scenario."""
+    v1 = (FIXTURES / "web" / "source_watch_v1.html").read_text(encoding="utf-8")
+    v2 = (FIXTURES / "web" / "source_watch_v2.html").read_text(encoding="utf-8")
+    assert "October 14, 2026" in v1
+    assert "November 2, 2026" in v2 and "beta" in v2.lower()
+
+
+@pytest.mark.allow_network  # loopback socket only (ephemeral port, never 4001)
+def test_serve_fixtures_serves_the_prepared_hub_manifest_and_catalog(prepared_hub):
+    _, hub_dir, _ = prepared_hub
+    server, thread, base = _serve(hub_dir)
+    try:
+        with urllib.request.urlopen(
+            f"{base}/skills/github-triage/manifest.json"
+        ) as response:
+            manifest = json.loads(response.read())
+        assert manifest["name"] == "github-triage"
+        artifact = manifest["versions"][manifest["latest_version"]]["artifact"]
+        assert artifact["filename"] and artifact["sha256"]
+
+        with urllib.request.urlopen(f"{base}/index.json") as response:
+            index = json.loads(response.read())
+        skill_ids = {e["id"] for e in index["agents"] if e.get("type") == "skill"}
+        assert skill_ids == {"github-triage", "data-explore"}
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_prepared_hub_signs_all_but_the_unsigned_list(prepared_hub):
+    skills_root, hub_dir, summaries = prepared_hub
+
+    assert summaries["data-explore"]["signed"] is True
+    assert summaries["github-triage"]["signed"] is False
+
+    # The signed bundle carries SIGNATURE.json; the unsigned one must not.
+    import zipfile
+
+    de = hub_dir / "skills" / "data-explore" / "1.0.0" / "data-explore-1.0.0.zip"
+    gt = hub_dir / "skills" / "github-triage" / "2.1.0" / "github-triage-2.1.0.zip"
+    assert "SIGNATURE.json" in zipfile.ZipFile(de).namelist()
+    assert "SIGNATURE.json" not in zipfile.ZipFile(gt).namelist()
+
+    # The throwaway key is trusted (role publisher) in the run's skills root,
+    # and its private half exists ONLY there — never in the committed tree.
+    trust = json.loads((skills_root / "trusted-keys.json").read_text(encoding="utf-8"))
+    assert any(k["role"] == "publisher" for k in trust["keys"])
+    assert (skills_root / "keys" / "eval-test-publisher.key").is_file()
+    assert not list((FIXTURES / "fixture_hub").rglob("*.key"))
+
+
+def test_prepared_hub_artifact_sha256_matches_manifest(prepared_hub):
+    """Drift guard: install verifies these checksums before unpacking."""
+    _, hub_dir, summaries = prepared_hub
+    for name, summary in summaries.items():
         manifest = json.loads(
-            (FIXTURES / "fixture_hub" / "skills" / name / "manifest.json").read_text(
-                encoding="utf-8"
-            )
+            (hub_dir / "skills" / name / "manifest.json").read_text(encoding="utf-8")
         )
-        version = manifest["latest_version"]
-        artifact = manifest["versions"][version]["artifact"]
+        artifact = manifest["versions"][summary["version"]]["artifact"]
         payload = (
-            FIXTURES / "fixture_hub" / "skills" / name / version / artifact["filename"]
+            hub_dir / "skills" / name / summary["version"] / artifact["filename"]
         ).read_bytes()
-        assert hashlib.sha256(payload).hexdigest() == artifact["sha256"], (
-            f"{name}: committed zip does not match its manifest sha256 — "
-            "regenerate with fixture_hub/_build_fixture_hub.py"
-        )
+        assert hashlib.sha256(payload).hexdigest() == artifact["sha256"]
         assert len(payload) == artifact["size_bytes"]
+
+
+@pytest.mark.allow_network  # loopback socket only (ephemeral port, never 4001)
+def test_signed_data_explore_installs_cleanly_and_unsigned_github_triage_refuses(
+    prepared_hub, monkeypatch
+):
+    """The corpus's install scenarios rest on exactly these two outcomes."""
+    from gaia.skills.errors import SkillPermissionError
+    from gaia.skills.install import install_skill
+    from gaia.skills.manager import SkillManager
+
+    skills_root, hub_dir, _ = prepared_hub
+    server, thread, base = _serve(hub_dir)
+    monkeypatch.setenv("GAIA_HUB_URL", base)
+    try:
+        mgr = SkillManager(user_skills_root=skills_root, include_claude_roots=False)
+
+        result = install_skill("data-explore", manager=mgr)
+        assert result.installed_tier == "community"
+        assert result.signature is not None and result.signature.trusted
+
+        with pytest.raises(SkillPermissionError) as excinfo:
+            install_skill("github-triage", manager=mgr, allow_experimental=True)
+        assert "shell:execute:gh" in str(excinfo.value)
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
 
 
 # ── gate thresholds ──────────────────────────────────────────────────────────

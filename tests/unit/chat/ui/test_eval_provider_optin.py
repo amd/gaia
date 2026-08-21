@@ -104,6 +104,22 @@ def test_server_startup_validates_the_optin():
     assert "_eval_provider_kwargs()" in source
 
 
+def test_lemonade_preflight_is_skipped_when_provider_is_claude(monkeypatch):
+    """With the opt-in active, _maybe_load_expected_model must return before
+    any Lemonade contact — the preflight's broad except would swallow a
+    blocked probe, so assert the base-URL lookup is never even reached."""
+    monkeypatch.setenv(_EVAL_PROVIDER_ENV, "claude")
+    monkeypatch.setenv(_EVAL_CLAUDE_MODEL_ENV, "claude-haiku-4-5")
+    from gaia.llm.lemonade_manager import LemonadeManager
+    from gaia.ui._chat_helpers import _maybe_load_expected_model
+
+    probe = MagicMock(side_effect=AssertionError("Lemonade was contacted"))
+    monkeypatch.setattr(LemonadeManager, "get_base_url", probe)
+
+    assert _maybe_load_expected_model("Gemma-4-E4B-it-GGUF") is None
+    probe.assert_not_called()
+
+
 def test_optin_composes_with_model_id_precedence(monkeypatch):
     """The provider opt-in does not disturb the #841 model_id branches."""
     monkeypatch.setenv(_EVAL_PROVIDER_ENV, "claude")
