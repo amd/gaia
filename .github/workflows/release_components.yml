@@ -290,12 +290,16 @@ jobs:
           set -euo pipefail
           mkdir -p bin
           PKG=github.com/amd/gaia/tui/internal/cli
-          DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          # The COMMIT's timestamp, never `now` — a wall-clock stamp makes every
+          # rebuild of the same commit differ, so re-publishing a released
+          # version can never reconcile against the bytes already stored.
+          DATE="$(TZ=UTC git show -s --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ HEAD)"
           cd tui
           while read -r goos goarch platform; do
             EXT=""
             [ "${goos}" = "windows" ] && EXT=".exe"
-            CGO_ENABLED=0 GOOS="${goos}" GOARCH="${goarch}" go build \
+            # -trimpath keeps the runner's absolute paths out of the binary.
+            CGO_ENABLED=0 GOOS="${goos}" GOARCH="${goarch}" go build -trimpath \
               -ldflags="-s -w -X ${PKG}.version=${VERSION} -X ${PKG}.commit=${GITHUB_SHA} -X ${PKG}.date=${DATE}" \
               -o "../bin/gaia-${platform}${EXT}" ./cmd/gaia
             echo "built gaia-${platform}${EXT}"
