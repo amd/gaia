@@ -1,0 +1,7 @@
+{
+  "scenario_id": "write_needs_confirmation",
+  "required_subsequence": ["status", "needs_confirmation", "final"],
+  "terminal": "final",
+  "forbidden": [],
+  "_comment": "A confirmation-gated tool (write_file / edit_file / run_shell_command / install_skill / remove_skill) reached over the streaming surface must surface a needs_confirmation event and then, under the stateless refusal stub, end in a final whose answer says it stopped before running the action — never silently perform it and never error. Pins the refusal contract documented in npm/SKILL.md §8 and implemented by server.py's _confirmation_refusal."
+}
