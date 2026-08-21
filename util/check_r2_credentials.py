@@ -2,43 +2,70 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
 
-"""Prove the R2 S3 credentials can actually publish, before a release tries.
+"""Find out whether the R2 credentials can publish, and if not, why.
 
 ``util/verify_publish_pipeline.py`` covers the publish *logic* against a local
-Worker with deliberately bogus credentials. It says nothing about whether the
-real ``R2_ACCESS_KEY_ID`` / ``R2_SECRET_ACCESS_KEY`` pair works -- and that is
-the half that has actually been failing, with ``PutObject -> Unauthorized``.
-This script covers the other half.
+Worker using deliberately bogus credentials. It says nothing about the real
+``R2_ACCESS_KEY_ID`` / ``R2_SECRET_ACCESS_KEY`` pair -- and that is the half
+that actually fails, always as ``PutObject -> Unauthorized``.
 
 Every artifact at or over the Worker's request-body cap (the Agent UI
 installers at 111-141 MB, the gaia sidecar's Linux build at ~120 MB) is PUT
-straight to R2 over the S3 API. R2 answers a bad credential AND a malformed
-request with the same ``Unauthorized``, so the error alone never says which,
-and re-pasting the secret has been the default guess. These checks separate
-them, in increasing order of privilege, and name the first that fails:
+straight to R2 over the S3 API. R2 answers a bad credential, a mismatched key
+pair, a wrong endpoint and a whitespace-corrupted secret with the SAME
+``Unauthorized``, so the error never says which. These probes separate them::
 
-    1. can it see the bucket?                (scoped correctly)
-    2. can it WRITE, with a checksum?        (Object Read & Write, not Read only)
-    3. can it write at RELEASE SIZE?         (the request shape boto3 builds for
-                                              a large single-part upload)
-    4. does the hub Worker serve it back?    (same bucket, not another account's)
+    python util/check_r2_credentials.py
+    python util/check_r2_credentials.py --size-mb 120     # match the real sidecar
+    python util/check_r2_credentials.py --compare a1b2...,c3d4...,e5f6...
 
-Run it against the credentials a release would use::
+WHAT EACH PROBE RULES OUT
+-------------------------
+[0] fingerprints  A SHA-256 of each value, safe to log. ``--compare`` diffs them
+    against another machine's or CI's, which is the only way to see that the
+    stored copy is simply a DIFFERENT credential. A mismatched key id paired
+    with a good secret is indistinguishable from every other cause, and no
+    amount of re-pasting the secret fixes it.
+[1] whitespace    Checked on the RAW value, before stripping. A trailing newline
+    is trivially stored (``gh secret set`` keeps whatever it is handed, and the
+    GitHub UI does not render it) and is signed as part of the credential.
+[2] shape         An R2 S3 access key id is 32 hex characters and its secret 64.
+    Cloudflare also shows a "Token value" above them on creation -- a different
+    credential entirely, which can never authenticate here.
+[3] head_bucket   Authenticates, and is scoped to this bucket.
+[4] put plain     The simplest possible write.
+[5] put+checksum  Exactly the call publish_to_r2.py makes, including the
+    botocore config that stops boto3 sending an aws-chunked trailer R2 rejects.
+[6] jurisdiction  A bucket created with a jurisdiction is ONLY reachable at
+    ``<account>.eu.r2.cloudflarestorage.com``; the standard endpoint answers
+    Unauthorized however good the token is. Probed only when the standard
+    endpoint refused, where it is the diagnosis rather than noise.
+[7] release size  A single-part PUT at real artifact size, which exercises the
+    request shape boto3 builds for a large body.
+[8] round-trip    Fetches the object back through the hub Worker. A credential
+    can happily write to a same-named bucket in a DIFFERENT account; only this
+    proves it is the bucket the hub actually serves.
 
-    python util/check_r2_credentials.py                 # reads .env, then the environment
-    python util/check_r2_credentials.py --size-mb 120   # match the real sidecar
+Reading the error codes matters more than pass/fail::
 
-It writes probe objects under ``agents/_credential-probe/`` and deletes them.
-That prefix is never a published agent, and a direct S3 write does not touch
+    Unauthorized           token not valid for this account/bucket, or wrong endpoint
+    AccessDenied           right token, insufficient permission (Object Read only)
+    NoSuchBucket           right account, wrong bucket name
+    InvalidAccessKeyId     key id not recognised at all
+    SignatureDoesNotMatch  secret wrong, or whitespace in either value
+
+Credentials come from ``.env`` (gitignored) or the environment, environment
+first. Probes are written under ``agents/_credential-probe/`` and deleted; that
+prefix is never a published agent, and a direct S3 write does not touch
 ``index.json`` -- only the Worker's ``/publish`` rebuilds the catalog -- so a
 probe leaves no trace in the hub listing. No secret value is ever printed.
 
 WHAT THIS STILL CANNOT PROVE
 ----------------------------
-That the credential works **from GitHub's runners**. It runs from wherever you
-run it. A token with Client IP Address Filtering passes here and fails in CI --
-if every check below passes and CI still returns Unauthorized, that filter (or
-an expired TTL) is the remaining explanation.
+That the credential works **from GitHub's runners**. It runs wherever you run
+it. A token with Client IP Address Filtering passes here and fails in CI --
+use ``--compare`` against a runner's fingerprints to tell that apart from CI
+simply holding different values.
 """
 
 from __future__ import annotations
@@ -57,9 +84,13 @@ ENV_FILE = REPO_ROOT / ".env"
 DEFAULT_BUCKET = "gaia-hub"
 PUBLIC_BASE = "https://hub.amd-gaia.ai"
 
-# Never a published agent id, so a probe can never collide with a real release.
 PROBE_PREFIX = "agents/_credential-probe"
 REQUIRED = ("R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "CLOUDFLARE_ACCOUNT_ID")
+EXPECTED_LEN = {
+    "R2_ACCESS_KEY_ID": 32,
+    "R2_SECRET_ACCESS_KEY": 64,
+    "CLOUDFLARE_ACCOUNT_ID": 32,
+}
 
 
 def load_env_file(path: Path) -> dict[str, str]:
@@ -80,14 +111,19 @@ def load_env_file(path: Path) -> dict[str, str]:
     return out
 
 
-def fail(headline: str, *lines: str) -> int:
-    print(f"\nFAILED: {headline}")
-    for line in lines:
-        print(f"  {line}")
-    return 1
+def fingerprint(value: str) -> str:
+    return hashlib.sha256(value.strip().encode()).hexdigest()[:16]
 
 
-def _http_get(url: str, timeout: int = 60) -> tuple[int, bytes]:
+def err(exc) -> str:
+    """Error code plus HTTP status -- the pair is more diagnostic than either."""
+    r = getattr(exc, "response", {}) or {}
+    code = (r.get("Error") or {}).get("Code", type(exc).__name__)
+    status = (r.get("ResponseMetadata") or {}).get("HTTPStatusCode", "?")
+    return f"{code} (HTTP {status})"
+
+
+def http_get(url: str, timeout: int = 60) -> tuple[int, bytes]:
     """GET via curl.
 
     Not urllib: Cloudflare's browser-integrity check answers a
@@ -97,7 +133,6 @@ def _http_get(url: str, timeout: int = 60) -> tuple[int, bytes]:
     proc = subprocess.run(
         ["curl", "-s", "-w", "\n%{http_code}", "--max-time", str(timeout), url],
         capture_output=True,
-        text=False,
     )
     body, _, code = proc.stdout.rpartition(b"\n")
     try:
@@ -112,196 +147,242 @@ def main(argv=None) -> int:
         "--size-mb",
         type=int,
         default=118,
-        help="Size of the large-upload probe. Default 118 (the Agent UI "
-        "installer); use 120 for the gaia Linux sidecar.",
+        help="Release-size probe. Default 118 (Agent UI installer); 120 is the "
+        "gaia Linux sidecar.",
     )
+    parser.add_argument("--skip-large", action="store_true", help="Skip probe [7].")
     parser.add_argument(
-        "--skip-large",
-        action="store_true",
-        help="Skip the release-size upload (checks 1, 2 and 4 only).",
+        "--compare",
+        metavar="KEY_FP,SECRET_FP,ACCOUNT_FP",
+        help="Three 16-char fingerprints from another machine or a CI run, to "
+        "diff against these. Different fingerprints mean the other side simply "
+        "holds a different credential.",
     )
+    parser.add_argument("--bucket", default=os.environ.get("R2_BUCKET", DEFAULT_BUCKET))
     args = parser.parse_args(argv)
 
     file_env = load_env_file(ENV_FILE)
 
-    def get(name: str) -> str:
-        return (os.environ.get(name) or file_env.get(name) or "").strip()
+    def raw(name: str) -> str:
+        # NOT stripped: probe [1] has to see the value as the publisher does.
+        value = os.environ.get(name)
+        return value if value is not None else file_env.get(name, "")
 
     try:
         import boto3
-        from botocore.config import Config as BotoConfig
+        from botocore.config import Config
         from botocore.exceptions import ClientError
     except ImportError:
-        return fail(
-            "boto3 is not installed for this interpreter.",
-            "Fix: uv pip install boto3   (or pip install boto3), then re-run.",
-        )
+        print("boto3 is not installed. Run:  uv pip install boto3")
+        return 2
 
-    missing = [n for n in REQUIRED if not get(n)]
+    missing = [n for n in REQUIRED if not raw(n).strip()]
     if missing:
-        return fail(
-            f"not set: {', '.join(missing)}",
-            f"Fill them in at {ENV_FILE} (gitignored), or export them.",
-            "Cloudflare -> R2 -> Manage R2 API Tokens -> Create API token,",
-            "permission 'Object Read & Write'. It shows the Access Key ID and",
-            "Secret Access Key exactly once.",
-        )
+        print(f"Set these first: {', '.join(missing)}")
+        print(f"  in {ENV_FILE} (gitignored), or the environment.")
+        print("  Cloudflare -> R2 -> Manage R2 API Tokens -> Create API token,")
+        print("  permission 'Object Read & Write'.")
+        return 2
 
-    key, secret, account = (get(n) for n in REQUIRED)
-    bucket = get("R2_BUCKET") or DEFAULT_BUCKET
-    endpoint = f"https://{account}.r2.cloudflarestorage.com"
+    values = {n: raw(n) for n in REQUIRED}
+    bucket = args.bucket
 
-    print(f"env file : {ENV_FILE}{'' if ENV_FILE.exists() else '  (absent)'}")
-    print(f"account  : {account[:6]}...{account[-4:]} (len {len(account)})")
-    print(f"key id   : {key[:6]}...{key[-4:]} (len {len(key)})")
-    print(f"secret   : (len {len(secret)})")
-    print(f"bucket   : {bucket}\n")
-
-    # An R2 S3 access key id is 32 hex characters and its secret 64. A
-    # Cloudflare *API token* pasted into either slot is a different credential
-    # type entirely and can never authenticate here.
-    for name, value, want in (("access key id", key, 32), ("secret", secret, 64)):
-        if len(value) != want:
+    print("[0] fingerprints")
+    fps = {}
+    for n in REQUIRED:
+        fps[n] = fingerprint(values[n])
+        print(f"      {n:22} sha256={fps[n]} len={len(values[n].strip())}")
+    if args.compare:
+        other = [p.strip() for p in args.compare.split(",")]
+        if len(other) != 3:
+            print("      --compare needs exactly three comma-separated fingerprints")
+            return 2
+        print("      compared against:")
+        differs = False
+        for n, theirs in zip(REQUIRED, other):
+            same = fps[n] == theirs
+            differs = differs or not same
+            print(f"      {n:22} {'MATCH' if same else 'DIFFERS -> ' + theirs}")
+        if differs:
             print(
-                f"WARNING: {name} is {len(value)} chars; R2 S3 credentials are "
-                f"{want}. A Cloudflare API token is the wrong credential type "
-                f"for the S3 API.\n"
+                "\n      The other side holds a DIFFERENT credential. A mismatched\n"
+                "      key id with a good secret fails exactly like a bad secret,\n"
+                "      which is why re-pasting the secret never fixes it."
             )
+    print()
 
-    client = boto3.client(
-        "s3",
-        endpoint_url=endpoint,
-        aws_access_key_id=key,
-        aws_secret_access_key=secret,
-        region_name="auto",
-        # Must match publish_to_r2.py: boto3 >= 1.36 otherwise sends an
-        # aws-chunked trailer that R2 rejects as `Unauthorized`, which would
-        # make this script blame the credential for a request-shape problem.
-        config=BotoConfig(
-            request_checksum_calculation="when_required",
-            response_checksum_validation="when_required",
-        ),
+    print("[1] whitespace")
+    dirty = [n for n in REQUIRED if values[n] != values[n].strip()]
+    for n in dirty:
+        print(f"      {n}: leading/trailing whitespace  <-- BREAKS THE SIGNATURE")
+    if not dirty:
+        print("      clean")
+
+    print("[2] shape")
+    for n in REQUIRED:
+        got, want = len(values[n].strip()), EXPECTED_LEN[n]
+        flag = "" if got == want else f"  <-- expected {want}"
+        print(f"      {n:22} {got} chars{flag}")
+    if any(len(values[n].strip()) != EXPECTED_LEN[n] for n in REQUIRED):
+        print(
+            "      A wrong length usually means Cloudflare's 'Token value' was\n"
+            "      pasted instead of the Access Key ID / Secret Access Key shown\n"
+            "      beneath it. That is a different credential and cannot work here."
+        )
+    print()
+
+    key = values["R2_ACCESS_KEY_ID"].strip()
+    secret = values["R2_SECRET_ACCESS_KEY"].strip()
+    account = values["CLOUDFLARE_ACCOUNT_ID"].strip()
+
+    cfg = Config(
+        # Matches publish_to_r2.py: boto3 >= 1.36 otherwise sends an aws-chunked
+        # trailer R2 rejects as `Unauthorized`, which would make this script
+        # blame the credential for a request-shape problem.
+        request_checksum_calculation="when_required",
+        response_checksum_validation="when_required",
     )
+    standard = f"{account}.r2.cloudflarestorage.com"
+    jurisdictional = f"{account}.eu.r2.cloudflarestorage.com"
 
-    def code_of(exc) -> str:
-        return exc.response.get("Error", {}).get("Code", "?")
+    def client(host: str):
+        return boto3.client(
+            "s3",
+            endpoint_url=f"https://{host}",
+            aws_access_key_id=key,
+            aws_secret_access_key=secret,
+            region_name="auto",
+            config=cfg,
+        )
 
-    # ListBuckets is account-level and a correctly bucket-scoped token is denied
-    # it, so this is informational only -- gating on it reports a working
-    # credential as broken.
-    print("[1/4] head_bucket   - is it scoped to this bucket? ......... ", end="")
+    small = f"{PROBE_PREFIX}/probe.bin"
+    marker = f"gaia-r2-probe-{int(time.time())}".encode()
+    digest = base64.b64encode(hashlib.sha256(marker).digest()).decode()
+
+    print(f"[3] head_bucket    '{bucket}' -> {standard}")
     try:
-        client.head_bucket(Bucket=bucket)
-        print("OK")
+        client(standard).head_bucket(Bucket=bucket)
+        print("      OK")
     except ClientError as e:
-        print("FAILED")
-        return fail(
-            f"cannot access bucket '{bucket}' ({code_of(e)}).",
-            "Either the key/secret pair is wrong, it belongs to a different",
-            f"Cloudflare account than CLOUDFLARE_ACCOUNT_ID ({account[:6]}...),",
-            "or the token is not scoped to this bucket.",
-        )
-    except Exception as e:
-        print("FAILED")
-        return fail(
-            f"cannot reach {endpoint}: {e}", "Check the account id and network."
-        )
+        print(f"      FAIL  {err(e)}")
 
-    small_key = f"{PROBE_PREFIX}/probe.txt"
-    marker = f"probe-{int(time.time())}".encode()
-    print("[2/4] put_object    - can it WRITE, with a checksum? ....... ", end="")
+    print(f"[4] put_object     plain -> {standard}")
+    plain_ok = False
     try:
-        client.put_object(
+        client(standard).put_object(Bucket=bucket, Key=small, Body=marker)
+        print("      OK")
+        plain_ok = True
+    except ClientError as e:
+        print(f"      FAIL  {err(e)}")
+
+    print(f"[5] put_object     + ChecksumSHA256 (the publisher's call) -> {standard}")
+    publisher_ok = False
+    try:
+        client(standard).put_object(
             Bucket=bucket,
-            Key=small_key,
+            Key=small,
             Body=marker,
-            ContentType="text/plain",
-            ChecksumSHA256=base64.b64encode(hashlib.sha256(marker).digest()).decode(),
+            ContentType="application/octet-stream",
+            ChecksumSHA256=digest,
         )
-        print("OK")
+        print("      OK  <- this is the call a release makes")
+        publisher_ok = True
     except ClientError as e:
-        print("FAILED")
-        return fail(
-            f"cannot write to '{bucket}' ({code_of(e)}).",
-            "It authenticates and sees the bucket, so this is a READ-ONLY token.",
-            "Re-issue it with 'Object Read & Write' and update BOTH .env and the",
-            "GitHub secrets (repository AND the agent-publish environment, whose",
-            "value overrides the repository one).",
+        print(f"      FAIL  {err(e)}")
+
+    # Only meaningful when the standard endpoint refused: a jurisdictional
+    # bucket is unreachable there no matter how good the token is.
+    if not (plain_ok or publisher_ok):
+        print(f"[6] jurisdiction   plain -> {jurisdictional}")
+        try:
+            client(jurisdictional).put_object(Bucket=bucket, Key=small, Body=marker)
+            print(
+                "      OK  <- BUCKET IS JURISDICTIONAL. publish_to_r2.py builds the\n"
+                "              standard endpoint, so it can never reach this bucket."
+            )
+        except ClientError as e:
+            print(f"      FAIL  {err(e)}")
+    else:
+        print("[6] jurisdiction   skipped (standard endpoint works)")
+
+    if not publisher_ok:
+        print(
+            "\nThe publisher's call was refused. Remaining variables:\n"
+            "  * Cloudflare -> R2 -> Manage R2 API Tokens -> open the token\n"
+            "  * Permission must be 'Object Read & Write', not 'Object Read only'\n"
+            f"  * Scope must include '{bucket}', or be 'Apply to all buckets'\n"
+            "  * TTL must not have expired\n"
+            "  * Client IP Address Filtering must not exclude the caller\n"
+            "  * Use the Access Key ID + Secret Access Key, NOT the 'Token value'"
         )
+        return 1
 
     if args.skip_large:
-        print("[3/4] release-size upload ................................. SKIPPED")
+        print("[7] release size   SKIPPED")
     else:
         size = args.size_mb * 1024 * 1024
-        big_key = f"{PROBE_PREFIX}/large-probe.bin"
+        big = f"{PROBE_PREFIX}/large-probe.bin"
         tmp = Path(os.environ.get("TEMP", "/tmp")) / "r2-credential-probe.bin"
         if not tmp.exists() or tmp.stat().st_size != size:
             block = os.urandom(1024 * 1024)
             with tmp.open("wb") as fh:
                 for _ in range(size // len(block)):
                     fh.write(block)
-        digest = hashlib.sha256()
+        h = hashlib.sha256()
         with tmp.open("rb") as fh:
             for chunk in iter(lambda: fh.read(1024 * 1024), b""):
-                digest.update(chunk)
+                h.update(chunk)
 
-        print(
-            f"[3/4] put_object    - at release size ({args.size_mb} MB) ......... ",
-            end="",
-            flush=True,
-        )
+        print(f"[7] release size   {args.size_mb} MB single-part -> {standard}")
         start = time.time()
         try:
             with tmp.open("rb") as fh:
-                client.put_object(
+                client(standard).put_object(
                     Bucket=bucket,
-                    Key=big_key,
+                    Key=big,
                     Body=fh,
                     ContentType="application/octet-stream",
                     ChecksumSHA256=base64.b64encode(
-                        bytes.fromhex(digest.hexdigest())
+                        bytes.fromhex(h.hexdigest())
                     ).decode(),
                 )
-            elapsed = time.time() - start
-            print(f"OK ({elapsed:.0f}s, {size / 1e6 / max(elapsed, 1):.1f} MB/s)")
+            dt = time.time() - start
+            print(f"      OK  ({dt:.0f}s, {size / 1e6 / max(dt, 1):.1f} MB/s)")
         except ClientError as e:
-            print("FAILED")
-            tmp.unlink(missing_ok=True)
-            return fail(
-                f"a {args.size_mb} MB upload failed ({code_of(e)}) where a small "
-                "one succeeded.",
-                "That is not a permissions problem -- it is the large-upload",
-                "request shape. Compare this client's botocore config with",
-                "publish_to_r2.py's _upload_to_r2.",
+            print(f"      FAIL  {err(e)}")
+            print(
+                "      A small write succeeded and a large one did not: that is the\n"
+                "      request shape for a large body, not permissions."
             )
+            tmp.unlink(missing_ok=True)
+            return 1
         finally:
             tmp.unlink(missing_ok=True)
-        client.delete_object(Bucket=bucket, Key=big_key)
+        client(standard).delete_object(Bucket=bucket, Key=big)
 
-    # The credential could write to a DIFFERENT account's bucket of the same
-    # name. Only the Worker serving the bytes back proves it is the hub's.
-    print("[4/4] round-trip    - does the hub Worker serve it back? ... ", end="")
+    print(f"[8] round-trip     GET {PUBLIC_BASE}/{small}")
     time.sleep(2)
-    status, body = _http_get(f"{PUBLIC_BASE}/{small_key}")
+    status, body = http_get(f"{PUBLIC_BASE}/{small}")
     same_bucket = status == 200 and body.strip() == marker
-    print("OK" if same_bucket else f"HTTP {status}")
-    client.delete_object(Bucket=bucket, Key=small_key)
+    print(f"      {'OK' if same_bucket else f'HTTP {status}'}")
+    client(standard).delete_object(Bucket=bucket, Key=small)
 
     if not same_bucket:
-        return fail(
-            "the write succeeded but the hub Worker cannot serve it back.",
-            f"GET {PUBLIC_BASE}/{small_key} returned HTTP {status}.",
-            "The credential addresses a different account's bucket than the one",
-            "behind hub.amd-gaia.ai. CLOUDFLARE_ACCOUNT_ID is what to re-check.",
+        print(
+            "\nThe write succeeded but the hub Worker cannot serve it back, so this\n"
+            "credential addresses a different account's bucket than the one behind\n"
+            f"{PUBLIC_BASE}. CLOUDFLARE_ACCOUNT_ID is what to re-check."
         )
+        return 1
 
     print(
         "\nPASS - these credentials can publish release-sized artifacts to the "
         "hub's bucket.\n"
-        "If CI still fails with Unauthorized, the values stored in GitHub differ\n"
-        "from these, or the token has Client IP Address Filtering / an expired\n"
-        "TTL that refuses GitHub's runners. Check the agent-publish environment\n"
-        "scope first: its secrets override the repository ones."
+        "If CI still fails with Unauthorized, re-run there and diff the "
+        "fingerprints with\n--compare: matching ones point at IP filtering or "
+        "TTL, differing ones mean the\nstored copy is a different credential. "
+        "Check the agent-publish environment\nscope first -- its secrets "
+        "override the repository ones."
     )
     return 0
 
