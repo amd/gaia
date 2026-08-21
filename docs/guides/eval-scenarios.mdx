@@ -131,7 +131,13 @@ The `gaia_`-prefixed categories target the flagship agent end-to-end (every
 scenario in them sets `agent_type: gaia`) and run via
 `gaia eval agent --agent-type gaia --category <name>`. Fixture values they
 assert are pinned in `eval/scenarios/GAIA_FIXTURE_VALUES.md`; fixtures live
-under `tests/fixtures/gaia/`. Tier tags (`t1_basic` → `t4_adversarial`) grade
+under `tests/fixtures/gaia/` and are staged to `~/gaia-eval/` at run time
+(the flagship sandboxes file access to the home directory — user messages
+reference only staged paths). The eval transport runs with
+`GAIA_AUTO_APPROVE_TOOLS=1` (gated actions execute; scenarios assert
+outcomes, modal semantics belong to the TUI lane) and memory scenarios reset
+persistent state via the eval MCP admin tools (`GAIA_MEMORY_ADMIN=1`) —
+GAIA_FIXTURE_VALUES.md carries the full conventions. Tier tags (`t1_basic` → `t4_adversarial`) grade
 difficulty in `gaia_core`/`gaia_memory`; `live` marks non-gating real-network
 canaries; `tui` marks the capability-ladder subset; and
 `local_blocked_no_embedder` marks scenarios that require Lemonade embeddings
@@ -145,7 +151,7 @@ canaries; `tui` marks the capability-ladder subset; and
 | `gaia_files` | File search/read/write/edit under the home sandbox; system-path and traversal refusals with actionable messages |
 | `gaia_data` | CSV → scratchpad SQL with exact pinned aggregates and elliptical follow-ups |
 | `gaia_web` | Fixture-server page fetch/download, honest 404 handling, one `live` search canary |
-| `gaia_shell` | Shell execution and the gh permission gate: ALLOW runs promptless, CONFIRM surfaces the exact command, REFUSE dies in prose, denials reported as denials |
+| `gaia_shell` | Shell execution and the gh permission gate: ALLOW runs, CONFIRM-tier writes execute under auto-approve with the outcome asserted (modal semantics live in the T1/T2/TUI lanes), REFUSE dies in prose on any transport, refusals reported honestly |
 | `gaia_skills_lifecycle` | list/load/unload persistence, hub search/install, unsigned-install refusal, list-before-claiming-unavailable |
 | `gaia_skills_tasks` | Judged task quality for every starter skill (github-triage through coding) against pinned fixtures |
 | `gaia_honesty` | The gaia-voice floor: failed tools reported failed, empty results empty, no claimed work, no fabricated triage, checkable claims checked |

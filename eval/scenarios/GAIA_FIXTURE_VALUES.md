@@ -9,6 +9,36 @@ vice versa.
 Corpus documents under `eval/corpus/` are NOT listed here — their planted facts
 are already authoritative in `eval/corpus/manifest.json`.
 
+## Path staging (home-sandbox convention — part of the contract)
+
+GaiaAgent sandboxes file access to `Path.home()`, and the CI runner workspace
+may live OUTSIDE home — so repo-relative fixture paths in user messages would
+be sandbox refusals there. The eval setup therefore **stages
+`tests/fixtures/gaia/*` (and the corpus documents scenarios use) to
+`~/gaia-eval/`**, preserving subdirectory names:
+
+- `tests/fixtures/gaia/csv/sales.csv` → `~/gaia-eval/csv/sales.csv`
+- `tests/fixtures/gaia/mini_repo/` → `~/gaia-eval/mini_repo/`
+
+Scenario user messages/objectives reference only the staged `~/gaia-eval/...`
+locations. Exception: `gaia_rag` (and other `setup.index_documents` entries)
+keep corpus-relative paths like `eval/corpus/documents/...` — the runner
+resolves those itself via `--corpus-dir` pointed at the staged copy, so they
+never pass through the agent's sandbox as user-message paths.
+
+## Eval-transport environment (affects how criteria are written)
+
+- `GAIA_AUTO_APPROVE_TOOLS=1` — CI eval runs unattended, so CONFIRM-tier
+  gated actions (file writes, `install_skill`, gh CONFIRM commands)
+  auto-approve and EXECUTE. Scenarios assert action outcomes; modal
+  semantics (exact command shown, deny honoured) are owned by the T1 gate
+  tests, the T2 `needs_confirmation` pin, and the `tui`-tagged TUI lane.
+  REFUSE-tier behaviour is unaffected by auto-approve.
+- `GAIA_MEMORY_ADMIN=1` — exposes the eval MCP admin tools
+  (`memory_clear(scope=all)` / `memory_seed`). Every `gaia_memory` scenario's
+  first turn instructs the simulator to call `memory_clear(scope=all)` before
+  sending the first user message — the only cross-scenario isolation.
+
 ## Fixture web server
 
 `tests/fixtures/gaia/serve_fixtures.py` serves `tests/fixtures/gaia/web/`,
@@ -38,8 +68,11 @@ Open issues, most recently opened first (`gh issue list` order):
 - Notification inbox (`gh api notifications`): 2 unread — issue #142 and
   PR #140 "Fix flaky sync test in CI" (both in `acme-labs/widgetworks`).
 - `gh issue view 139 --repo acme-labs/widgetworks` returns the row above.
-- The shim serves reads only; writes (`issue comment`, `pr merge`, `api -X
-  POST`) are gated by the permission tiers, not by the shim.
+- The shim serves reads, and accepts CONFIRM-tier writes (`gh issue comment`)
+  with a canned success response — under `GAIA_AUTO_APPROVE_TOOLS=1` those
+  writes execute, and scenarios assert the outcome against that response.
+  REFUSE-tier commands (`auth token`, `pr merge`, `api -X POST`,
+  `issue close`) are blocked by the permission gate and never reach the shim.
 
 ## Web pages — `tests/fixtures/gaia/web/`
 
@@ -123,7 +156,10 @@ Set up by the eval workflow, not by scenarios:
   fixture hub; `github-triage` pre-installed; `rss-digest` NOT pre-installed
   (install scenarios download it).
 - `gaia_web`, `gaia_skills_tasks` (web-based skills): fixture server running.
-- `gaia_data`, `gaia_code`: fixture CSV / mini repo present on disk.
+- `gaia_data`, `gaia_code`: fixture CSV / mini repo staged at `~/gaia-eval/`
+  (see Path staging above).
+- `gaia_memory`: backend started with `GAIA_MEMORY_ADMIN=1` (admin
+  clear/seed tools available to the simulator).
 
 ## Tag taxonomy used across the corpus
 

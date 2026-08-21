@@ -1,4 +1,4 @@
-# FIXTURE-SYNC: tests/fixtures/gaia/csv/sales.csv — see GAIA_FIXTURE_VALUES.md.
+# FIXTURE-SYNC: ~/gaia-eval/csv/sales.csv — see GAIA_FIXTURE_VALUES.md.
 id: select_memory_vs_data
 name: "Tool Selection — Right Tool Per Turn in a Mixed Conversation"
 category: gaia_tool_selection
@@ -14,7 +14,7 @@ persona: power_user
 setup:
   index_documents: []
   memory_clear: true
-  notes: "Fixture CSV at tests/fixtures/gaia/csv/sales.csv; dynamic tool selection enabled."
+  notes: "Staged fixture CSV at ~/gaia-eval/csv/sales.csv; dynamic tool selection enabled."
 
 turns:
   - turn: 1
@@ -25,7 +25,7 @@ turns:
     success_criteria: "Agent stores it (remember in agent_tools[])."
 
   - turn: 2
-    objective: "Data question: top product in tests/fixtures/gaia/csv/sales.csv"
+    objective: "Data question: top product in ~/gaia-eval/csv/sales.csv"
     ground_truth:
       expected_answer: "Gadget Pro ($7,200)"
     success_criteria: "Agent routes to data tools (analyze_data_file / scratchpad SQL in agent_tools[]) and answers Gadget Pro at $7,200. Reaching for memory tools here is misrouting."

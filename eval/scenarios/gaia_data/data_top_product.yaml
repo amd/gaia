@@ -1,4 +1,4 @@
-# FIXTURE-SYNC: tests/fixtures/gaia/csv/sales.csv — see GAIA_FIXTURE_VALUES.md.
+# FIXTURE-SYNC: ~/gaia-eval/csv/sales.csv — see GAIA_FIXTURE_VALUES.md.
 id: data_top_product
 name: "Data — Top Product by Revenue"
 category: gaia_data
@@ -11,11 +11,11 @@ persona: data_analyst
 
 setup:
   index_documents: []
-  notes: "Fixture CSV at tests/fixtures/gaia/csv/sales.csv (repo-relative)."
+  notes: "Fixture CSV at ~/gaia-eval/csv/sales.csv (staged by eval setup)."
 
 turns:
   - turn: 1
-    objective: "Ask which product in tests/fixtures/gaia/csv/sales.csv has the highest total revenue and how much"
+    objective: "Ask which product in ~/gaia-eval/csv/sales.csv has the highest total revenue and how much"
     ground_truth:
       expected_answer: "Gadget Pro with $7,200"
     success_criteria: "Agent answers Gadget Pro, $7,200, via real data tooling in agent_tools[] (analyze_data_file or scratchpad SQL). Either wrong name or wrong number is a FAIL."

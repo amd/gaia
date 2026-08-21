@@ -1,4 +1,4 @@
-# FIXTURE-SYNC: tests/fixtures/gaia/csv/sales.csv — see GAIA_FIXTURE_VALUES.md.
+# FIXTURE-SYNC: ~/gaia-eval/csv/sales.csv — see GAIA_FIXTURE_VALUES.md.
 id: data_followup_compound
 name: "Data — Load Once, Compound Follow-Ups"
 category: gaia_data
@@ -13,11 +13,11 @@ persona: data_analyst
 
 setup:
   index_documents: []
-  notes: "Fixture CSV at tests/fixtures/gaia/csv/sales.csv (repo-relative)."
+  notes: "Fixture CSV at ~/gaia-eval/csv/sales.csv (staged by eval setup)."
 
 turns:
   - turn: 1
-    objective: "Ask to load tests/fixtures/gaia/csv/sales.csv and describe its shape"
+    objective: "Ask to load ~/gaia-eval/csv/sales.csv and describe its shape"
     ground_truth:
       expected_answer: "12 rows; columns date, region, product, units, revenue"
     success_criteria: "Agent loads the file (real data tool call in agent_tools[]) and reports 12 rows with the five columns."
