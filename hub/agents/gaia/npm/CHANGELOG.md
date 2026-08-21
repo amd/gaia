@@ -4,13 +4,13 @@ All notable changes to `@amd-gaia/gaia` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this package adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.0] — unreleased
+## [0.1.1] — unreleased
 
-First release. `npx @amd-gaia/gaia` is now the single command that gets a user
-running GAIA: it fetches and verifies everything GAIA needs and drops them into
-the terminal UI. Before this there was no packaged path at all — the flagship agent
-had to be run from a repo checkout with a Python environment, and reaching the
-terminal UI meant building it from source.
+First working release. `npx @amd-gaia/gaia` is now the single command that gets a
+user running GAIA: it fetches and verifies everything GAIA needs and drops them
+into the terminal UI. Before this there was no packaged path at all — the flagship
+agent had to be run from a repo checkout with a Python environment, and reaching
+the terminal UI meant building it from source.
 
 ### Added
 
@@ -87,7 +87,7 @@ terminal UI meant building it from source.
 - The sidecar has no arm64 Linux or arm64 Windows build. On those platforms the
   run stops with an error naming the platform and the supported set rather than
   launching a UI with no agent behind it.
-- `gaia_agent` 0.1.0 has no caller-auth token, so unlike
+- `gaia_agent` 0.1.1 has no caller-auth token, so unlike
   `@amd-gaia/agent-email` this package mints and sends none.
 - Tracks sidecar contract `apiVersion` **2.12**; a differing major raises
   `VersionMismatchError`.
