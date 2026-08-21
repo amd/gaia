@@ -66,7 +66,18 @@ jobs:
         run: python -m pip install --upgrade requests pyyaml boto3
 
       - name: Run the pipeline harness
-        run: python util/verify_publish_pipeline.py
+        run: python util/verify_publish_pipeline.py 2>&1 | tee harness.log
+
+      # The harness tears down its Worker on exit, so a failure otherwise leaves
+      # only whatever reached the step log before the runner stopped.
+      - name: Upload the harness log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: publish-pipeline-harness-log
+          path: harness.log
+          if-no-files-found: ignore
+          retention-days: 7
 
       # The publisher's own unit tests: the by-reference lane, the threshold,
       # and the credential guards. Fast, and they catch a signature change the
