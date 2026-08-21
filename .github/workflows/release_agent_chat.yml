@@ -59,8 +59,9 @@
 #     GAIA_HUB_PUBLISH_URL (the Worker's workers.dev origin -- large uploads
 #     are blocked on the proxied custom domain's managed WAF; a wheel is
 #     small so this matters less than for email's binaries, but the Worker
-#     endpoint is the same one either way). REQUIRED for publishing — the
-#     release fails loudly if it is unset (no silent fallback).
+#     endpoint is the same one either way — same Worker + R2 bucket, just the
+#     door that isn't WAF-blocked). REQUIRED for publishing — the release
+#     fails loudly if it is unset (no silent fallback).
 #
 # Tag namespace: `agent-pkg-chat-*` (NOT `v*` -- avoids firing publish.yml /
 # the paused publish_agents.yml). Example:

@@ -108,9 +108,12 @@
 #     GAIA_HUB_BASE_URL      — public Worker origin for downloads + the lock
 #                              baseUrl. Default https://hub.amd-gaia.ai.
 #     GAIA_HUB_PUBLISH_URL   — origin CI POSTs uploads to. MUST be the Worker's
-#                              workers.dev URL: the free-plan managed WAF on the
-#                              proxied hub.amd-gaia.ai custom domain blocks large
-#                              binary uploads, but not GET downloads. REQUIRED —
+#                              workers.dev URL: the managed WAF fronting the
+#                              hub.amd-gaia.ai custom domain 403s large binary
+#                              uploads, so POST /publish goes through the
+#                              workers.dev origin instead — same Worker + R2
+#                              bucket, just the door that isn't WAF-blocked
+#                              (GET downloads stay on hub.amd-gaia.ai). REQUIRED —
 #                              the release fails loudly if it is unset (no silent
 #                              fallback).
 #   npm trusted publisher for @amd-gaia/gaia registered against THIS workflow
