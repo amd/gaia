@@ -39,6 +39,38 @@ const PATHS = [
     external: true,
   },
 ];
+
+// What is actually different about GAIA, in plain words. Every line is a real
+// property of the system, not a claim: the NPU path (Lemonade on Ryzen AI), the
+// single resident model and its per-device context window, the frozen-binary
+// sidecar behind a REST/SSE contract, runtime-loaded signed skills, memory plus
+// local retrieval instead of context compaction, and the immutable hub.
+const ARCHITECTURE = [
+  {
+    title: 'The AI chip in your PC does the work',
+    body: 'Models run on the NPU and integrated graphics of a Ryzen™ AI machine — no server, no account, no request leaving the box.',
+  },
+  {
+    title: 'One model stays loaded',
+    body: 'Every agent and skill shares the same model in memory, so switching between them costs nothing — no reload, no second copy of it.',
+  },
+  {
+    title: 'It remembers instead of forgetting',
+    body: 'Long conversations survive on real memory and a local index of your own files, rather than by quietly summarising your history away.',
+  },
+  {
+    title: 'Skills, not more installs',
+    body: 'New abilities are small packages the agent picks up and puts down while it runs. Each one is audited and signed before it reaches the hub.',
+  },
+  {
+    title: 'One file to embed',
+    body: 'An agent ships as a single self-contained binary behind a small local API, so putting it in your product means no runtime for your users to install.',
+  },
+  {
+    title: 'Nothing published can change',
+    body: 'Every version is fixed and checksummed. What you download today is exactly what was published, and it can never be replaced under the same name.',
+  },
+];
 ---
 
 <Layout
@@ -89,6 +121,20 @@ const PATHS = [
                 <span class="whitespace-nowrap">{p.code}</span>
               </div>
             </a>
+          </li>
+        ))}
+      </ul>
+    </section>
+
+    <!-- 3. Why it is built this way — technical substance in plain words. -->
+    <section id="architecture" class="g-shell g-section scroll-mt-[66px] border-t border-g-border">
+      <div class="g-label mb-8">Under the hood</div>
+
+      <ul class="grid gap-x-14 gap-y-9 sm:grid-cols-2">
+        {ARCHITECTURE.map((a) => (
+          <li>
+            <h2 class="g-h-card text-[17px]">{a.title}</h2>
+            <p class="g-body mt-2 max-w-[440px]">{a.body}</p>
           </li>
         ))}
       </ul>
