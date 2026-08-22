@@ -136,6 +136,12 @@ class TurnRecorder:
         self.turn_id = uuid.uuid4().hex[:12]
         self.started_at = _now()
         self._t0 = time.perf_counter()
+        # Held from construction rather than re-passed to finish(): all three
+        # are fixed when the turn opens, and asking twice let the model id be
+        # resolved a second time and disagree with what the turn actually ran.
+        self.query = query
+        self.agent_name = agent_name
+        self.model_id = model_id
 
         schema_json = json.dumps(tool_schemas) if tool_schemas else ""
         system_tokens = tok.count(system_prompt)
@@ -252,11 +258,8 @@ class TurnRecorder:
     def finish(
         self,
         *,
-        query: str,
         answer: str,
         steps: int,
-        agent_name: str,
-        model_id: Optional[str],
     ) -> Dict[str, Any]:
         """Seal the record, append it to the log, and return it."""
         total_s = time.perf_counter() - self._t0
@@ -266,13 +269,13 @@ class TurnRecorder:
         record = {
             "schema": SCHEMA,
             "turn_id": self.turn_id,
-            "agent": agent_name,
-            "model": model_id,
+            "agent": self.agent_name,
+            "model": self.model_id,
             "started_at": self.started_at,
             "ended_at": _now(),
             # The number a user actually feels: submit -> answer on screen.
             "total_s": round(total_s, 3),
-            "query": query,
+            "query": self.query,
             "answer_chars": len(answer or ""),
             "steps": steps,
             "prompt": self.prompt,
