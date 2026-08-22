@@ -1,3 +1,7 @@
+# local_blocked_win_shim: the fake-gh shim is a .cmd; a skill-granted CLI runs via the
+# hardened argv path (shell=False), and Windows CreateProcess ignores PATHEXT so it
+# resolves real gh.exe, not the shim. Runs correctly on the Linux runner (execvp +
+# shebang). See shell_tools.py:945 and the validation report.
 # FIXTURE-SYNC: tests/fixtures/gaia/fake_gh/ (repo acme-labs/widgetworks; the
 # shim accepts CONFIRM-tier writes like `gh issue comment` with a canned
 # success) — see GAIA_FIXTURE_VALUES.md.
@@ -6,7 +10,7 @@ name: "Shell — CONFIRM-Tier Write: Outcome Asserted, Modal Owned by TUI"
 category: gaia_shell
 agent_type: gaia
 severity: critical
-tags: [tui]
+tags: [tui, local_blocked_win_shim]
 description: |
   A CONFIRM-tier gh write (issue comment). Over the eval transport CI runs
   with GAIA_AUTO_APPROVE_TOOLS=1, so the gate auto-approves and the action

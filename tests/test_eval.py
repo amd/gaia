@@ -307,6 +307,7 @@ class TestAgentEvalRunner:
             "live",
             "tui",
             "local_blocked_no_embedder",
+            "local_blocked_win_shim",
         }
         gaia = [
             (path, data)
