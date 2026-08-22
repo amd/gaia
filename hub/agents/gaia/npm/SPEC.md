@@ -1,6 +1,6 @@
 # `@amd-gaia/gaia` — technical reference
 
-Version **0.1.0**. Companion to [`README.md`](./README.md), which is the
+Version **0.1.1**. Companion to [`README.md`](./README.md), which is the
 user-facing doc. This file specifies the wire and file formats the package
 depends on and the guarantees it makes.
 
@@ -32,11 +32,11 @@ of truth for what is downloaded and what it must hash to.
 ```jsonc
 {
   "schemaVersion": "3.0",
-  "agentVersion": "0.1.0",
+  "agentVersion": "0.1.1",
   "components": {
     "sidecar": {
-      "componentVersion": "0.1.0",
-      "baseUrl": "https://hub.amd-gaia.ai/agents/gaia/0.1.0",
+      "componentVersion": "0.1.1",
+      "baseUrl": "https://hub.amd-gaia.ai/agents/gaia/0.1.1",
       "platforms": { "<platformKey>": { /* entry */ } }
     },
     "tui": {
@@ -269,7 +269,7 @@ backward-compatible addition and is accepted.
 ### 5.4 No caller-auth token
 
 The email sidecar authenticates callers with a per-session bearer minted into
-`GAIA_EMAIL_SIDECAR_TOKEN`. `gaia_agent` has **no equivalent** at 0.1.0, so
+`GAIA_EMAIL_SIDECAR_TOKEN`. `gaia_agent` has **no equivalent** at 0.1.1, so
 this package mints and sends nothing. When the sidecar grows one, it lands here as
 a spawn-time env var and a request header — a change to this section, not a new
 subsystem.
