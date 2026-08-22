@@ -62,6 +62,8 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			if e.LemonadeReachable != nil {
 				m.lemonadeKnown = true
 				m.lemonadeUp = *e.LemonadeReachable
+				// Fresh evidence, so the one-shot pre-refusal is armed again.
+				m.lemonadeDownRefused = false
 				m.lemonadeVersion = e.LemonadeVersion
 				m.lemonadeBaseURL = e.LemonadeBaseURL
 			}

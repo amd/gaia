@@ -265,12 +265,43 @@ func waitForSetupEvent(ch <-chan setupEvent) tea.Cmd {
 // does not run anything -- Init() fires the actual probe once Bubble Tea's
 // event loop is running; this only makes the composer hold Enter (and Init
 // hold the initial --query, if any) until that probe answers.
+//
+// A Claude session is never gated: `gaia init` starts LemonadeServer.exe
+// unconditionally (_auto_start_server in src/gaia/installer/init_command.py),
+// which is the one thing --use-claude exists to avoid. --skip-chat-model
+// skips the model DOWNLOAD only; nothing skipped the server.
+//
+// Skipped, not hidden -- setupSkippedForClaudeNotice says so and what it
+// costs. `/setup` still runs the real thing, because typing it IS the user
+// choosing to start the local backend.
 func (m ChatModel) applyFirstBootGate() ChatModel {
-	if m.agentID == setupAgentID {
-		m.setupChecking = true
+	if m.agentID != setupAgentID {
+		return m
 	}
+	if m.claudeMode {
+		m.messages = append(m.messages, Message{
+			Role:    RoleStatus,
+			Content: setupSkippedForClaudeNotice,
+		})
+		return m
+	}
+	m.setupChecking = true
 	return m
 }
+
+// setupSkippedForClaudeNotice says what was skipped and names the fix.
+//
+// Conditional on purpose. This is appended at construction, before anything
+// knows the local server's state, and most machines running this already have
+// Lemonade installed and up — asserting that document search is broken would
+// be wrong for them. So it states what did not run and leaves whether that
+// matters to what the user observes. Embeddings have no Anthropic equivalent,
+// so those features do need Lemonade either way (see
+// hub/agents/gaia/python/gaia_agent/stdio.py).
+const setupSkippedForClaudeNotice = "Local setup skipped — `gaia init` was not run " +
+	"and the Lemonade server was not started for this session. If document search, " +
+	"memory or the code index turn out not to work, that is why: run `gaia init " +
+	"--profile " + setupProfile + " --skip-chat-model` in a terminal, or type /setup here."
 
 // supersededSetup reports whether an event belongs to a setup run that is no
 // longer the current one.
@@ -365,6 +396,11 @@ func (m ChatModel) handleSetupEvent(evt setupEvent) (tea.Model, tea.Cmd) {
 	m.setupRunning = false
 	m.setupCancel = nil
 	m.setupCh = nil
+	// `gaia init` installs and STARTS the local server, so whatever the last
+	// ping said about it is now stale — drop it rather than let a `/model`
+	// switch be refused against a server this run just brought up.
+	m.lemonadeKnown = false
+	m.lemonadeDownRefused = false
 
 	switch {
 	case m.setupCancelRequested:
