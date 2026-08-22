@@ -245,7 +245,12 @@ jobs:
           EXT=""
           if [ "${{ matrix.goos }}" = "windows" ]; then EXT=".exe"; fi
           PKG=github.com/amd/gaia/tui/internal/cli
-          go build -ldflags="-s -w -X ${PKG}.version=${{ github.ref_name }} -X ${PKG}.commit=${{ github.sha }} -X ${PKG}.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+          # The COMMIT's timestamp, never `now` — release_components.yml rebuilds
+          # these same targets, and two wall-clock stamps guarantee the release
+          # asset and the hub artifact differ for one version. -trimpath keeps
+          # the runner's absolute paths out of the binary.
+          DATE="$(TZ=UTC git show -s --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ HEAD)"
+          go build -trimpath -ldflags="-s -w -X ${PKG}.version=${{ github.ref_name }} -X ${PKG}.commit=${{ github.sha }} -X ${PKG}.date=${DATE}" \
             -o ../bin/gaia-${{ matrix.goos }}-${{ matrix.goarch }}${EXT} \
             ./cmd/gaia
 
