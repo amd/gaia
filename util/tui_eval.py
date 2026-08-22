@@ -32,7 +32,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO / "src"))
 
-TURN_TIMEOUT_S = 240
+TURN_TIMEOUT_S = int(os.environ.get("TUI_EVAL_TURN_TIMEOUT_S", "240"))
 LAUNCH_TIMEOUT_S = 150  # cold TUI+agent spawn measured ~60s on the dev box
 
 
