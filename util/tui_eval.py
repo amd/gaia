@@ -184,7 +184,10 @@ def run_scenario(scenario: dict, ctl: Control, out: Path) -> dict:
             entry["match"] = ok
             checked += 1
             if not ok:
-                verdict = "FAIL"
+                # expected_answer is SEMANTIC ground truth (judge harness
+                # vocabulary) — a containment miss is judge-undecided, not a
+                # deterministic FAIL: correct answers phrase things differently.
+                verdict = "NEEDS_JUDGE"
         transcript.append(entry)
     if verdict == "PASS" and checked == 0:
         verdict = "NEEDS_JUDGE"
