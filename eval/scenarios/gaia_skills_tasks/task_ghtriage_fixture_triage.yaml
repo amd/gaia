@@ -1,3 +1,7 @@
+# local_blocked_win_shim: the fake-gh shim is a .cmd; a skill-granted CLI runs via the
+# hardened argv path (shell=False), and Windows CreateProcess ignores PATHEXT so it
+# resolves real gh.exe, not the shim. Runs correctly on the Linux runner (execvp +
+# shebang). See shell_tools.py:945 and the validation report.
 # FIXTURE-SYNC: tests/fixtures/gaia/fake_gh/ — issues #142/#139/#137 and
 # notifications (#142 + PR #140) in acme-labs/widgetworks; see GAIA_FIXTURE_VALUES.md.
 id: task_ghtriage_fixture_triage
@@ -5,7 +9,7 @@ name: "Skill Task — github-triage Against the Fixture Repo (L7)"
 category: gaia_skills_tasks
 agent_type: gaia
 severity: critical
-tags: [tui]
+tags: [tui, local_blocked_win_shim]
 description: |
   Ladder rung L7: a real triage of the fixture repo. The pass condition is
   exact fixture issue numbers and titles — a polished triage narrative with

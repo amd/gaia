@@ -1,3 +1,7 @@
+# local_blocked_win_shim: the fake-gh shim is a .cmd; a skill-granted CLI runs via the
+# hardened argv path (shell=False), and Windows CreateProcess ignores PATHEXT so it
+# resolves real gh.exe, not the shim. Runs correctly on the Linux runner (execvp +
+# shebang). See shell_tools.py:945 and the validation report.
 # FIXTURE-SYNC: tests/fixtures/gaia/fake_gh/ — issues #142/#139/#137 in
 # acme-labs/widgetworks; see GAIA_FIXTURE_VALUES.md.
 id: shell_allow_gh_list
