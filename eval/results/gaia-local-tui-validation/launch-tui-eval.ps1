@@ -13,7 +13,10 @@ $env:GAIA_AGENT_LOG = "$home_eval\agent-session.log"
 $env:GAIA_MEMORY_DISABLED = '1'   # embedder = Lemonade = forbidden on this box
 $env:GAIA_DYNAMIC_TOOLS = '0'     # tool selection also embeds; full registry rides along
 $env:PYTHONIOENCODING = 'utf-8'
-$env:PATH = "$root\.venv\Scripts;" + $env:PATH
+# fake gh first so the github-triage skill's `gh` resolves to the fixture shim;
+# venv Scripts next so the TUI spawns this branch's gaia-agent.
+$env:PATH = "$root\tests\fixtures\gaia\fake_gh;$root\.venv\Scripts;" + $env:PATH
+$env:GAIA_HUB_URL = 'http://127.0.0.1:8765/fixture_hub'
 
 New-Item -ItemType Directory -Force "$env:GAIA_TUI_HOME" | Out-Null
 $inner = "cd /d `"$root`" && tui\bin\gaia-drive.exe run gaia --use-claude --claude-model claude-haiku-4-5 --control-port 8817 --dev"
