@@ -31,6 +31,7 @@ pytest.importorskip("gaia_agent_email")
 
 from fastapi.testclient import TestClient  # noqa: E402
 from gaia_agent_email import __version__ as package_version  # noqa: E402
+from gaia_agent_email import caller_auth as _caller_auth  # noqa: E402
 from gaia_agent_email import export_openapi  # noqa: E402
 from gaia_agent_email.contract import (  # noqa: E402
     SCHEMA_VERSION,
@@ -1148,6 +1149,9 @@ def test_prescan_returns_card_envelope_shape(prescan_client):
         "needs_you",
         "needs_you_total",
         "bulk",
+        # #2900: the phishing/spam-flagged subset of actionable.
+        "suspicious",
+        "suspicious_total",
     }
     for section in ("urgent", "actionable", "suggested_archives"):
         assert isinstance(result[section], list)
@@ -1920,6 +1924,67 @@ def test_calendar_create_bad_event_after_gate_is_400(client, monkeypatch):
     )
     assert resp.status_code == 400
     assert "start" in resp.json()["detail"].lower()
+
+
+# ---------------------------------------------------------------------------
+# 13. OpenAPI security declaration (#2993) — the per-session bearer gate
+#     (``require_caller_token``) is invisible to FastAPI's schema generator
+#     because it is a plain ``Request`` dependency, not a ``SecurityBase``
+#     one. The document must still declare the scheme and the real,
+#     conditional posture: bearer OR none, since the gate no-ops when the
+#     sidecar has no token configured (local dev).
+# ---------------------------------------------------------------------------
+
+def test_spec_declares_bearer_security_scheme(spec):
+    schemes = spec["components"]["securitySchemes"]
+    assert schemes["bearerAuth"]["type"] == "http"
+    assert schemes["bearerAuth"]["scheme"] == "bearer"
+
+
+def test_gated_operations_require_bearer_or_none(spec):
+    # Every documented operation not in EXEMPT_PATHS must declare the
+    # conditional posture: bearer OR no credential — never a blanket
+    # "bearer always required" (the gate is off when no token is configured).
+    for path, operations in spec["paths"].items():
+        if _caller_auth.is_exempt_path(path):
+            continue
+        for method, op in operations.items():
+            if method not in _caller_auth._OPENAPI_METHODS:
+                continue
+            assert op.get("security") == [{"bearerAuth": []}, {}], (
+                f"{method.upper()} {path} does not declare the conditional "
+                "bearer-or-none security requirement"
+            )
+
+
+def test_exempt_paths_are_explicitly_public(spec):
+    for path in ("/v1/email/health", "/v1/email/version"):
+        assert path in spec["paths"], f"{path} missing from spec"
+        for method, op in spec["paths"][path].items():
+            if method not in _caller_auth._OPENAPI_METHODS:
+                continue
+            assert op.get("security") == [], (
+                f"{method.upper()} {path} is an EXEMPT_PATHS route and must "
+                "declare an explicit empty security requirement"
+            )
+
+
+def test_sidecar_app_document_declares_the_gate():
+    # The `spec`/`client` fixtures above build the export app, which mounts
+    # the same routers as the sidecar but never wires require_caller_token
+    # itself — asserting only on that app would leave the actual shipped
+    # sidecar document (`server.build_app()`) unverified. `/health` and
+    # `/version` are mounted on the sidecar app directly rather than via a
+    # router, so they appear ONLY in this document, not the export app's.
+    from gaia_agent_email import server
+
+    spec = server.build_app().openapi()
+    assert spec["components"]["securitySchemes"]["bearerAuth"]["scheme"] == "bearer"
+    assert spec["paths"]["/v1/email/send"]["post"]["security"] == [
+        {"bearerAuth": []},
+        {},
+    ]
+    assert spec["paths"]["/health"]["get"]["security"] == []
 
 
 def test_spec_page_serves_html(client):

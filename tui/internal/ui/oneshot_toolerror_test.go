@@ -104,7 +104,7 @@ func TestDebugLoggerReceivesEveryEventWithItsRawPayload(t *testing.T) {
 			Type: "tool_result", Tool: "email_pre_scan", Data: toolErrorPayload(),
 		},
 		event.CanonicalFinalEvent{Type: "final", Answer: "done"},
-	}}, "triage", &out, &errW, func(format string, args ...any) {
+	}}, "triage", &out, &errW, true, func(format string, args ...any) {
 		debug.WriteString(strings.TrimSpace(fmt.Sprintf(format, args...)) + "\n")
 	})
 

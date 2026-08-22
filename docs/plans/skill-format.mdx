@@ -195,8 +195,8 @@ Each entry in `skills` or a set's list is either a **skill name** or a mapping:
 | Key | Type | Required | Description |
 |---|---|---|---|
 | `name` | string | yes | A skill name per [naming](#naming). |
-| `version` | string | no | SemVer or range. **Recorded, not resolved** in this phase — see below. |
-| `required` | bool | no | Default `true`. A missing `required: false` skill is logged and skipped; a missing required one fails the launch. |
+| `version` | string | no | SemVer or range, **enforced at load** against the installed skill's version — see below. |
+| `required` | bool | no | Default `true`. A `required: false` skill that is missing *or version-incompatible* is logged and skipped; either failure on a required one fails the launch. |
 
 **Set names** use the same slug shape as skill names, capped at 32 chars — a
 lowercase alphanumeric start and end with internal hyphens:
@@ -218,12 +218,18 @@ undeclared set, an unrecognized key in a reference mapping, a non-boolean
 set of skills or does not load.
 
 <Note>
-**`version:` is a declaration surface only in this phase.** It is parsed,
-validated as a non-empty string, and surfaced — but no constraint solving
-happens until [#2467](https://github.com/amd/gaia/issues/2467) can install
-versioned skills from the marketplace. Until then, a bundled skill's version is
-whatever the agent package ships. This mirrors how `network:` permissions are
-recorded but not enforced in Phase 1.
+**`version:` is enforced at load.** The range is matched against the installed
+skill's frontmatter `version`, and a mismatch is fail-loud: a `required` entry
+raises and the agent does not launch, an optional one is skipped with the reason
+logged. A skill with no `version` in its frontmatter cannot satisfy a pin —
+otherwise a local edit would silently shadow a pinned hub install. A range that
+names no version (`>=v2`, `1.2.x`) is rejected at manifest-parse time with the
+shapes above, rather than treated as "any" — so the verdict never depends on
+which skills happen to be installed on the machine doing the parsing.
+
+What [#2467](https://github.com/amd/gaia/issues/2467) still owns is resolution
+*across installable versions* — choosing which version to fetch from the
+marketplace. Checking the one version actually installed happens today.
 </Note>
 
 Selection semantics — the order a set is chosen in, the selector hook, and the
@@ -252,23 +258,24 @@ are no implicit grants — a skill declares every domain it touches.
 | `network` | `read`, `write`, `none` | Connector scope (see bridge below). | **Bridged** — resolves to a `ConnectorRequirement` |
 | `mcp` | `connect`, `none` | Connector scope (MCP-server connectors). | **Bridged** — resolves to a `ConnectorRequirement` |
 | `filesystem` | `read`, `write`, `none` | Local-capability domain (new; needs the skill sandbox). | **Refused at load** |
-| `shell` | `execute`, `none` | Local-capability domain (new). | **Refused at load** |
+| `shell` | `execute`, `none` | One named CLI, scoped: `shell:execute:gh`. | **Bridged** — grants that binary, read-only |
 | `database` | `read`, `write`, `none` | Local-capability domain (new). | **Refused at load** |
 | `desktop` | `control`, `none` | Local-capability domain (new). | **Refused at load** |
 | `env` | `read`, `none` | Environment beyond declared `env_vars`. | **Refused at load** |
 
 Scopes narrow a grant: `filesystem:read:~/.gaia/data/**`,
-`network:read:*.brave.com`, `shell:execute:git,npm`. An unscoped grant covers
-the whole domain — except `mcp:connect`, where a scope is mandatory (below).
-Grammar violations — an empty entry, a missing level, an unknown domain, or a
-level the domain does not define — fail loudly at parse time.
+`network:read:*.brave.com`, `shell:execute:gh`. An unscoped grant covers the
+whole domain — except `mcp:connect` and `shell:execute`, where a scope is
+mandatory (below). Grammar violations — an empty entry, a missing level, an
+unknown domain, or a level the domain does not define — fail loudly at parse
+time.
 
 <Warning>
 **A local-capability permission is refused, not sandboxed.** Until the sandbox
 lands ([#1019](https://github.com/amd/gaia/issues/1019)), loading a skill that
-declares `filesystem` / `shell` / `database` / `desktop` / `env` raises
-`SkillPermissionError` naming the offending grants. GAIA will not load a grant it
-cannot enforce, and will not pretend to enforce one.
+declares `filesystem` / `database` / `desktop` / `env` — or a bare, unscoped
+`shell:execute` — raises `SkillPermissionError` naming the offending grants. GAIA
+will not load a grant it cannot enforce, and will not pretend to enforce one.
 
 `<domain>:none` is inert in both directions: it produces no requirement and never
 triggers a refusal, because an explicit *denial* asks for less than the default.
@@ -290,11 +297,15 @@ inventing a second grant system:
   The skill's `permissions` become the agent's connector requirements when the
   skill is loaded — appended to a **per-instance** copy, never to the ClassVar, so
   one agent's skill cannot leak requirements into a sibling.
-- `filesystem:*`, `shell:*`, `database:*`, `desktop:*`, `env:*` are **new
+- `filesystem:*`, `database:*`, `desktop:*`, `env:*` are **new
   local-capability domains** with no connector equivalent. Until the skill sandbox
   lands (PROPOSED — see [Phased build](#phased-build)) a skill declaring one is
   refused outright — at **every** security tier, `verified` included. A tier is a
   provenance claim, not a sandbox.
+- `shell:execute:<binary>` has its own bridge — see
+  [Bring your own CLI](#bring-your-own-cli). It is not routed through a connector
+  and does not need the sandbox, because the grant is one named binary held to a
+  read-only subcommand allowlist.
 
 Per-agent scoping reuses the `namespaced_agent_id` keying
 (`builtin:` / `custom:sha256:` / `installed:`,
@@ -328,6 +339,67 @@ code can reach any host its process can. Do not treat a
 `network:read:*.brave.com` grant as a firewall.
 </Warning>
 
+#### Bring your own CLI — `shell:execute:<binary>`
+
+Some capabilities are a CLI, not a connector. GitHub triage does not need an MCP
+server; it needs `gh`, which already owns its auth and its rate limits. A skill
+declares the one binary it runs:
+
+```yaml
+permissions:
+  - shell:execute:gh
+tools_required:
+  - run_shell_command
+```
+
+Loading that skill grants **`gh` only**, **to that skill's session**, **on that
+agent instance** — the grant lives on the agent (mirroring how skill-derived
+connector requirements shadow the `REQUIRED_CONNECTORS` ClassVar), never in a
+module-level allowlist, so it can never widen a sibling agent's shell.
+`unload_skill` revokes it; a binary stays granted while another loaded skill
+still declares it.
+
+Four rules make the grant safe enough to bridge before the sandbox exists:
+
+1. **The binary must be policed.** `BINARY_POLICIES`
+   ([`skills/binaries.py`](https://github.com/amd/gaia/blob/main/src/gaia/skills/binaries.py))
+   maps each declarable binary to its read-only subcommands. A binary with no
+   entry cannot be declared — the refusal names what *is* declarable.
+2. **Subcommands are an allowlist.** For `gh`: `issue list|view|status`,
+   `pr list|view|diff|checks|status`, `repo list|view`, `release list|view`,
+   `run list|view`, `label list`, `search …`, `auth status`, and `gh api` for GET.
+   Anything absent is refused, so `gh auth token` (prints the credential),
+   `gh alias` / `gh extension` / `gh config` / `gh codespace` (arbitrary code or a
+   remote shell), and every write verb are blocked without being enumerated.
+3. **Flags that turn a read into a write are refused.** `gh api` rejects
+   `-X`/`--method` with anything but `GET`, rejects `-f`/`-F`/`--field`/
+   `--raw-field`/`--input` (a body implies a write), and rejects `graphql`.
+4. **The binary must be installed.** `load_skill` checks `PATH` and refuses with
+   the install command when it is missing. A skill that loads without the tool it
+   documents produces confident answers from no data — the failure this bridge
+   exists to prevent.
+
+The existing shell guardrails still apply on top: command chaining and
+redirection (`&&`, `;`, `>`, backticks, `$()`) are rejected before the policy
+runs, and each segment of a pipeline is validated separately.
+
+**The grant replaces the per-call prompt, for the granted calls only.**
+`run_shell_command` is in `Agent.confirmation_required_tools()`, so every call
+normally raises a confirmation modal. A triage is five to ten reads — five to ten
+modals attended, and unattended a 100% failure rate, since a console with nobody
+to ask denies. So a call *fully covered* by an active grant skips the prompt: the
+user already consented, in front matter, to one binary and a read-only table.
+Everything else is unchanged — `Agent._call_is_pre_authorized` asks the host's
+`skill_grant_covers_call` hook, which answers False unless **every** segment of
+the command is a granted binary running an allowed subcommand. `pwd` still
+prompts. So does `gh issue list | head`: consent was for `gh`, not for a
+pipeline. An agent that has loaded no such skill has no way to answer yes, and
+its gate is byte-identical.
+
+**Adding a CLI is data plus a `SKILL.md`.** Supporting GitLab is a `"glab"` entry
+in `BINARY_POLICIES` and a skill that declares `shell:execute:glab` — no new
+branch in the shell tool, no change to the permission grammar.
+
 ### Security tiers
 
 Three tiers set the **install-time permission ceiling** and grant behavior.
@@ -335,7 +407,7 @@ Three tiers set the **install-time permission ceiling** and grant behavior.
 | Tier | Signing | At install | Ceiling (enforced) |
 |---|---|---|---|
 | `verified` | AMD-signed, audited | Auto-grant, no prompt | All declared permissions pre-approved. |
-| `community` | Publisher-signed, automated scans | Dangerous grants prompt | `network:read`, `network:write`, `mcp:connect`. |
+| `community` | Publisher-signed, automated scans | Dangerous grants prompt | `network:read`, `network:write`, `mcp:connect`, `shell:execute`. |
 | `experimental` | None | Explicit opt-in (`--allow-experimental`) | `network:read` only. |
 
 **Promotion path:** `experimental → community → verified`. A publisher signs to
@@ -352,9 +424,10 @@ rather than a placeholder that makes the top tier look anchored. See
 [`gaia skill install`](/reference/cli#skills).
 
 The dangerous set the spec names — `shell:execute`, `desktop:control`,
-`database:write` — is retained as authoritative, but all three are local-capability
-domains, so in v1 they are **refused before any tier check**: the prompt is
-currently reachable only for `network:write`.
+`database:write` — is retained as authoritative. `shell:execute:<binary>` is
+reachable today through the read-only binary bridge and prompts at `community`;
+`desktop:control` and `database:write` are unbridged local capabilities, so they
+are still **refused before any tier check**.
 
 <Note>
 **Tiers are NOT the governance decision system.** The governance layer's
@@ -662,8 +735,8 @@ vendor-namespace pattern lossless in practice rather than in principle.
 | `primaryEnv: VAR` | `requirements.env_vars` | Consumed |
 | `envVars: [{name\|key, …}]` | `requirements.env_vars` (names) | Preserved — per-variable descriptions are not modeled |
 | `requires.tools: [t]` | `tools_required` | Consumed |
-| `requires.bins: [git]` | `permissions: [shell:execute:git]` | **Refused** — local capability |
-| `requires.anyBins: [a, b]` | `permissions: [shell:execute:a, …]` | **Refused** — and GAIA has no any-of form, so each is declared |
+| `requires.bins: [git]` | `permissions: [shell:execute:git]` | **Refused** unless the binary is in `BINARY_POLICIES` |
+| `requires.anyBins: [a, b]` | `permissions: [shell:execute:a, …]` | **Refused** unless policed — and GAIA has no any-of form, so each is declared |
 | `requires.config: [path]` | `permissions: [filesystem:read:path]` | **Refused** — local capability |
 | `install: [{node\|uv\|pip: pkg}]` | `requirements.{node_,}dependencies` | Preserved — GAIA never runs install steps |
 | `install: [{brew\|go\|shell: …}]` | — | Preserved + reported |
@@ -685,7 +758,7 @@ GAIA already has a home for.
 |---|---|---|
 | `requires.tools: [t]` | `tools_required` | Consumed |
 | `requires.env: [VAR]` | `requirements.env_vars` | Consumed |
-| `requires.bins` / `requires.config` | `shell` / `filesystem` permissions | **Refused** — local capability |
+| `requires.bins` / `requires.config` | `shell` / `filesystem` permissions | **Refused** — unpoliced binary / local capability |
 | `category`, `tags`, `author` | — | Preserved + reported |
 
 #### The shapes published skills actually use
@@ -752,10 +825,11 @@ tool names that exist in the current registry. All parse as YAML; tool skills
 round-trip against their `tools.py`.
 
 <Warning>
-**Several examples declare permissions Phase 1 refuses.** `rag-search` (4a) and
+**Several examples declare permissions GAIA refuses.** `rag-search` (4a) and
 `file-operations` (4c) declare `filesystem:*`, and the migrated `git-status` (6)
-declares `shell:execute:git`. These are **valid manifests** — they parse and
-validate — but `load_skill` refuses them until the sandbox lands
+declares `shell:execute:git` — a binary with no entry in `BINARY_POLICIES`. These
+are **valid manifests** — they parse and validate — but `load_skill` refuses them
+until the sandbox lands
 ([#1019](https://github.com/amd/gaia/issues/1019)), because GAIA will not load a
 grant it cannot enforce. They are kept here as the format's target state; the
 examples that load **today** are the instruction-only ones (1, 3) and the
@@ -1021,12 +1095,12 @@ to `experimental`.
 
 <Warning>
 **This particular skill does not install in v1.** `bins: [git]` maps to
-`shell:execute:git`, a local-capability permission with no enforcement until the
-sandbox lands, so `gaia skill migrate` reports `git-status` as **unmigratable
+`shell:execute:git`, and `git` has no entry in `BINARY_POLICIES`, so nothing could
+gate its subcommands; `gaia skill migrate` reports `git-status` as **unmigratable
 with that reason** rather than writing it. The AFTER block below is the mapping —
-the target state once the sandbox ships — not a file v1 produces. A skill needing
-local access is never silently stripped of the permission to make the migration
-succeed.
+the target state once a `git` policy exists — not a file v1 produces. A skill
+needing local access is never silently stripped of the permission to make the
+migration succeed.
 </Warning>
 
 ```yaml
@@ -1243,8 +1317,9 @@ the declared `network` requirements.
 **Success criteria:**
 - A hand-placed skill requesting a permission above its tier ceiling fails to
   **load** (installing one already fails).
-- `filesystem`/`shell`/`database`/`desktop`/`env` route to the sandbox and **load**
-  instead of being refused.
+- `filesystem`/`database`/`desktop`/`env` route to the sandbox and **load**
+  instead of being refused (`shell:execute:<binary>` already loads through the
+  read-only binary bridge).
 - A declared `network:<level>:<scope>` actually constrains egress.
 
 ### Phase 3 — Agent UI dashboard (PROPOSED; [#701](https://github.com/amd/gaia/issues/701))

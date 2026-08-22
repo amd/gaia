@@ -43,6 +43,7 @@ Design commitments
 from __future__ import annotations
 
 import asyncio
+import functools
 import hashlib
 import hmac
 import json
@@ -105,6 +106,7 @@ from gaia_agent_email.contract import (
     UnarchivedMessage,
     UnarchiveFailure,
 )
+from gaia_agent_email.mailbox_state import PROVIDERS, backend_family
 from gaia_agent_email.outlook_backend import AttachmentTooLargeError
 from gaia_agent_email.tools.llm_triage import LLMTriageError
 from gaia_agent_email.tools.summarize_tools import EmailSummarizeError
@@ -1215,24 +1217,26 @@ def get_send_backend():
             ),
         )
     provider = providers[0]
-    if provider == "google":
+    try:
+        family = backend_family(provider)
+    except ValueError:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Connected mailbox provider '{provider}' has no send backend. "
+                f"Expected one of: {', '.join(PROVIDERS)}."
+            ),
+        ) from None
+    if family == "gmail":
         from gaia_agent_email.gmail_backend import LiveGmailBackend, _get_gmail_token
 
         return LiveGmailBackend(_get_gmail_token)
-    if provider == "microsoft":
-        from gaia_agent_email.outlook_backend import (
-            LiveOutlookBackend,
-            _get_outlook_token,
-        )
-
-        return LiveOutlookBackend(_get_outlook_token)
-    raise HTTPException(
-        status_code=503,
-        detail=(
-            f"Connected mailbox provider '{provider}' has no send backend. "
-            "Expected 'google' or 'microsoft'."
-        ),
+    from gaia_agent_email.outlook_backend import (
+        LiveOutlookBackend,
+        _get_outlook_token,
     )
+
+    return LiveOutlookBackend(functools.partial(_get_outlook_token, provider))
 
 
 # Module-level indirection the send handler calls after the gate. Tests swap
@@ -1262,24 +1266,26 @@ def _resolve_backend_for_provider(provider: Optional[str]):
                 f"single connected mailbox. Connected: {connected or '(none)'}."
             ),
         )
-    if provider == "google":
+    try:
+        family = backend_family(provider)
+    except ValueError:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Provider '{provider}' has no send backend. "
+                f"Expected one of: {', '.join(PROVIDERS)}."
+            ),
+        ) from None
+    if family == "gmail":
         from gaia_agent_email.gmail_backend import LiveGmailBackend, _get_gmail_token
 
         return LiveGmailBackend(_get_gmail_token)
-    if provider == "microsoft":
-        from gaia_agent_email.outlook_backend import (
-            LiveOutlookBackend,
-            _get_outlook_token,
-        )
-
-        return LiveOutlookBackend(_get_outlook_token)
-    raise HTTPException(
-        status_code=503,
-        detail=(
-            f"Provider '{provider}' has no send backend. "
-            "Expected 'google' or 'microsoft'."
-        ),
+    from gaia_agent_email.outlook_backend import (
+        LiveOutlookBackend,
+        _get_outlook_token,
     )
+
+    return LiveOutlookBackend(functools.partial(_get_outlook_token, provider))
 
 
 # ---------------------------------------------------------------------------
@@ -1319,24 +1325,40 @@ def get_search_backend():
             ),
         )
     provider = providers[0]
-    if provider == "google":
+    try:
+        family = backend_family(provider)
+    except ValueError:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                f"Connected mailbox provider '{provider}' has no search "
+                f"backend. Expected one of: {', '.join(PROVIDERS)}."
+            ),
+        ) from None
+    if family == "gmail":
         from gaia_agent_email.gmail_backend import LiveGmailBackend, _get_gmail_token
 
         return LiveGmailBackend(_get_gmail_token)
-    if provider == "microsoft":
-        from gaia_agent_email.outlook_backend import (
-            LiveOutlookBackend,
-            _get_outlook_token,
-        )
-
-        return LiveOutlookBackend(_get_outlook_token)
-    raise HTTPException(
-        status_code=503,
-        detail=(
-            f"Connected mailbox provider '{provider}' has no search backend. "
-            "Expected 'google' or 'microsoft'."
-        ),
+    from gaia_agent_email.outlook_backend import (
+        LiveOutlookBackend,
+        _get_outlook_token,
     )
+
+    return LiveOutlookBackend(functools.partial(_get_outlook_token, provider))
+
+
+def _normalize_search_query(query: Optional[str]) -> Optional[str]:
+    """Normalize a search query's date/duration operators, or raise ``ValueError``.
+
+    Split out of ``_search_inbox`` so the route can map ONLY this failure to a
+    400 (#2830). Lazily imported for the same reason ``_search_inbox`` is: the
+    OpenAPI export must not pull in the live-mail machinery.
+    """
+    from gaia_agent_email.tools.read_tools import normalize_gmail_date_operators
+
+    if not query:
+        return query
+    return normalize_gmail_date_operators(query)
 
 
 def _search_inbox(
@@ -1537,25 +1559,31 @@ def _build_calendar_backend(provider: str):
     the calendar scope was never granted — surfaced as a 403 reconnect CTA at the
     route, never a silent empty calendar.
     """
-    if provider == "google":
+    try:
+        family = backend_family(provider)
+    except ValueError:
+        family = None
+    if family == "gmail":
         from gaia_agent_email.calendar_backend import (
             LiveCalendarBackend,
             _get_calendar_token,
         )
 
         return LiveCalendarBackend(_get_calendar_token)
-    if provider == "microsoft":
+    if family == "graph":
         from gaia_agent_email.outlook_calendar_backend import (
             LiveOutlookCalendarBackend,
             _get_outlook_calendar_token,
         )
 
-        return LiveOutlookCalendarBackend(_get_outlook_calendar_token)
+        return LiveOutlookCalendarBackend(
+            functools.partial(_get_outlook_calendar_token, provider)
+        )
     raise HTTPException(
         status_code=503,
         detail=(
             f"Connected provider '{provider}' has no calendar backend. "
-            "Expected 'google' or 'microsoft'."
+            f"Expected one of: {', '.join(PROVIDERS)}."
         ),
     )
 
@@ -1681,22 +1709,26 @@ def _raise_calendar_connector_http(exc: ConnectorsError) -> NoReturn:
 
 def _build_prescan_live_backend(provider: str):
     """Build the read-only (list/get) live backend for one connected provider."""
-    if provider == "google":
+    try:
+        family = backend_family(provider)
+    except ValueError:
+        family = None
+    if family == "gmail":
         from gaia_agent_email.gmail_backend import LiveGmailBackend, _get_gmail_token
 
         return LiveGmailBackend(_get_gmail_token)
-    if provider == "microsoft":
+    if family == "graph":
         from gaia_agent_email.outlook_backend import (
             LiveOutlookBackend,
             _get_outlook_token,
         )
 
-        return LiveOutlookBackend(_get_outlook_token)
+        return LiveOutlookBackend(functools.partial(_get_outlook_token, provider))
     raise HTTPException(
         status_code=503,
         detail=(
             f"Connected mailbox provider '{provider}' has no read backend. "
-            "Expected 'google' or 'microsoft'."
+            f"Expected one of: {', '.join(PROVIDERS)}."
         ),
     )
 
@@ -1935,7 +1967,7 @@ class EmailDraftRequest(_Strict):
     provider: Optional[str] = Field(
         default=None,
         description=(
-            "Optional provider binding ('google' or 'microsoft'). When set, "
+            "Optional provider binding ('google', 'microsoft', or 'microsoft_work'). When set, "
             "the confirmation token is bound to this provider so the send "
             "routes to the correct mailbox even when multiple are connected."
         ),
@@ -1984,7 +2016,7 @@ class EmailSendRequest(_Strict):
     provider: Optional[str] = Field(
         default=None,
         description=(
-            "Optional provider ('google' or 'microsoft'), used ONLY as the "
+            "Optional provider ('google', 'microsoft', or 'microsoft_work'), used ONLY as the "
             "fallback when the confirmation token carries no provider binding. "
             "A token's bound provider always wins; with two mailboxes connected "
             "and neither a binding nor this field set, the send is rejected as "
@@ -2104,6 +2136,20 @@ _CONNECTOR_ERROR_RESPONSES = {
 # Passing an unconnected provider, or omitting it with 2+ accounts connected,
 # is ambiguous — the backend resolvers refuse to guess (fail-loud, never a
 # silent pick). Shared by every route that resolves a provider-bound backend.
+# ``/search`` can 400 for a second reason: an unparseable date/duration
+# operator value in ``query`` (#2830). Declared separately so the spec says
+# which failures a caller can actually provoke.
+_SEARCH_400 = {
+    400: {
+        "description": (
+            "Ambiguous or unknown account: the named provider is not connected, "
+            "or no provider was given while several accounts are connected. Also "
+            "returned when ``query`` carries an unparseable date or duration "
+            "operator value (e.g. ``newer_than:1.5w``)."
+        )
+    }
+}
+
 _AMBIGUOUS_PROVIDER_400 = {
     400: {
         "description": (
@@ -2183,7 +2229,7 @@ async def triage_email_batch(request: BatchTriageRequest) -> BatchTriageResponse
 @router.post(
     "/search",
     response_model=EmailSearchResponse,
-    responses={**_CONNECTOR_ERROR_RESPONSES, **_AMBIGUOUS_PROVIDER_400},
+    responses={**_CONNECTOR_ERROR_RESPONSES, **_SEARCH_400},
 )
 async def search_inbox(
     request: EmailSearchRequest,
@@ -2201,11 +2247,19 @@ async def search_inbox(
     ambiguous mailbox counts). Backend auth / config / transport errors surface
     as actionable 4xx/5xx, never a silent empty result.
     """
+    # Normalize here, not around the whole search: only an unparseable date /
+    # duration operator is the caller's fault (400). A ValueError raised deeper
+    # inside the search is a server fault and must not be reported as a bad
+    # request with an internal message attached (#2830).
+    try:
+        normalized_query = _normalize_search_query(request.query)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
     try:
         return await asyncio.to_thread(
             _search_inbox,
             backend,
-            query=request.query,
+            query=normalized_query,
             labels=request.labels,
             max_results=request.max_results,
             page_token=request.page_token,

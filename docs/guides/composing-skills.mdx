@@ -117,8 +117,8 @@ skill_sets:
   library:
     - api-compatibility                # required (the default)
     - name: changelog-discipline
-      version: ">=0.1.0"               # recorded, not yet resolved
-      required: false                  # missing ⇒ logged and skipped
+      version: ">=0.1.0"               # checked against the installed version
+      required: false                  # missing/incompatible ⇒ logged, skipped
 ```
 
 ## 3. Point the agent at both
@@ -221,7 +221,15 @@ tokens each is ~750 tokens gone from a window your tool results were already
 using — enough to overflow a tight context and turn a working run into a
 `context_length_exceeded` error.
 
-Two habits keep it safe:
+The flagship `gaia` agent mitigates this at runtime: each turn it embeds the
+query against every loaded skill's description and renders only the matching
+bodies in full — the rest collapse to a one-line menu entry the model can
+re-activate with `load_skill`. `GAIA_DYNAMIC_SKILLS=0` turns the selection
+off (every body renders every turn, the behavior all other agents keep), and
+`GAIA_DYNAMIC_SKILLS_TAU` overrides the match threshold. Manifest `skills:`
+entries are always-on and never collapse.
+
+Two habits keep it safe everywhere else:
 
 - **Keep bodies short.** Procedure and judgement calls, not prose. If a skill
   needs reference material, put it in a file the body links to — resources load

@@ -160,6 +160,11 @@ def collect_system_info() -> List[Dict[str, str]]:
                     timeout=5,
                     stderr=subprocess.DEVNULL,
                     text=True,
+                    # A hardware name can carry a byte the locale codec
+                    # cannot map. These probes are wrapped in a bare
+                    # `except Exception: pass`, so a raise here does not
+                    # surface — it silently drops the whole reading.
+                    errors="replace",
                 )
                 gpu_names = [
                     line.strip() for line in output.splitlines() if line.strip()
@@ -174,6 +179,11 @@ def collect_system_info() -> List[Dict[str, str]]:
                     timeout=5,
                     stderr=subprocess.DEVNULL,
                     text=True,
+                    # A hardware name can carry a byte the locale codec
+                    # cannot map. These probes are wrapped in a bare
+                    # `except Exception: pass`, so a raise here does not
+                    # surface — it silently drops the whole reading.
+                    errors="replace",
                 )
                 for line in output.splitlines():
                     line = line.strip()
@@ -190,6 +200,11 @@ def collect_system_info() -> List[Dict[str, str]]:
                     timeout=3,
                     stderr=subprocess.DEVNULL,
                     text=True,
+                    # A hardware name can carry a byte the locale codec
+                    # cannot map. These probes are wrapped in a bare
+                    # `except Exception: pass`, so a raise here does not
+                    # surface — it silently drops the whole reading.
+                    errors="replace",
                 )
                 gpu_names = [
                     line.strip()

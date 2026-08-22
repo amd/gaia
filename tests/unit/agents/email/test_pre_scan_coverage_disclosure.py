@@ -18,6 +18,7 @@ not pinned -- but the substring set is specific enough that today's prompt
 from __future__ import annotations
 
 import inspect
+import re
 import sys
 from pathlib import Path
 
@@ -51,15 +52,29 @@ def _has_coverage_disclosure(text: str) -> bool:
     return mentions_scan_size and mentions_partial
 
 
+# Section headers in _SYSTEM_PROMPT are ALL-CAPS lines ending in ":" on
+# their own line (e.g. "ACTIONS:", "PRE-SCAN BEHAVIOR:",
+# "NUMBERING ITEMS IN YOUR REPLY:"). Bound a section by the NEXT such
+# header rather than a fixed character count -- a fixed window silently
+# truncates the section (and the test with it) whenever earlier prose in
+# the same section grows, which is exactly what #2900 did by adding two
+# paragraphs of narrower-tool routing guidance ahead of the coverage-
+# disclosure paragraph.
+_NEXT_HEADER_RE = re.compile(r"\n\n[A-Z][A-Z0-9 &/-]{3,50}:\n")
+
+
+def _extract_section(prompt: str, header: str) -> str:
+    start = prompt.find(header)
+    assert start != -1, f"{header!r} section not found in _SYSTEM_PROMPT"
+    body_start = start + len(header)
+    m = _NEXT_HEADER_RE.search(prompt, body_start)
+    end = m.start() if m else len(prompt)
+    return prompt[start:end]
+
+
 class TestSystemPromptDisclosesCoverage:
     def test_pre_scan_behavior_section_tells_the_model_to_disclose_coverage(self):
-        section_start = _SYSTEM_PROMPT.find("PRE-SCAN BEHAVIOR:")
-        assert (
-            section_start != -1
-        ), "PRE-SCAN BEHAVIOR: section not found in _SYSTEM_PROMPT"
-        # A generous window after the header so we don't accidentally match
-        # unrelated prose elsewhere in the (very long) system prompt.
-        section = _SYSTEM_PROMPT[section_start : section_start + 1500]
+        section = _extract_section(_SYSTEM_PROMPT, "PRE-SCAN BEHAVIOR:")
 
         assert _has_coverage_disclosure(section), (
             "PRE-SCAN BEHAVIOR section must instruct the model to disclose "

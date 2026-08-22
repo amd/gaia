@@ -27,6 +27,7 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from gaia_agent_email.attention_cache import ATTENTION_CACHE_TTL_SECONDS
 from gaia_agent_email.attention_cache import peek as _peek_attention_cache
+from gaia_agent_email.mailbox_state import provider_label
 from gaia_agent_email.tools.calendar_tools import (
     _listed_event_count_from_conversation,
     append_conflict_grounding_correction,
@@ -468,6 +469,199 @@ def rewrite_triage_answer(
     return f"{lead}\n\n{rendered}"
 
 
+def render_suspicious_list(envelope: Dict[str, Any]) -> str:
+    """Build the flagged-mail list straight from ``suspicious``, as bullets.
+
+    The narrow-tool counterpart to ``render_needs_you_list`` — same
+    rationale: the list is entirely determined by the tool's own output, so
+    composing it is not a judgement the model should be making. A
+    phishing/spam list is higher-stakes to get wrong (drop, merge, or
+    invent an entry) than a general triage list, not lower.
+
+    Deliberately NOT numbered. ``check_suspicious_mail``'s rows carry no
+    ``ref`` — they are never placed on the positional-reference card
+    (``agent._last_needs_you_card`` stays untouched, see
+    ``check_suspicious_mail``'s own docstring) — so a number here would be
+    exactly the "number the card doesn't carry" case ``agent.py``'s
+    NUMBERING ITEMS IN YOUR REPLY rule forbids: a follow-up like "archive 1"
+    would resolve against whatever ``needs_you`` card is still cached from
+    an earlier turn, not against this list, and act on the wrong message.
+    """
+    items = envelope.get("suspicious") or []
+    if not items:
+        return ""
+    lines = ["### Flagged this scan", ""]
+    for row in items:
+        who = _sender_label(row.get("sender"))
+        what = str(row.get("subject") or "").strip() or "(no subject)"
+        tags = [t for t, flag in (("phishing", row.get("is_phishing")), ("spam", row.get("is_spam"))) if flag]
+        why = str(row.get("why") or "").strip()
+        notes = [n for n in (", ".join(tags), why) if n]
+        suffix = f" ({' · '.join(notes)})" if notes else ""
+        lines.append(f"- {who} — {what}{suffix}")
+    return "\n".join(lines)
+
+
+def _suspicious_scan_has_coverage_gap(envelope: Dict[str, Any]) -> bool:
+    """True when a zero-finding scan still owes the user a caveat: a
+    mailbox failed (``degraded``) or the inbox scan didn't reach everything
+    (``scanned`` under ``total_inbox``). Same fields ``_honest_suspicious_summary``
+    already turns into prose — this only decides whether that prose is
+    needed when there is no flagged-mail list to attach it to.
+    """
+    if envelope.get("degraded"):
+        return True
+    scanned = envelope.get("scanned")
+    total_inbox = envelope.get("total_inbox")
+    return (
+        isinstance(scanned, int) and isinstance(total_inbox, int) and scanned < total_inbox
+    )
+
+
+def rewrite_suspicious_mail_answer(
+    final_answer: str, conversation: Optional[List[Dict[str, Any]]]
+) -> str:
+    """Replace ``check_suspicious_mail``'s flagged-mail list with one built
+    from the scan itself — the narrow-tool counterpart to
+    ``rewrite_triage_answer``.
+
+    Same rationale (#2900): a model paraphrasing a precomputed
+    phishing/spam list is exactly the failure mode ``rewrite_triage_answer``
+    exists to prevent for ``pre_scan_inbox``'s ``needs_you`` list, and a
+    flagged-mail list is higher-stakes to get wrong, not lower. Keyed on
+    tool PRESENCE, never question parsing (#2762).
+
+    Deliberately a no-op when ``pre_scan_inbox`` ALSO ran this turn —
+    ``rewrite_triage_answer``'s four-bucket card already wins that turn (see
+    its own docstring and the pinned #2900 residual-risk test); rendering a
+    narrower list here on top would silently discard that card instead of
+    leaving it as the documented residual risk.
+
+    The lead sentence is always the grounded summary, never the model's own
+    framing, once the scan actually flagged something. A model that opens
+    with "Nothing flagged this scan" while ``scan`` carries rows is not a
+    formatting slip like a dropped item or bad numbering — it is a clean
+    bill of health printed directly above the phishing list this function
+    renders, which is worse than the verbosity this rewrite otherwise fixes.
+    Unlike ``rewrite_triage_answer``, this has no downstream contradiction
+    check to catch a wrong opener (guard 2 only reconciles against
+    ``pre_scan_inbox``), so the lead cannot be allowed through unchecked —
+    unconditionally preferring the grounded summary is simpler than pattern-
+    matching every way a model could phrase a false all-clear, and strictly
+    safer.
+
+    Zero findings is normally a no-op (there is no list, so there is
+    nothing to protect against paraphrase) — EXCEPT when the scan itself
+    was incomplete (``_suspicious_scan_has_coverage_gap``): a failed
+    mailbox or a partial inbox pass turns "nothing flagged" from a clean
+    bill of health into a false all-clear, the same failure mode this
+    function exists to prevent, just with an empty list instead of a wrong
+    one (#2900 follow-up). That case unconditionally replaces the answer
+    with ``_honest_suspicious_summary`` too, for the same reason as the
+    non-empty branch above: detecting whether the model's own prose already
+    disclosed the gap is exactly the fragile pattern-matching this module
+    already rejected once.
+    """
+    if last_tool_payload(conversation, "pre_scan_inbox") is not None:
+        return final_answer
+    scan = last_tool_payload(conversation, "check_suspicious_mail")
+    if not scan:
+        return final_answer
+    rendered = render_suspicious_list(scan)
+    if not rendered:
+        if _suspicious_scan_has_coverage_gap(scan):
+            return _honest_suspicious_summary(scan)
+        return final_answer
+    lead = _honest_suspicious_summary(scan)
+    return f"{lead}\n\n{rendered}"
+
+
+def _mailbox_failure_caveat(mailbox_errors: Any) -> str:
+    """One clause naming which mailbox(es) a degraded scan could not read,
+    so a partial scan is never mistaken for whole-account coverage (#2900
+    follow-up — a failed mailbox is the same false-all-clear this rewrite
+    exists to prevent, one layer up).
+
+    Mirrors the phrasing the system prompt already asks the model for
+    (``agent.py``: "Outlook couldn't be scanned (token expired); results
+    below are Gmail only.") so the deterministic fallback and the model's
+    own honest framing read the same way.
+    """
+    clauses = []
+    for entry in mailbox_errors or []:
+        if not isinstance(entry, dict) or not entry.get("mailbox"):
+            # ``degraded`` promised at least one entry here — a malformed
+            # one is a broken envelope, not a normal case worth hiding.
+            logger.warning(
+                "email agent: degraded check_suspicious_mail envelope has a "
+                "malformed mailbox_errors entry (%r) — omitting it from the "
+                "coverage caveat",
+                entry,
+            )
+            continue
+        label = provider_label(entry["mailbox"])
+        error = str(entry.get("error") or "").strip()
+        clauses.append(f"{label} couldn't be scanned ({error})" if error else f"{label} couldn't be scanned")
+    if not clauses:
+        return "Part of your mail could not be scanned this time."
+    return "; ".join(clauses) + "; results below are from the rest of your mailboxes only."
+
+
+def _honest_suspicious_summary(envelope: Dict[str, Any]) -> str:
+    """A minimal, always-grounded summary sentence built straight from the
+    envelope's own counts — the unconditional lead for
+    ``rewrite_suspicious_mail_answer`` once the scan has flagged rows,
+    since the model's own framing sentence cannot be trusted not to
+    contradict that same envelope.
+
+    ``suspicious_total`` is captured pre-cap (#2900) so a flagged message
+    ranked past ``PRE_SCAN_SUSPICIOUS_CAP`` is never silently dropped from
+    the count — but ``render_suspicious_list`` only ever renders the capped
+    ``suspicious`` list beneath this lead. When the two diverge, say so
+    ("showing N") instead of quoting a total the list underneath never
+    displays.
+
+    Two coverage caveats the replaced model sentence could have carried,
+    and the replacement must not silently drop (#2900 follow-up): a failed
+    mailbox (``degraded``/``mailbox_errors``, ``check_suspicious_mail``
+    passes both through from ``pre_scan_inbox``'s own envelope), and a
+    partial inbox scan (``scanned`` under ``total_inbox``).
+    """
+    shown = len(envelope.get("suspicious") or [])
+    total = envelope.get("suspicious_total")
+    if not isinstance(total, int):
+        # The contract (``EmailPreScanResult.suspicious_total``) defaults
+        # this to 0, always present — a missing/non-int value means the
+        # envelope itself is malformed, not a normal case. Falling back to
+        # ``shown`` is the most honest number we CAN state (we have no
+        # other candidate total), but doing so silently would hide a
+        # truncation this same function exists to disclose — log it.
+        logger.warning(
+            "email agent: check_suspicious_mail envelope missing a valid "
+            "suspicious_total (got %r) — summary falls back to the shown "
+            "count, which may under-report a truncated list",
+            total,
+        )
+        total = shown
+    noun = "message" if total == 1 else "messages"
+
+    scanned = envelope.get("scanned", 0)
+    total_inbox = envelope.get("total_inbox")
+    if isinstance(scanned, int) and isinstance(total_inbox, int) and scanned < total_inbox:
+        coverage = f"{scanned} of {total_inbox} in the inbox scanned"
+    else:
+        coverage = f"{scanned} messages scanned"
+
+    if shown < total:
+        lead = f"{total} flagged {noun} this scan — showing {shown}. {coverage}."
+    else:
+        lead = f"{total} flagged {noun} this scan. {coverage}."
+
+    if envelope.get("degraded"):
+        lead += " " + _mailbox_failure_caveat(envelope.get("mailbox_errors"))
+    return lead
+
+
 def _honest_prescan_summary(envelope: Dict[str, Any]) -> str:
     """A minimal, always-grounded pre-scan sentence built straight from the
     envelope's own counts — the fallback used when the model's own framing
@@ -870,6 +1064,10 @@ def ground_final_answer(result: Dict[str, Any]) -> Dict[str, Any]:
     # the model to retype it is what makes one list, correctly numbered, every
     # time — see rewrite_triage_answer.
     final_answer = rewrite_triage_answer(final_answer, conversation)
+    # Same guarantee for the narrow "anything suspicious?" tool (#2900) — see
+    # rewrite_suspicious_mail_answer's docstring for why it defers to the
+    # above when both tools ran this turn.
+    final_answer = rewrite_suspicious_mail_answer(final_answer, conversation)
 
     success_claim = find_ungrounded_success_claim(final_answer, conversation)
     if success_claim:

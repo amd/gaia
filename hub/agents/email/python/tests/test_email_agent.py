@@ -19,9 +19,10 @@ def test_build_registration_shape():
     assert reg.source == "installed"
     assert reg.tags == ["email", "gmail", "calendar", "triage"]
     assert reg.icon == "mail"
-    # Provider-superset connector list — Google + Microsoft (#962, #1275).
+    # Provider-superset connector list — Google + Microsoft personal + work
+    # (#962, #1275, #2629).
     connector_ids = {c.connector_id for c in reg.required_connections}
-    assert connector_ids == {"google", "microsoft"}
+    assert connector_ids == {"google", "microsoft", "microsoft_work"}
 
 
 def test_conversation_starters_match_agent():

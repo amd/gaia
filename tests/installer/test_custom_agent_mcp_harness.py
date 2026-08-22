@@ -22,6 +22,7 @@ from typing import Iterable
 
 import pytest
 
+from gaia.agents.base.console import SilentConsole
 from gaia.agents.registry import AgentRegistry
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -124,8 +125,15 @@ def _dummy_mcp_config(log_path: Path) -> dict:
 
 
 def test_custom_agent_dummy_mcp_path_uses_installed_bundle(
-    fake_home, tmp_path, artifact_dir
+    fake_home, tmp_path, artifact_dir, monkeypatch
 ):
+    # MCP tools are confirmation-gated and this harness has no terminal to
+    # approve on; the gate's own tests cover the deny path. The gate reads the
+    # PRE-dotenv environment snapshot (#2210), so grant the opt-in there — a
+    # plain setenv after `import gaia` is deliberately ignored.
+    import gaia
+
+    monkeypatch.setitem(gaia._PRE_DOTENV_ENVIRON, "GAIA_AUTO_APPROVE_TOOLS", "1")
     bundle_path = tmp_path / "installer-mcp.zip"
     mcp_log = artifact_dir / "dummy-mcp.jsonl"
     mcp_config = tmp_path / "mcp_servers.json"
@@ -136,7 +144,15 @@ def test_custom_agent_dummy_mcp_path_uses_installed_bundle(
     assert "Imported: installer-mcp" in result.stdout
 
     registry = _discover_agent("installer-mcp")
-    agent = registry.create_agent("installer-mcp", mcp_config_file=str(mcp_config))
+    # mcp_dummy_add_two_numbers is confirmation-gated (#2475) and this harness
+    # has no terminal to ask on; opt this trusted run in explicitly rather than
+    # via GAIA_AUTO_APPROVE_TOOLS, which gaia.pre_dotenv_env snapshots at the
+    # process's first `import gaia` — long before a test body could set it.
+    agent = registry.create_agent(
+        "installer-mcp",
+        mcp_config_file=str(mcp_config),
+        output_handler=SilentConsole(auto_approve_gated_tools=True),
+    )
 
     try:
         response = agent.process_query("add 7 and 35")

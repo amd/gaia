@@ -541,7 +541,7 @@ Highlights as they apply at the agent boundary:
 | Bridged permissions | `network:*` / `mcp:connect` become per-agent `ConnectorRequirement`s | Shipped (declaration; egress not enforced) |
 | Local-capability permissions | `filesystem` / `shell` / `database` / `desktop` / `env` refuse the load outright | Shipped (refusal); enforcement deferred |
 | Per-agent least privilege | An agent receives a skill's tools only after the skill is explicitly loaded; no ambient activation. Tools are namespaced and instance-scoped | Shipped |
-| Instruction-only bodies | Loaded as context under a `==== LOADED SKILLS ====` prompt fragment; treated as untrusted input, never as system-level instructions | Shipped |
+| Instruction-only bodies | Loaded as context under a `==== LOADED SKILLS ====` prompt fragment (on the flagship agent, split into an `(active this turn)` bodies section and a collapsed one-line menu for the rest — per-turn semantic selection); treated as untrusted input, never as system-level instructions | Shipped |
 | Untrusted imports | `gaia skill import` stamps `security_tier: experimental` regardless of the tier the skill claims, and reports the reset | Shipped |
 | Resource escape | A skill may only read files inside its own directory; `SkillManager.resource_path` rejects traversal, as does `.zip` import | Shipped |
 | Tier ceiling | A permission above the effective tier's ceiling refuses the install | Shipped ([#2467](https://github.com/amd/gaia/issues/2467)); run-time load-side ceiling deferred ([#1019](https://github.com/amd/gaia/issues/1019)) |

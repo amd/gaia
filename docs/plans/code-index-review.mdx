@@ -1,0 +1,305 @@
+---
+title: "Code Index Hardening Review"
+description: "Deep review and hardening pass on the semantic code-search path ahead of flagship-agent adoption"
+icon: "shield"
+---
+
+# Code Index Hardening Review
+
+## Why this matters
+
+Semantic code search is what lets the flagship agent work *on* a codebase
+instead of merely *in* one — it was just composed onto the flagship (66 tools
+now) and had never been properly exercised end to end. This review reproduced
+real bugs against a live Lemonade Server, fixed the ones that would corrupt
+state or leak data, and measured the feature at the scale it will actually run
+at (the full `src/gaia` tree).
+
+**Verdict: usable, not yet bulletproof before this pass — and one of the bugs
+found here would have broken indexing for every Windows user on the second
+run.** Five real bugs are fixed below, each with a test that failed against
+the pre-fix code and passes now. What's left is called out explicitly in
+[What we recommend and didn't do](#what-we-recommend-and-did-not-do).
+
+## Bugs found and fixed
+
+### 1. Every re-index crashed on Windows (severity: critical)
+
+`_save_atomic()` persisted the FAISS index and metadata by writing to a
+`.tmp` file and calling `Path.rename()` onto the real path. On POSIX,
+`rename()` silently replaces an existing destination. On Windows it raises
+`FileExistsError` instead — so the *first* `index_repository()` call on a
+repo always succeeded (nothing to overwrite yet), and *every call after that*
+crashed, because the cache files from the first run were already sitting
+there.
+
+That means incremental re-indexing — the entire point of the file-hash
+cache — never worked on Windows in practice. Since GAIA's primary platform is
+Windows on Ryzen AI, this wasn't an edge case; it was the common path.
+
+**Fix:** `Path.replace()` instead of `Path.rename()` — atomically overwrites
+on both Windows and POSIX.
+[`src/gaia/code_index/sdk.py`](../../src/gaia/code_index/sdk.py) `_save_atomic()`.
+Regression test: `test_atomic_save_overwrites_existing_cache_on_reindex`
+(unit) plus the live `TestIncrementalReindexCorrectness` suite, which does
+two real `index_repository()` calls back to back.
+
+### 2. A symlink inside the allowed repo could re-root the whole sandbox (severity: security)
+
+`index_codebase(repo_path=...)` lets the LLM redirect the tool to any
+subdirectory it names, gated by a check that the resolved path stays under
+the agent's original root. The check compared `os.path.abspath()` strings —
+which does **not** follow symlinks. `CodeIndexSDK.__init__`, one call later,
+does `Path(repo_path).resolve()` — which **does** follow them.
+
+Net effect: a symlink (or Windows junction) planted *inside* the allowed root
+but pointing outside it sailed through the string check, then got resolved to
+its real, external target when the SDK constructed its root — silently
+re-scoping the entire index/search sandbox (including the SDK's own
+`PathValidator` allowlist) onto that external location.
+
+This was proven live, not just reasoned about: with the pre-fix code, calling
+`index_codebase(repo_path=<junction to an outside directory>)` actually
+indexed and embedded a file outside the sandbox:
+
+```
+index_codebase result: {"status": "ok", "files_indexed": 1, "chunks_created": 1}
+h._repo_path after call: ...\allowed\escape_link
+NOT BLOCKED -- traversal succeeded, repo re-rooted to: ...\allowed\escape_link
+```
+
+**Fix:** resolve both sides (`Path.resolve()`, which follows symlinks) before
+the prefix check, so the comparison matches what the SDK will actually treat
+as its root.
+[`src/gaia/agents/tools/code_index_tools.py`](../../src/gaia/agents/tools/code_index_tools.py)
+`index_codebase()`. Regression test:
+`TestTraversalGuard::test_symlink_inside_root_escaping_outside_is_blocked`
+(creates a real NTFS junction; skips cleanly on platforms without link
+privilege). `..` traversal and an absolute path elsewhere were already
+correctly blocked (`os.path.abspath` normalizes `..`) — those are covered too,
+as regression tests rather than new fixes.
+
+### 3. Batch embedding silently degraded 25x, or silently returned "no results" (severity: reliability)
+
+Reported behavior: batches of 1/2/5/25 embed correctly most of the time, but
+occasionally a batch call returns **zero embeddings with no exception** —
+most likely the embedding model still warming up. The old code treated that
+as final on the first try:
+
+- In the bulk-index path (`_encode_texts_with_sync`), it fell straight to a
+  one-by-one fallback — ~25x slower than a batch call, for what's usually a
+  transient condition that would have succeeded on retry.
+- In the query-encode path used by `search()` (`_encode_texts`), the one-by-one
+  fallback also swallowed failures silently and returned a shorter (possibly
+  empty) array — which `search()` then treated as **"no matches found"**
+  instead of a real backend error. A user asking a valid question would get a
+  quiet empty result indistinguishable from "the codebase doesn't contain
+  that," with no signal that Lemonade was actually the problem.
+
+I was not able to reproduce the exact race live against this environment's
+Lemonade instance (8 sequential cold-load rounds and 10 concurrent requests
+right after an explicit unload all returned full batches) — it appears to
+need timing conditions this session's hardware/load didn't hit. The fix
+doesn't depend on reproducing it: it's correct regardless of root cause.
+
+**Fix:** a shared `_embed_batch_resilient()` helper retries the *same batch*
+(not one-by-one) up to twice with backoff when the backend returns short with
+no exception — the correct response to "not ready yet." Only after those
+retries are exhausted does behavior diverge by caller:
+- `_encode_texts` (query-only, used by `search()`) now **raises** instead of
+  ever returning a short/empty result — the "no matches" path is no longer
+  reachable for real failures.
+- `_encode_texts_with_sync` (bulk indexing) still falls back to one-by-one as
+  a last resort, so one genuinely bad chunk doesn't abort an otherwise-healthy
+  index run; `index_repository()`'s existing check still raises if *every*
+  chunk fails.
+
+[`src/gaia/code_index/sdk.py`](../../src/gaia/code_index/sdk.py)
+`_embed_batch_resilient`, `_encode_texts`, `_encode_texts_with_sync`. Four new
+tests in `TestBatchEmbeddingRace` cover: raises after exhausting retries,
+recovers if the backend becomes ready mid-retry, `search()` raises instead of
+returning `[]`, and the bulk path still falls back correctly for a
+persistently-short batch.
+
+### 4. Raising `max_file_size_mb` didn't actually admit larger files (severity: correctness)
+
+`CodeIndexConfig.max_file_size_mb` gates file discovery (`_discover_files`)
+correctly. But `index_repository()` called `chunk_code_file(rel_path,
+content)` without passing that value through — so the *parser* silently
+re-applied its own hardcoded 1MB default regardless of what the caller
+configured. A file a caller explicitly raised the limit to admit would pass
+discovery, then get zeroed out at chunking with no error.
+
+**Fix:** pass `max_size_mb=self.config.max_file_size_mb` through.
+[`src/gaia/code_index/sdk.py`](../../src/gaia/code_index/sdk.py)
+`index_repository()`. Regression test:
+`test_honors_configured_max_file_size_mb_above_parser_default`.
+
+### 5. A single pathological chunk could hold an entire file, unsearchable past the first ~1200 chars (severity: quality)
+
+`_chunk_by_blocks()` (the fallback for files/languages with no symbol
+matches) splits on blank-line boundaries or every 80 lines — but a minified
+or generated file with **no newlines at all** is one "line" as far as
+`str.splitlines()` is concerned, so neither boundary ever fires. The whole
+file became one `CodeChunk`. Two consequences: `metadata.json` grows
+unbounded for that file, and since `_chunk_to_embed_text` only embeds the
+first 1200 chars of a chunk, everything past that point in the file becomes
+permanently unsearchable.
+
+This doesn't corrupt the index or hang (the default `max_file_size_mb=1`
+already caps how big such a chunk can get), but it's a real gap the review was
+asked to check for, and it also applies to a single *symbol* — an AST-parsed
+Python function or a regex-matched JS function can itself be enormous
+(generated code, a huge dict literal) regardless of blank-line structure.
+
+**Fix:** a `_split_oversized_chunk()` post-processing pass in
+`chunk_code_file()`, applied uniformly to every parser's output — any chunk
+over 20,000 chars is split into character-bounded pieces (each independently
+embeddable), reassembling losslessly. Line numbers are kept approximate
+(the original chunk's full range on every piece) rather than computed exactly
+per character offset — precise per-piece line attribution wasn't worth the
+added complexity for what's fundamentally a size-bounding safety net.
+[`src/gaia/code_index/parsers.py`](../../src/gaia/code_index/parsers.py).
+Tests: `test_single_giant_line_is_split_not_one_unbounded_chunk`,
+`test_oversized_symbol_chunk_is_split`.
+
+## What's solid (reviewed, not changed)
+
+- **Fail-loud contracts already in good shape** for the failure modes that
+  matter most: embedding-model mismatch between index and query
+  (`ValueError`), Lemonade unreachable during embedder load (`RuntimeError`
+  with an actionable hint), and a corrupt FAISS binary (`RuntimeError` rather
+  than silently reporting "no index"). These were already covered by
+  `TestFailLoudly` before this review and remain correct.
+- **`_read_file_safe`'s own traversal guard is solid.** It uses
+  `PathValidator`, which resolves symlinks via `os.path.realpath` before
+  checking containment — so a symlinked *file* inside the repo pointing to a
+  sensitive external file (e.g. `~/.ssh/id_rsa` renamed with a `.py`
+  extension) is correctly rejected at read time. Bug #2 above was specifically
+  about the *tool-level* pre-check that runs before this guard ever engages,
+  not this guard itself.
+- **Incremental reindex correctness, proven with real embeddings** (not
+  mocks): indexed two files, changed one, re-indexed, and confirmed (a) the
+  unchanged file's reused vector is *bit-identical* to its first embedding
+  (proof of real FAISS-reconstruct reuse, not a coincidental re-embed match),
+  and (b) the changed file's new content is both stored and actually
+  returned by `search()` — a stale-reuse bug would have kept serving the old
+  answer forever. See `TestIncrementalReindexCorrectness` in
+  `tests/integration/test_code_index_live.py`.
+- **A no-op reindex touches the embedder zero times.** Verified by breaking
+  the embedder client after the first index and confirming a second
+  `index_repository()` call with no file changes still succeeds.
+- **Single-slot model eviction recovers correctly.** Lemonade's embedding
+  slot holds exactly one model; loading a different embedder to evict the
+  code-index one and then calling `index_repository()` reloads the right
+  model on demand and indexes/searches correctly — no hang, no corruption.
+- **Failure modes that don't corrupt or hang:** a file deleted between
+  discovery and read, a binary file mislabeled with a `.py` extension, and an
+  unreadable file (permission error) are all caught and skipped, not
+  propagated. `os.walk()`'s default `followlinks=False` means a symlink loop
+  in directory structure can't cause an infinite walk either.
+- **Cache keying** is `sha256(resolved repo path)[:16]` — two different repos
+  get different cache dirs; the same repo path is stable across SDK
+  instances. Known, low-severity gap: Windows path comparisons aren't
+  case-normalized, so referencing the same on-disk repo with different
+  casing (`C:\Repo` vs `c:\repo`) produces two separate cache entries instead
+  of reusing one. Wasted disk, not a correctness bug — not fixed in this
+  pass.
+
+## Scale: the full `src/gaia` tree
+
+| Metric | Value |
+|---|---|
+| Files indexed | 544 |
+| Chunks created | 6,355 |
+| Wall clock (cold index) | 195.7s (~3.3 min) |
+| Process RSS after indexing | 160 MB |
+| `index.faiss` size | 19.1 MB |
+| `metadata.json` size | 15.2 MB |
+| Total cache size | ~34 MB (source tree is 33 MB) |
+| Search latency (8 queries) | 32–102 ms, avg 75 ms |
+
+**Verdict on scale:** memory and search latency are both fine — 160MB RSS and
+sub-100ms search are well within interactive bounds even on a large,
+hundreds-of-files repo. The honest caveat is **cold-index wall clock**:
+~3.3 minutes for 544 files with no progress feedback beyond log lines is a
+noticeable wait, and it scales roughly linearly with embedding throughput
+(~32 chunks/sec observed here, consistent with the ~42 chunks/sec seen on a
+smaller 28-file/394-chunk directory). On a truly large monorepo (thousands of
+files) this would run into tens of minutes. That's usable for a one-time
+setup step but would benefit from a progress callback surfaced to the caller
+— not implemented in this pass (see recommendations).
+
+Cache overhead is also worth flagging: metadata.json stores full,
+un-truncated chunk content, so total cache size tracks roughly 1:1 with
+source size. Not a problem at 33MB; worth watching on a multi-GB repo.
+
+## Search quality on hard queries
+
+Eight behavioral queries — the kind grep can't answer — run against the full
+6,355-chunk `src/gaia` index, top-5 results:
+
+| Query | Result |
+|---|---|
+| where do we decide if a skill is allowed to run a binary | **Weak hit** — correct file (`binaries.py`) appears at rank 5, behind 4 plausible-but-wrong hits |
+| what stops two skills with the same name colliding | **Miss** — `manager.py` doesn't appear in the top 5 at all |
+| where is the retry backoff decided | **Hit** — `lemonade_client.py::_post_load_with_transient_retry`, rank 1 |
+| what happens when two agents write the same file | **Ambiguous** — plausible but not definitively "the" answer (no single function owns this) |
+| how does a tool result get truncated | **Hit** — `_truncate_args` / `_handle_large_tool_result` at ranks 2–3 (rank 1 is a README, not code) |
+| how does the agent load the embedding model | **Hit** — `rag/sdk.py::_load_embedder`, rank 1 |
+| where does the code index cache get invalidated | **Hit** — `code_index_tools.py::clear_code_index`, rank 1 |
+| how is a path checked to stay inside the allowed repo root | **Hit** — `security.py::is_path_allowed`, rank 3 |
+
+**Honest read:** 5 of 8 are clear hits in the top 3, 1 is a weak hit only
+recoverable by reading to rank 5, 1 is a genuine miss, and 1 has no clean
+ground truth to grade against. That's a meaningfully lower hit rate than the
+"3 of 4" originally observed against a single 394-chunk subdirectory — and
+that's the expected direction: a larger, noisier corpus gives more
+plausible-but-wrong chunks a chance to outscore the right one. This is not a
+bug to fix; it's the real, current ceiling of a pure-embedding-similarity
+search with `top_k` chosen by the caller. Callers that need the *specific*
+file (not just "something related") should ask for a higher `top_k` (5–10)
+rather than trusting rank 1, and a coding agent doing multi-step search
+should treat a first search as a starting point, not a final answer.
+
+## The agent-facing tools
+
+- **`index_codebase`'s traversal guard now holds** against `..`, an absolute
+  path elsewhere, and a symlink/junction planted inside the allowed root
+  (bug #2, fixed above).
+- **`search_code_index`'s token cost**, actually measured (not estimated)
+  against a real indexed+searched result set: each result includes up to a
+  500-char content snippet plus file_path/symbol_name/language/start_line/score.
+  A real `top_k=5` JSON response measured **3,523 characters (~881 tokens)**
+  at a 4 chars/token estimate; `top_k=10` measured **6,741 characters
+  (~1,685 tokens)**. That's noticeable against a 32K NPU context — a multi-step agent
+  turn that calls `search_code_index` three or four times at the default
+  `top_k=10` could burn 5–7K tokens on raw search output alone. Not a bug,
+  but worth the caller defaulting to a smaller `top_k` (5) unless it
+  genuinely needs breadth. `top_k` and `scope` both behave as documented:
+  `top_k` caps result count exactly, `scope="code"` and `scope="all"` both
+  currently pass through (the SDK only produces `"code"` chunks today, so
+  this is forward-compatible rather than a live filter yet).
+
+## What we recommend and did not do
+
+- **Progress feedback during a long cold index.** A 3+ minute index with only
+  log-line output is a rough UX for an interactive agent session. A
+  callback/streaming hook so a caller can surface "312/544 files..." wasn't
+  implemented here — it's a UX feature, not a correctness fix, and out of
+  scope for a hardening pass.
+- **Cache-key case-normalization on Windows.** Low severity (wasted disk, not
+  a correctness bug) — noted above, not fixed.
+- **Chunking quality beyond the oversized-chunk guard.** Symbol-level
+  chunking (Python AST, regex-based for other languages) already produces
+  one chunk per function/class with the symbol name in context, verified
+  against a many-small-methods class, a no-symbols constants file, and a
+  deeply nested function — all correct. Retrieval ranking quality (the hit-rate
+  gaps above) is a modeling/ranking question, not a bug; consider it a
+  baseline to track in future eval work, not something this pass should have
+  attempted to fix via code changes.
+- **The batch-embedding race** (#3) could not be reproduced live in this
+  session despite deliberate stress attempts (repeated cold-load rounds,
+  concurrent requests). The fix is defensively correct regardless, but if it
+  recurs in the field, the retry-count/backoff constants in
+  `_embed_batch_resilient` are the first place to tune.

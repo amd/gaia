@@ -14,10 +14,18 @@ README.
 Idempotency (re-running a published release is a no-op):
   * 201 -> published. We assert the Worker-returned SHA-256 equals the SHA-256
     we computed locally (integrity/atomicity check).
-  * 409 (version_exists) -> the filename is already published. We GET the stored
-    object and assert its bytes hash to the SAME SHA-256 we hold. If they match
-    it is a true no-op (success); if they DIFFER we fail loudly — that means a
-    different binary is already published under this immutable name.
+  * 409 version_exists -> the filename is already published. We GET the stored
+    object. Identical bytes are a true no-op. DIFFERENT bytes are also a no-op,
+    because neither Go nor PyInstaller is byte-reproducible and a rebuild of a
+    released version therefore always differs: the published object stays
+    authoritative and is what this run reports, so the lock describes what the
+    hub actually serves. ``--strict-immutable`` restores the old hard failure.
+  * any OTHER 409 (artifact_mismatch, artifact_unverifiable, id_conflict) is a
+    real rejection -- the catalog was NOT modified -- and fails loudly.
+
+A run that stores nothing warns loudly, because with the above a forgotten
+version bump would otherwise be a green release that ships nothing.
+``--require-new`` turns that warning into a failure.
 
 NO silent fallback: any other non-2xx, a SHA mismatch, or a missing token
 raises with an actionable message.
@@ -42,6 +50,8 @@ inferred from the filename suffix.
 from __future__ import annotations
 
 import argparse
+import base64
+import contextlib
 import hashlib
 import json
 import os
@@ -92,20 +102,31 @@ def _parse_artifact_arg(arg: str) -> tuple[Path, str | None]:
 
 
 def _infer_platform_key(filename: str) -> str:
-    """Infer the platform key from ``email-agent-<key>[.exe]``."""
+    """Infer the platform key from ``<product>-agent-<key>[.exe]``.
+
+    Keyed on the ``-agent-`` marker, not one product name: this publisher is
+    shared by every agent lane (``gaia-agent-linux-x64``, ``email-agent-…``),
+    and release_agent_gaia.yml passes its binaries with no explicit
+    ``=<platform-key>``.
+    """
     stem = filename
     if stem.endswith(".exe"):
         stem = stem[: -len(".exe")]
-    prefix = "email-agent-"
-    if not stem.startswith(prefix):
+    marker = "-agent-"
+    idx = stem.rfind(marker)
+    if idx == -1:
         raise SystemExit(
-            f"error: cannot infer platform key from '{filename}'. Pass it "
-            "explicitly as <path>=<platform-key>."
+            f"error: cannot infer platform key from '{filename}' (expected "
+            "'<product>-agent-<platform>', e.g. 'gaia-agent-linux-x64'). Pass "
+            "it explicitly as <path>=<platform-key>."
         )
-    return stem[len(prefix) :]
+    return stem[idx + len(marker) :]
 
 
-def _download_sha256(base_url: str, agent_id: str, version: str, filename: str) -> str:
+def _download_published(
+    base_url: str, agent_id: str, version: str, filename: str
+) -> tuple[str, int]:
+    """SHA-256 and byte size of what is ALREADY published under this name."""
     url = f"{base_url.rstrip('/')}/agents/{agent_id}/{version}/{filename}"
     resp = requests.get(
         url, headers={"accept": "application/octet-stream"}, timeout=120
@@ -115,7 +136,94 @@ def _download_sha256(base_url: str, agent_id: str, version: str, filename: str) 
             f"error: 409 said '{filename}' exists but GET {url} returned "
             f"HTTP {resp.status_code}. Cannot verify idempotency; failing loudly."
         )
-    return hashlib.sha256(resp.content).hexdigest()
+    return hashlib.sha256(resp.content).hexdigest(), len(resp.content)
+
+
+# Cloudflare caps a Worker request body by plan — 100 MB on Free/Pro. Anything
+# at or above this goes straight to R2 over the S3 API instead, and is published
+# by reference. Deliberately below the real cap so an artifact that grows into
+# the limit switches lanes before it starts 413ing mid-release.
+DIRECT_UPLOAD_THRESHOLD = 90 * 1024 * 1024
+
+
+def _r2_credentials() -> tuple[str, str, str] | None:
+    """R2 S3 credentials, or None when direct upload is not configured.
+
+    Stripped: a trailing newline is easy to store (``gh secret set`` keeps
+    whatever it is handed, and the GitHub UI does not show it) and it is signed
+    as part of the credential, so SigV4 fails and R2 answers ``Unauthorized`` --
+    indistinguishable from a wrong key, and unfixable by re-pasting the value.
+    """
+    key = (os.environ.get("R2_ACCESS_KEY_ID") or "").strip()
+    secret = (os.environ.get("R2_SECRET_ACCESS_KEY") or "").strip()
+    account = (os.environ.get("CLOUDFLARE_ACCOUNT_ID") or "").strip()
+    if key and secret and account:
+        return key, secret, account
+    return None
+
+
+def _upload_to_r2(artifact_path: Path, key: str, sha_hex: str) -> None:
+    """PUT an artifact straight into the hub bucket, bypassing the Worker.
+
+    Single-part on purpose: R2 records a whole-object SHA-256 only for
+    non-multipart uploads, and the Worker refuses to publish an object it cannot
+    verify. ``put_object`` is always single-part (``upload_file`` would switch to
+    multipart above its threshold and silently strip the checksum).
+    """
+    try:
+        import boto3  # imported lazily: only the direct-upload path needs it
+        from botocore.config import Config as BotoConfig
+    except ImportError as e:  # pragma: no cover - environment problem, not logic
+        raise SystemExit(
+            "error: boto3 is required to upload artifacts larger than "
+            f"{DIRECT_UPLOAD_THRESHOLD} bytes directly to R2. "
+            "Install it (pip install boto3) and re-run."
+        ) from e
+
+    creds = _r2_credentials()
+    if creds is None:
+        raise SystemExit(
+            f"error: {artifact_path.name} is too large to publish through the "
+            "Worker (Cloudflare caps request bodies at 100 MB on Free/Pro), so it "
+            "must go directly to R2 — but R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY "
+            "and CLOUDFLARE_ACCOUNT_ID are not all set. Create an R2 API token "
+            "(Cloudflare dashboard -> R2 -> Manage API Tokens) with Object "
+            "Read & Write on the hub bucket and set all three."
+        )
+    access_key, secret_key, account_id = creds
+    bucket = os.environ.get("R2_BUCKET", "gaia-hub")
+
+    # boto3 >= 1.36 adds a CRC32 checksum to every PutObject by default and
+    # sends it as an aws-chunked trailer (Content-Encoding: aws-chunked,
+    # x-amz-content-sha256: STREAMING-UNSIGNED-PAYLOAD-TRAILER). R2 does not
+    # accept that trailer format and rejects the request outright — as
+    # `Unauthorized`, which reads like a credentials problem and is not one.
+    # `when_required` suppresses the automatic checksum while still sending the
+    # explicit ChecksumSHA256 below as a normal header, which is the whole point:
+    # the Worker refuses to publish an object R2 recorded no SHA-256 for.
+    client = boto3.client(
+        "s3",
+        endpoint_url=f"https://{account_id}.r2.cloudflarestorage.com",
+        aws_access_key_id=access_key,
+        aws_secret_access_key=secret_key,
+        region_name="auto",
+        config=BotoConfig(
+            request_checksum_calculation="when_required",
+            response_checksum_validation="when_required",
+        ),
+    )
+    print(
+        f"[publish] uploading {artifact_path.name} -> r2://{bucket}/{key}", flush=True
+    )
+    with artifact_path.open("rb") as fh:
+        client.put_object(
+            Bucket=bucket,
+            Key=key,
+            Body=fh,
+            ContentType="application/octet-stream",
+            # Base64, not hex — and this is what makes the object verifiable.
+            ChecksumSHA256=base64.b64encode(bytes.fromhex(sha_hex)).decode("ascii"),
+        )
 
 
 def publish_one(
@@ -133,6 +241,7 @@ def publish_one(
     capability_matrix_bytes: bytes | None = None,
     eval_scorecard_bytes: bytes | None = None,
     package_files_bytes: bytes | None = None,
+    strict_immutable: bool = False,
 ) -> dict:
     if not artifact_path.exists():
         raise SystemExit(f"error: artifact not found: {artifact_path}")
@@ -148,15 +257,48 @@ def publish_one(
         flush=True,
     )
 
-    with artifact_path.open("rb") as fh:
+    # Oversized artifacts cannot travel through the Worker at all (Cloudflare
+    # caps the request body at 100 MB on Free/Pro), so they go straight to R2 and
+    # the POST below only carries their coordinates. The Worker verifies the
+    # stored object's size and SHA-256 before recording it, so this is a
+    # different transport, not a weaker guarantee.
+    by_reference = size >= DIRECT_UPLOAD_THRESHOLD
+    if by_reference:
+        # Check BEFORE uploading. The Worker's by-reference immutability guard
+        # keys on the agent manifest and therefore fires only AFTER this PUT
+        # would already have replaced the published bytes — leaving the catalog
+        # describing the old artifact while R2 serves the new one, and the 409
+        # handler below re-downloading the bytes it just overwrote and happily
+        # agreeing with itself. Skipping the upload keeps that 409 meaningful.
+        download_url = f"{base_url.rstrip('/')}/agents/{agent_id}/{version}/{filename}"
+        head = requests.head(download_url, timeout=60, allow_redirects=True)
+        if head.status_code == 200:
+            print(
+                f"[publish] {filename} is already in R2 — not overwriting it; "
+                "the POST below verifies the stored bytes against this build.",
+                flush=True,
+            )
+        else:
+            _upload_to_r2(
+                artifact_path, f"agents/{agent_id}/{version}/{filename}", local_sha
+            )
+
+    with contextlib.ExitStack() as stack:
         files = {
             "manifest": (
                 "gaia-agent.yaml",
                 manifest_path.read_bytes(),
                 "application/x-yaml",
             ),
-            "artifact": (filename, fh, "application/octet-stream"),
         }
+        if by_reference:
+            files["artifact_ref_filename"] = (None, filename)
+            files["artifact_ref_sha256"] = (None, local_sha)
+            files["artifact_ref_size"] = (None, str(size))
+            files["artifact_ref_content_type"] = (None, "application/octet-stream")
+        else:
+            fh = stack.enter_context(artifact_path.open("rb"))
+            files["artifact"] = (filename, fh, "application/octet-stream")
         # Same multipart field name + shape the Worker expects from
         # `gaia agent publish` (src/gaia/hub/publisher.py): the README becomes
         # the catalog entry's `readme` (rendered as sanitized markdown on the
@@ -210,6 +352,7 @@ def publish_one(
             timeout=300,
         )
 
+    published_now = False
     if resp.status_code == 201:
         body = resp.json()
         server_sha = body.get("published", {}).get("artifact", {}).get("sha256")
@@ -219,6 +362,7 @@ def publish_one(
                 f"sha256={server_sha} but local sha256={local_sha}. The upload was "
                 "corrupted in transit; failing loudly."
             )
+        published_now = True
         n = body.get("published", {}).get("version_artifacts", "?")
         print(
             f"[publish] OK 201 — stored, server sha256 verified. "
@@ -226,32 +370,76 @@ def publish_one(
             flush=True,
         )
     elif resp.status_code == 409:
-        # Already published. Verify the stored bytes match ours (true no-op).
-        remote_sha = _download_sha256(base_url, agent_id, version, filename)
-        if remote_sha != local_sha:
+        # Only ONE of the Worker's four 409s means "already published":
+        # version_exists. artifact_mismatch / artifact_unverifiable / id_conflict
+        # all say "the catalog was NOT modified" -- reconciling those against the
+        # R2 object would report success for a release the hub never recorded.
+        error_code = ""
+        try:
+            error_code = str(resp.json().get("error", {}).get("code", ""))
+        except ValueError:
+            pass
+        if error_code != "version_exists":
+            raise SystemExit(
+                f"error: publish of {filename} was rejected with HTTP 409 "
+                f"{error_code or '(no error code)'} -- this is NOT 'already "
+                f"published' and the Worker did not record it in the catalog. "
+                f"{resp.text[:500]}"
+            )
+        # Already published. Nothing can overwrite it, so the only question is
+        # what this run reports downstream.
+        remote_sha, remote_size = _download_published(
+            base_url, agent_id, version, filename
+        )
+        if remote_sha == local_sha:
+            print(
+                f"[publish] OK 409 — already published with identical bytes "
+                f"(idempotent no-op).",
+                flush=True,
+            )
+        elif strict_immutable:
             raise SystemExit(
                 f"error: {filename} is already published at {agent_id}@{version} "
                 f"with a DIFFERENT sha256 (remote={remote_sha}, local={local_sha}). "
                 "Published artifacts are immutable — bump the version to change it."
             )
-        print(
-            f"[publish] OK 409 — already published with identical bytes "
-            f"(idempotent no-op).",
-            flush=True,
-        )
+        else:
+            # A rebuild of an already-released version. Neither Go nor
+            # PyInstaller is byte-reproducible, so re-running any published
+            # version lands here every time -- that is a no-op to skip, not a
+            # failure. The PUBLISHED bytes are authoritative: report their hash
+            # and size so the lock describes what the hub actually serves, never
+            # this run's throwaway rebuild.
+            print(
+                f"::warning::{filename} is already published at "
+                f"{agent_id}@{version} and this rebuild differs "
+                f"(remote={remote_sha[:12]}…, local={local_sha[:12]}…). Keeping "
+                f"the published bytes. If you meant to ship a CHANGE, bump the "
+                f"version — a published version can never be replaced.",
+                flush=True,
+            )
+            local_sha, size = remote_sha, remote_size
     else:
         raise SystemExit(
             f"error: publish of {filename} failed: HTTP {resp.status_code} "
             f"{resp.text[:500]}"
         )
 
-    executable = "email-agent.exe" if filename.endswith(".exe") else "email-agent"
+    # Derived from the artifact, not hardcoded to one product: this publisher is
+    # shared by every lane, and `gaia-agent-linux-x64` installs as `gaia-agent`.
+    stem = filename[: -len(".exe")] if filename.endswith(".exe") else filename
+    idx = stem.rfind("-agent-")
+    base = f"{stem[:idx]}-agent" if idx != -1 else "email-agent"
+    executable = base + (".exe" if filename.endswith(".exe") else "")
     return {
         "platform": platform_key,
         "filename": filename,
         "executable": executable,
         "sha256": local_sha,
         "size": size,
+        # Consumed by main()'s "did anything actually ship?" report and stripped
+        # before the summary is written, so the on-disk shape is unchanged.
+        "_published": published_now,
     }
 
 
@@ -326,6 +514,21 @@ def main(argv=None) -> int:
         "--summary-out",
         type=Path,
         help="Write a JSON array of {platform,filename,executable,sha256,size}.",
+    )
+    parser.add_argument(
+        "--require-new",
+        action="store_true",
+        help="Exit non-zero when every artifact was already published, i.e. the "
+        "run shipped nothing. Catches a forgotten version bump, which is "
+        "otherwise a green release that changes nothing.",
+    )
+    parser.add_argument(
+        "--strict-immutable",
+        action="store_true",
+        help="Fail when an artifact is already published and this build's bytes "
+        "differ. Off by default: neither Go nor PyInstaller is byte-reproducible, "
+        "so re-running a published version always differs and is a no-op to skip, "
+        "not a failure. Turn it on to police 'changed the code, forgot to bump'.",
     )
     args = parser.parse_args(argv)
 
@@ -442,6 +645,50 @@ def main(argv=None) -> int:
             flush=True,
         )
 
+    # Pre-flight the oversized lane BEFORE publishing anything. Each artifact is
+    # published in turn, so discovering halfway through that the S3 credentials
+    # are absent leaves the smaller platforms stored immutably under a version
+    # that can never be completed -- recoverable only by burning a version.
+    oversized = [
+        p
+        for p in (_parse_artifact_arg(raw)[0] for raw in args.artifact)
+        if p.exists() and p.stat().st_size >= DIRECT_UPLOAD_THRESHOLD
+    ]
+    if oversized:
+        # boto3 is only imported by the upload itself, so a missing dependency
+        # would otherwise surface mid-publish -- after the smaller platforms are
+        # already stored immutably under a version that can never be completed.
+        try:
+            import boto3  # noqa: F401
+        except ImportError:
+            listing = "\n".join(f"    {p.name}" for p in oversized)
+            raise SystemExit(
+                "error: these artifacts must upload over the S3 API:\n"
+                f"{listing}\n"
+                "  but boto3 is not installed for this interpreter.\n"
+                "  Fix: add boto3 to this step's dependency install "
+                "(see release_components.yml).\n"
+                "  Nothing has been published."
+            ) from None
+    if oversized and _r2_credentials() is None:
+        listing = "\n".join(
+            f"    {p.name}  ({p.stat().st_size / 1e6:.1f} MB)" for p in oversized
+        )
+        raise SystemExit(
+            "error: these artifacts exceed the Worker request-body cap "
+            f"({DIRECT_UPLOAD_THRESHOLD / 1e6:.1f} MB) and must upload straight to "
+            f"R2 over the S3 API:\n{listing}\n"
+            "  but R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY and CLOUDFLARE_ACCOUNT_ID "
+            "are not all set.\n"
+            "  Fix: pass all three to this step (see release_components.yml), from "
+            "an R2 API token with\n"
+            "       Object Read & Write (Cloudflare -> R2 -> Manage R2 API Tokens).\n"
+            "  Note: the cap is 100 MB on BOTH the Free and Pro plans, so upgrading "
+            "to Pro does not\n"
+            "        remove this requirement.\n"
+            "  Nothing has been published."
+        )
+
     results = []
     for raw in args.artifact:
         path, key = _parse_artifact_arg(raw)
@@ -468,15 +715,33 @@ def main(argv=None) -> int:
                 capability_matrix_bytes=capability_matrix_bytes,
                 eval_scorecard_bytes=eval_scorecard_bytes,
                 package_files_bytes=package_files_bytes,
+                strict_immutable=args.strict_immutable,
             )
         )
+
+    stored = sum(1 for r in results if r.pop("_published", False))
 
     if args.summary_out:
         args.summary_out.write_text(json.dumps(results, indent=2), encoding="utf-8")
         print(f"[publish] wrote summary -> {args.summary_out}", flush=True)
 
+    version = str(manifest["version"])
+    if stored == 0 and results:
+        print(
+            f"::warning::nothing new was stored — all {len(results)} artifact(s) "
+            f"were already published at {manifest['id']}@{version}. If you meant "
+            f"to ship a change, bump 'version' in the manifest: a published "
+            f"version can never be replaced, so re-running it is a no-op.",
+            flush=True,
+        )
+        if args.require_new:
+            raise SystemExit(
+                f"error: --require-new was set and {manifest['id']}@{version} was "
+                "already fully published. Bump the manifest version."
+            )
     print(
-        f"[publish] DONE — {len(results)} artifact(s) published/verified.", flush=True
+        f"[publish] DONE — {len(results)} artifact(s) verified, {stored} newly stored.",
+        flush=True,
     )
     return 0
 

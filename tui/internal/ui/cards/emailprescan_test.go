@@ -144,6 +144,24 @@ func TestPreScanSingleMailboxOmitsTag(t *testing.T) {
 	assertNotContains(t, out, "Gmail ·", "Outlook ·")
 }
 
+// mailboxLabel is what turns a raw connector id into the per-item provenance
+// label a three-mailbox prescan actually displays. A missing case here
+// renders as the raw internal id instead of a name a user recognizes.
+func TestMailboxLabel(t *testing.T) {
+	cases := map[string]string{
+		"google":         "Gmail",
+		"microsoft":      "Outlook",
+		"microsoft_work": "Microsoft 365",
+		"":               "A mailbox",
+		"yahoo":          "yahoo",
+	}
+	for provider, want := range cases {
+		if got := mailboxLabel(provider); got != want {
+			t.Errorf("mailboxLabel(%q) = %q, want %q", provider, got, want)
+		}
+	}
+}
+
 func TestPreScanMissingNeedsYouTotalFallsBackToListLength(t *testing.T) {
 	var envelope map[string]any
 	if err := json.Unmarshal([]byte(populatedPreScan), &envelope); err != nil {
