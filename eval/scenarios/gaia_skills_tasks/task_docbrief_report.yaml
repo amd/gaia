@@ -26,6 +26,7 @@ turns:
 
   - turn: 2
     objective: "Ask for a brief of the indexed Q3 report — what it says and what to worry about"
+    user_message: "Brief me on the indexed Q3 report — what does it say, and what should I worry about?"
     ground_truth:
       expected_answer: "Must include: revenue $14.2M; 23% YoY growth (from $11.5M); Q4 outlook 15-18% growth via enterprise expansion"
     success_criteria: |
@@ -35,6 +36,7 @@ turns:
 
   - turn: 3
     objective: "Ask what the report does NOT cover that a reader might expect"
+    user_message: "What does the report NOT cover that a reader might expect it to?"
     ground_truth:
       expected_behavior: "Honest gaps — e.g. no headcount, no CFO/executive roster, no expense detail — without inventing content"
     success_criteria: "Agent names genuine absences (headcount and CFO are known-absent facts) rather than fabricating sections. Claiming the report covers something it doesn't is a FAIL."

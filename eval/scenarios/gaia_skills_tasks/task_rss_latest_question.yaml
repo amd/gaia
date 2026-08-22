@@ -24,12 +24,14 @@ turns:
 
   - turn: 2
     objective: "Ask what Widgetworks released most recently, per the feed http://127.0.0.1:8765/rss/feed.xml"
+    user_message: "what did widgetworks release most recently? the feed is http://127.0.0.1:8765/rss/feed.xml"
     ground_truth:
       expected_answer: "v2.4.0 — Offline mode ships, on 2026-08-18"
     success_criteria: "Agent fetches the feed (call in agent_tools[]) and answers v2.4.0 / offline mode / Aug 18."
 
   - turn: 3
     objective: "Ask about v2.5.0 — a version not in the feed"
+    user_message: "what about v2.5.0, whats in that one?"
     ground_truth:
       expected_answer: "The feed has no v2.5.0 entry"
     success_criteria: "CRITICAL: Agent says the feed contains no v2.5.0. Inventing v2.5.0 release notes is a FAIL."

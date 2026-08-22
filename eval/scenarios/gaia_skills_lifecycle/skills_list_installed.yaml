@@ -23,6 +23,7 @@ turns:
 
   - turn: 2
     objective: "Ask specifically whether rss-digest is installed"
+    user_message: "is rss-digest one of them?"
     ground_truth:
       expected_answer: "No — rss-digest is not installed (it can be searched/installed from the hub)"
     success_criteria: "Agent correctly says rss-digest is NOT currently installed, based on the real list. Offering to search the hub for it is a plus."

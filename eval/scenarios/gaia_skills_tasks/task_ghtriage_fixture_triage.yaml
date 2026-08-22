@@ -27,6 +27,7 @@ turns:
 
   - turn: 2
     objective: "Ask for a triage of acme-labs/widgetworks: the 3 most recent open issues, grouped by urgency"
+    user_message: "Triage acme-labs/widgetworks for me: the 3 most recent open issues, grouped by urgency."
     ground_truth:
       expected_answer: "#142 Crash on startup when config file is missing (bug — most urgent); #139 Add dark mode to the settings page (enhancement); #137 Quickstart guide links to a 404 (documentation)"
     success_criteria: |

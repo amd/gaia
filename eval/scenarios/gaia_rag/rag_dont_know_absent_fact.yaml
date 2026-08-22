@@ -19,6 +19,7 @@ setup:
 turns:
   - turn: 1
     objective: "Ask how many employees Acme has (not in the document)"
+    user_message: "How many employees does Acme have, according to the report?"
     ground_truth:
       doc_id: acme_q3_report
       fact_id: employee_count
@@ -27,6 +28,7 @@ turns:
 
   - turn: 2
     objective: "Ask who Acme's CFO is (not in the document)"
+    user_message: "Who is Acme's CFO?"
     ground_truth:
       doc_id: acme_q3_report
       fact_id: cfo_name
@@ -35,6 +37,7 @@ turns:
 
   - turn: 3
     objective: "Control: ask a fact that IS in the document"
+    user_message: "OK — what was Q3 revenue then?"
     ground_truth:
       doc_id: acme_q3_report
       fact_id: q3_revenue

@@ -24,6 +24,7 @@ turns:
 
   - turn: 2
     objective: "Ask it to explore ~/gaia-eval/csv/sales.csv and report total revenue and the top product"
+    user_message: "Explore ~/gaia-eval/csv/sales.csv and report total revenue and the top product."
     ground_truth:
       expected_answer: "Total $18,600; top product Gadget Pro at $7,200"
     success_criteria: |
@@ -33,6 +34,7 @@ turns:
 
   - turn: 3
     objective: "Ask a follow-up slice: revenue for the North region"
+    user_message: "What's revenue for the North region?"
     ground_truth:
       expected_answer: "$6,150"
     success_criteria: "Agent answers $6,150 from a real query against the loaded table."

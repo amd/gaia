@@ -19,6 +19,7 @@ setup:
 turns:
   - turn: 1
     objective: "Ask about first-year PTO days"
+    user_message: "how many PTO days do new employees get in their first year? i mean vacation days"
     ground_truth:
       doc_id: employee_handbook
       fact_id: pto_days
@@ -27,6 +28,7 @@ turns:
 
   - turn: 2
     objective: "Ask about the remote work policy"
+    user_message: "and whats the deal with working from home, is that allowed?"
     ground_truth:
       doc_id: employee_handbook
       fact_id: remote_work
@@ -35,6 +37,7 @@ turns:
 
   - turn: 3
     objective: "Ask whether contractors get health benefits"
+    user_message: "do contractors get health benefits or no?"
     ground_truth:
       doc_id: employee_handbook
       fact_id: contractor_benefits
@@ -43,6 +46,7 @@ turns:
 
   - turn: 4
     objective: "Ask what benefits contractors ARE eligible for (nothing listed)"
+    user_message: "so what benefits ARE contractors eligible for?"
     ground_truth:
       doc_id: employee_handbook
       fact_id: contractor_entitlements

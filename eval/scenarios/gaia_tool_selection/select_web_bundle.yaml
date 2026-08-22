@@ -19,6 +19,7 @@ setup:
 turns:
   - turn: 1
     objective: "Ask what http://127.0.0.1:8765/solarium_a.html says about the project's storage capacity"
+    user_message: "What does http://127.0.0.1:8765/solarium_a.html say about the project's storage capacity?"
     ground_truth:
       expected_answer: "42 MWh"
     success_criteria: |
@@ -29,6 +30,7 @@ turns:
 
   - turn: 2
     objective: "Follow-up research: when was the project founded, per the same page"
+    user_message: "And when was the project founded, per the same page?"
     ground_truth:
       expected_answer: "2019"
     success_criteria: "Agent answers 2019 from the fetched page (re-fetch or retained content both fine)."

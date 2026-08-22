@@ -19,18 +19,21 @@ setup:
 turns:
   - turn: 1
     objective: "Ask the agent to index the codebase at ~/gaia-eval/mini_repo"
+    user_message: "Index the codebase at ~/gaia-eval/mini_repo so we can search it."
     ground_truth:
       expected_behavior: "Real indexing run"
     success_criteria: "agent_tools[] must include index_codebase (or an equivalent real indexing call) and the agent reports the index built. Claiming an index with no call is a FAIL."
 
   - turn: 2
     objective: "Ask which function converts temperatures from Celsius to Fahrenheit"
+    user_message: "Which function converts temperatures from Celsius to Fahrenheit?"
     ground_truth:
       expected_answer: "celsius_to_fahrenheit in tempkeeper/convert.py"
     success_criteria: "CRITICAL: Agent names celsius_to_fahrenheit and tempkeeper/convert.py, found via a real search (search_code_index or file search in agent_tools[]). Invented symbol or path is an automatic FAIL."
 
   - turn: 3
     objective: "Follow-up: does the repo also convert the other direction?"
+    user_message: "Does the repo convert the other direction too?"
     ground_truth:
       expected_answer: "Yes — fahrenheit_to_celsius in the same file"
     success_criteria: "Agent confirms fahrenheit_to_celsius exists in tempkeeper/convert.py (grounded in the index/read, not assumption)."

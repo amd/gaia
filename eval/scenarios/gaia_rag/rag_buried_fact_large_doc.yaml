@@ -19,6 +19,7 @@ setup:
 turns:
   - turn: 1
     objective: "Ask about the compliance finding in Section 52"
+    user_message: "What was the compliance finding in Section 52 of the report?"
     ground_truth:
       doc_id: large_report
       fact_id: buried_fact
@@ -27,6 +28,7 @@ turns:
 
   - turn: 2
     objective: "Ask whether there were any MAJOR non-conformities"
+    user_message: "Were there any major non-conformities?"
     ground_truth:
       doc_id: large_report
       fact_id: major_nonconformities

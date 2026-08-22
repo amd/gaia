@@ -27,12 +27,14 @@ turns:
 
   - turn: 2
     objective: "Ask for a brief of the handbook focused on time off and remote work"
+    user_message: "can you brief me on the handbook? mostly time off and the remote work stuff"
     ground_truth:
       expected_answer: "15 PTO days first year; remote up to 3 days/week with manager approval, fully remote needs VP approval"
     success_criteria: "Brief includes both planted policies accurately, grounded in retrieval (real query calls in agent_tools[])."
 
   - turn: 3
     objective: "Ask what the handbook grants contractors"
+    user_message: "and what does it say contractors get?"
     ground_truth:
       expected_answer: null
     success_criteria: "CRITICAL: Agent says the handbook lists no contractor entitlements (health benefits are explicitly full-time-only). Any invented contractor benefit is a FAIL."

@@ -26,6 +26,7 @@ turns:
 
   - turn: 2
     objective: "Ask for a morning brief from these two sources: http://127.0.0.1:8765/headlines.html and the feed http://127.0.0.1:8765/rss/feed.xml"
+    user_message: "give me a morning brief from these two sources: http://127.0.0.1:8765/headlines.html and the feed http://127.0.0.1:8765/rss/feed.xml"
     ground_truth:
       expected_answer: "One digest containing the 3 fixture headlines (riverfront park, chip fab 300 jobs, transit line M) and the latest release (v2.4.0 offline mode, Aug 18)"
     success_criteria: |

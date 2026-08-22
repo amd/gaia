@@ -26,18 +26,21 @@ turns:
 
   - turn: 2
     objective: "Data question: top product in ~/gaia-eval/csv/sales.csv"
+    user_message: "What's the top product in ~/gaia-eval/csv/sales.csv?"
     ground_truth:
       expected_answer: "Gadget Pro ($7,200)"
     success_criteria: "Agent routes to data tools (analyze_data_file / scratchpad SQL in agent_tools[]) and answers Gadget Pro at $7,200. Reaching for memory tools here is misrouting."
 
   - turn: 3
     objective: "Memory question: what report format do I prefer?"
+    user_message: "What report format do I prefer?"
     ground_truth:
       expected_answer: "One-page summary with a chart"
     success_criteria: "Agent recalls the stored preference (recall in agent_tools[], or direct memory context). Querying the CSV for this is misrouting; a wrong or invented preference is a FAIL."
 
   - turn: 4
     objective: "Combine both: 'give me the top-product finding in my preferred format'"
+    user_message: "Give me the top-product finding in my preferred format."
     ground_truth:
       expected_behavior: "A one-page-style summary of the Gadget Pro finding (chart described or included), using both prior results"
     success_criteria: "Agent produces a concise summary of the Gadget Pro/$7,200 finding shaped by the stored preference — showing both selections composed correctly."

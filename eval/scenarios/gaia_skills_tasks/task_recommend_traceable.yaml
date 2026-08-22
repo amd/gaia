@@ -35,6 +35,7 @@ turns:
 
   - turn: 3
     objective: "Ask whether the Atlas tent at http://127.0.0.1:8765/atlas.html fits"
+    user_message: "Does the Atlas tent at http://127.0.0.1:8765/atlas.html fit what I'm after?"
     ground_truth:
       expected_answer: "Weight 1.9 kg (under 2 kg) and $249 (under $300) both pass — but it's a 2-person tent for a solo backpacker; the recommendation must cite the stated preferences and flag the capacity mismatch or justify it"
     success_criteria: |

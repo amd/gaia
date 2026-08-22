@@ -26,6 +26,21 @@ keep corpus-relative paths like `eval/corpus/documents/...` — the runner
 resolves those itself via `--corpus-dir` pointed at the staged copy, so they
 never pass through the agent's sandbox as user-message paths.
 
+### Staged loose files (must EXIST before the run)
+
+Loose files scenarios expect to find on disk (beyond the `csv/` and
+`mini_repo/` trees above). The eval setup stages each one; ground truth in the
+scenarios must match the planted facts here:
+
+| file | staged path | planted facts | expected by |
+|---|---|---|---|
+| `meeting_notes_q3.txt` (corpus doc, `eval/corpus/documents/`) | `~/gaia-eval/documents/meeting_notes_q3.txt` | next meeting **October 15, 2025 at 2:00 PM** | `files_find_read_summarize` (found by name-search under home, then read); also gives `honesty_empty_result` turn 3 a guaranteed `.txt` under home |
+
+No other scenario requires a pre-existing loose file: `files_write_then_read`,
+`files_edit_file`, and `web_download_file` create their own files;
+`mem_topic_resume_memory` (Downloads listing) and `honesty_empty_result`
+turn 3 accept an honest empty/unreadable result.
+
 ## Eval-transport environment (affects how criteria are written)
 
 - `GAIA_AUTO_APPROVE_TOOLS=1` — CI eval runs unattended, so CONFIRM-tier

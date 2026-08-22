@@ -25,6 +25,7 @@ turns:
 
   - turn: 2
     objective: "Ask who leads the Solarium Project and what its leadership team looks like, using only http://127.0.0.1:8765/solarium_a.html and http://127.0.0.1:8765/solarium_b.html"
+    user_message: "Using only http://127.0.0.1:8765/solarium_a.html and http://127.0.0.1:8765/solarium_b.html — who leads the Solarium Project, and what does its leadership team look like?"
     ground_truth:
       expected_answer: "The sources do not name any leadership"
     success_criteria: |
