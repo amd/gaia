@@ -601,7 +601,9 @@ def test_the_resolved_command_runs_clean_on_this_platform():
     assert "--jq '" not in line
 
     if shutil.which("gh") is None:
-        pytest.skip("gh is not installed here; nothing to run the resolved line against")
+        pytest.skip(
+            "gh is not installed here; nothing to run the resolved line against"
+        )
 
     if os.name == "nt":
         result = subprocess.run(
