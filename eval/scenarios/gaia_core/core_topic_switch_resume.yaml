@@ -41,8 +41,11 @@ turns:
     objective: "Abrupt topic switch: a cooking question"
     user_message: "totally different question — how long do hard boiled eggs keep in the fridge?"
     ground_truth:
-      expected_answer: "About one week"
-    success_criteria: "Agent answers the egg question (about 1 week) without dragging the trip back in."
+      # Distractor turn: it exists to occupy the conversation between plant and
+      # resume — grade the SWITCH, not contested food-safety trivia (sources
+      # range from 3 days to a week).
+      expected_behavior: "Answers the egg question with a reasonable food-safety figure, without dragging the trip back in"
+    success_criteria: "Agent switches topics cleanly and gives a plausible answer (a few days to a week). FAIL only if it ignores the question or keeps talking about the trip."
 
   - turn: 5
     objective: "Another unrelated question: arithmetic"

@@ -19,5 +19,9 @@ $env:PATH = "$root\tests\fixtures\gaia\fake_gh;$root\.venv\Scripts;" + $env:PATH
 $env:GAIA_HUB_URL = 'http://127.0.0.1:8765/fixture_hub'
 
 New-Item -ItemType Directory -Force "$env:GAIA_TUI_HOME" | Out-Null
-$inner = "cd /d `"$root`" && tui\bin\gaia-drive.exe run gaia --use-claude --claude-model claude-haiku-4-5 --control-port 8817 --dev"
+# --bypass-permissions mirrors CI's GAIA_AUTO_APPROVE_TOOLS=1: the eval lane
+# asserts gated-action OUTCOMES; modal semantics are owned by the T1 gate tests
+# and the tui-tagged manual checks. REFUSE-tier commands stay refused — the
+# gate lives in the tool, not the confirmation layer.
+$inner = "cd /d `"$root`" && tui\bin\gaia-drive.exe run gaia --use-claude --claude-model claude-haiku-4-5 --control-port 8817 --dev --bypass-permissions"
 Start-Process -FilePath 'cmd.exe' -ArgumentList '/k', $inner -WindowStyle Normal
