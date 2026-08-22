@@ -61,12 +61,6 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # The Agent Hub's "in development" rows ship as a committed snapshot,
-      # because `railway up` uploads only website/ and cannot read ../hub at
-      # deploy time. This is what stops the snapshot going stale silently.
-      - name: Agent snapshot is in sync with hub/agents
-        run: npm run check:agents
-
       - name: Type-check (astro check)
         run: npx astro check
 

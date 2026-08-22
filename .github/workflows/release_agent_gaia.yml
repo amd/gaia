@@ -97,6 +97,13 @@
 #                              ENVIRONMENT secret on `agent-publish` (NOT a repo
 #                              secret) so it is unreadable until the gate is
 #                              approved.
+#     R2_ACCESS_KEY_ID       — R2 S3 credentials + account, from an R2 API token
+#     R2_SECRET_ACCESS_KEY     with Object Read & Write on the hub bucket
+#     CLOUDFLARE_ACCOUNT_ID    (Cloudflare → R2 → Manage R2 API Tokens). REQUIRED
+#                              for every release, not optional: the Linux sidecar
+#                              is past the Worker's request-body cap, so it is
+#                              PUT straight to R2 and published by reference.
+#                              Same ENVIRONMENT-secret placement as above.
 #   Variables:
 #     GAIA_HUB_BASE_URL      — public Worker origin for downloads + the lock
 #                              baseUrl. Default https://hub.amd-gaia.ai.
@@ -381,8 +388,14 @@ jobs:
           # rather than resolved from PyPI — the frozen binary must contain the
           # ChatAgent this commit was developed against, not whatever is
           # published.
+          #
+          # `rag` is required, not optional, in THIS lane: the agent's own
+          # pyproject leaves it out because a wheel gets it from `gaia init`
+          # into the active interpreter (#2358), and a frozen binary has no
+          # interpreter to install into. Without it faiss/pypdf are absent, the
+          # RAG tools still register, and document Q&A fails on every call.
           uv pip install --python .venv-freeze \
-            -e ".[api]" \
+            -e ".[api,rag]" \
             -e hub/agents/chat/python \
             -e hub/agents/gaia/python \
             pyinstaller
@@ -625,7 +638,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          uv pip install --system -e ".[api]" -e hub/agents/chat/python -e hub/agents/gaia/python pytest
+          # Same extras as the freeze env: testing without `rag` would exercise
+          # a dependency set no released binary ever has.
+          uv pip install --system -e ".[api,rag]" -e hub/agents/chat/python -e hub/agents/gaia/python pytest
 
       - name: Python tests (hub/agents/gaia/python/tests)
         shell: bash
@@ -692,7 +707,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python -m pip install --upgrade requests pyyaml
+          # boto3 is not optional here: the Linux sidecar exceeds the Worker's
+          # request-body cap, so it uploads over the S3 API. Without it the
+          # publish dies on that artifact with the smaller platforms already
+          # stored immutably.
+          python -m pip install --upgrade requests pyyaml boto3
 
       # Re-run of the `version` job's gates AFTER the approval pause: the gate
       # can sit for hours, and this job re-checks out the ref. Cheap insurance
@@ -727,16 +746,31 @@ jobs:
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "base_url=${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}/${HUB_PREFIX}/${VERSION}" >> "$GITHUB_OUTPUT"
 
-      - name: Assert hub publish token present
+      - name: Assert publish credentials present
         shell: bash
-        # Secret goes through env (never inlined into the script text) so a
-        # value with shell metacharacters can't break parsing or defeat masking.
+        # Secrets go through env (never inlined into the script text) so a value
+        # with shell metacharacters can't break parsing or defeat masking.
         env:
           GAIA_HUB_TOKEN: ${{ secrets.GAIA_HUB_TOKEN }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           set -euo pipefail
           if [ -z "${GAIA_HUB_TOKEN:-}" ]; then
             echo "::error::missing environment secret GAIA_HUB_TOKEN on the agent-publish environment — the Agent Hub Bearer publish token (must match the Worker's PUBLISH_TOKENS). See workers/agent-hub/README.md."
+            exit 1
+          fi
+          # The Linux sidecar is past the Worker's request-body cap, so every
+          # release needs the direct-to-R2 lane. publish_to_r2.py refuses to
+          # store anything without these; checking here names all three missing
+          # secrets at once, before the artifact downloads.
+          missing=""
+          for name in R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY CLOUDFLARE_ACCOUNT_ID; do
+            [ -n "${!name:-}" ] || missing="${missing} ${name}"
+          done
+          if [ -n "${missing}" ]; then
+            echo "::error::missing secret(s):${missing}. The Linux sidecar exceeds the Cloudflare Worker request-body cap and uploads straight to R2, so these are required for every release. Create an R2 API token with Object Read & Write (Cloudflare -> R2 -> Manage R2 API Tokens) and add them as ENVIRONMENT secrets on 'agent-publish' (a repo secret is also read, but keep them behind the approval gate). See workers/agent-hub/README.md."
             exit 1
           fi
 
@@ -841,6 +875,14 @@ jobs:
           # hub.amd-gaia.ai (GETs aren't blocked).
           GAIA_HUB_PUBLISH_URL: ${{ vars.GAIA_HUB_PUBLISH_URL }}
           GAIA_HUB_BASE_URL: ${{ vars.GAIA_HUB_BASE_URL }}
+          # The sidecar crosses the Worker's request-body cap on Linux
+          # (measured 120,677,152 bytes with the RAG deps compiled in), so that
+          # artifact is uploaded straight to R2 over the S3 API and published by
+          # reference. Without these the publish dies partway through, after the
+          # smaller platforms have already been stored immutably.
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
           set -euo pipefail
           for required in "${README}" "${CHANGELOG}"; do
@@ -874,9 +916,18 @@ jobs:
             exit 1
           fi
 
+          # --strict-immutable: the publisher's lenient default skips an already
+          # published artifact whose bytes differ and reports the PUBLISHED hash
+          # in its --summary-out. This lane does not use that summary — the lock
+          # is rebuilt from the freeze metas below — so a skipped artifact would
+          # be recorded with this run's local rebuild hash and only blow up two
+          # steps later, in the fetch-verify, blaming the bytes the hub serves.
+          # Fail here instead, where the error says to bump the version. Drop
+          # this flag if the lock is ever switched to --summary-out.
           python "${PACKAGING}/publish_to_r2.py" \
             --base-url "${GAIA_HUB_PUBLISH_URL:-${GAIA_HUB_BASE_URL:-https://hub.amd-gaia.ai}}" \
             --manifest "${MANIFEST}" \
+            --strict-immutable \
             "${doc_args[@]}" \
             "${args[@]}"
 

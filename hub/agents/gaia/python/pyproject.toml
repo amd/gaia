@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gaia-agent-gaia"
-version = "0.1.0"
+version = "0.1.1"
 description = "The flagship GAIA agent — conversation, document Q&A, data analysis, and web research, with persistent memory and add-on skills"
 authors = [{ name = "AMD" }]
 license = "MIT"
