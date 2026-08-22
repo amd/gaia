@@ -33,6 +33,7 @@ import json
 import logging
 import os
 import sys
+import uuid
 from pathlib import Path
 
 # How --skill-set reaches the per-request agent sessions (#2466): via the env var
@@ -52,6 +53,38 @@ DEFAULT_HOST = "127.0.0.1"
 # Import string uvicorn's reloader needs — reload requires an import-string app,
 # not a pre-built object (which is what ``uvicorn.run(app, ...)`` uses).
 _APP_IMPORT_STRING = "gaia_agent_email.server:app"
+
+
+def install_email_unhandled_exception_handler(app):
+    """Return structured JSON for unexpected /v1/email/* exceptions (#3000).
+
+    HTTPException and request validation keep their status and detail.
+    Anything else is a 500 with an error_id; the traceback is logged only.
+    """
+    from fastapi import HTTPException
+    from fastapi.exception_handlers import request_validation_exception_handler
+    from fastapi.exceptions import RequestValidationError
+    from fastapi.responses import JSONResponse
+    from starlette.exceptions import HTTPException as StarletteHTTPException
+
+    @app.exception_handler(Exception)
+    async def _unhandled_email_exception(request, exc):
+        if isinstance(exc, HTTPException):
+            return JSONResponse(
+                status_code=exc.status_code, content={"detail": exc.detail}
+            )
+        if isinstance(exc, StarletteHTTPException):
+            return JSONResponse(
+                status_code=exc.status_code, content={"detail": exc.detail}
+            )
+        if isinstance(exc, RequestValidationError):
+            return await request_validation_exception_handler(request, exc)
+        error_id = uuid.uuid4().hex[:12]
+        log.exception("Unhandled email API exception error_id=%s", error_id)
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Internal server error", "error_id": error_id},
+        )
 
 
 def build_app():
@@ -133,6 +166,7 @@ def build_app():
         description="Email triage REST sidecar.",
         lifespan=lifespan,
     )
+    install_email_unhandled_exception_handler(app)
 
     # Caller authentication (#1706). The sidecar binds 127.0.0.1 and exposes
     # draft/send, so it MUST authenticate its caller — a no-auth localhost API is
