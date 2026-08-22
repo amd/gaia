@@ -17,6 +17,20 @@ contract version is tracked separately as
   refusal message quotes the header back when one was sent, so a malformed value
   (`:8131`, an unbracketed `::1`) no longer reports as "no Host header".
 
+- **Gmail-style operator search (`from:`, `subject:`, `is:unread`, `newer_than:`) against a
+  connected Outlook mailbox returned nothing (#2996).** `LiveOutlookBackend.list_messages`
+  wrapped the entire query string in quotes and sent it to Microsoft Graph's `$search` as one
+  exact phrase, so an operator reached Graph as literal characters instead of a scope, and the
+  agent's own system prompt instructs it to prefer operators over a bare phrase. `from:` and
+  `subject:` now reach `$search` unquoted, which Graph's own KQL-based mail search already
+  parses the same way Outlook's web search box does. `is:unread`, `is:read`,
+  `newer_than:`, and `older_than:` (reusing #2830's duration parser) now route to an OData
+  `$filter` instead, since Graph's `$search` does not expose either concept. Graph rejects
+  `$search` and `$filter` together, so a query mixing the two families (`is:unread
+  from:alice`, for example) now raises an actionable error instead of silently searching only
+  one half of it. Absolute-date operators (`after:`, `before:`, `older:`, `newer:`) are
+  unaffected by this change and stay out of scope, matching #2830's own duration-only framing
+  of the Outlook gap.
 - **The OpenAPI document now declares the sidecar's bearer-token gate (#2993).**
   `require_caller_token` enforces a per-session bearer token at runtime, but was
   invisible to schema generation (it's a plain `Request` dependency, not a
