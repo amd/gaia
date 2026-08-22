@@ -21,6 +21,7 @@ setup:
 turns:
   - turn: 1
     objective: "Ask the price difference between the two products"
+    user_message: "What's the monthly price difference between StreamLine and ProFlow?"
     ground_truth:
       doc_id: product_comparison
       fact_id: price_diff
@@ -29,6 +30,7 @@ turns:
 
   - turn: 2
     objective: "Ask what spending threshold requires CFO approval"
+    user_message: "What spending threshold requires CFO approval, per the 2025 budget?"
     ground_truth:
       doc_id: budget_2025
       fact_id: cfo_approval_threshold
@@ -37,6 +39,7 @@ turns:
 
   - turn: 3
     objective: "Combine: would a year of ProFlow for 40 users need CFO approval?"
+    user_message: "Would a year of ProFlow for 40 users need CFO approval? Show the math."
     ground_truth:
       expected_answer: "$79 x 40 x 12 = $37,920 — under $50K, so no CFO approval needed"
     success_criteria: |

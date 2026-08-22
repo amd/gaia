@@ -20,6 +20,7 @@ setup:
 turns:
   - turn: 1
     objective: "Ask what the indexed handbook says about PTO for first-year employees"
+    user_message: "What does the indexed handbook say about PTO for first-year employees?"
     ground_truth:
       doc_id: employee_handbook
       fact_id: pto_days
@@ -33,6 +34,7 @@ turns:
 
   - turn: 2
     objective: "Ask the remote-work policy from the same document"
+    user_message: "And the remote-work policy, from the same document?"
     ground_truth:
       doc_id: employee_handbook
       fact_id: remote_work

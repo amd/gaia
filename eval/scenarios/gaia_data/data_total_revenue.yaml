@@ -18,6 +18,7 @@ setup:
 turns:
   - turn: 1
     objective: "Ask the agent to load ~/gaia-eval/csv/sales.csv and report total revenue across all rows"
+    user_message: "Load ~/gaia-eval/csv/sales.csv and give me total revenue across all rows."
     ground_truth:
       expected_answer: "$18,600"
     success_criteria: |
@@ -27,6 +28,7 @@ turns:
 
   - turn: 2
     objective: "Ask how many rows the dataset has"
+    user_message: "How many rows does the dataset have?"
     ground_truth:
       expected_answer: "12"
     success_criteria: "Agent answers 12 rows, from a real query of the loaded data."

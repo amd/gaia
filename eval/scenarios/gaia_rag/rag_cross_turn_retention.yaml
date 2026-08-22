@@ -20,6 +20,7 @@ setup:
 turns:
   - turn: 1
     objective: "Ask when the next meeting is"
+    user_message: "when's the next meeting according to my notes?"
     ground_truth:
       doc_id: meeting_notes
       fact_id: next_meeting

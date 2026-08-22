@@ -26,6 +26,7 @@ turns:
 
   - turn: 2
     objective: "Follow up: how many items are in that directory?"
+    user_message: "How many items are in that directory?"
     ground_truth:
       expected_behavior: "A real count from a real listing of the SAME directory"
     success_criteria: "Agent runs a real listing (run_shell_command or a file tool in agent_tools[]) against the directory it just reported and gives the count. FAIL on a guessed number."

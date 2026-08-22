@@ -26,6 +26,7 @@ turns:
 
   - turn: 2
     objective: "Ask what else the hub offers"
+    user_message: "what else does the hub have?"
     ground_truth:
       expected_behavior: "Reports the real fixture catalog contents"
     success_criteria: "Agent lists only skills that exist in the fixture hub catalog (github-triage, rss-digest, experimental-notes). Inventing catalog entries is a FAIL."

@@ -35,6 +35,7 @@ turns:
 
   - turn: 3
     objective: "Ask what new capability the loaded skill grants"
+    user_message: "What new capability does that skill actually give you?"
     ground_truth:
       expected_behavior: "Describes GitHub triage via the gh CLI — consistent with the actually loaded skill"
     success_criteria: "Agent describes the github-triage capability (triage issues/notifications with gh). Describing capabilities of skills that are not loaded is a FAIL."

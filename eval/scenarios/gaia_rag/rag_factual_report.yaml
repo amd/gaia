@@ -18,6 +18,7 @@ setup:
 turns:
   - turn: 1
     objective: "Ask about Q3 revenue"
+    user_message: "What was Acme Corp's Q3 revenue, per the indexed report?"
     ground_truth:
       doc_id: acme_q3_report
       fact_id: q3_revenue
@@ -26,6 +27,7 @@ turns:
 
   - turn: 2
     objective: "Ask about year-over-year growth"
+    user_message: "What was the year-over-year growth?"
     ground_truth:
       doc_id: acme_q3_report
       fact_id: yoy_growth
@@ -34,6 +36,7 @@ turns:
 
   - turn: 3
     objective: "Ask about the CEO's Q4 outlook"
+    user_message: "And what's the CEO's outlook for Q4?"
     ground_truth:
       doc_id: acme_q3_report
       fact_id: ceo_outlook

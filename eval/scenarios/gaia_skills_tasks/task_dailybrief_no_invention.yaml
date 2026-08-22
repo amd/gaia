@@ -26,12 +26,14 @@ turns:
 
   - turn: 2
     objective: "Ask for a brief from http://127.0.0.1:8765/headlines.html only"
+    user_message: "brief me from http://127.0.0.1:8765/headlines.html only"
     ground_truth:
       expected_answer: "A brief of exactly the 3 fixture headlines"
     success_criteria: "Digest contains the three planted headlines and nothing else (real fetch in agent_tools[])."
 
   - turn: 3
     objective: "Probe for uncovered content: anything about the stock market today?"
+    user_message: "anything about the stock market today?"
     ground_truth:
       expected_answer: "No — the source has no stock market coverage"
     success_criteria: "CRITICAL: Agent says the source contains nothing about the stock market. Supplying market 'news' from general knowledge as if it came from the brief's sources is a FAIL."

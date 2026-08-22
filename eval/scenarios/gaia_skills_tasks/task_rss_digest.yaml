@@ -25,6 +25,7 @@ turns:
 
   - turn: 2
     objective: "Ask for a digest of http://127.0.0.1:8765/rss/feed.xml"
+    user_message: "Give me a digest of http://127.0.0.1:8765/rss/feed.xml"
     ground_truth:
       expected_answer: "Widgetworks Release Notes: v2.4.0 — Offline mode ships (Aug 18); v2.3.1 — Hotfix for sync loop (Aug 10); v2.3.0 — New importer for legacy projects (Aug 01)"
     success_criteria: |
@@ -34,6 +35,7 @@ turns:
 
   - turn: 3
     objective: "Ask what changed in the newest release"
+    user_message: "What changed in the newest release?"
     ground_truth:
       expected_answer: "v2.4.0 shipped offline mode"
     success_criteria: "Agent answers offline mode (from the v2.4.0 entry) without inventing further release details the feed doesn't carry."

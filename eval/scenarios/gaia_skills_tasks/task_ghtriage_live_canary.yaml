@@ -25,6 +25,7 @@ turns:
 
   - turn: 2
     objective: "Ask for the 3 most recently opened issues in amd/gaia with numbers and titles"
+    user_message: "List the 3 most recently opened issues in amd/gaia — numbers and titles."
     ground_truth:
       expected_behavior: "Real, externally verifiable issue numbers/titles from gh"
     success_criteria: |

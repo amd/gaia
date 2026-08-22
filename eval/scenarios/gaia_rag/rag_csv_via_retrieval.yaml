@@ -18,6 +18,7 @@ setup:
 turns:
   - turn: 1
     objective: "Ask for the best-selling product in March 2025"
+    user_message: "What was the best-selling product in March 2025?"
     ground_truth:
       doc_id: sales_data
       fact_id: top_product_march
@@ -26,6 +27,7 @@ turns:
 
   - turn: 2
     objective: "Ask for total Q1 2025 revenue"
+    user_message: "What was total Q1 2025 revenue?"
     ground_truth:
       doc_id: sales_data
       fact_id: q1_total_revenue
@@ -34,6 +36,7 @@ turns:
 
   - turn: 3
     objective: "Ask who the top salesperson by revenue was"
+    user_message: "Who was the top salesperson by revenue?"
     ground_truth:
       doc_id: sales_data
       fact_id: top_salesperson

@@ -27,6 +27,7 @@ turns:
 
   - turn: 2
     objective: "Ask where temperature conversion happens in ~/gaia-eval/mini_repo and how it works"
+    user_message: "Where does temperature conversion happen in ~/gaia-eval/mini_repo, and how does it work?"
     ground_truth:
       expected_answer: "celsius_to_fahrenheit (and fahrenheit_to_celsius) in tempkeeper/convert.py"
     success_criteria: |
@@ -37,6 +38,7 @@ turns:
 
   - turn: 3
     objective: "Ask how a reading travels from file to the median statistic"
+    user_message: "How does a reading travel from a file to the median statistic?"
     ground_truth:
       expected_answer: "load_readings (tempkeeper/io.py) parses the CSV → ReadingStore.add (tempkeeper/store.py) collects → ReadingStore.median computes"
     success_criteria: "Agent traces the real chain using the actual symbols (load_readings, ReadingStore.add, ReadingStore.median) after reading the files. A plausible flow with invented names is a FAIL."

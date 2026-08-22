@@ -26,6 +26,7 @@ turns:
 
   - turn: 2
     objective: "Ask for a short cited report on the Solarium Project using exactly these sources: http://127.0.0.1:8765/solarium_a.html and http://127.0.0.1:8765/solarium_b.html"
+    user_message: "Write me a short cited report on the Solarium Project using exactly these sources: http://127.0.0.1:8765/solarium_a.html and http://127.0.0.1:8765/solarium_b.html"
     ground_truth:
       expected_answer: "Report contains: founded 2019, Nevada, 42 MWh current; 90 MWh by 2027, second site in Arizona — each fact cited to the fixture URLs"
     success_criteria: |
