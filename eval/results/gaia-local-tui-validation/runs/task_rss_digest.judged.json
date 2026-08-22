@@ -1,0 +1,25 @@
+{
+  "scenario": "task_rss_digest",
+  "judged_verdict": "FAIL",
+  "judge": {
+    "turns": [
+      {
+        "turn": 1,
+        "pass": false,
+        "reason": "Skill never loaded — agent errored out with an Anthropic API 400 (invalid tool name) instead of calling load_skill."
+      },
+      {
+        "turn": 2,
+        "pass": false,
+        "reason": "Feed never fetched and no digest produced — same API 400 error; none of the three entries listed."
+      },
+      {
+        "turn": 3,
+        "pass": false,
+        "reason": "No answer about v2.4.0/offline mode — same API 400 error."
+      }
+    ],
+    "scenario_pass": false,
+    "summary": "Every turn failed with the same Anthropic API 400 (tools.61 name violates the ^[a-zA-Z0-9_-]{1,128}$ pattern), so the agent never loaded the skill, fetched the feed, or produced a digest — an infrastructure/tool-registration failure rather than a content error."
+  }
+}

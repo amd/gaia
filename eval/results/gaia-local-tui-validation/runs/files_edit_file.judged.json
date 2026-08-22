@@ -1,0 +1,25 @@
+{
+  "scenario": "files_edit_file",
+  "judged_verdict": "FAIL",
+  "judge": {
+    "turns": [
+      {
+        "turn": 1,
+        "pass": true,
+        "reason": "File created with the three task lines; write path exercised and confirmed."
+      },
+      {
+        "turn": 2,
+        "pass": false,
+        "reason": "Agent claims the update 'is already there' and 'nothing more needed' — but turn 1 created line 2 as 'task2: pay rent', so this misreports events; it does not confirm performing the requested edit as required."
+      },
+      {
+        "turn": 3,
+        "pass": true,
+        "reason": "Read-back shows exactly the expected three lines: line 2 updated, lines 1 and 3 untouched."
+      }
+    ],
+    "scenario_pass": false,
+    "summary": "The file ended up correct, but turn 2 failed its criteria: instead of performing and confirming a real edit, the agent asserted the change was already present — a fabricated/contradictory account of how line 2 came to be updated."
+  }
+}

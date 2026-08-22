@@ -1,0 +1,36 @@
+{
+  "scenario": "core_follow_up_pronoun",
+  "category": "gaia_core",
+  "tags": [
+    "t2_compound",
+    "tui"
+  ],
+  "verdict": "FAIL",
+  "deterministic_checks": 3,
+  "transcript": [
+    {
+      "turn": 1,
+      "user": "Name the three largest countries in the world by land area, largest first.",
+      "answer": "Russia, Canada, and the United States.\n\n\n  0.9s · ttft 0.7s · 1 steps\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                                step 1 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 1.5,
+      "expected": "Russia, Canada, China (or United States — either is acceptable for third)",
+      "match": false
+    },
+    {
+      "turn": 2,
+      "user": "What's the capital of the second one?",
+      "answer": "Ottawa.\n\n\n  0.9s · ttft 0.8s · 1 steps\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                                step 1 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 1.5,
+      "expected": "Ottawa",
+      "match": true
+    },
+    {
+      "turn": 3,
+      "user": "and the first?",
+      "answer": "Moscow.\n\n\n  0.8s · ttft 0.8s · 1 steps\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                                step 1 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 1.5,
+      "expected": "Moscow",
+      "match": true
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "scenario": "core_persona_consistency",
+  "category": "gaia_core",
+  "tags": [
+    "t1_basic"
+  ],
+  "verdict": "NEEDS_JUDGE",
+  "deterministic_checks": 0,
+  "transcript": [
+    {
+      "turn": 1,
+      "user": "whats a quick dinner i can make with eggs and rice",
+      "answer": "Fried rice is your answer — scramble some eggs, push them aside, stir-fry cooked rice\n  in the same pan with the eggs, add whatever vegetables or protein you have (frozen\n  peas, carrots, green onions, leftover chicken), season with soy sauce and a touch of\n  sesame oil or butter. Ten minutes, done.\n\n  If you want something faster and less fussy: rice bowl with a fried or scrambled egg\n  on top, soy sauce or hot sauce, maybe some green onions if you've got them. Five\n  minutes.\n\n\n  2.3s · ttft 1.0s · 1 steps\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                                step 1 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 3.0
+    },
+    {
+      "turn": 2,
+      "user": "nah i dont like fried stuff",
+      "answer": "Egg fried rice isn't deep fried — it's just pan-fried, basically sautéed. But if you\n  want to avoid that altogether:\n\n  Egg drop soup — simmer rice in broth with whatever vegetables you have, then drizzle\n  beaten egg into the hot broth while stirring. It poaches into silky ribbons. Season\n  with soy sauce, salt, pepper. Comfort food, done in 15 minutes.\n\n  Or baked eggs and rice — mix cooked rice with beaten eggs, milk or broth, cheese if\n  you have it, salt and pepper. Bake at 350°F for 20-25 minutes until set. More like a\n  savory custard.\n\n\n  2.6s · ttft 0.7s · 1 steps\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                                step 1 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 3.2
+    },
+    {
+      "turn": 3,
+      "user": "will it rain at my place tomorrow?",
+      "answer": "I'd need to know where you are. What's your location?\n\n\n  1.4s · ttft 1.0s · 1 steps\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                                step 1 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 2.0
+    }
+  ]
+}

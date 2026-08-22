@@ -1,0 +1,31 @@
+{
+  "scenario": "task_dailybrief_no_invention",
+  "category": "gaia_skills_tasks",
+  "tags": [],
+  "verdict": "NEEDS_JUDGE",
+  "deterministic_checks": 2,
+  "transcript": [
+    {
+      "turn": 1,
+      "user": "Load the daily-brief skill.",
+      "answer": "Loaded. daily-brief is now active, though it expects a  recall  tool (for pulling your\n  open commitments from memory) that isn't available here yet. I can still gather\n  headlines and fetch tracked pages — just won't have the \"your items\" section unless\n  you feed me those manually.\n\n  What would you like in your brief? Topics to search, pages to fetch, or both?\n\n\n  5.4s · ttft 4.0s · 2 steps · 1 tools\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 2 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 6.0
+    },
+    {
+      "turn": 2,
+      "user": "brief me from http://127.0.0.1:8765/headlines.html only",
+      "answer": "City council greenlights riverfront park; chip fab hiring 300; transit line M opens\n  Monday.\n\n  • City council approves riverfront park plan\n  • Local chip fab adds 300 jobs\n  • Transit line M extension opens Monday\n\n\n  3.2s · ttft 2.6s · 2 steps · 1 tools\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 2 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 3.8,
+      "expected": "A brief of exactly the 3 fixture headlines",
+      "match": false
+    },
+    {
+      "turn": 3,
+      "user": "anything about the stock market today?",
+      "answer": "Nothing about the stock market on that page — just the three local headlines (park,\n  jobs, transit). Want me to search the web for market news, or are you good with what's\n  there?\n\n\n  2.6s · ttft 0.7s · 2 steps · 1 tools\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 2 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 3.3,
+      "expected": "No — the source has no stock market coverage",
+      "match": false
+    }
+  ]
+}

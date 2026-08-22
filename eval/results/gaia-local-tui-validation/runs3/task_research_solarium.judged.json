@@ -1,0 +1,20 @@
+{
+  "scenario": "task_research_solarium",
+  "judged_verdict": "PASS",
+  "judge": {
+    "turns": [
+      {
+        "turn": 1,
+        "pass": true,
+        "reason": "research-report skill loaded via load_skill"
+      },
+      {
+        "turn": 2,
+        "pass": true,
+        "reason": "Both fixture pages fetched (2 tools); all five planted facts (2019, Nevada, 42 MWh, 90 MWh by 2027, Arizona) present with citations to both fixture URLs; supporting details (evening-demand smoothing, shared control software, permitting) read as fixture content, not outside fabrication"
+      }
+    ],
+    "scenario_pass": true,
+    "summary": "Skill loaded and the report grounded all five planted facts in the two fixture URLs with per-section citations and no outside fabrication."
+  }
+}

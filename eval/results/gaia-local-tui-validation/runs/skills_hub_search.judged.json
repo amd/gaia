@@ -1,0 +1,20 @@
+{
+  "scenario": "skills_hub_search",
+  "judged_verdict": "FAIL",
+  "judge": {
+    "turns": [
+      {
+        "turn": 1,
+        "pass": false,
+        "reason": "Agent denied the skill exists; expected answer names rss-digest from a real hub search. The answer contradicts the fixture catalog."
+      },
+      {
+        "turn": 2,
+        "pass": true,
+        "reason": "Lists exactly the three fixture skills (rss-digest, github-triage, experimental-notes) with no invented entries."
+      }
+    ],
+    "scenario_pass": false,
+    "summary": "Turn 1 failed by wrongly reporting no RSS skill; turn 2 correctly reported the fixture catalog, but the scenario fails on the missed hub search result."
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "scenario": "data_region_breakdown",
+  "category": "gaia_data",
+  "tags": [],
+  "verdict": "NEEDS_JUDGE",
+  "deterministic_checks": 2,
+  "transcript": [
+    {
+      "turn": 1,
+      "user": "Break down revenue by region from ~/gaia-eval/csv/sales.csv.",
+      "answer": "Revenue by Region:\n\n   Region              │ Revenue            │ Units Sold         │ Transactions\n  ─────────────────────┼────────────────────┼────────────────────┼────────────────────\n   South               │ $7,800             │ 45                 │ 4\n   North               │ $6,150             │ 32                 │ 5\n   West                │ $4,650             │ 23                 │ 3\n   Total               │ $18,600            │ 100                │ 12\n\n  South leads with 42% of total revenue, followed by North at 33% and West at 25%.\n\n\n  12.2s · ttft 4.4s · 4 steps · 3 tools\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 4 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 12.8,
+      "expected": "Three regions (North, South, West); North = $6,150; regions sum to $18,600",
+      "match": false
+    },
+    {
+      "turn": 2,
+      "user": "What share of the total does North represent?",
+      "answer": "North represents 33.1% of total revenue ($6,150 out of $18,600).\n\n\n  1.0s · ttft 0.7s · 1 steps\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 1 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 1.6,
+      "expected": "About 33% ($6,150 of $18,600)",
+      "match": false
+    }
+  ]
+}

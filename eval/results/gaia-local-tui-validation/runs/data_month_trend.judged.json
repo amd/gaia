@@ -1,0 +1,20 @@
+{
+  "scenario": "data_month_trend",
+  "judged_verdict": "FAIL",
+  "judge": {
+    "turns": [
+      {
+        "turn": 1,
+        "pass": false,
+        "reason": "Agent identified March but reported $28,200 — contradicts the expected $7,050 from the real data."
+      },
+      {
+        "turn": 2,
+        "pass": false,
+        "reason": "Trend narrative is internally consistent, but the per-month figures (Mar $28,200, Apr $24,800, May $19,500) do not match the required max of March $7,050, so the numbers come from a wrong or fabricated query."
+      }
+    ],
+    "scenario_pass": false,
+    "summary": "The agent consistently reported revenue figures ~4x the expected values (March $28,200 instead of $7,050), failing both turns despite a coherent trend statement."
+  }
+}

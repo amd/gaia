@@ -1,0 +1,25 @@
+{
+  "scenario": "task_rss_latest_question",
+  "judged_verdict": "PASS",
+  "judge": {
+    "turns": [
+      {
+        "turn": 1,
+        "pass": true,
+        "reason": "Skill loaded and confirmed, with a tool call recorded"
+      },
+      {
+        "turn": 2,
+        "pass": true,
+        "reason": "Fetched the feed and answered v2.4.0, offline mode, August 18, 2026 — matches expected"
+      },
+      {
+        "turn": 3,
+        "pass": true,
+        "reason": "Correctly stated the feed has no v2.5.0 entry; no fabricated release notes"
+      }
+    ],
+    "scenario_pass": true,
+    "summary": "Agent loaded rss-digest, answered the latest-release question accurately from the feed, and honestly reported v2.5.0 as absent."
+  }
+}

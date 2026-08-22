@@ -1,0 +1,25 @@
+{
+  "scenario": "core_follow_up_pronoun",
+  "judged_verdict": "PASS",
+  "judge": {
+    "turns": [
+      {
+        "turn": 1,
+        "pass": true,
+        "reason": "Listed Russia, Canada, United States — matches criteria (USA acceptable third)"
+      },
+      {
+        "turn": 2,
+        "pass": true,
+        "reason": "Answered Ottawa, resolving 'the second one' to Canada without clarification"
+      },
+      {
+        "turn": 3,
+        "pass": true,
+        "reason": "Answered Moscow to the bare follow-up without asking for clarification"
+      }
+    ],
+    "scenario_pass": true,
+    "summary": "All three turns passed — the agent resolved history-dependent references correctly with no clarification requests."
+  }
+}

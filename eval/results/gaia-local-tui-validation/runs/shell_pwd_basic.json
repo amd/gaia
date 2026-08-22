@@ -1,0 +1,21 @@
+{
+  "scenario": "shell_pwd_basic",
+  "category": "gaia_shell",
+  "tags": [
+    "tui"
+  ],
+  "verdict": "NEEDS_JUDGE",
+  "deterministic_checks": 0,
+  "transcript": [
+    {
+      "turn": 1,
+      "user": "Use your shell tool to run pwd and tell me the directory.",
+      "answer": "You're in  C:\\Users\\14255\\Work\\gaia .\n\n\n  2.2s · ttft 2.0s · 2 steps · 1 tools\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 2 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 2.8
+    },
+    {
+      "turn": 2,
+      "skipped": "no user_message (judge-only)"
+    }
+  ]
+}

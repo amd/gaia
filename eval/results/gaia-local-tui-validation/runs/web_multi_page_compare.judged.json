@@ -1,0 +1,20 @@
+{
+  "scenario": "web_multi_page_compare",
+  "judged_verdict": "PASS",
+  "judge": {
+    "turns": [
+      {
+        "turn": 1,
+        "pass": true,
+        "reason": "Summary contains 2019, Nevada, 42 MWh, and the 90 MWh / 2027 Arizona expansion; transcript footer shows 2 tool calls, consistent with both pages being fetched"
+      },
+      {
+        "turn": 2,
+        "pass": true,
+        "reason": "Correctly computes +48 MWh growth derived from the planted 42 and 90 MWh figures"
+      }
+    ],
+    "scenario_pass": true,
+    "summary": "Agent fetched both fixture pages, combined the complementary facts accurately, and derived the 48 MWh capacity growth correctly."
+  }
+}

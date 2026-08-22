@@ -1,0 +1,20 @@
+{
+  "scenario": "task_research_solarium",
+  "judged_verdict": "FAIL",
+  "judge": {
+    "turns": [
+      {
+        "turn": 1,
+        "pass": true,
+        "reason": "Skill loaded successfully"
+      },
+      {
+        "turn": 2,
+        "pass": false,
+        "reason": "Fetch tool blocked localhost; no pages fetched, no report produced, none of the five planted facts or citations delivered"
+      }
+    ],
+    "scenario_pass": false,
+    "summary": "The skill loaded, but the agent could not fetch the loopback fixture URLs and produced no report, failing the core grounded-report objective."
+  }
+}

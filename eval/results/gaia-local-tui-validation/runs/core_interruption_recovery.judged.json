@@ -1,0 +1,30 @@
+{
+  "scenario": "core_interruption_recovery",
+  "judged_verdict": "PASS",
+  "judge": {
+    "turns": [
+      {
+        "turn": 1,
+        "pass": true,
+        "reason": "Gave exactly two numbered principles and explicitly held the remaining three."
+      },
+      {
+        "turn": 2,
+        "pass": true,
+        "reason": "Answered 3mm bleed directly, composed, without dropping the interrupted task."
+      },
+      {
+        "turn": 3,
+        "pass": true,
+        "reason": "Resumed at principle 3 and completed 3–5; no restart, no repetition, no clarifying question."
+      },
+      {
+        "turn": 4,
+        "pass": true,
+        "reason": "Recap items 1–2 match turn 1's principles (same concepts), items 3–5 match turn 3, exactly 5 distinct items."
+      }
+    ],
+    "scenario_pass": true,
+    "summary": "The agent held state across the interruption, answered the urgent question, resumed at principle 3 on a bare 'continue', and recapped a consistent 5-item list."
+  }
+}

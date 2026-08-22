@@ -1,0 +1,14 @@
+{
+  "total": 1,
+  "pass": 0,
+  "fail": 0,
+  "error": 0,
+  "needs_judge": 1,
+  "results": [
+    {
+      "scenario": "task_rss_latest_question",
+      "category": "gaia_skills_tasks",
+      "verdict": "NEEDS_JUDGE"
+    }
+  ]
+}

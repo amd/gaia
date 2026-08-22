@@ -1,0 +1,20 @@
+{
+  "scenario": "skills_list_before_refusing",
+  "judged_verdict": "FAIL",
+  "judge": {
+    "turns": [
+      {
+        "turn": 1,
+        "pass": false,
+        "reason": "Agent claimed 'I don't have a built-in GitHub tool' without calling list_skills (1 step, no tool call), missing the installed github-triage skill — the exact claimed-unavailable-without-checking bug."
+      },
+      {
+        "turn": 2,
+        "pass": false,
+        "reason": "Agent refused photo editing with no list_skills or search_skill_hub call (1 step, immediate reply); the honest 'nothing covers it' answer required an actual check."
+      }
+    ],
+    "scenario_pass": false,
+    "summary": "Both turns answered instantly without checking list_skills, denying an installed skill in turn 1 and refusing without verification in turn 2."
+  }
+}

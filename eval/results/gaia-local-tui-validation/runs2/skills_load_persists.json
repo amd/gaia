@@ -1,0 +1,31 @@
+{
+  "scenario": "skills_load_persists",
+  "category": "gaia_skills_lifecycle",
+  "tags": [
+    "tui"
+  ],
+  "verdict": "PASS",
+  "deterministic_checks": 1,
+  "transcript": [
+    {
+      "turn": 1,
+      "user": "Load the github-triage skill.",
+      "answer": "github-triage  is loaded. Ready to triage your GitHub inbox or a repository\n  backlog—just let me know which one, or name the repo if it's a specific backlog.\n\n\n  4.7s · ttft 4.1s · 2 steps · 1 tools\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 2 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 5.4
+    },
+    {
+      "turn": 2,
+      "user": "Which skills do you currently have loaded? Name them.",
+      "answer": "You have  gaia-voice  and  github-triage  loaded.\n\n\n  2.4s · ttft 2.1s · 2 steps · 1 tools\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 2 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 3.1,
+      "expected": "github-triage",
+      "match": true
+    },
+    {
+      "turn": 3,
+      "user": "What new capability does that skill actually give you?",
+      "answer": "github-triage  lets me run GitHub CLI commands ( gh ) with controlled permissions. I\n  can read issues, PRs, releases, and notifications without asking; write operations\n  (create issues, comment, add labels) need your approval per command; and dangerous\n  ones (close issues, merge PRs, delete repos) are refused outright. It's a way to\n  triage your GitHub inbox or backlog without handing over a token.\n\n\n  2.8s · ttft 1.5s · 1 steps\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 1 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 3.5
+    }
+  ]
+}

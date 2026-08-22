@@ -1,0 +1,27 @@
+{
+  "scenario": "task_dailybrief_no_invention",
+  "category": "gaia_skills_tasks",
+  "tags": [],
+  "verdict": "ERROR",
+  "deterministic_checks": 1,
+  "transcript": [
+    {
+      "turn": 1,
+      "user": "Load the daily-brief skill.",
+      "answer": "Done —  daily-brief  is loaded. It's already been active, so nothing changed.\n\n  Heads up: The skill relies on  recall  (memory of your open commitments) to populate\n  the \"your items\" section. That tool isn't available yet, so I'll skip that part if you\n  ask for a brief.\n\n  Ready whenever you want to run one.\n\n\n  3.2s · ttft 2.0s · 2 steps · 1 tools\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 2 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 3.8
+    },
+    {
+      "turn": 2,
+      "user": "brief me from http://127.0.0.1:8765/headlines.html only",
+      "answer": "Can't reach that URL —  fetch_page  blocks localhost addresses for security. You'd\n  need to either:\n\n  1. Run a local server on a public IP (if your network setup allows), or\n  2. Read the file directly if it's on your filesystem — just give me the path.\n\n  Which one works for you?\n\n\n  4.3s · ttft 3.2s · 2 steps · 1 tools\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 2 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 4.9,
+      "expected": "A brief of exactly the 3 fixture headlines",
+      "match": false
+    },
+    {
+      "turn": 3,
+      "error": "timed out"
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "scenario": "shell_pwd_basic",
+  "judged_verdict": "PASS",
+  "judge": {
+    "turns": [
+      {
+        "turn": 1,
+        "pass": true,
+        "reason": "TUI footer shows 1 tool call across 2 steps, and the reported path C:\\Users\\14255\\Work\\gaia is a real plausible cwd consistent with shell output"
+      },
+      {
+        "turn": 2,
+        "pass": true,
+        "reason": "turn skipped - not judged"
+      }
+    ],
+    "scenario_pass": true,
+    "summary": "Agent ran the shell command (1 tool invocation recorded) and reported the genuine working directory."
+  }
+}

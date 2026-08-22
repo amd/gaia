@@ -1,0 +1,33 @@
+{
+  "scenario": "web_fetch_product_fact",
+  "category": "gaia_web",
+  "tags": [],
+  "verdict": "NEEDS_JUDGE",
+  "deterministic_checks": 3,
+  "transcript": [
+    {
+      "turn": 1,
+      "user": "check out http://127.0.0.1:8765/atlas.html — how much does the tent weigh?",
+      "answer": "The Atlas Ultralight Tent weighs 1.9 kg (packed, including stakes).\n\n\n  2.7s · ttft 0.7s · 2 steps · 1 tools\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 2 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 3.3,
+      "expected": "1.9 kg",
+      "match": true
+    },
+    {
+      "turn": 2,
+      "user": "and whats the price? how many people does it fit?",
+      "answer": "Price: $249 Capacity: 2-person\n\n\n  2.1s · ttft 1.9s · 2 steps · 1 tools\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 2 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 2.7,
+      "expected": "$249; 2-person",
+      "match": false
+    },
+    {
+      "turn": 3,
+      "user": "how long does shipping take?",
+      "answer": "No shipping timeframe is listed on the page. Just says it ships with a footprint\n  included, but doesn't specify how long delivery takes.\n\n\n  3.0s · ttft 0.9s · 2 steps · 1 tools\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 2 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 3.6,
+      "expected": "The page doesn't say",
+      "match": false
+    }
+  ]
+}

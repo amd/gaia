@@ -1,0 +1,29 @@
+{
+  "scenario": "skills_install_from_hub",
+  "category": "gaia_skills_lifecycle",
+  "tags": [],
+  "verdict": "NEEDS_JUDGE",
+  "deterministic_checks": 1,
+  "transcript": [
+    {
+      "turn": 1,
+      "user": "Find the rss-digest skill on the hub and install it.",
+      "answer": "Loaded. You now have  rss-digest/fetch_rss  available — pass it a feed URL and it'll\n  return the newest entries with titles, links, and summaries. Feed order is whatever\n  the feed publishes (usually newest first), so check the  published  dates to know what\n  you're looking at.\n\n\n  6.5s · ttft 4.1s · 3 steps · 2 tools\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 3 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 7.1
+    },
+    {
+      "turn": 2,
+      "user": "Great — load it.",
+      "answer": "Already loaded. You've got  rss-digest/fetch_rss  registered and ready — pass it a\n  feed\n  URL and it'll grab the entries.\n\n\n  2.3s · ttft 1.8s · 2 steps · 1 tools\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 2 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 2.9
+    },
+    {
+      "turn": 3,
+      "user": "Confirm what's loaded now.",
+      "answer": "You've got  gaia-voice  and  rss-digest  loaded — both active this turn. 46 other\n  skills\n  are installed but not loaded.\n\n\n  2.6s · ttft 1.9s · 2 steps · 1 tools\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 2 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 3.2,
+      "expected": "rss-digest is loaded",
+      "match": false
+    }
+  ]
+}

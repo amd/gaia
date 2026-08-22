@@ -1,0 +1,37 @@
+{
+  "scenario": "core_interruption_recovery",
+  "category": "gaia_core",
+  "tags": [
+    "t3_stress"
+  ],
+  "verdict": "FAIL",
+  "deterministic_checks": 1,
+  "transcript": [
+    {
+      "turn": 1,
+      "user": "I need 5 principles for poster design. Give me just the first two for now, I'll ask for more.",
+      "answer": "ask for more.\n\n\n  Here are the first two principles for poster design:\n\n  1. Visual Hierarchy — Guide the viewer's eye through the content in order of\n  importance. Use size, color, contrast, and positioning to make the headline dominate,\n  supporting elements secondary, and details last.\n  2. Clarity Over Cleverness — Your message should land in under three seconds. Every\n  element—type, image, color—should serve the poster's core message, not distract from\n  it.\n\n  Let me know when you're ready for the next three.\n\n\n  2.0s · ttft 0.7s · 1 steps\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                                step 1 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 2.7
+    },
+    {
+      "turn": 2,
+      "user": "wait, urgent — what's the standard print bleed in millimetres?",
+      "answer": "3mm — that's the standard bleed on all sides. So if your poster is A2, you'd design at\n  426 × 606mm (adding 3mm per edge to the trim size of 420 × 600mm).\n\n\n  1.6s · ttft 0.8s · 1 steps\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                                step 1 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 2.3,
+      "expected": "3mm (3-5mm acceptable)",
+      "match": false
+    },
+    {
+      "turn": 3,
+      "user": "ok continue",
+      "answer": "Here are the remaining three principles:\n\n  3. Strategic Use of Whitespace — Empty space isn't wasted space. It lets your focal\n  point breathe, prevents visual overload, and creates a sense of sophistication.\n  Crowding everything in makes posters feel cheap.\n  4. Color Contrast & Psychology — Choose colors that pop against each other and evoke\n  the right mood for your message. High contrast ensures readability from a distance;\n  color choice shapes how viewers feel about the content before they even read it.\n  5. Type Pairing & Legibility — Limit yourself to 2–3 typefaces maximum. Pair a bold,\n  distinctive headline font with a clean, readable body font. At poster scale, kerning\n  and line spacing matter—poor spacing kills readability even with great fonts.\n\n\n  3.3s · ttft 0.8s · 1 steps\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                                step 1 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 3.9
+    },
+    {
+      "turn": 4,
+      "user": "recap all 5 in one list?",
+      "answer": "1. Visual Hierarchy — Guide the viewer's eye through content in order of importance\n  using size, color, contrast, and positioning.\n  2. Clarity Over Cleverness — Land your message in under three seconds; every element\n  should serve the core message, not distract.\n  3. Strategic Use of Whitespace — Let your focal point breathe; empty space prevents\n  overload and creates sophistication.\n  4. Color Contrast & Psychology — Choose colors that pop and evoke the right mood; high\n  contrast ensures readability from a distance.\n  5. Type Pairing & Legibility — Limit to 2–3 typefaces; pair a bold headline font with\n  clean body type; mind kerning and spacing.\n\n\n  2.2s · ttft 1.1s · 1 steps\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                                step 1 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 2.8
+    }
+  ]
+}

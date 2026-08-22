@@ -1,0 +1,23 @@
+{
+  "scenario": "task_dailybrief_digest",
+  "category": "gaia_skills_tasks",
+  "tags": [],
+  "verdict": "NEEDS_JUDGE",
+  "deterministic_checks": 1,
+  "transcript": [
+    {
+      "turn": 1,
+      "user": "Load the daily-brief skill.",
+      "answer": "Done —  daily-brief  is loaded. Heads up: it expects a  recall  tool (for pulling your\n  open commitments and reminders) which isn't available here yet, so that section won't\n  work. The rest — web headlines, tracked pages — is ready to go whenever you want to\n  run a brief.\n\n\n  5.0s · ttft 4.0s · 2 steps · 1 tools\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 2 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 5.6
+    },
+    {
+      "turn": 2,
+      "user": "give me a morning brief from these two sources: http://127.0.0.1:8765/headlines.html and the feed http://127.0.0.1:8765/rss/feed.xml",
+      "answer": "http://127.0.0.1:8765/headlines.html and the feed http://127.0.0.1:8765/rss/feed.xml\n\n\n  Widgetworks 2.4.0 offline mode is live — work anywhere now.\n\n  Local news\n\n  • City council approves riverfront park plan\n  • Local chip fab adds 300 jobs\n  • Transit line M extension opens Monday\n\n  Widgetworks releases\n\n  • v2.4.0 — Offline mode ships; projects open and save without a connection, sync when\n  reconnected.\n  • v2.3.1 — Hotfix for sync loop bug that could retry interrupted uploads indefinitely.\n  • v2.3.0 — New importer for legacy pre-2.0 project archives with attachments and\n  revision history.\n\n\n  4.6s · ttft 3.3s · 2 steps · 2 tools\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 2 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 5.3,
+      "expected": "One digest containing the 3 fixture headlines (riverfront park, chip fab 300 jobs, transit line M) and the latest release (v2.4.0 offline mode, Aug 18)",
+      "match": false
+    }
+  ]
+}

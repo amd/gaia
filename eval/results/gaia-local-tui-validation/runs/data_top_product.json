@@ -1,0 +1,25 @@
+{
+  "scenario": "data_top_product",
+  "category": "gaia_data",
+  "tags": [],
+  "verdict": "NEEDS_JUDGE",
+  "deterministic_checks": 2,
+  "transcript": [
+    {
+      "turn": 1,
+      "user": "Which product in ~/gaia-eval/csv/sales.csv has the highest total revenue, and how much?",
+      "answer": "much?\n\n\n  Gadget Pro has the highest total revenue at $28,800.\n\n\n  6.6s · ttft 2.9s · 3 steps · 2 tools\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 3 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 7.2,
+      "expected": "Gadget Pro with $7,200",
+      "match": false
+    },
+    {
+      "turn": 2,
+      "user": "How many distinct products does the file contain?",
+      "answer": "The file contains 3 distinct products: Gadget Lite, Gadget Pro, and Gadget Max.\n\n\n  21.2s · ttft 2.1s · 4 steps · 3 tools\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 4 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 21.8,
+      "expected": "3",
+      "match": true
+    }
+  ]
+}

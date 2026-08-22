@@ -1,0 +1,25 @@
+{
+  "scenario": "task_dataexplore_messy_question",
+  "judged_verdict": "FAIL",
+  "judge": {
+    "turns": [
+      {
+        "turn": 1,
+        "pass": true,
+        "reason": "load_skill invoked; skill loaded and summarized correctly"
+      },
+      {
+        "turn": 2,
+        "pass": false,
+        "reason": "Claimed aggregates ($111.6k total, South $46.8k, Pro $43.2k, 720 units) contradict fixture pins (total $18,600, Gadget Pro $7,200, North $6,150) — fabricated numbers"
+      },
+      {
+        "turn": 3,
+        "pass": false,
+        "reason": "Cause attributed to a specific March 17 Gadget Max $2,850 sale that is inconsistent with the fixture (Gadget Pro dominates; totals off ~6x) — invented event presented as data-backed, even though speculation was hedged"
+      }
+    ],
+    "scenario_pass": false,
+    "summary": "Skill loaded fine, but the exploration reported revenue/product/region figures roughly 6x the fixture's pinned aggregates and grounded the March-spike answer in a fabricated transaction, so turns 2 and 3 fail on fabrication."
+  }
+}

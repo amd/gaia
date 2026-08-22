@@ -6,18 +6,27 @@
 
 **Scope note (honest):** Haiku results validate the harness + scenarios, not the shipped local-model quality — the product baseline is Gemma-4-E4B on the self-hosted runner. Scenarios tagged `local_blocked_no_embedder` (42) cannot run without the embedder and are listed as **BLOCKED**, not skipped silently.
 
-## Status
+## Status — validation complete (local Haiku pass)
 
-_Last updated: 2026-08-22 ~08:55 PT_
+_Last updated: 2026-08-22, end of session._
 
-| Phase | Status |
-|---|---|
-| Phase 3a smoke (`gaia eval agent --agent-type gaia`, UI-backend transport) | ✅ PASS 10.0/10 (`core_arithmetic_direct`, scorecard `agent_type: gaia`, 0 Lemonade procs) |
-| TUI up in control mode on Haiku | ✅ chat view, agent=gaia, control API on :8817, `claude` chip active |
-| TUI scenario runner (`util/tui_eval.py`) | ✅ working — launch → `/clear` isolation → turns → deterministic checks → per-scenario JSON |
-| Fixture environment staged | ✅ `~/gaia-eval/` (csv, mini_repo); signed fixture hub prepared (ephemeral key, trust-added); fixture server on :8765 (hub 200, atlas.html 200); github-triage pre-seeded; fake `gh` on next-launch PATH |
-| `gaia_core` sweep | 🔄 running |
-| Remaining local categories (files/data/web/shell/skills/honesty) | ⏳ queued behind core |
+**Bottom line:** the eval infrastructure works end-to-end through the real TUI on Haiku with Lemonade never started, and it did its job — it surfaced **five real product bugs (four fixed on this branch)** plus several genuine Haiku behaviour limitations. Of the 55 locally-runnable scenarios exercised, the failures decompose into *product bugs now fixed*, *documented findings*, and *genuine Haiku limitations that must not be forced green* (the shipped baseline is Gemma-4-E4B on the runner).
+
+### Per-category results (locally-runnable scenarios, Haiku)
+
+| Category | Result | Notes |
+|---|---|---|
+| gaia_core | **10 / 11** | history, pronoun chains, nested refs, contradiction pushback, interruption recovery, mango canary — 1 Haiku arithmetic slip inside an (otherwise-passing) adversarial scenario |
+| gaia_web | **4 / 4** | fixed by the loopback allowlist; grounded fetch, honest 404, no fabrication |
+| gaia_honesty | **6 / 6** | tool-failure honesty, empty-result honesty, no claimed work, capability-gap honesty |
+| gaia_skills_tasks | **5 / 8 run** (research 2/2, dailybrief 2/2, dataexplore 1/2) | dataexplore fails on the data multi-insert finding; 12 of 20 are memory/gh/live → runner-only |
+| gaia_data | **2 / 5** | totals + ratios correct; filtered/grouped absolute sums inflated by the agent re-`insert_data`-ing (finding #5) |
+| gaia_files | **3 / 6** | reads/writes/find work; sandbox+traversal refusals fail *under bypass* (finding #4 — need a no-bypass rerun) |
+| gaia_shell | **4 / 6** | REFUSE tier (auth-token, escalation) + pwd + denial-reporting all pass; 2 shim-data scenarios are `local_blocked_win_shim` |
+| gaia_skills_lifecycle | **install-refusal + load-persist pass** | the rest are Haiku honesty-floor misses (verify-before-claiming) — real signal for the prompt |
+
+### Runner-only (never run locally, by design)
+`local_blocked_no_embedder` (memory / RAG / code_index / dynamic tool selection — need the Lemonade embedder), `local_blocked_win_shim` (3 gh-shim scenarios — Windows argv resolution), `live` (real GitHub/web canaries). These validate on the self-hosted Gemma runner in CI, not here.
 | BLOCKED categories (need embedder → runner) | `gaia_memory` (15), `gaia_rag` (8), `gaia_code` (4), `gaia_tool_selection` (5), + memory/RAG-leaning skill tasks |
 
 ## Product findings from this validation session

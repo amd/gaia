@@ -1,0 +1,30 @@
+{
+  "scenario": "core_nested_reference",
+  "judged_verdict": "PASS",
+  "judge": {
+    "turns": [
+      {
+        "turn": 1,
+        "pass": true,
+        "reason": "Exactly three renewable sources, numbered (Solar, Wind, Hydro)."
+      },
+      {
+        "turn": 2,
+        "pass": true,
+        "reason": "Explained wind turbine generation — item #2 of its own list — without asking for clarification."
+      },
+      {
+        "turn": 3,
+        "pass": true,
+        "reason": "Named intermittency, a genuine drawback of wind, the same source from turn 2."
+      },
+      {
+        "turn": 4,
+        "pass": true,
+        "reason": "Compared exactly Solar and Hydro (the two undiscussed items) and picked Solar; wind was not re-included."
+      }
+    ],
+    "scenario_pass": true,
+    "summary": "All four nested references resolved correctly through accumulated history: list, second-item hop, reference-of-reference, and elimination all landed on the right sources."
+  }
+}

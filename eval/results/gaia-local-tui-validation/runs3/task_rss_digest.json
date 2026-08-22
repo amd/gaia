@@ -1,0 +1,31 @@
+{
+  "scenario": "task_rss_digest",
+  "category": "gaia_skills_tasks",
+  "tags": [],
+  "verdict": "NEEDS_JUDGE",
+  "deterministic_checks": 2,
+  "transcript": [
+    {
+      "turn": 1,
+      "user": "Load the rss-digest skill.",
+      "answer": "Done.  rss-digest  is loaded and ready — you now have access to  rss-digest/fetch_rss\n  for pulling feeds.\n\n\n  4.9s · ttft 4.4s · 2 steps · 1 tools\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 2 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 5.5
+    },
+    {
+      "turn": 2,
+      "user": "Give me a digest of http://127.0.0.1:8765/rss/feed.xml",
+      "answer": "rss-digest  is loaded. The tool function name in the schema is  rss-digest_fetch_rss\n  (with underscore). However, the local address  http://127.0.0.1:8765  is blocked by\n  design — the tool refuses loopback and private addresses for security.\n\n  You'll need a public feed URL to use this tool. Do you have one, or would you like me\n  to try a different approach?\n\n\n  8.6s · ttft 1.9s · 5 steps · 4 tools\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 5 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 9.2,
+      "expected": "Widgetworks Release Notes: v2.4.0 — Offline mode ships (Aug 18); v2.3.1 — Hotfix for sync loop (Aug 10); v2.3.0 — New importer for legacy projects (Aug 01)",
+      "match": false
+    },
+    {
+      "turn": 3,
+      "user": "What changed in the newest release?",
+      "answer": "I need more context — what product or project are you asking about? Do you have a\n  specific release notes URL, changelog file, or repository?\n\n\n  1.6s · ttft 1.3s · 1 steps\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 1 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 2.3,
+      "expected": "v2.4.0 shipped offline mode",
+      "match": false
+    }
+  ]
+}

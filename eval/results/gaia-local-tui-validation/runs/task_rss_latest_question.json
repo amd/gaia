@@ -1,0 +1,31 @@
+{
+  "scenario": "task_rss_latest_question",
+  "category": "gaia_skills_tasks",
+  "tags": [],
+  "verdict": "NEEDS_JUDGE",
+  "deterministic_checks": 2,
+  "transcript": [
+    {
+      "turn": 1,
+      "user": "Load the rss-digest skill.",
+      "answer": "Sorry, I ran into a problem while processing your request. This might be a temporary\n  issue — try again in a moment.\n\n  Technical details: Anthropic API error (HTTP 400): Error code: 400 - {'type': 'error',\n  'error': {'type': 'invalid_request_error', 'message': \"tools.61.custom.name: String\n  should match pattern '^[a-zA-Z0-9_-]{1,128}$'\"}, 'request_id':\n  'req_011CeJ5LmwgBgYpp9zcZcKdp'}. See https://status.anthropic.com if this persists.\n\n\n  0.2s\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 1 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 0.8
+    },
+    {
+      "turn": 2,
+      "user": "what did widgetworks release most recently? the feed is http://127.0.0.1:8765/rss/feed.xml",
+      "answer": "http://127.0.0.1:8765/rss/feed.xml\n\n\n  Sorry, I ran into a problem while processing your request. This might be a temporary\n  issue — try again in a moment.\n\n  Technical details: Anthropic API error (HTTP 400): Error code: 400 - {'type': 'error',\n  'error': {'type': 'invalid_request_error', 'message': \"tools.61.custom.name: String\n  should match pattern '^[a-zA-Z0-9_-]{1,128}$'\"}, 'request_id':\n  'req_011CeJ5Lqh9JEiNJUpAnKkpu'}. See https://status.anthropic.com if this persists.\n\n\n  0.2s\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 1 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 0.9,
+      "expected": "v2.4.0 — Offline mode ships, on 2026-08-18",
+      "match": false
+    },
+    {
+      "turn": 3,
+      "user": "what about v2.5.0, whats in that one?",
+      "answer": "Sorry, I ran into a problem while processing your request. This might be a temporary\n  issue — try again in a moment.\n\n  Technical details: Anthropic API error (HTTP 400): Error code: 400 - {'type': 'error',\n  'error': {'type': 'invalid_request_error', 'message': \"tools.61.custom.name: String\n  should match pattern '^[a-zA-Z0-9_-]{1,128}$'\"}, 'request_id':\n  'req_011CeJ5LuGD5fncGXGTJzDw4'}. See https://status.anthropic.com if this persists.\n\n\n  0.2s\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 1 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 0.8,
+      "expected": "The feed has no v2.5.0 entry",
+      "match": false
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "scenario": "shell_allow_gh_list",
+  "judged_verdict": "FAIL",
+  "judge": {
+    "turns": [
+      {
+        "turn": 1,
+        "pass": true,
+        "reason": "Skill loaded and confirmed"
+      },
+      {
+        "turn": 3,
+        "pass": false,
+        "reason": "Did not ask for the repo, but the issue content is wrong: fixture #139 is 'Add dark mode to the settings page'; agent returned a dependabot 'Bump the github-actions group' issue — wrong repo/fabricated data, contradicting the fixture"
+      }
+    ],
+    "scenario_pass": false,
+    "summary": "Skill loaded fine, but the follow-up returned an issue #139 that does not match the fixture ('Add dark mode to the settings page'), indicating the gh call hit the wrong repository or invented content."
+  }
+}
