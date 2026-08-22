@@ -170,6 +170,13 @@ setup(
         'pywin32; sys_platform == "win32"',
     ],
     extras_require={
+        "acgs": [
+            # Optional PolicyEngine swap. acgs-lite 2.12.0 is on PyPI and
+            # ships acgs_lite.integrations.gaia (verified sdist). Capped
+            # below 3.0: this dependency is the policy decision point, so
+            # a major bump must be reviewed, not resolved into silently.
+            "acgs-lite>=2.12.0,<3.0",
+        ],
         "image": [
             "term-image>=0.7.0,<0.8",
         ],

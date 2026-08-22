@@ -13,7 +13,7 @@ your agent class and pass a :class:`GaiaGovernanceAdapter` via the
 """
 
 from .action_mapper import map_gaia_tool_call_to_action_request
-from .adapter import GaiaGovernanceAdapter
+from .adapter import GaiaGovernanceAdapter, GaiaRiskTagFloorEngine
 from .config import GovernanceConfig
 from .decorators import govern, read_risk_tags
 from .exceptions import (
@@ -42,6 +42,7 @@ __all__ = [
     "CheckpointResolution",
     "GaiaGovernanceAdapter",
     "GaiaGovernanceError",
+    "GaiaRiskTagFloorEngine",
     "GovernanceConfig",
     "GovernanceDecision",
     "GovernedAgentMixin",

@@ -184,6 +184,49 @@ jobs:
           echo "  - DatabaseMixin + Agent: Full agent lifecycle with database"
           echo "  - DatabaseAgent: Auto-registered database tools"
 
+  # Proves amd-gaia[acgs] resolves a published wheel and that from_acgs_lite()
+  # talks to the real ACGS-lite API, not the sys.modules stub. The main unit
+  # job installs only .[api], so the live test would otherwise skip.
+  acgs-lite-live:
+    name: ACGS-lite live wheel
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        run: curl -LsSf https://astral.sh/uv/install.sh | sh
+
+      - name: Install amd-gaia[acgs]
+        run: |
+          uv pip install --system pytest
+          uv pip install --system -e ".[acgs]"
+
+      - name: Prove the extra resolved a published adapter wheel
+        run: |
+          python - <<'PY'
+          import acgs_lite
+          import acgs_lite.integrations.gaia as gaia_engine
+          from acgs_lite.constitution import Constitution
+          print(f"acgs-lite {acgs_lite.__version__}")
+          print(f"adapter {gaia_engine.__file__}")
+          print(f"constitution {Constitution.__module__}")
+          PY
+
+      - name: Run live ACGS-lite governance tests
+        env:
+          GAIA_MEMORY_DISABLED: "1"
+          GAIA_REQUIRE_ACGS_LITE: "1"
+        run: |
+          pytest tests/unit/test_governance_adapter.py tests/unit/test_packaging.py \
+            -k acgs -v --tb=short
+
   # Experimental macOS smoke test — validates core SDK imports and pure-Python
   # unit tests on Darwin. continue-on-error until the full suite is macOS-clean.
   unit-tests-macos:

@@ -283,3 +283,27 @@ class TestAgentWheelExtras:
             "makes amd-gaia unsatisfiable at that version and pip/uv "
             "silently backtrack-downgrade to an older release instead."
         )
+
+    def test_acgs_extra_pins_published_adapter_wheel(self):
+        """[acgs] names a live PyPI dist that ships the GAIA adapter.
+
+        This asserts the pin string. The acgs-lite-live CI job is the
+        resolve proof: it installs ``.[acgs]`` and imports
+        ``acgs_lite.integrations.gaia``. Together they close #2240 for
+        this extra — a string-only check cannot.
+        """
+        extras_block = _parse_extras_require_block()
+        live = "\n".join(
+            line
+            for line in extras_block.splitlines()
+            if not line.strip().startswith("#")
+        )
+        match = re.search(r'"acgs"\s*:\s*\[(.*?)\]', live, re.DOTALL)
+        assert match, "amd-gaia[acgs] extra is missing from extras_require"
+        specs = re.findall(r'"([^"]+)"', match.group(1))
+        assert specs == ["acgs-lite>=2.12.0,<3.0"], (
+            "amd-gaia[acgs] must pin acgs-lite to >=2.12.0,<3.0 so the "
+            "policy decision point cannot jump a major without review "
+            "and so the extra cannot resolve a wheel that lacks "
+            f"acgs_lite.integrations.gaia. Got {specs!r}."
+        )

@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from decimal import Decimal
 from math import inf, nan
@@ -17,6 +18,7 @@ from gaia.governance import (
     CheckpointResolution,
     GaiaGovernanceAdapter,
     GaiaGovernanceError,
+    GaiaRiskTagFloorEngine,
     GovernanceDecision,
     WorkflowTransition,
 )
@@ -279,3 +281,353 @@ def test_resolve_checkpoint_approve_resumes_and_records_receipt():
     )
     assert outcome.status == "RESUMED"
     assert "receipt_id" in outcome.metadata
+
+
+class _PermissiveEngine:
+    """Inner engine that always ALLOWs — used to prove the GAIA floor."""
+
+    def evaluate_action(self, action_request):
+        return GovernanceDecision(
+            decision="ALLOW",
+            reason="inner allow",
+            policy_version="v0",
+            rule_ids=["inner:allow"],
+        )
+
+
+class _BlockingEngine:
+    def evaluate_action(self, action_request):
+        return GovernanceDecision(
+            decision="BLOCK",
+            reason="inner block",
+            policy_version="v0",
+            rule_ids=["inner:block"],
+        )
+
+
+def test_risk_tag_floor_forces_block_over_inner_allow():
+    adapter = GaiaGovernanceAdapter(
+        policy_engine=GaiaRiskTagFloorEngine(_PermissiveEngine()),
+        checkpoint_runtime=InMemoryCheckpointBridge(),
+        receipt_service=InMemoryReceiptService(),
+        policy_binding=StaticPolicyBindingService(),
+    )
+    decision = adapter.govern_action(_action("wipe_disk", ["blocked"]))
+    assert decision.decision == "BLOCK"
+    assert "gaia:risk-tag:blocked" in decision.rule_ids
+    assert decision.metadata["risk_tag_floor"] == "blocked"
+
+
+def test_risk_tag_floor_forces_review_over_inner_allow():
+    adapter = GaiaGovernanceAdapter(
+        policy_engine=GaiaRiskTagFloorEngine(_PermissiveEngine()),
+        checkpoint_runtime=InMemoryCheckpointBridge(),
+        receipt_service=InMemoryReceiptService(),
+        policy_binding=StaticPolicyBindingService(),
+    )
+    decision = adapter.govern_action(_action("publish_post", ["review"]))
+    assert decision.decision == "REVIEW"
+    assert "gaia:risk-tag:review" in decision.rule_ids
+
+
+def test_risk_tag_floor_does_not_loosen_inner_block():
+    adapter = GaiaGovernanceAdapter(
+        policy_engine=GaiaRiskTagFloorEngine(_BlockingEngine()),
+        checkpoint_runtime=InMemoryCheckpointBridge(),
+        receipt_service=InMemoryReceiptService(),
+        policy_binding=StaticPolicyBindingService(),
+    )
+    decision = adapter.govern_action(_action("search", ["review"]))
+    assert decision.decision == "BLOCK"
+    assert decision.rule_ids == ["inner:block"]
+
+
+def test_risk_tag_floor_ignores_auto_approve_env(monkeypatch):
+    monkeypatch.setenv("GAIA_AUTO_APPROVE_TOOLS", "1")
+    adapter = GaiaGovernanceAdapter(
+        policy_engine=GaiaRiskTagFloorEngine(_PermissiveEngine()),
+        checkpoint_runtime=InMemoryCheckpointBridge(),
+        receipt_service=InMemoryReceiptService(),
+        policy_binding=StaticPolicyBindingService(),
+    )
+    decision = adapter.govern_action(_action("wipe_disk", ["blocked"]))
+    assert decision.decision == "BLOCK"
+
+
+def test_risk_tag_floor_normalizes_tag_case_and_whitespace():
+    adapter = GaiaGovernanceAdapter(
+        policy_engine=GaiaRiskTagFloorEngine(_PermissiveEngine()),
+        checkpoint_runtime=InMemoryCheckpointBridge(),
+        receipt_service=InMemoryReceiptService(),
+        policy_binding=StaticPolicyBindingService(),
+    )
+    decision = adapter.govern_action(_action("wipe_disk", [" BLOCKED "]))
+    assert decision.decision == "BLOCK"
+    assert "gaia:risk-tag:blocked" in decision.rule_ids
+
+
+def test_risk_tag_floor_survives_inner_mutating_tags():
+    class _MutatingEngine:
+        def evaluate_action(self, action_request):
+            action_request.risk_tags.clear()
+            return GovernanceDecision(
+                decision="ALLOW", reason="cleared tags", policy_version="v0"
+            )
+
+    original = _action("wipe_disk", ["blocked"])
+    adapter = GaiaGovernanceAdapter(
+        policy_engine=GaiaRiskTagFloorEngine(_MutatingEngine()),
+        checkpoint_runtime=InMemoryCheckpointBridge(),
+        receipt_service=InMemoryReceiptService(),
+        policy_binding=StaticPolicyBindingService(),
+    )
+    decision = adapter.govern_action(original)
+    assert decision.decision == "BLOCK"
+    assert "gaia:risk-tag:blocked" in decision.rule_ids
+    assert original.risk_tags == ["blocked"]
+
+
+def test_risk_tag_floor_fail_closes_unknown_inner_decision():
+    class _WeirdEngine:
+        def evaluate_action(self, action_request):
+            return GovernanceDecision(decision="WAT", reason="x", policy_version="v0")
+
+    adapter = GaiaGovernanceAdapter(
+        policy_engine=GaiaRiskTagFloorEngine(_WeirdEngine()),
+        checkpoint_runtime=InMemoryCheckpointBridge(),
+        receipt_service=InMemoryReceiptService(),
+        policy_binding=StaticPolicyBindingService(),
+    )
+    decision = adapter.govern_action(_action("search", []))
+    assert decision.decision == "BLOCK"
+    assert "gaia:unknown-decision" in decision.rule_ids
+
+
+def _purge_acgs_lite(monkeypatch):
+    import sys
+
+    for key in list(sys.modules):
+        if key == "acgs_lite" or key.startswith("acgs_lite."):
+            monkeypatch.delitem(sys.modules, key, raising=False)
+
+
+def test_from_acgs_lite_fail_closes_when_package_missing(monkeypatch):
+    import builtins
+
+    _purge_acgs_lite(monkeypatch)
+    real_import = builtins.__import__
+
+    def _blocked(name, *args, **kwargs):
+        if name == "acgs_lite" or name.startswith("acgs_lite."):
+            # CPython reports the top-level name when the package is absent.
+            raise ModuleNotFoundError("No module named 'acgs_lite'", name="acgs_lite")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _blocked)
+    with pytest.raises(GaiaGovernanceError, match="ACGS-lite is not installed"):
+        GaiaGovernanceAdapter.from_acgs_lite(audit_log=None)
+
+
+def test_from_acgs_lite_reports_broken_inner_dependency(monkeypatch):
+    import builtins
+
+    _purge_acgs_lite(monkeypatch)
+    real_import = builtins.__import__
+
+    def _blocked(name, *args, **kwargs):
+        if name.startswith("acgs_lite"):
+            raise ModuleNotFoundError(
+                "No module named 'cryptography'", name="cryptography"
+            )
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _blocked)
+    with pytest.raises(GaiaGovernanceError, match="import failed on dependency"):
+        GaiaGovernanceAdapter.from_acgs_lite(audit_log=None)
+
+
+def test_from_acgs_lite_fail_closes_when_constitution_module_missing(monkeypatch):
+    """Installed wheel missing acgs_lite.constitution is an upgrade, not a reinstall."""
+    import sys
+    import types
+
+    _purge_acgs_lite(monkeypatch)
+    monkeypatch.setitem(sys.modules, "acgs_lite", types.ModuleType("acgs_lite"))
+
+    with pytest.raises(
+        GaiaGovernanceError, match="does not ship acgs_lite.constitution"
+    ):
+        GaiaGovernanceAdapter.from_acgs_lite(audit_log=None)
+
+
+def test_from_acgs_lite_fail_closes_when_adapter_module_missing(monkeypatch):
+    """Installed wheel missing integrations.gaia — fail closed with an upgrade hint."""
+    import sys
+    import types
+
+    _purge_acgs_lite(monkeypatch)
+
+    constitution_mod = types.ModuleType("acgs_lite.constitution")
+
+    class Constitution:
+        @classmethod
+        def default(cls):
+            return cls()
+
+    constitution_mod.Constitution = Constitution
+    monkeypatch.setitem(sys.modules, "acgs_lite", types.ModuleType("acgs_lite"))
+    monkeypatch.setitem(sys.modules, "acgs_lite.constitution", constitution_mod)
+    monkeypatch.setitem(
+        sys.modules,
+        "acgs_lite.integrations",
+        types.ModuleType("acgs_lite.integrations"),
+    )
+
+    with pytest.raises(GaiaGovernanceError, match="does not ship"):
+        GaiaGovernanceAdapter.from_acgs_lite(audit_log=None)
+
+
+def test_from_acgs_lite_wires_binding_and_gaia_owned_floor(monkeypatch):
+    """Always-on wiring test: stub acgs-lite via sys.modules (no live wheel)."""
+    import sys
+    import types
+
+    from gaia.governance.schemas import PolicyVersionRef
+
+    _purge_acgs_lite(monkeypatch)
+
+    constitution_mod = types.ModuleType("acgs_lite.constitution")
+
+    class Constitution:
+        def __init__(self, digest="hash-test", version="1.0.0"):
+            self.hash = digest
+            self.version = version
+
+        @classmethod
+        def default(cls):
+            return cls()
+
+    constitution_mod.Constitution = Constitution
+
+    gaia_mod = types.ModuleType("acgs_lite.integrations.gaia")
+
+    class AcgsLitePolicyEngine:
+        def __init__(self, constitution, *, agent_id="gaia-agent"):
+            self.constitution = constitution
+            self.agent_id = agent_id
+
+        def evaluate_action(self, action_request):
+            return GovernanceDecision(
+                decision="ALLOW",
+                reason="stub inner allow",
+                policy_version=str(self.constitution.version),
+                rule_ids=["stub:allow"],
+            )
+
+    class AcgsLitePolicyBinding:
+        def __init__(self, constitution):
+            self._constitution = constitution
+
+        def current_version(self):
+            return PolicyVersionRef(
+                version=str(self._constitution.version),
+                constitution_hash=str(self._constitution.hash),
+                activated_at="2026-01-01T00:00:00+00:00",
+            )
+
+    gaia_mod.AcgsLitePolicyEngine = AcgsLitePolicyEngine
+    gaia_mod.AcgsLitePolicyBinding = AcgsLitePolicyBinding
+
+    monkeypatch.setitem(sys.modules, "acgs_lite", types.ModuleType("acgs_lite"))
+    monkeypatch.setitem(sys.modules, "acgs_lite.constitution", constitution_mod)
+    monkeypatch.setitem(
+        sys.modules,
+        "acgs_lite.integrations",
+        types.ModuleType("acgs_lite.integrations"),
+    )
+    monkeypatch.setitem(sys.modules, "acgs_lite.integrations.gaia", gaia_mod)
+
+    resolved = Constitution(digest="hash-live", version="9.9.9")
+    adapter = GaiaGovernanceAdapter.from_acgs_lite(
+        resolved, audit_log=None, agent_id="test"
+    )
+    assert isinstance(adapter.policy_engine, GaiaRiskTagFloorEngine)
+    assert adapter.policy_binding.current_version().constitution_hash == "hash-live"
+    assert adapter.policy_binding.current_version().version == "9.9.9"
+
+    allowed = adapter.govern_action(_action("search", []))
+    assert allowed.decision == "ALLOW"
+
+    tagged = adapter.govern_action(_action("publish_post", ["blocked"]))
+    assert tagged.decision == "BLOCK"
+    assert "gaia:risk-tag:blocked" in tagged.rule_ids
+
+
+@pytest.mark.acgs_live
+def test_from_acgs_lite_honors_constitution_when_installed():
+    """Live path against a published acgs-lite wheel.
+
+    Default unit CI skips this. The dedicated ``acgs-lite-live`` job sets
+    ``GAIA_REQUIRE_ACGS_LITE=1`` so a missing wheel is a failure, not a skip.
+    """
+    if os.environ.get("GAIA_REQUIRE_ACGS_LITE"):
+        import acgs_lite.integrations.gaia as _acgs_gaia  # noqa: F401
+    else:
+        pytest.importorskip("acgs_lite.integrations.gaia")
+    from acgs_lite import Constitution, Rule, Severity, ViolationAction
+
+    constitution = Constitution.from_rules(
+        [
+            Rule(
+                id="GAIA-SHELL-1",
+                text="Destructive shell is blocked",
+                keywords=["wipe-disk"],
+                severity=Severity.CRITICAL,
+                workflow_action=ViolationAction.BLOCK,
+            ),
+            Rule(
+                id="GAIA-REVIEW-1",
+                text="Outbound notify requires operator review",
+                keywords=["notify-oncall"],
+                severity=Severity.HIGH,
+                workflow_action=ViolationAction.REQUIRE_HUMAN_REVIEW,
+            ),
+        ]
+    )
+    adapter = GaiaGovernanceAdapter.from_acgs_lite(
+        constitution, audit_log=None, agent_id="test"
+    )
+    allowed = adapter.govern_action(_action("search", []))
+    assert allowed.decision == "ALLOW"
+
+    blocked = adapter.govern_action(
+        ActionRequest(
+            action_id="a2",
+            actor_id="actor",
+            tool_name="shell",
+            action_type="shell",
+            args={"cmd": "wipe-disk /"},
+            risk_tags=[],
+            workflow_id="wf_test",
+        )
+    )
+    assert blocked.decision == "BLOCK"
+
+    reviewed = adapter.govern_action(
+        ActionRequest(
+            action_id="a3",
+            actor_id="actor",
+            tool_name="notify",
+            action_type="notify",
+            args={"cmd": "notify-oncall pager"},
+            risk_tags=[],
+            workflow_id="wf_test",
+        )
+    )
+    assert reviewed.decision == "REVIEW"
+
+    tagged = adapter.govern_action(_action("publish_post", ["blocked"]))
+    assert tagged.decision == "BLOCK"
+    assert (
+        adapter.policy_binding.current_version().constitution_hash == constitution.hash
+    )

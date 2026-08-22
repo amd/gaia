@@ -28,6 +28,16 @@ That's it. When the model calls `wipe_disk`, governance short-circuits
 the call, issues a signed receipt to `receipts.jsonl`, and returns a
 denied result to the agent loop.
 
+`default()` is the in-repo risk-tag stub. For a constitution-backed engine,
+use `GaiaGovernanceAdapter.from_acgs_lite()` after
+`pip install 'acgs-lite>=2.12.0,<3.0'` (or `amd-gaia[acgs]`). GAIA still
+owns the risk-tag floor: a `blocked` / `review` tag cannot be loosened
+by the inner engine, and `GAIA_AUTO_APPROVE_TOOLS` is not policy.
+
+`acgs-lite` 2.12.0 is the first published wheel that ships
+`acgs_lite.integrations.gaia`. A missing or too-old wheel fails closed
+with an install hint — the stub is never substituted silently.
+
 ## How decisions work
 
 | Decision | Effect |
@@ -146,7 +156,7 @@ frontend can distinguish a policy refusal from a generic tool failure.
 
 | Interface                   | Shipped reference                                 | Swap with                                  |
 |-----------------------------|---------------------------------------------------|--------------------------------------------|
-| `PolicyEngine`              | `RuleBasedPolicyEngine`                           | ACGS-lite engine, LLM judge, OPA, etc.     |
+| `PolicyEngine`              | `RuleBasedPolicyEngine` (demo stub)               | `GaiaGovernanceAdapter.from_acgs_lite()`, LLM judge, OPA |
 | `CheckpointRuntime`         | `InMemoryCheckpointBridge`                        | constitutional-swarm checkpoint service    |
 | `ReceiptServiceProtocol`    | `InMemoryReceiptService` / `JsonlReceiptService`  | DB, log forwarder, chain anchor            |
 | `PolicyBindingProtocol`     | `StaticPolicyBindingService`                      | constitutional-swarm policy control plane  |
