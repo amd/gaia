@@ -330,6 +330,21 @@ class OutputHandler(ABC):
         """
         ...
 
+    def print_turn_metrics(  # pylint: disable=unused-argument
+        self, record: Dict[str, Any]
+    ):
+        """Receive the sealed per-turn performance record. Optional — no-op.
+
+        Called just before :meth:`print_final_answer` so a console can put the
+        record on that same event. A separate hook rather than another
+        ``print_final_answer`` parameter, which every override would have to
+        take.
+
+        Not abstract on purpose: existing consoles must keep working without
+        implementing it, which is also why *record* goes unused here.
+        """
+        ...
+
     @abstractmethod
     def print_repeated_tool_warning(self):
         """Print warning about repeated tool calls (loop detection)."""
