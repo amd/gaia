@@ -173,15 +173,15 @@
     @apply font-mono flex items-center gap-2 rounded-g-panel border border-g-border bg-g-code-bg px-3 py-2.5 text-[12.5px] text-g-code-text;
   }
 
-  /* Syntax colors for hand-authored code panels (Terminal, CodePanel). Prism
-     handles rendered markdown separately in the agent detail page. */
+  /* Syntax colors for hand-authored code panels (Terminal). Prism handles
+     rendered markdown separately in the agent detail page. */
   .g-code-panel .tok-key { color: rgb(var(--g-gold)); }
   .g-code-panel .tok-str { color: #9bd07a; }
   .g-code-panel .tok-fn { color: #f4c46b; }
   .g-code-panel .tok-num { color: #79b8ff; }
   .g-code-panel .tok-com { color: rgb(var(--g-code-faint)); }
 
-  /* Terminal log severity colors — the email agent's real triage taxonomy. */
+  /* Terminal log severity colors. */
   .g-code-panel .log-urgent { color: #e0824a; }
   .g-code-panel .log-needs { color: #e7a33c; }
   .g-code-panel .log-fyi { color: #79b8ff; }
