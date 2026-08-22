@@ -60,7 +60,7 @@ class Control:
         return self.call("POST", "wait", {"timeout_ms": timeout_ms, **cond})
 
     def screen(self) -> str:
-        return self.call("GET", "screen?format=plain").get("text", "")
+        return self.call("GET", "screen?format=plain").get("screen", "")
 
     def status(self) -> dict:
         return self.call("GET", "status")
@@ -99,7 +99,7 @@ def launch(launcher: Path, control_json: Path) -> Control:
         if control_json.is_file():
             try:
                 ctl = Control(control_json)
-                st = ctl.status()
+                st = ctl.status().get("state", {})
                 if st.get("view") == "chat":
                     return ctl
             except (OSError, RuntimeError, json.JSONDecodeError):
@@ -117,11 +117,11 @@ def answer_region(screen_text: str) -> str:
 
 
 def run_turn(ctl: Control, message: str) -> str:
-    ctl.call("POST", "text", {"text": message, "submit": True})
+    send_line(ctl, message)
     ctl.wait(30_000, state={"streaming": True})
     ctl.wait(TURN_TIMEOUT_S * 1000, state={"streaming": False})
     ctl.call("POST", "keys", {"keys": ["end"], "delay_ms": 40})
-    time.sleep(0.3)
+    time.sleep(0.6)
     return answer_region(ctl.screen())
 
 
@@ -135,11 +135,17 @@ def check_expected(answer: str, expected) -> bool:
     return norm(str(expected)) in norm(answer)
 
 
+def send_line(ctl: Control, text: str) -> None:
+    """Type a line and submit it — the text endpoint does not submit itself."""
+    ctl.call("POST", "text", {"text": text, "delay_ms": 0})
+    ctl.call("POST", "keys", {"keys": ["enter"], "delay_ms": 40})
+
+
 def clear_conversation(ctl: Control) -> None:
     """Start a fresh conversation via /clear (view AND agent history —
     the subprocess transport implements TranscriptResetter as of this branch)."""
-    ctl.call("POST", "text", {"text": "/clear", "submit": True})
-    time.sleep(0.5)
+    send_line(ctl, "/clear")
+    time.sleep(0.8)
     screen_text = ctl.screen()
     if "▶ You:" in screen_text:
         raise RuntimeError("/clear did not empty the transcript view")

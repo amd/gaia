@@ -8,15 +8,22 @@
 
 ## Status
 
-_Last updated: 2026-08-21 ~16:20 PT_
+_Last updated: 2026-08-22 ~08:55 PT_
 
 | Phase | Status |
 |---|---|
 | Phase 3a smoke (`gaia eval agent --agent-type gaia`, UI-backend transport) | ✅ PASS 10.0/10 (`core_arithmetic_direct`, scorecard `agent_type: gaia`, 0 Lemonade procs) |
 | TUI up in control mode on Haiku | ✅ chat view, agent=gaia, control API on :8817, `claude` chip active |
-| Capability ladder (tui-tagged scenarios) | 🔄 L1 ✅ — rest running |
-| Category sweep (locally runnable) | ⏳ pending |
+| TUI scenario runner (`util/tui_eval.py`) | ✅ working — launch → `/clear` isolation → turns → deterministic checks → per-scenario JSON |
+| Fixture environment staged | ✅ `~/gaia-eval/` (csv, mini_repo); signed fixture hub prepared (ephemeral key, trust-added); fixture server on :8765 (hub 200, atlas.html 200); github-triage pre-seeded; fake `gh` on next-launch PATH |
+| `gaia_core` sweep | 🔄 running |
+| Remaining local categories (files/data/web/shell/skills/honesty) | ⏳ queued behind core |
 | BLOCKED categories (need embedder → runner) | `gaia_memory` (15), `gaia_rag` (8), `gaia_code` (4), `gaia_tool_selection` (5), + memory/RAG-leaning skill tasks |
+
+## Product findings from this validation session
+
+1. **🐛→✅ FIXED: `/clear` did not clear the agent's conversation history on the flagship's subprocess transport.** The TUI view emptied while `conversation_history` kept riding into every later prompt — including anything sensitive the user believed cleared. `subprocess.go` had no `TranscriptResetter`; only the SSE transport implemented it. Fixed on this branch (clear_history control verb + queue-sentinel routing so a mid-turn `/clear` lands after that turn), with Go + Python tests. Found because scenario isolation *required* a real clear.
+2. **Harness lessons (control API contract):** the `text` endpoint does not submit (a separate `enter` keypress does); `screen` returns its text under `"screen"`; `status` nests everything under `"state"`. All three produced silent stalls in the first runner version — each now pinned by the working runner.
 
 ## Per-scenario results
 
