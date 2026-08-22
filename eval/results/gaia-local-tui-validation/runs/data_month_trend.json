@@ -1,0 +1,23 @@
+{
+  "scenario": "data_month_trend",
+  "category": "gaia_data",
+  "tags": [],
+  "verdict": "NEEDS_JUDGE",
+  "deterministic_checks": 1,
+  "transcript": [
+    {
+      "turn": 1,
+      "user": "can you check ~/gaia-eval/csv/sales.csv and tell me which month had the highest revenue? and how much it was",
+      "answer": "revenue? and how much it was\n\n\n  March 2026 had the highest revenue at $28,200.\n\n\n  9.2s · ttft 5.2s · 4 steps · 3 tools\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 4 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 9.9,
+      "expected": "March, with $7,050",
+      "match": false
+    },
+    {
+      "turn": 2,
+      "user": "so is revenue trending up or down across the three months?",
+      "answer": "Revenue is trending down — it peaked in March at $28,200, then dropped to $24,800 in\n  April, and fell further to $19,500 in May. That's a consistent decline month-over-\n  month.\n\n\n  1.3s · ttft 0.7s · 1 steps\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 1 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 1.9
+    }
+  ]
+}

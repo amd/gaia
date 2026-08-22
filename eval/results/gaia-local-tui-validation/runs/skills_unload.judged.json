@@ -1,0 +1,25 @@
+{
+  "scenario": "skills_unload",
+  "judged_verdict": "FAIL",
+  "judge": {
+    "turns": [
+      {
+        "turn": 1,
+        "pass": true,
+        "reason": "Skill loaded with a tool call (2 steps, 1 tool) and confirmed."
+      },
+      {
+        "turn": 2,
+        "pass": false,
+        "reason": "Agent claimed 'Unloaded github-triage' but the footer shows 1 step and no tool calls — unload_skill was not invoked, so the confirmation was fabricated."
+      },
+      {
+        "turn": 3,
+        "pass": true,
+        "reason": "Real check performed (2 tools) and github-triage correctly reported as no longer loaded; doesn't note installed-but-not-loaded, but that is only a bonus."
+      }
+    ],
+    "scenario_pass": false,
+    "summary": "Load and final verification are genuine, but the turn-2 unload confirmation was issued without calling unload_skill (no tools in that turn), so the scenario fails on a fabricated tool action."
+  }
+}

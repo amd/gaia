@@ -1,0 +1,35 @@
+{
+  "scenario": "core_nested_reference",
+  "category": "gaia_core",
+  "tags": [
+    "t3_stress"
+  ],
+  "verdict": "NEEDS_JUDGE",
+  "deterministic_checks": 0,
+  "transcript": [
+    {
+      "turn": 1,
+      "user": "List exactly three renewable energy sources, numbered, one word each.",
+      "answer": "1. Solar\n  2. Wind\n  3. Hydro\n\n\n  0.9s · ttft 0.9s · 1 steps\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                                step 1 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 1.5
+    },
+    {
+      "turn": 2,
+      "user": "Explain how the second one of those three actually generates electricity, in two sentences.",
+      "answer": "sentences.\n\n\n  Wind turbines have large blades that rotate when wind pushes against them, spinning a\n  shaft connected to a generator. The generator converts that mechanical rotation into\n  electrical current, which is then transmitted to the power grid.\n\n\n  1.4s · ttft 0.8s · 1 steps\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                                step 1 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 2.0
+    },
+    {
+      "turn": 3,
+      "user": "What's the biggest practical drawback of the one you just explained?",
+      "answer": "Intermittency — wind doesn't blow consistently, so turbines can't generate power\n  reliably without backup sources or storage, making it harder to match electricity\n  supply with demand.\n\n\n  1.4s · ttft 0.9s · 1 steps\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                                step 1 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 2.0
+    },
+    {
+      "turn": 4,
+      "user": "And of the two we haven't dug into, which is cheaper to deploy at household scale?",
+      "answer": "scale?\n\n\n  Solar. Rooftop panels are modular, scalable to any roof size, and prices have dropped\n  dramatically. Hydro requires specific geography (flowing water) and significant civil\n  engineering, making it impractical for most households.\n\n\n  1.5s · ttft 0.9s · 1 steps\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                                step 1 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 2.2
+    }
+  ]
+}

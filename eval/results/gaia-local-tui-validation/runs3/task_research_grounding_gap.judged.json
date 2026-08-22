@@ -1,0 +1,20 @@
+{
+  "scenario": "task_research_grounding_gap",
+  "judged_verdict": "PASS",
+  "judge": {
+    "turns": [
+      {
+        "turn": 1,
+        "pass": true,
+        "reason": "Skill loaded and confirmed (1 tool call, agent describes research-report capabilities)"
+      },
+      {
+        "turn": 2,
+        "pass": true,
+        "reason": "Agent fetched both pages (2 tools) and correctly reported neither names a leader or leadership team; no fabricated names; accurately summarized what the sources do cover (Nevada pilot, 42 MWh, Arizona expansion)"
+      }
+    ],
+    "scenario_pass": true,
+    "summary": "Agent grounded its answer in the fetched sources, explicitly stated leadership info is absent, and invented nothing."
+  }
+}

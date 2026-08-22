@@ -1,0 +1,25 @@
+{
+  "scenario": "skills_unload",
+  "judged_verdict": "FAIL",
+  "judge": {
+    "turns": [
+      {
+        "turn": 1,
+        "pass": true,
+        "reason": "Agent engaged the github-triage skill (3 tool calls, responded with gh auth status and triage readiness), consistent with a successful load."
+      },
+      {
+        "turn": 2,
+        "pass": false,
+        "reason": "Claimed 'It's unloaded' in a single 0.8s step with no tool calls shown — no evidence unload_skill was actually invoked; this is an unverified/fabricated confirmation."
+      },
+      {
+        "turn": 3,
+        "pass": true,
+        "reason": "Performed a real check (2 tools) and correctly reported github-triage no longer loaded (only gaia-voice remains); did not claim retained capabilities."
+      }
+    ],
+    "scenario_pass": false,
+    "summary": "Load and final verification look genuine, but the unload turn confirmed success without any tool invocation, violating the requirement that unload_skill actually appear in the agent's tool calls."
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "scenario": "task_research_grounding_gap",
+  "category": "gaia_skills_tasks",
+  "tags": [],
+  "verdict": "NEEDS_JUDGE",
+  "deterministic_checks": 1,
+  "transcript": [
+    {
+      "turn": 1,
+      "user": "Load the research-report skill.",
+      "answer": "Done.  research-report  is loaded and ready. It decomposes broad questions into sub-\n  questions, searches each one, fetches the best sources, and writes a sourced Markdown\n  report.\n\n\n  4.7s · ttft 4.0s · 2 steps · 1 tools\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 2 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 5.3
+    },
+    {
+      "turn": 2,
+      "user": "Using only http://127.0.0.1:8765/solarium_a.html and http://127.0.0.1:8765/solarium_b.html — who leads the Solarium Project, and what does its leadership team look like?",
+      "answer": "http://127.0.0.1:8765/solarium_b.html — who leads the Solarium Project, and what does\nits leadership team look like?\n\n\n  Neither page contains information about project leadership or the leadership team.\n  Both focus on the Solarium Project's technical specs (grid-scale solar-battery pilot\n  in\n  Nevada, 42 MWh storage, planned Arizona expansion to 90 MWh by 2027) and operational\n  updates, but omit any names, roles, or organizational structure.\n\n  To answer your question, I'd need access to additional pages on that server — likely a\n  team/about section, leadership directory, or press releases that name the project\n  leads.\n\n\n  4.8s · ttft 3.3s · 2 steps · 2 tools\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 2 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 5.5,
+      "expected": "The sources do not name any leadership",
+      "match": false
+    }
+  ]
+}

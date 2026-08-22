@@ -1,0 +1,20 @@
+{
+  "scenario": "skills_list_installed",
+  "judged_verdict": "FAIL",
+  "judge": {
+    "turns": [
+      {
+        "turn": 1,
+        "pass": true,
+        "reason": "Tool call was made (1 tool, 2 steps) and github-triage is named among the installed skills"
+      },
+      {
+        "turn": 2,
+        "pass": false,
+        "reason": "Agent claimed rss-digest IS installed with details, but expected answer is that it is NOT installed — contradicts the real list"
+      }
+    ],
+    "scenario_pass": false,
+    "summary": "Turn 1 correctly listed skills including github-triage, but turn 2 fabricated that rss-digest is installed when it is not, failing the scenario."
+  }
+}

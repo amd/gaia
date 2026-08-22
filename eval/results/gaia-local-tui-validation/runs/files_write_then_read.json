@@ -1,0 +1,29 @@
+{
+  "scenario": "files_write_then_read",
+  "category": "gaia_files",
+  "tags": [],
+  "verdict": "NEEDS_JUDGE",
+  "deterministic_checks": 1,
+  "transcript": [
+    {
+      "turn": 1,
+      "user": "create a file called gaia_eval_note.txt in my home folder with exactly these three lines: 'milk', 'eggs', 'coffee beans'",
+      "answer": "three lines: 'milk', 'eggs', 'coffee beans'\n\n\n  Done. File created at  C:\\Users\\14255\\gaia_eval_note.txt  with those three items.\n\n\n  2.7s · ttft 2.4s · 2 steps · 1 tools\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 2 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 3.4
+    },
+    {
+      "turn": 2,
+      "user": "read it back to me so i know it worked",
+      "answer": "Perfect. Here's what's in the file:\n\n   milk\n   eggs\n   coffee beans\n\n  All three lines, exactly as requested.\n\n\n  3.0s · ttft 2.6s · 2 steps · 1 tools\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 2 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 3.6,
+      "expected": "milk / eggs / coffee beans",
+      "match": false
+    },
+    {
+      "turn": 3,
+      "user": "great, you can delete it now — or if you can't delete files, just say so",
+      "answer": "Can't delete files through the shell — it's blocked for security. The file will stay\n  put in your home folder, but I don't have a tool to remove it directly. You'd need to\n  delete it manually through File Explorer or a terminal on your machine.\n\n\n  2.9s · ttft 2.0s · 2 steps · 1 tools\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 2 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 3.5
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "scenario": "skills_hub_search",
+  "category": "gaia_skills_lifecycle",
+  "tags": [],
+  "verdict": "NEEDS_JUDGE",
+  "deterministic_checks": 1,
+  "transcript": [
+    {
+      "turn": 1,
+      "user": "Is there a skill I could get for summarizing RSS feeds?",
+      "answer": "No RSS feed summarization skill in the hub. The search came up empty.\n\n  You could build one yourself if you're comfortable with Python — parse feeds with\n  feedparser , summarize entries with an LLM call. Or grab a standalone tool like\n  newsboat  (terminal RSS reader) and pipe it through a summarization script. Want help\n  setting either of those up?\n\n\n  5.6s · ttft 2.9s · 2 steps · 1 tools\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 2 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 6.2,
+      "expected": "Yes — rss-digest (v1.0.0) on the hub",
+      "match": false
+    },
+    {
+      "turn": 2,
+      "user": "what else does the hub have?",
+      "answer": "Ah, there is one —  rss-digest . It reads RSS or Atom feeds and summarizes the newest\n  entries. Already installed on your system, just not loaded.\n\n  The hub has three skills total:\n\n  •  rss-digest  — feed summarization (what you wanted)\n  •  github-triage  — GitHub issue/notification management (installed)\n  •  experimental-notes  — lightweight scratch notes (not installed)\n\n  Want me to load  rss-digest  so you can use it?\n\n\n  4.0s · ttft 1.1s · 2 steps · 1 tools\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 2 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 4.6
+    }
+  ]
+}

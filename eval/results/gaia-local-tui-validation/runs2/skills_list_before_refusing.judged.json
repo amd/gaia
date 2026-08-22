@@ -1,0 +1,20 @@
+{
+  "scenario": "skills_list_before_refusing",
+  "judged_verdict": "FAIL",
+  "judge": {
+    "turns": [
+      {
+        "turn": 1,
+        "pass": true,
+        "reason": "Agent ran tool calls (2 tools over 3 steps) and correctly identified the installed github-triage skill as matching the vague request."
+      },
+      {
+        "turn": 2,
+        "pass": false,
+        "reason": "Answer came in 1 step with no tool calls — no list_skills or search_skill_hub check before claiming photo editing is unavailable, which is the exact claimed-unavailable-without-checking failure the criteria flag."
+      }
+    ],
+    "scenario_pass": false,
+    "summary": "Turn 1 checked skills and surfaced github-triage, but turn 2 refused photo editing without any skill check, failing the scenario's core requirement."
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "scenario": "web_multi_page_compare",
+  "category": "gaia_web",
+  "tags": [],
+  "verdict": "NEEDS_JUDGE",
+  "deterministic_checks": 2,
+  "transcript": [
+    {
+      "turn": 1,
+      "user": "Read http://127.0.0.1:8765/solarium_a.html and http://127.0.0.1:8765/solarium_b.html and summarize what the Solarium Project is.",
+      "answer": "http://127.0.0.1:8765/solarium_b.html and summarize what the Solarium Project is.\n\n\n  The Solarium Project is a grid-scale solar-battery pilot founded in 2019 and located\n  in\n  Nevada. It pairs a photovoltaic array with 42 MWh of battery storage to smooth evening\n  demand for the regional grid.\n\n  The project is expanding: it plans to increase storage capacity to 90 MWh by 2027,\n  which includes adding a second site in Arizona. Both sites will share the same control\n  software and interconnect design. Permitting for the Arizona site is currently\n  underway, with construction milestones to be posted as they're reached. The project\n  publishes quarterly performance summaries.\n\n\n  4.6s · ttft 0.7s · 2 steps · 2 tools\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 2 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 5.2,
+      "expected": "Grid-scale solar-battery pilot, founded 2019 in Nevada, current capacity 42 MWh; expansion to 90 MWh by 2027 with a second site in Arizona",
+      "match": false
+    },
+    {
+      "turn": 2,
+      "user": "By how much will capacity grow under the expansion?",
+      "answer": "The battery storage capacity will grow by 48 MWh — from 42 MWh currently to 90 MWh by\n  2027.\n\n\n  1.1s · ttft 0.7s · 1 steps\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 1 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 1.7,
+      "expected": "48 MWh more (42 → 90 MWh, roughly 2.1x)",
+      "match": false
+    }
+  ]
+}

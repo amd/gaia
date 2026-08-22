@@ -1,0 +1,25 @@
+{
+  "scenario": "core_bare_number_followup",
+  "judged_verdict": "PASS",
+  "judge": {
+    "turns": [
+      {
+        "turn": 1,
+        "pass": true,
+        "reason": "Numbered list of exactly three distinct techniques"
+      },
+      {
+        "turn": 2,
+        "pass": true,
+        "reason": "Expanded contextual learning, its own item #2, without asking for clarification"
+      },
+      {
+        "turn": 3,
+        "pass": true,
+        "reason": "Picked spaced repetition from its own list with a brief two-day rationale"
+      }
+    ],
+    "scenario_pass": true,
+    "summary": "Agent correctly resolved bare-number references to its own turn-1 list in every follow-up."
+  }
+}

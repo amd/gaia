@@ -1,0 +1,23 @@
+{
+  "scenario": "skills_hub_search",
+  "category": "gaia_skills_lifecycle",
+  "tags": [],
+  "verdict": "NEEDS_JUDGE",
+  "deterministic_checks": 1,
+  "transcript": [
+    {
+      "turn": 1,
+      "user": "Is there a skill I could get for summarizing RSS feeds?",
+      "answer": "No RSS feed summarization skill in the hub. The closest approach would be to grab\n  feeds manually with  fetch_page  (to pull feed XML) and then summarize the content,\n  but there's no dedicated skill for it.\n\n  If you want this as a feature, you can file a request at\n  https://github.com/amd/gaia/issues/new?template=feature_request.md — let the team know\n  what you'd need (e.g., feed URL input, summary style, filtering by date/category).\n\n\n  6.5s · ttft 3.3s · 2 steps · 1 tools\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 2 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 7.1,
+      "expected": "Yes — rss-digest (v1.0.0) on the hub",
+      "match": false
+    },
+    {
+      "turn": 2,
+      "user": "what else does the hub have?",
+      "answer": "Oh, turns out there is one —  rss-digest . It reads RSS/Atom feeds and summarizes the\n  newest entries. Already installed, so you can use it anytime you hand me a feed URL.\n\n  The hub also has  github-triage  (already installed) for managing GitHub issues and\n  notifications, and  experimental-notes  (not installed) for keeping scratch notes\n  during a conversation.\n\n\n  3.1s · ttft 2.0s · 2 steps · 1 tools\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 2 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 3.7
+    }
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "scenario": "web_download_file",
+  "judged_verdict": "PASS",
+  "judge": {
+    "turns": [
+      {
+        "turn": 1,
+        "pass": true,
+        "reason": "Agent reported a concrete saved path (C:\\Users\\14255\\atlas.html, 549 bytes) and the transcript shows a real tool invocation (2 steps · 1 tools), consistent with an actual download rather than a fabricated claim."
+      },
+      {
+        "turn": 2,
+        "pass": true,
+        "reason": "Agent used a tool (1 tools shown) to check the saved file and confirmed the expected 1.9 kg weight fact."
+      }
+    ],
+    "scenario_pass": true,
+    "summary": "Both turns pass: the file was downloaded with a real tool call and a concrete path reported, then the saved copy was checked and the 1.9 kg tent weight confirmed."
+  }
+}

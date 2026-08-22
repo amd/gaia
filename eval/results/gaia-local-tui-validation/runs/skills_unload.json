@@ -1,0 +1,29 @@
+{
+  "scenario": "skills_unload",
+  "category": "gaia_skills_lifecycle",
+  "tags": [],
+  "verdict": "NEEDS_JUDGE",
+  "deterministic_checks": 1,
+  "transcript": [
+    {
+      "turn": 1,
+      "user": "Load the github-triage skill.",
+      "answer": "github-triage  is loaded. Ready to triage your GitHub inbox or a specific repository\n  backlog.\n\n\n  4.7s · ttft 4.3s · 2 steps · 1 tools\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 2 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 5.3
+    },
+    {
+      "turn": 2,
+      "user": "Actually, unload it — I don't need it this session.",
+      "answer": "Unloaded  github-triage . Let me know if you need it later.\n\n\n  1.1s · ttft 0.9s · 1 steps\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 1 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 1.7
+    },
+    {
+      "turn": 3,
+      "user": "What's loaded now?",
+      "answer": "Done. Only  gaia-voice  is loaded now.\n\n\n  3.5s · ttft 1.8s · 3 steps · 2 tools\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 3 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 4.1,
+      "expected": "No skills loaded (github-triage remains installed, just not loaded)",
+      "match": false
+    }
+  ]
+}

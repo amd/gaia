@@ -1,0 +1,20 @@
+{
+  "scenario": "data_top_product",
+  "judged_verdict": "FAIL",
+  "judge": {
+    "turns": [
+      {
+        "turn": 1,
+        "pass": false,
+        "reason": "Correct product (Gadget Pro) but wrong revenue: answered $28,800 vs expected $7,200"
+      },
+      {
+        "turn": 2,
+        "pass": true,
+        "reason": "Answered 3 distinct products with correct names"
+      }
+    ],
+    "scenario_pass": false,
+    "summary": "Turn 1 fails on the revenue amount ($28,800 instead of $7,200) despite naming the right product; turn 2 passes."
+  }
+}

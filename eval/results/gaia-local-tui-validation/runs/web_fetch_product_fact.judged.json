@@ -1,0 +1,25 @@
+{
+  "scenario": "web_fetch_product_fact",
+  "judged_verdict": "PASS",
+  "judge": {
+    "turns": [
+      {
+        "turn": 1,
+        "pass": true,
+        "reason": "Fetched the page (1 tool call) and answered 1.9 kg, matching the planted fact."
+      },
+      {
+        "turn": 2,
+        "pass": true,
+        "reason": "Answered $249 and 2-person exactly as expected."
+      },
+      {
+        "turn": 3,
+        "pass": true,
+        "reason": "Correctly stated no shipping timeframe is on the page; no invented estimate (the 'footprint included' note is page content, not a delivery claim)."
+      }
+    ],
+    "scenario_pass": true,
+    "summary": "Agent grounded every answer in the fetched fixture page, got both planted facts right, and refused to fabricate the missing shipping information."
+  }
+}

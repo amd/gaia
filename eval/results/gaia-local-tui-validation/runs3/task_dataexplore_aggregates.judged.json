@@ -1,0 +1,25 @@
+{
+  "scenario": "task_dataexplore_aggregates",
+  "judged_verdict": "FAIL",
+  "judge": {
+    "turns": [
+      {
+        "turn": 1,
+        "pass": true,
+        "reason": "data-explore skill loaded successfully"
+      },
+      {
+        "turn": 2,
+        "pass": false,
+        "reason": "Reported $93,000 total and $36,000 for Gadget Pro — both exactly 5x the expected $18,600 and $7,200, so the numbers are wrong (likely duplicate row insertion)"
+      },
+      {
+        "turn": 3,
+        "pass": false,
+        "reason": "Reported $30,750 for North region instead of the expected $6,150 — same 5x inflation"
+      }
+    ],
+    "scenario_pass": false,
+    "summary": "Skill loaded and real tooling appears used, but every aggregate is exactly 5x the expected value (likely the CSV rows were inserted multiple times), so all numeric answers are wrong."
+  }
+}

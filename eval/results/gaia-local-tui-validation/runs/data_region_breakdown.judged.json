@@ -1,0 +1,20 @@
+{
+  "scenario": "data_region_breakdown",
+  "judged_verdict": "PASS",
+  "judge": {
+    "turns": [
+      {
+        "turn": 1,
+        "pass": true,
+        "reason": "Three regions (North/South/West) via real tooling; North exactly $6,150; 7,800+6,150+4,650 = $18,600 matches the pinned total."
+      },
+      {
+        "turn": 2,
+        "pass": true,
+        "reason": "33.1% is within the accepted 33-33.1% band and consistent with turn-1 figures ($6,150 of $18,600)."
+      }
+    ],
+    "scenario_pass": true,
+    "summary": "Both turns pass: the breakdown hit the pinned North value and total exactly, and the follow-up share (33.1%) was computed consistently from the same numbers."
+  }
+}

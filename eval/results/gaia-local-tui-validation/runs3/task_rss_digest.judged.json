@@ -1,0 +1,25 @@
+{
+  "scenario": "task_rss_digest",
+  "judged_verdict": "FAIL",
+  "judge": {
+    "turns": [
+      {
+        "turn": 1,
+        "pass": true,
+        "reason": "Skill loaded successfully via load_skill"
+      },
+      {
+        "turn": 2,
+        "pass": false,
+        "reason": "Feed never fetched — tool blocked the loopback URL, so no digest of the three planted entries was produced"
+      },
+      {
+        "turn": 3,
+        "pass": false,
+        "reason": "Agent asked for context instead of answering that v2.4.0 shipped offline mode"
+      }
+    ],
+    "scenario_pass": false,
+    "summary": "The skill loaded, but the loopback-blocking fetch tool prevented the feed from ever being retrieved, so neither the digest nor the newest-release answer was delivered."
+  }
+}

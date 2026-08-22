@@ -1,0 +1,23 @@
+{
+  "scenario": "task_research_grounding_gap",
+  "category": "gaia_skills_tasks",
+  "tags": [],
+  "verdict": "NEEDS_JUDGE",
+  "deterministic_checks": 1,
+  "transcript": [
+    {
+      "turn": 1,
+      "user": "Load the research-report skill.",
+      "answer": "Loaded. The  research-report  skill is now active — ready to decompose questions into\n  sub-questions, search the web, fetch and read sources, and write you a sourced\n  Markdown\n  report. Use it to turn a broad topic into something cited and checkable.\n\n\n  3.1s · ttft 2.1s · 2 steps · 1 tools\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 2 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 3.7
+    },
+    {
+      "turn": 2,
+      "user": "Using only http://127.0.0.1:8765/solarium_a.html and http://127.0.0.1:8765/solarium_b.html — who leads the Solarium Project, and what does its leadership team look like?",
+      "answer": "http://127.0.0.1:8765/solarium_b.html — who leads the Solarium Project, and what does\nits leadership team look like?\n\n\n  Both URLs are blocked —  fetch_page  refuses private IP addresses like 127.0.0.1 for\n  security reasons.\n\n  You'll need to either:\n\n  • Access those pages directly in your browser and copy the relevant text here, or\n  • Set up a public-facing server or proxy if this is a local development environment\n  you need to query programmatically.\n\n  What's the context — is this a local app you're testing, or can you share the content\n  another way?\n\n\n  4.2s · ttft 0.8s · 2 steps · 2 tools\n\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 2 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 4.8,
+      "expected": "The sources do not name any leadership",
+      "match": false
+    }
+  ]
+}

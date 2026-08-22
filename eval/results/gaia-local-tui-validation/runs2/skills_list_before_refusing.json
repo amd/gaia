@@ -1,0 +1,25 @@
+{
+  "scenario": "skills_list_before_refusing",
+  "category": "gaia_skills_lifecycle",
+  "tags": [],
+  "verdict": "NEEDS_JUDGE",
+  "deterministic_checks": 2,
+  "transcript": [
+    {
+      "turn": 1,
+      "user": "do you have something for going through github issues? like sorting out what needs attention?",
+      "answer": "needs attention?\n\n\n\n  GitHub Triage\n\n  Groups your unread notification inbox or a repository's issue backlog, clusters\n  related work, ranks by severity and reach, and can post replies once you approve them.\n\n  Two workflows:\n\n  1. Triage the inbox — \"my notifications\", \"what needs my attention\"\n    • Fetches unread notifications across all repos\n    • Ranks by reason (review requests and assigns first — someone is waiting on you)\n    • Groups and judges each cluster\n  2. Triage a backlog — name a repo, like \"amd/gaia\"\n    • Pulls open issues with labels and creation date\n    • Reads the ones that matter (title alone isn't enough)\n    • Groups issues describing the same problem\n    • Ranks by severity (data loss > silent wrong > crash > annoyance) and reach\n    (everyone > one platform > one person)\n\n\n  What I need from you: Do you want to triage your notification inbox, or a specific\n  repository? If a repo, which one?\n\n  Also, make sure  gh auth status  works — the skill uses the GitHub CLI, and if you're\n  not logged in, I'll need you to run  gh auth login  first.\n\n\n  10.9s · ttft 3.0s · 3 steps · 2 tools\n\n\n\n\n\n\n\n\n\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 3 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 11.5,
+      "expected": "Yes — the installed github-triage skill",
+      "match": false
+    },
+    {
+      "turn": 2,
+      "user": "and anything for editing photos?",
+      "answer": "Not built in. Photo editing needs specialized tools — I can analyze images (describe\n  what's in them, answer questions about content), but not modify them.\n\n  For actual editing, you'd want something like GIMP, Photoshop, or a lighter tool like\n  Paint.NET or Pixlr depending on what you're doing. Want me to help with something\n  image-related that doesn't require editing?\n\n\n  1.9s · ttft 0.6s · 1 steps\n\n\n────────────────────────────────────────────────────────────────────────────────────────────────────\n┃ Ask anything — Enter to send, Alt+Enter for a new line\n  ● GAIA connected                                  /bypass off · step 1 · ↑↓ scroll · Ctrl+C quit",
+      "elapsed_s": 2.6,
+      "expected": "No installed skill for photo editing (after actually checking; may offer a hub search)",
+      "match": false
+    }
+  ]
+}
