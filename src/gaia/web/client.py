@@ -52,6 +52,19 @@ def _is_blocked_ip(ip: "ipaddress._BaseAddress") -> bool:
     )
 
 
+def _loopback_allowed_hosts() -> frozenset:
+    """Hostnames the operator has explicitly opted to allow on loopback.
+
+    Off by default. ``GAIA_WEB_ALLOWED_HOSTS`` (comma-separated) is a trusted
+    automated-testing affordance — the eval's fixture HTTP server runs on
+    127.0.0.1 and the SSRF guard would otherwise (correctly) refuse it. It only
+    ever permits loopback/private for a host the operator named; nothing about
+    the default production posture changes.
+    """
+    raw = os.environ.get("GAIA_WEB_ALLOWED_HOSTS", "")
+    return frozenset(h.strip() for h in raw.split(",") if h.strip())
+
+
 def _assert_ip_allowed(ip_str: str, hostname: str) -> None:
     """Raise ValueError if ``ip_str`` is a private/reserved address.
 
@@ -61,6 +74,8 @@ def _assert_ip_allowed(ip_str: str, hostname: str) -> None:
     so a DNS rebind that slips a private IP past the pre-flight lookup is
     still caught at connect time on the *exact* address being dialed.
     """
+    if hostname in _loopback_allowed_hosts():
+        return
     try:
         ip = ipaddress.ip_address(ip_str)
     except ValueError:
@@ -348,6 +363,8 @@ class WebClient:
 
     def _validate_host_ip(self, hostname: str) -> None:
         """Resolve hostname and check IP is not private/internal."""
+        if hostname in _loopback_allowed_hosts():
+            return
         try:
             results = socket.getaddrinfo(hostname, None)
         except socket.gaierror:
