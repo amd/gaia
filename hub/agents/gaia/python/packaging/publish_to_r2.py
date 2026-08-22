@@ -198,10 +198,16 @@ def _download_published(
 
 
 def _r2_credentials() -> tuple[str, str, str] | None:
-    """R2 S3 credentials, or None when direct upload is not configured."""
-    key = os.environ.get("R2_ACCESS_KEY_ID")
-    secret = os.environ.get("R2_SECRET_ACCESS_KEY")
-    account = os.environ.get("CLOUDFLARE_ACCOUNT_ID")
+    """R2 S3 credentials, or None when direct upload is not configured.
+
+    Stripped: a trailing newline is easy to store (``gh secret set`` keeps
+    whatever it is handed, and the GitHub UI does not show it) and it is signed
+    as part of the credential, so SigV4 fails and R2 answers ``Unauthorized`` --
+    indistinguishable from a wrong key, and unfixable by re-pasting the value.
+    """
+    key = (os.environ.get("R2_ACCESS_KEY_ID") or "").strip()
+    secret = (os.environ.get("R2_SECRET_ACCESS_KEY") or "").strip()
+    account = (os.environ.get("CLOUDFLARE_ACCOUNT_ID") or "").strip()
     if key and secret and account:
         return key, secret, account
     return None

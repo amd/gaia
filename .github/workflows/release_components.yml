@@ -62,13 +62,19 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # Each component is versioned by its OWN manifest, independently of the
-      # core release and of each other. They used to be pinned to the release
-      # tag, which meant a terminal-hub rebuild could not ship without a whole
-      # core release, and bumping one component forced the other.
+      # Both components ship as part of the core release and carry its version,
+      # deliberately: one number for the whole release is simpler to reason
+      # about than three, and agent-ui's npm package already tracks
+      # src/gaia/version.py through installer/version/bump-ui-version.mjs.
       #
-      # `version` here is the CORE release, kept only for the min_gaia_version
-      # check below — it is NOT the path anything publishes under.
+      # A TAG therefore requires both manifests to already match it (asserted
+      # below). A DISPATCH does not: re-running a publish, or shipping a rebuilt
+      # binary between core releases, must not require cutting a core release —
+      # that coupling is what made every terminal-hub re-run fail.
+      #
+      # Each still publishes under the version in its own manifest, read by
+      # publish_to_r2.py. The assertion keeps them equal to the release; it is
+      # not what supplies the path.
       - id: v
         shell: bash
         run: |
@@ -98,6 +104,29 @@ jobs:
               exit 1
             fi
           done
+
+          # Both components ship as part of the core release and carry its
+          # version, so a TAG must find them already bumped: publishing under a
+          # stale version writes to an immutable path that cannot be corrected,
+          # and the catalog picks latest_version by highest SemVer, so a stale
+          # one is not even reachable as "latest".
+          #
+          # A DISPATCH is deliberately exempt. That is the whole point of the
+          # split: re-running a component publish, or shipping a rebuilt binary
+          # between core releases, must not require cutting a core release.
+          if [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
+            fail=0
+            for pair in "${TERMINAL_HUB_MANIFEST}:${TUI_V}" "${AGENT_UI_MANIFEST}:${UI_V}"; do
+              m="${pair%:*}"; got="${pair##*:}"
+              if [ "${got}" != "${CORE}" ]; then
+                echo "::error file=${m}::version ${got} does not match the release ${CORE}. Bump it before tagging — R2 paths are immutable, so publishing under a stale version cannot be undone."
+                fail=1
+              else
+                echo "✓ ${m} = ${got}"
+              fi
+            done
+            [ "${fail}" -eq 0 ] || exit 1
+          fi
 
           echo "version=${CORE}"       >> "$GITHUB_OUTPUT"
           echo "tui_version=${TUI_V}"  >> "$GITHUB_OUTPUT"
@@ -290,12 +319,16 @@ jobs:
           set -euo pipefail
           mkdir -p bin
           PKG=github.com/amd/gaia/tui/internal/cli
-          DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          # The COMMIT's timestamp, never `now` — a wall-clock stamp makes every
+          # rebuild of the same commit differ, so re-publishing a released
+          # version can never reconcile against the bytes already stored.
+          DATE="$(TZ=UTC git show -s --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ HEAD)"
           cd tui
           while read -r goos goarch platform; do
             EXT=""
             [ "${goos}" = "windows" ] && EXT=".exe"
-            CGO_ENABLED=0 GOOS="${goos}" GOARCH="${goarch}" go build \
+            # -trimpath keeps the runner's absolute paths out of the binary.
+            CGO_ENABLED=0 GOOS="${goos}" GOARCH="${goarch}" go build -trimpath \
               -ldflags="-s -w -X ${PKG}.version=${VERSION} -X ${PKG}.commit=${GITHUB_SHA} -X ${PKG}.date=${DATE}" \
               -o "../bin/gaia-${platform}${EXT}" ./cmd/gaia
             echo "built gaia-${platform}${EXT}"
@@ -518,5 +551,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh workflow run deploy_website.yml --ref main
+          # --repo: this job has no checkout, so gh cannot infer the repository.
+          gh workflow run deploy_website.yml --repo "${GITHUB_REPOSITORY}" --ref main
           echo "✓ requested website redeploy (deploy_website.yml on main)"
