@@ -1,6 +1,7 @@
 package components
 
 import (
+	"strconv"
 	"strings"
 	"time"
 
@@ -166,13 +167,25 @@ const (
 // read the `needs_confirmation` event arrived on, so the modal there is a
 // record of intent, not a live question, and letting it expire costs nothing.
 //
-// Where the answer CAN be delivered the modal does not expire at all — see
-// ConfirmationModel.Deliverable. A person reading "run `rm -rf build`?" and
-// deciding routinely takes longer than 30s, and a prompt that silently denies
-// under them loses work they were in the middle of approving. That was the
-// real defect: the flagship agent's own turns died this way. Deny stays the
-// default wherever a timeout does still apply — expiry never approves.
+// A person reading "run `rm -rf build`?" and deciding routinely takes longer
+// than 30s, so a deliverable prompt gets DeliverableConfirmationTimeout
+// instead: a prompt that silently denies under someone loses work they were in
+// the middle of approving. Deny stays the default wherever a timeout applies —
+// expiry never approves.
 const ConfirmationTimeout = 30 * time.Second
+
+// DeliverableConfirmationTimeout bounds a prompt the agent is genuinely parked
+// on. It is long because a real decision is slow, and it is FINITE because the
+// alternative is worse than either answer.
+//
+// This used to be "no timeout at all", and the reasoning was half right: 30s
+// does steal decisions. But unbounded turned one missed prompt into a hang
+// nobody could end — measured at 442s of spinner before the user pressed Esc
+// out of it. An agent blocked forever on a question is not a safer state than
+// a denied one; it is the state where the user cannot tell a prompt from a
+// crash. Ten minutes is longer than any real decision and short enough that
+// the turn always ends on its own, saying why.
+const DeliverableConfirmationTimeout = 10 * time.Minute
 
 // ConfirmationTimeoutMsg is the client-side auto-deny tick for one
 // confirmation. RunID lets a stale timer — left over from a confirmation that
@@ -182,9 +195,29 @@ type ConfirmationTimeoutMsg struct{ RunID string }
 
 // StartConfirmationTimeout schedules the auto-deny tick for one confirmation.
 func StartConfirmationTimeout(runID string) tea.Cmd {
-	return tea.Tick(ConfirmationTimeout, func(time.Time) tea.Msg {
+	return startConfirmationTimeoutIn(runID, ConfirmationTimeout)
+}
+
+func startConfirmationTimeoutIn(runID string, after time.Duration) tea.Cmd {
+	return tea.Tick(after, func(time.Time) tea.Msg {
 		return ConfirmationTimeoutMsg{RunID: runID}
 	})
+}
+
+// TimeoutCmd arms this confirmation's auto-deny on ITS clock.
+//
+// Every confirmation gets one — the only question is how long. Callers must not
+// pick the duration themselves: the modal knows whether its answer can be
+// delivered, and that is what sets the bound.
+func (m ConfirmationModel) TimeoutCmd() tea.Cmd {
+	return startConfirmationTimeoutIn(m.runID, m.timeout())
+}
+
+func (m ConfirmationModel) timeout() time.Duration {
+	if m.deliverable {
+		return DeliverableConfirmationTimeout
+	}
+	return ConfirmationTimeout
 }
 
 // ConfirmationDecidedMsg is emitted once a confirmation resolves — by key or
@@ -285,9 +318,13 @@ func (m ConfirmationModel) Pending() bool       { return m.state == Confirmation
 // Deliverable reports whether answering this prompt actually reaches the agent.
 func (m ConfirmationModel) Deliverable() bool { return m.deliverable }
 
-// ExpiresUnanswered reports whether this confirmation auto-denies. Only an
-// undeliverable one does; a live question waits for its human.
-func (m ConfirmationModel) ExpiresUnanswered() bool { return !m.deliverable }
+// ExpiresUnanswered reports whether this confirmation auto-denies.
+//
+// Always true now. A deliverable prompt used to answer false — wait for the
+// human, however long — which is right until the human never sees the prompt,
+// and then the turn hangs with no way to end it but Esc. Both kinds expire;
+// they differ only in how long they wait (see TimeoutCmd).
+func (m ConfirmationModel) ExpiresUnanswered() bool { return true }
 
 // confirmationBorderCols is how many columns the rounded border itself adds
 // (1 left + 1 right) on top of the style's Width — which lipgloss treats as
@@ -431,7 +468,9 @@ func (m ConfirmationModel) resultOrHint(inner int) string {
 	case ConfirmationDenied:
 		return confirmationNoStyle.Render("denied")
 	case ConfirmationTimedOut:
-		return confirmationWarnStyle.Render(WrapText("timed out after 30s with no response — denied", inner))
+		return confirmationWarnStyle.Render(WrapText(
+			"timed out after "+humanTimeout(m.timeout())+
+				" with no response — denied, and the agent was told so", inner))
 	default:
 		return confirmationHintStyle.Render(WrapText(m.keyHint(), inner))
 	}
@@ -439,19 +478,29 @@ func (m ConfirmationModel) resultOrHint(inner int) string {
 
 // keyHint spells out each choice, and says what "always" actually grants.
 //
-// "always allow" alone reads as "allow this again", which is narrower than the
-// grant really is: the backend records the TOOL NAME
-// (OutputHandler.session_approved_tools), so every later call runs whatever
-// arguments it likes. Naming the tool and saying "any" is the difference
-// between informed consent and a pleasant surprise.
+// "always allow" alone reads as "allow this again", which says nothing about
+// how much else it covers. The backend records an INVOCATION-scoped key, not
+// the tool name (gaia/agents/base/tool_grants.py), so the honest label is the
+// scope it sent us — `gh issue comment`, not `run_shell_command`. Printing that
+// scope verbatim is the difference between informed consent and a pleasant
+// surprise, and it is why an empty AlwaysScope hides the choice entirely.
 func (m ConfirmationModel) keyHint() string {
 	base := "y run once · n/esc deny"
 	if m.allowAlways() {
 		base = "y run once · a allow `" + m.alwaysScope +
 			"` this session · n/esc deny"
 	}
-	if m.ExpiresUnanswered() {
-		return base + " · auto-denies in 30s if you do nothing"
+	return base + " · auto-denies in " + humanTimeout(m.timeout()) + " if you do nothing"
+}
+
+// humanTimeout spells a duration the way a person would say it out loud.
+func humanTimeout(d time.Duration) string {
+	if d < time.Minute {
+		return strconv.Itoa(int(d.Seconds())) + "s"
 	}
-	return base + " · waits for you"
+	minutes := int(d.Minutes())
+	if minutes == 1 {
+		return "1 minute"
+	}
+	return strconv.Itoa(minutes) + " minutes"
 }

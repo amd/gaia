@@ -179,16 +179,17 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		}
 		cm.SetWidth(m.cardWidth())
 		m.confirmation = &cm
-		m.updateViewport()
+		// resize() reserves the modal's rows out of the transcript, so the
+		// pinned block displaces neither the composer nor the status bar. It
+		// has to run BEFORE updateViewport, which lays the transcript out to
+		// the height resize just set.
+		m.resize()
 
-		cmds := []tea.Cmd{waitForEvent(m.events)}
-		// The auto-deny is armed only where the answer has nowhere to go. On a
-		// live channel the agent is genuinely parked waiting, so expiring would
-		// deny work the user is in the middle of approving — which is the
-		// defect this modal used to produce. See components.ConfirmationTimeout.
-		if cm.ExpiresUnanswered() {
-			cmds = append(cmds, components.StartConfirmationTimeout(e.RunID))
-		}
+		// Every confirmation is armed, on its own clock — a long one where the
+		// answer can be delivered, a short one where it cannot. Unbounded was
+		// the old behaviour and it turned a prompt the user never saw into a
+		// turn that could not end. See components.DeliverableConfirmationTimeout.
+		cmds := []tea.Cmd{waitForEvent(m.events), cm.TimeoutCmd()}
 		return m, tea.Batch(cmds...), true
 
 	case event.CanonicalFinalEvent:
