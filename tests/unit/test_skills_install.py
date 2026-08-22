@@ -230,8 +230,17 @@ def test_publish_allows_unsigned_experimental(marketplace, tmp_path):
 def test_publish_refuses_a_local_capability_permission(marketplace, tmp_path):
     """v1 has no sandbox, so publishing this would publish a brick."""
     marketplace.keygen()
-    source = _write_source(tmp_path, permissions=("shell:execute",))
+    source = _write_source(tmp_path, permissions=("filesystem:write",))
     with pytest.raises(SkillPermissionError, match="local-capability"):
+        marketplace.publish(source)
+    assert marketplace.hub.publishes == []
+
+
+def test_publish_refuses_an_unscoped_shell_grant(marketplace, tmp_path):
+    """Shell is granted one binary at a time; the whole shell has no bridge."""
+    marketplace.keygen()
+    source = _write_source(tmp_path, permissions=("shell:execute",))
+    with pytest.raises(SkillPermissionError, match="asks for the whole shell"):
         marketplace.publish(source)
     assert marketplace.hub.publishes == []
 

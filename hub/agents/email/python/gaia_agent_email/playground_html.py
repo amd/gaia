@@ -598,6 +598,7 @@ async function doProvision(){
 const CONN_PROVIDERS = [
   { id:"google", label:"Google · Gmail" },
   { id:"microsoft", label:"Microsoft · Outlook" },
+  { id:"microsoft_work", label:"Microsoft Work or School" },
 ];
 function setConnStat(text, ok){
   const s = $("conn-stat"); if(!s) return;

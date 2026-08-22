@@ -2,6 +2,7 @@ package test
 
 import (
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -172,7 +173,13 @@ func TestHubCatalogLoadSurvivesTheChatView(t *testing.T) {
 	fake := newFakeDaemon(t)
 
 	cat := catalog.NewCatalog()
-	cat.SetMockBinary(filepath.Join(binDir, "gaia-bash"))
+	// buildBinaries names the mock with the platform suffix; without it the
+	// launch cannot resolve the binary on Windows and never leaves the hub.
+	mock := filepath.Join(binDir, "gaia-bash")
+	if runtime.GOOS == "windows" {
+		mock += ".exe"
+	}
+	cat.SetMockBinary(mock)
 	m := root.NewRootModelWithHub(cat, fake.client(), false)
 
 	updated, _ := m.Update(windowSize(120, 40))

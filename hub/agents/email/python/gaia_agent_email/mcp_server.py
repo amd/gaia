@@ -31,6 +31,7 @@ mail backend, and only on the authorized path.
 
 from __future__ import annotations
 
+import functools
 import os
 from typing import Any, Dict, List, Optional
 
@@ -50,6 +51,7 @@ from gaia_agent_email.api_routes import (  # read-only reuse of the REST surface
 )
 from gaia.connectors.api import connected_mailbox_providers
 from gaia.logger import get_logger
+from gaia_agent_email.mailbox_state import PROVIDERS, backend_family
 from gaia_agent_email.version import AGENT_VERSION
 
 logger = get_logger(__name__)
@@ -408,21 +410,23 @@ class EmailTriageMCPAgent(MCPAgent):
                 "from the message's mailbox), or draft with a provider binding."
             )
         provider = providers[0]
-        if provider == "google":
+        try:
+            family = backend_family(provider)
+        except ValueError:
+            raise RuntimeError(
+                f"Connected mailbox provider '{provider}' has no send backend. "
+                f"Expected one of: {', '.join(PROVIDERS)}."
+            ) from None
+        if family == "gmail":
             from gaia_agent_email.gmail_backend import LiveGmailBackend, _get_gmail_token
 
             return LiveGmailBackend(_get_gmail_token)
-        if provider == "microsoft":
-            from gaia_agent_email.outlook_backend import (
-                LiveOutlookBackend,
-                _get_outlook_token,
-            )
-
-            return LiveOutlookBackend(_get_outlook_token)
-        raise RuntimeError(
-            f"Connected mailbox provider '{provider}' has no send backend. "
-            "Expected 'google' or 'microsoft'."
+        from gaia_agent_email.outlook_backend import (
+            LiveOutlookBackend,
+            _get_outlook_token,
         )
+
+        return LiveOutlookBackend(functools.partial(_get_outlook_token, provider))
 
 
 def start_email_mcp(

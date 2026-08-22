@@ -72,9 +72,10 @@ def build_registration():
         return EmailTriageAgent(config=config)
 
     # Provider-superset connector list, mirrored from
-    # EmailTriageAgent.REQUIRED_CONNECTORS so the AgentUI offers both the Google
-    # and Microsoft tiles. Rebuilt from the light scope constants to avoid
-    # importing the heavy agent module at discovery time.
+    # EmailTriageAgent.REQUIRED_CONNECTORS so the AgentUI offers the Google,
+    # personal Microsoft, and work Microsoft 365 tiles. Rebuilt from the light
+    # scope constants to avoid importing the heavy agent module at discovery
+    # time.
     required_connections = [
         ConnectorRequirement(
             connector_id="google",
@@ -88,10 +89,19 @@ def build_registration():
             connector_id="microsoft",
             scopes=OUTLOOK_MAIL_SCOPES + OUTLOOK_CALENDAR_SCOPES,
             reason=(
-                "Read and organize your Outlook mailbox — personal "
-                "(Outlook.com) or work/school (Microsoft 365) — send messages "
-                "on your behalf, and read/respond to your Outlook calendar via "
+                "Read and organize your personal Outlook mailbox "
+                "(Outlook.com / Hotmail / Live), send messages on your "
+                "behalf, and read/respond to your Outlook calendar via "
                 "Microsoft Graph."
+            ),
+        ),
+        ConnectorRequirement(
+            connector_id="microsoft_work",
+            scopes=OUTLOOK_MAIL_SCOPES + OUTLOOK_CALENDAR_SCOPES,
+            reason=(
+                "Read and organize your work Microsoft 365 mailbox, send "
+                "messages on your behalf, and read/respond to your work "
+                "calendar via Microsoft Graph."
             ),
         ),
     ]
@@ -121,5 +131,5 @@ def build_registration():
         category="productivity",
         tags=["email", "gmail", "calendar", "triage"],
         icon="mail",
-        tools_count=65,  # guarded by tests/test_email_agent.py (#1232)
+        tools_count=66,  # guarded by tests/test_email_agent.py (#1232)
     )

@@ -55,16 +55,29 @@ def test_google_scopes_match_source_of_truth():
     assert set(cr.required_scopes) == set(REQUIRED_SCOPES)
 
 
-def test_microsoft_scopes_match_source_of_truth():
+@pytest.mark.parametrize("connector_id", ["microsoft", "microsoft_work"])
+def test_microsoft_scopes_match_source_of_truth(connector_id):
     from gaia_agent_email.outlook_scopes import (
         OUTLOOK_ALL_SCOPES,
         OUTLOOK_REQUIRED_SCOPES,
     )
 
     by_provider = _required_connections_by_provider()
-    cr = by_provider["microsoft"]
+    cr = by_provider[connector_id]
     assert set(cr.scopes) == set(OUTLOOK_ALL_SCOPES)
     assert set(cr.required_scopes) == set(OUTLOOK_REQUIRED_SCOPES)
+
+
+def test_daemon_forwards_every_mailbox_provider():
+    """The daemon only forwards tokens for ids listed in ``forward_providers``
+    (#2629) — a connector present in ``required_connections`` but missing here
+    would connect successfully and then silently never deliver a token."""
+    from gaia_agent_email.mailbox_state import PROVIDERS
+
+    from gaia.daemon.sidecars.spec import builtin_specs
+
+    email_spec = builtin_specs()["email"]
+    assert set(email_spec.forward_providers) == set(PROVIDERS)
 
 
 def test_namespaced_id_matches_source_of_truth():
@@ -118,9 +131,11 @@ class TestAgentScopesAgreeAcrossSurfaces:
         )
 
     def test_daemon_sidecar_spec_matches_fixture(self):
+        from gaia_agent_email.mailbox_state import PROVIDERS
+
         by_provider = _required_connections_by_provider()
         fixture = _load_fixture()
-        for provider in ("google", "microsoft"):
+        for provider in PROVIDERS:
             cr = by_provider[provider]
             agent = fixture[provider]["agent_scopes"]
             assert set(cr.scopes) == set(agent["required"]) | set(agent["optional"])
@@ -128,9 +143,10 @@ class TestAgentScopesAgreeAcrossSurfaces:
 
     def test_build_scope_union_agent_portion_matches_fixture(self):
         from gaia_agent_email.connector_routes import _build_scope_union
+        from gaia_agent_email.mailbox_state import PROVIDERS
 
         fixture = _load_fixture()
-        for provider in ("google", "microsoft"):
+        for provider in PROVIDERS:
             union = set(_build_scope_union(provider))
             agent = fixture[provider]["agent_scopes"]
             assert (set(agent["required"]) | set(agent["optional"])) <= union

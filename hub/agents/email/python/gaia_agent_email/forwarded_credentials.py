@@ -55,16 +55,24 @@ def _all_scopes_for(provider: str) -> List[str]:
     never REQUIRED_SCOPES: printing the narrower enforced-only set here
     would reproduce the exact silent-narrowing defect this issue removes —
     a user who follows the remedy would end up with LESS than what a
-    same-account connect from any other surface would have granted them."""
-    if provider == "google":
+    same-account connect from any other surface would have granted them.
+
+    Keyed off ``backend_family`` (not a hand-rolled provider check) so a
+    provider this agent doesn't recognize fails loudly here too, instead of
+    silently rendering an empty ``--scopes`` list in the remedy command."""
+    from gaia_agent_email.mailbox_state import backend_family
+
+    family = backend_family(provider)
+    if family == "gmail":
         from gaia_agent_email.scopes import ALL_SCOPES
 
         return list(ALL_SCOPES)
-    if provider == "microsoft":
-        from gaia_agent_email.outlook_scopes import OUTLOOK_ALL_SCOPES
+    # "graph" — both microsoft (personal) and microsoft_work (#2629) authenticate
+    # against Microsoft Graph with the same scope set; only the OAuth
+    # tenant/authority differs.
+    from gaia_agent_email.outlook_scopes import OUTLOOK_ALL_SCOPES
 
-        return list(OUTLOOK_ALL_SCOPES)
-    return []
+    return list(OUTLOOK_ALL_SCOPES)
 
 
 @dataclass(frozen=True)

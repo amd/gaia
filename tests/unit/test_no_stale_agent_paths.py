@@ -47,6 +47,7 @@ MIGRATED_AGENTS = (
     # Hub-native — never lived in-core, so nothing can go stale. Listed anyway to keep
     # the guard exhaustive against hub/agents/ (see the coverage test below).
     "doc-search",
+    "gaia",
     "hello-world",
     "word-count",
 )

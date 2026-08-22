@@ -36,7 +36,7 @@ func (m RootModel) ControlSnapshot() control.Snapshot {
 		}
 	}
 
-	if m.showHelp {
+	if m.help.Open {
 		snap.Overlay = "help"
 	}
 	// Halt wins over every other overlay. It draws nothing and intercepts no

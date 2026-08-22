@@ -126,12 +126,16 @@ jobs:
           # [dev] covers the email + eval unit tests (pytest, pytest-mock,
           # respx, keyring, httpx). [api] adds fastapi/uvicorn, which the
           # tests/unit/connectors/ router tests import via the UI connectors
-          # router. The in-memory keyring backend in tests/conftest.py avoids
-          # the SecretService daemon prerequisite on Linux runners. The email
-          # hub package is installed so the REST-contract + OpenAPI-conformance
-          # tests can import gaia_agent_email (they build the app in-process and
-          # mock Lemonade — no server needed).
-          uv pip install --system -e ".[dev,api]" -e hub/agents/email/python
+          # router. [publish] adds the 'build' package (#2934): the sdist
+          # packaging regression test builds a real sdist with --no-isolation
+          # against this env's already-installed setuptools, so it needs
+          # 'build' present but never touches the network. The in-memory
+          # keyring backend in tests/conftest.py avoids the SecretService
+          # daemon prerequisite on Linux runners. The email hub package is
+          # installed so the REST-contract + OpenAPI-conformance tests can
+          # import gaia_agent_email (they build the app in-process and mock
+          # Lemonade — no server needed).
+          uv pip install --system -e ".[dev,api,publish]" -e hub/agents/email/python
 
       - name: Run email-agent unit tests
         # NOTE: do NOT set GAIA_MEMORY_DISABLED here. The hub/agents/email/python

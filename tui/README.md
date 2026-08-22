@@ -114,6 +114,39 @@ In the pre-run checks, a condition that cannot be determined renders `[?]`
 rather than a checkmark and never counts as ready — unknown is never treated as
 fine.
 
+## Testing the harness against Claude
+
+`--use-claude` runs an agent on Anthropic's Claude API instead of the local
+model. It exists so that when something goes wrong you can tell *which* thing
+went wrong: on a known-good model, a bad answer is the harness's fault, not the
+model's.
+
+```bash
+gaia-tui run gaia --query "..." --use-claude
+gaia-tui run gaia --query "..." --use-claude --claude-model claude-opus-5
+```
+
+**This sends your conversation off the machine**, which is the one thing GAIA
+otherwise never does — so the chat header names the exact model in use (e.g.
+`Sonnet 5`) for as long as the mode is on, colored to mark it remote, and the
+launch says so in the transcript. It needs `ANTHROPIC_API_KEY` set, and it is a
+debugging tool, not a way to use GAIA.
+
+Only the chat model moves. Retrieval over your documents still embeds locally
+through Lemonade, so document questions need Lemonade running either way.
+
+Paths that cannot honour the flag say so instead of quietly ignoring it: the
+daemon transport refuses it, `--claude-model` without `--use-claude` refuses,
+and `chat --subprocess` tells you to put the flag in the command line you own.
+
+**Switching models mid-session:** the gaia agent also takes `/model` in the
+chat composer — `/model` alone lists every switchable id (the curated Claude
+5 family, plus whatever Lemonade currently has downloaded), and `/model <id>`
+swaps the live client without losing conversation history or loaded skills.
+An unknown id, a missing credential, or an unreachable Lemonade Server all
+refuse the switch with an actionable message and leave the session on
+whichever model was already working.
+
 ## Running against a local clone
 
 Three independent layers, and only one of them has a flag.
