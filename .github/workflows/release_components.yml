@@ -48,57 +48,93 @@ env:
   AGENT_UI_MANIFEST: hub/components/agent-ui/gaia-agent.yaml
 
 jobs:
-  # ── Resolve the version once, and prove every manifest agrees with the tag ──
-  # A manifest that still says 0.22.0 under a v0.23.0 tag would publish the new
-  # binaries under the OLD immutable version path — silently, and unfixably,
-  # because the path is immutable. Fail before anything is built.
+  # ── Resolve each component's own version ───────────────────────────────────
+  # Every component publishes under the version in its OWN manifest. They are
+  # independent of the core release and of each other, so a terminal-hub rebuild
+  # ships without a core release and bumping one never forces the other.
   version:
     name: Resolve & gate version
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.v.outputs.version }}
+      tui_version: ${{ steps.v.outputs.tui_version }}
       dry_run: ${{ steps.v.outputs.dry_run }}
     steps:
       - uses: actions/checkout@v7
 
+      # Both components ship as part of the core release and carry its version,
+      # deliberately: one number for the whole release is simpler to reason
+      # about than three, and agent-ui's npm package already tracks
+      # src/gaia/version.py through installer/version/bump-ui-version.mjs.
+      #
+      # A TAG therefore requires both manifests to already match it (asserted
+      # below). A DISPATCH does not: re-running a publish, or shipping a rebuilt
+      # binary between core releases, must not require cutting a core release —
+      # that coupling is what made every terminal-hub re-run fail.
+      #
+      # Each still publishes under the version in its own manifest, read by
+      # publish_to_r2.py. The assertion keeps them equal to the release; it is
+      # not what supplies the path.
       - id: v
         shell: bash
         run: |
           set -euo pipefail
+          python -m pip install --quiet pyyaml
+          read_ver() { python -c "import yaml,sys; print(yaml.safe_load(open(sys.argv[1]))['version'])" "$1"; }
+
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            # A dispatch has no tag to read; take the version from the manifests
-            # themselves and default to a dry run unless explicitly disabled.
-            VERSION="$(python -c "import yaml,sys; print(yaml.safe_load(open('${TERMINAL_HUB_MANIFEST}'))['version'])")"
+            CORE="$(python -c "import re,pathlib; print(re.search(r'__version__ = \"([^\"]+)\"', pathlib.Path('src/gaia/version.py').read_text()).group(1))")"
             if [ "${{ github.event.inputs.dry_run }}" = "false" ]; then
               echo "dry_run=false" >> "$GITHUB_OUTPUT"
             else
               echo "dry_run=true" >> "$GITHUB_OUTPUT"
             fi
           else
-            VERSION="${GITHUB_REF_NAME#v}"
+            CORE="${GITHUB_REF_NAME#v}"
             echo "dry_run=false" >> "$GITHUB_OUTPUT"
           fi
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          echo "resolved version: ${VERSION}"
 
-      - name: Assert both manifests match the resolved version
-        shell: bash
-        env:
-          VERSION: ${{ steps.v.outputs.version }}
-        run: |
-          set -euo pipefail
-          python -m pip install --quiet pyyaml
-          fail=0
-          for m in "${TERMINAL_HUB_MANIFEST}" "${AGENT_UI_MANIFEST}"; do
-            got="$(python -c "import yaml; print(yaml.safe_load(open('${m}'))['version'])")"
-            if [ "${got}" != "${VERSION}" ]; then
-              echo "::error file=${m}::version ${got} does not match the release version ${VERSION}. Bump it — R2 paths are immutable, so publishing under a stale version cannot be undone."
-              fail=1
-            else
-              echo "✓ ${m} = ${got}"
+          TUI_V="$(read_ver "${TERMINAL_HUB_MANIFEST}")"
+          UI_V="$(read_ver "${AGENT_UI_MANIFEST}")"
+
+          for pair in "terminal-hub:${TUI_V}" "agent-ui:${UI_V}" "core:${CORE}"; do
+            name="${pair%%:*}"; val="${pair#*:}"
+            if ! printf '%s' "${val}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+'; then
+              echo "::error::${name} version '${val}' is not a valid x.y.z version."
+              exit 1
             fi
           done
-          exit "${fail}"
+
+          # Both components ship as part of the core release and carry its
+          # version, so a TAG must find them already bumped: publishing under a
+          # stale version writes to an immutable path that cannot be corrected,
+          # and the catalog picks latest_version by highest SemVer, so a stale
+          # one is not even reachable as "latest".
+          #
+          # A DISPATCH is deliberately exempt. That is the whole point of the
+          # split: re-running a component publish, or shipping a rebuilt binary
+          # between core releases, must not require cutting a core release.
+          if [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
+            fail=0
+            for pair in "${TERMINAL_HUB_MANIFEST}:${TUI_V}" "${AGENT_UI_MANIFEST}:${UI_V}"; do
+              m="${pair%:*}"; got="${pair##*:}"
+              if [ "${got}" != "${CORE}" ]; then
+                echo "::error file=${m}::version ${got} does not match the release ${CORE}. Bump it before tagging — R2 paths are immutable, so publishing under a stale version cannot be undone."
+                fail=1
+              else
+                echo "✓ ${m} = ${got}"
+              fi
+            done
+            [ "${fail}" -eq 0 ] || exit 1
+          fi
+
+          echo "version=${CORE}"       >> "$GITHUB_OUTPUT"
+          echo "tui_version=${TUI_V}"  >> "$GITHUB_OUTPUT"
+          echo "core release : ${CORE}  (min_gaia_version gate only)"
+          echo "terminal-hub : ${TUI_V} -> agents/terminal-hub/${TUI_V}/"
+          # agent-ui publishes under its manifest version, read by
+          # publish_to_r2.py itself -- logged here, not passed as an output.
+          echo "agent-ui     : ${UI_V} -> agents/agent-ui/${UI_V}/"
 
       # A manifest can agree with the tag and STILL be a lie: the terminal hub
       # needs daemon host API v1.1, which released 0.22.0 does not serve.
@@ -278,17 +314,21 @@ jobs:
       - name: Build all targets
         shell: bash
         env:
-          VERSION: ${{ needs.version.outputs.version }}
+          VERSION: ${{ needs.version.outputs.tui_version }}
         run: |
           set -euo pipefail
           mkdir -p bin
           PKG=github.com/amd/gaia/tui/internal/cli
-          DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          # The COMMIT's timestamp, never `now` — a wall-clock stamp makes every
+          # rebuild of the same commit differ, so re-publishing a released
+          # version can never reconcile against the bytes already stored.
+          DATE="$(TZ=UTC git show -s --format=%cd --date=format-local:%Y-%m-%dT%H:%M:%SZ HEAD)"
           cd tui
           while read -r goos goarch platform; do
             EXT=""
             [ "${goos}" = "windows" ] && EXT=".exe"
-            CGO_ENABLED=0 GOOS="${goos}" GOARCH="${goarch}" go build \
+            # -trimpath keeps the runner's absolute paths out of the binary.
+            CGO_ENABLED=0 GOOS="${goos}" GOARCH="${goarch}" go build -trimpath \
               -ldflags="-s -w -X ${PKG}.version=${VERSION} -X ${PKG}.commit=${GITHUB_SHA} -X ${PKG}.date=${DATE}" \
               -o "../bin/gaia-${platform}${EXT}" ./cmd/gaia
             echo "built gaia-${platform}${EXT}"
@@ -304,7 +344,7 @@ jobs:
       - name: Verify the built binary reports the release version
         shell: bash
         env:
-          VERSION: ${{ needs.version.outputs.version }}
+          VERSION: ${{ needs.version.outputs.tui_version }}
         run: |
           set -euo pipefail
           # `version` is a cobra subcommand — rootCmd sets no Version field, so
@@ -511,5 +551,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh workflow run deploy_website.yml --ref main
+          # --repo: this job has no checkout, so gh cannot infer the repository.
+          gh workflow run deploy_website.yml --repo "${GITHUB_REPOSITORY}" --ref main
           echo "✓ requested website redeploy (deploy_website.yml on main)"

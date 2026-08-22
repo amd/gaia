@@ -1,17 +1,22 @@
 # Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
 # SPDX-License-Identifier: MIT
-"""Which lane an artifact takes to the hub, and what actually goes on the wire.
+"""Which lane a gaia sidecar takes to the hub, and what actually goes on the wire.
 
-Cloudflare caps a Worker request body at 100 MB on Free/Pro, so an artifact
-above that cannot be published through the Worker at all — it 413s at the edge.
-The publisher therefore routes large artifacts straight into R2 and sends only
-their coordinates.
+Cloudflare caps a Worker request body at 100 MB on Free/Pro, and the Linux
+sidecar is past that (measured 120,677,152 bytes with the RAG deps compiled in),
+so it cannot be published through the Worker at all — it 413s at the edge. The
+publisher routes it straight into R2 and sends only its coordinates.
 
 These tests assert the *shape* of both calls, not merely that they happened. A
 mock that records "put_object was invoked" would still pass if the upload went
 multipart, or if the checksum were omitted, or if the hex digest were sent where
 base64 belongs — and every one of those makes the Worker refuse the publish,
 during a release, after the binaries have been built.
+
+The gaia publisher is a separate file from the email one with a different
+signature (component-tagged records feeding the two-lane binaries.lock.json), so
+the email copy's tests do not cover it. util/verify_publish_pipeline.py drives
+both end-to-end against a local Worker; these are the fast half.
 """
 
 from __future__ import annotations
@@ -25,22 +30,24 @@ import pytest
 
 PACKAGING = Path(__file__).resolve().parents[1] / "packaging"
 _spec = importlib.util.spec_from_file_location(
-    "email_publish_to_r2", PACKAGING / "publish_to_r2.py"
+    "gaia_publish_to_r2", PACKAGING / "publish_to_r2.py"
 )
 assert _spec and _spec.loader
 pub = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(pub)
 
 MANIFEST_YAML = """\
-id: demo
-name: Demo
+id: gaia
+name: GAIA
 version: 1.2.3
-description: "Demo agent"
+description: "Flagship agent"
 author: AMD
 license: MIT
 language: python
 category: conversation
 """
+
+R2_ENV = ("R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "CLOUDFLARE_ACCOUNT_ID")
 
 
 @pytest.fixture
@@ -50,9 +57,13 @@ def manifest(tmp_path: Path) -> Path:
     return p
 
 
-def _artifact(
-    tmp_path: Path, size: int, name: str = "demo-1.2.3-x64-setup.exe"
-) -> Path:
+@pytest.fixture
+def r2_env(monkeypatch):
+    for name in R2_ENV:
+        monkeypatch.setenv(name, "acct" if name.endswith("ACCOUNT_ID") else "v")
+
+
+def _artifact(tmp_path: Path, size: int, name: str = "gaia-agent-linux-x64") -> Path:
     p = tmp_path / name
     p.write_bytes(b"x" * size)
     return p
@@ -115,10 +126,7 @@ def captured(monkeypatch):
         )()
 
     monkeypatch.setattr(pub.requests, "head", fake_head)
-
     monkeypatch.setattr(pub.requests, "post", fake_post)
-    # Returns (sha256, size) now: the 409 path needs the published SIZE too, so
-    # a reconciled artifact reports what the hub serves rather than this build.
     monkeypatch.setattr(pub, "_download_published", lambda *a, **k: ("", 0))
 
     # Stub boto3 AND botocore.config: neither is installed in the unit env, and
@@ -132,30 +140,26 @@ def captured(monkeypatch):
     monkeypatch.setitem(
         sysmod, "boto3", type("m", (), {"client": staticmethod(fake_client)})
     )
-    botocore = type("m", (), {})
-    botocore_config = type("m", (), {"Config": _Config})
-    monkeypatch.setitem(sysmod, "botocore", botocore)
-    monkeypatch.setitem(sysmod, "botocore.config", botocore_config)
+    monkeypatch.setitem(sysmod, "botocore", type("m", (), {}))
+    monkeypatch.setitem(sysmod, "botocore.config", type("m", (), {"Config": _Config}))
     return seen
 
 
-def _publish(manifest: Path, artifact: Path):
+def _publish(manifest: Path, artifact: Path) -> dict:
     return pub.publish_one(
         base_url="https://hub.example",
         manifest_path=manifest,
-        manifest={"id": "demo", "version": "1.2.3"},
+        manifest={"id": "gaia", "version": "1.2.3"},
         artifact_path=artifact,
-        platform_key="win-x64",
+        component="sidecar",
+        platform_key="linux-x64",
         token="tok",
+        docs={},
     )
 
 
-def test_a_small_artifact_still_rides_inline(manifest, tmp_path, captured, monkeypatch):
-    """The existing path must not change — email and terminal-hub depend on it."""
-    monkeypatch.setenv("R2_ACCESS_KEY_ID", "k")
-    monkeypatch.setenv("R2_SECRET_ACCESS_KEY", "s")
-    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct")
-
+def test_a_small_artifact_still_rides_inline(manifest, tmp_path, captured, r2_env):
+    """The existing path must not change — Windows and macOS ship through it."""
     _publish(manifest, _artifact(tmp_path, 1024))
 
     assert captured["put"] is None, "a small artifact must not touch the S3 API"
@@ -165,11 +169,8 @@ def test_a_small_artifact_still_rides_inline(manifest, tmp_path, captured, monke
 
 
 def test_an_oversized_artifact_goes_to_r2_and_is_published_by_reference(
-    manifest, tmp_path, captured, monkeypatch
+    manifest, tmp_path, captured, r2_env
 ):
-    monkeypatch.setenv("R2_ACCESS_KEY_ID", "k")
-    monkeypatch.setenv("R2_SECRET_ACCESS_KEY", "s")
-    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct")
     size = pub.DIRECT_UPLOAD_THRESHOLD + 1
     art = _artifact(tmp_path, size)
     sha = hashlib.sha256(art.read_bytes()).hexdigest()
@@ -178,7 +179,7 @@ def test_an_oversized_artifact_goes_to_r2_and_is_published_by_reference(
 
     put = captured["put"]
     assert put is not None, "an oversized artifact must be uploaded to R2"
-    assert put["Key"] == f"agents/demo/1.2.3/{art.name}"
+    assert put["Key"] == f"agents/gaia/1.2.3/{art.name}"
     # Base64 of the raw digest. Sending hex here is accepted by boto3 and then
     # rejected by R2, which is a failure that only shows up mid-release.
     assert put["ChecksumSHA256"] == base64.b64encode(bytes.fromhex(sha)).decode()
@@ -190,8 +191,32 @@ def test_an_oversized_artifact_goes_to_r2_and_is_published_by_reference(
     assert files["artifact_ref_size"] == str(size)
 
 
+def test_the_summary_record_still_carries_the_component(
+    manifest, tmp_path, captured, r2_env
+):
+    """gen_binaries_lock.py routes the sidecar/tui lanes on this field.
+
+    The by-reference lane must not change the record's shape, or an oversized
+    Linux sidecar publishes fine and then vanishes from the lock.
+    """
+    rec = _publish(manifest, _artifact(tmp_path, pub.DIRECT_UPLOAD_THRESHOLD + 1))
+
+    assert rec["component"] == "sidecar"
+    assert rec["platform"] == "linux-x64"
+    assert rec["executable"] == "gaia-agent"
+    assert rec["size"] == pub.DIRECT_UPLOAD_THRESHOLD + 1
+
+
+def test_a_windows_artifact_keeps_the_exe_suffix_on_the_executable(
+    manifest, tmp_path, captured, r2_env
+):
+    rec = _publish(manifest, _artifact(tmp_path, 1024, "gaia-agent-win32-x64.exe"))
+
+    assert rec["executable"] == "gaia-agent.exe"
+
+
 def test_put_object_is_used_so_the_upload_stays_single_part(
-    manifest, tmp_path, captured, monkeypatch
+    manifest, tmp_path, captured, r2_env
 ):
     """R2 records a whole-object SHA-256 only for single-part uploads.
 
@@ -199,24 +224,16 @@ def test_put_object_is_used_so_the_upload_stays_single_part(
     the checksum is lost, after which the Worker refuses the publish as
     unverifiable. Pinning the call keeps that from regressing quietly.
     """
-    monkeypatch.setenv("R2_ACCESS_KEY_ID", "k")
-    monkeypatch.setenv("R2_SECRET_ACCESS_KEY", "s")
-    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct")
-
     _publish(manifest, _artifact(tmp_path, pub.DIRECT_UPLOAD_THRESHOLD + 1))
 
     assert set(captured["put"]) >= {"Bucket", "Key", "Body", "ChecksumSHA256"}
 
 
-@pytest.mark.parametrize(
-    "missing", ["R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "CLOUDFLARE_ACCOUNT_ID"]
-)
+@pytest.mark.parametrize("missing", R2_ENV)
 def test_missing_r2_credentials_fail_loudly(
-    manifest, tmp_path, captured, monkeypatch, missing
+    manifest, tmp_path, captured, monkeypatch, r2_env, missing
 ):
     """Never fall back to the Worker — that path 413s and wastes a release."""
-    for name in ("R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "CLOUDFLARE_ACCOUNT_ID"):
-        monkeypatch.setenv(name, "v")
     monkeypatch.delenv(missing, raising=False)
 
     with pytest.raises(SystemExit) as e:
@@ -235,7 +252,7 @@ def test_the_threshold_sits_below_cloudflares_real_cap():
 
 
 def test_an_already_published_object_is_never_overwritten(
-    manifest, tmp_path, captured, monkeypatch
+    manifest, tmp_path, captured, r2_env
 ):
     """The failure this guards is silent, which is what makes it dangerous.
 
@@ -245,9 +262,6 @@ def test_an_already_published_object_is_never_overwritten(
     409 handler then re-downloads the bytes it just wrote — agreeing with itself
     and exiting green while install-time verification is broken for everyone.
     """
-    monkeypatch.setenv("R2_ACCESS_KEY_ID", "k")
-    monkeypatch.setenv("R2_SECRET_ACCESS_KEY", "s")
-    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct")
     captured["already_published"] = True
 
     _publish(manifest, _artifact(tmp_path, pub.DIRECT_UPLOAD_THRESHOLD + 1))
@@ -257,12 +271,9 @@ def test_an_already_published_object_is_never_overwritten(
 
 
 def test_the_check_runs_before_the_upload_not_after(
-    manifest, tmp_path, captured, monkeypatch
+    manifest, tmp_path, captured, r2_env
 ):
     """A first publish still uploads — the guard must not block the normal path."""
-    monkeypatch.setenv("R2_ACCESS_KEY_ID", "k")
-    monkeypatch.setenv("R2_SECRET_ACCESS_KEY", "s")
-    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct")
     captured["already_published"] = False
 
     _publish(manifest, _artifact(tmp_path, pub.DIRECT_UPLOAD_THRESHOLD + 1))
@@ -272,7 +283,7 @@ def test_the_check_runs_before_the_upload_not_after(
 
 
 def test_r2_client_disables_boto3_automatic_checksums(
-    manifest, tmp_path, captured, monkeypatch
+    manifest, tmp_path, captured, r2_env
 ):
     """boto3 >= 1.36 breaks R2 uploads unless the new defaults are turned off.
 
@@ -281,10 +292,6 @@ def test_r2_client_disables_boto3_automatic_checksums(
     credentials problem and sends you looking in the wrong place entirely. This
     cost one real release, so pin the config rather than the symptom.
     """
-    monkeypatch.setenv("R2_ACCESS_KEY_ID", "k")
-    monkeypatch.setenv("R2_SECRET_ACCESS_KEY", "s")
-    monkeypatch.setenv("CLOUDFLARE_ACCOUNT_ID", "acct")
-
     _publish(manifest, _artifact(tmp_path, pub.DIRECT_UPLOAD_THRESHOLD + 1))
 
     cfg = captured["client_kwargs"]["config"]
@@ -306,3 +313,126 @@ def test_the_r2_endpoint_is_account_scoped(manifest, tmp_path, captured, monkeyp
         captured["client_kwargs"]["endpoint_url"]
         == "https://acct123.r2.cloudflarestorage.com"
     )
+
+
+# --- the pre-flight: nothing may be stored before the oversized lane is proven --
+
+
+def test_the_preflight_is_silent_when_every_artifact_fits(tmp_path, monkeypatch):
+    for name in R2_ENV:
+        monkeypatch.delenv(name, raising=False)
+    small = _artifact(tmp_path, 1024)
+
+    pub._preflight_oversized([str(small)])
+
+
+def test_the_preflight_names_every_oversized_file_when_credentials_are_absent(
+    tmp_path, monkeypatch
+):
+    """It must name them: a release run cannot guess which leg is too big."""
+    for name in R2_ENV:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setitem(__import__("sys").modules, "boto3", type("m", (), {}))
+    small = _artifact(tmp_path, 1024, "gaia-agent-win32-x64.exe")
+    big = _artifact(tmp_path, pub.DIRECT_UPLOAD_THRESHOLD, "gaia-agent-linux-x64")
+
+    with pytest.raises(SystemExit) as e:
+        pub._preflight_oversized([str(small), str(big)])
+
+    msg = str(e.value)
+    assert big.name in msg
+    assert "R2_ACCESS_KEY_ID" in msg
+    assert "Nothing has been published" in msg
+
+
+def test_the_preflight_fails_when_boto3_is_missing_even_with_credentials(
+    tmp_path, monkeypatch, r2_env
+):
+    """Credentials alone do not make the upload possible.
+
+    boto3 is imported lazily by the upload itself, so without this the missing
+    dependency surfaces mid-publish — after the smaller platforms are already
+    stored immutably under a version that can never be completed.
+    """
+    real_import = __import__("builtins").__import__
+
+    def blocked(name, *a, **kw):
+        if name.split(".")[0] in ("boto3", "botocore"):
+            raise ImportError(f"No module named {name!r}")
+        return real_import(name, *a, **kw)
+
+    monkeypatch.setattr(__import__("builtins"), "__import__", blocked)
+    big = _artifact(tmp_path, pub.DIRECT_UPLOAD_THRESHOLD, "gaia-agent-linux-x64")
+
+    with pytest.raises(SystemExit) as e:
+        pub._preflight_oversized([str(big)])
+
+    msg = str(e.value)
+    assert "boto3" in msg
+    assert big.name in msg
+    assert "Nothing has been published" in msg
+
+
+def test_the_threshold_is_a_floor_not_a_ceiling(tmp_path, monkeypatch):
+    """An artifact exactly AT the threshold takes the direct lane, not the Worker."""
+    for name in R2_ENV:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setitem(__import__("sys").modules, "boto3", type("m", (), {}))
+    exact = _artifact(tmp_path, pub.DIRECT_UPLOAD_THRESHOLD)
+
+    with pytest.raises(SystemExit):
+        pub._preflight_oversized([str(exact)])
+
+
+def test_the_preflight_rejects_a_missing_artifact_before_anything_is_stored(
+    tmp_path, monkeypatch
+):
+    """A typo'd path must not cost the platforms that were listed before it."""
+    for name in R2_ENV:
+        monkeypatch.delenv(name, raising=False)
+    present = _artifact(tmp_path, 1024)
+
+    with pytest.raises(SystemExit) as e:
+        pub._preflight_oversized([str(present), str(tmp_path / "gaia-agent-nope")])
+
+    msg = str(e.value)
+    assert "gaia-agent-nope" in msg
+    assert "Nothing has been published" in msg
+
+
+def test_the_oversized_artifact_is_published_first(
+    manifest, tmp_path, monkeypatch, r2_env
+):
+    """The pre-flight proves the R2 credentials exist, not that R2 takes them.
+
+    An expired or read-only token still fails at the PUT, so the artifact that
+    needs it must go first — otherwise the smaller platforms are already stored
+    immutably under a version that can never be completed.
+    """
+    small = _artifact(tmp_path, 1024, "gaia-agent-darwin-arm64")
+    big = _artifact(tmp_path, pub.DIRECT_UPLOAD_THRESHOLD, "gaia-agent-linux-x64")
+    order: list[str] = []
+
+    def record(base_url, manifest_path, manifest_data, artifact_path, *a, **kw):
+        order.append(artifact_path.name)
+        return {"component": "sidecar", "platform": "x", "filename": "x"}
+
+    monkeypatch.setattr(pub, "publish_one", record)
+    monkeypatch.setenv("AGENT_HUB_PUBLISH_TOKEN", "tok")
+    monkeypatch.setitem(__import__("sys").modules, "boto3", type("m", (), {}))
+
+    # Deliberately listed small-first, which is what `for f in bins/*` produces.
+    pub.main(
+        [
+            "--base-url",
+            "https://hub.example",
+            "--manifest",
+            str(manifest),
+            "--artifact",
+            f"{small}=sidecar:darwin-arm64",
+            "--artifact",
+            f"{big}=sidecar:linux-x64",
+        ]
+    )
+
+    assert order == [big.name, small.name], "the oversized artifact must go first"
