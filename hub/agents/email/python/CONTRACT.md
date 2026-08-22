@@ -77,12 +77,16 @@ test asserts byte-for-byte equality, so drift in either place fails CI.
 | `PROMOTIONAL` | Marketing / bulk mail. |
 | `PERSONAL` | Personal correspondence. |
 
-> **Transport authentication is separate from this schema.** The frozen sidecar
-> requires a **per-session bearer token** (`Authorization: Bearer <token>`) on
-> every `/v1/email/*` request and enforces a loopback Host/Origin allowlist
-> ([#1706](https://github.com/amd/gaia/issues/1706)) — `401`/`400`/`403` on
-> failure. That is a deployment/transport control, not part of the request/response
-> contract, so it is **not** encoded in the frozen OpenAPI document. See
+> **Transport authentication is separate from this schema, but IS declared in the
+> OpenAPI document.** The frozen sidecar requires a **per-session bearer token**
+> (`Authorization: Bearer <token>`) on every `/v1/email/*` request and enforces a
+> loopback Host/Origin allowlist ([#1706](https://github.com/amd/gaia/issues/1706))
+> — `401`/`400`/`403` on failure. That check is conditional — a sidecar started
+> with no token configured (local development) skips it — so the OpenAPI document
+> declares a `bearerAuth` HTTP scheme and, per operation, `security: [{"bearerAuth":
+> []}, {}]` (bearer OR none) rather than asserting an unconditional requirement.
+> `EXEMPT_PATHS` routes (`/health`, `/version`, `/v1/email/health`, `/v1/email/version`)
+> declare an explicit empty requirement instead. See
 > [Email Integration → Authentication](https://amd-gaia.ai/docs/guides/email-integration#authentication).
 
 ---

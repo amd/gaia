@@ -1,7 +1,7 @@
 /* Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved. */
 /* SPDX-License-Identifier: MIT */
 
-/* GAIA shared design tokens — single source of truth for website + Agent UI.
+/* GAIA shared design tokens — the website's single source of truth.
    Dark is the designed ground (the starfield and the whole surface system assume
    it); light is a derived counterpart. Dark overrides via [data-theme="dark"],
    set pre-paint by the inline script in Layout.astro.

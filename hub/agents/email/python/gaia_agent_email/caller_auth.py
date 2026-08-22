@@ -84,6 +84,8 @@ EXEMPT_PATHS: FrozenSet[str] = frozenset(
         "/version",
         "/v1/email/health",
         "/v1/email/version",
+        # spec/playground are include_in_schema=False, so they never appear
+        # in the generated OpenAPI document below.
         "/v1/email/spec",
         "/v1/email/playground",
     }
@@ -182,6 +184,58 @@ def config_from_env() -> CallerAuthConfig:
 def is_exempt_path(path: str) -> bool:
     """Whether ``path`` is exempt from the token requirement (probes / HTML)."""
     return path in EXEMPT_PATHS
+
+
+# HTTP methods FastAPI/OpenAPI ever attach an operation to under a path item.
+_OPENAPI_METHODS: FrozenSet[str] = frozenset(
+    {"get", "post", "put", "patch", "delete", "options", "head", "trace"}
+)
+
+
+def openapi_security_extension(spec: dict) -> dict:
+    """Overlay the bearer-token gate onto a generated OpenAPI document (#2993).
+
+    ``require_caller_token`` is a plain ``Request``-typed dependency (by
+    design — it must not risk behaviour drift in the live auth path), so
+    FastAPI's schema generator never sees it and emits no
+    ``securitySchemes``/``security`` at all. This overlay documents the REAL
+    posture instead: the gate is skipped entirely when the sidecar has no
+    token configured (local dev), so every gated operation declares
+    ``security: [{"bearerAuth": []}, {}]`` — bearer OR none — never a false
+    "always required" claim. :data:`EXEMPT_PATHS` routes get an explicit
+    empty requirement (``security: []``) so they read as deliberately public,
+    not merely undocumented. Mutates and returns ``spec``.
+    """
+    schemes = spec.setdefault("components", {}).setdefault("securitySchemes", {})
+    schemes["bearerAuth"] = {"type": "http", "scheme": "bearer"}
+    for path, operations in spec.get("paths", {}).items():
+        requirement = [] if is_exempt_path(path) else [{"bearerAuth": []}, {}]
+        for method, operation in operations.items():
+            if method in _OPENAPI_METHODS:
+                operation["security"] = requirement
+    return spec
+
+
+def install_openapi_security(app) -> None:
+    """Wire :func:`openapi_security_extension` onto ``app.openapi()`` (#2993).
+
+    Shared by the sidecar (``server.py``) and the export app
+    (``export_openapi.py``) so the bearer-gate overlay is defined once and both
+    documents can never drift apart. Delegates to the app's own ``app.openapi``
+    (FastAPI's default schema builder) rather than calling
+    ``fastapi.openapi.utils.get_openapi`` directly — the default already forwards
+    everything ``FastAPI.__init__`` was given (``servers``, ``openapi_tags``,
+    etc.), so nothing set on the app can silently drop out of the published spec.
+    """
+    base_openapi = app.openapi
+
+    def _openapi() -> dict:
+        if app.openapi_schema:
+            return app.openapi_schema
+        app.openapi_schema = openapi_security_extension(base_openapi())
+        return app.openapi_schema
+
+    app.openapi = _openapi
 
 
 def _host_only(header_value: str) -> str:
@@ -291,4 +345,6 @@ __all__ = [
     "config_from_env",
     "is_exempt_path",
     "token_ok",
+    "openapi_security_extension",
+    "install_openapi_security",
 ]
