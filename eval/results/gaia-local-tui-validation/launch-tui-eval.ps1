@@ -1,0 +1,20 @@
+# Launch the flagship TUI for local eval driving (control mode, Haiku, no Lemonade).
+# One TUI at a time — kill existing gaia-drive.exe before running this.
+$root = 'C:\Users\14255\Work\gaia'
+$home_eval = "$root\eval\results\gaia-local-tui-validation"
+
+# Agent-side auth: the Go TUI checks ANTHROPIC_API_KEY before spawning with --use-claude.
+$envline = Select-String -Path "$root\.env" -Pattern '^ANTHROPIC_API_KEY=' | Select-Object -First 1
+if ($envline) { $env:ANTHROPIC_API_KEY = $envline.Line.Split('=', 2)[1].Trim() }
+
+$env:PYTHONPATH = "$root\src;$root\hub\agents\chat\python;$root\hub\agents\gaia\python"
+$env:GAIA_TUI_HOME = "$home_eval\tui-home"
+$env:GAIA_AGENT_LOG = "$home_eval\agent-session.log"
+$env:GAIA_MEMORY_DISABLED = '1'   # embedder = Lemonade = forbidden on this box
+$env:GAIA_DYNAMIC_TOOLS = '0'     # tool selection also embeds; full registry rides along
+$env:PYTHONIOENCODING = 'utf-8'
+$env:PATH = "$root\.venv\Scripts;" + $env:PATH
+
+New-Item -ItemType Directory -Force "$env:GAIA_TUI_HOME" | Out-Null
+$inner = "cd /d `"$root`" && tui\bin\gaia-drive.exe run gaia --use-claude --claude-model claude-haiku-4-5 --control-port 8817 --dev"
+Start-Process -FilePath 'cmd.exe' -ArgumentList '/k', $inner -WindowStyle Normal
