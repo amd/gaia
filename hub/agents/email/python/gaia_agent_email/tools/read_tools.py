@@ -42,6 +42,7 @@ from gaia_agent_email.context_budget import (
     skill_prompt_tokens,
 )
 from gaia_agent_email.gmail_backend import decode_message_body
+from gaia_agent_email.gmail_query import DURATION_OP_RE, parse_gmail_duration_value
 from gaia_agent_email.tools.envelope import _envelope_err, _envelope_ok
 
 # Re-exported so the pre-scan tests can monkeypatch ``read_tools.make_llm_classifier``
@@ -67,6 +68,7 @@ from gaia_agent_email.tools.triage_heuristics import (
 )
 from gaia_agent_email.tools.usage import aggregate_usage_stats
 from gaia_agent_email.verbose import (
+    log_search_effective_query,
     log_tool_call,
     log_triage_decision,
     log_triage_dispatch,
@@ -845,13 +847,17 @@ _RELATIVE_DAY_WINDOWS = {"today": "1d", "yesterday": "2d"}
 
 
 def normalize_gmail_date_operators(query: str) -> str:
-    """Rewrite date-operator values in ``query`` to Gmail's ``YYYY/MM/DD``.
+    """Rewrite date-operator values in ``query`` to Gmail's ``YYYY/MM/DD``,
+    and duration-operator (``newer_than:``/``older_than:``) values to a unit
+    Gmail accepts.
 
     Relative recency words (``after:today`` / ``newer:yesterday``) are rewritten
     to the timezone-robust ``newer_than:`` window so a present same-day message
     is reliably matched. Raises ``ValueError`` on an otherwise-unparseable value
     — a loud error beats passing it through as free text and returning a false
-    zero-result.
+    zero-result. The two operator families never overlap (``_DATE_OP_RE``
+    excludes the ``_than`` forms), so applying both substitutions in sequence
+    is safe.
     """
 
     def _sub(m: "re.Match[str]") -> str:
@@ -861,7 +867,12 @@ def normalize_gmail_date_operators(query: str) -> str:
             return f"newer_than:{_RELATIVE_DAY_WINDOWS[bare]}"
         return f"{op}:{_parse_gmail_date_value(m.group('val'), op=op)}"
 
-    return _DATE_OP_RE.sub(_sub, query)
+    def _duration_sub(m: "re.Match[str]") -> str:
+        op = m.group("op")
+        return f"{op}:{parse_gmail_duration_value(m.group('val'), op=op)}"
+
+    query = _DATE_OP_RE.sub(_sub, query)
+    return DURATION_OP_RE.sub(_duration_sub, query)
 
 
 # Gmail search operators (a leading ``token:`` in the query). If a query
@@ -949,20 +960,26 @@ def search_messages_impl(
         },
         debug=debug,
     ) as st:
-        listing = gmail.list_messages(query=query, max_results=max_results)
-        stubs = listing.get("messages", [])
         retried_query = None
-        # A literal-phrase query with zero hits is the #2114 failure mode:
-        # retry once as an operator query before giving up. Only when the
-        # user's query carried no operator of its own (else we'd second-guess
-        # an intentional ``from:`` search).
-        if not stubs and operator_retry and not has_gmail_operator(query):
-            retried_query = operatorize_query(query)
-            if retried_query != query:
-                listing = gmail.list_messages(
-                    query=retried_query, max_results=max_results
-                )
-                stubs = listing.get("messages", [])
+        # ``finally`` so the effective query still reaches the log when the
+        # backend raises -- that is the reproduce-from-a-diagnostics-bundle
+        # case this line exists for.
+        try:
+            listing = gmail.list_messages(query=query, max_results=max_results)
+            stubs = listing.get("messages", [])
+            # A literal-phrase query with zero hits is the #2114 failure mode:
+            # retry once as an operator query before giving up. Only when the
+            # user's query carried no operator of its own (else we'd
+            # second-guess an intentional ``from:`` search).
+            if not stubs and operator_retry and not has_gmail_operator(query):
+                retried_query = operatorize_query(query)
+                if retried_query != query:
+                    listing = gmail.list_messages(
+                        query=retried_query, max_results=max_results
+                    )
+                    stubs = listing.get("messages", [])
+        finally:
+            log_search_effective_query(query=query, retried_query=retried_query)
         if include_bodies:
             full_msgs = [gmail.get_message(stub["id"]) for stub in stubs]
             out = _format_messages_within_budget(
