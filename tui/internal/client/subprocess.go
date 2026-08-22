@@ -455,6 +455,17 @@ func (s *SubprocessClient) SetBypassPermissions(enabled bool) error {
 	})
 }
 
+// ResetTranscript implements TranscriptResetter for the subprocess transport:
+// the child accumulates conversation_history across turns, so /clear must
+// clear it there too or "cleared" context keeps riding into every prompt.
+// The interface is fire-and-forget; a send failure only means the child is
+// already gone, and a dead child has no history to clear.
+func (s *SubprocessClient) ResetTranscript() {
+	if err := s.writeControl(map[string]interface{}{controlKey: "clear_history"}); err != nil && s.debug {
+		fmt.Fprintf(os.Stderr, "clear_history not delivered: %v\n", err)
+	}
+}
+
 // BypassAtLaunch reports whether the child was spawned with bypass already on,
 // so the UI can show the warning from the very first frame rather than only
 // after a toggle.
