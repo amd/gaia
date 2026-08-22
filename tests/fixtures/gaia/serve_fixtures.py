@@ -2,17 +2,25 @@
 # SPDX-License-Identifier: MIT
 """Serve the gaia eval fixtures over HTTP (stdlib only, deterministic content).
 
-Eval setup starts this before web / rss-digest / fixture-hub scenarios:
+Default mode serves the ROUTED layout the scenario corpus assumes
+(eval/scenarios/GAIA_FIXTURE_VALUES.md — scenario URLs are root-relative):
 
+    /<page>.html        → tests/fixtures/gaia/web/<page>.html
+    /rss/feed.xml       → tests/fixtures/gaia/rss/feed.xml
+    /fixture_hub/...    → tests/fixtures/gaia/fixture_hub/_prepared/...
+                          (built per run by prepare_fixture_hub.py)
+
+Eval runs bind **port 8765** — scenarios hardcode http://127.0.0.1:8765 —
+with GAIA_HUB_URL=http://127.0.0.1:8765/fixture_hub:
+
+    python tests/fixtures/gaia/prepare_fixture_hub.py --skills-root <agent skills root>
     python tests/fixtures/gaia/serve_fixtures.py --port 8765
-    # pages:   http://127.0.0.1:8765/web/price_watch.html
-    # rss:     http://127.0.0.1:8765/rss/feed.xml
-    # hub:     GAIA_HUB_URL=http://127.0.0.1:8765/fixture_hub
 
-``--port 0`` binds an ephemeral port (printed on stdout as ``SERVING <url>``)
-so tests never collide with a fixed port. ``--dir`` defaults to this
-directory (the fixtures root); pass ``--dir tests/fixtures/gaia/fixture_hub``
-to serve the hub at the URL root instead of under ``/fixture_hub``.
+Unit tests keep the default ``--port 0`` (ephemeral, printed as
+``SERVING <url>``) so they never collide. Never 4001/4200/8141/13305.
+
+``--dir`` switches to PLAIN single-directory serving (no routing) — used by
+tests that serve one prepared hub directly.
 """
 
 from __future__ import annotations
@@ -25,6 +33,13 @@ from pathlib import Path
 
 FIXTURES_ROOT = Path(__file__).resolve().parent
 
+#: (url-prefix, directory) — first match wins; "" is the web-root catch-all.
+ROUTES: tuple[tuple[str, Path], ...] = (
+    ("/rss", FIXTURES_ROOT / "rss"),
+    ("/fixture_hub", FIXTURES_ROOT / "fixture_hub" / "_prepared"),
+    ("", FIXTURES_ROOT / "web"),
+)
+
 
 class _QuietHandler(SimpleHTTPRequestHandler):
     """Per-request stderr chatter off; errors still surface via status codes."""
@@ -33,14 +48,34 @@ class _QuietHandler(SimpleHTTPRequestHandler):
         pass
 
 
-def make_server(port: int, directory: Path) -> ThreadingHTTPServer:
-    """Build (but do not start) the server; caller owns serve/shutdown."""
-    if not directory.is_dir():
-        raise NotADirectoryError(
-            f"Fixture directory does not exist: {directory}. Pass --dir with a "
-            "real path (default: tests/fixtures/gaia)."
-        )
-    handler = partial(_QuietHandler, directory=str(directory))
+class _RoutedHandler(_QuietHandler):
+    """Map the contract's root-relative URL layout onto the fixture dirs."""
+
+    def translate_path(self, path: str) -> str:
+        clean = path.split("?", 1)[0].split("#", 1)[0]
+        for prefix, directory in ROUTES:
+            if not prefix or clean == prefix or clean.startswith(prefix + "/"):
+                self.directory = str(directory)
+                remainder = clean[len(prefix) :] or "/"
+                return super().translate_path(remainder)
+        return super().translate_path(clean)  # unreachable: "" always matches
+
+
+def make_server(port: int, directory: Path | None = None) -> ThreadingHTTPServer:
+    """Build (but do not start) the server; caller owns serve/shutdown.
+
+    ``directory=None`` (the default) serves the routed fixture layout above;
+    a path serves that single directory plainly.
+    """
+    if directory is None:
+        handler = partial(_RoutedHandler, directory=str(FIXTURES_ROOT / "web"))
+    else:
+        if not directory.is_dir():
+            raise NotADirectoryError(
+                f"Fixture directory does not exist: {directory}. Pass --dir with "
+                "a real path, or omit it for the routed fixture layout."
+            )
+        handler = partial(_QuietHandler, directory=str(directory))
     return ThreadingHTTPServer(("127.0.0.1", port), handler)
 
 
@@ -50,19 +85,34 @@ def main(argv: list[str] | None = None) -> int:
         "--port",
         type=int,
         default=0,
-        help="Port to bind on 127.0.0.1 (default 0 = ephemeral, printed).",
+        help=(
+            "Port to bind on 127.0.0.1. Default 0 = ephemeral (printed). Eval "
+            "runs pass --port 8765 (the base URL scenarios hardcode)."
+        ),
     )
     parser.add_argument(
         "--dir",
         type=Path,
-        default=FIXTURES_ROOT,
-        help="Directory to serve (default: the gaia fixtures root).",
+        default=None,
+        help=(
+            "Serve ONE directory plainly instead of the routed fixture layout "
+            "(web at /, rss at /rss, prepared hub at /fixture_hub)."
+        ),
     )
     args = parser.parse_args(argv)
 
-    server = make_server(args.port, args.dir.resolve())
+    directory = args.dir.resolve() if args.dir is not None else None
+    if directory is None and not (FIXTURES_ROOT / "fixture_hub" / "_prepared").is_dir():
+        print(
+            "WARNING: fixture_hub/_prepared does not exist — /fixture_hub/* will "
+            "404. Run prepare_fixture_hub.py first if this run needs the hub.",
+            file=sys.stderr,
+        )
+
+    server = make_server(args.port, directory)
     host, port = server.server_address[0], server.server_address[1]
-    print(f"SERVING http://{host}:{port}/ from {args.dir.resolve()}", flush=True)
+    served = directory if directory is not None else f"routed layout ({FIXTURES_ROOT})"
+    print(f"SERVING http://{host}:{port}/ from {served}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

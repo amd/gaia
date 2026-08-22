@@ -1,5 +1,0 @@
-[project]
-name = "widgetlib"
-version = "0.1.0"
-description = "Tiny fixture project for gaia-agent code-index eval scenarios."
-requires-python = ">=3.10"
