@@ -527,3 +527,31 @@ def test_adapter_constructs_on_a_supported_requests():
         requests.adapters.HTTPAdapter, "build_connection_pool_key_attributes"
     ), "test environment predates requests 2.32.3"
     assert PinnedIPAdapter() is not None
+
+class TestLoopbackAllowlist:
+    """GAIA_WEB_ALLOWED_HOSTS is an opt-in test affordance: default-off, and it
+    only permits loopback/private for a host the operator explicitly named."""
+
+    def test_default_blocks_loopback(self, monkeypatch):
+        import pytest
+
+        from gaia.web import client
+
+        monkeypatch.delenv("GAIA_WEB_ALLOWED_HOSTS", raising=False)
+        with pytest.raises(ValueError, match="private/reserved"):
+            client._assert_ip_allowed("127.0.0.1", "127.0.0.1")
+
+    def test_allowlisted_host_permitted(self, monkeypatch):
+        from gaia.web import client
+
+        monkeypatch.setenv("GAIA_WEB_ALLOWED_HOSTS", "127.0.0.1")
+        client._assert_ip_allowed("127.0.0.1", "127.0.0.1")  # no raise
+
+    def test_other_private_host_still_blocked(self, monkeypatch):
+        import pytest
+
+        from gaia.web import client
+
+        monkeypatch.setenv("GAIA_WEB_ALLOWED_HOSTS", "127.0.0.1")
+        with pytest.raises(ValueError, match="private/reserved"):
+            client._assert_ip_allowed("10.0.0.1", "evil.internal")

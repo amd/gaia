@@ -26,6 +26,7 @@ $env:PYTHONIOENCODING = 'utf-8'
 # venv Scripts next so the TUI spawns this branch's gaia-agent.
 $env:PATH = "$root\tests\fixtures\gaia\fake_gh;$root\.venv\Scripts;" + $env:PATH
 $env:GAIA_HUB_URL = 'http://127.0.0.1:8765/fixture_hub'
+$env:GAIA_WEB_ALLOWED_HOSTS = '127.0.0.1'   # let the fetch tool reach the loopback fixture server
 
 # Per-scenario skill isolation: a prior install (e.g. rss-digest) persists to
 # ~/.gaia/skills on disk, so scrub the installable fixtures each launch and keep
