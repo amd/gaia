@@ -100,6 +100,9 @@ jobs:
 
       - name: Run slow tests (with Docker operations)
         if: (success() || failure()) && steps.docker-check.outcome == 'success'
+        # bash on every OS: this step branches on pytest's exit code, and the
+        # Windows leg defaults to pwsh, where that syntax is not valid.
+        shell: bash
         run: |
           # pytest exits 5 when the marker selects nothing, which fails the job.
           # No slow tests remain -- the Docker-backed suite went with DockerAgent
