@@ -52,6 +52,7 @@ Token lifecycle, error hygiene, and the no-silent-fallback contract mirror
 from __future__ import annotations
 
 import base64
+from datetime import datetime, timezone
 from typing import (
     Any,
     Callable,
@@ -62,6 +63,7 @@ from typing import (
 )
 
 import httpx
+from gaia_agent_email.outlook_query import translate_query
 from gaia_agent_email.outlook_scopes import OUTLOOK_MAIL_SCOPES
 from gaia_agent_email.scopes import AGENT_NAMESPACED_ID
 
@@ -440,11 +442,16 @@ class LiveOutlookBackend:
                 "$select": "id,conversationId",
             }
 
-            # A free-text query maps to $search (Graph KQL). $search cannot be
-            # combined with $filter/$orderby, so it takes precedence and runs
-            # against the whole mailbox.
+            # $search (Graph KQL) or $filter, chosen by outlook_query.translate_query
+            # from the operators the query uses; the two are mutually exclusive on
+            # this endpoint, and either one runs against the whole mailbox.
             if query:
-                params["$search"] = f'"{query}"'
+                translated = translate_query(query, now=datetime.now(timezone.utc))
+                if translated.filter:
+                    params["$filter"] = translated.filter
+                    params["$orderby"] = "receivedDateTime desc"
+                else:
+                    params["$search"] = translated.search
                 path = "/me/messages"
             elif _LABEL_UNREAD in labels:
                 params["$filter"] = "isRead eq false"
