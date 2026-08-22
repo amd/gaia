@@ -35,6 +35,11 @@ foreach ($s in @('rss-digest','experimental-notes','data-explore')) {
   $d = Join-Path "$env:USERPROFILE\.gaia\skills" $s
   if (Test-Path $d) { Remove-Item -Recurse -Force $d }
 }
+# Fresh scratchpad per scenario: the SQL scratchpad is ~/.gaia/scratchpad.db on
+# disk and survives an agent restart, so re-loading a CSV across scenarios stacks
+# duplicate rows and inflates every SUM. Remove it so each data scenario starts empty.
+$sp = "$env:USERPROFILE\.gaia\scratchpad.db"
+if (Test-Path $sp) { Remove-Item -Force $sp }
 $ght = "$env:USERPROFILE\.gaia\skills\github-triage"
 if (-not (Test-Path $ght)) { Copy-Item -Recurse "$root\hub\skills\github-triage" $ght }
 New-Item -ItemType Directory -Force "$env:GAIA_TUI_HOME" | Out-Null
