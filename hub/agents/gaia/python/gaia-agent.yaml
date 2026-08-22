@@ -1,6 +1,6 @@
 id: gaia
 name: GAIA
-version: 0.1.0
+version: 0.1.1
 description: "The flagship GAIA agent — conversation, document Q&A, data analysis, and web research, with persistent memory and add-on skills"
 author: AMD
 license: MIT

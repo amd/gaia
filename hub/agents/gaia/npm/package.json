@@ -1,6 +1,6 @@
 {
   "name": "@amd-gaia/gaia",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "One command to run GAIA: fetches and SHA-256 verifies the flagship agent sidecar and the terminal UI, then launches them. Runs 100% locally on AMD Ryzen AI.",
   "author": "AMD AI Group",
