@@ -303,9 +303,14 @@ class TestReadTranslation:
     def test_list_messages_mixed_filter_and_search_operators_raises(self):
         # #2996 acceptance criterion: an operator combination Graph genuinely
         # cannot express (unread/date filter + a from:/subject:/text search)
-        # fails loudly instead of silently dropping half the query.
+        # fails loudly instead of silently dropping half the query. Raised as
+        # ConnectorsError (not the bare ValueError translate_query itself
+        # raises) so the multi-mailbox search_messages caller, which isolates
+        # per-provider failures by catching ConnectorsError only, treats this
+        # as a single-mailbox failure instead of aborting every mailbox and
+        # discarding results already collected from the others.
         backend, _, _ = _backend(lambda r: _ok({"value": []}))
-        with pytest.raises(ValueError, match="cannot be combined"):
+        with pytest.raises(ConnectorsError, match="cannot be combined"):
             backend.list_messages(query="is:unread from:alice", max_results=5)
 
     def test_list_messages_normalizes_to_gmail_stub_shape(self):

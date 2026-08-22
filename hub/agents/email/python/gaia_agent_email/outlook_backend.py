@@ -446,7 +446,15 @@ class LiveOutlookBackend:
             # from the operators the query uses; the two are mutually exclusive on
             # this endpoint, and either one runs against the whole mailbox.
             if query:
-                translated = translate_query(query, now=datetime.now(timezone.utc))
+                # Wrap as ConnectorsError, not a bare ValueError: the multi-mailbox
+                # caller (email tools search_messages) isolates per-provider failures
+                # by catching ConnectorsError only, so a query this mailbox cannot
+                # translate must fail like any other per-mailbox error rather than
+                # aborting the whole search and discarding other mailboxes' results.
+                try:
+                    translated = translate_query(query, now=datetime.now(timezone.utc))
+                except ValueError as exc:
+                    raise ConnectorsError(str(exc)) from exc
                 if translated.filter:
                     params["$filter"] = translated.filter
                     params["$orderby"] = "receivedDateTime desc"
