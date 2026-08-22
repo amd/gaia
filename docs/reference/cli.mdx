@@ -2959,8 +2959,9 @@ re-sends the request with the opt-in.
 #### `run --query` is a real one-shot
 
 `--query` does not open the alt screen. The answer goes to stdout, progress to
-stderr, and the exit code is `0` on a terminal answer / `1` on an error — so
-`gaia tui run email --query "…" > answer.txt` captures exactly the answer:
+stderr, and the exit code is `0` on a terminal answer, `1` on an error, and `3`
+when a confirmation gate held back a destructive action — so `gaia tui run
+email --query "…" > answer.txt` captures exactly the answer:
 
 ```bash
 gaia tui run email --query "how many unread?" > answer.txt 2> progress.log
@@ -3119,65 +3120,6 @@ was asked to drive, so the state says which.
 
 Most callers should not speak this API directly — the
 [TUI MCP server](/guides/mcp/tui) wraps it as MCP tools.
-
----
-
-### Hub Command
-
-Browse, install and uninstall agents from the [GAIA Agent Hub](https://hub.amd-gaia.ai).
-`gaia hub` is a thin client over the daemon's install routes, so the CLI, the
-Agent UI and the TUI share **one** installer, one SHA-256 check and one install
-lock — installing from two places at once is a clean 409, never a corrupt
-download. The daemon is started automatically if it is not already running.
-
-Agents install into `~/.gaia/agents/<id>/` (binary + `gaia-agent.yaml` +
-`.installed` sentinel). Every artifact is verified against the SHA-256 in the
-hub manifest before it is written; a mismatch fails the install and leaves
-nothing behind — there is no "use it anyway" path.
-
-```bash
-gaia hub list                      # catalog + which agents are installed
-gaia hub list --installed          # only what is installed (works offline)
-gaia hub list --refresh            # bypass the 5-minute catalog cache
-gaia hub install email --trust     # required: email is a non-verified agent
-gaia hub install email --version 0.5.0 --trust
-gaia hub uninstall email           # stops the sidecar first, then removes the dir
-```
-
-| Action | Options | Description |
-|--------|---------|-------------|
-| `list` | `--installed`, `--refresh` | Print id, latest version, installed version (`↑` when an update is available), download size and name. Warns when the hub was unreachable and the cached catalog was used. `--installed` is answered from the local `.installed` sentinels and needs no network. |
-| `install <id>` | `--version`, `--trust` | Download + verify + install, printing each phase. Exit 1 on any failure, with the reason. `--trust` is required for any agent outside the `verified` security tier. |
-| `uninstall <id>` | — | Stop the agent's sidecar, verify its pid is gone, then remove `~/.gaia/agents/<id>/`. |
-
-**Notes**
-
-- Install and uninstall both stop a running sidecar first — the install
-  directory *is* the sidecar's binary cache — and keep it stopped for the whole
-  operation, so nothing can respawn it mid-download. If the process survives the
-  tree-kill, the command aborts loudly and nothing is mutated.
-- Install and uninstall of the same agent are serialized: the second caller gets
-  a clean "already in progress" error instead of racing the first.
-- The catalog only lists agents this GAIA build can actually supervise; anything
-  else is reported as hidden rather than silently dropped.
-- Reserved built-in agents (e.g. `builder`) ship with the wheel and are refused
-  by both `install` and `uninstall`.
-- **Trust gate.** Any agent outside the `verified` security tier runs
-  third-party code on your machine, so it is refused (HTTP 403) until you pass
-  `--trust`, with the remedy named in the error. A manifest that omits
-  `security_tier` counts as `experimental` and is gated the same way. Nothing
-  infers the opt-in for you, and there is no bypass — a client (TUI, UI) renders
-  this as a "Trust & Install" confirmation and retries with `trusted: true`.
-- Requires the daemon extras (`pip install "amd-gaia[ui]"`), same as `gaia daemon`.
-
-<Note>
-`gaia agent install <id>` does the same install **in-process**; `gaia hub
-install <id>` routes it through the daemon, which additionally stops the
-agent's running sidecar first and holds it stopped for the download. Prefer
-`gaia hub` when the daemon supervises that agent (today: `email`); `gaia agent`
-is the right call on a machine with no daemon extras installed. See the note
-under [Agent Command](#agent-command).
-</Note>
 
 ---
 
