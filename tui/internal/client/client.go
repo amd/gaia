@@ -71,3 +71,44 @@ type AgentConfirmer interface {
 	// is not waiting on a confirmation.
 	Confirm(ctx context.Context, runID string, approved bool) error
 }
+
+// PermissionDecision is one answer to a live tool-permission prompt.
+type PermissionDecision string
+
+const (
+	// PermissionAllow runs this call and asks again next time.
+	PermissionAllow PermissionDecision = "allow"
+	// PermissionDeny refuses this call. The run continues — the agent sees a
+	// denied tool result and can choose something else.
+	PermissionDeny PermissionDecision = "deny"
+	// PermissionAlways runs this call and stops asking for the same TOOL for
+	// the rest of the session, whatever arguments later calls carry. That is
+	// the scope the agent actually records
+	// (OutputHandler.session_approved_tools); any UI offering this must say so.
+	PermissionAlways PermissionDecision = "always"
+)
+
+// ToolPermissionResponder is implemented by transports that can answer a
+// permission prompt WHILE the run is parked on it.
+//
+// Distinct from AgentConfirmer, which resolves an already-finished run's
+// recorded pause out of band. This one is the live seam: the agent thread is
+// blocked inside confirm_tool_execution and resumes the moment the decision
+// lands. A transport that cannot do this leaves the modal a record of intent —
+// which is what produced the original defect, where every gated tool
+// auto-denied because the answer had nowhere to go.
+type ToolPermissionResponder interface {
+	// RespondToolPermission delivers one decision. confirmID identifies the
+	// prompt it was typed against so a late answer cannot resolve whichever
+	// confirmation replaced it; empty means "whatever is pending".
+	RespondToolPermission(confirmID string, decision PermissionDecision) error
+}
+
+// PermissionBypasser is implemented by transports that can put the agent into
+// (or take it out of) bypass-permissions mode, where gated tools run without
+// asking.
+type PermissionBypasser interface {
+	// SetBypassPermissions turns unattended approval on or off. It takes
+	// effect on the next gated tool, including one in a turn already running.
+	SetBypassPermissions(enabled bool) error
+}

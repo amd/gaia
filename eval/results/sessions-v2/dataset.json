@@ -1,0 +1,92 @@
+{
+  "source": "claude-code-sessions",
+  "sessions_scanned": 24,
+  "turns_extracted": 58,
+  "focus": "all",
+  "cases": [
+    {
+      "id": "5614597c-004",
+      "session": "5614597c-332e-4c20-bb55-216012b42795",
+      "prompt": "how many skills were tested successfully, list them.",
+      "reference": "**Four skills were exercised end to end. Two more were installed and only proved discoverable.**\n\n| Skill | Origin | Load | Unload | Ran real work | Output verified against |\n|---|---|---|---|---|---|\n| **github-triage** | GAIA starter pack | \u2705 | \u2014 | \u2705 `gh issue list` | `gh` CLI \u2014 exact match on #2975/#2974/#2973 |\n| **xlsx** | Anthropic, vanilla | \u2705 | \u2705 | \u2705 built `sales.xlsx` | opened the zip: valid OOXML, real `SUM(B2:C2)` formulas, correct numbers |\n| **pdf** | Anthropic, vanilla | \u2705 | \u2014 | \u2705 built `report.pdf` | read the bytes: 602 B, `%PDF-1.4`, exact text present |\n| **gaia-voice** | bundled, always-on | \u2705 auto | \u2014 | n/a \u2014 no tools | behaviour changed twice as intended (real machine specs; grouped list) |\n\n**Installed and discovered only \u2014 never loaded or run: `skill-creator`, `webapp-testing`.** They appear correctly in the library listing, which is all I can claim for them.\n\nThe headline for your \"can it load any SKILL\" requirement is `xlsx` and `pdf`: those are Anthropic's own Claude Code skills, dropped into `~/.gaia/skills/` unmodified. Their frontmatter carries only `name`/`description`/`license` \u2014 no `metadata.gaia` block at all \u2014 and GAIA discovered, loaded, unloaded and executed them.\n\n<details>\n<summary>\ud83d\udd0d Coverage per skill, and what the other 24 prove</summary>\n\n**xlsx** got the fullest workout, because I used it for the load/unload cycle: loaded alongside github-triage, confirmed in the loaded set, unloaded, confirmed gone, and then correctly told me it had *lost* that capability (\"xlsx is unloaded, so I don't have that guidance active\") rather than bluffing. Then reloaded and used to build the spreadsheet.\n\n**A caveat on both Anthropic skills:** neither ran the way its author intended. `reportlab` and `openpyxl` aren't installed and `pip` is blocked by the shell allowlist, so the agent hand-wrote raw PDF and raw OOXML instead of using the skills' bundled scripts. The files are genuinely valid \u2014 I verified them \u2014 but the scripts those skills ship were never exercised. That's written up as a real gap: a skill can declare dependencies GAIA has no way to provision.\n\n**The other 24** were only ever part of the discovery test \u2014 the fix that took the listing from 2 of 30 to 30 of 30. That verifies the *library*, not the skills. So: **30 discoverable, 6 installed from outside the repo, 4 exercised, 3 of those producing artifacts I checked against ground truth.**\n</details>",
+      "tools_used": [
+        "Bash"
+      ],
+      "timestamp": "2026-08-14T10:56:30.409Z",
+      "context": "Earlier in this session you were asked: /compact\n\nYou answered: Found a serious one. Let me confirm the exact mechanism before fixing.",
+      "tags": [
+        "code"
+      ],
+      "query": "Background from earlier in this session:\nEarlier in this session you were asked: /compact\n\nYou answered: Found a serious one. Let me confirm the exact mechanism before fixing.\n\nWith that in mind: how many skills were tested successfully, list them."
+    },
+    {
+      "id": "5614597c-009",
+      "session": "5614597c-332e-4c20-bb55-216012b42795",
+      "prompt": "[CONTEXT UPDATE: You can update your task title using claudia_rename_task. Call it with your own task ID and a `displayName` parameter (string, 3-6 words) describing what you're doing NOW. The parameter is named `displayName`, NOT `title`. Keep the title current \u2014 whenever your focus shifts (new topic, new phase, different file), rename yourself so the sidebar reflects your current work. Do NOT rename if the user has manually edited the title (the tool will reject it).] where is the dataset saved? open it",
+      "reference": "**`C:\\Users\\14255\\Work\\gaia\\eval\\results\\sessions-run1\\dataset.json`** \u2014 38 KB, four files in that folder:\n\n| File | What it is |\n|---|---|\n| `dataset.json` | the 10 cases: prompt, reference answer, context, tags |\n| `results.json` | every GAIA answer + its judgement |\n| `scorecard.json` | the aggregate numbers |\n| `report.md` | the short readable version |\n\nHere's what a case actually looks like:",
+      "tools_used": [
+        "Bash",
+        "mcp__claudia__claudia_rename_task"
+      ],
+      "timestamp": "2026-08-14T20:57:25.855Z",
+      "context": "Earlier in this session you were asked: you're still running lemonade and not claude sonnet 5. use claude sonnet 5 for testing the coding abilities against claude code's sessions for comparison.\n\nYou answered: Let me verify what's actually running rather than assume.",
+      "tags": [
+        "search"
+      ],
+      "query": "Background from earlier in this session:\nEarlier in this session you were asked: you're still running lemonade and not claude sonnet 5. use claude sonnet 5 for testing the coding abilities against claude code's sessions for comparison.\n\nYou answered: Let me verify what's actually running rather than assume.\n\nWith that in mind: [CONTEXT UPDATE: You can update your task title using claudia_rename_task. Call it with your own task ID and a `displayName` parameter (string, 3-6 words) describing what you're doing NOW. The parameter is named `displayName`, NOT `title`. Keep the title current \u2014 whenever your focus shifts (new topic, new phase, different file), rename yourself so the sidebar reflects your current work. Do NOT rename if the user has manually edited the title (the tool will reject it).] where is the dataset saved? open it"
+    },
+    {
+      "id": "3fc76feb-001",
+      "session": "3fc76feb-e758-45ba-b31b-7b93c7e3ecdc",
+      "prompt": "[Your previous response had no visible output. Please continue and produce a user-visible response.]",
+      "reference": "I've implemented live model switching for the GAIA Go TUI + flagship agent and am currently waiting on a code-reviewer subagent's second opinion before finalizing. Quick status update while that runs:\n\n**Done so far:**\n- **Python (`hub/agents/gaia/python/gaia_agent/stdio.py`)**: agent now emits a canonical `status` event (additive fields: `model_id`, `model_display`, `model_backend`, `model_remote`) at startup and after every switch. New `/model` / `/model <id>` handling \u2014 intercepted before `agent.process_query`, so the LLM never sees it as a question. Switching swaps `agent.chat.llm_client` in place (never respawns the child), builds the new client *before* touching any state so a failed switch leaves the previous model fully intact, and validates against a curated Claude catalog or Lemonade's live `/models` list.\n- **Go (`tui/`)**: header now shows the specific resolved model name (e.g. \"Sonnet 5\") instead of a bare \"claude\" word, colored for remote vs local; `/model` recognized as a command (not sent as a chat question) but still dispatched over the real query channel, since the transport only reads stdout during an active turn.\n- **Tests**: 25 Python tests (all passing), several new Go tests (all passing), full `go test ./...` and `pytest` suites green, `go build`/`go vet` clean, `black`/`isort` applied.\n- **Docs**: TUI `/help` overlay and `tui/README.md` updated.\n\nI deliberately did *not* use the `gaia_control` channel suggested in the original ask \u2014 I traced through `subprocess.go` and found the Go side only scans stdout during an active `Send()`, so a control-channel response would sit unread until some unrelated future turn. I'm having the reviewer sanity-check that reasoning independently. I'll report full results once the review comes back.",
+      "tools_used": [],
+      "timestamp": "2026-08-14T06:39:14.173Z",
+      "context": "Earlier in this session you were asked: Implement live model switching in the GAIA Go TUI + flagship agent. Repo: C:\\Users\\14255\\Work\\gaia (branch feat/gaia-flagship-agent-2804). You are in an isolated worktree \u2014 commit there; do NOT push to any remote and do NOT open a PR. Another agent (me) is actively testing on the main worktree, so stay inside your worktree.\n\nCONTEXT \u2014 how this works today\n- The TUI (Go, `tui/`, Bubble Tea) spawns \n\nYou answered: Good \u2014 this worktree's HEAD (`e197cb4a`) is exactly `feat/gaia-flagship-agent-2804`, so it's already on the right branch content. Let's explore the key files.",
+      "tags": [],
+      "query": "Background from earlier in this session:\nEarlier in this session you were asked: Implement live model switching in the GAIA Go TUI + flagship agent. Repo: C:\\Users\\14255\\Work\\gaia (branch feat/gaia-flagship-agent-2804). You are in an isolated worktree \u2014 commit there; do NOT push to any remote and do NOT open a PR. Another agent (me) is actively testing on the main worktree, so stay inside your worktree.\n\nCONTEXT \u2014 how this works today\n- The TUI (Go, `tui/`, Bubble Tea) spawns \n\nYou answered: Good \u2014 this worktree's HEAD (`e197cb4a`) is exactly `feat/gaia-flagship-agent-2804`, so it's already on the right branch content. Let's explore the key files.\n\nWith that in mind: [Your previous response had no visible output. Please continue and produce a user-visible response.]"
+    },
+    {
+      "id": "3fc76feb-004",
+      "session": "3fc76feb-e758-45ba-b31b-7b93c7e3ecdc",
+      "prompt": "Check the background Go test run (task bc5ty558h) for completion; if done and green, do a final review pass and report the finished feature to the user.",
+      "reference": "That background Go test run (`bc5ty558h`) already completed earlier \u2014 it finished green (`tui/test 122.548s`, exit code 0), and I incorporated that into the final review pass I already reported above. To summarize where things stand:\n\n- **Go:** `go build ./...`, `go vet ./...`, and the full `go test ./...` (including the slow `tui/test` package) all pass clean.\n- **Python:** `pytest hub/agents/gaia/python/tests/` \u2014 122 passed.\n- **Review:** a code-reviewer subagent found real issues (agent-scoping gap, non-atomic rollback, non-chat models offered, respawn silently reverting the switch, dead code, doc drift) \u2014 all fixed and re-tested as detailed in my last report.\n\nThe feature is complete, reviewed, and fully green. Nothing further is pending from that background task \u2014 it's already reflected in the final status I gave you. Let me know if you'd like me to commit it now, or if you want to review the diff yourself first.",
+      "tools_used": [],
+      "timestamp": "2026-08-14T07:04:00.970Z",
+      "context": "Earlier in this session you were asked: Check on code-reviewer subagent progress for the live model switching feature review; if done, read findings and address them before finalizing.\n\nYou answered: Still running. I'll keep waiting for the completion notification.",
+      "tags": [
+        "code",
+        "docs",
+        "repo"
+      ],
+      "query": "Background from earlier in this session:\nEarlier in this session you were asked: Check on code-reviewer subagent progress for the live model switching feature review; if done, read findings and address them before finalizing.\n\nYou answered: Still running. I'll keep waiting for the completion notification.\n\nWith that in mind: Check the background Go test run (task bc5ty558h) for completion; if done and green, do a final review pass and report the finished feature to the user."
+    },
+    {
+      "id": "2b1f38a2-001",
+      "session": "2b1f38a2-64a5-48b3-938f-b9ea55368a02",
+      "prompt": "setup a claudia schedule to monitor and complete these tasks",
+      "reference": "Schedule `uht4odx6` is live \u2014 fires every 5 minutes, first at 22:25.\n\nEach tick it checks both subtasks and acts on what it finds:\n\n- **Both busy** \u2192 one line, stop. It won't type into a running session or start duplicating their work.\n- **Waiting on input** \u2192 answers from the design decisions already locked in (exact flag strings, `claude-sonnet-5`, the sentinel encoding, no-fallback rule, where the key lives).\n- **One done** \u2192 verifies the claims instead of trusting the summary. It's told to reject \"verified\" claims backed only by a mock that proves invocation, or an end-to-end run the task didn't actually observe. The empirical findings from my live probe are baked in as the specific things to check \u2014 chiefly that `thinking`/`signature` deltas never render as answer text.\n- **Both done** \u2192 merges the two worktree branches into `feat/gaia-flagship-agent-2804`, runs the real end-to-end check *in the main checkout* (tool-forcing query; a fluent answer with no `tool_call` event counts as a failure), runs lint + pytest + `go build/vet/test`, reviews the diff, removes the worktrees, reports, then deletes itself.\n\nIt won't commit to main or push. Recurring schedules auto-expire after 3 days, so it can't outlive the work even if something goes sideways.",
+      "tools_used": [
+        "ToolSearch",
+        "mcp__claudia__claudia_cron_create"
+      ],
+      "timestamp": "2026-08-13T22:20:23.375Z",
+      "context": "Earlier in this session you were asked: add a feature to the gaia agent TUI that allows us to bypass the lemonade backend and run the claude sonnet model for testing and validating the main harness.\n\nYou answered: I'll start by checking what other agents are working on, then explore the TUI codebase.",
+      "tags": [],
+      "query": "Background from earlier in this session:\nEarlier in this session you were asked: add a feature to the gaia agent TUI that allows us to bypass the lemonade backend and run the claude sonnet model for testing and validating the main harness.\n\nYou answered: I'll start by checking what other agents are working on, then explore the TUI codebase.\n\nWith that in mind: setup a claudia schedule to monitor and complete these tasks"
+    },
+    {
+      "id": "1ccacead-002",
+      "session": "1ccacead-855b-4cb6-a39f-64e2f03500ed",
+      "prompt": "critique and review, make the text and diagrams more readable. improve the design too.",
+      "reference": "A fair ask \u2014 let me critique it honestly, then fix what I find.\n\n**Critique of the current version:**\n\n1. **Diagrams are wireframes, not diagrams** \u2014 every box is an unfilled outline, so nothing groups visually; labels at 10\u201311px monospace are squint-territory; there's no legend tying color (copper=Go, teal=Python) to meaning.\n2. **The TOC is decorative** \u2014 its \"sub\" rows link to the same anchor as the part heading, and nothing tracks where you are in a 1,400-line page.\n3. **Walls of text** \u2014 several sections (chat narration, grant scoping, skills lifecycle) are 8\u201312-line paragraphs that should be scannable lists.\n4. **Inconsistent numbering** \u2014 Parts III\u2013VI have numbered subsections; Parts I, II, VII don't.\n5. **No fast path** \u2014 a reader who wants the gist has to read Part I; there's no \"whole system in five sentences.\"\n6. **Flat visual hierarchy** \u2014 part openers don't feel like chapter breaks, and tables shout (uppercase headers) while diagrams whisper.\n\nFixing all six. First the design system: soft fill tokens for diagrams, zebra tables, real chapter openers, depth indicators, and a live TOC.",
+      "tools_used": [
+        "Edit"
+      ],
+      "timestamp": "2026-08-13T22:35:44.884Z",
+      "context": "Earlier in this session you were asked: use this PR as the source of truth: https://github.com/amd/gaia/pull/2932\n\nYou answered: PR #2932 is the flagship GAIA agent + TUI work on branch `feat/gaia-flagship-agent-2804` (100 files). Let me check out that branch so the guide describes the code as it exists in the PR.",
+      "tags": [],
+      "query": "Background from earlier in this session:\nEarlier in this session you were asked: use this PR as the source of truth: https://github.com/amd/gaia/pull/2932\n\nYou answered: PR #2932 is the flagship GAIA agent + TUI work on branch `feat/gaia-flagship-agent-2804` (100 files). Let me check out that branch so the guide describes the code as it exists in the PR.\n\nWith that in mind: critique and review, make the text and diagrams more readable. improve the design too."
+    }
+  ]
+}

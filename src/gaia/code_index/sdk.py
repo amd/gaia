@@ -64,6 +64,10 @@ class CodeIndexConfig:
 
     repo_path: str
     max_files: int = 5000
+    #: Ceiling on directory entries the discovery walk may enumerate (counted
+    #: after pruning). max_files caps what gets INDEXED; without this, walking
+    #: a huge non-repo root could burn the whole tool timeout just listing.
+    max_walk_entries: int = 200_000
     max_file_size_mb: float = 1
     chunk_overlap: int = 50
     embedding_model: str = DEFAULT_EMBEDDING_MODEL
@@ -102,13 +106,20 @@ class IndexResult:
     files_indexed: int
     chunks_created: int
     duration_seconds: float
+    #: Chunks whose embedding failed and were left out of the index. Their
+    #: files are also left un-hashed so the next index retries them.
+    chunks_dropped: int = 0
 
 
 # ---------------------------------------------------------------------------
 # Cache metadata schema version — bump when structure changes
 # ---------------------------------------------------------------------------
 
-_CACHE_VERSION = 1
+# v2: chunk splitting moved to the embed window (parsers._MAX_CHUNK_CHARS)
+# with per-part line ranges. Old caches hold ~20K-char chunks that are ~94%
+# unembedded; reusing them would keep that content unsearchable forever, so
+# the version bump forces a one-time full re-index.
+_CACHE_VERSION = 2
 
 
 # ---------------------------------------------------------------------------
@@ -219,8 +230,13 @@ class CodeIndexSDK:
                 reused_chunks.extend(reused)
                 continue
 
-            # Parse changed/new file
-            parsed = chunk_code_file(rel_path, content)
+            # Parse changed/new file — honor the configured size cap, not the
+            # parser's hardcoded 1MB default (discovery already filtered by
+            # config, so a caller who raised max_file_size_mb shouldn't have
+            # the parser silently re-reject the same files it let through).
+            parsed = chunk_code_file(
+                rel_path, content, max_size_mb=self.config.max_file_size_mb
+            )
             new_chunks.extend(parsed)
             files_indexed += 1
 
@@ -238,24 +254,45 @@ class CodeIndexSDK:
         except ImportError as e:
             raise ImportError(_MISSING_DEPS_MSG) from e
 
-        # Reuse existing embeddings for unchanged chunks
+        # Reuse existing embeddings for unchanged chunks. Matching is keyed on
+        # (file_path, start_line, content) with each cache row consumed at
+        # most once — an oversized chunk split into parts gives every part
+        # the SAME (file_path, start_line), so a position-only match handed
+        # parts 2..N part 1's embedding. Matching is per-chunk: a chunk that
+        # misses the cache is re-embedded on its own instead of discarding
+        # reuse for every other chunk in the repo, and the keyed map makes
+        # the scan O(n) instead of O(reused x existing).
         reused_embeddings = None
+        matched_chunks: List[CodeChunk] = []
+        missed_chunks: List[CodeChunk] = [
+            c for c in reused_chunks if isinstance(c, CodeChunk)
+        ]
         if reused_chunks and existing_meta:
             existing_chunk_dicts = existing_meta.get("chunks", [])
-            # Build index map: find positions of reused chunks in existing index
-            reused_indices = []
+            rows_by_key: Dict[tuple, List[int]] = {}
+            for i, cd in enumerate(existing_chunk_dicts):
+                if cd.get("chunk_type") == "code":
+                    key = (cd.get("file_path"), cd.get("start_line"), cd.get("content"))
+                    rows_by_key.setdefault(key, []).append(i)
+
+            reused_indices: List[int] = []
+            missed_chunks = []
             for rc in reused_chunks:
                 if not isinstance(rc, CodeChunk):
                     continue
-                for i, cd in enumerate(existing_chunk_dicts):
-                    if (
-                        cd.get("chunk_type") == "code"
-                        and cd.get("file_path") == rc.file_path
-                        and cd.get("start_line") == rc.start_line
-                    ):
-                        reused_indices.append(i)
-                        break
+                rows = rows_by_key.get((rc.file_path, rc.start_line, rc.content))
+                if rows:
+                    reused_indices.append(rows.pop(0))
+                    matched_chunks.append(rc)
+                else:
+                    missed_chunks.append(rc)
 
+            if missed_chunks:
+                self.log.warning(
+                    f"{len(missed_chunks)}/{len(reused_chunks)} unchanged "
+                    "chunks missed the embedding cache — re-embedding only "
+                    "those"
+                )
             if reused_indices and self._ensure_index_loaded():
                 try:
                     reused_embeddings = np.array(
@@ -270,6 +307,11 @@ class CodeIndexSDK:
                         f"Could not reuse embeddings (cache desync, will re-embed): {e}"
                     )
                     reused_embeddings = None
+        if reused_embeddings is None:
+            # No index to reconstruct from (or it desynced): every unchanged
+            # chunk goes through the re-embed path.
+            matched_chunks = []
+            missed_chunks = [c for c in reused_chunks if isinstance(c, CodeChunk)]
 
         # Embed only new/changed chunks
         chunks_to_embed = new_chunks
@@ -293,16 +335,16 @@ class CodeIndexSDK:
         valid_chunks = []
         embedding_parts = []
         if reused_embeddings is not None and reused_embeddings.size > 0:
-            valid_chunks.extend(reused_chunks)
+            valid_chunks.extend(matched_chunks)
             embedding_parts.append(reused_embeddings)
-        elif reused_chunks:
-            # Fallback: could not reuse embeddings, must re-embed reused chunks too
+        if missed_chunks:
             self.log.info(
-                "Re-embedding unchanged chunks (no existing index to reuse from)"
+                f"Re-embedding {len(missed_chunks)} unchanged chunk(s) the "
+                "cache could not supply"
             )
-            texts = [self._chunk_to_embed_text(c) for c in reused_chunks]
+            texts = [self._chunk_to_embed_text(c) for c in missed_chunks]
             reused_emb, valid_reused = self._encode_texts_with_sync(
-                texts, reused_chunks
+                texts, missed_chunks
             )
             if valid_reused:
                 valid_chunks.extend(valid_reused)
@@ -325,6 +367,28 @@ class CodeIndexSDK:
                 f"{self.config.embedding_model!r} is loaded. "
                 f"{describe_client_hint('load', self.config.embedding_model).instruction}"
             )
+
+        # A file that lost even one chunk to a failed embedding must NOT have
+        # its hash recorded: the hash marks it "indexed", every later run
+        # would skip it as unchanged, and the missing chunks would stay
+        # unsearchable until someone wiped the cache. Un-hashed, the next
+        # index re-parses and re-embeds it.
+        from collections import Counter
+
+        wanted = Counter(c.file_path for c in all_chunks if isinstance(c, CodeChunk))
+        kept = Counter(c.file_path for c in valid_chunks if isinstance(c, CodeChunk))
+        incomplete = sorted(p for p, n in wanted.items() if kept.get(p, 0) != n)
+        chunks_dropped = sum(wanted.values()) - sum(kept.values())
+        if incomplete:
+            self.log.warning(
+                f"{chunks_dropped} chunk(s) across {len(incomplete)} file(s) "
+                f"lost their embeddings and were left out of the index; those "
+                f"files stay un-hashed so the next index_codebase retries "
+                f"them: {', '.join(incomplete[:5])}"
+                + ("…" if len(incomplete) > 5 else "")
+            )
+            for rel in incomplete:
+                new_file_hashes.pop(rel, None)
 
         embeddings = np.concatenate(embedding_parts, axis=0)
         faiss_index = self._build_faiss_index(embeddings)
@@ -352,6 +416,7 @@ class CodeIndexSDK:
             files_indexed=files_indexed,
             chunks_created=len(valid_chunks),
             duration_seconds=duration,
+            chunks_dropped=chunks_dropped,
         )
 
     def search(
@@ -540,6 +605,14 @@ class CodeIndexSDK:
         result = []
         max_size_bytes = int(self.config.max_file_size_mb * 1024 * 1024)
 
+        # Bound the WALK, not just the result list: max_files caps how many
+        # files are indexed, but enumerating a huge non-repo root (a home
+        # directory, a whole drive) could burn the entire tool timeout just
+        # listing entries. A cap, not an error — a legitimate repo with a
+        # giant assets/ subtree indexes what was found, exactly like the
+        # max_files cap below, and the truncation is logged loudly.
+        entries_seen = 0
+
         for root, dirs, files in os.walk(str(self._repo_root)):
             rel_root = Path(root).relative_to(self._repo_root)
 
@@ -552,6 +625,13 @@ class CodeIndexSDK:
                 and not d.startswith(".")
                 and not any(fnmatch.fnmatch(d, p) for p in ignore_patterns)
             ]
+
+            # Counted AFTER pruning, so node_modules/.git and gitignored
+            # trees cost nothing against the budget. Checked at the END of
+            # the loop body (files from this directory are kept), so one
+            # directory can overshoot by its own listing — which os.walk
+            # already paid for — but partial results always survive.
+            entries_seen += len(dirs) + len(files)
 
             if len(result) >= self.config.max_files:
                 break
@@ -585,6 +665,17 @@ class CodeIndexSDK:
                     continue
 
                 result.append(abs_path)
+
+            if entries_seen > self.config.max_walk_entries:
+                self.log.warning(
+                    f"discovery stopped after {entries_seen} directory "
+                    f"entries under {self._repo_root} (max_walk_entries="
+                    f"{self.config.max_walk_entries}) — indexing the "
+                    f"{len(result)} files found so far. If this is a code "
+                    "repository, raise max_walk_entries; if not, point "
+                    "repo_path at the repository root."
+                )
+                break
 
         return result
 
@@ -624,8 +715,9 @@ class CodeIndexSDK:
             return None
 
     def _chunk_to_embed_text(self, chunk: CodeChunk) -> str:
-        """Extract the text to embed (first 1200 chars for search)."""
-        MAX_EMBED_CHARS = 1200
+        """Extract the text to embed (first MAX_EMBED_CHARS chars for search)."""
+        from gaia.code_index.parsers import MAX_EMBED_CHARS
+
         prefix = ""
         if chunk.symbol_name:
             prefix = f"{chunk.symbol_type or 'symbol'}: {chunk.symbol_name}\n"
@@ -698,54 +790,83 @@ class CodeIndexSDK:
 
         self._embedder = self._llm_client
 
+    def _embed_batch_call(self, batch: List[str]) -> List[list]:
+        """One HTTP call to the embeddings endpoint. Raises on transport failure."""
+        response = self._embedder.embeddings(
+            batch, model=self.config.embedding_model, timeout=180
+        )
+        return [item.get("embedding", []) for item in (response or {}).get("data", [])]
+
+    def _embed_batch_resilient(self, batch: List[str]) -> List[list]:
+        """Embed one batch, retrying transport errors and short/empty responses.
+
+        Lemonade occasionally answers HTTP 200 with fewer (or zero) vectors
+        than requested while the model is still warming up — no exception is
+        raised, so a naive caller can't distinguish that from "embeddings
+        legitimately came back empty". Retrying the *same batch* a couple of
+        times resolves the transient case without callers paying the ~25x
+        cost of a one-by-one fallback for what is usually a load race.
+
+        Returns whatever the backend produced — may be shorter than *batch*
+        if retries are exhausted. Callers decide whether that's fatal.
+        """
+        max_retries = 2
+        result: List[list] = []
+        for attempt in range(max_retries + 1):
+            try:
+                result = self._embed_batch_call(batch)
+            except Exception as e:
+                if attempt < max_retries:
+                    self.log.warning(
+                        f"Embedding batch attempt {attempt + 1} failed: {e}"
+                    )
+                    time.sleep(2)
+                    continue
+                raise
+
+            if len(result) == len(batch):
+                return result
+
+            if attempt < max_retries:
+                self.log.warning(
+                    f"Embedding batch returned {len(result)}/{len(batch)} vectors "
+                    f"(no error) — backend likely still loading "
+                    f"{self.config.embedding_model!r}, retrying batch "
+                    f"(attempt {attempt + 1}/{max_retries})"
+                )
+                time.sleep(2)
+
+        return result
+
     def _encode_texts(self, texts: List[str]):
-        """Encode texts using Lemonade embeddings. Returns numpy array."""
+        """Encode texts using Lemonade embeddings. Returns numpy array.
+
+        Fails loudly if the backend cannot produce a vector for every text
+        after retries — this is the query-encode path used by search(),
+        which must never silently hand back fewer vectors than requested
+        (that previously surfaced as "no matches" instead of a real error).
+        """
         import numpy as np
 
         self._load_embedder()
 
+        from gaia.code_index.parsers import MAX_EMBED_CHARS
+
         BATCH_SIZE = 25
-        MAX_EMBED_CHARS = 1200
         safe_texts = [t[:MAX_EMBED_CHARS] for t in texts]
 
-        all_embeddings = []
+        all_embeddings: List[list] = []
         for batch_start in range(0, len(safe_texts), BATCH_SIZE):
             batch = safe_texts[batch_start : batch_start + BATCH_SIZE]
-            max_retries = 2
-            response = None
-            for attempt in range(max_retries + 1):
-                try:
-                    response = self._embedder.embeddings(
-                        batch, model=self.config.embedding_model, timeout=180
-                    )
-                    break
-                except Exception as e:
-                    if attempt < max_retries:
-                        self.log.warning(
-                            f"Embedding batch attempt {attempt + 1} failed: {e}"
-                        )
-                        time.sleep(2)
-                    else:
-                        raise
-
-            batch_embeddings = [
-                item.get("embedding", []) for item in (response or {}).get("data", [])
-            ]
-
-            # Fallback: one-by-one if batch returned nothing
-            if not batch_embeddings and batch:
-                self.log.warning("Batch returned 0 embeddings, trying one-by-one")
-                for single in batch:
-                    try:
-                        resp = self._embedder.embeddings(
-                            [single], model=self.config.embedding_model, timeout=60
-                        )
-                        data = resp.get("data", [])
-                        if data:
-                            batch_embeddings.append(data[0].get("embedding", []))
-                    except Exception as e:
-                        self.log.warning(f"Single embedding failed: {e}")
-
+            batch_embeddings = self._embed_batch_resilient(batch)
+            if len(batch_embeddings) != len(batch):
+                raise RuntimeError(
+                    f"Embedding backend returned {len(batch_embeddings)}/"
+                    f"{len(batch)} vectors after retries against "
+                    f"{self.config.embedding_model!r}. Verify Lemonade "
+                    "Server is reachable and the model is fully loaded "
+                    "(not mid-warm-up)."
+                )
             all_embeddings.extend(batch_embeddings)
 
         return np.array(all_embeddings, dtype=np.float32)
@@ -759,8 +880,9 @@ class CodeIndexSDK:
 
         self._load_embedder()
 
+        from gaia.code_index.parsers import MAX_EMBED_CHARS
+
         BATCH_SIZE = 25
-        MAX_EMBED_CHARS = 1200
 
         valid_chunks = []
         valid_embeddings = []
@@ -770,36 +892,21 @@ class CodeIndexSDK:
             batch_chunks = chunks[batch_start : batch_start + BATCH_SIZE]
             safe_texts = [t[:MAX_EMBED_CHARS] for t in batch_texts]
 
-            max_retries = 2
-            response = None
-            for attempt in range(max_retries + 1):
-                try:
-                    response = self._embedder.embeddings(
-                        safe_texts, model=self.config.embedding_model, timeout=180
-                    )
-                    break
-                except Exception as e:
-                    if attempt < max_retries:
-                        self.log.warning(f"Batch attempt {attempt + 1} failed: {e}")
-                        time.sleep(2)
-                    else:
-                        self.log.error(f"Batch embedding failed after retries: {e}")
-                        # Fall through with empty response
-                        response = {}
-
-            batch_embeddings = [
-                item.get("embedding", []) for item in (response or {}).get("data", [])
-            ]
-
-            # One-by-one fallback if batch returned nothing or partial result
-            if len(batch_embeddings) != len(batch_chunks) and batch_embeddings:
-                self.log.warning(
-                    f"Partial batch: got {len(batch_embeddings)} embeddings "
-                    f"for {len(batch_chunks)} chunks — retrying one-by-one"
-                )
+            try:
+                batch_embeddings = self._embed_batch_resilient(safe_texts)
+            except Exception as e:
+                self.log.error(f"Batch embedding failed after retries: {e}")
                 batch_embeddings = []
-            if not batch_embeddings and safe_texts:
-                self.log.warning("Batch returned 0 embeddings, trying one-by-one")
+
+            # Last-resort one-by-one fallback — only reached once the whole-batch
+            # retries above (transient "still loading") are exhausted, so this
+            # is now the rare path instead of the common one.
+            if len(batch_embeddings) != len(batch_chunks):
+                self.log.warning(
+                    f"Batch embedding still short ({len(batch_embeddings)}/"
+                    f"{len(batch_chunks)}) after retries — falling back to "
+                    "one-by-one for this batch"
+                )
                 batch_embeddings = []
                 for single_text in safe_texts:
                     try:
@@ -859,8 +966,12 @@ class CodeIndexSDK:
             tmp_meta.write_text(json.dumps(meta, indent=2), encoding="utf-8")
             # Rename index first — if crash happens between renames,
             # _load_metadata will detect stale metadata via ntotal check.
-            tmp_index.rename(self._index_path)
-            tmp_meta.rename(self._meta_path)
+            # Path.replace (not .rename) — on Windows, rename() raises
+            # FileExistsError when the destination already exists, so every
+            # re-index after the first would crash here. replace() atomically
+            # overwrites on both Windows and POSIX.
+            tmp_index.replace(self._index_path)
+            tmp_meta.replace(self._meta_path)
             self.log.debug(f"Index saved to {self._cache_dir}")
         except Exception as e:
             self.log.error(f"Failed to save index: {e}")

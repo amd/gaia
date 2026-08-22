@@ -39,21 +39,27 @@ func prepareTerminal() {
 // RunHub launches the Agent Hub TUI — the main entry point for browsing and launching agents.
 // If mockAgent is non-empty, all agent binary paths are overridden with it for testing.
 // A non-nil ctrl starts the loopback control API against this very program.
-func RunHub(debug bool, mockAgent string, ctrl *control.Options) error {
+// bypassPermissions starts launched agents with confirmation prompts off.
+// useClaude/claudeModel start them against Anthropic's Claude API instead of
+// the local Lemonade backend.
+func RunHub(dev bool, mockAgent string, ctrl *control.Options, bypassPermissions bool, useClaude bool, claudeModel string) error {
 	cat := catalog.NewCatalog()
 	if mockAgent != "" {
 		cat.SetMockBinary(mockAgent)
 	} else {
 		cat.DiscoverBinaries()
 	}
-	return run(root.NewRootModel(cat, debug), debug, ctrl)
+	m := root.NewRootModel(cat, dev).
+		WithBypassPermissions(bypassPermissions).
+		WithClaude(useClaude, claudeModel)
+	return run(m, dev, ctrl)
 }
 
 // RunChat launches the chat TUI directly with a subprocess agent (standalone mode).
 //
 // subprocess is a command line, so it is split with quoting honoured — a binary
 // path containing a space must be quoted, not silently torn in two.
-func RunChat(subprocess string, query string, debug bool, ctrl *control.Options) error {
+func RunChat(subprocess string, query string, dev bool, ctrl *control.Options) error {
 	argv, err := client.SplitCommandLine(subprocess)
 	if err != nil {
 		return fmt.Errorf("invalid --subprocess command: %w", err)
@@ -65,39 +71,57 @@ func RunChat(subprocess string, query string, debug bool, ctrl *control.Options)
 		return fmt.Errorf("cannot start --subprocess %q: %w", argv[0], err)
 	}
 
-	c := client.NewSubprocessClient(bin, argv[1:], debug)
+	c := client.NewSubprocessClient(bin, argv[1:], dev)
 	defer c.Close()
 
-	return run(chat.NewChatModel(c, agentNameFromPath(argv[0]), query, debug), debug, ctrl)
+	return run(chat.NewChatModel(c, agentNameFromPath(argv[0]), query, dev), dev, ctrl)
+}
+
+// teaOptions are the terminal capabilities every GAIA TUI program asks for.
+//
+// The mouse is left to the TERMINAL by default, so drag-select and the platform's
+// own copy/paste work the way they do in every other program — Ctrl/Cmd+C,
+// Ctrl+Shift+C, right-click, whatever that terminal uses.
+//
+// Capturing it (mode 1002) buys exactly one thing: the wheel scrolling the
+// transcript, which an alt-screen app cannot get from the terminal's scrollback
+// because it has none. That is not worth breaking selection for every user who
+// never asked for it — "I still can't drag my mouse over terminal text and copy
+// it" is the report this default answers. Ctrl+T turns capture on when the wheel
+// is what you want; ↑/↓ and PgUp/PgDn scroll regardless.
+func teaOptions() []tea.ProgramOption {
+	return []tea.ProgramOption{
+		tea.WithAltScreen(),
+	}
 }
 
 // run boots the Bubble Tea program, optionally wrapping it with the control
 // recorder so the live session can be driven over HTTP.
-func run(model tea.Model, debug bool, ctrl *control.Options) error {
+func run(model tea.Model, dev bool, ctrl *control.Options) error {
 	prepareTerminal()
 
 	// Swept whether or not this run publishes one of its own: a session started
 	// WITHOUT --control used to leave a dead predecessor's file in place.
 	if removed, err := control.ClearStale(daemon.PIDAlive); err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
-	} else if removed && debug {
+	} else if removed && dev {
 		fmt.Fprintln(os.Stderr, "[DEBUG] removed a stale control discovery file")
 	}
 
 	if ctrl == nil {
-		p := tea.NewProgram(model, tea.WithAltScreen())
+		p := tea.NewProgram(model, teaOptions()...)
 		if _, err := p.Run(); err != nil {
 			return fmt.Errorf("TUI error: %w", err)
 		}
 		return nil
 	}
 
-	// One debug switch for both halves: --debug on the TUI implies control
+	// One dev switch for both halves: --dev on the TUI implies control
 	// logging, and the server must not end up quieter than the recorder.
 	opts := *ctrl
-	opts.Debug = opts.Debug || debug
+	opts.Debug = opts.Debug || dev
 	state := control.NewState(control.Debugf(opts.Debug))
-	p := tea.NewProgram(control.NewRecorder(model, state), tea.WithAltScreen())
+	p := tea.NewProgram(control.NewRecorder(model, state), teaOptions()...)
 
 	srv, err := control.Start(p, state, opts)
 	if err != nil {
@@ -153,7 +177,7 @@ func run(model tea.Model, debug bool, ctrl *control.Options) error {
 // already refused that combination (see cli.agentControlOptions) rather than
 // pass a non-nil ctrl through here.
 // Returns the process exit code.
-func RunAgent(agentID, query, model string, debug bool, timeout time.Duration, ctrl *control.Options) (int, error) {
+func RunAgent(agentID, query, model string, dev bool, timeout time.Duration, ctrl *control.Options, bypassPermissions bool, useClaude bool, claudeModel string) (int, error) {
 	cat := catalog.NewCatalog()
 	cat.DiscoverBinaries()
 
@@ -171,29 +195,23 @@ func RunAgent(agentID, query, model string, debug bool, timeout time.Duration, c
 				"longer bound instead, e.g. --timeout 2h", timeout)
 	}
 
-	// A one-shot is always bounded — that is the whole point — so an unbounded
-	// or negative one is refused here rather than quietly turned into "forever".
-	if query != "" && timeout <= 0 {
-		return 1, fmt.Errorf(
-			"--timeout must be a positive duration, got %s: a one-shot that cannot "+
-				"time out is exactly the hang this bound exists to prevent. Pass a "+
-				"longer bound instead, e.g. --timeout 2h", timeout)
-	}
-
 	logf := func(string, ...any) {}
-	if debug {
+	if dev {
 		logf = func(format string, args ...any) {
 			fmt.Fprintf(os.Stderr, "[DEBUG] "+format+"\n", args...)
 		}
 	}
 
 	c, err := client.ForAgent(*agent, client.ForAgentOptions{
-		Debug: debug,
+		Dev:   dev,
 		Model: model,
 		Logf:  logf,
 		// A one-shot has nobody at the keyboard; only the interactive chat can
 		// answer a question, so it must not claim it can.
-		Interactive: query == "",
+		Interactive:       query == "",
+		BypassPermissions: bypassPermissions,
+		UseClaude:         useClaude,
+		ClaudeModel:       claudeModel,
 	})
 	if err != nil {
 		return 1, err
@@ -228,12 +246,12 @@ func RunAgent(agentID, query, model string, debug bool, timeout time.Duration, c
 
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
-		res := RunOneShot(ctx, c, query, os.Stdout, os.Stderr, logf)
+		res := RunOneShot(ctx, c, query, os.Stdout, os.Stderr, dev, logf)
 		return res.ExitCode, nil
 	}
 
-	model_ := chat.NewChatModelForCatalogAgent(c, agent.ID, agent.Name, debug)
-	if err := run(model_, debug, ctrl); err != nil {
+	model_ := chat.NewChatModelForCatalogAgent(c, agent.ID, agent.Name, dev)
+	if err := run(model_, dev, ctrl); err != nil {
 		return 1, err
 	}
 	return 0, nil
@@ -285,7 +303,7 @@ func canStart(a catalog.Agent) bool {
 }
 
 // orDefault names what will actually be used when a flag was left unset, so a
-// debug line never reads "model=\"\"".
+// diagnostic line never reads "model=\"\"".
 func orDefault(value, fallback string) string {
 	if value == "" {
 		return fallback

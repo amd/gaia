@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/amd/gaia/tui/internal/ui/theme"
 )
@@ -18,14 +19,22 @@ type StatusBarState struct {
 }
 
 var (
+	// No background fill. A band of near-black across the bottom of a black
+	// terminal is a seam, not a surface — it reads as grubby rather than as
+	// structure. The divider above it already separates the status line from
+	// the transcript.
 	statusBarStyle = lipgloss.NewStyle().
-			Background(theme.SurfaceBG).
-			Foreground(theme.OnSurface).
+			Foreground(theme.Dim).
 			Padding(0, 1)
 
 	connectedDotStyle    = lipgloss.NewStyle().Foreground(theme.Success)
 	disconnectedDotStyle = lipgloss.NewStyle().Foreground(theme.Danger)
 )
+
+// minHintWidth is the narrowest a truncated hint may get before it is dropped
+// outright: below this the ellipsis is most of what is left, which tells the
+// reader nothing and still costs the columns.
+const minHintWidth = 8
 
 // The dots are rendered per call, not stored pre-rendered: an AdaptiveColor
 // resolves when it is rendered, and a package-level Render() would freeze the
@@ -33,7 +42,20 @@ var (
 func connectedDot() string    { return connectedDotStyle.Render("●") }
 func disconnectedDot() string { return disconnectedDotStyle.Render("●") }
 
+// RenderStatusBar draws the one-row bar at the foot of a screen.
+//
+// It always returns exactly one line of exactly `width` display columns. Both
+// halves are measured with ansi.StringWidth rather than len: the hint is full
+// of arrows and middots (`↑↓ scroll · Esc cancel`), and a byte count reads that
+// 22-column string as 27, which pushed the hint five columns left of the right
+// edge. StringWidth is also the measure that survives a caller passing a styled
+// string — it skips the escape sequences a byte count would charge for — and it
+// counts a wide CJK rune as the two columns the terminal actually draws.
 func RenderStatusBar(state StatusBarState, width int) string {
+	if width <= 0 {
+		return ""
+	}
+
 	dot := disconnectedDot()
 	status := "disconnected"
 	if state.Connected {
@@ -44,30 +66,53 @@ func RenderStatusBar(state StatusBarState, width int) string {
 		status = "streaming"
 	}
 
-	// Build left and right content
-	leftText := fmt.Sprintf("%s %s", state.AgentName, status)
-	rightText := ""
+	left := " " + dot + " " + fmt.Sprintf("%s %s", state.AgentName, status)
+	right := ""
 	if state.Hint != "" {
-		rightText = state.Hint
+		right = state.Hint
 	} else if state.Steps > 0 {
-		rightText = fmt.Sprintf("steps: %d", state.Steps)
+		right = fmt.Sprintf("steps: %d", state.Steps)
+	}
+	if right != "" {
+		// One column of air before the bar's own padding, mirroring the leading
+		// space on the left.
+		right += " "
 	}
 
-	// Calculate padding (accounting for dot + spaces + padding(0,1) = 2 chars)
-	// left: " ● agentname status" — dot is 1 visible char
-	// right: "hint "
-	leftVisibleLen := 3 + len(leftText) // " ● " + text
-	rightVisibleLen := len(rightText)
-	if rightVisibleLen > 0 {
-		rightVisibleLen++ // trailing space
+	// Padding(0, 1) spends one column on each side, so the content this
+	// function builds has `width-2` to live in.
+	inner := width - 2
+	if inner < 1 {
+		// Narrower than its own padding: lipgloss cannot render the style below
+		// that floor, so the bar becomes a bare band of the width it was asked
+		// for rather than silently coming out wider than the screen.
+		return statusBarStyle.UnsetPadding().Width(width).Render("")
 	}
 
-	innerWidth := width - 2 // padding(0,1) adds 1 on each side
-	gap := innerWidth - leftVisibleLen - rightVisibleLen
-	if gap < 1 {
-		gap = 1
+	leftW := ansi.StringWidth(left)
+	rightW := ansi.StringWidth(right)
+
+	// Overflowing used to clamp the gap to 1 and let the content run past the
+	// bar, at which point lipgloss wrapped it onto a second row and sheared the
+	// layout below. Truncate instead — and truncate the hint first, because
+	// which agent is talking matters more than how to scroll it.
+	if budget := inner - leftW - 1; rightW > budget {
+		if budget < minHintWidth {
+			right, rightW = "", 0
+		} else {
+			right = ansi.Truncate(right, budget, "…")
+			rightW = ansi.StringWidth(right)
+		}
+	}
+	if leftW+rightW > inner {
+		left = ansi.Truncate(left, inner-rightW, "…")
+		leftW = ansi.StringWidth(left)
 	}
 
-	content := " " + dot + " " + leftText + strings.Repeat(" ", gap) + rightText
+	gap := inner - leftW - rightW
+	if gap < 0 {
+		gap = 0
+	}
+	content := left + strings.Repeat(" ", gap) + right
 	return statusBarStyle.Width(width).Render(content)
 }
