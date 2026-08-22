@@ -475,6 +475,10 @@ class Agent(abc.ABC):
     # both render paths and the ``_openai_tools`` property.
     _active_tool_filter: Optional[List[str]] = None
 
+    # Re-entrancy guard for tool timing. A tool body may call another tool
+    # (CodeAgent orchestrates that way); only the outermost call is timed.
+    _tool_timing_depth: int = 0
+
     # Per-turn performance record, live only for the duration of one turn and
     # only when GAIA_TURN_LOG is set. ``None`` is the off state everywhere.
     _turn_recorder: Optional[Any] = None
@@ -1006,7 +1010,7 @@ Do NOT wrap conversational replies in JSON.
         return recorder
 
     def _finish_turn_record(
-        self, user_input: str, answer: str, steps_taken: int
+        self, answer: str, steps_taken: int
     ) -> Optional[Dict[str, Any]]:
         """Seal and write the turn record; always detaches it from the SDK.
 
@@ -1021,13 +1025,7 @@ Do NOT wrap conversational replies in JSON.
         if recorder is None:
             return None
         try:
-            record = recorder.finish(
-                query=user_input,
-                answer=answer or "",
-                steps=steps_taken,
-                agent_name=type(self).__name__,
-                model_id=self._recorded_model_id(),
-            )
+            record = recorder.finish(answer=answer or "", steps=steps_taken)
         except Exception as e:  # noqa: BLE001 - diagnostics must not fail a turn
             logger.warning("could not finish turn record: %s", e)
             return None
@@ -4305,7 +4303,7 @@ Do NOT wrap conversational replies in JSON.
             # The impl re-raises on purpose (the wrong-ctx reload its caller
             # retries). A recorder left attached would fold the next turn's
             # calls into this one. Idempotent when the turn already sealed.
-            self._finish_turn_record(user_input, "", 0)
+            self._finish_turn_record("", 0)
 
     def _process_query_impl(
         self,
@@ -4315,8 +4313,6 @@ Do NOT wrap conversational replies in JSON.
         filename: str = None,
     ) -> Dict[str, Any]:
         """Inner implementation of ``process_query`` — see public method docstring."""
-        import time
-
         start_time = time.time()  # Track query processing start time
 
         # Store query for error context (used in _execute_tool for error formatting)
@@ -6273,9 +6269,7 @@ Do NOT wrap conversational replies in JSON.
                 # Sealed before the answer prints: total_s must mean
                 # "until it was on screen", and the console folds the record
                 # into that same event.
-                turn_record = self._finish_turn_record(
-                    user_input, final_answer, steps_taken
-                )
+                turn_record = self._finish_turn_record(final_answer, steps_taken)
                 self._publish_turn_metrics(turn_record)
                 self.console.print_final_answer(
                     final_answer,
@@ -6340,7 +6334,7 @@ Do NOT wrap conversational replies in JSON.
                 "error_history": self.error_history,
             }
             # Returns before the tail seal below.
-            self._finish_turn_record(user_input, "", steps_taken)
+            self._finish_turn_record("", steps_taken)
             return self.last_result
 
         # Print completion message
@@ -6397,7 +6391,7 @@ Do NOT wrap conversational replies in JSON.
 
         # Catches the exits that never printed an answer (max steps).
         turn_record = (
-            self._finish_turn_record(user_input, result.get("result", ""), steps_taken)
+            self._finish_turn_record(result.get("result", ""), steps_taken)
             or turn_record
         )
         if turn_record is not None:

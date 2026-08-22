@@ -133,10 +133,20 @@ class TestUnconvertibleValuesAreRefusedNotPassedOn:
 
 class TestTheDispatcherActuallyCallsIt:
     def test_execute_tool_coerces_before_dispatch(self):
-        src = inspect.getsource(Agent._execute_tool)
+        """Dispatch is split across a timing wrapper and the impl it delegates to.
+
+        Reading only one half would pass while the coercion sat in the other, so
+        assert the delegation too — otherwise splitting the method again silently
+        turns this into a test of the wrong function.
+        """
+        wrapper = inspect.getsource(Agent._execute_tool)
+        impl = inspect.getsource(Agent._execute_tool_impl)
         assert (
-            "_coerce_tool_args" in src
+            "_execute_tool_impl" in wrapper
+        ), "_execute_tool no longer delegates to _execute_tool_impl"
+        assert (
+            "_coerce_tool_args" in impl
         ), "coercion is not wired into the dispatch path, so no tool benefits"
-        assert src.index("_coerce_tool_args") < src.index(
+        assert impl.index("_coerce_tool_args") < impl.index(
             "_call_tool_bounded"
         ), "arguments must be fitted before the tool runs, not after"

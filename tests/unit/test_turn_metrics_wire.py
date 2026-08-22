@@ -203,9 +203,9 @@ class TestAgentSideHooks:
             path=log,
         )
 
-        first = agent._finish_turn_record("q", "a", 1)
+        first = agent._finish_turn_record("a", 1)
         assert first is not None and first["schema"] == "gaia.turn/1"
-        assert agent._finish_turn_record("q", "a", 1) is None
+        assert agent._finish_turn_record("a", 1) is None
         assert len(log.read_text(encoding="utf-8").strip().splitlines()) == 1
 
     def test_a_broken_console_hook_cannot_fail_the_turn(self):
@@ -303,9 +303,7 @@ class TestTimingHoldsUpOnTheUnhappyPaths:
         time.sleep(0.02)
         stream.close()  # what console cancellation does
 
-        record = recorder.finish(
-            query="q", answer="", steps=1, agent_name="A", model_id="m"
-        )
+        record = recorder.finish(answer="", steps=1)
         assert len(record["llm_calls"]) == 1, "the abandoned call was never closed"
         assert record["llm_calls"][0]["wall_s"] > 0
         assert record["totals"]["llm_s"] > 0, "its seconds landed in overhead"
@@ -319,9 +317,7 @@ class TestTimingHoldsUpOnTheUnhappyPaths:
         sdk._recorder_end(stats={"time_to_first_token": 0.5})
         sdk._recorder_end(stats={})
 
-        record = recorder.finish(
-            query="q", answer="", steps=1, agent_name="A", model_id="m"
-        )
+        record = recorder.finish(answer="", steps=1)
         assert len(record["llm_calls"]) == 1
         assert record["llm_calls"][0]["ttft_s"] == 0.5, "the backup close overwrote it"
 
