@@ -74,8 +74,11 @@ def extract_json(text: str) -> dict:
 
 def judge_one(scenario: dict, result: dict, out_path: Path) -> dict:
     prompt = build_prompt(scenario, result)
+    # Prompt goes over stdin — cmd.exe truncates argv at the first newline,
+    # so a multi-line prompt passed as an argument reaches claude as line 1 only.
     proc = subprocess.run(
-        ["claude", "-p", prompt],
+        ["claude", "-p"],
+        input=prompt,
         capture_output=True,
         text=True,
         encoding="utf-8",
