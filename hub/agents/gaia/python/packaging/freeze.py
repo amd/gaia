@@ -62,6 +62,28 @@ PATHEX = [
 MANIFEST_SRC = PKG_ROOT / "gaia-agent.yaml"
 SKILLS_SRC = PKG_ROOT / "gaia_agent" / "skills"
 
+# Modules PyInstaller must pull in wholesale, and the distributions whose
+# metadata must travel with them. Declared once so the preflight guard below
+# and the CLI args can never disagree about what has to be in the binary.
+COLLECT_SUBMODULES = [
+    # uvicorn: string-imported loops/protocols/lifespan.
+    "uvicorn",
+    # keyring: OS backend resolution via entry points.
+    "keyring",
+    # Both agent packages register tools lazily inside functions.
+    "gaia_agent",
+    "gaia_agent_chat",
+    # connector provider discovery is dynamic.
+    "gaia.connectors",
+    # pydantic v2 ships a compiled core; collect data to be safe.
+    "pydantic",
+]
+# FAISS backs the memory / RAG working-context index. faiss-cpu ships compiled
+# libs + swig submodules the static analyzer misses.
+COLLECT_ALL = ["faiss"]
+# importlib.metadata version probes + entry-point agent discovery.
+COPY_METADATA = ["keyring", "amd-gaia", "gaia-agent-gaia", "gaia-agent-chat"]
+
 # Heavy ML stack reached only through the lazily-imported chat/SDK graph. All
 # inference goes to Lemonade over HTTP, so excluding these keeps the binary at
 # ~100 MB instead of ~2 GB. numpy stays (memory.py imports it at module level).
@@ -84,6 +106,35 @@ EXCLUDES = [
     "sympy",
     "pandas",
 ]
+
+
+def _verify_collect_targets() -> None:
+    """Fail the build if a collect target is not importable in this env.
+
+    PyInstaller downgrades an uncollectable ``--collect-all`` target to a
+    WARNING and keeps going, so a missing dependency does not fail the freeze --
+    it ships a binary silently missing that capability. ``faiss`` is the live
+    example: the release workflow installs only ``.[api]``, which carries no RAG
+    deps, so the binary booted and passed the smoke test with vector search and
+    document Q&A absent. A frozen binary has no interpreter for the
+    "pip install" remedy those code paths advise, so the gap is unrecoverable on
+    the user's machine -- it has to fail here instead.
+    """
+    import importlib.util
+
+    missing = [
+        mod
+        for mod in COLLECT_SUBMODULES + COLLECT_ALL
+        if importlib.util.find_spec(mod) is None
+    ]
+    if missing:
+        raise SystemExit(
+            "freeze: refusing to build -- these modules are declared for "
+            f"collection but are not installed: {', '.join(missing)}.\n"
+            "PyInstaller would only warn and produce a binary missing that "
+            "capability. Install them into the freeze environment and re-run, "
+            'e.g. `uv pip install --python .venv-freeze -e ".[api,rag]"`.'
+        )
 
 
 def _resolve_add_data() -> list[tuple[Path, str]]:
@@ -135,6 +186,7 @@ def _resolve_add_data() -> list[tuple[Path, str]]:
 def build(onefile: bool = False, clean: bool = True) -> Path:
     import PyInstaller.__main__
 
+    _verify_collect_targets()
     add_data = _resolve_add_data()
 
     work = HERE / "build"
@@ -160,38 +212,12 @@ def build(onefile: bool = False, clean: bool = True) -> Path:
     ]
     for path in PATHEX:
         args += ["--paths", str(path)]
-    args += [
-        # uvicorn: string-imported loops/protocols/lifespan.
-        "--collect-submodules",
-        "uvicorn",
-        # keyring: OS backend resolution via entry points.
-        "--collect-submodules",
-        "keyring",
-        "--copy-metadata",
-        "keyring",
-        # Both agent packages register tools lazily inside functions.
-        "--collect-submodules",
-        "gaia_agent",
-        "--collect-submodules",
-        "gaia_agent_chat",
-        # connector provider discovery is dynamic.
-        "--collect-submodules",
-        "gaia.connectors",
-        # FAISS backs the memory / RAG working-context index. faiss-cpu ships
-        # compiled libs + swig submodules the static analyzer misses.
-        "--collect-all",
-        "faiss",
-        # pydantic v2 ships a compiled core; collect data to be safe.
-        "--collect-submodules",
-        "pydantic",
-        # importlib.metadata version probes + entry-point agent discovery.
-        "--copy-metadata",
-        "amd-gaia",
-        "--copy-metadata",
-        "gaia-agent-gaia",
-        "--copy-metadata",
-        "gaia-agent-chat",
-    ]
+    for mod in COLLECT_SUBMODULES:
+        args += ["--collect-submodules", mod]
+    for mod in COLLECT_ALL:
+        args += ["--collect-all", mod]
+    for distribution in COPY_METADATA:
+        args += ["--copy-metadata", distribution]
     for source, dest in add_data:
         args += ["--add-data", f"{source}{os.pathsep}{dest}"]
     for mod in EXCLUDES:
