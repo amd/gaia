@@ -8,6 +8,9 @@ description: |
   The answer must match what the loader really registered — the
   zero-tools-but-confident-prose failure is the canonical flagship bug.
 
+# Depends on the fake-gh shim (turn 3 fetches fixture issues); see local_blocked_win_shim.
+tags: [local_blocked_win_shim]
+
 persona: power_user
 
 setup:
