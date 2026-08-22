@@ -53,6 +53,7 @@ def build_app():
     spec matches what a host actually serves.
     """
     from fastapi import FastAPI
+    from gaia_agent_email import caller_auth
     from gaia_agent_email.api_routes import router as email_router
     from gaia_agent_email.connection_intake_routes import (
         router as connection_intake_router,
@@ -68,6 +69,12 @@ def build_app():
     # (schema 2.5), so it belongs in the published artifact, unlike the
     # playground-only connector routes (include_in_schema=False).
     app.include_router(connection_intake_router)
+
+    # Declare the sidecar's bearer gate (#2993) — this app mounts the SAME
+    # routers the sidecar gates in server.py, so its exported document must
+    # describe the same posture even though this minimal app never wires the
+    # dependency itself.
+    caller_auth.install_openapi_security(app)
     return app
 
 
