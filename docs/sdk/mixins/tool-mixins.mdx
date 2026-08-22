@@ -6,11 +6,11 @@ icon: "puzzle-piece"
 <Note>
 ⚡ **You are viewing:** Quick Reference - Common mixin usage patterns
 
-**See also:** [17 Detailed Mixin Specifications](/spec/file-tools-mixin) (under Specifications → Tool Mixins)
+**See also:** [Detailed Mixin Specifications](/spec/file-tools-mixin) (under Specifications → Tool Mixins)
 </Note>
 
 <Info>
-  **Source Code:** [`src/gaia/agents/tools/`](https://github.com/amd/gaia/tree/main/src/gaia/agents/tools/), [`hub/agents/code/python/gaia_agent_code/tools/`](https://github.com/amd/gaia/tree/main/hub/agents/code/python/gaia_agent_code/tools/)
+  **Source Code:** [`src/gaia/agents/tools/`](https://github.com/amd/gaia/tree/main/src/gaia/agents/tools/)
 </Info>
 
 <Note>
@@ -46,7 +46,7 @@ Each row is the exact `name → module.Class` mapping the registry resolves:
 | `vlm` | `from gaia.vlm.mixin import VLMToolsMixin` | Vision LLM / structured extraction |
 
 The sections below show usage patterns for the most common mixins; the
-`file_io` mixin is covered under [Code Development](./code-mixins).
+`file_io` mixin has its own spec at [FileIOToolsMixin](/spec/file-io-tools-mixin).
 
 ## 9.1 File Watching Mixin
 
@@ -161,7 +161,6 @@ class MyAgent(Agent, FileSearchToolsMixin):
 ## 9.5 Stable Diffusion Mixin
 
 **Import:** `from gaia.sd import SDToolsMixin`
-**Detailed Guide:** [Image Generation Guide](/guides/sd)
 **Source:** [`src/gaia/sd/mixin.py`](https://github.com/amd/gaia/tree/main/src/gaia/sd/mixin.py)
 
 ```python
@@ -251,7 +250,6 @@ result = agent.process_query("analyze this image: photo.jpg")
 ## Related Topics
 
 - [Core Agent System](../core/agent-system) - Learn about the base Agent class
-- [Code Development Mixins](./code-mixins) - Specialized code development tools
 - [User Guides](/guides/index) - Pre-built agent implementations
 - [Best Practices](../best-practices) - Agent development guidelines
 

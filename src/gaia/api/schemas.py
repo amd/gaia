@@ -44,12 +44,12 @@ class ChatCompletionRequest(BaseModel):
 
     Example:
         >>> request = ChatCompletionRequest(
-        ...     model="gaia-code",
+        ...     model="gaia",
         ...     messages=[{"role": "user", "content": "Hello"}]
         ... )
     """
 
-    model: str = Field(..., description="Model ID (e.g., gaia-code, gaia-jira)")
+    model: str = Field(..., description="Model ID (e.g., gaia)")
     messages: List[ChatMessage] = Field(..., description="Array of chat messages")
     stream: bool = Field(default=False, description="Enable SSE streaming")
     temperature: Optional[float] = Field(
@@ -128,7 +128,7 @@ class ChatCompletionResponse(BaseModel):
         ...     id="chatcmpl-123",
         ...     object="chat.completion",
         ...     created=1234567890,
-        ...     model="gaia-code",
+        ...     model="gaia",
         ...     choices=[...],
         ...     usage=UsageInfo(...)
         ... )
@@ -148,7 +148,7 @@ class ModelInfo(BaseModel):
 
     Example:
         >>> model = ModelInfo(
-        ...     id="gaia-code",
+        ...     id="gaia",
         ...     object="model",
         ...     created=1234567890,
         ...     owned_by="amd-gaia",

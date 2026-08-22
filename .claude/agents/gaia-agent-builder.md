@@ -101,7 +101,7 @@ The registry discovers packaged agents by scanning the `gaia.agent` entry-point 
 
 ### 4. CLI (optional)
 - [ ] Add a subparser in `src/gaia/cli.py` and document in `docs/reference/cli.mdx` — see `cli-developer` for the pattern
-- [ ] Standalone binary? Declare `console_scripts` in the hub package's own `pyproject.toml` — NOT a core `setup.py` entry (e.g. `hub/agents/code/python/` declares `gaia-code = gaia_agent_code.cli:main`)
+- [ ] Standalone binary? Declare `console_scripts` in the hub package's own `pyproject.toml` — NOT a core `setup.py` entry
 
 ### 5. Tests (required)
 - [ ] `hub/agents/<id>/python/tests/test_<id>_agent.py` — instantiation + tool registration + mocked-LLM response

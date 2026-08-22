@@ -27,7 +27,7 @@ func hubResponse(installed bool, supervised bool) *HubCatalog {
 	}
 	return &HubCatalog{
 		Agents:               []HubEntry{entry},
-		UnsupervisedFiltered: []string{"code"},
+		UnsupervisedFiltered: []string{"chat"},
 	}
 }
 
@@ -102,10 +102,10 @@ func TestSeedAgentsAbsentFromTheHubAreNotOffered(t *testing.T) {
 			t.Errorf("no reason recorded for %q", a.ID)
 		}
 	}
-	// 'code' is the id the fixture reports as filtered-for-lack-of-a-spec, so
+	// 'chat' is the id the fixture reports as filtered-for-lack-of-a-spec, so
 	// that fact must replace the seed's blanket "not published yet".
-	if got := c.Get("code").NotOfferedReason; got != "no way to run it yet" {
-		t.Errorf("'code' reason = %q, want the daemon's filtered reason", got)
+	if got := c.Get("chat").NotOfferedReason; got != "no way to run it yet" {
+		t.Errorf("'chat' reason = %q, want the daemon's filtered reason", got)
 	}
 }
 

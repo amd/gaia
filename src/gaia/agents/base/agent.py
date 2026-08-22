@@ -197,6 +197,9 @@ class ToolExecutionTimeout(Exception):
 TOOLS_REQUIRING_CONFIRMATION = {
     "run_shell_command",
     "run_cli_command",
+    # Runs a .py file in a subprocess — arbitrary code execution, and unlike
+    # run_shell_command there is no read-only allowlist behind it.
+    "execute_python_file",
     "write_file",
     "write_python_file",
     "edit_file",

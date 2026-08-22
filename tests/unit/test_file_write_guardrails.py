@@ -12,8 +12,7 @@ for all file mutation operations across agents. These tests verify:
 - Overwrite confirmation prompting
 - Backup creation before overwrite
 - Audit logging for write operations
-- Integration with ChatAgent write_file / edit_file tools
-- Integration with CodeAgent write_file / edit_file tools
+- Integration with the FileIOToolsMixin write_file / edit_file tools
 
 All tests are designed to run without LLM or external services.
 """
@@ -907,12 +906,12 @@ class TestChatAgentEditFileGuardrails:
 
 
 # ============================================================================
-# 12. CodeAgent write_file GUARDRAIL TESTS
+# 12. FileIOToolsMixin write_file GUARDRAIL TESTS
 # ============================================================================
 
 
-class TestCodeAgentWriteFileGuardrails:
-    """Test that CodeAgent's generic write_file tool enforces PathValidator guardrails.
+class TestFileIOToolsMixinWriteFileGuardrails:
+    """Test that FileIOToolsMixin's write_file tool enforces PathValidator guardrails.
 
     These tests exercise write_file from code/tools/file_io.py (FileIOToolsMixin).
     """
@@ -1005,12 +1004,12 @@ class TestCodeAgentWriteFileGuardrails:
 
 
 # ============================================================================
-# 13. CodeAgent edit_file GUARDRAIL TESTS
+# 13. FileIOToolsMixin edit_file GUARDRAIL TESTS
 # ============================================================================
 
 
-class TestCodeAgentEditFileGuardrails:
-    """Test that CodeAgent's generic edit_file tool enforces PathValidator guardrails."""
+class TestFileIOToolsMixinEditFileGuardrails:
+    """Test that FileIOToolsMixin's edit_file tool enforces PathValidator guardrails."""
 
     @pytest.fixture
     def mixin_and_registry(self, tmp_path):
