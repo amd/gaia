@@ -27,8 +27,9 @@ import './ConnectorRetryBanner.css';
  * Given the error message and the current connector rows, decide whether the
  * provider the message referenced is now connected. Pure + exported for tests.
  *
- * ``detectProvider`` returns 'google' | 'microsoft' | 'both' (ambiguous). For
- * an ambiguous message, either provider being connected is enough to retry.
+ * ``detectProvider`` returns 'google' | 'microsoft' | 'microsoft_work' | 'all'
+ * (ambiguous). For an ambiguous message, any of the three connecting is
+ * enough to retry.
  */
 export function referencedProviderConnected(
     content: string,
@@ -39,17 +40,26 @@ export function referencedProviderConnected(
     const provider = detectProvider(content);
     if (provider === 'google') return isConfigured('google');
     if (provider === 'microsoft') return isConfigured('microsoft');
-    return isConfigured('google') || isConfigured('microsoft');
+    if (provider === 'microsoft_work') return isConfigured('microsoft_work');
+    return isConfigured('google') || isConfigured('microsoft') || isConfigured('microsoft_work');
 }
 
-/** Human label for the connected provider, for the banner copy. */
-function connectedProviderLabel(content: string, connectors: ConnectorRow[]): string {
+/**
+ * Human label for the connected provider, for the banner copy. An ambiguous
+ * message resolves to whichever provider is actually configured, preferring
+ * Google, then Microsoft, then Microsoft 365 (the connectors' canonical
+ * display order).
+ */
+export function connectedProviderLabel(content: string, connectors: ConnectorRow[]): string {
     const isConfigured = (id: string) =>
         connectors.some((c) => c.id === id && c.configured);
     const provider = detectProvider(content);
-    if (provider === 'microsoft' || (provider === 'both' && isConfigured('microsoft') && !isConfigured('google'))) {
-        return 'Microsoft';
-    }
+    if (provider === 'google') return 'Google';
+    if (provider === 'microsoft') return 'Microsoft';
+    if (provider === 'microsoft_work') return 'Microsoft 365';
+    if (isConfigured('google')) return 'Google';
+    if (isConfigured('microsoft')) return 'Microsoft';
+    if (isConfigured('microsoft_work')) return 'Microsoft 365';
     return 'Google';
 }
 

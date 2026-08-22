@@ -1071,6 +1071,8 @@ jobs:
     needs: build
     if: always() && needs.build.result == 'success'
     runs-on: ubuntu-24.04
+    # apt-get can stall fetching xvfb; without this the job inherits the 6h default.
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -1161,6 +1163,7 @@ jobs:
           done
           if [ "$HEALTH_OK" -ne 1 ]; then
             echo "::error::userns-restricted: /api/health did not report service=gaia-agent-ui"
+            tail -n 200 /tmp/stdout.log /tmp/stderr.log || true
             kill -9 "$APP_PID" 2>/dev/null || true
             exit 1
           fi

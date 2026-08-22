@@ -414,7 +414,14 @@ def cmd_index(argv):
         return 0
 
     if action == "search":
-        results = sdk.search(args.query, scope=args.scope, top_k=args.top_k)
+        # search() raises (rather than pretending "no matches") when the
+        # embedder can't produce a query vector — e.g. Lemonade still warming
+        # up. Surface that as a message, not a traceback, like build does.
+        try:
+            results = sdk.search(args.query, scope=args.scope, top_k=args.top_k)
+        except Exception as e:
+            print(f"Search failed: {e}")
+            return 1
         if not results:
             print("No results found. Run 'gaia-code index' first.")
             return 0

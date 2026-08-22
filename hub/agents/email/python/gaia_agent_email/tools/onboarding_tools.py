@@ -306,9 +306,12 @@ def _run_oauth(agent: Any, provider: str) -> Dict[str, Any]:
 def _run_connect(agent: Any, provider: str) -> None:
     """Run whichever sign-in *provider* actually uses.
 
-    Microsoft goes through the guided device-code walkthrough (#2590) — no
-    client secret, no browser required. Every other provider keeps the
-    existing browser-loopback path.
+    Personal Microsoft goes through the guided device-code walkthrough
+    (#2590) — no client secret, no browser required. ``microsoft_work``
+    deliberately falls through to the generic browser-loopback path instead
+    (``setup_routes.ROUTES`` has no entry for it): a work tenant registers
+    its own app and consent policy, so the personal walkthrough's
+    assumptions don't hold. Every other provider uses the same generic path.
     """
     if provider == "microsoft":
         _run_microsoft_setup(agent)
@@ -325,10 +328,11 @@ def _run_microsoft_setup(agent: Any) -> Dict[str, Any]:
     two that could disagree. A mailbox that already has a client configured
     (e.g. a reconnect) skips straight to sign-in — never re-walked.
     """
+    from gaia_agent_email.tools import setup_walkthrough as sw
+
     from gaia.connectors._loop import run_sync
     from gaia.connectors.handler import configure
     from gaia.connectors.setup_routes import get_route
-    from gaia_agent_email.tools import setup_walkthrough as sw
 
     gap = _oauth_client_gap("microsoft")
     if gap is not None:
@@ -407,7 +411,9 @@ def _confirm_repair(agent: Any, state: Dict[str, Any]) -> bool:
         go = Option(
             _YES,
             f"Reconnect {label}",
-            _go_blurb(provider, "Opens your browser to sign in again. Your mail is untouched."),
+            _go_blurb(
+                provider, "Opens your browser to sign in again. Your mail is untouched."
+            ),
         )
     elif kind == ms.STATE_MISSING_SCOPES:
         missing = _scope_labels(state["provider"], state.get("missing_scopes") or [])
@@ -428,7 +434,10 @@ def _confirm_repair(agent: Any, state: Dict[str, Any]) -> bool:
         go = Option(
             _YES,
             f"Connect {label}",
-            _go_blurb(provider, "Opens your browser to sign in. Nothing is sent anywhere else."),
+            _go_blurb(
+                provider,
+                "Opens your browser to sign in. Nothing is sent anywhere else.",
+            ),
         )
 
     answer = ask(
@@ -457,7 +466,12 @@ def _choose_provider(agent: Any, states: List[Dict[str, Any]]) -> str:
             Option(
                 "microsoft",
                 "Outlook",
-                "An outlook.com or Microsoft 365 account.",
+                "An outlook.com or Hotmail account.",
+            ),
+            Option(
+                "microsoft_work",
+                "Microsoft 365",
+                "A work or school Microsoft 365 / Entra account.",
             ),
             Option(_NO, "Neither right now", "Change nothing and carry on."),
         ),

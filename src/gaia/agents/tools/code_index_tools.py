@@ -19,6 +19,7 @@ requiring cooperative ``__init__`` chaining.
 
 import json
 import os
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from gaia.agents.base.tools import tool
@@ -67,7 +68,10 @@ class CodeIndexToolsMixin:
             repo_path: Repository root (absolute or relative, resolved here).
             code_index_config: Optional pre-built ``CodeIndexConfig``.
         """
-        self._repo_path = os.path.abspath(repo_path)
+        # expanduser everywhere a root is stored, or a '~'-style
+        # allowed_paths config produces a "<cwd>/~" root that rejects the
+        # very paths it was meant to allow.
+        self._repo_path = os.path.abspath(os.path.expanduser(repo_path))
         self._code_index_config = code_index_config
         self._code_index_sdk: Optional[Any] = None
 
@@ -119,17 +123,49 @@ class CodeIndexToolsMixin:
             self._ensure_code_index_state()
 
             if repo_path:
-                resolved = os.path.abspath(repo_path)
+                # expanduser first: the refusal below suggests '~/...' paths,
+                # and a model following that advice literally must not get
+                # "<cwd>/~/..." back.
+                resolved = os.path.abspath(os.path.expanduser(repo_path))
                 if not os.path.isdir(resolved):
                     return json.dumps({"error": f"Not a directory: {resolved}"})
                 # Restrict to the agent's original repo_path to prevent
                 # LLM-directed path traversal to arbitrary directories.
-                original = os.path.abspath(self._repo_path)
-                if not resolved.startswith(original + os.sep) and resolved != original:
-                    return json.dumps({"error": f"repo_path must be within {original}"})
+                # Compare *resolved* (symlink-following) paths, not raw
+                # abspath — a symlink inside the allowed root that points
+                # outside it would otherwise pass this string check and
+                # then, in CodeIndexSDK.__init__ (which does resolve()),
+                # silently re-root the whole index/search sandbox onto the
+                # symlink's target.
+                real_resolved = str(Path(resolved).resolve())
+                real_original = str(Path(self._repo_path).resolve())
+                if (
+                    not real_resolved.startswith(real_original + os.sep)
+                    and real_resolved != real_original
+                ):
+                    return json.dumps(
+                        {"error": f"repo_path must be within {real_original}"}
+                    )
                 self._repo_path = resolved
                 self._code_index_config = None
                 self._code_index_sdk = None
+
+            # The sandbox ceiling may be the user's whole home directory (the
+            # flagship agent's default file scope). Indexing that is never
+            # what "index the codebase" means — it walks and embeds every
+            # repo, download, and cache the user owns, and blows the tool
+            # timeout doing it. Require an actual repo path instead.
+            effective = str(Path(self._repo_path).resolve())
+            if effective == str(Path.home().resolve()):
+                return json.dumps(
+                    {
+                        "error": (
+                            "refusing to index your entire home directory — "
+                            "call index_codebase with the repository's path, "
+                            "e.g. index_codebase(repo_path='~/projects/myrepo')"
+                        )
+                    }
+                )
 
             sdk = self._get_code_index_sdk()
             if sdk is None:

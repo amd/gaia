@@ -328,19 +328,20 @@ class TestAgentConsoleInteractive:
         # Capitalised N marks the default; y/a are the explicit approvals.
         assert "[N]o" in prompts[0]
 
-    def test_always_approves_that_tool_for_the_session_only(self, tty, monkeypatch):
+    def test_always_approves_that_call_for_the_session_only(self, tty, monkeypatch):
         _answer(monkeypatch, "a", "n")
         console = AgentConsole()
         assert console.confirm_tool_execution("write_file", {"path": "a.py"}) is True
-        # Second call to the same tool does not re-prompt (no answers consumed).
-        assert console.confirm_tool_execution("write_file", {"path": "b.py"}) is True
-        # A different tool still asks — and the queued "n" denies it.
-        assert console.confirm_tool_execution("send_now", {}) is False
+        # The SAME call does not re-prompt (no answers consumed).
+        assert console.confirm_tool_execution("write_file", {"path": "a.py"}) is True
+        # A different file is a different decision — the queued "n" denies it.
+        assert console.confirm_tool_execution("write_file", {"path": "b.py"}) is False
 
     def test_always_does_not_leak_across_consoles(self, tty, monkeypatch):
         _answer(monkeypatch, "a", "n")
-        assert AgentConsole().confirm_tool_execution("write_file", {}) is True
-        assert AgentConsole().confirm_tool_execution("write_file", {}) is False
+        args = {"path": "a.py"}
+        assert AgentConsole().confirm_tool_execution("write_file", args) is True
+        assert AgentConsole().confirm_tool_execution("write_file", args) is False
 
 
 class TestArgumentRendering:
@@ -494,25 +495,63 @@ class TestAlwaysAllowScope:
     """ "Always" must not become a blank cheque for arbitrary execution."""
 
     @pytest.mark.parametrize("tool_name", ["run_shell_command", "run_cli_command"])
-    def test_shell_tools_never_offer_always(self, tty, monkeypatch, tool_name):
+    def test_a_shell_grant_covers_only_that_command(self, tty, monkeypatch, tool_name):
+        """The shell tools may be granted, but never wholesale.
+
+        These used to refuse "always" outright, because the tool name says
+        nothing about what the next command will be. Grants are now keyed on
+        the invocation, so the useful case works and the dangerous one still
+        cannot happen: approving `gh issue list` never approves `rm -rf /`.
+        """
         prompts = _answer(monkeypatch, "a", "n")
         console = AgentConsole()
-        # "a" is not an approval for these — the tool name says nothing about
-        # what the next command will be.
-        assert console.confirm_tool_execution(tool_name, {"command": "ls"}) is False
-        assert "always" not in prompts[0]
-        # And nothing was remembered: the next call asks again.
+        assert (
+            console.confirm_tool_execution(tool_name, {"command": "gh issue list"})
+            is True
+        )
+        # The offer names what it grants, so nobody reads it as tool-wide.
+        assert "gh issue list" in prompts[0]
+
+        # Same command, different arguments: the same decision, not re-asked.
+        assert (
+            console.confirm_tool_execution(
+                tool_name, {"command": "gh issue list --limit 5"}
+            )
+            is True
+        )
+        # A different command is a different decision — the queued "n" denies.
         assert (
             console.confirm_tool_execution(tool_name, {"command": "rm -rf /"}) is False
+        )
+
+    @pytest.mark.parametrize(
+        "command", ["bash -c 'rm -rf /'", "gh issue list | sh", "git -C /elsewhere log"]
+    )
+    def test_an_unscopable_command_is_never_granted(self, tty, monkeypatch, command):
+        """No honest narrow scope exists, so "always" is not on the table."""
+        prompts = _answer(monkeypatch, "a", "a")
+        console = AgentConsole()
+        # "a" is not an approval here: with no grant on offer it is not an
+        # answer at all, and the prompt defaults to no.
+        assert (
+            console.confirm_tool_execution("run_shell_command", {"command": command})
+            is False
+        )
+        assert "always" not in prompts[0]
+        # Nothing was remembered: the next identical call asks again.
+        assert (
+            console.confirm_tool_execution("run_shell_command", {"command": command})
+            is False
         )
 
     def test_reset_clears_remembered_approvals(self, tty, monkeypatch):
         _answer(monkeypatch, "a", "n")
         console = AgentConsole()
-        assert console.confirm_tool_execution("write_file", {}) is True
+        args = {"path": "a.py"}
+        assert console.confirm_tool_execution("write_file", args) is True
         console.reset_tool_approvals()
         # Asks again after the reset — and the queued "n" denies.
-        assert console.confirm_tool_execution("write_file", {}) is False
+        assert console.confirm_tool_execution("write_file", args) is False
 
 
 class TestDenialReasonBinding:

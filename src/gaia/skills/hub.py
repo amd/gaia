@@ -46,6 +46,7 @@ from gaia.hub.catalog import (
 from gaia.logger import get_logger
 from gaia.skills.errors import SkillError, SkillNotFoundError, SkillValidationError
 from gaia.skills.versions import resolve as resolve_version_spec
+from gaia.skills.versions import validate_spec as validate_version_spec
 
 log = get_logger(__name__)
 
@@ -223,10 +224,14 @@ class RemoteSkill:
         """Highest published version satisfying *spec*.
 
         Raises:
+            SkillValidationError: *spec* is not a range GAIA can read. Checked
+                before the candidate list, so an unreadable pin is reported as
+                such even for a skill with nothing published yet.
             SkillNotFoundError: when no published version satisfies it. The error
                 lists what *is* published, which is what the user needs to
                 correct the pin.
         """
+        validate_version_spec(spec)
         available = sorted(self.versions)
         chosen = resolve_version_spec(available, spec)
         if chosen is None:

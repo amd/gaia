@@ -98,6 +98,9 @@ func TestCanonicalFinalWithoutTokens(t *testing.T) {
 // "~" prefix, since this is a real count, not the old char-length guess.
 func TestCanonicalFinalCarriesRealTokenCount(t *testing.T) {
 	m, _ := newTestModel(t)
+	// The token count is a --dev figure; this test is about the plumbing
+	// that carries it, so it asks for the dev breakdown explicitly.
+	m.dev = true
 	m.streaming = true
 	m.queryStart = time.Now().Add(-5 * time.Second)
 	m.ttft = 1 * time.Second
@@ -127,6 +130,7 @@ func TestCanonicalFinalCarriesRealTokenCount(t *testing.T) {
 // this is a fix, not a removal, and there is no fallback to the old guess.
 func TestCanonicalRenderOmitsTokensWhenZero(t *testing.T) {
 	m, _ := newTestModel(t)
+	m.dev = true
 	msg := &Message{
 		Role:      RoleAssistant,
 		Duration:  3200 * time.Millisecond,
@@ -199,6 +203,7 @@ func TestCanonicalLegacyTransportNeverSetsTTFT(t *testing.T) {
 // client must use the server-reported usage.ttft instead of leaving it at 0.
 func TestCanonicalTTFTFallsBackToServerReportedValue(t *testing.T) {
 	m, _ := newTestModel(t)
+	m.dev = true
 	m.streaming = true
 	m.queryStart = time.Now().Add(-82 * time.Second)
 
@@ -277,8 +282,14 @@ func TestCanonicalToolCallAndResult(t *testing.T) {
 	if item.Success == nil || !*item.Success {
 		t.Errorf("expected success from {\"ok\":true}, got %v", item.Success)
 	}
-	if !strings.Contains(item.Content, "search_email") || !strings.Contains(item.Content, "invoice") {
-		t.Errorf("tool line lost its detail: %q", item.Content)
+	// The line names the work in words, plus the one argument that says what the
+	// work is ABOUT. The raw tool name stays on the item for repeat-folding, but
+	// it is not what the user reads.
+	if !strings.Contains(item.Content, "invoice") {
+		t.Errorf("tool line lost the argument that says what it is doing: %q", item.Content)
+	}
+	if item.Tool != "search_email" {
+		t.Errorf("tool line lost the raw tool name it folds on: %q", item.Tool)
 	}
 	// The render key is no longer echoed onto the activity line — it now draws a
 	// real card in the transcript, which is where the detail belongs.
@@ -391,8 +402,19 @@ func TestRoleErrorProducersSanitizeControlBytesPreserveNewlines(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			m, _ := newTestModel(t)
-			switch tt.event.(type) {
-			case errMsg, questionFailedMsg, confirmActionResultMsg:
+			switch v := tt.event.(type) {
+			case errMsg:
+				// errMsg{} as written above has turnSeq's zero value, which
+				// only matches a fresh model's own zero-valued turnSeq by
+				// coincidence — not what a real errMsg looks like (a live
+				// turn's turnSeq is always >= 1, see its doc comment). Drive
+				// a real turn first so this exercises turnSeq scoping
+				// honestly, matching production (#2912 review).
+				updated, _ := m.Update(sendQueryMsg{query: "x"})
+				m = updated.(ChatModel)
+				updated, _ = m.Update(errMsg{err: v.err, turnSeq: m.turnSeq})
+				m = updated.(ChatModel)
+			case questionFailedMsg, confirmActionResultMsg:
 				updated, _ := m.Update(tt.event)
 				m = updated.(ChatModel)
 			default:

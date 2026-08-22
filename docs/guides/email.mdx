@@ -201,7 +201,7 @@ Preferences are snapshotted to the agent's on-device MemoryStore on every change
 
 ### Behavioral learning (auto-promotion)
 
-Senders you reply to quickly are automatically promoted to priority on the next triage run — no explicit command needed. The agent measures how long it took you to reply to each sender (using the original message's receipt timestamp as the anchor) and promotes senders whose median reply latency falls below the threshold. Promotion is applied on-demand during triage, not on a background thread, and persists across agent restarts. Works across both connected mailboxes (Gmail and Outlook).
+Senders you reply to quickly are automatically promoted to priority on the next triage run — no explicit command needed. The agent measures how long it took you to reply to each sender (using the original message's receipt timestamp as the anchor) and promotes senders whose median reply latency falls below the threshold. Promotion is applied on-demand during triage, not on a background thread, and persists across agent restarts. Works across every connected mailbox (Gmail, personal Outlook, and work Microsoft 365).
 
 ### Turning memory on or off
 
@@ -472,6 +472,11 @@ agent declares no skill sets — Agent Skills are switched off in this build. Dr
 the option, or uncomment the 'skill_sets:' and 'default_skill_set:' blocks in
 gaia-agent.yaml.
 ```
+
+The account-type mapping behind that machinery is three-way: a personal
+Microsoft account (`microsoft`) resolves to `personal`, a work/school account
+(`microsoft_work`) resolves to `work`, and a Gmail-only mailbox has no
+equivalent tenant claim to inspect and falls through to `default_skill_set`.
 
 To re-enable, uncomment **both** blocks together — a non-empty `skill_sets:`
 with no `default_skill_set:` fails validation — and run the eval before

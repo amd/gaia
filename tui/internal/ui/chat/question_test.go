@@ -147,11 +147,13 @@ func TestStaleAnswerIsDropped(t *testing.T) {
 	m := modelWith(t, c)
 	m = feed(t, m, needsInput())
 
-	updated, cmd := m.Update(components.QuestionAnsweredMsg{RequestID: "old", Value: "yes"})
+	// A non-nil cmd alone doesn't mean the stale answer went anywhere: the
+	// question is still open here (feed built it via handleEvent directly,
+	// bypassing Update, so the mouse was never actually captured for it yet),
+	// and Update's own mouse-capture reconciliation legitimately returns one
+	// to grab it now — see mousecapture.go. c.answers is the real assertion.
+	updated, _ := m.Update(components.QuestionAnsweredMsg{RequestID: "old", Value: "yes"})
 	m = updated.(ChatModel)
-	if cmd != nil {
-		t.Error("a stale answer must not be sent")
-	}
 	if len(c.answers) != 0 {
 		t.Errorf("transport received a stale answer: %v", c.answers)
 	}
@@ -180,7 +182,8 @@ func TestKeysRouteToThePendingQuestion(t *testing.T) {
 	}
 }
 
-// Cancelling the turn takes the question down with it.
+// Cancelling the turn takes the question down with it. Streaming itself does
+// not clear until the run settles (doneMsg) -- see requestCancel (#2901).
 func TestCancellingTheTurnClearsTheQuestion(t *testing.T) {
 	c := &respondingClient{}
 	m := modelWith(t, c)
@@ -192,8 +195,14 @@ func TestCancellingTheTurnClearsTheQuestion(t *testing.T) {
 	if m.question != nil {
 		t.Error("an abandoned question must not stay on screen")
 	}
+	if !m.streaming {
+		t.Error("streaming must stay true until the run's channel settles (doneMsg), not flip synchronously")
+	}
+
+	updated, _ = m.Update(doneMsg{ch: m.events})
+	m = updated.(ChatModel)
 	if m.streaming {
-		t.Error("Esc must still cancel the turn while a question is up")
+		t.Error("Esc must still cancel the turn while a question is up, once settlement is confirmed")
 	}
 }
 
