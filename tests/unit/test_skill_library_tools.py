@@ -7,7 +7,7 @@ from __future__ import annotations
 import base64
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 from urllib.parse import urlsplit
 
 import pytest
@@ -23,6 +23,7 @@ from gaia.skills.publish import publish_skill
 from gaia.skills.signing import TrustStore
 
 from .skills_helpers import (
+    FakeHub,
     fake_hub,
     isolated_manager,
     make_key,
@@ -31,7 +32,14 @@ from .skills_helpers import (
 )
 
 
-def _instruction_skill(name: str, *, tier: str = "experimental") -> str:
+def _instruction_skill(
+    name: str,
+    *,
+    tier: str = "experimental",
+    permissions: tuple[str, ...] = (),
+) -> str:
+    permission_lines = "".join(f"      - {permission}\n" for permission in permissions)
+    permissions_yaml = f"    permissions:\n{permission_lines}" if permissions else ""
     return f"""---
 name: {name}
 description: Instructions for testing the {name} skill library entry.
@@ -39,7 +47,7 @@ version: 1.0.0
 metadata:
   gaia:
     security_tier: {tier}
----
+{permissions_yaml}---
 
 # {name}
 
@@ -117,13 +125,13 @@ class _LibraryAgent(SkillLibraryToolsMixin):
 
 
 @pytest.fixture(autouse=True)
-def isolate_tool_and_hub_registries() -> Iterator[None]:
+def isolate_tool_and_hub_registries() -> Iterator[dict[str, Any]]:
     """Keep dynamic tools and catalog memory from leaking between tests."""
     from gaia.hub.catalog import clear_cache
 
     before = dict(_TOOL_REGISTRY)
     clear_cache()
-    yield
+    yield before
     _TOOL_REGISTRY.clear()
     _TOOL_REGISTRY.update(before)
     clear_cache()
@@ -149,27 +157,37 @@ def _assert_error(result: dict, action: str) -> None:
     assert result["error"]
 
 
-def _publish_installable_skill(tmp_path: Path, manager):
+def _publish_installable_skill(
+    tmp_path: Path,
+    manager,
+    *,
+    name: str = "hub-skill",
+    tier: str = "community",
+    permissions: tuple[str, ...] = (),
+    unsigned: bool = False,
+) -> FakeHub:
     hub = fake_hub(tmp_path)
-    key = make_key(manager.user_root)
-    trust = TrustStore.load(manager.user_root)
-    trust.add(
-        public_key_b64=base64.b64encode(key.public_bytes).decode("ascii"),
-        publisher="acme",
-        role="publisher",
-    )
-    trust.save()
+    if not unsigned:
+        key = make_key(manager.user_root)
+        trust = TrustStore.load(manager.user_root)
+        trust.add(
+            public_key_b64=base64.b64encode(key.public_bytes).decode("ascii"),
+            publisher="acme",
+            role="publisher",
+        )
+        trust.save()
 
     source = write_skill_dir(
         tmp_path / "sources",
-        "hub-skill",
-        _instruction_skill("hub-skill", tier="community"),
+        name,
+        _instruction_skill(name, tier=tier, permissions=permissions),
     )
     publish_skill(
         source,
         token="test-token",
         hub_url=hub.BASE_URL,
         publisher="acme",
+        unsigned=unsigned,
         audit_report=write_audit_report(tmp_path / "audit"),
         keys_root=manager.user_root,
         uploader=hub.accept_publish,
@@ -177,12 +195,12 @@ def _publish_installable_skill(tmp_path: Path, manager):
     return hub
 
 
-def _record_hub_requests(monkeypatch, hub) -> list[str]:
+def _record_hub_requests(monkeypatch, hub: FakeHub) -> list[str]:
     requested: list[str] = []
 
     def fetch(url: str) -> bytes:
         requested.append(url)
-        return cast(bytes, hub.fetcher(url))
+        return hub.fetcher(url)
 
     monkeypatch.setenv("GAIA_HUB_URL", hub.BASE_URL)
     monkeypatch.setattr("gaia.skills.hub.fetch_bytes", fetch)
@@ -191,8 +209,14 @@ def _record_hub_requests(monkeypatch, hub) -> list[str]:
 
 def test_registers_exactly_the_seven_skill_library_tools(
     agent: _LibraryAgent,
+    isolate_tool_and_hub_registries: dict[str, Any],
 ) -> None:
-    assert tuple(agent._tools_registry) == SKILL_LIBRARY_TOOL_NAMES
+    added = tuple(
+        name
+        for name in agent._tools_registry
+        if name not in isolate_tool_and_hub_registries
+    )
+    assert added == SKILL_LIBRARY_TOOL_NAMES
 
 
 def test_list_skills_reports_installed_and_loaded_state(
@@ -330,6 +354,45 @@ def test_install_skill_uses_the_expected_hub_objects(
     )
 
 
+def test_install_skill_refuses_an_unsigned_skill(
+    agent: _LibraryAgent, tmp_path: Path, monkeypatch
+) -> None:
+    hub = _publish_installable_skill(
+        tmp_path,
+        agent.skill_manager,
+        name="unsigned-skill",
+        tier="experimental",
+        unsigned=True,
+    )
+    _record_hub_requests(monkeypatch, hub)
+
+    result = _call(agent, "install_skill", "unsigned-skill")
+
+    _assert_error(result, "install_skill")
+    assert result["error_type"] == "SkillInstallError"
+    assert "--allow-experimental" in result["error"]
+    assert not (agent.skill_manager.user_root / "unsigned-skill").exists()
+
+
+def test_install_skill_refuses_a_dangerous_grant_without_a_human(
+    agent: _LibraryAgent, tmp_path: Path, monkeypatch
+) -> None:
+    hub = _publish_installable_skill(
+        tmp_path,
+        agent.skill_manager,
+        name="dangerous-skill",
+        permissions=("network:write:*.example.com",),
+    )
+    _record_hub_requests(monkeypatch, hub)
+
+    result = _call(agent, "install_skill", "dangerous-skill")
+
+    _assert_error(result, "install_skill")
+    assert result["error_type"] == "SkillInstallError"
+    assert "network:write" in result["error"]
+    assert not (agent.skill_manager.user_root / "dangerous-skill").exists()
+
+
 @pytest.mark.parametrize("tool_name", ["install_skill", "remove_skill", "load_skill"])
 def test_disk_touching_tools_reject_non_bare_names(
     agent: _LibraryAgent, tool_name: str
@@ -381,6 +444,7 @@ def test_load_skill_allows_code_from_the_gated_user_root(
     assert result["status"] == "success"
     assert result["directory"] == str(directory)
     assert result["registered_tools"] == ["cleared-code/ping"]
+    assert agent.rebuilt == 1
     assert "cleared-code/ping" in agent._tools_registry
     assert "ZZ-CLEARED-CODE-BODY-ZZ" in agent.get_skills_system_prompt()
 
@@ -461,6 +525,7 @@ def test_unload_skill_restores_prompt_and_tool_state(
         tools,
     )
     assert _call(agent, "load_skill", "temporary-code")["status"] == "success"
+    assert agent.rebuilt == 1
     assert "temporary-code/ping" in agent._tools_registry
     assert "ZZ-TEMPORARY-CODE-BODY-ZZ" in agent.get_skills_system_prompt()
 
@@ -468,6 +533,7 @@ def test_unload_skill_restores_prompt_and_tool_state(
 
     assert result["status"] == "success"
     assert result["loaded_skills"] == []
+    assert agent.rebuilt == 2
     assert "temporary-code/ping" not in agent._tools_registry
     assert "ZZ-TEMPORARY-CODE-BODY-ZZ" not in agent.get_skills_system_prompt()
 
