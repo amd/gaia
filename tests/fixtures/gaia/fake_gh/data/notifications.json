@@ -1,32 +1,16 @@
 [
   {
-    "reason": "review_requested",
-    "repository": {"full_name": "gaia-fixtures/widget-factory"},
-    "subject": {"title": "Fix atomic save on network shares (#106)", "type": "PullRequest"},
-    "updated_at": "2026-07-23T08:30:00Z"
-  },
-  {
-    "reason": "assign",
-    "repository": {"full_name": "gaia-fixtures/widget-factory"},
-    "subject": {"title": "Silent wrong totals in CSV export when locale uses comma decimals", "type": "Issue"},
-    "updated_at": "2026-07-22T11:15:00Z"
-  },
-  {
-    "reason": "mention",
-    "repository": {"full_name": "gaia-fixtures/telemetry-hub"},
-    "subject": {"title": "Adopt widget-factory's exporter here too?", "type": "Discussion"},
-    "updated_at": "2026-07-21T15:02:00Z"
-  },
-  {
-    "reason": "ci_activity",
-    "repository": {"full_name": "gaia-fixtures/widget-factory"},
-    "subject": {"title": "nightly build failed: test_exporter_locale", "type": "CheckSuite"},
-    "updated_at": "2026-07-23T03:11:00Z"
-  },
-  {
     "reason": "subscribed",
-    "repository": {"full_name": "gaia-fixtures/telemetry-hub"},
-    "subject": {"title": "Release 0.9.0 published", "type": "Release"},
-    "updated_at": "2026-07-20T18:44:00Z"
+    "repository": {"full_name": "acme-labs/widgetworks"},
+    "subject": {"title": "Crash on startup when config file is missing", "type": "Issue"},
+    "unread": true,
+    "updated_at": "2026-08-20T15:02:00Z"
+  },
+  {
+    "reason": "review_requested",
+    "repository": {"full_name": "acme-labs/widgetworks"},
+    "subject": {"title": "Fix flaky sync test in CI", "type": "PullRequest"},
+    "unread": true,
+    "updated_at": "2026-08-20T10:45:00Z"
   }
 ]

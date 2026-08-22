@@ -1,12 +1,11 @@
 # Fixture skill hub — a local, deterministic Agent Hub skills lane
 
-Committed here: only **unsigned skill sources** (`sources/<name>/SKILL.md`,
-verbatim copies of `hub/skills/<name>/SKILL.md`). The servable hub — catalog +
-per-skill manifest + versioned `SKILL.md` + zip artifacts — is built **per
-run** by `tests/fixtures/gaia/prepare_fixture_hub.py`, which signs bundles
-with an **ephemeral** `eval-test-publisher` Ed25519 keypair. No private key is
-ever committed; the throwaway key and its trust-store entry live only in the
-run's `--skills-root`.
+Committed here: only **unsigned skill sources** (`sources/<name>/…`). The
+servable hub — catalog + per-skill manifest + versioned `SKILL.md` + zip
+artifacts — is built **per run** by `tests/fixtures/gaia/prepare_fixture_hub.py`,
+which signs bundles with an **ephemeral** `eval-test-publisher` Ed25519
+keypair. No private key is ever committed; the throwaway key and its
+trust-store entry live only in the run's `--skills-root`.
 
 ## Per-run setup
 
@@ -15,12 +14,11 @@ run's `--skills-root`.
 #    in the agent-under-eval's skills root:
 python tests/fixtures/gaia/prepare_fixture_hub.py --skills-root <agent skills root>
 
-# 2. Serve it (ephemeral port; NEVER 4001/4200/8141/13305):
-python tests/fixtures/gaia/serve_fixtures.py --dir tests/fixtures/gaia/fixture_hub/_prepared
-# prints: SERVING http://127.0.0.1:<port>/
+# 2. Serve the routed fixture layout (eval runs use port 8765; NEVER 4001):
+python tests/fixtures/gaia/serve_fixtures.py --port 8765
 
 # 3. Point the agent at it:
-GAIA_HUB_URL=http://127.0.0.1:<port>
+GAIA_HUB_URL=http://127.0.0.1:8765/fixture_hub
 ```
 
 `--skills-root` is required and must be the skills root the agent actually
@@ -28,21 +26,24 @@ uses (that is where `install_skill` reads `trusted-keys.json`). It is never
 defaulted, so a developer's real `~/.gaia/skills` trust store can't pick up a
 test key by accident.
 
-## Contents and the tier behaviour scenarios can rely on (all verified)
+## Catalog — exactly three skills (a scenario asserts the exact catalog)
 
-| Skill | Version | Signed by default? | Install outcome |
-|---|---|---|---|
-| `data-explore` | 1.0.0 | yes (ephemeral key) | **installs cleanly at `community`** — no flags, no prompts. The clean hub-install target. |
-| `github-triage` | 2.1.0 | **deliberately unsigned** | **refused** — unsigned collapses it to `experimental`, and its `shell:execute:gh` grant is above the `experimental` ceiling (which allows only `network:read`). The install-refusal scenario target; the error carries the `--allow-experimental` guidance chain. |
+Per the corpus contract (`eval/scenarios/GAIA_FIXTURE_VALUES.md`):
 
-Also verified, for corpus planning: signing github-triage too
-(`--unsigned ""`) makes it installable at `community`, but its
-`shell:execute:gh` is a dangerous grant — the install **prompts** (declining
-refuses; `assume_yes`/`--yes` installs). So `data-explore` remains the only
-zero-interaction clean-install target.
+| skill | version | tier | signed | role in scenarios |
+|---|---|---|---|---|
+| `github-triage` | 2.1.0 | community | yes | searched / pre-seeded only — **never installed by scenarios** (its `shell:execute:gh` is a dangerous grant, so installing prompts even signed) |
+| `rss-digest` | 1.0.0 | community | yes | **the clean-install target** — `network:read` only, installs at `community` with zero flags and zero prompts; the install-success scenario downloads THIS |
+| `experimental-notes` | 0.0.1 | experimental | **no** | **the install-refusal target** — unsigned, refused with the `--allow-experimental` guidance |
 
-Search behaviour: `search_skills("")` lists both; matching covers id, name,
-description, and declared tool names (e.g. `query_data` → `data-explore`).
+`github-triage` and `rss-digest` sources are verbatim copies of
+`hub/skills/<name>/` (rss-digest includes its `tools.py`);
+`experimental-notes` is a minimal instruction-only skill that exists solely
+for the refusal scenario.
+
+Search behaviour: `search_skills("")` lists exactly the three; matching covers
+id, name, description, and declared tool names (e.g. `fetch_rss` →
+`rss-digest`).
 
 Rebuilding is cheap and idempotent — `prepare_fixture_hub.py` wipes and
 recreates `--out`, and regenerates the keypair (`force=True`) each run.

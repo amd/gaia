@@ -5,8 +5,8 @@
 Run at eval-setup time, once per run:
 
     python tests/fixtures/gaia/prepare_fixture_hub.py --skills-root <agent skills root>
-    python tests/fixtures/gaia/serve_fixtures.py --dir tests/fixtures/gaia/fixture_hub/_prepared
-    # GAIA_HUB_URL=http://127.0.0.1:<port>
+    python tests/fixtures/gaia/serve_fixtures.py --port 8765   # routed layout
+    # GAIA_HUB_URL=http://127.0.0.1:8765/fixture_hub
 
 What it does, per run:
 
@@ -14,8 +14,9 @@ What it does, per run:
    ``<skills-root>/keys/`` (``gaia.skills.signing.generate_key``). The private
    key never exists outside that run's machine — nothing is committed.
 2. Signs every skill source under ``fixture_hub/sources/`` EXCEPT the ones in
-   ``--unsigned`` (default: github-triage stays unsigned — the corpus has a
-   scenario asserting the refusal + ``--allow-experimental`` guidance).
+   ``--unsigned`` (default: experimental-notes stays unsigned — it exists
+   solely as the install-refusal target, per the corpus contract
+   ``eval/scenarios/GAIA_FIXTURE_VALUES.md``).
 3. Zips each bundle and writes the hub layout ``gaia.skills.hub`` fetches
    (index.json + per-skill manifest.json + versioned SKILL.md + artifact)
    into ``--out`` (default ``fixture_hub/_prepared``, gitignored).
@@ -153,8 +154,11 @@ def prepare(
                 "description": skill.description,
                 "latest_version": version,
                 "security_tier": skill.security_tier,
+                # Both provided tools (tools: — what rss-digest ships) and
+                # required registry tools: search matches on these names.
                 "skill_metadata": {
-                    "tools": [{"name": t} for t in skill.gaia.tools_required]
+                    "tools": [{"name": t.name} for t in skill.gaia.tools]
+                    + [{"name": t} for t in skill.gaia.tools_required]
                 },
             }
         )
@@ -204,11 +208,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--unsigned",
-        default="github-triage",
+        default="experimental-notes",
         help=(
             "Comma-separated skills to leave deliberately UNSIGNED (default: "
-            "github-triage — the install-refusal scenario target). Pass '' to "
-            "sign everything."
+            "experimental-notes — the install-refusal scenario target). Pass "
+            "'' to sign everything."
         ),
     )
     args = parser.parse_args(argv)
