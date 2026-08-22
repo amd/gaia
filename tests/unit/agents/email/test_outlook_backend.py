@@ -250,6 +250,68 @@ class TestReadTranslation:
         backend.list_messages(query="invoice", max_results=5)
         params = parse_qs(urlparse(str(rec.requests[0].url)).query)
         assert "$search" in params
+        # A bare phrase with no recognized Gmail operator keeps the legacy
+        # exact-phrase quoting.
+        assert params["$search"] == ['"invoice"']
+
+    def test_list_messages_from_operator_reaches_search_unquoted(self):
+        # #2996: the whole query used to be wrapped in one pair of quotes, so
+        # Graph read "from:netflix" as literal text instead of the scoped
+        # from: term its own $search (Graph KQL) already understands.
+        backend, rec, _ = _backend(lambda r: _ok({"value": []}))
+        backend.list_messages(query="from:netflix", max_results=5)
+        params = parse_qs(urlparse(str(rec.requests[0].url)).query)
+        assert params["$search"] == ["from:netflix"]
+        assert "$filter" not in params
+
+    def test_list_messages_subject_operator_reaches_search_unquoted(self):
+        backend, rec, _ = _backend(lambda r: _ok({"value": []}))
+        backend.list_messages(query="subject:invoice", max_results=5)
+        params = parse_qs(urlparse(str(rec.requests[0].url)).query)
+        assert params["$search"] == ["subject:invoice"]
+
+    def test_list_messages_is_unread_query_routes_to_filter(self):
+        # #2996 acceptance criterion: unread/status filters route to Graph
+        # $filter rather than being swallowed into a $search phrase match.
+        backend, rec, _ = _backend(lambda r: _ok({"value": []}))
+        backend.list_messages(query="is:unread", max_results=5)
+        params = parse_qs(urlparse(str(rec.requests[0].url)).query)
+        assert params["$filter"] == ["isRead eq false"]
+        assert "$search" not in params
+
+    def test_list_messages_is_read_query_routes_to_filter(self):
+        backend, rec, _ = _backend(lambda r: _ok({"value": []}))
+        backend.list_messages(query="is:read", max_results=5)
+        params = parse_qs(urlparse(str(rec.requests[0].url)).query)
+        assert params["$filter"] == ["isRead eq true"]
+
+    def test_list_messages_newer_than_query_routes_to_filter(self):
+        # #2996 acceptance criterion: a recency filter actually bounds the
+        # result set on Outlook, not a phrase match on the literal text.
+        backend, rec, _ = _backend(lambda r: _ok({"value": []}))
+        backend.list_messages(query="newer_than:7d", max_results=5)
+        params = parse_qs(urlparse(str(rec.requests[0].url)).query)
+        assert "$search" not in params
+        assert params["$filter"][0].startswith("receivedDateTime ge ")
+
+    def test_list_messages_older_than_query_uses_le_comparator(self):
+        backend, rec, _ = _backend(lambda r: _ok({"value": []}))
+        backend.list_messages(query="older_than:14d", max_results=5)
+        params = parse_qs(urlparse(str(rec.requests[0].url)).query)
+        assert params["$filter"][0].startswith("receivedDateTime le ")
+
+    def test_list_messages_mixed_filter_and_search_operators_raises(self):
+        # #2996 acceptance criterion: an operator combination Graph genuinely
+        # cannot express (unread/date filter + a from:/subject:/text search)
+        # fails loudly instead of silently dropping half the query. Raised as
+        # ConnectorsError (not the bare ValueError translate_query itself
+        # raises) so the multi-mailbox search_messages caller, which isolates
+        # per-provider failures by catching ConnectorsError only, treats this
+        # as a single-mailbox failure instead of aborting every mailbox and
+        # discarding results already collected from the others.
+        backend, _, _ = _backend(lambda r: _ok({"value": []}))
+        with pytest.raises(ConnectorsError, match="cannot be combined"):
+            backend.list_messages(query="is:unread from:alice", max_results=5)
 
     def test_list_messages_normalizes_to_gmail_stub_shape(self):
         backend, _, _ = _backend(
