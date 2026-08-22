@@ -328,7 +328,7 @@ for a personal document agent, and it is still a real boundary — system
 directories, program files, and other users' homes are refused, with the check
 run against the *resolved* path so a symlink out of scope doesn't slip through.
 
-**In 0.1.0 narrowing it is a construction-time setting only.** The packaged
+**In 0.1.1 narrowing it is a construction-time setting only.** The packaged
 sidecar exposes no flag or env var for `allowed_paths` (its CLI accepts only
 `--host` and `--port`), so restricting the scope means embedding `GaiaAgent` in
 your own Python process:
@@ -339,7 +339,7 @@ from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
 agent = GaiaAgent(config=GaiaAgentConfig(allowed_paths=["/home/me/Documents"]))
 ```
 
-## 10. Skills — opt-in, and empty in 0.1.0
+## 10. Skills — opt-in, and empty in 0.1.1
 
 The agent is built to host **Agent Skills** (short playbooks loaded into its own
 prompt, grouped into named sets, one set active per launch), and its bundled
@@ -355,7 +355,7 @@ threshold. Manifest `skills:` entries are always-on and never collapse. If the
 embedder is unavailable, selection disables itself for the session and every
 body renders — capability is never silently lost to a failed match.
 
-**Nothing ships enabled in 0.1.0.** The bundled skill library is empty, and
+**Nothing ships enabled in 0.1.1.** The bundled skill library is empty, and
 `gaia-agent.yaml` ships its `skills:` / `skill_sets:` / `default_skill_set:`
 blocks **commented out** — following the email agent's precedent, because skill
 bodies cost prompt tokens and no eval has measured that trade for this agent yet.
@@ -414,7 +414,7 @@ There is no silent null.
   broken install, and there is no override.
 - **No `linux-arm64` / `win32-arm64` sidecar.** The TUI has both. A `PlatformError`
   on those hosts is the design, not a missing artifact.
-- **There is no caller-auth token at 0.1.0.** Unlike `@amd-gaia/agent-email`, this
+- **There is no caller-auth token at 0.1.1.** Unlike `@amd-gaia/agent-email`, this
   sidecar mints none and this package sends none — don't add an `Authorization`
   header looking for one, and don't rely on its absence as a security boundary.
   Loopback binding is what protects it.
@@ -452,7 +452,7 @@ Then, in another terminal:
 
 ```bash
 curl -s http://127.0.0.1:8141/health          # {"status":"ok","service":"gaia-agent-gaia"}
-curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.12","agentVersion":"0.1.0"}
+curl -s http://127.0.0.1:8141/version         # {"apiVersion":"2.12","agentVersion":"0.1.1"}
 curl -s http://127.0.0.1:8141/v1/gaia/init    # 200 + "ready":true, or 503 + a "hint"
 curl -N -X POST http://127.0.0.1:8141/v1/gaia/query \
   -H 'content-type: application/json' \
