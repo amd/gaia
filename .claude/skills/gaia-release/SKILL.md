@@ -54,7 +54,7 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
 - **Plain language first, in every artifact** — the release notes, PR body, Discord post, and your own between-phase status updates all follow [CLAUDE.md → How You Communicate](../../../CLAUDE.md#how-you-communicate): lead with what a user can now do, layer version numbers, SHAs, and pipeline mechanics underneath. Say each point once — don't restate a highlight in the changelog and again in the announcement.
 - **No Claude attribution anywhere** — not in PR titles, PR bodies, commit messages (no `Co-Authored-By: Claude ...` trailer), release notes, code comments, or the Discord announcement.
 - **No silent fallbacks** — if a validator fails, a step times out, or a workflow run isn't found, stop with an actionable error. Do not retry blindly. Do not "proceed anyway."
-- **Match house style for release notes** — see *Generation parameters* in Phase 1. In short: value-prop first, **local agents are the headline** (not the SDK), one agent/command per highlight, plain language, engaging but factual, and **no emoji, no fluff** (full banned-phrase list under *Generation parameters*). Read the **last 2–3 release notes** before drafting. Patch releases do **not** include a `pip install` block. Use the `Why upgrade:` framing with a short bullet list, then `## What's New`, then `## Bug Fixes`, then `## Full Changelog`.
+- **Release notes are bulleted, plain, and short** — see *Notes format* in Phase 1. Every entry is one bullet, never a prose block; no narrative overview paragraph; no emoji; a hard word budget that is checked, not eyeballed. Sections in order: `## Breaking Changes` (only if any), `## What's New`, `## Bug Fixes`, `## Known Issues` (only if any), `## Contributors`, `## Full Changelog`. Patch releases do **not** include a `pip install` block.
 - **Match the previous release PR body shape exactly** — read the most recent merged `Release vX.Y.Z` PR (e.g. `gh pr list --repo amd/gaia --state merged --search "Release v in:title" --limit 3`). Open with `# GAIA vX.Y.Z Release Notes` (no MDX frontmatter in the PR body), end with a `Release checklist` section. Style drift here costs review cycles.
 - **Bulletproof commits only** — every change made by this skill must satisfy the four criteria in CLAUDE.md (validated, critiqued, scope-clean, no half-finished work) before being committed.
 - **Pushing tags is irreversible.** Always confirm the SHA the tag will point to and the green status of the pre-tag verification run before `git push origin v<version>`.
@@ -91,48 +91,43 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
 
    If the requested version doesn't match the rubric, **stop and surface the mismatch**: *"You asked for `v<requested>` (patch). I see N feat commits since `<prev>` including `<one or two examples>` — this looks minor-shaped. Continue as patch, or bump to `v<suggested>`?"* Do not silently proceed.
 
-2. **Read the last 2–3 release notes** to match structure and length (not tone — see *Generation parameters*).
-   - [docs/releases/v0.17.4.mdx](../../../docs/releases/v0.17.4.mdx)
-   - [docs/releases/v0.17.3.mdx](../../../docs/releases/v0.17.3.mdx)
-   - [docs/releases/v0.17.2.mdx](../../../docs/releases/v0.17.2.mdx)
+2. **Read recent release notes for structure only** — frontmatter shape, section headings, PR-link format. Take **length and tone from *Notes format* below, not from the files**: [v0.21.1](../../../docs/releases/v0.21.1.mdx) is the model at 267 narrative words, while v0.22.0 (1705) and v0.23.0 (1119) were flagged in review as too much text in too-blocky a form — they are the regression this section exists to prevent.
 
-   Cross-check: same frontmatter shape, same section headings, same *structure* and length per entry — but **not** the prior tone. The last few releases predate the *Generation parameters* below; match their shape, not their dryness. Patch releases are short; minor/major releases include `pip install` and may have a "Highlights" block.
+   Patch releases are short. Minor/major releases carry more bullets and a `pip install` block — the per-bullet shape is identical, only the count grows.
 
 3. **Create [docs/releases/v<version>.mdx](../../../docs/releases/)** with this skeleton (adapt to whether it's patch / minor / major):
 
    ```mdx
    ---
    title: "v<version>"
-   description: "<one-line elevator pitch — what shipped, who benefits>"
+   description: "<one plain line: what shipped. Not a pitch.>"
    ---
 
    # GAIA v<version> Release Notes
 
-   <One-paragraph overview: what kind of release this is and what it covers.>
+   <Optional single sentence naming what this release is about. Drop it entirely if
+   the bullets already say it — that is the common case. Never a paragraph.>
 
-   **Why upgrade:**
-   - **<short title>** — <one-line value-and-mechanism>.
-   - **<short title>** — <one-line value-and-mechanism>.
+   ## Breaking Changes
 
-   ---
+   - **<what changed>** — <what to do instead>. (PR [#NNN](https://github.com/amd/gaia/pull/NNN))
 
    ## What's New
 
-   ### <What the user can now do> — `<gaia command>`
-
-   <Lead with the outcome and why it matters, in plain language that makes the reader
-   want to try it. Then one line on how to run it, PR linked inline. One agent or
-   command per entry — add another `### ` block for the next one. Not every highlight
-   is a command — for UI / SDK / perf items, use a plain title with no trailing
-   command.>
-
-   ---
+   - **<what the user can now do>** — `<gaia command>`. <At most one more sentence, only
+     if the title genuinely needs it.> (PRs [#NNN](https://github.com/amd/gaia/pull/NNN), [#NNN](https://github.com/amd/gaia/pull/NNN))
 
    ## Bug Fixes
 
-   - **<title>** (PR [#NNN](https://github.com/amd/gaia/pull/NNN)) — <one-line description of fix and impact>.
+   - **<what was broken>** — <what now happens>. (PR [#NNN](https://github.com/amd/gaia/pull/NNN))
 
-   ---
+   ## Known Issues
+
+   - **<what still does not work>** — <workaround, or "tracked in [#NNN](https://github.com/amd/gaia/issues/NNN)">.
+
+   ## Contributors
+
+   - [@handle](https://github.com/handle) — <what they contributed>. (PR [#NNN](https://github.com/amd/gaia/pull/NNN))
 
    ## Full Changelog
 
@@ -143,6 +138,9 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
 
    Full Changelog: [v<previous>...v<version>](https://github.com/amd/gaia/compare/v<previous>...v<version>)
    ```
+
+   Omit `## Breaking Changes` and `## Known Issues` when empty — no "None" placeholder. Drop
+   the `---` rules between sections; the headings already separate them.
 
    **Generate the changelog by introspecting git, and escape it for MDX.** Do not
    hand-transcribe subjects, and do not pipe `git log` output in raw — a subject
@@ -168,39 +166,41 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
    claimed 197 when the real count was 198). The claimed count, the listed lines, and
    `git log` must all agree.
 
-   **Generation parameters (apply to every entry — this is the point of the skill).**
-   GAIA's notes have historically read dry and engineering-first: they say *what
-   changed* but not *why a user should care or want to try it*. Generate against these
-   every time:
+   **Notes format (apply to every entry — this is the point of the skill).** Tone is
+   already governed by [CLAUDE.md → How You Communicate](../../../CLAUDE.md#how-you-communicate)
+   — plain language, outcome first, each point made exactly once. Do not restate or soften
+   it here. What *is* release-notes-specific is the shape:
 
-   - **Value-prop first.** Open each entry with what the user can now do and why it
-     matters — the outcome, not the implementation. "Triage your inbox in one command"
-     before "added EmailAgent with Gmail polling".
-   - **Local agents are the headline.** Lead with the agents that solve real problems
-     (`gaia browse`, `gaia analyze`, email triage, …); SDK / infra / refactors are
-     supporting detail. People come for the agents, not the SDK.
-   - **One agent or command per highlight.** `gaia browse` and `gaia analyze` each get
-     their own `### ` entry with its own one-line utility — never lumped together.
-   - **Plain, human language.** Write like you're telling a colleague what they can do
-     now. Short sentences; plain words over jargon.
-   - **Engaging, still factual.** Make the reader want to try it without overselling —
-     no invented benchmarks, no "fastest ever". The pull comes from a clear, real
-     capability, not adjectives.
-   - **No fluff, no emoji.** Banned: emoji in headings or body, "we're excited to
-     announce", "finally", "blazing(-fast)", "Here's the good stuff", "no more
-     crashes", "silently", "game-changer".
+   - **Bullets, not paragraphs.** Every entry is one bullet: a bold clause naming what the
+     user can now do, then at most one sentence, then the PR links. No `###` prose blocks
+     inside `What's New`.
+   - **Say it once.** A highlight appears in the bullet list or in the opening sentence,
+     never both. The frontmatter `description` is not a third copy.
+   - **Factual, not promotional.** State the capability and stop. Banned: emoji, "we're
+     excited to announce", "finally", "blazing(-fast)", "game-changer", "seamless",
+     "powerful", "unlock", "Here's the good stuff", "makes X effortless", "no more
+     crashes", invented benchmarks.
+   - **Order by what users run.** Agents and commands first (`gaia hub`, `gaia email`, …);
+     SDK, CI, and refactor work last, or omitted when it has no user-visible effect.
+   - **Word budget — a cap, not a target.** **≤ 350 words** for a patch, **≤ 600** for a
+     minor/major, measured from the top down to the first of `## Bug Fixes` / `## Known
+     Issues` / `## Contributors` / `## Full Changelog`. Those four are reference lists —
+     their length is set by how many fixes actually shipped, and squeezing them hides work.
+     The cap is on the narrative part, which is what bloats. Over budget means cut entries,
+     not reflow them. Step 8 checks it. (Calibration, same measure: v0.21.1 shipped at 267,
+     v0.22.0 at 1705, v0.23.0 at 1119.)
 
-   **Example — one highlight, done right:**
+   **Example — one highlight:**
 
-   > **Bad** (dry, implementation-first, no reason to care):
-   > ### EmailAgent
-   > Adds an EmailAgent with Gmail polling and a rules engine for classification.
-
-   > **Good** (value-first, plain, makes you want to try it):
+   > **Bad** (prose block, promotional, three sentences where one works):
    > ### Triage your inbox from the terminal — `gaia email`
    > Point GAIA at your inbox and it sorts the noise from what needs you: drafts
    > replies to routine mail, flags what's urgent, leaves the rest. Runs locally, so
    > your mail never leaves your machine. Try it: `gaia email`.
+
+   > **Good** (one bullet, plain, factual):
+   > - **Triage your inbox from the terminal** — `gaia email` sorts mail, drafts replies to
+   >   routine messages, and flags what needs you. Runs locally. (PR [#1234](https://github.com/amd/gaia/pull/1234))
 
 4. **Update [docs/docs.json](../../../docs/docs.json):**
    - Add `releases/v<version>` to the Releases tab.
@@ -249,6 +249,11 @@ These map to [CLAUDE.md](../../../CLAUDE.md). Re-read them whenever this skill r
    ```bash
    python util/validate_release_notes.py docs/releases/v<version>.mdx --tag v<version>
    (cd docs && npx -y mintlify@latest validate)   # the docs.yml `validate` job — MUST also pass
+
+   # Word budget from *Notes format* — the narrative part only, not the reference lists.
+   # Cap: 350 words for a patch, 600 for a minor/major. Over budget means cut entries.
+   awk '/^## (Bug Fixes|Known Issues|Contributors|Full Changelog)/{exit} {print}' \
+     docs/releases/v<version>.mdx | wc -w
    ```
    Both must exit 0. Fix any errors before continuing. If either fails for reasons unrelated to your changes (missing dep, broken import), stop and surface that — do not silently bypass. `validate_release_notes.py` prints the first failing check (missing/renamed section, absent `compare/` link, tag mismatch) — read that line to localise the fix; it has no `--verbose` flag.
 
@@ -460,7 +465,7 @@ Show the user the run URL, the **release PR number** (`#$RELEASE_PR`), and the *
    ```
    Required artifacts: `.whl`, `.tar.gz`, `.deb`, `.AppImage`, `.dmg`, `.exe`, and the `latest*.yml` files for the Electron auto-updater. If any are missing, the corresponding build job didn't run or didn't upload — investigate.
 
-3. **Draft the Discord announcement.** Read the just-shipped release notes (`docs/releases/v<version>.mdx`) to populate the highlight list — one bullet per "What's New" entry plus any Bug Fix worth surfacing, written in the same voice as the notes — apply the same *Generation parameters* (value-prop first, plain, engaging, no fluff/emoji).
+3. **Draft the Discord announcement.** Read the just-shipped release notes (`docs/releases/v<version>.mdx`) to populate the highlight list — reuse the `What's New` bullets near-verbatim plus any Bug Fix worth surfacing. Same *Notes format* rules apply: bullets, plain, factual, no emoji.
 
    **The template and format rules live in**
    [`reference/discord-announcement.md`](reference/discord-announcement.md) — read it and

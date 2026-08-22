@@ -1,0 +1,87 @@
+---
+// Copyright(C) 2024-2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
+// The site's single primary CTA: the one-line installer for the gaia CLI and
+// the terminal hub (gaia-tui). Both platform commands are server-rendered so
+// no-JS visitors see them; JS only adds the copy buttons' behavior.
+//
+// The commands are the real ones served at amd-gaia.ai (installer/scripts/):
+// they install the Python CLI and download the published terminal-hub binary
+// from the Agent Hub, checksum-verified. Keep them byte-identical to
+// docs/quickstart.mdx.
+
+interface Props {
+  class?: string;
+  align?: 'left' | 'center';
+}
+
+const { class: className = '', align = 'left' } = Astro.props;
+
+const COMMANDS = [
+  { os: 'macOS · Linux', cmd: 'curl -fsSL https://amd-gaia.ai/install.sh | sh' },
+  { os: 'Windows', cmd: 'irm https://amd-gaia.ai/install.ps1 | iex' },
+];
+const centered = align === 'center';
+---
+
+<div class:list={['flex min-w-0 flex-col gap-2.5', centered && 'items-center', className]}>
+  {COMMANDS.map(({ os, cmd }) => (
+    <div class="g-cmd w-full max-w-[560px] justify-between gap-3 py-3 pr-2">
+      {/* Focusable: the command overflows at narrow widths, and a scroll region
+          no keyboard user can reach hides the tail of it. */}
+      <div tabindex="0" class="flex min-w-0 items-center gap-2 overflow-x-auto">
+        <span class="text-g-gold" aria-hidden="true">$</span>
+        <code class="whitespace-nowrap bg-transparent p-0" data-install-cmd>{cmd}</code>
+      </div>
+      <div class="flex flex-none items-center gap-2">
+        <span class="g-label hidden sm:block">{os}</span>
+        <button
+          type="button"
+          data-copy-install
+          data-cmd={cmd}
+          aria-label={`Copy the ${os} install command`}
+          class="rounded-g-btn border border-g-border px-2 py-1.5 text-g-code-faint transition-colors hover:border-g-gold-dim hover:text-g-code-text"
+        >
+          <svg data-icon-copy class="h-3.5 w-3.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+          </svg>
+          <svg data-icon-done class="hidden h-3.5 w-3.5 text-g-gold" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M20 6 9 17l-5-5"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+  ))}
+
+  <p class:list={['mono mt-1 text-[11.5px] leading-[1.7] text-g-faint', centered && 'text-center']}>
+    Installs the <code class="bg-transparent p-0">gaia</code> CLI and the terminal hub.
+    Then <code class="bg-transparent p-0">gaia init</code> downloads the local model, and
+    <code class="bg-transparent p-0">gaia-tui</code> opens the hub.
+  </p>
+</div>
+
+<script>
+  document.querySelectorAll<HTMLButtonElement>('[data-copy-install]').forEach((btn) => {
+    let timer = 0;
+    const flip = (ok: boolean) => {
+      btn.querySelector('[data-icon-copy]')?.classList.toggle('hidden', ok);
+      btn.querySelector('[data-icon-done]')?.classList.toggle('hidden', !ok);
+    };
+    btn.addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText(btn.dataset.cmd || '');
+      } catch {
+        // No Clipboard API (non-secure origin): select the command so a manual
+        // Ctrl/Cmd+C still works, and say so instead of faking success.
+        const code = btn.closest('.g-cmd')?.querySelector('[data-install-cmd]');
+        if (code) getSelection()?.selectAllChildren(code);
+        btn.setAttribute('aria-label', 'Copy failed — command selected, press Ctrl+C');
+        return;
+      }
+      flip(true);
+      clearTimeout(timer);
+      timer = window.setTimeout(() => flip(false), 1600);
+    });
+  });
+</script>

@@ -67,6 +67,12 @@ Running the sidecar by hand without `GAIA_EMAIL_SIDECAR_TOKEN` disables the toke
 check (local development only, logged loudly); the Host/Origin controls still
 apply. The shipped product always spawns with a token.
 
+The OpenAPI document (both the live `/openapi.json` and the committed
+`openapi.email.json`) declares this: a `bearerAuth` HTTP scheme plus, per
+gated operation, `security: [{"bearerAuth": []}, {}]` — bearer OR none,
+matching the conditional check above. Exempt paths declare an explicit empty
+requirement instead.
+
 ## REST API
 
 The code-derived, CI-guarded inventory of every capability surface (internal

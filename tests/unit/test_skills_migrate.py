@@ -246,7 +246,7 @@ def test_migrated_skill_is_experimental_with_no_claim(tmp_path):
 
 
 def test_requires_bins_is_reported_unmigratable_not_downgraded(tmp_path):
-    """A skill that shells out is refused with the Phase 1 deferral reason."""
+    """A skill that shells out to an unpoliced binary is refused, not downgraded."""
     source = write_source(tmp_path / "src", "git-status", OPENCLAW_GIT_STATUS)
     outcome = migrate_skill_dir(source, vendor=VENDOR_OPENCLAW)
 
@@ -257,10 +257,11 @@ def test_requires_bins_is_reported_unmigratable_not_downgraded(tmp_path):
 
     # The mapping still happened and is reported...
     assert any("shell:execute:git" in line for line in outcome.mapped)
-    # ...and the refusal is Phase 1's own message, naming the deferral.
+    # ...and the refusal names the binary and why it cannot be granted: GAIA
+    # ships no read-only command policy for 'git', so nothing could gate it.
     assert "shell:execute:git" in blocker
-    assert "deferred to a later phase" in blocker
-    assert "issues/1019" in blocker
+    assert "no read-only command policy" in blocker
+    assert "BINARY_POLICIES" in blocker
 
 
 def test_refused_skill_cannot_be_installed(tmp_path):
@@ -636,7 +637,7 @@ def test_cli_migrate_exits_4_when_a_skill_is_refused(run_cli, tmp_path):
 
     assert rc == 4
     assert "Migrated 1/2" in out
-    assert "deferred to a later phase" in out
+    assert "no read-only command policy" in out
     assert "refused rather than silently stripped" in err
     # The good one still installed; one refusal does not block the batch.
     assert (tmp_path / "gaia-home" / "skills" / "release-notes").is_dir()
@@ -801,8 +802,8 @@ def test_real_cli_migrate_end_to_end(tmp_path):
 def test_real_corpus_covers_both_verdicts():
     """The corpus exercises the refusal path, not just the happy one.
 
-    If every real skill migrated cleanly, the local-capability refusal would be
-    untested against real data and could rot unnoticed.
+    If every real skill migrated cleanly, the unenforceable-permission refusal
+    would be untested against real data and could rot unnoticed.
     """
     outcomes = [
         migrate_skill_dir(d, vendor=VENDOR_OPENCLAW) for d in _real_fixture_dirs()
@@ -812,8 +813,8 @@ def test_real_corpus_covers_both_verdicts():
 
     assert len(migrated) >= 5, "expected several real skills to migrate cleanly"
     assert any(
-        "deferred to a later phase" in b for o in refused for b in o.blockers
-    ), "expected at least one real skill refused for a local capability"
+        "no read-only command policy" in b for o in refused for b in o.blockers
+    ), "expected at least one real skill refused for an unpoliced binary"
 
 
 # ----------------------------------------------------------------------

@@ -21,13 +21,15 @@ The point of shipping ten of them is not that GAIA does ten things. It is that
 example of a different platform primitive, and each is meant to be copied and
 edited rather than used verbatim.
 
-The pack lives in [`skills/starter/`](https://github.com/amd/gaia/tree/main/skills/starter).
+The pack lives in the hub's skills lane,
+[`hub/skills/`](https://github.com/amd/gaia/tree/main/hub/skills) — one directory
+per skill, alongside `hub/agents/` and `hub/components/`.
 
 ## Install one
 
 ```bash
 # From a GAIA checkout
-gaia skill import skills/starter/research-report
+gaia skill import hub/skills/research-report
 
 gaia skill list                       # see what's installed, and from which root
 gaia skill info research-report       # the manifest: permissions, tools, tier
@@ -65,6 +67,11 @@ print(agent.process_query("What's the current state of NPU support in llama.cpp?
 manifest, registers any tools the skill provides under `<skill-name>/<tool>`,
 bridges its permissions to connector requirements, and injects the procedure
 into the system prompt. `unload_skill(name)` reverses all of it.
+
+On most agents a loaded body then renders in the prompt on every turn. The
+flagship `gaia` agent is the exception: it selects per turn which loaded
+bodies are relevant, and collapses the rest to a one-line menu entry — see
+[the skill spec](/spec/agent-skills) for the mechanics.
 
 `ChatAgent` is the agent to target for this pack: on its default `full` profile
 it registers the web, RAG, scratchpad, memory, file, and shell tools that these
@@ -165,23 +172,25 @@ hard, and produces one digest under 250 words.
 
 ### github-triage
 
-The connector example. Reads a backlog through the GitHub MCP server, groups
+The bring-your-own-CLI example. Reads a backlog with the `gh` command, groups
 duplicates, ranks by severity × reach, and drafts the reply without sending it.
 
-- **Demonstrates** — a connector-bridged permission. It declares
-  `mcp:connect:mcp-github`, which GAIA resolves against the real connector
-  catalog into a `ConnectorRequirement`.
+- **Demonstrates** — a scoped binary grant. It declares `shell:execute:gh`, which
+  grants the GitHub CLI to this skill's session on this agent, restricted to
+  read-only subcommands (see
+  [Bring your own CLI](/plans/skill-format#bring-your-own-cli)).
 - **Configure** —
 
   ```bash
-  gaia connectors configure mcp-github --set GITHUB_TOKEN=<your-token>
-  gaia connectors list
-  # Agent UI only — MCP tools are gated per agent by the activations ledger:
-  gaia connectors activations activate mcp-github installed:chat
+  gh auth login       # gh owns its own auth — GAIA never sees the token
+  gh auth status
   ```
 
-  The token goes to the OS keyring, never into the skill file. Its tools come
-  from the MCP server, so use the names the agent lists.
+  If `gh` is not on PATH the skill refuses to load and names the install command.
+  Writes are refused by the runtime, not just by the instructions: `gh issue
+  create`, `gh api -X POST`, and `gh auth token` all come back as errors. Reads
+  run without a per-call approval prompt — loading the skill is the consent — but
+  any command outside the grant still asks.
 
 ### rss-digest
 
@@ -202,7 +211,7 @@ This is the part that matters. Copying a skill and editing it is the whole
 workflow:
 
 ```bash
-cp -r skills/starter/source-watch ~/my-skills/gpu-restock-watch
+cp -r hub/skills/source-watch ~/my-skills/gpu-restock-watch
 ```
 
 Then, in `gpu-restock-watch/SKILL.md`:
@@ -248,7 +257,7 @@ cannot run, they are left out, with the specific blocker named:
 | `morning-brief` (scheduled voice digest to Telegram) | Four at once: the scheduler cannot run skills; there is no Gmail/Calendar/Weather connector in the catalog; text-to-speech is not exposed as an agent tool; the Telegram adapter has no voice-note path. `daily-brief` covers the composition half. |
 | `voice-research` (voice in, voice out) | The Telegram adapter handles photos and documents but not voice messages, and TTS is CLI-only (`gaia talk`), not a tool an agent can call. |
 | `trading-alert` (RSI / unusual volume) | No finance connector in the catalog, and no historical price source to compute an indicator from. Alerting on a number the agent cannot actually obtain would be theatre. |
-| `email-triage` (Gmail triage over MCP) | There is no `gmail` connector id — Gmail is a *scope* of the `google` OAuth connector, not an MCP server with tools. Email triage ships instead as a full agent: see the [Email guide](/guides/email). `github-triage` covers the same connector-bridged primitive. |
+| `email-triage` (Gmail triage over MCP) | There is no `gmail` connector id — Gmail is a *scope* of the `google` OAuth connector, not an MCP server with tools. Email triage ships instead as a full agent: see the [Email guide](/guides/email). `github-triage` covers the same backlog-triage shape over a CLI grant. |
 
 Scheduling is the single largest unblock: with `gaia schedule add --skill` wired
 to the skills runtime, `source-watch`, `price-watch`, `check-in`, and

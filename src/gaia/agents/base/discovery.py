@@ -2062,6 +2062,13 @@ class SystemDiscovery:
             output = subprocess.check_output(
                 ["cmdkey", "/list"],
                 text=True,
+                # A console tool writes in the OEM codepage, not the locale one
+                # text=True decodes with, so a credential entry holding a
+                # non-ASCII name can produce a byte that codec cannot map.
+                # UnicodeDecodeError is not a SubprocessError or an OSError, so
+                # without this it escapes the handler below and takes the whole
+                # discovery pass down over one accented character.
+                errors="replace",
                 timeout=10,
                 **kwargs,
             )
@@ -2153,6 +2160,10 @@ class SystemDiscovery:
                     argv,
                     capture_output=True,
                     text=True,
+                    # Keychain entries carry user-supplied text; one byte the
+                    # locale codec cannot map would otherwise raise instead of
+                    # returning a result.
+                    errors="replace",
                     timeout=10,
                     check=False,
                 )
