@@ -215,6 +215,196 @@ void Agent::setDefaultPolicy(ToolPolicy policy) {
     tools_.setDefaultPolicy(policy);
 }
 
+// ---------------------------------------------------------------------------
+// Skill sets — see include/gaia/skill_sets.h and src/gaia/skills/sets.py
+// ---------------------------------------------------------------------------
+
+const SkillSets& Agent::skillSets() const {
+    std::string manifest;
+    {
+        std::lock_guard<std::mutex> lock(configMutex_);
+        if (skillSets_.has_value()) return *skillSets_;
+        manifest = config_.skillManifest;
+    }
+
+    // Parse outside the lock — it touches the filesystem and can throw. An
+    // empty manifest path means "look beside the running executable"; an agent
+    // that ships none simply declares no skills.
+    if (manifest.empty()) manifest = findAgentManifestNearExecutable();
+    SkillSets parsed = manifest.empty() ? SkillSets() : parseSkillSetsFile(manifest);
+
+    std::lock_guard<std::mutex> lock(configMutex_);
+    // Never reassigned once set, so the returned reference stays valid and
+    // stable for the agent's lifetime after the lock is released.
+    if (!skillSets_.has_value()) skillSets_ = std::move(parsed);
+    return *skillSets_;
+}
+
+std::optional<std::string> Agent::activeSkillSet() const {
+    std::lock_guard<std::mutex> lock(configMutex_);
+    return activeSkillSet_;
+}
+
+std::vector<std::string> Agent::skillSetLoaded() const {
+    std::lock_guard<std::mutex> lock(configMutex_);
+    return skillSetLoaded_;
+}
+
+SkillSetResolution Agent::resolveSkillSet(
+    const std::optional<std::string>& requested) const {
+    std::optional<std::string> explicitChoice = requested;
+    if (!explicitChoice.has_value()) {
+        std::lock_guard<std::mutex> lock(configMutex_);
+        if (!config_.skillSet.empty()) explicitChoice = config_.skillSet;
+    }
+    // Only consult the hook when nothing explicit was asked for — an explicit
+    // request must never be second-guessed by agent state.
+    const bool haveExplicit =
+        explicitChoice.has_value() &&
+        explicitChoice->find_first_not_of(" \t\r\n\f\v") != std::string::npos;
+    const std::optional<std::string> selected =
+        haveExplicit ? std::nullopt : selectSkillSet();
+    return skillSets().resolve(explicitChoice, selected);
+}
+
+std::vector<std::string> Agent::loadSkillSet(
+    const std::optional<std::string>& requested) {
+    const SkillSets& declarations = skillSets();
+
+    std::optional<std::string> explicitChoice = requested;
+    if (!explicitChoice.has_value()) {
+        std::lock_guard<std::mutex> lock(configMutex_);
+        if (!config_.skillSet.empty()) explicitChoice = config_.skillSet;
+    }
+
+    if (!declarations) {
+        // Never drop an explicit request on the floor — resolve() throws with
+        // the actionable "this agent declares no skill_sets" message.
+        if (explicitChoice.has_value() &&
+            explicitChoice->find_first_not_of(" \t\r\n\f\v") != std::string::npos) {
+            declarations.resolve(explicitChoice);
+        }
+        return {};
+    }
+
+    const SkillSetResolution resolution = resolveSkillSet(requested);
+
+    if (skillLoader_ == nullptr) {
+        // A previous set is still registered in a loader that has since been
+        // detached. Recording the new set here would strand those skills with
+        // no way to ever retire them — the "reports one set, carries another's
+        // skills" state the all-or-nothing rule exists to prevent.
+        if (!skillSetLoaded_.empty()) {
+            throw SkillSetError(
+                "Cannot switch to skill set '" + resolution.name.value_or("(none)") +
+                "': the loader that registered skill set '" +
+                activeSkillSet_.value_or("(none)") +
+                "' has been detached, so that set's skills cannot be retired. "
+                "Re-attach it with Agent::setSkillLoader() before switching.");
+        }
+        // Resolution works without a loader; registration does not. Say so
+        // rather than returning an empty list that reads like "this set is
+        // empty" — that is the silent capability loss the set contract exists
+        // to prevent. P3.3 (#2800) installs the loader.
+        if (!resolution.skills.empty()) {
+            console_->printWarning(
+                "Skill set '" + resolution.name.value_or("(none)") + "' resolved to " +
+                std::to_string(resolution.skills.size()) +
+                " skill(s), but no skill loader is installed, so none were "
+                "registered. Call Agent::setSkillLoader() before loadSkillSet().");
+        }
+        std::lock_guard<std::mutex> lock(configMutex_);
+        activeSkillSet_ = resolution.name;
+        skillSetLoaded_.clear();
+        return {};
+    }
+
+    // What the incoming set wants, and what the outgoing one brought in. The
+    // difference is all a switch is allowed to unload.
+    std::set<std::string> wanted;
+    for (const SkillRef& ref : resolution.skills) wanted.insert(ref.name);
+    const std::vector<std::string> previouslyLoaded = skillSetLoaded_;
+
+    // Load the new set BEFORE dropping the old one, tracking what this call
+    // actually brought in so a failure can be undone completely.
+    std::vector<std::string> loaded;
+    std::vector<std::string> newlyLoaded;
+    try {
+        for (const SkillRef& ref : resolution.skills) {
+            const bool alreadyPresent = skillLoader_->isLoaded(ref.name);
+            if (!skillLoader_->loadSkill(ref.name)) {
+                if (!ref.required) {
+                    console_->printWarning(
+                        "Optional skill '" + ref.name + "' declared by skill set '" +
+                        resolution.name.value_or("(none)") +
+                        "' was not found in any skills root — skipped.");
+                    continue;
+                }
+                throw SkillSetError(
+                    "Skill '" + ref.name + "' declared by skill set '" +
+                    resolution.name.value_or("(none)") +
+                    "' was not found in any skills root. Install it, remove it from "
+                    "the set in gaia-agent.yaml, or mark it 'required: false' if the "
+                    "agent works without it. See " +
+                    SETS_DOCS_URL + ".");
+            }
+            if (!alreadyPresent) newlyLoaded.push_back(ref.name);
+            loaded.push_back(ref.name);
+            reportVersionPin(ref);
+        }
+    } catch (...) {
+        // Roll back to the pre-call state: drop only what this call added, and
+        // leave activeSkillSet_ / skillSetLoaded_ untouched so the agent keeps
+        // reporting the set it is actually carrying.
+        for (const std::string& name : newlyLoaded) {
+            // A throwing unload must not abort the rollback or displace the
+            // original, actionable failure.
+            try {
+                skillLoader_->unloadSkill(name);
+            } catch (const std::exception& unloadError) {
+                console_->printError("Could not roll back skill '" + name +
+                                     "' after a failed set load: " + unloadError.what());
+            }
+        }
+        console_->printError("Skill set '" + resolution.name.value_or("(none)") +
+                             "' failed to load; the agent is unchanged and skill set '" +
+                             activeSkillSet_.value_or("(none)") + "' remains active.");
+        throw;
+    }
+
+    // The new set is fully loaded — now retire the previous one's leftovers.
+    // Scoped to set-loaded names, so a skill loaded outside a set is never a
+    // set's to unload, and an always-on skill (in `wanted` for every set)
+    // survives the switch.
+    for (const std::string& stale : previouslyLoaded) {
+        if (wanted.count(stale) == 0) skillLoader_->unloadSkill(stale);
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(configMutex_);
+        activeSkillSet_ = resolution.name;
+        skillSetLoaded_ = loaded;
+    }
+    rebuildSystemPrompt();
+    return loaded;
+}
+
+void Agent::reportVersionPin(const SkillRef& ref) const {
+    // #2864: a version pin is a declaration surface until the marketplace phase
+    // (#2467) can install versioned skills. Accepting one and saying nothing is
+    // the silent-fallback failure CLAUDE.md prohibits, so name the pin and what
+    // is actually on disk and let the operator judge.
+    if (!ref.version.has_value() || skillLoader_ == nullptr) return;
+    const std::string onDisk = skillLoader_->loadedVersion(ref.name);
+    console_->printWarning(
+        "Skill '" + ref.name + "' declares version pin '" + *ref.version +
+        "', which GAIA does not yet enforce; loaded the on-disk version " +
+        (onDisk.empty() ? "(the skill declares none)" : "'" + onDisk + "'") +
+        " unchecked. Verify it satisfies the pin, or drop the pin from "
+        "gaia-agent.yaml until versioned installs land. See " +
+        SETS_DOCS_URL + ".");
+}
+
 Agent::~Agent() {
     disconnectAllMcp();
 }
