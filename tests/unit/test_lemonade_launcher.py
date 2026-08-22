@@ -657,7 +657,7 @@ def test_start_hint_macos_names_the_daemon_via_real_detection(mocker):
 def test_start_hint_macos_app_installed_but_no_binaries_describes_the_app(mocker):
     """App bundle present but no daemon on disk: describe the app, do NOT
     invent a shell command."""
-    from gaia.llm.lemonade_launcher import describe_start_hint
+    from gaia.llm.lemonade_launcher import StartHint, describe_start_hint
 
     mocker.patch.dict(os.environ, {}, clear=True)
     mocker.patch("platform.system", return_value="Darwin")
@@ -666,14 +666,14 @@ def test_start_hint_macos_app_installed_but_no_binaries_describes_the_app(mocker
 
     hint = describe_start_hint()
 
-    assert hint.command is None
-    assert "lemonade-server" not in hint.instruction
-    assert "Lemonade app" in hint.instruction
+    assert hint == StartHint(
+        instruction="Start the Lemonade app from Applications, then retry."
+    )
 
 
-def test_start_hint_macos_nothing_installed_points_at_the_download(mocker):
-    """macOS is not a `gaia init` platform — never suggest it there."""
-    from gaia.llm.lemonade_launcher import describe_start_hint
+def test_start_hint_macos_nothing_installed_points_at_gaia_init(mocker):
+    """Nothing installed on macOS: `gaia init` is the supported remedy."""
+    from gaia.llm.lemonade_launcher import StartHint, describe_start_hint
 
     mocker.patch.dict(os.environ, {}, clear=True)
     mocker.patch("platform.system", return_value="Darwin")
@@ -682,17 +682,27 @@ def test_start_hint_macos_nothing_installed_points_at_the_download(mocker):
 
     hint = describe_start_hint()
 
-    assert hint.command is None
-    assert "gaia init" not in hint.instruction
-    assert "lemonade-server.ai" in hint.instruction
+    assert hint == StartHint(
+        instruction=(
+            "Lemonade Server is not installed. Run `gaia init` to install it, "
+            "or set LEMONADE_SERVER_PATH to an existing install."
+        )
+    )
 
 
-def test_start_hint_not_installed_on_linux_points_at_gaia_init(mocker):
+@pytest.mark.parametrize("system", ["Linux", "Windows"])
+def test_start_hint_not_installed_on_supported_platform_points_at_gaia_init(
+    mocker, system
+):
     """Nothing installed on a supported platform: `gaia init` is the remedy,
     not a start command for software that isn't there."""
-    from gaia.llm.lemonade_launcher import LemonadeTooling, describe_start_hint
+    from gaia.llm.lemonade_launcher import (
+        LemonadeTooling,
+        StartHint,
+        describe_start_hint,
+    )
 
-    mocker.patch("platform.system", return_value="Linux")
+    mocker.patch("platform.system", return_value=system)
     mocker.patch(
         "gaia.llm.lemonade_launcher.resolve_lemonade",
         return_value=LemonadeTooling(found=False, kind="none"),
@@ -700,9 +710,12 @@ def test_start_hint_not_installed_on_linux_points_at_gaia_init(mocker):
 
     hint = describe_start_hint()
 
-    assert hint.command is None
-    assert "gaia init" in hint.instruction
-    assert "lemonade-server serve" not in hint.instruction
+    assert hint == StartHint(
+        instruction=(
+            "Lemonade Server is not installed. Run `gaia init` to install it, "
+            "or set LEMONADE_SERVER_PATH to an existing install."
+        )
+    )
 
 
 def test_start_hint_instruction_embeds_the_command_verbatim(mocker):
