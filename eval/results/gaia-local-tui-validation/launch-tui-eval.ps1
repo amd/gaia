@@ -4,8 +4,17 @@ $root = 'C:\Users\14255\Work\gaia'
 $home_eval = "$root\eval\results\gaia-local-tui-validation"
 
 # Agent-side auth: the Go TUI checks ANTHROPIC_API_KEY before spawning with --use-claude.
-$envline = Select-String -Path "$root\.env" -Pattern '^ANTHROPIC_API_KEY=' | Select-Object -First 1
-if ($envline) { $env:ANTHROPIC_API_KEY = $envline.Line.Split('=', 2)[1].Trim() }
+# Prefer the Max-subscription OAuth token (rides the plan, no per-call billing)
+# over the .env pay-as-you-go key. Read fresh so an expiry refresh is picked up.
+$cred = "$env:USERPROFILE\.claude\.credentials.json"
+if (Test-Path $cred) {
+  $tok = (Get-Content $cred -Raw | ConvertFrom-Json).claudeAiOauth.accessToken
+  if ($tok) { $env:ANTHROPIC_API_KEY = $tok }
+}
+if (-not $env:ANTHROPIC_API_KEY) {
+  $envline = Select-String -Path "$root\.env" -Pattern '^ANTHROPIC_API_KEY=' | Select-Object -First 1
+  if ($envline) { $env:ANTHROPIC_API_KEY = $envline.Line.Split('=', 2)[1].Trim() }
+}
 
 $env:PYTHONPATH = "$root\src;$root\hub\agents\chat\python;$root\hub\agents\gaia\python"
 $env:GAIA_TUI_HOME = "$home_eval\tui-home"
@@ -18,6 +27,15 @@ $env:PYTHONIOENCODING = 'utf-8'
 $env:PATH = "$root\tests\fixtures\gaia\fake_gh;$root\.venv\Scripts;" + $env:PATH
 $env:GAIA_HUB_URL = 'http://127.0.0.1:8765/fixture_hub'
 
+# Per-scenario skill isolation: a prior install (e.g. rss-digest) persists to
+# ~/.gaia/skills on disk, so scrub the installable fixtures each launch and keep
+# only the pre-seeded github-triage (restore it if a run removed it).
+foreach ($s in @('rss-digest','experimental-notes','data-explore')) {
+  $d = Join-Path "$env:USERPROFILE\.gaia\skills" $s
+  if (Test-Path $d) { Remove-Item -Recurse -Force $d }
+}
+$ght = "$env:USERPROFILE\.gaia\skills\github-triage"
+if (-not (Test-Path $ght)) { Copy-Item -Recurse "$root\hub\skills\github-triage" $ght }
 New-Item -ItemType Directory -Force "$env:GAIA_TUI_HOME" | Out-Null
 # --bypass-permissions mirrors CI's GAIA_AUTO_APPROVE_TOOLS=1: the eval lane
 # asserts gated-action OUTCOMES; modal semantics are owned by the T1 gate tests
