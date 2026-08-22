@@ -195,6 +195,11 @@ def build_app():
     # Router import is light; the heavy agent/memory imports are deferred to the
     # first session build.
     app.include_router(agent_router, dependencies=token_gate)
+
+    # require_caller_token is a plain Request dependency (not a
+    # fastapi.security class), so FastAPI never emits securitySchemes for
+    # it (#2993) — overlay the real, conditional (bearer-or-none) posture.
+    caller_auth.install_openapi_security(app)
     return app
 
 

@@ -151,12 +151,18 @@ func containsString(haystack []string, needle string) bool {
 // script and from CI.
 //
 // debugf receives every event as it arrives, raw payloads included; nil is
-// silent. It is what --debug reaches for when a turn answers with nothing.
+// silent. It is what --dev reaches for when a turn answers with nothing.
+//
+// dev also decides whether the run reports its own machinery — step and tool
+// counts — after the answer. Those measure the agent loop, not the answer, so
+// they belong to whoever is tuning the loop; a one-shot piped into a script
+// should end at the answer.
 func RunOneShot(
 	ctx context.Context,
 	c client.AgentClient,
 	query string,
 	out, errW io.Writer,
+	dev bool,
 	debugf func(format string, args ...any),
 ) OneShotResult {
 	if debugf == nil {
@@ -248,8 +254,9 @@ func RunOneShot(
 			} else if res.Answer != "" {
 				fmt.Fprintln(out, res.Answer)
 			}
-			if usage := event.CanonicalUsageOf(e); usage.Steps > 0 || usage.ToolsUsed > 0 {
-				fmt.Fprintf(errW, "  ℹ️  %d steps, %d tools\n", usage.Steps, usage.ToolsUsed)
+			if usage := event.CanonicalUsageOf(e); dev && (usage.Steps > 0 || usage.ToolsUsed > 0) {
+				fmt.Fprintf(errW, "  ℹ️  %s, %s\n",
+					plural(usage.Steps, "step"), plural(usage.ToolsUsed, "tool"))
 			}
 
 		case event.CanonicalErrorEvent:
@@ -287,7 +294,11 @@ func RunOneShot(
 		case event.ToolStartEvent:
 			fmt.Fprintf(errW, "  🔧 %s\n", e.Tool)
 		case event.StepEvent:
-			fmt.Fprintf(errW, "  … Step %d/%d\n", e.Step, e.Total)
+			// The agent loop's bound, not progress on the work — same reason the
+			// chat view drops it. Only --dev has a use for it.
+			if dev {
+				fmt.Fprintf(errW, "  … Step %d/%d\n", e.Step, e.Total)
+			}
 		case event.ThinkingEvent:
 			// Reasoning is not progress a script needs; --debug keeps it.
 			debugf("thinking: %s", e.Content)
@@ -591,4 +602,13 @@ func abandonedDetail(err error, query string, elapsed time.Duration) string {
 	}
 	return fmt.Sprintf("the %q query was cancelled after %s, before the agent answered",
 		query, elapsed.Round(time.Second))
+}
+
+// plural renders a count with its noun, so a one-step turn does not report
+// "1 steps".
+func plural(n int, noun string) string {
+	if n == 1 {
+		return fmt.Sprintf("1 %s", noun)
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
 }

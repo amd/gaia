@@ -339,6 +339,68 @@ def _chunk_by_blocks(
 
 
 # ---------------------------------------------------------------------------
+# Oversized-chunk guard
+# ---------------------------------------------------------------------------
+
+# How much of a chunk's text is actually embedded. Defined here (the SDK
+# imports it) so the split size below can never drift from it again.
+MAX_EMBED_CHARS = 1200
+
+# A single pathological chunk (one giant minified line, a generated file with
+# no blank lines for _chunk_by_blocks to split on) can otherwise become one
+# CodeChunk holding the entire file: unbounded metadata.json growth and a
+# mostly-unsearchable blob. Split at just under the embed window — a split
+# part larger than what gets embedded defeats the split: at the previous
+# 20,000 the guard's own stated goal failed, with ~94% of every part still
+# unembedded. The margin leaves room for the "file: symbol:" prefix
+# _chunk_to_embed_text prepends.
+_MAX_CHUNK_CHARS = MAX_EMBED_CHARS - 100
+
+
+def _split_oversized_chunk(
+    chunk: CodeChunk, max_chars: int = _MAX_CHUNK_CHARS
+) -> List[CodeChunk]:
+    """Split *chunk* into character-bounded pieces if it exceeds *max_chars*.
+
+    Each part carries its own line range, computed from the newlines that
+    precede and span it — with the split threshold at the embed window,
+    splitting is the common case, and every part sharing the whole block's
+    range would make search hits point at the block instead of the fragment.
+    """
+    text = chunk.content
+    if len(text) <= max_chars:
+        return [chunk]
+
+    n_parts = -(-len(text) // max_chars)  # ceil division
+    parts = []
+    newlines_before = 0  # running offset — rescanning the prefix is O(n^2)
+    for i in range(n_parts):
+        lo = i * max_chars
+        piece = text[lo : lo + max_chars]
+        part_start = chunk.start_line + newlines_before
+        newlines_in_piece = piece.count("\n")
+        part_end = min(chunk.end_line, part_start + newlines_in_piece)
+        newlines_before += newlines_in_piece
+        symbol_name = chunk.symbol_name
+        if symbol_name:
+            symbol_name = f"{symbol_name} (part {i + 1}/{n_parts})"
+        parts.append(
+            CodeChunk(
+                content=piece,
+                file_path=chunk.file_path,
+                language=chunk.language,
+                start_line=part_start,
+                end_line=part_end,
+                symbol_name=symbol_name,
+                symbol_type=chunk.symbol_type,
+                docstring=chunk.docstring if i == 0 else None,
+                imports=chunk.imports,
+            )
+        )
+    return parts
+
+
+# ---------------------------------------------------------------------------
 # Public dispatcher
 # ---------------------------------------------------------------------------
 
@@ -364,6 +426,11 @@ def chunk_code_file(
     language = detect_language(file_path)
 
     if language == "python":
-        return parse_python_file(file_path, content)
+        chunks = parse_python_file(file_path, content)
+    else:
+        chunks = parse_generic_file(file_path, content, language)
 
-    return parse_generic_file(file_path, content, language)
+    result: List[CodeChunk] = []
+    for c in chunks:
+        result.extend(_split_oversized_chunk(c))
+    return result

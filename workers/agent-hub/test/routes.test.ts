@@ -30,6 +30,21 @@ describe("GET routes", () => {
     expect(((await res.json()) as any).status).toBe("ok");
   });
 
+  it("reports the deployed build on /health so a stale Worker is detectable", async () => {
+    // The release workflow greps this for the commit it just deployed. A fixed
+    // "ok" would let a months-old Worker pass the post-deploy check, which is
+    // how an outdated manifest validator broke every publish unnoticed.
+    const env = { ...makeEnv(), WORKER_BUILD: "abc123" };
+    const res = await worker.fetch(get("/health"), env as never);
+    expect(((await res.json()) as any).build).toBe("abc123");
+  });
+
+  it("says 'unknown' rather than omitting the build when it is unset", async () => {
+    const env = makeEnv();
+    const res = await worker.fetch(get("/health"), env as never);
+    expect(((await res.json()) as any).build).toBe("unknown");
+  });
+
   it("serves /index.json after a publish", async () => {
     const env = makeEnv();
     await seed(env);

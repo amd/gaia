@@ -13,7 +13,7 @@ func TestAgentLoopMechanicsAreNotShownToTheUser(t *testing.T) {
 		"Processing with Gemma-4-E4B-it-GGUF...", // identical every message
 		"Step 1/50",                              // a loop bound, not progress
 		"Step 12/50",
-		"Thinking",         // the spinner already says this
+		"Thinking", // the spinner already says this
 		"Completed in 1 steps",
 	} {
 		if got := userFacingStatus(noise); got != "" {

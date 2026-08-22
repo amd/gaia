@@ -4,16 +4,27 @@ Production agents for the GAIA Agent Hub. Each agent is a standalone package tha
 
 ## Structure
 
+Three lanes, each with its own package format and publish contract:
+
 ```
 hub/
-├── agents/
+├── agents/            # Agents — a package that runs on its own
 │   ├── <id>/
 │   │   ├── python/     # Python agent (packaged as a wheel)
 │   │   ├── npm/        # JS/TS client (when the agent ships one)
 │   │   └── cpp/        # C++ agent (compiled binary, when present)
 │   └── README.md
+├── components/        # Front ends that drive agents (Agent UI, terminal hub)
+│   └── <id>/gaia-agent.yaml
+├── skills/            # Skills — a capability any agent composes
+│   ├── <name>/SKILL.md
+│   └── README.md
 └── README.md
 ```
+
+Agents and components declare a `gaia-agent.yaml`; skills do not — a skill's
+`SKILL.md` front matter *is* its manifest. See
+[skills/README.md](skills/README.md).
 
 ## New here? Start with the examples
 

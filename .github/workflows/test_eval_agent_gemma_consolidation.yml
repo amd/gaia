@@ -136,6 +136,11 @@ on:
         description: 'Driver + judge model for the eval harness (must match the baseline)'
         required: false
         default: 'claude-sonnet-4-6'
+      deep_diagnostics:
+        description: 'Run the full embedder-failure ladder (purges the model from disk, unloads all models). Off on PRs - it costs ~7 extra min and disturbs other jobs on the box.'
+        required: false
+        type: boolean
+        default: false
   # `pull_request`, NOT `push`. A `push` path filter matches the files in the
   # PUSH, so merging main into a branch replays all of main's churn through the
   # filter — which is how #2807 and #2809, both pure C++ PRs with no Python in
@@ -205,6 +210,11 @@ env:
   # Opus 5; this one value is exempt until the baselines are regenerated with
   # that driver. Override per-run via the dispatch input above.
   EVAL_MODEL: ${{ github.event.inputs.eval_model || 'claude-sonnet-4-6' }}
+  # Deep ladder is opt-in. Its rungs purge the embedder from disk and unload every
+  # resident model, which is fine while investigating and wrong to repeat on every
+  # PR: the cause is known (#3016) and the box is shared, so the next job landing
+  # on it pays for a cold reload it did not ask for.
+  DEEP_DIAG: ${{ github.event.inputs.deep_diagnostics || 'false' }}
   # Loopback services — bypass any runner proxy. This covers the PYTHON side
   # (httpx/requests in the eval, the agents and the backend); PowerShell's
   # Invoke-RestMethod ignores NO_PROXY and uses the system proxy instead.
@@ -247,12 +257,22 @@ jobs:
     # LemonadeServer.exe. Landing on Linux dies with 'powershell: command not
     # found'. Same guard as test_email_agent_eval.yml.
     #
-    # `lemonade-eval` — as opposed to the `stx` label the sibling evals use — is
-    # currently carried by exactly one runner (sjlab-stx-halo-18, itself an stx
-    # box). Serialisation comes from the concurrency group above, NOT from this
-    # label; the label only narrows WHICH box. Widen to `stx` if this job should
-    # be schedulable across the whole pool.
-    runs-on: [self-hosted, Windows, lemonade-eval]
+    # `strix-halo` pins the SoC, and that is a correctness requirement, not a
+    # preference: the `stx` pool spans Strix Point boxes as well (sjlab-stx-1,
+    # sjlab-stx-3), which do not have the 128 GB of unified memory this eval's
+    # model needs, and scores from two different SoCs are not comparable to each
+    # other or to the committed baselines. Do NOT widen this to `stx` — an
+    # earlier revision of this comment suggested exactly that, which would have
+    # let a scorecard be produced on whichever machine happened to be free.
+    #
+    # `lemonade-eval` is kept alongside it to say WHICH Halo box owns the long
+    # eval slot. It is redundant while exactly one runner carries both, and that
+    # is the point: if the label is ever moved to a non-Halo box this job finds
+    # no runner and queues visibly, rather than quietly measuring the wrong
+    # hardware. Serialisation still comes from the concurrency group, not either
+    # label. Same `Windows` guard as the sibling evals: the pool also matches a
+    # Linux box (xsj-aimlab-stxp-04) and every step here is PowerShell.
+    runs-on: [self-hosted, Windows, strix-halo, lemonade-eval]
     defaults:
       run:
         # Pinned to Windows PowerShell 5.1, not left to the runner default (pwsh
@@ -260,6 +280,14 @@ jobs:
         # 5.1's rules — the Tee-Object/`2>&1` and $LASTEXITCODE notes are
         # 5.1-specific — and this file's first run died because nothing declared
         # a shell at all and the steps were bash.
+        #
+        # KEEP EVERY `run:` BODY PURE ASCII. Actions writes the block to a .ps1
+        # with no BOM, and PowerShell 5.1 reads a BOM-less file as ANSI, not
+        # UTF-8 — so one em dash inside a `run:` string is three cp1252 bytes
+        # mid-token and the whole step dies at parse time before a line executes.
+        # (Run 32274575191: a single `—` in an ::error:: message produced
+        # "Missing argument in parameter list" 30 lines away from itself.) YAML
+        # comments and step `name:` values are fine; they never reach the file.
         shell: powershell
     # BUDGET DERIVATION — measured on this runner, not guessed.
     #
@@ -361,6 +389,113 @@ jobs:
           $ErrorActionPreference = "Stop"
           $ProgressPreference = "SilentlyContinue"
 
+          # One probe, so each rung of the ladder below runs an identical check.
+          # $LlamacppArgs empty = load the embedder bare, which is ONLY ever used
+          # as the discriminator on the last rung -- never to take the job green,
+          # because production RAG always passes --ubatch-size 2048
+          # (gaia/rag/sdk.py::_load_embedder) and measuring a different load than
+          # production performs is exactly the "we did not measure" case the
+          # integrity gate exists to refuse.
+          function Invoke-EmbedProbe {
+            param([string]$LlamacppArgs)
+            $ErrorActionPreference = "Continue"
+            $global:LASTEXITCODE = 0
+            if ($LlamacppArgs) {
+              $out = & python tests/ci_lemonade_check.py `
+                --model $embeddingModel --checkpoint $embeddingCheckpoint `
+                --recipe $embeddingRecipe --register-embedding --embeddings `
+                --llamacpp-args $LlamacppArgs 2>&1
+            } else {
+              $out = & python tests/ci_lemonade_check.py `
+                --model $embeddingModel --checkpoint $embeddingCheckpoint `
+                --recipe $embeddingRecipe --register-embedding --embeddings 2>&1
+            }
+            $code = $LASTEXITCODE
+            $ErrorActionPreference = "Stop"
+            $out | ForEach-Object { Write-Host "$_" }
+            # Assert the EMBEDDINGS line, not the helper's terminal `[ci] OK` -
+            # that one prints whether or not --embeddings was passed. `dim=` only
+            # prints after a real vector came back. Exit 0 alone is not enough
+            # either: a command that fails to LAUNCH leaves $LASTEXITCODE at the
+            # reset 0 and would read as a pass.
+            return ($code -eq 0 -and [bool]($out -match '\[ci\] embeddings OK \(dim='))
+          }
+
+          # Lemonade runs as a SYSTEM Scheduled Task, whose action has no console
+          # and whose stdout/stderr the scheduler records nowhere -- so until
+          # ensure-lemonade-running.ps1 began redirecting them, llama-server's
+          # startup error was discarded by the OS, not merely hard to locate.
+          # Every #2920 failure reported "(none found)" from a SYSTEM-profile glob
+          # that never had anything to match. Read the redirect target instead.
+          function Show-LemonadeTaskLog {
+            $dir = "C:\ProgramData\GaiaLemonadeServer"
+            Write-Host "=== Lemonade task stdout/stderr (tail) ==="
+            $found = $false
+            foreach ($f in @("$dir\lemonade-task-stderr.log", "$dir\lemonade-task-stdout.log")) {
+              if (Test-Path $f) {
+                # Report the size: "file exists but is empty" and "file is absent"
+                # are different faults (buffering vs. no redirect) and printing
+                # nothing for both makes them indistinguishable.
+                $len = (Get-Item $f).Length
+                Write-Host "--- $f ($len bytes) ---"
+                if ($len -gt 0) {
+                  Get-Content $f -Tail 120 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "$_" }
+                  $found = $true
+                } else {
+                  Write-Host "(empty - server captured nothing on this stream)"
+                }
+              }
+            }
+            if (-not $found) {
+              Write-Host "(none found in $dir - this runner's Scheduled Task predates the redirect; the -ForceRestart below re-registers it with logging)"
+            }
+            return $found
+          }
+
+          # Lemonade's POST /delete deregisters a model but never removes its
+          # files, so the probe's delete + re-pull cannot re-fetch anything: it
+          # short-circuits on the blob cache and reloads the same bytes every
+          # time. Freeing them needs an OS-level delete, which is this function.
+          # Roots follow _huggingface_cache_dir / _lemonade_models_dir in
+          # src/gaia/installer/uninstall_command.py; report what was removed, since
+          # the sizes are the evidence that a re-pull was ever real.
+          function Clear-EmbedderFromDisk {
+            $sys = "$env:SystemRoot\System32\config\systemprofile"
+            $roots = @(
+              "$sys\AppData\Local\huggingface\hub", "$sys\.cache\huggingface\hub",
+              "$sys\AppData\Local\lemonade\models",  "$sys\.cache\lemonade\models",
+              "$env:LOCALAPPDATA\huggingface\hub",   "$env:USERPROFILE\.cache\huggingface\hub",
+              "$env:LOCALAPPDATA\lemonade\models",   "$env:USERPROFILE\.cache\lemonade\models"
+            )
+            if ($env:HF_HOME) { $roots += (Join-Path $env:HF_HOME "hub") }
+            $removed = 0
+            foreach ($root in ($roots | Where-Object { $_ } | Select-Object -Unique)) {
+              if (-not (Test-Path $root)) { continue }
+              Get-ChildItem $root -Filter "*embeddinggemma*" -Directory -ErrorAction SilentlyContinue |
+                ForEach-Object {
+                  $mb = 0
+                  try {
+                    $mb = [math]::Round(((Get-ChildItem $_.FullName -Recurse -File -ErrorAction SilentlyContinue |
+                          Measure-Object Length -Sum).Sum / 1MB), 1)
+                  } catch { }
+                  Write-Host "Removing on-disk embedder cache: $($_.FullName) ($mb MB)"
+                  Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
+                  $removed++
+                }
+            }
+            if ($removed -eq 0) {
+              # Do NOT read this as "the delete worked" - it never removes files.
+              # Nothing found almost certainly means the cache lives somewhere the
+              # roots above do not cover, so the retry below is still loading the
+              # same bytes and this probe proved nothing.
+              Write-Host "PURGE: found nothing to remove. Lemonade's delete does not remove files, so this most likely means the model cache is NOT under any of these roots, not that the disk was clean: $($roots -join '; ')"
+            } else {
+              Write-Host "PURGE: removed $removed dir(s). Lemonade's delete only deregisters, so this is the first time the bytes are actually gone and the next pull genuinely re-fetches."
+            }
+            return $removed
+          }
+
+
           if (-not $env:ANTHROPIC_API_KEY) {
             Write-Host "::error::ANTHROPIC_API_KEY is not set. The eval judge (src/gaia/eval/claude.py) reads it from the environment; without it every scenario scores as an infra error and the scorecard is meaningless. Add the ANTHROPIC_API_KEY repository secret, or run the eval locally on AMD hardware."
             exit 1
@@ -402,6 +537,22 @@ jobs:
           }
           Write-Host "Lemonade reachable at $lemonadeUrl"
 
+          # Record WHICH machine produced this scorecard. The runs-on labels state
+          # the intent; this is the only thing that proves it held at runtime, and
+          # a score is not interpretable without it - the pool spans two SoCs and
+          # only Strix Halo has the memory this eval assumes. /v1/system-info also
+          # carries per-recipe backend state (unsupported / installable /
+          # update_required / installed) and compatible devices, which is the
+          # diff that explains why this embedder loads on a Strix Point box and
+          # not here (#3016). Best-effort and never fatal: it is evidence, not a
+          # gate, and must not be able to fail a run on its own.
+          $ErrorActionPreference = "Continue"
+          Write-Host "=== Lemonade system-info (device + llamacpp backend state) ==="
+          python -c "import json; from gaia.llm.lemonade_client import LemonadeClient; si = LemonadeClient().get_system_info(); print(json.dumps({k: v for k, v in si.items() if k != 'recipes'}, indent=2, default=str)[:2000]); print('--- recipes.llamacpp ---'); print(json.dumps(si.get('recipes', {}).get('llamacpp'), indent=2, default=str)[:2000])"
+          if ($LASTEXITCODE -ne 0) { Write-Host "(system-info unavailable on this Lemonade build - continuing, this is diagnostic only)" }
+          $global:LASTEXITCODE = 0
+          $ErrorActionPreference = "Stop"
+
           # ensure-lemonade-running.ps1 SWALLOWS a failed warm pull ("WARN: warm
           # pull failed") and still exits 0, so a healthy server proves nothing
           # about the model this job exists to measure. `/models` (no show_all)
@@ -419,6 +570,28 @@ jobs:
             exit 1
           }
           Write-Host "Model under test present: $modelUnderTest"
+
+          # ...but "present" only means the GGUF is on disk. Nothing in this job
+          # has ever LOADED it: ensure-lemonade-running.ps1 warms via /pull, which
+          # is a download, and the check above reads /models' `downloaded` flag. So
+          # a runner where llama-server cannot start AT ALL looks identical here to
+          # a healthy one, and the first thing to actually load a model is the
+          # embedder probe below -- which is why an embedder-specific fault and a
+          # dead llama-server have been indistinguishable for this gate's whole
+          # history (#2920). Load the CHAT model first: it shares the llama-server
+          # binary, so if it also fails, the embedder is not the variable.
+          $ErrorActionPreference = "Continue"
+          $global:LASTEXITCODE = 0
+          $chatOut = & python tests/ci_lemonade_check.py --model $modelUnderTest --chat 2>&1
+          $chatCode = $LASTEXITCODE
+          $ErrorActionPreference = "Stop"
+          $chatOut | ForEach-Object { Write-Host "$_" }
+          if ($chatCode -ne 0 -or -not ($chatOut -match '\[ci\] chat OK')) {
+            Write-Host "::error::llama-server cannot start for the CHAT model $modelUnderTest on this runner either, so this is not an embedder fault - no model can be served here and every category would fail. The GGUF is downloaded and Lemonade answers /health, so the server process is up and the binary underneath it is what will not spawn. Check whether an Application Control policy is blocking llama-server.exe on this box (#2826), and read the Lemonade task log below."
+            Show-LemonadeTaskLog | Out-Null
+            exit 1
+          }
+          Write-Host "Chat model loads and serves - llama-server works on this runner, so an embedder failure below is embedder-specific."
 
           # THE RAG CATEGORIES RUN ON A SECOND MODEL. rag_quality and
           # context_retention answer entirely out of chunks the EMBEDDER
@@ -457,50 +630,139 @@ jobs:
           # Continue, not Stop: under Stop the helper's first stderr line becomes
           # a terminating NativeCommandError and the step dies before the
           # ::error:: below. Same reasoning as the eval step's own note.
-          $ErrorActionPreference = "Continue"
-          $global:LASTEXITCODE = 0
-          $embedOut = & python tests/ci_lemonade_check.py `
-            --model $embeddingModel `
-            --checkpoint $embeddingCheckpoint `
-            --recipe $embeddingRecipe `
-            --register-embedding `
-            --embeddings `
-            --llamacpp-args "--ubatch-size 2048" 2>&1
-          $embedCode = $LASTEXITCODE
-          $ErrorActionPreference = "Stop"
-          $embedOut | ForEach-Object { Write-Host "$_" }
-          # Assert the EMBEDDINGS line, not the helper's terminal `[ci] OK` - that
-          # one prints whether or not --embeddings was passed, so a dropped flag
-          # would take this preflight green having verified nothing. `dim=` only
-          # prints after a real vector came back. Exit 0 alone is not enough
-          # either: a command that fails to LAUNCH leaves $LASTEXITCODE at the
-          # reset 0 and would read as a pass.
-          if ($embedCode -ne 0 -or -not ($embedOut -match '\[ci\] embeddings OK \(dim=')) {
-            # Why llama-server refused to start is in Lemonade's own log, which
-            # the probe cannot see. Print it so the fix does not need an RDP
-            # session onto the box. The server runs as the SYSTEM scheduled task
-            # (ensure-lemonade-running.ps1), so the log is in the SYSTEM
-            # profile's ~/.cache/lemonade - server.log per lemonade_client.py,
-            # but glob both that dir and a logs/ subdir since the layout has
-            # moved before.
-            Write-Host "=== Lemonade server log (tail) ==="
-            $logGlobs = @(
-              "$env:SystemRoot\System32\config\systemprofile\.cache\lemonade\*.log",
-              "$env:SystemRoot\System32\config\systemprofile\.cache\lemonade\logs\*.log",
-              "$env:USERPROFILE\.cache\lemonade\*.log",
-              "$env:USERPROFILE\.cache\lemonade\logs\*.log"
+          # RUNG 1 - the load production performs.
+          $embedOk = Invoke-EmbedProbe -LlamacppArgs "--ubatch-size 2048"
+
+          # RUNG 2 - a stale llama.cpp backend cannot spawn and reports exactly
+          # this "llama-server failed to start".
+          if (-not $embedOk) {
+            Show-LemonadeTaskLog | Out-Null
+
+            # A stale llama.cpp backend in Lemonade's bin cache cannot spawn, and
+            # reports exactly this "llama-server failed to start". install-lemonade
+            # already wipes that cache - but only when it reconciles, so a runner
+            # whose VERSION is correct never clears it and can never self-heal
+            # (#2920). Do the same wipe here, restart, and re-probe once.
+            Write-Host "=== Probe failed; clearing the llama.cpp backend cache and retrying once ==="
+            $cacheRoots = @(
+              "$env:SystemRoot\System32\config\systemprofile\.cache\lemonade",
+              "$env:USERPROFILE\.cache\lemonade"
             )
-            $logged = $false
-            Get-ChildItem $logGlobs -ErrorAction SilentlyContinue |
-              Sort-Object LastWriteTime -Descending | Select-Object -First 1 |
-              ForEach-Object {
-                Write-Host "--- $($_.FullName) ---"
-                Get-Content $_.FullName -Tail 120 -ErrorAction SilentlyContinue
-                $logged = $true
-              }
-            $logHint = if ($logged) { "the llama-server error is in the Lemonade log tail above" } else { "no Lemonade log was found on this runner (looked in: $($logGlobs -join ', ')) - read llama-server's failure from the Lemonade console instead" }
-            if (-not $logged) { Write-Host "(none found)" }
-            Write-Host "::error::The RAG embedder $embeddingModel cannot serve embeddings on this runner (probe exit $embedCode; its output is above). rag_quality and context_retention would score ~2/10 as non-answers against a ~9/10 baseline and look like a model regression. The probe already re-registered and re-pulled the model, so a load that still fails is the RUNNER, not the registration: $logHint, then on sjlab-stx-halo-18 run ``powershell -File installer\scripts\ensure-lemonade-running.ps1 -ForceRestart`` and re-run this probe by hand (``python tests/ci_lemonade_check.py --model $embeddingModel --checkpoint $embeddingCheckpoint --recipe $embeddingRecipe --register-embedding --embeddings --llamacpp-args '--ubatch-size 2048'``). Do NOT re-run the eval until it passes - it costs 3.5h and measures nothing."
+            if ($env:LEMONADE_CACHE_DIR) { $cacheRoots += $env:LEMONADE_CACHE_DIR }
+            $seenRoots = @{}
+            foreach ($root in ($cacheRoots | Where-Object { $_ })) {
+              $rootKey = $root.ToLowerInvariant()
+              if ($seenRoots.ContainsKey($rootKey)) { continue }
+              $seenRoots[$rootKey] = $true
+              $backendDir = Join-Path $root "bin"
+              if (-not (Test-Path $backendDir)) { continue }
+              Write-Host "Clearing stale llama.cpp backend cache at $backendDir"
+              # Cached ROCm Composable-Kernel headers blow past MAX_PATH, so mirror
+              # an empty dir over the tree with robocopy (long-path-safe) first.
+              $emptyDir = Join-Path $env:RUNNER_TEMP "lemonade-wipe-empty"
+              if (-not (Test-Path $emptyDir)) { New-Item -ItemType Directory -Path $emptyDir -Force | Out-Null }
+              robocopy $emptyDir $backendDir /MIR /NFL /NDL /NJH /NJS /NP | Out-Null
+              # robocopy: <8 is success. Fail loud - a swallowed wipe leaves the
+              # stale backend in place and the retry below repeats the failure.
+              if ($LASTEXITCODE -ge 8) { throw "robocopy mirror-wipe of $backendDir failed with exit code $LASTEXITCODE" }
+              Remove-Item $backendDir -Recurse -Force -ErrorAction Stop
+            }
+            $global:LASTEXITCODE = 0
+
+            Write-Host "Restarting Lemonade so it refetches a matching backend..."
+            powershell -ExecutionPolicy Bypass -File installer\scripts\ensure-lemonade-running.ps1 -ForceRestart
+            $global:LASTEXITCODE = 0
+
+            $embedOk = Invoke-EmbedProbe -LlamacppArgs "--ubatch-size 2048"
+            if ($embedOk) {
+              Write-Host "Embedder recovered after the backend-cache wipe - the cached llama.cpp backend was stale."
+            }
+          }
+
+          # STOP HERE ON A NORMAL RUN. Everything above is cheap and read-only:
+          # it establishes whether llama-server works at all on this box and
+          # whether a stale backend was the problem. Everything below purges the
+          # model from disk and unloads every resident model, which was the right
+          # thing to do while the cause was unknown and is the wrong thing to
+          # repeat on every PR now that it is known (#3016) - it adds ~7 min and
+          # leaves the next job on this shared box paying for a cold reload.
+          # Re-dispatch with deep_diagnostics: true to run the full ladder.
+          # ...and do NOT kill the job here. Only rag_quality and context_retention
+          # answer out of embedder-produced chunks; tool_selection's four scenarios
+          # (known_path_read, multi_step_plan, no_tools_needed, smart_discovery)
+          # carry no corpus at all, so a dead embedder costs two categories, not
+          # three. Exiting cost the third for free and left PRs with no regression
+          # signal whatsoever. Record the state, let the run measure what it can,
+          # and let the integrity gate render the honest verdict - the job still
+          # fails, because two of three were not measured.
+          if (-not $embedOk -and $env:DEEP_DIAG -ne 'true') {
+            Show-LemonadeTaskLog | Out-Null
+            "EMBEDDER_OK=false" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+            Write-Host "::error::The RAG embedder $embeddingModel will not load on this runner - a known Strix Halo limitation tracked in #3016, NOT a fault in this PR. The chat model loaded and served over the same llama-server binary earlier in this step, and the same embedder loads fine on the Strix Point boxes, so llama-server works here and the gap is specific to the embeddings path on this SoC. Re-running this gate will not clear it. rag_quality and context_retention cannot be measured; tool_selection does not need the embedder and WILL still run, so this job continues and still gates that category. The deeper rungs (purge the model from disk, load without --ubatch-size 2048, load with everything else unloaded) are skipped on PR runs on purpose because they disturb other jobs on this shared box - re-dispatch with deep_diagnostics: true if you need the full elimination ladder."
+          }
+
+          # RUNG 3 - purge the model's BYTES, not just its registration, then
+          # retry the production load once. `--register-embedding` already deletes
+          # and re-pulls before every attempt above, so a third identical retry
+          # would prove nothing; what has never been tried is removing the files
+          # underneath, because Lemonade's delete may only drop the registry entry
+          # and leave the HF blob cache intact (`gaia uninstall --purge-hf-cache`
+          # exists for exactly that). If a corrupt or truncated GGUF is the cause,
+          # this is the only rung that can clear it - and it takes the job green,
+          # which the diagnostic rung below deliberately never does.
+          if (-not $embedOk) {
+            Write-Host "=== Backend-cache wipe did not help; purging the embedder from disk and retrying once ==="
+            Clear-EmbedderFromDisk | Out-Null
+            Write-Host "Restarting Lemonade before the clean-disk retry..."
+            powershell -ExecutionPolicy Bypass -File installer\scripts\ensure-lemonade-running.ps1 -ForceRestart
+            $global:LASTEXITCODE = 0
+            $embedOk = Invoke-EmbedProbe -LlamacppArgs "--ubatch-size 2048"
+            if ($embedOk) {
+              Write-Host "Embedder recovered after a full on-disk purge - the cached GGUF was bad. Continuing."
+            }
+          }
+
+          # RUNG 4 - DIAGNOSTIC ONLY, never a pass. Everything shared with the two
+          # healthy sibling jobs (test_embeddings.yml, test_rag.yml - same model,
+          # same helper, green on their runner) has now been ruled out, and the
+          # remaining differences are this job's --ubatch-size 2048 and its
+          # co-resident chat model. Loading bare separates those in one run
+          # instead of another week of blind re-runs. It cannot take the job
+          # green: production RAG always passes the flag (gaia/rag/sdk.py), so a
+          # bare load measures something GAIA never does.
+          if (-not $embedOk) {
+            Show-LemonadeTaskLog | Out-Null
+            Write-Host "=== Discriminating probe: loading the embedder WITHOUT --ubatch-size 2048 (diagnostic only) ==="
+            $bareOk = Invoke-EmbedProbe
+            $logged = Show-LemonadeTaskLog
+            $logHint = if ($logged) { "llama-server's own error is in the task-log tail above" } else { "no task log was captured even after a -ForceRestart re-register - check that this runner's ensure-lemonade-running.ps1 carries the stdout/stderr redirect" }
+
+            if ($bareOk) {
+              Write-Host "::error::The RAG embedder $embeddingModel loads FINE without ``--ubatch-size 2048`` and fails WITH it, on this runner. That flag is not CI-only - gaia/rag/sdk.py::_load_embedder passes it on every embedder load, so document Q&A and every RAG-backed agent are broken on this hardware the same way, and this eval gate has simply never been able to measure them (0 passes in its history, #2920). Fix the load in gaia/rag/sdk.py - do NOT drop the flag from this probe to go green, which would measure a load GAIA never performs. $logHint"
+              exit 1
+            }
+
+            # RUNG 5 - the last hypothesis standing. The chat model loaded and
+            # served over the same llama-server binary earlier in this step, so
+            # the box can spawn it; the flag, the registration, the model's bytes
+            # and the backend cache are all eliminated above. What differs from
+            # the two green sibling jobs is that they load this embedder on a
+            # fresh `-NoModel` server while here a chat model is already resident
+            # (#1544 keeps it co-resident by design). Evict everything and load
+            # the embedder alone: if that works, co-residency is the cause, and
+            # on unified-memory hardware that is a GAIA problem, not a CI one.
+            Write-Host "=== Final discriminator: unloading ALL models, then loading the embedder ALONE ==="
+            $ErrorActionPreference = "Continue"
+            python -c "from gaia.llm.lemonade_client import LemonadeClient; LemonadeClient().unload_model(ignore_if_not_loaded=True); print('[ci] unloaded all models')"
+            $ErrorActionPreference = "Stop"
+            $aloneOk = Invoke-EmbedProbe -LlamacppArgs "--ubatch-size 2048"
+            Show-LemonadeTaskLog | Out-Null
+            if ($aloneOk) {
+              Write-Host "::error::The RAG embedder $embeddingModel loads ALONE but not while the chat model is resident. This runner cannot hold both at once, and gaia/rag/sdk.py::_load_embedder deliberately keeps the chat model resident (#1544), so on this hardware every RAG-backed agent hits the same wall, and this gate has never been able to measure them. Fix the co-residency in the RAG SDK (evict-then-reload, or a smaller resident context); do NOT paper over it here, since an eval that unloads the chat model measures a configuration GAIA never runs."
+              exit 1
+            }
+
+            Write-Host "::error::The RAG embedder $embeddingModel cannot be served on this runner under any condition tried. Everything cheap is now eliminated, so do not re-run hoping it clears: the chat model LOADED and served over the same llama-server binary earlier in this step (so the binary spawns fine here and this is not #2826), the load fails identically with and without ``--ubatch-size 2048``, alone and co-resident with the chat model, and the registration, the model's on-disk bytes and the llama.cpp backend cache were each purged and retried. What is left is this specific embedding model on this specific box - most likely the ``--embeddings``/pooling path of the llama.cpp build Lemonade ships here, which is the same class of fault as #1831. Next step is a HUMAN one: on the runner, run Lemonade in a console (not the Scheduled Task, whose stdout/stderr it does not write to) and read llama-server's own failure while reproducing with ``python tests/ci_lemonade_check.py --model $embeddingModel --checkpoint $embeddingCheckpoint --recipe $embeddingRecipe --register-embedding --embeddings --llamacpp-args '--ubatch-size 2048'``. $logHint. Until then rag_quality and context_retention cannot be measured at all - they would score ~2/10 as non-answers against a ~9/10 baseline and read as a model regression."
             exit 1
           }
 
@@ -616,7 +878,9 @@ jobs:
             # No --agent-type: the committed baselines were produced against the
             # backend default (their `config` records only backend_url/model/budget),
             # so passing one here would compare against a different agent.
-            foreach ($category in @("rag_quality", "context_retention", "tool_selection")) {
+            $categories = if ($env:EMBEDDER_OK -eq 'false') { @("tool_selection") } else { @("rag_quality", "context_retention", "tool_selection") }
+            if ($env:EMBEDDER_OK -eq 'false') { Write-Host "::warning::Embedder unavailable (#3016) - measuring tool_selection only. rag_quality and context_retention answer out of embedder-produced chunks and cannot be measured; the integrity gate below still fails the job for them." }
+            foreach ($category in $categories) {
               Write-Host "=================================================================="
               Write-Host "  gaia eval agent --category $category"
               Write-Host "=================================================================="
@@ -672,7 +936,8 @@ jobs:
           $ErrorActionPreference = "Stop"
           $missing = $false
 
-          foreach ($category in @("rag_quality", "context_retention", "tool_selection")) {
+          $categories = if ($env:EMBEDDER_OK -eq 'false') { @("tool_selection") } else { @("rag_quality", "context_retention", "tool_selection") }
+          foreach ($category in $categories) {
             $log = "eval-out\$category.log"
             if (-not (Test-Path $log)) {
               Write-Host "::error::No log for $category - the chain stopped before it ran."
@@ -734,7 +999,9 @@ jobs:
           $noMeasurement = @("infra_error", "errored", "timeout", "blocked", "budget_exceeded", "skipped")
           $problems = @()
 
-          foreach ($category in @("rag_quality", "context_retention", "tool_selection")) {
+          $categories = if ($env:EMBEDDER_OK -eq 'false') { @("tool_selection") } else { @("rag_quality", "context_retention", "tool_selection") }
+          $skipped = if ($env:EMBEDDER_OK -eq 'false') { @("rag_quality", "context_retention") } else { @() }
+          foreach ($category in $categories) {
             $current = "eval-out\$category\scorecard.json"
             if (-not (Test-Path $current)) {
               $problems += "${category}: no scorecard produced"
@@ -764,9 +1031,22 @@ jobs:
             Write-Host "${category}: $($got.Count) scenario(s) run, $($want.Count) in baseline, unmeasured=$shown"
           }
 
+          # A category the embedder made impossible is still an unmeasured
+          # category. It is named with its cause rather than silently dropped,
+          # and it still fails the job: this gate's whole job is refusing to
+          # render a verdict over measurements that do not exist, and "we knew
+          # why" is not the same as "we measured it".
+          foreach ($sk in $skipped) {
+            $problems += "${sk}: NOT MEASURED - the RAG embedder will not load on this runner (#3016), and this category answers out of embedder-produced chunks"
+          }
+
           if ($problems.Count -gt 0) {
             foreach ($p in $problems) { Write-Host "::error::Integrity: $p" }
             Write-Host ""
+            if ($skipped.Count -gt 0) {
+              Write-Host "NOTE: $($categories -join ', ') still ran and IS compared below - read that verdict, it is a real regression signal. What this job cannot tell you today is anything about $($skipped -join ' or '), and it will keep failing until #3016 is fixed."
+              Write-Host ""
+            }
             Write-Host "The eval did not produce a complete set of measurements, so the baseline comparison below is not trustworthy. This fails regardless of ``enforce`` - report mode softens a WORSE score, never a MISSING one. Check the backend/Lemonade logs in the artifact, then re-run."
             exit 1
           }
@@ -779,7 +1059,8 @@ jobs:
           $regressed = @()
           $failedCompare = $false
 
-          foreach ($category in @("rag_quality", "context_retention", "tool_selection")) {
+          $categories = if ($env:EMBEDDER_OK -eq 'false') { @("tool_selection") } else { @("rag_quality", "context_retention", "tool_selection") }
+          foreach ($category in $categories) {
             $current = "eval-out\$category\scorecard.json"
             $baseline = Join-Path $env:BASELINE_DIR "scorecard_$category.json"
             Write-Host ""
