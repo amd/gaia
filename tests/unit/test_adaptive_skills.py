@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
 import subprocess
 
 import pytest
@@ -599,6 +600,9 @@ def test_the_resolved_command_runs_clean_on_this_platform():
     )
     assert "--jq '" not in line
 
+    if shutil.which("gh") is None:
+        pytest.skip("gh is not installed here; nothing to run the resolved line against")
+
     if os.name == "nt":
         result = subprocess.run(
             line, shell=True, capture_output=True, text=True, errors="replace"
@@ -609,7 +613,15 @@ def test_the_resolved_command_runs_clean_on_this_platform():
         result = subprocess.run(
             shlex.split(line), capture_output=True, text=True, errors="replace"
         )
-    assert result.returncode == 0, result.stderr[:400]
+
+    # The claim is that the SHELL parses this line — the bug the delta fixes is
+    # an unbalanced `--jq '` that Windows cmd swallows, taking the rest of the
+    # arguments with it. Reaching gh's auth check proves the argv survived
+    # intact, which is the whole point; demanding a successful API call would
+    # make a unit test depend on a token it has no business needing.
+    output = (result.stderr or "") + (result.stdout or "")
+    unauthenticated = "GH_TOKEN" in output or "gh auth login" in output
+    assert result.returncode == 0 or unauthenticated, result.stderr[:400]
 
 
 # --------------------------------------------------------------------------
