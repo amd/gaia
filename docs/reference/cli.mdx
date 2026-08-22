@@ -2142,6 +2142,7 @@ Author and manage agent skills. A skill is a directory whose only required file 
 
 ```bash
 gaia skill {list,info,create,import,export,migrate} [OPTIONS]     # author locally
+gaia skill deltas <name> [OPTIONS]                                # what an agent LEARNED
 gaia skill audit <dir> [OPTIONS]                                  # pre-publish gate
 gaia skill {search,install,remove,publish,keygen,trust} [OPTIONS] # marketplace
 ```
@@ -2202,6 +2203,31 @@ Skills are discovered from three roots, highest precedence first:
     | `--body` | Also print the Markdown instructions |
 
     Shows path, root, license, security tier, declared permissions, the tools the skill **provides** (namespaced `<skill>/<tool>`), the registry tools it **consumes** (`tools_required`), and any lower-precedence copies it shadows.
+  </Tab>
+
+  <Tab title="deltas">
+    ```bash
+    gaia skill deltas <name> [--pending] [--diff] [--json] [--scope AGENT]
+    gaia skill deltas <name> --approve <id> | --revert <id> | --reset
+    gaia skill deltas <name> --scope AGENT --drop-section <slug>
+    ```
+
+    | Option | Description |
+    |--------|-------------|
+    | `--pending` | Show staged changes awaiting approval instead of active ones |
+    | `--diff` | Unified diff of the shipped skill vs the one this agent runs |
+    | `--scope` | Agent the changes belong to (default: every scope) |
+    | `--approve` | Approve one staged change |
+    | `--revert` | Archive one learned change — kept for inspection, never deleted |
+    | `--reset` | Archive **every** learned change, back to the shipped skill |
+    | `--drop-section` | Remove a section this agent never needs (the model cannot do this) |
+    | `--db` | Memory database to read (default: `~/.gaia/memory.db`) |
+
+    Shows what an agent **learned** about a skill and lets you undo it. An agent can adapt a skill it was given — correcting a command that fails on your machine, or reshaping a procedure written around a workflow you do not use — and that adaptation is stored in agent memory, never written to the shipped `SKILL.md`.
+
+    Learned changes are **substitutive**: a correction replaces the text it fixes rather than being appended beneath it, and a second correction to the same section supersedes the first. So a skill an agent has been taught ten things about is no larger than one it has been taught one thing about.
+
+    Nothing takes effect until you approve it, and the effective skill is always recoverable — `--reset` archives every learned change without deleting the record of it. To run an agent with no learned changes at all for one session, use `gaia chat --no-learned-skills`; the composed prompt is then byte-identical to a build with no overlay.
   </Tab>
 
   <Tab title="create">

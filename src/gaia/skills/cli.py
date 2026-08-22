@@ -111,6 +111,11 @@ def add_subparser(subparsers: argparse._SubParsersAction) -> None:
         "--body", action="store_true", help="Also print the Markdown instructions"
     )
 
+    # Adaptive skills (#2674): inspect/approve/revert the learned overlay.
+    from gaia.skills.deltas_cli import add_deltas_parser
+
+    add_deltas_parser(sub)
+
     p_create = sub.add_parser("create", help="Scaffold a new skill directory")
     p_create.add_argument("name", help="Skill name (lowercase-with-hyphens)")
     p_create.add_argument(
@@ -395,6 +400,7 @@ def handle(args: argparse.Namespace) -> int:
     handlers = {
         "list": _handle_list,
         "info": _handle_info,
+        "deltas": _handle_deltas,
         "create": _handle_create,
         "import": _handle_import,
         "export": _handle_export,
@@ -527,6 +533,13 @@ def _handle_info(args: argparse.Namespace) -> int:
         print("\n--- instructions ---")
         print(skill.body)
     return EXIT_OK
+
+
+def _handle_deltas(args: argparse.Namespace) -> int:
+    """Inspect and control the learned overlay on a skill (#2674)."""
+    from gaia.skills.deltas_cli import handle_deltas
+
+    return handle_deltas(args, _manager().load(args.name))
 
 
 def _handle_create(args: argparse.Namespace) -> int:
