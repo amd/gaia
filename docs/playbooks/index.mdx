@@ -4,10 +4,6 @@ description: "Hands-on tutorials for building production AI agents on Ryzen AI"
 icon: "book-atlas"
 ---
 
-<Info>
-  **Source Code:** [`hub/agents/chat/python/`](https://github.com/amd/gaia/blob/main/hub/agents/chat/python/) | [`hub/agents/code/python/`](https://github.com/amd/gaia/blob/main/hub/agents/code/python/) | [`src/gaia/rag/sdk.py`](https://github.com/amd/gaia/blob/main/src/gaia/rag/sdk.py) | [`hub/agents/emr/python/`](https://github.com/amd/gaia/blob/main/hub/agents/emr/python/) | [`examples/hardware_advisor_agent.py`](https://github.com/amd/gaia/blob/main/examples/hardware_advisor_agent.py)
-</Info>
-
 <Badge text="development" color="orange" />
 
 These playbooks provide step-by-step tutorials for building AI agents on AMD AI PCs. Each explains implementation details and architectural decisions.
@@ -265,70 +261,6 @@ Build an AI-powered agent that generates complete Next.js applications from natu
 
 ---
 
-## How to Use Playbooks
-
-<Steps>
-  <Step title="Choose your playbook">
-    Pick a use case that matches your needs. Each playbook is self-contained.
-  </Step>
-
-  <Step title="Follow the journey">
-    Start from Step 1 and work through sequentially. Each step builds on the previous one.
-  </Step>
-
-  <Step title="Understand the implementation">
-    Read the "Under the Hood" sections to understand the technical details and design decisions.
-  </Step>
-
-  <Step title="Extend and customize">
-    Use the "Making It Your Own" sections to adapt the agent for your specific use case.
-  </Step>
-
-  <Step title="Deploy to production">
-    Review deployment patterns for packaging and distribution.
-  </Step>
-</Steps>
-
----
-
-## Playbook Structure
-
-Each playbook follows this format:
-
-<Accordion title="1. Why Build This? (Context)">
-  Sets the stage - what problem does this solve? What will you build?
-</Accordion>
-
-<Accordion title="2. Quick Start (5 min)">
-  Minimal working example to verify setup and understand basic usage.
-</Accordion>
-
-<Accordion title="3. Architecture Overview">
-  Visual diagram showing how components fit together.
-</Accordion>
-
-<Accordion title="4. Understanding Components">
-  Deep dive into each piece with "under the hood" explanations.
-</Accordion>
-
-<Accordion title="5. Step-by-Step Build">
-  Incremental construction - each step adds one feature and explains it.
-</Accordion>
-
-<Accordion title="6. Making It Your Own">
-  Customization patterns, extensions, and advanced use cases.
-</Accordion>
-
-<Accordion title="7. Production Deployment">
-  API servers, CLI tools, and distribution patterns.
-</Accordion>
-
-<Accordion title="8. Real-World Examples">
-  Complete, copy-paste ready examples for common scenarios.
-</Accordion>
-
----
-
 ## Prerequisites
 
 All playbooks assume you have:
@@ -381,55 +313,7 @@ All playbooks assume you have:
 
 ## Learning Path
 
-<Steps>
-  <Step title="Start here" icon="rocket">
-    Begin with **[Document Q&A Agent](/playbooks/chat-agent/part-1-getting-started)** - it covers foundational concepts used in all other playbooks.
-  </Step>
-
-  <Step title="Add capabilities" icon="puzzle-piece">
-    Once comfortable, add voice with the **[Talk Guide](/guides/talk)** or code generation with the **[Code Agent](/playbooks/code-agent/part-1-introduction)**.
-  </Step>
-
-  <Step title="Go advanced" icon="star">
-    Build complex systems with **[Routing Agent](/guides/routing)** and custom tool mixins.
-  </Step>
-
-  <Step title="Ship it" icon="box">
-    Package and distribute with **[UI Documentation](/deployment/ui)** guides.
-  </Step>
-</Steps>
-
----
-
-## Playbook Principles
-
-Our playbooks follow these principles:
-
-<CardGroup cols={3}>
-  <Card title="Fast Start" icon="bolt">
-    Working example in 5 minutes to verify setup.
-  </Card>
-
-  <Card title="Teachable" icon="brain">
-    Technical explanations of implementation details and design trade-offs.
-  </Card>
-
-  <Card title="Extensible" icon="wrench">
-    Code is designed for extension via inheritance and composition.
-  </Card>
-
-  <Card title="Progressive" icon="rocket">
-    Incremental build process, adding one feature per step.
-  </Card>
-
-  <Card title="Practical" icon="bullseye">
-    Production-oriented examples with real-world use cases.
-  </Card>
-
-  <Card title="Reusable" icon="box">
-    Code samples you can adapt for your specific requirements.
-  </Card>
-</CardGroup>
+Start with the **[Document Q&A Agent](/playbooks/chat-agent/part-1-getting-started)** to learn the foundational concepts used throughout the other playbooks.
 
 ---
 
