@@ -212,6 +212,12 @@ def main() -> int:
     ap.add_argument("--category", action="append", default=[])
     ap.add_argument("--scenario", default=None)
     ap.add_argument("--exclude-tag", action="append", default=[])
+    ap.add_argument(
+        "--restart-per-scenario",
+        action="store_true",
+        help="Full TUI restart between scenarios — needed when a scenario "
+        "mutates state /clear does not reset (loaded skills persist).",
+    )
     ap.add_argument("--out", required=True, type=Path)
     args = ap.parse_args()
 
@@ -234,6 +240,8 @@ def main() -> int:
     results = []
     for _path, data in found:
         print(f"[RUN ] {data['id']}", flush=True)
+        if args.restart_per_scenario:
+            ctl = launch(args.launcher, args.control_json)
         try:
             res = run_scenario(data, ctl, args.out)
         except Exception as exc:
