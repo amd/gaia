@@ -130,7 +130,7 @@ func TestDevPayloadsRenderOnlyUnderDev(t *testing.T) {
 
 	dev := NewChatModel(&nullClient{}, "GAIA", "", true)
 	dev.width = 120
-	devLines := strings.Join(dev.renderActivityItem(item, false, 0), "\n")
+	devLines := strings.Join(dev.renderActivityItem(item, false, 0, 0), "\n")
 	for _, want := range []string{"Reading /etc/hosts", "417 bytes", "/etc/hosts", "args", "out"} {
 		if !strings.Contains(devLines, want) {
 			t.Errorf("--dev render lost %q:\n%s", want, devLines)
@@ -143,7 +143,7 @@ func TestDevPayloadsRenderOnlyUnderDev(t *testing.T) {
 	user.width = 120
 	bare := item
 	bare.Args, bare.Output = "", ""
-	userLines := strings.Join(user.renderActivityItem(bare, false, 0), "\n")
+	userLines := strings.Join(user.renderActivityItem(bare, false, 0, 0), "\n")
 	if strings.Contains(userLines, "args") || strings.Contains(userLines, `{"`) {
 		t.Errorf("user mode drew a developer payload:\n%s", userLines)
 	}

@@ -24,10 +24,20 @@ import (
 //   - A tool result becomes ONE indented line: outcome, size, latency. Never raw
 //     JSON — the render card in the transcript is where a full result belongs.
 const (
-	// narrationWidth caps a tool line so it never wraps out of the live region.
+	// narrationWidth is the MEASURE one work-log row is laid out to — the column
+	// the render layer wraps at, not the most text a line may carry. The log
+	// wraps rather than clips (renderActivityItem), so a line longer than this
+	// keeps its tail on a second row instead of losing it.
 	narrationWidth = 74
-	// detailWidth caps the `└` outcome line, which is subordinate to its call.
-	detailWidth = 66
+	// narrationMax bounds the whole narration string. It is a sanity bound on a
+	// runaway payload — a shell command with a page-long --jq expression — set to
+	// the rows the log will actually show, so nothing is carried that can never
+	// be rendered.
+	narrationMax = logHeadRows * narrationWidth
+	// detailMax bounds an outcome string the same way, over the rows its `└`
+	// line may wrap to. An outcome that failed carries the remedy, so it gets
+	// the same room as the call above it rather than one clipped row.
+	detailMax = logDetailRows * narrationWidth
 )
 
 // shellTools name their argument better than any phrase could: for these the
@@ -131,13 +141,13 @@ var salientArgKeys = []string{
 // inventing a description for a tool this client has never heard of.
 func toolNarration(tool string, args json.RawMessage, narration string) string {
 	if n := clean(narration); n != "" {
-		return truncateRunes(n, narrationWidth)
+		return truncateRunes(n, narrationMax)
 	}
 
 	// The command is the narration — anything wrapped round it is noise.
 	if shellTools[tool] {
 		if cmd := argValue(args, "command", "cmd"); cmd != "" {
-			return truncateRunes(cmd, narrationWidth)
+			return truncateRunes(cmd, narrationMax)
 		}
 	}
 
@@ -156,14 +166,19 @@ func toolNarration(tool string, args json.RawMessage, narration string) string {
 
 	line := phrase.Without
 	if arg != "" && phrase.With != "" {
-		line = fmt.Sprintf(phrase.With, truncateRunes(arg, 48))
+		// Budgeted against the TEMPLATE, not against the whole line. Several
+		// phrases put words after the %s — "Looking for %s in your documents" —
+		// and an argument allowed to fill the line pushed them off the end,
+		// leaving the reader the query with no clue what was done with it.
+		room := narrationMax - displayWidth(fmt.Sprintf(phrase.With, ""))
+		line = fmt.Sprintf(phrase.With, truncateRunes(arg, room))
 	} else if arg != "" {
-		line = phrase.Without + ": " + truncateRunes(arg, 48)
+		line = phrase.Without + ": " + truncateRunes(arg, narrationMax-displayWidth(phrase.Without)-2)
 	}
 	if line == "" {
 		line = "Running " + tool
 	}
-	return truncateRunes(line, narrationWidth)
+	return truncateRunes(line, narrationMax)
 }
 
 // derivePhrase builds a phrase from the tool name when the table has no entry.
@@ -220,7 +235,11 @@ func toolResultDetail(e event.CanonicalToolResultEvent) string {
 		parts = append(parts, summary)
 	}
 	if len(parts) == 0 {
-		if msg := firstLine(firstStringOf(data, "message", "error", "detail", "display_message")); msg != "" {
+		// clean, not firstLine, matching failureDetail: this is the ERROR text
+		// path, and a tool puts the remedy on its second line as often as not.
+		// `summary` above stays first-line-only — a summary that runs to several
+		// lines is a payload dump, not a sentence with a tail worth keeping.
+		if msg := firstStringOf(data, "message", "error", "detail", "display_message"); msg != "" {
 			parts = append(parts, msg)
 		}
 	}
@@ -254,7 +273,7 @@ func markFailed(line string, failed bool) string {
 	if failed && !strings.HasPrefix(strings.ToLower(line), "failed") {
 		line = "failed — " + line
 	}
-	return truncateRunes(line, detailWidth)
+	return truncateRunes(line, detailMax)
 }
 
 // countPhrase names what came back and how much of it — "18 skills", "3 files".
