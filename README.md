@@ -26,6 +26,8 @@
 
 See the [installation guide](https://github.com/amd/gaia/blob/main/docs/guides/install.mdx) for setup instructions.
 
+> **Note (Email agent):** the Email agent (0.6.0) supports **two** install paths — the npm client and `gaia hub install email`, which fetches the same build as a binary sidecar into your GAIA agents directory. There is no PyPI wheel; `gaia hub install email` is the preferred path since it integrates with the GAIA CLI and requires no Node.js toolchain.
+
 ---
 
 ## Why GAIA?
