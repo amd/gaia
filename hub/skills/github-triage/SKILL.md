@@ -76,8 +76,9 @@ otherwise-approvable write: `--body-file` (uploads a local file's contents),
 `--editor`, and `--web`.
 
 A refused command returns an error, not a silent no-op. Report it as a refusal
-and say what you would have run — do not work around it, and do not tell the
-user that approving it is an option.
+and say what you would have run. These commands are refused outright rather than
+gated, so there is no approval to offer — do not work around one, and do not
+present approving it as a path.
 
 Any *other* shell command still needs the user's per-call approval, so keep to
 `gh`; piping its output elsewhere will stop and ask.
