@@ -598,6 +598,7 @@ skills lane:
 gaia skill search "web search" [--json] [--hub-url URL]
 gaia skill install <name[@semver-range]> [--allow-experimental] [--force] [--yes]
 gaia skill remove <name>
+gaia skill lock [--check|--relock] [--json]
 gaia skill publish ./my-skill/ [--unsigned] [--audit-report FILE] [--dry-run]
 gaia skill keygen [--key-name NAME] [--force]
 gaia skill trust {list|add <key> [--role publisher|amd]|remove <key-id>}
@@ -606,7 +607,14 @@ gaia skill trust {list|add <key> [--role publisher|amd]|remove <key-id>}
 `install` accepts a SemVer range and takes the highest published version
 satisfying it — the same rule agent `dependencies:` use. Installs are recorded in
 `~/.gaia/skills/skill-lock.json` with the requested range, the resolved version,
-the artifact SHA-256, the signing key, and the tier actually installed at.
+the artifact SHA-256, a digest of the installed files, the signing key, and the
+tier actually installed at.
+
+`lock` reads that record back: `--check` (the default) reports version, tier,
+content, and presence drift between the lock and the disk, exiting `4` when
+anything differs; `--relock` re-records the current state after an intentional
+change. A `community` / `verified` skill whose files drifted refuses to load and
+cannot be relocked — those bytes are not the ones its signature covered.
 
 **Still PROPOSED** — `update` (marketplace):
 
@@ -1460,6 +1468,7 @@ Only the sandbox/run-time-enforcement and REST/UI layers are greenfield; the mar
 | Hub catalog lane (server side) | `skill` catalog `type`, `POST /publish/skill`, `skills/` R2 prefix, SKILL.md publish validation, audit gate | `workers/agent-hub/src/` | **Exists** (#2467) |
 | **Project-local `./.gaia/skills/` root** | — | **NOT FOUND** | **Deferred — PROPOSED** |
 | **Registry lock (`skill-lock.json`)** | `SkillLock`, `LockEntry` | `skills/lock.py` | **Exists** (#2467) |
+| **Lock drift detection + relock** | `check_drift()`, `assert_no_fatal_drift()`, `relock()`, `gaia skill lock` | `skills/drift.py` | **Exists** (#2467) |
 
 ---
 

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 """
 CLI for ``gaia skill
-{list|info|create|import|export|migrate|audit|search|install|remove|publish|keygen|trust}``.
+{list|info|create|import|export|migrate|audit|search|install|remove|lock|publish|keygen|trust}``.
 
 Three groups of verbs, all real:
 
@@ -14,7 +14,8 @@ Three groups of verbs, all real:
   rejection.
 * **Marketplace** (#2467) — ``search`` / ``install`` / ``remove`` / ``publish``,
   plus the ``keygen`` / ``trust`` key management the tier ladder rests on. These
-  talk to the Agent Hub's skills lane.
+  talk to the Agent Hub's skills lane. ``lock`` reads ``skill-lock.json`` back
+  and reports (or re-records) drift between it and what is installed.
 
 Exit codes are shared by all: ``0`` ok, ``2`` usage, ``3`` not found, ``4``
 invalid (a malformed skill, a refused install, a rejected publish). ``audit``
@@ -30,7 +31,7 @@ import sys
 import tempfile
 import zipfile
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from gaia.logger import get_logger
 from gaia.skills.errors import SkillError, SkillNotFoundError, SkillValidationError
@@ -43,6 +44,7 @@ from gaia.skills.format import (
     parse_skill_file,
     reset_security_tier,
 )
+from gaia.skills.lock import forget_skill
 from gaia.skills.manager import SkillManager
 from gaia.skills.migrate import (
     VENDORS,
@@ -54,6 +56,11 @@ from gaia.skills.migrate import (
 )
 from gaia.skills.signing import ROLE_AMD, ROLE_PUBLISHER
 from gaia.skills.tiers import LOWEST_TIER
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    # Runtime imports of drift stay inside the two verbs that need it, to keep
+    # its cost off every other `gaia skill` invocation.
+    from gaia.skills.drift import RelockResult
 
 log = get_logger(__name__)
 
@@ -322,6 +329,36 @@ def _add_marketplace_subparsers(sub: argparse._SubParsersAction) -> None:
     p_remove = sub.add_parser("remove", help="Remove an installed skill")
     p_remove.add_argument("name", help="Skill name to remove")
 
+    p_lock = sub.add_parser(
+        "lock",
+        help="Check installed skills against skill-lock.json, or re-record it",
+        description=(
+            "Compare every skill in ~/.gaia/skills against skill-lock.json: its "
+            "version, the security tier install enforced, and a digest of its "
+            "files. Reports skills the lock has lost track of and skills it "
+            "tracks that are gone. Exits "
+            f"{EXIT_INVALID} when anything differs, {EXIT_OK} when the lock and "
+            "the disk agree. Untracked skills are expected right after "
+            "'gaia skill create' / 'import' / 'migrate' — --relock records them."
+        ),
+    )
+    lock_mode = p_lock.add_mutually_exclusive_group()
+    lock_mode.add_argument(
+        "--check",
+        action="store_true",
+        help="Report drift without changing anything (the default)",
+    )
+    lock_mode.add_argument(
+        "--relock",
+        action="store_true",
+        help="Re-record the current state as intended. Refuses to re-record a "
+        "signature-backed skill whose files changed — that would launder an "
+        "attestation the new bytes never had.",
+    )
+    p_lock.add_argument(
+        "--json", action="store_true", dest="as_json", help="Emit JSON instead of text"
+    )
+
     p_publish = sub.add_parser(
         "publish", help="Validate, audit, sign, and publish a skill to the Agent Hub"
     )
@@ -405,6 +442,7 @@ def handle(args: argparse.Namespace) -> int:
         "search": _handle_search,
         "install": _handle_install,
         "remove": _handle_remove,
+        "lock": _handle_lock,
         "publish": _handle_publish,
         "keygen": _handle_keygen,
         "trust": _handle_trust,
@@ -438,11 +476,17 @@ def _manager() -> SkillManager:
 
 
 def _handle_list(args: argparse.Namespace) -> int:
+    from gaia.skills.drift import DRIFT_UNTRACKED, check_drift
+
     manager = _manager()
     skills = manager.list_skills()
     if args.root:
         skills = [s for s in skills if s.root == args.root]
     errors = manager.discovery_errors
+    drift = check_drift(manager.user_root)
+    # An untracked skill is already a row in the table below; re-flagging it here
+    # would bury the drifts that are not otherwise visible.
+    notable = [d for d in drift.drifts if d.kind != DRIFT_UNTRACKED]
 
     if getattr(args, "as_json", False):
         payload = {
@@ -453,6 +497,7 @@ def _handle_list(args: argparse.Namespace) -> int:
             "skills": [_skill_summary(s) for s in skills],
             "shadowed": [_skill_summary(s) for s in manager.shadowed()],
             "errors": errors,
+            "drift": drift.to_dict(),
         }
         print(json.dumps(payload, indent=2))
         return EXIT_INVALID if errors else EXIT_OK
@@ -476,6 +521,17 @@ def _handle_list(args: argparse.Namespace) -> int:
         print(
             f"  ↳ '{shadow.name}' in {shadow.directory} is shadowed by the "
             f"higher-precedence copy",
+            file=sys.stderr,
+        )
+
+    if notable:
+        blocking = sum(1 for d in notable if d.fatal)
+        names = ", ".join(sorted({d.skill for d in notable}))
+        print(
+            f"\n⚠ {len(notable)} skill file(s) no longer match "
+            f"{drift.lock_file.name} ({names}"
+            f"{f'; {blocking} will refuse to load' if blocking else ''}). "
+            "Details: gaia skill lock --check",
             file=sys.stderr,
         )
 
@@ -567,6 +623,7 @@ def _handle_create(args: argparse.Namespace) -> int:
 
     if target.exists() and args.force:
         shutil.rmtree(target)
+        forget_skill(parent, args.name)
     target.mkdir(parents=True)
     skill.write(target / SKILL_FILENAME)
     if args.with_tools:
@@ -602,6 +659,10 @@ def _handle_import(args: argparse.Namespace) -> int:
         imported.name = name
         previous_tier = reset_security_tier(imported)
         imported.write(target / SKILL_FILENAME)
+
+    # These bytes are not the hub's any more, so its provenance must not describe
+    # them — otherwise the replaced skill reads as tampered-with hub content.
+    forget_skill(destination_root, name)
 
     print(f"✅ Imported skill '{name}' into {target}")
     if previous_tier != "experimental":
@@ -815,6 +876,9 @@ def _handle_search(args: argparse.Namespace) -> int:
                     "query": args.query,
                     "offline": found.offline,
                     "generated_at": found.generated_at,
+                    "age_seconds": found.age_seconds,
+                    "age_text": found.age_text,
+                    "stale": found.stale,
                     "skills": results,
                 },
                 indent=2,
@@ -824,10 +888,21 @@ def _handle_search(args: argparse.Namespace) -> int:
 
     # Say so before the results, not after: a stale list read as current is how a
     # user ends up installing something that was unpublished.
-    if found.offline:
+    if found.stale:
+        from gaia.hub.catalog import CACHE_STALE_AFTER_SECONDS
+
+        days = round(CACHE_STALE_AFTER_SECONDS / 86400)
         print(
-            f"⚠ The hub was unreachable — showing the offline catalog cache "
-            f"(generated {found.generated_at or 'unknown'}). It may be stale.",
+            f"⚠ This catalog is {found.age_text} — over {days} days old. The hub "
+            "is unreachable, so skills published since are missing and skills "
+            "unpublished since are still listed, including any whose security "
+            "tier changed. Reconnect and re-run to refresh, or check GAIA_HUB_URL.",
+            file=sys.stderr,
+        )
+    elif found.offline:
+        print(
+            f"⚠ The hub was unreachable — showing the offline catalog cache from "
+            f"{found.age_text}. It may be stale.",
             file=sys.stderr,
         )
 
@@ -848,7 +923,13 @@ def _handle_search(args: argparse.Namespace) -> int:
             f"{entry.get('id', '?'):<28} {entry.get('latest_version', '-'):<10} "
             f"{entry.get('security_tier', '-'):<13} {tools:<6} {description}"
         )
-    print("\nInstall one with: gaia skill install <name>")
+    origin = (
+        f"offline cache, last refreshed {found.age_text}"
+        if found.offline
+        else f"hub, fetched {found.age_text}"
+    )
+    print(f"\nCatalog: {origin}")
+    print("Install one with: gaia skill install <name>")
     return EXIT_OK
 
 
@@ -913,6 +994,79 @@ def _handle_remove(args: argparse.Namespace) -> int:
     if not result.was_locked:
         print("   (it was not hub-installed, so no lock entry was tracked)")
     return EXIT_OK
+
+
+def _handle_lock(args: argparse.Namespace) -> int:
+    """Check the user root against ``skill-lock.json``, or re-record it."""
+    from gaia.skills.drift import check_drift, relock
+
+    root = _manager().user_root
+
+    if getattr(args, "relock", False):
+        return _render_relock(relock(root), root, as_json=args.as_json)
+
+    report = check_drift(root)
+
+    if getattr(args, "as_json", False):
+        print(json.dumps(report.to_dict(), indent=2))
+        return EXIT_OK if report.clean else EXIT_INVALID
+
+    if report.clean:
+        print(f"✅ {report.lock_file} matches what is installed in {root}")
+        return EXIT_OK
+
+    fatal, warnings = len(report.fatal), len(report.warnings)
+    print(
+        f"⚠ {len(report.drifts)} difference(s) between {root} and "
+        f"{report.lock_file.name} ({fatal} blocking, {warnings} advisory):\n",
+        file=sys.stderr,
+    )
+    print(report.render(), file=sys.stderr)
+    if fatal:
+        print(
+            "\nThe blocking ones are signature-backed skills whose files changed, "
+            "so they will refuse to load until reinstalled — the tier they carry "
+            "was earned by different bytes.",
+            file=sys.stderr,
+        )
+    print(
+        "\nRe-record the state you intended with: gaia skill lock --relock",
+        file=sys.stderr,
+    )
+    return EXIT_INVALID
+
+
+def _render_relock(result: "RelockResult", root: Path, *, as_json: bool) -> int:
+    if as_json:
+        print(json.dumps(result.to_dict(), indent=2))
+        return EXIT_INVALID if result.refused else EXIT_OK
+
+    if not result.changed and not result.refused:
+        print(f"✅ Nothing to re-record — {result.lock_file} already matches {root}")
+        return EXIT_OK
+
+    print(f"✅ Re-recorded {result.lock_file}")
+    if result.updated:
+        print(f"   updated : {', '.join(result.updated)}")
+    if result.added:
+        print(f"   now tracked (source: local) : {', '.join(result.added)}")
+    if result.removed:
+        print(f"   dropped (no longer installed) : {', '.join(result.removed)}")
+
+    if not result.refused:
+        return EXIT_OK
+
+    names = ", ".join(sorted({d.skill for d in result.refused}))
+    print(
+        f"\n❌ Refused to re-record {names}: installed at a signature-backed tier, "
+        "but the files changed. Re-recording would leave the lock asserting a "
+        "signature over bytes it never covered.",
+        file=sys.stderr,
+    )
+    for drift in result.refused:
+        print(f"  ✗ [{drift.kind}] {drift.skill}: {drift.summary}", file=sys.stderr)
+        print(f"      → {drift.remediation}", file=sys.stderr)
+    return EXIT_INVALID
 
 
 def _handle_publish(args: argparse.Namespace) -> int:
