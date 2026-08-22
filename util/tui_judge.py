@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -74,6 +75,10 @@ def extract_json(text: str) -> dict:
 
 def judge_one(scenario: dict, result: dict, out_path: Path) -> dict:
     prompt = build_prompt(scenario, result)
+    # The judge rides the Claude Code subscription login. A set ANTHROPIC_API_KEY
+    # (e.g. the agent's depleted pay-as-you-go key) takes precedence and makes
+    # `claude -p` fail — strip it from the judge's environment.
+    env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
     # Prompt goes over stdin — cmd.exe truncates argv at the first newline,
     # so a multi-line prompt passed as an argument reaches claude as line 1 only.
     proc = subprocess.run(
@@ -84,6 +89,7 @@ def judge_one(scenario: dict, result: dict, out_path: Path) -> dict:
         encoding="utf-8",
         errors="replace",
         timeout=JUDGE_TIMEOUT_S,
+        env=env,
         shell=True,  # claude is a .cmd shim on Windows
     )
     if proc.returncode != 0:
