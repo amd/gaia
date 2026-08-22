@@ -56,11 +56,12 @@ down in proportion to how hard the change is to undo.
 
 ## Guardrails are not bugs
 
-`write_file` and `edit_file` refuse system directories, dotfiles like `.env`
-or `.ssh/*`, and anything above a 10 MB size limit — these are the platform's
-sandbox, not something to route around. If a write is denied, that is the
-answer; report it and ask the user where they'd actually like the file, don't
-look for another tool that skips the check.
+`write_file` and `edit_file` refuse system directories, credential-bearing
+dotfiles such as environment files and SSH key directories, and anything above
+a 10 MB size limit — these are the platform's sandbox, not something to route
+around. If a write is denied, that is the answer; report it and ask the user
+where they'd actually like the file, don't look for another tool that skips the
+check.
 
 ## What this skill does not cover
 

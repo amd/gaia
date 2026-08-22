@@ -101,7 +101,18 @@ jobs:
       - name: Run slow tests (with Docker operations)
         if: (success() || failure()) && steps.docker-check.outcome == 'success'
         run: |
-          python -m pytest tests/mcp/test_agent_mcp_server.py -v -m "slow and not integration" --tb=short
+          # pytest exits 5 when the marker selects nothing, which fails the job.
+          # No slow tests remain -- the Docker-backed suite went with DockerAgent
+          # -- so treat an empty selection as nothing to do. The step stays so a
+          # future slow test runs without anyone re-adding it, and any real
+          # failure still propagates.
+          rc=0
+          python -m pytest tests/mcp/test_agent_mcp_server.py -v -m "slow and not integration" --tb=short || rc=$?
+          if [ "$rc" -eq 5 ]; then
+            echo "No slow tests are defined in this file; nothing to run."
+            exit 0
+          fi
+          exit "$rc"
 
       # Integration tests require Lemonade server - skip for now
       # - name: Run integration tests (with LLM orchestration)
