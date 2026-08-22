@@ -83,11 +83,25 @@ def _tool_use_block(block_id="toolu_01", name="list_directory", tool_input=None)
     )
 
 
-def _response(content, stop_reason="end_turn", input_tokens=10, output_tokens=5):
+def _response(
+    content,
+    stop_reason="end_turn",
+    input_tokens=10,
+    output_tokens=5,
+    cache_read=None,
+    cache_write=None,
+):
+    usage = SimpleNamespace(input_tokens=input_tokens, output_tokens=output_tokens)
+    # Left unset by default so the no-cache-fields path (an older anthropic
+    # SDK, or a response that predates caching) stays covered.
+    if cache_read is not None:
+        usage.cache_read_input_tokens = cache_read
+    if cache_write is not None:
+        usage.cache_creation_input_tokens = cache_write
     return SimpleNamespace(
         content=content,
         stop_reason=stop_reason,
-        usage=SimpleNamespace(input_tokens=input_tokens, output_tokens=output_tokens),
+        usage=usage,
     )
 
 
@@ -157,7 +171,7 @@ def test_system_hoisted_out_of_messages(fake_anthropic):
         ]
     )
     call = provider._client.messages.create.call_args.kwargs
-    assert call["system"] == "You are GAIA."
+    assert call["system"][0]["text"] == "You are GAIA."
     assert all(m["role"] != "system" for m in call["messages"])
     assert call["messages"] == [{"role": "user", "content": "hello"}]
 
@@ -167,7 +181,11 @@ def test_tools_translated_to_anthropic_shape(fake_anthropic):
     provider._client.messages.create.return_value = _response([_text_block("ok")])
     provider.chat([{"role": "user", "content": "hi"}], tools=OPENAI_TOOLS)
     call = provider._client.messages.create.call_args.kwargs
-    assert call["tools"] == [
+    # The cache breakpoint is asserted separately; this is the translation.
+    translated = [
+        {k: v for k, v in t.items() if k != "cache_control"} for t in call["tools"]
+    ]
+    assert translated == [
         {
             "name": "read_file",
             "description": "Read a file",
@@ -286,6 +304,106 @@ def test_usage_captured_from_response(fake_anthropic):
     assert provider.get_performance_stats() == usage
 
 
+# ── prompt caching ──────────────────────────────────────────────────────
+#
+# Anthropic caching is opt-in and silent: with no ``cache_control`` breakpoint
+# nothing ever caches, and with no cache fields read back the metrics report a
+# 0% hit rate whether or not it worked. Both halves are asserted on the *shape*
+# of the outgoing request and the parsed usage — never on "create was called".
+
+
+def test_system_block_carries_the_cache_breakpoint(fake_anthropic):
+    provider = _provider(fake_anthropic)
+    provider._client.messages.create.return_value = _response([_text_block("ok")])
+    provider.chat(
+        [
+            {"role": "system", "content": "You are GAIA."},
+            {"role": "user", "content": "hello"},
+        ],
+        tools=OPENAI_TOOLS,
+    )
+    call = provider._client.messages.create.call_args.kwargs
+    assert call["system"] == [
+        {
+            "type": "text",
+            "text": "You are GAIA.",
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+    # Second breakpoint at the end of the tools segment. Caching gives no
+    # partial credit, so without it any drift in the system prompt would throw
+    # away the tool schemas too.
+    assert call["tools"][-1]["cache_control"] == {"type": "ephemeral"}
+    assert not any("cache_control" in t for t in call["tools"][:-1])
+
+
+def test_tools_are_still_cached_without_a_system_prompt(fake_anthropic):
+    """``generate`` and ``vision`` send no system prompt; the schemas are still
+    a stable prefix worth caching."""
+    provider = _provider(fake_anthropic)
+    provider._client.messages.create.return_value = _response([_text_block("ok")])
+    provider.chat([{"role": "user", "content": "hi"}], tools=OPENAI_TOOLS)
+    call = provider._client.messages.create.call_args.kwargs
+    assert "system" not in call
+    assert call["tools"][-1]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_breakpoint_never_mutates_the_caller_tool_list(fake_anthropic):
+    provider = _provider(fake_anthropic)
+    provider._client.messages.create.return_value = _response([_text_block("ok")])
+    tools = json.loads(json.dumps(OPENAI_TOOLS))
+    provider.chat([{"role": "user", "content": "hi"}], tools=tools)
+    assert tools == OPENAI_TOOLS, "the agent reuses this list on every call"
+
+
+def test_no_breakpoint_when_there_is_nothing_stable_to_cache(fake_anthropic):
+    provider = _provider(fake_anthropic)
+    provider._client.messages.create.return_value = _response([_text_block("ok")])
+    provider.chat([{"role": "user", "content": "hi"}])
+    call = provider._client.messages.create.call_args.kwargs
+    assert "system" not in call and "tools" not in call
+
+
+def test_usage_reads_both_cache_counters(fake_anthropic):
+    provider = _provider(fake_anthropic)
+    provider._client.messages.create.return_value = _response(
+        [_text_block("ok")], input_tokens=180, output_tokens=28, cache_read=12200
+    )
+    provider.chat([{"role": "user", "content": "hi"}])
+    usage = provider.get_last_usage()
+    assert usage["cache_read_input_tokens"] == 12200
+    assert usage["cache_creation_input_tokens"] == 0
+    assert usage["uncached_input_tokens"] == 180
+    # input_tokens is the uncached remainder, so the prompt is the sum — a
+    # working cache must not read as a prompt that shrank by 98%.
+    assert usage["prompt_tokens"] == 12380
+    assert usage["total_tokens"] == 12408
+    assert provider.get_performance_stats() == usage
+
+
+def test_usage_counts_a_cache_write_toward_the_prompt(fake_anthropic):
+    provider = _provider(fake_anthropic)
+    provider._client.messages.create.return_value = _response(
+        [_text_block("ok")], input_tokens=180, output_tokens=28, cache_write=12200
+    )
+    provider.chat([{"role": "user", "content": "hi"}])
+    usage = provider.get_last_usage()
+    assert usage["cache_creation_input_tokens"] == 12200
+    assert usage["cache_read_input_tokens"] == 0
+    assert usage["prompt_tokens"] == 12380
+
+
+def test_usage_survives_a_response_with_no_cache_fields(fake_anthropic):
+    provider = _provider(fake_anthropic)
+    provider._client.messages.create.return_value = _response(
+        [_text_block("ok")], input_tokens=123, output_tokens=45
+    )
+    provider.chat([{"role": "user", "content": "hi"}])
+    usage = provider.get_last_usage()
+    assert usage["prompt_tokens"] == 123
+    assert usage["cache_read_input_tokens"] == 0
+
+
 # ── streaming ───────────────────────────────────────────────────────────
 
 
@@ -370,12 +488,48 @@ def test_stream_assembles_input_json_deltas_into_sentinel(fake_anthropic):
     # Streaming request still carried stream=True to the SDK.
     assert provider._client.messages.create.call_args.kwargs["stream"] is True
     usage = provider.get_last_usage()
-    assert usage == {
-        "prompt_tokens": 42,
-        "completion_tokens": 17,
-        "total_tokens": 59,
-        "tokens_per_second": usage["tokens_per_second"],
-    }
+    assert usage["prompt_tokens"] == 42
+    assert usage["completion_tokens"] == 17
+    assert usage["total_tokens"] == 59
+
+
+def test_stream_reads_cache_counters_off_message_start(fake_anthropic):
+    """The streaming path is where the flagship actually runs, so a cache read
+    that only the non-streaming path parsed would report 0% in the TUI."""
+    provider = _provider(fake_anthropic)
+    events = [
+        SimpleNamespace(
+            type="message_start",
+            message=SimpleNamespace(
+                usage=SimpleNamespace(
+                    input_tokens=180,
+                    output_tokens=1,
+                    cache_read_input_tokens=12200,
+                    cache_creation_input_tokens=0,
+                )
+            ),
+        ),
+        SimpleNamespace(
+            type="content_block_delta",
+            index=0,
+            delta=SimpleNamespace(type="text_delta", text="hi"),
+        ),
+        SimpleNamespace(
+            type="message_delta",
+            delta=SimpleNamespace(stop_reason="end_turn"),
+            usage=SimpleNamespace(output_tokens=28),
+        ),
+    ]
+    provider._client.messages.create.return_value = iter(events)
+    assert list(provider.chat([{"role": "user", "content": "hi"}], stream=True)) == [
+        "hi"
+    ]
+    usage = provider.get_last_usage()
+    assert usage["cache_read_input_tokens"] == 12200
+    assert usage["prompt_tokens"] == 12380
+    # message_delta reports the final output count and carries no cache fields;
+    # absorbing it must not wipe what message_start established.
+    assert usage["completion_tokens"] == 28
 
 
 # ── AgentSDK routing ────────────────────────────────────────────────────

@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/amd/gaia/tui/internal/client"
 	"github.com/amd/gaia/tui/internal/ui"
 )
 
@@ -110,17 +111,27 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&useClaude, "use-claude", false,
 		"run the agent against Anthropic's Claude API instead of the local Lemonade "+
 			"backend — your conversation is sent to Anthropic, not processed on this "+
-			"machine. Requires ANTHROPIC_API_KEY. The chat header shows a \"claude\" "+
-			"chip while this is on")
+			"machine. Requires ANTHROPIC_API_KEY. The local server is NOT started and "+
+			"first-run setup is skipped; the chat header names the model in use "+
+			"(e.g. \"claude · haiku-4.5\") while this is on")
 	rootCmd.PersistentFlags().StringVar(&claudeModel, "claude-model", defaultClaudeModel,
-		"Claude model id to use with --use-claude (pass \"\" to let the agent pick)")
-	// --claude-model without --use-claude would be accepted and then change
-	// nothing; refuse it before any UI opens.
+		"Claude model id to use with --use-claude: "+
+			strings.Join(client.ClaudeModelIDs(), ", ")+
+			" (pass \"\" to let the agent pick)")
+	// Both --claude-model refusals happen here, before any UI opens: a flag
+	// that will not do what it says must fail as a command-line error, not as
+	// something the user has to notice inside a running TUI.
 	rootCmd.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
 		if rootCmd.PersistentFlags().Changed("claude-model") && !useClaude {
 			return fmt.Errorf(
 				"--claude-model only applies with --use-claude: the local Lemonade " +
 					"backend does not run Claude models. Add --use-claude, or drop --claude-model")
+		}
+		// An id nothing accepts reaches Anthropic verbatim and comes back a
+		// 404 mid-turn — see client.ValidateClaudeModel for why nothing
+		// downstream catches it.
+		if err := client.ValidateClaudeModel(claudeModel); err != nil {
+			return fmt.Errorf("--claude-model: %w", err)
 		}
 		return nil
 	}

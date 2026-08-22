@@ -16,8 +16,11 @@ icon: sparkles
 # no skill set loaded). Drift-guarded by tests/test_gaia_agent.py, which builds
 # the agent and compares — a hand-edit that disagrees with the registry fails CI.
 # 55 from ChatAgent's "full" profile + 7 skill-library tools
-# (gaia_agent.skill_tools.SKILL_LIBRARY_TOOL_NAMES).
-tools_count: 66
+# (gaia_agent.skill_tools.SKILL_LIBRARY_TOOL_NAMES) + 4 code-index tools
+# + the load_tools escape hatch, which registers because dynamic_tools is on.
+# This is the REGISTERED size — what the agent can do. Dynamic tool loading
+# means a single turn only shows the model a subset of it.
+tools_count: 67
 
 language: python
 min_gaia_version: "0.23.0"
@@ -63,9 +66,10 @@ dependencies:
 # the flagship and they corrupt an answer no matter which task is running, so
 # they cannot live in an opt-in bundle the way a task skill can.
 #
-# It is deliberately small (~900 tokens, measured) and declares no tools, so the concern
-# that kept `default_skill_set` commented out — loading several large skill
-# bodies into every prompt — does not apply. default_skill_set stays off.
+# Its body is 676 tiktoken (cl100k) tokens, measured, and it declares no tools —
+# so the concern that kept `default_skill_set` commented out, loading several
+# large skill bodies into every prompt, does not apply. Keep it that size: it is
+# paid on every LLM call of every turn. default_skill_set stays off.
 skills:
   - gaia-voice
 
