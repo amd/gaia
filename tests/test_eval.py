@@ -2175,6 +2175,36 @@ class TestFindScenariosExtraDirs:
         assert "tag_a" in ids
         assert "tag_b" in ids
 
+    def test_exclude_tag_filtering(self, tmp_path):
+        from gaia.eval.runner import find_scenarios
+
+        self._write_scenario(tmp_path, "keep_me", tags=["t1_basic"])
+        self._write_scenario(tmp_path, "blocked", tags=["t1_basic", "live"])
+        self._write_scenario(tmp_path, "untagged_kept")
+
+        results = find_scenarios(extra_dirs=[str(tmp_path)], exclude_tags=["live"])
+        ids = [data["id"] for _, data in results]
+        assert "keep_me" in ids
+        assert "untagged_kept" in ids
+        assert "blocked" not in ids
+
+    def test_exclude_tag_applies_after_include_filters(self, tmp_path):
+        from gaia.eval.runner import find_scenarios
+
+        self._write_scenario(tmp_path, "in_and_kept", tags=["t1_basic"])
+        self._write_scenario(tmp_path, "in_but_excluded", tags=["t1_basic", "live"])
+        self._write_scenario(tmp_path, "not_included", tags=["other"])
+
+        results = find_scenarios(
+            extra_dirs=[str(tmp_path)], tags=["t1_basic"], exclude_tags=["live"]
+        )
+        ids = [data["id"] for _, data in results]
+        assert ids == ["in_and_kept"] or (
+            "in_and_kept" in ids
+            and "in_but_excluded" not in ids
+            and "not_included" not in ids
+        )
+
     def test_tags_field_accepted_in_scenario_yaml(self, tmp_path):
         """Tags field in scenario YAML should not cause validation errors."""
         from gaia.eval.runner import validate_scenario

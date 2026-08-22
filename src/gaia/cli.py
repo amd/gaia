@@ -2140,6 +2140,14 @@ Examples:
         "scenarios matching ANY tag are included)",
     )
     agent_eval_parser.add_argument(
+        "--exclude-tag",
+        action="append",
+        metavar="TAG",
+        help="Skip scenarios carrying this tag (can be repeated; applied after "
+        "--tag/--category — e.g. --exclude-tag local_blocked_no_embedder "
+        "--exclude-tag live for a no-Lemonade local run)",
+    )
+    agent_eval_parser.add_argument(
         "--output-format",
         choices=["json", "markdown", "junit"],
         default=None,
@@ -3929,6 +3937,7 @@ Let me know your answer!
                     extra_scenario_dirs=getattr(args, "scenario_dir", None),
                     extra_corpus_dirs=getattr(args, "corpus_dir", None),
                     tags=getattr(args, "tag", None),
+                    exclude_tags=getattr(args, "exclude_tag", None),
                     output_format=getattr(args, "output_format", None),
                 )
                 scorecard = runner.run(

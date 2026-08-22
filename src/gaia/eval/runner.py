@@ -348,7 +348,9 @@ def _documents_exist(scenario_data: dict) -> bool:
     return True
 
 
-def find_scenarios(scenario_id=None, category=None, extra_dirs=None, tags=None):
+def find_scenarios(
+    scenario_id=None, category=None, extra_dirs=None, tags=None, exclude_tags=None
+):
     """Find scenario YAML files matching filters.
 
     Args:
@@ -358,6 +360,8 @@ def find_scenarios(scenario_id=None, category=None, extra_dirs=None, tags=None):
             Scenarios from extra_dirs override built-in scenarios with the same ID.
         tags: List of tags to filter by. If specified, only scenarios whose ``tags``
             field contains at least one of these tags are returned (OR logic).
+        exclude_tags: List of tags to exclude. A scenario carrying ANY of these
+            tags is dropped, after the include filters are applied.
 
     Returns list of (path, data) tuples. Raises RuntimeError if any YAML is
     unparseable or fails schema validation.
@@ -416,6 +420,8 @@ def find_scenarios(scenario_id=None, category=None, extra_dirs=None, tags=None):
             scenario_tags = set(data.get("tags", []))
             if not scenario_tags.intersection(tags):
                 continue
+        if exclude_tags and set(data.get("tags", [])).intersection(exclude_tags):
+            continue
         scenarios.append((path, data))
     return scenarios
 
@@ -1702,6 +1708,7 @@ class AgentEvalRunner:
         extra_scenario_dirs=None,
         extra_corpus_dirs=None,
         tags=None,
+        exclude_tags=None,
         output_format=None,
         agent_type=None,
     ):
@@ -1713,6 +1720,7 @@ class AgentEvalRunner:
         self.extra_scenario_dirs = extra_scenario_dirs or []
         self.extra_corpus_dirs = extra_corpus_dirs or []
         self.tags = tags or []
+        self.exclude_tags = exclude_tags or []
         self.output_format = output_format
         self.agent_type = agent_type
 
@@ -1788,11 +1796,14 @@ class AgentEvalRunner:
             category=category,
             extra_dirs=self.extra_scenario_dirs,
             tags=self.tags if self.tags else None,
+            exclude_tags=self.exclude_tags if self.exclude_tags else None,
         )
         if not scenarios:
             filter_desc = f"id={scenario_id}, category={category}"
             if self.tags:
                 filter_desc += f", tags={self.tags}"
+            if self.exclude_tags:
+                filter_desc += f", exclude_tags={self.exclude_tags}"
             print(
                 f"[ERROR] No scenarios found ({filter_desc})",
                 file=sys.stderr,
