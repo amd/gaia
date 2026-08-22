@@ -1071,6 +1071,8 @@ jobs:
     needs: build
     if: always() && needs.build.result == 'success'
     runs-on: ubuntu-24.04
+    # apt-get can stall fetching xvfb; without this the job inherits the 6h default.
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@v7

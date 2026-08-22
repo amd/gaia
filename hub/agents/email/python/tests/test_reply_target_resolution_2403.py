@@ -235,6 +235,29 @@ def test_no_match_raises_not_found():
 
 
 # ---------------------------------------------------------------------------
+# CUT invariant (#2830 plan item 6): the zero-result operator-query widener
+# that search_messages_impl uses is deliberately NOT wired into this
+# side-effecting draft_reply path -- a bad widen here would pick the wrong
+# thread to reply to, not just show 0 results. An operator target that
+# matches nothing must make exactly one backend call, with the query
+# byte-identical to what was sent, and fail not-found -- never silently
+# retry with a widened query.
+# ---------------------------------------------------------------------------
+
+
+def test_operator_target_zero_hits_makes_exactly_one_call_unchanged_query():
+    gmail = _backend()  # empty mailbox
+    target = 'from:"The Neuron" newer_than:14d'
+    with pytest.raises(ValueError) as exc:
+        resolve_message_target({"google": gmail}, target=target)
+    text = str(exc.value).lower()
+    assert "no message" in text or "not found" in text
+    calls = _list_calls(gmail)
+    assert len(calls) == 1
+    assert calls[0][1]["query"] == target
+
+
+# ---------------------------------------------------------------------------
 # Explicit mailbox scoping
 # ---------------------------------------------------------------------------
 

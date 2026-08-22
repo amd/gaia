@@ -253,6 +253,13 @@ identify who is calling.
   (DNS-rebinding); a non-loopback browser `Origin` → **HTTP 403** (drive-by web
   page). No permissive CORS is ever sent.
 
+The sidecar's OpenAPI document (`GET /openapi.json`, and the committed
+`openapi.email.json`) declares this posture: a `bearerAuth` HTTP scheme, and per
+gated operation `security: [{"bearerAuth": []}, {}]` — bearer OR none, matching
+the check above being skipped when no token is configured. Exempt routes
+(`/health`, `/version`, `/v1/email/health`, `/v1/email/version`) declare an
+explicit empty security requirement instead.
+
 How this maps to the entry points above:
 
 - **Frozen sidecar / npm** — `startSidecar` mints the token, injects it, and binds
