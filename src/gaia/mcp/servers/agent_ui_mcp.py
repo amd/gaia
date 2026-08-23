@@ -33,7 +33,7 @@ from gaia.ui.sse_handler import (
 )
 
 if TYPE_CHECKING:  # import only for type checking; runtime import is lazy (#1750)
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server import MCPServer
 
 logger = logging.getLogger(__name__)
 
@@ -238,14 +238,14 @@ def _stream_chat(base_url: str, session_id: str, message: str) -> Dict[str, Any]
     return result
 
 
-def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "FastMCP":
+def create_agent_ui_mcp(backend_url: str = DEFAULT_BACKEND) -> "MCPServer":
     """Create the MCP server with tools for interacting with GAIA Agent UI."""
     # Imported lazily so the pure helpers above (_normalize_error, _api,
     # _stream_chat) stay importable without the optional ``mcp`` dependency,
     # which the unit-test job does not install (issue #1750).
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server import MCPServer
 
-    mcp = FastMCP(name="GAIA Agent UI")
+    mcp = MCPServer(name="GAIA Agent UI")
 
     # ── System ─────────────────────────────────────────────────────
 
@@ -840,14 +840,12 @@ def main():
         print("Starting GAIA Agent UI MCP Server (stdio mode)...", file=sys.stderr)
         mcp.run(transport="stdio")
     else:
-        mcp.settings.host = args.host
-        mcp.settings.port = args.port
         print("\n🚀 GAIA Agent UI MCP Server")
         print(f"   Backend: {args.backend}")
         print(f"   MCP: http://{args.host}:{args.port}/mcp")
         tool_count = len(mcp._tool_manager._tools)  # pylint: disable=protected-access
         print(f"   Tools: {tool_count} registered\n")
-        mcp.run(transport="streamable-http")
+        mcp.run(transport="streamable-http", host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

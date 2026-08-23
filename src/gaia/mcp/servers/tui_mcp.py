@@ -36,7 +36,7 @@ import requests
 from gaia.logger import get_logger
 
 if TYPE_CHECKING:  # import only for type checking; runtime import is lazy (#1750)
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server import MCPServer
 
 logger = get_logger(__name__)
 
@@ -708,13 +708,13 @@ def route_logging_to_stderr() -> None:
             handler.setStream(sys.stderr)
 
 
-def create_tui_mcp() -> "FastMCP":
+def create_tui_mcp() -> "MCPServer":
     """Create the MCP server exposing the GAIA TUI control tools."""
     # Imported lazily so the helpers above stay importable without the optional
     # ``mcp`` dependency, which the unit-test job does not install (issue #1750).
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server import MCPServer
 
-    mcp = FastMCP(name="GAIA TUI")
+    mcp = MCPServer(name="GAIA TUI")
 
     @mcp.tool()
     def tui_status() -> Dict[str, Any]:
@@ -849,14 +849,12 @@ def main():
         print("Starting GAIA TUI MCP Server (stdio mode)...", file=sys.stderr)
         mcp.run(transport="stdio")
     else:
-        mcp.settings.host = args.host
-        mcp.settings.port = args.port
         print("\n🚀 GAIA TUI MCP Server")
         print(f"   Control file: {_display_path()}")
         print(f"   MCP: http://{args.host}:{args.port}/mcp")
         tool_count = len(mcp._tool_manager._tools)  # pylint: disable=protected-access
         print(f"   Tools: {tool_count} registered\n")
-        mcp.run(transport="streamable-http")
+        mcp.run(transport="streamable-http", host=args.host, port=args.port)
 
 
 if __name__ == "__main__":

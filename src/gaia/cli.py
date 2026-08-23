@@ -7724,9 +7724,6 @@ def handle_mcp_serve(args):
             )
             mcp.run(transport="stdio")
         else:
-            mcp.settings.host = args.host
-            mcp.settings.port = args.port
-
             print("=" * 60)
             print("🤖 GAIA Agent UI MCP Server")
             print("=" * 60)
@@ -7741,7 +7738,7 @@ def handle_mcp_serve(args):
                 pass
             print("\nPress Ctrl+C to stop")
             print("=" * 60)
-            mcp.run(transport="streamable-http")
+            mcp.run(transport="streamable-http", host=args.host, port=args.port)
 
     except KeyboardInterrupt:
         print("\n✅ Agent UI MCP server stopped")
@@ -7773,9 +7770,6 @@ def handle_mcp_tui(args):
             )
             mcp.run(transport="stdio")
         else:
-            mcp.settings.host = args.host
-            mcp.settings.port = args.port
-
             print("=" * 60)
             print("🖥️  GAIA TUI Control MCP Server")
             print("=" * 60)
@@ -7790,7 +7784,7 @@ def handle_mcp_tui(args):
                 log.debug("FastMCP tool registry layout changed; skipping tool count")
             print("\nPress Ctrl+C to stop")
             print("=" * 60)
-            mcp.run(transport="streamable-http")
+            mcp.run(transport="streamable-http", host=args.host, port=args.port)
 
     except KeyboardInterrupt:
         print("\n✅ TUI control MCP server stopped")
