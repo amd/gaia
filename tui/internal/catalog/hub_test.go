@@ -239,6 +239,43 @@ func TestFindBinaryInRepoFindsANonExeBuildOutput(t *testing.T) {
 	}
 }
 
+// The flagship agent is the only seeded entry declared TransportSubprocess, so
+// it is the only one whose transport the sentinel path had to correct -- which
+// is why installing it shipped a TUI that spawned the frozen REST sidecar and
+// tried to read newline-delimited JSON out of a uvicorn log.
+func TestInstalledSeededSubprocessAgentBecomesDaemonTransport(t *testing.T) {
+	sentinel := `{"id":"gaia","version":"0.1.1","language":"python","artifact_kind":"binary"}`
+	home := t.TempDir()
+	agentDir := filepath.Join(home, ".gaia", "agents", "gaia")
+	if err := os.MkdirAll(agentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(agentDir, SentinelName), []byte(sentinel), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	if runtime.GOOS == "windows" {
+		t.Setenv("USERPROFILE", home)
+	}
+
+	c := NewCatalog()
+	if seeded := c.Get("gaia"); seeded == nil || seeded.Transport != TransportSubprocess {
+		t.Skip("gaia is no longer seeded as a subprocess agent; this regression cannot recur")
+	}
+
+	c.LoadInstalledAgents()
+
+	gaia := c.Get("gaia")
+	if gaia == nil {
+		t.Fatal("gaia disappeared from the catalog after loading its sentinel")
+	}
+	if gaia.Transport != TransportDaemon {
+		t.Errorf("transport = %v, want TransportDaemon: an installed hub agent is an "+
+			"HTTP sidecar the daemon supervises, not a binary to spawn over stdio",
+			gaia.Transport)
+	}
+}
+
 func TestLoadInstalledAgentsReadsSentinels(t *testing.T) {
 	// InstallRoot mirrors the Python installer exactly (<home>/.gaia/agents),
 	// so the fixture is a fake home rather than an env override.
