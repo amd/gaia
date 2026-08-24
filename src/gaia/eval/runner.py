@@ -684,14 +684,37 @@ def _aggregate_performance(result: dict, scenario_id: str) -> None:
         if isinstance(flags, list):
             all_flags.update(flags)
 
+    # Tool calls come from the judge's observed agent_tools, which is recorded
+    # for every turn whether or not the backend reported inference stats — so
+    # this is available even when performance is flagged no_stats.
+    tool_calls_per_turn = [
+        len(turn.get("agent_tools") or []) for turn in result.get("turns", [])
+    ]
+    total_tool_calls = sum(tool_calls_per_turn)
+
     if tps_values or ttft_values or total_input or total_output:
         avg_tps = sum(tps_values) / len(tps_values) if tps_values else None
         avg_ttft = sum(ttft_values) / len(ttft_values) if ttft_values else None
         result["performance_summary"] = {
             "avg_tokens_per_second": round(avg_tps, 1) if avg_tps else None,
+            # min/max alongside the average: an average hides the slow turn,
+            # and the slow turn is the one a user notices.
+            "min_tokens_per_second": round(min(tps_values), 1) if tps_values else None,
+            "max_tokens_per_second": round(max(tps_values), 1) if tps_values else None,
             "avg_time_to_first_token": round(avg_ttft, 3) if avg_ttft else None,
+            "min_time_to_first_token": (
+                round(min(ttft_values), 3) if ttft_values else None
+            ),
+            "max_time_to_first_token": (
+                round(max(ttft_values), 3) if ttft_values else None
+            ),
             "total_input_tokens": total_input,
             "total_output_tokens": total_output,
+            "turns_measured": len(tps_values),
+            "total_tool_calls": total_tool_calls,
+            "max_tool_calls_in_a_turn": (
+                max(tool_calls_per_turn) if tool_calls_per_turn else None
+            ),
             "flags": sorted(all_flags),
         }
         if avg_tps:
@@ -701,7 +724,21 @@ def _aggregate_performance(result: dict, scenario_id: str) -> None:
                 file=sys.stderr,
             )
     else:
+        # Stays None with no inference stats — deliberately. scorecard.py counts
+        # any dict here toward `scenarios_with_data`, so emitting a stats-less
+        # summary would inflate that number and overstate what was measured.
+        # Tool usage is reported separately below instead.
         result["performance_summary"] = None
+
+    # Tool usage is measured from the judge's observed calls, so it is real even
+    # when the backend reported no inference stats — kept out of
+    # performance_summary so it can never be mistaken for stats coverage.
+    if tool_calls_per_turn:
+        result["tool_usage"] = {
+            "total_tool_calls": total_tool_calls,
+            "max_tool_calls_in_a_turn": max(tool_calls_per_turn),
+            "turns": len(tool_calls_per_turn),
+        }
 
 
 #: A scenario's result is judged when the judge actually scored it; infra
