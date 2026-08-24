@@ -3939,6 +3939,7 @@ Let me know your answer!
                     tags=getattr(args, "tag", None),
                     exclude_tags=getattr(args, "exclude_tag", None),
                     output_format=getattr(args, "output_format", None),
+                    iterations=getattr(args, "iterations", 1),
                 )
                 scorecard = runner.run(
                     scenario_id=getattr(args, "scenario", None),
