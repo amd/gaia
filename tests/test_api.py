@@ -318,9 +318,8 @@ class TestApiUnitValidation:
         """Test that empty messages array returns 400 (no user message)."""
         from gaia.api.openai_server import registry as server_registry
 
-        # Model-existence check runs before the empty-messages check, and
-        # Stub the registry so this test
-        # exercises the message-validation branch it's named for.
+        # The model 404 check runs first; stubbing it keeps a future rename of
+        # the model from failing this test somewhere other than its own branch.
         mocker.patch.object(server_registry, "model_exists", return_value=True)
 
         response = self.client.post(

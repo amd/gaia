@@ -416,6 +416,7 @@ def check_imports() -> CheckResult:
         ("from", "gaia.agents.base", "tool", "Tool decorator", False),
         # Specialized Agents — optional so a framework-only env (no
         # gaia-agent-<id> installed) skips rather than fails.
+        ("from", "gaia_agent.agent", "GaiaAgent", "Flagship agent", True),
         ("from", "gaia_agent_chat", "ChatAgent", "Chat agent", True),
         # Database
         ("from", "gaia.database", "DatabaseAgent", "Database agent", False),
