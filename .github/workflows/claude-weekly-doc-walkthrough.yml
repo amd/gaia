@@ -439,20 +439,20 @@ jobs:
           # presence on this self-hosted Windows runner is not a confirmed
           # dependency (the ubuntu-hosted synthesis job below uses jq safely,
           # since GH-hosted runners guarantee it; this job cannot assume that).
-          # execution_file is JSONL (one object per line); walk every line and
-          # keep the LAST one that has an is_error key, matching the bash
-          # `jq -s '[.. | objects | select(has("is_error")) | .is_error] | .[-1]'`
+          # execution_file is a PRETTY-PRINTED JSON array, not JSONL, so parsing it
+          # line by line makes every line invalid and silently reports a healthy run
+          # as crashed. Scan the whole text and keep the LAST is_error, matching the
+          # bash `jq -s '[.. | objects | select(has("is_error")) | .is_error] | .[-1]'`
           # claude-weekly-audit.yml uses on ubuntu.
           $ok = $false
-          $isErr = $null
           if ($env:EXEC_FILE -and (Test-Path $env:EXEC_FILE)) {
-            foreach ($line in Get-Content $env:EXEC_FILE) {
-              try {
-                $obj = $line | ConvertFrom-Json -ErrorAction Stop
-                if ($obj.PSObject.Properties.Name -contains "is_error") { $isErr = $obj.is_error }
-              } catch {}
+            $raw = Get-Content -Raw $env:EXEC_FILE
+            $hits = [regex]::Matches($raw, '"is_error"\s*:\s*(true|false)')
+            if ($hits.Count -gt 0) {
+              $ok = $hits[$hits.Count - 1].Groups[1].Value -eq 'false'
+            } else {
+              Write-Host "::warning::No is_error in $env:EXEC_FILE -- treating as a crash."
             }
-            if ($isErr -eq $false) { $ok = $true }
           }
           $transcriptExists = Test-Path "$env:RUN_DIR\transcript.md"
           if ($ok -and $transcriptExists) {
@@ -549,18 +549,17 @@ jobs:
         env:
           EXEC_FILE: ${{ steps.judge.outputs.execution_file }}
         run: |
-          # PowerShell-native JSON parsing (ConvertFrom-Json), not jq -- see
-          # the "Report executor status" step above for why.
+          # Same whole-text scan as "Report executor status" above -- see the note there
+          # for why line-by-line parsing misreads this file.
           $ok = $false
-          $isErr = $null
           if ($env:EXEC_FILE -and (Test-Path $env:EXEC_FILE)) {
-            foreach ($line in Get-Content $env:EXEC_FILE) {
-              try {
-                $obj = $line | ConvertFrom-Json -ErrorAction Stop
-                if ($obj.PSObject.Properties.Name -contains "is_error") { $isErr = $obj.is_error }
-              } catch {}
+            $raw = Get-Content -Raw $env:EXEC_FILE
+            $hits = [regex]::Matches($raw, '"is_error"\s*:\s*(true|false)')
+            if ($hits.Count -gt 0) {
+              $ok = $hits[$hits.Count - 1].Groups[1].Value -eq 'false'
+            } else {
+              Write-Host "::warning::No is_error in $env:EXEC_FILE -- treating as a crash."
             }
-            if ($isErr -eq $false) { $ok = $true }
           }
           $findingsFile = "findings-walkthrough-${{ matrix.doc.slug }}.json"
           if ($ok) {
