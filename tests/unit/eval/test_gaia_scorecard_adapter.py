@@ -242,7 +242,6 @@ class TestGenScorecardPayload:
         mod = _load("gen_scorecard")
         from gaia.eval.release_scorecard import (
             parse_scorecard,
-            render_scorecard,
             validate_scorecard,
             write_scorecard,
         )
@@ -368,6 +367,23 @@ class TestGenScorecardPayload:
         assert parsed["recipe"]["environment"]["note"] == "harness validation"
         assert parsed["recipe"]["environment"]["gaia_commit"]
         assert "lemonade_version" not in parsed["recipe"]["environment"]
+
+
+class TestReleaseWorkflowWiring:
+    def test_publish_job_needs_scorecard_and_eval_gates(self):
+        # Mirrors the email twin in test_scorecard_gate.py: the release cannot
+        # publish without the scorecard gate and the judged eval subset.
+        import yaml
+
+        workflow_path = REPO_ROOT / ".github" / "workflows" / "release_agent_gaia.yml"
+        parsed = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
+        needs = parsed["jobs"]["publish"].get("needs", [])
+        if isinstance(needs, str):
+            needs = [needs]
+        assert (
+            "scorecard-gate" in needs
+        ), f"publish.needs missing scorecard-gate: {needs}"
+        assert "gaia-eval" in needs, f"publish.needs missing gaia-eval: {needs}"
 
 
 class TestPerfReport:

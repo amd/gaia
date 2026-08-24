@@ -374,7 +374,6 @@ jobs:
           }
           if ("$env:REBASELINE" -eq "true") {
             $gateArgs += "--allow-ctx-mismatch"
-            $gateArgs += "--allow-regression"
           }
           python -m gaia.eval.scorecard_gate @gateArgs
           if ($LASTEXITCODE -ne 0) { throw "scorecard_gate (same-version) failed" }
@@ -388,7 +387,6 @@ jobs:
           if ($PREV) { $gateArgs += @("--baseline-ref", "$PREV") }
           if ("$env:REBASELINE" -eq "true") {
             $gateArgs += "--allow-ctx-mismatch"
-            $gateArgs += "--allow-regression"
           }
           python -m gaia.eval.scorecard_gate @gateArgs
           if ($LASTEXITCODE -ne 0) { throw "scorecard_gate (cross-version) failed" }
