@@ -127,8 +127,19 @@ def measure(scenarios: list[dict]) -> tuple[dict, list[str]]:
         tool_calls.append((float(max(per_turn)) if per_turn else None, sid))
     _worst("max_tool_calls_per_turn", tool_calls)
 
-    # Not produced by the runner's performance_summary yet (plan §2b names the
-    # runner-extension fallback). Recorded as unmeasured — never fabricated.
+    # Recorded as unmeasured — never fabricated. Verified sources, so nobody
+    # spends a day "just plumbing it through" and finds nothing at the far end:
+    #
+    #   cache_hit_ratio — the PRODUCT path has no counter to read. Lemonade
+    #     exposes no prefill/cache field at all, so on the Gemma runner this is
+    #     a missing SOURCE, not a missing pipe. ClaudeProvider does compute real
+    #     numbers (`cache_read_input_tokens` / `cache_creation_input_tokens`,
+    #     providers/claude.py) but they stop at `_last_usage` and the eval's
+    #     per-turn schema carries no cache field. Measuring it therefore needs a
+    #     Lemonade-side counter first, then a judge-schema field — and changing
+    #     that schema is an LLM-affecting change that owes an eval run.
+    #   llm_calls_per_turn — the judge reports the tools it observed, not how
+    #     many times the agent called the model, and no other layer records it.
     for absent in ("min_cache_hit_ratio", "max_llm_calls_per_turn"):
         not_measured.append(absent)
 
