@@ -315,39 +315,48 @@ def capture_skill(
         destination_root.mkdir(parents=True, exist_ok=True)
         if target.exists():
             shutil.rmtree(target)
-        if source_dir is not None:
-            # The WHOLE bundle lands — tools.py/scripts included — so promote
-            # trusts exactly the bytes that were audited and captured.
-            shutil.copytree(source_dir, target)
-            landed = parse_skill_file(target, check_directory_name=False)
-        else:
-            target.mkdir(parents=True)
-            landed = skill
+        # The bundle and its lock entry land together or not at all. The lock
+        # is what marks a capture untrusted, so a bundle on disk WITHOUT one
+        # reads as an ordinary skill and its tools.py would import on the next
+        # load — a half-finished capture must never fail open into a trusted
+        # one. Any failure below removes the directory and re-raises.
+        try:
+            if source_dir is not None:
+                # The WHOLE bundle lands — tools.py/scripts included — so
+                # promote trusts exactly the bytes that were audited.
+                shutil.copytree(source_dir, target)
+                landed = parse_skill_file(target, check_directory_name=False)
+            else:
+                target.mkdir(parents=True)
+                landed = skill
 
-        landed.name = final_name
-        previous_tier = reset_security_tier(landed)
-        landed.write(target / SKILL_FILENAME)
+            landed.name = final_name
+            previous_tier = reset_security_tier(landed)
+            landed.write(target / SKILL_FILENAME)
+
+            lock = SkillLock.load(destination_root)
+            lock.record(
+                LockEntry(
+                    name=final_name,
+                    version=landed.version or UNVERSIONED,
+                    requested="*",
+                    source=SOURCE_CAPTURED,
+                    origin=origin,
+                    claimed_tier=previous_tier,
+                    installed_tier=LOWEST_TIER,
+                    permissions=list(landed.gaia.permissions),
+                    path=str(target),
+                    captured=True,
+                    code_trusted=False,
+                )
+            )
+            lock.save()
+        except Exception:
+            shutil.rmtree(target, ignore_errors=True)
+            raise
 
     has_code = bool(landed.gaia.tools) or (target / "scripts").is_dir()
     deferred = [t.name for t in landed.gaia.tools]
-
-    lock = SkillLock.load(destination_root)
-    lock.record(
-        LockEntry(
-            name=final_name,
-            version=landed.version or UNVERSIONED,
-            requested="*",
-            source=SOURCE_CAPTURED,
-            origin=origin,
-            claimed_tier=previous_tier,
-            installed_tier=LOWEST_TIER,
-            permissions=list(landed.gaia.permissions),
-            path=str(target),
-            captured=True,
-            code_trusted=False,
-        )
-    )
-    lock.save()
     resolver.reload()
 
     review_findings: List[str] = []
@@ -398,16 +407,35 @@ def capture_entry(skill: Skill) -> Optional[LockEntry]:
     return entry
 
 
+def _grants_a_binary(skill: Skill) -> bool:
+    """True when the skill asks for a policied CLI (``shell:execute:<binary>``)."""
+    from gaia.skills.binaries import resolve_binary_policies
+
+    try:
+        return bool(
+            resolve_binary_policies(skill.parsed_permissions(), skill_name=skill.name)
+        )
+    except Exception:  # pylint: disable=broad-exception-caught
+        # An unresolvable policy is decided by the loader's own gate, not here;
+        # for the deferral question treat it as reach so we fail CLOSED.
+        return True
+
+
 def code_is_deferred(skill: Skill) -> bool:
-    """True when this skill's tools must NOT register yet.
+    """True when this skill's executable reach must NOT be granted yet.
 
     A captured skill whose ``code_trusted`` is still false gets its
-    instructions injected but its ``tools.py`` never imported — the deferral
-    ``gaia skill promote`` lifts. Trust is bound to the audited bytes: if the
-    bundle changed since the promote, the code defers again until the human
-    re-promotes what is there now.
+    instructions injected but its ``tools.py`` never imported and its binary
+    grants withheld — the deferral ``gaia skill promote`` lifts. Trust is bound
+    to the audited bytes: if the bundle changed since the promote, it defers
+    again until the human re-promotes what is there now.
+
+    "Reach" is tools OR a binary permission. A skill can declare zero tools and
+    still ask for ``shell:execute:gh``, and an ALLOW-tier subcommand runs with
+    no prompt on the premise that loading the skill was the consent — which is
+    exactly the premise a pasted or fetched skill breaks.
     """
-    if not skill.gaia.tools:
+    if not skill.gaia.tools and not _grants_a_binary(skill):
         return False
     entry = capture_entry(skill)
     if entry is None:
