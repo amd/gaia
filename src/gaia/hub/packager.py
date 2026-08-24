@@ -64,7 +64,7 @@ def _normalize_wheel_stem(dist_name: str) -> str:
     """Return the wheel-escaped distribution name.
 
     PEP 427 escapes runs of ``-_.`` in the distribution name to a single ``_``,
-    so ``gaia-agent-summarize`` becomes ``gaia_agent_summarize`` in the wheel
+    so ``gaia-agent-email`` becomes ``gaia_agent_email`` in the wheel
     filename. We use this to locate the wheel ``python -m build`` produced.
     """
     return re.sub(r"[-_.]+", "_", dist_name).lower()

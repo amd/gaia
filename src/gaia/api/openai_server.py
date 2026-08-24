@@ -265,7 +265,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
         ```
         POST /v1/chat/completions
         {
-            "model": "gaia-code",
+            "model": "gaia",
             "messages": [{"role": "user", "content": "Write hello world"}],
             "stream": false
         }
@@ -275,7 +275,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
         ```
         POST /v1/chat/completions
         {
-            "model": "gaia-code",
+            "model": "gaia",
             "messages": [{"role": "user", "content": "Write hello world"}],
             "stream": true
         }
@@ -647,7 +647,7 @@ async def list_models() -> ModelListResponse:
             "object": "list",
             "data": [
                 {
-                    "id": "gaia-code",
+                    "id": "gaia",
                     "object": "model",
                     "created": 1234567890,
                     "owned_by": "amd-gaia"

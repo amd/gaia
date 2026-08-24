@@ -94,6 +94,13 @@ func TestModelCommandDoesNotShowAsAChatBubble(t *testing.T) {
 
 // The header must name the SPECIFIC model the agent resolved — never a bare
 // backend word — and mark a remote one distinctly from a local one.
+//
+// A remote model is spelled "claude · sonnet-5", derived from the model id,
+// rather than the agent's own "Sonnet 5" label. Both name the model; the id
+// form is used because it is the ONLY form available before the agent's first
+// ping (the launch flag carries an id, not a label — see renderModelChip),
+// and a header that respelled itself the moment the first turn ran would read
+// as the model having changed when nothing did.
 func TestHeaderNamesTheSpecificModelFromTheAgent(t *testing.T) {
 	m, _ := newTestModel(t)
 
@@ -106,7 +113,7 @@ func TestHeaderNamesTheSpecificModelFromTheAgent(t *testing.T) {
 	})
 
 	header := ansi.Strip(m.renderHeader())
-	if !strings.Contains(header, "Sonnet 5") {
+	if !strings.Contains(header, "claude · sonnet-5") {
 		t.Errorf("header must name the specific model, got %q", header)
 	}
 	if strings.HasSuffix(strings.TrimSpace(header), "claude") {
@@ -150,7 +157,7 @@ func TestHeaderUpdatesAfterALiveModelSwitch(t *testing.T) {
 	})
 
 	header := ansi.Strip(m.renderHeader())
-	if !strings.Contains(header, "Opus 5") {
+	if !strings.Contains(header, "claude · opus-5") {
 		t.Errorf("header did not pick up the live switch, got %q", header)
 	}
 	if strings.Contains(header, "Gemma") {

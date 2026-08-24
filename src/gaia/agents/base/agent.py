@@ -18,6 +18,7 @@ import os
 import re
 import subprocess
 import threading
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -197,6 +198,9 @@ class ToolExecutionTimeout(Exception):
 TOOLS_REQUIRING_CONFIRMATION = {
     "run_shell_command",
     "run_cli_command",
+    # Runs a .py file in a subprocess — arbitrary code execution, and unlike
+    # run_shell_command there is no read-only allowlist behind it.
+    "execute_python_file",
     "write_file",
     "write_python_file",
     "edit_file",
@@ -474,6 +478,20 @@ class Agent(abc.ABC):
     # both render paths and the ``_openai_tools`` property.
     _active_tool_filter: Optional[List[str]] = None
 
+    # Re-entrancy guard for tool timing. A tool body may call another tool
+    # (CodeAgent orchestrates that way); only the outermost call is timed.
+    _tool_timing_depth: int = 0
+
+    # Seconds spent waiting on a human confirmation, excluded from tool time.
+    _confirmation_wait_s: float = 0.0
+
+    # Which mixin contributed each system-prompt fragment.
+    _mixin_prompt_origins: "Optional[Dict[str, Any]]" = None
+
+    # Per-turn performance record, live only for the duration of one turn and
+    # only when GAIA_TURN_LOG is set. ``None`` is the off state everywhere.
+    _turn_recorder: Optional[Any] = None
+
     # Skills (#888): lazily built manager + the skills loaded into this agent.
     # Instance-level once set, so one agent's skills never leak into a sibling.
     _skill_manager: Optional[Any] = None
@@ -572,6 +590,19 @@ class Agent(abc.ABC):
     # ``confirmation_required_tools`` — so an agent never has to re-list the
     # generic shell/file-mutation tools. Empty by default.
     CONFIRMATION_REQUIRED_TOOLS: ClassVar[frozenset] = frozenset()
+
+    # ``get_*_system_prompt`` fragments whose text changes during a session.
+    # ``_compose_system_prompt`` emits these LAST so a mid-session change never
+    # invalidates the backend's KV-cache prefix for the static text above them.
+    # Add a name here only if its fragment genuinely varies within one session —
+    # a static fragment listed here just loses its position, harmlessly.
+    VOLATILE_PROMPT_FRAGMENTS: ClassVar[frozenset] = frozenset(
+        {
+            "get_memory_system_prompt",  # changes on any remember()/forget()
+            "get_skills_system_prompt",  # per-turn body selection (#2848)
+            "get_recalled_skills_system_prompt",  # per-turn procedural recall
+        }
+    )
 
     # Declarative per-agent hardware requirement.  Agents that need a
     # minimum tier (e.g., NPU) should set this ClassVar to a
@@ -865,6 +896,12 @@ Do NOT wrap conversational replies in JSON.
                 return [p for p in prompts if "Stable Diffusion" not in p]
         """
         prompts = []
+        # Records fragment text -> producing method name for this pass, so
+        # ``_compose_system_prompt`` can tell volatile fragments from static
+        # ones WITHOUT re-running them (memory's fragment hits the DB). A
+        # subclass override that filters the returned list still works: the
+        # lookup is by text, applied after the filter.
+        origins: Dict[str, str] = {}
 
         # Auto-discover all get_*_system_prompt() methods on this instance.
         # This eliminates the need to hardcode each mixin's prompt method.
@@ -879,6 +916,7 @@ Do NOT wrap conversational replies in JSON.
                     fragment = getattr(self, attr_name)()
                     if fragment:
                         prompts.append(fragment)
+                        origins[fragment] = attr_name
                 except Exception as e:
                     # A raising fragment is dropped from the composed prompt; surface it
                     # so a silently degraded system prompt is diagnosable.
@@ -888,6 +926,7 @@ Do NOT wrap conversational replies in JSON.
                         e,
                     )
 
+        self._mixin_prompt_origins = origins
         return prompts
 
     def _compose_system_prompt(self) -> str:
@@ -909,47 +948,150 @@ Do NOT wrap conversational replies in JSON.
                 ]
                 return "\n\n".join(p for p in parts if p)
         """
-        parts = []
+        fragments = self._get_mixin_prompts()
+        origins = getattr(self, "_mixin_prompt_origins", {})
+        volatile_mixins = [
+            f for f in fragments if origins.get(f) in self.VOLATILE_PROMPT_FRAGMENTS
+        ]
+        static_mixins = [f for f in fragments if f not in volatile_mixins]
 
-        # Add mixin prompts first
-        parts.extend(self._get_mixin_prompts())
+        parts = list(static_mixins)
 
         # Add agent-specific prompt
         custom = self._get_system_prompt()
         if custom:
             parts.append(custom)
 
-        # When a dynamic tool filter is active, the tool block is volatile (it
-        # grows as new tools are selected), so it must come LAST — after the
-        # stable response-format template — to keep the KV-cache prefix warm on
-        # non-expansion turns. With no filter (``None``) we keep the legacy
-        # order (tools before the format template) so the composed prompt stays
-        # byte-identical for every existing agent.
+        # Native tool_calls models receive the full JSON schemas via ``tools=``
+        # (``_openai_tools``). Rendering the one-line text list as well restates
+        # every name, signature and summary the schema already carries — 1,678
+        # duplicate tokens on the flagship's 66-tool registry, on every call.
+        # Same reasoning that already skips ``_response_format_template`` below.
         tool_filter = self._active_tool_filter
         tools_block = None
-        if hasattr(self, "_format_tools_for_prompt"):
+        if not self._uses_native_tool_calls() and hasattr(
+            self, "_format_tools_for_prompt"
+        ):
             tools_description = self._format_tools_for_prompt(filter_to=tool_filter)
             if tools_description:
                 tools_block = f"==== AVAILABLE TOOLS ====\n{tools_description}"
 
+        # With no filter the tool block never changes, so it belongs with the
+        # static text. Under a filter it is volatile (it grows as new tools are
+        # selected) and moves below, after the stable response-format template.
         if tool_filter is None and tools_block is not None:
             parts.append(tools_block)
 
         # Add embedded-JSON response format only for models that don't support
         # native tool_calls. For tool_calling models we pass tools=[] instead,
         # and the model uses OpenAI function-calling format natively.
-        if hasattr(self, "_response_format_template"):
-            from gaia.llm.lemonade_client import is_tool_calling_model
+        if hasattr(self, "_response_format_template") and not (
+            self._uses_native_tool_calls()
+        ):
+            parts.append(self._response_format_template)
 
-            if not getattr(self, "_use_claude", False) and not is_tool_calling_model(
-                getattr(self, "model_id", None)
-            ):
-                parts.append(self._response_format_template)
+        # Volatile last. llama.cpp reuses the KV cache only up to the first
+        # differing token, so anything that changes mid-session — memory after a
+        # remember(), the per-turn skill-body selection, a filtered tool list —
+        # placed ABOVE the static text invalidates all of it. Tail position
+        # keeps the static head cached across turns.
+        parts.extend(volatile_mixins)
 
         if tool_filter is not None and tools_block is not None:
             parts.append(tools_block)
 
         return "\n\n".join(p for p in parts if p)
+
+    # ── per-turn performance recording (dev mode, opt-in) ──────────────────
+
+    def _begin_turn_record(self, user_input: str) -> Optional[Any]:
+        """Start a turn record, or return ``None`` when recording is off.
+
+        Off is the default: it costs one env lookup per turn. When on, the
+        recorder is handed to the chat SDK, which is the single choke point
+        every backend request passes through.
+        """
+        from gaia.agents.base.turn_metrics import TurnRecorder, turn_log_path
+
+        if turn_log_path() is None:
+            return None
+        try:
+            recorder = TurnRecorder(
+                query=user_input,
+                agent_name=type(self).__name__,
+                model_id=getattr(self, "model_id", None),
+                system_prompt=self.system_prompt,
+                tool_schemas=self._openai_tools,
+                tool_names=(
+                    sorted(self._tools_registry)
+                    if self._active_tool_filter is None
+                    else list(self._active_tool_filter)
+                ),
+                skills_active=sorted(getattr(self, "loaded_skills", {}) or {}),
+                history_messages=len(getattr(self, "conversation_history", []) or []),
+            )
+        except Exception as e:  # noqa: BLE001 - diagnostics must not fail a turn
+            logger.warning("could not start turn record: %s", e)
+            return None
+        chat = getattr(self, "chat", None)
+        if chat is not None:
+            chat.turn_recorder = recorder
+            chat.turn_step = 0
+        return recorder
+
+    def _finish_turn_record(
+        self, answer: str, steps_taken: int
+    ) -> Optional[Dict[str, Any]]:
+        """Seal and write the turn record; always detaches it from the SDK.
+
+        Idempotent — a second call in the same turn returns ``None``, because
+        the first cleared ``_turn_recorder``.
+        """
+        recorder = getattr(self, "_turn_recorder", None)
+        chat = getattr(self, "chat", None)
+        if chat is not None:
+            chat.turn_recorder = None
+        self._turn_recorder = None
+        if recorder is None:
+            return None
+        try:
+            record = recorder.finish(answer=answer or "", steps=steps_taken)
+        except Exception as e:  # noqa: BLE001 - diagnostics must not fail a turn
+            logger.warning("could not finish turn record: %s", e)
+            return None
+        from gaia.agents.base.turn_metrics import format_summary
+
+        logger.info("[turn] %s", format_summary(record))
+        return record
+
+    def _publish_turn_metrics(self, record: Optional[Dict[str, Any]]) -> None:
+        """Hand the sealed record to the console, if this console wants one.
+
+        Optional hook: a console that does not define it (a third-party one not
+        deriving from ``OutputHandler``) simply does not receive metrics.
+        """
+        if not record:
+            return
+        hook = getattr(self.console, "print_turn_metrics", None)
+        if hook is None:
+            return
+        try:
+            hook(record)
+        except Exception as e:  # noqa: BLE001 - diagnostics must not fail a turn
+            logger.warning("console rejected turn metrics: %s", e)
+
+    def _uses_native_tool_calls(self) -> bool:
+        """True when this agent's backend takes tools via ``tools=``.
+
+        The single source of truth for "the model gets schemas, not prose" —
+        read by both the tool-block gate and the response-format gate in
+        :meth:`_compose_system_prompt`.
+        """
+        from gaia.llm.lemonade_client import is_tool_calling_model
+
+        return bool(getattr(self, "_use_claude", False)) or is_tool_calling_model(
+            getattr(self, "model_id", None)
+        )
 
     @property
     def system_prompt(self) -> str:
@@ -3017,6 +3159,10 @@ Do NOT wrap conversational replies in JSON.
         it — a triage is five to ten reads — a wall of modals attended, and a
         guaranteed failure unattended.
 
+        Reads only. The same grant also declares which ``gh`` *writes* may be
+        offered to the user, and those answer False here — the grant says a
+        write may be asked about, never that it is already approved.
+
         Duck-typed on purpose. The host that owns a grant implements
         ``skill_grant_covers_call``; an agent with no such mixin has no way to
         answer yes, so its gate stays byte-identical.
@@ -3076,6 +3222,45 @@ Do NOT wrap conversational replies in JSON.
             return
         logger.debug("Tool '%s' reported its own LLM usage: %s", tool_name, usage)
         self._tool_reported_usage.append(usage)
+
+    def _execute_tool_timed(self, tool_name: str, tool_args: Dict[str, Any]) -> Any:
+        """Run :meth:`_execute_tool`, timing it for the turn record.
+
+        Deliberately a separate method the agent loop calls, rather than timing
+        inside ``_execute_tool``: that method is copied onto stand-ins by
+        attribute assignment (``_execute_tool = Agent._execute_tool``) and is
+        read back with ``inspect.getsource`` by the coercion contract test, so
+        splitting it breaks both. Timing here also still covers every exit
+        ``_execute_tool`` has — refusals, unknown names, declined confirmations
+        — so a refused call's latency is never misfiled as agent overhead.
+        """
+        recorder = getattr(self, "_turn_recorder", None)
+        # Only the outermost call is timed. A tool body may call another tool
+        # (CodeAgent's orchestration does); timing both would count the inner
+        # one's seconds twice and push tool_s past the turn's own total.
+        if recorder is None or getattr(self, "_tool_timing_depth", 0):
+            return self._execute_tool(tool_name, tool_args)
+
+        started = time.perf_counter()
+        # Default False, set only on a clean return: a tool that RAISES must not
+        # be recorded ok, and ``_is_error_result(None)`` would say it was.
+        ok = False
+        self._tool_timing_depth = 1
+        try:
+            result = self._execute_tool(tool_name, tool_args)
+            ok = not self._is_error_result(result)
+            return result
+        finally:
+            self._tool_timing_depth = 0
+            try:
+                recorder.record_tool(
+                    step=getattr(getattr(self, "chat", None), "turn_step", 0),
+                    name=tool_name or "<unnamed>",
+                    wall_s=time.perf_counter() - started,
+                    ok=ok,
+                )
+            except Exception as e:  # noqa: BLE001 - never displace a tool error
+                logger.warning("could not record tool timing: %s", e)
 
     def _execute_tool(self, tool_name: str, tool_args: Dict[str, Any]) -> Any:
         """
@@ -3139,10 +3324,10 @@ Do NOT wrap conversational replies in JSON.
                 elif candidates:
                     err = "Unknown tool name. Use one of: " f"{', '.join(candidates)}."
                 else:
-                    err = (
-                        "Unknown tool name. Use only tools listed in your "
-                        "AVAILABLE TOOLS section."
-                    )
+                    # Native tool-calling models get schemas via ``tools=`` and
+                    # no longer receive an AVAILABLE TOOLS section, so naming it
+                    # here would point them at something that isn't there.
+                    err = "Unknown tool name. Use only the tools you were given."
                 logger.error(err)
                 return {"status": "error", "error": err}
 
@@ -4162,10 +4347,16 @@ Do NOT wrap conversational replies in JSON.
         """
         ns_id = self._namespaced_agent_id()
         identity_ctx = self._agent_identity_context(ns_id)
-        if identity_ctx is None:
-            return self._process_query_impl(user_input, max_steps, trace, filename)
-        with identity_ctx:
-            return self._process_query_impl(user_input, max_steps, trace, filename)
+        try:
+            if identity_ctx is None:
+                return self._process_query_impl(user_input, max_steps, trace, filename)
+            with identity_ctx:
+                return self._process_query_impl(user_input, max_steps, trace, filename)
+        finally:
+            # The impl re-raises on purpose (the wrong-ctx reload its caller
+            # retries). A recorder left attached would fold the next turn's
+            # calls into this one. Idempotent when the turn already sealed.
+            self._finish_turn_record("", 0)
 
     def _process_query_impl(
         self,
@@ -4175,8 +4366,6 @@ Do NOT wrap conversational replies in JSON.
         filename: str = None,
     ) -> Dict[str, Any]:
         """Inner implementation of ``process_query`` — see public method docstring."""
-        import time
-
         start_time = time.time()  # Track query processing start time
 
         # Store query for error context (used in _execute_tool for error formatting)
@@ -4196,6 +4385,13 @@ Do NOT wrap conversational replies in JSON.
         conversation = []
         # Build messages array for chat completions
         messages = []
+
+        # Per-turn performance record (dev mode; no-op unless GAIA_TURN_LOG is
+        # set). Built here so it spans the whole turn — the total it reports is
+        # submit-to-answer, which is what the user actually waits through.
+        self._turn_recorder = self._begin_turn_record(user_input)
+        # Set by whichever exit seals the record; read by the tail below.
+        turn_record: Optional[Dict[str, Any]] = None
 
         # Prepopulate with conversation history if available (for session persistence)
         if hasattr(self, "conversation_history") and self.conversation_history:
@@ -4292,6 +4488,8 @@ Do NOT wrap conversational replies in JSON.
             # In chat mode, we'll just add to messages array
             steps_taken += 1
             logger.debug(f"Step {steps_taken}/{steps_limit}")
+            if self._turn_recorder is not None and self.chat is not None:
+                self.chat.turn_step = steps_taken
 
             # Display current step
             self.console.print_step_header(steps_taken, steps_limit)
@@ -4353,7 +4551,7 @@ Do NOT wrap conversational replies in JSON.
                     self.console.start_progress(f"Executing {tool_name}")
 
                     # Execute the tool
-                    tool_result = self._execute_tool(tool_name, tool_args)
+                    tool_result = self._execute_tool_timed(tool_name, tool_args)
 
                     # Stop progress indicator
                     self.console.stop_progress()
@@ -5364,7 +5562,7 @@ Do NOT wrap conversational replies in JSON.
                         break
 
                     # Execute
-                    tool_result = self._execute_tool(tool_name, tool_args)
+                    tool_result = self._execute_tool_timed(tool_name, tool_args)
                     self.console.stop_progress()
 
                     # Result-based dedup for query family tools
@@ -5580,7 +5778,7 @@ Do NOT wrap conversational replies in JSON.
                     break
 
                 # Execute the tool
-                tool_result = self._execute_tool(tool_name, tool_args)
+                tool_result = self._execute_tool_timed(tool_name, tool_args)
 
                 # Stop progress indicator
                 self.console.stop_progress()
@@ -5847,7 +6045,7 @@ Do NOT wrap conversational replies in JSON.
                         conversation.append(
                             {"role": "assistant", "content": _forced_tool_call}
                         )
-                        _forced_result = self._execute_tool(
+                        _forced_result = self._execute_tool_timed(
                             "query_specific_file",
                             {"file_path": _last_indexed_file, "query": _forced_query},
                         )
@@ -6120,6 +6318,11 @@ Do NOT wrap conversational replies in JSON.
                 _pre_input_tokens, pre_output_tokens = _sum_conversation_tokens(
                     conversation, self._tool_reported_usage
                 )
+                # Sealed before the answer prints: total_s must mean "until it
+                # was on screen", and the console folds the record into that
+                # same event.
+                turn_record = self._finish_turn_record(final_answer, steps_taken)
+                self._publish_turn_metrics(turn_record)
                 self.console.print_final_answer(
                     final_answer,
                     streaming=self.streaming,
@@ -6182,6 +6385,8 @@ Do NOT wrap conversational replies in JSON.
                 "error_count": len(self.error_history),
                 "error_history": self.error_history,
             }
+            # Returns before the tail seal below.
+            self._finish_turn_record("", steps_taken)
             return self.last_result
 
         # Print completion message
@@ -6235,6 +6440,14 @@ Do NOT wrap conversational replies in JSON.
             result["output_file"] = file_path
 
         logger.debug(f"Query processing complete: {result}")
+
+        # Catches the exits that never printed an answer (max steps).
+        turn_record = (
+            self._finish_turn_record(result.get("result", ""), steps_taken)
+            or turn_record
+        )
+        if turn_record is not None:
+            result["turn_metrics"] = turn_record
 
         # Store the result internally
         self.last_result = result

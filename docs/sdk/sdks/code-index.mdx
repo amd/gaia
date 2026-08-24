@@ -9,10 +9,10 @@ icon: "magnifying-glass-code"
 </Info>
 
 <Note>
-  **Looking for usage docs?** See the [Code Index guide](/guides/code-index) for CLI walkthroughs and architecture overview.
+  **Looking for usage docs?** See the [Code Index guide](/guides/code-index) for the flagship-agent skill walkthrough and architecture overview.
 </Note>
 
-`CodeIndexSDK` indexes **repository files** (no git history, no PRs) using Lemonade Server embeddings and FAISS for vector similarity search. The SDK is exposed to agents via `CodeIndexToolsMixin`, which is already composed into the built-in `CodeAgent`.
+`CodeIndexSDK` indexes **repository files** (no git history, no PRs) using Lemonade Server embeddings and FAISS for vector similarity search. The SDK is exposed to agents via `CodeIndexToolsMixin`, which is already composed into the flagship [`GaiaAgent`](/guides/gaia).
 
 ## Installation
 
@@ -181,7 +181,7 @@ The mixin lives at `gaia.agents.tools.code_index_tools.CodeIndexToolsMixin`. It 
 | `get_index_status()` | Report indexed state, chunk counts, embedding model, cache path |
 | `clear_code_index()` | Remove the cached index |
 
-`CodeAgent` already composes this mixin, so `gaia-code index chat` and any `CodeAgent` instance get the tools for free.
+`GaiaAgent` already composes this mixin, so the flagship agent's `coding` skill gets the tools for free — see the [Code Index guide](/guides/code-index#using-it-from-the-flagship-agent).
 
 ### Composing onto a custom Python agent
 

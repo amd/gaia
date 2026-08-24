@@ -24,6 +24,7 @@ from typing import Any, ClassVar, Dict, List, Optional
 from gaia.agents.base.console import OutputHandler
 from gaia.agents.base.tool_grants import grant_scope
 from gaia.agents.base.tools import get_tool_display_label, get_tool_metadata
+from gaia.agents.base.turn_metrics import turn_log_path
 from gaia.ui.event_narration import DEBUG_CHANNEL, format_count
 
 logger = logging.getLogger(__name__)
@@ -241,6 +242,9 @@ class SSEOutputHandler(OutputHandler):
         # cancel path can force a blocked read to error out by closing it from
         # another thread. None outside an active email-relay turn.
         self.active_relay_response: Optional[Any] = None
+        # Sealed turn record for the turn in flight, stashed by
+        # print_turn_metrics and consumed by the next print_final_answer.
+        self._turn_metrics: Optional[Dict[str, Any]] = None
 
     def _emit(self, event: Dict[str, Any]):
         """Push an event to the queue for SSE delivery."""
@@ -585,6 +589,10 @@ class SSEOutputHandler(OutputHandler):
 
     # === Completion Methods ===
 
+    def print_turn_metrics(self, record: Dict[str, Any]):
+        """Stash the sealed turn record for the answer event that follows."""
+        self._turn_metrics = record
+
     def print_final_answer(
         self,
         answer: str,
@@ -628,6 +636,11 @@ class SSEOutputHandler(OutputHandler):
             and ttft_seconds > 0
         ):
             event["ttft"] = round(ttft_seconds, 3)
+        # Dev-mode only. Gated on the same env var that produced the record, so
+        # an ordinary turn's payload stays byte-identical to before this existed.
+        record, self._turn_metrics = self._turn_metrics, None
+        if record is not None and turn_log_path() is not None:
+            event["metrics"] = record
         self._emit(event)
 
     def print_repeated_tool_warning(self):

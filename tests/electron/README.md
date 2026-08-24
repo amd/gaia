@@ -6,7 +6,7 @@ This directory contains automated tests for GAIA Electron applications that vali
 
 The test suite validates multiple aspects to catch breakage from Dependabot updates:
 
-### Structure Tests (`test_jira_app.js`, `test_example_app.js`)
+### Structure Tests (`test_electron_example_app.js`)
 - **App Configuration**: Validates app.config.json and package.json files
 - **App Structure**: Ensures required files and directories exist  
 - **Dependencies**: Verifies all required dependencies are present
@@ -47,7 +47,6 @@ tests/electron/
 ├── setup.js                   # Jest configuration and global test utilities
 ├── mocks/
 │   └── electron.js           # Mock Electron APIs (for future unit tests)
-├── test_jira_app.js          # Jira app structure tests (18 tests)
 ├── test_example_app.js       # Example app structure tests (11 tests)
 └── test_functional.js        # Functional validation tests (11 tests)
 ```
@@ -85,10 +84,7 @@ npm run test:watch
 
 ```bash
 # Run specific test file
-npm test -- test_jira_app.js
-
-# Run both app tests
-npm test -- test_jira_app.js test_example_app.js
+npm test -- test_electron_example_app.js
 ```
 
 ## GitHub Actions Integration
@@ -211,7 +207,7 @@ Add to `.vscode/launch.json`:
 
 Tests run automatically when Dependabot creates PRs for:
 - Electron framework dependencies (`src/gaia/electron/package.json`)
-- App dependencies (e.g., `src/gaia/apps/jira/webui/package.json`)
+- App dependencies (e.g., `src/gaia/apps/example/webui/package.json`)
 
 If tests pass, PRs can be automatically merged (requires workflow configuration).
 

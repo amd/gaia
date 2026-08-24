@@ -153,6 +153,23 @@ class GaiaAgentConfig(ChatAgentConfig):
     dynamic_skills: bool = True
     dynamic_skills_threshold: float = DEFAULT_SKILL_THRESHOLD
 
+    # Per-turn semantic tool selection. On by default for this agent
+    # specifically: breadth is its whole point, and breadth is what makes the
+    # un-trimmed native ``tools=`` payload cost ~10.2K tiktoken tokens on every
+    # LLM call of a 2-5 call ReAct turn — 60% of the fixed prefill a 4B model
+    # re-reads each step. ChatAgent keeps dynamic_tools=False; no other profile
+    # pays a 66-tool registry. Overridable via GAIA_DYNAMIC_TOOLS.
+    dynamic_tools: bool = True
+
+    # 10 CORE (FULL_CORE_TOOLS) + 16 dynamic slots. The inherited 14 was sized
+    # for the doc profile's 11 CORE, leaving 3 slots — less than one 6-member
+    # bundle, so the flagship would truncate a cohesion group mid-pull instead
+    # of loading it. Swept offline against nine representative queries: 22 cut
+    # the web bundle in half on a research question, 26 lands every matched
+    # bundle whole, and 30 buys nothing further. Costs ~4.2K tiktoken tokens of
+    # tools= against 10.5K for the whole registry.
+    dynamic_tools_max: int = 26
+
     # Image generation stays off: it pulls a second resident model, and evicting
     # the chat model to draw a picture is not a trade a document agent should
     # make silently.

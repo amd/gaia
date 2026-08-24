@@ -12,6 +12,10 @@ tool registry **exactly**, in both directions:
 
 This test makes either drift a CI failure, so adding a doc-profile tool forces a
 conscious bundling decision in the same change.
+
+The matching guard for the ``full`` profile lives in
+``hub/agents/gaia/python/tests/test_full_tool_bundles.py`` — that registry is the
+flagship's, and 11 of its tools come from mixins only GaiaAgent composes.
 """
 
 from __future__ import annotations
@@ -22,7 +26,11 @@ import pytest
 # whole module when a framework-only env lacks it.
 pytest.importorskip("gaia_agent_chat")
 
-from gaia_agent_chat.tool_bundles import DOC_BUNDLES, DOC_CORE_TOOLS  # noqa: E402
+from gaia_agent_chat.tool_bundles import (  # noqa: E402
+    DOC_BUNDLES,
+    DOC_CORE_TOOLS,
+    PROFILE_TOOL_CONFIGS,
+)
 
 from gaia.eval.tool_cost import build_doc_agent_skeleton  # noqa: E402
 
@@ -72,3 +80,19 @@ def test_core_is_subset_of_bundle_union():
 def test_bundles_have_unique_names():
     names = [b.name for b in DOC_BUNDLES]
     assert len(names) == len(set(names)), f"duplicate bundle names: {names}"
+
+
+def test_only_doc_and_full_get_a_loader():
+    """Every other profile stays on the untouched full-registry path.
+
+    Adding a profile here without authoring its CORE/bundle pair would hand it
+    the wrong tool set, so the map is pinned rather than merely documented.
+    """
+    assert set(PROFILE_TOOL_CONFIGS) == {"doc", "full"}
+
+
+def test_doc_profile_is_wired_to_the_doc_config():
+    cfg = PROFILE_TOOL_CONFIGS["doc"]
+    assert cfg.core is DOC_CORE_TOOLS
+    assert cfg.bundles is DOC_BUNDLES
+    assert not cfg.optional, "the doc registry has no absent-by-construction tools"

@@ -466,7 +466,6 @@ lemonade-server serve              # Start LLM backend
 gaia llm "Hello"                   # Test LLM
 gaia chat                          # Interactive chat
 gaia chat --ui                     # Agent UI (browser-based)
-gaia-code                          # Code agent
 ```
 
 ### Agent UI Development
@@ -490,15 +489,13 @@ gaia/
 │   │   ├── builder/    # in-core agent (ChatAgent moved to hub/agents/chat/python/)
 │   │   ├── code_index/ # CodeIndexToolsMixin — semantic code search (FAISS)
 │   │   └── registry.py # Agent registry + KNOWN_TOOLS map
-│   │   #   Packaged agents (code, analyst, browser, fileio, email, summarize, jira,
-│   │   #   blender, docker, sd, emr, connectors-demo, docqa, routing) live in hub/agents/<id>/python/.
+│   │   #   Packaged agents live in hub/agents/<id>/python/: gaia (flagship),
+│   │   #   chat (its base class), email. Per-task agents were collapsed into
+│   │   #   skills under hub/skills/.
 │   ├── api/            # OpenAI-compatible REST API server
 │   ├── apps/           # Standalone applications
 │   │   ├── webui/      # Agent UI frontend (React/Vite/Electron)
-│   │   ├── jira/       # Jira standalone app
 │   │   ├── llm/        # LLM standalone app
-│   │   ├── summarize/  # Document summarization app
-│   │   ├── docker/     # Docker standalone app
 │   │   ├── example/    # Reference/starter app
 │   │   └── _shared/    # Shared assets for apps
 │   ├── audio/          # Audio processing (Whisper ASR, Kokoro TTS)
@@ -536,7 +533,6 @@ gaia/
 │   └── test_*.py       # Top-level feature tests (sdk, api, chat, code, rag, eval…)
 ├── scripts/            # Build, install, and launch scripts
 ├── docs/               # Documentation (MDX format)
-├── workshop/           # Tutorial materials
 └── .github/workflows/  # CI/CD pipelines
 ```
 
@@ -549,9 +545,7 @@ Defined in [`setup.py`](setup.py) under `console_scripts`:
 | `gaia` / `gaia-cli` | `gaia.cli:main` | Main CLI — all `gaia <subcommand>` |
 | `gaia-mcp` | `gaia.mcp.mcp_bridge:main` | Standalone MCP bridge binary |
 
-The `gaia-emr` console script now ships with the standalone `gaia-agent-emr` hub package (`hub/agents/emr/python/`), not the core wheel.
-
-`gaia-code` is no longer a core `console_scripts` entry — it ships with the standalone `gaia-agent-code` wheel (`hub/agents/code/python/`, entry point `gaia_agent_code.cli:main`).
+`gaia` and `gaia-mcp` are the only console scripts the core wheel ships.
 
 ## Architecture
 
@@ -585,24 +579,18 @@ is set in its own `agent.py` (see [Default Models](#default-models)).
 
 | Agent | Description |
 |-------|-------------|
-| **ChatAgent** | Multi-profile conversation (chat/doc/file) with RAG — hub (`chat/`) |
+| **GaiaAgent** | The flagship — conversation, documents, data, web, memory, skills — hub (`gaia/`) |
+| **ChatAgent** | Multi-profile conversation (chat/doc/file) with RAG; the flagship's base class — hub (`chat/`) |
+| **EmailTriageAgent** | Email triage for Gmail (local inference; needs the Google connector) — hub (`email/`) |
 | **BuilderAgent** | Scaffolds new agents from templates — in-core (`builder/`) |
-| **DocumentQAAgent** | Standalone document Q&A with RAG — hub (`docqa/`) |
-| **RoutingAgent** | Intelligent agent selection (`AGENT_ROUTING_MODEL`) — hub (`routing/`) |
-| **CodeAgent** | Code generation with orchestration |
-| **AnalystAgent** | Structured data analysis (CSV/Excel, scratchpad SQL) |
-| **BrowserAgent** | Web research — search, fetch pages, download |
-| **FileIOAgent** | File read/write/edit operations |
-| **EmailTriageAgent** | Email triage for Gmail (local inference; needs the Google connector) |
-| **SummarizerAgent** | Document/text summarization |
-| **JiraAgent** | Jira issue management |
-| **BlenderAgent** | 3D scene automation |
-| **DockerAgent** | Container management |
-| **SDAgent** | Stable Diffusion image generation |
-| **MedicalIntakeAgent** | Medical form processing (VLM) — `hub/agents/emr/python/` |
-| **ConnectorsDemoAgent** | Per-agent connector activation demo |
 
-`gaia browse` and `gaia analyze` invoke BrowserAgent and AnalystAgent (see [`src/gaia/cli.py`](src/gaia/cli.py)); `gaia telegram` is a messaging adapter, not an agent. DocumentQAAgent, FileIOAgent, and ConnectorsDemoAgent are internal building-block agents (not standalone CLI commands). DocumentQAAgent and RoutingAgent now ship as standalone `gaia-agent-docqa` / `gaia-agent-routing` hub wheels (`hub/agents/`).
+Per-task agents (code, analyst, browser, fileio, docqa, doc-search, summarize, jira,
+docker, blender, sd, emr, routing) were **deleted**: their capability is the flagship's
+tool surface driven by a `SKILL.md` in [`hub/skills/`](hub/skills/). Adding a capability
+means writing a skill, not shipping an agent. `hub/agents/{hello-world,word-count,
+connectors-demo}` remain as teaching templates and are not catalog agents.
+
+`gaia telegram` is a messaging adapter, not an agent.
 
 ### Agent Registry & Tool Mixins
 
@@ -627,9 +615,8 @@ When adding a new tool mixin, register it in `KNOWN_TOOLS` so other agents can c
 
 ### Default Models
 - `gaia llm` default: `Gemma-4-E4B-it-GGUF` (`DEFAULT_MODEL_NAME` in [`src/gaia/llm/lemonade_client.py`](src/gaia/llm/lemonade_client.py)). ChatAgent and EmailTriageAgent explicitly use it too.
-- Agents that leave `model_id` unset fall back to `Gemma-4-E4B-it-GGUF` — the base `Agent.__init__` default (`model_id or DEFAULT_MODEL_NAME`). That covers Analyst, Browser, FileIO, plus Code/Builder/Jira/Docker/Routing/DocumentQA/Blender/doc-search/connectors-demo. Every agent shares one model id so switching agents never evicts and cold-reloads the resident model.
+- Agents that leave `model_id` unset fall back to `Gemma-4-E4B-it-GGUF` — the base `Agent.__init__` default (`model_id or DEFAULT_MODEL_NAME`). That covers GaiaAgent, ChatAgent, BuilderAgent, and the example templates. Every agent shares one model id so switching agents never evicts and cold-reloads the resident model.
 - Context window is pinned per device profile, not per agent: `GPU_CTX_SIZE` (65536, GPU/CPU) and `NPU_CTX_SIZE` (32768, the FLM ceiling) in [`src/gaia/llm/lemonade_client.py`](src/gaia/llm/lemonade_client.py). A machine runs one profile, so exactly one `(model, ctx_size)` pair is ever resident.
-- Summarizer: `Qwen3-4B-Instruct-2507-GGUF`
 - Vision: `Gemma-4-E4B-it-GGUF` is the default VLM (VLM mixin + EMR agent); `Qwen3-VL-4B-Instruct-GGUF` also supported
 - Image generation (SD): `SDXL-Turbo`
 
@@ -644,20 +631,13 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 - `gaia talk` - Voice interaction
 - `gaia prompt "<text>"` - Single prompt to LLM (with system-prompt support)
 - `gaia llm "<text>"` - Simple LLM queries
-- `gaia browse` - Web research (search, fetch pages, download)
 - `gaia knowledge {search|extract|usage}` - Web knowledge via Tavily (search/extract)
-- `gaia analyze` - Structured data analysis with scratchpad tables
 - `gaia email` - Email triage for Gmail (local inference; needs the Google connector)
-- `gaia summarize` - Document summarization
-- `gaia blender` - Blender 3D agent
-- `gaia sd` - Stable Diffusion image generation
-- `gaia jira` - Jira integration
-- `gaia docker` - Docker management
 
 **Servers & infrastructure:**
 - `gaia daemon` - The headless daemon (one machine-wide custody process; supervises sidecar agents)
 - `gaia api` - OpenAI-compatible API server
-- `gaia mcp {start|stop|status|test|agent|docker|serve|list|tools|test-client}` - MCP bridge (add/remove moved to the connectors framework, #977)
+- `gaia mcp {start|stop|status|test|agent|serve|list|tools|test-client}` - MCP bridge (add/remove moved to the connectors framework, #977)
 - `gaia schedule {add|list|show|remove|pause|resume|run|daemon}` - Run a skill or prompt on a cron schedule
 - `gaia telegram {start|stop|status}` - Telegram messaging adapter
 - `gaia connectors` - Manage connectors (Google/GitHub OAuth, MCP servers) and per-agent grants
@@ -685,8 +665,6 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 - `gaia perf-vis` - Visualize performance results
 
 **Standalone binaries** (separate `console_scripts`, not subcommands):
-- `gaia-code` - CodeAgent entry, from the `gaia-agent-code` wheel (`hub/agents/code/python/gaia_agent_code/cli.py`)
-- `gaia-emr` - Medical intake entry (ships with the `gaia-agent-emr` hub package, `hub/agents/emr/python/gaia_agent_emr/cli.py`)
 - `gaia-mcp` - Standalone MCP bridge binary
 
 ## Documentation Index
@@ -694,7 +672,7 @@ All commands are registered in [`src/gaia/cli.py`](src/gaia/cli.py). Run `gaia -
 All docs are `.mdx` (Mintlify). [`docs/docs.json`](docs/docs.json) is the authoritative
 navigation — consult it rather than a hand-maintained copy here. Where things live:
 
-- **Guides** (`docs/guides/`) — one per feature: chat, agent-ui, browse, analyze, email, talk, code, blender, jira, docker, routing, emr, memory, install, custom-agent, hardware-advisor, npu.
+- **Guides** (`docs/guides/`) — one per feature: chat, agent-ui, email, talk, memory, install, custom-agent, hardware-advisor, npu.
 - **SDK** (`docs/sdk/`) — `core/` (agent-system, tools, console), `sdks/` (chat, agent-ui, rag, llm, vlm, audio), `infrastructure/` (mcp, api-server).
 - **Reference** (`docs/reference/`) — cli, dev, faq, troubleshooting, eval.
 - **Specs** (`docs/spec/`), **Deployment** (`docs/deployment/`), **Integrations** (`docs/integrations/`).
@@ -739,7 +717,7 @@ scoring. Don't fork it into another file.
 
 ## Claude Agents
 
-Specialized agents live in `.claude/agents/` (23 total). Each agent file is the authoritative source for its scope, when-to-use / when-NOT-to-use triggers, and conventions — the summaries below are a pointer, not a replacement.
+Specialized agents live in `.claude/agents/` (20 total). Each agent file is the authoritative source for its scope, when-to-use / when-NOT-to-use triggers, and conventions — the summaries below are a pointer, not a replacement.
 
 ### Development
 - **gaia-agent-builder** — Creating a new GAIA agent (Python class). Not for tuning an existing agent's prompt or adding a single tool.
@@ -757,15 +735,12 @@ Specialized agents live in `.claude/agents/` (23 total). Each agent file is the 
 
 ### Specialists
 - **rag-specialist** — `src/gaia/rag/` and the `rag` tool mixin: chunking, embeddings, retrieval quality.
-- **jira-specialist** — `JiraAgent`, JQL templates, Atlassian integration.
-- **blender-specialist** — `BlenderAgent` and the Blender MCP server/client pair.
 - **voice-engineer** — Whisper ASR, Kokoro TTS, Talk SDK, real-time audio.
 - **lemonade-specialist** — Lemonade Server / provider adapter, NPU/GPU optimisation, model selection.
 - **prompt-engineer** — System prompts, tool docstrings, eval-judge prompts inside GAIA.
 
 ### Infrastructure
 - **frontend-developer** — React/Vite/Electron Agent UI and standalone apps.
-- **docker-specialist** — Dockerfiles, compose, and the `DockerAgent`.
 - **github-actions-specialist** — `.github/workflows/` authoring and debugging.
 - **github-issues-specialist** — Agent-ready issues/PRs, `AGENTS.md`, repo setup for AI agents.
 - **release-manager** — Version bumps, changelog, publish/PyPI/installer workflows.
