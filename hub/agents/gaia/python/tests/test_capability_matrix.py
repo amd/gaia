@@ -7,7 +7,7 @@ agent-loop tools, REST verbs, eval coverage) and renders a committed
 ``CAPABILITY_MATRIX.md``. This suite is the contract it satisfies:
 
 - AC1: the committed matrix doc is byte-identical to a freshly regenerated one.
-- AC2: ``tools_count`` (67) is identical across ``gaia-agent.yaml``,
+- AC2: ``tools_count`` (68) is identical across ``gaia-agent.yaml``,
   ``gaia_agent.build_gaia()``, and the AST-derived bundle union.
 - AC3: every exposed REST functional op is annotated with an eval suite name or
   the "no quality eval" sentinel — closed-set, bidirectional.
@@ -58,7 +58,7 @@ _spec.loader.exec_module(capability_matrix)
 # the flagship eval dataset §1/§3).
 # ---------------------------------------------------------------------------
 
-_EXPECTED_TOOLS_TOTAL = 67
+_EXPECTED_TOOLS_TOTAL = 68
 _EXPECTED_CORE_COUNT = 10
 _EXPECTED_BUNDLE_COUNT = 18
 
@@ -67,6 +67,7 @@ _EXPECTED_SKILL_LIBRARY_TOOLS = frozenset(
         "list_skills",
         "search_skill_hub",
         "install_skill",
+        "capture_skill",
         "remove_skill",
         "load_skill",
         "unload_skill",
@@ -240,6 +241,7 @@ def test_eval_surface_state_is_derived_not_asserted(matrix):
         "gaia_memory",
         "gaia_rag",
         "gaia_shell",
+        "gaia_skills_capture",
         "gaia_skills_lifecycle",
         "gaia_skills_tasks",
         "gaia_tool_selection",

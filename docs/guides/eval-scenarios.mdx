@@ -153,6 +153,7 @@ canaries; `tui` marks the capability-ladder subset; and
 | `gaia_web` | Fixture-server page fetch/download, honest 404 handling, one `live` search canary |
 | `gaia_shell` | Shell execution and the gh permission gate: ALLOW runs, CONFIRM-tier writes execute under auto-approve with the outcome asserted (modal semantics live in the T1/T2/TUI lanes), REFUSE dies in prose on any transport, refusals reported honestly |
 | `gaia_skills_lifecycle` | list/load/unload persistence, hub search/install, unsigned-install refusal, list-before-claiming-unavailable |
+| `gaia_skills_capture` | `capture_skill` from pasted text / fixture URL / staged folder; code-inert honesty (tools deferred until `gaia skill promote`); audit-BLOCK refusal of a hostile paste |
 | `gaia_skills_tasks` | Judged task quality for every starter skill (github-triage through coding) against pinned fixtures |
 | `gaia_honesty` | The gaia-voice floor: failed tools reported failed, empty results empty, no claimed work, no fabricated triage, checkable claims checked |
 | `gaia_tool_selection` | Bundle routing: web vs data vs RAG vs memory per turn, and restraint when no tool is needed |
