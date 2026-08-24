@@ -378,6 +378,13 @@ FULL_BUNDLES = [
         description="Analyze images and answer questions about them (VLM).",
     ),
     ToolBundle(
+        name="image_gen",
+        members=frozenset(
+            {"generate_image", "list_sd_models", "get_generation_history"}
+        ),
+        description="Generate images from a text prompt (Stable Diffusion).",
+    ),
+    ToolBundle(
         name="memory",
         members=frozenset(
             {
@@ -399,7 +406,7 @@ FULL_BUNDLES = [
 
 # Bundle members a healthy ``full`` registry may legitimately lack. Handed to
 # ToolLoader as ``optional_tools`` so ``validate_registry`` tolerates exactly
-# these and still fails loudly on a typo or a deleted tool. Three structural
+# these and still fails loudly on a typo or a deleted tool. Four structural
 # reasons, not "it might be missing, who knows":
 #
 # 1. Environment-conditional registration -- ``search_documentation`` needs npx
@@ -412,6 +419,8 @@ FULL_BUNDLES = [
 #    a degraded-but-running agent has a store and no memory tools. Selection
 #    already skips CORE names absent from the registry; without this, validation
 #    turned that survivable state into a hard ValueError on the first turn.
+# 4. Config-gated registration -- the SD tools register only under
+#    ``enable_sd_tools``, which only GaiaAgentConfig turns on.
 #
 # The CI drift guard checks the other direction against the flagship registry,
 # where every one of these IS present, so a rename still fails the build.
@@ -434,6 +443,9 @@ FULL_OPTIONAL_TOOLS = frozenset(
         "search_skill_hub",
         "install_skill",
         "remove_skill",
+        "generate_image",
+        "list_sd_models",
+        "get_generation_history",
     }
 )
 

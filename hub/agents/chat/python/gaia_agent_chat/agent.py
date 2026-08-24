@@ -750,12 +750,17 @@ class ChatAgent(
         return super()._post_process_tool_result(tool_name, _tool_args, tool_result)
 
     def _get_mixin_prompts(self) -> list[str]:
-        """Auto-discover mixin prompts, but exclude SD unless actually initialized."""
-        prompts = super()._get_mixin_prompts()
-        # Remove SD prompt if SD was not explicitly initialized (saves ~1000 tokens)
-        if not hasattr(self, "sd_default_model"):
-            prompts = [p for p in prompts if "Stable Diffusion" not in p]
-        return prompts
+        """Auto-discover mixin prompts, minus SD's.
+
+        ``SDToolsMixin.get_sd_system_prompt`` opens with "You are an expert
+        image generation assistant" and runs ~5K chars. It was written for the
+        standalone SD agent, where that persona was the whole job. Auto-
+        discovery pulls it in for any class composing the mixin, so on a
+        general-purpose agent it front-loads the prompt with an identity that
+        is wrong for every other turn. The procedure lives in the ``image-gen``
+        skill instead, which renders only when a turn calls for it.
+        """
+        return [p for p in super()._get_mixin_prompts() if "Stable Diffusion" not in p]
 
     def _get_system_prompt(self) -> str:
         """Generate the system prompt for the Chat Agent."""
@@ -1477,12 +1482,26 @@ No documents are currently indexed.
         # Only registered when explicitly enabled via config.enable_sd_tools=True.
         # Off by default to prevent image generation being called for document Q&A.
         if getattr(self.config, "enable_sd_tools", False):
+            from gaia.config import GAIA_CONFIG_DIR
+
+            # Absolute, under the user's home. The mixin default is relative to
+            # cwd, which for a daemon-launched sidecar is the package directory.
+            sd_output_dir = GAIA_CONFIG_DIR / "cache" / "sd" / "images"
             try:
-                self.init_sd()
-                logger.debug("SD tools registered (generate_image, list_sd_models)")
-            except Exception as _sd_err:
+                self.init_sd(output_dir=str(sd_output_dir))
                 logger.debug(
-                    "SD tools not available (SD model not loaded): %s", _sd_err
+                    "SD tools registered (generate_image, list_sd_models, "
+                    "get_generation_history), output=%s",
+                    sd_output_dir,
+                )
+            except Exception as _sd_err:
+                # Not debug: the caller explicitly asked for these tools, so
+                # losing them must leave a reason in the log.
+                logger.warning(
+                    "SD tools requested but registration failed — image "
+                    "generation will be unavailable: %s",
+                    _sd_err,
+                    exc_info=True,
                 )
 
         # ── Phase 3: Web & System tools ──────────────────────────────────────────
