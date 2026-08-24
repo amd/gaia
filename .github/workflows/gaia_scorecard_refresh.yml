@@ -1,0 +1,427 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# Gaia agent eval-scorecard refresh + regression gate (dispatch-only).
+#
+# Answers "how does a change to the flagship keep the published scorecard
+# honest?": re-run the REAL judged eval over every gaia_* category on the
+# self-hosted Lemonade runner, regenerate hub/agents/gaia/npm/SCORECARD.md via
+# the gen_scorecard adapter, then either commit a refreshed card or reject a
+# regressed/sub-bar one. Mirrors email_scorecard_refresh.yml's guards:
+#
+#   - NO auto-commit on main (workflow_dispatch has no branches: restriction;
+#     a careless dispatch against main would otherwise push straight to it).
+#   - Fail-fast BASIS guard (in `pre`, before any eval spend): a run whose
+#     ctx_size does not match the committed card's recipe.environment.ctx_size
+#     stamp fails immediately — unless rebaseline=true with a required
+#     rebaseline_reason marks the basis change deliberate. THE FIRST RUNNER
+#     RUN IS EXACTLY THAT CASE: the committed card is the local Haiku
+#     harness-validation card (ctx=200000, model=claude-haiku-4-5), so the
+#     first Gemma refresh must pass rebaseline=true with a reason like
+#     "first Gemma runner baseline replacing the Haiku harness-validation
+#     card". After that, refreshes compare ctx-to-ctx.
+#   - Same-version regression check via gaia.eval.scorecard_gate
+#     --baseline-file (variance-aware, ctx-comparability-aware — never
+#     hand-roll this comparison), and a best-effort cross-version check vs the
+#     prior agent-pkg-gaia-* tag via --baseline-ref.
+#
+# The quality/perf gate manifests under tests/fixtures/gaia/ stay the single
+# enforcement source: the gate-reader steps run before gen_scorecard, so an
+# enforce:true breach blocks the refresh from committing a regressed card.
+#
+# Runner-only by construction (`gaia eval agent` needs Lemonade + the Agent UI
+# backend on AMD hardware; the dev boxes must never start Lemonade). Shares
+# the serial `lemonade-eval` slot; a full refresh occupies it for many hours —
+# check `gh run list` before dispatching.
+#
+# KNOWN RESIDUAL GAP (same as email): this workflow can only govern what IT
+# commits; a hand-edited SCORECARD.md in an unrelated PR bypasses these guards
+# (the release-time scorecard-gate in release_agent_gaia.yml is the backstop).
+
+name: GAIA Agent Eval — scorecard refresh
+
+on:
+  workflow_dispatch:
+    inputs:
+      categories:
+        description: 'Comma-separated gaia_* categories (default: all 12 — the only profile allowed to commit; a subset run never commits)'
+        required: false
+        default: ''
+      eval_model:
+        description: 'Driver + judge model for the eval harness'
+        required: false
+        default: 'claude-sonnet-4-6'
+      model:
+        description: 'The AGENT model under test (stamped on the card)'
+        required: false
+        default: 'Gemma-4-E4B-it-GGUF'
+      ctx_size:
+        description: 'Context window the agent runs under (stamped; #1892 — GPU profile 65536, NPU 32768)'
+        required: false
+        default: '65536'
+      rebaseline:
+        description: 'Commit a card whose basis (ctx_size/model) differs from the committed card''s; skips the numeric regression comparison for this one deliberate run'
+        type: boolean
+        default: false
+      rebaseline_reason:
+        description: 'REQUIRED when rebaseline=true — why this basis change is deliberate (recorded in the commit message)'
+        required: false
+        type: string
+        default: ''
+
+concurrency:
+  # The serial Lemonade slot — shared with every other self-hosted eval so two
+  # runs never race-evict each other's model. Declared at the workflow level
+  # only (single job; declaring it at BOTH levels is a self-deadlock).
+  group: lemonade-eval
+  cancel-in-progress: false
+  queue: max
+
+permissions:
+  contents: write   # auto-commit the refreshed scorecard to the branch
+
+env:
+  SCORECARD: hub/agents/gaia/npm/SCORECARD.md
+  MANIFEST: hub/agents/gaia/python/gaia-agent.yaml
+  EVAL_CATEGORIES: ${{ inputs.categories || 'gaia_core,gaia_shell,gaia_tool_selection,gaia_honesty,gaia_web,gaia_files,gaia_data,gaia_code,gaia_rag,gaia_memory,gaia_skills_lifecycle,gaia_skills_tasks' }}
+  EVAL_MODEL: ${{ inputs.eval_model || 'claude-sonnet-4-6' }}
+  MODEL: ${{ inputs.model || 'Gemma-4-E4B-it-GGUF' }}
+  CTX_SIZE: ${{ inputs.ctx_size || '65536' }}
+  REBASELINE: ${{ inputs.rebaseline }}
+  REBASELINE_REASON: ${{ inputs.rebaseline_reason || '' }}
+  # FULL = the default 12-category list untouched; only FULL may commit
+  # (a category subset would silently downgrade the published sample basis).
+  IS_FULL: ${{ (inputs.categories || '') == '' }}
+  BACKEND_URL: http://127.0.0.1:4200
+  FIXTURE_PORT: '8765'
+  GAIA_HUB_URL: http://127.0.0.1:8765/fixture_hub
+  GAIA_WEB_ALLOWED_HOSTS: '127.0.0.1'
+  GAIA_MEMORY_ADMIN: '1'
+  GAIA_AUTO_APPROVE_TOOLS: '1'
+  NO_PROXY: 'localhost,127.0.0.1'
+  LEMONADE_BASE_URL: 'http://127.0.0.1:13305'
+  PYTHONIOENCODING: 'utf-8'
+  PYTHON_KEYRING_BACKEND: keyring.backends.null.Keyring
+
+jobs:
+  refresh:
+    name: Re-run gaia eval, refresh-or-reject scorecard
+    runs-on: [self-hosted, Windows, lemonade-eval]
+    defaults:
+      run:
+        shell: powershell
+    # BUDGET DERIVATION — same basis as test_gaia_agent_eval.yml (20
+    # min/scenario ceiling from the consolidation measurements on this box;
+    # no gaia category has its own runner numbers yet — the [TIMING] summary
+    # lines from the eval step are what will replace this):
+    #   eval step (full, ~95 scenarios x 20)        -> 1980
+    #   setup (venv/node/lemonade/preflight/stage)  -> 40
+    #   collect + gates + gen_scorecard + commit    -> 40
+    #   job: 1980+40+40 = 2060 -> 2100 (margin)
+    timeout-minutes: 2100
+    steps:
+      - name: Checkout (the pushed branch)
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
+          fetch-depth: 0   # full history for git describe (cross-version baseline)
+
+      - name: Preflight — judge credential
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:ANTHROPIC_API_KEY)) {
+            Write-Host '::error::ANTHROPIC_API_KEY is not set - the eval cannot judge. Add the repository secret.'
+            exit 1
+          }
+
+      - name: Setup Python Environment
+        uses: ./.github/actions/setup-venv
+        with:
+          python-version: '3.12'
+          install-package: '-e .[dev,eval,ui,api] -e hub/agents/chat/python -e hub/agents/gaia/python'
+
+      - name: Resolve version, committed basis, and fail fast on a basis mismatch
+        id: pre
+        timeout-minutes: 10
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $VERSION = python -c "import yaml; print(yaml.safe_load(open('$env:MANIFEST'))['version'])"
+          if ($LASTEXITCODE -ne 0) { throw "could not read version from $env:MANIFEST" }
+          "version=$VERSION" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+          # Read the committed card's basis BEFORE any eval spend. ctx_size
+          # lives at recipe.environment.ctx_size — reuse env_ctx_size, never
+          # re-derive the path.
+          $COMMITTED_CTX = ""
+          $committedPath = ""
+          git cat-file -e "HEAD:$env:SCORECARD" 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            $committedPath = Join-Path $env:RUNNER_TEMP "committed_scorecard.md"
+            [System.IO.File]::WriteAllLines($committedPath, (git show "HEAD:$env:SCORECARD"))
+            $committedForPy = $committedPath -replace '\\', '/'
+            $COMMITTED_CTX = python -c "from gaia.eval.release_scorecard import parse_scorecard; from gaia.eval.scorecard_gate import env_ctx_size; import pathlib; v = env_ctx_size(parse_scorecard(pathlib.Path('$committedForPy'))); print('' if v is None else v)"
+            if ($LASTEXITCODE -ne 0) { throw "could not read committed ctx_size" }
+          }
+          "committed_ctx=$COMMITTED_CTX" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "committed_path=$committedPath" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+          $PREV = (git describe --tags --abbrev=0 --match 'agent-pkg-gaia-*' "HEAD^" 2>$null)
+          if (-not $PREV) { $PREV = "" }
+          "prev_tag=$PREV" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+          "is_full=$env:IS_FULL" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "commit_allowed=$env:IS_FULL" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+          if ($env:IS_FULL -eq "true") {
+            if ($env:GITHUB_REF_NAME -eq "main") {
+              Write-Host "::error::Refuse to auto-commit to main via workflow_dispatch. Dispatch against a feature branch and open a PR with the refreshed card."
+              exit 1
+            }
+            if ($env:REBASELINE -eq "true" -and [string]::IsNullOrWhiteSpace($env:REBASELINE_REASON)) {
+              Write-Host "::error::rebaseline=true requires a non-empty rebaseline_reason - it is recorded in the commit message so git history can tell an approved basis migration from a careless flip."
+              exit 1
+            }
+            $committedCtxDisplay = if ($COMMITTED_CTX) { $COMMITTED_CTX } else { "<unstamped>" }
+            $ctxMismatch = ($COMMITTED_CTX -eq "") -or ($COMMITTED_CTX -ne $env:CTX_SIZE)
+            if ($ctxMismatch -and ($env:REBASELINE -ne "true")) {
+              Write-Host "::error::Basis mismatch - committed card ctx_size=$committedCtxDisplay vs requested ctx_size=$env:CTX_SIZE. Scores at different windows are not comparable. Re-dispatch at the committed ctx_size, or pass rebaseline=true with a rebaseline_reason to move the basis deliberately (the FIRST Gemma refresh replacing the Haiku harness-validation card is exactly that case)."
+              exit 1
+            }
+          }
+          $profileName = if ($env:IS_FULL -eq "true") { "FULL" } else { "SUBSET (never commits)" }
+          Write-Host "PROFILE: $profileName -- categories=$env:EVAL_CATEGORIES model=$env:MODEL ctx=$env:CTX_SIZE rebaseline=$env:REBASELINE | committed ctx=$COMMITTED_CTX prev_tag=$PREV"
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - name: Install Claude Code CLI (the eval's scenario driver)
+        run: |
+          npm install -g @anthropic-ai/claude-code
+          if ($LASTEXITCODE -ne 0) { throw "Claude Code CLI install failed" }
+          claude --version
+          if ($LASTEXITCODE -ne 0) { throw "claude installed but not runnable on PATH" }
+
+      - name: Install Lemonade Server
+        uses: ./.github/actions/install-lemonade
+
+      - name: Start Lemonade Server (version-matched, warmed)
+        timeout-minutes: 15
+        env:
+          HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+          HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
+        run: |
+          powershell -ExecutionPolicy Bypass -File installer\scripts\ensure-lemonade-running.ps1 -WarmModel "$env:MODEL"
+          if ($LASTEXITCODE -ne 0) { throw "Lemonade server not ready" }
+
+      - name: Preflight — embedder serves embeddings (memory-on run)
+        run: |
+          $ErrorActionPreference = "Continue"
+          $global:LASTEXITCODE = 0
+          $probe = @(python -c "from gaia.llm.lemonade_client import DEFAULT_EMBEDDING_MODEL, MODELS; m = next(x for x in MODELS.values() if x.model_id == DEFAULT_EMBEDDING_MODEL); print(DEFAULT_EMBEDDING_MODEL); print(m.checkpoint); print(m.recipe)")
+          if ($LASTEXITCODE -ne 0 -or $probe.Count -lt 3) {
+            Write-Host "::error::Could not resolve the embedding model from the venv - the install is broken."
+            exit 1
+          }
+          $embedOut = & python tests/ci_lemonade_check.py `
+            --model $probe[-3] --checkpoint $probe[-2] --recipe $probe[-1] `
+            --register-embedding --embeddings `
+            --llamacpp-args "--ubatch-size 2048" 2>&1
+          $embedCode = $LASTEXITCODE
+          $embedOut | ForEach-Object { Write-Host "$_" }
+          if ($embedCode -ne 0 -or -not ($embedOut -match '\[ci\] embeddings OK \(dim=')) {
+            Write-Host "::error::The embedder cannot serve embeddings on this runner (memory-on eval needs it). See the recovery notes in test_eval_agent_gemma_consolidation.yml."
+            exit 1
+          }
+
+      - name: Stage fixtures + skills + fixture hub
+        run: |
+          $ErrorActionPreference = "Stop"
+          $stage = Join-Path $env:USERPROFILE "gaia-eval"
+          if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
+          Copy-Item tests\fixtures\gaia $stage -Recurse
+          $skillsRoot = Join-Path $env:USERPROFILE ".gaia\skills"
+          New-Item -ItemType Directory -Force $skillsRoot | Out-Null
+          Copy-Item hub\skills\* $skillsRoot -Recurse -Force
+          python tests/fixtures/gaia/prepare_fixture_hub.py --skills-root $skillsRoot
+          if ($LASTEXITCODE -ne 0) { throw "prepare_fixture_hub failed" }
+
+      - name: Run the gaia eval categories serially (real eval)
+        timeout-minutes: 1980
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          $ErrorActionPreference = "Continue"
+          $ProgressPreference = "SilentlyContinue"
+          [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+          Remove-Item -Recurse -Force eval-out -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force -Path eval-out | Out-Null
+
+          function Test-Backend {
+            try { Invoke-RestMethod -Uri "$env:BACKEND_URL/api/health" -TimeoutSec 5 | Out-Null; return $true }
+            catch { return $false }
+          }
+          if (Test-Backend) {
+            Write-Host "::error::$env:BACKEND_URL is already serving - a stale GAIA backend is running. Kill it (gaia kill) and re-run."
+            exit 1
+          }
+
+          $fixture = Start-Process -FilePath "python" `
+            -ArgumentList "tests/fixtures/gaia/serve_fixtures.py","--port","$env:FIXTURE_PORT" `
+            -WorkingDirectory $PWD `
+            -RedirectStandardOutput (Join-Path $PWD "eval-out\fixtures.log") `
+            -RedirectStandardError (Join-Path $PWD "eval-out\fixtures.err.log") `
+            -NoNewWindow -PassThru
+          $backend = Start-Process -FilePath "python" `
+            -ArgumentList "-m","gaia.ui.server","--port","4200","--host","127.0.0.1" `
+            -WorkingDirectory $PWD `
+            -RedirectStandardOutput (Join-Path $PWD "eval-out\backend.out.log") `
+            -RedirectStandardError (Join-Path $PWD "eval-out\backend.err.log") `
+            -NoNewWindow -PassThru
+          if (-not $backend -or -not $fixture) {
+            Write-Host "::error::Could not start gaia.ui.server / serve_fixtures.py."
+            exit 1
+          }
+
+          try {
+            $ready = $false
+            foreach ($attempt in 1..120) {
+              if ($backend.HasExited) {
+                Write-Host "::error::gaia.ui.server exited during startup (exit $($backend.ExitCode))."
+                Get-Content "eval-out\backend.out.log", "eval-out\backend.err.log" -ErrorAction SilentlyContinue
+                exit 1
+              }
+              if (Test-Backend) { $ready = $true; break }
+              Start-Sleep -Seconds 5
+            }
+            if (-not $ready) {
+              Write-Host "::error::GAIA UI backend did not become healthy in time."
+              Get-Content "eval-out\backend.out.log", "eval-out\backend.err.log" -ErrorAction SilentlyContinue
+              exit 1
+            }
+
+            foreach ($category in @($env:EVAL_CATEGORIES -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
+              Write-Host "==== gaia eval agent --agent-type gaia --category $category ===="
+              $global:LASTEXITCODE = 0
+              gaia eval agent --agent-type gaia --category $category `
+                --backend "$env:BACKEND_URL" --model "$env:EVAL_MODEL" --budget 5.00 `
+                --exclude-tag live --exclude-tag local_blocked_win_shim 2>&1 |
+                ForEach-Object { Write-Host "$_"; "$_" } |
+                Out-File -FilePath "eval-out\$category.log" -Encoding utf8
+              $code = $LASTEXITCODE
+              if ($code -ne 0) {
+                Write-Host "::error::gaia eval agent --category $category crashed with exit $code."
+                exit 1
+              }
+              # Collect this category's scorecard immediately (same session).
+              $hit = Select-String -Path "eval-out\$category.log" -Encoding UTF8 -Pattern '^Output:\s*(.+?)\s*$' | Select-Object -Last 1
+              $runDir = if ($hit) { $hit.Matches[0].Groups[1].Value } else { $null }
+              if (-not $runDir -or -not (Test-Path (Join-Path $runDir "scorecard.json"))) {
+                Write-Host "::error::Could not resolve a scorecard for $category."
+                exit 1
+              }
+              New-Item -ItemType Directory -Force -Path "eval-out\$category" | Out-Null
+              Copy-Item (Join-Path $runDir "scorecard.json") "eval-out\$category\scorecard.json"
+            }
+          }
+          finally {
+            foreach ($proc in @($backend, $fixture)) {
+              if ($proc -and -not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
+            }
+          }
+
+      # Gate-readers run BEFORE gen_scorecard: an enforce:true breach (or a
+      # zero-judged run) blocks the refresh from committing a regressed card.
+      - name: Quality gate (reads the thresholds manifest)
+        timeout-minutes: 10
+        run: |
+          python hub/agents/gaia/python/packaging/eval_quality_report.py
+          if ($LASTEXITCODE -ne 0) { throw "quality gate report failed" }
+
+      - name: Perf gate (reads the thresholds manifest)
+        timeout-minutes: 10
+        run: |
+          python hub/agents/gaia/python/packaging/eval_perf_report.py
+          if ($LASTEXITCODE -ne 0) { throw "perf gate report failed" }
+
+      - name: Regenerate SCORECARD.md from the real run
+        timeout-minutes: 10
+        run: |
+          # eval-out/<category>/scorecard.json is the collection layout the
+          # adapter merges into one combined card. --lemonade-version stamps
+          # the server actually used.
+          $LEMONADE_VERSION = ""
+          try {
+            $LEMONADE_VERSION = (Invoke-RestMethod -Uri "$env:LEMONADE_BASE_URL/api/v1/health" -TimeoutSec 10).version
+          } catch {}
+          $genArgs = @("--run-dir","eval-out","--model","$env:MODEL","--ctx-size","$env:CTX_SIZE","--hardware","AMD Ryzen AI MAX+ (Strix Halo)")
+          if ($LEMONADE_VERSION) { $genArgs += @("--lemonade-version","$LEMONADE_VERSION") }
+          python hub/agents/gaia/python/packaging/gen_scorecard.py @genArgs
+          if ($LASTEXITCODE -ne 0) { throw "gen_scorecard failed" }
+
+      - name: Same-version regression check (reject a worse re-run)
+        if: steps.pre.outputs.is_full == 'true'
+        timeout-minutes: 10
+        run: |
+          # Reuse gaia.eval.scorecard_gate — variance-aware and
+          # ctx-comparability-aware; never hand-roll this comparison.
+          $gateArgs = @("--scorecard", "$env:SCORECARD")
+          if ("${{ steps.pre.outputs.committed_path }}") {
+            $gateArgs += @("--baseline-file", "${{ steps.pre.outputs.committed_path }}")
+          }
+          if ("$env:REBASELINE" -eq "true") {
+            $gateArgs += "--allow-ctx-mismatch"
+            $gateArgs += "--allow-regression"
+          }
+          python -m gaia.eval.scorecard_gate @gateArgs
+          if ($LASTEXITCODE -ne 0) { throw "scorecard_gate (same-version) failed" }
+
+      - name: Cross-version gate (fresh SCORECARD.md vs prior version tag, best-effort)
+        if: steps.pre.outputs.is_full == 'true'
+        timeout-minutes: 10
+        run: |
+          $PREV = "${{ steps.pre.outputs.prev_tag }}"
+          $gateArgs = @("--scorecard", "$env:SCORECARD")
+          if ($PREV) { $gateArgs += @("--baseline-ref", "$PREV") }
+          if ("$env:REBASELINE" -eq "true") {
+            $gateArgs += "--allow-ctx-mismatch"
+            $gateArgs += "--allow-regression"
+          }
+          python -m gaia.eval.scorecard_gate @gateArgs
+          if ($LASTEXITCODE -ne 0) { throw "scorecard_gate (cross-version) failed" }
+
+      - name: Upload eval output
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gaia-scorecard-refresh
+          path: eval-out/
+          if-no-files-found: warn
+
+      - name: Commit the refreshed SCORECARD.md (full profile only)
+        timeout-minutes: 10
+        run: |
+          if ("${{ steps.pre.outputs.commit_allowed }}" -ne "true") {
+            Write-Host "SUBSET RUN -- card NOT committed (a category subset is a smaller basis than the published card's full corpus). Restoring the committed SCORECARD.md."
+            git checkout -- "$env:SCORECARD"
+            exit 0
+          }
+          git diff --quiet -- "$env:SCORECARD"
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "SCORECARD.md unchanged -- nothing to commit."
+            exit 0
+          }
+          git config user.name  "${{ github.actor }}"
+          git config user.email "${{ github.actor }}@users.noreply.github.com"
+          git add "$env:SCORECARD"
+          $commitMsg = "eval(gaia): refresh v${{ steps.pre.outputs.version }} scorecard from judged eval run"
+          if ("$env:REBASELINE" -eq "true") {
+            $commitMsg = "eval(gaia): re-baseline v${{ steps.pre.outputs.version }} scorecard at ctx=$env:CTX_SIZE`n`n$env:REBASELINE_REASON"
+          }
+          git commit -m "$commitMsg"
+          if ($LASTEXITCODE -ne 0) { throw "git commit failed" }
+          git push origin "HEAD:${{ github.head_ref || github.ref_name }}"
+          if ($LASTEXITCODE -ne 0) { throw "git push failed" }
