@@ -444,6 +444,7 @@
             "group": "Release Notes",
             "pages": [
               "releases/index",
+              "releases/v0.23.1",
               "releases/v0.23.0",
               "releases/v0.22.0",
               "releases/v0.21.2",
