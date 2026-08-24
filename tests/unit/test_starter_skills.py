@@ -9,8 +9,13 @@ Phase 1 contract, declare only permissions this phase can honor, and name only
 tools that actually exist in the registry. A skill that parses but cannot run is
 worse than a missing one.
 
-Every test that can be parametrized iterates ``skills/starter/`` rather than a
-hardcoded list, so a newly added skill is covered automatically.
+Every test that can be parametrized iterates the hub's skills lane
+(``hub/skills/``) rather than a hardcoded list, so a newly added skill is covered
+automatically. The lane is currently the starter pack exactly, so these guards
+apply to all of it — including
+:func:`test_starter_skill_declares_starter_pack_provenance`. A skill added to the
+lane from some other source needs that assertion narrowed first; it will fail
+loudly rather than skip.
 
 All roots are ``tmp_path``-scoped and every CLI subprocess runs with ``HOME``
 and ``GAIA_CONFIG_DIR`` redirected, so nothing here reads or writes the
@@ -20,6 +25,7 @@ developer's real ``~/.gaia/skills`` or ``~/.claude/skills``.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -37,7 +43,7 @@ from gaia.skills.permissions import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-STARTER_ROOT = REPO_ROOT / "skills" / "starter"
+STARTER_ROOT = REPO_ROOT / "hub" / "skills"
 
 #: Marks every skill in the pack, so consumers can group them (issue #893).
 PROVENANCE_SOURCE = "starter-pack"
@@ -146,7 +152,9 @@ def registry_tool_names() -> frozenset[str]:
     from gaia.agents.base.memory import MemoryMixin
     from gaia.agents.base.tools import _TOOL_REGISTRY
     from gaia.agents.tools.browser_tools import BrowserToolsMixin
+    from gaia.agents.tools.code_index_tools import CodeIndexToolsMixin
     from gaia.agents.tools.file_io_tools import FileIOToolsMixin
+    from gaia.agents.tools.file_tools import FileSearchToolsMixin
     from gaia.agents.tools.filesystem_tools import FileSystemToolsMixin
     from gaia.agents.tools.rag_tools import RAGToolsMixin
     from gaia.agents.tools.scratchpad_tools import ScratchpadToolsMixin
@@ -170,20 +178,49 @@ def registry_tool_names() -> frozenset[str]:
         (RAGToolsMixin, "register_rag_tools"),
         (ScratchpadToolsMixin, "register_scratchpad_tools"),
         (FileIOToolsMixin, "register_file_io_tools"),
+        (FileSearchToolsMixin, "register_file_search_tools"),
         (FileSystemToolsMixin, "register_filesystem_tools"),
         (ShellToolsMixin, "register_shell_tools"),
+        (CodeIndexToolsMixin, "register_code_index_tools"),
         (MemoryMixin, "register_memory_tools"),
     ]
 
     before = dict(_TOOL_REGISTRY)
     try:
+        # Start from an empty registry: names left behind by an earlier test
+        # must not count as "real tools" or the honesty guard passes vacuously.
+        _TOOL_REGISTRY.clear()
         for mixin, method in registrars:
             getattr(mixin, method)(_Stub())
         names = frozenset(_TOOL_REGISTRY)
     finally:
         _TOOL_REGISTRY.clear()
         _TOOL_REGISTRY.update(before)
-    return names
+    return names | _chat_agent_inline_tools()
+
+
+def _chat_agent_inline_tools() -> frozenset[str]:
+    """Tools ChatAgent registers inline in ``_register_tools`` (no mixin).
+
+    The flagship gaia agent inherits ChatAgent, so a starter skill may target
+    these too. Instantiating ChatAgent here would drag in an LLM client, so
+    each name is instead verified against the agent's source: the ``def``
+    must exist in ``agent.py`` or the name is dropped — keeping this list
+    incapable of drifting past a rename.
+
+    ``request_user_input`` comes from ``_register_loop_control_tools``, which
+    every non-``chat`` profile runs, so a skill that has to ask the user a
+    question before acting can legitimately declare it.
+    """
+    # Ships with the standalone gaia-agent-chat wheel, which the core-only test
+    # job does not install; skip rather than judge the list against nothing.
+    gaia_agent_chat = pytest.importorskip("gaia_agent_chat")
+
+    source = (Path(gaia_agent_chat.__file__).parent / "agent.py").read_text(
+        encoding="utf-8"
+    )
+    inline = {"execute_python_file", "list_files", "request_user_input"}
+    return frozenset(t for t in inline if f"def {t}(" in source)
 
 
 def test_registry_fixture_actually_registered_something(registry_tool_names):
@@ -335,11 +372,14 @@ def test_starter_skill_loads_into_an_agent(pack_manager: SkillManager):
         _instance_tools = None
         _skill_manager = None
         _loaded_skills = None
+        _active_skill_filter = None
 
         skill_manager = Agent.skill_manager
         loaded_skills = Agent.loaded_skills
+        granted_binaries = Agent.granted_binaries
         _tools_registry = Agent._tools_registry
         _format_tools_for_prompt = Agent._format_tools_for_prompt
+        _note_skill_active = Agent._note_skill_active
         load_skill = Agent.load_skill
         unload_skill = Agent.unload_skill
         get_skills_system_prompt = Agent.get_skills_system_prompt
@@ -670,6 +710,11 @@ def _gaia(*args: str, home: Path) -> subprocess.CompletedProcess:
         "PYTHONPATH": str(REPO_ROOT / "src"),
         "GAIA_MEMORY_DISABLED": "1",
     }
+    # Windows loads winsock via SystemRoot, and `import asyncio` needs it — a
+    # fully hermetic env kills every subprocess here with WinError 10106.
+    for name in ("SystemRoot", "SystemDrive"):
+        if name in os.environ:
+            env[name] = os.environ[name]
     return subprocess.run(
         [sys.executable, "-m", "gaia.cli", *args],
         capture_output=True,

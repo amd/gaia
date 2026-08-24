@@ -24,15 +24,18 @@ Two independent checks run at install, and both must pass:
 2. **Permission ceiling** — every declared permission must sit at or below the
    effective tier's ceiling (:func:`enforce_tier_ceiling`).
 
-**What the ceiling can and cannot mean in v1.** Phase 1 (#888) bridges
-connector-backed domains only; a skill declaring a local capability
-(``filesystem``/``shell``/``database``/``desktop``/``env``) is refused outright by
+**What the ceiling can and cannot mean in v1.** A skill declaring a local
+capability with no bridge (``filesystem``/``database``/``desktop``/``env``) is
+refused outright by
 :func:`gaia.skills.permissions.refuse_unbridged_permissions` because the sandbox
 that would contain it does not exist yet. So the ceilings below discriminate
-between *bridged* permissions, and :data:`DANGEROUS_GRANTS` keeps the spec's
-authoritative dangerous set even though three of its entries are unreachable
-today — a skill declaring them never gets as far as the prompt. Do not read a
-``verified`` stamp as "a runtime sandbox is protecting you"; it is not.
+between *bridged* permissions: the connector domains, plus
+``shell:execute:<binary>``, which is gated by the command policy in
+:mod:`gaia.skills.binaries` rather than by a sandbox. ``shell:execute`` stays in
+:data:`DANGEROUS_GRANTS`, so at ``community`` it prompts; ``desktop:control`` and
+``database:write`` remain unreachable — a skill declaring them never gets as far
+as the prompt. Do not read a ``verified`` stamp as "a runtime sandbox is
+protecting you"; it is not.
 """
 
 from __future__ import annotations
@@ -57,9 +60,12 @@ LOWEST_TIER = TIER_ORDER[0]
 #: (pre-approved by the AMD audit), prompted at ``community``, refused below.
 #:
 #: ``shell:execute`` / ``desktop:control`` / ``database:write`` are the spec's
-#: original three. They are local-capability domains, so in v1 they are refused
-#: before any tier check — kept here so the set stays the single authoritative
-#: list when the Phase 2 sandbox makes them reachable.
+#: original three. ``shell:execute:<binary>`` is reachable today through the
+#: policed binary bridge and stays dangerous — running someone else's CLI on
+#: the user's machine warrants a prompt even when every subcommand is a read.
+#: ``desktop:control`` and ``database:write`` have no bridge, so they are still
+#: refused before any tier check — kept here so the set stays the single
+#: authoritative list when the Phase 2 sandbox makes them reachable.
 DANGEROUS_GRANTS: frozenset[str] = frozenset(
     {
         "shell:execute",
@@ -78,10 +84,12 @@ DANGEROUS_GRANTS: frozenset[str] = frozenset(
 #: ``<domain>:none`` is always allowed: it asks for nothing.
 _CEILINGS: dict[str, frozenset[str] | None] = {
     "verified": None,
-    # Everything the bridge supports; dangerous grants still prompt.
-    "community": frozenset({"network:read", "network:write", "mcp:connect"}),
-    # Read-only egress only. An unattested skill may not open an MCP connection
-    # or write to the network without the user promoting it first.
+    # Everything the bridges support; dangerous grants still prompt.
+    "community": frozenset(
+        {"network:read", "network:write", "mcp:connect", "shell:execute"}
+    ),
+    # Read-only egress only. An unattested skill may not open an MCP connection,
+    # write to the network, or run a local CLI without the user promoting it first.
     "experimental": frozenset({"network:read"}),
 }
 

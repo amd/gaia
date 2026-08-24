@@ -49,6 +49,7 @@ KNOWN_TOOLS: Dict[str, tuple] = {
     "browser": ("gaia.agents.tools.browser_tools", "BrowserToolsMixin"),
     "sd": ("gaia.sd.mixin", "SDToolsMixin"),
     "vlm": ("gaia.vlm.mixin", "VLMToolsMixin"),
+    "skills": ("gaia.agents.tools.skill_library_tools", "SkillLibraryToolsMixin"),
 }
 
 # Manifest-fingerprint keys used to detect a legacy YAML manifest masquerading
@@ -520,8 +521,6 @@ class AgentRegistry:
         "chat-lite": "chat",
         "doc-lite": "doc",
         "file-lite": "file",
-        "data-lite": "data",
-        "web-lite": "web",
         "gaia-lite": "doc",
     }
 
@@ -533,8 +532,6 @@ class AgentRegistry:
         "chat-lite": "lite",
         "doc-lite": "lite",
         "file-lite": "lite",
-        "data-lite": "lite",
-        "web-lite": "lite",
         "gaia-lite": "lite",
     }
 
@@ -707,19 +704,11 @@ class AgentRegistry:
         # module-level ``build_model_tiers`` helper. No built-in registration
         # here.
 
-        # AnalystAgent (id="data") and BrowserAgent (id="web") ship as the
-        # standalone ``gaia-agent-analyst`` / ``gaia-agent-browser`` wheels
-        # (#1102), discovered via the ``gaia.agent`` entry point in
-        # ``_discover_installed_agents`` — no built-in registration here.
-
-        # The former ``chat-lite``/``doc-lite``/``file-lite``/``data-lite``/
-        # ``web-lite``/``gaia-lite`` registrations are consolidated into the
-        # ``lite`` model tier of the agents above (#1162). The old IDs resolve
-        # through ``_LEGACY_ID_ALIASES`` so existing sessions keep working.
-
-        # ConnectorsDemoAgent ships as the standalone ``gaia-agent-connectors-demo``
-        # wheel (#1102) and is discovered via the ``gaia.agent`` entry point in
-        # ``_discover_installed_agents`` — no built-in registration here.
+        # The analyst (id="data") and browser (id="web") agents were removed;
+        # their capability is the flagship's scratchpad and browser tools, driven
+        # by the data-explore and research-report skills. Their ``-lite`` aliases
+        # are gone too — the surviving aliases still resolve through
+        # ``_LEGACY_ID_ALIASES`` so existing chat/doc/file sessions keep working.
 
         # EmailTriageAgent (id="email") ships as the standalone
         # ``gaia-agent-email`` wheel (#1102), discovered via the ``gaia.agent``

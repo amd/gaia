@@ -114,7 +114,7 @@ one new idea:
 
 - [`hello-world/`](https://github.com/amd/gaia/tree/main/hub/agents/hello-world/python) — the smallest agent possible (a system prompt, no tools).
 - [`word-count/`](https://github.com/amd/gaia/tree/main/hub/agents/word-count/python) — adds one tool with the `@tool` decorator.
-- [`doc-search/`](https://github.com/amd/gaia/tree/main/hub/agents/doc-search/python) — reuses a built-in toolset (`RAGToolsMixin`) for document Q&A.
+- [`connectors-demo/`](https://github.com/amd/gaia/tree/main/hub/agents/connectors-demo/python) — pulls real data through the connectors framework (Gmail, Calendar, Drive, GitHub).
 
 Each is a complete, publishable package (manifest + code + README + tests that fake
 the model, so they run without a model server). See the
@@ -387,8 +387,12 @@ dependencies = ["amd-gaia[api]>=0.20.0"]   # add ,rag / ,etc. for extra capabili
 The [email agent](https://github.com/amd/gaia/tree/main/hub/agents/email/python)
 goes one step further and ships a **frozen native binary** plus an npm package
 (`@amd-gaia/agent-email`) so JavaScript apps can run it with no Python installed.
-That packaging is currently hand-built per agent; reusable tooling to make any agent
-an npm sidecar is on the roadmap.
+The [flagship `gaia` agent](https://github.com/amd/gaia/tree/main/hub/agents/gaia/python)
+follows the same pattern as its second instance (`@amd-gaia/gaia`), additionally
+consuming the Go terminal UI as a separately-published hub component rather than
+bundling a copy of its own — see [`plans/flagship-installer`](/plans/flagship-installer)
+for that packaging in detail. That packaging is currently hand-built per agent;
+reusable tooling to make any agent an npm sidecar is on the roadmap.
 
 ## Publishing a skill instead of an agent
 
@@ -405,7 +409,7 @@ publish` is the mechanism maintainers and CI run *after* your PR merges.
 <Steps>
   <Step title="Put your skill in skills/community/">
     One directory per skill: `skills/community/<your-skill-name>/SKILL.md`, plus
-    `tools.py` and `scripts/` if it ships code. (`skills/starter/` is the AMD
+    `tools.py` and `scripts/` if it ships code. (`hub/skills/` is the AMD
     starter pack — worked examples to copy, not a place to submit.) See
     [`skills/community/README.md`](https://github.com/amd/gaia/blob/main/skills/community/README.md).
   </Step>

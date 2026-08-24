@@ -37,12 +37,63 @@ type confirmActionResultMsg struct {
 func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bool) {
 	switch e := evt.(type) {
 	case event.CanonicalStatusEvent:
+		// The model-state ping (ModelID set) is header metadata, not turn
+		// progress — it never touches the activity log. Sent once at agent
+		// startup and again after every `/model` switch, so the header always
+		// names what the agent actually resolved, never a launch flag's guess.
+		if e.ModelID != "" {
+			// A change nobody here asked for means the agent process was
+			// replaced without a live `/model` switch in flight — a
+			// cancelled turn respawns the child from its ORIGINAL launch
+			// flags (subprocess.go), silently reverting any earlier switch.
+			// The header self-corrects either way (below); this just makes
+			// the revert visible instead of quietly true.
+			if m.modelID != "" && e.ModelID != m.modelID && !m.awaitingModelSwitch {
+				m.messages = append(m.messages, Message{
+					Role: RoleStatus,
+					Content: "[!] the agent process restarted and reverted to " +
+						e.ModelDisplay + " — use /model to switch again.",
+				})
+			}
+			m.modelID = e.ModelID
+			m.modelDisplay = e.ModelDisplay
+			m.modelBackend = e.ModelBackend
+			m.modelRemote = e.ModelRemote
+			if e.LemonadeReachable != nil {
+				m.lemonadeKnown = true
+				m.lemonadeUp = *e.LemonadeReachable
+				// Fresh evidence, so the one-shot pre-refusal is armed again.
+				m.lemonadeDownRefused = false
+				m.lemonadeVersion = e.LemonadeVersion
+				m.lemonadeBaseURL = e.LemonadeBaseURL
+			}
+			// Keep the legacy flag in sync — renderClaudeChip is still the
+			// pre-first-event fallback (see renderModelChip).
+			m.claudeMode = e.ModelRemote
+			break
+		}
+
 		// One live line, replaced — not a log. A user watching a 200s turn needs
 		// to know what is happening NOW; an accumulating list of "Step 2/50"
 		// and "Thinking" answers a question nobody asked and buries the tool
 		// call that actually says what the agent is doing.
+		// Tracked in both modes, shown in neither by itself: the canonical
+		// transport reports steps only in the `final` event's usage, so without
+		// this the step count is unknown until the turn is already over.
+		if n, ok := stepNumberOf(e.Message); ok {
+			m.totalSteps = n
+		}
+		// Bounded on the way in, like every other agent-supplied line the log
+		// keeps (see narrate.go). What PRINTS is still laid out to this terminal
+		// at render time; this only stops a megabyte of "status" living in the
+		// model for the rest of the session.
 		if msg := userFacingStatus(e.Message); msg != "" {
-			m.setLiveStatus(msg)
+			m.setLiveStatus(truncateRunes(msg, narrationMax))
+		} else if m.dev {
+			// --dev is where harness internals belong: suppressing them for
+			// everyone would make a wire-level bug invisible to whoever has to
+			// fix it.
+			m.setLiveStatus(truncateRunes("[harness] "+clean(e.Message), narrationMax))
 		}
 
 	case event.CanonicalTokenEvent:
@@ -53,11 +104,18 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		m.buffer += e.Delta
 
 	case event.CanonicalToolCallEvent:
-		label := e.Tool
-		if arg := extractCommandFromArgs(e.Args); arg != "" {
-			label += ": " + arg
+		item := ActivityItem{
+			Kind:    "tool",
+			Tool:    e.Tool,
+			Content: toolNarration(e.Tool, e.Args, e.Narration),
 		}
-		m.activity = append(m.activity, ActivityItem{Kind: "tool", Content: label})
+		if m.dev {
+			// The narration says what the call MEANS; this says what was
+			// actually passed. When an agent calls the right tool with the
+			// wrong argument the two disagree, and that gap is the bug.
+			item.Args = devPayload(e.Args, devPayloadWidth)
+		}
+		m.activity = append(m.activity, item)
 
 	case event.CanonicalToolResultEvent:
 		// Only trust the failure classifier where a card was declared. Outside
@@ -74,7 +132,8 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			// ToolOutcome's "Unknown is never a pass" doc comment, but only for
 			// this two-state presentation mapping (S3): Succeeded and Unknown
 			// both still tick green via markToolDone below.
-			m.setOpenToolOutcome(e.Tool, false)
+			// A failed call is the one whose payload a developer most wants.
+			m.setToolOutputAt(m.setOpenToolOutcome(e.Tool, false, failureDetail(e, toolErr)), e)
 			m.messages = append(m.messages, Message{
 				Role:    RoleError,
 				Content: sanitizeErrorText(composeToolErrorText(e.Tool, toolErr)),
@@ -110,11 +169,10 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 
 	case event.CanonicalNeedsConfirmationEvent:
 		// The pause goes to the permanent transcript — never swallowed — AND to
-		// the interactive modal, which owns the keyboard until the user answers
-		// or the 30s client-side timeout auto-denies. The status line stays
-		// durable in scrollback even after the modal resolves and clears (see
-		// CanonicalFinalEvent below): the modal is the CURRENT decision surface,
-		// this line is the permanent record of it.
+		// the interactive modal, which owns the keyboard until the user answers.
+		// The status line stays durable in scrollback even after the modal
+		// resolves and clears (see CanonicalFinalEvent below): the modal is the
+		// CURRENT decision surface, this line is the permanent record of it.
 		line := "confirmation needed: " + e.Action
 		if summary := strings.TrimSpace(e.Summary); summary != "" {
 			line += " — " + summary
@@ -122,10 +180,22 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 		m.messages = append(m.messages, Message{Role: RoleStatus, Content: "[!] " + line})
 
 		cm := components.NewConfirmationModel(e.RunID, e.Action, e.Summary, e.ConfirmURL)
+		if m.canRespondToPermission() {
+			cm = cm.WithLiveChannel(e.ConfirmID, e.AlwaysScope)
+		}
 		cm.SetWidth(m.cardWidth())
 		m.confirmation = &cm
 		m.updateViewport()
-		return m, tea.Batch(waitForEvent(m.events), components.StartConfirmationTimeout(e.RunID)), true
+
+		cmds := []tea.Cmd{waitForEvent(m.events)}
+		// The auto-deny is armed only where the answer has nowhere to go. On a
+		// live channel the agent is genuinely parked waiting, so expiring would
+		// deny work the user is in the middle of approving — which is the
+		// defect this modal used to produce. See components.ConfirmationTimeout.
+		if cm.ExpiresUnanswered() {
+			cmds = append(cmds, components.StartConfirmationTimeout(e.RunID))
+		}
+		return m, tea.Batch(cmds...), true
 
 	case event.CanonicalFinalEvent:
 		usage := event.CanonicalUsageOf(e)
@@ -153,6 +223,7 @@ func (m ChatModel) handleCanonicalEvent(evt interface{}) (ChatModel, tea.Cmd, bo
 			Steps:     usage.Steps,
 			ToolsUsed: usage.ToolsUsed,
 			Tokens:    usage.Tokens,
+			Metrics:   usage.Metrics,
 		})
 		// Drain here, not on doneMsg: streaming flips false in THIS handler, and doneMsg fires later, after a second query could already be in flight.
 		m.drainPendingPreScan()
@@ -288,10 +359,22 @@ func (m *ChatModel) resolveConfirmationOnTurnEnd() {
 	m.confirmation = nil
 }
 
+// canRespondToPermission reports whether this transport can carry a decision
+// back to an agent that is still parked on the prompt.
+func (m ChatModel) canRespondToPermission() bool {
+	_, ok := m.client.(client.ToolPermissionResponder)
+	return ok
+}
+
 // resolveConfirmationDecision records a confirmation's outcome — from a
-// keypress or the 30s timeout — in the activity log and the permanent
-// transcript, then attempts live delivery when (and only when) the triggering
-// event carried a confirm_url.
+// keypress or the auto-deny — in the activity log and the permanent
+// transcript, then delivers it on whichever seam the transport offers.
+//
+// Two seams exist and they are not interchangeable. The LIVE one
+// (ToolPermissionResponder) reaches an agent thread still blocked on the
+// prompt; the resume-model one (confirm_url) reaches a run that already
+// stopped. Neither present means the modal only ever recorded intent, and the
+// outcome line has to say so rather than imply the tool ran.
 func (m ChatModel) resolveConfirmationDecision(msg components.ConfirmationDecidedMsg) (tea.Model, tea.Cmd) {
 	outcome, success := confirmationOutcomeText(msg)
 	m.activity = append(m.activity, ActivityItem{
@@ -307,18 +390,44 @@ func (m ChatModel) resolveConfirmationDecision(msg components.ConfirmationDecide
 	m.confirmation = nil
 	m.updateViewport()
 
+	if msg.Deliverable {
+		return m, m.respondToolPermission(msg)
+	}
 	if msg.ConfirmURL == "" {
-		// The stateless model (what every shipped sidecar speaks today): there is
-		// no channel to deliver a decision to, so there is nothing further to do
-		// — recording the outcome above is the whole job.
+		// No channel to deliver a decision to, so there is nothing further to
+		// do — recording the outcome above is the whole job.
 		return m, nil
 	}
 	return m, m.confirmAction(msg.RunID, msg.Action, msg.Approved)
 }
 
+// respondToolPermission hands the decision to the live control channel. The
+// agent is blocked waiting for exactly this, so a failure here strands the run
+// — it is surfaced, never swallowed.
+func (m ChatModel) respondToolPermission(msg components.ConfirmationDecidedMsg) tea.Cmd {
+	responder, ok := m.client.(client.ToolPermissionResponder)
+	if !ok {
+		return func() tea.Msg {
+			return confirmActionResultMsg{Action: msg.Action, Approved: msg.Approved, err: fmt.Errorf(
+				"this agent connection cannot deliver a permission decision")}
+		}
+	}
+	decision := client.PermissionDeny
+	switch {
+	case msg.Always:
+		decision = client.PermissionAlways
+	case msg.Approved:
+		decision = client.PermissionAllow
+	}
+	return func() tea.Msg {
+		err := responder.RespondToolPermission(msg.ConfirmID, decision)
+		return confirmActionResultMsg{Action: msg.Action, Approved: msg.Approved, err: err}
+	}
+}
+
 // confirmationOutcomeText is the one-line outcome recorded for a resolved
 // confirmation. Never claims delivery that cannot happen: an approval with no
-// confirm_url is recorded as exactly that, not as "approved" — see
+// channel is recorded as exactly that, not as "approved" — see
 // ConfirmationModel's doc comment for why (ui/oneshot.go's writeWithheld
 // already draws this line for the one-shot surface; this is the same rule
 // applied here).
@@ -326,11 +435,15 @@ func confirmationOutcomeText(msg components.ConfirmationDecidedMsg) (text string
 	switch {
 	case msg.TimedOut:
 		return "denied (30s timeout — no response)", false
-	case msg.Approved && msg.ConfirmURL != "":
-		return "approved — delivering", true
+	case msg.Always:
+		return "approved — and '" + msg.AlwaysScope + "' will not ask again this session", true
+	case msg.Approved && (msg.Deliverable || msg.ConfirmURL != ""):
+		return "approved — running it", true
 	case msg.Approved:
 		return "approved, but this transport has no live approval channel yet " +
 			"(no confirm_url on the event) — nothing was actually sent", false
+	case msg.Deliverable:
+		return "denied — the agent was told no", false
 	default:
 		return "denied — nothing sent", false
 	}
@@ -359,22 +472,66 @@ func (m ChatModel) confirmAction(runID, action string, approved bool) tea.Cmd {
 	}
 }
 
-// markToolDone closes out the activity line opened by the matching tool_call.
+// markToolDone closes out the activity line opened by the matching tool_call,
+// and hangs one `└` outcome line under it.
 //
 // The canonical tool_result carries no success flag, so the agent's own
 // {"ok": bool} / {"success": bool} convention is read out of `data` when present;
-// absent that, a delivered result counts as completed. Per-tool detail belongs
-// to the render card drawn in the transcript, not to this one-line summary.
+// absent that, a delivered result counts as completed. The FULL result belongs
+// to the render card in the transcript — this line only says it came back, how
+// much of it, and how long it took.
 func (m *ChatModel) markToolDone(e event.CanonicalToolResultEvent) {
-	m.setOpenToolOutcome(e.Tool, toolResultSucceeded(e.Data))
+	at := m.setOpenToolOutcome(e.Tool, toolResultSucceeded(e.Data), toolResultDetail(e))
+	m.setToolOutputAt(at, e)
+}
+
+// setToolOutputAt attaches the raw result payload to one specific tool line.
+// Developer mode only, and a no-op otherwise.
+//
+// Indexed rather than searched. Searching back for "the last tool line without
+// output" looked equivalent but is a different predicate from the one that
+// closed the line, and the two disagree exactly when it matters: two calls open
+// at once, or a payload that compacts to nothing, and the next result's payload
+// lands under the wrong call — which in the one view meant for verifying what
+// happened is worse than showing nothing.
+func (m *ChatModel) setToolOutputAt(at int, e event.CanonicalToolResultEvent) {
+	if !m.dev || at < 0 || at >= len(m.activity) {
+		return
+	}
+	if payload := devPayload(e.Data, devPayloadWidth); payload != "" {
+		m.activity[at].Output = payload
+	}
+}
+
+// failureDetail is the `└` line for a tool the render-domain classifier judged
+// failed. The tool's own error message is the most actionable thing available,
+// so it wins over anything composed from the payload.
+func failureDetail(e event.CanonicalToolResultEvent, te event.ToolError) string {
+	head := "failed"
+	if te.Code != "" {
+		head += " — " + te.Code
+	}
+	// clean, not firstLine: the log wraps now, and a tool's error message puts
+	// the remedy on its second line as often as not.
+	if msg := clean(te.Message); msg != "" {
+		return truncateRunes(head+": "+msg, detailMax)
+	}
+	if detail := toolResultDetail(e); detail != "" && !isBareStatusWord(detail) {
+		return truncateRunes(head+": "+detail, detailMax)
+	}
+	return head
 }
 
 // setOpenToolOutcome closes out the activity line opened by the matching
-// tool_call with an explicit success value. Shared by markToolDone (which
-// derives success from toolResultSucceeded) and the failed-render path in
-// handleCanonicalEvent (which must not: that classifier trusts the sidecar's
-// `success: true` even when the tool's own nested result says otherwise).
-func (m *ChatModel) setOpenToolOutcome(tool string, success bool) {
+// tool_call with an explicit success value and its outcome line. Shared by
+// markToolDone (which derives success from toolResultSucceeded) and the
+// failed-render path in handleCanonicalEvent (which must not: that classifier
+// trusts the sidecar's `success: true` even when the tool's own nested result
+// says otherwise).
+//
+// Returns the index of the item it closed, so a caller with more to attach to
+// the SAME line does not have to re-derive which one that was.
+func (m *ChatModel) setOpenToolOutcome(tool string, success bool, detail string) int {
 	for i := len(m.activity) - 1; i >= 0; i-- {
 		item := &m.activity[i]
 		if item.Kind != "tool" || item.Done {
@@ -382,16 +539,20 @@ func (m *ChatModel) setOpenToolOutcome(tool string, success bool) {
 		}
 		item.Done = true
 		item.Success = &success
-		return
+		item.Detail = detail
+		return i
 	}
 
 	// A result with no matching call still has to be visible.
 	m.activity = append(m.activity, ActivityItem{
 		Kind:    "tool",
-		Content: tool,
+		Tool:    tool,
+		Content: toolNarration(tool, nil, ""),
+		Detail:  detail,
 		Done:    true,
 		Success: &success,
 	})
+	return len(m.activity) - 1
 }
 
 // composeToolErrorText builds the RoleError text for a failed render tool:
@@ -454,18 +615,33 @@ func userFacingStatus(raw string) string {
 	return msg
 }
 
-// setLiveStatus replaces the current status line instead of appending one, so
-// the activity area shows the latest stage rather than a transcript of stages.
+// setLiveStatus places a stage line in the work log without letting stages pile
+// up. Three cases, in the order the loop meets them:
+//
+//   - The same words as the stage already showing: nothing happened that the
+//     user can see, so nothing is added. The gaia sidecar re-sends "Working out
+//     how to answer" once per agent-loop step; unfiltered, one turn spent three
+//     of its six log lines saying it.
+//   - A new stage with no completed work since the last one: replaces it. Two
+//     stages back to back are one stage changing, not two things done.
+//   - A new stage after a tool ran: its own line. The tool is evidence of work,
+//     and this is genuinely the next thing.
 func (m *ChatModel) setLiveStatus(msg string) {
+	sawWork := false
 	for i := len(m.activity) - 1; i >= 0; i-- {
-		if m.activity[i].Kind == "status" {
-			m.activity[i].Content = msg
+		switch m.activity[i].Kind {
+		case "tool", "confirm":
+			sawWork = true
+		case "status":
+			if m.activity[i].Content == msg {
+				return
+			}
+			if !sawWork {
+				m.activity[i].Content = msg
+				return
+			}
+			m.activity = append(m.activity, ActivityItem{Kind: "status", Content: msg})
 			return
-		}
-		// A completed tool call is evidence of work and stays; a status line
-		// after it is a NEW stage, so stop looking and add one.
-		if m.activity[i].Kind == "tool" {
-			break
 		}
 	}
 	m.activity = append(m.activity, ActivityItem{Kind: "status", Content: msg})

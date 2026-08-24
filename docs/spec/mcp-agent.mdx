@@ -109,7 +109,7 @@ class MCPAgent(Agent):
                 ...
 
     Example:
-        >>> class CodeAgent(MCPAgent, Agent):
+        >>> class FileToolsAgent(MCPAgent, Agent):
         ...     def get_mcp_tool_definitions(self):
         ...         return [{
         ...             "name": "create-file",
@@ -356,7 +356,7 @@ def _execute_tool_1(self, param1: str, param2: int) -> Dict:
 
 ```python
 # Single protocol (MCP only)
-class DockerAgent(MCPAgent, Agent):
+class ToolingAgent(MCPAgent, Agent):
     def get_mcp_tool_definitions(self):
         return [...]
 
@@ -364,7 +364,7 @@ class DockerAgent(MCPAgent, Agent):
         pass
 
 # Multiple protocols (MCP + API)
-class JiraAgent(MCPAgent, ApiAgent, Agent):
+class HybridAgent(MCPAgent, ApiAgent, Agent):
     # MCP methods
     def get_mcp_tool_definitions(self):
         return [...]
@@ -374,7 +374,7 @@ class JiraAgent(MCPAgent, ApiAgent, Agent):
 
     # API methods
     def get_model_id(self):
-        return "gaia-jira"
+        return "hybrid-agent"
 
 # Order: MCPAgent, ApiAgent, then Agent
 ```
@@ -746,7 +746,7 @@ from gaia.agents.base import Agent, MCPAgent
 from gaia.agents.base.api_agent import ApiAgent
 from typing import List, Dict, Any
 
-class CodeAgent(MCPAgent, ApiAgent, Agent):
+class CodeAnalyzerAgent(MCPAgent, ApiAgent, Agent):
     """Code agent exposed via MCP and OpenAI API."""
 
     def _get_system_prompt(self) -> str:
@@ -787,7 +787,7 @@ class CodeAgent(MCPAgent, ApiAgent, Agent):
 
     # API methods
     def get_model_id(self) -> str:
-        return "gaia-code"
+        return "code-analyzer"
 
     def get_model_info(self) -> Dict[str, Any]:
         return {
@@ -798,7 +798,8 @@ class CodeAgent(MCPAgent, ApiAgent, Agent):
 
 # Can be used via:
 # 1. MCP: VSCode extension -> execute_mcp_tool("analyze-code", ...)
-# 2. API: POST /v1/chat/completions with model="gaia-code"
+# 2. API: POST /v1/chat/completions with model="code-analyzer"
+#    (after registering it in AGENT_MODELS — see spec/api-server)
 ```
 
 ---

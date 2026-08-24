@@ -100,16 +100,16 @@ gaia --ui --base-url https://your-server:13305/api/v1
 
 Agents stop after a maximum number of reasoning/tool steps. The default is **50**, applied consistently across the CLI, the Agent UI, and background runs.
 
-- **Per-invocation:** pass `--max-steps <n>` to any agent command (e.g. `gaia browse --max-steps 80`). `gaia blender` uses `--steps <n>`.
+- **Per-invocation:** pass `--max-steps <n>` to any agent command (e.g. `gaia chat --max-steps 80`).
 - **Fleet-wide:** set the `GAIA_AGENT_MAX_STEPS` environment variable to change the default for every agent at once, without per-command flags.
 
 ```bash
 # Raise the limit for every agent in this shell
 export GAIA_AGENT_MAX_STEPS=80
-gaia browse "research the latest AMD Ryzen AI news"
+gaia chat --query "research the latest AMD Ryzen AI news"
 ```
 
-A few agents intentionally override the default (e.g. the Code agent uses 100 for multi-file generation). An invalid `GAIA_AGENT_MAX_STEPS` value (non-integer or ≤ 0) fails fast with an actionable error rather than silently capping agents.
+Some skills intentionally need more headroom than the default (e.g. multi-file code generation). An invalid `GAIA_AGENT_MAX_STEPS` value (non-integer or ≤ 0) fails fast with an actionable error rather than silently capping agents.
 
 ### Per-tool execution timeout
 
@@ -150,7 +150,7 @@ actionable error rather than run silently. For an unattended run you trust, set
 ```bash
 # CI / batch use only — the model can then send mail and run shell commands
 # without asking. Every approval is logged with the tool name.
-GAIA_AUTO_APPROVE_TOOLS=1 gaia analyze data.csv --json > report.json
+GAIA_AUTO_APPROVE_TOOLS=1 gaia email -q "Triage my inbox and reply to anything urgent"
 ```
 
 A `.env` file cannot set this variable; it must come from the real process
@@ -190,11 +190,14 @@ gaia init [OPTIONS]
 | `--minimal` | flag | false | Shortcut for `--profile minimal` |
 | `--skip-models` | flag | false | Skip model downloads (only install Lemonade) |
 | `--skip-lemonade` | flag | false | Skip Lemonade installation check (for CI with pre-installed Lemonade) |
+| `--skip-webui-build` | flag | false | Skip building the Agent UI frontend (dev/source installs only; same effect as setting `GAIA_SKIP_WEBUI_BUILD`) |
 | `--force-reinstall` | flag | false | Force reinstall even if compatible version exists |
 | `--force-models` | flag | false | Force re-download models (deletes then re-downloads each model) |
 | `--yes, -y` | flag | false | Skip confirmation prompts (non-interactive) |
 | `--verbose` | flag | false | Enable verbose output |
 | `--remote` | flag | false | Use remote Lemonade Server (skip local install/start, download models via API). Auto-detected when `LEMONADE_BASE_URL` is set to a non-localhost URL. |
+| `--skip-chat-model` | flag | false | Skip the profile's chat LLM but still install Lemonade and any embedding model the profile needs — for a session backed by a remote LLM (e.g. the Go TUI's `--use-claude`) that never calls the local chat model but still needs Lemonade for RAG/memory embeddings |
+| `--check` | flag | false | Report whether the profile is already set up and exit — no install, no download, no side effects. Exit code `0` means ready, `1` means `gaia init` still has work to do. Used by the Go TUI's first-boot check and `/setup` command |
 
 **Available Profiles:**
 
@@ -216,9 +219,17 @@ canonical choices list):
 | `all` | All models | All models for all agents | ~26 GB |
 
 <Note>
-The `talk`, `blender`, `jira`, and `docker` agents all rely on the `chat` profile —
-there is no dedicated profile for each. Run `gaia init --profile chat` (or `all`)
-to prepare their dependencies.
+`gaia init` sets up Lemonade + models only — it does not install the flagship [GAIA
+agent](/guides/gaia) or its terminal UI (`gaia-tui`). Get both with
+`npx @amd-gaia/gaia` (fetches and verifies both binaries, no Python required) or, from a
+checkout, `uv pip install -e hub/agents/gaia/python`. See the
+[flagship installer plan](/plans/flagship-installer) for how the two pieces fit together
+and current release status.
+</Note>
+
+<Note>
+The `talk` agent relies on the `chat` profile — there is no dedicated `talk`
+profile. Run `gaia init --profile chat` (or `all`) to prepare its dependencies.
 </Note>
 
 <Note>
@@ -425,7 +436,7 @@ Author, version, validate, and share GAIA agents.
 
 #### Developer workflow: `init`, `version`, `test`
 
-Scaffold a new agent package, bump its version, and run the quality gates that publishing requires. The scaffold mirrors the canonical hub package layout (`hub/agents/summarize/python/`).
+Scaffold a new agent package, bump its version, and run the quality gates that publishing requires. The scaffold mirrors the canonical hub package layout (`hub/agents/email/python/`).
 
 ```bash
 gaia agent init <name> [--language python|cpp] [--output DIR] [--layout flat|hub] [--force]
@@ -489,15 +500,19 @@ Manage an *installed* agent: set per-agent configuration, verify it loads, and i
 
 ```bash
 gaia agent configure <id> [--model NAME] [--set KEY=VALUE ...] [--replace] [--show]
-gaia agent health <id>
-gaia agent status [<id>]
+gaia agent health <id> [--json]
+gaia agent status [<id>] [--json]
 ```
 
 **`configure`** writes per-agent settings (e.g. a preferred model). `--set` values are JSON-decoded when possible (`--set temperature=0.2` stores a number, `--set verbose=true` a boolean), otherwise kept as strings. Settings merge into the existing config by default; pass `--replace` to overwrite it wholesale, or `--show` to print the current config without changing it.
 
-**`health`** verifies that an installed agent actually loads — its registration resolves and its entry point imports. It reports one of `healthy`, `degraded` (loads but something optional is off, e.g. a corrupt config), `error` (a required piece fails to load), or `not_installed`, and exits non-zero for `error` / `not_installed` so scripts can gate on it.
+**`health`** verifies that an installed agent actually loads — its registration resolves and its entry point imports. It reports one of `healthy`, `degraded` (loads but something optional is off, e.g. a corrupt config), `error` (a required piece fails to load), or `not_installed`.
 
 **`status`** aggregates installed version, health, config summary, and source for one agent — or every discovered agent when `<id>` is omitted.
+
+**Exit codes:** with an explicit `<id>`, both commands exit `1` when that agent's health is `error` or `not_installed`, `0` otherwise — so scripts can gate on a single agent without parsing table output. The all-agents form (`gaia agent status` with no `<id>`) always exits `0`; an absent agent shows up as a row, not a failure of the listing itself.
+
+**`--json`** emits machine-readable output instead of the table/text form, with log lines routed to stderr so stdout stays pure JSON for `| jq`. `health --json` prints one object (`HealthStatus.to_dict()`); `status --json` prints one object for a single `<id>`, or a JSON **list** of objects for the all-agents form.
 
 | Option | Applies to | Description |
 |--------|------------|-------------|
@@ -506,6 +521,7 @@ gaia agent status [<id>]
 | `--set KEY=VALUE` | `configure` | Set an arbitrary setting (repeatable) |
 | `--replace` | `configure` | Replace the whole config instead of merging |
 | `--show` | `configure` | Print the current config and exit |
+| `--json` | `health`, `status` | Emit machine-readable JSON instead of text |
 
 **Examples:**
 
@@ -517,6 +533,16 @@ gaia agent configure chat --model Qwen3.5-35B-A3B-GGUF
 ```bash Check health and status
 gaia agent health chat
 gaia agent status            # every discovered agent
+```
+
+```bash Gate a script on a single agent
+# Exit code alone is enough to gate on: 0 if installed, 1 if not.
+gaia agent status chat || echo "chat is not installed"
+
+# Or inspect the JSON. Passing the value with --arg keeps this working in
+# Windows PowerShell 5.1, which strips embedded double quotes from arguments
+# to native commands.
+gaia agent status chat --json | jq -e --arg v healthy '.health == $v'
 ```
 </CodeGroup>
 
@@ -556,12 +582,12 @@ pip install "amd-gaia[publish]"
 
 <CodeGroup>
 ```bash Build a wheel
-gaia agent pack hub/agents/summarize/python/
+gaia agent pack hub/agents/email/python/
 ```
 
 ```bash Store tokens, then dual-publish
 gaia agent login --hub --pypi          # prompts for each token
-gaia agent publish hub/agents/summarize/python/
+gaia agent publish hub/agents/email/python/
 ```
 
 ```bash Publish to PyPI only
@@ -576,7 +602,7 @@ same way — via the `gaia.agent` entry point, so the registry discovers it
 automatically:
 
 ```bash From PyPI (pip)
-pip install gaia-agent-summarize          # one agent
+pip install gaia-agent-email          # one agent
 pip install "amd-gaia[agents]"            # every AMD production agent
 ```
 
@@ -586,7 +612,7 @@ PyPI publishing for `gaia-agent-*` wheels is currently paused (tracked by
 resolve yet. Until publishing lands, install an agent straight from this repo:
 
 ```bash From source (works today)
-uv pip install "gaia-agent-summarize @ git+https://github.com/amd/gaia.git#subdirectory=hub/agents/summarize/python"
+uv pip install "gaia-agent-email @ git+https://github.com/amd/gaia.git#subdirectory=hub/agents/email/python"
 ```
 </Note>
 
@@ -826,47 +852,6 @@ During a chat session, use these special commands:
 | `/help` | Show available commands |
 | `quit`, `exit`, `bye` | End the chat session |
 
-### Specialized Agent Commands
-
-Use focused agent commands when you want a smaller tool surface than the full chat agent.
-
-```bash
-gaia browse [OPTIONS]
-gaia analyze [OPTIONS]
-```
-
-**Options:**
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `--query, -q` | string | - | Single query to execute |
-| `--model` | string | auto-selected by agent | Override the model used by the agent |
-| `--allowed-paths` | path(s) | - | Restrict local file paths used by agent tools |
-| `--stats`, `--show-stats` | flag | false | Show performance statistics |
-| `--stream` | flag | false | Enable streaming responses |
-| `--show-prompts` | flag | false | Display prompts sent to LLM |
-| `--debug` | flag | false | Enable debug output |
-| `--list-tools` | flag | false | List available tools and exit |
-
-**Examples:**
-
-<CodeGroup>
-```bash Browser Agent
-gaia browse --query "Search the web for AMD GAIA documentation"
-```
-
-```bash Analyst Agent
-gaia analyze --query 'Create a transactions table with date TEXT and amount REAL'
-```
-
-```bash Inspect Tools
-gaia browse --list-tools
-gaia analyze --list-tools
-```
-</CodeGroup>
-
----
-
 ### Prompt Command
 
 Send a single prompt to a GAIA agent.
@@ -908,140 +893,6 @@ gaia prompt "Write a story" \
 ---
 
 ## Specialized Agents
-
-### Code Agent
-
-<Card title="Code Development" icon="code" href="/guides/code">
-  AI-powered code generation, analysis, and linting for Python/TypeScript
-</Card>
-
-<Tip>
-The Code Agent requires extended context. Start Lemonade with:
-
-```bash
-lemonade-server serve --ctx-size 32768
-```
-</Tip>
-
-**Features:**
-- Intelligent Language Detection (Python/TypeScript)
-- Code Generation (functions, classes, unit tests)
-- Autonomous Workflow (planning → implementation → testing → verification)
-- Automatic Test Generation
-- Iterative Error Correction
-- Code Analysis with AST
-- Linting & Formatting
-
-**Quick Examples:**
-
-Routing detects "Express" and uses TypeScript:
-<CodeGroup>
-```bash TypeScript/Express
-gaia-code "Create a REST API with Express and SQLite for managing products"
-```
-</CodeGroup>
-
-Routing detects "Django" and uses Python:
-<CodeGroup>
-```bash Python/Django
-gaia-code "Create a Django REST API with authentication"
-```
-</CodeGroup>
-
-Routing detects "React" and uses TypeScript frontend:
-<CodeGroup>
-```bash React Frontend
-gaia-code "Create a React dashboard with user management"
-```
-</CodeGroup>
-
-<CodeGroup>
-```bash Interactive Mode
-gaia-code --interactive
-```
-
-```bash Cloud LLM
-gaia-code "Create a REST API" --use-claude
-```
-</CodeGroup>
-
-[→ Full Code Agent Documentation](/guides/code)
-
-#### Code Index
-
-`gaia-code index` builds and queries a local FAISS-backed semantic index over a repository. Embeddings run on AMD NPU/GPU through Lemonade Server. Requires the `[rag]` extras.
-
-```bash
-# Build / refresh the index for the current repo
-gaia-code index
-
-# Index a specific repo, capping discovery
-gaia-code index --repo /path/to/repo --max-files 2000
-
-# Semantic search
-gaia-code index search "where do we mint JWT tokens"
-gaia-code index search "auth flow" --scope code --top-k 5
-
-# Inspect / wipe the cache
-gaia-code index status
-gaia-code index clear
-
-# Interactive Q&A (CodeAgent + code_index tools)
-gaia-code index chat
-```
-
-Common flags at the `index` level: `--repo`, `--max-files`, `--model`, `--base-url`, `--no-lemonade-check`, `--use-claude`, `--use-chatgpt`.
-
-[→ Full Code Index Documentation](/guides/code-index)
-
----
-
-### Blender Agent
-
-<Card title="3D Scene Creation" icon="cube" href="/guides/blender">
-  Natural language 3D modeling and scene manipulation
-</Card>
-
-**Features:**
-- Natural Language 3D Modeling
-- Interactive Planning
-- Object Management
-- Material Assignment
-- MCP Integration
-
-**Options:**
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `--query` | string | – | Custom query to run instead of the built-in examples |
-| `--interactive` | flag | false | Continuously input queries in interactive mode |
-| `--example` | string | – | Run a specific built-in example (1-6); omit for interactive mode |
-| `--steps` | integer | 50 | Maximum number of steps per query (defaults to the global agent step limit, or `$GAIA_AGENT_MAX_STEPS` if set) |
-| `--output-dir` | path | output | Directory to save output files |
-| `--mcp-port` | integer | 9876 | Port for the Blender MCP server |
-| `--debug-prompts` | flag | false | Show prompts sent to the LLM |
-| `--print-result` | flag | false | Print results to the console |
-
-**Examples:**
-
-Interactive Blender mode:
-```bash
-gaia blender --interactive
-```
-
-Create specific objects:
-```bash
-gaia blender --query "Create a red cube and blue sphere arranged in a line"
-```
-
-Run built-in examples:
-```bash
-gaia blender --example 2
-```
-
-[→ Full Blender Agent Documentation](/guides/blender)
-
----
 
 ### Email Command
 
@@ -1096,61 +947,6 @@ that nothing happened.
 
 ---
 
-### SD Command
-
-<Card title="Image Generation" icon="image" href="/guides/sd">
-  Generate images using Stable Diffusion on Ryzen AI
-</Card>
-
-```bash
-gaia sd <prompt> [OPTIONS]
-```
-
-**Options:**
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `prompt` | string | - | Text description of the image to generate |
-| `-i, --interactive` | flag | false | Run in interactive mode |
-| `--sd-model` | string | SDXL-Turbo | Model: SDXL-Turbo (fast, good quality, default), SD-Turbo (faster, lower quality), SDXL-Base-1.0 (photorealistic, slow), SD-1.5 |
-| `--size` | string | auto | Image size: 512x512, 768x768, 1024x1024 (auto-selected per model) |
-| `--steps` | integer | auto | Inference steps (auto: 4 for Turbo, 20 for Base) |
-| `--cfg-scale` | float | auto | CFG scale (auto: 1.0 for Turbo, 7.5 for Base) |
-| `--output-dir` | path | .gaia/cache/sd/images | Directory to save images |
-| `--seed` | integer | random | Seed for reproducibility |
-| `--no-open` | flag | false | Skip prompt to open image in viewer |
-
-**Examples:**
-
-Fast, good-quality generation with the default (SDXL-Turbo, ~17s):
-```bash
-gaia sd "a sunset over mountains"
-```
-
-Even faster (lower quality) with SD-Turbo (~13s):
-```bash
-gaia sd "cyberpunk city at night" --sd-model SD-Turbo
-```
-
-Photorealistic with SDXL-Base-1.0 (slow, ~9min):
-```bash
-gaia sd "portrait, photorealistic, detailed" --sd-model SDXL-Base-1.0
-```
-
-For automation (no prompts):
-```bash
-gaia sd "test image" --no-open
-```
-
-Interactive mode:
-```bash
-gaia sd -i
-```
-
-[→ Full Image Generation Documentation](/guides/sd)
-
----
-
 ### Talk Command
 
 <Card title="Voice Interaction" icon="microphone" href="/guides/talk">
@@ -1192,87 +988,6 @@ gaia talk -i guide.pdf --no-tts
 </CodeGroup>
 
 [→ Full Voice Interaction Guide](/guides/talk)
-
----
-
-### Jira Command
-
-<Card title="Jira / Atlassian" icon="ticket" href="/guides/jira">
-  Natural-language interface for Jira, Confluence, and Compass using your Atlassian credentials (REST API).
-</Card>
-
-```bash
-gaia jira "Create a bug report for the login issue"
-gaia jira --interactive
-```
-
-**Options:**
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `command` | string | – | Natural-language command to execute (positional). |
-| `--interactive` | flag | false | Continuous interactive mode. |
-| `--mcp-host` | string | localhost | MCP bridge host. |
-| `--mcp-port` | integer | 8765 | MCP bridge port. |
-| `--verbose` | flag | false | Verbose output. |
-| `--debug` | flag | false | Debug logging. |
-
-[→ Full Jira Guide](/guides/jira)
-
----
-
-### Docker Command
-
-<Card title="Docker" icon="docker" href="/guides/docker">
-  Natural-language interface for Docker containerization.
-</Card>
-
-```bash
-gaia docker "Create a Dockerfile for my Flask app"
-gaia docker "Containerize this project" --directory ./myapp
-```
-
-**Options:**
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `command` | string | – | Natural-language command to execute (positional). |
-| `--directory` | path | current dir | Directory to analyze/containerize. |
-| `--verbose` | flag | false | Verbose output. |
-| `--debug` | flag | false | Debug logging. |
-
-[→ Full Docker Guide](/guides/docker)
-
----
-
-### Summarize Command
-
-Summarize meeting transcripts, emails, and PDFs.
-
-```bash
-gaia summarize --input ./meeting.vtt
-gaia summarize --input ./inbox/ --type email --format both
-```
-
-**Options:**
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `-i, --input` | path | – | Input file or directory (required unless `--list-configs`). |
-| `-o, --output` | path | auto | Output file/directory (auto-adjusted to format). |
-| `-t, --type` | `transcript`\|`email`\|`pdf`\|`auto` | auto | Input type. |
-| `-f, --format` | `json`\|`pdf`\|`email`\|`both` | json | Output format (`both` = json + pdf). |
-| `--styles` | one or more styles | executive participants action_items | `brief`, `detailed`, `bullets`, `executive`, `participants`, `action_items`, `all`. |
-| `--max-tokens` | integer | 1024 | Maximum tokens for the summary. |
-| `--email-to` | string | – | Recipients (comma-separated) for `email` output format. |
-| `--email-subject` | string | auto | Email subject line. |
-| `--email-cc` | string | – | CC recipients (comma-separated). |
-| `--config` | path | – | Use a predefined configuration file from `configs/`. |
-| `--list-configs` | flag | false | List available configuration templates and exit. |
-| `--combined-prompt` | flag | false | Combine styles into a single LLM call (experimental). |
-| `--no-viewer` | flag | false | Don't auto-open the HTML viewer for JSON output. |
-| `--quiet` | flag | false | Minimal output. |
-| `--verbose` | flag | false | Detailed/debug output. |
 
 ---
 
@@ -1336,7 +1051,7 @@ curl http://localhost:8080/health
 
     **Options:**
     - `--host` - Server host (default: localhost)
-    - `--port` - Server port (default: 8080). <Warning>The `gaia mcp docker` bridge defaults to the same port — run them on different ports if you need both.</Warning>
+    - `--port` - Server port (default: 8080)
     - `--debug` - Enable debug logging
     - `--show-prompts` - Log the prompts sent to the LLM for every request (useful for debugging)
     - `--streaming` - Stream tokens to clients via SSE (OpenAI-style)
@@ -1507,7 +1222,6 @@ gaia mcp test --query "Hello from GAIA MCP!"
 | `stop` | Stop background MCP bridge server |
 | `test` | Test MCP bridge functionality (optionally against a specific `--tool`) |
 | `agent` | Invoke the MCP orchestrator agent (positional `request` arg + `--domain`, `--context`) |
-| `docker` | Start the Docker MCP server (default port 8080) |
 | `serve` | Start the Agent UI MCP server (wraps the Agent UI backend) |
 | `tui` | Start the TUI control MCP server (drives a running `gaia tui --control`) |
 
@@ -1552,7 +1266,7 @@ curl -H "Authorization: Bearer $GAIA_MCP_AUTH_TOKEN" http://localhost:8765/statu
 
 `GET /health` stays public so container and orchestrator liveness probes keep
 working; it reports only liveness plus agent/tool **counts**. Every other
-endpoint — `/status`, `/tools`, `/chat`, `/llm`, `/jira`, `/summarize`, and the
+endpoint — `/status`, `/tools`, `/chat`, `/llm`, and the
 JSON-RPC endpoint — requires the token. `gaia mcp status`, `gaia mcp test`, and
 `gaia mcp agent` accept `--auth-token` (also defaulting to
 `$GAIA_MCP_AUTH_TOKEN`) so they can reach a protected bridge.
@@ -1577,13 +1291,8 @@ on loopback, before sending a token across an untrusted network.
 gaia mcp agent <request> [--domain DOMAIN] [--context CONTEXT]
 ```
 
-Pass a natural-language `request` and, optionally, a `--domain` (e.g. `jira`,
-`docker`) and free-form `--context` string to steer the orchestrator.
-
-#### `gaia mcp docker` options
-
-`--port` defaults to `8080`. <Warning>This is the **same default** as `gaia api
-start` — run them on different ports if you need both alive at once.</Warning>
+Pass a natural-language `request` and, optionally, a `--domain` (e.g. `atlassian`,
+`gaia`, `all`) and free-form `--context` string to steer the orchestrator.
 
 #### `gaia mcp tui` options
 
@@ -2932,8 +2641,9 @@ re-sends the request with the opt-in.
 #### `run --query` is a real one-shot
 
 `--query` does not open the alt screen. The answer goes to stdout, progress to
-stderr, and the exit code is `0` on a terminal answer / `1` on an error — so
-`gaia tui run email --query "…" > answer.txt` captures exactly the answer:
+stderr, and the exit code is `0` on a terminal answer, `1` on an error, and `3`
+when a confirmation gate held back a destructive action — so `gaia tui run
+email --query "…" > answer.txt` captures exactly the answer:
 
 ```bash
 gaia tui run email --query "how many unread?" > answer.txt 2> progress.log
@@ -3094,192 +2804,6 @@ Most callers should not speak this API directly — the
 [TUI MCP server](/guides/mcp/tui) wraps it as MCP tools.
 
 ---
-
-### Hub Command
-
-Browse, install and uninstall agents from the [GAIA Agent Hub](https://hub.amd-gaia.ai).
-`gaia hub` is a thin client over the daemon's install routes, so the CLI, the
-Agent UI and the TUI share **one** installer, one SHA-256 check and one install
-lock — installing from two places at once is a clean 409, never a corrupt
-download. The daemon is started automatically if it is not already running.
-
-Agents install into `~/.gaia/agents/<id>/` (binary + `gaia-agent.yaml` +
-`.installed` sentinel). Every artifact is verified against the SHA-256 in the
-hub manifest before it is written; a mismatch fails the install and leaves
-nothing behind — there is no "use it anyway" path.
-
-```bash
-gaia hub list                      # catalog + which agents are installed
-gaia hub list --installed          # only what is installed (works offline)
-gaia hub list --refresh            # bypass the 5-minute catalog cache
-gaia hub install email --trust     # required: email is a non-verified agent
-gaia hub install email --version 0.5.0 --trust
-gaia hub uninstall email           # stops the sidecar first, then removes the dir
-```
-
-| Action | Options | Description |
-|--------|---------|-------------|
-| `list` | `--installed`, `--refresh` | Print id, latest version, installed version (`↑` when an update is available), download size and name. Warns when the hub was unreachable and the cached catalog was used. `--installed` is answered from the local `.installed` sentinels and needs no network. |
-| `install <id>` | `--version`, `--trust` | Download + verify + install, printing each phase. Exit 1 on any failure, with the reason. `--trust` is required for any agent outside the `verified` security tier. |
-| `uninstall <id>` | — | Stop the agent's sidecar, verify its pid is gone, then remove `~/.gaia/agents/<id>/`. |
-
-**Notes**
-
-- Install and uninstall both stop a running sidecar first — the install
-  directory *is* the sidecar's binary cache — and keep it stopped for the whole
-  operation, so nothing can respawn it mid-download. If the process survives the
-  tree-kill, the command aborts loudly and nothing is mutated.
-- Install and uninstall of the same agent are serialized: the second caller gets
-  a clean "already in progress" error instead of racing the first.
-- The catalog only lists agents this GAIA build can actually supervise; anything
-  else is reported as hidden rather than silently dropped.
-- Reserved built-in agents (e.g. `builder`) ship with the wheel and are refused
-  by both `install` and `uninstall`.
-- **Trust gate.** Any agent outside the `verified` security tier runs
-  third-party code on your machine, so it is refused (HTTP 403) until you pass
-  `--trust`, with the remedy named in the error. A manifest that omits
-  `security_tier` counts as `experimental` and is gated the same way. Nothing
-  infers the opt-in for you, and there is no bypass — a client (TUI, UI) renders
-  this as a "Trust & Install" confirmation and retries with `trusted: true`.
-- Requires the daemon extras (`pip install "amd-gaia[ui]"`), same as `gaia daemon`.
-
-<Note>
-`gaia agent install <id>` does the same install **in-process**; `gaia hub
-install <id>` routes it through the daemon, which additionally stops the
-agent's running sidecar first and holds it stopped for the download. Prefer
-`gaia hub` when the daemon supervises that agent (today: `email`); `gaia agent`
-is the right call on a machine with no daemon extras installed. See the note
-under [Agent Command](#agent-command).
-</Note>
-
----
-
-### Terminal hub (`gaia tui`)
-
-`gaia tui` is the Go/Bubble Tea terminal hub: browse agents, install them, and
-chat with them without leaving the terminal. Building from source the binary is
-`tui/bin/gaia` (`cd tui && make build`).
-
-<Note>
-  The binary accepts a leading `tui` word and drops it, so `gaia tui install
-  email` and `gaia install email` are the same command. Running the source build
-  directly, both `./tui/bin/gaia tui list` and `./tui/bin/gaia list` work.
-</Note>
-
-```bash
-gaia tui                                  # open the hub
-gaia tui list                             # what the Agent Hub offers + what you have
-gaia tui list --installed                 # local only, no network call
-gaia tui install email --trust            # download and install
-gaia tui uninstall email                  # stop the agent and remove it
-gaia tui run email                        # interactive chat
-gaia tui run email --query "triage my inbox"   # one-shot: answer on stdout, exit 0/1
-gaia tui status                           # background service + what is installed
-```
-
-| Command | Description |
-|---------|-------------|
-| `gaia tui` | Open the Agent Hub. |
-| `gaia tui list [--installed]` | List agents with version, install state, download size, and security tier. `--installed` reads the local `~/.gaia/agents/*/.installed` sentinels and never touches the network. |
-| `gaia tui install <id> [--version X] [--trust]` | Install an agent and wait for it to finish. |
-| `gaia tui uninstall <id>` | Stop the agent's sidecar, verify it is gone, remove its install directory. |
-| `gaia tui run <id> [--query "…"] [--model M] [--timeout D]` | Run an agent. `--query` is a genuine one-shot, checked and bounded (`--timeout`, default 15m). |
-| `gaia tui status` | Whether the background service is running, which sidecars it knows, and what is installed. |
-| `gaia tui chat --agent <id>` \| `--subprocess <cmd>` | Chat with an agent by catalog id, or with a binary you spawn directly. With `--agent --query` it is the same one-shot `gaia tui run --query` is, `--timeout` included. |
-| `gaia tui hub` | The hub screen explicitly (same as bare `gaia tui`). |
-
-Install and uninstall are served by the GAIA daemon
-(`POST /daemon/v1/agents/{id}/install`, `DELETE /daemon/v1/agents/{id}`), so the
-TUI, `gaia hub`, and the Agent UI share one integrity check and one install
-lock. The daemon is started automatically for these commands; `gaia tui status`
-only ever attaches, so it reports what *is* running rather than starting
-something.
-
-#### `--trust`: installing a non-verified agent
-
-An agent outside the `verified` security tier runs third-party code on your
-machine. The daemon refuses to install one with **HTTP 403** until the caller
-passes an explicit opt-in — there is no bypass, and nothing retries on your
-behalf.
-
-From the CLI, that opt-in is `--trust`. Without it the command prints exactly
-what you would be agreeing to and exits non-zero:
-
-```console
-$ gaia tui install email
-
-Refusing to install "email" without --trust.
-
-  Agent       email
-  Version     0.5.0
-  Publisher   AMD
-  Security    experimental (not verified by AMD)
-  Download    31.1 MB
-  Access      none declared
-
-If you trust the publisher, re-run:
-  gaia tui install email --trust
-```
-
-In the hub screen the same refusal opens a **Trust & Install** confirmation
-showing the same facts. It defaults to *Cancel*, and only an explicit yes
-re-sends the request with the opt-in.
-
-#### `run --query` is a real one-shot
-
-`--query` does not open the alt screen. The answer goes to stdout, progress to
-stderr, and the exit code is `0` on a terminal answer / `1` on an error — so
-`gaia tui run email --query "…" > answer.txt` captures exactly the answer:
-
-```bash
-gaia tui run email --query "how many unread?" > answer.txt 2> progress.log
-echo $?   # 0
-```
-
-It never waits on something that is not there. Before the query is sent, a
-one-shot over the daemon transport (the agents the background service supervises)
-runs the same readiness check the hub's launch gate runs — background service,
-sidecar, local model server, model, and for email the mailbox — and if one of
-them is not ready it prints that row and its remedy to stderr and exits non-zero.
-Against an unreachable dependency that is about a second; the ceiling is the time
-it takes to start the sidecar. Nothing is sent to the agent, and the gate screen
-is never rendered: a script has nobody to press a key. An agent that runs as a
-local subprocess has no readiness route to probe, so it is launched directly.
-
-```bash
-$ gaia tui run email --query "triage my inbox"   # with the model server down
-❌ Email is not ready — Local AI: not running at http://localhost:8000/api/v1
-   GAIA needs a local model server. It runs on your machine; no message text ever leaves it.
-…
-        run: lemonade-server serve
-$ echo $?   # 1, after about a second
-```
-
-The turn itself is bounded — 15 minutes by default, `--timeout 90s` / `--timeout
-2h` to change it — so an agent that accepts the query and then stops answering is
-reported with what to read next instead of hanging a CI job until the job's own
-timeout kills it. There is no "wait forever": `--timeout 0` is refused. Interactive
-`gaia tui run <id>` is unaffected — a person can read what arrives and press
-ctrl+c.
-
-#### Hub keys
-
-| Key | Action |
-|-----|--------|
-| `enter` | Run the selected agent |
-| `i` | Install it (or update it, when a newer version exists) |
-| `d` | Uninstall it (asks first) |
-| `r` | Refresh the agent list from the Agent Hub |
-| `/` | Search |
-| `tab` / `shift+tab` | Next / previous category |
-| `v` | Vote for a coming-soon agent |
-| `?` | Help |
-| `q`, `ctrl+c` | Quit |
-
-<Note>
-  `backspace` is deliberately unbound. It used to share the uninstall binding
-  with `d` and `delete`, which made "go back" a destructive action.
-</Note>
 
 ### Cache Command
 
@@ -3511,12 +3035,6 @@ For more help, see:
 ## See Also
 
 <CardGroup cols={2}>
-  <Card title="Code Agent" icon="code" href="/guides/code">
-    Python/TypeScript development
-  </Card>
-  <Card title="Blender Agent" icon="cube" href="/guides/blender">
-    3D scene creation
-  </Card>
   <Card title="Voice Interaction" icon="microphone" href="/guides/talk">
     Speech-to-speech conversation
   </Card>

@@ -42,7 +42,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential curl jq libportaudio2
+          sudo apt-get install -y build-essential curl jq libportaudio2 software-properties-common
 
       - name: Setup Python environment
         uses: ./.github/actions/setup-venv
@@ -52,13 +52,134 @@ jobs:
           install-package: '.[dev,talk,rag,mcp,api]'
           extra-index-url: 'https://download.pytorch.org/whl/cpu'
 
-      - name: Install Lemonade SDK
+      - name: Install Lemonade Server (PPA)
         run: |
-          echo "=== Installing Lemonade SDK ==="
-          uv pip install lemonade-sdk --python .venv/bin/python
+          echo "=== Installing Lemonade Server from the Launchpad PPA ==="
+          # Byte-identical to LemonadeInstaller._install_via_ppa()
+          # (src/gaia/installer/lemonade_installer.py) -- GAIA's real Linux
+          # install path. lemonade-sdk was removed from PyPI.
+          sudo add-apt-repository -y ppa:lemonade-team/stable
+          sudo apt-get update
+          sudo apt-get install -y lemonade-server
 
           echo "=== Verifying Lemonade Installation ==="
-          lemonade-server-dev -h
+          lemonade --version
+
+      - name: Resolve and verify Lemonade version
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          import subprocess
+          import sys
+
+          # Read the pin the same way .github/actions/install-lemonade/action.yml
+          # does, to avoid triggering gaia/__init__.py for a plain version read.
+          sys.path.insert(0, "src/gaia")
+          from version import LEMONADE_MIN_VERSION, LEMONADE_VERSION  # noqa: E402
+
+          # gaia.llm.lemonade_launcher is the shared resolution/version-probe
+          # primitive -- reuse it instead of reimplementing the parsing in bash.
+          sys.path.insert(0, "src")
+          from gaia.llm.lemonade_launcher import (  # noqa: E402
+              get_installed_version,
+              resolve_lemonade,
+          )
+
+
+          def parse(v):
+              return tuple(int(p) for p in v.split(".")[:3])
+
+
+          try:
+              dpkg_raw = subprocess.run(
+                  ["dpkg-query", "-W", "-f=${Version}", "lemonade-server"],
+                  capture_output=True,
+                  text=True,
+                  check=True,
+              ).stdout.strip()
+          except subprocess.CalledProcessError as e:
+              print(
+                  "::error::dpkg-query could not find an installed lemonade-server "
+                  f"package ({e.stderr.strip()!r}). The PPA install step should have "
+                  "installed it -- check the 'Install Lemonade Server (PPA)' step's "
+                  "log above."
+              )
+              sys.exit(1)
+          dpkg_version = dpkg_raw.split("~")[0]
+
+          tooling = resolve_lemonade()
+          if not tooling.found:
+              print(
+                  "::error::gaia.llm.lemonade_launcher.resolve_lemonade() did not "
+                  f"find an installed Lemonade (dpkg reports {dpkg_raw}). The PPA "
+                  "install succeeded but GAIA's own launcher can't see it -- check "
+                  "the Linux probe in src/gaia/llm/lemonade_launcher.py:resolve_lemonade."
+              )
+              sys.exit(1)
+
+          probe_version = get_installed_version(tooling)
+          if probe_version is None:
+              print(
+                  "::error::gaia.llm.lemonade_launcher.get_installed_version() could "
+                  f"not parse a version from `{tooling.client_path} --version` (dpkg "
+                  f"reports {dpkg_raw}). Run that command on the runner to see the "
+                  "raw output; fix _VERSION_RE in "
+                  "src/gaia/llm/lemonade_launcher.py if the format changed."
+              )
+              sys.exit(1)
+
+          print(f"GAIA pin (LEMONADE_VERSION):        {LEMONADE_VERSION}")
+          print(f"GAIA floor (LEMONADE_MIN_VERSION):  {LEMONADE_MIN_VERSION}")
+          print(f"dpkg-query version:                 {dpkg_raw}  (normalized: {dpkg_version})")
+          print(f"gaia.llm.lemonade_launcher probe:    {probe_version}  (kind={tooling.kind})")
+
+          if dpkg_version != probe_version:
+              print(
+                  f"::error::Version sources disagree: dpkg reports {dpkg_version} "
+                  "but GAIA's own resolve_lemonade()/get_installed_version() reports "
+                  f"{probe_version}. The installed package and the launcher's "
+                  "--version parsing are out of sync -- a broken install. See "
+                  "src/gaia/llm/lemonade_launcher.py:get_installed_version."
+              )
+              sys.exit(1)
+
+          installed = probe_version
+          installed_t = parse(installed)
+          min_t = parse(LEMONADE_MIN_VERSION)
+          pin_t = parse(LEMONADE_VERSION)
+
+          if installed_t < min_t:
+              print(
+                  f"::error::Installed Lemonade {installed} is below "
+                  f"LEMONADE_MIN_VERSION ({LEMONADE_MIN_VERSION}) -- the floor "
+                  "GAIA's own code refuses to run against. The PPA's current build "
+                  "has regressed below GAIA's minimum; see src/gaia/version.py."
+              )
+              sys.exit(1)
+
+          if installed_t < pin_t:
+              print(
+                  f"::error::Installed Lemonade {installed} is older than the "
+                  f"pinned LEMONADE_VERSION ({LEMONADE_VERSION}) -- GAIA pins a "
+                  "Lemonade release that Linux users cannot actually install from "
+                  f"the PPA. Lower LEMONADE_VERSION to {installed} (or below) in "
+                  "src/gaia/version.py, or wait for the PPA to catch up."
+              )
+              sys.exit(1)
+
+          if installed_t > pin_t:
+              print(
+                  f"::warning::Installed Lemonade {installed} is newer than the "
+                  f"pinned LEMONADE_VERSION ({LEMONADE_VERSION}) in "
+                  "src/gaia/version.py. Linux users are unaffected (the PPA install "
+                  "is unpinned either way) -- this is stale bookkeeping. Merge the "
+                  "open lemonade-version-bump PR to clear it."
+              )
+
+          with open(os.environ["GITHUB_ENV"], "a") as f:
+              f.write(f"LEMONADE_INSTALLED_VERSION={installed}\n")
+          PY
 
       - name: Verify GAIA CLI installation
         run: |
@@ -83,22 +204,75 @@ jobs:
           HUGGINGFACE_ACCESS_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
           HF_TOKEN: ${{ secrets.HUGGINGFACE_ACCESS_TOKEN }}
         run: |
-          echo "=== Starting Lemonade Server ==="
+          echo "=== Starting Lemonade Server via GAIA's own launcher abstraction ==="
 
-          # Start Lemonade server in background with a lightweight model
-          echo "Starting Lemonade server with Qwen model..."
-          echo "Note: First run may take 5-10 minutes to download the model (~3GB)"
+          # build_start_command() is the single source of truth for how GAIA
+          # starts a resolved install (src/gaia/llm/lemonade_launcher.py) --
+          # this is its first exercise on Linux CI. Modern Linux tooling
+          # resolves to `systemctl --user start lemond`.
+          STARTSPEC=$(python -c "
+          import json, sys
+          sys.path.insert(0, 'src')
+          from gaia.llm.lemonade_launcher import build_start_command, resolve_lemonade
+          spec = build_start_command(resolve_lemonade(), None)
+          print(json.dumps({'argv': spec.argv, 'env': spec.env}))
+          ")
+          echo "build_start_command() resolved: $STARTSPEC"
+          mapfile -t START_ARGV < <(echo "$STARTSPEC" | jq -r '.argv[]')
 
-          # Start server and capture both stdout and stderr
-          lemonade-server-dev run Qwen3-0.6B-GGUF > lemonade.log 2>&1 &
-          LEMONADE_PID=$!
-          echo "Lemonade server started with PID: $LEMONADE_PID"
+          # Unified log source for both start paths below, so the rest of this
+          # step (and the job's upload-artifact step) don't need to care which
+          # one ran.
+          dump_lemonade_log() {
+            if [ "$LEMONADE_SYSTEMD_MANAGED" = "true" ]; then
+              journalctl --user -u lemond --no-pager | tee lemonade.log
+            else
+              cat lemonade.log 2>/dev/null || true
+            fi
+          }
 
-          # Function to check if process is still running
+          LEMONADE_SYSTEMD_MANAGED=false
+          if [ "${START_ARGV[0]}" = "systemctl" ]; then
+            # GHA runners have no logind session by default, so the user
+            # systemd instance never comes up on its own -- enable-linger
+            # brings up user@<uid>.service standalone, matching a real
+            # logged-in desktop session.
+            echo "Enabling systemd user session (loginctl enable-linger)..."
+            sudo loginctl enable-linger "$(whoami)"
+            sudo systemctl start "user@$(id -u).service" || true
+            export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+            for i in $(seq 1 10); do
+              systemctl --user status >/dev/null 2>&1 && break
+              sleep 1
+            done
+
+            if ! "${START_ARGV[@]}"; then
+              echo "::error::systemctl --user start lemond failed on this runner even after enabling the user systemd session (loginctl enable-linger + XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR). GAIA's own build_start_command() for modern Linux tooling requires a working systemd --user session -- inspect the loginctl/systemctl output above; this is the same command a real Linux user's desktop session runs."
+              exit 1
+            fi
+            echo "✅ Started via systemd user unit: ${START_ARGV[*]}"
+            LEMONADE_SYSTEMD_MANAGED=true
+          else
+            # Legacy tooling (`lemonade-server serve ...`) is a foreground
+            # process, not a service-manager command -- background it directly.
+            mapfile -t START_ENV < <(echo "$STARTSPEC" | jq -r '.env | to_entries[] | "\(.key)=\(.value)"')
+            env "${START_ENV[@]}" "${START_ARGV[@]}" > lemonade.log 2>&1 &
+            LEMONADE_PID=$!
+            echo "Launched directly (PID: $LEMONADE_PID): ${START_ARGV[*]}"
+          fi
+
+          # Function to check if the server is still alive, regardless of
+          # which path started it.
           check_process_alive() {
+            if [ "$LEMONADE_SYSTEMD_MANAGED" = "true" ]; then
+              systemctl --user is-active --quiet lemond && return 0
+              echo "❌ lemond user unit is not active. Journal:"
+              dump_lemonade_log
+              return 1
+            fi
             if ! kill -0 $LEMONADE_PID 2>/dev/null; then
               echo "❌ Lemonade server process has died. Log output:"
-              cat lemonade.log
+              dump_lemonade_log
               return 1
             fi
             return 0
@@ -114,7 +288,7 @@ jobs:
               exit 1
             fi
 
-            if curl -sf -m 5 http://localhost:8000/api/v1/health >/dev/null 2>&1; then
+            if curl -sf -m 5 http://localhost:13305/api/v1/health >/dev/null 2>&1; then
               echo "✅ Lemonade server is responding! (${elapsed}s)"
               break
             fi
@@ -124,14 +298,32 @@ jobs:
 
             if [ $((elapsed % 60)) -eq 0 ]; then
               echo "Still waiting... (${elapsed}s elapsed)"
-              tail -3 lemonade.log 2>/dev/null || true
+              if [ "$LEMONADE_SYSTEMD_MANAGED" = "true" ]; then
+                journalctl --user -u lemond --no-pager -n 3 2>/dev/null || true
+              else
+                tail -3 lemonade.log 2>/dev/null || true
+              fi
             fi
           done
 
           if [ $elapsed -ge $max_wait ]; then
             echo "❌ Lemonade server failed to start within ${max_wait}s"
-            cat lemonade.log
-            kill $LEMONADE_PID 2>/dev/null || true
+            dump_lemonade_log
+            if [ "$LEMONADE_SYSTEMD_MANAGED" != "true" ]; then
+              kill $LEMONADE_PID 2>/dev/null || true
+            fi
+            exit 1
+          fi
+
+          # Third version source: the running server's own report. The first
+          # two (dpkg + GAIA's probe) already agreed in the "Resolve and
+          # verify Lemonade version" step; LEMONADE_INSTALLED_VERSION carries
+          # that agreed value forward.
+          HEALTH_VERSION=$(curl -s http://localhost:13305/api/v1/health | jq -r '.version // "unknown"')
+          echo "server /api/v1/health version: $HEALTH_VERSION (installed package: $LEMONADE_INSTALLED_VERSION)"
+          if [ "$HEALTH_VERSION" != "$LEMONADE_INSTALLED_VERSION" ]; then
+            echo "::error::Running server reports version $HEALTH_VERSION but the installed package is $LEMONADE_INSTALLED_VERSION — the three version sources disagree. The server may be a stale process left running from before install/upgrade; restart lemond and retry."
+            dump_lemonade_log
             exit 1
           fi
 
@@ -144,7 +336,7 @@ jobs:
           max_attempts=4   # 1 initial + 3 retries
           delay=60
           for attempt in $(seq 1 $max_attempts); do
-            if lemonade-server-dev pull Qwen3-0.6B-GGUF; then
+            if lemonade pull Qwen3-0.6B-GGUF; then
               pull_ok=true
               break
             fi
@@ -156,16 +348,16 @@ jobs:
           done
           if [ "$pull_ok" != "true" ]; then
             echo "::error::model pull failed after ${max_attempts} attempts (Qwen3-0.6B-GGUF)"
-            cat lemonade.log 2>/dev/null || true
+            dump_lemonade_log
             exit 1
           fi
 
           # List available models for debugging
           echo "=== Listing Available Models ==="
-          curl -s http://localhost:8000/api/v1/models | jq '.' || echo "Could not list models"
+          curl -s http://localhost:13305/api/v1/models | jq '.' || echo "Could not list models"
 
-          # Python lemonade-server-dev runs on port 8000; tell GAIA CLI where to connect
-          export LEMONADE_BASE_URL=http://localhost:8000/api/v1
+          # Modern lemond/lemonade binds DEFAULT_PORT (13305); tell GAIA CLI where to connect
+          export LEMONADE_BASE_URL=http://localhost:13305/api/v1
 
           echo "=== Testing Core GAIA CLI Commands with Lemonade ==="
 
@@ -202,8 +394,8 @@ jobs:
           echo "Testing LemonadeClient API with running server"
 
           # Run the lemonade client integration tests (skip hybrid NPU test - no NPU on Linux)
-          # LEMONADE_PORT=8000: lemonade-server-dev always binds to 8000 (no --port flag)
-          LEMONADE_PORT=8000 GAIA_TEST_MODEL="Qwen3-0.6B-GGUF" python -m pytest tests/test_lemonade_client.py -vs --tb=short -k "Integration and not hybrid" || LEMONADE_TEST_EXIT=$?
+          # LEMONADE_PORT defaults to 13305 (DEFAULT_PORT); set explicitly for clarity.
+          LEMONADE_PORT=13305 GAIA_TEST_MODEL="Qwen3-0.6B-GGUF" python -m pytest tests/test_lemonade_client.py -vs --tb=short -k "Integration and not hybrid" || LEMONADE_TEST_EXIT=$?
 
           if [ "${LEMONADE_TEST_EXIT:-0}" -eq 0 ]; then
             echo "✅ Lemonade client integration tests passed successfully!"
@@ -214,7 +406,11 @@ jobs:
 
           # Clean up: Stop the Lemonade server
           echo "Stopping Lemonade server..."
-          kill $LEMONADE_PID 2>/dev/null || true
+          if [ "$LEMONADE_SYSTEMD_MANAGED" = "true" ]; then
+            systemctl --user stop lemond 2>/dev/null || true
+          else
+            kill $LEMONADE_PID 2>/dev/null || true
+          fi
           sleep 5
 
           # Report failures — RAG tests may fail when the agent's default model
@@ -299,7 +495,6 @@ jobs:
           echo "   ✅ Lemonade server with Qwen3-0.6B-GGUF model"
           echo "   ✅ Core CLI commands using Qwen model (chat, prompt, llm)"
           echo "   ✅ Evaluation commands (eval, eval agent)"
-          echo "   ✅ Summarizer CLI integration (gaia summarize command)"
           echo "   ✅ RAG (Retrieval-Augmented Generation) functionality"
           echo "   ✅ Lemonade client integration (API tests)"
           echo "   ✅ Cross-platform compatibility"

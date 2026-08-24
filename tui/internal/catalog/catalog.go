@@ -249,7 +249,11 @@ func (c *Catalog) SetMockBinary(binaryPath string) {
 			continue
 		}
 		c.agents[i].BinaryPath = binaryPath
+		// All three describe how to invoke ONE binary, so they are replaced as
+		// a unit — a mock inheriting the real agent's --dev would be handed an
+		// argument it never declared.
 		c.agents[i].BinaryArgs = nil
+		c.agents[i].DevArgs = nil
 		if !c.agents[i].Status.IsLaunchable() {
 			c.agents[i].Status = StatusInstalled
 			c.agents[i].NotOfferedReason = ""
@@ -604,6 +608,7 @@ func (c *Catalog) Remove(id string) {
 		a := &c.agents[i]
 		a.BinaryPath = ""
 		a.BinaryArgs = nil
+		a.DevArgs = nil
 		a.InstalledVersion = ""
 		a.UpdateAvailable = false
 		if a.LatestVersion != "" {
@@ -703,36 +708,6 @@ func seedAgents() []Agent {
 			NotOfferedReason: NotPublishedReason,
 		},
 		{
-			ID: "code", Name: "Code", Description: "Code generation and editing",
-			Category: "Code", Tags: []string{"code", "programming", "developer"},
-			Icon: "🔧", Version: "0.1.0", Status: StatusComingSoon,
-			NotOfferedReason: NotPublishedReason,
-		},
-		{
-			ID: "blender", Name: "Blender", Description: "3D scene automation and modeling",
-			Category: "Creative", Tags: []string{"3d", "blender", "modeling", "animation"},
-			Icon: "🎨", Version: "0.1.0", Status: StatusComingSoon,
-			NotOfferedReason: NotPublishedReason,
-		},
-		{
-			ID: "jira", Name: "Jira", Description: "Issue tracking and project management",
-			Category: "Productivity", Tags: []string{"jira", "issues", "project", "agile"},
-			Icon: "🎫", Version: "0.1.0", Status: StatusComingSoon,
-			NotOfferedReason: NotPublishedReason,
-		},
-		{
-			ID: "docker", Name: "Docker", Description: "Container management and orchestration",
-			Category: "DevOps", Tags: []string{"docker", "containers", "kubernetes"},
-			Icon: "🐳", Version: "0.1.0", Status: StatusComingSoon,
-			NotOfferedReason: NotPublishedReason,
-		},
-		{
-			ID: "summarize", Name: "Summarize", Description: "Document and text summarization",
-			Category: "Documents", Tags: []string{"summarize", "text", "tldr"},
-			Icon: "📝", Version: "0.1.0", Status: StatusComingSoon,
-			NotOfferedReason: NotPublishedReason,
-		},
-		{
 			// The email agent is an HTTP sidecar the daemon supervises, not a
 			// binary the TUI can spawn — it is reached through the daemon relay.
 			ID: "email", Name: "Email", Description: "Email triage, drafting, and calendar",
@@ -740,25 +715,35 @@ func seedAgents() []Agent {
 			Icon: "📧", Version: "0.1.0", Status: StatusAvailable,
 			Transport: TransportDaemon,
 		},
-
-		// --- Coming Soon ---
+		// The flagship, spawned directly as a child process: TUI -> agent ->
+		// Lemonade, with no daemon, HTTP port, bearer token or model-slot lease
+		// in the path. The child is started once and kept, which is what makes a
+		// turn cost ~2.5s instead of ~44.6s (the agent is built once, not per
+		// request) and what makes a skill loaded in one turn still loaded in the
+		// next — no session id, no session registry, no contract version.
+		//
+		// CanonicalEvents because it writes the canonical vocabulary, the only
+		// one with somewhere to put tool narration and result previews.
+		//
+		// Seeded ComingSoon on purpose: it is not on the Agent Hub yet, and the
+		// seed list is the pre-hub-load fallback, so shipping it Available would
+		// offer an install that cannot be fetched — the same row-that-fails bug
+		// gaia-bash caused. A hub row promotes it once it publishes; `run`
+		// resolves on catalog presence rather than status, so local development
+		// works without over-claiming to users.
 		{
-			ID: "routing", Name: "Routing", Description: "Intelligent agent selection and orchestration",
-			Category: "Infrastructure", Tags: []string{"routing", "orchestration", "multi-agent"},
-			Icon: "🔀", Version: "0.1.0", Status: StatusComingSoon,
+			ID: "gaia", Name: "GAIA", Description: "Chat, documents, data, and web research — with memory and skills",
+			Category: "General", Tags: []string{"general", "chat", "rag", "memory", "skills"},
+			Icon: "✨", Version: "0.1.0", Status: StatusComingSoon,
 			NotOfferedReason: NotPublishedReason,
-		},
-		{
-			ID: "browser", Name: "Browser", Description: "Web browsing and automation",
-			Category: "Research", Tags: []string{"browser", "web", "scraping", "automation"},
-			Icon: "🌐", Version: "0.1.0", Status: StatusComingSoon,
-			NotOfferedReason: NotPublishedReason,
-		},
-		{
-			ID: "data-analyst", Name: "Data Analyst", Description: "Data analysis and visualization",
-			Category: "Data", Tags: []string{"data", "analysis", "charts", "csv", "excel"},
-			Icon: "📊", Version: "0.1.0", Status: StatusComingSoon,
-			NotOfferedReason: NotPublishedReason,
+			Transport:        TransportSubprocess,
+			BinaryPath:       "gaia-agent",
+			CanonicalEvents:  true,
+			// `gaia-tui --dev` also puts the child at DEBUG in
+			// ~/.gaia/logs/gaia-agent.log. Without this the TUI would go verbose
+			// while the agent kept logging errors only — and the log is where the
+			// answer usually is.
+			DevArgs: []string{"--dev"},
 		},
 	}
 }

@@ -499,3 +499,200 @@ def test_handle_dispatches_pack(tmp_path, monkeypatch):
         packager, "pack", lambda p, *, output_dir=None, **k: _FakePackResult(tmp_path)
     )
     assert cli_agent.handle(_pack_args(tmp_path)) is True
+
+
+# ---------------------------------------------------------------------------
+# status / health — exit codes and --json (issue #2994)
+# ---------------------------------------------------------------------------
+
+
+def _status_args(agent_id=None, as_json=False):
+    return Namespace(agent_action="status", id=agent_id, as_json=as_json)
+
+
+def _health_args(agent_id, as_json=False):
+    return Namespace(agent_action="health", id=agent_id, as_json=as_json)
+
+
+def _fake_status(agent_id, health, *, version="1.0.0", source="installed"):
+    from gaia.hub import lifecycle
+
+    return lifecycle.AgentStatus(
+        id=agent_id,
+        installed=health != lifecycle.HEALTH_NOT_INSTALLED,
+        installed_version=None if health == lifecycle.HEALTH_NOT_INSTALLED else version,
+        health=health,
+        config={},
+        source="" if health == lifecycle.HEALTH_NOT_INSTALLED else source,
+    )
+
+
+def test_cmd_status_absent_id_exits_nonzero(monkeypatch):
+    from gaia.hub import lifecycle
+
+    monkeypatch.setattr(cli_agent, "_build_registry", lambda: None)
+    monkeypatch.setattr(
+        lifecycle,
+        "status",
+        lambda agent_id, registry=None: _fake_status(
+            agent_id, lifecycle.HEALTH_NOT_INSTALLED
+        ),
+    )
+    with pytest.raises(SystemExit) as exc:
+        cli_agent.cmd_status(_status_args("ghost"))
+    assert exc.value.code != 0
+
+
+def test_cmd_status_present_id_exits_zero(monkeypatch, capsys):
+    from gaia.hub import lifecycle
+
+    monkeypatch.setattr(cli_agent, "_build_registry", lambda: None)
+    monkeypatch.setattr(
+        lifecycle,
+        "status",
+        lambda agent_id, registry=None: _fake_status(
+            agent_id, lifecycle.HEALTH_HEALTHY
+        ),
+    )
+    # Should not raise SystemExit at all.
+    cli_agent.cmd_status(_status_args("chat"))
+    assert "chat" in capsys.readouterr().out
+
+
+def test_cmd_status_all_agents_exits_zero_even_with_absent(monkeypatch, capsys):
+    from gaia.hub import lifecycle
+
+    monkeypatch.setattr(cli_agent, "_build_registry", lambda: None)
+    monkeypatch.setattr(
+        lifecycle,
+        "status_all",
+        lambda registry=None: {
+            "chat": _fake_status("chat", lifecycle.HEALTH_HEALTHY),
+            "ghost": _fake_status("ghost", lifecycle.HEALTH_NOT_INSTALLED),
+        },
+    )
+    # The listing form never gates on an absent agent — no SystemExit.
+    cli_agent.cmd_status(_status_args(None))
+    out = capsys.readouterr().out
+    assert "chat" in out
+    assert "ghost" in out
+
+
+def test_cmd_status_json_single_agent(monkeypatch, capsys):
+    import json
+
+    from gaia.hub import lifecycle
+
+    monkeypatch.setattr(cli_agent, "_build_registry", lambda: None)
+    monkeypatch.setattr(
+        lifecycle,
+        "status",
+        lambda agent_id, registry=None: _fake_status(
+            agent_id, lifecycle.HEALTH_HEALTHY
+        ),
+    )
+    cli_agent.cmd_status(_status_args("chat", as_json=True))
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {
+        "id": "chat",
+        "installed": True,
+        "installed_version": "1.0.0",
+        "health": lifecycle.HEALTH_HEALTHY,
+        "config": {},
+        "source": "installed",
+    }
+
+
+def test_cmd_status_json_all_agents_is_a_list(monkeypatch, capsys):
+    import json
+
+    from gaia.hub import lifecycle
+
+    monkeypatch.setattr(cli_agent, "_build_registry", lambda: None)
+    monkeypatch.setattr(
+        lifecycle,
+        "status_all",
+        lambda registry=None: {
+            "chat": _fake_status("chat", lifecycle.HEALTH_HEALTHY),
+            "ghost": _fake_status("ghost", lifecycle.HEALTH_NOT_INSTALLED),
+        },
+    )
+    cli_agent.cmd_status(_status_args(None, as_json=True))
+    payload = json.loads(capsys.readouterr().out)
+    assert isinstance(payload, list)
+    assert {entry["id"] for entry in payload} == {"chat", "ghost"}
+
+
+def test_cmd_status_json_absent_still_exits_nonzero(monkeypatch, capsys):
+    import json
+
+    from gaia.hub import lifecycle
+
+    monkeypatch.setattr(cli_agent, "_build_registry", lambda: None)
+    monkeypatch.setattr(
+        lifecycle,
+        "status",
+        lambda agent_id, registry=None: _fake_status(
+            agent_id, lifecycle.HEALTH_NOT_INSTALLED
+        ),
+    )
+    with pytest.raises(SystemExit) as exc:
+        cli_agent.cmd_status(_status_args("ghost", as_json=True))
+    assert exc.value.code != 0
+    # stdout must be pure, parseable JSON — no log lines mixed in.
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["health"] == lifecycle.HEALTH_NOT_INSTALLED
+
+
+def test_cmd_health_absent_id_exits_nonzero(monkeypatch):
+    from gaia.hub import lifecycle
+
+    monkeypatch.setattr(cli_agent, "_build_registry", lambda: None)
+    monkeypatch.setattr(
+        lifecycle,
+        "health_check",
+        lambda agent_id, registry=None: lifecycle.HealthStatus(
+            id=agent_id, state=lifecycle.HEALTH_NOT_INSTALLED, detail="not installed"
+        ),
+    )
+    with pytest.raises(SystemExit) as exc:
+        cli_agent.cmd_health(_health_args("ghost"))
+    assert exc.value.code != 0
+
+
+def test_cmd_health_present_id_exits_zero(monkeypatch, capsys):
+    from gaia.hub import lifecycle
+
+    monkeypatch.setattr(cli_agent, "_build_registry", lambda: None)
+    monkeypatch.setattr(
+        lifecycle,
+        "health_check",
+        lambda agent_id, registry=None: lifecycle.HealthStatus(
+            id=agent_id, state=lifecycle.HEALTH_HEALTHY, detail="ok"
+        ),
+    )
+    cli_agent.cmd_health(_health_args("chat"))
+    assert "chat" in capsys.readouterr().out
+
+
+def test_cmd_health_json_shape(monkeypatch, capsys):
+    import json
+
+    from gaia.hub import lifecycle
+
+    monkeypatch.setattr(cli_agent, "_build_registry", lambda: None)
+    monkeypatch.setattr(
+        lifecycle,
+        "health_check",
+        lambda agent_id, registry=None: lifecycle.HealthStatus(
+            id=agent_id, state=lifecycle.HEALTH_HEALTHY, detail="ok"
+        ),
+    )
+    cli_agent.cmd_health(_health_args("chat", as_json=True))
+    payload = json.loads(capsys.readouterr().out)
+    assert payload == {
+        "id": "chat",
+        "state": lifecycle.HEALTH_HEALTHY,
+        "detail": "ok",
+        "warnings": [],
+    }

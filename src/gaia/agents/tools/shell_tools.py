@@ -194,6 +194,74 @@ DANGEROUS_SHELL_OPERATORS = re.compile(
 )
 
 
+#: The one tool whose executor enforces the read-only binary policy, and so the
+#: only one a ``shell:execute`` grant may exempt from confirmation.
+_POLICY_GATED_SHELL_TOOL = "run_shell_command"
+
+
+def skill_granted_binaries(host: Any) -> frozenset:
+    """CLIs *host*'s loaded skills granted via ``shell:execute:<binary>``.
+
+    Read off the agent instance, never a module global: the grant belongs to one
+    agent's session, so a skill loaded on one agent can never widen a sibling's
+    shell. Empty for a host that has loaded no such skill — the common case,
+    which leaves the whitelist behaviour byte-identical.
+    """
+    grants = getattr(host, "_granted_binaries", None)
+    return grants.binaries() if grants is not None else frozenset()
+
+
+def _is_granted_binary(token: str, granted: frozenset) -> bool:
+    """True when *token* names a CLI this agent's skills granted."""
+    if not granted:
+        return False
+    from gaia.skills.binaries import normalize_binary
+
+    return normalize_binary(token) in granted
+
+
+def _operator_check_text(command: str) -> str:
+    """The part of *command* the operator blocklist applies to.
+
+    A PowerShell ``-Command`` body is script, not outer shell, and is validated
+    separately by ``_validate_command`` (DANGEROUS_PS_PATTERNS + the cmdlet
+    prefix allowlist). Scanning it here would refuse legitimate cmdlets.
+    """
+    if not command.strip().lower().startswith(("powershell ", "powershell.exe ")):
+        return command
+    try:
+        parts = shlex.split(command)
+    except ValueError:
+        parts = command.split()
+    outer = []
+    skip_next = False
+    for part in parts:
+        if skip_next:
+            skip_next = False
+            continue
+        if part.lower() in ("-command", "-c"):
+            skip_next = True
+            continue
+        outer.append(part)
+    return " ".join(outer)
+
+
+def _split_pipeline(cmd_parts: list) -> list:
+    """Split a shlex-split command on ``|`` into its non-empty segments."""
+    segments: list = []
+    current: list = []
+    for part in cmd_parts:
+        if part == "|":
+            if current:
+                segments.append(current)
+            current = []
+        else:
+            current.append(part)
+    if current:
+        segments.append(current)
+    return segments
+
+
 class ShellToolsMixin:
     """
     Mixin providing shell command execution tools with rate limiting.
@@ -214,6 +282,165 @@ class ShellToolsMixin:
         self.shell_command_times = deque(maxlen=100)  # Track last 100 command times
         self.max_commands_per_minute = 10
         self.max_commands_per_10_seconds = 3
+
+    def _validate_shell_command(self, command: str) -> tuple:
+        """Every refusal ``command`` earns on its text alone, plus its segments.
+
+        Pure and side-effect free, so it can run twice: once as a pre-flight
+        before the confirmation prompt, once on the real execution path. Sharing
+        one implementation is what keeps those two from ever disagreeing.
+
+        Returns:
+            ``(error, segments)`` — ``error`` is None when nothing here refuses
+            the command. Refusals that need runtime context (rate limit, working
+            directory, path traversal) stay with the caller, so a command this
+            clears may still be refused later; one it rejects never runs.
+        """
+        if DANGEROUS_SHELL_OPERATORS.search(_operator_check_text(command)):
+            return (
+                {
+                    "status": "error",
+                    "error": "Shell operators (&, >, >>, <, &&, ||, ;, `, $()) are not allowed for security reasons.",
+                    "has_errors": True,
+                    "hint": "Pipe (|) is allowed. Use individual commands for other operations.",
+                },
+                [],
+            )
+
+        try:
+            cmd_parts = shlex.split(command)
+        except ValueError as exc:
+            return (
+                {
+                    "status": "error",
+                    "error": f"Invalid command syntax: {exc}",
+                    "has_errors": True,
+                },
+                [],
+            )
+
+        segments = _split_pipeline(cmd_parts)
+        if not segments:
+            return (
+                {"status": "error", "error": "Empty command", "has_errors": True},
+                [],
+            )
+
+        granted = skill_granted_binaries(self)
+        for segment in segments:
+            error = self._validate_command(
+                segment[0].lower(),
+                segment,
+                command if len(segments) == 1 else " ".join(segment),
+                granted_binaries=granted,
+            )
+            if error:
+                return error, segments
+
+        return None, segments
+
+    def policy_refusal_for_call(
+        self, tool_name: str, tool_args: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """The refusal this call has already earned, before anyone is asked.
+
+        Read by ``Agent._policy_refusal``. A command the guardrails will refuse
+        must never raise a confirmation prompt: asking someone to approve
+        ``gh auth token`` when the answer is already no trains them to click
+        through, and frames a blocked action as merely risky. Refuse it first
+        and say why.
+
+        The mirror of that rule is what makes writes work: a command that WOULD
+        run on approval must not be refused here. ``_validate_shell_command``
+        returns None for a granted binary's confirmable write, so it falls
+        through to the prompt instead of dying in front of it.
+
+        Duck-typed rather than an override — ``Agent`` precedes this mixin in
+        ``ChatAgent``'s MRO, so a same-named method here would never be reached.
+        """
+        if tool_name != _POLICY_GATED_SHELL_TOOL:
+            return None
+        command = (tool_args or {}).get("command")
+        if not isinstance(command, str):
+            return None
+        error, _ = self._validate_shell_command(command)
+        if error is not None:
+            logger.info(
+                "Refusing %r before the confirmation prompt: %s",
+                command,
+                error.get("error"),
+            )
+        return error
+
+    def skill_grant_covers_call(
+        self, tool_name: str, tool_args: Dict[str, Any]
+    ) -> bool:
+        """True when an active ``shell:execute:<binary>`` grant covers this call.
+
+        Read by ``Agent._call_is_pre_authorized`` to skip the per-call
+        confirmation modal. The grant *is* the consent: the user declared one
+        named binary, restricted to a read-only table, in a skill they chose to
+        load. Re-asking on every call is not a second safeguard — a triage runs
+        five to ten ``gh`` reads, so it is five to ten modals attended and a
+        100% failure rate unattended.
+
+        Deliberately narrow. It answers False unless **every** segment of the
+        command is a granted binary running a read-only subcommand, so
+        ``gh issue list | head`` still prompts even though ``head`` is
+        whitelisted: consent was given for ``gh``, not for a pipeline.
+
+        **The ALLOW tier only.** A confirmable write (``gh issue comment``)
+        answers False here on purpose: the grant declares which writes MAY be
+        offered, and the user still approves each one. This is the single place
+        that decides a gh call runs with nobody asked, which is why it uses
+        ``validate_invocation`` — the function whose contract is exactly that
+        question, and which answers no for CONFIRM as well as REFUSE.
+
+        Duck-typed rather than an override — ``Agent`` precedes this mixin in
+        ``ChatAgent``'s MRO, so a same-named method here would never be reached.
+        """
+        if tool_name != _POLICY_GATED_SHELL_TOOL:
+            # Only the tool that actually runs _validate_command may be exempt;
+            # anything else would skip the modal without enforcing the policy.
+            return False
+
+        granted = skill_granted_binaries(self)
+        if not granted:
+            return False
+
+        command = (tool_args or {}).get("command")
+        if not isinstance(command, str) or DANGEROUS_SHELL_OPERATORS.search(command):
+            return False
+
+        try:
+            segments = _split_pipeline(shlex.split(command))
+        except ValueError:
+            return False
+        if not segments:
+            return False
+
+        from gaia.skills.binaries import (
+            BINARY_POLICIES,
+            normalize_binary,
+            validate_invocation,
+        )
+
+        for segment in segments:
+            binary = normalize_binary(segment[0])
+            if binary not in granted:
+                return False
+            policy = BINARY_POLICIES.get(binary)
+            if policy is None or validate_invocation(policy, segment) is not None:
+                return False
+
+        logger.info(
+            "Skipping the confirmation prompt for '%s': %r is covered by an active "
+            "skill grant (read-only %s).",
+            tool_name,
+            command,
+            ", ".join(sorted(granted)),
+        )
+        return True
 
     def _check_rate_limit(self) -> tuple:
         """
@@ -274,13 +501,71 @@ class ShellToolsMixin:
 
     @staticmethod
     def _validate_command(
-        cmd_base: str, cmd_parts: list, command: str
+        cmd_base: str,
+        cmd_parts: list,
+        command: str,
+        granted_binaries: frozenset = frozenset(),
     ) -> Optional[Dict[str, Any]]:
         """
         Validate a command against the whitelist and subcommand rules.
 
+        Args:
+            cmd_base: The lowercased command name.
+            cmd_parts: The shlex-split command.
+            command: The raw command string.
+            granted_binaries: Skill-granted CLIs for *this* agent instance. Passed
+                in rather than read from module state so the grant can never be
+                global.
+
         Returns None if the command is allowed, or an error dict if blocked.
+
+        A skill-granted CLI's *confirmable write* returns None here too. This
+        method answers "is this refused?", not "may it run unasked" — the
+        second question belongs to ``skill_grant_covers_call``, which is what
+        decides whether the confirmation prompt is skipped. Answering yes here
+        would refuse a write before anyone could approve it, which is the dead
+        end this tier removes.
         """
+        # Skill-granted CLIs are gated by their own policy table instead of
+        # ALLOWED_COMMANDS; anything ungranted is still refused.
+        # Imported here — gaia.skills pulls in the connector stack.
+        from gaia.skills.binaries import (
+            BINARY_POLICIES,
+            REFUSE,
+            classify_invocation,
+            normalize_binary,
+        )
+
+        binary = normalize_binary(cmd_base)
+        policy = BINARY_POLICIES.get(binary)
+        if policy is not None:
+            if binary not in granted_binaries:
+                return {
+                    "status": "error",
+                    "error": (
+                        f"Command '{binary}' is not available to this agent. It is "
+                        "granted only to a skill that declares "
+                        f"'shell:execute:{binary}' in its SKILL.md — load that skill "
+                        "first."
+                    ),
+                    "has_errors": True,
+                    "hint": f"{policy.summary} {policy.install_hint}",
+                }
+            decision = classify_invocation(policy, cmd_parts)
+            if decision.outcome == REFUSE:
+                return {
+                    "status": "error",
+                    "error": decision.message,
+                    "has_errors": True,
+                    "hint": (
+                        f"This one is refused outright, not gated — the '{binary}' "
+                        "grant will not run it even with the user's approval. "
+                        "Use an allowed command, or tell the user what you would "
+                        "have run and why it is blocked."
+                    ),
+                }
+            return None
+
         # Special handling for git - only allow read-only operations
         if cmd_base == "git":
             if len(cmd_parts) > 1:
@@ -548,66 +833,25 @@ class ShellToolsMixin:
                 else:
                     cwd = str(Path.cwd())
 
-                # Block dangerous shell operators (redirects, chaining)
-                # Pipes (|) are allowed but each command is validated
-                # For PowerShell commands, only check operators in the outer
-                # shell portion — the PS script body is validated separately
-                # by _validate_command (DANGEROUS_PS_PATTERNS + cmdlet
-                # prefix checks).
-                shell_text_to_check = command
-                cmd_lower_stripped = command.strip().lower()
-                if cmd_lower_stripped.startswith(("powershell ", "powershell.exe ")):
-                    # Strip out the -Command argument content so we only
-                    # check the outer shell for dangerous operators.
-                    try:
-                        _ps_parts = shlex.split(command)
-                    except ValueError:
-                        _ps_parts = command.split()
-                    _ps_outer = []
-                    _skip_next = False
-                    for _p in _ps_parts:
-                        if _skip_next:
-                            _skip_next = False
-                            continue
-                        if _p.lower() in ("-command", "-c"):
-                            _skip_next = True
-                            continue
-                        _ps_outer.append(_p)
-                    shell_text_to_check = " ".join(_ps_outer)
+                # Operators, syntax, and the per-command whitelist. Shared with
+                # the pre-flight that runs before the confirmation prompt, so a
+                # command refused there is refused here for the same reason.
+                error, segments = self._validate_shell_command(command)
+                if error:
+                    return error
 
-                if DANGEROUS_SHELL_OPERATORS.search(shell_text_to_check):
-                    return {
-                        "status": "error",
-                        "error": "Shell operators (&, >, >>, <, &&, ||, ;, `, $()) are not allowed for security reasons.",
-                        "has_errors": True,
-                        "hint": "Pipe (|) is allowed. Use individual commands for other operations.",
-                    }
-
-                # Parse command safely
-                try:
-                    cmd_parts = shlex.split(command)
-                except ValueError as e:
-                    return {
-                        "status": "error",
-                        "error": f"Invalid command syntax: {e}",
-                        "has_errors": True,
-                    }
-
-                if not cmd_parts:
-                    return {
-                        "status": "error",
-                        "error": "Empty command",
-                        "has_errors": True,
-                    }
+                granted = skill_granted_binaries(self)
+                cmd_parts = [part for segment in segments for part in segment]
 
                 # Validate arguments for path traversal
-                # This prevents "cat ../secret.txt" even if "cat" is allowed
+                # This prevents "cat ../secret.txt" even if "cat" is allowed.
+                # Exempt per SEGMENT, never per line: a granted CLI's operands are
+                # remote ids, but 'gh … | cat ../secret' must still be checked.
+                scanned = [
+                    seg for seg in segments if not _is_granted_binary(seg[0], granted)
+                ]
                 if hasattr(self, "path_validator"):
-                    for arg in cmd_parts[1:]:
-                        # Skip shell pipe operator
-                        if arg == "|":
-                            continue
-
+                    for arg in [a for seg in scanned for a in seg[1:]]:
                         candidate_path = arg
                         if arg.startswith("-"):
                             if "=" in arg:
@@ -651,39 +895,26 @@ class ShellToolsMixin:
                                         "error": f"Access denied: Argument '{arg}' resolves to forbidden path '{resolved_path}'",
                                         "has_errors": True,
                                     }
-                            except Exception:
-                                pass
+                            except (OSError, ValueError) as exc:
+                                # Unresolvable is not a verdict — say so rather
+                                # than letting the argument through unnoticed.
+                                logger.warning(
+                                    "Could not resolve '%s' against the allowed "
+                                    "paths (%s); it was not path-checked.",
+                                    arg,
+                                    exc,
+                                )
 
                 cmd_base = cmd_parts[0].lower()
 
-                # If the command contains pipes, validate EACH command in the pipeline
-                if "|" in cmd_parts:
-                    # Split into pipeline segments
-                    segments = []
-                    current_segment = []
-                    for part in cmd_parts:
-                        if part == "|":
-                            if current_segment:
-                                segments.append(current_segment)
-                            current_segment = []
-                        else:
-                            current_segment.append(part)
-                    if current_segment:
-                        segments.append(current_segment)
-
-                    # Validate each command in the pipeline
-                    for seg in segments:
-                        if not seg:
-                            continue
-                        seg_base = seg[0].lower()
-                        # Reconstruct the segment command for subcommand validation
-                        seg_command = " ".join(seg)
-                        error = self._validate_command(seg_base, seg, seg_command)
-                        if error:
-                            return error
-                else:
-                    # Single command - validate normally
-                    error = self._validate_command(cmd_base, cmd_parts, command)
+                # Validate every command in the pipeline, not just the first.
+                for seg in segments:
+                    error = self._validate_command(
+                        seg[0].lower(),
+                        seg,
+                        command if len(segments) == 1 else " ".join(seg),
+                        granted_binaries=granted,
+                    )
                     if error:
                         return error
 
@@ -697,7 +928,25 @@ class ShellToolsMixin:
                 # whitelist, we use shell=True on Windows so cmd.exe can resolve
                 # both built-ins and commands on PATH (including those from Git
                 # for Windows which provides ls, cat, grep, etc.).
-                use_shell = os.name == "nt"
+                #
+                # A skill-granted CLI is the exception, and must stay one. It is
+                # a real executable — it needs no built-in resolution — and it
+                # is the one path that can run without a confirmation prompt, on
+                # arguments built from untrusted remote text (an issue body the
+                # model just read). Handing cmd.exe the raw STRING there would
+                # let that text act: `--search "x|whoami"` is one argv token to
+                # every check above and two commands to cmd.exe, and `%VAR%`
+                # expands into a value the approval prompt never showed. argv
+                # goes to the process verbatim, so neither is possible.
+                # One segment only: a pipeline needs a shell to be a pipeline,
+                # and `cmd_parts` has already dropped the `|` tokens, so an argv
+                # run of one would silently concatenate the two commands.
+                lone_granted_segment = (
+                    len(segments) == 1
+                    and bool(granted)
+                    and _is_granted_binary(segments[0][0], granted)
+                )
+                use_shell = os.name == "nt" and not lone_granted_segment
 
                 # Build the command string for execution
                 # On Windows with shell=True, use the ORIGINAL command string
@@ -730,13 +979,50 @@ class ShellToolsMixin:
                             exec_cmd = win_cmd + exec_cmd[len(cmd_base) :]
 
                 # Execute command
+                #
+                # encoding/errors are explicit, and load-bearing. Bare
+                # ``text=True`` decodes with the locale codec — cp1252 on a
+                # default Windows box — and subprocess does that decode inside
+                # its pipe reader THREAD. A byte that codec cannot map raises
+                # UnicodeDecodeError in that thread, which dies, and
+                # subprocess.run then returns returncode 0 with EMPTY stdout.
+                # The command succeeded and its output was silently discarded.
+                #
+                # That is not an edge case: `gh issue list` on amd/gaia returns
+                # an issue title containing "⚠️", so GitHub triage got back
+                # nothing and the model reported an empty backlog it had never
+                # actually read. Any tool emitting UTF-8 (git, gh, npm, docker)
+                # hits it. errors="replace" keeps a stray undecodable byte from
+                # costing the whole output.
                 start_time = time.monotonic()
                 try:
                     result = subprocess.run(
                         exec_cmd,
                         cwd=cwd,
                         capture_output=True,
-                        text=True,
+                        # stdin is DEVNULL, never inherited. capture_output
+                        # redirects stdout/stderr but leaves stdin alone, and
+                        # this process's stdin is the agent transport's pipe —
+                        # held open by the TUI and never written to. A child
+                        # that reads it (directly, or by probing whether it is
+                        # interactive) blocks forever on input that cannot
+                        # arrive, because there is no human on that pipe.
+                        #
+                        # The hang was not theoretical: `gh` spawned from the
+                        # agent never exited, while the identical command took
+                        # 0.07s from a shell. Worse, subprocess.run's own
+                        # timeout does not save it — on expiry it kills the
+                        # cmd.exe it launched, then calls communicate() again
+                        # with NO timeout, which waits on pipes the surviving
+                        # grandchild still holds. That is the 180s tool timeout
+                        # and the orphaned gh.exe left behind by every attempt.
+                        #
+                        # DEVNULL gives an immediate EOF, which is the honest
+                        # answer here: an agent's shell command is
+                        # non-interactive by construction.
+                        stdin=subprocess.DEVNULL,
+                        encoding="utf-8",
+                        errors="replace",
                         timeout=timeout,
                         check=False,
                         env=os.environ.copy(),

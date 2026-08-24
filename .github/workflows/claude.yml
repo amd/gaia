@@ -3,7 +3,10 @@
 #
 # Fork PR Support:
 # - pr-review (pull_request_target): ✅ Works on fork PRs - full review when PR opened / marked ready
-# - pr-rereview (pull_request_target): ✅ Works on fork PRs - lightweight re-review on each push (synchronize); flags only new regressions, silent otherwise
+# - pr-rereview (pull_request_target): ✅ Works on fork PRs - lightweight Sonnet re-review on each push (synchronize); flags only new regressions, silent otherwise.
+#   ESCALATION: if it finds NO prior Claude review on the PR (the full pr-review was skipped because
+#   the fork-PR approval gate landed after a push, so only this synchronize run ever fired) it does a
+#   FULL first review instead of staying silent — see the job's STEP 0 / FULL-REVIEW MODE prompt.
 # - issue-handler (issue_comment): ✅ Works on fork PRs - responds to @claude in PR conversations
 # - issue-triage (issues: opened): ✅ Labels / dedupes / chases repro on new issues. No-ops when the
 #   issue already carries a type label (the bug/feature templates apply one), so it mainly affects
@@ -98,7 +101,9 @@
 # COST: Fork PRs consume your Anthropic quota — the Max subscription pool when
 # CLAUDE_CODE_OAUTH_TOKEN is set, otherwise per-token API billing. The full pr-review runs
 # only on open / reopen / ready; each subsequent push gets the lightweight pr-rereview
-# (Sonnet, flags only new regressions). Both groups cancel in-progress runs on rapid pushes.
+# (Sonnet, flags only new regressions) — UNLESS no prior review exists, in which case
+# pr-rereview escalates to a full first review (still Sonnet). Both groups cancel
+# in-progress runs on rapid pushes.
 # On the API-key fallback path (OAuth token expired), the Opus jobs bill per-token at up to
 # --max-turns 100 each until the monthly auth canary (claude-auth-canary.yml) flags the outage.
 
@@ -302,7 +307,7 @@ jobs:
             ## Review Checklist
 
             ### 1. Code Quality & Patterns
-            - **Architecture Consistency:** For new agents, compare with existing agents — in-core ones under `src/gaia/agents/` (chat, docqa, builder, routing) and most others under `hub/agents/<id>/python/gaia_agent_<id>/agent.py`
+            - **Architecture Consistency:** For new agents, compare with existing agents — in-core ones under `src/gaia/agents/` (builder) and hub ones under `hub/agents/<id>/python/gaia_agent_<id>/agent.py` (chat, email, gaia, connectors-demo, hello-world, word-count)
               - Does it extend `src/gaia/agents/base/agent.py` (`class Agent`)?
               - Does it register tools via `@tool` (see `src/gaia/agents/base/tools.py`)?
               - Does error handling use `src/gaia/agents/base/errors.py` formatters?
@@ -429,6 +434,13 @@ jobs:
   # (A true per-push delta isn't available — the pull_request event carries no before/after
   # SHA — so it scans the full diff but is told to flag only what's new, not repeat the
   # first review. cancel-in-progress collapses rapid pushes to the latest.)
+  #
+  # ESCALATION (STEP 0 in the prompt): fork/external PRs are held for maintainer approval,
+  # so if approval lands after a push the `opened` full pr-review never runs and this
+  # synchronize job is the FIRST to fire. To avoid a PR silently never getting reviewed, the
+  # job checks for a prior Claude review and, finding none, does a full first review instead
+  # of the silent lightweight pass. --max-turns is raised to 80 for that path (a ceiling, so
+  # it costs nothing extra on ordinary re-reviews).
   pr-rereview:
     if: |
       github.repository == 'amd/gaia' &&
@@ -452,13 +464,48 @@ jobs:
       comment_file: /tmp/rereview.md
       require_comment: false
       prompt: |
-        You are doing a LIGHTWEIGHT re-review of a push to an already-reviewed GAIA pull
-        request — NOT a full review. The first pr-review already covered this PR in depth.
+        You are re-reviewing a push to a GAIA pull request. You run in ONE of two modes
+        depending on whether Claude has already reviewed this PR — decide which FIRST.
 
         REPO: ${{ github.repository }}
         PR NUMBER: ${{ github.event.pull_request.number }}
 
-        ## Scope — flag only what's NEW
+        ## STEP 0 (MANDATORY, do this FIRST) — has this PR been reviewed yet?
+        External/fork PRs need maintainer approval before any Claude job runs, so the full
+        `pr-review` on the `opened` event is often NEVER executed — the first run that
+        actually fires is this push-triggered job. Never assume a prior review exists; verify:
+
+          `gh pr view ${{ github.event.pull_request.number }} --json comments --jq '.comments[].author.login'`
+          `gh api repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/reviews --jq '.[].user.login'`
+
+        A prior Claude review is a comment/review by `github-actions[bot]` that contains a
+        review (a Verdict line, severity emojis 🔴/🟡/🟢, or a "🔍 Technical details" block).
+        - Found one  → RE-REVIEW MODE (below).
+        - Found NONE → this PR has never been reviewed → FULL-REVIEW MODE (below). Do NOT
+          fall through to silence — the whole point of this branch is that the first review
+          was skipped by the approval gate and must still be delivered.
+
+        ═════════════════════════════════════════════════════════════════════
+        ## FULL-REVIEW MODE (no prior Claude review found) — you MUST post
+        Treat this as the FIRST review of the PR.
+        - Read `/tmp/review-rubric.md` (your severity/nit/skip policy; if absent or empty,
+          note that at the top of your review and use inline judgement), then `pr-diff.txt`,
+          `pr-files.txt`, and `CLAUDE.md`. Run `gh pr view ${{ github.event.pull_request.number }}`
+          for author intent, then selectively open changed files.
+        - Review correctness first, then security, tests, docs, and architecture / CLAUDE.md
+          compliance — the full GAIA review checklist.
+        - Post exactly ONE review in the TWO-part format below, leading with a Verdict
+          (Approve / Approve with suggestions / Request changes) and honouring the rubric's
+          nit cap. Even a clean PR gets a posted "Approve" — silence is NOT allowed here.
+        - Write it to /tmp/rereview.md. A workflow step posts that file after you
+          exit; do NOT post it yourself — a model-issued post that never happens
+          leaves the job green and the PR unreviewed.
+        Then STOP — the rest of this prompt is RE-REVIEW MODE and does not apply.
+        ═════════════════════════════════════════════════════════════════════
+
+        ## RE-REVIEW MODE (a prior Claude review exists) — flag only what's NEW
+        This is a LIGHTWEIGHT re-review, NOT a full review. The first pr-review already
+        covered this PR in depth.
         pr-diff.txt is the full PR diff (base..head); pr-files.txt lists changed files. Do
         NOT redo the full review or repeat its earlier points. Scan the diff for regressions
         and newly-introduced problems only; if nothing new is wrong, stay silent. (You can't
@@ -479,7 +526,8 @@ jobs:
         (if it is absent, fall back to inline judgement and say so); read CLAUDE.md and open
         any file you need to judge a specific change.
 
-        ## When to comment — DEFAULT IS SILENCE
+        ## When to comment — DEFAULT IS SILENCE (RE-REVIEW MODE only)
+        (In FULL-REVIEW MODE you always post — this section does not apply there.)
         Comment ONLY if you find a 🔴 critical or 🟡 important problem. If the diff looks fine
         or has only trivial nits, post NOTHING and exit — routine fix-up pushes must not spam
         the PR. This is intentionally STRICTER than the full review's nit cap: a re-review
@@ -508,8 +556,8 @@ jobs:
         - Write for the human: plain language, only the detail they need to act.
         - ~150 words max. No Summary / Strengths / Verdict scaffolding — this is a re-review, not a full review.
       claude_args: |
-        --max-turns 40
-        --model claude-opus-5
+        --max-turns 80
+        --model claude-sonnet-4-6
         --allowedTools Edit,Read,Write,Grep,Glob,Bash
 
   # Respond to @claude in PR review comments (non-fork PRs only - secrets unavailable on forks)
@@ -875,9 +923,7 @@ jobs:
             - `question` — a usage question with no defect claimed.
 
             Apply AT MOST ONE component label, only if the issue clearly belongs to it:
-            `agent::email`, `agent::analyst`, `agent::fileio`, `agent::sd`,
-            `agent::docqa`, `agent::emr`, `agent::browser`, `agent::summarize`,
-            `agent::blender`, `agent::code`, `agent::connectors-demo`,
+            `agent::email`, `agent::connectors-demo`, `agent::examples`,
             `cli`, `agent-ui`, `rag`, `eval`, `tests`, `installer`, `connectors`,
             `mcp`, `llm`, `audio`, `electron`, `lemonade`, `performance`, `security`.
 
@@ -1491,7 +1537,8 @@ jobs:
           # Note: claude-code-action does not support workflow_run events natively.
           # Using automation mode (via `prompt`) to bypass event type validation.
           prompt: |
-            Generate comprehensive release notes for GAIA version ${{ steps.tag.outputs.TAG_NAME }}.
+            Generate release notes for GAIA version ${{ steps.tag.outputs.TAG_NAME }}.
+            Short, plain, and bulleted — see the format and word budget below.
 
             ## FIRST ACTIONS
             1. Read release-context.txt - Contains commit log, contributors, PRs, and list of diff files
@@ -1530,41 +1577,43 @@ jobs:
             ```
             ---
             title: "${{ steps.tag.outputs.TAG_NAME }}"
-            description: "[One-line summary of this release]"
+            description: "[One plain line: what shipped. Not a pitch.]"
             ---
             ```
 
-            Then use this content structure for both files:
+            Then use this content structure for both files. Sections and shape must match
+            `.claude/skills/gaia-release/SKILL.md` (*Notes format*, Phase 1) exactly — both
+            generators write `docs/releases/<tag>.mdx`, so a divergence here makes the file's
+            shape depend on which one happened to run.
+
+            Bullets, not paragraphs. Every entry is one bullet, never a prose block.
 
             # GAIA ${{ steps.tag.outputs.TAG_NAME }} Release Notes
 
-            ## Overview
-
-            [2-3 sentence summary of the most important changes. Highlight major new features, significant improvements, or breaking changes.]
-
-            ## What's New
-
-            ### 🚀 [Major Feature Name]
-            [Description with code example if applicable]
-
-            [Continue for each major new feature...]
-
-            ## Improvements
-
-            ### [Category - e.g., Agent UX, Performance, etc.]
-            - **[Improvement name]**: [Brief description]
-
-            ## Bug Fixes
-
-            - **#[issue]**: [Description of fix]
-
-            ## Infrastructure
-
-            - [Change description]
+            [Optional single sentence naming what this release is about. Drop it if the
+            bullets already say it — that is the common case. Never a paragraph, and never
+            an "## Overview" section.]
 
             ## Breaking Changes
 
-            [List any breaking changes, or "None. All changes are additive."]
+            - **[what changed]** - [what to do instead]. (PR #[number])
+
+            ## What's New
+
+            - **[what the user can now do]** - `[gaia command]`. [At most one more sentence,
+              only if the title genuinely needs it.] (PRs #[number], #[number])
+
+            ## Bug Fixes
+
+            - **[what was broken]** - [what now happens]. (PR #[number])
+
+            ## Known Issues
+
+            - **[what still does not work]** - [workaround, or "tracked in #[number]"].
+
+            ## Contributors
+
+            - @[handle] - [what they contributed]. (PR #[number])
 
             ## Full Changelog
 
@@ -1575,14 +1624,33 @@ jobs:
 
             Full Changelog: [${{ env.PREVIOUS_TAG }}...${{ steps.tag.outputs.TAG_NAME }}](https://github.com/amd/gaia/compare/${{ env.PREVIOUS_TAG }}...${{ steps.tag.outputs.TAG_NAME }})
 
+            Omit `## Breaking Changes` and `## Known Issues` when there are none — do not emit
+            an empty section or a "None. All changes are additive." placeholder.
+
             ## Guidelines
 
-            1. **Be specific** - Reference actual file changes, not generic descriptions
-            2. **Include code examples** - For new features, show how to use them
-            3. **Categorize properly**: 🚀 new features, 🎯 improvements, 🐛 bug fixes, 🔧 infrastructure, 📚 docs, 🔒 security
-            4. **Link PRs and issues** - Use #number format
-            5. **Credit contributors** - Mention contributors for significant changes
-            6. **Highlight AMD-specific features** - NPU optimizations, Ryzen AI features
+            1. **Plain language, outcome first** - say what a user can now do, in the words
+               they would use. CLAUDE.md "How You Communicate" governs this output too.
+            2. **Bulleted and short** - one bullet per entry, at most two sentences in it.
+               No `###` prose blocks, no code examples, no walkthroughs.
+            3. **Word budget (a cap, not a target)** - from the top down to the first of
+               `## Bug Fixes` / `## Known Issues` / `## Contributors` / `## Full Changelog`,
+               total <= 350 words for a patch release, <= 600 for a minor/major. Those four are
+               reference lists sized by how many fixes shipped; squeezing them hides work. The
+               cap is on the narrative part. Over budget means cut entries, not reflow them.
+               Count before finishing:
+               `awk '/^## (Bug Fixes|Known Issues|Contributors|Full Changelog)/{exit} {print}' <file> | wc -w`
+            4. **Factual, not promotional** - state the capability and stop. No emoji anywhere,
+               in headings or body. Banned: "we're excited to announce", "finally",
+               "blazing(-fast)", "game-changer", "seamless", "powerful", "unlock",
+               "makes X effortless", invented benchmarks.
+            5. **Specific, not generic** - name the actual command, flag, or behavior that
+               changed, not "various improvements".
+            6. **Order by what users run** - agents and commands first, including AMD-specific
+               capabilities (NPU, Ryzen AI) when they ship; SDK, CI, and refactor work last, or
+               omitted when it has no user-visible effect.
+            7. **Link PRs and issues** - use the #number format.
+            8. **Credit contributors** - one comma-separated line under `## Contributors`.
 
             ## What NOT to Include
 

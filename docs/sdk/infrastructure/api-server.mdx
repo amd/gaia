@@ -24,20 +24,15 @@ import uvicorn
 # Run server (app is a module-level FastAPI instance)
 uvicorn.run(app, host="0.0.0.0", port=8080)
 
-# Now accessible via the OpenAI SDK:
+# Now accessible via the OpenAI SDK. The flagship ships registered as "gaia";
+# add more in AGENT_MODELS (see below):
 # from openai import OpenAI
 # client = OpenAI(base_url="http://localhost:8080/v1", api_key="dummy")
 # response = client.chat.completions.create(
-#     model="gaia-code",
+#     model="my-agent",
 #     messages=[{"role": "user", "content": "Write Python code"}]
 # )
 ```
-
-<Note>
-**Port 8080 is shared by default with `gaia mcp docker`.** Run one of them on a
-different port (e.g. `gaia api start --port 8081`) if you need both alive at
-the same time.
-</Note>
 
 ### CORS
 
@@ -139,22 +134,13 @@ class MyAPIAgent(ApiAgent):
 ### Registering new agents with the server
 
 The API server exposes a **static registry** of agent models at
-`src/gaia/api/agent_registry.py`, not a runtime `register()` API. To add a new
-model, append an entry to `AGENT_MODELS`:
+`src/gaia/api/agent_registry.py`, not a runtime `register()` API. `AGENT_MODELS`
+ships one entry, `gaia`, the flagship agent. To expose another model, append an
+entry to `AGENT_MODELS`:
 
 ```python
 # src/gaia/api/agent_registry.py
 AGENT_MODELS = {
-    "gaia-code": {
-        "class_name": "gaia_agent_routing.agent.RoutingAgent",
-        "init_params": {
-            "api_mode": True,
-            "silent_mode": True,
-            "streaming": False,
-            "max_steps": 100,
-        },
-        "description": "Intelligent routing agent ...",
-    },
     # 👇 New entry
     "my-agent": {
         "class_name": "my_package.my_agent.MyAPIAgent",

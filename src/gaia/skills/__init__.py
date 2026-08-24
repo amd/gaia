@@ -23,12 +23,27 @@ From an agent::
         def _register_tools(self):
             self.load_skill("web-research")   # tools land under 'web-research/'
 
-Phase 1 (issue #888) bridges connector-backed permissions only. A skill
-declaring a local-capability permission (``filesystem``, ``shell``,
-``database``, ``desktop``, ``env``) is refused — see
+Permissions bridge two ways: connector-backed domains (``network``, ``mcp``)
+and scoped binary grants (``shell:execute:gh``, gated by
+:mod:`gaia.skills.binaries`). A skill declaring an unbridged local capability
+(``filesystem``, ``database``, ``desktop``, ``env``) is refused — see
 :mod:`gaia.skills.permissions`.
 """
 
+from gaia.skills.binaries import (
+    ALLOW,
+    BINARY_POLICIES,
+    CONFIRM,
+    REFUSE,
+    BinaryGrants,
+    BinaryPolicy,
+    InvocationDecision,
+    Subcommand,
+    classify_invocation,
+    normalize_binary,
+    resolve_binary_policies,
+    validate_invocation,
+)
 from gaia.skills.consume import (
     AGENT_MANIFEST_FILENAME,
     ResolvedSkills,
@@ -88,6 +103,7 @@ from gaia.skills.migrate import (
     migrate_text,
 )
 from gaia.skills.permissions import (
+    BINARY_BRIDGED_DOMAINS,
     CONNECTOR_BRIDGED_DOMAINS,
     LOCAL_CAPABILITY_DOMAINS,
     Permission,
@@ -176,7 +192,21 @@ __all__ = [
     "connector_requirements",
     "refuse_unbridged_permissions",
     "CONNECTOR_BRIDGED_DOMAINS",
+    "BINARY_BRIDGED_DOMAINS",
     "LOCAL_CAPABILITY_DOMAINS",
+    # Binary bridge (shell:execute:<binary>)
+    "BINARY_POLICIES",
+    "BinaryPolicy",
+    "InvocationDecision",
+    "ALLOW",
+    "CONFIRM",
+    "REFUSE",
+    "classify_invocation",
+    "BinaryGrants",
+    "Subcommand",
+    "normalize_binary",
+    "resolve_binary_policies",
+    "validate_invocation",
     # Security tiers (#2467)
     "TIER_ORDER",
     "LOWEST_TIER",

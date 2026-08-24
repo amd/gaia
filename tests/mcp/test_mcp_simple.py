@@ -57,40 +57,8 @@ def test_mcp_bridge():
         print(f"❌ FAILED - {e}")
         return False
 
-    # Test 3: Jira Endpoint
-    print("3. Jira Endpoint... ", end="")
-    try:
-        req_data = json.dumps({"query": "show 1 issue"}).encode("utf-8")
-        req = urllib.request.Request(
-            f"{base_url}/jira",
-            data=req_data,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib.request.urlopen(req) as response:
-            data = json.loads(response.read().decode("utf-8"))
-            if data.get("success") or "result" in data:
-                print("✅ PASSED")
-            else:
-                print(f"❌ FAILED - {data.get('error', 'Unknown error')}")
-                return False
-    except urllib.error.HTTPError as e:
-        # In CI without Jira credentials, endpoint may return 500
-        import os
-
-        if (
-            os.environ.get("CI") == "true" or os.environ.get("GITHUB_ACTIONS") == "true"
-        ) and e.code == 500:
-            print("⚠️  EXPECTED (No Jira credentials in CI)")
-        else:
-            print(f"❌ FAILED - HTTP Error {e.code}: {e.reason}")
-            return False
-    except Exception as e:
-        print(f"❌ FAILED - {e}")
-        return False
-
-    # Test 4: LLM Endpoint
-    print("4. LLM Endpoint... ", end="")
+    # Test 3: LLM Endpoint
+    print("3. LLM Endpoint... ", end="")
     try:
         req_data = json.dumps({"query": "What is 2+2?"}).encode("utf-8")
         req = urllib.request.Request(

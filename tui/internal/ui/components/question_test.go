@@ -200,6 +200,105 @@ func TestQuestionAnswerLabelPrefersOptionLabel(t *testing.T) {
 	}
 }
 
+// --- mouse: RowAt / WithCursor -------------------------------------------------
+
+// RowAt(0) is always the question title — never a selectable row, whatever
+// the question text does.
+func TestRowAtTitleRowIsNotSelectable(t *testing.T) {
+	q := NewQuestionModel("q1", "Pick one", opts(), false, false)
+	q.SetWidth(76)
+	if got := q.RowAt(0); got != -1 {
+		t.Errorf("RowAt(0) = %d, want -1 (the title)", got)
+	}
+}
+
+// Every screen row the two options actually render on must resolve back to
+// the right option index — including their wrapped description lines, which
+// span more than one screen row each.
+func TestRowAtMapsEveryRenderedRowToItsOption(t *testing.T) {
+	q := NewQuestionModel("q1", "Which mailbox should I connect?", opts(), true, false)
+	q.SetWidth(76)
+	lines := strings.Split(q.View(), "\n")
+
+	seen := map[int]bool{}
+	for row := range lines {
+		if opt := q.RowAt(row); opt >= 0 {
+			seen[opt] = true
+		}
+	}
+	if !seen[0] || !seen[1] {
+		t.Errorf("expected both options reachable via RowAt, got hits for %v across %d rows", seen, len(lines))
+	}
+}
+
+// The mapping must be EXACT, not merely reachable: the screen row that shows
+// an option's "[N]" marker must resolve to option N-1. A constant off-by-one
+// (e.g. subtracting a border row the borderless panel no longer has) keeps
+// every option reachable through its wrapped description lines while sending
+// a click on the label itself to the row above — this pins the label row.
+func TestRowAtOptionLabelRowResolvesToThatOption(t *testing.T) {
+	q := NewQuestionModel("q1", "Which mailbox should I connect?", opts(), true, false)
+	q.SetWidth(76)
+	lines := strings.Split(q.View(), "\n")
+
+	for i := range opts() {
+		marker := "[" + string(rune('1'+i)) + "]"
+		found := false
+		for row, line := range lines {
+			if strings.Contains(stripANSI(line), marker) {
+				found = true
+				if got := q.RowAt(row); got != i {
+					t.Errorf("RowAt(%d) — the %s label row — = %d, want %d", row, marker, got, i)
+				}
+			}
+		}
+		if !found {
+			t.Fatalf("no rendered row carries the %s marker", marker)
+		}
+	}
+}
+
+// A row past the panel's own content is not a row at all.
+func TestRowAtOutOfRangeIsNotSelectable(t *testing.T) {
+	q := NewQuestionModel("q1", "Pick one", opts(), false, false)
+	q.SetWidth(76)
+	if got := q.RowAt(9999); got != -1 {
+		t.Errorf("RowAt(9999) = %d, want -1", got)
+	}
+}
+
+// WithCursor is the mouse's entry point to the same cursor Update drives —
+// it must move the highlighted option and its focus exactly like ↑/↓ does.
+func TestWithCursorMovesTheHighlightedOption(t *testing.T) {
+	q := NewQuestionModel("q1", "Pick one", opts(), false, false)
+	q.SetWidth(76)
+	q = q.WithCursor(1)
+
+	if q.Cursor() != 1 {
+		t.Errorf("Cursor() = %d, want 1", q.Cursor())
+	}
+	if !strings.Contains(stripANSI(q.View()), "> (*) [2] Outlook") {
+		t.Errorf("WithCursor(1) did not mark option 2 selected:\n%s", stripANSI(q.View()))
+	}
+}
+
+// An out-of-range row is a no-op — a stale mouse coordinate must never move
+// the cursor somewhere the keyboard path could not reach either.
+func TestWithCursorIgnoresAnOutOfRangeRow(t *testing.T) {
+	q := NewQuestionModel("q1", "Pick one", opts(), false, false)
+	q.SetWidth(76)
+	before := q.Cursor()
+
+	q = q.WithCursor(-1)
+	if q.Cursor() != before {
+		t.Errorf("WithCursor(-1) moved the cursor to %d", q.Cursor())
+	}
+	q = q.WithCursor(99)
+	if q.Cursor() != before {
+		t.Errorf("WithCursor(99) moved the cursor to %d", q.Cursor())
+	}
+}
+
 // stripANSI removes SGR escapes so assertions read the plain text a
 // no-colour terminal would show.
 func stripANSI(s string) string {

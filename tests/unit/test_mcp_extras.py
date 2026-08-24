@@ -44,8 +44,7 @@ _PORT_INSTRUCTION = (
     "mcp 2.0.0 removed mcp.server.fastmcp (FastMCP -> MCPServer) — before "
     "widening the cap past <2.0, port GAIA's FastMCP-based MCP servers "
     "(src/gaia/mcp/agent_mcp_server.py, src/gaia/mcp/servers/agent_ui_mcp.py, "
-    "src/gaia/mcp/servers/tui_mcp.py — docker_mcp.py is blocked transitively "
-    "via agent_mcp_server.py) to the mcp 2.x API."
+    "src/gaia/mcp/servers/tui_mcp.py) to the mcp 2.x API."
 )
 
 

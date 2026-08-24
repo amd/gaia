@@ -143,7 +143,7 @@ class ChatMessage(BaseModel):
 
 class ChatCompletionRequest(BaseModel):
     """POST /v1/chat/completions request."""
-    model: str = Field(..., description="Model ID (e.g., gaia-code, gaia-jira)")
+    model: str = Field(..., description="Model ID — an id registered in AGENT_MODELS")
     messages: List[ChatMessage]
     stream: bool = Field(default=False, description="Enable SSE streaming")
     temperature: Optional[float] = Field(default=0.7, ge=0, le=2)
@@ -236,7 +236,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
     Example Non-Streaming:
         POST /v1/chat/completions
         {
-            "model": "gaia-code",
+            "model": "your-agent-id",
             "messages": [{"role": "user", "content": "Write hello world"}],
             "stream": false
         }
@@ -246,7 +246,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
             "id": "chatcmpl-abc123",
             "object": "chat.completion",
             "created": 1234567890,
-            "model": "gaia-code",
+            "model": "your-agent-id",
             "choices": [{
                 "index": 0,
                 "message": {
@@ -265,7 +265,7 @@ async def create_chat_completion(request: ChatCompletionRequest):
     Example Streaming:
         POST /v1/chat/completions
         {
-            "model": "gaia-code",
+            "model": "your-agent-id",
             "messages": [{"role": "user", "content": "Write hello world"}],
             "stream": true
         }
@@ -291,24 +291,21 @@ async def list_models() -> ModelListResponse:
         Response:
         {
             "object": "list",
-            "data": [
-                {
-                    "id": "gaia-code",
-                    "object": "model",
-                    "created": 1234567890,
-                    "owned_by": "amd-gaia",
-                    "description": "Autonomous Python coding agent",
-                    "max_input_tokens": 32768,
-                    "max_output_tokens": 8192
-                },
-                {
-                    "id": "gaia-jira",
-                    "object": "model",
-                    "created": 1234567890,
-                    "owned_by": "amd-gaia"
-                }
-            ]
+            "data": [{"id": "gaia", "object": "model", ...}]
         }
+
+        (AGENT_MODELS holds one entry, "gaia", the flagship agent. Register
+        another in src/gaia/api/agent_registry.py to add to this list. An
+        entry looks like:
+        {
+            "id": "your-agent-id",
+            "object": "model",
+            "created": 1234567890,
+            "owned_by": "amd-gaia",
+            "description": "...",
+            "max_input_tokens": 32768,
+            "max_output_tokens": 8192
+        })
     """
     pass
 
@@ -341,14 +338,17 @@ new model you edit `AGENT_MODELS` and restart the server.
 from importlib import import_module
 from typing import Any, Dict
 
+# One entry ships: "gaia", the flagship agent. Add more here to expose them.
 AGENT_MODELS: Dict[str, Dict[str, Any]] = {
-    "gaia-code": {
-        "class_name": "gaia_agent_routing.agent.RoutingAgent",
-        "init_params": {"api_mode": True, "silent_mode": True,
-                        "streaming": False, "max_steps": 100},
-        "description": "Intelligent routing agent ...",
+    "gaia": {
+        "class_name": "gaia_agent.agent.GaiaAgent",
+        "init_params": {"silent_mode": True, "streaming": False},
     },
-    # Add entries here to expose more models on /v1/models.
+    # "your-agent-id": {
+    #     "class_name": "my_package.my_agent.MyAPIAgent",
+    #     "init_params": {"api_mode": True, "silent_mode": True},
+    #     "description": "...",
+    # },
 }
 
 
@@ -415,7 +415,7 @@ async def stream_chat_completion(
         SSE-formatted chunks (data: {...})
 
     Example:
-        async for chunk in stream_chat_completion(agent, "Hello", "gaia-code"):
+        async for chunk in stream_chat_completion(agent, "Hello", "your-agent-id"):
             print(chunk)
         # Output:
         # data: {"id":"chatcmpl-123","object":"chat.completion.chunk",...}
@@ -636,7 +636,7 @@ def test_chat_completion_non_streaming():
     response = client.post(
         "/v1/chat/completions",
         json={
-            "model": "gaia-code",
+            "model": "your-agent-id",
             "messages": [{"role": "user", "content": "Say hello"}],
             "stream": False
         }
@@ -655,7 +655,7 @@ def test_chat_completion_streaming():
         "POST",
         "/v1/chat/completions",
         json={
-            "model": "gaia-code",
+            "model": "your-agent-id",
             "messages": [{"role": "user", "content": "Count to 3"}],
             "stream": True
         }
@@ -691,7 +691,7 @@ def test_chat_completion_no_user_message():
     response = client.post(
         "/v1/chat/completions",
         json={
-            "model": "gaia-code",
+            "model": "your-agent-id",
             "messages": [{"role": "system", "content": "You are helpful"}],
         }
     )
@@ -727,7 +727,7 @@ gaia api stop
 curl -X POST http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "gaia-code",
+    "model": "your-agent-id",
     "messages": [
       {"role": "user", "content": "Write a hello world program"}
     ],
@@ -741,7 +741,7 @@ curl -X POST http://localhost:8080/v1/chat/completions \
 curl -X POST http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "gaia-code",
+    "model": "your-agent-id",
     "messages": [
       {"role": "user", "content": "Write a hello world program"}
     ],
@@ -764,7 +764,7 @@ for model in models:
 response = requests.post(
     "http://localhost:8080/v1/chat/completions",
     json={
-        "model": "gaia-code",
+        "model": "your-agent-id",
         "messages": [
             {"role": "user", "content": "Write hello world in Python"}
         ],
@@ -778,7 +778,7 @@ print(result["choices"][0]["message"]["content"])
 response = requests.post(
     "http://localhost:8080/v1/chat/completions",
     json={
-        "model": "gaia-code",
+        "model": "your-agent-id",
         "messages": [
             {"role": "user", "content": "Count to 5"}
         ],
@@ -814,7 +814,7 @@ client = OpenAI(
 
 # Non-streaming
 response = client.chat.completions.create(
-    model="gaia-code",
+    model="your-agent-id",
     messages=[
         {"role": "user", "content": "Write hello world"}
     ]
@@ -823,7 +823,7 @@ print(response.choices[0].message.content)
 
 # Streaming
 stream = client.chat.completions.create(
-    model="gaia-code",
+    model="your-agent-id",
     messages=[
         {"role": "user", "content": "Count to 5"}
     ],

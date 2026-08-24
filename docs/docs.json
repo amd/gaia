@@ -85,18 +85,15 @@
                   {
                     "group": "Core Agents",
                     "pages": [
+                      "guides/gaia",
                       "guides/chat",
-                      "guides/talk",
-                      "guides/browse",
-                      "guides/analyze"
+                      "guides/talk"
                     ]
                   },
                   {
                     "group": "Developer Tools",
                     "pages": [
-                      "guides/code",
-                      "guides/code-index",
-                      "guides/docker"
+                      "guides/code-index"
                     ]
                   },
                   {
@@ -104,17 +101,7 @@
                     "pages": [
                       "guides/email",
                       "guides/email-integration",
-                      "guides/telegram-adapter",
-                      "guides/jira"
-                    ]
-                  },
-                  {
-                    "group": "Specialized Agents",
-                    "pages": [
-                      "guides/sd",
-                      "guides/blender",
-                      "guides/emr",
-                      "guides/routing"
+                      "guides/telegram-adapter"
                     ]
                   },
                   {
@@ -168,33 +155,11 @@
                     ]
                   },
                   {
-                    "group": "Image Generation Agent",
-                    "pages": [
-                      "playbooks/sd-agent/index"
-                    ]
-                  },
-                  {
                     "group": "Document Q&A Agent",
                     "pages": [
                       "playbooks/chat-agent/part-1-getting-started",
                       "playbooks/chat-agent/part-2-advanced-features",
                       "playbooks/chat-agent/part-3-deployment"
-                    ]
-                  },
-                  {
-                    "group": "Code Generation Agent",
-                    "pages": [
-                      "playbooks/code-agent/part-1-introduction",
-                      "playbooks/code-agent/part-2-app-creation",
-                      "playbooks/code-agent/part-3-validation-building"
-                    ]
-                  },
-                  {
-                    "group": "Medical Intake Agent",
-                    "pages": [
-                      "playbooks/emr-agent/part-1-getting-started",
-                      "playbooks/emr-agent/part-2-dashboard",
-                      "playbooks/emr-agent/part-3-architecture"
                     ]
                   },
                   {
@@ -244,7 +209,6 @@
                   {
                     "group": "Agents",
                     "pages": [
-                      "sdk/agents/routing",
                       "sdk/agents/specialized",
                       "sdk/agents/talk"
                     ]
@@ -253,7 +217,6 @@
                     "group": "Mixins & Utilities",
                     "pages": [
                       "sdk/mixins/tool-mixins",
-                      "sdk/mixins/code-mixins",
                       "sdk/mixins/database-mixin",
                       "sdk/utils/file-watcher"
                     ]
@@ -262,7 +225,6 @@
                     "group": "Guides",
                     "pages": [
                       "sdk/packaging",
-                      "sdk/applications",
                       "sdk/configuration",
                       "sdk/testing",
                       "sdk/performance-analysis-plotter",
@@ -324,9 +286,6 @@
           {
             "group": "Code Infrastructure",
             "pages": [
-              "spec/code-models",
-              "spec/orchestrator",
-              "spec/validators",
               "spec/prompts"
             ]
           },
@@ -334,22 +293,11 @@
             "group": "Tool Mixins",
             "pages": [
               "spec/database-mixin",
-              "spec/cli-tools-mixin",
-              "spec/code-tools-mixin",
               "spec/file-io-tools-mixin",
-              "spec/validation-tools-mixin",
-              "spec/error-fixing-mixin",
-              "spec/testing-mixin",
               "spec/file-tools-mixin",
               "spec/rag-tools-mixin",
               "spec/shell-tools-mixin",
               "spec/file-search-mixin",
-              "spec/code-formatting-mixin",
-              "spec/project-management-mixin",
-              "spec/prisma-tools-mixin",
-              "spec/typescript-tools-mixin",
-              "spec/external-tools-mixin",
-              "spec/web-tools-mixin",
               "spec/browser-tools",
               "spec/file-system-agent"
             ]
@@ -364,12 +312,7 @@
             "group": "Agents & Apps",
             "pages": [
               "spec/mcp-agent",
-              "spec/routing-agent",
               "spec/chat-agent",
-              "spec/docker-agent",
-              "spec/jira-agent",
-              "spec/blender-agent",
-              "spec/summarizer-app",
               "spec/component-status"
             ]
           }
@@ -465,6 +408,7 @@
               "plans/agent-hub-ui",
               "plans/agent-ui-hub-publish",
               "plans/email-agent-packaging",
+              "plans/flagship-installer",
               "spec/agent-hub-restructure",
               "spec/agent-skills",
               "plans/skill-format",
@@ -480,7 +424,8 @@
               "plans/docker-containers",
               "plans/mcp-docs",
               "plans/desktop-installer",
-              "plans/tool-loader"
+              "plans/tool-loader",
+              "plans/code-index-review"
             ]
           },
           {

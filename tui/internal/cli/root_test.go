@@ -1,6 +1,10 @@
+// Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+// SPDX-License-Identifier: MIT
+
 package cli
 
 import (
+	"bytes"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -66,5 +70,65 @@ func TestUsageNamesTheInvokedBinary(t *testing.T) {
 	}
 	if path := listCmd.CommandPath(); !strings.HasPrefix(path, "gaia-tui ") {
 		t.Errorf("subcommand path = %q, want it to start with %q", path, "gaia-tui ")
+	}
+}
+
+// TestVersionFlagIsRegistered pins rootCmd.Version non-empty: cobra only wires
+// up --version when it is set, and an empty string here is silently invisible
+// -- see the flagship-installer plan for why a published binary needs this.
+func TestVersionFlagIsRegistered(t *testing.T) {
+	if rootCmd.Version == "" {
+		t.Fatal("rootCmd.Version is empty, so cobra never registers --version")
+	}
+}
+
+// TestVersionFlagPrintsVersion checks `--version` prints the same string as
+// the `version` subcommand, not a bare cobra default.
+func TestVersionFlagPrintsVersion(t *testing.T) {
+	var out bytes.Buffer
+	rootCmd.SetOut(&out)
+	rootCmd.SetErr(&out)
+	rootCmd.SetArgs([]string{"--version"})
+	defer func() {
+		rootCmd.SetArgs(nil)
+		rootCmd.SetOut(nil)
+		rootCmd.SetErr(nil)
+	}()
+
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("--version returned an error: %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, version) {
+		t.Fatalf("--version output %q does not contain version %q", got, version)
+	}
+	if !strings.Contains(got, "commit:") || !strings.Contains(got, "built:") {
+		t.Fatalf("--version output %q does not match the `version` subcommand's format", got)
+	}
+}
+
+// TestVersionSubcommandMatchesFlag: the two spellings must never drift into
+// reporting different things for the same binary.
+func TestVersionSubcommandMatchesFlag(t *testing.T) {
+	var flagOut bytes.Buffer
+	rootCmd.SetOut(&flagOut)
+	rootCmd.SetArgs([]string{"--version"})
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("--version returned an error: %v", err)
+	}
+
+	var subOut bytes.Buffer
+	rootCmd.SetOut(&subOut)
+	rootCmd.SetArgs([]string{"version"})
+	defer func() {
+		rootCmd.SetArgs(nil)
+		rootCmd.SetOut(nil)
+	}()
+	if err := rootCmd.Execute(); err != nil {
+		t.Fatalf("version returned an error: %v", err)
+	}
+
+	if flagOut.String() != subOut.String() {
+		t.Fatalf("--version printed %q but the version subcommand printed %q", flagOut.String(), subOut.String())
 	}
 }
