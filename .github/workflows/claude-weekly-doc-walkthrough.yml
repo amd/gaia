@@ -191,6 +191,32 @@ jobs:
             exit 1
           }
 
+      # FOUND ON A LIVE RUN (2026-08-24, run 32755389532): claude-code-action installs
+      # the CLI with `curl https://claude.ai/install.sh | bash`, and that script refuses
+      # Windows ("Windows is not supported by this script"). Both the executor and the
+      # judge died there after 3 attempts, before any doc was walked -- and
+      # continue-on-error reported the job green. Install from npm instead (which does
+      # support Windows) and hand the action the binary via
+      # `path_to_claude_code_executable`, its documented skip-the-install escape hatch.
+      - name: Install Claude Code (npm — the action's own installer refuses Windows)
+        id: claude_cli
+        shell: powershell
+        run: |
+          npm install -g @anthropic-ai/claude-code@latest
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "::error::npm install of @anthropic-ai/claude-code failed -- the executor and judge cannot run."
+            exit 1
+          }
+          $npmPrefix = (npm prefix -g).Trim()
+          $claude = Join-Path $npmPrefix "claude.cmd"
+          if (-not (Test-Path $claude)) {
+            Write-Host "::error::Claude Code installed but no claude.cmd under $npmPrefix -- cannot point the action at it."
+            exit 1
+          }
+          Write-Host "Claude Code CLI at $claude"
+          & $claude --version
+          "path=$claude" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
+
       - name: Verify clean start state
         shell: powershell
         run: |
@@ -311,10 +337,13 @@ jobs:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          # On `schedule`, github.actor is whoever last touched the default branch — always
-          # github-merge-queue[bot] here. Without this the human-actor gate rejects every
+          # On `schedule`, github.actor is whoever last touched the default branch — a bot
+          # in this repo: github-merge-queue[bot] normally, github-actions[bot] after a
+          # release workflow commits. Without this the human-actor gate rejects every
           # scheduled run before Claude starts. Safe: schedule/dispatch only, no fork input.
-          allowed_bots: "github-merge-queue"
+          allowed_bots: "github-merge-queue,github-actions"
+          # Skip the action's Linux-only installer — see the npm install step above.
+          path_to_claude_code_executable: ${{ steps.claude_cli.outputs.path }}
           prompt: |
             You are the EXECUTOR half of GAIA's weekly doc walkthrough. Your only job is
             to run commands and capture their raw output -- judging correctness is a
@@ -419,11 +448,15 @@ jobs:
             Write-Host "✅ Executor completed and wrote a transcript."
             "- **Executor:** ✅ completed, transcript written" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
           } elseif ($ok -and -not $transcriptExists) {
-            Write-Host "::warning::Executor step reported success but no transcript.md was written -- the judge will file a crash finding for this."
-            "- **Executor:** ⚠️ reported success but wrote no transcript" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+            # No transcript means the judge would review nothing and write nothing, and the
+            # job would still go green. Stop here so the cause is the reported failure.
+            Write-Host "::error title=Executor wrote no transcript (${{ matrix.doc.path }})::The executor reported success but never wrote transcript.md, so there is nothing to judge. log: $env:EXEC_FILE"
+            "- **Executor:** ❌ reported success but wrote no transcript" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+            exit 1
           } else {
-            Write-Host "::warning title=Executor did not complete cleanly (${{ matrix.doc.path }})::log: $env:EXEC_FILE"
+            Write-Host "::error title=Executor did not complete cleanly (${{ matrix.doc.path }})::log: $env:EXEC_FILE"
             "- **Executor:** ❌ did not complete cleanly" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+            exit 1
           }
 
       - name: "Judge (Opus): verify ${{ matrix.doc.path }} against its transcript"
@@ -435,8 +468,10 @@ jobs:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          # See the executor step's note — scheduled runs are actored by github-merge-queue[bot].
-          allowed_bots: "github-merge-queue"
+          # See the executor step's note — scheduled runs are actored by a bot.
+          allowed_bots: "github-merge-queue,github-actions"
+          # Skip the action's Linux-only installer — see the npm install step above.
+          path_to_claude_code_executable: ${{ steps.claude_cli.outputs.path }}
           prompt: |
             You are the JUDGE half of GAIA's weekly doc walkthrough. Do not trust the
             executor's framing -- read its raw transcript and the doc yourself, and reach
@@ -566,7 +601,9 @@ jobs:
         with:
           name: findings-walkthrough-${{ matrix.doc.slug }}
           path: findings-walkthrough-${{ matrix.doc.slug }}.json
-          if-no-files-found: warn
+          # The judge writes `{"findings": []}` even when a doc is clean, so a missing file
+          # means the judge never ran. Fail — a silent skip reads as "walked, all good".
+          if-no-files-found: error
 
   # Collect every matrix job's findings, dedupe against open weekly-audit
   # issues, and file ONE parent triage issue + per-finding child issues.
@@ -640,8 +677,8 @@ jobs:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          # See the executor step's note — scheduled runs are actored by github-merge-queue[bot].
-          allowed_bots: "github-merge-queue"
+          # See the executor step's note — scheduled runs are actored by a bot.
+          allowed_bots: "github-merge-queue,github-actions"
           prompt: |
             You are the synthesis step of GAIA's weekly DOC WALKTHROUGH (the
             execution-based sibling of the static weekly-audit -- see

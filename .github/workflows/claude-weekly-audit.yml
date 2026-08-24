@@ -224,10 +224,11 @@ jobs:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          # On `schedule`, github.actor is whoever last touched the default branch — always
-          # github-merge-queue[bot] here. Without this the human-actor gate rejects every
+          # On `schedule`, github.actor is whoever last touched the default branch — a bot
+          # in this repo: github-merge-queue[bot] normally, github-actions[bot] after a
+          # release workflow commits. Without this the human-actor gate rejects every
           # scheduled run before Claude starts. Safe: schedule/dispatch only, no fork input.
-          allowed_bots: "github-merge-queue"
+          allowed_bots: "github-merge-queue,github-actions"
           prompt: |
             You are one lens of GAIA's proactive nightly code audit. YOUR LENS IS: ${{ matrix.dimension }}
             Do ONLY that lens — ignore issues that belong to the other four.
@@ -441,8 +442,8 @@ jobs:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          # See the dimension job's note — scheduled runs are actored by github-merge-queue[bot].
-          allowed_bots: "github-merge-queue"
+          # See the dimension job's note — scheduled runs are actored by a bot.
+          allowed_bots: "github-merge-queue,github-actions"
           prompt: |
             You are the synthesis step of GAIA's nightly proactive audit. Four dimension jobs
             (correctness, docs, tests, features) each wrote a findings JSON file.
