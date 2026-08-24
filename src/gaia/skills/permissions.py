@@ -11,7 +11,7 @@ unenforced:
   :class:`~gaia.connectors.providers.base.ConnectorRequirement`, the same
   primitive agents already declare via ``REQUIRED_CONNECTORS``.
 - **Binary-bridged** — ``shell:execute:<binary>`` grants one named CLI, per
-  skill, per agent instance, restricted to the read-only subcommands in
+  skill, per agent instance, restricted to the three-tier subcommand table in
   :data:`gaia.skills.binaries.BINARY_POLICIES`. The scope is mandatory: an
   unscoped ``shell:execute`` asks for the whole shell, which no bridge covers.
 - ``filesystem`` / ``database`` / ``desktop`` / ``env`` are local-capability
@@ -200,7 +200,7 @@ def refuse_unbridged_permissions(
 
     Raises:
         SkillPermissionError: for a local-capability domain, a bare
-            ``shell:execute``, or a binary grant with no read-only policy.
+            ``shell:execute``, or a binary grant with no command policy.
     """
     refuse_unpoliced_binaries(permissions, skill_name=skill_name)
 

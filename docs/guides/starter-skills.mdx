@@ -173,11 +173,11 @@ hard, and produces one digest under 250 words.
 ### github-triage
 
 The bring-your-own-CLI example. Reads a backlog with the `gh` command, groups
-duplicates, ranks by severity × reach, and drafts the reply without sending it.
+duplicates, ranks by severity × reach, and posts the reply once you approve it.
 
 - **Demonstrates** — a scoped binary grant. It declares `shell:execute:gh`, which
-  grants the GitHub CLI to this skill's session on this agent, restricted to
-  read-only subcommands (see
+  grants the GitHub CLI to this skill's session on this agent, restricted to the
+  subcommands in GAIA's policy table (see
   [Bring your own CLI](/plans/skill-format#bring-your-own-cli)).
 - **Configure** —
 
@@ -187,10 +187,14 @@ duplicates, ranks by severity × reach, and drafts the reply without sending it.
   ```
 
   If `gh` is not on PATH the skill refuses to load and names the install command.
-  Writes are refused by the runtime, not just by the instructions: `gh issue
-  create`, `gh api -X POST`, and `gh auth token` all come back as errors. Reads
-  run without a per-call approval prompt — loading the skill is the consent — but
-  any command outside the grant still asks.
+  Reads run without a per-call approval prompt — loading the skill is the consent.
+  The useful writes (`gh issue create|comment|edit`, `gh pr comment`,
+  `gh label create|edit`) show you the exact command and wait for a yes, a no, or
+  an "always" scoped to that one command class for the session. Escalations are
+  refused by the runtime and never offered as a prompt at all: `gh auth token`
+  prints a credential, `gh alias`/`gh extension` run arbitrary code, and
+  `gh api -X POST` is an unbounded write. Any command outside the grant still
+  asks.
 
 ### rss-digest
 

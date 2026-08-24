@@ -287,10 +287,15 @@ The flagship agent (the one spawned as a local subprocess, not through the
 background daemon) runs this same setup automatically on its first launch on a
 clean machine — installing Lemonade and downloading the models it needs instead
 of failing at whichever piece is missing. `/setup` reruns it on demand, e.g.
-after deleting a model or reinstalling Lemonade. A session launched with
-`--use-claude` skips downloading the local chat model (inference runs on
-Anthropic's API instead) but still installs the RAG/memory embedding model,
-which has no Claude equivalent.
+after deleting a model or reinstalling Lemonade.
+
+A session launched with `--use-claude` skips this setup entirely and does not
+start the local server — that flag exists to avoid the local backend, so
+running an installer that launches it would defeat it, and would hold the first
+answer behind a multi-minute install. The transcript says the server was not
+started and names what still needs it: RAG, memory and the code index embed
+through Lemonade, which has no Claude equivalent. Run `gaia init --profile chat
+--skip-chat-model`, or `/setup` in the composer, when you want those.
 
 ## Next steps
 
