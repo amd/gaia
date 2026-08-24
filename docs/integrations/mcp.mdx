@@ -27,7 +27,7 @@ The GAIA MCP Server provides an HTTP-native bridge that exposes GAIA's AI agents
   </Card>
 
   <Card title="You DON'T Need MCP When" icon="xmark" color="#dc2626">
-    - Using GAIA CLI directly (`gaia jira`, `gaia llm`, etc.)
+    - Using GAIA CLI directly (`gaia chat`, `gaia llm`, etc.)
     - Building Python applications (use GAIA's Python API directly)
     - Running GAIA agents locally from the command line
     - Integrating with VSCode as a Language Model Provider (use the API Server instead)
@@ -79,10 +79,6 @@ The GAIA MCP Server provides an HTTP-native bridge that exposes GAIA's AI agents
     ```bash
     lemonade-server serve --ctx-size 8192
     ```
-  </Step>
-
-  <Step title="Install Docker (for Docker agent)">
-    Install Docker Engine or Desktop from [docker.com](https://www.docker.com/)
   </Step>
 </Steps>
 
@@ -185,11 +181,7 @@ The MCP Server acts as an HTTP bridge between external applications and GAIA's n
 | `/tools` | GET | List available tools |
 | `/chat` | POST | Conversational chat (with context) |
 | `/llm` | POST | Direct LLM queries (no context) |
-| `/jira` | POST | Jira operations |
-| `/summarize` | POST | Multipart file upload → SSE-streamed summary |
 | `/` | POST | JSON-RPC 2.0 endpoint |
-
-<Note>Docker uses a newer framework using FastMCP-powered server. See examples in [Docker section](#docker-operations-fastmcp-framework) below.</Note>
 
 ### Example API Calls
 
@@ -231,39 +223,6 @@ The MCP Server acts as an HTTP bridge between external applications and GAIA's n
     curl -X POST http://localhost:8765/llm \
       -H "Content-Type: application/json" \
       -d '{"query": "What is artificial intelligence?"}'
-    ```
-  </Tab>
-
-  <Tab title="Jira Operations">
-    ```bash
-    curl -X POST http://localhost:8765/jira \
-      -H "Content-Type: application/json" \
-      -d '{"query": "show my open issues"}'
-    ```
-  </Tab>
-
-  <Tab title="Docker Operations">
-    Start Docker MCP server:
-    ```bash
-    gaia mcp docker --port 8080
-    ```
-
-    Containerize application via JSON-RPC:
-    ```bash
-    curl -X POST http://localhost:8080/ \
-      -H "Content-Type: application/json" \
-      -d '{
-        "jsonrpc": "2.0",
-        "id": "1",
-        "method": "tools/call",
-        "params": {
-          "name": "dockerize",
-          "arguments": {
-            "appPath": "/absolute/path/to/app",
-            "port": 5000
-          }
-        }
-      }'
     ```
   </Tab>
 
@@ -342,13 +301,6 @@ The MCP Server acts as an HTTP bridge between external applications and GAIA's n
       -H "Content-Type: application/json" \
       -d '{"query": "What is quantum computing?"}'
     ```
-
-    Jira operations:
-    ```bash
-    curl -X POST http://localhost:8765/jira \
-      -H "Content-Type: application/json" \
-      -d '{"query": "create idea: Add dark mode feature"}'
-    ```
   </Tab>
 </Tabs>
 
@@ -387,18 +339,6 @@ The MCP server exposes the following GAIA agents as tools:
 |------|-------------|-------------------|
 | `gaia.chat` | Conversational chat with context | `{"query": "Hello GAIA"}` |
 | `gaia.query` | Direct LLM queries (no context) | `{"query": "What is AI?"}` |
-| `gaia.jira` | Natural language Jira operations | `{"query": "show my issues"}` |
-| `gaia.blender.create` | 3D content creation | `{"command": "create_cube", "parameters": {}}` |
-
-### Docker Tool (FastMCP framework on port 8080)
-
-| Tool | Description | Example Arguments |
-|------|-------------|-------------------|
-| `dockerize` | Containerize application (analyze → create Dockerfile → build → run) | `{"appPath": "/absolute/path/to/app", "port": 5000}` |
-
-<Info>To use the Docker tool, start the Docker MCP server: `gaia mcp docker --port 8080`</Info>
-
-<Note>The Docker agent is GAIA's first to use the new FastMCP framework. See [Docker Agent Documentation](/guides/docker).</Note>
 
 ## Troubleshooting
 
@@ -478,16 +418,6 @@ Comprehensive HTTP validation test:
 python tests/mcp/test_mcp_http_validation.py
 ```
 
-Jira-specific MCP tests:
-```bash
-python tests/mcp/test_mcp_jira.py
-```
-
-Summarize-tool tests:
-```bash
-python tests/mcp/test_mcp_summarize.py
-```
-
 Integration tests:
 ```bash
 python tests/mcp/test_mcp_integration.py
@@ -496,12 +426,9 @@ python tests/mcp/test_mcp_integration.py
 <Info>
 The tests validate:
 - Health checks and tool listing
-- Direct endpoints (`/chat`, `/jira`, `/llm`, `/summarize`)
+- Direct endpoints (`/chat`, `/llm`)
 - JSON-RPC protocol compliance
 - Error handling and CORS headers
-
-Note: `gaia mcp docker` runs a **separate** FastMCP server (`docker_mcp.py`),
-not an endpoint on the main bridge.
 </Info>
 
 ## Security Considerations
@@ -532,10 +459,6 @@ For production deployments, always implement these security measures:
     Works with browser-based applications
   </Card>
 </CardGroup>
-
-## Applications
-
-GAIA provides applications that connect to the MCP server. For using existing apps or building new ones, see the [SDK Applications](/sdk/applications) documentation.
 
 ## VSCode Integration
 
@@ -571,12 +494,6 @@ For complete VSCode integration documentation, see [VSCode Integration Documenta
   </Card>
   <Card title="n8n Integration" icon="workflow" href="/integrations/n8n">
     Detailed workflow automation examples
-  </Card>
-  <Card title="Jira Agent" icon="ticket" href="/guides/jira">
-    Natural language Jira operations
-  </Card>
-  <Card title="Docker Agent" icon="docker" href="/guides/docker">
-    Natural language Docker containerization
   </Card>
   <Card title="GAIA CLI" icon="terminal" href="/reference/cli">
     Command line interface reference

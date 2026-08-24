@@ -151,8 +151,7 @@ build, pulling ~18 `nvidia-*` / `cuda-*` packages — a 4.7 GB venv instead of
 | `talk` | Voice ASR/TTS (whisper, sounddevice, kokoro-onnx) |
 | `mcp` | MCP client/server bridge (`gaia mcp start`) |
 | `audio` | Lower-level audio tooling shared by talk |
-| `blender` | BlenderAgent 3D automation bindings |
-| `image` | Stable Diffusion image agent |
+| `image` | Terminal image rendering (`term-image`) |
 | `eval` | Evaluation framework (ground-truth generation, batch experiments) |
 | `youtube` | `gaia youtube --download-transcript` |
 | `lint` | Standalone lint dependency bundle |
@@ -390,6 +389,47 @@ commands. With nothing declared, the skill targets your **local machine**.
 > keys only in your **user-level** config (or a memory file it points to) —
 > never in the repo's `CLAUDE.md` or `.claude/settings.json`. The skill reads
 > them write-only and never echoes them into logs, screenshots, or reports.
+
+---
+
+## Measuring where a turn's time goes
+
+A slow local turn is almost always prefill: the system prompt and tool schemas
+are re-sent on every LLM call, so prompt size converts directly into seconds.
+None of that is visible in the default stats line, which shows only elapsed
+time.
+
+Set `GAIA_TURN_LOG` to a file path to turn on per-turn recording:
+
+```bash
+export GAIA_TURN_LOG=~/.gaia/turns.jsonl
+gaia --dev
+```
+
+Each turn appends one JSON object (schema `gaia.turn/1`) with the fixed prefill
+size, cached-vs-new input tokens per call, output tokens, the wall-time split
+across model / tools / agent overhead, and absolute timestamps — so a session
+is greppable and two builds are diffable.
+
+With `--dev`, the TUI also draws the same breakdown under each answer:
+
+```
+34.5s · ttft 2.1s · 14.2 tok/s · 3 steps · 17.0k prefill
+  turn a3f1c2  22:47:35Z → 22:48:09Z  34.5s total
+  model 28.4s · tools 4.8s · overhead 1.3s
+  in 51,204 tok (38,110 cached, 13,094 new · 74% hit) · out 210 tok
+  prefill 17.0k fixed · 66 tools · skills: gaia-voice
+```
+
+Unset, recording is off and costs nothing — the recorder is never constructed
+and the agent's wire payload is unchanged.
+
+<Note>
+Token counts marked *cached* / *new* come from a client-side estimator
+(`tiktoken` when installed), not from the model's own tokenizer. Read them as
+ratios and deltas — how much a prompt shrank, what share was cache-eligible —
+not as exact model token counts. `out` is the backend's own count.
+</Note>
 
 ---
 

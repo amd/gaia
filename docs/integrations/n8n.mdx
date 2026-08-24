@@ -16,7 +16,7 @@ This guide explains how to integrate GAIA's AI capabilities into n8n workflows u
 
 ## Overview
 
-n8n can leverage GAIA's AI agents (LLM, Chat, Jira, Blender) through HTTP requests to the MCP server. This enables powerful AI-driven workflow automation without writing code.
+n8n can leverage GAIA's AI agents (LLM, Chat) through HTTP requests to the MCP server. This enables powerful AI-driven workflow automation without writing code.
 
 ## Architecture
 
@@ -27,7 +27,6 @@ graph TB
         Email(["Email"])
         Calendar(["Calendar"])
         Slack(["Slack"])
-        Jira(["Jira"])
         GitHub(["GitHub"])
     end
 
@@ -43,8 +42,6 @@ graph TB
     subgraph Agents["GAIA Agents Layer"]
         LLM(["LLM Agent"])
         Chat(["Chat Agent"])
-        JiraAgent(["Jira Agent"])
-        Blender(["Blender Agent"])
     end
 
     subgraph Backend["LLM Backend"]
@@ -54,25 +51,19 @@ graph TB
     Email --> Workflow
     Calendar --> Workflow
     Slack --> Workflow
-    Jira --> Workflow
     GitHub --> Workflow
 
     Workflow -->|"HTTP/REST"| MCP
     MCP --> Endpoints
     Endpoints --> LLM
     Endpoints --> Chat
-    Endpoints --> JiraAgent
-    Endpoints --> Blender
 
     LLM --> Lemonade
     Chat --> Lemonade
-    JiraAgent --> Lemonade
-    Blender --> Lemonade
 
     style Email fill:#f8f9fa,stroke:#dee2e6,stroke-width:2px,color:#495057
     style Calendar fill:#f8f9fa,stroke:#dee2e6,stroke-width:2px,color:#495057
     style Slack fill:#f8f9fa,stroke:#dee2e6,stroke-width:2px,color:#495057
-    style Jira fill:#f8f9fa,stroke:#dee2e6,stroke-width:2px,color:#495057
     style GitHub fill:#f8f9fa,stroke:#dee2e6,stroke-width:2px,color:#495057
 
     style Workflow fill:#E2A33E,stroke:#A87B2D,stroke-width:2px,color:#1a1a1a
@@ -82,8 +73,6 @@ graph TB
 
     style LLM fill:#A87B2D,stroke:#A87B2D,stroke-width:2px,color:#fff
     style Chat fill:#A87B2D,stroke:#A87B2D,stroke-width:2px,color:#fff
-    style JiraAgent fill:#A87B2D,stroke:#A87B2D,stroke-width:2px,color:#fff
-    style Blender fill:#A87B2D,stroke:#A87B2D,stroke-width:2px,color:#fff
 
     style Lemonade fill:#2d2d2d,stroke:#1a1a1a,stroke-width:2px,color:#fff
 ```
@@ -104,7 +93,7 @@ graph TB
   </Step>
 
   <Step title="GAIA Agents">
-    Specialized AI agents for different tasks (Jira, Chat, LLM, Blender)
+    Specialized AI agents for different tasks (Chat, LLM)
   </Step>
 
   <Step title="LLM Backend">
@@ -113,17 +102,11 @@ graph TB
 </Steps>
 
 <CardGroup cols={2}>
-  <Card title="Natural Language Jira" icon="ticket">
-    Natural language Jira operations
-  </Card>
   <Card title="AI Text Processing" icon="brain">
     AI-powered text processing and summarization
   </Card>
   <Card title="Conversational Chat" icon="comments">
     Conversational chat with context
-  </Card>
-  <Card title="3D Content Generation" icon="cube">
-    3D content generation via Blender
   </Card>
 </CardGroup>
 
@@ -209,18 +192,6 @@ The MCP bridge provides the following HTTP endpoints:
 ### Direct Agent Endpoints
 
 <Tabs>
-  <Tab title="Jira Operations">
-    **POST** `/jira` - Natural language Jira operations
-
-    ```json
-    {
-      "query": "show my open issues"
-    }
-    ```
-
-    The Jira agent automatically determines the appropriate operation based on the query.
-  </Tab>
-
   <Tab title="LLM Queries">
     **POST** `/llm` - Direct LLM queries (no conversation context)
 
@@ -349,54 +320,20 @@ Supports methods:
 
 <Tip>Purpose: Analyze or process text with AI</Tip>
 
-### Example 5: Jira Agent - Natural Language Queries
-
-<Steps>
-  <Step title="Add HTTP Request Node">
-    Add an **HTTP Request** node
-  </Step>
-
-  <Step title="Configure">
-    - **Method**: `POST`
-    - **URL**: `http://localhost:8765/jira`
-    - **Body Content Type**: `JSON`
-    - **JSON Body**:
-    ```json
-    {
-      "query": "Show my open issues from this week"
-    }
-    ```
-  </Step>
-
-  <Step title="Agent Processing">
-    The Jira agent will:
-    - Understand your natural language query
-    - Convert it to JQL
-    - Execute the search
-    - Return formatted results
-  </Step>
-</Steps>
-
-<Tip>Purpose: Query Jira using natural language</Tip>
-
 ## Building Complete Workflows
 
 ### Workflow 1: Daily Standup Assistant
 
-**Components**: Manual Trigger → Jira Query → LLM Summarize → Output
+**Components**: Manual Trigger → Source HTTP Request → LLM Summarize → Output
 
 <Steps>
   <Step title="Add Manual Trigger">
     Add **Manual Trigger** node (or Schedule Trigger for automation)
   </Step>
 
-  <Step title="Add Jira HTTP Request">
-    **HTTP Request** node for Jira:
-    ```json
-    {
-      "query": "show issues I worked on yesterday"
-    }
-    ```
+  <Step title="Add Source HTTP Request">
+    **HTTP Request** node pulling yesterday's activity from wherever you track
+    it — a calendar, an issue tracker's own REST API, a Slack channel export
   </Step>
 
   <Step title="Add LLM HTTP Request">
@@ -415,7 +352,7 @@ Supports methods:
 
 ### Workflow 2: Smart Issue Triage
 
-**Components**: Webhook Trigger → LLM Analysis → Jira Update
+**Components**: Webhook Trigger → LLM Analysis → Issue Tracker Update
 
 <Steps>
   <Step title="Add Webhook Node">
@@ -431,8 +368,10 @@ Supports methods:
     ```
   </Step>
 
-  <Step title="Update Jira">
-    **HTTP Request** to Jira to update the issue based on AI suggestions
+  <Step title="Update Issue Tracker">
+    **HTTP Request** to your issue tracker's own API to apply the AI
+    suggestions — GAIA only supplies the LLM analysis step, the tracker
+    update goes directly to that service, not through GAIA
   </Step>
 </Steps>
 
@@ -514,7 +453,7 @@ Each endpoint returns different data structures:
   </Tab>
 
   <Tab title="POST Endpoints">
-    **chat, llm, jira**:
+    **chat, llm**:
     - Always include `success: true/false`
     - Main content in `result` field
     - Additional info in `metadata` (optional)
@@ -544,7 +483,7 @@ Each endpoint returns different data structures:
     Add IF nodes to check `success` field
   </Card>
   <Card title="Set Timeouts" icon="5">
-    Use 30s timeout for Jira/LLM operations
+    Use 30s timeout for LLM operations
   </Card>
   <Card title="Log Responses" icon="6">
     Use Set nodes to capture responses for debugging
@@ -632,13 +571,6 @@ Each endpoint returns different data structures:
     curl http://localhost:8765/health  # localhost
     curl http://192.168.1.100:8765/health  # Using your machine's IP
     ```
-  </Accordion>
-
-  <Accordion title="Jira Operations Failing">
-    **Solutions**:
-    - Verify Jira credentials are configured in GAIA
-    - Test with simple query first: "show 1 issue"
-    - Check Jira agent logs for detailed errors
   </Accordion>
 
   <Accordion title="LLM Queries Slow">

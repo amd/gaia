@@ -88,7 +88,7 @@ Supports both **streaming** (SSE) and **non-streaming** responses.
 
 | Parameter | Type | Required | Default | Range | Description |
 |-----------|------|----------|---------|-------|-------------|
-| `model` | string | ✅ Yes | - | - | Model ID (e.g., "gaia-code") |
+| `model` | string | ✅ Yes | - | - | Model ID — an id registered in `AGENT_MODELS` |
 | `messages` | array | ✅ Yes | - | - | Array of message objects |
 | `stream` | boolean | No | `false` | - | Enable Server-Sent Events streaming |
 | `temperature` | number | No | `0.7` | 0.0 - 2.0 | Sampling temperature |
@@ -114,7 +114,7 @@ Supports both **streaming** (SSE) and **non-streaming** responses.
     curl -X POST http://localhost:8080/v1/chat/completions \
       -H "Content-Type: application/json" \
       -d '{
-        "model": "gaia-code",
+        "model": "your-agent-id",
         "messages": [{"role": "user", "content": "Write a hello function"}],
         "stream": false
       }'
@@ -127,7 +127,7 @@ Supports both **streaming** (SSE) and **non-streaming** responses.
       "id": "chatcmpl-abc123",
       "object": "chat.completion",
       "created": 1677652288,
-      "model": "gaia-code",
+      "model": "your-agent-id",
       "choices": [
         {
           "index": 0,
@@ -158,7 +158,7 @@ Supports both **streaming** (SSE) and **non-streaming** responses.
     curl -X POST http://localhost:8080/v1/chat/completions \
       -H "Content-Type: application/json" \
       -d '{
-        "model": "gaia-code",
+        "model": "your-agent-id",
         "messages": [{"role": "user", "content": "Write a hello function"}],
         "stream": true
       }'
@@ -167,13 +167,13 @@ Supports both **streaming** (SSE) and **non-streaming** responses.
 
   <Tab title="Response (SSE)">
     ```
-    data: {"id":"chatcmpl-abc123","object":"chat.completion.chunk","created":1677652288,"model":"gaia-code","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
+    data: {"id":"chatcmpl-abc123","object":"chat.completion.chunk","created":1677652288,"model":"your-agent-id","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
 
-    data: {"id":"chatcmpl-abc123","object":"chat.completion.chunk","created":1677652288,"model":"gaia-code","choices":[{"index":0,"delta":{"content":"Here"},"finish_reason":null}]}
+    data: {"id":"chatcmpl-abc123","object":"chat.completion.chunk","created":1677652288,"model":"your-agent-id","choices":[{"index":0,"delta":{"content":"Here"},"finish_reason":null}]}
 
-    data: {"id":"chatcmpl-abc123","object":"chat.completion.chunk","created":1677652288,"model":"gaia-code","choices":[{"index":0,"delta":{"content":"'s"},"finish_reason":null}]}
+    data: {"id":"chatcmpl-abc123","object":"chat.completion.chunk","created":1677652288,"model":"your-agent-id","choices":[{"index":0,"delta":{"content":"'s"},"finish_reason":null}]}
 
-    data: {"id":"chatcmpl-abc123","object":"chat.completion.chunk","created":1677652288,"model":"gaia-code","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
+    data: {"id":"chatcmpl-abc123","object":"chat.completion.chunk","created":1677652288,"model":"your-agent-id","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
 
     data: [DONE]
     ```
@@ -184,30 +184,7 @@ Supports both **streaming** (SSE) and **non-streaming** responses.
 
 ## Available Models
 
-### gaia-code
-
-<Card title="Autonomous Code Development" icon="code">
-  Python/TypeScript development agent with intelligent routing
-</Card>
-
-| Property | Value |
-|----------|-------|
-| **ID** | `gaia-code` |
-| **Max Input Tokens** | 32768 |
-| **Max Output Tokens** | 8192 |
-| **Description** | Autonomous Python/TypeScript coding agent with planning, generation, and testing |
-
-**Requirements:**
-- Lemonade Server with `--ctx-size 32768`
-- Model: `Gemma-4-E4B-it-GGUF`
-
-**Capabilities:**
-- Code generation (functions, classes, projects)
-- Test generation
-- Linting & formatting (pylint, Black)
-- Error detection and correction
-- Project scaffolding
-- Architectural planning
+`AGENT_MODELS` in [`src/gaia/api/agent_registry.py`](https://github.com/amd/gaia/blob/main/src/gaia/api/agent_registry.py) holds one entry, `gaia`, mapping to the flagship `GaiaAgent`. `GET /v1/models` returns it. To expose another agent, add an entry — see [Adding New Agents](#adding-new-agents) below.
 
 ---
 
@@ -232,7 +209,7 @@ All errors follow OpenAI's error format.
 ```json
 {
   "error": {
-    "message": "Model 'gaia-invalid' not found. Available models: gaia-code",
+    "message": "Model 'gaia-invalid' not found. Available models: <none registered>",
     "type": "invalid_request_error",
     "code": "model_not_found"
   }
@@ -342,12 +319,6 @@ All errors follow OpenAI's error format.
 <CardGroup cols={2}>
   <Card title="API Server Guide" icon="server" href="/reference/api">
     Usage examples and integration guides
-  </Card>
-  <Card title="Code Agent" icon="code" href="/guides/code">
-    Code agent capabilities
-  </Card>
-  <Card title="Routing Guide" icon="route" href="/guides/routing">
-    Intelligent language detection
   </Card>
   <Card title="VSCode Integration" icon="code" href="/integrations/vscode">
     VSCode extension setup

@@ -224,6 +224,10 @@ jobs:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          # On `schedule`, github.actor is whoever last touched the default branch — always
+          # github-merge-queue[bot] here. Without this the human-actor gate rejects every
+          # scheduled run before Claude starts. Safe: schedule/dispatch only, no fork input.
+          allowed_bots: "github-merge-queue"
           prompt: |
             You are one lens of GAIA's proactive nightly code audit. YOUR LENS IS: ${{ matrix.dimension }}
             Do ONLY that lens — ignore issues that belong to the other four.
@@ -390,7 +394,9 @@ jobs:
         with:
           name: findings-${{ matrix.dimension }}
           path: findings-${{ matrix.dimension }}.json
-          if-no-files-found: warn
+          # A dimension that ran writes `{"findings": []}` even when clean, so a missing file
+          # means the lens never ran. Fail the job — a silent skip reads as "audited, clean".
+          if-no-files-found: error
 
   # Collect the four dimension outputs, dedupe against open weekly-audit issues, rank,
   # and file ONE parent triage issue + per-finding child issues. This is the only job
@@ -435,6 +441,8 @@ jobs:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          # See the dimension job's note — scheduled runs are actored by github-merge-queue[bot].
+          allowed_bots: "github-merge-queue"
           prompt: |
             You are the synthesis step of GAIA's nightly proactive audit. Four dimension jobs
             (correctness, docs, tests, features) each wrote a findings JSON file.
@@ -584,5 +592,9 @@ jobs:
           if [ "$ok" = "true" ]; then
             echo "✅ Nightly audit synthesis completed (log: $EXEC_FILE)"
           else
-            echo "::warning title=Nightly audit did not complete::The synthesis step crashed or errored before finishing (often the upstream install-phase ENOENT flake). Re-run: $RUN_URL"
+            # Hard-fail, not a warning: a green run that audited nothing is indistinguishable
+            # from a green run that found nothing, which is how the actor-gate outage went
+            # unnoticed for a month. A flake here costs one re-run; silence costs coverage.
+            echo "::error title=Nightly audit did not complete::The synthesis step crashed or errored before finishing (often the upstream install-phase ENOENT flake). Re-run: $RUN_URL"
+            exit 1
           fi

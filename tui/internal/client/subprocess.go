@@ -479,6 +479,24 @@ func (s *SubprocessClient) ClaudeAtLaunch() bool {
 	return false
 }
 
+// ClaudeModelAtLaunch reports which Claude model the child was spawned with,
+// or "" when none was named (--use-claude alone, or a local launch).
+//
+// Read back off argv for the same reason ClaudeAtLaunch is: the header must
+// name what actually reached the child, never a second copy of the flag that
+// could disagree. It is what lets the chip say "claude · haiku-4.5" from the
+// first frame instead of a bare "claude" -- the agent's own model-state ping
+// is authoritative, but it is not read until the first turn (see
+// gaia_agent.stdio.main), which on a session that opens and waits is never.
+func (s *SubprocessClient) ClaudeModelAtLaunch() string {
+	for i, a := range s.args {
+		if a == ClaudeModelFlag && i+1 < len(s.args) {
+			return s.args[i+1]
+		}
+	}
+	return ""
+}
+
 // resetDeadChild kills, reaps, and discards a child the client can no longer
 // talk to. One helper, because the sequence is easy to get subtly wrong: a
 // missed discard leaves a corpse marked "started" and every later Send fails

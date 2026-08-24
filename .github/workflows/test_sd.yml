@@ -16,7 +16,6 @@ on:
       - '.github/actions/setup-venv/**'
       - '.github/workflows/test_sd.yml'
       - "src/gaia/sd/**"  # SD mixin and tools
-      - "hub/agents/sd/python/**"  # SD agent (standalone wheel #1102)
       - "src/gaia/llm/lemonade_client.py"
       - "src/gaia/cli.py"
       - "tests/integration/test_sd_integration.py"
@@ -30,7 +29,6 @@ on:
       - '.github/actions/setup-venv/**'
       - '.github/workflows/test_sd.yml'
       - "src/gaia/sd/**"  # SD mixin and tools
-      - "hub/agents/sd/python/**"  # SD agent (standalone wheel #1102)
       - "src/gaia/llm/lemonade_client.py"
       - "src/gaia/cli.py"
       - "tests/integration/test_sd_integration.py"
@@ -48,7 +46,7 @@ jobs:
       - Windows
       - ${{ contains(github.event.pull_request.labels.*.name, 'stx-test') && 'stx-test' || 'stx' }}
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
 

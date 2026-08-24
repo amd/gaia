@@ -23,7 +23,7 @@ The Electron Integration system provides a reusable framework for packaging GAIA
 
 **Key Features:**
 - Shared Electron framework (`@amd-gaia/electron`)
-- Multi-app support (Jira, Chat, Docker)
+- Multi-app support via `app.config.json` — currently shipping the flagship Agent UI (`webui`)
 - Dynamic app loading via `app.config.json`
 - Express backend integration
 - MCP client communication
@@ -134,7 +134,7 @@ flowchart TD
 | **electron/src/** | `main.js` (entry point), `app-controller.js` (lifecycle) |
 | **electron/preload/** | `preload.js` (renderer context bridge) |
 | **electron/services/** | `window-manager.js`, `base-ipc-handlers.js`, `mcp-client.js` |
-| **apps/** | `jira/webui/`, `chat/webui/`, `docker/webui/` - each with `app.config.json` |
+| **apps/** | `webui/` (flagship Agent UI), `example/webui/` - each with `app.config.json` |
 
 ---
 
@@ -185,23 +185,23 @@ flowchart TD
 }
 ```
 
-**Example:** `src/gaia/apps/jira/webui/app.config.json`
+**Example:** `src/gaia/apps/webui/app.config.json` (the flagship Agent UI)
 ```json
 {
-  "name": "jira",
-  "displayName": "GAIA Jira Assistant",
-  "port": 3001,
+  "name": "agent-ui",
+  "displayName": "GAIA Agent UI",
   "window": {
     "width": 1400,
     "height": 900,
-    "minWidth": 1024,
-    "minHeight": 768,
-    "resizable": true
+    "minWidth": 900,
+    "minHeight": 700
   },
   "backend": {
-    "apiUrl": "http://localhost:13305/api/v1",
-    "mcpPort": 8765,
-    "healthCheck": "/health"
+    "command": "gaia",
+    "args": ["chat", "--ui", "--ui-port", "4200"],
+    "port": 4200,
+    "healthCheck": "/api/health",
+    "startupTimeout": 15000
   }
 }
 ```
@@ -301,7 +301,7 @@ window.electronAPI = {
 
 ```bash
 # Required
-GAIA_APP_NAME=jira|chat|docker  # App to launch
+GAIA_APP_NAME=webui|example  # App to launch
 
 # Optional
 GAIA_APP_MODE=production|development  # Run mode (default: production)
@@ -456,13 +456,12 @@ const path = require('path');
 
 describe('App Configuration', () => {
   it('should load valid app.config.json', () => {
-    const configPath = path.join(__dirname, '../../src/gaia/apps/jira/webui/app.config.json');
+    const configPath = path.join(__dirname, '../../src/gaia/apps/webui/app.config.json');
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
 
     assert(config.name, 'name is required');
     assert(config.displayName, 'displayName is required');
-    assert(config.port, 'port is required');
-    assert(config.port >= 3000 && config.port < 10000, 'port must be 3000-9999');
+    assert(config.backend.port, 'backend.port is required');
   });
 
   it('should validate window configuration', () => {
@@ -499,7 +498,7 @@ describe('App Launch', function() {
     app = new Application({
       path: require('electron'),
       args: [path.join(__dirname, '../../src/gaia/electron/src/main.js')],
-      env: { GAIA_APP_NAME: 'jira', GAIA_APP_MODE: 'development' }
+      env: { GAIA_APP_NAME: 'webui', GAIA_APP_MODE: 'development' }
     });
 
     await app.start();
@@ -517,12 +516,12 @@ describe('App Launch', function() {
 
   it('should load app URL', async () => {
     const url = await app.client.getUrl();
-    assert(url.includes('localhost:3001'));
+    assert(url.includes('localhost:4200'));
   });
 
   it('should have correct title', async () => {
     const title = await app.client.getTitle();
-    assert(title.includes('GAIA Jira'));
+    assert(title.includes('GAIA Agent UI'));
   });
 });
 ```
@@ -607,7 +606,7 @@ GAIA_APP_NAME=myapp npm start
 
 ```bash
 # Run with dev tools
-GAIA_APP_NAME=jira GAIA_APP_MODE=development npm start
+GAIA_APP_NAME=webui GAIA_APP_MODE=development npm start
 ```
 
 ### Example 3: Production Build
@@ -628,7 +627,7 @@ npm run build:linux
 ## Related Specifications
 
 - [mcp-server](/spec/mcp-server) - MCP server integration
-- [jira-agent](/spec/jira-agent) - Example agent using Electron UI
+- [chat-agent](/spec/chat-agent) - Backs the flagship Agent UI's Electron shell
 
 ---
 
