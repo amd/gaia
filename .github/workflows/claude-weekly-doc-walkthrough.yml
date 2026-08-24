@@ -198,6 +198,14 @@ jobs:
       # continue-on-error reported the job green. Install from npm instead (which does
       # support Windows) and hand the action the binary via
       # `path_to_claude_code_executable`, its documented skip-the-install escape hatch.
+      # npm is not on PATH on this runner either (same story as bash and python).
+      # test_eval_agent_gemma_consolidation.yml sets Node up the same way on the
+      # same runner pool before its own `npm install -g @anthropic-ai/claude-code`.
+      - name: Set up Node (provides npm for the Claude Code install below)
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
       - name: Install Claude Code (npm — the action's own installer refuses Windows)
         id: claude_cli
         shell: powershell
