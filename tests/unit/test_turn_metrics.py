@@ -18,6 +18,7 @@ from gaia.agents.base.turn_metrics import (
     SCHEMA,
     TURN_LOG_ENV,
     TurnRecorder,
+    _common_prefix_len,
     format_summary,
     turn_log_path,
 )
@@ -355,3 +356,42 @@ def test_a_cold_turn_that_only_wrote_the_cache_still_uses_server_totals():
     )
     record = rec.finish(answer="a", steps=1)
     assert "in 14,034 (0% cached)" in format_summary(record)
+
+
+# The cached/new split is only as trustworthy as this helper. It is a binary
+# search over slice equality, so an off-by-one lands as a wrong cache figure
+# rather than a crash — which is why it is checked against the obvious
+# implementation rather than against hand-picked expectations.
+def _naive_prefix_len(a: str, b: str) -> int:
+    limit = min(len(a), len(b))
+    i = 0
+    while i < limit and a[i] == b[i]:
+        i += 1
+    return i
+
+
+@pytest.mark.parametrize(
+    "a,b",
+    [
+        ("", ""),
+        ("", "a"),
+        ("a", ""),
+        ("a", "a"),
+        ("abc", "abd"),
+        ("aaa", "aa"),
+        ("abc", "xyz"),
+        ("x" * 5000, "x" * 5000),
+        ("x" * 5000 + "a", "x" * 5000 + "b"),
+        ("héllo", "héllx"),
+        ("日本語", "日本"),
+    ],
+)
+def test_common_prefix_matches_the_obvious_implementation(a, b):
+    assert _common_prefix_len(a, b) == _naive_prefix_len(a, b)
+
+
+def test_common_prefix_is_symmetric_and_bounded():
+    a, b = "shared-head" + "L" * 900, "shared-head" + "R" * 900
+    n = _common_prefix_len(a, b)
+    assert n == _common_prefix_len(b, a) == len("shared-head")
+    assert 0 <= n <= min(len(a), len(b))

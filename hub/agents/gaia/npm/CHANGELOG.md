@@ -24,6 +24,18 @@ the terminal UI meant building it from source.
   `GAIA_DYNAMIC_SKILLS=0` turns the selection off, `GAIA_DYNAMIC_SKILLS_TAU`
   overrides the match threshold, and an embedder outage disables it for the
   session (every body renders — capability is never lost to a failed match).
+- **Per-turn tool selection, now on by default for the flagship `full`
+  profile.** The model is sent at most 26 of its 67 tools on any one call — a
+  fixed core plus whichever cohesion bundles the query matched — instead of the
+  whole registry every time. No capability is lost: `load_tools` is an escape
+  hatch the model calls mid-turn to pull in a bundle the selector missed.
+  `GAIA_DYNAMIC_TOOLS=0` turns the selection off, `GAIA_DYNAMIC_TOOLS_MAX`
+  moves the cap and `GAIA_DYNAMIC_TOOLS_TAU` the match threshold.
+- **A materially smaller fixed prompt on every call.** The always-on
+  `gaia-voice` guidance was rewritten from 2,145 tokens to 692 with all of its
+  behavioural rules intact. It had been a rationale document — every rule
+  followed by the incident that motivated it — and the model needs the rule,
+  not the incident report.
 - **`gaia run` (the default command)** — resolves the host platform, fetches and
   SHA-256 verifies both binaries, then launches the terminal UI and propagates its
   exit code. Arguments after a bare `--` are forwarded to the TUI verbatim.
