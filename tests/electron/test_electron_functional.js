@@ -7,74 +7,10 @@
  * This catches real breakage from dependency updates that structure tests miss
  */
 
-const { execSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
 describe('Electron Apps Functional Validation', () => {
-  describe('Jira App', () => {
-    const appPath = path.join(__dirname, '../../src/gaia/apps/jira/webui');
-    
-    it('should have installable package.json', () => {
-      const packagePath = path.join(appPath, 'package.json');
-      const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
-      
-      // Verify all dependencies are properly formatted
-      expect(pkg.dependencies).toBeDefined();
-      expect(pkg.devDependencies).toBeDefined();
-      
-      // Check for malformed version strings
-      Object.entries(pkg.dependencies || {}).forEach(([name, version]) => {
-        expect(version).toMatch(/^[\^~]?\d+\.\d+\.\d+$/);
-      });
-      
-      Object.entries(pkg.devDependencies || {}).forEach(([name, version]) => {
-        expect(version).toMatch(/^[\^~]?\d+\.\d+\.\d+$/);
-      });
-    });
-
-    it('should have valid main entry point', () => {
-      const packagePath = path.join(appPath, 'package.json');
-      const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
-      
-      const mainPath = path.join(appPath, pkg.main);
-      expect(fs.existsSync(mainPath)).toBe(true);
-      
-      // Verify the main file has no obvious syntax errors
-      const content = fs.readFileSync(mainPath, 'utf8');
-      expect(content).toContain('require');
-      expect(content.length).toBeGreaterThan(100);
-    });
-
-    it('should have valid forge configuration', () => {
-      const forgeConfigPath = path.join(appPath, 'forge.config.js');
-      if (fs.existsSync(forgeConfigPath)) {
-        // Verify it can be loaded
-        const config = require(forgeConfigPath);
-        expect(config).toBeDefined();
-        expect(config.packagerConfig).toBeDefined();
-      }
-    });
-
-    it('should have consistent electron versions', () => {
-      const packagePath = path.join(appPath, 'package.json');
-      const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf8'));
-      
-      const frameworkPackagePath = path.join(__dirname, '../../src/gaia/electron/package.json');
-      const frameworkPkg = JSON.parse(fs.readFileSync(frameworkPackagePath, 'utf8'));
-      
-      // Both should have electron as devDependency
-      expect(pkg.devDependencies.electron).toBeDefined();
-      expect(frameworkPkg.devDependencies.electron).toBeDefined();
-      
-      // Versions should be compatible (both should use ^31 or similar)
-      const appElectronMajor = pkg.devDependencies.electron.match(/(\d+)/)[1];
-      const frameworkElectronMajor = frameworkPkg.devDependencies.electron.match(/(\d+)/)[1];
-      
-      expect(appElectronMajor).toBe(frameworkElectronMajor);
-    });
-  });
-
   describe('Example App', () => {
     const appPath = path.join(__dirname, '../../src/gaia/apps/example/webui');
     

@@ -17,10 +17,6 @@ from typing import List, Optional, Set
 # Paths to filter out (framework internals)
 FRAMEWORK_PATHS: Set[str] = {
     "gaia/agents/base",
-    "gaia/agents/blender",
-    "gaia/agents/code",
-    "gaia/agents/docker",
-    "gaia/agents/jira",
     "gaia/agents/tools",
     # Hub-migrated agents (#1102): wheel installs land under site-packages
     # (covered below); editable hub checkouts show as hub/agents/<id>/python/.

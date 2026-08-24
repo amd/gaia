@@ -42,7 +42,7 @@ func TestCatalogLoadMakesEmailInstallable(t *testing.T) {
 func TestUnofferedSeedAgentsLeaveAvailable(t *testing.T) {
 	d, _ := newHubOnFakeDaemon(t)
 
-	for _, id := range []string{"code", "docker", "chat"} {
+	for _, id := range []string{"chat", "doc", "file"} {
 		agent := d.cat.Get(id)
 		if agent == nil {
 			t.Fatalf("seed agent %q disappeared from the catalog", id)

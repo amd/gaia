@@ -18,9 +18,8 @@ Currently, the following capabilities are available, more will be added in the n
 | ------------------ | ---------------------------------------- | --------------------------------------------------------------- | ---------------- |
 | LLM Direct         | Direct LLM queries via CLI               | Direct model interaction using the new `gaia llm` command      | Windows, Linux   |
 | Chat Agent         | Interactive conversations with history   | Interactive chat sessions with conversation context and commands | Windows, Linux   |
-| Code Agent         | AI-powered code generation and analysis  | Autonomous workflow for code generation, project scaffolding, and error fixing | Windows, Linux   |
-| Blender Agent      | 3D content creation and manipulation     | Specialized agent for Blender automation and workflow          | Windows, Linux   |
-| Summarization      | Document and transcript summarization    | AI-powered summarization with multiple output formats          | Windows, Linux   |
+| Flagship GAIA Agent | Conversation, documents, data, web, skills | Coding, data analysis, and other per-task capability lives here as skills | Windows, Linux   |
+| Summarization      | Document and transcript summarization    | AI-powered summarization via the flagship agent's `summarize` skill | Windows, Linux   |
 | Evaluation Suite   | Model evaluation and benchmarking       | Scenario-based agent eval, throughput benchmarking, and reporting | Windows, Linux   |
 | Voice Interaction  | Speech-to-speech conversation           | Voice-based AI interaction with TTS and ASR                    | Windows, Linux   |
 | Web Dashboards     | Browser-based interfaces for agents      | JavaScript apps with simple configuration                       | Windows, Linux   |
@@ -93,77 +92,14 @@ gaia chat --show-stats
 
 **Platform Availability**: Windows and Linux
 
-## Blender Agent
-
-The Blender agent provides specialized functionality for 3D content creation and workflow automation. It is now fully integrated into the CLI for easy access:
-
-```bash
-# Run all Blender examples
-gaia blender
-
-# Interactive 3D scene creation
-gaia blender --interactive
-
-# Create specific objects with custom queries
-gaia blender --query "Create a red cube and blue sphere"
-
-# Run a specific example
-gaia blender --example 2
-```
-
-**Key capabilities:**
-- **Scene Management**: Clear scenes and get scene information
-- **Object Creation**: Create cubes, spheres, cylinders, cones, and torus objects
-- **Material Assignment**: Set RGBA colors and materials for objects
-- **Object Modification**: Modify position, rotation, and scale of existing objects
-- **Interactive Planning**: Multi-step scene creation with automatic planning
-
-**Requirements:** In addition to the Lemonade server, the Blender agent requires a Blender MCP server to be running. See the [CLI documentation](/reference/cli#blender-command) for complete setup instructions.
-
-**Platform Availability**: Windows and Linux
-
 ## Summarization
 
-The Summarization feature provides AI-powered document and transcript processing with multiple output formats:
-
-```bash
-# Summarize a meeting transcript
-gaia summarize -i meeting_transcript.txt -o summary.json
-
-# Summarize emails with PDF output
-gaia summarize -i emails_directory/ -f pdf -o summaries/
-
-# Generate specific summary styles
-gaia summarize -i document.txt --styles executive action_items --max-tokens 1024
-
-# List available configuration templates
-gaia summarize --list-configs
-```
-
-**Key features:**
-- **Multiple Input Types**: Process transcripts, emails, and documents
-- **Flexible Output Formats**: JSON, PDF, email, or both
-- **Configurable Styles**: Brief, detailed, bullets, executive, participants, and action items
-- **Batch Processing**: Process entire directories of documents
-- **Template Support**: Use predefined configuration templates
-- **Model Flexibility**: Support for both local (Lemonade) and cloud (OpenAI/Claude) models
-
-**Output formats:**
-- `json` - Structured JSON with all summary components
-- `pdf` - Professional PDF reports
-- `email` - Email-ready format with recipients
-- `both` - Generate both JSON and PDF
-
-**Summary styles** (`--styles ...`, space-separated):
-- `brief` - Concise 2-3 sentence summary
-- `detailed` - Comprehensive detailed summary
-- `bullets` - Bullet-point format focused on action items
-- `executive` - High-level executive summary
-- `participants` - Meeting participants and roles
-- `action_items` - Extracted action items with owners/deadlines
-- `all` - Generate every style above
-
-**Platform Availability**: Windows and Linux
+Document, transcript, and email summarization is a flagship-agent skill, not
+a standalone command. Ask the [flagship GAIA agent](/guides/gaia) to
+summarize what you point it at (a pasted transcript, email, or PDF) and it
+picks a style — brief, detailed, bullet action items, executive — that
+matches the content and folds long input forward instead of losing the back
+half. See the [`summarize` skill](https://github.com/amd/gaia/blob/main/hub/skills/summarize/SKILL.md).
 
 ## Evaluation Framework
 
@@ -245,9 +181,7 @@ The models GAIA agents use by default (pulled by `gaia init --profile <profile>`
 
 | Model | Format / Backend | Used by |
 | ----- | ---------------- | ------- |
-| `Gemma-4-E4B-it-GGUF` | GGUF (llama.cpp) | Default chat, coding, and vision (multimodal) |
-| `Qwen3.5-35B-A3B-GGUF` | GGUF (llama.cpp) | Specialized agents (analyst, browser, file I/O, code, jira, docker, routing, doc Q&A) |
-| `Qwen3-4B-Instruct-2507-GGUF` | GGUF (llama.cpp) | Summarization |
+| `Gemma-4-E4B-it-GGUF` | GGUF (llama.cpp) | Default model for every agent — chat, flagship skills (coding, data, summarization), and vision (multimodal). Sharing one model id means switching agents never evicts and cold-reloads it. |
 | `Qwen3-VL-4B-Instruct-GGUF` | GGUF (llama.cpp) | Alternate vision model |
 | `embeddinggemma-300m-GGUF` | GGUF (llama.cpp) | Embeddings for RAG / document Q&A |
 | `gemma4-it-e2b-FLM` | FLM (NPU) | Chat on Ryzen AI NPU (`--profile npu`) |

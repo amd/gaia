@@ -15,7 +15,7 @@ Usage:
     client = OpenAI(base_url="http://localhost:8080/v1", api_key="dummy")
 
     response = client.chat.completions.create(
-        model="gaia-code-agent",
+        model="gaia",
         messages=[{"role": "user", "content": "Write hello world"}]
     )
 """
