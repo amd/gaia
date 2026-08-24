@@ -19,7 +19,6 @@ say each point once. The prompt text itself is always shown in full.
 
 - Writing or refactoring `_get_system_prompt()` for a GAIA agent
 - Tightening `@tool` docstrings (these are the LLM's tool-use spec)
-- Authoring routing instructions for `RoutingAgent`
 - Designing eval-judge prompts for `src/gaia/eval/`
 - Debugging underperforming agents via prompt-only changes
 
@@ -37,7 +36,6 @@ say each point once. The prompt text itself is always shown in full.
 | Tool descriptions | `@tool` docstring inside `_register_tools` |
 | Prompt assembly | `_compose_system_prompt` / `_format_tools_for_prompt` in `src/gaia/agents/base/agent.py` |
 | Chat defaults | `src/gaia/chat/prompts.py` |
-| Routing | `hub/agents/routing/python/gaia_agent_routing/agent.py` |
 
 Concrete agents live under `hub/agents/<id>/python/gaia_agent_<id>/` — `src/gaia/agents/` is framework-only.
 

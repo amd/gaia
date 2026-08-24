@@ -175,17 +175,17 @@ func TestRemoveNonexistent(t *testing.T) {
 
 func TestIncrementVotes(t *testing.T) {
 	c := NewCatalog()
-	agent := c.Get("routing")
+	agent := c.Get("chat")
 	if agent.Votes != 0 {
 		t.Fatalf("initial Votes = %d, want 0", agent.Votes)
 	}
 
-	c.IncrementVotes("routing")
+	c.IncrementVotes("chat")
 	if agent.Votes != 1 {
 		t.Fatalf("after IncrementVotes, Votes = %d, want 1", agent.Votes)
 	}
 
-	c.IncrementVotes("routing")
+	c.IncrementVotes("chat")
 	if agent.Votes != 2 {
 		t.Fatalf("after second IncrementVotes, Votes = %d, want 2", agent.Votes)
 	}

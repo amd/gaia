@@ -91,6 +91,11 @@ class ChatAgentConfig:
     silent_mode: bool = False
     output_dir: Optional[str] = None
 
+    # Where agent output goes. The base Agent has always accepted this; without
+    # it on the config there is no way to hand a ChatAgent the SSE handler the
+    # OpenAI-compatible API server streams through.
+    output_handler: Optional[Any] = None
+
     # RAG settings
     rag_documents: List[str] = field(default_factory=list)
     library_documents: List[str] = field(
@@ -416,6 +421,7 @@ class ChatAgent(
             streaming=config.streaming,
             show_stats=config.show_stats,
             silent_mode=config.silent_mode,
+            output_handler=config.output_handler,
             debug=config.debug,
             device=config.device,
             min_context_size=(

@@ -208,12 +208,11 @@ class AgentSDK:
             return
         try:
             # Proxy for what the server renders, and the ORDER matters: chat
-            # templates inject the tool schemas alongside the system block, at
+            # templates inject the tool schemas alongside the system block at
             # the front, not after the conversation. Appending them last made
             # the shared prefix stop at the first history message, so a turn
             # whose whole 12.2k system+tools header was reusable reported 27%
-            # cache hit instead of ~99%. Measured in a live run, invisible to
-            # every unit test, because only a real turn grows the history.
+            # cache hit instead of ~99%.
             head = json.dumps(structured[:1], default=str) if structured else ""
             if tools:
                 head += json.dumps(tools, default=str)

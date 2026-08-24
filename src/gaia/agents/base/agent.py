@@ -198,6 +198,9 @@ class ToolExecutionTimeout(Exception):
 TOOLS_REQUIRING_CONFIRMATION = {
     "run_shell_command",
     "run_cli_command",
+    # Runs a .py file in a subprocess — arbitrary code execution, and unlike
+    # run_shell_command there is no read-only allowlist behind it.
+    "execute_python_file",
     "write_file",
     "write_python_file",
     "edit_file",
@@ -1217,11 +1220,7 @@ Do NOT wrap conversational replies in JSON.
     @property
     def _openai_tools(self):
         """Return OpenAI function-calling schemas when the active model supports native tool_calls."""
-        from gaia.llm.lemonade_client import is_tool_calling_model
-
-        if getattr(self, "_use_claude", False) or is_tool_calling_model(
-            getattr(self, "model_id", None)
-        ):
+        if self._uses_native_tool_calls():
             return (
                 self._build_openai_tool_schemas(filter_to=self._active_tool_filter)
                 or None
@@ -3156,6 +3155,10 @@ Do NOT wrap conversational replies in JSON.
         it — a triage is five to ten reads — a wall of modals attended, and a
         guaranteed failure unattended.
 
+        Reads only. The same grant also declares which ``gh`` *writes* may be
+        offered to the user, and those answer False here — the grant says a
+        write may be asked about, never that it is already approved.
+
         Duck-typed on purpose. The host that owns a grant implements
         ``skill_grant_covers_call``; an agent with no such mixin has no way to
         answer yes, so its gate stays byte-identical.
@@ -3251,9 +3254,8 @@ Do NOT wrap conversational replies in JSON.
                 recorder.record_tool(
                     step=getattr(getattr(self, "chat", None), "turn_step", 0),
                     name=tool_name or "<unnamed>",
-                    # Human approval time is excluded — it is neither tool nor
-                    # model cost, and folding it in made a 1.3s command report
-                    # as 322.6s in a live run.
+                    # Human approval is excluded — neither tool nor model cost.
+                    # Folding it in made a 1.3s command report as 322.6s.
                     wall_s=max(0.0, time.perf_counter() - started - waited),
                     ok=ok,
                     waited_s=waited,
@@ -3342,13 +3344,17 @@ Do NOT wrap conversational replies in JSON.
         # frontend modal, everything else denies with an actionable message.
         if self._tool_requires_confirmation(tool_name, tool_args):
             # Blocking on a human is not tool cost. Timed separately so a turn
-            # where someone took five minutes to approve does not report the
-            # tool as having taken five minutes.
+            # where approval took five minutes does not report the tool as
+            # having taken five minutes.
             _confirm_started = time.perf_counter()
             try:
                 approved = self.console.confirm_tool_execution(tool_name, tool_args)
             finally:
-                self._confirmation_wait_s = time.perf_counter() - _confirm_started
+                # Accumulates: a tool body that invokes another confirmed tool
+                # asks twice, and the outer timer resets this per turn anyway.
+                self._confirmation_wait_s = (
+                    getattr(self, "_confirmation_wait_s", 0.0) or 0.0
+                ) + (time.perf_counter() - _confirm_started)
             if not approved:
                 return {
                     "status": "denied",

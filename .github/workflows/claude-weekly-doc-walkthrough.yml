@@ -208,6 +208,26 @@ jobs:
           "" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
           "- **Start:** $(Get-Date -Format o), clean run dir: ``$runDir``" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
 
+      # FOUND ON A LIVE RUN (2026-08-10, run 31387768076): this runner has no
+      # `python` on PATH, so the venv step below died with CommandNotFound before
+      # any doc was walked. Every other STX workflow gets its interpreter through
+      # uv (see .github/actions/setup-venv), so do the same here rather than
+      # depending on a system Python that isn't there.
+      - name: Ensure uv is on PATH (provides the interpreter for the venv below)
+        shell: powershell
+        run: |
+          $uvBin = "$env:USERPROFILE\.local\bin"
+          if (-not (Test-Path "$uvBin\uv.exe")) {
+            Write-Host "uv not present -- installing."
+            irm https://astral.sh/uv/install.ps1 | iex
+          }
+          if (-not (Test-Path "$uvBin\uv.exe")) {
+            Write-Host "::error::uv install did not produce $uvBin\uv.exe -- cannot create the walkthrough venv."
+            exit 1
+          }
+          Add-Content -Path $env:GITHUB_PATH -Value $uvBin
+          Write-Host "uv on PATH at $uvBin"
+
       - name: Fresh venv, real-user install (no -e install, no hub packages)
         shell: powershell
         run: |
@@ -218,8 +238,10 @@ jobs:
           # hub/agents/*/python package alongside it. This is the property
           # that would have caught #2260 -- do not "fix" a resulting
           # ImportError by installing a hub package here; that IS the bug.
+          # uv only supplies the interpreter; --seed puts real pip in the venv so
+          # the install below is still a plain `pip install <wheel>`.
           Write-Host "Creating venv at $env:RUN_DIR\venv ..."
-          python -m venv "$env:RUN_DIR\venv"
+          uv venv --seed --python 3.12 "$env:RUN_DIR\venv"
           & "$env:RUN_DIR\venv\Scripts\python.exe" -m pip install --upgrade pip build
           Write-Host "Building wheel from the checkout ..."
           & "$env:RUN_DIR\venv\Scripts\python.exe" -m build --wheel --outdir "$env:RUN_DIR\dist" .
@@ -289,6 +311,10 @@ jobs:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          # On `schedule`, github.actor is whoever last touched the default branch — always
+          # github-merge-queue[bot] here. Without this the human-actor gate rejects every
+          # scheduled run before Claude starts. Safe: schedule/dispatch only, no fork input.
+          allowed_bots: "github-merge-queue"
           prompt: |
             You are the EXECUTOR half of GAIA's weekly doc walkthrough. Your only job is
             to run commands and capture their raw output -- judging correctness is a
@@ -409,6 +435,8 @@ jobs:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          # See the executor step's note — scheduled runs are actored by github-merge-queue[bot].
+          allowed_bots: "github-merge-queue"
           prompt: |
             You are the JUDGE half of GAIA's weekly doc walkthrough. Do not trust the
             executor's framing -- read its raw transcript and the doc yourself, and reach
@@ -612,6 +640,8 @@ jobs:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          # See the executor step's note — scheduled runs are actored by github-merge-queue[bot].
+          allowed_bots: "github-merge-queue"
           prompt: |
             You are the synthesis step of GAIA's weekly DOC WALKTHROUGH (the
             execution-based sibling of the static weekly-audit -- see
@@ -717,5 +747,8 @@ jobs:
           if [ "$ok" = "true" ]; then
             echo "✅ Weekly doc walkthrough synthesis completed (log: $EXEC_FILE)"
           else
-            echo "::warning title=Weekly doc walkthrough did not complete::The synthesis step crashed or errored before finishing. Re-run: $RUN_URL"
+            # Hard-fail for the same reason as claude-weekly-audit.yml: a green run that
+            # synthesised nothing is indistinguishable from one that found nothing.
+            echo "::error title=Weekly doc walkthrough did not complete::The synthesis step crashed or errored before finishing. Re-run: $RUN_URL"
+            exit 1
           fi

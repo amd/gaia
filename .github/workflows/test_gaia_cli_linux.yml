@@ -495,7 +495,6 @@ jobs:
           echo "   ✅ Lemonade server with Qwen3-0.6B-GGUF model"
           echo "   ✅ Core CLI commands using Qwen model (chat, prompt, llm)"
           echo "   ✅ Evaluation commands (eval, eval agent)"
-          echo "   ✅ Summarizer CLI integration (gaia summarize command)"
           echo "   ✅ RAG (Retrieval-Augmented Generation) functionality"
           echo "   ✅ Lemonade client integration (API tests)"
           echo "   ✅ Cross-platform compatibility"

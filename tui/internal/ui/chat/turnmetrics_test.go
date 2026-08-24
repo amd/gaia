@@ -172,3 +172,110 @@ func stripANSI(s string) string {
 	}
 	return b.String()
 }
+
+// A backend with a real prefix cache (Anthropic) reports what it actually
+// reused. The local estimator cannot see across turns — it resets with each
+// record — so on a one-step turn it always says 0%, which is exactly the
+// reading that made the cache look broken when it was working.
+func TestServerCacheCountersWinOverTheLocalEstimate(t *testing.T) {
+	stats := sampleTurnStats()
+	stats.LLMCalls = []event.CanonicalTurnCall{
+		{Step: 1, WallS: 0.7, InputTokens: 14057, CacheReadInputTokens: 13696},
+	}
+	stats.Totals = event.CanonicalTurnTotals{
+		InputTokensLocal: 12895, InputTokensCachedLocal: 0, InputTokensNewLocal: 12895,
+		InputTokensServer: 14057, InputTokensCachedServer: 13696,
+		OutputTokensServer: 5,
+	}
+	msg := sampleMetricsMessage()
+	msg.Metrics = stats
+
+	block := NewChatModel(&nullClient{}, "GAIA", "", true).turnMetricsBlock(msg)
+	for _, want := range []string{"14,057 tok", "13,696 cached", "361 new", "97% hit"} {
+		if !strings.Contains(block, want) {
+			t.Errorf("block is missing %q:\n%s", want, block)
+		}
+	}
+	if strings.Contains(block, "12,895") {
+		t.Errorf("local estimate leaked into a turn the backend measured:\n%s", block)
+	}
+}
+
+// A cold turn only writes the cache. It still counts as measured, so turn 1 and
+// turn 2 are drawn from the same source and their totals compare directly.
+func TestAColdTurnStillUsesTheServerTotals(t *testing.T) {
+	stats := sampleTurnStats()
+	stats.LLMCalls = nil
+	stats.Totals = event.CanonicalTurnTotals{
+		InputTokensLocal: 12858, InputTokensCachedLocal: 0,
+		InputTokensServer: 14034, CacheWriteTokensServer: 13696,
+	}
+	msg := sampleMetricsMessage()
+	msg.Metrics = stats
+
+	block := NewChatModel(&nullClient{}, "GAIA", "", true).turnMetricsBlock(msg)
+	if !strings.Contains(block, "14,034 tok") || !strings.Contains(block, "0 cached") {
+		t.Errorf("cold turn did not report the server total:\n%s", block)
+	}
+}
+
+// Lemonade reports neither counter, so the local prefix estimate must survive —
+// it is the only cached/new signal a local llama.cpp turn has.
+func TestLocalEstimateSurvivesOnABackendThatReportsNoCache(t *testing.T) {
+	block := NewChatModel(&nullClient{}, "GAIA", "", true).turnMetricsBlock(sampleMetricsMessage())
+	for _, want := range []string{"51,204 tok", "38,110 cached", "74% hit"} {
+		if !strings.Contains(block, want) {
+			t.Errorf("block is missing %q:\n%s", want, block)
+		}
+	}
+}
+
+// Time spent waiting for a human to approve a tool is neither model time nor
+// tool time. It only appears when someone was actually asked — on every other
+// turn the figure is zero and the word "waiting" is noise.
+func TestWaitingOnYouShowsOnlyWhenSomeoneWasAsked(t *testing.T) {
+	dev := NewChatModel(&nullClient{}, "GAIA", "", true)
+
+	quiet := dev.turnMetricsBlock(sampleMetricsMessage())
+	if strings.Contains(quiet, "waiting on you") {
+		t.Errorf("a turn nobody was asked about advertised a wait:\n%s", quiet)
+	}
+
+	msg := sampleMetricsMessage()
+	msg.Metrics.Totals.WaitingOnUserS = 322.6
+	msg.Metrics.ToolCalls[0].WaitedS = 322.6
+	block := dev.turnMetricsBlock(msg)
+
+	if !strings.Contains(block, "waiting on you 322.6s") {
+		t.Errorf("the approval wait never reached the split line:\n%s", block)
+	}
+	if !strings.Contains(block, "run_shell_command 2.1s") {
+		t.Errorf("the tool's own cost was rewritten by the wait:\n%s", block)
+	}
+	if !strings.Contains(block, "(+322.6s waiting on you)") {
+		t.Errorf("the step row did not hang the wait off its tool:\n%s", block)
+	}
+}
+
+// Claude reports no time-to-first-token. Printing the absent value as 0.0s
+// reads as an instant first token — the fake zero the recorder itself is
+// careful never to emit.
+func TestAMissingTTFTReadsAsAbsentNotInstant(t *testing.T) {
+	dev := NewChatModel(&nullClient{}, "GAIA", "", true)
+	msg := sampleMetricsMessage()
+	msg.Metrics.LLMCalls = []event.CanonicalTurnCall{
+		{Step: 1, WallS: 12.8, TTFTS: 0, InputTokensLocal: 17204},
+		{Step: 2, WallS: 9.1, TTFTS: 0.4, InputTokensLocal: 17260},
+	}
+	block := dev.turnMetricsBlock(msg)
+
+	if strings.Contains(block, "ttft  0.0s") {
+		t.Errorf("an unreported ttft printed as an instant first token:\n%s", block)
+	}
+	if !strings.Contains(block, "ttft    --") {
+		t.Errorf("an unreported ttft did not read as absent:\n%s", block)
+	}
+	if !strings.Contains(block, "ttft  0.4s") {
+		t.Errorf("a real ttft stopped rendering:\n%s", block)
+	}
+}
