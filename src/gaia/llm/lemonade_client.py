@@ -437,13 +437,6 @@ AGENT_PROFILES = {
         min_ctx_size=GPU_CTX_SIZE,
         description="Interactive chat with RAG and vision support",
     ),
-    "code": AgentProfile(
-        name="code",
-        display_name="Code Agent",
-        models=["gemma-4-e4b"],
-        min_ctx_size=GPU_CTX_SIZE,
-        description="Autonomous coding assistant",
-    ),
     "bash": AgentProfile(
         name="bash",
         display_name="Bash Agent",
@@ -466,27 +459,6 @@ AGENT_PROFILES = {
         # break summarize_document and large multi-chunk retrievals.
         min_ctx_size=GPU_CTX_SIZE,
         description="Document Q&A with retrieval and vision",
-    ),
-    "blender": AgentProfile(
-        name="blender",
-        display_name="Blender Agent",
-        models=["gemma-4-e4b"],
-        min_ctx_size=GPU_CTX_SIZE,
-        description="3D content generation in Blender",
-    ),
-    "jira": AgentProfile(
-        name="jira",
-        display_name="Jira Agent",
-        models=["gemma-4-e4b"],
-        min_ctx_size=GPU_CTX_SIZE,
-        description="Jira issue management",
-    ),
-    "docker": AgentProfile(
-        name="docker",
-        display_name="Docker Agent",
-        models=["gemma-4-e4b"],
-        min_ctx_size=GPU_CTX_SIZE,
-        description="Docker container management",
     ),
     "vlm": AgentProfile(
         name="vlm",
@@ -511,10 +483,10 @@ AGENT_PROFILES = {
     ),
     "sd": AgentProfile(
         name="sd",
-        display_name="SD Agent",
+        display_name="Stable Diffusion tools",
         models=["gemma-4-e4b"],
         min_ctx_size=GPU_CTX_SIZE,
-        description="Stable Diffusion image generation with LLM helper",
+        description="Image generation via the SD tool mixin",
     ),
 }
 
@@ -4040,7 +4012,7 @@ class LemonadeClient:
         Get agent profile by name.
 
         Args:
-            agent: Name of the agent (chat, code, rag, talk, blender, etc.)
+            agent: Name of the agent (chat, rag, talk, vlm, etc.)
 
         Returns:
             AgentProfile if found, None otherwise
@@ -4360,7 +4332,7 @@ class LemonadeClient:
             status = client.initialize(agent="chat")
 
             # Initialize with custom context size
-            status = client.initialize(agent="code", ctx_size=65536)
+            status = client.initialize(agent="chat", ctx_size=65536)
         """
         profile = self.get_agent_profile(agent)
         if not profile:
@@ -4746,7 +4718,7 @@ def initialize_lemonade(
         status = initialize_lemonade(agent="chat")
 
         # Initialize for code agent with larger context
-        status = initialize_lemonade(agent="code", ctx_size=65536)
+        status = initialize_lemonade(agent="chat", ctx_size=65536)
     """
     client = LemonadeClient(host=host, port=port, keep_alive=True)
     return client.initialize(

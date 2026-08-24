@@ -1177,15 +1177,8 @@ The evaluation framework supports **combined prompt** as an optional optimizatio
 - **Quality Trade-off**: May produce less focused results for individual styles
 - **⚠️ Model Limitations**: Smaller LLMs (e.g., less than 3B parameters) may struggle with complex combined prompts, leading to incomplete outputs or format errors
 
-To enable combined prompt (for cost/speed optimization):
-
-CLI: Use `--combined-prompt` flag to enable optimization
-
-```bash
-gaia summarize -i meeting.txt --styles all --combined-prompt
-```
-
-Config: Set `"combined_prompt": true` in parameters to enable
+To enable combined prompt (for cost/speed optimization), set
+`"combined_prompt": true` in parameters:
 
 ```json
 {

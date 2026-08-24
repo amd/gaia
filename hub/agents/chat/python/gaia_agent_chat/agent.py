@@ -25,7 +25,7 @@ except ImportError as _watchdog_err:
 
 from gaia_agent_chat.profiles import TOOL_GROUP_REGISTRARS, get_profile_spec
 from gaia_agent_chat.session import SessionManager
-from gaia_agent_chat.tool_bundles import DOC_BUNDLES, DOC_CORE_TOOLS
+from gaia_agent_chat.tool_bundles import PROFILE_TOOL_CONFIGS
 
 from gaia.agents.base.agent import Agent, default_max_steps
 from gaia.agents.base.console import AgentConsole
@@ -90,6 +90,11 @@ class ChatAgentConfig:
     show_stats: bool = False
     silent_mode: bool = False
     output_dir: Optional[str] = None
+
+    # Where agent output goes. The base Agent has always accepted this; without
+    # it on the config there is no way to hand a ChatAgent the SSE handler the
+    # OpenAI-compatible API server streams through.
+    output_handler: Optional[Any] = None
 
     # RAG settings
     rag_documents: List[str] = field(default_factory=list)
@@ -416,6 +421,7 @@ class ChatAgent(
             streaming=config.streaming,
             show_stats=config.show_stats,
             silent_mode=config.silent_mode,
+            output_handler=config.output_handler,
             debug=config.debug,
             device=config.device,
             min_context_size=(
@@ -574,17 +580,22 @@ class ChatAgent(
     def _maybe_build_tool_loader(self) -> Optional[ToolLoader]:
         """Construct the semantic tool loader, or ``None`` when inactive.
 
-        Active only for the ``doc`` profile with the toggle resolved on (config
-        field, overridable by ``GAIA_DYNAMIC_TOOLS``). Returning ``None`` leaves
-        the agent on the full-registry / byte-identical legacy path.
+        Active for a profile with a :data:`PROFILE_TOOL_CONFIGS` entry (``doc``,
+        ``full``) and the toggle resolved on (config field, overridable by
+        ``GAIA_DYNAMIC_TOOLS``). Any other profile returns ``None``, leaving the
+        agent on the full-registry / byte-identical legacy path.
         """
         if not self._resolve_dynamic_tools_enabled():
             return None
-        if getattr(self.config, "prompt_profile", "full") != "doc":
+        profile_config = PROFILE_TOOL_CONFIGS.get(
+            getattr(self.config, "prompt_profile", "full")
+        )
+        if profile_config is None:
             return None
         return ToolLoader(
-            core_tools=DOC_CORE_TOOLS,
-            bundles=DOC_BUNDLES,
+            core_tools=profile_config.core,
+            bundles=profile_config.bundles,
+            optional_tools=profile_config.optional,
             embed_fn=self._embed_text,
             embed_batch_fn=self._embed_texts_batch,
             threshold=self._resolve_dynamic_tools_threshold(),
@@ -1024,9 +1035,9 @@ No documents are currently indexed.
         # self-recover via the free full-registry path and are the
         # TTFT-sensitive case, so we don't tax them with the menu. Lives in
         # this stable prefix (before the volatile tools tail) → no KV thrash.
-        # Only ever non-empty for the "doc" profile — no other profile's
-        # ``prompt_blocks`` names "load_tools_menu", and ``tool_loader`` is
-        # only ever built for "doc" (``_maybe_build_tool_loader``).
+        # Non-empty only where both halves line up: the profile's
+        # ``prompt_blocks`` names "load_tools_menu" and ``_maybe_build_tool_loader``
+        # built a loader for it (the "doc" and "full" profiles).
         load_tools_menu = ""
         loader = getattr(self, "tool_loader", None)
         if loader is not None and is_tool_calling_model(
@@ -1297,9 +1308,9 @@ No documents are currently indexed.
         self._register_loop_control_tools()  # set_loop_state, request_user_input
 
         # load_tools escape hatch (#1450, Part 2) — registered ONLY when the
-        # dynamic loader is active, so the default-off doc path stays
-        # byte-identical. It is in DOC_CORE_TOOLS, so once registered it renders
-        # in both prompt paths every active turn (cap- and eviction-exempt).
+        # dynamic loader is active, so the loader-off path stays byte-identical.
+        # It is in every profile's CORE set, so once registered it renders in
+        # both prompt paths every active turn (cap- and eviction-exempt).
         if self.tool_loader is not None:
 
             @tool

@@ -20,6 +20,37 @@ and is bearer-token authenticated (token in `~/.gaia/tui/control.json`, mode
 host's LAN address. Launch it in **its own Terminal window** — a long-lived
 process started from a background tool call gets SIGKILLed (exit 137).
 
+### Launch it in Windows Terminal, never bare `cmd.exe`
+
+**A `cmd.exe` window spawned by `Start-Process` lands in legacy conhost, which
+reports no colour support — and the TUI then renders with no colour and no
+syntax highlighting at all.** It is not a rendering bug and it is not the
+capture stripping ANSI; the process genuinely emits zero escape sequences.
+
+The chain: `theme.Init()` and `components.PrimeRenderer()` resolve the palette
+once at startup (`prepareTerminal`, `internal/ui/app.go`). `detectStyle()
+(components/markdown.go)` returns `styles.NoTTYStyle` when the terminal reports
+no colour, glamour then drops every chroma token, and `answerPanelStyle` paints
+each code line one flat grey. Everything *looks* right except that code blocks
+are monochrome — which reads as "syntax highlighting is broken".
+
+Launch through `wt.exe` so the console is Windows Terminal (truecolor):
+
+```bash
+powershell.exe -NoProfile -Command \
+  "Start-Process wt.exe -ArgumentList @('new-tab','--title','GAIA','cmd.exe','/k','<abs path>\run.bat')"
+```
+
+Two traps in that line: a `--title` containing a space breaks `wt`'s own
+argument parsing (`error 0x80070002`), so keep it one word; and put the env vars
+(`GAIA_TUI_HOME`, `PYTHONPATH`, `GAIA_AGENT_LOG`) inside the `.bat`, because a
+new tab handed to an already-running Windows Terminal inherits *that* process's
+environment, not your shell's.
+
+To check colour rather than guess: `GET /control/v1/screen?format=ansi` and
+count `\x1b`. Zero on a frame that should be styled means the profile
+degraded — relaunch under `wt.exe`.
+
 ## Endpoints
 
 `/control/v1/` — `status` · `screen` · `keys` · `text` · **`wait`** · `frames` · `resize`
@@ -41,8 +72,11 @@ where `ask` types, submits, and blocks on `gone streaming`.
 - **Always `screen 0 999`.** A cropped capture once produced a fabricated
   "uninstall silently does nothing" — the status line is the second-to-last row.
 - **`resize` FIRST** or cols/rows are 0 and everything wraps wrongly.
-- **`format=plain` strips ANSI.** You cannot judge colour or styling from a
-  capture. Read the renderer's source for `lipgloss` calls instead.
+- **`format=plain` strips ANSI** — but `format=ansi` does not, and it is the
+  fastest way to settle a colour question. Count `\x1b` in the result: a styled
+  frame returns dozens (a healthy header is
+  `\x1b[1;38;2;181;224;141mGAIA`), and **zero means the colour profile
+  degraded at launch** — see the Windows Terminal note above, not a renderer bug.
 - **Check the screen you are actually on** before sending keys. Keys sent to the
   wrong screen do nothing and read as "the binding is broken".
 - `screencapture` is blocked on this machine. Use the control API text.

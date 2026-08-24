@@ -182,6 +182,10 @@ jobs:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          # On `schedule`, github.actor is whoever last touched the default branch — always
+          # github-merge-queue[bot] here. Without this the human-actor gate rejects every
+          # scheduled run before Claude starts. Safe: schedule/dispatch only, no fork input.
+          allowed_bots: "github-merge-queue"
           prompt: |
             You are one lens of GAIA's proactive SECURITY audit. YOUR LENS: ${{ matrix.lens }}.
             Find real, exploitable security weaknesses.
@@ -288,7 +292,9 @@ jobs:
         with:
           name: findings-${{ matrix.lens }}
           path: findings-${{ matrix.lens }}.json
-          if-no-files-found: warn
+          # A lens that ran writes `{"findings": []}` even when clean, so a missing file
+          # means the lens never ran. Fail the job — a silent skip reads as "audited, clean".
+          if-no-files-found: error
 
   # ---------------------------------------------------------------------------
   # Score + publish. Converts Claude findings to SARIF (CVSS -> security-severity)
@@ -316,17 +322,23 @@ jobs:
         with:
           path: audit-findings
       - name: Convert findings to SARIF
+        env:
+          EXPECTED_LENSES: "3"  # keep in sync with the audit job's matrix.lens
         run: |
           set -euo pipefail
           # Flatten the per-lens artifact subdirs into one glob for the converter.
           find audit-findings -name 'findings-*.json' -exec cp {} . \; || true
-          if ls findings-*.json >/dev/null 2>&1; then
-            python util/findings_to_sarif.py findings-*.json -o claude-security.sarif
-          else
-            echo "No findings files produced; writing an empty SARIF run."
-            python util/findings_to_sarif.py /dev/null -o claude-security.sarif || \
-              echo '{"$schema":"https://json.schemastore.org/sarif-2.1.0.json","version":"2.1.0","runs":[{"tool":{"driver":{"name":"gaia-claude-security-audit","rules":[]}},"results":[]}]}' > claude-security.sarif
+          # "No lens produced output" and "every lens found nothing" produce the same empty
+          # SARIF, and uploading it would mark existing code-scanning alerts as FIXED. So a
+          # short count is a hard failure, not a quiet clean bill of health.
+          # `find`, not `ls findings-*.json` — under `set -euo pipefail` a no-match glob
+          # makes ls exit non-zero and kills the step before it can report why.
+          got=$(find . -maxdepth 1 -name 'findings-*.json' | wc -l)
+          if [ "$got" -lt "$EXPECTED_LENSES" ]; then
+            echo "::error title=Security audit::Only $got/$EXPECTED_LENSES lenses produced findings files — the audit did not run. Refusing to upload an empty SARIF (it would clear existing alerts)."
+            exit 1
           fi
+          python util/findings_to_sarif.py findings-*.json -o claude-security.sarif
       - name: Upload Claude SARIF to code scanning
         uses: github/codeql-action/upload-sarif@v4
         with:

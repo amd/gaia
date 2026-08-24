@@ -99,7 +99,7 @@ The default construction registers **55 tools**. Grouped by what they're for:
 
 `run_shell_command` is restricted to a read-only command allowlist (`ls`, `cat`, `grep`, `find`, `stat`, `df`, `uname`, and similar) and rate-limited. Anything that writes, installs, or executes an arbitrary binary is refused.
 
-**Image *generation* is deliberately off.** Drawing a picture would pull a second model into Lemonade and evict the resident chat model mid-conversation — not a trade a document agent should make silently. Use the [Image Generation agent](/guides/sd) when you want that.
+**Image *generation* is deliberately off.** Drawing a picture would pull a second model into Lemonade and evict the resident chat model mid-conversation — not a trade a document agent should make silently. A custom agent can still compose the [`sd` tool mixin](/sdk/mixins/tool-mixins#95-stable-diffusion-mixin) when that trade-off is acceptable.
 
 ### Tools that need your approval
 

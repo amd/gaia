@@ -26,30 +26,10 @@ from gaia.llm.lemonade_client import (
     LemonadeClientError,
     _get_lemonade_config,
 )
-from gaia.llm.lemonade_launcher import describe_client_hint, describe_start_hint
+from gaia.llm.lemonade_launcher import describe_start_hint
 from gaia.logger import get_logger
 from gaia.perf_analysis import run_perf_visualization
 from gaia.version import version
-
-# Optional imports — degrades to BLENDER_AVAILABLE = False when the blender
-# agent (or the Blender MCP client) is not installed.
-try:
-    # BlenderAgent now ships as the external ``gaia_agent_blender`` wheel
-    # (#1102), splitting it from the gaia.mcp import below; both must stay in
-    # this guarded optional-import block, so the gaia.mcp import is necessarily
-    # ungrouped from the top-of-file gaia imports.
-    from gaia_agent_blender.agent import BlenderAgent
-
-    # pylint: disable=ungrouped-imports
-    from gaia.mcp.blender_mcp_client import MCPClient
-
-    # pylint: enable=ungrouped-imports
-
-    BLENDER_AVAILABLE = True
-except ImportError:
-    BlenderAgent = None
-    MCPClient = None
-    BLENDER_AVAILABLE = False
 
 # Load environment variables from .env file
 load_dotenv()
@@ -128,7 +108,7 @@ def initialize_lemonade_for_agent(
     initialization and error handling.
 
     Args:
-        agent: Agent name (chat, code, talk, rag, blender, jira, docker, vlm, minimal, mcp)
+        agent: Agent name (chat, talk, rag, vlm, minimal, mcp)
         quiet: Suppress output (only errors)
         skip_if_external: If True, skip initialization when using Claude/ChatGPT
         use_claude: Whether Claude API is being used
@@ -246,7 +226,7 @@ def ensure_agent_models(
     user feedback during model downloads.
 
     Args:
-        agent: Agent name (chat, code, rag, talk, blender, jira, docker, vlm, minimal, mcp)
+        agent: Agent name (chat, rag, talk, vlm, minimal, mcp)
         host: Lemonade server host
         port: Lemonade server port
         quiet: Suppress output (only errors)
@@ -350,60 +330,6 @@ def ensure_agent_models(
         if not quiet:
             print(f"❌ Error checking/downloading models: {e}", file=sys.stderr)
         return False
-
-
-def check_mcp_health(host="localhost", port=9876):
-    """Check if Blender MCP server is running and accessible."""
-    log = get_logger(__name__)
-
-    try:
-        import socket
-
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(3)
-        result = sock.connect_ex((host, port))
-        sock.close()
-
-        if result == 0:
-            log.debug("Blender MCP server is accessible")
-            return True
-        else:
-            log.debug(f"Failed to connect to Blender MCP server on {host}:{port}")
-            return False
-    except Exception as e:
-        log.debug(f"Error checking MCP server: {str(e)}")
-        return False
-
-
-def print_mcp_error():
-    """Print informative error message when Blender MCP server is not running."""
-    print(
-        "❌ Error: Blender MCP server is not running or not accessible.",
-        file=sys.stderr,
-    )
-    print("", file=sys.stderr)
-    print("To set up the Blender MCP server:", file=sys.stderr)
-    print("", file=sys.stderr)
-    print("1. Open Blender (version 4.3 or newer recommended)", file=sys.stderr)
-    print("2. Go to Edit > Preferences > Add-ons", file=sys.stderr)
-    print("3. Click the down arrow button, then 'Install...'", file=sys.stderr)
-    print(
-        "4. Navigate to: <GAIA_REPO>/src/gaia/mcp/blender_mcp_server.py",
-        file=sys.stderr,
-    )
-    print("5. Install and enable the 'Simple Blender MCP' add-on", file=sys.stderr)
-    print(
-        "6. Open the 3D viewport sidebar (press 'N' key if not visible)",
-        file=sys.stderr,
-    )
-    print("7. Find the 'Blender MCP' panel in the sidebar", file=sys.stderr)
-    print("8. Set port to 9876 and click 'Start Server'", file=sys.stderr)
-    print("", file=sys.stderr)
-    print(
-        "For detailed setup instructions, see: workshop/blender.ipynb", file=sys.stderr
-    )
-    print("", file=sys.stderr)
-    print("Then try your Blender command again.", file=sys.stderr)
 
 
 class GaiaCliClient:
@@ -570,12 +496,9 @@ async def async_main(action, **kwargs):
 
     # Map actions to agent profiles for Lemonade initialization
     # Each agent has specific model and context size requirements
-    # Note: code, blender, jira, docker are handled by their own handler functions
     action_to_agent = {
         "prompt": "minimal",  # Basic prompts use minimal profile
         "chat": "chat",
-        "browse": "chat",
-        "analyze": "chat",
         "talk": "talk",
         "stats": "minimal",
     }
@@ -835,67 +758,6 @@ async def async_main(action, **kwargs):
                     agent.stop_watching()
             except Exception:  # pylint: disable=broad-except
                 pass
-    elif action in ("browse", "analyze"):
-        # BrowserAgent (id="web") and AnalystAgent (id="data") ship as the
-        # standalone gaia-agent-browser / gaia-agent-analyst wheels (#1102);
-        # resolve them through the registry so the framework doesn't hard-import
-        # the external packages.
-        from gaia.agents.registry import AgentRegistry
-
-        agent_id = "web" if action == "browse" else "data"
-        wheel = "gaia-agent-browser" if action == "browse" else "gaia-agent-analyst"
-        agent_config_kwargs = dict(
-            use_claude=kwargs.get("use_claude", False),
-            use_chatgpt=kwargs.get("use_chatgpt", False),
-            claude_model=kwargs.get("claude_model", "claude-sonnet-4-20250514"),
-            base_url=kwargs.get("base_url"),
-            model_id=kwargs.get("model", None),
-            # None → global default (default_max_steps / env) in Agent.
-            max_steps=kwargs.get("max_steps"),
-            streaming=kwargs.get("stream", False),
-            show_prompts=kwargs.get("show_prompts", False),
-            show_stats=kwargs.get("show_stats", False),
-            silent_mode=not (
-                kwargs.get("debug", False) or kwargs.get("list_tools", False)
-            ),
-            debug=kwargs.get("debug", False),
-            allowed_paths=kwargs.get("allowed_paths", None),
-        )
-        registry = AgentRegistry()
-        registry.discover()
-        if registry.get(agent_id) is None:
-            raise RuntimeError(
-                agent_not_installed_message(
-                    f"The '{action}' agent is not installed",
-                    wheel,
-                    next_step=f"Then re-run `gaia {action}`.",
-                )
-            )
-        agent = registry.create_agent(agent_id, **agent_config_kwargs)
-
-        try:
-            if kwargs.get("list_tools", False):
-                agent.list_tools(verbose=True)
-                return 0
-
-            query = kwargs.get("query")
-            if query:
-                result = agent.process_query(query, trace=kwargs.get("trace", False))
-                if kwargs.get("show_stats", False) and result.get("duration"):
-                    agent.console.display_stats(result)
-                return 0 if result["status"] == "success" else 1
-
-            print(f"Starting {agent.__class__.__name__}. Type /quit to exit.")
-            while True:
-                user_input = input("\nYou: ").strip()
-                if not user_input:
-                    continue
-                if user_input.lower() in {"/quit", "/exit"}:
-                    return 0
-                agent.process_query(user_input, trace=kwargs.get("trace", False))
-        finally:
-            if hasattr(agent, "close"):
-                agent.close()
     elif action == "talk":
         # Use TalkSDK for voice functionality
         from gaia.talk.sdk import TalkConfig, TalkSDK
@@ -1136,7 +998,6 @@ def _show_interactive_menu(log=None):
         print('    gaia prompt "Hello"    Single prompt to LLM')
         print("    gaia talk              Voice interaction")
         print("    gaia init              Setup Lemonade + models")
-        print("    gaia code              Code generation agent")
         print()
         print("  Run 'gaia --help' for the full command list.")
     else:
@@ -1334,8 +1195,7 @@ def build_parser():
         help="Set the logging level (default: INFO)",
     )
     # Shared --config flag. Attached only to commands that read the persistent
-    # config (chat/llm/prompt + the `gaia config` subcommands) — NOT to
-    # parent_parser, since `gaia summarize` already defines its own --config.
+    # config (chat/llm/prompt + the `gaia config` subcommands).
     config_path_parser = argparse.ArgumentParser(add_help=False)
     config_path_parser.add_argument(
         "--config",
@@ -1524,32 +1384,6 @@ def build_parser():
         default=None,
         help="Path to pre-built Agent UI frontend dist directory (used with --ui)",
     )
-    for agent_command, agent_help in (
-        ("browse", "Web research with search, page fetch, and download tools"),
-        ("analyze", "Structured data analysis with scratchpad tables"),
-    ):
-        agent_parser = subparsers.add_parser(
-            agent_command,
-            help=agent_help,
-            parents=[parent_parser],
-        )
-        agent_parser.add_argument(
-            "--query",
-            "-q",
-            type=str,
-            help="Single query to execute (defaults to interactive mode if not provided)",
-        )
-        agent_parser.add_argument(
-            "--show-prompts", action="store_true", help="Display prompts sent to LLM"
-        )
-        agent_parser.add_argument(
-            "--debug", action="store_true", help="Enable debug output"
-        )
-        agent_parser.add_argument(
-            "--allowed-paths",
-            nargs="+",
-            help="Allowed directory paths for file operations",
-        )
     talk_parser = subparsers.add_parser(
         "talk", help="Start voice conversation with Gaia", parents=[parent_parser]
     )
@@ -1595,240 +1429,6 @@ def build_parser():
         "--index", "-i", type=str, help="Index a PDF document for voice Q&A"
     )
     talk_parser.set_defaults(action="talk")
-
-    # Add summarize command
-    summarize_parser = subparsers.add_parser(
-        "summarize",
-        help="Summarize meeting transcripts and emails",
-        parents=[parent_parser],
-    )
-    summarize_parser.add_argument(
-        "-i",
-        "--input",
-        help="Input file or directory path (required unless using --list-configs)",
-    )
-    summarize_parser.add_argument(
-        "-o",
-        "--output",
-        help="Output file/directory path (auto-adjusted based on format)",
-    )
-    summarize_parser.add_argument(
-        "-t",
-        "--type",
-        choices=["transcript", "email", "pdf", "auto"],
-        default="auto",
-        help="Input type (default: auto-detect)",
-    )
-    summarize_parser.add_argument(
-        "-f",
-        "--format",
-        choices=["json", "pdf", "email", "both"],
-        default="json",
-        help="Output format (default: json). 'both' generates json and pdf",
-    )
-    summarize_parser.add_argument(
-        "--styles",
-        nargs="+",
-        choices=[
-            "brief",
-            "detailed",
-            "bullets",
-            "executive",
-            "participants",
-            "action_items",
-            "all",
-        ],
-        default=["executive", "participants", "action_items"],
-        help="Summary style(s) to generate (default: executive participants action_items)",
-    )
-    summarize_parser.add_argument(
-        "--max-tokens",
-        type=int,
-        default=1024,
-        help="Maximum tokens for summary (default: 1024)",
-    )
-    summarize_parser.add_argument(
-        "--email-to", help="Email recipients (comma-separated) for email output format"
-    )
-    summarize_parser.add_argument(
-        "--email-subject", help="Email subject line (default: auto-generated)"
-    )
-    summarize_parser.add_argument("--email-cc", help="CC recipients (comma-separated)")
-    summarize_parser.add_argument(
-        "--config", help="Use predefined configuration file from configs/ directory"
-    )
-    summarize_parser.add_argument(
-        "--list-configs",
-        action="store_true",
-        help="List all available configuration templates",
-    )
-    summarize_parser.add_argument(
-        "--quiet",
-        action="store_true",
-        help="Minimal output, suppress progress indicators",
-    )
-    summarize_parser.add_argument(
-        "--verbose", action="store_true", help="Detailed output with debug information"
-    )
-    summarize_parser.add_argument(
-        "--combined-prompt",
-        action="store_true",
-        help="Combine multiple styles into single LLM call (experimental - may reduce quality)",
-    )
-    summarize_parser.add_argument(
-        "--no-viewer",
-        action="store_true",
-        help="Don't automatically open HTML viewer for JSON output",
-    )
-
-    # Add Blender agent command
-    blender_parser = subparsers.add_parser(
-        "blender",
-        help="Blender 3D scene creation and modification",
-        parents=[parent_parser],
-    )
-    blender_parser.add_argument(
-        "--example",
-        type=int,
-        choices=range(1, 7),
-        help="Run a specific example (1-6), if not specified run interactive mode",
-    )
-    blender_parser.add_argument(
-        "--steps",
-        type=int,
-        default=None,
-        help="Maximum number of steps per query. Defaults to the global agent "
-        "step limit (50, or $GAIA_AGENT_MAX_STEPS if set).",
-    )
-    blender_parser.add_argument(
-        "--output-dir",
-        type=str,
-        default="output",
-        help="Directory to save output files",
-    )
-    blender_parser.add_argument(
-        "--query", type=str, help="Custom query to run instead of examples"
-    )
-    blender_parser.add_argument(
-        "--interactive",
-        action="store_true",
-        help="Enable interactive mode to continuously input queries",
-    )
-    blender_parser.add_argument(
-        "--debug-prompts",
-        action="store_true",
-        default=False,
-        help="Enable debug prompts",
-    )
-    blender_parser.add_argument(
-        "--print-result",
-        action="store_true",
-        default=False,
-        help="Print results to console",
-    )
-    blender_parser.add_argument(
-        "--mcp-port",
-        type=int,
-        default=9876,
-        help="Port for the Blender MCP server (default: 9876)",
-    )
-
-    # Add SD (Stable Diffusion) image generation command
-    sd_parser = subparsers.add_parser(
-        "sd",
-        help="Generate images using Stable Diffusion",
-        parents=[parent_parser],
-    )
-    sd_parser.add_argument(
-        "prompt",
-        nargs="?",
-        help="Text description of the image to generate",
-    )
-    sd_parser.add_argument(
-        "-i",
-        "--interactive",
-        action="store_true",
-        help="Run in interactive mode",
-    )
-    sd_parser.add_argument(
-        "--sd-model",
-        dest="sd_model",
-        choices=["SD-1.5", "SD-Turbo", "SDXL-Base-1.0", "SDXL-Turbo"],
-        default="SDXL-Turbo",
-        help="SD model: SDXL-Turbo (fast, good quality, default), SD-Turbo (faster but lower quality), SDXL-Base-1.0 (photorealistic, slow)",
-    )
-    sd_parser.add_argument(
-        "--size",
-        choices=["512x512", "768x768", "1024x1024"],
-        help="Image size (auto-selected if not specified: 512px for SD-1.5/Turbo, 1024px for SDXL)",
-    )
-    sd_parser.add_argument(
-        "--steps",
-        type=int,
-        help="Inference steps (auto-selected if not specified: 4 for Turbo, 20 for Base)",
-    )
-    sd_parser.add_argument(
-        "--cfg-scale",
-        dest="cfg_scale",
-        type=float,
-        help="CFG scale (auto-selected if not specified: 1.0 for Turbo, 7.5 for Base)",
-    )
-    sd_parser.add_argument(
-        "--output-dir",
-        default=".gaia/cache/sd/images",
-        help="Directory to save generated images",
-    )
-    sd_parser.add_argument(
-        "--seed",
-        type=int,
-        help="Random seed for reproducibility",
-    )
-    sd_parser.add_argument(
-        "--no-open",
-        action="store_true",
-        help="Skip prompt to open image in viewer (for automation/scripting)",
-    )
-
-    # Add Jira app command
-    jira_parser = subparsers.add_parser(
-        "jira",
-        help="Natural language interface for Atlassian tools (Jira, Confluence, Compass)",
-        parents=[parent_parser],
-    )
-    jira_parser.add_argument(
-        "command",
-        nargs="?",
-        help="Natural language command to execute (e.g., 'Create a bug report for login issue')",
-    )
-    jira_parser.add_argument(
-        "-i",
-        "--interactive",
-        action="store_true",
-        help="Run in interactive mode for continuous commands",
-    )
-    jira_parser.add_argument(
-        "--mcp-host",
-        default="localhost",
-        help="MCP bridge host (default: localhost)",
-    )
-    jira_parser.add_argument(
-        "--mcp-port",
-        type=int,
-        default=8765,
-        help="MCP bridge port (default: 8765)",
-    )
-    jira_parser.add_argument(
-        "-v",
-        "--verbose",
-        action="store_true",
-        help="Enable verbose output",
-    )
-    jira_parser.add_argument(
-        "-d",
-        "--debug",
-        action="store_true",
-        help="Enable debug logging",
-    )
 
     # Add Email Triage Agent command (#962)
     email_parser = subparsers.add_parser(
@@ -1971,35 +1571,6 @@ def build_parser():
     autonomy_run_parser.add_argument(
         "--session-id", default="cli", help=_AUTONOMY_SESSION_HELP
     )
-
-    # Add Docker app command
-    docker_parser = subparsers.add_parser(
-        "docker",
-        help="Natural language interface for Docker containerization",
-        parents=[parent_parser],
-    )
-    docker_parser.add_argument(
-        "command",
-        help="Natural language command to execute (e.g., 'Create a Dockerfile for my Flask app')",
-    )
-    docker_parser.add_argument(
-        "-d",
-        "--directory",
-        default=".",
-        help="Directory to analyze/containerize (default: current directory)",
-    )
-    docker_parser.add_argument(
-        "-v",
-        "--verbose",
-        action="store_true",
-        help="Enable verbose output",
-    )
-    docker_parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="Enable debug logging",
-    )
-    docker_parser.set_defaults(action="docker")
 
     # Add API server command
     api_parser = subparsers.add_parser(
@@ -2231,16 +1802,13 @@ Examples:
   # Download models for chat agent only
   gaia download --agent chat
 
-  # Download models for code agent
-  gaia download --agent code
-
   # List available agents and their required models
   gaia download --list
 
   # Delete all downloaded GAIA models (free up disk space)
   gaia download --clear-cache
 
-Available agents: chat, code, talk, rag, blender, jira, docker, vlm, minimal, mcp
+Available agents: chat, talk, rag, vlm, minimal, mcp
         """,
     )
     download_parser.add_argument(
@@ -2921,20 +2489,6 @@ Examples:
         help="Bearer token if the bridge requires one (default: $GAIA_MCP_AUTH_TOKEN)",
     )
 
-    # MCP Docker command (per-agent MCP server)
-    mcp_docker_parser = mcp_subparsers.add_parser(
-        "docker", help="Start Docker MCP server (per-agent architecture)"
-    )
-    mcp_docker_parser.add_argument(
-        "--host", default="localhost", help="Host to bind to (default: localhost)"
-    )
-    mcp_docker_parser.add_argument(
-        "--port", type=int, default=8080, help="Port to listen on (default: 8080)"
-    )
-    mcp_docker_parser.add_argument(
-        "--verbose", action="store_true", help="Enable verbose logging"
-    )
-
     # MCP serve command (Agent UI MCP server)
     mcp_serve_parser = mcp_subparsers.add_parser(
         "serve", help="Start Agent UI MCP server (wraps the Agent UI backend)"
@@ -3338,7 +2892,6 @@ Examples:
             "minimal",
             "sd",
             "chat",
-            "code",
             "rag",
             "mcp",
             "vlm",
@@ -3346,7 +2899,7 @@ Examples:
             "npu",
             "all",
         ],
-        help="Profile to initialize: minimal, sd (image gen), chat, code, rag, mcp, vlm (vision), email (Gmail/Outlook triage), npu (Ryzen AI NPU), all (default: chat)",
+        help="Profile to initialize: minimal, sd (image gen), chat, rag, mcp, vlm (vision), email (Gmail/Outlook triage), npu (Ryzen AI NPU), all (default: chat)",
     )
     init_parser.add_argument(
         "--minimal",
@@ -3734,7 +3287,7 @@ def main():
         return
 
     # Handle core Gaia CLI commands
-    if args.action in ["prompt", "chat", "browse", "analyze", "talk", "stats"]:
+    if args.action in ["prompt", "chat", "talk", "stats"]:
         kwargs = {
             k: v for k, v in vars(args).items() if v is not None and k != "action"
         }
@@ -3750,414 +3303,6 @@ def main():
             log.error(f"Error executing {args.action}: {e}")
             print(f"❌ Error: {e}")
             sys.exit(1)
-        return
-
-    # Handle summarize command
-    if args.action == "summarize":
-
-        from gaia.apps.summarize.app import SummarizerApp, SummaryConfig
-        from gaia.apps.summarize.html_viewer import HTMLViewer
-
-        # Handle list-configs option
-        if args.list_configs:
-            import gaia.apps.summarize.app
-
-            config_dir = Path(gaia.apps.summarize.app.__file__).parent / "configs"
-            if config_dir.exists():
-                print("\nAvailable summarization configurations:\n")
-                for config_file in sorted(config_dir.glob("*.json")):
-                    try:
-                        with open(config_file, encoding="utf-8") as f:
-                            config_data = json.load(f)
-                        name = config_file.stem
-                        desc = config_data.get("description", "No description")
-                        print(f"{name:<20} - {desc}")
-                    except (json.JSONDecodeError, OSError) as e:
-                        log.debug(f"Failed to read config file {config_file}: {e}")
-                print("\nUse: gaia summarize --config <config_name>")
-            else:
-                print("No configuration templates found.")
-            return
-
-        # Validate required arguments (input not required for --list-configs)
-        if not args.list_configs and not args.input:
-            # Show help instead of just an error
-            print("\nUsage: gaia summarize -i INPUT [options]\n")
-            print("Summarize meeting transcripts and emails\n")
-            print("Required arguments:")
-            print("  -i, --input INPUT    Input file or directory path\n")
-            print("Common options:")
-            print(
-                "  -o, --output OUTPUT  Output file/directory path (auto-adjusted based on format)"
-            )
-            print(
-                "  -f, --format FORMAT  Output format: json, pdf, email, both (default: json)"
-            )
-            print(
-                "  --styles STYLES      Summary style(s): brief, detailed, bullets, executive,"
-            )
-            print("                       participants, action_items, all")
-            print(
-                "                       (default: executive participants action_items)"
-            )
-            print(
-                "  --config CONFIG      Use predefined configuration from configs/ directory"
-            )
-            print("  --list-configs       List all available configuration templates\n")
-            print("Examples:")
-            print("  gaia summarize -i meeting.txt -o summary.json")
-            print("  gaia summarize -i meeting.txt --styles executive action_items")
-            print("  gaia summarize -i ./transcripts/ -o ./summaries/")
-            print("  gaia summarize --list-configs\n")
-            print("For full help: gaia summarize --help")
-            sys.exit(1)
-
-        # Handle "all" style
-        if "all" in args.styles:
-            args.styles = [
-                "brief",
-                "detailed",
-                "bullets",
-                "executive",
-                "participants",
-                "action_items",
-            ]
-
-        # Validate email format requirements
-        if args.format == "email":
-            if Path(args.input).is_dir():
-                print(
-                    "❌ Error: Email format only supports single file input, not directories"
-                )
-                sys.exit(1)
-            if not args.email_to:
-                print("❌ Error: --email-to is required for email output format")
-                sys.exit(1)
-
-            # Validate email addresses
-            from gaia.apps.summarize.app import validate_email_list
-
-            try:
-                validate_email_list(args.email_to)
-                if args.email_cc:
-                    validate_email_list(args.email_cc)
-            except ValueError as e:
-                print(f"❌ Error: {e}")
-                sys.exit(1)
-
-        # Load configuration if specified
-        if args.config:
-            import gaia.apps.summarize
-
-            config_path = (
-                Path(gaia.apps.summarize.__file__).parent
-                / "configs"
-                / f"{args.config}.json"
-            )
-            if config_path.exists():
-                with open(config_path, encoding="utf-8") as f:
-                    config_data = json.load(f)
-                # Apply config values
-                if "styles" in config_data:
-                    args.styles = config_data["styles"]
-                if "format" in config_data:
-                    args.format = config_data["format"]
-                if "max_tokens" in config_data:
-                    args.max_tokens = config_data["max_tokens"]
-                if "combined_prompt" in config_data:
-                    args.combined_prompt = config_data["combined_prompt"]
-                log.info(f"Loaded configuration from {args.config}")
-            else:
-                print(f"❌ Error: Configuration file '{args.config}' not found")
-                sys.exit(1)
-
-        # Set logging level
-        if args.verbose:
-            log_manager.set_level("gaia.apps.summarize", logging.DEBUG)
-        elif args.quiet:
-            log_manager.set_level("gaia.apps.summarize", logging.WARNING)
-
-        # Create summarizer config
-        config = SummaryConfig(
-            model=args.model,
-            max_tokens=args.max_tokens,
-            input_type=args.type,
-            styles=args.styles,
-            combined_prompt=args.combined_prompt,
-        )
-
-        # Create summarizer app
-        app = SummarizerApp(config)
-
-        try:
-            input_path = Path(args.input)
-
-            if input_path.is_file():
-                # Single file processing
-                if not args.quiet:
-                    print(f"Summarizing file: {input_path}")
-
-                result = app.summarize_file(input_path)
-
-                # Handle output
-                if args.format == "json":
-                    output_path = args.output or input_path.with_suffix(".summary.json")
-                    with open(output_path, "w", encoding="utf-8") as f:
-                        json.dump(result, f, indent=2)
-                    print(f"✅ Summary saved to: {output_path}")
-
-                    # Create and open HTML viewer unless disabled
-                    if not args.no_viewer:
-                        html_path = HTMLViewer.create_and_open(
-                            result, output_path, auto_open=True
-                        )
-                        print(f"🌐 HTML viewer created: {html_path}")
-                        print(
-                            "   (Use --no-viewer to disable automatic HTML generation)"
-                        )
-
-                elif args.format == "email":
-                    # Email output - show preview and open email client
-                    print("\n📧 Email Preview:")
-                    print(f"To: {args.email_to}")
-                    if args.email_cc:
-                        print(f"CC: {args.email_cc}")
-                    subject = args.email_subject or f"Summary - {input_path.stem}"
-                    print(f"Subject: {subject}")
-
-                    # Build email body
-                    email_body = f"Summary of: {input_path.name}\n"
-                    email_body += "=" * 50 + "\n\n"
-
-                    # Add summaries based on result structure
-                    if "summary" in result:
-                        # Single style output
-                        email_body += result["summary"]["text"] + "\n\n"
-                        if "items" in result["summary"]:
-                            email_body += "Action Items:\n"
-                            for item in result["summary"]["items"]:
-                                email_body += f"  • {item}\n"
-                            email_body += "\n"
-                    else:
-                        # Multiple styles output
-                        for style, summary_data in result["summaries"].items():
-                            email_body += f"{style.upper().replace('_', ' ')}:\n"
-                            email_body += "-" * 30 + "\n"
-                            if "text" in summary_data:
-                                email_body += summary_data["text"] + "\n"
-                            if "items" in summary_data:
-                                for item in summary_data["items"]:
-                                    email_body += f"  • {item}\n"
-                            if "participants" in summary_data:
-                                for participant in summary_data["participants"]:
-                                    email_body += f"  • {participant}\n"
-                            email_body += "\n"
-
-                    # Show preview of email body
-                    print("\nEmail Body Preview (first 500 chars):")
-                    print("-" * 50)
-                    print(email_body[:500] + ("..." if len(email_body) > 500 else ""))
-                    print("-" * 50)
-
-                    print("\nPress Enter to open email client, or Ctrl+C to cancel...")
-                    try:
-                        input()
-
-                        # Create mailto URL
-                        import platform
-                        import urllib.parse
-
-                        mailto_params = {
-                            "subject": subject,
-                            "body": email_body[
-                                :2000
-                            ],  # Limit body to avoid URL length issues
-                        }
-                        if args.email_cc:
-                            mailto_params["cc"] = args.email_cc
-
-                        # Build mailto URL
-                        params_str = urllib.parse.urlencode(
-                            mailto_params, quote_via=urllib.parse.quote
-                        )
-                        mailto_url = f"mailto:{args.email_to}?{params_str}"
-
-                        # Open email client
-                        system = platform.system()
-                        try:
-                            if system == "Windows":
-                                # os.startfile uses ShellExecute (no shell parsing),
-                                # safe for the user-built mailto URL (which contains
-                                # '&'-separated query params cmd would mis-parse).
-                                # Windows-only attr; guarded by the platform check.
-                                os.startfile(mailto_url)  # pylint: disable=no-member
-                            elif system == "Darwin":  # macOS
-                                subprocess.run(["open", mailto_url], check=True)
-                            else:  # Linux/Unix
-                                subprocess.run(["xdg-open", mailto_url], check=True)
-                            print("✅ Email client opened successfully")
-                        except subprocess.CalledProcessError:
-                            print(
-                                "❌ Failed to open email client. Please check your default email client settings."
-                            )
-                        except Exception as e:
-                            print(f"❌ Error opening email client: {e}")
-
-                    except KeyboardInterrupt:
-                        print("\nCancelled.")
-
-                elif args.format in ["pdf", "both"]:
-                    # Generate PDF output
-                    try:
-                        from gaia.apps.summarize.pdf_formatter import (
-                            HAS_REPORTLAB,
-                            PDFFormatter,
-                        )
-
-                        if not HAS_REPORTLAB:
-                            print(
-                                "❌ Error: PDF output requires reportlab. Install with: uv pip install reportlab"
-                            )
-                            if args.format == "both":
-                                print(
-                                    "ℹ️  JSON output was still generated successfully."
-                                )
-                            sys.exit(1)
-
-                        formatter = PDFFormatter()
-                        pdf_path = Path(
-                            args.output or input_path.with_suffix(".summary.pdf")
-                        )
-
-                        # Generate PDF
-                        formatter.format_summary_as_pdf(result, pdf_path)
-                        print(f"✅ PDF summary saved to: {pdf_path}")
-
-                        # Also save JSON if format is "both"
-                        if args.format == "both":
-                            json_path = pdf_path.with_suffix(".json")
-                            with open(json_path, "w", encoding="utf-8") as f:
-                                json.dump(result, f, indent=2)
-                            print(f"✅ JSON summary saved to: {json_path}")
-
-                            # Create HTML viewer for JSON
-                            if not args.no_viewer:
-                                html_path = HTMLViewer.create_and_open(
-                                    result, json_path, auto_open=True
-                                )
-                                print(f"🌐 HTML viewer created: {html_path}")
-
-                    except ImportError as e:
-                        print(f"❌ Error: {e}")
-                        if args.format == "both":
-                            # Fall back to JSON only
-                            json_path = Path(
-                                args.output or input_path.with_suffix(".summary.json")
-                            )
-                            with open(json_path, "w", encoding="utf-8") as f:
-                                json.dump(result, f, indent=2)
-                            print(f"✅ JSON summary saved to: {json_path}")
-                            print(
-                                "ℹ️  PDF generation skipped due to missing dependencies."
-                            )
-                        else:
-                            sys.exit(1)
-                    except Exception as e:
-                        print(f"❌ Error generating PDF: {e}")
-                        sys.exit(1)
-
-            elif input_path.is_dir():
-                # Directory batch processing
-                if not args.quiet:
-                    print(f"Summarizing directory: {input_path}")
-
-                results = app.summarize_directory(input_path)
-
-                if not results:
-                    print("❌ No files found to summarize")
-                    sys.exit(1)
-
-                # Save results
-                output_dir = Path(args.output or "./summaries")
-                output_dir.mkdir(exist_ok=True)
-
-                # Check if we need PDF formatter
-                pdf_formatter = None
-                if args.format in ["pdf", "both"]:
-                    try:
-                        from gaia.apps.summarize.pdf_formatter import (
-                            HAS_REPORTLAB,
-                            PDFFormatter,
-                        )
-
-                        if HAS_REPORTLAB:
-                            pdf_formatter = PDFFormatter()
-                        else:
-                            print(
-                                "⚠️  Warning: PDF output requires reportlab. Install with: uv pip install reportlab"
-                            )
-                            if args.format == "pdf":
-                                print("❌ Cannot generate PDF files without reportlab.")
-                                sys.exit(1)
-                    except ImportError:
-                        print("⚠️  Warning: PDF formatter not available")
-                        if args.format == "pdf":
-                            sys.exit(1)
-
-                for i, result in enumerate(results):
-                    input_file = result["metadata"]["input_file"]
-                    base_name = Path(input_file).stem
-
-                    files_created = []
-
-                    # Save JSON if needed
-                    if args.format in ["json", "both"]:
-                        json_path = output_dir / f"{base_name}.summary.json"
-                        with open(json_path, "w", encoding="utf-8") as f:
-                            json.dump(result, f, indent=2)
-                        files_created.append(json_path.name)
-
-                        # Create HTML viewer for JSON (don't auto-open for batch)
-                        if not args.no_viewer:
-                            html_path = HTMLViewer.create_and_open(
-                                result,
-                                json_path,
-                                auto_open=False,  # Don't open browser for each file in batch
-                            )
-                            files_created.append(html_path.name)
-
-                    # Save PDF if needed
-                    if args.format in ["pdf", "both"] and pdf_formatter:
-                        pdf_path = output_dir / f"{base_name}.summary.pdf"
-                        try:
-                            pdf_formatter.format_summary_as_pdf(result, pdf_path)
-                            files_created.append(pdf_path.name)
-                        except Exception as e:
-                            print(
-                                f"⚠️  Warning: Failed to generate PDF for {base_name}: {e}"
-                            )
-
-                    if not args.quiet and files_created:
-                        print(
-                            f"✅ [{i+1}/{len(results)}] {Path(input_file).name} → {', '.join(files_created)}"
-                        )
-
-                print(
-                    f"\n✅ Processed {len(results)} files. Summaries saved to: {output_dir}"
-                )
-                if not args.no_viewer and args.format in ["json", "both"]:
-                    print("   📂 HTML viewers created for each JSON file")
-                    print("   💡 Open any .html file to view the formatted summary")
-
-            else:
-                print(f"❌ Error: Input path does not exist: {input_path}")
-                sys.exit(1)
-
-        except Exception as e:
-            log.error(f"Error during summarization: {e}")
-            print(f"❌ Error: {e}")
-            sys.exit(1)
-
         return
 
     # Handle utility commands
@@ -4422,7 +3567,7 @@ Let me know your answer!
                     print("   To delete them, restart Lemonade Server and try again:")
                     print()
                     print(
-                        "   1. Close any running GAIA commands (gaia chat, gaia code, etc.)"
+                        "   1. Close any running GAIA commands (gaia chat, gaia email, etc.)"
                     )
                     print(
                         f"   2. Restart Lemonade Server "
@@ -5094,28 +4239,8 @@ Let me know your answer!
         handle_agent_command(args)
         return
 
-    # Handle Blender command
-    if args.action == "blender":
-        handle_blender_command(args)
-        return
-
-    # Handle SD (image generation) command
-    if args.action == "sd":
-        handle_sd_command(args)
-        return
-
-    # Handle Jira command
-    if args.action == "jira":
-        handle_jira_command(args)
-        return
-
     if args.action == "email":
         handle_email_command(args)
-        return
-
-    # Handle Docker command
-    if args.action == "docker":
-        handle_docker_command(args)
         return
 
     # Handle API server command
@@ -5367,153 +4492,6 @@ def kill_process_by_port(port):
             "success": False,
             "message": f"Error killing process on port {port}: {str(e)}",
         }
-
-
-def wait_for_user():
-    """Wait for user to press Enter before continuing."""
-    input("Press Enter to continue to the next example...")
-
-
-def run_blender_examples(agent, selected_example=None, print_result=True):
-    """
-    Run the Blender agent example demonstrations.
-
-    Args:
-        agent: The BlenderAgent instance
-        selected_example: Optional example number to run specifically
-        print_result: Whether to print the result
-    """
-    console = agent.console
-
-    examples = {
-        1: {
-            "name": "Clearing the scene",
-            "description": "This example demonstrates how to clear all objects from a scene.",
-            "query": "Clear the scene to start fresh",
-        },
-        2: {
-            "name": "Creating a basic cube",
-            "description": "This example creates a red cube at the center of the scene.",
-            "query": "Create a red cube at the center of the scene and make sure it has a red material",
-        },
-        3: {
-            "name": "Creating a sphere with specific properties",
-            "description": "This example creates a blue sphere with specific parameters.",
-            "query": "Create a blue sphere at position (3, 0, 0) and set its scale to (2, 2, 2)",
-        },
-        4: {
-            "name": "Creating multiple objects",
-            "description": "This example creates multiple objects with specific arrangements.",
-            "query": "Create a green cube at (0, 0, 0) and a red sphere 3 units above it",
-        },
-        5: {
-            "name": "Creating and modifying objects",
-            "description": "This example creates objects and then modifies them.",
-            "query": "Create a blue cylinder, then make it taller and move it up 2 units",
-        },
-    }
-
-    # If a specific example is requested, run only that one
-    if selected_example and selected_example in examples:
-        example = examples[selected_example]
-        console.print_header(f"=== Example {selected_example}: {example['name']} ===")
-        console.print_header(example["description"])
-        agent.process_query(example["query"])
-        agent.display_result(print_result=print_result)
-        return
-
-    # Run all examples in sequence
-    for idx, example in examples.items():
-        console.print_header(f"=== Example {idx}: {example['name']} ===")
-        console.print_header(example["description"])
-        agent.process_query(example["query"], trace=True)
-        agent.display_result(print_result=print_result)
-
-        # Wait for user input between examples, except the last one
-        if idx < len(examples):
-            wait_for_user()
-
-
-def run_blender_interactive_mode(agent, print_result=True):
-    """
-    Run the Blender Agent in interactive mode where the user can continuously input queries.
-
-    Args:
-        agent: The BlenderAgent instance
-        print_result: Whether to print the result
-    """
-    console = agent.console
-    console.print_header("=== Blender Interactive Mode ===")
-    console.print_header(
-        "Enter your 3D scene queries. Type 'exit', 'quit', or 'q' to exit."
-    )
-
-    while True:
-        try:
-            query = input("\nEnter Blender query: ")
-            if query.lower() in ["exit", "quit", "q"]:
-                console.print_header("Exiting Blender interactive mode.")
-                break
-
-            if query.strip():  # Process only non-empty queries
-                agent.process_query(query)
-                agent.display_result(print_result=print_result)
-
-        except KeyboardInterrupt:
-            console.print_header("\nBlender interactive mode interrupted. Exiting.")
-            break
-        except Exception as e:
-            console.print_error(f"Error processing Blender query: {e}")
-
-
-def handle_jira_command(args):
-    """
-    Handle the Jira app command.
-
-    Args:
-        args: Parsed command line arguments for the jira command
-    """
-    log = get_logger(__name__)
-
-    # Initialize Lemonade with jira agent profile (32768 context)
-    # Skip if --no-lemonade-check is specified
-    if not getattr(args, "no_lemonade_check", False):
-        success, _ = initialize_lemonade_for_agent(
-            agent="jira",
-            skip_if_external=True,
-            use_claude=getattr(args, "use_claude", False),
-            use_chatgpt=getattr(args, "use_chatgpt", False),
-            base_url=getattr(args, "base_url", None),
-        )
-        if not success:
-            sys.exit(1)
-
-    try:
-        # Import and use JiraApp directly (no MCP needed)
-        from gaia.apps.jira.app import main as jira_main
-
-        # Pass the arguments directly to the Jira app
-        # The app expects certain arguments, so we need to ensure they're set
-        if not hasattr(args, "verbose"):
-            args.verbose = False
-        if not hasattr(args, "debug"):
-            args.debug = False
-        if not hasattr(args, "model"):
-            args.model = None
-
-        # Run the Jira app's main function
-        result = asyncio.run(jira_main(args))
-        sys.exit(result)
-
-    except ImportError as e:
-        log.error(f"Failed to import Jira app: {e}")
-        print("❌ Error: Jira app components are not available")
-        print("Make sure GAIA is installed properly: uv pip install -e .")
-        sys.exit(1)
-    except Exception as e:
-        log.error(f"Error running Jira app: {e}")
-        print(f"❌ Error: {e}")
-        sys.exit(1)
 
 
 def handle_email_command(args):
@@ -5802,58 +4780,6 @@ def handle_email_autonomy_command(args) -> None:
     sys.exit(0)
 
 
-def handle_docker_command(args):
-    """
-    Handle the Docker app command.
-
-    Args:
-        args: Parsed command line arguments for the docker command
-    """
-    log = get_logger(__name__)
-
-    # Initialize Lemonade with docker agent profile (32768 context)
-    # Skip if --no-lemonade-check is specified
-    if not getattr(args, "no_lemonade_check", False):
-        success, _ = initialize_lemonade_for_agent(
-            agent="docker",
-            skip_if_external=True,
-            use_claude=getattr(args, "use_claude", False),
-            use_chatgpt=getattr(args, "use_chatgpt", False),
-            base_url=getattr(args, "base_url", None),
-        )
-        if not success:
-            sys.exit(1)
-
-    try:
-        # Import and use DockerApp directly
-        from gaia.apps.docker.app import main as docker_main
-
-        # Pass the arguments directly to the Docker app
-        # The app expects certain arguments, so we need to ensure they're set
-        if not hasattr(args, "verbose"):
-            args.verbose = False
-        if not hasattr(args, "debug"):
-            args.debug = False
-        if not hasattr(args, "model"):
-            args.model = None
-        if not hasattr(args, "directory"):
-            args.directory = "."
-
-        # Run the Docker app's main function
-        result = asyncio.run(docker_main(args))
-        sys.exit(result)
-
-    except ImportError as e:
-        log.error(f"Failed to import Docker app: {e}")
-        print("❌ Error: Docker app components are not available")
-        print("Make sure GAIA is installed properly: uv pip install -e .")
-        sys.exit(1)
-    except Exception as e:
-        log.error(f"Error running Docker app: {e}")
-        print(f"❌ Error: {e}")
-        sys.exit(1)
-
-
 def handle_api_command(args):
     """
     Handle the API server command.
@@ -5966,273 +4892,6 @@ def handle_perf_vis_command(args):
 
     if exit_code != 0:
         sys.exit(exit_code)
-
-
-def handle_sd_command(args):
-    """
-    Handle the SD (Stable Diffusion) image generation command.
-
-    Args:
-        args: Parsed command line arguments for the sd command
-    """
-    # No prompt and not interactive - show help (no server needed)
-    if not args.prompt and not args.interactive:
-        print("Usage: gaia sd <prompt> [options]")
-        print("       gaia sd -i  (interactive mode)")
-        print()
-        print("Examples:")
-        print('  gaia sd "a sunset over mountains"')
-        print('  gaia sd "cyberpunk city" --sd-model SDXL-Turbo --size 1024x1024')
-        print("  gaia sd -i")
-        return
-
-    try:
-        from gaia_agent_sd import SDAgent, SDAgentConfig
-    except ImportError as e:
-        raise ImportError(
-            agent_not_installed_message(
-                "The sd agent is not installed",
-                "gaia-agent-sd",
-                next_step="See https://amd-gaia.ai/docs/guides/sd.",
-            )
-        ) from e
-
-    # Ensure Lemonade is ready with proper context size for SD agent
-    # SD agent needs 8K context for image + story workflow
-    success, _ = initialize_lemonade_for_agent(
-        agent="sd",
-        use_claude=getattr(args, "use_claude", False),
-        use_chatgpt=getattr(args, "use_chatgpt", False),
-        quiet=False,
-        base_url=getattr(args, "base_url", None),
-    )
-
-    if not success and not (
-        getattr(args, "use_claude", False) or getattr(args, "use_chatgpt", False)
-    ):
-        print("Failed to initialize Lemonade Server with required 8K context.")
-        print(
-            f"Restart it with an 8192 token context. {describe_start_hint(8192).instruction}"
-        )
-        sys.exit(1)
-
-    # Create config - ensure LLM model is set
-    llm_model = getattr(args, "model", None)
-    if not llm_model:
-        llm_model = "Gemma-4-E4B-it-GGUF"  # Default LLM for prompt enhancement
-
-    config = SDAgentConfig(
-        sd_model=args.sd_model,
-        output_dir=args.output_dir,
-        prompt_to_open=not args.no_open,
-        show_stats=getattr(args, "stats", False),
-        use_claude=getattr(args, "use_claude", False),
-        use_chatgpt=getattr(args, "use_chatgpt", False),
-        base_url=getattr(args, "base_url", "http://localhost:13305/api/v1"),
-        model_id=llm_model,
-    )
-
-    # Create agent with LLM prompt enhancement
-    agent = SDAgent(config)
-
-    # Check health
-    health = agent.sd_health_check()
-    if health["status"] != "healthy":
-        print(f"Error: {health.get('error', 'SD endpoint unavailable')}")
-        print("Make sure Lemonade Server is running and SD model is available:")
-        print(f"  {describe_start_hint().instruction}")
-        print(f"  {describe_client_hint('pull', args.sd_model).instruction}")
-        sys.exit(1)
-
-    print()
-    print("=" * 80)
-    print(f"🖼️  SD Image Generator - {args.sd_model}")
-    print("=" * 80)
-    print("LLM-powered prompt enhancement for better image quality")
-    print(f"Output: {args.output_dir}")
-    if not args.no_open:
-        print("You'll be prompted to open images after generation")
-    print("=" * 80)
-    print()
-
-    # Interactive mode
-    if args.interactive:
-        print("Type 'quit' to exit.")
-        print()
-
-        while True:
-            try:
-                user_prompt = input("You: ").strip()
-                if not user_prompt:
-                    continue
-                if user_prompt.lower() in ("quit", "exit", "q"):
-                    print("Goodbye!")
-                    break
-
-                # Track images before this query
-                initial_count = len(agent.sd_generations)
-
-                # Use agent.process_query() for LLM enhancement
-                result = agent.process_query(user_prompt)
-                if result.get("final_answer"):
-                    print(f"\nAgent: {result['final_answer']}\n")
-                else:
-                    print("\nAgent: Generation complete\n")
-
-                # Prompt to open image(s) after agent completes
-                if not args.no_open and result.get("status") != "error":
-                    try:
-                        # Get all newly generated images from this query
-                        new_images = agent.sd_generations[initial_count:]
-
-                        if new_images:
-                            num_images = len(new_images)
-                            prompt_text = (
-                                f"Open {num_images} images in default viewer? [Y/n]: "
-                                if num_images > 1
-                                else "Open image in default viewer? [Y/n]: "
-                            )
-                            response = input(prompt_text).strip().lower()
-
-                            if response in ("", "y", "yes"):
-                                for img in new_images:
-                                    path = str(Path(img["image_path"]).resolve())
-                                    if sys.platform == "win32":
-                                        os.startfile(path)  # pylint: disable=no-member
-                                    elif sys.platform == "darwin":
-                                        subprocess.run(["open", path], check=False)
-                                    else:
-                                        subprocess.run(["xdg-open", path], check=False)
-                                plural = "s" if num_images > 1 else ""
-                                print(f"[{num_images} image{plural} opened]\n")
-                    except (KeyboardInterrupt, EOFError):
-                        pass
-
-            except KeyboardInterrupt:
-                print("\nGoodbye!")
-                break
-
-    # Single prompt mode
-    else:
-        # Track images before this command
-        initial_count = len(agent.sd_generations)
-
-        # Use agent.process_query() for LLM enhancement
-        result = agent.process_query(args.prompt)
-        if result.get("final_answer"):
-            print(f"\n{result['final_answer']}\n")
-
-        # Prompt to open image(s) after agent completes
-        if not args.no_open and result.get("status") != "error":
-            try:
-                # Get all newly generated images from this command
-                new_images = agent.sd_generations[initial_count:]
-
-                if new_images:
-                    num_images = len(new_images)
-                    prompt_text = (
-                        f"Open {num_images} images in default viewer? [Y/n]: "
-                        if num_images > 1
-                        else "Open image in default viewer? [Y/n]: "
-                    )
-                    response = input(prompt_text).strip().lower()
-
-                    if response in ("", "y", "yes"):
-                        for img in new_images:
-                            path = str(Path(img["image_path"]).resolve())
-                            if sys.platform == "win32":
-                                os.startfile(path)  # pylint: disable=no-member
-                            elif sys.platform == "darwin":
-                                subprocess.run(["open", path], check=False)
-                            else:
-                                subprocess.run(["xdg-open", path], check=False)
-                        plural = "s" if num_images > 1 else ""
-                        print(f"[{num_images} image{plural} opened]\n")
-            except (KeyboardInterrupt, EOFError):
-                pass
-
-
-def handle_blender_command(args):
-    """
-    Handle the Blender agent command.
-
-    Args:
-        args: Parsed command line arguments for the blender command
-    """
-    log = get_logger(__name__)
-
-    # Check if Blender components are available
-    if not BLENDER_AVAILABLE:
-        print("❌ Error: Blender agent components are not available")
-        print('Install blender dependencies with: uv pip install -e ".[blender]"')
-        sys.exit(1)
-
-    # Initialize Lemonade with blender agent profile (32768 context)
-    # Skip if --no-lemonade-check is specified
-    if not getattr(args, "no_lemonade_check", False):
-        log.info("Initializing Lemonade for Blender agent...")
-        success, _ = initialize_lemonade_for_agent(
-            agent="blender",
-            skip_if_external=True,
-            use_claude=getattr(args, "use_claude", False),
-            use_chatgpt=getattr(args, "use_chatgpt", False),
-            base_url=getattr(args, "base_url", None),
-        )
-        if not success:
-            sys.exit(1)
-
-    # Check if Blender MCP server is running
-    mcp_port = getattr(args, "mcp_port", 9876)
-    log.info(f"Checking Blender MCP server connectivity on port {mcp_port}...")
-    if not check_mcp_health(port=mcp_port):
-        print_mcp_error()
-        print(f"Note: Checking for MCP server on port {mcp_port}", file=sys.stderr)
-        sys.exit(1)
-    log.info("✅ Blender MCP server is accessible")
-
-    # Create output directory if specified
-    output_dir = args.output_dir
-    if output_dir:
-        os.makedirs(output_dir, exist_ok=True)
-
-    try:
-        # Create MCP client with custom port if specified
-        mcp_client = MCPClient(host="localhost", port=mcp_port)
-
-        # Get base_url from args or environment
-        base_url = getattr(args, "base_url", None)
-
-        # Create the BlenderAgent
-        agent = BlenderAgent(
-            mcp=mcp_client,
-            model_id=args.model,
-            base_url=base_url,
-            max_steps=args.steps,
-            output_dir=output_dir,
-            streaming=args.stream,
-            show_stats=args.show_stats,
-            debug_prompts=args.debug_prompts,
-        )
-
-        # Run in interactive mode if specified
-        if args.interactive:
-            run_blender_interactive_mode(agent, print_result=args.print_result)
-        # Process a custom query if provided
-        elif args.query:
-            agent.console.print_header(f"Processing Blender query: '{args.query}'")
-            agent.process_query(args.query)
-            agent.display_result(print_result=args.print_result)
-        # Run specific example if provided, otherwise run all examples
-        else:
-            run_blender_examples(
-                agent, selected_example=args.example, print_result=args.print_result
-            )
-
-    except Exception as e:
-        blender_log = get_logger(__name__)
-        blender_log.error(f"Error running Blender agent: {e}")
-        print(f"❌ Error: {e}")
-        sys.exit(1)
 
 
 def _print_knowledge_usage(client):
@@ -8438,8 +7097,6 @@ def handle_mcp_command(args):
         handle_mcp_test(args)
     elif args.mcp_action == "agent":
         handle_mcp_agent(args)
-    elif args.mcp_action == "docker":
-        handle_mcp_docker(args)
     elif args.mcp_action == "serve":
         handle_mcp_serve(args)
     elif args.mcp_action == "tui":
@@ -9055,40 +7712,6 @@ def handle_mcp_agent(args):
     except Exception as e:
         log.error(f"Error running MCP agent test: {e}")
         print(f"❌ Error running MCP agent test: {e}")
-
-
-def handle_mcp_docker(args):
-    """Start the Docker MCP server (per-agent architecture)."""
-    log = get_logger(__name__)
-
-    try:
-        from gaia.mcp.servers.docker_mcp import start_docker_mcp
-
-        print("=" * 60)
-        print("🐳 GAIA Docker MCP Server")
-        print("=" * 60)
-        print(f"Starting on {args.host}:{args.port}")
-        if args.verbose:
-            print("🔍 Verbose mode: ENABLED")
-        print("\nPress Ctrl+C to stop")
-        print("=" * 60)
-
-        # Start the Docker MCP server
-        start_docker_mcp(
-            port=args.port,
-            host=args.host,
-            verbose=args.verbose,
-        )
-
-    except KeyboardInterrupt:
-        print("\n✅ Docker MCP server stopped")
-    except ImportError as e:
-        log.error(f"Failed to import Docker MCP server: {e}")
-        print("❌ Error: Could not load Docker MCP server")
-        print(f"   {e}")
-    except Exception as e:
-        log.error(f"Error starting Docker MCP server: {e}")
-        print(f"❌ Error starting Docker MCP server: {e}")
 
 
 def handle_mcp_serve(args):

@@ -163,12 +163,98 @@ type CanonicalFinalEvent struct {
 // Tokens is the real generated-token count. TTFT is the turn's first LLM
 // call's own measured time-to-first-token — the server-measured fallback
 // used when no token ever streamed this turn.
+// Metrics is the agent's per-turn performance record, present only when the
+// agent ran with GAIA_TURN_LOG set. Nil on every ordinary turn and from any
+// agent older than the record — callers must treat absence as normal.
 type CanonicalUsage struct {
-	Steps     int     `json:"steps"`
-	ToolsUsed int     `json:"tools_used"`
-	Elapsed   float64 `json:"elapsed"`
-	Tokens    int     `json:"tokens"`
-	TTFT      float64 `json:"ttft"`
+	Steps     int                 `json:"steps"`
+	ToolsUsed int                 `json:"tools_used"`
+	Elapsed   float64             `json:"elapsed"`
+	Tokens    int                 `json:"tokens"`
+	TTFT      float64             `json:"ttft"`
+	Metrics   *CanonicalTurnStats `json:"-"`
+}
+
+// usageWire decodes the usage object with the record left as raw bytes, so a
+// record whose inner shape we misread cannot take steps/tokens/ttft down with
+// it — those are what the user sees on every turn.
+type usageWire struct {
+	CanonicalUsage
+	Metrics json.RawMessage `json:"metrics,omitempty"`
+}
+
+// CanonicalTurnStats mirrors gaia.turn/1 (see turn_metrics.py). Only the fields
+// the TUI renders are decoded; the record carries more, and the log file is
+// where the rest is read.
+type CanonicalTurnStats struct {
+	TurnID    string              `json:"turn_id"`
+	Model     string              `json:"model"`
+	StartedAt string              `json:"started_at"`
+	EndedAt   string              `json:"ended_at"`
+	TotalS    float64             `json:"total_s"`
+	Steps     int                 `json:"steps"`
+	Prompt    CanonicalTurnPrompt `json:"prompt"`
+	LLMCalls  []CanonicalTurnCall `json:"llm_calls"`
+	ToolCalls []CanonicalTurnTool `json:"tool_calls"`
+	Totals    CanonicalTurnTotals `json:"totals"`
+}
+
+// CanonicalTurnPrompt is the fixed cost re-sent on every call of the turn:
+// FixedPrefillTokens is the system prompt plus tool schemas, which is the
+// dominant term in a local turn's latency.
+type CanonicalTurnPrompt struct {
+	FixedPrefillTokens int      `json:"fixed_prefill_tokens"`
+	SystemTokens       int      `json:"system_tokens"`
+	ToolSchemaTokens   int      `json:"tool_schema_tokens"`
+	ToolsSent          int      `json:"tools_sent"`
+	SkillsActive       []string `json:"skills_active"`
+}
+
+// CanonicalTurnCall is one backend request. InputTokensCached is the KV-cache
+// prefix this call could reuse; PrefillTokPerS is measured over the tokens the
+// server actually had to read, so it reads far above the cold rate on a hit.
+type CanonicalTurnCall struct {
+	Step              int     `json:"step"`
+	At                string  `json:"at"`
+	WallS             float64 `json:"wall_s"`
+	TTFTS             float64 `json:"ttft_s"`
+	TokPerS           float64 `json:"tok_per_s"`
+	InputTokensLocal  int     `json:"input_tokens_local"`
+	InputTokensCached int     `json:"input_tokens_cached"`
+	InputTokensNew    int     `json:"input_tokens_new"`
+	InputTokens       float64 `json:"input_tokens"`
+	OutputTokens      float64 `json:"output_tokens"`
+	PrefillTokPerS    float64 `json:"prefill_tok_per_s"`
+	// Reported by the backend itself, on backends that report it at all
+	// (Anthropic's prefix cache does; a local llama.cpp KV cache does not).
+	// Absent means unmeasured — not a miss.
+	CacheReadInputTokens     float64 `json:"cache_read_input_tokens"`
+	CacheCreationInputTokens float64 `json:"cache_creation_input_tokens"`
+}
+
+// CanonicalTurnTool is one tool execution, timed around every return path.
+type CanonicalTurnTool struct {
+	Step  int     `json:"step"`
+	Name  string  `json:"name"`
+	WallS float64 `json:"wall_s"`
+	OK    bool    `json:"ok"`
+}
+
+// CanonicalTurnTotals splits the turn's wall time and its token counts. The
+// *Local counts come from the client-side estimator and the *Server ones from
+// the backend: they use different tokenizers, so a cached/new split is only
+// ever valid within one source — never Cached_Server against Local.
+type CanonicalTurnTotals struct {
+	LLMS                    float64 `json:"llm_s"`
+	ToolS                   float64 `json:"tool_s"`
+	OverheadS               float64 `json:"overhead_s"`
+	InputTokensLocal        int     `json:"input_tokens_local"`
+	InputTokensCachedLocal  int     `json:"input_tokens_cached_local"`
+	InputTokensNewLocal     int     `json:"input_tokens_new_local"`
+	InputTokensServer       int     `json:"input_tokens_server"`
+	InputTokensCachedServer int     `json:"input_tokens_cached_server"`
+	CacheWriteTokensServer  int     `json:"cache_write_tokens_server"`
+	OutputTokensServer      float64 `json:"output_tokens_server"`
 }
 
 // CanonicalErrorEvent — terminal failure. Detail is actionable and surfaced
@@ -210,9 +296,20 @@ func CanonicalUsageOf(e CanonicalFinalEvent) CanonicalUsage {
 	if len(e.Usage) == 0 {
 		return u
 	}
-	if err := json.Unmarshal(e.Usage, &u); err != nil {
+	var wire usageWire
+	if err := json.Unmarshal(e.Usage, &wire); err != nil {
 		return CanonicalUsage{}
 	}
+	u = wire.CanonicalUsage
+	if len(wire.Metrics) == 0 {
+		return u
+	}
+	var stats CanonicalTurnStats
+	if err := json.Unmarshal(wire.Metrics, &stats); err != nil {
+		// The turn's own stats still stand; only the breakdown is lost.
+		return u
+	}
+	u.Metrics = &stats
 	return u
 }
 

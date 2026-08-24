@@ -45,7 +45,6 @@ const MIN_FORGE_VERSION = 7;
 // Paths to framework and apps
 const FRAMEWORK_PATH = path.join(__dirname, '../../src/gaia/electron');
 const EXAMPLE_APP_PATH = path.join(__dirname, '../../src/gaia/apps/example/webui');
-const JIRA_APP_PATH = path.join(__dirname, '../../src/gaia/apps/jira/webui');
 
 describe('Electron Framework Integration', () => {
   describe('Framework Core Validation', () => {
@@ -107,8 +106,7 @@ describe('Electron Framework Integration', () => {
 
   describe('App Structure Compliance', () => {
     const apps = [
-      { name: 'example', path: EXAMPLE_APP_PATH },
-      { name: 'jira', path: JIRA_APP_PATH }
+      { name: 'example', path: EXAMPLE_APP_PATH }
     ];
 
     apps.forEach(({ name, path: appPath }) => {
@@ -341,24 +339,18 @@ contextBridge.exposeInMainWorld('testAPI', {
       const examplePkg = JSON.parse(
         fs.readFileSync(path.join(EXAMPLE_APP_PATH, 'package.json'), 'utf8')
       );
-      const jiraPkg = JSON.parse(
-        fs.readFileSync(path.join(JIRA_APP_PATH, 'package.json'), 'utf8')
-      );
 
       const frameworkVersion = frameworkPkg.devDependencies.electron;
       const exampleVersion = examplePkg.devDependencies.electron;
-      const jiraVersion = jiraPkg.devDependencies.electron;
 
       // Extract major versions
       const getMajor = (v) => parseInt(v.replace(/[\^~]/, '').split('.')[0]);
 
       const frameworkMajor = getMajor(frameworkVersion);
       const exampleMajor = getMajor(exampleVersion);
-      const jiraMajor = getMajor(jiraVersion);
 
       // All should be on the same major version
       expect(exampleMajor).toBe(frameworkMajor);
-      expect(jiraMajor).toBe(frameworkMajor);
     });
 
     it(`should use electron >= ${MIN_ELECTRON_VERSION} for security features`, () => {
@@ -375,12 +367,12 @@ contextBridge.exposeInMainWorld('testAPI', {
 
     it(`should have compatible electron-forge version (>=${MIN_FORGE_VERSION}) if present`, () => {
       // Check if apps using forge have compatible versions
-      const jiraPkg = JSON.parse(
-        fs.readFileSync(path.join(JIRA_APP_PATH, 'package.json'), 'utf8')
+      const examplePkg = JSON.parse(
+        fs.readFileSync(path.join(EXAMPLE_APP_PATH, 'package.json'), 'utf8')
       );
 
-      if (jiraPkg.devDependencies['@electron-forge/cli']) {
-        const forgeVersion = jiraPkg.devDependencies['@electron-forge/cli'];
+      if (examplePkg.devDependencies['@electron-forge/cli']) {
+        const forgeVersion = examplePkg.devDependencies['@electron-forge/cli'];
         const forgeMajor = parseInt(forgeVersion.replace(/[\^~]/, '').split('.')[0]);
 
         // See MIN_FORGE_VERSION constant for version requirements documentation
@@ -391,8 +383,7 @@ contextBridge.exposeInMainWorld('testAPI', {
 
   describe('Security Configuration Validation', () => {
     const apps = [
-      { name: 'example', path: EXAMPLE_APP_PATH },
-      { name: 'jira', path: JIRA_APP_PATH }
+      { name: 'example', path: EXAMPLE_APP_PATH }
     ];
 
     apps.forEach(({ name, path: appPath }) => {

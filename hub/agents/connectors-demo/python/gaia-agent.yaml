@@ -5,8 +5,9 @@ description: "Demonstrates the connectors framework — pulls real data from you
 author: AMD
 license: MIT
 
-category: productivity
-tags: [google, gmail, github, calendar]
+category: examples
+security_tier: experimental
+tags: [example, reference, connectors, google, github]
 icon: plug
 tools_count: 4
 
