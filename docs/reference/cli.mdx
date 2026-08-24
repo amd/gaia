@@ -1937,7 +1937,7 @@ Author and manage agent skills. A skill is a directory whose only required file 
 ```bash
 gaia skill {list,info,create,import,export,migrate} [OPTIONS]     # author locally
 gaia skill audit <dir> [OPTIONS]                                  # pre-publish gate
-gaia skill {search,install,remove,publish,keygen,trust} [OPTIONS] # marketplace
+gaia skill {search,install,remove,promote,publish,keygen,trust} [OPTIONS] # marketplace + trust
 ```
 
 Skills are discovered from three roots, highest precedence first:
@@ -1961,6 +1961,7 @@ Skills are discovered from three roots, highest precedence first:
 | `search [query]` | Search the Agent Hub's skills lane |
 | `install <name[@range]>` | Install a published skill into `~/.gaia/skills/` |
 | `remove <name>` | Delete an installed skill and drop its lock entry |
+| `promote <name>` | Trust a **captured** skill's code after a clean audit — until then its `tools.py` stays inert |
 | `publish <dir>` | Validate, audit, sign, and publish a skill to the hub |
 | `keygen` | Generate an Ed25519 publisher key for signing |
 | `trust {list,add,remove}` | Manage the public keys whose signatures this machine trusts |
@@ -2121,6 +2122,30 @@ Skills are discovered from three roots, highest precedence first:
     bundle's `SIGNATURE.json` over every file, then installs at
     `min(claimed tier, tier the signature earned)`. Nothing is written until every
     gate passes.
+  </Tab>
+
+  <Tab title="promote">
+    ```bash
+    gaia skill promote <name>
+    ```
+
+    The trust step for skills the agent **captured** in-conversation (the
+    flagship's `capture_skill` tool: pasted `SKILL.md` text, a URL, or a local
+    folder/zip). A captured skill's instructions load immediately, but any
+    `tools.py`/scripts it carries stay **inert** — `load_skill` injects the body
+    and defers tool registration. `promote` re-runs the full security audit on
+    the installed directory and, **only on an `ALLOW` verdict**, marks the code
+    trusted so the next load registers its tools. Trust is bound to the audited
+    bytes: edit the skill afterwards and its code defers again until
+    re-promoted.
+
+    `REVIEW`/`BLOCK` print the findings and refuse (exit `5`/`6`), revoking any
+    earlier trust. This is deliberately a terminal command — the agent cannot
+    call it, so a chat approval can never enable captured code.
+
+    Not to be confused with `gaia skill trust`, which manages the **signing
+    keys** this machine accepts for hub installs. `promote` trusts one local
+    captured skill's code, audit-gated — nothing else.
   </Tab>
 
   <Tab title="publish">

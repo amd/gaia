@@ -281,6 +281,13 @@ agent instead of a throwaway built fresh per call — indexed documents and
 `load_skill` state only survive between turns when the same `session_id`
 threads them together.
 
+A skill **captured** in-conversation (the `capture_skill` tool — itself
+confirmation-gated and therefore unreachable over `/query`) loads
+**instruction-only** until a human runs `gaia skill promote <name>` in a
+terminal: `load_skill` injects its body but defers registering any tools it
+declares, and reports the deferral in its result. Integrators must not expect
+a captured skill's `<skill>/<tool>` names to exist before that promote.
+
 A retained skill stays *loaded* but its body is not necessarily in the prompt
 every turn: the agent selects per turn which loaded bodies match the query and
 collapses the rest to a one-line menu entry (re-activated by calling

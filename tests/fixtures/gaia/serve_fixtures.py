@@ -9,6 +9,8 @@ Default mode serves the ROUTED layout the scenario corpus assumes
     /rss/feed.xml       → tests/fixtures/gaia/rss/feed.xml
     /fixture_hub/...    → tests/fixtures/gaia/fixture_hub/_prepared/...
                           (built per run by prepare_fixture_hub.py)
+    /capture/...        → tests/fixtures/gaia/capture/...
+                          (raw SKILL.md fixtures for the capture scenarios)
 
 Eval runs bind **port 8765** — scenarios hardcode http://127.0.0.1:8765 —
 with GAIA_HUB_URL=http://127.0.0.1:8765/fixture_hub:
@@ -37,6 +39,7 @@ FIXTURES_ROOT = Path(__file__).resolve().parent
 ROUTES: tuple[tuple[str, Path], ...] = (
     ("/rss", FIXTURES_ROOT / "rss"),
     ("/fixture_hub", FIXTURES_ROOT / "fixture_hub" / "_prepared"),
+    ("/capture", FIXTURES_ROOT / "capture"),
     ("", FIXTURES_ROOT / "web"),
 )
 

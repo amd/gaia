@@ -295,6 +295,7 @@ class TestAgentEvalRunner:
             "gaia_shell",
             "gaia_skills_lifecycle",
             "gaia_skills_tasks",
+            "gaia_skills_capture",
             "gaia_honesty",
             "gaia_tool_selection",
             "gaia_code",

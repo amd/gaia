@@ -1,0 +1,64 @@
+# FIXTURE-SYNC: mirrors tests/fixtures/gaia/capture/meeting-notes/SKILL.md
+# (renamed sticky-notes so it never collides with the URL-capture scenario's
+# install of the same fixture) — see GAIA_FIXTURE_VALUES.md "Capture fixtures".
+id: capture_paste_load_use
+name: "Capture — Pasted SKILL.md Is Captured, Loaded, and Actually Used"
+category: gaia_skills_capture
+agent_type: gaia
+severity: critical
+description: |
+  The user pastes a complete SKILL.md and asks the agent to save and use it.
+  The agent must run the real capture_skill -> load_skill chain and then
+  demonstrably follow the captured instructions.
+
+persona: casual_user
+
+setup:
+  index_documents: []
+  notes: "GAIA_AUTO_APPROVE_TOOLS=1 (capture_skill is confirmation-gated)."
+
+turns:
+  - turn: 1
+    objective: "Paste a SKILL.md and ask the agent to add it to its skills"
+    user_message: |
+      here's a skill I want you to have. save it and load it:
+
+      ---
+      name: sticky-notes
+      description: Structure meeting notes in the Andromeda format when the user asks for meeting notes.
+      version: "1.0.0"
+      ---
+
+      # Meeting Notes (Andromeda format)
+
+      When the user asks you to take or format meeting notes:
+
+      1. Open with the exact header line `ANDROMEDA NOTES`.
+      2. List attendees as a bulleted list under **Attendees**.
+      3. List decisions under **Decisions**, one bullet each, starting with a verb.
+      4. Close with the exact line `Filed by GAIA.`
+
+      Never invent attendees or decisions the user did not state.
+    ground_truth:
+      expected_behavior: "Captured via capture_skill, then loaded via load_skill; reported at the experimental tier"
+    success_criteria: |
+      CRITICAL: agent_tools[] must include a real capture_skill call AND a
+      load_skill call for sticky-notes. Claiming the skill was saved without
+      those tool calls is an automatic FAIL. Reporting it landed at the
+      experimental tier (or equivalent caution) is expected.
+
+  - turn: 2
+    objective: "Use the captured skill on real content"
+    user_message: "great — take meeting notes: attendees were Priya and Marcus, and we decided to ship Friday and to drop the beta flag"
+    ground_truth:
+      expected_answer: "Notes opening with 'ANDROMEDA NOTES', listing Priya and Marcus, the two decisions, closing with 'Filed by GAIA.'"
+    success_criteria: |
+      The notes follow the captured format: the ANDROMEDA NOTES header, an
+      Attendees list with exactly Priya and Marcus, both stated decisions,
+      and the 'Filed by GAIA.' closing line. Ignoring the skill's format, or
+      inventing extra attendees/decisions, is a FAIL.
+
+expected_outcome: |
+  A real capture -> load -> use chain: the pasted skill lands on disk via
+  capture_skill, its instructions load, and the next answer visibly follows
+  them.

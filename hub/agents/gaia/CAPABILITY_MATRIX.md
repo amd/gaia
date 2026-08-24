@@ -9,7 +9,7 @@ python hub/agents/gaia/python/packaging/capability_matrix.py
 
 ## Definitions
 
-- **tools_count**: the number of registered agent-loop tools for the default construction (prompt_profile='full', memory available): FULL_CORE_TOOLS unioned with every FULL_BUNDLES member in gaia_agent_chat.tool_bundles (which the flagship's registry must equal exactly, including the 7 skill-library tools, the 4 code-index tools, and the load_tools escape hatch). This is the REGISTERED size — what the agent can do. Dynamic tool loading means a single turn only shows the model a subset of it, and it is distinct from the REST surface's 3 functional verbs, a purpose-built streaming facade for external callers.
+- **tools_count**: the number of registered agent-loop tools for the default construction (prompt_profile='full', memory available): FULL_CORE_TOOLS unioned with every FULL_BUNDLES member in gaia_agent_chat.tool_bundles (which the flagship's registry must equal exactly, including the 8 skill-library tools, the 4 code-index tools, and the load_tools escape hatch). This is the REGISTERED size — what the agent can do. Dynamic tool loading means a single turn only shows the model a subset of it, and it is distinct from the REST surface's 3 functional verbs, a purpose-built streaming facade for external callers.
 - **no quality eval sentinel**: `no quality eval (contract-tested only)` -- the op is contract/shape-tested only; no judged quality bar exists for it.
 
 ## Capability matrix
@@ -26,7 +26,7 @@ The committed SSE sequence pins under `python/eval_baselines/query_sequences/` s
 
 ## Surface totals
 
-- Registered agent-loop tools: **67** (CORE 10 + 18 bundles; bundles overlap CORE and each other by design, so per-bundle counts sum past the unique total)
+- Registered agent-loop tools: **68** (CORE 10 + 18 bundles; bundles overlap CORE and each other by design, so per-bundle counts sum past the unique total)
   - `clipboard`: 2
   - `code_index`: 4
   - `data`: 6
@@ -41,11 +41,12 @@ The committed SSE sequence pins under `python/eval_baselines/query_sequences/` s
   - `rag_query`: 6
   - `screenshot`: 1
   - `shell`: 3
-  - `skill_hub`: 3
+  - `skill_hub`: 4
   - `skills`: 4
   - `vision`: 2
   - `web`: 6
-- Skill-library tools (framework `SKILL_LIBRARY_TOOL_NAMES`, all in the union): **7**
+- Skill-library tools (framework `SKILL_LIBRARY_TOOL_NAMES`, all in the union): **8**
+  - `capture_skill`
   - `install_skill`
   - `list_skills`
   - `load_skill`
@@ -61,7 +62,7 @@ The committed SSE sequence pins under `python/eval_baselines/query_sequences/` s
 - Eval suites: **2**
   - `perf`: enforce=False, acceptance_enforce=None
   - `quality`: enforce=False, acceptance_enforce=None
-- Judged scenario categories (`eval/scenarios/gaia_*`): **12**
+- Judged scenario categories (`eval/scenarios/gaia_*`): **13**
   - `gaia_code`
   - `gaia_core`
   - `gaia_data`
@@ -70,6 +71,7 @@ The committed SSE sequence pins under `python/eval_baselines/query_sequences/` s
   - `gaia_memory`
   - `gaia_rag`
   - `gaia_shell`
+  - `gaia_skills_capture`
   - `gaia_skills_lifecycle`
   - `gaia_skills_tasks`
   - `gaia_tool_selection`

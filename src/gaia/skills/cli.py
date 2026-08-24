@@ -322,6 +322,22 @@ def _add_marketplace_subparsers(sub: argparse._SubParsersAction) -> None:
     p_remove = sub.add_parser("remove", help="Remove an installed skill")
     p_remove.add_argument("name", help="Skill name to remove")
 
+    p_promote = sub.add_parser(
+        "promote",
+        help="Trust a CAPTURED skill's code after a clean security audit",
+        description=(
+            "Re-run the full static security audit on a skill captured via the "
+            "agent's capture_skill tool and, only on an ALLOW verdict, mark its "
+            "code trusted so the next load registers its tools. Until then a "
+            "captured skill loads instruction-only — its tools.py/scripts are "
+            "inert. REVIEW/BLOCK verdicts print the findings and refuse (exit "
+            f"codes {EXIT_REVIEW}/{EXIT_BLOCK}). Distinct from 'gaia skill "
+            "trust', which manages the SIGNING KEYS this machine accepts — "
+            "promote trusts THIS local skill's code, audit-gated, nothing else."
+        ),
+    )
+    p_promote.add_argument("name", help="Captured skill name to promote")
+
     p_publish = sub.add_parser(
         "publish", help="Validate, audit, sign, and publish a skill to the Agent Hub"
     )
@@ -405,6 +421,8 @@ def handle(args: argparse.Namespace) -> int:
         "search": _handle_search,
         "install": _handle_install,
         "remove": _handle_remove,
+        # Trust step for captured skills (code inert until promoted)
+        "promote": _handle_promote,
         "publish": _handle_publish,
         "keygen": _handle_keygen,
         "trust": _handle_trust,
@@ -696,6 +714,39 @@ def _repo_relative_prefix(audited_path: str) -> str:
     except ValueError:
         return ""
     return relative.as_posix()
+
+
+def _handle_promote(args: argparse.Namespace) -> int:
+    """Trust a captured skill's code — the one human gate on captured code.
+
+    Not to be confused with ``gaia skill trust``: *trust* manages the signing
+    keys this machine accepts for hub installs; *promote* audits and trusts one
+    local **captured** skill's code so ``load_skill`` may register its tools.
+    """
+    from gaia.skills.capture import promote_skill
+
+    result = promote_skill(args.name)
+    if result.promoted:
+        print(f"✅ Promoted skill '{result.name}': audit verdict ALLOW.")
+        print(
+            "   Its tools will register on the next load "
+            f"(load_skill('{result.name}') in a session, after unloading if "
+            "currently loaded)."
+        )
+        return EXIT_OK
+
+    sys.stderr.write(
+        f"❌ Promote of '{result.name}' refused: audit verdict "
+        f"{result.verdict}. {result.reason}\n"
+    )
+    for line in result.findings:
+        sys.stderr.write(f"   {line}\n")
+    sys.stderr.write(
+        "   The skill stays loadable instruction-only; its code remains "
+        "inert. Fix the findings and re-run 'gaia skill promote', or remove "
+        f"the skill with 'gaia skill remove {result.name}'.\n"
+    )
+    return EXIT_REVIEW if result.verdict == "REVIEW" else EXIT_BLOCK
 
 
 def _handle_migrate(args: argparse.Namespace) -> int:

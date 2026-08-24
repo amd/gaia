@@ -43,6 +43,11 @@ a model that would happily approve itself:
 
 Each surfaces as an error naming what would proceed instead.
 
+A fifth boundary defers rather than refuses: ``capture_skill`` lands a skill
+from pasted text, a URL, or a folder, but any code it carries stays **inert**
+(``gaia.skills.capture`` — instructions load, ``tools.py`` never imports) until
+the human runs ``gaia skill promote <name>`` in a terminal.
+
 Loading stays opt-in
 --------------------
 Registering these tools does not load anything. Skill bodies cost prompt tokens
@@ -73,6 +78,7 @@ SKILL_LIBRARY_TOOL_NAMES = (
     "list_skills",
     "search_skill_hub",
     "install_skill",
+    "capture_skill",
     "remove_skill",
     "load_skill",
     "unload_skill",
@@ -205,7 +211,7 @@ class SkillLibraryToolsMixin:
     """
 
     def register_skill_library_tools(self) -> None:
-        """Register the seven skill-library tools onto this agent.
+        """Register the eight skill-library tools onto this agent.
 
         Call this **before** ``super()._register_tools()``: ChatAgent's
         registration ends by snapshotting the global registry, and a tool added
@@ -425,11 +431,82 @@ class SkillLibraryToolsMixin:
             return payload
 
         @tool
+        def capture_skill(source: str, name: str = "") -> dict:
+            """Capture a skill from pasted SKILL.md text, a URL, or a local path into ~/.gaia/skills.
+
+            The user is asked to approve this before it runs. source is
+            classified automatically: http(s):// is fetched (raw SKILL.md or a
+            .zip bundle); an existing local folder/.zip is imported; anything
+            else is treated as pasted SKILL.md text. The capture is
+            security-audited first — a BLOCK verdict refuses it and nothing is
+            written; you cannot override that. Captured skills land at the
+            experimental tier. Instructions are loadable immediately with
+            load_skill, but any tools.py/scripts in the bundle stay INERT until
+            the user runs `gaia skill promote <name>` in a terminal — never
+            claim the skill's tools work before that.
+
+            Args:
+                source: Pasted SKILL.md text, an http(s) URL, or a local path.
+                name: Optional name to install under instead of the skill's own.
+
+            Returns:
+                Dictionary with the captured name, path, tier, whether it
+                carries inert code, and any audit findings to relay.
+            """
+            from gaia.skills.capture import capture_skill as _capture
+            from gaia.skills.errors import SkillError
+
+            if name:
+                rejection = _reject_bad_name("capture_skill", name)
+                if rejection is not None:
+                    return rejection
+
+            try:
+                result = _capture(
+                    source,
+                    name=name.strip() or None,
+                    manager=agent.skill_manager,
+                )
+            except SkillError as exc:
+                return _failure("capture_skill", exc)
+
+            payload: Dict[str, Any] = {
+                "status": "success",
+                "name": result.name,
+                "path": str(result.path),
+                "security_tier": result.tier,
+                "source_kind": result.source_kind,
+                "has_code": result.has_code,
+                "next_step": (
+                    f"Captured but not active. Call load_skill('{result.name}') "
+                    "to use its instructions in this session."
+                ),
+            }
+            if result.has_code:
+                count = len(result.deferred_tools) or "its"
+                payload["deferred_tools"] = list(result.deferred_tools)
+                payload["code_inert"] = (
+                    f"This skill carries {count} tool(s)/scripts that stay "
+                    "INERT until the user runs "
+                    f"`gaia skill promote {result.name}` in a terminal. Its "
+                    "instructions load now; its code does not. Say exactly "
+                    "that — do not claim the tools work."
+                )
+            if result.review_findings:
+                payload["audit_findings"] = list(result.review_findings)
+                payload["warning"] = (
+                    f"The security audit flagged {len(result.review_findings)} "
+                    "finding(s) (listed under 'audit_findings'). The capture "
+                    "landed, but tell the user about them before using it."
+                )
+            return payload
+
+        @tool
         def remove_skill(name: str) -> dict:
             """Delete an installed skill from ~/.gaia/skills.
 
-            The user is asked to approve this before it runs. Only removes
-            skills installed from the hub. A skill bundled with
+            The user is asked to approve this before it runs. Removes skills
+            installed from the hub or captured. A skill bundled with
             this agent, or imported from .claude/skills, is refused with the
             reason — those are removed by uninstalling the agent or deleting
             the folder. If the skill is loaded right now, it is unloaded too.
@@ -514,6 +591,12 @@ class SkillLibraryToolsMixin:
             except SkillError as exc:
                 return _failure("load_skill", exc)
 
+            # Captured-but-unpromoted code never registered (gaia.skills.capture)
+            # — report that honestly instead of listing tools that do not exist.
+            from gaia.skills.capture import code_is_deferred
+
+            deferred = code_is_deferred(skill)
+
             payload: Dict[str, Any] = {
                 "status": "success",
                 "name": skill.name,
@@ -530,14 +613,27 @@ class SkillLibraryToolsMixin:
                     f"Paths in this skill's instructions are relative to "
                     f"{skill.directory} — join them onto it before use."
                 ),
-                "registered_tools": [
-                    skill.namespaced_tool_name(t) for t in skill.tool_names
-                ],
+                "registered_tools": (
+                    []
+                    if deferred
+                    else [skill.namespaced_tool_name(t) for t in skill.tool_names]
+                ),
                 "loaded_skills": sorted(agent.loaded_skills),
                 "prompt_tokens_estimate": estimate_prompt_tokens(
                     agent.get_skills_system_prompt()
                 ),
             }
+            if deferred:
+                payload["deferred_tools"] = list(skill.tool_names)
+                payload["warning"] = (
+                    f"Skill '{skill.name}' was captured and its code is not "
+                    f"yet trusted: its {len(skill.tool_names)} tool(s) "
+                    f"({', '.join(skill.tool_names)}) did NOT register. Its "
+                    "instructions are loaded and usable. Tell the user the "
+                    "tools stay inert until they run "
+                    f"`gaia skill promote {skill.name}` in a terminal — do "
+                    "not claim to run these tools."
+                )
 
             # tools_required is advisory at load time — the base loader logs the
             # gap and loads anyway, so surface it here or the model discovers it
@@ -549,11 +645,15 @@ class SkillLibraryToolsMixin:
             ]
             if unmet:
                 payload["unmet_tools_required"] = unmet
-                payload["warning"] = (
+                unmet_warning = (
                     f"Skill '{skill.name}' expects tool(s) {', '.join(unmet)}, which "
                     "this agent does not have registered. The parts of its "
                     "instructions that use them cannot run — say so instead of "
                     "improvising a substitute."
+                )
+                existing = payload.get("warning")
+                payload["warning"] = (
+                    f"{existing} {unmet_warning}" if existing else unmet_warning
                 )
             return payload
 

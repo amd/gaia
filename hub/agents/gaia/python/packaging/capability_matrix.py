@@ -93,7 +93,7 @@ TOOLS_COUNT_DEFINITION = (
     "tools_count = the number of registered agent-loop tools for the default "
     "construction (prompt_profile='full', memory available): FULL_CORE_TOOLS "
     "unioned with every FULL_BUNDLES member in gaia_agent_chat.tool_bundles "
-    "(which the flagship's registry must equal exactly, including the 7 "
+    "(which the flagship's registry must equal exactly, including the 8 "
     "skill-library tools, the 4 code-index tools, and the load_tools escape "
     "hatch). This is the REGISTERED size — what the agent can do. Dynamic tool "
     "loading means a single turn only shows the model a subset of it, and it "
@@ -227,7 +227,7 @@ def _derive_skill_library_tool_names(
     path: Path = _SKILL_LIBRARY_TOOLS_PATH,
 ) -> Tuple[str, ...]:
     """AST-extract ``SKILL_LIBRARY_TOOL_NAMES`` — the framework's own pinned
-    list of the 7 skill-library tools, cross-checked into the bundle union."""
+    list of the 8 skill-library tools, cross-checked into the bundle union."""
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     for node in ast.walk(tree):
         if (

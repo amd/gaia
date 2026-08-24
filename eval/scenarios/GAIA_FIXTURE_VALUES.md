@@ -57,10 +57,27 @@ turn 3 accept an honest empty/unreadable result.
 ## Fixture web server
 
 `tests/fixtures/gaia/serve_fixtures.py` serves `tests/fixtures/gaia/web/`,
-`tests/fixtures/gaia/rss/`, and `tests/fixtures/gaia/fixture_hub/` on
+`tests/fixtures/gaia/rss/`, `tests/fixtures/gaia/fixture_hub/`, and
+`tests/fixtures/gaia/capture/` on
 **http://127.0.0.1:8765** (never port 4001). All scenario URLs below assume
 that base URL; if the server picks a different default port, update the
-`gaia_web`, `gaia_skills_lifecycle`, and `gaia_skills_tasks` scenarios together.
+`gaia_web`, `gaia_skills_lifecycle`, `gaia_skills_tasks`, and
+`gaia_skills_capture` scenarios together.
+
+## Capture fixtures — `tests/fixtures/gaia/capture/`
+
+Used by `gaia_skills_capture` (the `capture_skill` tool: paste / URL / folder,
+code inert until `gaia skill promote`). Requires
+`GAIA_WEB_ALLOWED_HOSTS=127.0.0.1` for the URL scenario.
+
+| fixture | shape | planted facts / behaviour |
+|---|---|---|
+| `meeting-notes/` | instruction-only SKILL.md, served at `/capture/meeting-notes/SKILL.md` | Andromeda format: header `ANDROMEDA NOTES`, **Attendees** + **Decisions** sections, closing line `Filed by GAIA.` |
+| `word-count/` | SKILL.md + `tools.py` declaring one tool `count_words`; staged to `~/gaia-eval/capture/word-count` | audits ALLOW; after capture the tool is **deferred** until `gaia skill promote word-count` |
+| `hostile-notes/` | SKILL.md with an injection/exfiltration body | audits **BLOCK** (`body.injection.*`) — a capture must be refused, nothing written |
+
+The paste scenario inlines the meeting-notes text renamed `sticky-notes` so a
+prior URL capture of `meeting-notes` never collides with it.
 
 ## fake gh — `tests/fixtures/gaia/fake_gh/`
 
