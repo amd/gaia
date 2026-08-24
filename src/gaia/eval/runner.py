@@ -22,6 +22,7 @@ import json
 import logging
 import os
 import shutil
+import statistics
 import subprocess
 import sys
 import tempfile
@@ -701,6 +702,68 @@ def _aggregate_performance(result: dict, scenario_id: str) -> None:
             )
     else:
         result["performance_summary"] = None
+
+
+#: A scenario's result is judged when the judge actually scored it; infra
+#: failures say nothing about quality and must not count toward a pass rate.
+_STABILITY_JUDGED = {"PASS", "FAIL", "BLOCKED_BY_ARCHITECTURE"}
+
+
+def summarize_attempts(attempts: list) -> dict:
+    """Fold N runs of one scenario into a single result carrying stability.
+
+    The representative result is the WORST judged attempt, so a scenario that
+    fails intermittently never reports as a clean pass. ``stability`` is what
+    n=1 cannot express:
+
+    ``stable-pass`` every judged attempt passed; ``flaky`` some did and some did
+    not — the case that silently looks like either a pass or a hard failure at
+    n=1; ``stable-fail`` none passed.
+    """
+    if not attempts:
+        raise ValueError("summarize_attempts requires at least one attempt")
+    if len(attempts) == 1:
+        return attempts[0]
+
+    judged = [a for a in attempts if a.get("status") in _STABILITY_JUDGED]
+    passes = [a for a in judged if a.get("status") == "PASS"]
+    # Worst-first: a FAIL outranks a PASS as the representative outcome.
+    representative = min(
+        judged or attempts,
+        key=lambda a: (a.get("status") == "PASS", a.get("overall_score") or 0.0),
+    )
+    result = dict(representative)
+
+    scores = [
+        a["overall_score"]
+        for a in judged
+        if isinstance(a.get("overall_score"), (int, float))
+    ]
+    if judged:
+        pass_rate = len(passes) / len(judged)
+        stability = (
+            "stable-pass"
+            if len(passes) == len(judged)
+            else "stable-fail" if not passes else "flaky"
+        )
+    else:
+        pass_rate = None
+        stability = None
+
+    result["stability"] = {
+        "runs": len(attempts),
+        "judged": len(judged),
+        "pass_count": len(passes),
+        "pass_rate": round(pass_rate, 4) if pass_rate is not None else None,
+        "stability": stability,
+        "score_avg": round(statistics.fmean(scores), 3) if scores else None,
+        "score_min": round(min(scores), 3) if scores else None,
+        "score_max": round(max(scores), 3) if scores else None,
+        # stdev needs 2+ points; a single judged attempt has no spread to report.
+        "score_stdev": round(statistics.stdev(scores), 3) if len(scores) > 1 else None,
+        "statuses": [a.get("status") for a in attempts],
+    }
+    return result
 
 
 def preflight_check(backend_url, scenarios=None):
@@ -1711,6 +1774,7 @@ class AgentEvalRunner:
         exclude_tags=None,
         output_format=None,
         agent_type=None,
+        iterations=1,
     ):
         self.backend_url = backend_url
         self.model = model
@@ -1721,6 +1785,11 @@ class AgentEvalRunner:
         self.extra_corpus_dirs = extra_corpus_dirs or []
         self.tags = tags or []
         self.exclude_tags = exclude_tags or []
+        if iterations is None:
+            iterations = 1
+        if int(iterations) < 1:
+            raise ValueError(f"iterations must be >= 1, got {iterations!r}")
+        self.iterations = int(iterations)
         self.output_format = output_format
         self.agent_type = agent_type
 
@@ -1890,20 +1959,32 @@ class AgentEvalRunner:
             effective_timeout = _compute_effective_timeout(self.timeout, scenario_data)
             # Per-scenario agent_type from YAML overrides CLI --agent-type
             scenario_agent_type = scenario_data.get("agent_type", self.agent_type)
-            result = run_scenario_subprocess(
-                scenario_path,
-                scenario_data,
-                run_dir,
-                self.backend_url,
-                self.model,
-                self.budget,
-                effective_timeout,
-                keep_sessions=keep_sessions,
-                extra_corpus_dirs=(
-                    self.extra_corpus_dirs if self.extra_corpus_dirs else None
-                ),
-                agent_type=scenario_agent_type,
-            )
+            # Repeat the scenario N times so a flaky result is distinguishable
+            # from a hard failure — at N=1 they are indistinguishable.
+            attempts = []
+            for attempt_idx in range(1, self.iterations + 1):
+                if self.iterations > 1:
+                    print(
+                        f"[RUN] {sid} — iteration {attempt_idx}/{self.iterations}",
+                        flush=True,
+                    )
+                attempts.append(
+                    run_scenario_subprocess(
+                        scenario_path,
+                        scenario_data,
+                        run_dir,
+                        self.backend_url,
+                        self.model,
+                        self.budget,
+                        effective_timeout,
+                        keep_sessions=keep_sessions,
+                        extra_corpus_dirs=(
+                            self.extra_corpus_dirs if self.extra_corpus_dirs else None
+                        ),
+                        agent_type=scenario_agent_type,
+                    )
+                )
+            result = summarize_attempts(attempts)
             results.append(result)
 
             completed[sid] = result.get("status")
