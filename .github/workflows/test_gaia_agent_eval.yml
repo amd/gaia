@@ -114,6 +114,10 @@ on:
         description: 'Driver + judge model for the eval harness (must match the baseline)'
         required: false
         default: 'claude-sonnet-4-6'
+      iterations:
+        description: 'Runs per scenario. >1 exposes flaky vs stable-fail, which n=1 cannot. Cost and wall clock scale linearly with N.'
+        required: false
+        default: '3'
   # Reusable: called by weekly_eval.yml and release_agent_gaia.yml so the
   # weekly and the release run the same eval definition. The `lemonade-eval`
   # job group keeps calls strictly serial on the single Lemonade slot.
@@ -124,6 +128,11 @@ on:
         required: false
         type: string
         default: ''
+      iterations:
+        description: 'Runs per scenario (cost and wall clock scale linearly with N)'
+        required: false
+        type: string
+        default: '1'
       eval_model:
         description: 'Driver + judge model for the eval harness'
         required: false
@@ -159,6 +168,10 @@ env:
   # as scoring it (runner.py passes it to `claude -p`), so changing it
   # compares two different eval agents. Override per-run via the input.
   EVAL_MODEL: ${{ inputs.eval_model || 'claude-sonnet-4-6' }}
+  # Runs per scenario. A PR keeps 1 (cost); dispatch/weekly default to 3 so
+  # `flaky` is distinguishable from `stable-fail` — n=1 cannot express it.
+  # Cost and wall clock scale linearly with this number.
+  EVAL_ITERATIONS: ${{ inputs.iterations || '1' }}
   # A dispatch input always wins; otherwise `[eval-enforce]` in the PR TITLE
   # opts in pre-merge (workflow_dispatch is only offered once this file is on
   # the default branch). Retitling alone does not re-run the gate — add the
@@ -479,7 +492,7 @@ jobs:
               $global:LASTEXITCODE = 0
               $evalArgs = @('eval','agent','--agent-type','gaia','--category',$category,
                             '--backend',"$env:BACKEND_URL",'--model',"$env:EVAL_MODEL",
-                            '--budget','5.00',
+                            '--budget','5.00','--iterations',"$env:EVAL_ITERATIONS",
                             '--exclude-tag','live','--exclude-tag','local_blocked_win_shim') + $run.extra
               & gaia @evalArgs 2>&1 |
                 ForEach-Object { Write-Host "$_"; "$_" } |
@@ -662,6 +675,19 @@ jobs:
       # the job summary, one ::warning:: per breach. `if: always()` so "no
       # gate report was produced" is stated out loud even when an earlier
       # step died.
+      # One tidy sheet per run: config repeated on every row so several runs
+      # concatenate into one spreadsheet and pivot as a time series. Unmeasured
+      # metrics write an empty cell, never 0.
+      - name: Export results to CSV
+        if: always()
+        run: |
+          Get-ChildItem -Path eval-out -Directory | ForEach-Object {
+            if (Test-Path (Join-Path $_.FullName 'scorecard.json')) {
+              python hub/agents/gaia/python/packaging/eval_csv_export.py `
+                --run-dir $_.FullName --output-dir eval-out
+            }
+          }
+
       - name: Gate verdicts (job summary)
         if: always()
         run: |
