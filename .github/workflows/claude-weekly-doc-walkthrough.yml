@@ -223,7 +223,10 @@ jobs:
           }
           Write-Host "Claude Code CLI at $claude"
           & $claude --version
-          "path=$claude" | Out-File -Append -Encoding utf8 $env:GITHUB_OUTPUT
+          # Add-Content, not `Out-File -Encoding utf8`: on Windows PowerShell 5.1 that
+          # writes a BOM mid-file, and the runner then rejects the NEXT step's append
+          # with "Unable to process file command 'output'".
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "path=$claude"
 
       - name: Verify clean start state
         shell: powershell
