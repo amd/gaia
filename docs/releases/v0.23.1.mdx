@@ -1,6 +1,6 @@
 ---
 title: "v0.23.1"
-description: "Patch release: the flagship GAIA agent is installable from the terminal hub. v0.23.0's daemon could not run it, so `gaia install gaia` failed for everyone who followed the website."
+description: "The flagship GAIA agent is installable from the terminal hub — v0.23.0's daemon could not run it. Thirteen per-task agents are also removed, their capability now reached through the flagship's skills."
 ---
 
 # GAIA v0.23.1 Release Notes
@@ -9,6 +9,14 @@ GAIA v0.23.1 is a patch release on top of v0.23.0. It makes the flagship GAIA ag
 
 **Why upgrade:**
 - **The flagship agent installs and runs** — `gaia install gaia` now downloads the agent and starts its sidecar. On v0.23.0 it fails with `'gaia' is published on the Agent Hub but this GAIA build cannot run it as a sidecar`, which is the exact path the website's onboarding walks you down.
+
+---
+
+## Breaking Changes
+
+- **Thirteen per-task agents were removed** (PR [#2995](https://github.com/amd/gaia/pull/2995)) — `analyst`, `blender`, `browser`, `code`, `doc-search`, `docker`, `docqa`, `emr`, `fileio`, `jira`, `routing`, `sd`, and `summarize` no longer ship as separate agents. Their capability is the flagship agent's tool surface driven by a `SKILL.md` in `hub/skills/`, so adding a capability now means writing a skill rather than shipping an agent.
+
+  **If you install or launch one of these by id, that will now fail.** Use the flagship (`gaia install gaia`) and load the matching skill instead. This lands in a patch release because it arrived on main before the flagship-installability fix could be cut on its own; the two ship together.
 
 ---
 
