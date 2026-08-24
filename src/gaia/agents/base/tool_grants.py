@@ -104,7 +104,15 @@ _PATH_ARG_NAMES = ("file_path", "path", "filename", "file", "target_file")
 _COMMAND_ARG_NAMES = ("command", "cmd", "script", "command_line")
 _SKILL_ARG_NAMES = ("skill", "skill_name", "skill_id", "name")
 
-_SKILL_TOOLS = frozenset({"install_skill", "capture_skill", "remove_skill"})
+_SKILL_TOOLS = frozenset({"install_skill", "remove_skill"})
+
+#: `capture_skill` is deliberately NOT grantable — every capture prompts.
+#: These scopes key on the skill NAME, but for capture the operative argument
+#: is `source`: an "always allow capture_skill notes" would silently approve any
+#: future source under that name, and the label would not describe what was
+#: granted. Keying on `source` would not fix it either — a URL is not a stable
+#: identity, since the bytes behind it can change between captures.
+_UNGRANTABLE_TOOLS = frozenset({"capture_skill"})
 
 
 @dataclass(frozen=True)
@@ -126,6 +134,8 @@ def grant_scope(tool_name: str, tool_args: Any) -> Optional[GrantScope]:
     ``None`` means the UI must not offer "always" for this call.
     """
     args = tool_args if isinstance(tool_args, dict) else {}
+    if tool_name in _UNGRANTABLE_TOOLS:
+        return None
     if tool_name in _SHELL_TOOLS:
         return _shell_scope(tool_name, args)
     if tool_name in _PATH_TOOLS:

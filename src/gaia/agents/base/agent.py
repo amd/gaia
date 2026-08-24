@@ -1652,8 +1652,22 @@ Do NOT wrap conversational replies in JSON.
                         existing.append(requirement)
                 self.REQUIRED_CONNECTORS = existing
 
-            for policy in policies:
-                self.granted_binaries.grant(policy.binary, skill_name=skill.name)
+            # A binary grant IS executable reach, so untrusted captured code
+            # must not get one either. An ALLOW-tier subcommand runs with no
+            # prompt because "loading the skill is the consent" — and a pasted
+            # or fetched skill is exactly the case where loading is not consent.
+            # `gaia skill promote` re-audits and reloads, which grants then.
+            if not code_deferred:
+                for policy in policies:
+                    self.granted_binaries.grant(policy.binary, skill_name=skill.name)
+            elif policies:
+                logger.warning(
+                    "Skill '%s' is captured and untrusted: binary grant(s) %s "
+                    "withheld until 'gaia skill promote %s'.",
+                    skill.name,
+                    ", ".join(p.binary for p in policies),
+                    skill.name,
+                )
 
             self.loaded_skills[name] = skill
             self._note_skill_active(name)
