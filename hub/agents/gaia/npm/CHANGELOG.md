@@ -40,7 +40,7 @@ the terminal UI meant building it from source.
   manifest's `skill_sets:` / `default_skill_set:` blocks stay commented out until
   an eval measures what loading several bodies costs. See SKILL.md §10.
 - **A materially smaller fixed prompt on every call.** That always-on
-  `gaia-voice` guidance was rewritten from 2,145 tokens to 692 with all of its
+  `gaia-voice` guidance was rewritten from 2,129 tokens to 676 with all of its
   behavioural rules intact. It had been a rationale document — every rule
   followed by the incident that motivated it — and the model needs the rule,
   not the incident report.
