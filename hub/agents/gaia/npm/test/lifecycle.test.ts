@@ -326,7 +326,12 @@ posixOnly("startSidecar backstops (something binds AFTER the pre-flight)", () =>
    * and an unrelated process takes it before our sidecar binds. Reproduced by a
    * fake sidecar that hands the port to a DETACHED holder and exits — the same
    * shape as the frozen build's uvicorn grandchild. The holder signals readiness
-   * through a file, so the ordering is pinned rather than timed.
+   * through a file so it is listening before the child goes away.
+   *
+   * Which backstop fires is still a race — a probe landing before the child's
+   * exit reaches `assertOurs` directly, one landing after goes through the
+   * re-probe — and both raise the same error, which is the point. Neutering
+   * either alone still passes; neutering both fails this test.
    */
   it("names the port conflict when our child dies and something else answers", async () => {
     const readyFile = path.join(tmp, "holder.ready");
