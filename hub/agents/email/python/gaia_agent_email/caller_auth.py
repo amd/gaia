@@ -300,10 +300,16 @@ class HostOriginMiddleware:
             # Fail closed on an absent/empty Host: HTTP/1.1 requires one and
             # every real client sends it, so "no Host" is a caller skipping the
             # rebinding control, not a case to wave through.
-            host = _host_only(headers.get("host", ""))
+            raw_host = headers.get("host", "")
+            host = _host_only(raw_host)
             if host not in config.allowed_hosts:
+                # Keyed on the RAW header: _host_only returns "" for a malformed
+                # value too (`:8131`, an unbracketed `::1`), and calling that
+                # "no Host header" misdirects whoever is debugging the client.
                 named = (
-                    f"Host header '{host}'" if host else "A request with no Host header"
+                    f"Host header '{raw_host}'"
+                    if raw_host.strip()
+                    else "A request with no Host header"
                 )
                 await self._reject(
                     scope,
