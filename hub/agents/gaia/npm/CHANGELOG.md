@@ -31,7 +31,15 @@ the terminal UI meant building it from source.
   hatch the model calls mid-turn to pull in a bundle the selector missed.
   `GAIA_DYNAMIC_TOOLS=0` turns the selection off, `GAIA_DYNAMIC_TOOLS_MAX`
   moves the cap and `GAIA_DYNAMIC_TOOLS_TAU` the match threshold.
-- **A materially smaller fixed prompt on every call.** The always-on
+- **One bundled skill ships enabled: `gaia-voice`.** It is a manifest `skills:`
+  entry, so it is always on and rendered in full on every LLM call — 676 tokens
+  of every prompt, and it declares no tools. It is the agent's honesty floor
+  (don't claim work you didn't do, don't present empty output as a result,
+  don't substitute a near-miss and report success), which is why it is not in an
+  opt-in bundle the way a task skill is. No *skill set* ships enabled: the
+  manifest's `skill_sets:` / `default_skill_set:` blocks stay commented out until
+  an eval measures what loading several bodies costs. See SKILL.md §10.
+- **A materially smaller fixed prompt on every call.** That always-on
   `gaia-voice` guidance was rewritten from 2,145 tokens to 692 with all of its
   behavioural rules intact. It had been a rationale document — every rule
   followed by the incident that motivated it — and the model needs the rule,
@@ -99,7 +107,10 @@ the terminal UI meant building it from source.
 - The sidecar has no arm64 Linux or arm64 Windows build. On those platforms the
   run stops with an error naming the platform and the supported set rather than
   launching a UI with no agent behind it.
-- `gaia_agent` 0.1.1 has no caller-auth token, so unlike
-  `@amd-gaia/agent-email` this package mints and sends none.
+- `gaia_agent` enforces a per-session caller-auth bearer on every `/v1/gaia/*`
+  request, plus a loopback `Host` allowlist and non-loopback `Origin` rejection.
+  This package mints no token, so a sidecar it spawns comes up in dev mode (token
+  check skipped, loudly warned, Host/Origin still enforced) — pass your own
+  through `spawnSidecar`'s `env` to turn it on. See SPEC §5.4.
 - Tracks sidecar contract `apiVersion` **2.12**; a differing major raises
   `VersionMismatchError`.
