@@ -10,6 +10,8 @@ auto-denied after a timeout and the user never got a way to say yes.
 
 import io
 import json
+import queue
+import sys
 import threading
 import time
 
@@ -21,6 +23,7 @@ pytest.importorskip("gaia_agent")
 
 from gaia_agent.stdio import (  # noqa: E402
     PermissionState,
+    _pump_stdin,
     apply_control,
     parse_control,
     run_turn,
@@ -322,3 +325,125 @@ class TestGrantsSurviveTheTurnBoundary:
         assert handler.confirm_timeout_seconds is not None
         PermissionState().attach(handler)
         assert handler.confirm_timeout_seconds is None
+
+
+class TestStdinClosingEndsAParkedTurn:
+    """A confirmation waits for a person, so nothing else bounds it.
+
+    That makes stdin closing the only other way the wait can end. The sentinel
+    the pump queues on EOF sits BEHIND the running turn, so on its own it never
+    reaches a turn parked on a prompt: the child outlived its parent, kept the
+    model slot, and only a kill ended it.
+    """
+
+    @staticmethod
+    def _park_a_turn(state, out, agent):
+        turn = threading.Thread(
+            target=run_turn,
+            args=(agent, "go", out),
+            kwargs={"state": state},
+            daemon=True,
+        )
+        turn.start()
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline:
+            if "needs_confirmation" in out.getvalue():
+                return turn
+            time.sleep(0.01)
+        raise AssertionError("the turn never reached the confirmation")
+
+    def test_eof_ends_a_turn_parked_on_a_confirmation(self, monkeypatch):
+        state = PermissionState()
+        out = io.StringIO()
+        turn = self._park_a_turn(state, out, GatedAgent())
+
+        monkeypatch.setattr(sys, "stdin", io.StringIO(""))  # the host went away
+        queries = queue.Queue()
+        _pump_stdin(queries, state)
+
+        turn.join(timeout=15.0)
+        assert not turn.is_alive(), "the turn never ended — the process is immortal"
+
+        events = [
+            json.loads(line) for line in out.getvalue().splitlines() if line.strip()
+        ]
+        terminals = [e for e in events if e.get("type") in ("final", "error")]
+        assert len(terminals) == 1, "the turn must still end with ONE terminal event"
+        assert "decision=False" in final_answer(events), "an abandoned prompt is a deny"
+        assert queries.get_nowait() is None, "the run-loop sentinel is still queued"
+
+    def test_eof_with_no_turn_running_is_ordinary(self, monkeypatch):
+        monkeypatch.setattr(sys, "stdin", io.StringIO(""))
+        queries = queue.Queue()
+
+        _pump_stdin(queries, PermissionState())  # must not raise
+
+        assert queries.get_nowait() is None
+
+    def test_cancelling_reports_whether_there_was_a_turn(self):
+        from gaia.ui.sse_handler import SSEOutputHandler
+
+        state = PermissionState()
+        assert state.cancel_active() is False
+
+        handler = SSEOutputHandler()
+        state.attach(handler)
+        assert state.cancel_active() is True
+        assert handler.cancelled.is_set()
+
+
+class TestTheHandoffIsAtomic:
+    """A decision must reach the handler that is live when it is applied.
+
+    The race has no black-box seam — it needs the turn thread to detach and the
+    next to attach between two statements — so the invariant is asserted
+    directly instead: the lock is still held when the handler is used. With it
+    dropped first, a decision carrying no ``confirm_id`` (the TUI omits it when
+    empty) is accepted by a handler nobody is waiting on while the live prompt
+    keeps waiting, and the "no turn is running" warning never fires either.
+    """
+
+    class _Handler:
+        auto_approve_gated_tools = False
+        confirm_timeout_seconds = 60.0
+
+        def __init__(self):
+            self.cancelled = threading.Event()
+            self.calls = []
+
+        def session_grants(self):
+            return set()
+
+        def resolve_tool_confirmation(self, **kwargs):
+            self.calls.append(kwargs)
+            return True
+
+    def test_the_lock_is_held_while_the_handler_is_used(self):
+        state = PermissionState()
+        handler = self._Handler()
+        state.attach(handler)
+        held = []
+        original = handler.resolve_tool_confirmation
+
+        def _record(**kwargs):
+            held.append(state._lock.locked())
+            return original(**kwargs)
+
+        handler.resolve_tool_confirmation = _record
+
+        state.resolve("allow", None)
+
+        assert held == [True], "the handler was used after the lock was dropped"
+        assert handler.calls == [
+            {"approved": True, "always": False, "confirm_id": None}
+        ]
+
+    def test_a_detached_handler_never_sees_the_decision(self):
+        state = PermissionState()
+        handler = self._Handler()
+        state.attach(handler)
+        state.detach(handler)
+
+        state.resolve("allow", None)
+
+        assert handler.calls == []

@@ -1,3 +1,5 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
 """Builds the read-only snapshot the TUI's ``/memory`` view renders.
 
 The agent process already holds an open ``MemoryStore`` (via ``MemoryMixin``),
