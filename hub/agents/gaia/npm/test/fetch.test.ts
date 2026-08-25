@@ -18,8 +18,19 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { IntegrityError, PlatformError } from "../src/errors.js";
-import { fetchAll, fetchBinary, verifySha256 } from "../src/fetch.js";
-import { SIDECAR_BASE, TUI_BASE, makeLock, writeLockFile } from "./helpers.js";
+import {
+  INSTALLED_SENTINEL_NAME,
+  fetchAll,
+  fetchBinary,
+  verifySha256,
+} from "../src/fetch.js";
+import {
+  SIDECAR_BASE,
+  SIDECAR_VERSION,
+  TUI_BASE,
+  makeLock,
+  writeLockFile,
+} from "./helpers.js";
 
 const SIDECAR_BYTES = Buffer.from("#!/fake-frozen-gaia-agent\n");
 const TUI_BYTES = Buffer.from("#!/fake-gaia-tui\n");
@@ -345,5 +356,116 @@ describe("fetchAll", () => {
       }),
     ).rejects.toBeInstanceOf(IntegrityError);
     expect(fs.existsSync(path.join(tuiDir, "gaia-tui"))).toBe(false);
+  });
+});
+
+describe("the .installed sentinel", () => {
+  /** Read the sentinel the daemon and the TUI both key "installed" on. */
+  function readSentinel(outDir: string): Record<string, unknown> {
+    const raw = fs.readFileSync(path.join(outDir, INSTALLED_SENTINEL_NAME), "utf8");
+    return JSON.parse(raw) as Record<string, unknown>;
+  }
+
+  async function installSidecar(outDir: string): Promise<string> {
+    const lockPath = await realShaLock();
+    const res = await fetchBinary({
+      component: "sidecar",
+      outDir,
+      platformKey: "linux-x64",
+      lockPath,
+      fetchImpl: recordingFetch(BODIES),
+    });
+    return res.sha256;
+  }
+
+  it("is written on a fresh install, in the shape the daemon requires", async () => {
+    // Staging a verified binary is only half an install: without this file the
+    // daemon sees nothing installed and the TUI runs the REST sidecar over
+    // stdio, filling the chat with uvicorn's startup log.
+    const outDir = path.join(tmp, "agents", "gaia");
+    await installSidecar(outDir);
+    const s = readSentinel(outDir);
+    // gaia/daemon/sidecars/fetch.py::_hub_installed_binary rejects the install
+    // unless all three of these hold.
+    expect(s["artifact_kind"]).toBe("binary");
+    expect(s["executable"]).toBe("gaia-agent");
+    expect(s["artifact_sha256"]).toBe(SIDECAR_SHA);
+    expect(s["id"]).toBe("gaia");
+    expect(s["language"]).toBe("python");
+    expect(s["version"]).toBe(SIDECAR_VERSION);
+    expect(s["path"]).toBe(outDir);
+    expect(Number.isNaN(Date.parse(String(s["installed_at"])))).toBe(false);
+  });
+
+  it("records the sha the daemon will re-hash the binary against", async () => {
+    // A wrong hash here is an IntegrityError at daemon start, not a no-op.
+    const outDir = path.join(tmp, "agents", "gaia");
+    await installSidecar(outDir);
+    const onDisk = crypto
+      .createHash("sha256")
+      .update(fs.readFileSync(path.join(outDir, "gaia-agent")))
+      .digest("hex");
+    expect(readSentinel(outDir)["artifact_sha256"]).toBe(onDisk);
+  });
+
+  it("keeps `executable` a bare filename", () => {
+    // installer.read_sentinel discards a sentinel whose executable contains a
+    // separator, which silently un-installs the agent.
+    const outDir = path.join(tmp, "agents", "gaia");
+    return installSidecar(outDir).then(() => {
+      const exe = String(readSentinel(outDir)["executable"]);
+      expect(exe).not.toContain("/");
+      expect(exe).not.toContain("\\");
+      expect(path.basename(exe)).toBe(exe);
+    });
+  });
+
+  it("is written on a CACHE HIT too, repairing an older sentinel-less install", async () => {
+    // Users who already ran an earlier npx have a verified binary and no
+    // sentinel; if we only wrote on download they would stay broken forever.
+    const outDir = path.join(tmp, "agents", "gaia");
+    await installSidecar(outDir);
+    fs.rmSync(path.join(outDir, INSTALLED_SENTINEL_NAME));
+
+    const lockPath = await realShaLock();
+    urls.length = 0;
+    const res = await fetchBinary({
+      component: "sidecar",
+      outDir,
+      platformKey: "linux-x64",
+      lockPath,
+      fetchImpl: recordingFetch(BODIES),
+    });
+    expect(res.cached).toBe(true);
+    expect(urls).toEqual([]); // proves it really was the cache path
+    expect(readSentinel(outDir)["artifact_sha256"]).toBe(SIDECAR_SHA);
+  });
+
+  it("is NOT written for the tui, which is not a hub agent", async () => {
+    const outDir = path.join(tmp, "cache");
+    const lockPath = await realShaLock();
+    await fetchBinary({
+      component: "tui",
+      outDir,
+      platformKey: "linux-x64",
+      lockPath,
+      fetchImpl: recordingFetch(BODIES),
+    });
+    expect(fs.existsSync(path.join(outDir, INSTALLED_SENTINEL_NAME))).toBe(false);
+  });
+
+  it("fetchAll leaves one for the sidecar and none for the tui", async () => {
+    const lockPath = await realShaLock();
+    const sidecarDir = path.join(tmp, "agents", "gaia");
+    const tuiDir = path.join(tmp, "cache");
+    await fetchAll({
+      lockPath,
+      platformKey: "linux-x64",
+      sidecarDir,
+      tuiDir,
+      fetchImpl: recordingFetch(BODIES),
+    });
+    expect(fs.existsSync(path.join(sidecarDir, INSTALLED_SENTINEL_NAME))).toBe(true);
+    expect(fs.existsSync(path.join(tuiDir, INSTALLED_SENTINEL_NAME))).toBe(false);
   });
 });

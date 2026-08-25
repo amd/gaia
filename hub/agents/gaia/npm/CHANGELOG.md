@@ -76,6 +76,67 @@ the terminal UI meant building it from source.
 - **Programmatic exports** — `fetchAll`, `startSidecar`, `shutdown`, `runTui`, the
   platform helpers, and the typed error classes, for embedding GAIA in another
   app.
+- **The `.installed` record is written after a verified sidecar install.**
+  Staging the binary was only half an install: the daemon and the terminal UI
+  both key "this agent is installed" on `~/.gaia/agents/gaia/.installed`, and
+  without it the UI ran the REST sidecar as its own stdio child and the chat
+  filled with uvicorn's startup log. It is written on a cache hit as well as a
+  fresh download, so an install left by an earlier version repairs itself.
+  See SPEC §4.1.
+- **`--allow-insecure-base-url`** — opt-in for a non-`https` `--base-url`, for a
+  trusted local mirror.
+
+### Fixed
+
+- **A second `gaia serve` no longer reports success against a server it does not
+  own.** With the port already taken, its own sidecar died but the incumbent
+  answered `/health`, so the start "succeeded" and the later shutdown logged
+  "already exited" while the real server kept running. It now fails naming the
+  port and the likely cause.
+- **Importing the package no longer changes a host app's error handling.** The
+  crash and signal handlers reaped every sidecar *before* checking whether the
+  host had its own handler, so an exception the host handled killed the sidecar
+  and the host's next request got an unexplained `ECONNREFUSED`.
+- **`gaia run` no longer breaks the terminal UI's `PATH`.** Hiding our own `gaia`
+  shim removed the whole bin directory, which on a Homebrew or pipx layout also
+  took `python3`, `lemonade-server`, and the real `gaia` with it — so the UI
+  reported a missing CLI that we had hidden. A shared directory now moves to the
+  end of `PATH` instead of being dropped.
+- **Flags a command does not read are refused, not ignored.** `run --port 9000`
+  parsed fine and came up on the default port; likewise `serve --component` and
+  `serve --cache-dir`.
+- **A failed install says what to do.** A download that could not be moved into
+  place — usually a running sidecar holding the file on Windows — printed a raw
+  stack trace.
+- **`taskkill` failures name their reason.** Its exit code and stderr were
+  discarded, so "Access is denied" surfaced ten seconds later as a generic
+  timeout.
+- **A sidecar that survives shutdown is still reaped at exit.** `shutdown`
+  de-registered it before killing it, so one that survived both kill windows
+  became a permanent orphan holding the port.
+- **`serve` removes its signal handlers once it stops**, so Ctrl+C keeps working
+  afterwards, and a repeat Ctrl+C during a slow teardown now says what it is
+  waiting for instead of looking frozen.
+- **A non-JSON reply from a sidecar probe raises a typed error** rather than a
+  bare `SyntaxError` — the case where a proxy answers `200` with an HTML page.
+- **`--port` no longer accepts what `Number()` would coerce**, so `--port 0x2710`
+  is rejected instead of quietly binding 10000.
+
+### Security
+
+- **`resolveSidecarPath` / `resolveTuiPath` verify the binary before returning a
+  path that gets spawned.** Both fed `spawn()` from a predictable cache path with
+  no integrity check, so anything able to write `~/.gaia/agents/gaia/` got code
+  run — despite the package documenting the SHA verify as its security boundary.
+  They now re-hash against `binaries.lock.json`; pass `{ verify: false }` for a
+  binary you built yourself. Note this makes them proportional to the binary's
+  size — resolve once at startup, not per request.
+- **`--base-url` requires `https`** unless `--allow-insecure-base-url` is passed.
+  The pinned SHA already made a plaintext mirror non-exploitable, but tampering
+  surfaced as a confusing `IntegrityError` instead of the transport failure it is.
+- **Downloads stream to disk instead of being buffered whole**, so a ~200MB
+  artifact no longer peaks at roughly double that in memory. The hash is computed
+  incrementally and still verified *before* the file is moved into place.
 
 ### Notes
 

@@ -33,6 +33,7 @@ import {
   type BinaryLockEntry,
   type ComponentName,
   componentBaseUrl,
+  componentLock,
   currentPlatformKey,
   defaultLockPath,
   isPlaceholderSha,
@@ -50,14 +51,70 @@ export function defaultCacheDir(agentVersion: string): string {
   return path.join(os.homedir(), ".gaia", "npm-cache", `gaia-${agentVersion}`);
 }
 
+/** The hub agent id this package installs the sidecar as. */
+export const SIDECAR_AGENT_ID = "gaia";
+
+/** Basename of the hub install record (`gaia.hub.installer.SENTINEL_NAME`). */
+export const INSTALLED_SENTINEL_NAME = ".installed";
+
 /**
  * The daemon's own sidecar cache — `~/.gaia/agents/gaia/`, mirroring
  * `gaia.daemon.sidecars.fetch.default_cache_dir("gaia")`. Staging the verified
  * sidecar here means the daemon's own fetch is a SHA-256 cache hit instead of a
  * second download. This path is a cross-repo contract with the daemon.
  */
-export function daemonSidecarCacheDir(agentId = "gaia"): string {
+export function daemonSidecarCacheDir(agentId = SIDECAR_AGENT_ID): string {
   return path.join(os.homedir(), ".gaia", "agents", agentId);
+}
+
+/**
+ * Record a completed install the way `gaia.hub.installer` does.
+ *
+ * Staging a verified binary is only half the job the CLI claims to do. Without
+ * this file the daemon's `_hub_installed_binary` sees no install, and the TUI
+ * treats `gaia-agent` as its own stdio child — spawning our REST sidecar over
+ * stdio and filling the chat with uvicorn's startup log. With it, the TUI uses
+ * daemon transport and the daemon supervises the process and mints its token.
+ *
+ * Field names and `artifact_kind`/`executable`/`artifact_sha256` are a
+ * cross-repo contract with `InstalledAgent.to_dict()`; the daemon re-hashes the
+ * binary and raises if it does not match `artifact_sha256`, so this must carry
+ * the hash we actually verified.
+ */
+async function writeInstalledSentinel(opts: {
+  outDir: string;
+  version: string;
+  sha256: string;
+  executable: string;
+}): Promise<void> {
+  const sentinel = path.join(opts.outDir, INSTALLED_SENTINEL_NAME);
+  const record = {
+    id: SIDECAR_AGENT_ID,
+    version: opts.version,
+    language: "python",
+    installed_at: new Date().toISOString(),
+    artifact_sha256: opts.sha256,
+    path: opts.outDir,
+    artifact_kind: "binary",
+    executable: opts.executable,
+  };
+  // Temp-then-rename: a truncated sentinel reads as a corrupt install, which
+  // looks identical to "never installed".
+  const tmp = `${sentinel}.tmp.${process.pid}`;
+  try {
+    await fsp.writeFile(tmp, `${JSON.stringify(record, null, 2)}\n`, "utf8");
+    await fsp.rename(tmp, sentinel);
+  } catch (e) {
+    await fsp.rm(tmp, { force: true }).catch(() => undefined);
+    throw new Error(
+      `verified the sidecar at ${opts.outDir} but could not write its ` +
+        `${INSTALLED_SENTINEL_NAME} record: ${(e as Error).message}. Without it the ` +
+        "daemon does not see a completed install and the TUI falls back to running " +
+        `the sidecar over stdio. Check write permissions on ${opts.outDir}.`,
+      { cause: e },
+    );
+  }
+  log.debug(`wrote ${sentinel} (v${opts.version})`);
 }
 
 export interface FetchOptions {
@@ -242,6 +299,16 @@ export async function fetchBinary(opts: FetchOptions): Promise<FetchResult> {
       // Re-apply the exec bit: an interrupted earlier run or a restrictive umask
       // can leave correct bytes that still cannot be spawned.
       if (process.platform !== "win32") await fsp.chmod(binaryPath, 0o755);
+      // Also on a cache hit: an earlier release staged a verified binary with no
+      // sentinel, and those installs would otherwise never repair themselves.
+      if (opts.component === "sidecar") {
+        await writeInstalledSentinel({
+          outDir,
+          version: componentLock(lock, "sidecar").componentVersion,
+          sha256: existing,
+          executable: entry.executable,
+        });
+      }
       return {
         component: opts.component,
         binaryPath,
@@ -318,6 +385,15 @@ export async function fetchBinary(opts: FetchOptions): Promise<FetchResult> {
         "pass a --sidecar-dir / --cache-dir you own.",
       { cause: e },
     );
+  }
+
+  if (opts.component === "sidecar") {
+    await writeInstalledSentinel({
+      outDir,
+      version: componentLock(lock, "sidecar").componentVersion,
+      sha256: sha,
+      executable: entry.executable,
+    });
   }
 
   log.info(`installed verified ${opts.component} -> ${binaryPath}`);

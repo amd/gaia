@@ -190,6 +190,41 @@ supervises the sidecar and does its own SHA-256 check on the binary it finds
 there; installing an already-verified binary at that path turns the daemon's fetch
 into a cache hit instead of a second multi-hundred-megabyte download.
 
+### 4.1 The `.installed` sentinel
+
+Installing the sidecar also writes `~/.gaia/agents/gaia/.installed`, the record
+the daemon and the TUI both read to answer "is this agent installed?". It is
+written for the `sidecar` component only — the TUI is not a hub agent — and on a
+**cache hit as well as a fresh download**, so an install staged by an earlier
+release repairs itself on the next run.
+
+```json
+{
+  "id": "gaia",
+  "version": "<sidecar componentVersion>",
+  "language": "python",
+  "installed_at": "<ISO-8601 UTC>",
+  "artifact_sha256": "<the verified SHA-256>",
+  "path": "<install directory>",
+  "artifact_kind": "binary",
+  "executable": "gaia-agent[.exe]"
+}
+```
+
+The shape is a cross-repo contract with `InstalledAgent.to_dict()` in
+`gaia.hub.installer`. Three fields are load-bearing:
+`gaia.daemon.sidecars.fetch._hub_installed_binary` ignores the install unless
+`artifact_kind` is `binary` and `executable` and `artifact_sha256` are non-empty,
+and it **re-hashes the binary and raises `IntegrityError` if the file no longer
+matches `artifact_sha256`** — so the recorded hash is the one actually verified,
+never the lock's nominal value. `executable` must be a bare filename;
+`installer.read_sentinel` discards a sentinel whose executable contains a path
+separator, which reads as "never installed".
+
+Without the sentinel the daemon sees no install and the TUI falls back to running
+`gaia-agent` as its own stdio child — spawning the REST sidecar over stdio and
+filling the chat with uvicorn's startup log.
+
 The TUI directory is keyed by `agentVersion` — this package's version, not the
 component's — so a bump of either never reuses the previous release's executable.
 
@@ -293,7 +328,8 @@ from `~/.gaia/agents/gaia/`. A sidecar spawned here would be a second process th
 TUI never talks to, competing for port `8141`.
 
 So `run`'s contribution to the sidecar is putting a **verified** binary where the
-daemon looks. Daemon and sidecar lifecycle belong to the daemon.
+daemon looks, and recording the install in `.installed` (§4.1) so the daemon and
+the TUI both see it. Daemon and sidecar lifecycle belong to the daemon.
 
 ### 6.2 `gaia serve` — the direct path
 
@@ -325,8 +361,8 @@ failed start never leaks a process.
 | Code    | Meaning                                                                 |
 | ------- | ----------------------------------------------------------------------- |
 | `0`     | Success                                                                 |
-| `1`     | A typed failure: `IntegrityError`, `PlatformError`, `HealthTimeoutError`, `VersionMismatchError`, `BinaryNotFoundError`, or an unexpected error |
-| `2`     | Usage error: unknown command, unknown `--component`, invalid `--port`    |
+| `1`     | A typed failure: `IntegrityError`, `PlatformError`, `HealthTimeoutError`, `VersionMismatchError`, `BinaryNotFoundError`, `SidecarExitedError`, `MalformedResponseError`, or an unexpected error |
+| `2`     | Usage error: unknown command, invalid `--port`, or a flag the command does not read (`run --port`, `serve --component`, `serve --cache-dir`, `run`/`serve` `--platform`), an unknown `--component`, or a non-https `--base-url` without `--allow-insecure-base-url` |
 | *other* | From `run`: the TUI's own exit code, propagated verbatim                 |
 
 A TUI killed by a signal propagates as `128 + signum` (the shell convention), so a
@@ -340,12 +376,14 @@ All extend `GaiaError`, so `instanceof GaiaError` catches any of ours.
 
 | Class                  | Raised when                                                    |
 | ---------------------- | -------------------------------------------------------------- |
-| `IntegrityError`       | A download's SHA-256 does not match the lock                   |
+| `IntegrityError`       | A download's SHA-256 does not match the lock, or a resolved binary's does not |
 | `PlatformError`        | Unsupported platform, missing/incomplete entry, placeholder hash, malformed lock |
 | `HealthTimeoutError`   | The sidecar did not report healthy within the timeout          |
 | `VersionMismatchError` | `apiVersion` major differs from this package's                 |
 | `BinaryNotFoundError`  | A binary is absent from disk when spawning                     |
+| `SidecarExitedError`   | The spawned sidecar died while the port answered — something else owns it |
 | `HttpError`            | A non-2xx from a sidecar probe                                 |
+| `MalformedResponseError` | A 2xx from a sidecar probe whose body is not JSON            |
 
 Per the repo's no-silent-fallbacks rule, every message names what failed, what to
 do, and where to look next.
@@ -370,7 +408,8 @@ do, and where to look next.
 Exported from the package root — see `src/index.ts`.
 
 **Fetch:** `fetchAll`, `fetchBinary`, `verifySha256`, `fileSha256`,
-`binaryExists`, `defaultCacheDir`, `daemonSidecarCacheDir`.
+`binaryExists`, `defaultCacheDir`, `daemonSidecarCacheDir`,
+`INSTALLED_SENTINEL_NAME`, `SIDECAR_AGENT_ID`.
 
 **Lifecycle:** `spawnSidecar`, `startSidecar`, `waitForHealth`, `checkVersion`,
 `health`, `version`, `shutdown`, `runTui`, `resolveSidecarPath`, `resolveTuiPath`,
@@ -383,6 +422,13 @@ Exported from the package root — see `src/index.ts`.
 
 **Constants:** `AGENT_ID`, `API_VERSION`, `DEFAULT_HOST`, `DEFAULT_PORT`,
 `RESERVED_PORT`.
+
+`resolveSidecarPath` / `resolveTuiPath` re-verify the file's SHA-256 against
+`binaries.lock.json` before returning a path that is about to be spawned — the
+cache path is predictable, so anything able to write it would otherwise get code
+run. That makes them **O(size of the binary)**, not a cheap path join: resolve
+once at startup, not per request. Pass `{ verify: false }` for a binary you built
+yourself, which no lock describes, and `{ lock }` to reuse an already-loaded lock.
 
 ---
 
