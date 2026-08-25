@@ -762,7 +762,7 @@ def test_model_switch_lemonade_unreachable_is_actionable_and_leaves_model_runnin
     assert agent.rebuild_count == 0
 
 
-def test_model_switch_survives_alongside_history_and_skills(monkeypatch):
+def test_model_switch_survives_alongside_history_and_skills(monkeypatch, stub_lemonade):
     """The whole point: switching models must not disturb what makes the
     flagship agent stateful (see test_the_agent_survives_between_turns)."""
     from gaia_agent import stdio as stdio_mod
@@ -809,6 +809,36 @@ def test_a_bad_base_url_is_reported_as_such_not_as_a_dead_server(monkeypatch, ca
     # must not silently lose the field.
     assert state["lemonade_base_url"] == "http:/not-a-url"
     assert "invalid base_url" in caplog.text
+
+
+def test_a_health_failure_with_no_url_names_the_one_that_was_tried(monkeypatch):
+    """Reporting ``None`` tells the user nothing about what was attempted."""
+
+    class _Unbuildable:
+        def __init__(self, base_url=None, verbose=True):
+            raise ValueError("boom")
+
+    monkeypatch.setattr(stdio, "LemonadeClient", _Unbuildable)
+    monkeypatch.setenv("LEMONADE_BASE_URL", "http://10.0.0.7:9000/api/v1")
+
+    state = stdio._lemonade_health(None)
+
+    assert state["lemonade_base_url"] == "http://10.0.0.7:9000/api/v1"
+
+
+def test_a_health_failure_with_no_url_and_no_env_names_the_default(monkeypatch):
+    from gaia.llm.lemonade_client import DEFAULT_LEMONADE_URL
+
+    class _Unbuildable:
+        def __init__(self, base_url=None, verbose=True):
+            raise ValueError("boom")
+
+    monkeypatch.setattr(stdio, "LemonadeClient", _Unbuildable)
+    monkeypatch.delenv("LEMONADE_BASE_URL", raising=False)
+
+    state = stdio._lemonade_health(None)
+
+    assert state["lemonade_base_url"] == DEFAULT_LEMONADE_URL
 
 
 def test_the_rollback_restores_an_absent_model_id(monkeypatch, stub_lemonade):
@@ -1063,6 +1093,24 @@ def test_a_control_line_that_explodes_does_not_take_the_pump_down(monkeypatch):
     assert drained == ["still here?", None]
 
 
+def test_the_sentinel_survives_a_cancel_that_raises(monkeypatch):
+    """The cancel runs ahead of the sentinel, so a cancel that raises used to
+    skip it — recreating the immortal process the cancel exists to prevent."""
+
+    class _ExplodingState(stdio.PermissionState):
+        def cancel_active(self):
+            raise RuntimeError("a handler with no cancelled flag")
+
+    monkeypatch.setattr(sys, "stdin", io.StringIO("hello\n"))
+    queries = queue.Queue()
+
+    with pytest.raises(RuntimeError):
+        stdio._pump_stdin(queries, _ExplodingState())
+
+    assert queries.get_nowait() == "hello"
+    assert queries.get_nowait() is None, "the only exit signal was skipped"
+
+
 def test_the_pump_queues_the_sentinel_even_when_stdin_itself_raises(monkeypatch):
     """A decode error out of the iteration used to skip the sentinel entirely."""
 
@@ -1124,6 +1172,20 @@ def test_the_parser_defaults_to_local_and_prompting():
 # ---------------------------------------------------------------------------
 
 
+class _ExitCalled(Exception):
+    """os._exit never returns; a stub that does lets main run past its exit."""
+
+    def __init__(self, code):
+        super().__init__(code)
+        self.code = code
+
+
+def _no_return_exit(monkeypatch):
+    monkeypatch.setattr(
+        os, "_exit", lambda code: (_ for _ in ()).throw(_ExitCalled(code))
+    )
+
+
 class _DeadAfter:
     """A pipe that dies partway through, the way a parent exiting does."""
 
@@ -1166,13 +1228,69 @@ def test_main_exits_cleanly_when_the_parent_closes_the_pipe(monkeypatch):
     monkeypatch.setattr(sys, "stdin", io.StringIO("hello\n"))
     # The model banner goes out, then the parent exits mid-turn.
     monkeypatch.setattr(sys, "stdout", _DeadAfter(2))
+    _no_return_exit(monkeypatch)
 
-    exits = []
-    monkeypatch.setattr(os, "_exit", lambda code: exits.append(code))
+    with pytest.raises(_ExitCalled) as exit_call:
+        stdio.main([])
 
-    stdio.main([])
+    assert exit_call.value.code == 0, "main must reach its clean exit"
 
-    assert exits == [0], "main must reach its clean exit, not die by traceback"
+
+def test_main_exits_cleanly_when_the_parent_leaves_during_model_load(monkeypatch):
+    """Model load is the LONGEST window the parent has to leave in.
+
+    Quitting the TUI while the model loads killed the pipe before the banner —
+    which is written before the run loop, so neither the loop's guard nor the
+    exit flush ever ran and the exception escaped ``main``.
+    """
+    import gaia_agent.agent as agent_mod
+
+    class _Agent:
+        def __init__(self, config=None):
+            self.console = None
+
+    monkeypatch.setattr(agent_mod, "GaiaAgent", _Agent)
+    monkeypatch.setattr(agent_mod, "GaiaAgentConfig", lambda **kwargs: None)
+    monkeypatch.setattr(stdio, "_configure_logging", lambda out, dev=False: None)
+    monkeypatch.setattr(stdio, "_model_state_event", lambda agent: {"type": "status"})
+    monkeypatch.setattr(sys, "stdin", io.StringIO("hello\n"))
+    monkeypatch.setattr(sys, "stdout", _DeadAfter(0))  # dead before the banner
+    _no_return_exit(monkeypatch)
+
+    with pytest.raises(_ExitCalled) as exit_call:
+        stdio.main([])
+
+    assert exit_call.value.code == 0, "the banner write escaped main"
+
+
+def test_a_failed_startup_reports_nothing_to_a_dead_parent(monkeypatch):
+    """The other pre-loop write: the agent failed to build AND the wire is gone.
+
+    It must still return its exit code rather than raise the write failure over
+    the construction failure that is the real news.
+    """
+    import gaia_agent.agent as agent_mod
+
+    def _boom(**kwargs):
+        raise RuntimeError("model file is corrupt")
+
+    monkeypatch.setattr(agent_mod, "GaiaAgent", _boom)
+    monkeypatch.setattr(agent_mod, "GaiaAgentConfig", lambda **kwargs: None)
+    monkeypatch.setattr(stdio, "_configure_logging", lambda out, dev=False: None)
+    monkeypatch.setattr(sys, "stdout", _DeadAfter(0))
+
+    assert stdio.main([]) == 1
+
+
+def test_the_exit_path_survives_a_dead_stderr(monkeypatch):
+    """The TUI pipes stderr too, so it dies with stdout."""
+    _no_return_exit(monkeypatch)
+    monkeypatch.setattr(sys, "stderr", _DeadAfter(0))
+
+    with pytest.raises(_ExitCalled) as exit_call:
+        stdio._exit_cleanly(_DeadAfter(0))
+
+    assert exit_call.value.code == 0
 
 
 def test_main_reports_a_crashed_turn_and_keeps_going(monkeypatch):
@@ -1197,9 +1315,10 @@ def test_main_reports_a_crashed_turn_and_keeps_going(monkeypatch):
     monkeypatch.setattr(sys, "stdin", io.StringIO("hello\n"))
     wire = io.StringIO()
     monkeypatch.setattr(sys, "stdout", wire)
-    monkeypatch.setattr(os, "_exit", lambda code: None)
+    _no_return_exit(monkeypatch)
 
-    stdio.main([])
+    with pytest.raises(_ExitCalled):
+        stdio.main([])
 
     events = [json.loads(line) for line in _lines(wire)]
     assert events[-1]["type"] == "error"

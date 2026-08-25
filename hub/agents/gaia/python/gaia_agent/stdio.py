@@ -73,7 +73,11 @@ from typing import Any, Dict, List, Optional
 from gaia_agent.memory_dump import MEMORY_DUMP_QUERY, build_memory_dump
 
 from gaia.llm import create_client
-from gaia.llm.lemonade_client import LemonadeClient, LemonadeClientError
+from gaia.llm.lemonade_client import (
+    DEFAULT_LEMONADE_URL,
+    LemonadeClient,
+    LemonadeClientError,
+)
 from gaia.logger import get_logger
 from gaia.ui.sse_translation import TERMINAL_TYPES, CanonicalTranslator
 
@@ -351,11 +355,11 @@ def _lemonade_health(base_url: Optional[str]) -> Dict[str, Any]:
         client = LemonadeClient(base_url=base_url, verbose=False)
     except Exception as exc:  # pylint: disable=broad-exception-caught
         # A malformed base_url reads to the user as "Lemonade isn't running",
-        # so name it rather than reporting a bare unreachable.
-        logger.warning(
-            "[lemonade] client construction failed for %r: %s", base_url, exc
-        )
-        return {"lemonade_base_url": base_url, "lemonade_reachable": False}
+        # so name it rather than reporting a bare unreachable. The client
+        # resolves an omitted URL the same way, so report that, not None.
+        tried = base_url or os.environ.get("LEMONADE_BASE_URL", DEFAULT_LEMONADE_URL)
+        logger.warning("[lemonade] client construction failed for %r: %s", tried, exc)
+        return {"lemonade_base_url": tried, "lemonade_reachable": False}
     state: Dict[str, Any] = {"lemonade_base_url": client.base_url}
     try:
         health = client.health_check() or {}
@@ -671,9 +675,46 @@ def _pump_stdin(queries: "queue.Queue", state: PermissionState) -> None:
                 logger.exception("control message failed: %s", line)
     finally:
         # Cancel BEFORE the sentinel: the sentinel is queued behind the running
-        # turn, so a turn parked on a confirmation would never reach it.
-        state.cancel_active()
-        queries.put(None)  # stdin closed
+        # turn, so a turn parked on a confirmation would never reach it. The
+        # sentinel is the process's only exit signal, so nothing may skip it —
+        # a cancel that raised would recreate the immortal process it prevents.
+        try:
+            state.cancel_active()
+        finally:
+            queries.put(None)  # stdin closed
+
+
+def _write_if_wire_alive(event: Dict[str, Any], out) -> bool:
+    """Write one event, reporting whether the wire is still there.
+
+    Only for the writes where a dead pipe means the parent left rather than the
+    turn failed — startup and the run loop's own error handler. Everywhere else
+    a write failure must propagate.
+    """
+    try:
+        _write(event, out)
+        return True
+    except OSError as exc:
+        logger.warning("stdout is gone (%s) — nothing left to report to", exc)
+        return False
+
+
+def _exit_cleanly(out) -> None:
+    """Leave without waiting on the agent's non-daemon threads.
+
+    The agent leaves memory extraction and the filesystem watcher behind, so a
+    plain return hangs the interpreter at shutdown — a one-shot `run --query`
+    sat for 400s until its caller killed it. Nothing here owns unflushed state:
+    events are flushed per line and the DBs commit per write. Both flushes are
+    guarded because the usual way of arriving here is the parent — which owns
+    both pipes — having already gone.
+    """
+    for name, stream in (("stdout", out), ("stderr", sys.stderr)):
+        try:
+            stream.flush()
+        except OSError as exc:
+            logger.warning("%s was already gone at exit: %s", name, exc)
+    os._exit(0)
 
 
 def _write(event: Dict[str, Any], out) -> None:
@@ -808,6 +849,9 @@ def _configure_logging(real_stdout, *, dev: bool) -> "Path":
     # Configured last, so the NOTSET sweep above cannot clear it. Its own
     # handler at AUDIT_LEVEL is what keeps a bypass toggle on the record in
     # user mode, where the shared handler drops everything below ERROR.
+    # Not merged into the shared handler at an INFO floor: gaia loggers built
+    # after this call default to INFO, so that would put the whole tree back
+    # into the user-mode log.
     audit_handler = logging.FileHandler(path, encoding="utf-8")
     audit_handler.setLevel(AUDIT_LEVEL)
     audit_handler.setFormatter(
@@ -1107,7 +1151,7 @@ def main(argv: Optional[list] = None) -> int:
         agent = GaiaAgent(config=GaiaAgentConfig(**config_kwargs))
     except Exception as exc:
         print(traceback.format_exc(), file=sys.stderr)
-        _write(_terminal_error(exc), out)
+        _write_if_wire_alive(_terminal_error(exc), out)
         return 1
 
     # The model chip needs the AGENT's resolved model, not the launch flags —
@@ -1115,7 +1159,10 @@ def main(argv: Optional[list] = None) -> int:
     # the wire, read as part of whichever turn the child's first Send()
     # triggers (the transport doesn't scan stdout until then), so it always
     # lands before that turn's own events.
-    _write(_model_state_event(agent), out)
+    if not _write_if_wire_alive(_model_state_event(agent), out):
+        # Model load is the longest window the parent has to leave in, and it
+        # is gone — there is nobody left to serve.
+        _exit_cleanly(out)
 
     # stdin is read by its own thread so it keeps being read DURING a turn —
     # which is the only time a confirmation decision can arrive. The turn loop
@@ -1137,23 +1184,11 @@ def main(argv: Optional[list] = None) -> int:
             break
         except Exception as exc:  # never let one bad turn kill the process
             logger.exception("stdio turn crashed outside the run loop")
-            try:
-                _write(_terminal_error(exc), out)
-            except OSError:
-                logger.warning("stdout closed while reporting — ending the run loop")
+            if not _write_if_wire_alive(_terminal_error(exc), out):
                 break
 
-    # stdin closed: the parent is done with us. The agent leaves non-daemon
-    # threads behind (memory extraction, the filesystem watcher), so a plain
-    # return would hang the interpreter at shutdown waiting on them — a one-shot
-    # `run --query` sat for 400s until its caller killed it. Nothing here owns
-    # unflushed state: events are flushed per line and the DBs commit per write.
-    try:
-        out.flush()
-    except OSError as exc:
-        logger.warning("stdout was already gone at exit: %s", exc)
-    sys.stderr.flush()
-    os._exit(0)
+    # stdin closed: the parent is done with us.
+    _exit_cleanly(out)
 
 
 if __name__ == "__main__":
