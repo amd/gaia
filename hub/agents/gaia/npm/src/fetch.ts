@@ -68,6 +68,17 @@ export function daemonSidecarCacheDir(agentId = SIDECAR_AGENT_ID): string {
 }
 
 /**
+ * Whether this fetch produced a runnable local install worth recording.
+ *
+ * `--platform` fetches a binary for a DIFFERENT host — a cross-compile staging
+ * step, not an install. Recording one would hand the daemon a wrong-arch
+ * executable that re-hashes correctly and then fails to exec.
+ */
+function installsForThisHost(component: ComponentName, platformKey: string): boolean {
+  return component === "sidecar" && platformKey === currentPlatformKey();
+}
+
+/**
  * Record a completed install the way `gaia.hub.installer` does.
  *
  * Staging a verified binary is only half the job the CLI claims to do. Without
@@ -160,6 +171,9 @@ function sha256Hex(buf: Buffer): string {
   return crypto.createHash("sha256").update(buf).digest("hex");
 }
 
+/** Read size for incremental hashing — bounded regardless of artifact size. */
+const HASH_CHUNK_BYTES = 1 << 20;
+
 /**
  * SHA-256 of a file on disk, or null when it is simply absent. Any other error
  * (a permission problem, a directory in the way) is re-raised: reading it as
@@ -167,16 +181,35 @@ function sha256Hex(buf: Buffer): string {
  * less useful message.
  */
 export async function fileSha256(filePath: string): Promise<string | null> {
-  try {
-    return sha256Hex(await fsp.readFile(filePath));
-  } catch (e) {
-    const code = (e as NodeJS.ErrnoException).code;
-    if (code === "ENOENT") return null;
-    throw new Error(
+  const unreadable = (e: unknown): Error =>
+    new Error(
       `cannot read the cached binary at ${filePath} to check its hash: ${(e as Error).message}. ` +
         "Fix the permissions on that path, or pass a different --cache-dir / --sidecar-dir.",
       { cause: e },
     );
+
+  let fh: fsp.FileHandle;
+  try {
+    fh = await fsp.open(filePath, "r");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw unreadable(e);
+  }
+  // Chunked, not readFile: this runs on every cache hit, and the sidecar is
+  // ~200MB — buffering it whole is the peak the streaming download removed.
+  try {
+    const hash = crypto.createHash("sha256");
+    const buf = Buffer.allocUnsafe(HASH_CHUNK_BYTES);
+    for (;;) {
+      const { bytesRead } = await fh.read(buf, 0, buf.length, null);
+      if (bytesRead === 0) break;
+      hash.update(buf.subarray(0, bytesRead));
+    }
+    return hash.digest("hex");
+  } catch (e) {
+    throw unreadable(e);
+  } finally {
+    await fh.close();
   }
 }
 
@@ -301,7 +334,7 @@ export async function fetchBinary(opts: FetchOptions): Promise<FetchResult> {
       if (process.platform !== "win32") await fsp.chmod(binaryPath, 0o755);
       // Also on a cache hit: an earlier release staged a verified binary with no
       // sentinel, and those installs would otherwise never repair themselves.
-      if (opts.component === "sidecar") {
+      if (installsForThisHost(opts.component, platformKey)) {
         await writeInstalledSentinel({
           outDir,
           version: componentLock(lock, "sidecar").componentVersion,
@@ -387,7 +420,7 @@ export async function fetchBinary(opts: FetchOptions): Promise<FetchResult> {
     );
   }
 
-  if (opts.component === "sidecar") {
+  if (installsForThisHost(opts.component, platformKey)) {
     await writeInstalledSentinel({
       outDir,
       version: componentLock(lock, "sidecar").componentVersion,

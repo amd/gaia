@@ -15,13 +15,15 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { IntegrityError, PlatformError } from "../src/errors.js";
+import { TUI_ARTIFACT_NAMES } from "../src/platform.js";
 import {
   INSTALLED_SENTINEL_NAME,
   fetchAll,
   fetchBinary,
+  fileSha256,
   verifySha256,
 } from "../src/fetch.js";
 import {
@@ -360,6 +362,16 @@ describe("fetchAll", () => {
 });
 
 describe("the .installed sentinel", () => {
+  // A sentinel records a LOCAL install, so these must run against the host's own
+  // platform — the default when no platformKey is passed.
+  const HOST_KEY = `${process.platform}-${process.arch}`;
+  const WIN = process.platform === "win32";
+  const HOST_EXE = WIN ? "gaia-agent.exe" : "gaia-agent";
+  const HOST_BODIES: Record<string, Buffer> = {
+    [`gaia-agent-${HOST_KEY}${WIN ? ".exe" : ""}`]: SIDECAR_BYTES,
+    [TUI_ARTIFACT_NAMES[HOST_KEY]!]: TUI_BYTES,
+  };
+
   /** Read the sentinel the daemon and the TUI both key "installed" on. */
   function readSentinel(outDir: string): Record<string, unknown> {
     const raw = fs.readFileSync(path.join(outDir, INSTALLED_SENTINEL_NAME), "utf8");
@@ -371,9 +383,8 @@ describe("the .installed sentinel", () => {
     const res = await fetchBinary({
       component: "sidecar",
       outDir,
-      platformKey: "linux-x64",
       lockPath,
-      fetchImpl: recordingFetch(BODIES),
+      fetchImpl: recordingFetch(HOST_BODIES),
     });
     return res.sha256;
   }
@@ -388,7 +399,7 @@ describe("the .installed sentinel", () => {
     // gaia/daemon/sidecars/fetch.py::_hub_installed_binary rejects the install
     // unless all three of these hold.
     expect(s["artifact_kind"]).toBe("binary");
-    expect(s["executable"]).toBe("gaia-agent");
+    expect(s["executable"]).toBe(HOST_EXE);
     expect(s["artifact_sha256"]).toBe(SIDECAR_SHA);
     expect(s["id"]).toBe("gaia");
     expect(s["language"]).toBe("python");
@@ -403,7 +414,7 @@ describe("the .installed sentinel", () => {
     await installSidecar(outDir);
     const onDisk = crypto
       .createHash("sha256")
-      .update(fs.readFileSync(path.join(outDir, "gaia-agent")))
+      .update(fs.readFileSync(path.join(outDir, HOST_EXE)))
       .digest("hex");
     expect(readSentinel(outDir)["artifact_sha256"]).toBe(onDisk);
   });
@@ -426,15 +437,13 @@ describe("the .installed sentinel", () => {
     const outDir = path.join(tmp, "agents", "gaia");
     await installSidecar(outDir);
     fs.rmSync(path.join(outDir, INSTALLED_SENTINEL_NAME));
-
     const lockPath = await realShaLock();
     urls.length = 0;
     const res = await fetchBinary({
       component: "sidecar",
       outDir,
-      platformKey: "linux-x64",
       lockPath,
-      fetchImpl: recordingFetch(BODIES),
+      fetchImpl: recordingFetch(HOST_BODIES),
     });
     expect(res.cached).toBe(true);
     expect(urls).toEqual([]); // proves it really was the cache path
@@ -447,9 +456,8 @@ describe("the .installed sentinel", () => {
     await fetchBinary({
       component: "tui",
       outDir,
-      platformKey: "linux-x64",
       lockPath,
-      fetchImpl: recordingFetch(BODIES),
+      fetchImpl: recordingFetch(HOST_BODIES),
     });
     expect(fs.existsSync(path.join(outDir, INSTALLED_SENTINEL_NAME))).toBe(false);
   });
@@ -460,12 +468,105 @@ describe("the .installed sentinel", () => {
     const tuiDir = path.join(tmp, "cache");
     await fetchAll({
       lockPath,
-      platformKey: "linux-x64",
       sidecarDir,
       tuiDir,
-      fetchImpl: recordingFetch(BODIES),
+      fetchImpl: recordingFetch(HOST_BODIES),
     });
     expect(fs.existsSync(path.join(sidecarDir, INSTALLED_SENTINEL_NAME))).toBe(true);
     expect(fs.existsSync(path.join(tuiDir, INSTALLED_SENTINEL_NAME))).toBe(false);
+  });
+});
+
+describe("a cross-platform fetch is not a local install", () => {
+  // `--platform` stages a binary for a DIFFERENT host. Recording it as installed
+  // hands the daemon a wrong-arch executable that re-hashes correctly and then
+  // fails to exec; before the sentinel existed that fetch was inert.
+  const HOST_KEY = `${process.platform}-${process.arch}`;
+  const FOREIGN = HOST_KEY === "linux-x64" ? "win32-x64" : "linux-x64";
+  const FOREIGN_FILE = `gaia-agent-${FOREIGN}${FOREIGN.startsWith("win32") ? ".exe" : ""}`;
+  const FOREIGN_EXE = FOREIGN.startsWith("win32") ? "gaia-agent.exe" : "gaia-agent";
+
+  it("writes the binary but NO sentinel for another platform", async () => {
+    const lockPath = await realShaLock();
+    const outDir = path.join(tmp, "agents", "gaia");
+    const res = await fetchBinary({
+      component: "sidecar",
+      outDir,
+      platformKey: FOREIGN,
+      lockPath,
+      fetchImpl: recordingFetch({ [FOREIGN_FILE]: SIDECAR_BYTES }),
+    });
+    expect(res.platformKey).toBe(FOREIGN);
+    expect(fs.existsSync(path.join(outDir, FOREIGN_EXE))).toBe(true);
+    expect(fs.existsSync(path.join(outDir, INSTALLED_SENTINEL_NAME))).toBe(false);
+  });
+
+  it("does not write one on a cross-platform CACHE HIT either", async () => {
+    const lockPath = await realShaLock();
+    const outDir = path.join(tmp, "agents", "gaia");
+    const opts = {
+      component: "sidecar" as const,
+      outDir,
+      platformKey: FOREIGN,
+      lockPath,
+      fetchImpl: recordingFetch({ [FOREIGN_FILE]: SIDECAR_BYTES }),
+    };
+    await fetchBinary(opts);
+    const again = await fetchBinary(opts);
+    expect(again.cached).toBe(true);
+    expect(fs.existsSync(path.join(outDir, INSTALLED_SENTINEL_NAME))).toBe(false);
+  });
+});
+
+describe("fileSha256", () => {
+  it("returns null for an absent file, not an error", async () => {
+    expect(await fileSha256(path.join(tmp, "nope"))).toBeNull();
+  });
+
+  it("re-raises anything that is not ENOENT", async () => {
+    // A directory in the way must not read as "no cache" — that would trigger a
+    // re-download which then fails on write with a far less useful message.
+    const dir = path.join(tmp, "a-directory");
+    fs.mkdirSync(dir);
+    await expect(fileSha256(dir)).rejects.toThrow(/cannot read the cached binary/);
+  });
+
+  it("hashes a file larger than one read chunk correctly", async () => {
+    // The cache-hit path runs this on a ~200MB binary on every `gaia run`, so it
+    // reads in bounded chunks; a single-chunk implementation would hash only the
+    // first 1MB and silently accept a tampered tail.
+    const big = path.join(tmp, "big.bin");
+    const chunk = Buffer.alloc(1 << 20, 0xab);
+    const tail = Buffer.from("DISTINCT-TAIL");
+    fs.writeFileSync(big, Buffer.concat([chunk, chunk, chunk, tail]));
+    const expected = crypto
+      .createHash("sha256")
+      .update(fs.readFileSync(big))
+      .digest("hex");
+    expect(await fileSha256(big)).toBe(expected);
+  });
+
+  it("never buffers the whole file", async () => {
+    // The property, not just the result: `readFile` allocates the entire ~200MB
+    // binary on every cache hit, which is the peak the streaming download was
+    // supposed to have removed. Correctness alone cannot tell the two apart.
+    const file = path.join(tmp, "chunked.bin");
+    fs.writeFileSync(file, Buffer.alloc((1 << 20) * 3, 0x5a));
+    const readFile = vi.spyOn(fsp, "readFile");
+    try {
+      expect(await fileSha256(file)).toHaveLength(64);
+      expect(readFile).not.toHaveBeenCalled();
+    } finally {
+      readFile.mockRestore();
+    }
+  });
+
+  it("notices a change in the LAST chunk", async () => {
+    const a = path.join(tmp, "a.bin");
+    const b = path.join(tmp, "b.bin");
+    const head = Buffer.alloc((1 << 20) * 2, 7);
+    fs.writeFileSync(a, Buffer.concat([head, Buffer.from("one")]));
+    fs.writeFileSync(b, Buffer.concat([head, Buffer.from("two")]));
+    expect(await fileSha256(a)).not.toBe(await fileSha256(b));
   });
 });

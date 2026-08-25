@@ -95,6 +95,7 @@ export {
   IntegrityError,
   MalformedResponseError,
   PlatformError,
+  PortInUseError,
   SidecarExitedError,
   VersionMismatchError,
 } from "./errors.js";

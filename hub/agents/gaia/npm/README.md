@@ -109,7 +109,8 @@ The `.installed` record next to it is what the daemon and the terminal UI read t
 know the agent is installed — without it the UI would run the sidecar as its own
 stdio child instead of letting the daemon supervise it. It is rewritten even when
 the binary was already cached, so an install left by an earlier version repairs
-itself the next time you run.
+itself the next time you run. A `--platform` fetch stages a binary for a
+*different* machine, so it deliberately leaves no record.
 
 The terminal UI is installed as `gaia-tui`, **never** as `gaia` — a file named
 `gaia` in a cache directory would shadow the `gaia` shim npm puts on your `PATH`.

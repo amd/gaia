@@ -194,9 +194,12 @@ into a cache hit instead of a second multi-hundred-megabyte download.
 
 Installing the sidecar also writes `~/.gaia/agents/gaia/.installed`, the record
 the daemon and the TUI both read to answer "is this agent installed?". It is
-written for the `sidecar` component only — the TUI is not a hub agent — and on a
-**cache hit as well as a fresh download**, so an install staged by an earlier
-release repairs itself on the next run.
+written on a **cache hit as well as a fresh download**, so an install staged by
+an earlier release repairs itself on the next run, and only when the fetch
+produced a runnable local install — that is, for the `sidecar` component (the
+TUI is not a hub agent) **and** for this host's own platform. A `--platform`
+fetch stages a binary for a different host; recording it would hand the daemon a
+wrong-architecture executable that re-hashes correctly and then fails to exec.
 
 ```json
 {
@@ -334,8 +337,17 @@ the TUI both see it. Daemon and sidecar lifecycle belong to the daemon.
 ### 6.2 `gaia serve` — the direct path
 
 `serve` fetches the sidecar and spawns it itself, for integrators who want the
-REST surface without a daemon or a UI. This path owns the process fully: spawn →
-`waitForHealth` → `checkVersion` → run until interrupted → tree-kill.
+REST surface without a daemon or a UI. This path owns the process fully:
+port pre-flight → spawn → `waitForHealth` → `checkVersion` → run until
+interrupted → tree-kill.
+
+The port is checked **before** the spawn, and a taken port raises
+`PortInUseError` without starting anything. That ordering is the guarantee: the
+frozen sidecar spends seconds unpacking before it attempts its bind, while an
+incumbent answers `/health` in milliseconds — so a post-spawn check alone would
+see a healthy port and a still-alive child, and hand back a handle for a server
+it does not own. `assertOurs` and the re-probe after a failed health wait remain
+as backstops for the narrower window where something binds after the pre-flight.
 
 ### 6.3 Tree-kill
 
@@ -361,7 +373,7 @@ failed start never leaks a process.
 | Code    | Meaning                                                                 |
 | ------- | ----------------------------------------------------------------------- |
 | `0`     | Success                                                                 |
-| `1`     | A typed failure: `IntegrityError`, `PlatformError`, `HealthTimeoutError`, `VersionMismatchError`, `BinaryNotFoundError`, `SidecarExitedError`, `MalformedResponseError`, or an unexpected error |
+| `1`     | A typed failure: `IntegrityError`, `PlatformError`, `HealthTimeoutError`, `VersionMismatchError`, `BinaryNotFoundError`, `PortInUseError`, `SidecarExitedError`, `MalformedResponseError`, or an unexpected error |
 | `2`     | Usage error: unknown command, invalid `--port`, or a flag the command does not read (`run --port`, `serve --component`, `serve --cache-dir`, `run`/`serve` `--platform`), an unknown `--component`, or a non-https `--base-url` without `--allow-insecure-base-url` |
 | *other* | From `run`: the TUI's own exit code, propagated verbatim                 |
 
@@ -381,6 +393,7 @@ All extend `GaiaError`, so `instanceof GaiaError` catches any of ours.
 | `HealthTimeoutError`   | The sidecar did not report healthy within the timeout          |
 | `VersionMismatchError` | `apiVersion` major differs from this package's                 |
 | `BinaryNotFoundError`  | A binary is absent from disk when spawning                     |
+| `PortInUseError`       | The bind port was already taken; nothing was spawned            |
 | `SidecarExitedError`   | The spawned sidecar died while the port answered — something else owns it |
 | `HttpError`            | A non-2xx from a sidecar probe                                 |
 | `MalformedResponseError` | A 2xx from a sidecar probe whose body is not JSON            |

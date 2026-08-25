@@ -21,6 +21,7 @@ import {
   HealthTimeoutError,
   IntegrityError,
   MalformedResponseError,
+  PortInUseError,
   SidecarExitedError,
   VersionMismatchError,
 } from "../src/errors.js";
@@ -123,6 +124,15 @@ async function stubHtml(): Promise<string> {
 const diesInstantly = (): string => process.execPath;
 
 const sleepFor = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/** A port that is free right now — bound, read, and released. */
+async function freePort(): Promise<number> {
+  const server = net.createServer();
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const { port } = server.address() as net.AddressInfo;
+  await new Promise((r) => server.close(r));
+  return port;
+}
 
 /** Write a Node script and return its path (not itself spawnable). */
 async function script(name: string, js: string): Promise<string> {
@@ -253,11 +263,12 @@ posixOnly("shutdown", () => {
 });
 
 describe("startSidecar vs a FOREIGN server already on the port", () => {
-  it("refuses a handle whose own child is dead, naming the port", async () => {
-    // The failure this reproduces: a second `gaia serve` finds 8141 already
-    // bound, its own sidecar dies, but the incumbent answers /health and
-    // /version — so startSidecar used to hand back a handle it did not own, and
-    // shutdown then logged "already exited" while the real server kept running.
+  // The real conflict: a second `gaia serve` finds 8141 already bound. The
+  // incumbent answers /health in milliseconds while our own child — a ~200MB
+  // one-file build — is still unpacking, so it is very much ALIVE at every
+  // post-spawn check. Only a pre-flight probe catches that ordering; the
+  // post-spawn backstops below cover the narrower window after it.
+  it("refuses the start, naming the port, before anything is spawned", async () => {
     const { port } = await stubSidecarOnPort({ versionDelayMs: 750 });
     const p = startSidecar({
       binaryPath: diesInstantly(),
@@ -265,28 +276,38 @@ describe("startSidecar vs a FOREIGN server already on the port", () => {
       autoCleanup: false,
       healthTimeoutMs: 20_000,
     });
-    await expect(p).rejects.toBeInstanceOf(SidecarExitedError);
+    await expect(p).rejects.toBeInstanceOf(PortInUseError);
     await expect(p).rejects.toThrow(new RegExp(`port ${port}`));
-    await expect(p).rejects.toThrow(/another process is already bound/);
+    await expect(p).rejects.toThrow(/already in use/);
   }, 30_000);
 
-  // Whether the incumbent's reply or our child's death reaches startSidecar
-  // first is a race, and CI on Linux lost it where Windows won: the port
-  // conflict reported as a plain HealthTimeoutError. Delaying /health past the
-  // child's exit pins the losing order on every platform.
-  it("still names the port conflict when the child's death wins the race", async () => {
-    const { port } = await stubSidecarOnPort({ healthDelayMs: 400 });
+  it("never spawns a child when the port is taken", async () => {
+    // A binary that does NOT exist: spawnSidecar throws BinaryNotFoundError the
+    // moment it is reached. Getting PortInUseError instead proves the port check
+    // ran first — no process was created, and none could have been.
+    const { port } = await stubSidecarOnPort();
     const p = startSidecar({
-      binaryPath: diesInstantly(),
+      binaryPath: path.join(tmp, "never-created"),
       port,
       autoCleanup: false,
-      healthTimeoutMs: 20_000,
     });
-    await expect(p).rejects.toBeInstanceOf(SidecarExitedError);
-    await expect(p).rejects.toThrow(/another process is already bound/);
+    await expect(p).rejects.toBeInstanceOf(PortInUseError);
+    await expect(p).rejects.not.toBeInstanceOf(BinaryNotFoundError);
   }, 30_000);
 
-  it("reports a SidecarExitedError as a GaiaError, so the CLI formats it", async () => {
+  it("keeps the health-timeout error when the port is genuinely free", async () => {
+    // The pre-flight must not swallow the ordinary "our sidecar never came up"
+    // case: nothing is listening, so this has to reach the health wait.
+    const p = startSidecar({
+      binaryPath: diesInstantly(),
+      port: 8189,
+      autoCleanup: false,
+      healthTimeoutMs: 3_000,
+    });
+    await expect(p).rejects.toBeInstanceOf(HealthTimeoutError);
+  }, 30_000);
+
+  it("reports the conflict as a GaiaError, so the CLI formats it", async () => {
     const { port } = await stubSidecarOnPort({ versionDelayMs: 750 });
     await expect(
       startSidecar({
@@ -297,6 +318,63 @@ describe("startSidecar vs a FOREIGN server already on the port", () => {
       }),
     ).rejects.toBeInstanceOf(GaiaError);
   }, 30_000);
+});
+
+posixOnly("startSidecar backstops (something binds AFTER the pre-flight)", () => {
+  /**
+   * The window the pre-flight cannot cover: the port is free when we probe it,
+   * and an unrelated process takes it before our sidecar binds. Reproduced by a
+   * fake sidecar that hands the port to a DETACHED holder and exits — the same
+   * shape as the frozen build's uvicorn grandchild. The holder signals readiness
+   * through a file, so the ordering is pinned rather than timed.
+   */
+  it("names the port conflict when our child dies and something else answers", async () => {
+    const readyFile = path.join(tmp, "holder.ready");
+    const holder = await script(
+      "holder",
+      `import http from "node:http";
+       import fs from "node:fs";
+       const port = Number(process.argv[2]);
+       const server = http.createServer((_q, s) => {
+         s.writeHead(200, { "content-type": "application/json" });
+         s.end(JSON.stringify({ status: "ok", service: "not-ours" }));
+       });
+       server.listen(port, "127.0.0.1", () => fs.writeFileSync(${JSON.stringify(readyFile)}, String(process.pid)));
+       setTimeout(() => process.exit(0), 20000).unref();`,
+    );
+    const bin = await fakeBinary(
+      "hands-off-port",
+      `import { spawn } from "node:child_process";
+       import fs from "node:fs";
+       const port = process.argv[process.argv.indexOf("--port") + 1];
+       const child = spawn(process.execPath, [${JSON.stringify(holder)}, port], { detached: true, stdio: "ignore" });
+       child.unref();
+       // Exit only once the holder really owns the port — no timing race.
+       const wait = () => fs.existsSync(${JSON.stringify(readyFile)}) ? process.exit(0) : setTimeout(wait, 20);
+       wait();`,
+    );
+
+    const free = await freePort();
+    try {
+      const p = startSidecar({
+        binaryPath: bin,
+        port: free,
+        autoCleanup: false,
+        healthTimeoutMs: 15_000,
+      });
+      await expect(p).rejects.toBeInstanceOf(SidecarExitedError);
+      await expect(p).rejects.toThrow(/another process is already bound/);
+    } finally {
+      if (fs.existsSync(readyFile)) {
+        const pid = Number(fs.readFileSync(readyFile, "utf8"));
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          /* already gone */
+        }
+      }
+    }
+  }, 40_000);
 });
 
 describe("non-JSON responses", () => {

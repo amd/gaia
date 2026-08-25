@@ -32,6 +32,9 @@ export class BinaryNotFoundError extends GaiaError {}
 /** The sidecar we spawned died; anything answering its port is not ours. */
 export class SidecarExitedError extends GaiaError {}
 
+/** The bind port was already taken before we spawned anything. */
+export class PortInUseError extends GaiaError {}
+
 /** A 2xx response whose body is not the JSON the contract promises. */
 export class MalformedResponseError extends GaiaError {}
 

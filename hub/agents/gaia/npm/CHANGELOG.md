@@ -81,18 +81,20 @@ the terminal UI meant building it from source.
   both key "this agent is installed" on `~/.gaia/agents/gaia/.installed`, and
   without it the UI ran the REST sidecar as its own stdio child and the chat
   filled with uvicorn's startup log. It is written on a cache hit as well as a
-  fresh download, so an install left by an earlier version repairs itself.
-  See SPEC §4.1.
+  fresh download, so an install left by an earlier version repairs itself, and
+  only for this host's own platform — a `--platform` fetch stages a binary for a
+  different machine and records nothing. See SPEC §4.1.
 - **`--allow-insecure-base-url`** — opt-in for a non-`https` `--base-url`, for a
   trusted local mirror.
 
 ### Fixed
 
 - **A second `gaia serve` no longer reports success against a server it does not
-  own.** With the port already taken, its own sidecar died but the incumbent
-  answered `/health`, so the start "succeeded" and the later shutdown logged
-  "already exited" while the real server kept running. It now fails naming the
-  port and the likely cause.
+  own.** With the port already taken, the incumbent answered `/health` while our
+  own sidecar was still unpacking, so the start "succeeded", printed a ready URL
+  for someone else's server, and the child then died of `EADDRINUSE`. The port is
+  now checked before anything is spawned, and a taken one fails naming the port
+  and how to find the process holding it.
 - **Importing the package no longer changes a host app's error handling.** The
   crash and signal handlers reaped every sidecar *before* checking whether the
   host had its own handler, so an exception the host handled killed the sidecar
@@ -134,9 +136,11 @@ the terminal UI meant building it from source.
 - **`--base-url` requires `https`** unless `--allow-insecure-base-url` is passed.
   The pinned SHA already made a plaintext mirror non-exploitable, but tampering
   surfaced as a confusing `IntegrityError` instead of the transport failure it is.
-- **Downloads stream to disk instead of being buffered whole**, so a ~200MB
-  artifact no longer peaks at roughly double that in memory. The hash is computed
-  incrementally and still verified *before* the file is moved into place.
+- **A ~200MB artifact is never held in memory whole.** Downloads stream to disk,
+  and the cache-hit check that re-hashes an already-installed binary — which runs
+  on every `gaia run` — reads it in bounded chunks. Both hashes are computed
+  incrementally, and a download is still verified *before* the file is moved into
+  place.
 
 ### Notes
 

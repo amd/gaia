@@ -22,6 +22,7 @@
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
+import net from "node:net";
 import path from "node:path";
 
 import {
@@ -30,6 +31,7 @@ import {
   HttpError,
   IntegrityError,
   MalformedResponseError,
+  PortInUseError,
   SidecarExitedError,
   VersionMismatchError,
 } from "./errors.js";
@@ -658,11 +660,53 @@ async function assertNotAForeignServer(sidecar: Sidecar): Promise<void> {
 }
 
 /**
+ * True when something is already listening on host:port.
+ *
+ * A TCP connect, not a `/health` probe: ANY listener makes our bind fail, and
+ * the incumbent need not be a GAIA sidecar. Unreachable-in-time counts as free —
+ * this exists to turn a confusing failure into a clear one early, and the
+ * spawn + health wait remains the actual gate.
+ */
+function portInUse(host: string, port: number, timeoutMs = 500): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = net.connect({ host, port });
+    const settle = (inUse: boolean): void => {
+      socket.destroy();
+      resolve(inUse);
+    };
+    socket.setTimeout(timeoutMs, () => settle(false));
+    socket.once("connect", () => settle(true));
+    socket.once("error", () => settle(false)); // ECONNREFUSED — nothing there
+  });
+}
+
+/**
  * Spawn → wait for health → assert the child is still ours → (optionally)
  * version-check. On any failure the sidecar is shut down before rethrowing, so a
  * failed start never leaks a process.
+ *
+ * The port is checked BEFORE the spawn. Without that, the frozen sidecar spends
+ * seconds unpacking before it even attempts its bind, while an incumbent answers
+ * `/health` in milliseconds — so the health wait succeeds, the still-unpacking
+ * child looks alive, and we would hand back a handle for a server we do not own.
+ * `assertOurs` / `assertNotAForeignServer` stay as backstops for the narrower
+ * race where something binds after this check.
  */
 export async function startSidecar(opts: StartOptions): Promise<Sidecar> {
+  const host = opts.host ?? DEFAULT_HOST;
+  const port = opts.port ?? DEFAULT_PORT;
+  if (await portInUse(host, port)) {
+    throw new PortInUseError(
+      `port ${port} on ${host} is already in use, so the gaia sidecar cannot bind ` +
+        "it. Most likely an instance you started earlier is still running. Find it " +
+        "with " +
+        (process.platform === "win32"
+          ? `\`netstat -ano | findstr :${port}\``
+          : `\`lsof -i :${port}\``) +
+        `, then stop it — or start on a different port with --port. Nothing was ` +
+        "spawned.",
+    );
+  }
   const sidecar = spawnSidecar(opts);
   // A sidecar that dies immediately (missing runtime lib, port already bound)
   // must not make the caller wait out the full health timeout.
