@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock, call
 
 import pytest
 
+sys.path.insert(0, os.path.abspath("src"))
+
 from gaia.messaging.telegram import TelegramAdapter
 
 
@@ -69,10 +71,11 @@ async def test_allowed_user_streams_accumulated_response(monkeypatch):
         ),
     )
     requested_users = []
+    sent_inputs = []
 
     class StubSession:
         def send_stream(self, text):
-            assert text == "hello"
+            sent_inputs.append(text)
             return iter(
                 [
                     SimpleNamespace(text="Hello"),
@@ -89,6 +92,7 @@ async def test_allowed_user_streams_accumulated_response(monkeypatch):
     await adapter._handle_message(update, None)
 
     assert requested_users == [12345]
+    assert sent_inputs == ["hello"]
     reply_text.assert_awaited_once_with("Thinking...")
     assert streamed_reply.edit_text.await_args_list == [
         call("Hello"),
