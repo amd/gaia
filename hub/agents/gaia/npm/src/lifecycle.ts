@@ -47,7 +47,7 @@ const log = createLogger("lifecycle");
 
 export const DEFAULT_HOST = "127.0.0.1";
 
-/** Matches `gaia_agent_gaia.server.DEFAULT_PORT`. NEVER 4001 (repo-reserved). */
+/** Matches `gaia_agent.server.DEFAULT_PORT`. NEVER 4001 (repo-reserved). */
 export const DEFAULT_PORT = 8141;
 
 /** Repo-wide reserved port. Nothing here may ever bind it. */
