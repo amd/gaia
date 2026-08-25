@@ -241,15 +241,22 @@ class ClaudeProvider(LLMClient):
             )
             original = entry.get("name", "")
             api_name = self._api_tool_name(original)
-            if api_name != original:
-                if api_name in self._tool_name_map:
-                    raise ValueError(
-                        f"Tool names {self._tool_name_map[api_name]!r} and "
-                        f"{original!r} both sanitize to {api_name!r} for the "
-                        "Anthropic API — rename one."
-                    )
-                self._tool_name_map[api_name] = original
-                entry["name"] = api_name
+            # EVERY outbound name is registered, identity included. Registering
+            # only the rewritten ones cannot detect the collision that actually
+            # misroutes a call: a skill tool `write/file` sanitizes to
+            # `write_file` and silently shadows the builtin of that name, so the
+            # restore map sends the model's builtin call to the skill's tool.
+            # A skill shadowing a registry name is an expected case
+            # (skills/loader.py), so this is reachable, not theoretical.
+            if api_name in self._tool_name_map:
+                clash = self._tool_name_map[api_name]
+                raise ValueError(
+                    f"Tool names {clash!r} and {original!r} both map to "
+                    f"{api_name!r} for the Anthropic API — the model's call "
+                    "could not be routed back unambiguously. Rename one."
+                )
+            self._tool_name_map[api_name] = original
+            entry["name"] = api_name
             converted.append(entry)
         return converted
 
