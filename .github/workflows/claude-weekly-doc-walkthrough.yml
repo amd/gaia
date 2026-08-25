@@ -227,9 +227,11 @@ jobs:
             Write-Host "::error::No npm on PATH -- the Set up Node step above should have provided it. claude-code-action's own installer refuses Windows, so npm is the only install path here."
             exit 1
           }
-          # Deliberately unpinned. The action bundles its own expected CLI version and
-          # bumps it with the SHA; pinning here independently would drift against it.
-          npm install -g @anthropic-ai/claude-code@latest
+          # Major-pinned, not exact. The action bundles its own expected CLI version and
+          # bumps it with the SHA, so pinning exactly here would drift against it; ^2
+          # still tracks that while stopping a 3.x breaking release from landing
+          # mid-scheduled-run. Revisit when the action's SHA moves to a 3.x CLI.
+          npm install -g "@anthropic-ai/claude-code@^2"
           if ($LASTEXITCODE -ne 0) {
             Write-Host "::error::npm install of @anthropic-ai/claude-code failed -- the executor and judge cannot run."
             exit 1
