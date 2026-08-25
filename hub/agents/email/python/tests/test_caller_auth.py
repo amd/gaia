@@ -7,7 +7,8 @@ mailbox. These tests lock in the three controls that make it safe to expose:
 
 1. **Per-session bearer token** — a non-exempt request without a valid token is
    401; with the correct token it is served; with a wrong token it is 401.
-2. **Host allowlist** — a non-loopback ``Host`` header is 400 (DNS-rebinding).
+2. **Host allowlist** — a non-loopback ``Host`` header is 400 (DNS-rebinding),
+   and so is a request that omits ``Host`` entirely.
 3. **Origin rejection** — a non-loopback browser ``Origin`` is 403 (drive-by).
 
 ``POST /v1/email/draft`` is the probe endpoint: it mints a confirmation token
@@ -16,6 +17,7 @@ with no mailbox/LLM dependency, so it exercises the auth layer in isolation.
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 from pathlib import Path
 
@@ -163,6 +165,41 @@ def test_non_loopback_host_is_rejected_400():
     )
     assert resp.status_code == 400
     assert "host" in resp.json()["detail"].lower()
+
+
+def test_absent_host_is_rejected_400():
+    """Omitting ``Host`` must not skip the rebinding control.
+
+    Driven through the middleware directly: ``TestClient`` always sets a Host,
+    so a request without one is unreachable from it.
+    """
+    caller_auth.configure(caller_auth.CallerAuthConfig(token=_TOKEN))
+    sent: list = []
+
+    async def app(scope, receive, send):  # pragma: no cover - must never run
+        raise AssertionError("a Host-less request reached the app")
+
+    async def _send(message):
+        sent.append(message)
+
+    async def _receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/v1/email/health",
+        "query_string": b"",
+        "headers": [],  # no Host at all
+    }
+    asyncio.run(caller_auth.HostOriginMiddleware(app)(scope, _receive, _send))
+
+    start = next(m for m in sent if m["type"] == "http.response.start")
+    assert start["status"] == 400
+    body = b"".join(
+        m.get("body", b"") for m in sent if m["type"] == "http.response.body"
+    )
+    assert b"no Host header" in body
 
 
 def test_cross_origin_browser_request_is_rejected_403():
