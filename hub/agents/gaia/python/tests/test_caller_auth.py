@@ -202,3 +202,71 @@ def test_probe_paths_do_not_require_a_token(monkeypatch, path):
     """The attach handshake polls these before it can know the token."""
     client = _client(monkeypatch, token=_TOKEN)
     assert client.get(path).status_code == 200, path
+
+
+def test_a_request_with_no_host_header_is_rejected(monkeypatch):
+    """The control failed OPEN on an absent Host: the check was skipped entirely.
+
+    A browser always sends Host, so the sharp drive-by vector stayed covered —
+    but a raw-socket or HTTP/1.0 client could opt out of rebinding protection
+    just by omitting the header, which is not a thing a security control may let
+    a caller choose.
+    """
+    client = _client(monkeypatch, token=_TOKEN)
+    r = client.post(
+        "/v1/gaia/query",
+        json=_QUERY_BODY,
+        headers={"Host": "", "Authorization": f"Bearer {_TOKEN}"},
+    )
+    assert r.status_code == 400, r.text
+    detail = r.json()["detail"]
+    assert "no Host header" in detail
+    # Actionable: it must say what to send instead.
+    assert "127.0.0.1" in detail
+
+
+def test_the_missing_host_check_also_covers_the_probes(monkeypatch):
+    """Same rule for the token-free paths — they skip the token, not transport."""
+    client = _client(monkeypatch, token=_TOKEN)
+    assert client.get("/health", headers={"Host": ""}).status_code == 400
+
+
+# -- EXEMPT_PATHS is a real declaration, not decoration -----------------------
+
+
+def test_exempt_paths_names_exactly_the_token_free_routes(monkeypatch):
+    """EXEMPT_PATHS listed three paths that the token guard could never see:
+    all three are registered on the APP, outside the token-guarded router, so
+    ``is_exempt_path`` never decided any of them.
+
+    Leaving that unstated is a config implying protection semantics it does not
+    have, so pin the real shape — every named path answers without a token, and
+    no OTHER router path does.
+    """
+    client = _client(monkeypatch, token=_TOKEN)
+
+    for path in caller_auth.EXEMPT_PATHS:
+        assert client.get(path).status_code == 200, f"{path} unexpectedly gated"
+
+    # And the guarded router really is guarded, so the exemption is not what is
+    # keeping those three open.
+    assert client.post("/v1/gaia/query", json=_QUERY_BODY).status_code == 401
+    assert client.get("/v1/gaia/init").status_code == 401
+
+
+def test_exempt_paths_never_matches_a_guarded_route(monkeypatch):
+    """The honest statement of today's wiring: the guarded router is mounted
+    under /v1/gaia and no exempt path except the version probe lives there — and
+    that one is registered on the app, not the router."""
+    _client(monkeypatch, token=_TOKEN)  # installs the active config
+    guarded_prefix = "/v1/gaia/"
+    guarded = {
+        p
+        for p in caller_auth.EXEMPT_PATHS
+        if p.startswith(guarded_prefix) and p != "/v1/gaia/version"
+    }
+    assert guarded == set(), (
+        f"{sorted(guarded)} sit under the token-guarded router prefix; either "
+        "they are genuinely public (and the router must skip them) or the "
+        "exemption is dead config."
+    )

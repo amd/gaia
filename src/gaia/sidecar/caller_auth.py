@@ -17,8 +17,10 @@ Three controls, keyed on a :class:`CallerAuthConfig` installed at app build:
    process can read it via ``/proc/<pid>/environ`` or ``ps eww``) or directly
    in the *token* env var (legacy). Non-exempt requests must present
    ``Authorization: Bearer <token>``.
-2. **Host allowlist** — the ``Host`` header must be loopback, which is what
-   defeats DNS rebinding (the rebound request carries ``Host: evil.com``).
+2. **Host allowlist** — the ``Host`` header must be present AND loopback, which
+   is what defeats DNS rebinding (the rebound request carries ``Host: evil.com``).
+   An absent or empty ``Host`` is refused too, so a raw-socket client cannot skip
+   the control by omitting the header.
 3. **Origin rejection** — a request carrying a non-loopback browser ``Origin``
    is refused. Non-browser clients send no ``Origin`` and are unaffected.
 
@@ -27,8 +29,10 @@ no token configured the token check is skipped and a loud warning is logged, but
 Host/Origin still apply — so a hand-run developer sidecar keeps the control that
 stops a web page driving it.
 
-Each sidecar binds its own env-var names and exempt paths; everything else is
-shared so the two cannot drift apart.
+A sidecar binds its own env-var names and exempt paths and inherits everything
+else from here. Only the flagship (``gaia_agent.caller_auth``) does so today —
+the email sidecar still carries its own copy of this logic, so a change here
+does NOT reach it.
 """
 
 from __future__ import annotations
@@ -208,16 +212,23 @@ class HostOriginMiddleware:
         if config is not None:
             headers = Headers(scope=scope)
 
+            # Fail closed on an absent/empty Host: HTTP/1.1 requires one and
+            # every real client sends it, so "no Host" is a raw-socket caller
+            # skipping the rebinding control, not a case to wave through.
             host = _host_only(headers.get("host", ""))
-            if host and host not in config.allowed_hosts:
+            if host not in config.allowed_hosts:
+                named = (
+                    f"Host header '{host}'" if host else "A request with no Host header"
+                )
                 await self._reject(
                     scope,
                     receive,
                     send,
                     400,
-                    f"Rejected: Host header '{host}' is not an allowed loopback "
-                    f"host. The {config.surface} serves only 127.0.0.1/localhost; "
-                    "a non-loopback Host is a DNS-rebinding attempt.",
+                    f"Rejected: {named} is not an allowed loopback host. The "
+                    f"{config.surface} serves only 127.0.0.1/localhost; send "
+                    "'Host: 127.0.0.1:<port>'. A non-loopback or absent Host is "
+                    "a DNS-rebinding attempt.",
                 )
                 return
 

@@ -10,20 +10,23 @@ learned during the turn. A skill activated by ``load_skill`` lives on
 no skills loaded while the model, having just said "it's loaded", keeps
 promising otherwise.
 
-Mirrors ``gaia_agent_email.agent_routes._SessionRegistry`` deliberately: same
-idle-TTL + LRU bounds, same claim-the-lock eviction. The duplication is a known
-cost — extracting one shared registry into core touches the email agent's
-tested paths and belongs in its own change.
+Started as a deliberate mirror of ``gaia_agent_email.agent_routes._SessionRegistry``
+— same idle-TTL + LRU bounds, same claim-the-lock eviction — and has since
+diverged: this one reserves a slot while an agent builds so the cap is a real
+bound, and tears agents down through ``close()``, which the email agent does not
+have. The duplication is a known cost; extracting one shared registry into core
+touches the email agent's tested paths and belongs in its own change.
 """
 
 from __future__ import annotations
 
-import logging
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
-logger = logging.getLogger(__name__)
+from gaia.logger import get_logger
+
+logger = get_logger(__name__)
 
 #: Human label used in the cap-exhausted error below.
 AGENT_LABEL = "GAIA"
@@ -59,9 +62,14 @@ class _AgentSession:
     second turn cannot corrupt the cached agent's conversation state.
     """
 
-    def __init__(self, session_id: str, agent: Any) -> None:
+    def __init__(self, session_id: str, agent: Any, model_id: Any = None) -> None:
         self.session_id = session_id
         self.agent = agent
+        #: The ``model_id`` this session's agent was BUILT with (``None`` = the
+        #: agent's own default). Only construction reads a model, so a later turn
+        #: asking for a different one cannot be honoured — the server compares
+        #: against this and refuses rather than running the old model silently.
+        self.model_id = model_id
         self.run_lock = threading.Lock()
         #: True exactly once, on the session built to replace one this
         #: registry involuntarily evicted (LRU cap or idle timeout) — never
@@ -87,14 +95,30 @@ _DEFAULT_IDLE_TTL_SECONDS = 4 * 60 * 60  # 4 hours
 _DEFAULT_MAX_SESSIONS = 100
 
 
-def _close_agent(agent: Any) -> None:
-    """Best-effort teardown of a retained agent's handles on eviction."""
-    close = getattr(agent, "close_db", None)
-    if callable(close):
-        try:
-            close()
-        except Exception as exc:  # pragma: no cover - teardown must not raise
-            logger.warning("agent session close_db failed: %s", exc)
+def close_agent(agent: Any) -> None:
+    """Release one agent's handles — RAG/index, scratchpad DB, HTTP session.
+
+    ``close()`` is the flagship's teardown; ``close_db()`` is the email agent's,
+    accepted so a caller can hand either here. An agent exposing neither is a
+    LOUD error, not a quiet skip: this helper reached that state once already by
+    probing only ``close_db``, which ``GaiaAgent`` does not define, and every
+    eviction leaked the whole agent while looking like it had cleaned up.
+    """
+    close = getattr(agent, "close", None)
+    if not callable(close):
+        close = getattr(agent, "close_db", None)
+    if not callable(close):
+        logger.error(
+            "%s exposes neither close() nor close_db(), so its RAG index, "
+            "scratchpad DB and HTTP session leak until the process exits. "
+            "Give the agent class a close() method.",
+            type(agent).__name__,
+        )
+        return
+    try:
+        close()
+    except Exception as exc:  # pragma: no cover - teardown must not raise
+        logger.warning("%s teardown failed: %s", type(agent).__name__, exc)
 
 
 class _SessionRegistry:
@@ -126,6 +150,12 @@ class _SessionRegistry:
         #: retire the previous tombstone to make room, erasing it before it
         #: was ever consumed.
         self._evicted_ids: Dict[str, None] = {}
+        #: session_ids whose agent is being BUILT right now. Construction runs
+        #: outside the lock, so without reserving the slot here two creators for
+        #: two new ids both pass the capacity check at len == max-1 and both
+        #: install, putting the registry at max+1. Counted against the cap and
+        #: dropped by whichever creator added it, on every exit path.
+        self._pending: Set[str] = set()
         self._max_evicted_ids = max(4 * max_sessions, 32)
         self._lock = threading.Lock()
         self._idle_ttl_seconds = idle_ttl_seconds
@@ -150,7 +180,9 @@ class _SessionRegistry:
             if existing is not None:
                 self._last_used[session_id] = time.monotonic()
                 return existing
-            if len(self._sessions) >= self._max_sessions:
+            # Racers for the SAME id share one reservation (a set), so the pair
+            # costs one slot — which is what they will end up occupying.
+            if len(self._sessions) + len(self._pending) >= self._max_sessions:
                 evicted = self._claim_lru_locked()
                 if evicted is None:
                     raise SessionCapacityError(
@@ -160,16 +192,23 @@ class _SessionRegistry:
                         "terminal/window, or wait for one to finish its current "
                         "turn, and retry."
                     )
+            self._pending.add(session_id)
         if evicted is not None:
-            _close_agent(evicted.agent)
+            close_agent(evicted.agent)
         # Build outside the lock — construction is slow and must not block other
         # sessions. A racing creator for the SAME id is resolved below by
         # discarding the loser's agent.
-        agent = build_session_agent(**config_kwargs)
+        try:
+            agent = build_session_agent(**config_kwargs)
+        except BaseException:
+            with self._lock:
+                self._pending.discard(session_id)
+            raise
         with self._lock:
+            self._pending.discard(session_id)
             existing = self._sessions.get(session_id)
             if existing is not None:
-                _close_agent(agent)
+                close_agent(agent)
                 self._last_used[session_id] = time.monotonic()
                 return existing
             # Consume the eviction tombstone HERE, on the branch that installs
@@ -177,7 +216,9 @@ class _SessionRegistry:
             # id could win the install with the flag already consumed, and the
             # "your loaded skills were reset" warning would reach no one.
             reclaimed = self._evicted_ids.pop(session_id, _SENTINEL) is not _SENTINEL
-            session = _AgentSession(session_id, agent)
+            session = _AgentSession(
+                session_id, agent, model_id=config_kwargs.get("model_id")
+            )
             session.reclaimed_after_eviction = reclaimed
             self._sessions[session_id] = session
             self._last_used[session_id] = time.monotonic()
@@ -229,7 +270,7 @@ class _SessionRegistry:
                 self._note_evicted_locked(sid)
                 evicted.append(session)
         for session in evicted:
-            _close_agent(session.agent)
+            close_agent(session.agent)
         return [s.session_id for s in evicted]
 
     def delete(self, session_id: str) -> bool:
@@ -238,7 +279,7 @@ class _SessionRegistry:
             self._last_used.pop(session_id, None)
         if session is None:
             return False
-        _close_agent(session.agent)
+        close_agent(session.agent)
         return True
 
     def clear(self) -> None:
@@ -248,7 +289,7 @@ class _SessionRegistry:
             self._sessions.clear()
             self._last_used.clear()
         for session in sessions:
-            _close_agent(session.agent)
+            close_agent(session.agent)
 
 
 #: One process == the whole registry. The sidecar never runs uvicorn with
@@ -258,6 +299,7 @@ registry = _SessionRegistry()
 
 __all__ = [
     "build_session_agent",
+    "close_agent",
     "registry",
     "_AgentSession",
     "_SessionRegistry",
