@@ -709,5 +709,40 @@ class TestToolNameSanitization:
         import pytest
 
         p = _provider(fake_anthropic)
-        with pytest.raises(ValueError, match="sanitize to"):
+        with pytest.raises(ValueError, match="both map to"):
             p._to_anthropic_tools(self._tools("a/b", "a.b"))
+
+
+class TestToolNameCollisionRouting:
+    """A sanitized name colliding with an untouched one misroutes the model's
+    call. Registering only rewritten names cannot see that collision."""
+
+    def _tools(self, *names):
+        return [
+            {
+                "type": "function",
+                "function": {"name": n, "description": "", "parameters": {}},
+            }
+            for n in names
+        ]
+
+    def test_sanitized_name_shadowing_a_builtin_is_refused(self, fake_anthropic):
+        import pytest
+
+        p = _provider(fake_anthropic)
+        # `write/file` -> `write_file`, which is already a real builtin.
+        with pytest.raises(ValueError, match="both map to"):
+            p._to_anthropic_tools(self._tools("write_file", "write/file"))
+
+    def test_order_does_not_hide_the_collision(self, fake_anthropic):
+        import pytest
+
+        p = _provider(fake_anthropic)
+        with pytest.raises(ValueError, match="both map to"):
+            p._to_anthropic_tools(self._tools("write/file", "write_file"))
+
+    def test_unchanged_names_still_round_trip(self, fake_anthropic):
+        p = _provider(fake_anthropic)
+        converted = p._to_anthropic_tools(self._tools("read_file", "query-docs"))
+        assert [t["name"] for t in converted] == ["read_file", "query-docs"]
+        assert p._restore_tool_name("read_file") == "read_file"
