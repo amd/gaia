@@ -520,6 +520,20 @@ session slot is busy and none is idle enough to evict (SPEC §5.2). Do NOT
 loop on `/v1/gaia/init` — it will report ready. Wait for a running turn to
 finish (or close an idle session) and retry the same `/query`.
 
+**Three more refusals are yours to avoid**, each naming its fix in `detail`
+(SPEC §5.2 has the reasoning):
+
+- **409 — the `run_id` is still in flight.** You mint it, so mint a fresh UUID
+  per request; reusing one would leave the earlier run with no way to be
+  cancelled.
+- **409 — `model` differs from what this `session_id` was built with.** Only
+  construction reads a model, so it cannot be applied to the retained agent.
+  Omit `model` to stay on the session's current one, or start a new
+  `session_id` to switch.
+- **400 — the `Host` header is absent or empty.** The loopback check fails
+  closed, so omitting the header is refused rather than served. Send
+  `Host: 127.0.0.1:<port>`; every real HTTP client already does.
+
 For the full wire contract, lock schema, exit codes, and timeout table, see
 [`SPEC.md`](./SPEC.md). For the user-facing overview, see [`README.md`](./README.md)
 and <https://amd-gaia.ai/docs/guides/gaia>.

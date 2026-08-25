@@ -273,8 +273,9 @@ backward-compatible addition and is accepted.
 
 Loopback binding is not access control: this sidecar exposes shell and file
 tools, so an unauthenticated port lets any page the user visits drive it. Three
-controls guard it, all in `gaia_agent.caller_auth` over the mechanism shared
-with the email sidecar (`gaia.sidecar.caller_auth`):
+controls guard it, all in `gaia_agent.caller_auth`, which binds this sidecar's
+env-var names and exempt paths onto the shared mechanism in
+`gaia.sidecar.caller_auth`:
 
 1. **Per-session bearer token.** Every `/v1/gaia/*` request must carry
    `Authorization: Bearer <token>`. The spawning parent supplies it one of two
