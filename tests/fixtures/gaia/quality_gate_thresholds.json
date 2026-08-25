@@ -1,6 +1,6 @@
 {
-  "_comment": "Quality-gate thresholds for the gaia-agent judged eval suite (gaia eval agent --agent-type gaia). Mirrors the email manifests' pattern (tests/fixtures/email/quality_gate_thresholds.json): the bars are targets, 'enforce' is the SINGLE switch CI keys off, and it ships FALSE (report mode) on purpose — the values below are generous placeholders to be tightened once the first self-hosted-runner baseline is captured (plan phase 4). Flipping 'enforce' to true happens here, in data, not in code. Integrity failures (missing judge key, zero judged scenarios, harness crash) fail regardless of this switch.",
-  "min_judged_pass_rate": 0.60,
+  "_comment": "Quality-gate thresholds for the gaia-agent judged eval suite (gaia eval agent --agent-type gaia). Mirrors the email manifests' pattern: the bars are targets, 'enforce' is the SINGLE switch CI keys off, and flipping it happens HERE, in data, not in code \u2014 so it takes effect on PRs, the weekly, and the release at once. Integrity failures (missing judge key, zero judged scenarios, harness crash) fail regardless of this switch. ENFORCE IS ON with deliberately loose bars: no Gemma baseline exists yet because the dev machine cannot run Lemonade, so these are absolute floors rather than a comparison against a measured baseline. The only Haiku reference point scored 0.727 judged pass rate over gaia_core, which is why 0.60 is the floor \u2014 headroom for a weaker local model. EXPECT to retune after the first self-hosted-runner run: if Gemma lands under 0.60 the honest response is to read the failures first and decide whether the bar or the agent is wrong, not to reflexively lower the bar.",
+  "min_judged_pass_rate": 0.6,
   "min_avg_score": 5.0,
-  "enforce": false
+  "enforce": true
 }
