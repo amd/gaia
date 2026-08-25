@@ -77,7 +77,7 @@ async function stubSidecar(
  * down deterministically. Returns the port so a spawn can be aimed at it.
  */
 async function stubSidecarOnPort(
-  opts: { versionDelayMs?: number; healthBody?: unknown } = {},
+  opts: { versionDelayMs?: number; healthDelayMs?: number; healthBody?: unknown } = {},
 ): Promise<{ baseUrl: string; port: number }> {
   const http = await import("node:http");
   const server = http.createServer((req, res) => {
@@ -88,7 +88,10 @@ async function stubSidecarOnPort(
       }, delayMs);
     };
     if (req.url === "/health")
-      return send(opts.healthBody ?? { status: "ok", service: "not-ours" });
+      return send(
+        opts.healthBody ?? { status: "ok", service: "not-ours" },
+        opts.healthDelayMs ?? 0,
+      );
     if (req.url === "/version")
       return send({ apiVersion: API_VERSION, agentVersion: "9.9.9" }, opts.versionDelayMs ?? 0);
     res.writeHead(404).end();
@@ -264,6 +267,22 @@ describe("startSidecar vs a FOREIGN server already on the port", () => {
     });
     await expect(p).rejects.toBeInstanceOf(SidecarExitedError);
     await expect(p).rejects.toThrow(new RegExp(`port ${port}`));
+    await expect(p).rejects.toThrow(/another process is already bound/);
+  }, 30_000);
+
+  // Whether the incumbent's reply or our child's death reaches startSidecar
+  // first is a race, and CI on Linux lost it where Windows won: the port
+  // conflict reported as a plain HealthTimeoutError. Delaying /health past the
+  // child's exit pins the losing order on every platform.
+  it("still names the port conflict when the child's death wins the race", async () => {
+    const { port } = await stubSidecarOnPort({ healthDelayMs: 400 });
+    const p = startSidecar({
+      binaryPath: diesInstantly(),
+      port,
+      autoCleanup: false,
+      healthTimeoutMs: 20_000,
+    });
+    await expect(p).rejects.toBeInstanceOf(SidecarExitedError);
     await expect(p).rejects.toThrow(/another process is already bound/);
   }, 30_000);
 

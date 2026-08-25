@@ -638,6 +638,26 @@ function assertOurs(sidecar: Sidecar): void {
 }
 
 /**
+ * Decide what a dead child actually means, by asking who owns the port now.
+ *
+ * The health wait aborts the instant our child exits, so on a fast machine that
+ * abort can beat a healthy reply from an incumbent — and then a port conflict
+ * reports as a plain timeout. Re-probing settles which failure this is instead
+ * of letting the race name it. Silent when our child is alive, or when nothing
+ * answers: that is a genuine timeout and the caller rethrows it.
+ */
+async function assertNotAForeignServer(sidecar: Sidecar): Promise<void> {
+  const { child } = sidecar;
+  if (child.exitCode === null && child.signalCode === null) return;
+  try {
+    if ((await health(sidecar.baseUrl, 1_000)).status !== "ok") return;
+  } catch {
+    return; // nothing is listening — our sidecar simply died
+  }
+  assertOurs(sidecar); // something else owns the port; throws SidecarExitedError
+}
+
+/**
  * Spawn → wait for health → assert the child is still ours → (optionally)
  * version-check. On any failure the sidecar is shut down before rethrowing, so a
  * failed start never leaks a process.
@@ -649,10 +669,15 @@ export async function startSidecar(opts: StartOptions): Promise<Sidecar> {
   const died = new AbortController();
   sidecar.child.once("exit", () => died.abort());
   try {
-    await waitForHealth(sidecar.baseUrl, {
-      timeoutMs: opts.healthTimeoutMs,
-      signal: died.signal,
-    });
+    try {
+      await waitForHealth(sidecar.baseUrl, {
+        timeoutMs: opts.healthTimeoutMs,
+        signal: died.signal,
+      });
+    } catch (e) {
+      await assertNotAForeignServer(sidecar);
+      throw e;
+    }
     assertOurs(sidecar);
     if (opts.verifyVersion ?? true) {
       await checkVersion(sidecar.baseUrl, {
