@@ -7,6 +7,20 @@ import (
 	"testing"
 )
 
+// writeSentinel marks <root>/<agentID> a completed install, which is what
+// findInstalledBinaryIn requires before it will hand back a binary from there.
+func writeSentinel(t *testing.T, root, agentID, executable string) {
+	t.Helper()
+	dir := filepath.Join(root, agentID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"id":"` + agentID + `","version":"0.1.0","language":"python","executable":"` + executable + `"}`
+	if err := os.WriteFile(filepath.Join(dir, SentinelName), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func hubResponse(installed bool, supervised bool) *HubCatalog {
 	entry := HubEntry{
 		ID:                "email",
@@ -179,6 +193,7 @@ func TestFindInstalledBinaryFindsANonWindowsExecutable(t *testing.T) {
 	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	writeSentinel(t, root, "email", name)
 
 	got := findInstalledBinaryIn(root, "email", "gaia-agent-email")
 	if got == "" {
@@ -198,8 +213,59 @@ func TestFindInstalledBinarySearchesTheBinSubdir(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "gaia-agent-email"), []byte("x"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	writeSentinel(t, root, "email", "gaia-agent-email")
 	if got := findInstalledBinaryIn(root, "email", "gaia-agent-email"); got == "" {
 		t.Fatal("did not search <id>/bin/")
+	}
+}
+
+// The flagship's stdio child and the frozen REST sidecar are both named
+// `gaia-agent`, and other installers stage the REST one into this same
+// directory without a sentinel. Spawning it fed uvicorn's startup log to a JSON
+// line scanner, which the user saw as "unreadable event skipped" (#3062).
+func TestFindInstalledBinaryIgnoresABinaryWithNoSentinel(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "gaia")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	name := "gaia-agent"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := findInstalledBinaryIn(root, "gaia", "gaia-agent"); got != "" {
+		t.Errorf("ran an unverified binary from the install root: %s", got)
+	}
+	// The file is still there, so the diagnostic must say "finish the install"
+	// rather than sending the user to look for a download that already happened.
+	if got := installDirBinaryIn(root, "gaia", "gaia-agent"); got == "" {
+		t.Error("installDirBinaryIn must still see the file, for the diagnostic")
+	}
+}
+
+// A corrupt sentinel is not proof of a completed install either.
+func TestFindInstalledBinaryIgnoresACorruptSentinel(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "gaia")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	name := "gaia-agent"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, SentinelName), []byte("{not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := findInstalledBinaryIn(root, "gaia", "gaia-agent"); got != "" {
+		t.Errorf("trusted a corrupt sentinel: %s", got)
 	}
 }
 
@@ -215,6 +281,10 @@ func TestFindInstalledBinaryIgnoresANonExecutableFile(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "gaia-agent-email"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// Sentinel present on purpose: without it the install-completeness gate
+	// would reject this, and the test would pass without ever reaching the mode
+	// bits it exists to check.
+	writeSentinel(t, root, "email", "gaia-agent-email")
 	if got := findInstalledBinaryIn(root, "email", "gaia-agent-email"); got != "" {
 		t.Errorf("returned a non-executable file: %s", got)
 	}
