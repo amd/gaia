@@ -1220,11 +1220,7 @@ Do NOT wrap conversational replies in JSON.
     @property
     def _openai_tools(self):
         """Return OpenAI function-calling schemas when the active model supports native tool_calls."""
-        from gaia.llm.lemonade_client import is_tool_calling_model
-
-        if getattr(self, "_use_claude", False) or is_tool_calling_model(
-            getattr(self, "model_id", None)
-        ):
+        if self._uses_native_tool_calls():
             return (
                 self._build_openai_tool_schemas(filter_to=self._active_tool_filter)
                 or None
@@ -3246,18 +3242,23 @@ Do NOT wrap conversational replies in JSON.
         # be recorded ok, and ``_is_error_result(None)`` would say it was.
         ok = False
         self._tool_timing_depth = 1
+        self._confirmation_wait_s = 0.0
         try:
             result = self._execute_tool(tool_name, tool_args)
             ok = not self._is_error_result(result)
             return result
         finally:
             self._tool_timing_depth = 0
+            waited = getattr(self, "_confirmation_wait_s", 0.0) or 0.0
             try:
                 recorder.record_tool(
                     step=getattr(getattr(self, "chat", None), "turn_step", 0),
                     name=tool_name or "<unnamed>",
-                    wall_s=time.perf_counter() - started,
+                    # Human approval is excluded — neither tool nor model cost.
+                    # Folding it in made a 1.3s command report as 322.6s.
+                    wall_s=max(0.0, time.perf_counter() - started - waited),
                     ok=ok,
+                    waited_s=waited,
                 )
             except Exception as e:  # noqa: BLE001 - never displace a tool error
                 logger.warning("could not record tool timing: %s", e)
@@ -3342,7 +3343,19 @@ Do NOT wrap conversational replies in JSON.
         # (#2210): AgentConsole prompts on a TTY, SSEOutputHandler blocks on the
         # frontend modal, everything else denies with an actionable message.
         if self._tool_requires_confirmation(tool_name, tool_args):
-            if not self.console.confirm_tool_execution(tool_name, tool_args):
+            # Blocking on a human is not tool cost. Timed separately so a turn
+            # where approval took five minutes does not report the tool as
+            # having taken five minutes.
+            _confirm_started = time.perf_counter()
+            try:
+                approved = self.console.confirm_tool_execution(tool_name, tool_args)
+            finally:
+                # Accumulates: a tool body that invokes another confirmed tool
+                # asks twice, and the outer timer resets this per turn anyway.
+                self._confirmation_wait_s = (
+                    getattr(self, "_confirmation_wait_s", 0.0) or 0.0
+                ) + (time.perf_counter() - _confirm_started)
+            if not approved:
                 return {
                     "status": "denied",
                     "error": self._confirmation_denied_error(tool_name),

@@ -421,6 +421,12 @@ func (c *Catalog) applyInstalledRecord(id, version string) {
 	}
 	a := &c.agents[idx]
 	a.FromHub = true
+	// A sentinel under the install root means the daemon installed it as an
+	// HTTP sidecar it supervises, so there is no binary for the TUI to spawn --
+	// same invariant upsertHubEntry applies. Seeded entries reach here with
+	// whatever transport the seed guessed, and a seeded subprocess agent that
+	// kept it would be spawned over stdio and fed a frozen REST binary.
+	a.Transport = TransportDaemon
 	a.InstalledVersion = version
 	if version != "" {
 		a.Version = version

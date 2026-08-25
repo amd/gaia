@@ -20,6 +20,9 @@ Phase 1's counts came from `.perf/dump_prompt.py` with Lemonade up; Phase 2 uses
 tokens on the baseline (16,993 vs 17,014) because the memory block grew between
 runs — stored facts are live data. Phase 2's numbers are the ones to quote:
 baseline and patched were taken with the same script, minutes apart.
+`dump_prompt.py` was a throwaway live-Lemonade script and is deliberately not
+committed — it printed the composed prompt, which embeds the user's memory store
+verbatim, so `.perf/.gitignore` excludes it.
 
 ## The headline
 
@@ -389,12 +392,12 @@ produces a number that means nothing.
 
 ## Numbers still owed — blocked, not skipped
 
-Lemonade was banned mid-task (the machine was crashing; see
-`~/.gaia/ORCHESTRATION.md`). Everything below needs a **Gemma-4-E4B on Lemonade**
-measurement. **Claude Haiku is not a substitute for any of them** — it is valid
-evidence for logic, not for local-model latency or eval scores. None of these
-are estimated here, and none should be quoted from the arithmetic above as
-though they had been observed.
+Lemonade was banned mid-task: running it was crashing the development machine, so
+local inference stayed disabled there for the rest of the work. Everything below
+needs a **Gemma-4-E4B on Lemonade** measurement. **Claude Haiku is not a
+substitute for any of them** — it is valid evidence for logic, not for
+local-model latency or eval scores. None of these are estimated here, and none
+should be quoted from the arithmetic above as though they had been observed.
 
 | # | owed number | why it needs Lemonade | how to get it |
 |---|---|---|---|
@@ -451,5 +454,7 @@ wired into the dispatch path. Tool timing now lives in a separate
 `PYTHONPATH` that is even slightly malformed — MSYS `/c/...` paths, mixed
 separators from `$(pwd)` — silently falls through and every result then measures
 unmodified main. That happened here and briefly produced a clean bill of health
-for code that was not being executed. The runner asserts `gaia.__file__` points
-into the worktree and aborts if it does not.
+for code that was not being executed. The runner derives the checkout root from
+its own location, so it works in any clone, and it asserts `gaia.__file__` points
+into that root and aborts if it does not. Set `GAIA_PYTHON` if `python` on `PATH`
+is not the interpreter you want.

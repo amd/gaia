@@ -35,7 +35,7 @@ from gaia_agent_chat.tool_bundles import (
 from gaia.agents.base.tools import _TOOL_REGISTRY
 
 #: Ceiling on bundle size. A pull-in must never be able to exhaust the dynamic
-#: slots on its own (GaiaAgentConfig.dynamic_tools_max leaves 12).
+#: slots on its own (GaiaAgentConfig.dynamic_tools_max=26 minus 10 CORE leaves 16).
 MAX_BUNDLE_MEMBERS = 6
 
 
@@ -141,7 +141,11 @@ def test_bundles_have_unique_names():
 
 
 def test_bundles_stay_small():
-    oversized = {b.name: len(b.members) for b in FULL_BUNDLES if len(b.members) > 6}
+    oversized = {
+        b.name: len(b.members)
+        for b in FULL_BUNDLES
+        if len(b.members) > MAX_BUNDLE_MEMBERS
+    }
     assert not oversized, (
         f"bundles over {MAX_BUNDLE_MEMBERS} members: {oversized}. One pull-in "
         "must not be able to exhaust the dynamic slots — split the group."

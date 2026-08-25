@@ -407,3 +407,203 @@ class TestTimingHoldsUpOnTheUnhappyPaths:
 
         assert agent._turn_recorder is None, "the recorder outlived the turn"
         assert log.exists(), "the failed turn wrote no record"
+
+
+class TestApprovalTimeIsNotToolTime:
+    """Time spent waiting for a human to approve a tool belongs to neither the
+    tool nor the model. Folding it into ``wall_s`` made a 1.3s shell command
+    report as 322.6s — the tool looked pathological when the person was simply
+    away from the keyboard."""
+
+    def _recorder(self, tmp_path):
+        return TurnRecorder(
+            query="q",
+            agent_name="A",
+            model_id="m",
+            system_prompt="sys",
+            tool_schemas=None,
+            path=tmp_path / "turns.jsonl",
+        )
+
+    def test_the_confirmation_prompt_is_timed_apart_from_the_tool(self):
+        """Pins the contract at its source: ``_execute_tool`` must leave the
+        approval wait on the agent for ``_execute_tool_timed`` to subtract."""
+        agent = _bare_agent()
+        agent._instance_tools = {"run_shell_command": {"function": lambda **kw: "ok"}}
+        agent._policy_refusal = lambda name, args: None
+        agent._tool_requires_confirmation = lambda name, args: True
+        agent._confirmation_denied_error = lambda name: "denied"
+
+        class _SlowHuman:
+            @staticmethod
+            def confirm_tool_execution(name, args):
+                time.sleep(0.05)
+                return False
+
+        agent.console = _SlowHuman()
+
+        result = Agent._execute_tool(agent, "run_shell_command", {})
+
+        assert result["status"] == "denied"
+        assert agent._confirmation_wait_s >= 0.05
+
+    def test_the_wait_is_recorded_beside_the_tool_not_inside_it(self, tmp_path):
+        recorder = self._recorder(tmp_path)
+        agent = _bare_agent()
+        agent._turn_recorder = recorder
+
+        def _impl(name, args):
+            # What the real confirmation branch does to the agent.
+            agent._confirmation_wait_s = 0.20
+            return {"status": "ok"}
+
+        agent._execute_tool = _impl
+        agent._is_error_result = lambda r: False
+        agent._execute_tool_timed("run_shell_command", {})
+
+        (call,) = recorder.tool_calls
+        assert call["waited_s"] == pytest.approx(0.20, abs=0.01)
+        # The tool itself returned instantly; only the wait took time.
+        assert call["wall_s"] < 0.1, f"approval time billed to the tool: {call}"
+
+    def test_a_turn_with_no_approval_carries_no_wait(self, tmp_path):
+        """The key is absent, not zero — a turn nobody was asked about must not
+        grow a field suggesting they were."""
+        recorder = self._recorder(tmp_path)
+        agent = _bare_agent()
+        agent._turn_recorder = recorder
+        agent._execute_tool = lambda name, args: {"status": "ok"}
+        agent._is_error_result = lambda r: False
+
+        agent._execute_tool_timed("read_file", {})
+
+        (call,) = recorder.tool_calls
+        assert "waited_s" not in call
+        assert recorder.finish(answer="a", steps=1)["totals"]["waiting_on_user_s"] == 0
+
+    def test_waiting_inflates_neither_tool_time_nor_overhead(self, tmp_path):
+        recorder = self._recorder(tmp_path)
+        recorder.record_tool(step=1, name="run_shell_command", wall_s=1.3, waited_s=8.0)
+        totals = recorder.finish(answer="a", steps=1)["totals"]
+
+        assert totals["tool_s"] == pytest.approx(1.3, abs=0.01)
+        assert totals["waiting_on_user_s"] == pytest.approx(8.0, abs=0.01)
+        # The turn itself took milliseconds, so charging it 8s of someone
+        # else's time would drive overhead negative — it is clamped at 0.
+        assert totals["overhead_s"] == 0.0
+
+    def test_a_stale_wait_cannot_leak_into_the_next_tool(self, tmp_path):
+        """``_confirmation_wait_s`` lives on the agent, so the second call must
+        reset it — otherwise one approval discounts every later tool."""
+        recorder = self._recorder(tmp_path)
+        agent = _bare_agent()
+        agent._turn_recorder = recorder
+        agent._is_error_result = lambda r: False
+
+        def _confirmed(name, args):
+            agent._confirmation_wait_s = 5.0
+            return {"status": "ok"}
+
+        agent._execute_tool = _confirmed
+        agent._execute_tool_timed("run_shell_command", {})
+
+        agent._execute_tool = lambda name, args: {"status": "ok"}
+        agent._execute_tool_timed("read_file", {})
+
+        first, second = recorder.tool_calls
+        assert first["waited_s"] == pytest.approx(5.0, abs=0.01)
+        assert "waited_s" not in second
+
+    def test_two_approvals_in_one_tool_both_count(self):
+        """A tool body that invokes another confirmed tool asks twice. The
+        second prompt must add to the wait, not replace it — otherwise the
+        outer approval is silently billed back to the tool."""
+        agent = _bare_agent()
+        agent._instance_tools = {"a": {"function": lambda **kw: "ok"}}
+        agent._policy_refusal = lambda name, args: None
+        agent._tool_requires_confirmation = lambda name, args: True
+        agent._confirmation_denied_error = lambda name: "denied"
+
+        class _SlowHuman:
+            @staticmethod
+            def confirm_tool_execution(name, args):
+                time.sleep(0.05)
+                return False
+
+        agent.console = _SlowHuman()
+
+        Agent._execute_tool(agent, "a", {})
+        Agent._execute_tool(agent, "a", {})
+
+        assert agent._confirmation_wait_s >= 0.10
+
+
+class TestThePrefixProxyMatchesWhereTheServerPutsThings:
+    """The cached/new split is only meaningful if our rendered proxy orders
+    things the way the chat template does. Caught in a live run: tools were
+    appended AFTER the conversation, so the shared prefix stopped at the first
+    history message and a turn whose entire system+tools header was reusable
+    reported 27% cache hit instead of ~99%."""
+
+    @staticmethod
+    def _sdk(recorder):
+        from gaia.chat.sdk import AgentSDK
+
+        sdk = AgentSDK.__new__(AgentSDK)
+        sdk.turn_recorder = recorder
+        sdk.turn_step = 1
+        sdk.log = logging.getLogger("test.sdk")
+        return sdk
+
+    def _recorder(self, tmp_path):
+        return TurnRecorder(
+            query="q",
+            agent_name="A",
+            model_id="m",
+            system_prompt="sys",
+            tool_schemas=None,
+            path=tmp_path / "turns.jsonl",
+        )
+
+    def test_growing_history_still_reuses_the_system_and_tools_header(self, tmp_path):
+        recorder = self._recorder(tmp_path)
+        sdk = self._sdk(recorder)
+        system = {"role": "system", "content": "S" * 12000}
+        tools = [
+            {
+                "type": "function",
+                "function": {"name": f"t{i}", "description": "d" * 400},
+            }
+            for i in range(30)
+        ]
+
+        sdk._recorder_begin([system, {"role": "user", "content": "hello"}], tools)
+        sdk._recorder_end(stats={})
+        # A tool call and its result appended — the header is untouched.
+        sdk._recorder_begin(
+            [
+                system,
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": "calling"},
+                {"role": "user", "content": "[Tool result: shell] ok"},
+            ],
+            tools,
+        )
+        sdk._recorder_end(stats={})
+
+        second = recorder.llm_calls[1]
+        assert second["cache_hit_ratio"] > 0.95, (
+            "the system+tools header must stay in the shared prefix when history "
+            f"grows; got {second['cache_hit_ratio']:.0%}"
+        )
+
+    def test_an_empty_message_list_does_not_crash_the_recorder(self, tmp_path):
+        """Slicing a proxy is not worth a failed turn; the hook swallows, but
+        the call must still be opened."""
+        recorder = self._recorder(tmp_path)
+        sdk = self._sdk(recorder)
+
+        sdk._recorder_begin([], None)
+        sdk._recorder_end(stats={})
+
+        assert len(recorder.llm_calls) == 1

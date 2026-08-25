@@ -238,6 +238,8 @@ type CanonicalTurnTool struct {
 	Name  string  `json:"name"`
 	WallS float64 `json:"wall_s"`
 	OK    bool    `json:"ok"`
+	// Absent unless this call actually waited on a human.
+	WaitedS float64 `json:"waited_s"`
 }
 
 // CanonicalTurnTotals splits the turn's wall time and its token counts. The
@@ -245,8 +247,11 @@ type CanonicalTurnTool struct {
 // the backend: they use different tokenizers, so a cached/new split is only
 // ever valid within one source — never Cached_Server against Local.
 type CanonicalTurnTotals struct {
-	LLMS                    float64 `json:"llm_s"`
-	ToolS                   float64 `json:"tool_s"`
+	LLMS  float64 `json:"llm_s"`
+	ToolS float64 `json:"tool_s"`
+	// Blocked on a human approving a tool. Neither tool nor model cost, so it
+	// gets its own line rather than inflating either.
+	WaitingOnUserS          float64 `json:"waiting_on_user_s"`
 	OverheadS               float64 `json:"overhead_s"`
 	InputTokensLocal        int     `json:"input_tokens_local"`
 	InputTokensCachedLocal  int     `json:"input_tokens_cached_local"`
