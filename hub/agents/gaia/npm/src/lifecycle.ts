@@ -20,6 +20,7 @@
  */
 
 import { type ChildProcess, spawn, spawnSync } from "node:child_process";
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -27,10 +28,20 @@ import {
   BinaryNotFoundError,
   HealthTimeoutError,
   HttpError,
+  IntegrityError,
+  MalformedResponseError,
+  SidecarExitedError,
   VersionMismatchError,
 } from "./errors.js";
 import { createLogger } from "./logger.js";
-import { currentPlatformKey } from "./platform.js";
+import {
+  type BinaryLock,
+  type ComponentName,
+  currentPlatformKey,
+  isPlaceholderSha,
+  loadLock,
+  resolveEntry,
+} from "./platform.js";
 
 const log = createLogger("lifecycle");
 
@@ -83,10 +94,73 @@ export interface ResolveOptions {
   resourcesDir: string;
   /** Override the executable basename (defaults per-platform). */
   executable?: string;
+  /**
+   * Re-verify the file's SHA-256 against `binaries.lock.json` before handing
+   * back a path that is about to be spawned. Default `true` — the cache dir is
+   * predictable, so anything that can write it could otherwise get code run.
+   * Set `false` only for a binary you built yourself, which no lock describes.
+   */
+  verify?: boolean;
+  /** Pre-loaded lock, to avoid re-reading it per call. */
+  lock?: BinaryLock;
+}
+
+/** SHA-256 of a file, read in chunks so a ~200MB binary is not buffered whole. */
+function fileSha256Sync(filePath: string): string {
+  const hash = crypto.createHash("sha256");
+  const buf = Buffer.allocUnsafe(1 << 20);
+  const fd = fs.openSync(filePath, "r");
+  try {
+    for (;;) {
+      const n = fs.readSync(fd, buf, 0, buf.length, null);
+      if (n === 0) break;
+      hash.update(buf.subarray(0, n));
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
+  return hash.digest("hex");
+}
+
+/**
+ * Re-verify an on-disk binary against the lock. `fetch.ts` calls the SHA verify
+ * "the security boundary"; this keeps that true for the resolve→spawn path,
+ * which is exported and whose cache path is guessable.
+ */
+function verifyAgainstLock(
+  full: string,
+  component: ComponentName,
+  lock: BinaryLock | undefined,
+): void {
+  const platformKey = currentPlatformKey();
+  const entry = resolveEntry(lock ?? loadLock(), component, platformKey);
+  if (isPlaceholderSha(entry.sha256)) {
+    throw new IntegrityError(
+      `binaries.lock.json has a placeholder sha256 for ${component}/'${platformKey}', ` +
+        `so ${full} cannot be verified and must not be spawned. Install a released ` +
+        "@amd-gaia/gaia, or pass { verify: false } if you built this binary yourself.",
+    );
+  }
+  const actual = fileSha256Sync(full);
+  if (actual.toLowerCase() !== entry.sha256.toLowerCase()) {
+    throw new IntegrityError(
+      `SHA-256 mismatch for the ${component} binary at ${full}:\n` +
+        `  expected ${entry.sha256}\n` +
+        `  actual   ${actual}\n` +
+        "Refusing to spawn a binary that does not match binaries.lock.json. " +
+        "Re-run `npx @amd-gaia/gaia fetch --force` to reinstall it; if it persists, " +
+        "report it at https://github.com/amd/gaia/issues.",
+    );
+  }
 }
 
 /** Resolve a fetched binary's path, failing loudly if it is not there. */
-function resolveIn(opts: ResolveOptions, fallback: string, what: string): string {
+function resolveIn(
+  opts: ResolveOptions,
+  component: ComponentName,
+  fallback: string,
+  what: string,
+): string {
   if (!opts?.resourcesDir) {
     throw new TypeError("resolve requires { resourcesDir }");
   }
@@ -97,15 +171,16 @@ function resolveIn(opts: ResolveOptions, fallback: string, what: string): string
         "Run the fetch step first: `npx @amd-gaia/gaia fetch`.",
     );
   }
+  if (opts.verify ?? true) verifyAgainstLock(full, component, opts.lock);
   return full;
 }
 
 export function resolveSidecarPath(opts: ResolveOptions): string {
-  return resolveIn(opts, sidecarExecutableName(), "gaia-agent sidecar");
+  return resolveIn(opts, "sidecar", sidecarExecutableName(), "gaia-agent sidecar");
 }
 
 export function resolveTuiPath(opts: ResolveOptions): string {
-  return resolveIn(opts, tuiExecutableName(), "gaia-tui");
+  return resolveIn(opts, "tui", tuiExecutableName(), "gaia-tui");
 }
 
 export interface SpawnOptions {
@@ -145,18 +220,46 @@ const liveSidecars = new Set<Sidecar>();
 let cleanupInstalled = false;
 const CLEANUP_SIGNALS: NodeJS.Signals[] = ["SIGINT", "SIGTERM", "SIGHUP"];
 
+/** stderr from an exit handler: console.error can be async on a piped stderr. */
+function writeStderrSync(msg: string): void {
+  try {
+    fs.writeSync(2, msg.endsWith("\n") ? msg : `${msg}\n`);
+  } catch {
+    /* stderr unavailable */
+  }
+}
+
 function killTreeSync(sidecar: Sidecar): void {
   const { child } = sidecar;
   if (child.pid === undefined) return;
   if (child.exitCode !== null || child.signalCode !== null) return;
   try {
     if (process.platform === "win32") {
-      spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore" });
+      const r = spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+        stdio: ["ignore", "ignore", "pipe"],
+        encoding: "utf8",
+      });
+      // A refusal ("Access is denied") leaves the port held; say so now rather
+      // than let it surface as an unexplained bind failure on the next run.
+      if (r.error || r.status !== 0) {
+        writeStderrSync(
+          `[gaia:lifecycle] ERROR taskkill /PID ${child.pid} /T /F failed ` +
+            `(${r.error ? r.error.message : `exit ${String(r.status)}`}): ` +
+            `${(r.stderr ?? "").trim() || "(no output)"}. ` +
+            `Kill pid ${child.pid} manually or port ${sidecar.port} stays bound.`,
+        );
+      }
     } else {
       process.kill(-child.pid, "SIGKILL");
     }
-  } catch {
-    /* already gone */
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException).code;
+    if (code === "ESRCH") return; // already gone — the outcome we wanted
+    writeStderrSync(
+      `[gaia:lifecycle] ERROR could not kill the sidecar process group ` +
+        `${String(child.pid)}: ${(e as Error).message}. ` +
+        `Kill it manually or port ${sidecar.port} stays bound.`,
+    );
   }
 }
 
@@ -180,27 +283,37 @@ function crashHandler(err: unknown): void {
   process.exit(1);
 }
 
+/**
+ * True when ours is the only listener for `event`, i.e. nothing else in this
+ * process handles it and the process is therefore going down.
+ *
+ * Reaping is only ours to do in that case: a host with its own handler keeps
+ * running, and killing its sidecar would turn an exception it handled into an
+ * unexplained ECONNREFUSED on its next request.
+ */
+function weOwnTheExit(event: string): boolean {
+  return process.listenerCount(event) === 1;
+}
+
 function installCleanupHandlers(): void {
   if (cleanupInstalled) return;
   cleanupInstalled = true;
+  // The backstop: whatever route the process takes out, this runs.
   process.on("exit", reapAllSync);
+  // crashHandler reaps before it exits, so the guard is the whole handler.
   process.on("uncaughtException", (err) => {
-    reapAllSync();
-    if (process.listenerCount("uncaughtException") === 1) crashHandler(err);
+    if (weOwnTheExit("uncaughtException")) crashHandler(err);
   });
   process.on("unhandledRejection", (err) => {
-    reapAllSync();
-    if (process.listenerCount("unhandledRejection") === 1) crashHandler(err);
+    if (weOwnTheExit("unhandledRejection")) crashHandler(err);
   });
   for (const sig of CLEANUP_SIGNALS) {
     const handler = (): void => {
+      if (!weOwnTheExit(sig)) return;
       reapAllSync();
-      // Sole listener → restore the default disposition and re-raise so the
-      // process still terminates (Ctrl+C).
-      if (process.listenerCount(sig) === 1) {
-        process.removeListener(sig, handler);
-        process.kill(process.pid, sig);
-      }
+      // Restore the default disposition and re-raise so we still terminate.
+      process.removeListener(sig, handler);
+      process.kill(process.pid, sig);
     };
     process.on(sig, handler);
   }
@@ -253,9 +366,18 @@ export function spawnSidecar(opts: SpawnOptions): Sidecar {
   return sidecar;
 }
 
-async function getJson<T>(url: string, timeoutMs: number): Promise<T> {
+async function getJson<T>(
+  url: string,
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<T> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+  // Link the caller's signal so an in-flight probe aborts the moment the
+  // process being probed dies, rather than at the next poll.
+  const onAbort = (): void => controller.abort();
+  if (signal?.aborted) controller.abort();
+  else signal?.addEventListener("abort", onAbort, { once: true });
   try {
     const res = await fetch(url, {
       headers: { accept: "application/json" },
@@ -263,15 +385,31 @@ async function getJson<T>(url: string, timeoutMs: number): Promise<T> {
     });
     const text = await res.text();
     if (!res.ok) throw new HttpError(res.status, url, text);
-    return JSON.parse(text) as T;
+    try {
+      return JSON.parse(text) as T;
+    } catch (e) {
+      // A proxy or captive portal answering 200 with HTML lands here; a bare
+      // SyntaxError would escape the CLI's GaiaError branch as a raw stack.
+      throw new MalformedResponseError(
+        `${url} returned HTTP ${res.status} but its body is not JSON ` +
+          `(${(e as Error).message}). First 200 bytes: ${JSON.stringify(text.slice(0, 200))}. ` +
+          "Something other than the gaia sidecar is answering that address — " +
+          "check for a proxy on the port, or point at the right host/port.",
+      );
+    }
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
   }
 }
 
 /** `GET /health` — liveness only; it does not mean a model is loaded. */
-export function health(baseUrl: string, timeoutMs = 1000): Promise<HealthResponse> {
-  return getJson<HealthResponse>(`${baseUrl}/health`, timeoutMs);
+export function health(
+  baseUrl: string,
+  timeoutMs = 1000,
+  signal?: AbortSignal,
+): Promise<HealthResponse> {
+  return getJson<HealthResponse>(`${baseUrl}/health`, timeoutMs, signal);
 }
 
 /** `GET /version` — the contract probe (`{ apiVersion, agentVersion }`). */
@@ -303,25 +441,32 @@ export async function waitForHealth(
   const deadline = Date.now() + timeoutMs;
   let lastErr = "";
   let attempts = 0;
+  // Re-checked after every await, not just at the top of the loop: a probe that
+  // races the process's death would otherwise report a foreign server's health.
+  const throwIfAborted = (): void => {
+    if (!opts.signal?.aborted) return;
+    throw new HealthTimeoutError(
+      `health wait for ${baseUrl} was aborted after ${attempts} probe(s) ` +
+        "(the process being probed exited).",
+    );
+  };
   while (Date.now() < deadline) {
-    if (opts.signal?.aborted) {
-      throw new HealthTimeoutError(
-        `health wait for ${baseUrl} was aborted after ${attempts} probe(s) ` +
-          "(the process being probed exited).",
-      );
-    }
+    throwIfAborted();
     attempts++;
     try {
-      const h = await health(baseUrl, intervalMs * 4);
+      const h = await health(baseUrl, intervalMs * 4, opts.signal);
+      throwIfAborted();
       if (h.status === "ok") {
         log.debug(`sidecar healthy after ${attempts} probe(s)`);
         return;
       }
       lastErr = `unexpected health status: ${JSON.stringify(h)}`;
     } catch (e) {
+      throwIfAborted();
       lastErr = (e as Error).message;
     }
     await sleep(intervalMs);
+    throwIfAborted();
   }
   throw new HealthTimeoutError(
     `the gaia sidecar at ${baseUrl} did not become healthy within ${timeoutMs}ms ` +
@@ -375,8 +520,8 @@ export async function checkVersion(
  */
 export async function shutdown(sidecar: Sidecar, timeoutMs = 5000): Promise<void> {
   const { child } = sidecar;
-  liveSidecars.delete(sidecar); // an explicit shutdown owns the lifecycle now
   if (child.exitCode !== null || child.signalCode !== null || child.pid === undefined) {
+    liveSidecars.delete(sidecar);
     log.debug("shutdown: sidecar already exited");
     return;
   }
@@ -387,11 +532,29 @@ export async function shutdown(sidecar: Sidecar, timeoutMs = 5000): Promise<void
     child.once("exit", () => resolve());
   });
 
+  // Why the kill was refused, kept for the throw below — "Access is denied" is
+  // the difference between "retry" and "run this elevated".
+  let killDiagnostic = "";
+
   if (process.platform === "win32") {
     const killer = spawn("taskkill", ["/PID", String(pid), "/T", "/F"], {
-      stdio: "ignore",
+      stdio: ["ignore", "ignore", "pipe"],
     });
-    killer.on("error", (e) => log.error(`taskkill failed: ${e.message}`));
+    let taskkillErr = "";
+    killer.stderr?.on("data", (d) => {
+      taskkillErr += String(d);
+    });
+    killer.on("error", (e) => {
+      killDiagnostic = `taskkill could not be launched: ${e.message}`;
+      log.error(killDiagnostic);
+    });
+    killer.on("exit", (code) => {
+      if (code === 0) return;
+      killDiagnostic =
+        `taskkill /PID ${pid} /T /F exited ${String(code)}: ` +
+        `${taskkillErr.trim() || "(no output)"}`;
+      log.error(killDiagnostic);
+    });
   } else {
     try {
       process.kill(-pid, "SIGTERM"); // negative pid → the whole process group
@@ -427,16 +590,20 @@ export async function shutdown(sidecar: Sidecar, timeoutMs = 5000): Promise<void
     // Bound the final wait too. On Windows there is no second escalation after
     // taskkill, so an unbounded await here would hang Ctrl+C forever.
     if ((await raceExit(timeoutMs)) === "timeout") {
+      // Deliberately still registered: the process-exit reaper is the last
+      // chance to reap a survivor, and de-registering here would orphan it.
       throw new Error(
-        `the gaia sidecar (pid ${pid}) did not exit after a forced kill. ` +
-          "Kill it manually — " +
+        `the gaia sidecar (pid ${pid}) did not exit after a forced kill` +
+          (killDiagnostic ? ` (${killDiagnostic})` : "") +
+          ". Kill it manually — " +
           (process.platform === "win32"
             ? `taskkill /PID ${pid} /T /F`
             : `kill -9 -${pid}`) +
-          ` — or the port it holds stays bound.`,
+          ` — or port ${sidecar.port} stays bound.`,
       );
     }
   }
+  liveSidecars.delete(sidecar);
   log.info("sidecar shut down");
 }
 
@@ -450,9 +617,30 @@ export interface StartOptions extends SpawnOptions {
 }
 
 /**
- * Spawn → wait for health → (optionally) version-check. On any failure the
- * sidecar is shut down before rethrowing, so a failed start never leaks a
- * process.
+ * Refuse a handle whose own child is dead. A healthy `/health` proves *something*
+ * owns the port — this proves it is ours. Without it a second `gaia serve` would
+ * print a ready URL for a server it cannot shut down.
+ */
+function assertOurs(sidecar: Sidecar): void {
+  const { child } = sidecar;
+  if (child.exitCode === null && child.signalCode === null) return;
+  throw new SidecarExitedError(
+    `the gaia sidecar we spawned exited (code=${String(child.exitCode)} ` +
+      `signal=${String(child.signalCode)}) while ${sidecar.baseUrl}/health still ` +
+      `answered — another process is already bound to port ${sidecar.port}, most ` +
+      "likely an instance you started earlier. Stop it (" +
+      (process.platform === "win32"
+        ? `netstat -ano | findstr :${sidecar.port}`
+        : `lsof -i :${sidecar.port}`) +
+      ") or start on a different port with --port. Re-run with DEBUG=gaia to see " +
+      "the sidecar's own output.",
+  );
+}
+
+/**
+ * Spawn → wait for health → assert the child is still ours → (optionally)
+ * version-check. On any failure the sidecar is shut down before rethrowing, so a
+ * failed start never leaks a process.
  */
 export async function startSidecar(opts: StartOptions): Promise<Sidecar> {
   const sidecar = spawnSidecar(opts);
@@ -465,10 +653,12 @@ export async function startSidecar(opts: StartOptions): Promise<Sidecar> {
       timeoutMs: opts.healthTimeoutMs,
       signal: died.signal,
     });
+    assertOurs(sidecar);
     if (opts.verifyVersion ?? true) {
       await checkVersion(sidecar.baseUrl, {
         expectedApiVersion: opts.expectedApiVersion,
       });
+      assertOurs(sidecar);
     }
     return sidecar;
   } catch (e) {

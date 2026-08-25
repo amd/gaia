@@ -29,6 +29,12 @@ export class VersionMismatchError extends GaiaError {}
 /** A binary could not be located on disk for spawning. */
 export class BinaryNotFoundError extends GaiaError {}
 
+/** The sidecar we spawned died; anything answering its port is not ours. */
+export class SidecarExitedError extends GaiaError {}
+
+/** A 2xx response whose body is not the JSON the contract promises. */
+export class MalformedResponseError extends GaiaError {}
+
 /** An HTTP request to the sidecar returned a non-2xx status. */
 export class HttpError extends GaiaError {
   constructor(

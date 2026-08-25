@@ -124,15 +124,52 @@ export async function fileSha256(filePath: string): Promise<string | null> {
 }
 
 /**
- * Verify a buffer against an expected SHA-256. Throws `IntegrityError` loudly on
- * mismatch — this is the no-silent-fallback integrity gate.
+ * Stream a response body to `tmp`, hashing as it goes.
+ *
+ * Incremental on purpose: the sidecar is ~200MB and `arrayBuffer()` would peak
+ * at roughly double that. Awaiting each write applies backpressure.
  */
-export function verifySha256(
-  buf: Buffer,
-  expected: string,
-  sourceLabel: string,
-): string {
-  const actual = sha256Hex(buf);
+async function streamToFile(
+  res: Response,
+  tmp: string,
+  url: string,
+): Promise<{ sha256: string; bytes: number }> {
+  if (!res.body) {
+    throw new Error(
+      `download failed: ${url} returned HTTP ${res.status} with no response body. ` +
+        "Check the base URL and that the artifact is published for this platform.",
+    );
+  }
+  const hash = crypto.createHash("sha256");
+  let bytes = 0;
+  let fh: fsp.FileHandle;
+  try {
+    fh = await fsp.open(tmp, "w");
+  } catch (e) {
+    throw new Error(
+      `cannot open ${tmp} to stage the download: ${(e as Error).message}. ` +
+        "Check write permissions on that directory, or pass a different " +
+        "--sidecar-dir / --cache-dir.",
+      { cause: e },
+    );
+  }
+  try {
+    for await (const chunk of res.body as unknown as AsyncIterable<Uint8Array>) {
+      hash.update(chunk);
+      bytes += chunk.byteLength;
+      await fh.write(chunk);
+    }
+  } finally {
+    await fh.close();
+  }
+  return { sha256: hash.digest("hex"), bytes };
+}
+
+/**
+ * Compare an already-computed SHA-256 with the expected one. Throws
+ * `IntegrityError` loudly on mismatch — this is the no-silent-fallback gate.
+ */
+function assertSha256(actual: string, expected: string, sourceLabel: string): string {
   if (actual.toLowerCase() !== expected.toLowerCase()) {
     throw new IntegrityError(
       `SHA-256 mismatch for ${sourceLabel}:\n` +
@@ -145,6 +182,15 @@ export function verifySha256(
     );
   }
   return actual;
+}
+
+/** Verify an in-memory buffer against an expected SHA-256. */
+export function verifySha256(
+  buf: Buffer,
+  expected: string,
+  sourceLabel: string,
+): string {
+  return assertSha256(sha256Hex(buf), expected, sourceLabel);
 }
 
 /**
@@ -211,7 +257,12 @@ export async function fetchBinary(opts: FetchOptions): Promise<FetchResult> {
   const timeoutMs = opts.timeoutMs ?? 300_000;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
-  let buf: Buffer;
+
+  // Streamed to a temp file while hashing incrementally: the sidecar is ~200MB
+  // and buffering it whole peaks at roughly double that in RSS.
+  const tmp = `${binaryPath}.download.${process.pid}`;
+  let actualSha: string;
+  let bytes: number;
   try {
     const res = await fetchImpl(url, {
       headers: { accept: "application/octet-stream" },
@@ -223,8 +274,9 @@ export async function fetchBinary(opts: FetchOptions): Promise<FetchResult> {
           "Check the base URL and that the artifact is published for this platform.",
       );
     }
-    buf = Buffer.from(await res.arrayBuffer());
+    ({ sha256: actualSha, bytes } = await streamToFile(res, tmp, url));
   } catch (e) {
+    await fsp.rm(tmp, { force: true }).catch(() => undefined);
     if ((e as Error).name === "AbortError") {
       throw new Error(`download timed out after ${timeoutMs}ms for ${url}`);
     }
@@ -232,23 +284,40 @@ export async function fetchBinary(opts: FetchOptions): Promise<FetchResult> {
   } finally {
     clearTimeout(timer);
   }
-  log.debug(`downloaded ${buf.length} bytes`);
+  log.debug(`downloaded ${bytes} bytes`);
 
-  const sha = verifySha256(buf, entry.sha256, `${opts.component} ${platformKey} (${url})`);
-
-  // Write to a temp then rename, so a crash mid-write never leaves a
-  // half-written file that a later run would treat as a real binary.
-  const tmp = `${binaryPath}.download.${process.pid}`;
+  // Verify BEFORE the rename: unverified bytes must never reach the final path.
+  let sha: string;
   try {
-    await fsp.writeFile(tmp, buf);
-    await fsp.rename(tmp, binaryPath);
+    sha = assertSha256(actualSha, entry.sha256, `${opts.component} ${platformKey} (${url})`);
   } catch (e) {
     await fsp.rm(tmp, { force: true }).catch(() => undefined);
     throw e;
   }
 
-  if (process.platform !== "win32") {
-    await fsp.chmod(binaryPath, 0o755);
+  try {
+    await fsp.rename(tmp, binaryPath);
+  } catch (e) {
+    await fsp.rm(tmp, { force: true }).catch(() => undefined);
+    throw new Error(
+      `downloaded and verified the ${opts.component}, but could not move it into place ` +
+        `at ${binaryPath}: ${(e as Error).message}. ` +
+        "The usual cause is that the file is in use — stop any running gaia sidecar " +
+        "or TUI (`gaia kill`) and re-run. Otherwise check write permissions on " +
+        `${outDir}, or pass a different --sidecar-dir / --cache-dir.`,
+      { cause: e },
+    );
+  }
+
+  try {
+    if (process.platform !== "win32") await fsp.chmod(binaryPath, 0o755);
+  } catch (e) {
+    throw new Error(
+      `installed the ${opts.component} at ${binaryPath} but could not make it ` +
+        `executable: ${(e as Error).message}. Run \`chmod +x ${binaryPath}\`, or ` +
+        "pass a --sidecar-dir / --cache-dir you own.",
+      { cause: e },
+    );
   }
 
   log.info(`installed verified ${opts.component} -> ${binaryPath}`);

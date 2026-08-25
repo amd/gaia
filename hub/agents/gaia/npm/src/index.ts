@@ -91,6 +91,8 @@ export {
   HealthTimeoutError,
   HttpError,
   IntegrityError,
+  MalformedResponseError,
   PlatformError,
+  SidecarExitedError,
   VersionMismatchError,
 } from "./errors.js";
