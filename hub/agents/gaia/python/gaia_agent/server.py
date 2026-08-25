@@ -168,7 +168,19 @@ class DuplicateRunError(RuntimeError):
 #: the moment its run registers; this only bounds cancels whose run never came.
 _MAX_PRECANCELLED = 256
 
+#: Cap on remembered just-finished ids, which is what lets ``cancel`` tell a run
+#: that ended a moment ago from one that has not registered yet.
+_MAX_FINISHED = 256
+
 _MISSING = object()
+
+
+def _remember_bounded(store: Dict[str, None], key: str, cap: int) -> None:
+    """Record ``key`` as the newest entry, dropping the oldest past ``cap``."""
+    store.pop(key, None)  # re-insert at the end, so this is the newest
+    store[key] = None
+    while len(store) > cap:
+        store.pop(next(iter(store)))
 
 
 class _RunRegistry:
@@ -179,6 +191,9 @@ class _RunRegistry:
         #: run_ids cancelled before their ``/query`` registered. Insertion
         #: ordered, so the oldest is the one evicted at the cap.
         self._precancelled: Dict[str, None] = {}
+        #: run_ids whose run has already ended. Same shape, and the reason
+        #: ``cancel`` does not tombstone them.
+        self._finished: Dict[str, None] = {}
         self._lock = threading.Lock()
 
     def add(self, run: _QueryRun) -> bool:
@@ -205,12 +220,18 @@ class _RunRegistry:
     def cancel(self, run_id: str) -> bool:
         """Stop a live run, or remember the cancel for one about to register.
 
-        Returns whether a LIVE run was stopped. An id with no live run stays
-        ``False`` — a cancel racing a run's own completion should not claim to
-        have stopped anything — but the id is tombstoned so that a run which
-        registers *after* this call starts already cancelled. The caller mints
-        ``run_id`` before it POSTs ``/query``, so that ordering is a real race,
-        not a hypothetical one. Consumed on use, so it fires at most once.
+        Returns whether a LIVE run was stopped; an id with no live run stays
+        ``False``, because a cancel racing a run's own completion should not
+        claim to have stopped anything.
+
+        Two different situations miss ``_runs``, and only one of them may be
+        tombstoned. A run that ALREADY ENDED is the common, documented race, and
+        arming a tombstone for it would leave an entry nothing can consume — and
+        would pre-cancel the next run if the caller reused that id. A run that
+        has NOT REGISTERED YET is the real ordering this exists for: the caller
+        mints ``run_id`` before it POSTs ``/query``, so a cancel can genuinely
+        arrive first. Only the latter is remembered, and it is consumed on use,
+        so it fires at most once.
         """
         with self._lock:
             run = self._runs.get(run_id)
@@ -218,15 +239,16 @@ class _RunRegistry:
                 run.cancel_event.set()
                 run.handler.cancelled.set()
                 return True
-            self._precancelled.pop(run_id, None)  # re-insert as newest
-            self._precancelled[run_id] = None
-            while len(self._precancelled) > _MAX_PRECANCELLED:
-                self._precancelled.pop(next(iter(self._precancelled)))
+            if run_id not in self._finished:
+                _remember_bounded(self._precancelled, run_id, _MAX_PRECANCELLED)
             return False
 
     def remove(self, run_id: str) -> None:
+        """Retire a finished run, remembering the id so a late cancel knows it
+        ended rather than treating it as one that has yet to start."""
         with self._lock:
             self._runs.pop(run_id, None)
+            _remember_bounded(self._finished, run_id, _MAX_FINISHED)
 
 
 _registry = _RunRegistry()

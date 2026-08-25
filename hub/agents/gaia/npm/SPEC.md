@@ -245,6 +245,11 @@ Both defaults are overridable (`--sidecar-dir`, `--cache-dir`).
 
 Served by `gaia_agent.server`. Bound to `127.0.0.1` only.
 
+Every request must carry a loopback `Host` header. A `Host` that is non-loopback,
+absent or empty is refused with `400` before routing — that check is what defeats
+DNS rebinding, so it fails closed rather than serving a request that simply omits
+the header.
+
 | Property           | Value                                   |
 | ------------------ | --------------------------------------- |
 | Default port       | `8141` (`DEFAULT_PORT` in `server.py`)  |
@@ -299,6 +304,14 @@ evicted id gets a fresh agent (the conversation is not blocked) but the
 response stream's first event is a `{"type":"status","status":"warning",...}`
 telling the caller that per-turn state — most visibly any loaded skill — did
 not survive and should be reloaded.
+
+A second `/query` reusing a `run_id` that is still in flight gets `409` —
+`run_id` is caller-minted, so mint a fresh UUID per request; reusing one would
+leave the earlier run with no way to be cancelled. A `/query` supplying a `model`
+that differs from the one its `session_id` was built with also gets `409`: only
+agent construction reads a model, so the request cannot be honoured on the
+retained agent. Omit `model` to continue on the session's current one, or start a
+new `session_id` to switch.
 
 ### 5.3 Version gate
 

@@ -245,7 +245,7 @@ def test_the_refused_duplicate_does_not_leak_its_agent(built):
     assert agents[0].closed == 1
 
 
-def test_run_registry_rejects_a_duplicate_directly(built):
+def test_run_registry_rejects_a_duplicate_directly():
     run_id = str(uuid.uuid4())
     reg = server_mod._RunRegistry()
     reg.add(server_mod._QueryRun(run_id, object(), object()))
@@ -339,6 +339,51 @@ def test_a_cancel_that_beats_the_run_still_stops_it(built):
     # ...but the run that arrives afterwards starts already cancelled.
     assert agents[0].saw_cancelled is True
     assert len(_terminals(r)) == 1
+
+
+def test_cancelling_a_run_that_just_finished_does_not_arm_a_tombstone(built):
+    """A cancel racing the run's own completion is the documented normal case,
+    so it must not leave an entry behind that nothing can ever consume — and
+    must not pre-cancel a reuse of that id, which the run table allows once the
+    first run is done."""
+    client, agents = built
+    run_id = str(uuid.uuid4())
+
+    first = client.post("/v1/gaia/query", json=_body(run_id=run_id))
+    assert first.status_code == 200
+    assert _wait_until(lambda: server_mod._registry.get(run_id) is None)
+
+    late = client.post(f"/v1/gaia/query/{run_id}/cancel")
+    assert late.json()["cancelled"] is False
+    assert run_id not in server_mod._registry._precancelled
+
+    second = client.post("/v1/gaia/query", json=_body(run_id=run_id))
+    assert second.status_code == 200, second.text
+    assert agents[1].saw_cancelled is False, (
+        "a reused run_id was pre-cancelled by a cancel aimed at the run that "
+        "already finished under it"
+    )
+
+
+def test_a_late_cancel_still_reports_it_stopped_nothing(built):
+    """The response contract for the completion race is unchanged."""
+    client, _ = built
+    run_id = str(uuid.uuid4())
+    client.post("/v1/gaia/query", json=_body(run_id=run_id))
+    assert _wait_until(lambda: server_mod._registry.get(run_id) is None)
+
+    assert client.post(f"/v1/gaia/query/{run_id}/cancel").json()["cancelled"] is False
+
+
+def test_a_cancel_for_a_never_seen_id_is_still_remembered(built):
+    """The distinction the fix turns on: unknown-and-unstarted still arms, so
+    the cancel-beats-the-POST race stays closed."""
+    client, _ = built
+    run_id = str(uuid.uuid4())
+
+    client.post(f"/v1/gaia/query/{run_id}/cancel")
+
+    assert run_id in server_mod._registry._precancelled
 
 
 def test_an_early_cancel_applies_once_and_only_to_its_own_run_id(built):
