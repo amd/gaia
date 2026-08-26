@@ -398,7 +398,7 @@ def test_callback_error_handling():
 
 ## Usage Examples
 
-### Example 1: EMR Intake Agent (Auto-Process Forms)
+### Example 1: Form Intake Agent (Auto-Process Forms)
 
 ```python
 from gaia import Agent, FileChangeHandler
@@ -406,8 +406,8 @@ from gaia.llm import VLMClient
 from watchdog.observers import Observer
 from pathlib import Path
 
-class MedicalIntakeAgent(Agent):
-    """Process medical intake forms automatically."""
+class FormIntakeAgent(Agent):
+    """Process scanned forms automatically."""
 
     def __init__(self, watch_dir: str = "./intake_forms", **kwargs):
         super().__init__(**kwargs)
@@ -440,7 +440,7 @@ class MedicalIntakeAgent(Agent):
         """Extract data from intake form."""
         path = Path(image_path)
         image_bytes = path.read_bytes()
-        extracted = self.vlm.extract_from_image(image_bytes, "Extract patient data")
+        extracted = self.vlm.extract_from_image(image_bytes, "Extract form fields")
         return {"file": str(path), "data": extracted}
 
     def __del__(self):
@@ -597,10 +597,6 @@ Add new section after Tool Mixins:
 [Full documentation with examples]
 ```
 
-### Update EMR Example
-
-Replace manual file watching with FileChangeHandler in medical-intake-build-guide.md
-
 ---
 
 ## Implementation Checklist
@@ -646,7 +642,6 @@ Replace manual file watching with FileChangeHandler in medical-intake-build-guid
 - [ ] Can import: `from gaia import FileChangeHandler`
 - [ ] Example code works
 - [ ] All tests pass
-- [ ] EMR agent can use it
 
 ---
 

@@ -151,13 +151,22 @@ build, pulling ~18 `nvidia-*` / `cuda-*` packages — a 4.7 GB venv instead of
 | `talk` | Voice ASR/TTS (whisper, sounddevice, kokoro-onnx) |
 | `mcp` | MCP client/server bridge (`gaia mcp start`) |
 | `audio` | Lower-level audio tooling shared by talk |
-| `blender` | BlenderAgent 3D automation bindings |
-| `image` | Stable Diffusion image agent |
+| `image` | Terminal image rendering (`term-image`) |
 | `eval` | Evaluation framework (ground-truth generation, batch experiments) |
 | `youtube` | `gaia youtube --download-transcript` |
 | `lint` | Standalone lint dependency bundle |
 
 ### Step 6: Claude Code Plugins (Optional)
+
+<Note>
+The same `.claude/settings.json` registers a `SessionStart` hook that runs
+[`scripts/cloud_bootstrap.sh`](https://github.com/amd/gaia/blob/main/scripts/cloud_bootstrap.sh).
+It builds the editable dev install for [Claude Code cloud sessions](https://code.claude.com/docs/en/claude-code-on-the-web),
+where the environment's own setup script runs before the repo is cloned and so
+cannot do it. On a local machine and in CI it exits immediately without output —
+it is gated on `CLAUDE_CODE_REMOTE` and `CI`.
+</Note>
+
 
 GAIA ships a `.claude/settings.json` that declares two recommended Claude Code plugins from the official Anthropic marketplace:
 
@@ -290,6 +299,58 @@ Key fixtures live in `tests/conftest.py` (`api_client`, `api_server`,
 `require_lemonade`, `lemonade_available`). The `require_lemonade` fixture
 auto-skips integration tests when no Lemonade server is running.
 
+### Verifying the Agent Hub publish pipeline
+
+Publishing to the hub is **irreversible** — `hub.amd-gaia.ai` has no unpublish
+route, so a bad release is permanent and public. Before running any
+`release_*.yml` workflow that publishes, prove the pipeline locally:
+
+```bash
+python util/verify_publish_pipeline.py
+```
+
+It boots `workers/agent-hub` under `wrangler dev` with Miniflare's simulated R2,
+drives the real publishers against it, and asserts on behaviour — the happy path,
+idempotent re-runs, immutability, the oversized direct-to-R2 lane, and the
+pre-flight checks that must refuse to publish anything at all. It refuses to run
+against any non-loopback URL, needs no credentials, and cleans up after itself.
+It skips with a message (not a failure) when Node.js is unavailable.
+
+**There are two publisher scripts and they are different programs.**
+`hub/agents/email/python/packaging/publish_to_r2.py` backs the email, chat, and
+components releases; `hub/agents/gaia/python/packaging/publish_to_r2.py` backs
+`release_agent_gaia.yml`. Proving one says nothing about the other, so the
+harness runs both by default and labels every row with the publisher it came
+from. Use `--publisher email` or `--publisher gaia` to narrow it. A case that
+needs a capability a publisher does not have is reported **N/A**, never passed.
+
+Read the module docstring for what it deliberately **cannot** prove — real R2
+credentials from GitHub's IP space, real installer sizes, and the macOS freeze
+legs still only get exercised in CI.
+
+### Verifying the R2 credentials
+
+The harness runs on **bogus** credentials against a local Worker, so it proves
+the publish logic and nothing about whether the real key works. Every artifact
+over the Worker's request-body cap — the Agent UI installers, the gaia sidecar's
+Linux build — is PUT straight to R2 instead, and R2 answers both a bad
+credential and a malformed request with the same `Unauthorized`:
+
+```bash
+python util/check_r2_credentials.py --size-mb 120
+```
+
+It checks bucket scope, a checksummed write, a write at real release size, and
+a round-trip back through the hub Worker, naming the first that fails. That last
+check is the one worth understanding: a credential can happily write to a
+same-named bucket in a *different* Cloudflare account, and only the Worker
+serving the bytes back rules that out.
+
+It reads `.env` (gitignored) or the environment, writes probes under
+`agents/_credential-probe/` and deletes them, and prints no secret value. It
+still cannot prove the credential works **from GitHub's runners** — a token with
+Client IP Address Filtering passes locally and fails in CI.
+
 ### Real-World Testing with Claude Code
 
 Unit and integration tests prove code paths; they don't prove a feature works
@@ -328,6 +389,47 @@ commands. With nothing declared, the skill targets your **local machine**.
 > keys only in your **user-level** config (or a memory file it points to) —
 > never in the repo's `CLAUDE.md` or `.claude/settings.json`. The skill reads
 > them write-only and never echoes them into logs, screenshots, or reports.
+
+---
+
+## Measuring where a turn's time goes
+
+A slow local turn is almost always prefill: the system prompt and tool schemas
+are re-sent on every LLM call, so prompt size converts directly into seconds.
+None of that is visible in the default stats line, which shows only elapsed
+time.
+
+Set `GAIA_TURN_LOG` to a file path to turn on per-turn recording:
+
+```bash
+export GAIA_TURN_LOG=~/.gaia/turns.jsonl
+gaia --dev
+```
+
+Each turn appends one JSON object (schema `gaia.turn/1`) with the fixed prefill
+size, cached-vs-new input tokens per call, output tokens, the wall-time split
+across model / tools / agent overhead, and absolute timestamps — so a session
+is greppable and two builds are diffable.
+
+With `--dev`, the TUI also draws the same breakdown under each answer:
+
+```
+34.5s · ttft 2.1s · 14.2 tok/s · 3 steps · 17.0k prefill
+  turn a3f1c2  22:47:35Z → 22:48:09Z  34.5s total
+  model 28.4s · tools 4.8s · overhead 1.3s
+  in 51,204 tok (38,110 cached, 13,094 new · 74% hit) · out 210 tok
+  prefill 17.0k fixed · 66 tools · skills: gaia-voice
+```
+
+Unset, recording is off and costs nothing — the recorder is never constructed
+and the agent's wire payload is unchanged.
+
+<Note>
+Token counts marked *cached* / *new* come from a client-side estimator
+(`tiktoken` when installed), not from the model's own tokenizer. Read them as
+ratios and deltas — how much a prompt shrank, what share was cache-eligible —
+not as exact model token counts. `out` is the backend's own count.
+</Note>
 
 ---
 

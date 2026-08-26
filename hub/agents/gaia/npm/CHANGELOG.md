@@ -4,13 +4,13 @@ All notable changes to `@amd-gaia/gaia` are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and this package adheres
 to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.0] — unreleased
+## [0.1.1] — unreleased
 
-First release. `npx @amd-gaia/gaia` is now the single command that gets a user
-running GAIA: it fetches and verifies everything GAIA needs and drops them into
-the terminal UI. Before this there was no packaged path at all — the flagship agent
-had to be run from a repo checkout with a Python environment, and reaching the
-terminal UI meant building it from source.
+First working release. `npx @amd-gaia/gaia` is now the single command that gets a
+user running GAIA: it fetches and verifies everything GAIA needs and drops them
+into the terminal UI. Before this there was no packaged path at all — the flagship
+agent had to be run from a repo checkout with a Python environment, and reaching
+the terminal UI meant building it from source.
 
 ### Added
 
@@ -24,6 +24,26 @@ terminal UI meant building it from source.
   `GAIA_DYNAMIC_SKILLS=0` turns the selection off, `GAIA_DYNAMIC_SKILLS_TAU`
   overrides the match threshold, and an embedder outage disables it for the
   session (every body renders — capability is never lost to a failed match).
+- **Per-turn tool selection, now on by default for the flagship `full`
+  profile.** The model is sent at most 26 of its 67 tools on any one call — a
+  fixed core plus whichever cohesion bundles the query matched — instead of the
+  whole registry every time. No capability is lost: `load_tools` is an escape
+  hatch the model calls mid-turn to pull in a bundle the selector missed.
+  `GAIA_DYNAMIC_TOOLS=0` turns the selection off, `GAIA_DYNAMIC_TOOLS_MAX`
+  moves the cap and `GAIA_DYNAMIC_TOOLS_TAU` the match threshold.
+- **One bundled skill ships enabled: `gaia-voice`.** It is a manifest `skills:`
+  entry, so it is always on and rendered in full on every LLM call — 676 tokens
+  of every prompt, and it declares no tools. It is the agent's honesty floor
+  (don't claim work you didn't do, don't present empty output as a result,
+  don't substitute a near-miss and report success), which is why it is not in an
+  opt-in bundle the way a task skill is. No *skill set* ships enabled: the
+  manifest's `skill_sets:` / `default_skill_set:` blocks stay commented out until
+  an eval measures what loading several bodies costs. See SKILL.md §10.
+- **A materially smaller fixed prompt on every call.** That always-on
+  `gaia-voice` guidance was rewritten from 2,129 tokens to 676 with all of its
+  behavioural rules intact. It had been a rationale document — every rule
+  followed by the incident that motivated it — and the model needs the rule,
+  not the incident report.
 - **`gaia run` (the default command)** — resolves the host platform, fetches and
   SHA-256 verifies both binaries, then launches the terminal UI and propagates its
   exit code. Arguments after a bare `--` are forwarded to the TUI verbatim.
@@ -64,6 +84,71 @@ terminal UI meant building it from source.
 - **Programmatic exports** — `fetchAll`, `startSidecar`, `shutdown`, `runTui`, the
   platform helpers, and the typed error classes, for embedding GAIA in another
   app.
+- **The `.installed` record is written after a verified sidecar install.**
+  Staging the binary was only half an install: the daemon and the terminal UI
+  both key "this agent is installed" on `~/.gaia/agents/gaia/.installed`, and
+  without it the UI ran the REST sidecar as its own stdio child and the chat
+  filled with uvicorn's startup log. It is written on a cache hit as well as a
+  fresh download, so an install left by an earlier version repairs itself, and
+  only for this host's own platform — a `--platform` fetch stages a binary for a
+  different machine and records nothing. See SPEC §4.1.
+- **`--allow-insecure-base-url`** — opt-in for a non-`https` `--base-url`, for a
+  trusted local mirror.
+
+### Fixed
+
+- **A second `gaia serve` no longer reports success against a server it does not
+  own.** With the port already taken, the incumbent answered `/health` while our
+  own sidecar was still unpacking, so the start "succeeded", printed a ready URL
+  for someone else's server, and the child then died of `EADDRINUSE`. The port is
+  now checked before anything is spawned, and a taken one fails naming the port
+  and how to find the process holding it.
+- **Importing the package no longer changes a host app's error handling.** The
+  crash and signal handlers reaped every sidecar *before* checking whether the
+  host had its own handler, so an exception the host handled killed the sidecar
+  and the host's next request got an unexplained `ECONNREFUSED`.
+- **`gaia run` no longer breaks the terminal UI's `PATH`.** Hiding our own `gaia`
+  shim removed the whole bin directory, which on a Homebrew or pipx layout also
+  took `python3`, `lemonade-server`, and the real `gaia` with it — so the UI
+  reported a missing CLI that we had hidden. A shared directory now moves to the
+  end of `PATH` instead of being dropped.
+- **Flags a command does not read are refused, not ignored.** `run --port 9000`
+  parsed fine and came up on the default port; likewise `serve --component` and
+  `serve --cache-dir`.
+- **A failed install says what to do.** A download that could not be moved into
+  place — usually a running sidecar holding the file on Windows — printed a raw
+  stack trace.
+- **`taskkill` failures name their reason.** Its exit code and stderr were
+  discarded, so "Access is denied" surfaced ten seconds later as a generic
+  timeout.
+- **A sidecar that survives shutdown is still reaped at exit.** `shutdown`
+  de-registered it before killing it, so one that survived both kill windows
+  became a permanent orphan holding the port.
+- **`serve` removes its signal handlers once it stops**, so Ctrl+C keeps working
+  afterwards, and a repeat Ctrl+C during a slow teardown now says what it is
+  waiting for instead of looking frozen.
+- **A non-JSON reply from a sidecar probe raises a typed error** rather than a
+  bare `SyntaxError` — the case where a proxy answers `200` with an HTML page.
+- **`--port` no longer accepts what `Number()` would coerce**, so `--port 0x2710`
+  is rejected instead of quietly binding 10000.
+
+### Security
+
+- **`resolveSidecarPath` / `resolveTuiPath` verify the binary before returning a
+  path that gets spawned.** Both fed `spawn()` from a predictable cache path with
+  no integrity check, so anything able to write `~/.gaia/agents/gaia/` got code
+  run — despite the package documenting the SHA verify as its security boundary.
+  They now re-hash against `binaries.lock.json`; pass `{ verify: false }` for a
+  binary you built yourself. Note this makes them proportional to the binary's
+  size — resolve once at startup, not per request.
+- **`--base-url` requires `https`** unless `--allow-insecure-base-url` is passed.
+  The pinned SHA already made a plaintext mirror non-exploitable, but tampering
+  surfaced as a confusing `IntegrityError` instead of the transport failure it is.
+- **A ~200MB artifact is never held in memory whole.** Downloads stream to disk,
+  and the cache-hit check that re-hashes an already-installed binary — which runs
+  on every `gaia run` — reads it in bounded chunks. Both hashes are computed
+  incrementally, and a download is still verified *before* the file is moved into
+  place.
 
 ### Notes
 
@@ -87,7 +172,10 @@ terminal UI meant building it from source.
 - The sidecar has no arm64 Linux or arm64 Windows build. On those platforms the
   run stops with an error naming the platform and the supported set rather than
   launching a UI with no agent behind it.
-- `gaia_agent` 0.1.0 has no caller-auth token, so unlike
-  `@amd-gaia/agent-email` this package mints and sends none.
+- `gaia_agent` enforces a per-session caller-auth bearer on every `/v1/gaia/*`
+  request, plus a loopback `Host` allowlist and non-loopback `Origin` rejection.
+  This package mints no token, so a sidecar it spawns comes up in dev mode (token
+  check skipped, loudly warned, Host/Origin still enforced) — pass your own
+  through `spawnSidecar`'s `env` to turn it on. See SPEC §5.4.
 - Tracks sidecar contract `apiVersion` **2.12**; a differing major raises
   `VersionMismatchError`.

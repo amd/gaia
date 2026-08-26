@@ -123,17 +123,26 @@ model's.
 
 ```bash
 gaia-tui run gaia --query "..." --use-claude
-gaia-tui run gaia --query "..." --use-claude --claude-model claude-opus-5
+gaia-tui run gaia --use-claude --claude-model claude-haiku-4-5
 ```
 
 **This sends your conversation off the machine**, which is the one thing GAIA
-otherwise never does — so the chat header names the exact model in use (e.g.
-`Sonnet 5`) for as long as the mode is on, colored to mark it remote, and the
-launch says so in the transcript. It needs `ANTHROPIC_API_KEY` set, and it is a
-debugging tool, not a way to use GAIA.
+otherwise never does — so the chat header names the exact model in use
+(`claude · haiku-4.5`) for as long as the mode is on, colored to mark it
+remote, and the launch says so in the transcript. It needs `ANTHROPIC_API_KEY`
+set (a repo-root `.env` works too).
 
-Only the chat model moves. Retrieval over your documents still embeds locally
-through Lemonade, so document questions need Lemonade running either way.
+`--claude-model` takes one of `claude-opus-5`, `claude-sonnet-5`,
+`claude-haiku-4-5`, `claude-fable-5` — there is no date suffix. Anything else
+is refused at the command line, with the accepted ids, rather than forwarded to
+Anthropic to come back a 404 mid-turn.
+
+**A Claude session does not start the local backend at all.** First-boot setup
+is skipped, so `LemonadeServer.exe` is never launched and the first answer is
+not held behind an install. The transcript says so, and says what it costs:
+retrieval, memory and the code index still embed through Lemonade (Anthropic
+has no embeddings API), so those need `gaia init --profile chat
+--skip-chat-model`, or `/setup` in the composer, before they work.
 
 Paths that cannot honour the flag say so instead of quietly ignoring it: the
 daemon transport refuses it, `--claude-model` without `--use-claude` refuses,
@@ -143,9 +152,15 @@ and `chat --subprocess` tells you to put the flag in the command line you own.
 chat composer — `/model` alone lists every switchable id (the curated Claude
 5 family, plus whatever Lemonade currently has downloaded), and `/model <id>`
 swaps the live client without losing conversation history or loaded skills.
+Typing the space in `/model ` turns the slash palette into a model picker, so
+the Claude ids are pickable rather than remembered; local ids stay behind bare
+`/model`, since only the agent knows what this machine has downloaded.
+
 An unknown id, a missing credential, or an unreachable Lemonade Server all
 refuse the switch with an actionable message and leave the session on
-whichever model was already working.
+whichever model was already working. Backends never swap themselves: a local
+switch with Lemonade down is refused with both ways forward (start the server,
+or name a Claude id), never silently answered somewhere else.
 
 ## Running against a local clone
 

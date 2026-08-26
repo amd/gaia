@@ -1,6 +1,6 @@
 # `@amd-gaia/gaia` — technical reference
 
-Version **0.1.0**. Companion to [`README.md`](./README.md), which is the
+Version **0.1.1**. Companion to [`README.md`](./README.md), which is the
 user-facing doc. This file specifies the wire and file formats the package
 depends on and the guarantees it makes.
 
@@ -32,11 +32,11 @@ of truth for what is downloaded and what it must hash to.
 ```jsonc
 {
   "schemaVersion": "3.0",
-  "agentVersion": "0.1.0",
+  "agentVersion": "0.1.1",
   "components": {
     "sidecar": {
-      "componentVersion": "0.1.0",
-      "baseUrl": "https://hub.amd-gaia.ai/agents/gaia/0.1.0",
+      "componentVersion": "0.1.1",
+      "baseUrl": "https://hub.amd-gaia.ai/agents/gaia/0.1.1",
       "platforms": { "<platformKey>": { /* entry */ } }
     },
     "tui": {
@@ -190,6 +190,44 @@ supervises the sidecar and does its own SHA-256 check on the binary it finds
 there; installing an already-verified binary at that path turns the daemon's fetch
 into a cache hit instead of a second multi-hundred-megabyte download.
 
+### 4.1 The `.installed` sentinel
+
+Installing the sidecar also writes `~/.gaia/agents/gaia/.installed`, the record
+the daemon and the TUI both read to answer "is this agent installed?". It is
+written on a **cache hit as well as a fresh download**, so an install staged by
+an earlier release repairs itself on the next run, and only when the fetch
+produced a runnable local install — that is, for the `sidecar` component (the
+TUI is not a hub agent) **and** for this host's own platform. A `--platform`
+fetch stages a binary for a different host; recording it would hand the daemon a
+wrong-architecture executable that re-hashes correctly and then fails to exec.
+
+```json
+{
+  "id": "gaia",
+  "version": "<sidecar componentVersion>",
+  "language": "python",
+  "installed_at": "<ISO-8601 UTC>",
+  "artifact_sha256": "<the verified SHA-256>",
+  "path": "<install directory>",
+  "artifact_kind": "binary",
+  "executable": "gaia-agent[.exe]"
+}
+```
+
+The shape is a cross-repo contract with `InstalledAgent.to_dict()` in
+`gaia.hub.installer`. Three fields are load-bearing:
+`gaia.daemon.sidecars.fetch._hub_installed_binary` ignores the install unless
+`artifact_kind` is `binary` and `executable` and `artifact_sha256` are non-empty,
+and it **re-hashes the binary and raises `IntegrityError` if the file no longer
+matches `artifact_sha256`** — so the recorded hash is the one actually verified,
+never the lock's nominal value. `executable` must be a bare filename;
+`installer.read_sentinel` discards a sentinel whose executable contains a path
+separator, which reads as "never installed".
+
+Without the sentinel the daemon sees no install and the TUI falls back to running
+`gaia-agent` as its own stdio child — spawning the REST sidecar over stdio and
+filling the chat with uvicorn's startup log.
+
 The TUI directory is keyed by `agentVersion` — this package's version, not the
 component's — so a bump of either never reuses the previous release's executable.
 
@@ -253,7 +291,10 @@ none is idle enough to evict gets `503` with the reason in `detail` — a
 temporary, retryable condition, not a bug: wait for a turn to finish (or
 close an idle session) and retry. A
 `session_id` can also be evicted from the retention table under an idle
-timeout or an LRU cap on concurrent sessions; a `/query` that lands on an
+timeout (**4 hours** without a turn) or an LRU cap on concurrent sessions
+(**100**) — the two knobs that decide when the `503` above can happen at all
+(`session_registry.py`). Eviction is idle-only: a conversation still in use is
+never timed out mid-flight. A `/query` that lands on an
 evicted id gets a fresh agent (the conversation is not blocked) but the
 response stream's first event is a `{"type":"status","status":"warning",...}`
 telling the caller that per-turn state — most visibly any loaded skill — did
@@ -266,13 +307,66 @@ against this package's `API_VERSION`. A differing major is a breaking contract
 change and raises `VersionMismatchError`. A higher minor with the same major is a
 backward-compatible addition and is accepted.
 
-### 5.4 No caller-auth token
+### 5.4 Caller authentication
 
-The email sidecar authenticates callers with a per-session bearer minted into
-`GAIA_EMAIL_SIDECAR_TOKEN`. `gaia_agent` has **no equivalent** at 0.1.0, so
-this package mints and sends nothing. When the sidecar grows one, it lands here as
-a spawn-time env var and a request header — a change to this section, not a new
-subsystem.
+Loopback binding is not access control: this sidecar exposes shell and file
+tools, so an unauthenticated port lets any page the user visits drive it. Three
+controls guard it, all in `gaia_agent.caller_auth`, which binds this sidecar's
+env-var names and exempt paths onto the shared mechanism in
+`gaia.sidecar.caller_auth`:
+
+1. **Per-session bearer token.** Every `/v1/gaia/*` request must carry
+   `Authorization: Bearer <token>`. The spawning parent supplies it one of two
+   ways: `GAIA_GAIA_SIDECAR_TOKEN_FILE` — the path to a `0600`, owner-only file
+   holding the token, which is the preferred channel because the secret never
+   sits in the environment — or `GAIA_GAIA_SIDECAR_TOKEN`, the token itself, the
+   legacy delivery. A request without it is **401**, with a `detail` naming both
+   env vars.
+2. **Host allowlist.** The `Host` header must be loopback (`127.0.0.1`,
+   `localhost`, `::1`); anything else is **400**. This is what defeats DNS
+   rebinding, where the rebound request arrives with `Host: evil.com`.
+3. **Origin rejection.** A request carrying a non-loopback browser `Origin` is
+   **403**. Non-browser clients send no `Origin` and are unaffected.
+
+`/health`, `/version`, and `/v1/gaia/version` are **token-exempt** — they are
+the probes a host polls during the attach handshake, before any token is in
+play, and none of them exposes user data or accepts work. Host and Origin still
+apply to them, so `waitForHealth` and `checkVersion` work against a
+token-protected sidecar without knowing the token.
+
+**Dev mode.** If neither env var is set the token check is skipped and the
+sidecar logs a loud warning saying so; Host and Origin are still enforced. That
+is the state a sidecar this package spawns comes up in, because `spawnSidecar`
+mints nothing — pass your own token through `spawnSidecar`'s `env` option to
+turn the check on. The shipped product does not rely on dev mode: the daemon
+mints a per-session token and passes it as `GAIA_GAIA_SIDECAR_TOKEN_FILE`
+(`gaia.daemon.sidecars.spec` mirrors both names as plain strings so core never
+imports this wheel).
+
+### 5.5 Other transports
+
+The HTTP server above is the surface this package drives, and everything in
+this document describes it. It is not the agent's only transport:
+`gaia_agent.stdio` runs the same agent over newline-delimited JSON on
+stdin/stdout — no port, no token, no discovery file. The terminal UI reaches it
+that way when it spawns the agent as a subprocess; an agent **installed** from
+the hub, which is what this package delivers, is supervised by the daemon over
+the HTTP surface above instead (§6.1).
+
+It emits the identical canonical event vocabulary, but its input channel accepts
+a JSON line carrying a `gaia_control` key, which gives it something HTTP does
+not have: a back-channel that can answer a confirmation prompt *while* a turn is
+in flight. It also takes `--bypass-permissions` (start with gating off) and
+`--use-claude` / `--claude-model` (route chat to the Anthropic API instead of
+local Lemonade; embeddings stay on Lemonade either way). None of that is
+reachable over `/v1/gaia/query`.
+
+`--use-claude` is the one with a reach beyond the machine, and it cannot be
+turned on for what this package delivers: the terminal UI **refuses** it for a
+daemon-transport agent, with an error saying so, because the daemon relay has no
+way to switch inference backends. So the local-only claim in the README holds
+for every path this package installs — it is a property of the transport, not a
+default someone can flip.
 
 ---
 
@@ -293,13 +387,23 @@ from `~/.gaia/agents/gaia/`. A sidecar spawned here would be a second process th
 TUI never talks to, competing for port `8141`.
 
 So `run`'s contribution to the sidecar is putting a **verified** binary where the
-daemon looks. Daemon and sidecar lifecycle belong to the daemon.
+daemon looks, and recording the install in `.installed` (§4.1) so the daemon and
+the TUI both see it. Daemon and sidecar lifecycle belong to the daemon.
 
 ### 6.2 `gaia serve` — the direct path
 
 `serve` fetches the sidecar and spawns it itself, for integrators who want the
-REST surface without a daemon or a UI. This path owns the process fully: spawn →
-`waitForHealth` → `checkVersion` → run until interrupted → tree-kill.
+REST surface without a daemon or a UI. This path owns the process fully:
+port pre-flight → spawn → `waitForHealth` → `checkVersion` → run until
+interrupted → tree-kill.
+
+The port is checked **before** the spawn, and a taken port raises
+`PortInUseError` without starting anything. That ordering is the guarantee: the
+frozen sidecar spends seconds unpacking before it attempts its bind, while an
+incumbent answers `/health` in milliseconds — so a post-spawn check alone would
+see a healthy port and a still-alive child, and hand back a handle for a server
+it does not own. `assertOurs` and the re-probe after a failed health wait remain
+as backstops for the narrower window where something binds after the pre-flight.
 
 ### 6.3 Tree-kill
 
@@ -325,8 +429,8 @@ failed start never leaks a process.
 | Code    | Meaning                                                                 |
 | ------- | ----------------------------------------------------------------------- |
 | `0`     | Success                                                                 |
-| `1`     | A typed failure: `IntegrityError`, `PlatformError`, `HealthTimeoutError`, `VersionMismatchError`, `BinaryNotFoundError`, or an unexpected error |
-| `2`     | Usage error: unknown command, unknown `--component`, invalid `--port`    |
+| `1`     | A typed failure: `IntegrityError`, `PlatformError`, `HealthTimeoutError`, `VersionMismatchError`, `BinaryNotFoundError`, `PortInUseError`, `SidecarExitedError`, `MalformedResponseError`, or an unexpected error |
+| `2`     | Usage error: unknown command, invalid `--port`, or a flag the command does not read (`run --port`, `serve --component`, `serve --cache-dir`, `run`/`serve` `--platform`), an unknown `--component`, or a non-https `--base-url` without `--allow-insecure-base-url` |
 | *other* | From `run`: the TUI's own exit code, propagated verbatim                 |
 
 A TUI killed by a signal propagates as `128 + signum` (the shell convention), so a
@@ -340,12 +444,15 @@ All extend `GaiaError`, so `instanceof GaiaError` catches any of ours.
 
 | Class                  | Raised when                                                    |
 | ---------------------- | -------------------------------------------------------------- |
-| `IntegrityError`       | A download's SHA-256 does not match the lock                   |
+| `IntegrityError`       | A download's SHA-256 does not match the lock, or a resolved binary's does not |
 | `PlatformError`        | Unsupported platform, missing/incomplete entry, placeholder hash, malformed lock |
 | `HealthTimeoutError`   | The sidecar did not report healthy within the timeout          |
 | `VersionMismatchError` | `apiVersion` major differs from this package's                 |
 | `BinaryNotFoundError`  | A binary is absent from disk when spawning                     |
+| `PortInUseError`       | The bind port was already taken; nothing was spawned            |
+| `SidecarExitedError`   | The spawned sidecar died while the port answered — something else owns it |
 | `HttpError`            | A non-2xx from a sidecar probe                                 |
+| `MalformedResponseError` | A 2xx from a sidecar probe whose body is not JSON            |
 
 Per the repo's no-silent-fallbacks rule, every message names what failed, what to
 do, and where to look next.
@@ -370,7 +477,8 @@ do, and where to look next.
 Exported from the package root — see `src/index.ts`.
 
 **Fetch:** `fetchAll`, `fetchBinary`, `verifySha256`, `fileSha256`,
-`binaryExists`, `defaultCacheDir`, `daemonSidecarCacheDir`.
+`binaryExists`, `defaultCacheDir`, `daemonSidecarCacheDir`,
+`INSTALLED_SENTINEL_NAME`, `SIDECAR_AGENT_ID`.
 
 **Lifecycle:** `spawnSidecar`, `startSidecar`, `waitForHealth`, `checkVersion`,
 `health`, `version`, `shutdown`, `runTui`, `resolveSidecarPath`, `resolveTuiPath`,
@@ -383,6 +491,13 @@ Exported from the package root — see `src/index.ts`.
 
 **Constants:** `AGENT_ID`, `API_VERSION`, `DEFAULT_HOST`, `DEFAULT_PORT`,
 `RESERVED_PORT`.
+
+`resolveSidecarPath` / `resolveTuiPath` re-verify the file's SHA-256 against
+`binaries.lock.json` before returning a path that is about to be spawned — the
+cache path is predictable, so anything able to write it would otherwise get code
+run. That makes them **O(size of the binary)**, not a cheap path join: resolve
+once at startup, not per request. Pass `{ verify: false }` for a binary you built
+yourself, which no lock describes, and `{ lock }` to reuse an already-loaded lock.
 
 ---
 

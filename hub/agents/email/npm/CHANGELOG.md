@@ -6,6 +6,12 @@ behind any entry — API shapes, endpoints, and version semantics — see
 
 ## [Unreleased]
 
+- **A request with no `Host` header is now rejected instead of served.** The
+  sidecar's DNS-rebinding check used to skip itself when the header was absent.
+  No normal client is affected — this package, the Python client, and curl all
+  send `Host` — but a request that left it out used to get a `200` and now gets
+  a `400`.
+
 - **The published API contract now shows that requests need a session token.**
   The sidecar has always required a bearer token on most calls, but the
   contract document didn't say so. It now declares the requirement (and marks

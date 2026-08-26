@@ -59,7 +59,7 @@ binds a send to one exact message but does not identify the caller.
   logged, deprecated compatibility leg for older binaries; a set path var whose
   file is missing or empty fails sidecar startup loudly. The npm lifecycle
   currently uses the env channel.
-- **Host allowlist** — non-loopback `Host` → **400** (DNS-rebinding).
+- **Host allowlist** — an absent or non-loopback `Host` → **400** (DNS-rebinding).
 - **Origin rejection** — non-loopback browser `Origin` → **403** (drive-by page).
   Non-browser clients send no `Origin` and are unaffected. No CORS is ever sent.
 

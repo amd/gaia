@@ -22,7 +22,7 @@ GAIA is the agent a new user meets first. One agent handles the everyday work yo
 - **Web research** — search the web, fetch and read pages, download files.
 - **Files** — read, search by name or content, and walk directory trees inside your allowed scope. Writing and editing are available too, behind an explicit confirmation (see [Tools that need your approval](#tools-that-need-your-approval)).
 - **Images** — describe a local image or answer a question about it, using the local vision model.
-- **Skills** — short playbooks loaded into the agent's own prompt. Opt-in; see [Skills](#skills-opt-in) below for what ships in this release.
+- **Skills** — short playbooks loaded into the agent's own prompt. One ships always-on; the rest are opt-in. See [Skills](#skills) below for what this release ships.
 
 ## Requirements
 
@@ -82,9 +82,15 @@ curl -s http://127.0.0.1:8141/v1/gaia/init
 
 It answers **200** when ready and **503** when not, with a `hint` naming the fix — Lemonade unreachable, Lemonade too old, or model not downloaded. Liveness alone is `GET /health`, which never touches the model server.
 
+<Note>
+  A **401** here means the sidecar wants a caller token — `/v1/gaia/*` requires one, while
+  `/health` and `/version` don't. That's the normal state for the sidecar the daemon
+  spawns. See [Authenticating your requests](#authenticating-your-requests).
+</Note>
+
 ## Tool surface
 
-The default construction registers **55 tools**. Grouped by what they're for:
+The default construction registers **67 tools** — the 55 of the Chat agent's `full` profile, plus 7 skill-library tools, 4 code-search tools, and the `load_tools` escape hatch. Grouped by what they're for:
 
 | Area | Tools |
 |---|---|
@@ -95,19 +101,23 @@ The default construction registers **55 tools**. Grouped by what they're for:
 | Memory | `remember`, `recall`, `forget`, `update_memory`, `search_past_conversations` |
 | Images | `analyze_image`, `answer_question_about_image` |
 | Desktop & system | `take_screenshot`, `list_windows`, `get_system_info`, `notify_desktop`, `read_clipboard`, `write_clipboard`, `text_to_speech`, `run_shell_command` |
-| Run control | `request_user_input`, `set_loop_state` |
+| Skills | `list_skills`, `search_skill_hub`, `install_skill`, `remove_skill`, `load_skill`, `unload_skill`, `skill_status` |
+| Code search | `index_codebase`, `search_code_index`, `get_index_status`, `clear_code_index` |
+| Run control | `request_user_input`, `set_loop_state`, `load_tools` |
+
+That count is what the agent *can* do, not what it sees at once: per-turn tool selection sends the model a subset of the registry on any one call, and `load_tools` is the escape hatch it calls mid-turn to pull in a bundle the selector missed. No capability is lost either way.
 
 `run_shell_command` is restricted to a read-only command allowlist (`ls`, `cat`, `grep`, `find`, `stat`, `df`, `uname`, and similar) and rate-limited. Anything that writes, installs, or executes an arbitrary binary is refused.
 
-**Image *generation* is deliberately off.** Drawing a picture would pull a second model into Lemonade and evict the resident chat model mid-conversation — not a trade a document agent should make silently. Use the [Image Generation agent](/guides/sd) when you want that.
+**Image *generation* is deliberately off.** Drawing a picture would pull a second model into Lemonade and evict the resident chat model mid-conversation — not a trade a document agent should make silently. A custom agent can still compose the [`sd` tool mixin](/sdk/mixins/tool-mixins#95-stable-diffusion-mixin) when that trade-off is acceptable.
 
 ### Tools that need your approval
 
-Three tools mutate your machine and are gated behind an explicit confirmation: **`write_file`**, **`edit_file`**, and **`run_shell_command`**. Everything else — reading, indexing, querying, web fetching, memory — runs without asking.
+Six tools mutate your machine and are gated behind an explicit confirmation: **`write_file`**, **`edit_file`**, **`run_shell_command`**, **`execute_python_file`**, and — because installing a skill writes third-party code under `~/.gaia/skills` and removing one deletes it — **`install_skill`** and **`remove_skill`**. Everything else — reading, indexing, querying, web fetching, memory — runs without asking.
 
 <Warning>
-  **Over the sidecar's `/query` stream, those three are refused rather than prompted.** That
-  surface has no way to collect an approval yet, so instead of pretending to, the run stops
+  **Over the sidecar's `/query` stream, all six are refused rather than prompted.** That
+  surface has no way to collect an approval, so instead of pretending to, the run stops
   with a message saying which action it declined. If your workflow depends on the agent
   writing files, drive it from a surface that can prompt you, or perform the write yourself.
 </Warning>
@@ -121,7 +131,7 @@ That's the honest scope for a personal document agent — "ask questions about m
 To narrow it, construct the agent with an explicit list:
 
 ```python
-from gaia_agent_gaia.agent import GaiaAgent, GaiaAgentConfig
+from gaia_agent.agent import GaiaAgent, GaiaAgentConfig
 
 agent = GaiaAgent(config=GaiaAgentConfig(
     allowed_paths=["/home/me/Documents", "/home/me/projects"],
@@ -129,7 +139,7 @@ agent = GaiaAgent(config=GaiaAgentConfig(
 ```
 
 <Note>
-  In v0.1.0 this is a **construction-time** setting only — the packaged sidecar exposes no
+  In v0.1.1 this is a **construction-time** setting only — the packaged sidecar exposes no
   flag or environment variable for it, so narrowing the scope means embedding the agent in
   your own Python process.
 </Note>
@@ -140,11 +150,13 @@ Memory is on by default and lives on-device. The agent writes facts you ask it t
 
 The mechanism, storage location, and how to disable it are covered in the [Memory guide](/guides/memory).
 
-## Skills (opt-in)
+## Skills
 
 [Agent Skills](/guides/composing-skills) are short playbooks an agent loads into its own prompt, grouped into named **skill sets** — exactly one set is active per launch. GAIA is built to host them: its own bundled skill directory is the highest-precedence discovery root, so a skill shipped with the agent wins over a same-named user copy.
 
-**No skill set loads by default, and v0.1.0 declares none.** Skill bodies cost prompt tokens and shrink the room left for an answer, and no eval has measured that trade for this agent yet. The manifest's skill-set declarations ship commented out; enabling them is uncommenting two blocks, with no code change.
+**One skill ships enabled: `gaia-voice`.** It is declared in the manifest's always-on `skills:` list, so it is in the prompt on every call — 676 tokens of it, and it registers no tools. It isn't a task recipe but the agent's honesty floor: don't claim work you didn't do, don't present empty output as a result, don't substitute a near-miss and report success. Those failures spoil an answer whatever the task is, which is why it can't sit in a bundle you have to opt into.
+
+**No skill *set* loads by default, and v0.1.1 declares none.** Loading several skill bodies into every prompt costs tokens and shrinks the room left for an answer, and no eval has measured that trade for this agent yet. The manifest's skill-set declarations ship commented out; enabling them is uncommenting two blocks, with no code change.
 
 Once a release declares sets, you select one at launch:
 
@@ -182,6 +194,18 @@ The agent runs as a **sidecar** — a self-contained HTTP service the GAIA daemo
 - **Idle streams emit `: keepalive` comments** every 10 seconds so a long tool call doesn't look like a dead connection.
 - **Confirmation-gated tools end the run with a refusal** — see [Tools that need your approval](#tools-that-need-your-approval).
 
+### Authenticating your requests
+
+Binding to loopback is not access control — this agent has shell and file tools, so an open port would let any page you visit drive it. Three checks guard the sidecar:
+
+- **A per-session bearer token.** Every `/v1/gaia/*` request must carry `Authorization: Bearer <token>`; without it you get **401**. The process that spawned the sidecar supplies the token, either as `GAIA_GAIA_SIDECAR_TOKEN_FILE` — a path to a `0600`, owner-only file, so the secret never sits in the environment — or directly as `GAIA_GAIA_SIDECAR_TOKEN`. When the GAIA daemon runs the agent, it mints the token and uses the file channel.
+- **A loopback `Host` allowlist.** A `Host` header that isn't `127.0.0.1`, `localhost`, or `::1` is **400** — this is what defeats DNS rebinding.
+- **Origin rejection.** A request carrying a non-loopback browser `Origin` is **403**. Non-browser clients send no `Origin` and are unaffected.
+
+`GET /health`, `GET /version`, and `GET /v1/gaia/version` skip the token — they're the probes a host polls before any token is in play, and none of them exposes your data. `Host` and `Origin` still apply to them.
+
+If neither token variable is set, the sidecar starts with the token check off and says so loudly in its log; `Host` and `Origin` stay enforced. That's a **local development** convenience — a sidecar you started by hand — not something to build on. Full details, including how to supply a token when you spawn the sidecar yourself, are in the package's [SPEC.md §5.4](https://github.com/amd/gaia/blob/main/hub/agents/gaia/npm/SPEC.md).
+
 ## Troubleshooting
 
 ### "Local Lemonade Server is not reachable"
@@ -208,10 +232,10 @@ It isn't on the Agent Hub yet, so there is nothing to install — the row is del
 
 The daemon redirects the sidecar's output to `~/.gaia/agents/gaia/logs/sidecar-<port>.log`. Check that file first; a failed start also surfaces the log tail in the error. `gaia daemon agents` shows id, mode, pid, port, and contract version for everything currently running.
 
-## Limitations (v0.1.0)
+## Limitations (v0.1.1)
 
 - **Not published on the Agent Hub yet** — install from source until the release tag lands.
-- **No skill sets declared** — the skill machinery is wired and tested, but nothing ships enabled; see [Skills](#skills-opt-in).
+- **No skill sets declared** — the skill machinery is wired and tested, and `gaia-voice` ships always-on, but no *set* does; see [Skills](#skills).
 - **Narrowing file scope requires embedding the agent** — no sidecar flag for `allowed_paths` yet.
-- **No server-side confirmation flow** — over `/query`, `write_file`, `edit_file`, and `run_shell_command` end the run with a refusal instead of prompting over the stream.
+- **No server-side confirmation flow** — over `/query`, all six [confirmation-gated tools](#tools-that-need-your-approval) end the run with a refusal instead of prompting over the stream.
 - **No image generation** — deliberately, so the chat model is never evicted mid-conversation.

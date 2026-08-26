@@ -9,7 +9,7 @@ this module must not drag in RAG, the browser stack, or a model client.
 
 __all__ = ["build_gaia"]
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 _LAZY = {
     "GaiaAgent": "agent",
@@ -74,7 +74,7 @@ def build_gaia():
         icon="sparkles",
         # Must equal the real registry size for the default construction, and
         # the manifest's own tools_count. Drift-guarded by tests/test_gaia_agent.py.
-        tools_count=66,
+        tools_count=67,
         # ChatAgent loads MCP servers dynamically, so the Settings "Active for"
         # panel must list this agent for MCP-server connectors.
         consumes_mcp_servers=True,

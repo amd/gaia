@@ -99,7 +99,7 @@ function Install-Gaia {
         # so the pip form fails on every re-run.
         # --upgrade exits 0 when there is nothing to do, so non-zero is a real
         # failure, not "already current".
-        & uv pip install --python "$GAIA_VENV\Scripts\python.exe" --upgrade amd-gaia --quiet
+        & uv pip install --python "$GAIA_VENV\Scripts\python.exe" --upgrade "amd-gaia[api]" --quiet
         if ($LASTEXITCODE -ne 0) {
             Write-Error "Failed to update the GAIA package in $GAIA_VENV (exit $LASTEXITCODE)."
             Write-Host "  Fix:  re-run this installer, or delete $GAIA_HOME to start clean." -ForegroundColor $COLOR_YELLOW
@@ -136,7 +136,7 @@ function Install-Gaia {
     # Target the venv python rather than running Activate.ps1: that is a script
     # on disk, so a Restricted execution policy blocks it even though the
     # piped-in installer itself is exempt.
-    & uv pip install --python "$GAIA_VENV\Scripts\python.exe" amd-gaia
+    & uv pip install --python "$GAIA_VENV\Scripts\python.exe" "amd-gaia[api]"
     if ($LASTEXITCODE -ne 0) {
         Write-Error "Failed to install the GAIA package (uv exit $LASTEXITCODE)."
         Write-Host "  Fix:  re-run this installer; if it persists report it at" -ForegroundColor $COLOR_YELLOW

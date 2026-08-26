@@ -59,7 +59,7 @@
 # (CLAUDE_CODE_OAUTH_TOKEN, covered by the monthly claude-auth-canary.yml). Runs on the
 # Claude Max subscription pool, so there is no per-run dollar cost — only shared quota.
 #
-# COST CEILING: 4 dimension jobs (--max-turns 30) + 1 synthesis job (--max-turns 32) =
+# COST CEILING: 4 dimension jobs (--max-turns 45) + 1 synthesis job (--max-turns 32) =
 # a known per-run ceiling, now paid up to 7x/week instead of once since the cadence went
 # nightly. window_days=1 and skip-if-empty are what keep that affordable. This shares one
 # Max subscription pool with claude-security-audit.yml (also nightly) and the interactive
@@ -128,11 +128,27 @@ jobs:
       skip: ${{ steps.scope.outputs.skip }}
       mode: ${{ steps.scope.outputs.mode }}
       window_days: ${{ steps.scope.outputs.window_days }}
+      dimensions: ${{ steps.dims.outputs.dimensions }}
+      dimension_count: ${{ steps.dims.outputs.dimension_count }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      # Single source of truth for the dimension list: the audit matrix and the
+      # synthesis completeness check both read it, so adding a dimension can't leave
+      # the check counting the old number.
+      - name: Resolve the dimension list
+        id: dims
+        run: |
+          set -euo pipefail
+          dimensions='["correctness","docs","tests","features"]'
+          {
+            echo "dimensions=$dimensions"
+            echo "dimension_count=$(printf '%s' "$dimensions" | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))')"
+          } >> "$GITHUB_OUTPUT"
+          echo "Dimensions: $dimensions"
 
       - name: Resolve mode and skip-if-empty
         id: scope
@@ -184,7 +200,7 @@ jobs:
       # wall-clock (~5 sequential Claude jobs) for a smoother token profile.
       max-parallel: 1
       matrix:
-        dimension: [correctness, docs, tests, features]
+        dimension: ${{ fromJSON(needs.preflight.outputs.dimensions) }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
@@ -224,6 +240,11 @@ jobs:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          # On `schedule`, github.actor is whoever last touched the default branch — a bot
+          # in this repo: github-merge-queue[bot] normally, github-actions[bot] after a
+          # release workflow commits. Without this the human-actor gate rejects every
+          # scheduled run before Claude starts. Safe: schedule/dispatch only, no fork input.
+          allowed_bots: "github-merge-queue,github-actions"
           prompt: |
             You are one lens of GAIA's proactive nightly code audit. YOUR LENS IS: ${{ matrix.dimension }}
             Do ONLY that lens — ignore issues that belong to the other four.
@@ -368,19 +389,23 @@ jobs:
             conservatism back into a lens prompt.
 
             ## Budget
-            You have --max-turns 30 and share one rate-limited subscription pool with the
+            You have --max-turns 45 and share one rate-limited subscription pool with the
             sibling lenses (run back-to-back), the nightly security audit, and the
             interactive PR-review jobs. Delegate to a subagent only for a genuinely wide,
             parallelizable investigation — not for work you can finish in a handful of tool
             calls, and never to verify or double-check your own findings. Prefer one
             subagent over several. Spend turns reading code, not coordinating.
 
+            STOP investigating at ~5 turns remaining and spend them writing the findings
+            file. Hitting the ceiling mid-investigation discards everything you found and
+            fails the whole audit — partial findings written beat perfect findings lost.
+
             ## Security is out of scope — hand it off, do not file it here
             If you notice a security weakness, do NOT file it in this audit's findings or the
             public triage issue (that would disclose it). Security has a dedicated private-channel
             workflow (claude-security-audit.yml). Leave it to that sweep.
           claude_args: |
-            --max-turns 30
+            --max-turns 45
             --model ${{ env.AUDIT_MODEL }}
             --allowedTools Read,Grep,Glob,Bash
 
@@ -390,7 +415,9 @@ jobs:
         with:
           name: findings-${{ matrix.dimension }}
           path: findings-${{ matrix.dimension }}.json
-          if-no-files-found: warn
+          # A dimension that ran writes `{"findings": []}` even when clean, so a missing file
+          # means the lens never ran. Fail the job — a silent skip reads as "audited, clean".
+          if-no-files-found: error
 
   # Collect the four dimension outputs, dedupe against open weekly-audit issues, rank,
   # and file ONE parent triage issue + per-finding child issues. This is the only job
@@ -415,6 +442,21 @@ jobs:
         with:
           path: audit-findings
 
+      # "No dimension produced output" and "every dimension found nothing" both leave
+      # synthesis with nothing to file, and it reports success either way. Refuse the
+      # first case loudly instead of calling an audit that never ran a clean bill of health.
+      - name: Require every dimension to have reported in
+        env:
+          EXPECTED_DIMENSIONS: ${{ needs.preflight.outputs.dimension_count }}
+        run: |
+          set -euo pipefail
+          got=$(find audit-findings -name 'findings-*.json' | wc -l)
+          if [ "$got" -lt "$EXPECTED_DIMENSIONS" ]; then
+            echo "::error title=Nightly audit::Only $got/$EXPECTED_DIMENSIONS dimensions produced findings files — the audit did not run. Not filing a triage issue off a partial sweep."
+            exit 1
+          fi
+          echo "All $got/$EXPECTED_DIMENSIONS dimensions reported in."
+
       - name: Ensure labels exist
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -435,6 +477,8 @@ jobs:
           anthropic_api_key: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN == '' && secrets.ANTHROPIC_API_KEY || '' }}
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          # See the dimension job's note — scheduled runs are actored by a bot.
+          allowed_bots: "github-merge-queue,github-actions"
           prompt: |
             You are the synthesis step of GAIA's nightly proactive audit. Four dimension jobs
             (correctness, docs, tests, features) each wrote a findings JSON file.
@@ -584,5 +628,9 @@ jobs:
           if [ "$ok" = "true" ]; then
             echo "✅ Nightly audit synthesis completed (log: $EXEC_FILE)"
           else
-            echo "::warning title=Nightly audit did not complete::The synthesis step crashed or errored before finishing (often the upstream install-phase ENOENT flake). Re-run: $RUN_URL"
+            # Hard-fail, not a warning: a green run that audited nothing is indistinguishable
+            # from a green run that found nothing, which is how the actor-gate outage went
+            # unnoticed for a month. A flake here costs one re-run; silence costs coverage.
+            echo "::error title=Nightly audit did not complete::The synthesis step crashed or errored before finishing (often the upstream install-phase ENOENT flake). Re-run: $RUN_URL"
+            exit 1
           fi
