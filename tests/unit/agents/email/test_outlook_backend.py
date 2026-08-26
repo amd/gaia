@@ -250,6 +250,19 @@ class TestReadTranslation:
         backend.list_messages(query="invoice", max_results=5)
         params = parse_qs(urlparse(str(rec.requests[0].url)).query)
         assert "$search" in params
+        assert params["$search"] == ['"invoice"']
+
+    def test_list_messages_query_escapes_quotes_in_search(self):
+        backend, rec, _ = _backend(lambda r: _ok({"value": []}))
+        backend.list_messages(query='from:"Acme Corp"', max_results=5)
+        params = parse_qs(urlparse(str(rec.requests[0].url)).query)
+        assert params["$search"] == ['"from:\\"Acme Corp\\""']
+
+    def test_list_messages_query_escapes_backslash_in_search(self):
+        backend, rec, _ = _backend(lambda r: _ok({"value": []}))
+        backend.list_messages(query="subject:a\\b", max_results=5)
+        params = parse_qs(urlparse(str(rec.requests[0].url)).query)
+        assert params["$search"] == ['"subject:a\\\\b"']
 
     def test_list_messages_normalizes_to_gmail_stub_shape(self):
         backend, _, _ = _backend(

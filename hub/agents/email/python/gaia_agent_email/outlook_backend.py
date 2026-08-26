@@ -314,6 +314,17 @@ def _build_graph_message(
     return message
 
 
+def _graph_search_param(query: str) -> str:
+    """Wrap KQL for Graph ``$search``.
+
+    Graph requires the whole KQL string to be wrapped in double quotes.
+    Quotes and backslashes inside the query must be escaped, otherwise a
+    value such as ``from:"Acme Corp"`` becomes ``"from:"Acme Corp""``.
+    """
+    escaped = query.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
 # ---------------------------------------------------------------------------
 # LiveOutlookBackend
 # ---------------------------------------------------------------------------
@@ -444,7 +455,7 @@ class LiveOutlookBackend:
             # combined with $filter/$orderby, so it takes precedence and runs
             # against the whole mailbox.
             if query:
-                params["$search"] = f'"{query}"'
+                params["$search"] = _graph_search_param(query)
                 path = "/me/messages"
             elif _LABEL_UNREAD in labels:
                 params["$filter"] = "isRead eq false"
