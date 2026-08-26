@@ -77,6 +77,10 @@ class CaptureResult:
     #: True when the bundle ships ``tools.py``/``scripts`` or declares tools —
     #: i.e. there is code that stays inert until ``gaia skill promote``.
     has_code: bool
+    #: A bundled ``scripts/`` dir. Tracked separately from has_code because
+    #: registration gating does NOT make a script file unrunnable — the caller
+    #: must be told the difference rather than sold a blanket "inert".
+    has_scripts: bool = False
     #: Unqualified names of the tools the bundle declares (inert until promote).
     deferred_tools: List[str] = field(default_factory=list)
     #: Audit verdict for the capture (ALLOW or REVIEW; BLOCK never lands).
@@ -291,6 +295,25 @@ def capture_skill(
 
         # Audit at the tier the capture will land on. BLOCK refuses outright;
         # REVIEW lands but its findings ride the result for the user to see.
+        # A symlinked file is skipped by the audit's source walk but is
+        # DEREFERENCED by copytree, so its real bytes would land in the skills
+        # root having never been scanned. Refuse the bundle instead: "BLOCK
+        # refuses before anything is written" has to hold for every source.
+        if source_dir is not None:
+            linked = sorted(
+                str(p.relative_to(source_dir))
+                for p in source_dir.rglob("*")
+                if p.is_symlink()
+            )
+            if linked:
+                raise SkillCaptureError(
+                    f"Capture of '{final_name}' refused: the bundle contains "
+                    f"symlink(s) ({', '.join(linked[:5])}). The audit cannot "
+                    "read through a link, but copying the bundle would follow "
+                    "it, so the captured code would never have been scanned. "
+                    "Replace the link with the real file and re-capture."
+                )
+
         from gaia.skills.audit.engine import audit_skill_object
 
         report = audit_skill_object(skill, directory=source_dir, tier=LOWEST_TIER)
@@ -355,7 +378,8 @@ def capture_skill(
             shutil.rmtree(target, ignore_errors=True)
             raise
 
-    has_code = bool(landed.gaia.tools) or (target / "scripts").is_dir()
+    has_scripts = (target / "scripts").is_dir()
+    has_code = bool(landed.gaia.tools) or has_scripts
     deferred = [t.name for t in landed.gaia.tools]
     resolver.reload()
 
@@ -381,6 +405,7 @@ def capture_skill(
         source_kind=kind,
         origin=origin,
         has_code=has_code,
+        has_scripts=has_scripts,
         deferred_tools=deferred,
         verdict=report.verdict,
         review_findings=review_findings,

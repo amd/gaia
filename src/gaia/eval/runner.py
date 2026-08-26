@@ -1011,6 +1011,7 @@ def run_scenario_subprocess(
     keep_sessions=False,
     extra_corpus_dirs=None,
     agent_type=None,
+    attempt=None,
 ):
     """Invoke claude -p for one scenario. Returns parsed result dict."""
     scenario_id = scenario_data["id"]
@@ -1351,10 +1352,17 @@ def run_scenario_subprocess(
             file=sys.stderr,
         )
 
-    # Write trace file
+    # Write trace file. With --iterations every attempt gets its OWN trace:
+    # writing them all to <sid>.json would leave only the last attempt on disk,
+    # so a `flaky` verdict could never be investigated, and resume would reload
+    # a single attempt in place of the summarized result and silently change the
+    # scorecard. The summarized <sid>.json is written by the caller.
     traces_dir = run_dir / "traces"
     traces_dir.mkdir(exist_ok=True)
-    trace_path = traces_dir / f"{scenario_id}.json"
+    if attempt is not None:
+        trace_path = traces_dir / f"{scenario_id}.attempt{attempt}.json"
+    else:
+        trace_path = traces_dir / f"{scenario_id}.json"
     trace_path.write_text(
         json.dumps(result, indent=2, ensure_ascii=False), encoding="utf-8"
     )
@@ -2019,9 +2027,17 @@ class AgentEvalRunner:
                             self.extra_corpus_dirs if self.extra_corpus_dirs else None
                         ),
                         agent_type=scenario_agent_type,
+                        attempt=(attempt_idx if self.iterations > 1 else None),
                     )
                 )
             result = summarize_attempts(attempts)
+            if self.iterations > 1:
+                # The summarized result is what resume must reload — never one
+                # attempt, which would drop `stability` and could flip status.
+                (run_dir / "traces" / f"{sid}.json").write_text(
+                    json.dumps(result, indent=2, ensure_ascii=False),
+                    encoding="utf-8",
+                )
             results.append(result)
 
             completed[sid] = result.get("status")
