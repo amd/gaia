@@ -48,7 +48,7 @@ contract version is tracked separately as
   **Outlook mailboxes are unaffected by this duration fix** —
   `outlook_backend.py` never parses Gmail operator syntax, so converting
   `w` to days has no effect there. Quoted Outlook `$search` values are
-  escaped separately (see the Graph quote escape entry below).
+  escaped separately (see the Graph quote escape entry above).
 
 ### Changed
 
