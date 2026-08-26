@@ -147,6 +147,11 @@ setup(
         # sidecar. Distinct from keyring's pywin32-ctypes, which has no
         # win32security module.
         'pywin32; sys_platform == "win32"',
+        # lemonade_client imports psutil at module scope, and the CLI imports
+        # lemonade_client — so without it even `gaia --version` traces back.
+        # Core, not an extra: it only ever worked because accelerate happens to
+        # pull psutil in transitively.
+        "psutil>=5.9.0",
     ],
     extras_require={
         "image": [
@@ -162,10 +167,6 @@ setup(
             # in-process (#2176), so [api] carries no per-agent deps (keyring is
             # already a core install_requires dep for `gaia connectors`, #1621).
             "httpx>=0.27.0",
-            # The daemon's sidecar registry imports psutil at module scope and
-            # _check_daemon_deps refuses to start without it — declare it rather
-            # than rely on accelerate pulling it in transitively.
-            "psutil>=5.9.0",
         ],
         "ui": [
             "fastapi>=0.115.0",

@@ -40,6 +40,12 @@ SETUP_PY = REPO_ROOT / "setup.py"
 OPENAI_SERVER = REPO_ROOT / "src" / "gaia" / "api" / "openai_server.py"
 EMAIL_PYPROJECT = REPO_ROOT / "hub" / "agents" / "email" / "python" / "pyproject.toml"
 CLI_PY = REPO_ROOT / "src" / "gaia" / "cli.py"
+LEMONADE_CLIENT = REPO_ROOT / "src" / "gaia" / "llm" / "lemonade_client.py"
+
+
+def _normalize(reqs: list[str]) -> set[str]:
+    """Requirement strings -> bare lowercased distribution names."""
+    return {re.split(r"[<>=;\[ ]", r, maxsplit=1)[0].strip().lower() for r in reqs}
 
 
 def _parse_extra(name: str) -> list[str]:
@@ -140,46 +146,45 @@ def test_keyring_guaranteed_for_api_installs_via_core() -> None:
     )
 
 
-def test_api_extra_covers_every_daemon_dep() -> None:
-    """``pip install 'amd-gaia[api]'`` must be enough to start ``gaia daemon``.
+def test_psutil_is_a_core_dep_not_an_extra() -> None:
+    """``import psutil`` runs at module scope on the plain-CLI import path.
 
-    The installer installs exactly this extra, and the terminal hub is dead
-    without the daemon. psutil was only ever present transitively (accelerate
-    pulls it), so a resolver change could have re-broken the bug this guards.
+    lemonade_client imports it at module scope and the CLI imports
+    lemonade_client, so a bare install without psutil cannot even run
+    ``gaia --version`` — it never reaches _check_daemon_deps' friendly message.
+    It only ever worked because accelerate pulls psutil in transitively.
     """
-    api_reqs = [
-        r.split(">")[0].split("=")[0].split("<")[0].lower() for r in _parse_extra("api")
-    ]
-    missing = [
-        pkg for pkg in _daemon_required_packages() if pkg.lower() not in api_reqs
-    ]
-    assert not missing, (
-        f"setup.py[api] must declare {missing} — cli.py::_check_daemon_deps "
-        "hard-exits without them, and installer/scripts/install.{sh,ps1} "
-        "install 'amd-gaia[api]' as the only route to a working `gaia daemon`."
+    assert "import psutil" in LEMONADE_CLIENT.read_text(encoding="utf-8"), (
+        "this guard exists because lemonade_client imports psutil at module "
+        "scope; if that moved, re-home the requirement to match."
+    )
+    assert "psutil" in _normalize(_parse_install_requires()), (
+        "psutil must be in core install_requires — it is imported on the plain "
+        "CLI path, not just by the daemon."
     )
 
 
-def test_daemon_deps_error_names_an_extra_that_satisfies_it() -> None:
-    """The remedy must point at an extra that actually declares the deps.
+def test_daemon_deps_are_guaranteed_for_the_extras_the_error_names() -> None:
+    """Every remedy the daemon suggests must actually produce a working daemon.
 
-    The message used to name ``[dev]``, which declares none of fastapi,
-    uvicorn or psutil — following it left the daemon just as dead.
+    The message used to name ``[dev]``, which declares none of fastapi, uvicorn
+    or psutil — following it left the daemon just as dead. Core counts, since
+    ``pip install 'amd-gaia[x]'`` always installs install_requires too.
     """
     src = CLI_PY.read_text(encoding="utf-8")
     body = src[
         src.index("def _check_daemon_deps") : src.index("def handle_daemon_command")
     ]
     named = set(re.findall(r"\[([a-z]+)\]", body.split('"""', 2)[-1]))
+    assert named, "no remedy extra found in the _check_daemon_deps message"
+
+    core = _normalize(_parse_install_requires())
     required = {p.lower() for p in _daemon_required_packages()}
     for extra in named:
-        declared = {
-            r.split(">")[0].split("=")[0].split("<")[0].lower()
-            for r in _parse_extra(extra)
-        }
-        assert required <= declared, (
+        satisfied = core | _normalize(_parse_extra(extra))
+        assert required <= satisfied, (
             f"cli.py::_check_daemon_deps tells the user to install [{extra}], "
-            f"but that extra does not declare {sorted(required - declared)}."
+            f"but core + that extra still lack {sorted(required - satisfied)}."
         )
 
 
