@@ -1,0 +1,97 @@
+# Copyright(C) 2025-2026 Advanced Micro Devices, Inc. All rights reserved.
+# SPDX-License-Identifier: MIT
+
+# Builds + tests the @amd-gaia/gaia npm package (the `npx @amd-gaia/gaia`
+# launcher: binary fetcher + sidecar lifecycle). Until now nothing ran it on a
+# PR -- only release_agent_gaia.yml touched the package, at release time -- so a
+# change that broke the launcher stayed green all the way to the release gate.
+# That is the same gap test_gaia_agent.yml closed for the Python side.
+#
+# The package ships NO binaries: they are fetched from R2 and SHA-256 verified
+# against binaries.lock.json at run time, so the last step asserts the tarball
+# stays thin.
+
+name: Agent GAIA npm Package Tests
+
+on:
+  workflow_call:
+  push:
+    branches: [ main ]
+    paths:
+      - 'hub/agents/gaia/npm/**'
+      - '.github/workflows/test_agent_gaia_npm.yml'
+  pull_request:
+    branches: [ main ]
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - 'hub/agents/gaia/npm/**'
+      - '.github/workflows/test_agent_gaia_npm.yml'
+  merge_group:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test-agent-gaia-npm:
+    name: Build & Test gaia npm package
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ready_for_ci')
+    defaults:
+      run:
+        working-directory: hub/agents/gaia/npm
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: hub/agents/gaia/npm/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (tsc)
+        run: npm run build
+
+      - name: Test (vitest)
+        run: npm test
+
+      # Thin-package invariant: the published tarball must NEVER contain a
+      # platform binary -- the sidecar and the TUI are fetched from R2 and
+      # verified against binaries.lock.json. Fail loudly if one is packed.
+      - name: Assert tarball ships no binaries
+        run: |
+          npm pack --dry-run --json > pack.json
+          node -e '
+            const fs = require("fs");
+            const pack = JSON.parse(fs.readFileSync("pack.json", "utf8"));
+            const files = (pack[0]?.files ?? []).map((f) => f.path);
+            const offenders = files.filter((p) => {
+              const base = p.split("/").pop();
+              return (
+                /\.(exe|bin)$/i.test(base) ||
+                base === "gaia-agent" ||
+                base === "gaia-tui" ||
+                /^gaia-(agent|tui)(-|\.)/i.test(base)
+              );
+            });
+            if (offenders.length > 0) {
+              console.error("❌ Tarball contains forbidden binary file(s):");
+              offenders.forEach((p) => console.error("   " + p));
+              console.error(
+                "The @amd-gaia/gaia package must stay thin — binaries are " +
+                "fetched from R2 at run time, never committed to the tarball."
+              );
+              process.exit(1);
+            }
+            console.log("✅ Thin-package invariant holds — " + files.length + " files, no binaries.");
+          '

@@ -51,7 +51,10 @@ built-in `fetch`. Use `import`, not `require`; from CommonJS use
    each against the lock**.
 4. Installs the sidecar into `~/.gaia/agents/gaia/` and the TUI into
    `~/.gaia/npm-cache/gaia-<version>/`.
-5. Execs the TUI, whose exit code becomes ours.
+5. Writes `~/.gaia/agents/gaia/.installed` — the record the daemon and the TUI
+   both read to decide the sidecar is installed. Written on a cache hit too, so
+   an install staged by an earlier release repairs itself.
+6. Execs the TUI, whose exit code becomes ours.
 
 `run` deliberately does **not** spawn a sidecar. The TUI reaches agents through
 the GAIA daemon's relay and never holds a sidecar token, and the daemon is what
@@ -382,8 +385,11 @@ interface.
 ## 12. Running in a server or long-lived app
 
 - **`fetchAll` / `fetchBinary` are a build step**, not per request — network plus
-  a full SHA-256 hash of a large artifact. Run once; `resolveSidecarPath` /
-  `resolveTuiPath` at runtime.
+  a full SHA-256 hash of a large artifact. Run once at install time.
+- **`resolveSidecarPath` / `resolveTuiPath` are startup, not per request.** They
+  re-hash the binary against `binaries.lock.json` before handing back a path that
+  gets spawned, so they cost a full read of a large file. Resolve once and keep
+  the path. `{ verify: false }` skips the check for a binary you built yourself.
 - **Spawn once at boot** and hold the `Sidecar` handle for the process lifetime.
   Never per request.
 - **Low concurrency.** One local Lemonade model slot, so parallel queries
@@ -421,9 +427,12 @@ There is no silent null.
 - **`run_id` must be a UUID**, and unknown fields in the request body are a
   **422** — the model forbids extras. Typos don't get ignored.
 - **`gaia run` needs the *Python* `gaia` CLI on `PATH`** — the TUI shells out to
-  it to start the daemon. The package deliberately strips its own npm bin
-  directory from the child's `PATH` so the TUI doesn't re-invoke the npm shim; if
-  the Python CLI isn't installed, the daemon never comes up.
+  it to start the daemon. So the TUI doesn't re-invoke our own npm shim, the
+  child's `PATH` is rewritten: a directory holding nothing but our shim (an npx
+  temp dir) is dropped, and a **shared** bin directory is moved to the end
+  instead of removed, so the `python3` / `lemonade-server` / real `gaia` beside
+  it stay reachable. If the Python CLI isn't installed anywhere, the daemon never
+  comes up.
 - **The TUI is installed as `gaia-tui`, never `gaia`** — the terminal-hub artifact
   *is* called `gaia-<platform>`, and a file named `gaia` in a cache directory would
   shadow the npm bin shim. The lock's `filename` and `executable` differ for that
