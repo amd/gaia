@@ -97,17 +97,17 @@ func TestHubSearch(t *testing.T) {
 	if !d.m.IsFiltering() {
 		t.Fatal("/ did not enter filter mode")
 	}
-	for _, r := range "browser" {
+	for _, r := range "terminal" {
 		d.send(key(string(r)))
 	}
 	d.send(keyEnter())
 
 	after := d.m.VisibleAgentIDs()
 	if len(after) >= before {
-		t.Fatalf("filtering for 'browser' left %d of %d rows visible", len(after), before)
+		t.Fatalf("filtering for 'terminal' left %d of %d rows visible", len(after), before)
 	}
-	if len(after) == 0 || after[0] != "browser" {
-		t.Fatalf("filtered rows = %v, want browser first", after)
+	if len(after) == 0 || after[0] != "bash" {
+		t.Fatalf("filtered rows = %v, want bash first", after)
 	}
 
 	d.send(keyEsc())

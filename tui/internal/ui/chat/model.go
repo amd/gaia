@@ -215,6 +215,14 @@ type ChatModel struct {
 	// kept in sync by every model-state ping thereafter (handleCanonicalEvent).
 	claudeMode bool
 
+	// launchClaudeModel is the id --claude-model put on the child's argv, ""
+	// when the launch named none. Kept separate from modelID on purpose:
+	// modelID means "what the agent RESOLVED" and the restart detector keys
+	// off it, so seeding it from a flag would let a launch flag masquerade as
+	// agent truth. This one is only ever read by the header's pre-ping
+	// fallback (renderClaudeChip).
+	launchClaudeModel string
+
 	// mouseCaptured is true while the APP holds the mouse, for either of the
 	// two independent reasons documented on overlayOpen (mousecapture.go):
 	// the user turned on wheel scrolling, or an overlay is open and needs
@@ -256,6 +264,11 @@ type ChatModel struct {
 	lemonadeUp      bool
 	lemonadeVersion string
 	lemonadeBaseURL string
+	// lemonadeDownRefused makes the "local server is down" pre-refusal fire
+	// once per down report instead of forever. Nothing refreshes lemonadeUp
+	// between pings, so a sticky refusal would outlive the problem — see
+	// refuseModelSwitch. Cleared by the next ping, whatever it says.
+	lemonadeDownRefused bool
 
 	// modelID/modelDisplay/modelBackend/modelRemote come from the agent's own
 	// model-state ping (a CanonicalStatusEvent with ModelID set — see
@@ -288,6 +301,15 @@ type ChatModel struct {
 	queryStart   time.Time // tracks when the current query started
 	firstToken   bool      // whether the first real inference token has arrived this turn (not just any SSE frame)
 	ttft         time.Duration
+
+	// logPeakRows is the tallest the work log has been THIS turn. The region's
+	// height is held there (see liveRegionView) so it never shrinks mid-turn and
+	// drops the transcript above back down while it is being read.
+	logPeakRows int
+	// logPeakWidth is the measure logPeakRows was reached at. A width change
+	// reflows the log, so a peak measured at another width describes a layout
+	// that no longer exists.
+	logPeakWidth int
 
 	// followTail is true while the view should stay pinned to the newest
 	// content. Scrolling up clears it, so a streaming answer stops yanking the
@@ -1134,6 +1156,9 @@ func (m ChatModel) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 func (m ChatModel) requestCancel() (tea.Model, tea.Cmd) {
 	m.cancelPending = true
 	m.activity = nil
+	// The log just emptied; holding the height it reached would leave a block of
+	// blank rows under "Stopping at the next step".
+	m.logPeakRows = 0
 	m.question = nil
 	m.confirmation = nil
 	// A follow-up queued behind this turn was written on the assumption the
@@ -1237,6 +1262,18 @@ func (m ChatModel) submit(query string) (tea.Model, tea.Cmd) {
 			m.updateViewport()
 			return m, nil
 		}
+		// Refused here when the round-trip could only end in the same
+		// refusal — a bad Claude id, or a local id with the local server
+		// known-down. See refuseModelSwitch: the agent still validates, this
+		// only spares a turn that had no chance.
+		if reason := m.refuseModelSwitch(modelCommandArg(query)); reason != "" {
+			// Spent: the next identical request goes to the agent, which is
+			// the only thing that can re-probe the local server.
+			m.lemonadeDownRefused = true
+			m.messages = append(m.messages, Message{Role: RoleError, Content: reason})
+			m.updateViewport()
+			return m, nil
+		}
 		// A control request, not a question — unlike sendQuery, this never
 		// posts a user chat bubble; the agent's own confirmation (or
 		// refusal) is the only line that belongs in the transcript. Still
@@ -1334,6 +1371,7 @@ func (m ChatModel) sendQuery(query string) (tea.Model, tea.Cmd) {
 func (m ChatModel) startTurn(query string) (tea.Model, tea.Cmd) {
 	m.streaming = true
 	m.activity = nil
+	m.logPeakRows = 0
 	m.buffer = ""
 	// Asking a new question means you want to see its answer, wherever the
 	// scroll happened to be left.
@@ -1505,7 +1543,11 @@ func (m ChatModel) handleEvent(evt interface{}) (tea.Model, tea.Cmd) {
 		// arrives with tabs, CRs and occasionally ANSI colour, and the old
 		// byte slice at [:60] cut mid-rune on any non-ASCII output — a path
 		// with an accent or a box-drawing character rendered as mojibake.
-		summary = truncateRunes(clean(summary), 60)
+		//
+		// Bounded here, but no longer CUT to a row: the renderer wraps this
+		// (renderActivityItem) and is the one place that decides where a line
+		// ends. A 60-column cut here lost the tail before it ever got there.
+		summary = truncateRunes(clean(summary), narrationMax)
 		if len(m.activity) > 0 {
 			last := &m.activity[len(m.activity)-1]
 			if last.Kind == "tool" {
@@ -1680,6 +1722,15 @@ func (m *ChatModel) resize() {
 		vpWidth = 10
 	}
 
+	// A width change reflows the work log, so the height it peaked at was
+	// measured against a layout that no longer exists — holding it strands
+	// blank rows under the log for the rest of the turn. The mid-stream hold
+	// (liveRegionView) is untouched: that one absorbs the log shrinking while
+	// the reader is mid-sentence, which is not what a deliberate resize is.
+	if m.logPeakWidth != m.width {
+		m.logPeakWidth = m.width
+		m.logPeakRows = 0
+	}
 	m.viewport.Width = vpWidth
 	m.viewport.Height = vpHeight
 	m.input.SetWidth(vpWidth - 2)
@@ -1742,7 +1793,7 @@ func (m *ChatModel) updateViewport() {
 	// lands — the silent gap before an agent's first event is exactly when a
 	// blank screen reads as a hang.
 	if m.streaming {
-		sb.WriteString(m.renderLiveRegion())
+		sb.WriteString(m.liveRegionView())
 		sb.WriteString("\n")
 	}
 
@@ -1825,7 +1876,9 @@ func (m ChatModel) cardWidth() int {
 // answerMeasure caps how wide a line of prose gets. A 200-column terminal will
 // happily lay an answer out as 200-character lines, and the eye loses the start
 // of the next one on the way back — the reason newspapers set narrow columns.
-// Tables and cards are not prose and are not capped by this.
+// Tables and cards are not prose and are not capped by this, and neither is the
+// work log: one-line content follows the terminal (see logWidth), because for a
+// single row more columns mean more of the line, not a longer read.
 const answerMeasure = 88
 
 // answerWidth is the width an answer lays out to — the same for the streaming
@@ -1907,6 +1960,11 @@ func (m ChatModel) answerStats(msg *Message) string {
 	if msg.ToolsUsed > 0 {
 		stats = append(stats, fmt.Sprintf("%d tools", msg.ToolsUsed))
 	}
+	// The fixed prompt re-sent on every call — the term that actually explains
+	// a slow local turn, and the only one none of the numbers above imply.
+	if msg.Metrics != nil && msg.Metrics.Prompt.FixedPrefillTokens > 0 {
+		stats = append(stats, thousands(msg.Metrics.Prompt.FixedPrefillTokens)+" prefill")
+	}
 	return strings.Join(stats, " · ")
 }
 
@@ -1938,6 +1996,9 @@ func (m ChatModel) renderMessage(msg *Message, seen map[string]bool) string {
 
 		if stats := m.answerStats(msg); stats != "" {
 			panel += "\n" + activityStyle.Render("  "+stats)
+		}
+		if block := m.turnMetricsBlock(msg); block != "" {
+			panel += "\n" + block
 		}
 		return panel
 
@@ -1972,6 +2033,18 @@ const workLogLines = 6
 // 13 rows and shove the answer the user is reading off the top.
 const workLogMaxRows = 9
 
+// logHeadRows caps how many rows ONE action's description may wrap to. Wrapping
+// is what buys the tail back; the per-action cap is what stops a single 300-
+// character shell command from spending the whole region on itself and hiding
+// every other action. The region's own ceiling (logRows) is unchanged by
+// wrapping — a wrapped line costs HISTORY, never height.
+const logHeadRows = 3
+
+// logDetailRows caps an action's `└` outcome. Same room as the call above it,
+// not less: the outcomes that run long are the FAILURES, and a failure's tail
+// is the remedy — the one line in the log a user has to act on.
+const logDetailRows = 3
+
 // logRows is the height budget for THIS terminal: never more than half the
 // visible pane, so the log cannot crowd out the transcript on a short window
 // (a 12-row terminal leaves the viewport 5 rows — the fixed cap alone would
@@ -1987,17 +2060,37 @@ func (m ChatModel) logRows() int {
 	return budget
 }
 
-// logWidth is the column budget for one work-log line on THIS terminal. The
-// fixed caps are a readability ceiling, not a layout assumption: below ~80
-// columns every line would soft-wrap and double the region's real height.
+// logGutter is the widest left margin a work-log row carries: two spaces, the
+// spinner (which draws two columns, not one) and a space. Static rows spend a
+// column less; one budget serves them all, so it is set by the widest.
+const logGutter = 5
+
+// logWidth is the measure one work-log ROW is laid out to on THIS terminal.
+//
+// Single-line content follows the window. A tool line, a live status and its
+// outcome each start as one row, so extra columns buy the reader more of the
+// SAME row rather than more rows — which matters most for the lines whose tail
+// carries the reason or the remedy. Wrapping (wrapLog) is what saves a tail
+// that still does not fit; a wider window is what stops it needing to.
+//
+// That is the opposite call from prose, which stays at answerMeasure however
+// wide the window gets; see that constant for why the two differ.
 func (m ChatModel) logWidth() int {
 	// 4 for the marker gutter, 2 for the viewport's own edge.
 	w := m.width - 6
-	if w > narrationWidth {
-		w = narrationWidth
-	}
 	if w < 16 {
 		w = 16
+	}
+	// The floor is there so a cramped window still shows SOMETHING, not so it
+	// prints past the last column: the viewport does not soft-wrap, so a row
+	// one column too wide shears the row beneath it. Measured against the
+	// WIDEST gutter, since one budget serves every row and the live one is a
+	// column deeper than the rest.
+	if fits := m.width - logGutter; m.width > 0 && w > fits {
+		w = fits
+	}
+	if w < 1 {
+		w = 1
 	}
 	return w
 }
@@ -2020,6 +2113,41 @@ const (
 	glyphStatus = "✻"
 	glyphDetail = "└"
 )
+
+// liveRegionView is the work log at a height that does not go backwards.
+//
+// The region's height moves with what the agent is doing: an outcome lands and
+// an action grows a row; a wrapped action pushes an older one out and the block
+// gets SHORTER. Growth is fine — it is new work, at the bottom where the eye
+// already is. Shrinking is the one that hurts: everything above drops back down
+// mid-sentence while it is being read, and wrapping makes the swings bigger. So
+// the height is held at this turn's peak, never above the terminal's budget,
+// and the difference is padded with blank rows.
+func (m *ChatModel) liveRegionView() string {
+	out := m.renderLiveRegion()
+	rows := strings.Count(out, "\n") + 1
+	if rows > m.logPeakRows {
+		m.logPeakRows = rows
+	}
+	// A resize can lower the ceiling under a peak reached on a taller window.
+	if budget := m.logRows(); m.logPeakRows > budget {
+		m.logPeakRows = budget
+	}
+	// Before the first WindowSizeMsg there is no viewport to budget against, so
+	// logRows' 9 is a guess — padding to it would open the turn with a block of
+	// blank rows on a window that may only have five.
+	if m.viewport.Height <= 0 {
+		return out
+	}
+	// Padded ABOVE. Below, the blank rows open a gap between the log and the
+	// answer streaming under it; above, they land in the space that already
+	// separates the log from the transcript, and hold the block's total height
+	// just the same.
+	if pad := m.logPeakRows - rows; pad > 0 {
+		out = strings.Repeat("\n", pad) + out
+	}
+	return out
+}
 
 // renderLiveRegion draws the rolling activity log for the running turn: one line
 // per meaningful action, newest last, each closed action followed by a single
@@ -2050,10 +2178,14 @@ func (m ChatModel) renderLiveRegion() string {
 	// hanging under nothing.
 	groups := make([][]string, 0, len(log)+1)
 	for i, item := range log {
-		groups = append(groups, m.renderActivityItem(item, i == live, elapsed))
+		groups = append(groups, m.renderActivityItem(item, i == live, elapsed, 0))
 	}
 	if live < 0 {
-		groups = append(groups, []string{m.renderLiveLine(m.idlePhrase(len(log)), elapsed)})
+		// Measured like every other row. This is the OPENING frame of every
+		// turn — before any tool event exists — so an unmeasured phrase here
+		// shears the frame on the very first thing a narrow window draws.
+		phrase := wrapLog(m.idlePhrase(len(log)), "", m.logWidth()-elapsedReserve, 1)[0]
+		groups = append(groups, []string{m.renderLiveLine(phrase, elapsed)})
 	}
 	// Shown until something has actually COMPLETED. A stage line alone does not
 	// count: a turn that sits on "Working out how to answer" for 1:47 with no
@@ -2062,7 +2194,11 @@ func (m ChatModel) renderLiveRegion() string {
 	// reappears the moment the last finished action scrolls out of view.
 	hint := ""
 	if !anyCompleted(m.activity) && elapsed >= stillWorkingAfter {
-		hint = "     " + activityStyle.Render(glyphDetail+" still working — local model, usually 60-90s")
+		// Measured like every other row in this region. Its 50 columns fit an
+		// 80-column terminal, but on a narrower one it wrapped to two rows and
+		// broke the single-row assumption the budget below is making.
+		hint = "     " + activityStyle.Render(truncateRunes(
+			glyphDetail+" still working — usually 60-90s", m.logWidth()-1))
 	}
 
 	// The hint is part of the height budget, not an extra row bolted on after
@@ -2072,14 +2208,27 @@ func (m ChatModel) renderLiveRegion() string {
 		budget--
 	}
 	// Oldest first: the newest action is the one being watched, and the live
-	// line is always last.
-	rows := 0
+	// line is always last. Trimming from the top is what pays for wrapping —
+	// a wrapped action costs older HISTORY, not extra height.
+	kept, rows := 0, 0
 	for i := len(groups) - 1; i >= 0; i-- {
-		rows += len(groups[i])
-		if rows > budget {
-			groups = groups[i+1:]
+		if rows+len(groups[i]) > budget {
 			break
 		}
+		rows += len(groups[i])
+		kept++
+	}
+	if kept > 0 {
+		groups = groups[len(groups)-kept:]
+	} else if n := len(log) - 1; n >= 0 {
+		// One action taller than the entire budget — a wrapped shell command on
+		// a 12-row terminal, where the budget is two rows. Re-render it to fit
+		// rather than drop it: an empty live region is a blank screen, which is
+		// the one thing this whole region exists to prevent. Re-rendered, not
+		// row-sliced, so the ellipsis lands inside the text rather than after
+		// the clock. (The synthetic idle line is one row and always fits, so the
+		// group that overflowed is always the last log entry.)
+		groups = [][]string{m.renderActivityItem(log[n], n == live, elapsed, budget)}
 	}
 
 	var lines []string
@@ -2198,47 +2347,84 @@ func formatElapsed(d time.Duration) string {
 // Failure is never signalled by colour or a glyph alone: a failed call's outcome
 // line begins with the word "failed" (see toolResultDetail / failureDetail), so
 // the state survives a terminal with no colour.
-func (m ChatModel) renderActivityItem(item ActivityItem, live bool, elapsed time.Duration) []string {
+// maxRows is the height this ONE action may occupy, or 0 for the standard caps.
+// The live region passes a real number only when a single action is taller than
+// the whole region's budget: the cut has to be made HERE, inside the text, or
+// the marker ends up appended to a rendered row — after the elapsed clock on the
+// live line, where it reads as part of the timer rather than as a truncation.
+func (m ChatModel) renderActivityItem(item ActivityItem, live bool, elapsed time.Duration, maxRows int) []string {
 	width := m.logWidth()
-	// The counter is reserved BEFORE truncating, not appended after. Appending
-	// after meant any narration already at the cap — which shell commands and
-	// long paths routinely are, and which are exactly the calls that repeat —
-	// had its "x14" cut straight back off.
-	content := item.Content
+
+	// The counter rides along through the wrap rather than being appended after
+	// it. Appended after, any narration already at the measure — which shell
+	// commands and long paths routinely are, and which are exactly the calls
+	// that repeat — had its "x14" cut straight back off.
+	suffix := ""
 	if item.Repeat > 0 {
-		suffix := fmt.Sprintf(" x%d", item.Repeat+1)
-		content = truncateRunes(content, width-len(suffix)) + suffix
-	} else {
-		content = truncateRunes(content, width)
+		suffix = fmt.Sprintf(" x%d", item.Repeat+1)
 	}
 
-	var head string
+	headRows := logHeadRows
+	if maxRows > 0 && maxRows < headRows {
+		headRows = maxRows
+	}
+	// Only the FIRST row carries the clock, so only the first row pays for it.
+	// Charging every wrapped row 8 columns for a number none of them shows threw
+	// away two words per row of the longest lines in the log.
+	rows := wrapLog(clean(item.Content), suffix, width, headRows)
+	if live {
+		rows = wrapLogLead(clean(item.Content), suffix, width-elapsedReserve, width, headRows)
+	}
+
+	// Glyph and colour differ per kind; the wrap and the continuation indent do
+	// not. Continuations line up under the TEXT, not the glyph, so the marker
+	// column stays a gutter and the eye reads one action as one block.
+	glyph := ""
+	style := activityStyle
 	switch {
 	case live:
-		head = m.renderLiveLine(content, elapsed)
+		style = thinkingStyle
 	case item.Kind == "tool" || item.Kind == "confirm":
-		style := toolNameStyle
+		glyph, style = glyphTool, toolNameStyle
 		if item.Success != nil && !*item.Success {
 			style = failStyle
 		}
-		head = "  " + activityStyle.Render(glyphTool) + " " + style.Render(content)
 	case item.Kind == "status" || item.Kind == "thinking":
-		head = "  " + activityStyle.Render(glyphStatus) + " " +
-			lipgloss.NewStyle().Foreground(theme.Warning).Render(content)
-	default:
-		head = "    " + activityStyle.Render(content)
+		glyph, style = glyphStatus, lipgloss.NewStyle().Foreground(theme.Warning)
 	}
 
-	lines := []string{head}
-	if detail := truncateRunes(clean(item.Detail), width-2); detail != "" {
-		style := activityStyle
+	var lines []string
+	switch {
+	case live:
+		lines = append(lines, m.renderLiveLine(rows[0], elapsed))
+	case glyph != "":
+		lines = append(lines, "  "+activityStyle.Render(glyph)+" "+style.Render(rows[0]))
+	default:
+		lines = append(lines, "    "+style.Render(rows[0]))
+	}
+	for _, row := range rows[1:] {
+		lines = append(lines, "    "+style.Render(row))
+	}
+
+	detailRows := logDetailRows
+	if maxRows > 0 {
+		detailRows = maxRows - len(lines) // the call outranks its outcome
+	}
+	if detail := clean(item.Detail); detail != "" && detailRows > 0 {
+		dstyle := activityStyle
 		if item.Success != nil && !*item.Success {
-			style = failStyle
+			dstyle = failStyle
 		}
-		lines = append(lines, "    "+style.Render(glyphDetail+" "+detail))
+		drows := wrapLog(detail, "", width-2, detailRows)
+		lines = append(lines, "    "+dstyle.Render(glyphDetail+" "+drows[0]))
+		for _, row := range drows[1:] {
+			lines = append(lines, "      "+dstyle.Render(row))
+		}
 	}
 	// Developer mode only. Args and Output are populated nowhere else, so the
 	// user-mode log is genuinely unchanged rather than merely filtered here.
+	// These stay ONE clipped row each: they are raw JSON, not prose, and the
+	// transcript's render card is where a full payload belongs.
 	for _, extra := range []struct{ label, text string }{
 		{"args", item.Args},
 		{"out", item.Output},
@@ -2252,6 +2438,113 @@ func (m ChatModel) renderActivityItem(item ActivityItem, live bool, elapsed time
 		}
 	}
 	return lines
+}
+
+// elapsedReserve is the room renderLiveLine's trailing clock needs: two spaces
+// and up to "10:05", plus the column the spinner takes beyond a static row's
+// marker — the live row's gutter is one deeper than every other row's.
+const elapsedReserve = 8
+
+// wrapLog lays one work-log string out over at most maxRows rows of width
+// columns, reusing the same wrap the transcript uses (components.WrapText) so
+// there is one wrapping path in this package, not three.
+//
+// Wrapped, not clipped, for the reason the status path already gives: the
+// viewport does not soft-wrap, so a line longer than the measure loses its tail
+// — and for the lines that carry a reason or a remedy, the tail IS the point.
+// What the row cap cuts is still marked with an ellipsis, because a silent cut
+// is the bug this replaces. suffix (the repeat counter, or "") stays visible
+// even then: it is the part saying this call happened fourteen times.
+func wrapLog(s, suffix string, width, maxRows int) []string {
+	// Floored at 1, never raised to a comfortable minimum: this measure is what
+	// the CALLER can afford, and handing back a wider row than the window has
+	// columns is the shear every other budget here exists to avoid. One column
+	// of text is unreadable; a sheared frame is unreadable and takes the row
+	// below with it.
+	if width < 1 {
+		width = 1
+	}
+	if maxRows < 1 {
+		maxRows = 1
+	}
+	rows := hardBreak(strings.Split(components.WrapText(s+suffix, width), "\n"), width)
+	if len(rows) <= maxRows {
+		return rows
+	}
+	rows = rows[:maxRows]
+	rows[maxRows-1] = clipTail(strings.TrimRight(rows[maxRows-1], " "), width-displayWidth(suffix)) + suffix
+	return rows
+}
+
+// wrapLogLead wraps like wrapLog, except the FIRST row gets a narrower measure
+// than the rest. The live row's elapsed clock is appended after its text and
+// takes those columns from THAT row only — continuations carry no clock and
+// should not pay for one.
+func wrapLogLead(s, suffix string, lead, width, maxRows int) []string {
+	if lead < 8 {
+		lead = 8
+	}
+	if displayWidth(s+suffix) <= lead {
+		return []string{s + suffix}
+	}
+	first := hardBreak(strings.Split(components.WrapText(s, lead), "\n"), lead)[0]
+	// A prefix of s, not a re-rendering of it: clean() has already collapsed
+	// runs of spaces, so WrapText's rows rejoin to exactly what went in.
+	rest := strings.TrimSpace(strings.TrimPrefix(s, first))
+	if rest == "" || maxRows <= 1 {
+		return wrapLog(s, suffix, lead, maxRows)
+	}
+	return append([]string{first}, wrapLog(rest, suffix, width, maxRows-1)...)
+}
+
+// hardBreak splits any row still wider than the measure. WrapText breaks on
+// SPACES, and the lines that run long are routinely one unbroken token — a URL,
+// a Windows path, a quoted shell argument — which it emits whole. Left alone
+// those rows overrun the pane and the viewport clips them, which is the bug this
+// whole change is about.
+func hardBreak(rows []string, width int) []string {
+	out := make([]string, 0, len(rows))
+	for _, row := range rows {
+		for displayWidth(row) > width {
+			head, rest := splitAtWidth(row, width)
+			out = append(out, head)
+			row = rest
+		}
+		out = append(out, row)
+	}
+	return out
+}
+
+// splitAtWidth cuts s at a COLUMN count, never mid-rune.
+func splitAtWidth(s string, width int) (string, string) {
+	used := 0
+	for i, r := range s {
+		w := displayWidth(string(r))
+		if used+w > width {
+			return s[:i], s[i:]
+		}
+		used += w
+	}
+	return s, ""
+}
+
+// clipTail cuts s to limit columns and ALWAYS ends it with an ellipsis.
+// truncateRunes alone leaves a string that already fits untouched — and rows
+// arrive here filled TO the measure, so that is the common case, not a boundary
+// one. It would mean a cut with nothing on screen to say so.
+func clipTail(s string, limit int) string {
+	if limit <= 1 {
+		return "…"
+	}
+	if displayWidth(s) < limit {
+		return s + "…"
+	}
+	// limit-1, not limit: a row that lands EXACTLY on the measure — which is the
+	// common case, since the wrap fills rows to it — is "within budget" as far
+	// as truncateRunes is concerned, and it would hand the string straight back
+	// unmarked. Asking for one column less forces the cut, and truncateRunes
+	// adds the ellipsis itself.
+	return truncateRunes(s, limit-1)
 }
 
 // queuedEchoFloor is the narrowest the echoed line may get before the key hint
@@ -2390,8 +2683,12 @@ func (m ChatModel) View() string {
 // tool_args payload. Every truncation goes through truncateRunes: the previous
 // byte slice at [:60] split multi-byte runes, so a command touching a path with
 // any non-ASCII character rendered a replacement glyph mid-word.
+//
+// Bounded to the same measure the canonical path gives an argument, for the same
+// reason: the work log wraps, so a capture-time cut at one row's width threw the
+// tail away before anything could show it.
 func extractCommandFromArgs(raw json.RawMessage) string {
-	const argWidth = 60
+	const argWidth = narrationMax
 
 	var args map[string]interface{}
 	if err := json.Unmarshal(raw, &args); err != nil {

@@ -162,8 +162,6 @@ jobs:
           echo "  - DatabaseMixin: SQLite database access for agents"
           echo "  - FileWatcher: File system monitoring utilities"
           echo "  - Testing Utilities: MockLLMProvider, MockVLMClient, fixtures"
-          echo "  - EMR Agent: Medical intake form processing"
-          echo "  - EMR CLI: Command-line interface for EMR agent"
           echo "  - LLM Client: Language model client utilities"
           echo "  - ASR: Automatic speech recognition utilities"
           echo "  - TTS: Text-to-speech utilities"

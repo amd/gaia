@@ -284,7 +284,7 @@ class TestInitCommand(unittest.TestCase):
         """Test that valid profiles are accepted."""
         from gaia.installer.init_command import InitCommand
 
-        valid_profiles = ["minimal", "chat", "code", "rag", "all"]
+        valid_profiles = ["minimal", "chat", "rag", "all"]
         for profile in valid_profiles:
             cmd = InitCommand(profile=profile, yes=True)
             self.assertEqual(cmd.profile, profile)
@@ -575,7 +575,7 @@ class TestInitProfiles(unittest.TestCase):
         """Test that expected profiles are defined."""
         from gaia.installer.init_command import INIT_PROFILES
 
-        expected = ["minimal", "chat", "code", "rag", "all"]
+        expected = ["minimal", "chat", "rag", "all"]
         for profile in expected:
             self.assertIn(profile, INIT_PROFILES)
 
@@ -2206,7 +2206,7 @@ class TestHubInstallWiringChatOnlyScope(_HubInstallWiringTestBase):
     ``TestHubInstallWiringNpuProfile`` for the positive case.
     """
 
-    NON_CHAT_PROFILES = ("sd", "code", "rag", "vlm", "minimal", "all")
+    NON_CHAT_PROFILES = ("sd", "rag", "vlm", "minimal", "all")
 
     def test_non_chat_profiles_never_call_hub_install_and_still_exit_zero(self):
         for profile in self.NON_CHAT_PROFILES:

@@ -107,7 +107,11 @@ def test_unknown_name_with_no_candidates_uses_generic_message():
     agent = _make_agent_with_tools(["mcp_tool_tool_displaylens_on"])
     result = agent._execute_tool("totally_unrelated", {})
     err = result["error"]
-    assert "AVAILABLE TOOLS" in err
+    # Must NOT name an "AVAILABLE TOOLS section": native tool-calling models
+    # get their schemas via ``tools=`` and no longer receive that block, so
+    # pointing at it would send the model looking for something absent.
+    assert "AVAILABLE TOOLS" not in err
+    assert "Unknown tool name" in err
     # Bad name still NOT quoted
     assert "'totally_unrelated'" not in err
 

@@ -421,6 +421,12 @@ func (c *Catalog) applyInstalledRecord(id, version string) {
 	}
 	a := &c.agents[idx]
 	a.FromHub = true
+	// A sentinel under the install root means the daemon installed it as an
+	// HTTP sidecar it supervises, so there is no binary for the TUI to spawn --
+	// same invariant upsertHubEntry applies. Seeded entries reach here with
+	// whatever transport the seed guessed, and a seeded subprocess agent that
+	// kept it would be spawned over stdio and fed a frozen REST binary.
+	a.Transport = TransportDaemon
 	a.InstalledVersion = version
 	if version != "" {
 		a.Version = version
@@ -708,36 +714,6 @@ func seedAgents() []Agent {
 			NotOfferedReason: NotPublishedReason,
 		},
 		{
-			ID: "code", Name: "Code", Description: "Code generation and editing",
-			Category: "Code", Tags: []string{"code", "programming", "developer"},
-			Icon: "🔧", Version: "0.1.0", Status: StatusComingSoon,
-			NotOfferedReason: NotPublishedReason,
-		},
-		{
-			ID: "blender", Name: "Blender", Description: "3D scene automation and modeling",
-			Category: "Creative", Tags: []string{"3d", "blender", "modeling", "animation"},
-			Icon: "🎨", Version: "0.1.0", Status: StatusComingSoon,
-			NotOfferedReason: NotPublishedReason,
-		},
-		{
-			ID: "jira", Name: "Jira", Description: "Issue tracking and project management",
-			Category: "Productivity", Tags: []string{"jira", "issues", "project", "agile"},
-			Icon: "🎫", Version: "0.1.0", Status: StatusComingSoon,
-			NotOfferedReason: NotPublishedReason,
-		},
-		{
-			ID: "docker", Name: "Docker", Description: "Container management and orchestration",
-			Category: "DevOps", Tags: []string{"docker", "containers", "kubernetes"},
-			Icon: "🐳", Version: "0.1.0", Status: StatusComingSoon,
-			NotOfferedReason: NotPublishedReason,
-		},
-		{
-			ID: "summarize", Name: "Summarize", Description: "Document and text summarization",
-			Category: "Documents", Tags: []string{"summarize", "text", "tldr"},
-			Icon: "📝", Version: "0.1.0", Status: StatusComingSoon,
-			NotOfferedReason: NotPublishedReason,
-		},
-		{
 			// The email agent is an HTTP sidecar the daemon supervises, not a
 			// binary the TUI can spawn — it is reached through the daemon relay.
 			ID: "email", Name: "Email", Description: "Email triage, drafting, and calendar",
@@ -774,26 +750,6 @@ func seedAgents() []Agent {
 			// while the agent kept logging errors only — and the log is where the
 			// answer usually is.
 			DevArgs: []string{"--dev"},
-		},
-
-		// --- Coming Soon ---
-		{
-			ID: "routing", Name: "Routing", Description: "Intelligent agent selection and orchestration",
-			Category: "Infrastructure", Tags: []string{"routing", "orchestration", "multi-agent"},
-			Icon: "🔀", Version: "0.1.0", Status: StatusComingSoon,
-			NotOfferedReason: NotPublishedReason,
-		},
-		{
-			ID: "browser", Name: "Browser", Description: "Web browsing and automation",
-			Category: "Research", Tags: []string{"browser", "web", "scraping", "automation"},
-			Icon: "🌐", Version: "0.1.0", Status: StatusComingSoon,
-			NotOfferedReason: NotPublishedReason,
-		},
-		{
-			ID: "data-analyst", Name: "Data Analyst", Description: "Data analysis and visualization",
-			Category: "Data", Tags: []string{"data", "analysis", "charts", "csv", "excel"},
-			Icon: "📊", Version: "0.1.0", Status: StatusComingSoon,
-			NotOfferedReason: NotPublishedReason,
 		},
 	}
 }

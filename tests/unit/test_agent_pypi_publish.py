@@ -34,7 +34,9 @@ WORKFLOW = REPO_ROOT / ".github" / "workflows" / "publish_agents.yml"
 
 # Infrastructure agents publish as wheels but are loaded by class-path from the
 # API server, not discovered via the gaia.agent registry entry point (#1102).
-INFRA_ONLY_AGENT_IDS = {"routing"}
+# Currently empty: the routing agent that used to need this exemption was
+# removed in the agent-collapse (its only AGENT_MODELS entry went with it).
+INFRA_ONLY_AGENT_IDS: set[str] = set()
 
 if str(UTIL_DIR) not in sys.path:
     sys.path.insert(0, str(UTIL_DIR))
@@ -51,9 +53,9 @@ def test_production_agent_list_nonempty(packages):
     """setup.py[agents] resolves to at least the migrated agents."""
     assert packages, "no production agent packages derived from setup.py[agents]"
     ids = {p.agent_id for p in packages}
-    # Spot-check a couple that have already migrated; the helper enforces the
-    # full set exists on disk, so this just sanity-checks the mapping direction.
-    assert {"summarize", "analyst", "browser"} <= ids
+    # Spot-check the surviving hub agents; the helper enforces the full set
+    # exists on disk, so this just sanity-checks the mapping direction.
+    assert {"email", "chat", "gaia"} <= ids
 
 
 def test_dist_name_and_directory_convention(packages):
