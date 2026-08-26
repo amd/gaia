@@ -78,3 +78,35 @@ class TestRunnerWiring:
     def test_zero_or_negative_raises(self):
         with pytest.raises(ValueError, match="iterations must be >= 1"):
             AgentEvalRunner(iterations=0)
+
+
+class TestPerAttemptEvidence:
+    """With --iterations, every attempt needs its own trace. Writing them all to
+    <sid>.json leaves only the last one on disk — so a `flaky` verdict could
+    never be investigated, and resume would reload a single attempt in place of
+    the summarized result and silently change the scorecard."""
+
+    def test_attempt_index_produces_a_distinct_trace_name(self):
+        import inspect
+
+        from gaia.eval import runner
+
+        src = inspect.getsource(runner.run_scenario_subprocess)
+        assert "attempt}.json" in src, "per-attempt traces must not share a path"
+        assert (
+            "attempt=None"
+            in inspect.signature(runner.run_scenario_subprocess).parameters.__str__()
+            or "attempt" in inspect.signature(runner.run_scenario_subprocess).parameters
+        )
+
+    def test_summarized_result_is_what_resume_reloads(self):
+        """<sid>.json must hold the summarized result (with stability), because
+        that is the file the resume path reads back."""
+        import inspect
+
+        from gaia.eval.runner import AgentEvalRunner
+
+        # The iterations loop lives in _run_locked, which run() delegates to.
+        src = inspect.getsource(AgentEvalRunner._run_locked)
+        assert 'f"{sid}.json"' in src
+        assert "summarize_attempts" in src

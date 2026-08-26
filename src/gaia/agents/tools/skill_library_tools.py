@@ -485,13 +485,23 @@ class SkillLibraryToolsMixin:
             if result.has_code:
                 count = len(result.deferred_tools) or "its"
                 payload["deferred_tools"] = list(result.deferred_tools)
+                # State exactly what is withheld. Registration and binary grants
+                # are enforced; a bundled scripts/ file is still a file on disk
+                # that the shell tool can be asked to run, so calling it "inert"
+                # would be a promise this code does not keep.
                 payload["code_inert"] = (
-                    f"This skill carries {count} tool(s)/scripts that stay "
-                    "INERT until the user runs "
+                    f"This skill's {count} tool(s) are NOT registered and its "
+                    "binary grants are withheld until the user runs "
                     f"`gaia skill promote {result.name}` in a terminal. Its "
-                    "instructions load now; its code does not. Say exactly "
+                    "instructions load now; its tools do not work. Say exactly "
                     "that — do not claim the tools work."
                 )
+                if result.has_scripts:
+                    payload["scripts_warning"] = (
+                        "It also ships a scripts/ directory. Those files are on "
+                        "disk and are NOT execution-gated — do not run them, and "
+                        "do not describe them as safe, until it is promoted."
+                    )
             if result.review_findings:
                 payload["audit_findings"] = list(result.review_findings)
                 payload["warning"] = (

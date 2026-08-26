@@ -1,6 +1,8 @@
 # Launch the flagship TUI for local eval driving (control mode, Haiku, no Lemonade).
 # One TUI at a time — kill existing gaia-drive.exe before running this.
-$root = 'C:\Users\14255\Work\gaia'
+# Repo root derived from this script's location (util/ -> repo root), so the
+# launcher works on any checkout rather than one developer's machine.
+$root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $home_eval = "$root\eval\results\gaia-local-tui-validation"
 
 # Agent-side auth: the Go TUI checks ANTHROPIC_API_KEY before spawning with --use-claude.
